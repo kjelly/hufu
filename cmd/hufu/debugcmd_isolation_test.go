@@ -32,12 +32,14 @@ func TestDebugCmd_RunIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Write events for two runs
-	events := `{"run_id":"run-A", "task_id":"task-1", "attempt": 1}
-{"run_id":"run-B", "task_id":"task-1", "attempt": 1}
-{"run_id":"run-B", "task_id":"task-2", "attempt": 1}
+	// Write canonical events for two runs
+	events := `{"run_id":"run-A","type":"run_started","payload":{"team":"dev"}}
+{"run_id":"run-A","task_id":"task-1","type":"task_started","payload":{"id":"task-1","attempt":1}}
+{"run_id":"run-B","type":"run_started","payload":{"team":"dev"}}
+{"run_id":"run-B","task_id":"task-1","type":"task_started","payload":{"id":"task-1","attempt":1}}
+{"run_id":"run-B","task_id":"task-2","type":"task_started","payload":{"id":"task-2","attempt":1}}
 `
-	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "execution-events.jsonl"), []byte(events), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "event_store.jsonl"), []byte(events), 0644); err != nil {
 		t.Fatal(err)
 	}
 

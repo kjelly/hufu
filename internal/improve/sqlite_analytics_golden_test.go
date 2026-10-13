@@ -41,7 +41,7 @@ func TestAnalyzeRecentSemanticGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diagnostics.ExecutionLinesRead != int64(len(semanticGoldenExecutionEvents())) || diagnostics.SelectedRuns != 4 || diagnostics.ProjectedTasks != 4 {
+	if diagnostics.ExecutionRows != projectedFixtureRows(t, semanticGoldenExecutionEvents()) || diagnostics.SelectedRuns != 4 || diagnostics.ProjectedTasks != 4 {
 		t.Fatalf("diagnostics = %+v", diagnostics)
 	}
 	projection := newSemanticGoldenProjection(report)
@@ -130,12 +130,12 @@ func semanticGoldenExecutionEvents() []team.ExecutionEvent {
 		{Timestamp: "2026-07-12T09:00:00Z", RunID: "ops-run", Team: "ops", TaskID: "ops-task", Agent: "operator", Attempt: 1, Status: "done", Usage: team.ExecutionUsage{TotalTokens: 2}},
 		// Version zero and an invalid timestamp represent a replayed legacy row.
 		{Timestamp: "not-a-time", RunID: "dev-legacy", Team: "dev", TaskID: "legacy-task", Agent: "legacy", Attempt: 1, Status: "planned", Usage: team.ExecutionUsage{TotalTokens: 1}},
-		{Version: 2, Timestamp: "2026-07-12T10:00:00Z", RunID: "dev-same-a", Team: "dev", TaskID: "task-a", Agent: "old-agent", Attempt: 1, Status: "in_progress", Model: "old-model", TaskType: "old-type", Skills: []string{"old-skill"}, TeamRevision: "revision-a", Usage: team.ExecutionUsage{InputTokens: 10, TotalTokens: 10}},
-		{Version: 2, Timestamp: "2026-07-12T10:00:01Z", RunID: "dev-same-a", Team: "dev", TaskID: "task-a", Agent: "developer", Attempt: 2, Status: "done", Model: "model-b", TaskType: "verification", Skills: []string{"new-skill", "shared"}, TeamRevision: "revision-a", Usage: team.ExecutionUsage{OutputTokens: 6, TotalTokens: 6}},
-		{Version: 2, Timestamp: "2026-07-12T10:00:00Z", RunID: "dev-same-b", Team: "dev", TaskID: "task-b", Agent: "reviewer", Attempt: 1, Status: "in_progress", Model: "model-a", TaskType: "review", Skills: []string{"review"}, TeamRevision: "revision-b", Usage: team.ExecutionUsage{InputTokens: 4, TotalTokens: 4}},
-		{Version: 2, Timestamp: "2026-07-12T10:00:01Z", RunID: "dev-same-b", Team: "dev", TaskID: "task-b", Agent: "reviewer", Attempt: 1, Status: "error", Model: "model-a", TaskType: "review", Skills: []string{}, TeamRevision: "revision-b", Usage: team.ExecutionUsage{OutputTokens: 3, TotalTokens: 3}},
-		{Version: 2, Timestamp: "2026-07-12T11:00:00Z", RunID: "dev-latest", Team: "dev", TaskID: "task-latest", Agent: "developer", Attempt: 1, Status: "in_progress", Model: "model-c", TaskType: "agent", Skills: []string{"memory"}, TeamRevision: "revision-c", Usage: team.ExecutionUsage{InputTokens: 20, TotalTokens: 20}},
-		{Version: 2, Timestamp: "2026-07-12T11:00:02Z", RunID: "dev-latest", Team: "dev", TaskID: "task-latest", Agent: "developer", Attempt: 1, Status: "done", Model: "model-c", TaskType: "agent", Skills: []string{"memory"}, TeamRevision: "revision-c", Usage: team.ExecutionUsage{OutputTokens: 5, TotalTokens: 5}},
+		{Version: 2, Timestamp: "2026-07-12T10:00:00Z", RunID: "dev-same-a", Team: "dev", TaskID: "task-a", Agent: "old-agent", Attempt: 1, Status: "in_progress", Model: "old-model", TaskType: "old-type", Skills: []string{"old-skill"}, TeamRevision: "revision-a"},
+		{Version: 2, Timestamp: "2026-07-12T10:00:01Z", RunID: "dev-same-a", Team: "dev", TaskID: "task-a", Agent: "developer", Attempt: 2, Status: "done", Model: "model-b", TaskType: "verification", Skills: []string{"new-skill", "shared"}, TeamRevision: "revision-a", Usage: team.ExecutionUsage{InputTokens: 10, OutputTokens: 6, TotalTokens: 16}},
+		{Version: 2, Timestamp: "2026-07-12T10:00:00Z", RunID: "dev-same-b", Team: "dev", TaskID: "task-b", Agent: "reviewer", Attempt: 1, Status: "in_progress", Model: "model-a", TaskType: "review", Skills: []string{"review"}, TeamRevision: "revision-b"},
+		{Version: 2, Timestamp: "2026-07-12T10:00:01Z", RunID: "dev-same-b", Team: "dev", TaskID: "task-b", Agent: "reviewer", Attempt: 1, Status: "error", Model: "model-a", TaskType: "review", Skills: []string{}, TeamRevision: "revision-b", Usage: team.ExecutionUsage{InputTokens: 4, OutputTokens: 3, TotalTokens: 7}},
+		{Version: 2, Timestamp: "2026-07-12T11:00:00Z", RunID: "dev-latest", Team: "dev", TaskID: "task-latest", Agent: "developer", Attempt: 1, Status: "in_progress", Model: "model-c", TaskType: "agent", Skills: []string{"memory"}, TeamRevision: "revision-c"},
+		{Version: 2, Timestamp: "2026-07-12T11:00:02Z", RunID: "dev-latest", Team: "dev", TaskID: "task-latest", Agent: "developer", Attempt: 1, Status: "done", Model: "model-c", TaskType: "agent", Skills: []string{"memory"}, TeamRevision: "revision-c", Usage: team.ExecutionUsage{InputTokens: 20, OutputTokens: 5, TotalTokens: 25}},
 		{Version: 2, Timestamp: "2026-07-12T12:00:00Z", RunID: "", Team: "dev", TaskID: "empty-run", Status: "done"},
 		{Version: 2, Timestamp: "2026-07-12T12:00:00Z", RunID: "empty-team-run", Team: "", TaskID: "empty-team", Status: "done"},
 	}

@@ -17,8 +17,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const eventsPath = "logs/execution-events.jsonl"
-
 var ErrNoExecutionData = errors.New("no execution event data")
 
 type AgentDefinition struct {
@@ -161,8 +159,8 @@ func LatestTeam(workspace string) (string, error) {
 		return "", err
 	}
 	defer func() { _ = analytics.Close() }()
-	if _, err := analytics.loadExecutionEvents(ctx, filepath.Join(workspace, eventsPath)); err != nil {
-		return "", newAnalyticsError(AnalyticsStageLoadExecution, err)
+	if _, err := analytics.loadEventStore(ctx, workspace, false); err != nil {
+		return "", err
 	}
 	teamName, runs, err := analytics.sqlSelectRecentRunSummaries(ctx, "", 1)
 	if err != nil {
@@ -203,14 +201,15 @@ func analyzeRecent(ctx context.Context, workspace, teamName, teamDir string, run
 	analytics.diagnostics = diagnostics
 	defer func() { _ = analytics.Close() }()
 	started = time.Now()
-	executionStats, err := analytics.loadExecutionEvents(ctx, filepath.Join(workspace, eventsPath))
-	diagnostics.record(diagnosticLoadExecution, started)
+	eventStoreStats, err := analytics.loadEventStore(ctx, workspace, true)
+	diagnostics.record(diagnosticLoadEventStore, started)
 	if err != nil {
-		return nil, newAnalyticsError(AnalyticsStageLoadExecution, err)
+		return nil, err
 	}
 	if diagnostics != nil {
-		diagnostics.ExecutionLinesRead = executionStats.LinesRead
-		diagnostics.ExecutionRows = executionStats.RowsLoaded
+		diagnostics.EventsRead = eventStoreStats.EventsRead
+		diagnostics.ExecutionRows = eventStoreStats.Execution.RowsLoaded
+		diagnostics.MemoryRows = eventStoreStats.Memory.RowsLoaded
 	}
 	started = time.Now()
 	auditStats, err := analytics.loadAuditEvents(ctx, filepath.Join(workspace, "logs", "audit"))
@@ -221,15 +220,6 @@ func analyzeRecent(ctx context.Context, workspace, teamName, teamDir string, run
 	if diagnostics != nil {
 		diagnostics.AuditLinesRead = auditStats.LinesRead
 		diagnostics.AuditRows = auditStats.RowsLoaded
-	}
-	started = time.Now()
-	memoryStats, err := analytics.loadMemoryEvents(ctx, workspace)
-	diagnostics.record(diagnosticLoadMemory, started)
-	if err != nil {
-		return nil, newAnalyticsError(AnalyticsStageLoadMemory, err)
-	}
-	if diagnostics != nil {
-		diagnostics.MemoryRows = memoryStats.RowsLoaded
 	}
 	started = time.Now()
 	if err := analytics.createIndexes(ctx); err != nil {

@@ -15,6 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/utils"
 	"github.com/spf13/cobra"
 )
@@ -44,7 +45,7 @@ var debugCmd = &cobra.Command{
 			runID = target
 
 			// Verify run-id exists
-			eventsPath := filepath.Join(workspacePath, "logs", "execution-events.jsonl")
+			eventsPath := filepath.Join(workspacePath, "logs", "event_store.jsonl")
 			if err := verifyRunID(eventsPath, runID); err != nil {
 				return fmt.Errorf("failed to verify run ID %q: %w", runID, err)
 			}
@@ -130,27 +131,30 @@ var debugCmd = &cobra.Command{
 			taskIDs := make(map[string]bool)
 			attempts := make(map[string]bool) // "taskID:attempt"
 
-			filterJSONL := func(relPath string, checkRunID bool, idField string) {
+			// filterJSONL adds relPath's rows for runID to the bundle and returns
+			// them unredacted for derived projections.
+			filterJSONL := func(relPath string, checkRunID bool, idField string) []byte {
 				fullPath := filepath.Join(workspacePath, relPath)
 				fJSON, err := debugOpenFile(fullPath)
 				if err != nil {
 					if errors.Is(err, errDebugSymlinkPath) {
 						inclusions[relPath] = "omitted (symlink path)"
-						return
+						return nil
 					}
 					if os.IsNotExist(err) {
 						inclusions[relPath] = "omitted (not found)"
 					} else {
 						inclusions[relPath] = fmt.Sprintf("error reading: %v", err)
 					}
-					return
+					return nil
 				}
 				defer func() { _ = fJSON.Close() }()
 				var filtered []byte
 				omittedLegacy := 0
 				scanner := bufio.NewScanner(fJSON)
 				buf := make([]byte, 0, 64*1024)
-				scanner.Buffer(buf, 1024*1024)
+				// Event-store records can reach the store's 4 MiB line limit.
+				scanner.Buffer(buf, 4*1024*1024)
 				for scanner.Scan() {
 					var ev map[string]interface{}
 					if json.Unmarshal(scanner.Bytes(), &ev) == nil {
@@ -180,8 +184,7 @@ var debugCmd = &cobra.Command{
 				if err := scanner.Err(); err != nil {
 					inclusions[relPath] = fmt.Sprintf("error parsing: %v", err)
 				} else if len(filtered) > 0 {
-					filtered = utils.RedactJSONLData(filtered)
-					if err := addBytesToTar(tw, filtered, relPath); err != nil {
+					if err := addBytesToTar(tw, utils.RedactJSONLData(filtered), relPath); err != nil {
 						inclusions[relPath] = fmt.Sprintf("error writing to tar: %v", err)
 					} else {
 						inclusions[relPath] = "included (filtered, redacted)"
@@ -189,9 +192,48 @@ var debugCmd = &cobra.Command{
 				} else {
 					inclusions[relPath] = "omitted (empty after filter)"
 				}
+				return filtered
 			}
-			filterJSONL("logs/execution-events.jsonl", true, "")
-			filterJSONL("logs/event_store.jsonl", true, "")
+
+			// Execution-event telemetry is derived from the run's canonical
+			// events; the bundle carries it under its historical name, and
+			// its attempts select the run's task transcripts.
+			addDerivedExecutionEvents := func(storeRows []byte) {
+				const relPath = "logs/execution-events.jsonl"
+				projector := team.NewExecutionEventProjector()
+				for _, line := range bytes.Split(storeRows, []byte{'\n'}) {
+					var event team.RunEvent
+					if json.Unmarshal(line, &event) == nil {
+						projector.Add(event)
+					}
+				}
+				var derived []byte
+				for _, row := range projector.Rows() {
+					if row.RunID != runID {
+						continue
+					}
+					data, err := json.Marshal(row)
+					if err != nil {
+						inclusions[relPath] = fmt.Sprintf("error encoding: %v", err)
+						return
+					}
+					derived = append(append(derived, data...), '\n')
+					if row.TaskID != "" {
+						taskIDs[row.TaskID] = true
+						attempts[fmt.Sprintf("%s:%d", row.TaskID, row.Attempt)] = true
+					}
+				}
+				if len(derived) == 0 {
+					inclusions[relPath] = "omitted (no execution events for run)"
+					return
+				}
+				if err := addBytesToTar(tw, utils.RedactJSONLData(derived), relPath); err != nil {
+					inclusions[relPath] = fmt.Sprintf("error writing to tar: %v", err)
+				} else {
+					inclusions[relPath] = "included (derived from event store, redacted)"
+				}
+			}
+			addDerivedExecutionEvents(filterJSONL("logs/event_store.jsonl", true, ""))
 			filterJSONL("logs/task_journal.jsonl", false, "task_id")
 
 			// task-output
@@ -333,20 +375,21 @@ var debugCmd = &cobra.Command{
 func verifyRunID(eventsPath string, runID string) error {
 	f, err := debugOpenFile(eventsPath)
 	if errors.Is(err, errDebugSymlinkPath) {
-		return fmt.Errorf("execution events path contains a symlink")
+		return fmt.Errorf("event store path contains a symlink")
 	}
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("execution events log not found (is %s a valid workspace?)", filepath.Dir(filepath.Dir(eventsPath)))
+			return fmt.Errorf("event store not found (is %s a valid workspace?)", filepath.Dir(filepath.Dir(eventsPath)))
 		}
 		return err
 	}
 	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
-	// increase buffer size in case of large JSON
+	// Event-store records can reach the store's 4 MiB line limit. The scan
+	// is tolerant: a debug bundle must still find a run in a damaged log.
 	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
+	scanner.Buffer(buf, 4*1024*1024)
 
 	type miniEvent struct {
 		RunID string `json:"run_id"`
@@ -361,9 +404,9 @@ func verifyRunID(eventsPath string, runID string) error {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("error reading execution events: %w", err)
+		return fmt.Errorf("error reading event store: %w", err)
 	}
-	return fmt.Errorf("run ID %q not found in execution events", runID)
+	return fmt.Errorf("run ID %q not found in event store", runID)
 }
 
 func addBytesToTar(tw *tar.Writer, data []byte, name string) error {

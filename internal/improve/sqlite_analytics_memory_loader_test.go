@@ -3,6 +3,7 @@ package improve
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,7 +31,7 @@ func writeMemoryEventStore(t *testing.T, workspace string, events []team.RunEven
 	return filepath.Join(workspace, "logs", "event_store.jsonl")
 }
 
-func TestLoadMemoryEventsExtractsMinimalPayloadFields(t *testing.T) {
+func TestLoadEventStoreExtractsMinimalMemoryPayloadFields(t *testing.T) {
 	workspace := t.TempDir()
 	writeMemoryEventStore(t, workspace, []team.RunEvent{
 		{ID: "run-start", Type: "run_started", Actor: "runtime", Payload: []byte(`{"secret":"do-not-store"}`)},
@@ -41,10 +42,11 @@ func TestLoadMemoryEventsExtractsMinimalPayloadFields(t *testing.T) {
 	})
 
 	session := newTestSession(t)
-	stats, err := session.loadMemoryEvents(t.Context(), workspace)
+	loaded, err := session.loadEventStore(t.Context(), workspace, true)
 	if err != nil {
-		t.Fatalf("loadMemoryEvents: %v", err)
+		t.Fatalf("loadEventStore: %v", err)
 	}
+	stats := loaded.Memory
 	if stats.RowsLoaded != 3 || stats.EventsSkipped != 1 || stats.MalformedPayloadRows != 1 {
 		t.Fatalf("stats = %+v, want three loaded, one skipped, one malformed payload", stats)
 	}
@@ -121,14 +123,14 @@ FROM memory_events ORDER BY event_seq`)
 	}
 }
 
-func TestLoadMemoryEventsMissingStoreIsNonfatalAndDoesNotCreateFile(t *testing.T) {
+func TestLoadEventStoreMissingStoreIsNotAnErrorAndDoesNotCreateFile(t *testing.T) {
 	workspace := t.TempDir()
 	session := newTestSession(t)
-	stats, err := session.loadMemoryEvents(t.Context(), workspace)
+	stats, err := session.loadEventStore(t.Context(), workspace, true)
 	if err != nil {
 		t.Fatalf("load missing event store: %v", err)
 	}
-	if stats != (memoryLoadStats{}) {
+	if stats != (eventStoreLoadStats{}) {
 		t.Fatalf("stats = %+v, want zero value", stats)
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "logs", "event_store.jsonl")); !os.IsNotExist(err) {
@@ -136,7 +138,7 @@ func TestLoadMemoryEventsMissingStoreIsNonfatalAndDoesNotCreateFile(t *testing.T
 	}
 }
 
-func TestLoadMemoryEventsLateHashFailureRollsBackPrefix(t *testing.T) {
+func TestLoadEventStoreLateHashFailureRollsBackPrefix(t *testing.T) {
 	const batchCandidate = 32
 	workspace := t.TempDir()
 	events := make([]team.RunEvent, 0, batchCandidate+3)
@@ -160,11 +162,12 @@ func TestLoadMemoryEventsLateHashFailureRollsBackPrefix(t *testing.T) {
 
 	session := newTestSession(t)
 	session.batchConfig.Memory = batchCandidate
-	stats, err := session.loadMemoryEvents(t.Context(), workspace)
-	if err != nil {
-		t.Fatalf("corrupt event store must be nonfatal: %v", err)
+	stats, err := session.loadEventStore(t.Context(), workspace, true)
+	var analyticsErr *AnalyticsError
+	if !errors.As(err, &analyticsErr) || analyticsErr.Stage != AnalyticsStageLoadExecution {
+		t.Fatalf("corrupt event store error = %v, want a load_execution AnalyticsError", err)
 	}
-	if stats.RowsLoaded != int64(batchCandidate+2) {
+	if stats.Memory.RowsLoaded != int64(batchCandidate+2) {
 		t.Fatalf("stats = %+v, want a flushed batch plus streamed prefix rows before rollback", stats)
 	}
 	var count int

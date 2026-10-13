@@ -88,8 +88,9 @@ func TestSQLiteAnalyticsSession_RejectsExecutionIngestAfterTaskProjection(t *tes
 		t.Fatal(err)
 	}
 
-	path := writeJSONLFile(t, []string{`{"run_id":"r2","team":"dev","task_id":"2","status":"done"}`})
-	if _, err := session.loadExecutionEvents(context.Background(), path); err == nil {
+	workspace := t.TempDir()
+	writeExecutionEvents(t, workspace, []team.ExecutionEvent{{RunID: "r2", Team: "dev", TaskID: "2", Attempt: 1, Status: "done"}})
+	if _, err := session.loadEventStore(context.Background(), workspace, false); err == nil {
 		t.Fatal("expected execution ingestion after task projection to fail")
 	}
 	var count int

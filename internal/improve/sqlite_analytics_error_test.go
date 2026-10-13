@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestNewAnalyticsErrorNilIsNil(t *testing.T) {
@@ -56,62 +58,70 @@ func TestAnalyticsErrorStagesMatchSpec(t *testing.T) {
 	}
 }
 
-// AnalyzeRecent must surface a *AnalyticsError (not a bare error) once
-// execution-event ingestion genuinely fails, tagged with the boundary that
-// failed. A directory in place of the events file forces bufio.Scanner to
-// hit a real read error (EISDIR) instead of the tolerated "file missing" /
-// "malformed line" cases the loader otherwise swallows.
-func TestAnalyzeRecentSurfacesAnalyticsErrorWithLoadExecutionStage(t *testing.T) {
-	workspace := t.TempDir()
-	teamDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(workspace, "logs"), 0o755); err != nil {
-		t.Fatal(err)
+// AnalyzeRecent and LatestTeam must report a typed *AnalyticsError when the
+// event store they derive execution events from cannot be trusted, tagged
+// with the load_execution boundary. A missing store is no data, not an error.
+func TestEventStoreLoadFailuresSurfaceLoadExecutionStage(t *testing.T) {
+	unreadable := func(t *testing.T, workspace string) {
+		// A directory in place of the log: opening succeeds, reading fails.
+		if err := os.MkdirAll(filepath.Join(workspace, "logs", "event_store.jsonl"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
-	// A directory named execution-events.jsonl: os.Open succeeds, but
-	// bufio.Scanner.Scan() fails to read it as a file.
-	if err := os.MkdirAll(filepath.Join(workspace, eventsPath), 0o755); err != nil {
-		t.Fatal(err)
+	tampered := func(t *testing.T, workspace string) {
+		writeExecutionEvents(t, workspace, []team.ExecutionEvent{
+			{Timestamp: "2026-07-12T10:00:00Z", RunID: "run-1", Team: "dev", TaskID: "1", Agent: "developer", Attempt: 1, Status: "done", Model: "secret-model"},
+		})
+		path := filepath.Join(workspace, "logs", "event_store.jsonl")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The payload is hashed; editing it must break the chain.
+		if err := os.WriteFile(path, []byte(strings.Replace(string(data), "secret-model", "secret-modex", 1)), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-
-	_, err := AnalyzeRecent(workspace, "dev", teamDir, 1)
-	if err == nil {
-		t.Fatal("expected an error when execution-events.jsonl is unreadable")
+	analyze := func(workspace string) error {
+		_, err := AnalyzeRecent(workspace, "dev", workspace, 1)
+		return err
 	}
-	var analyticsErr *AnalyticsError
-	if !errors.As(err, &analyticsErr) {
-		t.Fatalf("AnalyzeRecent error = %v (%T), want *AnalyticsError", err, err)
+	latest := func(workspace string) error {
+		_, err := LatestTeam(workspace)
+		return err
 	}
-	if analyticsErr.Stage != AnalyticsStageLoadExecution {
-		t.Fatalf("Stage = %q, want %q", analyticsErr.Stage, AnalyticsStageLoadExecution)
+	tests := []struct {
+		name    string
+		prepare func(*testing.T, string)
+		load    func(string) error
+	}{
+		{name: "AnalyzeRecent with an unreadable store", prepare: unreadable, load: analyze},
+		{name: "LatestTeam with an unreadable store", prepare: unreadable, load: latest},
+		{name: "AnalyzeRecent with a tampered chain", prepare: tampered, load: analyze},
+		{name: "LatestTeam with a tampered chain", prepare: tampered, load: latest},
 	}
-	// §18: the error must never leak payload/prompt/secret content — only
-	// name the failing operation and path, both of which are non-sensitive
-	// here (a workspace-relative telemetry path).
-	if strings.Contains(err.Error(), "secret") {
-		t.Fatalf("error message unexpectedly contains sensitive-looking content: %q", err.Error())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			tt.prepare(t, workspace)
+			err := tt.load(workspace)
+			var analyticsErr *AnalyticsError
+			if !errors.As(err, &analyticsErr) {
+				t.Fatalf("error = %v (%T), want *AnalyticsError", err, err)
+			}
+			if analyticsErr.Stage != AnalyticsStageLoadExecution {
+				t.Fatalf("Stage = %q, want %q", analyticsErr.Stage, AnalyticsStageLoadExecution)
+			}
+			// §18: the error names the failing operation, never payload content.
+			if strings.Contains(err.Error(), "secret") {
+				t.Fatalf("error message leaks payload content: %q", err.Error())
+			}
+		})
 	}
 }
 
-// LatestTeam shares the same load_execution boundary as AnalyzeRecent and
-// must classify the same failure the same way.
-func TestLatestTeamSurfacesAnalyticsErrorWithLoadExecutionStage(t *testing.T) {
-	workspace := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(workspace, "logs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(workspace, eventsPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := LatestTeam(workspace)
-	if err == nil {
-		t.Fatal("expected an error when execution-events.jsonl is unreadable")
-	}
-	var analyticsErr *AnalyticsError
-	if !errors.As(err, &analyticsErr) {
-		t.Fatalf("LatestTeam error = %v (%T), want *AnalyticsError", err, err)
-	}
-	if analyticsErr.Stage != AnalyticsStageLoadExecution {
-		t.Fatalf("Stage = %q, want %q", analyticsErr.Stage, AnalyticsStageLoadExecution)
+func TestMissingEventStoreIsNoExecutionData(t *testing.T) {
+	if _, err := LatestTeam(t.TempDir()); !errors.Is(err, ErrNoExecutionData) {
+		t.Fatalf("LatestTeam error = %v, want ErrNoExecutionData", err)
 	}
 }

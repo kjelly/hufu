@@ -6,9 +6,8 @@ type analyticsDiagnosticStage uint8
 
 const (
 	diagnosticOpen analyticsDiagnosticStage = iota
-	diagnosticLoadExecution
+	diagnosticLoadEventStore
 	diagnosticLoadAudit
-	diagnosticLoadMemory
 	diagnosticBuildIndexes
 	diagnosticSelectRuns
 	diagnosticProjectTasks
@@ -24,19 +23,18 @@ const (
 // regression investigations. It is deliberately excluded from Report so
 // instrumentation cannot change the stable public result contract.
 type AnalyticsDiagnostics struct {
-	ExecutionLinesRead int64
-	ExecutionRows      int64
-	AuditLinesRead     int64
-	AuditRows          int64
-	MemoryRows         int64
+	EventsRead     int64
+	ExecutionRows  int64
+	AuditLinesRead int64
+	AuditRows      int64
+	MemoryRows     int64
 
 	SelectedRuns   int
 	ProjectedTasks int
 
 	Open               time.Duration
-	LoadExecution      time.Duration
+	LoadEventStore     time.Duration
 	LoadAudit          time.Duration
-	LoadMemory         time.Duration
 	BuildIndexes       time.Duration
 	SelectRuns         time.Duration
 	ProjectTasks       time.Duration
@@ -62,12 +60,10 @@ func (d *AnalyticsDiagnostics) record(stage analyticsDiagnosticStage, started ti
 	switch stage {
 	case diagnosticOpen:
 		d.Open += duration
-	case diagnosticLoadExecution:
-		d.LoadExecution += duration
+	case diagnosticLoadEventStore:
+		d.LoadEventStore += duration
 	case diagnosticLoadAudit:
 		d.LoadAudit += duration
-	case diagnosticLoadMemory:
-		d.LoadMemory += duration
 	case diagnosticBuildIndexes:
 		d.BuildIndexes += duration
 	case diagnosticSelectRuns:

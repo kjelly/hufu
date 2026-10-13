@@ -4,10 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/team"
@@ -23,94 +20,128 @@ func newTestSession(t *testing.T) *sqliteAnalyticsSession {
 	return session
 }
 
-func writeJSONLFile(t *testing.T, lines []string) string {
+// insertFixtureRows inserts execution rows directly, for tests of the SQL
+// that reads execution_events rather than of the event-store projection.
+func insertFixtureRows(t *testing.T, session *sqliteAnalyticsSession, rows []team.ExecutionEvent) loadStats {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "execution-events.jsonl")
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-func TestLoadExecutionEvents_MissingFileIsNotAnError(t *testing.T) {
-	session := newTestSession(t)
-	stats, err := session.loadExecutionEvents(context.Background(), filepath.Join(t.TempDir(), "does-not-exist.jsonl"))
+	tx, err := session.conn.BeginTx(context.Background(), nil)
 	if err != nil {
-		t.Fatalf("err = %v, want nil", err)
-	}
-	if stats != (loadStats{}) {
-		t.Fatalf("stats = %+v, want zero value", stats)
-	}
-}
-
-func TestLoadExecutionEvents_SkipsMalformedAndMissingRunID(t *testing.T) {
-	valid1, _ := json.Marshal(team.ExecutionEvent{Version: 1, Timestamp: "2026-07-12T10:00:00Z", RunID: "r1", Team: "dev", TaskID: "1", Status: "done"})
-	valid2, _ := json.Marshal(team.ExecutionEvent{Version: 1, Timestamp: "2026-07-12T10:00:01Z", RunID: "r1", Team: "dev", TaskID: "2", Status: "done"})
-	missingRunID, _ := json.Marshal(team.ExecutionEvent{Version: 1, Timestamp: "2026-07-12T10:00:02Z", RunID: "", Team: "dev", TaskID: "3", Status: "done"})
-	path := writeJSONLFile(t, []string{
-		string(valid1),
-		"{not valid json",
-		string(missingRunID),
-		string(valid2),
-	})
-
-	session := newTestSession(t)
-	session.batchConfig.Execution = 32
-	stats, err := session.loadExecutionEvents(context.Background(), path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if stats.RowsLoaded != 2 || stats.MalformedRows != 1 || stats.MissingRunIDRows != 1 || stats.LinesRead != 4 {
-		t.Fatalf("stats = %+v, want RowsLoaded=2 MalformedRows=1 MissingRunIDRows=1 LinesRead=4", stats)
-	}
-
-	var count int
-	if err := session.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM execution_events").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 2 {
-		t.Fatalf("execution_events rows = %d, want 2", count)
+	var stats loadStats
+	if err := session.insertExecutionRows(context.Background(), tx, rows, &stats); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("insert execution rows: %v", err)
 	}
-}
-
-func TestLoadExecutionEvents_AssignsMonotonicEventSeqInFileOrder(t *testing.T) {
-	e1, _ := json.Marshal(team.ExecutionEvent{Timestamp: "2026-07-12T10:00:00Z", RunID: "r1", Team: "dev", TaskID: "1"})
-	e2, _ := json.Marshal(team.ExecutionEvent{Timestamp: "2026-07-12T10:00:00Z", RunID: "r1", Team: "dev", TaskID: "2"}) // same timestamp as e1
-	path := writeJSONLFile(t, []string{string(e1), string(e2)})
-
-	session := newTestSession(t)
-	session.batchConfig.Execution = 32
-	if _, err := session.loadExecutionEvents(context.Background(), path); err != nil {
+	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := session.conn.QueryContext(context.Background(), "SELECT event_seq, task_id FROM execution_events ORDER BY event_seq")
+	return stats
+}
+
+// loadFixtureLines inserts JSONL execution rows, skipping lines that do not
+// decode, for SQL tests written as raw records.
+func loadFixtureLines(t *testing.T, session *sqliteAnalyticsSession, lines []string) {
+	t.Helper()
+	var rows []team.ExecutionEvent
+	for _, line := range lines {
+		var row team.ExecutionEvent
+		if json.Unmarshal([]byte(line), &row) == nil {
+			rows = append(rows, row)
+		}
+	}
+	insertFixtureRows(t, session, rows)
+}
+
+func executionTaskIDs(t *testing.T, session *sqliteAnalyticsSession) []string {
+	t.Helper()
+	rows, err := session.conn.QueryContext(context.Background(), "SELECT task_id FROM execution_events ORDER BY event_seq")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = rows.Close() }()
 	var got []string
 	for rows.Next() {
-		var seq int64
 		var taskID string
-		if err := rows.Scan(&seq, &taskID); err != nil {
+		if err := rows.Scan(&taskID); err != nil {
 			t.Fatal(err)
 		}
 		got = append(got, taskID)
 	}
-	if len(got) != 2 || got[0] != "1" || got[1] != "2" {
-		t.Fatalf("task ids in event_seq order = %v, want [1 2] (file order preserved even with identical timestamps)", got)
+	return got
+}
+
+func TestLoadEventStore_MissingStoreLoadsNothing(t *testing.T) {
+	session := newTestSession(t)
+	stats, err := session.loadEventStore(context.Background(), t.TempDir(), true)
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if stats != (eventStoreLoadStats{}) {
+		t.Fatalf("stats = %+v, want zero value", stats)
 	}
 }
 
-func TestLoadExecutionEvents_UnparseableTimestampYieldsNullUnixNS(t *testing.T) {
-	e, _ := json.Marshal(team.ExecutionEvent{Timestamp: "not-a-timestamp", RunID: "r1", Team: "dev", TaskID: "1"})
-	path := writeJSONLFile(t, []string{string(e)})
+func TestLoadEventStore_LoadsExecutionAndMemoryRowsInOnePass(t *testing.T) {
+	workspace := t.TempDir()
+	writeExecutionEvents(t, workspace, []team.ExecutionEvent{
+		{Timestamp: "2026-07-12T10:00:00Z", RunID: "r1", Team: "dev", TaskID: "1", Agent: "developer", Attempt: 1, Status: "in_progress"},
+		{Timestamp: "2026-07-12T10:00:00Z", RunID: "r1", Team: "dev", TaskID: "2", Agent: "developer", Attempt: 1, Status: "in_progress"},
+		{Timestamp: "2026-07-12T10:00:01Z", RunID: "r1", Team: "dev", TaskID: "1", Agent: "developer", Attempt: 1, Status: "done"},
+	})
+	appendEventChain(t, workspace, []team.RunEvent{
+		{RunID: "r1", TaskID: "1", Actor: "runtime", Type: memoryRetrievedEvent, Timestamp: "2026-07-12T10:00:00Z", Payload: []byte(`{"retrieval_id":"r","context_item_id":"c"}`)},
+		{RunID: "r1", TaskID: "1", Actor: "runtime", Type: memoryRetrievedEvent, Timestamp: "2026-07-12T10:00:00Z", Payload: []byte(`true`)},
+	})
 
 	session := newTestSession(t)
-	session.batchConfig.Skills = 32
-	if _, err := session.loadExecutionEvents(context.Background(), path); err != nil {
+	session.batchConfig.Execution = 32
+	stats, err := session.loadEventStore(context.Background(), workspace, true)
+	if err != nil {
 		t.Fatal(err)
 	}
+	// run_started opens the run, then rows follow projection order even
+	// when timestamps tie.
+	if got := executionTaskIDs(t, session); !reflect.DeepEqual(got, []string{"", "1", "2", "1"}) {
+		t.Fatalf("task ids in event_seq order = %v, want [\"\" 1 2 1]", got)
+	}
+	if stats.EventsRead != 6 || stats.Execution.RowsLoaded != 4 || stats.Memory.RowsLoaded != 1 || stats.Memory.MalformedPayloadRows != 1 {
+		t.Fatalf("stats = %+v, want 6 events, 4 execution rows, 1 memory row, 1 malformed memory payload", stats)
+	}
+}
+
+func TestLoadEventStore_ExecutionOnlySkipsMemoryRows(t *testing.T) {
+	workspace := t.TempDir()
+	writeExecutionEvents(t, workspace, []team.ExecutionEvent{{RunID: "r1", Team: "dev", TaskID: "1", Attempt: 1, Status: "done"}})
+	appendEventChain(t, workspace, []team.RunEvent{{RunID: "r1", Actor: "runtime", Type: memoryRetrievedEvent, Payload: []byte(`{"retrieval_id":"r"}`)}})
+	session := newTestSession(t)
+	if _, err := session.loadEventStore(context.Background(), workspace, false); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := session.conn.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM memory_events").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("memory_events rows = %d, want 0 for an execution-only load", count)
+	}
+}
+
+func TestInsertExecutionRows_SkipsRowsWithoutRunID(t *testing.T) {
+	session := newTestSession(t)
+	stats := insertFixtureRows(t, session, []team.ExecutionEvent{
+		{RunID: "r1", Team: "dev", TaskID: "1", Status: "done"},
+		{RunID: "", Team: "dev", TaskID: "2", Status: "done"},
+	})
+	if stats.RowsLoaded != 1 || stats.MissingRunIDRows != 1 {
+		t.Fatalf("stats = %+v, want 1 loaded and 1 missing run id", stats)
+	}
+}
+
+func TestInsertExecutionRows_UnparseableTimestampYieldsNullUnixNS(t *testing.T) {
+	session := newTestSession(t)
+	session.batchConfig.Skills = 32
+	insertFixtureRows(t, session, []team.ExecutionEvent{{Timestamp: "not-a-timestamp", RunID: "r1", Team: "dev", TaskID: "1"}})
 	var raw string
 	var unixNS sql.NullInt64
 	if err := session.conn.QueryRowContext(context.Background(), "SELECT timestamp_raw, timestamp_unix_ns FROM execution_events").Scan(&raw, &unixNS); err != nil {
@@ -124,14 +155,9 @@ func TestLoadExecutionEvents_UnparseableTimestampYieldsNullUnixNS(t *testing.T) 
 	}
 }
 
-func TestLoadExecutionEvents_SkillsAreNormalizedAndDeduped(t *testing.T) {
-	e, _ := json.Marshal(team.ExecutionEvent{Timestamp: "2026-07-12T10:00:00Z", RunID: "r1", Team: "dev", TaskID: "1", Skills: []string{" go ", "go", " review ", "\t"}})
-	path := writeJSONLFile(t, []string{string(e)})
-
+func TestInsertExecutionRows_SkillsAreNormalizedAndDeduped(t *testing.T) {
 	session := newTestSession(t)
-	if _, err := session.loadExecutionEvents(context.Background(), path); err != nil {
-		t.Fatal(err)
-	}
+	insertFixtureRows(t, session, []team.ExecutionEvent{{Timestamp: "2026-07-12T10:00:00Z", RunID: "r1", Team: "dev", TaskID: "1", Skills: []string{" go ", "go", " review ", "\t"}}})
 	rows, err := session.conn.QueryContext(context.Background(), "SELECT skill FROM execution_event_skills ORDER BY skill")
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +176,7 @@ func TestLoadExecutionEvents_SkillsAreNormalizedAndDeduped(t *testing.T) {
 	}
 }
 
-func TestLoadExecutionEvents_PreservesAllFieldsForOneRow(t *testing.T) {
+func TestInsertExecutionRows_PreservesAllFieldsForOneRow(t *testing.T) {
 	event := team.ExecutionEvent{
 		Version: 3, Timestamp: "2026-07-12T10:00:00.5Z", RunID: "r1", Team: "dev", TaskID: "1",
 		Agent: "developer", Attempt: 2, Status: "done", Model: "large", TaskType: "agent",
@@ -161,19 +187,10 @@ func TestLoadExecutionEvents_PreservesAllFieldsForOneRow(t *testing.T) {
 		AcceptanceState:  team.AcceptanceState("passed"),
 		RepairAttempts:   1,
 		Phase:            team.Phase("execute"),
-		Provider:         "anthropic",
 		FailureSignature: "",
 	}
-	// This is a saved provider-era JSONL row. Do not construct it through
-	// ExecutionEvent.MarshalJSON: current writers intentionally suppress the
-	// retired provider field, while the analytics reader must keep accepting
-	// historical files that contain it.
-	path := writeJSONLFile(t, []string{`{"version":3,"timestamp":"2026-07-12T10:00:00.5Z","run_id":"r1","team":"dev","task_id":"1","agent":"developer","attempt":2,"status":"done","model":"large","task_type":"agent","team_revision":"rev-a","duration_ms":1234,"usage":{"input_tokens":10,"output_tokens":20,"total_tokens":30,"progress_tokens":5},"outcome":"goal_satisfied","stop_reason":"completed","acceptance_state":"passed","repair_attempts":1,"phase":"execute","provider":"anthropic"}`})
-
 	session := newTestSession(t)
-	if _, err := session.loadExecutionEvents(context.Background(), path); err != nil {
-		t.Fatal(err)
-	}
+	insertFixtureRows(t, session, []team.ExecutionEvent{event})
 	var got team.ExecutionEvent
 	var outcome, stopReason, acceptanceState, phase string
 	row := session.conn.QueryRowContext(context.Background(), `SELECT version, timestamp_raw, run_id, team, task_id, agent, attempt,

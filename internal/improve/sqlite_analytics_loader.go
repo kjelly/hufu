@@ -1,17 +1,13 @@
 package improve
 
-// Streaming ingestion of execution-events.jsonl into the TEMP analytics
-// schema (spec.md §8). Events are decoded and inserted one line at a time
-// inside a single transaction — the file is never materialized into a
-// []team.ExecutionEvent slice, so peak memory stays proportional to one
-// event, not to the whole telemetry history (spec.md G4).
+// Insertion of projected execution events into the TEMP analytics schema
+// (spec.md §8). Rows come from team.ExecutionEventProjector over the
+// canonical event store; see loadEventStore.
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
+	"database/sql"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -21,9 +17,7 @@ import (
 // loadStats reports what happened during ingestion, for tests and
 // diagnostics only — spec.md §8.1 explicitly keeps this out of Report.
 type loadStats struct {
-	LinesRead        int64
 	RowsLoaded       int64
-	MalformedRows    int64
 	MissingRunIDRows int64
 }
 
@@ -47,91 +41,53 @@ const (
 	executionSkillColumnCount = 4
 )
 
-// loadExecutionEvents streams path (execution-events.jsonl) into TEMP
-// execution_events / execution_event_skills. It preserves the tolerant
-// semantics exactly: a missing file is not an error, a malformed
-// JSON line is skipped, and a line with an empty run_id is skipped.
-func (s *sqliteAnalyticsSession) loadExecutionEvents(ctx context.Context, path string) (loadStats, error) {
-	var stats loadStats
-	if s.selectedRunsReady {
-		return stats, fmt.Errorf("cannot ingest execution events after run selection")
-	}
-
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return stats, nil
-		}
-		return stats, fmt.Errorf("open execution events: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	tx, err := s.conn.BeginTx(ctx, nil)
-	if err != nil {
-		return stats, fmt.Errorf("begin execution events transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-
+// insertExecutionRows inserts projected rows into TEMP execution_events /
+// execution_event_skills in projection order. A row without a run ID cannot
+// be attributed to a run and is skipped.
+func (s *sqliteAnalyticsSession) insertExecutionRows(ctx context.Context, tx *sql.Tx, rows []team.ExecutionEvent, stats *loadStats) error {
 	eventBatchRows, err := s.configuredBatchRows(ctx, executionEventColumnCount, s.batchConfig.Execution)
 	if err != nil {
-		return stats, fmt.Errorf("configure execution event batch: %w", err)
+		return fmt.Errorf("configure execution event batch: %w", err)
 	}
 	skillBatchRows, err := s.configuredBatchRows(ctx, executionSkillColumnCount, s.batchConfig.Skills)
 	if err != nil {
-		return stats, fmt.Errorf("configure execution skill batch: %w", err)
+		return fmt.Errorf("configure execution skill batch: %w", err)
 	}
 	insertEvent, err := newSQLiteBatchInserter(ctx, tx, insertExecutionEventPrefix, executionEventColumnCount, eventBatchRows)
 	if err != nil {
-		return stats, fmt.Errorf("create execution event batch: %w", err)
+		return fmt.Errorf("create execution event batch: %w", err)
 	}
 	defer func() { _ = insertEvent.Close() }()
 	insertSkill, err := newSQLiteBatchInserter(ctx, tx, insertExecutionEventSkillPrefix, executionSkillColumnCount, skillBatchRows)
 	if err != nil {
-		return stats, fmt.Errorf("create execution skill batch: %w", err)
+		return fmt.Errorf("create execution skill batch: %w", err)
 	}
 	defer func() { _ = insertSkill.Close() }()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 4<<20)
-
+	// Continue after rows already loaded so separate loads keep a single
+	// insertion order.
 	var eventSeq int64
-	for scanner.Scan() {
-		stats.LinesRead++
-		var event team.ExecutionEvent
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			stats.MalformedRows++
-			continue
-		}
+	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(event_seq), 0) FROM execution_events").Scan(&eventSeq); err != nil {
+		return fmt.Errorf("read execution event sequence: %w", err)
+	}
+	for _, event := range rows {
 		if event.RunID == "" {
 			stats.MissingRunIDRows++
 			continue
 		}
 		eventSeq++
 		if err := insertExecutionEventRow(insertEvent, insertSkill, eventSeq, event); err != nil {
-			return stats, fmt.Errorf("insert execution event %d: %w", eventSeq, err)
+			return fmt.Errorf("insert execution event %d: %w", eventSeq, err)
 		}
 		stats.RowsLoaded++
 	}
-	if err := scanner.Err(); err != nil {
-		return stats, fmt.Errorf("read execution events: %w", err)
-	}
 	if err := insertEvent.Flush(); err != nil {
-		return stats, fmt.Errorf("flush execution events: %w", err)
+		return fmt.Errorf("flush execution events: %w", err)
 	}
 	if err := insertSkill.Flush(); err != nil {
-		return stats, fmt.Errorf("flush execution skills: %w", err)
+		return fmt.Errorf("flush execution skills: %w", err)
 	}
-
-	if err := tx.Commit(); err != nil {
-		return stats, fmt.Errorf("commit execution events: %w", err)
-	}
-	committed = true
-	return stats, nil
+	return nil
 }
 
 func insertExecutionEventRow(insertEvent, insertSkill *sqliteBatchInserter, eventSeq int64, event team.ExecutionEvent) error {

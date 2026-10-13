@@ -47,17 +47,9 @@ func writeAnalyticsBenchmarkFixture(tb testing.TB, profile analyticsBenchmarkPro
 
 func writeBenchmarkExecutionEvents(tb testing.TB, workspace string, profile analyticsBenchmarkProfile) {
 	tb.Helper()
-	path := filepath.Join(workspace, eventsPath)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		tb.Fatal(err)
-	}
-	file, err := os.Create(path)
-	if err != nil {
-		tb.Fatal(err)
-	}
-	writer := bufio.NewWriterSize(file, 256*1024)
 	base := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
 	eventsPerRun := max(1, profile.events/profile.runs)
+	rows := make([]team.ExecutionEvent, 0, profile.events)
 	for i := range profile.events {
 		run := min(profile.runs-1, i/eventsPerRun)
 		withinRun := i % eventsPerRun
@@ -80,7 +72,7 @@ func writeBenchmarkExecutionEvents(tb testing.TB, workspace string, profile anal
 		if !terminal && task%13 == 0 {
 			agent, model, taskType = "initial-agent", "initial-model", "initial-type"
 		}
-		event := team.ExecutionEvent{
+		row := team.ExecutionEvent{
 			Version:      2,
 			Timestamp:    base.Add(time.Duration(run)*time.Minute + time.Duration(withinRun/2)*time.Millisecond).Format(time.RFC3339Nano),
 			RunID:        fmt.Sprintf("run-%06d", run),
@@ -93,42 +85,18 @@ func writeBenchmarkExecutionEvents(tb testing.TB, workspace string, profile anal
 			TaskType:     taskType,
 			Skills:       []string{fmt.Sprintf("skill-%d", task%5), fmt.Sprintf("shared-%d", task%2)},
 			TeamRevision: fmt.Sprintf("revision-%d", run%7),
-			DurationMS:   int64(10 + task%100),
-			Usage: team.ExecutionUsage{
+		}
+		if terminal {
+			// The runtime records an attempt's usage on its terminal row.
+			row.Usage = team.ExecutionUsage{
 				InputTokens:  5 + task%20,
 				OutputTokens: 3 + task%10,
 				TotalTokens:  8 + task%30,
-			},
+			}
 		}
-		data, marshalErr := json.Marshal(event)
-		if marshalErr != nil {
-			tb.Fatal(marshalErr)
-		}
-		if _, err = writer.Write(data); err != nil {
-			tb.Fatal(err)
-		}
-		if err = writer.WriteByte('\n'); err != nil {
-			tb.Fatal(err)
-		}
+		rows = append(rows, row)
 	}
-	// These extra records exercise tolerant ingestion without changing the
-	// advertised count of valid, run-scoped execution events.
-	if _, err = writer.WriteString("{malformed-json\n"); err != nil {
-		tb.Fatal(err)
-	}
-	emptyRun, err := json.Marshal(team.ExecutionEvent{Version: 2, Timestamp: base.Format(time.RFC3339Nano), Team: "dev", TaskID: "empty-run", Status: "done"})
-	if err != nil {
-		tb.Fatal(err)
-	}
-	if _, err = writer.Write(append(emptyRun, '\n')); err != nil {
-		tb.Fatal(err)
-	}
-	if err = writer.Flush(); err != nil {
-		tb.Fatal(err)
-	}
-	if err = file.Close(); err != nil {
-		tb.Fatal(err)
-	}
+	appendEventChain(tb, workspace, executionFixtureEvents(tb, rows))
 }
 
 func writeBenchmarkAuditEvents(tb testing.TB, workspace string, profile analyticsBenchmarkProfile) {
@@ -177,55 +145,28 @@ func writeBenchmarkAuditEvents(tb testing.TB, workspace string, profile analytic
 
 func writeBenchmarkMemoryEvents(tb testing.TB, workspace string, profile analyticsBenchmarkProfile) {
 	tb.Helper()
-	path := filepath.Join(workspace, "logs", "event_store.jsonl")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		tb.Fatal(err)
-	}
-	file, err := os.Create(path)
-	if err != nil {
-		tb.Fatal(err)
-	}
-	writer := bufio.NewWriter(file)
 	count := max(3, profile.events/1_000)
 	base := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
-	previousID, previousHash := "", ""
+	events := make([]team.RunEvent, 0, count)
 	for i := range count {
 		run := i % profile.runs
 		eventType := []string{memoryRetrievedEvent, memoryUsageRecordedEvent, memoryOutcomeRecordedEvent}[i%3]
 		payload := json.RawMessage(fmt.Sprintf(`{"retrieval_id":"retrieval-%d","context_item_id":"context-%d","content_hash":"hash-%d","policy_version":"policy-v1","reason_code":"normal","token_count":4,"disposition":"applied","signal":"verification_passed","direction":"positive"}`, i/3, i/3, i/3))
-		event := team.RunEvent{
-			SchemaVersion: 1,
-			ID:            fmt.Sprintf("memory-%08d", i),
-			PreviousID:    previousID,
-			RunID:         fmt.Sprintf("run-%06d", run),
-			SessionID:     "benchmark",
-			TaskID:        fmt.Sprintf("task-%06d-%04d", run, i%max(1, profile.events/profile.runs/2)),
-			Actor:         "runtime",
-			Type:          eventType,
-			Timestamp:     base.Add(time.Duration(run) * time.Minute).Format(time.RFC3339Nano),
-			Payload:       payload,
-			PreviousHash:  previousHash,
-		}
-		event.Hash = team.ComputeEventHash(event.PreviousHash, event.ID, event.Type, event.Timestamp, event.Payload)
-		data, marshalErr := json.Marshal(event)
-		if marshalErr != nil {
-			tb.Fatal(marshalErr)
-		}
-		if _, err = writer.Write(append(data, '\n')); err != nil {
-			tb.Fatal(err)
-		}
-		previousID, previousHash = event.ID, event.Hash
+		events = append(events, team.RunEvent{
+			RunID:     fmt.Sprintf("run-%06d", run),
+			SessionID: "benchmark",
+			TaskID:    fmt.Sprintf("task-%06d-%04d", run, i%max(1, profile.events/profile.runs/2)),
+			Actor:     "runtime",
+			Type:      eventType,
+			Timestamp: base.Add(time.Duration(run) * time.Minute).Format(time.RFC3339Nano),
+			Payload:   payload,
+		})
 	}
-	if err = writer.Flush(); err != nil {
-		tb.Fatal(err)
-	}
-	if err = file.Close(); err != nil {
-		tb.Fatal(err)
-	}
+	appendEventChain(tb, workspace, events)
 }
 
 func addAnalyticsDiagnostics(total *AnalyticsDiagnostics, current AnalyticsDiagnostics) {
-	total.ExecutionLinesRead = current.ExecutionLinesRead
+	total.EventsRead = current.EventsRead
 	total.ExecutionRows = current.ExecutionRows
 	total.AuditLinesRead = current.AuditLinesRead
 	total.AuditRows = current.AuditRows
@@ -233,9 +174,8 @@ func addAnalyticsDiagnostics(total *AnalyticsDiagnostics, current AnalyticsDiagn
 	total.SelectedRuns = current.SelectedRuns
 	total.ProjectedTasks = current.ProjectedTasks
 	total.Open += current.Open
-	total.LoadExecution += current.LoadExecution
+	total.LoadEventStore += current.LoadEventStore
 	total.LoadAudit += current.LoadAudit
-	total.LoadMemory += current.LoadMemory
 	total.BuildIndexes += current.BuildIndexes
 	total.SelectRuns += current.SelectRuns
 	total.ProjectTasks += current.ProjectTasks
@@ -251,9 +191,8 @@ func reportAnalyticsDiagnostics(b *testing.B, diagnostics AnalyticsDiagnostics) 
 	b.Helper()
 	iterations := float64(max(1, b.N))
 	b.ReportMetric(float64(diagnostics.Open.Nanoseconds())/iterations, "open-ns/op")
-	b.ReportMetric(float64(diagnostics.LoadExecution.Nanoseconds())/iterations, "load_execution-ns/op")
+	b.ReportMetric(float64(diagnostics.LoadEventStore.Nanoseconds())/iterations, "load_event_store-ns/op")
 	b.ReportMetric(float64(diagnostics.LoadAudit.Nanoseconds())/iterations, "load_audit-ns/op")
-	b.ReportMetric(float64(diagnostics.LoadMemory.Nanoseconds())/iterations, "load_memory-ns/op")
 	b.ReportMetric(float64(diagnostics.BuildIndexes.Nanoseconds())/iterations, "create_indexes-ns/op")
 	b.ReportMetric(float64(diagnostics.SelectRuns.Nanoseconds())/iterations, "select_runs-ns/op")
 	b.ReportMetric(float64(diagnostics.ProjectTasks.Nanoseconds())/iterations, "task_projection-ns/op")

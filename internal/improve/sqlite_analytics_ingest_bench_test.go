@@ -18,7 +18,6 @@ func BenchmarkSQLiteAnalyticsExecutionBatchSizesTiny(b *testing.B) {
 
 func benchmarkSQLiteAnalyticsExecutionBatchSizes(b *testing.B, profile analyticsBenchmarkProfile) {
 	workspace, _ := writeAnalyticsBenchmarkFixture(b, profile)
-	path := filepath.Join(workspace, eventsPath)
 	for _, candidate := range analyticsBatchCandidates {
 		b.Run(fmt.Sprintf("batch=%d", candidate), func(b *testing.B) {
 			b.ReportAllocs()
@@ -29,7 +28,7 @@ func benchmarkSQLiteAnalyticsExecutionBatchSizes(b *testing.B, profile analytics
 				}
 				session.batchConfig.Execution = candidate
 				session.batchConfig.Skills = candidate
-				if _, err := session.loadExecutionEvents(b.Context(), path); err != nil {
+				if _, err := session.loadEventStore(b.Context(), workspace, false); err != nil {
 					b.Fatal(err)
 				}
 				if err := session.Close(); err != nil {
@@ -76,7 +75,7 @@ func BenchmarkSQLiteAnalyticsMemoryBatchSizes(b *testing.B) {
 					b.Fatal(err)
 				}
 				session.batchConfig.Memory = candidate
-				if _, err := session.loadMemoryEvents(b.Context(), workspace); err != nil {
+				if _, err := session.loadEventStore(b.Context(), workspace, true); err != nil {
 					b.Fatal(err)
 				}
 				if err := session.Close(); err != nil {

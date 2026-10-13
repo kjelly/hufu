@@ -336,21 +336,15 @@ func legacyBenchCollectGroupedMetrics(events []team.ExecutionEvent) GroupedMetri
 
 // ---- synthetic fixture generation ----
 
-// writeSyntheticExecutionEvents writes n JSONL execution events for a single
-// team, spread across runs of tasksPerRun tasks each (two events per task:
+// writeSyntheticExecutionEvents writes n execution events for a single team,
+// spread across runs of tasksPerRun tasks each (two events per task:
 // in_progress then a terminal status), with a small, realistic spread of
 // agents/models/task types/skills so grouped-metrics cardinality resembles
-// real telemetry rather than a single degenerate group.
-func writeSyntheticExecutionEvents(b *testing.B, path string, n int) {
+// real telemetry rather than a single degenerate group. The rows go to
+// dir's event store, which the SQL path reads, and to legacyPath as JSONL for
+// the in-Go comparison path.
+func writeSyntheticExecutionEvents(b *testing.B, dir, legacyPath string, n int) {
 	b.Helper()
-	f, err := os.Create(path)
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer func() { _ = f.Close() }()
-	w := bufio.NewWriterSize(f, 1<<20)
-	defer func() { _ = w.Flush() }()
-
 	agents := []string{"agent-a", "agent-b", "agent-c"}
 	models := []string{"small", "large"}
 	taskTypes := []string{"coordinator", "worker"}
@@ -360,15 +354,18 @@ func writeSyntheticExecutionEvents(b *testing.B, path string, n int) {
 
 	const tasksPerRun = 200
 	const eventsPerTask = 2
+	rows := make([]team.ExecutionEvent, 0, n)
 	for i := 0; i < n; i++ {
 		taskOrdinal := i / eventsPerTask
 		runIdx := taskOrdinal / tasksPerRun
 		taskIdx := taskOrdinal % tasksPerRun
 		status := "in_progress"
+		var usage team.ExecutionUsage
 		if i%eventsPerTask == eventsPerTask-1 {
 			status = statuses[taskIdx%len(statuses)]
+			usage.TotalTokens = 10 + taskIdx%7
 		}
-		event := team.ExecutionEvent{
+		rows = append(rows, team.ExecutionEvent{
 			Version:   3,
 			Timestamp: base.Add(time.Duration(i) * time.Millisecond).Format(time.RFC3339Nano),
 			RunID:     fmt.Sprintf("run-%d", runIdx),
@@ -380,16 +377,24 @@ func writeSyntheticExecutionEvents(b *testing.B, path string, n int) {
 			Model:     models[taskIdx%len(models)],
 			TaskType:  taskTypes[taskIdx%len(taskTypes)],
 			Skills:    skillSets[taskIdx%len(skillSets)],
-			Usage:     team.ExecutionUsage{TotalTokens: 10 + taskIdx%7},
-		}
-		data, err := json.Marshal(event)
+			Usage:     usage,
+		})
+	}
+	writeExecutionEvents(b, dir, rows)
+
+	f, err := os.Create(legacyPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	w := bufio.NewWriterSize(f, 1<<20)
+	defer func() { _ = w.Flush() }()
+	for _, row := range rows {
+		data, err := json.Marshal(row)
 		if err != nil {
 			b.Fatal(err)
 		}
-		if _, err := w.Write(data); err != nil {
-			b.Fatal(err)
-		}
-		if err := w.WriteByte('\n'); err != nil {
+		if _, err := w.Write(append(data, '\n')); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -412,8 +417,8 @@ func writeSyntheticExecutionEvents(b *testing.B, path string, n int) {
 func BenchmarkExecutionTelemetryLegacyVsSQL(b *testing.B) {
 	for _, n := range []int{10_000, 100_000, 1_000_000} {
 		dir := b.TempDir()
-		path := filepath.Join(dir, "execution-events.jsonl")
-		writeSyntheticExecutionEvents(b, path, n)
+		path := filepath.Join(dir, "legacy-execution-events.jsonl")
+		writeSyntheticExecutionEvents(b, dir, path, n)
 
 		b.Run(fmt.Sprintf("legacy/n=%d", n), func(b *testing.B) {
 			b.ReportAllocs()
@@ -440,7 +445,7 @@ func BenchmarkExecutionTelemetryLegacyVsSQL(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				if _, err := session.loadExecutionEvents(ctx, path); err != nil {
+				if _, err := session.loadEventStore(ctx, dir, false); err != nil {
 					b.Fatal(err)
 				}
 				if err := session.createIndexes(ctx); err != nil {
@@ -502,13 +507,10 @@ func benchmarkSQLiteAnalyticsIndexSets(b *testing.B, profile analyticsBenchmarkP
 				if err != nil {
 					b.Fatal(err)
 				}
-				if _, err := session.loadExecutionEvents(ctx, filepath.Join(workspace, eventsPath)); err != nil {
+				if _, err := session.loadEventStore(ctx, workspace, true); err != nil {
 					b.Fatal(err)
 				}
 				if _, err := session.loadAuditEvents(ctx, filepath.Join(workspace, "logs", "audit")); err != nil {
-					b.Fatal(err)
-				}
-				if _, err := session.loadMemoryEvents(ctx, workspace); err != nil {
 					b.Fatal(err)
 				}
 				if err := session.createIndexesFrom(ctx, candidate.statements); err != nil {
@@ -571,13 +573,10 @@ func BenchmarkSQLiteAnalyticsPragmaProfiles(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				if _, err := session.loadExecutionEvents(ctx, filepath.Join(workspace, eventsPath)); err != nil {
+				if _, err := session.loadEventStore(ctx, workspace, true); err != nil {
 					b.Fatal(err)
 				}
 				if _, err := session.loadAuditEvents(ctx, filepath.Join(workspace, "logs", "audit")); err != nil {
-					b.Fatal(err)
-				}
-				if _, err := session.loadMemoryEvents(ctx, workspace); err != nil {
 					b.Fatal(err)
 				}
 				if err := session.createIndexes(ctx); err != nil {

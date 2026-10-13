@@ -1,7 +1,6 @@
 package improve
 
 import (
-	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -48,7 +47,6 @@ func TestSQLMemoryMetricsParityAllTenFields(t *testing.T) {
 	}
 	allExecution := append([]team.ExecutionEvent{}, selectedExecution...)
 	allExecution = append(allExecution, team.ExecutionEvent{Timestamp: "2026-07-12T11:00:00Z", RunID: "unrelated", Team: "other", TaskID: "other-task", Attempt: 2, Usage: team.ExecutionUsage{InputTokens: 100}})
-	writeExecutionEvents(t, workspace, allExecution)
 	writeMemoryEventStore(t, workspace, []team.RunEvent{
 		{ID: "run-start", RunID: "selected", Type: "run_started", Actor: "runtime", Payload: []byte(`{"secret":"discard"}`)},
 		{ID: "retrieval-1", RunID: "selected", Type: memoryRetrievedEvent, Actor: "runtime", Payload: []byte(`{"retrieval_id":"r1","reason_code":"stale_environment","token_count":2.9}`)},
@@ -65,12 +63,11 @@ func TestSQLMemoryMetricsParityAllTenFields(t *testing.T) {
 	})
 
 	session := newTestSession(t)
-	if _, err := session.loadExecutionEvents(t.Context(), filepath.Join(workspace, eventsPath)); err != nil {
+	if _, err := session.loadEventStore(t.Context(), workspace, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.loadMemoryEvents(t.Context(), workspace); err != nil {
-		t.Fatal(err)
-	}
+	// The SQL under test reads execution rows; insert them directly.
+	insertFixtureRows(t, session, allExecution)
 	if _, _, err := session.sqlSelectRecentRunSummaries(t.Context(), "dev", 1); err != nil {
 		t.Fatal(err)
 	}

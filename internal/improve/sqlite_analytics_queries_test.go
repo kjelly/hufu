@@ -2,7 +2,6 @@ package improve
 
 import (
 	"context"
-	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -11,18 +10,7 @@ import (
 
 func loadFixtureEvents(t *testing.T, session *sqliteAnalyticsSession, events []team.ExecutionEvent) {
 	t.Helper()
-	lines := make([]string, 0, len(events))
-	for _, event := range events {
-		data, err := json.Marshal(event)
-		if err != nil {
-			t.Fatal(err)
-		}
-		lines = append(lines, string(data))
-	}
-	path := writeJSONLFile(t, lines)
-	if _, err := session.loadExecutionEvents(context.Background(), path); err != nil {
-		t.Fatalf("loadExecutionEvents: %v", err)
-	}
+	insertFixtureRows(t, session, events)
 }
 
 func setTestSelectedRuns(t *testing.T, session *sqliteAnalyticsSession, runIDs ...string) {
@@ -128,8 +116,7 @@ func TestSQLiteAnalyticsSelectedRunLifecycleConstraints(t *testing.T) {
 		if _, _, err := session.sqlSelectRecentRunSummaries(t.Context(), "dev", 1); err != nil {
 			t.Fatal(err)
 		}
-		path := writeJSONLFile(t, []string{`{"run_id":"r2","team":"dev"}`})
-		if _, err := session.loadExecutionEvents(t.Context(), path); err == nil {
+		if _, err := session.loadEventStore(t.Context(), t.TempDir(), false); err == nil {
 			t.Fatal("expected ingestion after selection to fail")
 		}
 	})

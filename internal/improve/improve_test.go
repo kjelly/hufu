@@ -1,7 +1,6 @@
 package improve
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,18 +33,8 @@ func TestAnalyzeUsesLatestRunAndProducesDeterministicFindings(t *testing.T) {
 		{Version: 1, Timestamp: "2026-07-12T11:00:04Z", RunID: "latest", Team: "dev", TaskID: "2", Agent: "developer", Attempt: 2, Status: "in_progress"},
 		{Version: 1, Timestamp: "2026-07-12T11:00:08Z", RunID: "latest", Team: "dev", TaskID: "2", Agent: "developer", Attempt: 2, Status: "done", Usage: team.ExecutionUsage{TotalTokens: 50}},
 	}
-	var lines []string
-	for _, event := range events {
-		data, err := json.Marshal(event)
-		if err != nil {
-			t.Fatal(err)
-		}
-		lines = append(lines, string(data))
-	}
-	if err := os.MkdirAll(filepath.Join(workspace, "logs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workspace, eventsPath), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+	writeExecutionEvents(t, workspace, events)
+	if err := os.MkdirAll(filepath.Join(workspace, "logs", "audit"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	audit := `{"timestamp":"2026-07-12T11:00:02Z","team":"dev","agent":"developer","event":"tool_error","input":"secret"}` + "\n"
@@ -120,7 +109,7 @@ func TestAnalyzeRecentAggregatesTeamRunsAndGroupsMetadata(t *testing.T) {
 		{Version: 2, Timestamp: "2026-07-12T11:00:02Z", RunID: "dev-2", Team: "dev", TaskID: "1", Agent: "developer", Attempt: 1, Status: "error", Model: "large", TaskType: "agent", TeamRevision: "rev-b", Usage: team.ExecutionUsage{TotalTokens: 5}},
 		{Version: 2, Timestamp: "2026-07-12T11:00:04Z", RunID: "dev-2", Team: "dev", TaskID: "1", Agent: "developer", Attempt: 2, Status: "in_progress", Model: "large", TaskType: "agent", Skills: []string{"go", "review"}, TeamRevision: "rev-b"},
 		{Version: 2, Timestamp: "2026-07-12T11:00:06Z", RunID: "dev-2", Team: "dev", TaskID: "1", Agent: "developer", Attempt: 2, Status: "done", Model: "large", TaskType: "agent", Skills: []string{"go", "review"}, TeamRevision: "rev-b", Usage: team.ExecutionUsage{TotalTokens: 15}},
-		{Version: 2, Timestamp: "2026-07-12T11:00:07Z", RunID: "dev-2", Team: "", TaskID: "ignored", Agent: "developer", Attempt: 1, Status: "done", Model: "secret-model", TeamRevision: "wrong-revision", Usage: team.ExecutionUsage{TotalTokens: 100}},
+		{Version: 2, Timestamp: "2026-07-12T11:00:07Z", RunID: "teamless", Team: "", TaskID: "ignored", Agent: "developer", Attempt: 1, Status: "done", Model: "secret-model", TeamRevision: "wrong-revision", Usage: team.ExecutionUsage{TotalTokens: 100}},
 		{Version: 2, Timestamp: "2026-07-12T12:00:00Z", RunID: "other-1", Team: "other", TaskID: "1", Agent: "helper", Attempt: 1, Status: "done", Usage: team.ExecutionUsage{TotalTokens: 99}},
 	}
 	writeExecutionEvents(t, workspace, events)
@@ -248,24 +237,6 @@ func TestAnalyzeRecentIncludesSQLMemoryMetrics(t *testing.T) {
 	wantRef := ArtifactRef{Kind: "context_item", ID: "context-1", Revision: "hash-1"}
 	if strings.Join(report.MemoryPolicyVersions, ",") != "policy-v1" || len(report.AppliedContextRefs) != 1 || report.AppliedContextRefs[0] != wantRef {
 		t.Fatalf("memory provenance policies=%v refs=%v", report.MemoryPolicyVersions, report.AppliedContextRefs)
-	}
-}
-
-func writeExecutionEvents(t *testing.T, workspace string, events []team.ExecutionEvent) {
-	t.Helper()
-	lines := make([]string, 0, len(events))
-	for _, event := range events {
-		data, err := json.Marshal(event)
-		if err != nil {
-			t.Fatal(err)
-		}
-		lines = append(lines, string(data))
-	}
-	if err := os.MkdirAll(filepath.Join(workspace, "logs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workspace, eventsPath), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
-		t.Fatal(err)
 	}
 }
 

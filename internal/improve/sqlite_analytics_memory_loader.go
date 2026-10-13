@@ -1,19 +1,7 @@
 package improve
 
-// Streaming ingestion of the canonical event_store.jsonl memory events. The
-// reader is deliberately owned by internal/team: it validates the complete
-// durable hash chain without opening EventStore, which would create files or
-// publish a cache. This loader keeps its TEMP writes transactional so a chain
-// error after a valid prefix cannot leave partial analytics rows behind.
-
-import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"time"
-
-	"github.com/kjelly/hufu/internal/team"
-)
+// Memory event rows from the canonical event store; loadEventStore streams
+// them in the same pass as the execution projection.
 
 type memoryLoadStats struct {
 	RowsLoaded           int64
@@ -35,88 +23,6 @@ const (
 	memoryUsageRecordedEvent   = "memory_usage_recorded"
 	memoryOutcomeRecordedEvent = "memory_outcome_recorded"
 )
-
-// loadMemoryEvents streams the canonical event store into TEMP memory_events.
-// Missing, corrupt, or otherwise unreadable canonical event stores are
-// intentionally nonfatal, matching the public memory-reader behavior. SQL
-// errors from the TEMP insert and commit are still returned to the caller.
-func (s *sqliteAnalyticsSession) loadMemoryEvents(ctx context.Context, workspace string) (memoryLoadStats, error) {
-	var stats memoryLoadStats
-	if s.taskViewsReady {
-		return stats, fmt.Errorf("cannot ingest memory events after task projections materialize")
-	}
-
-	tx, err := s.conn.BeginTx(ctx, nil)
-	if err != nil {
-		return stats, fmt.Errorf("begin memory events transaction: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-
-	batchRows, err := s.configuredBatchRows(ctx, memoryEventColumnCount, s.batchConfig.Memory)
-	if err != nil {
-		return stats, fmt.Errorf("configure memory event batch: %w", err)
-	}
-	insertEvent, err := newSQLiteBatchInserter(ctx, tx, insertMemoryEventPrefix, memoryEventColumnCount, batchRows)
-	if err != nil {
-		return stats, fmt.Errorf("create memory event batch: %w", err)
-	}
-	defer func() { _ = insertEvent.Close() }()
-
-	var eventSeq int64
-	var insertErr error
-	streamErr := team.StreamValidatedRunEvents(ctx, workspace, func(event team.RunEvent) error {
-		if !isMemoryEventType(event.Type) {
-			stats.EventsSkipped++
-			return nil
-		}
-
-		var payload map[string]any
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			stats.MalformedPayloadRows++
-			return nil
-		}
-
-		eventSeq++
-		var timestampUnixNS any
-		if timestamp, err := time.Parse(time.RFC3339Nano, event.Timestamp); err == nil {
-			timestampUnixNS = timestamp.UnixNano()
-		}
-		insertErr = insertEvent.Add(
-			eventSeq, event.RunID, event.TaskID, event.Attempt, event.Type, event.Timestamp,
-			timestampUnixNS, memoryPayloadString(payload, "retrieval_id"), memoryPayloadString(payload, "context_item_id"),
-			memoryPayloadString(payload, "content_hash"), memoryPayloadString(payload, "policy_version"), memoryPayloadString(payload, "reason_code"),
-			memoryPayloadInt(payload, "token_count"), memoryPayloadString(payload, "disposition"),
-			memoryPayloadString(payload, "signal"), memoryPayloadString(payload, "direction"),
-		)
-		if insertErr != nil {
-			return insertErr
-		}
-		stats.RowsLoaded++
-		return nil
-	})
-	if insertErr != nil {
-		return stats, fmt.Errorf("insert memory event: %w", insertErr)
-	}
-	if streamErr != nil {
-		// The transaction is rolled back by the deferred cleanup. Canonical
-		// event-store validation/read failures are nonfatal by design.
-		return stats, nil
-	}
-	if err := insertEvent.Flush(); err != nil {
-		return stats, fmt.Errorf("flush memory events: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return stats, fmt.Errorf("commit memory events: %w", err)
-	}
-	committed = true
-	return stats, nil
-}
 
 func isMemoryEventType(eventType string) bool {
 	switch eventType {

@@ -8,14 +8,6 @@ import (
 	"github.com/kjelly/hufu/internal/team"
 )
 
-func loadFixtureLines(t *testing.T, session *sqliteAnalyticsSession, lines []string) {
-	t.Helper()
-	path := writeJSONLFile(t, lines)
-	if _, err := session.loadExecutionEvents(context.Background(), path); err != nil {
-		t.Fatalf("loadExecutionEvents: %v", err)
-	}
-}
-
 func TestSQLRunSelectionFixedOrderingAndFiltering(t *testing.T) {
 	t.Run("equal_end_uses_run_id_tie_break", func(t *testing.T) {
 		session := newTestSession(t)

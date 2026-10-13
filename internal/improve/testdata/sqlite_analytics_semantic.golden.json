@@ -41,9 +41,9 @@
     "tool_calls": 1,
     "tool_errors": 1,
     "tokens_by_agent": {
-      "developer": 31,
+      "developer": 41,
       "legacy": 1,
-      "old-agent": 10,
+      "old-agent": 0,
       "reviewer": 7
     },
     "tool_calls_by_agent": {

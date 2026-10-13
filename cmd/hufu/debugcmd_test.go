@@ -18,14 +18,14 @@ func TestDebugCmd_WorkspaceValidation(t *testing.T) {
 	os.Chdir(tmpDir)
 	defer os.Chdir(originalWD)
 
-	// 1. Create a fake workspace with an execution-events.jsonl containing a run_id
+	// 1. Create a fake workspace whose event store records a run
 	workspaceDir := "workspace"
 	if err := os.MkdirAll(filepath.Join(workspaceDir, "logs"), 0755); err != nil {
 		t.Fatal(err)
 	}
 
-	eventsPath := filepath.Join(workspaceDir, "logs", "execution-events.jsonl")
-	if err := os.WriteFile(eventsPath, []byte(`{"run_id":"run-12345"}`+"\n"), 0644); err != nil {
+	eventsPath := filepath.Join(workspaceDir, "logs", "event_store.jsonl")
+	if err := os.WriteFile(eventsPath, []byte(`{"run_id":"run-12345","type":"run_started","payload":{"team":"dev"}}`+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -250,7 +250,9 @@ func TestDebugCmd_RunIDContents(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(workspaceDir, "logs", "task-output"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "execution-events.jsonl"), []byte(`{"run_id":"run-42", "task_id":"task-7", "attempt": 1}`+"\n"), 0644); err != nil {
+	runEvents := `{"run_id":"run-42","type":"run_started","payload":{"team":"dev"}}` + "\n" +
+		`{"run_id":"run-42","task_id":"task-7","type":"task_started","payload":{"id":"task-7","attempt":1}}` + "\n"
+	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "event_store.jsonl"), []byte(runEvents), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "task-output", "task-7-run-42-attempt-1.jsonl"), []byte(`transcript attempt 1`), 0644); err != nil {
@@ -373,7 +375,7 @@ func TestDebugCmd_RejectsJSONLSymlinks(t *testing.T) {
 	if err := os.WriteFile(externalEvents, []byte(`{"run_id":"run-events-link","secret":"outside-secret"}`+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(externalEvents, filepath.Join(logsDir, "execution-events.jsonl")); err != nil {
+	if err := os.Symlink(externalEvents, filepath.Join(logsDir, "event_store.jsonl")); err != nil {
 		t.Skipf("symlink test unavailable: %v", err)
 	}
 
@@ -388,21 +390,21 @@ func TestDebugCmd_RejectsJSONLSymlinks(t *testing.T) {
 
 	cmd := newRootCommand()
 	cmd.SetArgs([]string{"debug", "run-events-link", "-w", workspaceDir})
-	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "execution events path contains a symlink") {
-		t.Fatalf("execution-events symlink was not rejected: %v", err)
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "event store path contains a symlink") {
+		t.Fatalf("event store symlink was not rejected: %v", err)
 	}
 
-	if err := os.Remove(filepath.Join(logsDir, "execution-events.jsonl")); err != nil {
+	if err := os.Remove(filepath.Join(logsDir, "event_store.jsonl")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(logsDir, "execution-events.jsonl"), []byte(`{"run_id":"run-filter"}`+"\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(logsDir, "event_store.jsonl"), []byte(`{"run_id":"run-filter","type":"run_started","payload":{"team":"dev"}}`+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	externalStore := filepath.Join(tmpDir, "external-event-store.jsonl")
-	if err := os.WriteFile(externalStore, []byte(`{"run_id":"run-filter","secret":"outside-secret"}`+"\n"), 0644); err != nil {
+	externalJournal := filepath.Join(tmpDir, "external-task-journal.jsonl")
+	if err := os.WriteFile(externalJournal, []byte(`{"run_id":"run-filter","task_id":"1","secret":"outside-secret"}`+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(externalStore, filepath.Join(logsDir, "event_store.jsonl")); err != nil {
+	if err := os.Symlink(externalJournal, filepath.Join(logsDir, "task_journal.jsonl")); err != nil {
 		t.Skipf("symlink test unavailable: %v", err)
 	}
 
@@ -431,8 +433,8 @@ func TestDebugCmd_RejectsJSONLSymlinks(t *testing.T) {
 		if nextErr != nil {
 			t.Fatal(nextErr)
 		}
-		if hdr.Name == "logs/event_store.jsonl" {
-			t.Fatal("run-id bundle followed event_store JSONL symlink")
+		if hdr.Name == "logs/task_journal.jsonl" {
+			t.Fatal("run-id bundle followed task journal JSONL symlink")
 		}
 		if hdr.Name == "bundle-manifest.json" {
 			manifest, err = io.ReadAll(tr)
@@ -441,7 +443,7 @@ func TestDebugCmd_RejectsJSONLSymlinks(t *testing.T) {
 			}
 		}
 	}
-	if strings.Contains(string(manifest), "outside-secret") || !strings.Contains(string(manifest), "logs/event_store.jsonl") || !strings.Contains(string(manifest), "symlink path") {
+	if strings.Contains(string(manifest), "outside-secret") || !strings.Contains(string(manifest), "logs/task_journal.jsonl") || !strings.Contains(string(manifest), "symlink path") {
 		t.Fatalf("filtered JSONL symlink was not safely omitted: %s", manifest)
 	}
 }
@@ -452,7 +454,7 @@ func TestDebugCmd_RejectsDanglingOutputSymlink(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(workspaceDir, "logs"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "execution-events.jsonl"), []byte(`{"run_id":"run-dangling"}`+"\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "event_store.jsonl"), []byte(`{"run_id":"run-dangling","type":"run_started","payload":{"team":"dev"}}`+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -491,7 +493,7 @@ func TestDebugCmd_ConcurrentOutputSwapDoesNotWriteExternal(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(workspaceDir, "logs"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "execution-events.jsonl"), []byte(`{"run_id":"run-swap"}`+"\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "event_store.jsonl"), []byte(`{"run_id":"run-swap","type":"run_started","payload":{"team":"dev"}}`+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -564,7 +566,7 @@ func TestDebugCmd_ConcurrentSymlinkSwapDoesNotLeak(t *testing.T) {
 	if err := os.MkdirAll(metaDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "execution-events.jsonl"), []byte(`{"run_id":"run-race"}`+"\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "event_store.jsonl"), []byte(`{"run_id":"run-race","type":"run_started","payload":{"team":"dev"}}`+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	candidate := filepath.Join(dataDir, "race-artifact")
