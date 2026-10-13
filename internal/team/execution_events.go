@@ -359,6 +359,7 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 		teamRevision = teamDefinitionRevision(c.session.Dir)
 	}
 
+	semanticBaseline, _ := c.SemanticRetrievalStatus()
 	c.executionEventsMu.Lock()
 	c.executionRunID = runID
 	c.executionTeamRevision = teamRevision
@@ -485,6 +486,7 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 			}
 		}
 		c.recordRunTelemetry(c.LastRunResult())
+		c.finishSemanticRun(runID, semanticBaseline)
 		var canonicalEvents []RunEvent
 		if c.eventStore != nil {
 			var readErr error

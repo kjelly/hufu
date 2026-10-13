@@ -16,8 +16,8 @@ func writeSemanticRetrievalRuntimeReport(b *strings.Builder, data *team.Semantic
 	}
 	status := data.Status
 	b.WriteString("## Semantic Retrieval Runtime\n\n")
-	fmt.Fprintf(b, "Mode `%s`, state `%s`, model `%s`, generation `%s`. Queries %d, served %d, truncated %d; warmups %d, refreshes %d (%d failed).",
-		reportSafeMetadata(status.Mode, 40), reportSafeMetadata(status.State, 40), reportSafeMetadata(status.Model, 120),
+	fmt.Fprintf(b, "Run `%s`: mode `%s`, state `%s`, model `%s`, generation `%s`. Queries %d, served %d, truncated %d; warmups %d, refreshes %d (%d failed).",
+		reportSafeMetadata(valueOrUnavailable(data.RunID), 120), reportSafeMetadata(status.Mode, 40), reportSafeMetadata(status.State, 40), reportSafeMetadata(status.Model, 120),
 		reportSafeMetadata(valueOrUnavailable(status.GenerationID), 120), status.Queries, status.SemanticResults, status.TruncatedQueries,
 		status.Warmups, status.Refreshes, status.RefreshFailures)
 	if status.RoutedSemantic+status.RoutedLexical > 0 {

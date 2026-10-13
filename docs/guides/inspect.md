@@ -67,7 +67,7 @@ hufu inspect storage --workspace ./workspace --format json
 ```
 
 `inspect semantic-retrieval` summarizes the workspace's content-free semantic
-retrieval traces and the runtime status each run left when it closed (see
+retrieval traces and the runtime status recorded when each run finished (see
 [Semantic memory retrieval](../reference/semantic-retrieval.md#inspecting)).
 Those files are not part of the event chain, so the envelope reports
 `event_chain: not_applicable`; it rejects `--branch` and `--session`.

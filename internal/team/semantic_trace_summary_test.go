@@ -182,29 +182,48 @@ func TestPercentileMillis(t *testing.T) {
 	}
 }
 
-func TestSemanticRuntimeRecordAndReport(t *testing.T) {
+func TestFinishSemanticRunRecordsTheRunOnly(t *testing.T) {
 	c, repo, fake := semanticRouterFixture(t)
-	if _, ok, err := c.SemanticRetrievalReport(); ok || err != nil {
-		t.Fatalf("report with semantic retrieval off: ok=%v err=%v", ok, err)
+	c.finishSemanticRun("run-0", SemanticRuntimeStatus{})
+	if _, ok := c.SemanticRetrievalReport(); ok {
+		t.Fatal("report exists with semantic retrieval off")
 	}
 	attachSemanticRuntime(t, c, repo, fake, semantic.ModeAuto)
+	// A first run on the same runtime: its routes must not count below.
 	routeSharedIDsForGoal(t, c, "協調者恢復後要避免重送副作用")
-	report, ok, err := c.SemanticRetrievalReport()
-	if !ok || err != nil || report.Status.Mode != string(semantic.ModeAuto) || report.Summary.Traces == 0 || report.Status.RoutedSemantic != 1 {
-		t.Fatalf("report = %+v ok=%v err=%v", report, ok, err)
-	}
+	baseline, _ := c.SemanticRetrievalStatus()
+	c.executionRunID = "run-1"
+	routeSharedIDsForGoal(t, c, "協調者恢復後要避免重送副作用")
+	routeSharedIDs(t, c)
+	c.finishSemanticRun("run-1", baseline)
 
-	c.recordSemanticRuntimeStatus()
 	records, skipped, err := ReadSemanticRuntimeRecords(c.session.Workspace, "")
-	if err != nil || skipped != 0 || len(records) != 1 || records[0].RunID != "run-1" || records[0].Status.RoutedSemantic != 1 || records[0].RecordedAt.IsZero() {
+	if err != nil || skipped != 0 || len(records) != 1 {
 		t.Fatalf("records = %+v skipped=%d err=%v", records, skipped, err)
+	}
+	status := records[0].Status
+	if records[0].RunID != "run-1" || records[0].RecordedAt.IsZero() || status.RoutedSemantic != 1 || status.RoutedLexical != 1 ||
+		status.Queries != 1 || status.Warmups != 0 || status.State != "ready" || status.GenerationID == "" {
+		t.Fatalf("record = %+v", records[0])
 	}
 	info, err := os.Stat(filepath.Join(c.session.Workspace, semanticRuntimeStatusFile))
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("status file mode = %v, %v", info, err)
 	}
-	if other, _, _ := ReadSemanticRuntimeRecords(c.session.Workspace, "run-2"); len(other) != 0 {
-		t.Fatalf("run filter kept %+v", other)
+	report, ok := c.SemanticRetrievalReport()
+	if !ok || report.RunID != "run-1" || report.Status.RoutedSemantic != 1 || report.Summary.Traces == 0 || report.Summary.Runs != 1 {
+		t.Fatalf("report = %+v ok=%v", report, ok)
+	}
+}
+
+func TestSemanticRuntimeStatusSince(t *testing.T) {
+	base := SemanticRuntimeStatus{Queries: 4, SemanticResults: 3, RoutedLexical: 2, Warmups: 1, Fallbacks: map[string]int{"embedding_warming": 1}}
+	now := SemanticRuntimeStatus{State: "ready", Queries: 7, SemanticResults: 5, RoutedLexical: 2, RoutedSemantic: 3, Warmups: 1, Refreshes: 2,
+		Fallbacks: map[string]int{"embedding_warming": 1, "embedding_busy": 1}}
+	got := now.since(base)
+	if got.Queries != 3 || got.SemanticResults != 2 || got.RoutedLexical != 0 || got.RoutedSemantic != 3 || got.Warmups != 0 || got.Refreshes != 2 ||
+		got.State != "ready" || len(got.Fallbacks) != 1 || got.Fallbacks["embedding_busy"] != 1 {
+		t.Fatalf("since = %+v", got)
 	}
 }
 

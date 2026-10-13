@@ -54,7 +54,7 @@ func TestInspectSemanticRetrievalCommand(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Semantic retrieval (run run-1)",
-		"Runtime at close of run run-1 (2026-10-13 10:00:00Z): mode auto, state ready, model embeddinggemma:latest, generation gen-1",
+		"Runtime when run run-1 finished (2026-10-13 10:00:00Z): mode auto, state ready, model embeddinggemma:latest, generation gen-1",
 		"routed semantic 46 / lexical 1",
 		"Traces: 47 across 1 run(s)",
 		"worker_private",
@@ -77,6 +77,7 @@ func TestWriteSemanticRetrievalRuntimeReport(t *testing.T) {
 		t.Fatalf("off wrote %q", off.String())
 	}
 	data := &team.SemanticRetrievalReportData{
+		RunID:   "run-7",
 		Status:  team.SemanticRuntimeStatus{Mode: "auto", State: "ready", Model: "embeddinggemma:latest", Queries: 3, SemanticResults: 2, RoutedSemantic: 3, RoutedLexical: 4},
 		Summary: team.SummarizeSemanticRetrievalTraces(nil),
 	}
@@ -86,7 +87,7 @@ func TestWriteSemanticRetrievalRuntimeReport(t *testing.T) {
 	writeSemanticRetrievalRuntimeReport(&b, data)
 	for _, want := range []string{
 		"## Semantic Retrieval Runtime",
-		"Mode `auto`, state `ready`, model `embeddinggemma:latest`",
+		"Run `run-7`: mode `auto`, state `ready`, model `embeddinggemma:latest`",
 		"Auto routed 3 request(s) semantic and 4 lexical.",
 		"| shared_persistent | semantic | active | 3 | 2 | 1 | 0 | 90 / 200 |",
 		"Fallback reasons: embedding_busy=1.",

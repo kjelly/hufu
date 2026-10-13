@@ -28,8 +28,9 @@ func newInspectSemanticRetrievalCommand(options *inspectCLIOptions) *cobra.Comma
 many requests each memory ranking (shared_persistent, worker_private) sent to
 the semantic lane or kept lexical in auto mode, how many the lane served
 without a fallback, the fallback reasons, truncated queries, and latency,
-queue-wait, and embedding percentiles. It also shows the runtime status the
-run left when it closed: warm state, model, generation, and refresh counts.
+queue-wait, and embedding percentiles. It also shows the runtime status
+recorded when the run finished: warm state, model, generation, and that
+run's query, route, and refresh counts.
 Traces hold only HMAC hashes, counts, and identities; never query or memory text.`,
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: cobra.NoFileCompletions,
@@ -110,7 +111,7 @@ func renderInspectSemanticRetrievalText(writer io.Writer, query inspectpkg.Inspe
 
 func renderSemanticRuntimeText(writer io.Writer, record team.SemanticRuntimeRecord) error {
 	status := record.Status
-	if _, err := fmt.Fprintf(writer, "Runtime at close of run %s (%s): mode %s, state %s, model %s, generation %s\n",
+	if _, err := fmt.Fprintf(writer, "Runtime when run %s finished (%s): mode %s, state %s, model %s, generation %s\n",
 		safeOverviewValue(valueOrUnavailable(record.RunID)), record.RecordedAt.Format("2006-01-02 15:04:05Z"),
 		safeOverviewValue(status.Mode), safeOverviewValue(status.State), safeOverviewValue(status.Model),
 		safeOverviewValue(valueOrUnavailable(status.GenerationID))); err != nil {

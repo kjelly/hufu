@@ -642,11 +642,15 @@ type Coordinator struct {
 	// semanticRuntime is the optional Ollama semantic lane (nil when the
 	// effective semantic-retrieval mode is off). Clones share it; only the
 	// constructing coordinator closes it.
-	semanticRuntime                  *SemanticRetrievalRuntime
-	ownsSemanticRuntime              bool
-	semanticSettings                 semantic.Settings
-	semanticTraceHasher              contextstore.TraceHasher
-	semanticTraceSink                func(contextstore.SemanticRetrievalTrace)
+	semanticRuntime     *SemanticRetrievalRuntime
+	ownsSemanticRuntime bool
+	semanticSettings    semantic.Settings
+	semanticTraceHasher contextstore.TraceHasher
+	semanticTraceSink   func(contextstore.SemanticRetrievalTrace)
+	// lastSemanticRun is the semantic retrieval report of the latest finished
+	// run, captured before the run identity is cleared.
+	lastSemanticRunMu                sync.Mutex
+	lastSemanticRun                  *SemanticRetrievalReportData
 	sharedMemorySvc                  SharedMemoryService // canonical shared persistent memory service.
 	asyncTasksWg                     sync.WaitGroup      // tracks in-flight async candidate writes before run finalization
 	skillsMu                         sync.RWMutex

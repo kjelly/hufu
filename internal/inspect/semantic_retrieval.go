@@ -11,7 +11,7 @@ import (
 
 // SemanticRetrievalData summarizes the workspace's content-free semantic
 // retrieval traces (docs/reference/semantic-retrieval.md) and the runtime
-// status the selected run, or the latest run, left when it closed.
+// status recorded when the selected run, or the latest run, finished.
 type SemanticRetrievalData struct {
 	Runtime      *team.SemanticRuntimeRecord   `json:"runtime,omitempty"`
 	Summary      team.SemanticRetrievalSummary `json:"summary"`

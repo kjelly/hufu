@@ -277,7 +277,7 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		d.Decisions, _ = tc.coordinator.DecisionIndexEntries()
 		d.DecisionPrimitives, _ = tc.coordinator.DecisionPrimitiveResults(context.Background())
 		d.ControlDecisions, _ = tc.coordinator.ControlDecisionSummaries(context.Background())
-		if semantic, ok, _ := tc.coordinator.SemanticRetrievalReport(); ok {
+		if semantic, ok := tc.coordinator.SemanticRetrievalReport(); ok {
 			d.SemanticRetrieval = &semantic
 		}
 		d.Decisions = team.RedactedDecisionIndexEntries(d.Decisions)

@@ -185,9 +185,10 @@ In `shadow`, `active`, and `auto`, every ranking request appends one line to
   embedding time.
 
 Query and memory text are never written. The HMAC key is
-`<workspace>/semantic-trace.key` (mode 0600). When a run closes, its runtime
-status (warm state, model, generation, query, fallback, route, and refresh
-counts) is appended to `<workspace>/semantic-runtime-status.jsonl`.
+`<workspace>/semantic-trace.key` (mode 0600). When a run finishes, its runtime
+status is appended to `<workspace>/semantic-runtime-status.jsonl`: warm state,
+model, and generation as of the finish, and that run's query, fallback, route,
+warmup, and refresh counts.
 
 ## Inspecting
 
@@ -195,7 +196,7 @@ counts) is appended to `<workspace>/semantic-runtime-status.jsonl`.
 hufu inspect semantic-retrieval [run-id] [--task <task-id>] [--format json]
 ```
 
-Shows the runtime status the run (or the latest run) left at close, a table
+Shows the runtime status recorded when the run (or the latest run) finished, a table
 per source, route, and mode (requests, served without fallback, fallbacks,
 truncated queries, p50/p95 latency, p95 queue wait, p50/p95 embedding time),
 the fallback reasons, and one row per task attempt with its route and route

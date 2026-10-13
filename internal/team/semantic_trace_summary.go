@@ -16,27 +16,68 @@ import (
 
 const semanticRuntimeStatusFile = "semantic-runtime-status.jsonl"
 
-// SemanticRuntimeRecord is the runtime status a run left when it closed.
+// SemanticRuntimeRecord is the runtime status when a run finished. Counters
+// (queries, fallbacks, routes, warmups, refreshes) count that run only; the
+// state, model, generation, and last refresh are as of the finish.
 type SemanticRuntimeRecord struct {
 	RunID      string                `json:"run_id"`
 	RecordedAt time.Time             `json:"recorded_at"`
 	Status     SemanticRuntimeStatus `json:"status"`
 }
 
-// recordSemanticRuntimeStatus appends the closing runtime status to the
-// workspace so inspect can show it after the process exits. Like traces it
-// is best effort and content-free.
-func (c *Coordinator) recordSemanticRuntimeStatus() {
-	if c == nil || c.semanticRuntime == nil || c.session == nil || c.session.Workspace == "" {
+// finishSemanticRun runs when run runID finishes, before its identity is
+// cleared: it appends the run's runtime status to the workspace, so inspect
+// can show it after the process exits, and keeps the run's report section.
+// Like traces it is best effort and content-free.
+func (c *Coordinator) finishSemanticRun(runID string, baseline SemanticRuntimeStatus) {
+	status, ok := c.SemanticRetrievalStatus()
+	if !ok || c.session == nil || c.session.Workspace == "" {
 		return
 	}
-	data, err := json.Marshal(SemanticRuntimeRecord{RunID: c.executionRunID, RecordedAt: time.Now().UTC(), Status: c.semanticRuntime.Status()})
+	record := SemanticRuntimeRecord{RunID: runID, RecordedAt: time.Now().UTC(), Status: status.since(baseline)}
+	appendSemanticRuntimeRecord(c.session.Workspace, record)
+	report := SemanticRetrievalReportData{RunID: runID, Status: record.Status}
+	traces, skipped, err := ReadSemanticRetrievalTraces(c.session.Workspace, runID)
+	if err == nil {
+		report.Summary, report.SkippedLines = SummarizeSemanticRetrievalTraces(traces), skipped
+	}
+	c.lastSemanticRunMu.Lock()
+	c.lastSemanticRun = &report
+	c.lastSemanticRunMu.Unlock()
+}
+
+// since returns s with every counter reduced by base, so a record counts one
+// run of a runtime that serves several.
+func (s SemanticRuntimeStatus) since(base SemanticRuntimeStatus) SemanticRuntimeStatus {
+	s.Queries -= base.Queries
+	s.SemanticResults -= base.SemanticResults
+	s.TruncatedQueries -= base.TruncatedQueries
+	s.RoutedSemantic -= base.RoutedSemantic
+	s.RoutedLexical -= base.RoutedLexical
+	s.Warmups -= base.Warmups
+	s.Refreshes -= base.Refreshes
+	s.RefreshFailures -= base.RefreshFailures
+	var fallbacks map[string]int
+	for reason, count := range s.Fallbacks {
+		if delta := count - base.Fallbacks[reason]; delta > 0 {
+			if fallbacks == nil {
+				fallbacks = map[string]int{}
+			}
+			fallbacks[reason] = delta
+		}
+	}
+	s.Fallbacks = fallbacks
+	return s
+}
+
+func appendSemanticRuntimeRecord(workspace string, record SemanticRuntimeRecord) {
+	data, err := json.Marshal(record)
 	if err != nil {
 		return
 	}
 	shadowTraceMu.Lock()
 	defer shadowTraceMu.Unlock()
-	f, err := os.OpenFile(filepath.Join(c.session.Workspace, semanticRuntimeStatusFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(filepath.Join(workspace, semanticRuntimeStatusFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}
@@ -238,23 +279,24 @@ func percentileMillis(values []int64, percentile int) int64 {
 }
 
 // SemanticRetrievalReportData is the semantic retrieval section of a run
-// report: the live runtime status and this run's traces.
+// report: the runtime status of the run and a summary of its traces.
 type SemanticRetrievalReportData struct {
+	RunID        string                   `json:"run_id"`
 	Status       SemanticRuntimeStatus    `json:"status"`
 	Summary      SemanticRetrievalSummary `json:"summary"`
 	SkippedLines int                      `json:"skipped_lines,omitempty"`
 }
 
-// SemanticRetrievalReport returns the report section, or ok=false when
-// semantic retrieval is off.
-func (c *Coordinator) SemanticRetrievalReport() (SemanticRetrievalReportData, bool, error) {
-	status, ok := c.SemanticRetrievalStatus()
-	if !ok || c.session == nil || c.session.Workspace == "" {
-		return SemanticRetrievalReportData{}, false, nil
+// SemanticRetrievalReport returns the report section of the latest finished
+// run, or ok=false when semantic retrieval is off or no run has finished.
+func (c *Coordinator) SemanticRetrievalReport() (SemanticRetrievalReportData, bool) {
+	if c == nil {
+		return SemanticRetrievalReportData{}, false
 	}
-	traces, skipped, err := ReadSemanticRetrievalTraces(c.session.Workspace, c.executionRunID)
-	if err != nil {
-		return SemanticRetrievalReportData{Status: status}, true, err
+	c.lastSemanticRunMu.Lock()
+	defer c.lastSemanticRunMu.Unlock()
+	if c.lastSemanticRun == nil {
+		return SemanticRetrievalReportData{}, false
 	}
-	return SemanticRetrievalReportData{Status: status, Summary: SummarizeSemanticRetrievalTraces(traces), SkippedLines: skipped}, true, nil
+	return *c.lastSemanticRun, true
 }

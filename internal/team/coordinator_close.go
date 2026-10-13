@@ -35,7 +35,6 @@ func (c *Coordinator) closeOwnedResources() error {
 	// The semantic refresher reads the canonical store, so it stops first.
 	if c.ownsSemanticRuntime {
 		c.semanticRuntime.Close()
-		c.recordSemanticRuntimeStatus()
 	}
 
 	c.terminalControlMu.Lock()
