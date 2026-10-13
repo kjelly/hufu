@@ -803,6 +803,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		OccurrenceAttempt: c.taskAttempt(todoID),
 		ExecutionTarget:   receiptExecutionTarget(directTask.ResolvedExecutionTarget),
 		Usage:             receiptUsage(usageFromSteps(steps)),
+		Model:             directModel,
 		FinishedAt:        time.Now(), ProducerID: resolvedName,
 		ModelExecutionID: contextManifest.ModelExecutionID,
 		ArtifactScope:    cloneArtifactAccessScope(directArtifactScope),

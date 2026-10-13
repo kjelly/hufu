@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/execution"
@@ -34,6 +35,7 @@ func ExecutionEventFromRunEvent(event RunEvent) (ExecutionEvent, bool) {
 		var payload LifecycleEventPayload
 		if json.Unmarshal(event.Payload, &payload) == nil {
 			out.Team = payload.Team
+			out.TeamRevision = payload.TeamRevision
 		}
 		return out, true
 	case string(EventRunFinished):
@@ -85,10 +87,7 @@ func ExecutionEventFromRunEvent(event RunEvent) (ExecutionEvent, bool) {
 		}
 		out.Status, out.Attempt = "error", payload.FromAttempt
 		out.ExecutionTarget, out.Backend = payload.FromTarget.String(), payload.FromTarget.Backend
-		out.Model = payload.FromTarget.String()
-		if execution.IsOllamaBackend(payload.FromTarget.Backend) {
-			out.Model = payload.FromTarget.Model
-		}
+		out.Model = telemetryModelForTarget(payload.FromTarget)
 		if payload.Agent != "" {
 			out.Agent = payload.Agent
 		}
@@ -97,16 +96,20 @@ func ExecutionEventFromRunEvent(event RunEvent) (ExecutionEvent, bool) {
 		return ExecutionEvent{}, false
 	}
 	var payload struct {
-		Agent            string     `json:"agent"`
-		Attempt          int        `json:"attempt"`
-		Phase            Phase      `json:"phase"`
-		ContractID       string     `json:"contract_id"`
-		ContractHash     string     `json:"contract_hash"`
-		ContractRevision int        `json:"contract_revision"`
-		Model            string     `json:"model"`
-		Skills           []string   `json:"skills"`
-		Outcome          RunOutcome `json:"outcome"`
-		Retries          int        `json:"retries"`
+		Agent            string                    `json:"agent"`
+		Attempt          int                       `json:"attempt"`
+		Phase            Phase                     `json:"phase"`
+		ContractID       string                    `json:"contract_id"`
+		ContractHash     string                    `json:"contract_hash"`
+		ContractRevision int                       `json:"contract_revision"`
+		Model            string                    `json:"model"`
+		ExecutionTarget  execution.ExecutionTarget `json:"execution_target"`
+		Skills           []string                  `json:"skills"`
+		InjectedSkills   []string                  `json:"injected_skills"`
+		LoadedSkills     []string                  `json:"loaded_skills"`
+		Source           string                    `json:"source"`
+		Outcome          RunOutcome                `json:"outcome"`
+		Retries          int                       `json:"retries"`
 	}
 	if json.Unmarshal(event.Payload, &payload) == nil {
 		if payload.Agent != "" {
@@ -131,10 +134,14 @@ func ExecutionEventFromRunEvent(event RunEvent) (ExecutionEvent, bool) {
 		}
 		if payload.Model != "" {
 			out.Model = payload.Model
+		} else if !payload.ExecutionTarget.IsZero() {
+			// A typed occurrence records its frozen primary target, not a
+			// model string. The attempt's receipt names the model it actually
+			// ran on; ExecutionEventProjector prefers that one.
+			out.Model = telemetryModelForTarget(payload.ExecutionTarget)
 		}
-		if len(payload.Skills) > 0 {
-			out.Skills = append([]string(nil), payload.Skills...)
-		}
+		out.TaskType = payload.Source
+		out.Skills = unionSkills(payload.Skills, payload.InjectedSkills, payload.LoadedSkills)
 	}
 	if out.Attempt < 1 {
 		out.Attempt = event.Attempt
@@ -145,54 +152,47 @@ func ExecutionEventFromRunEvent(event RunEvent) (ExecutionEvent, bool) {
 	return out, true
 }
 
-// projectedExecutionEvents is the legacy-compatible lifecycle projection.
-// The event store deliberately records every durable state transition, while
-// the legacy execution logger records one lifecycle event each time a task
-// enters a status within an attempt. Collapse a task's repeated durable
-// transitions into the status it is already in, but keep a status the task
-// re-enters after another one (an approved --plan task starting again after
-// planned). Attempts follow the in-dispatch counter the attempt-starting
-// task_started event carries, which is the number the legacy logger records;
-// logs without that counter fall back to the task's retry count.
+// telemetryModelForTarget names target the way execution telemetry does for
+// a built-in or named LLM backend (executionModelIDForTarget): the local
+// backend keeps its leaf model and every other backend its qualified
+// selector. Agent backends report their leaf model there; without the
+// registry this pure projection cannot tell them apart, which is why the
+// attempt receipt records the resolved model.
+func telemetryModelForTarget(target execution.ExecutionTarget) string {
+	if execution.IsOllamaBackend(target.Backend) {
+		return target.Model
+	}
+	return target.String()
+}
+
+// unionSkills merges declared, injected, and loaded skills in that order,
+// dropping blanks and repeats, as TodoList.ExecutionMetadata does.
+func unionSkills(groups ...[]string) []string {
+	var skills []string
+	seen := make(map[string]struct{})
+	for _, group := range groups {
+		for _, skill := range group {
+			if skill == "" {
+				continue
+			}
+			if _, ok := seen[skill]; ok {
+				continue
+			}
+			seen[skill] = struct{}{}
+			skills = append(skills, skill)
+		}
+	}
+	return skills
+}
+
+// projectedExecutionEvents projects a complete event slice; see
+// ExecutionEventProjector.
 func projectedExecutionEvents(events []RunEvent) []ExecutionEvent {
-	type taskLifecycle struct {
-		agent           string
-		dispatchAttempt int
-		status          string
-		attempt         int
-	}
-	projected := make([]ExecutionEvent, 0, len(events))
-	lifecycles := make(map[string]*taskLifecycle)
+	projector := NewExecutionEventProjector()
 	for _, event := range events {
-		mapped, ok := ExecutionEventFromRunEvent(event)
-		if !ok {
-			continue
-		}
-		key := mapped.RunID + "\x00" + mapped.TaskID
-		lifecycle := lifecycles[key]
-		if lifecycle == nil {
-			lifecycle = &taskLifecycle{}
-			lifecycles[key] = lifecycle
-		}
-		if event.Type == string(EventExecutionFallbackDecided) && mapped.Agent == "execution-route" && lifecycle.agent != "" {
-			mapped.Agent = lifecycle.agent
-		}
-		if mapped.Agent != "" {
-			lifecycle.agent = mapped.Agent
-		}
-		if attempt := eventDispatchAttempt(event); attempt > 0 {
-			lifecycle.dispatchAttempt = attempt
-		}
-		if lifecycle.dispatchAttempt > 0 {
-			mapped.Attempt = lifecycle.dispatchAttempt
-		}
-		if mapped.Status == lifecycle.status && mapped.Attempt == lifecycle.attempt {
-			continue
-		}
-		lifecycle.status, lifecycle.attempt = mapped.Status, mapped.Attempt
-		projected = append(projected, mapped)
+		projector.Add(event)
 	}
-	return projected
+	return projector.Rows()
 }
 
 // eventDispatchAttempt returns the in-dispatch attempt counter that an
@@ -332,6 +332,34 @@ func CompareExecutionEventsParity(legacy, exported []ExecutionEvent) error {
 				return err
 			}
 		}
+		if err := compareExecutionTaskTelemetry(key, legacyTaskEvents, exportedTaskEvents); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// compareExecutionTaskTelemetry compares what telemetry aggregates per task:
+// total token usage and the last reported model. Rows may split usage
+// differently (a fallback attempt's receipt arrives with the next terminal
+// transition), but the task totals must match.
+func compareExecutionTaskTelemetry(key executionEventTaskKey, legacy, exported []indexedExecutionEvent) error {
+	sum := func(events []indexedExecutionEvent) (usage ExecutionUsage, model string) {
+		for _, indexed := range events {
+			usage = addExecutionUsage(usage, indexed.event.Usage)
+			if indexed.event.Model != "" {
+				model = indexed.event.Model
+			}
+		}
+		return usage, model
+	}
+	legacyUsage, legacyModel := sum(legacy)
+	exportedUsage, exportedModel := sum(exported)
+	if legacyUsage != exportedUsage {
+		return fmt.Errorf("task %q usage mismatch: legacy=%+v exported=%+v", key.taskID, legacyUsage, exportedUsage)
+	}
+	if legacyModel != exportedModel {
+		return fmt.Errorf("task %q last model mismatch: legacy=%q exported=%q", key.taskID, legacyModel, exportedModel)
 	}
 	return nil
 }
@@ -381,6 +409,18 @@ func compareExecutionEvent(scope string, legacy, exported ExecutionEvent) error 
 	}
 	if legacy.Attempt > 0 && exported.Attempt > 0 && legacy.Attempt != exported.Attempt {
 		return fmt.Errorf("%s attempt mismatch: legacy=%d exported=%d", scope, legacy.Attempt, exported.Attempt)
+	}
+	if legacy.Team != exported.Team {
+		return fmt.Errorf("%s team mismatch: legacy=%q exported=%q", scope, legacy.Team, exported.Team)
+	}
+	if legacy.TeamRevision != exported.TeamRevision {
+		return fmt.Errorf("%s team_revision mismatch: legacy=%q exported=%q", scope, legacy.TeamRevision, exported.TeamRevision)
+	}
+	if legacy.TaskType != exported.TaskType {
+		return fmt.Errorf("%s task_type mismatch: legacy=%q exported=%q", scope, legacy.TaskType, exported.TaskType)
+	}
+	if !slices.Equal(legacy.Skills, exported.Skills) {
+		return fmt.Errorf("%s skills mismatch: legacy=%v exported=%v", scope, legacy.Skills, exported.Skills)
 	}
 	if legacy.Status != "run_finished" {
 		return nil

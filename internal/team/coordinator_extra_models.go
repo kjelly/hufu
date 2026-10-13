@@ -169,13 +169,7 @@ func (c *Coordinator) fanoutExecutionUsage(todoID string) ExecutionUsage {
 		if receipt.RunID != c.contextRunID() || receipt.Usage == nil {
 			continue
 		}
-		usage := receipt.Usage
-		total.InputTokens += usage.InputTokens
-		total.OutputTokens += usage.OutputTokens
-		total.TotalTokens += usage.TotalTokens
-		total.ProgressTokens += usage.ProgressTokens
-		total.CacheReadTokens += usage.CacheReadTokens
-		total.CacheCreationTokens += usage.CacheCreationTokens
+		total = addExecutionUsage(total, *receipt.Usage)
 	}
 	return total
 }

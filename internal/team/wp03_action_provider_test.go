@@ -195,6 +195,13 @@ func TestRuntimeActionExecutionEventShadowParity(t *testing.T) {
 				t.Fatal(err)
 			}
 			c.executionEvents = logger
+			// beginExecutionRun opens every run on both streams.
+			if err := c.emitEvent("run_started", "coordinator", "", LifecycleEventPayload{Team: session.Config.Name}); err != nil {
+				t.Fatal(err)
+			}
+			if err := logger.append(ExecutionEvent{Status: "run_started", RunID: runID, Team: session.Config.Name}); err != nil {
+				t.Fatal(err)
+			}
 
 			task := TaskDef{Agent: "executor", Goal: "apply", Phase: PhaseExecute, Action: &Action{Capability: "structured-actions", Type: "apply"}}
 			item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{PlanTaskID: "parity", Phase: PhaseExecute, ContractID: "execute", Action: task.Action, Agent: task.Agent, Desc: task.Goal}})[0]

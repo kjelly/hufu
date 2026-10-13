@@ -199,8 +199,8 @@ func TestExecutionEventExporterTerminalOutcomeParity(t *testing.T) {
 			},
 			legacyLogs: []ExecutionEvent{
 				{Status: "run_started", RunID: "run-1", TaskID: "", Agent: "coordinator", Team: "alpha"},
-				{Status: "in_progress", RunID: "run-1", TaskID: "1", Agent: "worker", Attempt: 1},
-				{Status: "done", RunID: "run-1", TaskID: "1", Agent: "worker", Attempt: 1},
+				{Status: "in_progress", RunID: "run-1", TaskID: "1", Agent: "worker", Team: "alpha", Attempt: 1},
+				{Status: "done", RunID: "run-1", TaskID: "1", Agent: "worker", Team: "alpha", Attempt: 1},
 				{Status: "run_finished", RunID: "run-1", TaskID: "", Agent: "coordinator", Team: "alpha", Outcome: RunOutcomeCompleted, AcceptanceState: AcceptancePassed, EvidenceManifestHash: "hash-123"},
 			},
 		},
@@ -215,12 +215,12 @@ func TestExecutionEventExporterTerminalOutcomeParity(t *testing.T) {
 				{Type: string(EventRunFinished), RunID: "run-2", TaskID: "", Actor: "coordinator", Payload: []byte(`{"team":"alpha","outcome":"blocked"}`)},
 			},
 			legacyLogs: []ExecutionEvent{
-				{Status: "run_started", RunID: "run-2", TaskID: "", Agent: "coordinator"},
-				{Status: "in_progress", RunID: "run-2", TaskID: "1", Agent: "worker", Attempt: 1},
-				{Status: "error", RunID: "run-2", TaskID: "1", Agent: "worker", Attempt: 1},
-				{Status: "in_progress", RunID: "run-2", TaskID: "1", Agent: "worker", Attempt: 2},
-				{Status: "error", RunID: "run-2", TaskID: "1", Agent: "worker", Attempt: 2},
-				{Status: "run_finished", RunID: "run-2", TaskID: "", Agent: "coordinator", Outcome: RunOutcomeBlocked},
+				{Status: "run_started", RunID: "run-2", TaskID: "", Agent: "coordinator", Team: "alpha"},
+				{Status: "in_progress", RunID: "run-2", TaskID: "1", Agent: "worker", Team: "alpha", Attempt: 1},
+				{Status: "error", RunID: "run-2", TaskID: "1", Agent: "worker", Team: "alpha", Attempt: 1},
+				{Status: "in_progress", RunID: "run-2", TaskID: "1", Agent: "worker", Team: "alpha", Attempt: 2},
+				{Status: "error", RunID: "run-2", TaskID: "1", Agent: "worker", Team: "alpha", Attempt: 2},
+				{Status: "run_finished", RunID: "run-2", TaskID: "", Agent: "coordinator", Team: "alpha", Outcome: RunOutcomeBlocked},
 			},
 		},
 		{
@@ -232,23 +232,17 @@ func TestExecutionEventExporterTerminalOutcomeParity(t *testing.T) {
 				{Type: string(EventRunFinished), RunID: "run-3", TaskID: "", Actor: "coordinator", Payload: []byte(`{"team":"alpha","outcome":"failed","acceptance_state":"failed"}`)},
 			},
 			legacyLogs: []ExecutionEvent{
-				{Status: "run_started", RunID: "run-3", TaskID: "", Agent: "coordinator"},
-				{Status: "in_progress", RunID: "run-3", TaskID: "1", Agent: "worker", Attempt: 1},
-				{Status: "error", RunID: "run-3", TaskID: "1", Agent: "worker", Attempt: 1},
-				{Status: "run_finished", RunID: "run-3", TaskID: "", Agent: "coordinator", Outcome: RunOutcomeFailed, AcceptanceState: AcceptanceFailed},
+				{Status: "run_started", RunID: "run-3", TaskID: "", Agent: "coordinator", Team: "alpha"},
+				{Status: "in_progress", RunID: "run-3", TaskID: "1", Agent: "worker", Team: "alpha", Attempt: 1},
+				{Status: "error", RunID: "run-3", TaskID: "1", Agent: "worker", Team: "alpha", Attempt: 1},
+				{Status: "run_finished", RunID: "run-3", TaskID: "", Agent: "coordinator", Team: "alpha", Outcome: RunOutcomeFailed, AcceptanceState: AcceptanceFailed},
 			},
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var exported []ExecutionEvent
-			for _, re := range tc.runEvents {
-				if ee, ok := ExecutionEventFromRunEvent(re); ok {
-					exported = append(exported, ee)
-				}
-			}
-			if err := CompareExecutionEventsParity(tc.legacyLogs, exported); err != nil {
+			if err := CompareExecutionEventsParity(tc.legacyLogs, projectedExecutionEvents(tc.runEvents)); err != nil {
 				t.Fatalf("parity check failed for %s: %v", tc.name, err)
 			}
 		})
@@ -385,8 +379,8 @@ func TestExportAndVerifyExecutionEvents_EndToEndParityAndForcedMismatch(t *testi
 		t.Fatal(err)
 	}
 	logger.append(ExecutionEvent{Status: "run_started", RunID: runID, Team: "team-alpha", Agent: "coordinator"})
-	logger.append(ExecutionEvent{Status: "in_progress", RunID: runID, TaskID: "1", Agent: "worker", Attempt: 1})
-	logger.append(ExecutionEvent{Status: "done", RunID: runID, TaskID: "1", Agent: "worker", Attempt: 1})
+	logger.append(ExecutionEvent{Status: "in_progress", RunID: runID, Team: "team-alpha", TaskID: "1", Agent: "worker", Attempt: 1})
+	logger.append(ExecutionEvent{Status: "done", RunID: runID, Team: "team-alpha", TaskID: "1", Agent: "worker", Attempt: 1})
 	logger.append(ExecutionEvent{Status: "run_finished", RunID: runID, Team: "team-alpha", Agent: "coordinator", Outcome: RunOutcomeCompleted, AcceptanceState: AcceptancePassed, EvidenceManifestHash: "ev-hash-1"})
 	logger.close()
 
@@ -447,7 +441,7 @@ func TestExecutionEvents_ProductionBeginAndFinalizeParity(t *testing.T) {
 		t.Fatal("expected EventStore to be non-nil")
 	}
 
-	c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "test task"}})
+	c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "test task", Model: "model-1"}})
 	todoID := "1"
 	c.recordExecutionEvent(todoID, "worker", 1, "in_progress", "model-1", 0, ExecutionUsage{})
 	if err := c.CommitTaskTransition(context.Background(), todoID, TaskPending, TaskInProgress, "", "", nil); err != nil {
@@ -495,7 +489,7 @@ func TestSkippedTasksKeepExecutionEventParity(t *testing.T) {
 				taskTracker: NewTaskTracker(),
 			}
 			closer := c.beginExecutionRun()
-			c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "test task"}})
+			c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "test task", Model: "model-1"}})
 			ctx := context.Background()
 			if tt.attempt > 0 {
 				c.recordExecutionEvent("1", "worker", tt.attempt, "in_progress", "model-1", 0, ExecutionUsage{})

@@ -1318,6 +1318,7 @@ retryLoop:
 			OccurrenceAttempt: c.taskAttempt(todoID),
 			ExecutionTarget:   receiptExecutionTarget(attemptTarget),
 			Usage:             receiptUsage(usageWithProgressTokens(steps, attemptTokens)),
+			Model:             resolvedModel,
 			ModelExecutionID:  contextManifest.ModelExecutionID,
 			StartedAt:         attemptStarted,
 			FinishedAt:        time.Now(),

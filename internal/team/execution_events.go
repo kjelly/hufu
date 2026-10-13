@@ -122,7 +122,10 @@ type LifecycleEventPayload struct {
 	FailureSignature string        `json:"failure_signature"`
 
 	// Extended fields used for specific events (e.g. run_started, run_finished, reliability_eval)
-	Team                          string                       `json:"team,omitempty"`
+	Team string `json:"team,omitempty"`
+	// TeamRevision hashes the team and agent definitions a run started with
+	// (teamDefinitionRevision). run_started carries it for telemetry.
+	TeamRevision                  string                       `json:"team_revision,omitempty"`
 	Outcome                       RunOutcome                   `json:"outcome"`
 	GoalSatisfied                 bool                         `json:"goal_satisfied"`
 	GoalMode                      GoalMode                     `json:"goal_mode,omitempty"`
@@ -423,7 +426,7 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 	}
 	runStartedDurable := c.eventStore != nil
 	if err := c.emitEvent("run_started", "coordinator", "", LifecycleEventPayload{
-		Team: teamName,
+		Team: teamName, TeamRevision: teamRevision,
 	}); err == nil && runStartedDurable {
 		c.clearSupersededPendingWrapUp(runID)
 	}

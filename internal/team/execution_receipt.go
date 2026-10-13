@@ -184,6 +184,10 @@ type ExecutionReceipt struct {
 	// Usage is the attempt's token usage. It is nil for receipts written
 	// before usage was recorded, which consumers must show as unknown.
 	Usage *ExecutionUsage `json:"usage,omitempty"`
+	// Model is the model identifier execution telemetry reports for this
+	// attempt (executionModelIDForTarget). The execution-event projection
+	// reads it instead of re-resolving the target against a backend registry.
+	Model string `json:"model,omitempty"`
 	// ResultContract* record the attempt's result contract outcome. They
 	// are metadata for projections; the payload value itself is part of the
 	// typed result.
