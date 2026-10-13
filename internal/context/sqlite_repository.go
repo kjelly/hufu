@@ -52,6 +52,11 @@ var migrations = []migrationDef{
 	// created before this migration read zero, meaning unknown, until the
 	// aggregates are rebuilt from events.
 	{12, "experience_strong_evidence_recency", `ALTER TABLE experience_aggregates ADD COLUMN last_strong_evidence_at INTEGER NOT NULL DEFAULT 0;`},
+	// Semantic generations record which identity scheme their hashes attest
+	// and which canonical inventory they cover; one generation per policy may
+	// be active. Exclusions record items deliberately left without a vector
+	// (for example input over the model limit) so coverage stays per item.
+	{13, "semantic_inventory_policy_and_exclusions", `ALTER TABLE context_embedding_generations ADD COLUMN identity_scheme TEXT NOT NULL DEFAULT 'static-table-v1'; ALTER TABLE context_embedding_generations ADD COLUMN inventory_policy TEXT NOT NULL DEFAULT 'project-all-v0'; DROP INDEX idx_context_embedding_generations_active; CREATE UNIQUE INDEX idx_context_embedding_generations_active_policy ON context_embedding_generations(project_id, model_id, model_revision, inventory_policy) WHERE state = 'active'; CREATE TABLE context_embedding_exclusions (generation_id TEXT NOT NULL, item_id TEXT NOT NULL, content_hash TEXT NOT NULL, reason TEXT NOT NULL, PRIMARY KEY (generation_id, item_id), FOREIGN KEY (generation_id) REFERENCES context_embedding_generations(generation_id) ON DELETE CASCADE, FOREIGN KEY (item_id) REFERENCES context_items(id) ON DELETE CASCADE);`},
 }
 
 func migrationChecksum(sql string) string {

@@ -211,7 +211,7 @@ func HybridRetrieveWithOptions(
 	semanticCandidateCount := 0
 	fallbackReason := SemanticFallbackNone
 	if options.Mode != RetrievalOff {
-		remainder := strings.TrimSpace(parts.Remainder)
+		remainder := req.SemanticQueryText()
 		switch {
 		case remainder == "":
 			fallbackReason = SemanticFallbackEmptyRemainder

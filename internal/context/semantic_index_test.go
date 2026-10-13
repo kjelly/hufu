@@ -168,15 +168,6 @@ func TestSemanticIndexRejectsCorruptActiveSnapshotWithoutPartialResults(t *testi
 			},
 		},
 		{
-			name: "content hash mismatch",
-			mutate: func(t *testing.T, repository *SQLiteRepository, generationID string) {
-				_, err := repository.db.ExecContext(t.Context(), "UPDATE context_embeddings SET content_hash=? WHERE generation_id=? AND item_id='a'", projectionHash("wrong"), generationID)
-				if err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-		{
 			name: "dimension mismatch",
 			mutate: func(t *testing.T, repository *SQLiteRepository, generationID string) {
 				_, err := repository.db.ExecContext(t.Context(), "UPDATE context_embeddings SET dimensions=1,vector=? WHERE generation_id=? AND item_id='a'", encodeEmbeddingVector([]float32{1}), generationID)
@@ -198,7 +189,7 @@ func TestSemanticIndexRejectsCorruptActiveSnapshotWithoutPartialResults(t *testi
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			index, repository, _, model := buildSemanticTestIndex(t, items, map[string][]float32{"a": {1, 0}, "b": {0, 1}})
-			active, err := repository.ActiveGeneration(t.Context(), "project", model)
+			active, err := repository.ActiveGeneration(t.Context(), "project", model, InventoryPolicyProjectAll)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -244,7 +235,7 @@ func TestSemanticIndexCancellationAndConcurrentRefresh(t *testing.T) {
 	}
 }
 
-func TestSemanticIndexWithoutCurrentActiveGenerationIsStale(t *testing.T) {
+func TestSemanticIndexWithoutActiveGenerationIsMissing(t *testing.T) {
 	repository := openProjectionTestRepository(t)
 	embedder := semanticTestEmbedder{model: projectionTestModel("model", "1"), query: []float32{1, 0}}
 	index, err := NewSemanticIndex(repository, repository, embedder)
@@ -252,14 +243,136 @@ func TestSemanticIndexWithoutCurrentActiveGenerationIsStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = index.SearchVector(t.Context(), SearchRequest{Query: "query", Scope: Scope{ProjectID: "project"}})
-	if !errors.Is(err, ErrSemanticIndexStale) {
+	if !errors.Is(err, ErrNoActiveEmbeddingGeneration) || SemanticFallbackReasonForError(err) != SemanticFallbackProjectionMissing {
 		t.Fatalf("missing generation error = %v", err)
+	}
+}
+
+// TestSemanticIndexFreshnessIsPerItem is the B1 regression: canonical writes
+// outside the request's candidates must not invalidate the index, while an
+// uncovered or edited candidate falls back without an embedding call.
+func TestSemanticIndexFreshnessIsPerItem(t *testing.T) {
+	items := []ContextItem{
+		{ID: "a", Kind: ContextDecision, Content: "content a", Scope: Scope{ProjectID: "project", TeamID: "team"}, Confidence: 1},
+		{ID: "b", Kind: ContextDecision, Content: "content b", Scope: Scope{ProjectID: "project", TeamID: "team"}, Confidence: 1},
+	}
+	tests := []struct {
+		name          string
+		mutate        func(*testing.T, *SQLiteRepository)
+		wantErr       error
+		wantIDs       []string
+		wantIncomplete bool
+	}{
+		{name: "unrelated private and cross-project writes", mutate: func(t *testing.T, repository *SQLiteRepository) {
+			if err := repository.Append(t.Context(),
+				ContextItem{ID: "worker-stm", Kind: ContextSummary, Content: "worker session note", Scope: Scope{ProjectID: "project", TeamID: "team", SessionID: "s", AgentID: "worker"}, Confidence: 1},
+				ContextItem{ID: "other-project", Kind: ContextDecision, Content: "other", Scope: Scope{ProjectID: "other"}, Confidence: 1},
+			); err != nil {
+				t.Fatal(err)
+			}
+		}, wantIDs: []string{"a", "b"}},
+		{name: "new authorized candidate", mutate: func(t *testing.T, repository *SQLiteRepository) {
+			if err := repository.Append(t.Context(), ContextItem{ID: "c", Kind: ContextDecision, Content: "content c", Scope: Scope{ProjectID: "project", TeamID: "team"}, Confidence: 1}); err != nil {
+				t.Fatal(err)
+			}
+		}, wantErr: ErrSemanticProjectionIncomplete, wantIncomplete: true},
+		{name: "edited candidate content", mutate: func(t *testing.T, repository *SQLiteRepository) {
+			if _, err := repository.db.ExecContext(t.Context(), "UPDATE context_items SET content='edited', content_hash=? WHERE id='a'", projectionHash("edited")); err != nil {
+				t.Fatal(err)
+			}
+		}, wantErr: ErrSemanticProjectionIncomplete, wantIncomplete: true},
+		{name: "non-content change keeps coverage", mutate: func(t *testing.T, repository *SQLiteRepository) {
+			if _, err := repository.db.ExecContext(t.Context(), "UPDATE context_items SET priority=priority+1 WHERE id='b'"); err != nil {
+				t.Fatal(err)
+			}
+		}, wantIDs: []string{"a", "b"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			repository := openProjectionTestRepository(t)
+			if err := repository.Append(t.Context(), items...); err != nil {
+				t.Fatal(err)
+			}
+			inventory := loadProjectionInventory(t, repository, "project")
+			model := projectionTestModel("semantic-test", "1")
+			generation := beginProjectionGeneration(t, repository, "semantic-active", inventory, model)
+			appendSemanticRows(t, repository, generation.GenerationID, inventory, map[string][]float32{"a": {1, 0}, "b": {0, 1}})
+			if _, err := repository.ActivateGeneration(t.Context(), generation.GenerationID, inventory.Revision, inventory.Digest); err != nil {
+				t.Fatal(err)
+			}
+			embedder := &countingEmbedder{semanticTestEmbedder: semanticTestEmbedder{model: model, query: []float32{1, 0}}}
+			incomplete := 0
+			index, err := NewSemanticIndexWithOptions(repository, repository, embedder, SemanticIndexOptions{OnIncomplete: func() { incomplete++ }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.mutate(t, repository)
+			results, err := index.SearchVector(t.Context(), SearchRequest{Query: "query", Scope: Scope{ProjectID: "project", TeamID: "team"}})
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) || SemanticFallbackReasonForError(err) != SemanticFallbackProjectionIncomplete {
+					t.Fatalf("err = %v, want %v", err, tc.wantErr)
+				}
+				if embedder.queries != 0 {
+					t.Fatalf("incomplete projection embedded %d queries", embedder.queries)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			} else if got := searchResultIDs(results); !slices.Equal(got, tc.wantIDs) {
+				t.Fatalf("result IDs = %v, want %v", got, tc.wantIDs)
+			}
+			if (incomplete > 0) != tc.wantIncomplete {
+				t.Fatalf("OnIncomplete calls = %d", incomplete)
+			}
+		})
+	}
+}
+
+func TestSemanticIndexTreatsMatchingExclusionAsCovered(t *testing.T) {
+	repository := openProjectionTestRepository(t)
+	if err := repository.Append(t.Context(),
+		ContextItem{ID: "a", Kind: ContextDecision, Content: "content a", Scope: Scope{ProjectID: "project"}, Confidence: 1},
+		ContextItem{ID: "huge", Kind: ContextDecision, Content: "oversize content", Scope: Scope{ProjectID: "project"}, Confidence: 1},
+	); err != nil {
+		t.Fatal(err)
+	}
+	inventory := loadProjectionInventory(t, repository, "project")
+	model := projectionTestModel("semantic-test", "1")
+	generation := beginProjectionGeneration(t, repository, "semantic-active", inventory, model)
+	if err := repository.AppendGenerationRows(t.Context(), generation.GenerationID, []EmbeddingRow{{ItemID: "a", ContentHash: inventory.Items[0].ContentHash, Dimensions: 2, Vector: []float32{1, 0}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.AppendGenerationExclusions(t.Context(), generation.GenerationID, []EmbeddingExclusion{{ItemID: "huge", ContentHash: inventory.Items[1].ContentHash, Reason: ExclusionOversize}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ActivateGeneration(t.Context(), generation.GenerationID, inventory.Revision, inventory.Digest); err != nil {
+		t.Fatal(err)
+	}
+	index, err := NewSemanticIndex(repository, repository, semanticTestEmbedder{model: model, query: []float32{1, 0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := index.SearchVector(t.Context(), SearchRequest{Query: "query", Scope: Scope{ProjectID: "project"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := searchResultIDs(results); !slices.Equal(got, []string{"a"}) {
+		t.Fatalf("result IDs = %v, want [a]", got)
 	}
 }
 
 type semanticTestEmbedder struct {
 	model embedding.ModelIdentity
 	query []float32
+}
+
+type countingEmbedder struct {
+	semanticTestEmbedder
+	queries int
+}
+
+func (e *countingEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	e.queries++
+	return e.semanticTestEmbedder.EmbedQuery(ctx, text)
 }
 
 func (e semanticTestEmbedder) Identity() embedding.ModelIdentity { return e.model }

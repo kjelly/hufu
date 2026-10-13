@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -209,6 +210,55 @@ func TestHMACTraceHasherRequiresStrongCopiedKey(t *testing.T) {
 	clear(key)
 	if got := hasher.HashString("query"); got != want || got != strings.ToLower(got) || len(got) != 64 {
 		t.Fatalf("HMAC after caller key mutation = %q, want %q", got, want)
+	}
+}
+
+func TestHybridRetrieveSemanticQueryOnlyFeedsVectorLane(t *testing.T) {
+	repository := openProjectionTestRepository(t)
+	if err := repository.Append(t.Context(), ContextItem{
+		ID: "lexical", Kind: ContextDecision, Content: "phase execute guidance", Scope: Scope{ProjectID: "project"}, Confidence: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	vector := &recordingVectorSearcher{}
+	full := "協調者 resume 時避免重複副作用\nphase:execute\ntrigger:task_dispatch"
+	results, _, err := HybridRetrieveWithOptions(t.Context(), repository, SearchRequest{
+		Query: full, SemanticQuery: "協調者 resume 時避免重複副作用", Scope: Scope{ProjectID: "project"},
+	}, HybridRetrievalOptions{Mode: RetrievalActive, Vector: vector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vector.queries) != 1 || vector.queries[0] != "協調者 resume 時避免重複副作用" {
+		t.Fatalf("vector lane queries = %q", vector.queries)
+	}
+	if got := searchResultIDs(results); len(got) != 1 || got[0] != "lexical" {
+		t.Fatalf("lexical lane must still use the full query: %v", got)
+	}
+}
+
+func TestSemanticFallbackReasonForRuntimeErrors(t *testing.T) {
+	tests := []struct {
+		err  error
+		want SemanticFallbackReason
+	}{
+		{err: fmt.Errorf("x: %w", ErrSemanticProjectionIncomplete), want: SemanticFallbackProjectionIncomplete},
+		{err: ErrSemanticWarming, want: SemanticFallbackEmbeddingWarming},
+		{err: ErrSemanticBusy, want: SemanticFallbackEmbeddingBusy},
+		{err: ErrSemanticTimeout, want: SemanticFallbackEmbeddingTimeout},
+		{err: embedding.ErrEmbeddingInputTooLong, want: SemanticFallbackInputTooLong},
+		{err: embedding.ErrModelProfileMismatch, want: SemanticFallbackProfileMismatch},
+		{err: embedding.ErrOllamaUnavailable, want: SemanticFallbackEmbeddingUnavailable},
+		{err: embedding.ErrModelNotFound, want: SemanticFallbackEmbeddingUnavailable},
+		{err: embedding.ErrEmbeddingResponse, want: SemanticFallbackInvalidVector},
+		{err: ErrNoActiveEmbeddingGeneration, want: SemanticFallbackProjectionMissing},
+	}
+	for _, tc := range tests {
+		if got := SemanticFallbackReasonForError(tc.err); got != tc.want {
+			t.Fatalf("SemanticFallbackReasonForError(%v) = %s, want %s", tc.err, got, tc.want)
+		}
+		if !validSemanticFallbackReason(tc.want) {
+			t.Fatalf("%s is not a valid fallback reason", tc.want)
+		}
 	}
 }
 

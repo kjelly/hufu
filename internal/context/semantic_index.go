@@ -8,6 +8,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/kjelly/hufu/internal/embedding"
@@ -19,37 +20,66 @@ var (
 	ErrSemanticProjectionRefresh = errors.New("semantic projection refresh failed")
 	ErrSemanticInvalidVector     = errors.New("semantic query vector is invalid")
 	ErrSemanticCanonicalRepo     = errors.New("canonical repository failed during semantic retrieval")
+	// ErrSemanticProjectionIncomplete means at least one authorized
+	// candidate has no vector for its current content hash. The request
+	// falls back to lexical retrieval rather than ranking new memories
+	// lower only because they are not embedded yet.
+	ErrSemanticProjectionIncomplete = errors.New("semantic projection does not cover every authorized candidate")
 )
 
 type RetrievalCandidateIterator interface {
 	IterateRetrievable(context.Context, SearchRequest, func(ContextItem) error) error
 }
 
-type SemanticIndex struct {
-	repo       Repository
-	projection SemanticProjectionRepository
-	embedder   embedding.Embedder
-	iterator   RetrievalCandidateIterator
-	inventory  CanonicalEmbeddingInventory
+// SemanticIndexOptions configure a SemanticIndex.
+type SemanticIndexOptions struct {
+	// InventoryPolicy selects the generations the index reads; empty means
+	// InventoryPolicyProjectAll.
+	InventoryPolicy string
+	// OnIncomplete is called (without locks held) when a request finds an
+	// uncovered candidate, so a refresher can catch up.
+	OnIncomplete func()
+}
 
-	mu             sync.RWMutex
-	refreshMu      sync.Mutex
-	model          embedding.ModelIdentity
+// SemanticIndex scores authorized canonical candidates against the active
+// generation. Freshness is per item: a candidate is covered when the
+// generation holds a vector or an exclusion for its current content hash.
+// Unrelated canonical writes therefore never invalidate the index.
+type SemanticIndex struct {
+	repo         Repository
+	projection   SemanticProjectionRepository
+	embedder     embedding.Embedder
+	iterator     RetrievalCandidateIterator
+	model        embedding.ModelIdentity
+	policy       string
+	onIncomplete func()
+
+	mu        sync.RWMutex
+	refreshMu sync.Mutex
+	snapshot  *semanticSnapshot
+}
+
+// semanticSnapshot is immutable once published.
+type semanticSnapshot struct {
+	projectID      string
 	generationID   string
 	sourceRevision int64
-	snapshot       flatVectors
+	ids            []string
+	hashes         []string
+	data           []float32
+	dimensions     int
+	excluded       map[string]string
 }
 
-type flatVectors struct {
-	IDs        []string
-	Data       []float32
-	Dimensions int
+func NewSemanticIndex(repo Repository, projection SemanticProjectionRepository, embedder embedding.Embedder) (*SemanticIndex, error) {
+	return NewSemanticIndexWithOptions(repo, projection, embedder, SemanticIndexOptions{})
 }
 
-func NewSemanticIndex(
+func NewSemanticIndexWithOptions(
 	repo Repository,
 	projection SemanticProjectionRepository,
 	embedder embedding.Embedder,
+	options SemanticIndexOptions,
 ) (*SemanticIndex, error) {
 	if repo == nil || projection == nil || embedder == nil {
 		return nil, errors.New("semantic index dependencies are required")
@@ -58,66 +88,54 @@ func NewSemanticIndex(
 	if !ok {
 		return nil, errors.New("semantic index repository does not provide canonical retrieval iteration")
 	}
-	inventory, ok := repo.(CanonicalEmbeddingInventory)
-	if !ok {
-		return nil, errors.New("semantic index repository does not provide canonical embedding inventory")
-	}
 	model := embedder.Identity()
+	model.Scheme = model.EffectiveScheme()
 	if err := validateModelIdentity(model); err != nil {
 		return nil, err
 	}
+	policy := options.InventoryPolicy
+	if policy == "" {
+		policy = InventoryPolicyProjectAll
+	}
+	if !ValidInventoryPolicy(policy) {
+		return nil, fmt.Errorf("unknown embedding inventory policy %q", policy)
+	}
 	return &SemanticIndex{
-		repo: repo, projection: projection, embedder: embedder,
-		iterator: iterator, inventory: inventory, model: model,
+		repo: repo, projection: projection, embedder: embedder, iterator: iterator,
+		model: model, policy: policy, onIncomplete: options.OnIncomplete,
 	}, nil
+}
+
+type coveredCandidate struct {
+	item  ContextItem
+	index int
 }
 
 func (s *SemanticIndex) SearchVector(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
 	if req.Scope.ProjectID == "" {
 		return nil, errors.New("project scope is required")
 	}
-	if err := s.ensureSnapshot(ctx, req.Scope.ProjectID); err != nil {
-		return nil, err
-	}
-	query, err := s.embedder.EmbedQuery(ctx, req.Query)
+	snapshot, err := s.ensureSnapshot(ctx, req.Scope.ProjectID)
 	if err != nil {
 		return nil, err
 	}
-
-	s.mu.RLock()
-	snapshot := s.snapshot
-	sourceRevision := s.sourceRevision
-	generationID := s.generationID
-	s.mu.RUnlock()
-	if err = validateSemanticQueryVector(query, snapshot.Dimensions); err != nil {
-		return nil, err
-	}
-
-	limit := req.Limit
-	if limit <= 0 {
-		limit = 20
-	}
-	best := make(resultMinHeap, 0, min(limit, len(snapshot.IDs)))
-	heap.Init(&best)
+	// Coverage is checked before embedding the query so an incomplete
+	// projection costs no model call.
+	var covered []coveredCandidate
+	uncovered := 0
 	err = s.iterator.IterateRetrievable(ctx, req, func(item ContextItem) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		index, found := slices.BinarySearch(snapshot.IDs, item.ID)
-		if !found {
-			return fmt.Errorf("%w: authorized item %s is absent", ErrSemanticSnapshotCorrupt, item.ID)
-		}
-		start := index * snapshot.Dimensions
-		score := dotProduct(query, snapshot.Data[start:start+snapshot.Dimensions])
-		candidate := SearchResult{Item: item, Score: score}
-		if len(best) < limit {
-			heap.Push(&best, candidate)
+		hash := strings.ToLower(item.ContentHash)
+		if index, found := slices.BinarySearch(snapshot.ids, item.ID); found && snapshot.hashes[index] == hash {
+			covered = append(covered, coveredCandidate{item: item, index: index})
 			return nil
 		}
-		if searchResultBetter(candidate, best[0]) {
-			best[0] = candidate
-			heap.Fix(&best, 0)
+		if excludedHash, found := snapshot.excluded[item.ID]; found && excludedHash == hash {
+			return nil
 		}
+		uncovered++
 		return nil
 	})
 	if err != nil {
@@ -126,21 +144,41 @@ func (s *SemanticIndex) SearchVector(ctx context.Context, req SearchRequest) ([]
 		}
 		return nil, fmt.Errorf("%w: %w", ErrSemanticCanonicalRepo, err)
 	}
-	currentRevision, err := s.repo.Revision(ctx)
+	if uncovered > 0 {
+		if s.onIncomplete != nil {
+			s.onIncomplete()
+		}
+		return nil, fmt.Errorf("%w: %d of %d candidates lack vectors", ErrSemanticProjectionIncomplete, uncovered, uncovered+len(covered))
+	}
+	if len(covered) == 0 {
+		return []SearchResult{}, nil
+	}
+	query, err := s.embedder.EmbedQuery(ctx, req.Query)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrSemanticCanonicalRepo, err)
+		return nil, err
 	}
-	if currentRevision != sourceRevision {
-		return nil, ErrSemanticIndexStale
-	}
-	active, err := s.projection.ActiveGeneration(ctx, req.Scope.ProjectID, s.model)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrSemanticProjectionRefresh, err)
-	}
-	if active.GenerationID != generationID {
-		return nil, ErrSemanticIndexStale
+	if err = validateSemanticQueryVector(query, snapshot.dimensions); err != nil {
+		return nil, err
 	}
 
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	best := make(resultMinHeap, 0, min(limit, len(covered)))
+	heap.Init(&best)
+	for _, candidate := range covered {
+		start := candidate.index * snapshot.dimensions
+		result := SearchResult{Item: candidate.item, Score: dotProduct(query, snapshot.data[start:start+snapshot.dimensions])}
+		if len(best) < limit {
+			heap.Push(&best, result)
+			continue
+		}
+		if searchResultBetter(result, best[0]) {
+			best[0] = result
+			heap.Fix(&best, 0)
+		}
+	}
 	results := make([]SearchResult, len(best))
 	copy(results, best)
 	sort.Slice(results, func(i, j int) bool {
@@ -149,106 +187,99 @@ func (s *SemanticIndex) SearchVector(ctx context.Context, req SearchRequest) ([]
 	return results, nil
 }
 
-func (s *SemanticIndex) ensureSnapshot(ctx context.Context, projectID string) error {
-	revision, active, err := s.currentProjectionIdentity(ctx, projectID)
+// ensureSnapshot returns the snapshot of the project's active generation,
+// reloading it only when the active generation changed.
+func (s *SemanticIndex) ensureSnapshot(ctx context.Context, projectID string) (*semanticSnapshot, error) {
+	active, err := s.activeGeneration(ctx, projectID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if s.snapshotMatches(active.GenerationID, revision) {
-		return nil
+	if snapshot := s.currentSnapshot(projectID, active.GenerationID); snapshot != nil {
+		return snapshot, nil
 	}
-
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()
-	for range 2 {
-		revision, active, err = s.currentProjectionIdentity(ctx, projectID)
-		if err != nil {
-			return err
-		}
-		if s.snapshotMatches(active.GenerationID, revision) {
-			return nil
-		}
-		if active.SourceRevision != revision {
-			return ErrSemanticIndexStale
-		}
-
-		inventory, loadErr := s.inventory.LoadEmbeddingInventory(ctx, projectID)
-		if loadErr != nil {
-			return fmt.Errorf("%w: %w", ErrSemanticProjectionRefresh, loadErr)
-		}
-		rows, loadErr := s.projection.LoadActiveGeneration(ctx, active.GenerationID)
-		if loadErr != nil {
-			return fmt.Errorf("%w: %w", ErrSemanticSnapshotCorrupt, loadErr)
-		}
-		flat, loadErr := buildFlatVectors(active, inventory, rows)
-		if loadErr != nil {
-			return loadErr
-		}
-
-		finalRevision, finalActive, loadErr := s.currentProjectionIdentity(ctx, projectID)
-		if loadErr != nil {
-			return loadErr
-		}
-		if finalRevision != revision || finalActive.GenerationID != active.GenerationID {
-			continue
-		}
-		s.mu.Lock()
-		s.generationID = active.GenerationID
-		s.sourceRevision = active.SourceRevision
-		s.snapshot = flat
-		s.mu.Unlock()
-		return nil
+	if snapshot := s.currentSnapshot(projectID, active.GenerationID); snapshot != nil {
+		return snapshot, nil
 	}
-	return ErrSemanticIndexStale
+	for attempt := 0; ; attempt++ {
+		rows, err := s.projection.LoadActiveGeneration(ctx, active.GenerationID)
+		if err == nil {
+			var exclusions []EmbeddingExclusion
+			if exclusions, err = s.projection.LoadGenerationExclusions(ctx, active.GenerationID); err != nil {
+				return nil, fmt.Errorf("%w: %w", ErrSemanticProjectionRefresh, err)
+			}
+			snapshot, buildErr := buildSemanticSnapshot(active, rows, exclusions)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			s.mu.Lock()
+			s.snapshot = snapshot
+			s.mu.Unlock()
+			return snapshot, nil
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		// A concurrent refresh may have superseded the generation between
+		// the two reads; retry once against the new winner before treating
+		// an unreadable active generation as corrupt.
+		latest, latestErr := s.activeGeneration(ctx, projectID)
+		if attempt > 0 || latestErr != nil || latest.GenerationID == active.GenerationID {
+			return nil, fmt.Errorf("%w: %w", ErrSemanticSnapshotCorrupt, err)
+		}
+		active = latest
+	}
 }
 
-func (s *SemanticIndex) currentProjectionIdentity(ctx context.Context, projectID string) (int64, Generation, error) {
-	revision, err := s.repo.Revision(ctx)
-	if err != nil {
-		return 0, Generation{}, fmt.Errorf("%w: %w", ErrSemanticCanonicalRepo, err)
+func (s *SemanticIndex) activeGeneration(ctx context.Context, projectID string) (Generation, error) {
+	active, err := s.projection.ActiveGeneration(ctx, projectID, s.model, s.policy)
+	if err == nil {
+		return active, nil
 	}
-	active, err := s.projection.ActiveGeneration(ctx, projectID, s.model)
-	if err != nil {
-		if errors.Is(err, ErrNoActiveEmbeddingGeneration) {
-			return 0, Generation{}, ErrSemanticIndexStale
-		}
-		return 0, Generation{}, fmt.Errorf("%w: %w", ErrSemanticProjectionRefresh, err)
+	if errors.Is(err, ErrNoActiveEmbeddingGeneration) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return Generation{}, err
 	}
-	return revision, active, nil
+	return Generation{}, fmt.Errorf("%w: %w", ErrSemanticProjectionRefresh, err)
 }
 
-func (s *SemanticIndex) snapshotMatches(generationID string, revision int64) bool {
+func (s *SemanticIndex) currentSnapshot(projectID, generationID string) *semanticSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.generationID != "" && s.generationID == generationID && s.sourceRevision == revision
+	if s.snapshot != nil && s.snapshot.projectID == projectID && s.snapshot.generationID == generationID {
+		return s.snapshot
+	}
+	return nil
 }
 
-func buildFlatVectors(active Generation, inventory EmbeddingInventory, rows []EmbeddingRow) (flatVectors, error) {
-	if inventory.ProjectID != active.ProjectID || inventory.Revision != active.SourceRevision ||
-		inventory.Digest != active.ContentDigest || len(inventory.Items) != active.ExpectedCount ||
-		len(rows) != active.ExpectedCount {
-		return flatVectors{}, fmt.Errorf("%w: active generation inventory mismatch", ErrSemanticSnapshotCorrupt)
+func buildSemanticSnapshot(active Generation, rows []EmbeddingRow, exclusions []EmbeddingExclusion) (*semanticSnapshot, error) {
+	if len(rows) != active.RowCount || len(rows)+len(exclusions) != active.ExpectedCount {
+		return nil, fmt.Errorf("%w: active generation entry count mismatch", ErrSemanticSnapshotCorrupt)
 	}
-	flat := flatVectors{
-		IDs: make([]string, len(rows)), Data: make([]float32, len(rows)*active.Model.Dimensions),
-		Dimensions: active.Model.Dimensions,
+	dims := active.Model.Dimensions
+	snapshot := &semanticSnapshot{
+		projectID: active.ProjectID, generationID: active.GenerationID, sourceRevision: active.SourceRevision,
+		ids: make([]string, len(rows)), hashes: make([]string, len(rows)),
+		data: make([]float32, len(rows)*dims), dimensions: dims, excluded: make(map[string]string, len(exclusions)),
 	}
 	for i, row := range rows {
-		if i >= len(inventory.Items) || row.ItemID != inventory.Items[i].ItemID ||
-			row.ContentHash != inventory.Items[i].ContentHash || row.Dimensions != flat.Dimensions ||
-			len(row.Vector) != flat.Dimensions {
-			return flatVectors{}, fmt.Errorf("%w: embedding row %d does not match canonical inventory", ErrSemanticSnapshotCorrupt, i)
+		if row.Dimensions != dims || len(row.Vector) != dims {
+			return nil, fmt.Errorf("%w: embedding row %d has wrong dimensions", ErrSemanticSnapshotCorrupt, i)
 		}
 		if err := validateNormalizedVector(row.Vector); err != nil {
-			return flatVectors{}, fmt.Errorf("%w: item %s: %v", ErrSemanticSnapshotCorrupt, row.ItemID, err)
+			return nil, fmt.Errorf("%w: item %s: %v", ErrSemanticSnapshotCorrupt, row.ItemID, err)
 		}
-		flat.IDs[i] = row.ItemID
-		copy(flat.Data[i*flat.Dimensions:(i+1)*flat.Dimensions], row.Vector)
+		snapshot.ids[i] = row.ItemID
+		snapshot.hashes[i] = strings.ToLower(row.ContentHash)
+		copy(snapshot.data[i*dims:(i+1)*dims], row.Vector)
 	}
-	if !slices.IsSorted(flat.IDs) {
-		return flatVectors{}, fmt.Errorf("%w: embedding rows are not bytewise sorted", ErrSemanticSnapshotCorrupt)
+	if !slices.IsSorted(snapshot.ids) {
+		return nil, fmt.Errorf("%w: embedding rows are not bytewise sorted", ErrSemanticSnapshotCorrupt)
 	}
-	return flat, nil
+	for _, exclusion := range exclusions {
+		snapshot.excluded[exclusion.ItemID] = strings.ToLower(exclusion.ContentHash)
+	}
+	return snapshot, nil
 }
 
 func validateSemanticQueryVector(vector []float32, dimensions int) error {
@@ -339,10 +370,15 @@ func (r *SQLiteRepository) IterateRetrievable(ctx context.Context, req SearchReq
 	})
 }
 
+// SemanticTraceIdentity reports the encoder and the generation of the last
+// loaded snapshot.
 func (s *SemanticIndex) SemanticTraceIdentity() (embedding.ModelIdentity, string, int64) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.model, s.generationID, s.sourceRevision
+	if s.snapshot == nil {
+		return s.model, "", 0
+	}
+	return s.model, s.snapshot.generationID, s.snapshot.sourceRevision
 }
 
 var _ VectorSearcher = (*SemanticIndex)(nil)

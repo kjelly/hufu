@@ -4,6 +4,7 @@ package context
 
 import (
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -189,6 +190,20 @@ type SearchRequest struct {
 	// FilePaths are normalized evidence refs used for a deterministic ranking
 	// boost; they deliberately do not exclude otherwise relevant results.
 	FilePaths []string
+	// SemanticQuery, when set, replaces Query as the source of the semantic
+	// lane's text (exact and lexical lanes keep Query). The runtime passes
+	// the bare goal here so phase/trigger metadata lines are not embedded.
+	SemanticQuery string
+}
+
+// SemanticQueryText is the text the semantic lane embeds: the remainder of
+// SemanticQuery (or Query) after exact identifiers are taken out.
+func (r SearchRequest) SemanticQueryText() string {
+	source := r.Query
+	if strings.TrimSpace(r.SemanticQuery) != "" {
+		source = r.SemanticQuery
+	}
+	return strings.TrimSpace(DecomposeQuery(source).Remainder)
 }
 
 // WithAllowedItemIDs returns a request with a copied, deduplicated, bytewise

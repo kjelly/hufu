@@ -7,6 +7,7 @@ import (
 	"errors"
 	"math"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -62,7 +63,7 @@ func TestEmbeddingGenerationLifecycleAndProjectionIsolation(t *testing.T) {
 	if generation.GenerationID == "" || generation.State != GenerationBuilding {
 		t.Fatalf("unexpected building generation: %#v", generation)
 	}
-	if _, err = repository.ActiveGeneration(t.Context(), "project-1", model); !errors.Is(err, ErrNoActiveEmbeddingGeneration) {
+	if _, err = repository.ActiveGeneration(t.Context(), "project-1", model, InventoryPolicyProjectAll); !errors.Is(err, ErrNoActiveEmbeddingGeneration) {
 		t.Fatalf("building generation became visible: %v", err)
 	}
 	if _, err = repository.LoadActiveGeneration(t.Context(), generation.GenerationID); err == nil {
@@ -123,7 +124,7 @@ func TestEquivalentGenerationKeepsExistingActiveWinner(t *testing.T) {
 	if err = repository.AppendGenerationRows(t.Context(), second.GenerationID, projectionRows(inventory, model.Dimensions)[:1]); err != nil {
 		t.Fatal(err)
 	}
-	visible, err := repository.ActiveGeneration(t.Context(), "project-1", model)
+	visible, err := repository.ActiveGeneration(t.Context(), "project-1", model, InventoryPolicyProjectAll)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,25 +168,168 @@ func TestBeginGenerationRejectsImmutableIdentityConflict(t *testing.T) {
 	}
 }
 
-func TestActivateGenerationRejectsCanonicalDrift(t *testing.T) {
+// TestActivateGenerationToleratesUnrelatedCanonicalWrites is the B1
+// regression: freshness is checked per item at query time, so a write after
+// the inventory snapshot no longer blocks activation.
+func TestActivateGenerationToleratesUnrelatedCanonicalWrites(t *testing.T) {
 	repository := openProjectionTestRepository(t)
 	appendProjectionItems(t, repository, "project-1", "item-1")
 	inventory := loadProjectionInventory(t, repository, "project-1")
 	model := projectionTestModel("model-a", "1")
-	generation := beginProjectionGeneration(t, repository, "generation-drift", inventory, model)
+	generation := beginProjectionGeneration(t, repository, "generation-later-write", inventory, model)
 	appendProjectionRows(t, repository, generation.GenerationID, inventory, model.Dimensions)
 	appendProjectionItems(t, repository, "project-1", "item-2")
+	appendProjectionItems(t, repository, "project-2", "item-3")
 
-	_, err := repository.ActivateGeneration(t.Context(), generation.GenerationID, inventory.Revision, inventory.Digest)
-	if !errors.Is(err, ErrEmbeddingInventoryDrift) {
-		t.Fatalf("activation drift error = %v", err)
-	}
-	generation, err = loadGeneration(t.Context(), repository.db, generation.GenerationID)
+	active, err := repository.ActivateGeneration(t.Context(), generation.GenerationID, inventory.Revision, inventory.Digest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if generation.State != GenerationBuilding {
-		t.Fatalf("drifted generation state = %s, want building", generation.State)
+	if active.GenerationID != generation.GenerationID || active.State != GenerationActive {
+		t.Fatalf("activation = %#v", active)
+	}
+}
+
+func TestAppendGenerationRowsRejectsEditedCanonicalItem(t *testing.T) {
+	repository := openProjectionTestRepository(t)
+	appendProjectionItems(t, repository, "project-1", "item-1")
+	inventory := loadProjectionInventory(t, repository, "project-1")
+	model := projectionTestModel("model-a", "1")
+	generation := beginProjectionGeneration(t, repository, "generation-edited", inventory, model)
+	if _, err := repository.db.ExecContext(t.Context(), "UPDATE context_items SET content='edited', content_hash=? WHERE id='item-1'", projectionHash("edited")); err != nil {
+		t.Fatal(err)
+	}
+	err := repository.AppendGenerationRows(t.Context(), generation.GenerationID, projectionRows(inventory, model.Dimensions))
+	if !errors.Is(err, ErrEmbeddingInventoryDrift) {
+		t.Fatalf("append after edit error = %v", err)
+	}
+}
+
+func TestActivateGenerationKeepsNewerActiveWinner(t *testing.T) {
+	repository := openProjectionTestRepository(t)
+	appendProjectionItems(t, repository, "project-1", "item-1")
+	older := loadProjectionInventory(t, repository, "project-1")
+	model := projectionTestModel("model-a", "1")
+	stale := beginProjectionGeneration(t, repository, "generation-older", older, model)
+	appendProjectionRows(t, repository, stale.GenerationID, older, model.Dimensions)
+
+	appendProjectionItems(t, repository, "project-1", "item-2")
+	newer := loadProjectionInventory(t, repository, "project-1")
+	fresh := beginProjectionGeneration(t, repository, "generation-newer", newer, model)
+	appendProjectionRows(t, repository, fresh.GenerationID, newer, model.Dimensions)
+	if _, err := repository.ActivateGeneration(t.Context(), fresh.GenerationID, newer.Revision, newer.Digest); err != nil {
+		t.Fatal(err)
+	}
+
+	winner, err := repository.ActivateGeneration(t.Context(), stale.GenerationID, older.Revision, older.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if winner.GenerationID != fresh.GenerationID {
+		t.Fatalf("older generation replaced newer: winner %s", winner.GenerationID)
+	}
+	stale, err = loadGeneration(t.Context(), repository.db, stale.GenerationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale.State != GenerationSuperseded {
+		t.Fatalf("older candidate state = %s, want superseded", stale.State)
+	}
+}
+
+func TestGenerationExclusionsAndCopyForward(t *testing.T) {
+	repository := openProjectionTestRepository(t)
+	appendProjectionItems(t, repository, "project-1", "item-1", "item-2", "item-3")
+	inventory := loadProjectionInventory(t, repository, "project-1")
+	model := projectionTestModel("model-a", "1")
+	first := beginProjectionGeneration(t, repository, "generation-first", inventory, model)
+	rows := projectionRows(inventory, model.Dimensions)
+	if err := repository.AppendGenerationRows(t.Context(), first.GenerationID, rows[:2]); err != nil {
+		t.Fatal(err)
+	}
+	exclusion := EmbeddingExclusion{ItemID: "item-3", ContentHash: inventory.Items[2].ContentHash, Reason: ExclusionOversize}
+	if err := repository.AppendGenerationExclusions(t.Context(), first.GenerationID, []EmbeddingExclusion{exclusion}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.AppendGenerationExclusions(t.Context(), first.GenerationID, []EmbeddingExclusion{{ItemID: "item-1", ContentHash: inventory.Items[0].ContentHash, Reason: "bogus"}}); err == nil {
+		t.Fatal("unknown exclusion reason accepted")
+	}
+	if _, err := repository.ActivateGeneration(t.Context(), first.GenerationID, inventory.Revision, inventory.Digest); err != nil {
+		t.Fatal(err)
+	}
+
+	second := beginProjectionGeneration(t, repository, "generation-second", inventory, model)
+	if err := repository.CopyGenerationEntries(t.Context(), first.GenerationID, second.GenerationID, inventory.Items); err != nil {
+		t.Fatal(err)
+	}
+	vectors, exclusions, err := repository.LoadGenerationEntryHashes(t.Context(), second.GenerationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vectors) != 2 || exclusions["item-3"] != exclusion.ContentHash {
+		t.Fatalf("copied vectors=%v exclusions=%v", vectors, exclusions)
+	}
+	other := projectionTestModel("model-b", "1")
+	foreign := beginProjectionGeneration(t, repository, "generation-foreign", inventory, other)
+	if err := repository.CopyGenerationEntries(t.Context(), first.GenerationID, foreign.GenerationID, inventory.Items); err == nil {
+		t.Fatal("entries copied across encoders")
+	}
+}
+
+func TestRetrievableInventoryPolicy(t *testing.T) {
+	repository := openProjectionTestRepository(t)
+	if err := repository.Append(t.Context(),
+		ContextItem{ID: "confirmed", Kind: ContextDecision, Content: "confirmed", Scope: Scope{ProjectID: "p"}},
+		ContextItem{ID: "candidate", Kind: ContextDecision, Content: "candidate", Scope: Scope{ProjectID: "p"}, Lifecycle: LifecycleCandidate},
+		ContextItem{ID: "rejected", Kind: ContextDecision, Content: "rejected", Scope: Scope{ProjectID: "p"}, Lifecycle: LifecycleRejected},
+		ContextItem{ID: "private", Kind: ContextSummary, Content: "private", Scope: Scope{ProjectID: "p", SessionID: "s", AgentID: "worker"}},
+		ContextItem{ID: "old", Kind: ContextDecision, Content: "old", Scope: Scope{ProjectID: "p"}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.MarkSuperseded(t.Context(), []string{"old"}, "confirmed"); err != nil {
+		t.Fatal(err)
+	}
+	inventory, err := repository.LoadEmbeddingInventoryForPolicy(t.Context(), "p", InventoryPolicyRetrievable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, item := range inventory.Items {
+		ids = append(ids, item.ItemID)
+	}
+	if !slices.Equal(ids, []string{"candidate", "confirmed", "private"}) {
+		t.Fatalf("retrievable inventory = %v", ids)
+	}
+	if _, err = repository.LoadEmbeddingInventoryForPolicy(t.Context(), "p", "nope"); err == nil {
+		t.Fatal("unknown inventory policy accepted")
+	}
+}
+
+func TestOllamaEncoderIdentityValidation(t *testing.T) {
+	valid := embedding.ModelIdentity{
+		Scheme: embedding.IdentitySchemeOllamaEncoder, ID: "ollama/embeddinggemma:latest",
+		Revision: projectionHash("fingerprint"), Dimensions: 768, ManifestSHA256: projectionHash("digest"),
+	}
+	tests := []struct {
+		name   string
+		mutate func(*embedding.ModelIdentity)
+		ok     bool
+	}{
+		{name: "valid", mutate: func(*embedding.ModelIdentity) {}, ok: true},
+		{name: "fake table hash", mutate: func(m *embedding.ModelIdentity) { m.TableSHA256 = projectionHash("table") }},
+		{name: "short revision", mutate: func(m *embedding.ModelIdentity) { m.Revision = "1" }},
+		{name: "missing provider prefix", mutate: func(m *embedding.ModelIdentity) { m.ID = "embeddinggemma" }},
+		{name: "unknown scheme", mutate: func(m *embedding.ModelIdentity) { m.Scheme = "other" }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			model := valid
+			tc.mutate(&model)
+			if err := validateModelIdentity(model); (err == nil) != tc.ok {
+				t.Fatalf("validateModelIdentity(%+v) = %v", model, err)
+			}
+		})
 	}
 }
 

@@ -32,6 +32,7 @@ an existing store requires a new migration, hufu creates a timestamped
 | 10 | `promotion_generated_draft_hash` | Records each promotion proposal's generated draft hash so operator edits can be distinguished from the model draft. |
 | 11 | `context_pair_judgments` | Adds model judgments about pairs of existing persistent memories and their human review state (memory conflicts). |
 | 12 | `experience_strong_evidence_recency` | Adds `experience_aggregates.last_strong_evidence_at`, the last time an item received strong evidence; knowledge staleness is measured from it. Earlier rows read 0 (unknown) until rebuilt. |
+| 13 | `semantic_inventory_policy_and_exclusions` | Adds `identity_scheme` and `inventory_policy` to semantic generations, keys the active index by inventory policy, and adds `context_embedding_exclusions`. Earlier generations read as `static-table-v1` / `project-all-v0`. |
 
 ## Tables
 
@@ -75,13 +76,29 @@ FTS5 lexical projection with unindexed canonical `id` plus searchable `content`,
 
 ### Semantic embedding projection tables
 
-`context_embedding_generations` records immutable model identity, the source
-canonical revision and inventory digest, expected and actual row counts, and a
-`building`, `active`, `superseded`, or `failed` lifecycle. A partial unique
-index permits only one active generation for each
-`(project_id, model_id, model_revision)` tuple. Model dimensions plus manifest,
-table, and tokenizer hashes prevent a reused model ID/revision from silently
-changing bytes.
+`context_embedding_generations` records immutable model identity, the
+inventory policy it covers, the canonical revision of its inventory snapshot,
+the inventory digest, expected entries (vector rows plus exclusions), the
+vector row count, and a `building`, `active`, `superseded`, or `failed`
+lifecycle. A partial unique index permits only one active generation for each
+`(project_id, model_id, model_revision, inventory_policy)` tuple.
+`identity_scheme` states what the hash columns attest: for `static-table-v1`
+the manifest, table, and tokenizer hashes of verified local files; for
+`ollama-encoder-v1` `model_hash` is the Ollama model digest, `model_revision`
+is the encoder profile fingerprint (digest, dimensions, document prefix,
+normalization, input limit, adapter version), and the table and tokenizer
+hashes are empty. A reused model ID/revision with different bytes is refused.
+
+Inventory policies: `project-all-v0` covers every project row (the original
+static-table behavior); `retrievable-v1` covers candidate or confirmed rows
+that are not superseded, in every scope of the project. Scope, lifecycle,
+expiry, and activation are still enforced per request by the canonical
+iterator, never by the projection.
+
+`context_embedding_exclusions` records items a generation deliberately leaves
+without a vector, with their content hash and a reason (`oversize` when the
+input exceeds the encoder limit, `empty`). An excluded item with an unchanged
+hash counts as covered.
 
 `context_embeddings` stores little-endian float32 vectors by generation and
 canonical context item. Both generation and item foreign keys cascade on
@@ -89,10 +106,17 @@ delete. Projection writes never append `context_events`, so semantic rebuilds
 do not advance the canonical revision. Readers may load only an active,
 fully-validated generation; building and failed rows are never query input.
 
-Generation activation uses an immediate SQLite transaction to revalidate row
-count, vector shape, the source revision, and the bytewise-sorted inventory
-digest before swapping the active generation. Equivalent concurrent builders
-reuse one winner. Cleanup retains the active generation and the two newest
+Freshness is per item: a query uses the active generation only when every
+authorized candidate has a vector or exclusion for its current content hash;
+otherwise that request falls back to exact and lexical retrieval
+(`projection_incomplete`). Canonical writes outside the candidate set never
+invalidate the index. Refreshes are incremental: unchanged entries are copied
+forward and only new or edited items are embedded. Generation activation uses
+an immediate SQLite transaction to revalidate entry count, vector shape, and
+the bytewise-sorted entry digest before swapping the active generation; it
+does not require the global canonical revision to be unchanged, but it never
+lets a generation built from an older inventory snapshot replace a newer
+active one. Equivalent concurrent builders reuse one winner. Cleanup retains the active generation and the two newest
 superseded generations, and removes building or failed generations only after
 their 24-hour recovery window.
 
@@ -118,7 +142,7 @@ their 24-hour recovery window.
 | `idx_context_hash` | project/content hash | Duplicate detection. |
 | `idx_context_validity` | project/valid-until/expires-at | Validity and expiry filtering. |
 | `idx_context_events_type` | event type | Event/revision inspection. |
-| `idx_context_embedding_generations_active` | project/model/revision for active rows | Enforces one active semantic generation. |
+| `idx_context_embedding_generations_active_policy` | project/model/revision/inventory policy for active rows | Enforces one active semantic generation per inventory policy. |
 | `idx_context_embeddings_item` | canonical item ID | Cascade inspection and projection maintenance. |
 
 ## Operational checks

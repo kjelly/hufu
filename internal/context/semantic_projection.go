@@ -3,13 +3,13 @@ package context
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -37,39 +37,40 @@ const (
 	GenerationFailed     GenerationState = "failed"
 )
 
-type EmbeddingInventoryItem struct {
-	ItemID      string
-	Content     string
-	ContentHash string
-}
+// Exclusion reasons for items a generation deliberately leaves without a
+// vector. Coverage treats an excluded item with a matching hash as covered.
+const (
+	ExclusionOversize = "oversize"
+	ExclusionEmpty    = "empty"
+)
 
-type EmbeddingInventory struct {
-	ProjectID string
-	Revision  int64
-	Digest    string
-	Items     []EmbeddingInventoryItem
-}
-
+// GenerationSpec describes a generation before rows are written.
+// ExpectedCount counts vector rows plus exclusions, and ContentDigest is the
+// digest of their (item ID, content hash) pairs in item ID order.
 type GenerationSpec struct {
-	GenerationID   string
-	ProjectID      string
-	Model          embedding.ModelIdentity
-	SourceRevision int64
-	ExpectedCount  int
-	ContentDigest  string
+	GenerationID    string
+	ProjectID       string
+	Model           embedding.ModelIdentity
+	InventoryPolicy string
+	SourceRevision  int64
+	ExpectedCount   int
+	ContentDigest   string
 }
 
 type Generation struct {
-	GenerationID   string
-	ProjectID      string
-	Model          embedding.ModelIdentity
-	SourceRevision int64
-	State          GenerationState
-	ExpectedCount  int
-	RowCount       int
-	ContentDigest  string
-	CreatedAt      time.Time
-	ActivatedAt    *time.Time
+	GenerationID    string
+	ProjectID       string
+	Model           embedding.ModelIdentity
+	InventoryPolicy string
+	SourceRevision  int64
+	State           GenerationState
+	ExpectedCount   int
+	// RowCount counts vector rows only; exclusions make up the rest of
+	// ExpectedCount.
+	RowCount      int
+	ContentDigest string
+	CreatedAt     time.Time
+	ActivatedAt   *time.Time
 }
 
 type EmbeddingRow struct {
@@ -79,24 +80,31 @@ type EmbeddingRow struct {
 	Vector      []float32
 }
 
+type EmbeddingExclusion struct {
+	ItemID      string
+	ContentHash string
+	Reason      string
+}
+
 type GenerationCleanupPolicy struct {
 	Now              time.Time
 	InactiveTTL      time.Duration
 	RetainSuperseded int
 }
 
-type CanonicalEmbeddingInventory interface {
-	LoadEmbeddingInventory(context.Context, string) (EmbeddingInventory, error)
-}
-
 type SemanticProjectionRepository interface {
 	BeginGeneration(context.Context, GenerationSpec) (Generation, error)
 	AppendGenerationRows(context.Context, string, []EmbeddingRow) error
-	ActiveGeneration(context.Context, string, embedding.ModelIdentity) (Generation, error)
+	AppendGenerationExclusions(context.Context, string, []EmbeddingExclusion) error
+	CopyGenerationEntries(context.Context, string, string, []EmbeddingInventoryItem) error
+	ActiveGeneration(context.Context, string, embedding.ModelIdentity, string) (Generation, error)
 	LoadActiveGeneration(context.Context, string) ([]EmbeddingRow, error)
+	LoadGenerationExclusions(context.Context, string) ([]EmbeddingExclusion, error)
+	LoadGenerationEntryHashes(context.Context, string) (map[string]string, map[string]string, error)
 	ActivateGeneration(context.Context, string, int64, string) (Generation, error)
 	MarkGenerationFailed(context.Context, string) error
 	CleanupInactiveGenerations(context.Context, GenerationCleanupPolicy) (int64, error)
+	ListGenerations(context.Context, string) ([]Generation, error)
 }
 
 func NewEmbeddingGenerationID() (string, error) {
@@ -105,26 +113,6 @@ func NewEmbeddingGenerationID() (string, error) {
 		return "", fmt.Errorf("create embedding generation ID: %w", err)
 	}
 	return "sem-" + hex.EncodeToString(random), nil
-}
-
-func (r *SQLiteRepository) LoadEmbeddingInventory(ctx context.Context, projectID string) (EmbeddingInventory, error) {
-	if strings.TrimSpace(projectID) == "" {
-		return EmbeddingInventory{}, errors.New("embedding inventory project ID is required")
-	}
-	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return EmbeddingInventory{}, fmt.Errorf("begin embedding inventory snapshot: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	inventory, err := loadEmbeddingInventory(ctx, tx, projectID)
-	if err != nil {
-		return EmbeddingInventory{}, err
-	}
-	if err = tx.Commit(); err != nil {
-		return EmbeddingInventory{}, fmt.Errorf("commit embedding inventory snapshot: %w", err)
-	}
-	return inventory, nil
 }
 
 func (r *SQLiteRepository) BeginGeneration(ctx context.Context, spec GenerationSpec) (Generation, error) {
@@ -142,8 +130,8 @@ func (r *SQLiteRepository) BeginGeneration(ctx context.Context, spec GenerationS
 		var conflicts int
 		loadErr := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM context_embedding_generations
 			WHERE project_id=? AND model_id=? AND model_revision=? AND
-			(model_hash!=? OR dimensions!=? OR table_hash!=? OR tokenizer_hash!=?)`,
-			spec.ProjectID, spec.Model.ID, spec.Model.Revision, spec.Model.ManifestSHA256,
+			(identity_scheme!=? OR model_hash!=? OR dimensions!=? OR table_hash!=? OR tokenizer_hash!=?)`,
+			spec.ProjectID, spec.Model.ID, spec.Model.Revision, spec.Model.Scheme, spec.Model.ManifestSHA256,
 			spec.Model.Dimensions, spec.Model.TableSHA256, spec.Model.TokenizerSHA256,
 		).Scan(&conflicts)
 		if loadErr != nil {
@@ -155,19 +143,19 @@ func (r *SQLiteRepository) BeginGeneration(ctx context.Context, spec GenerationS
 
 		now := time.Now().UTC()
 		_, insertErr := tx.ExecContext(ctx, `INSERT INTO context_embedding_generations(
-			generation_id,project_id,model_id,model_revision,model_hash,dimensions,table_hash,tokenizer_hash,
-			source_revision,state,expected_count,row_count,content_digest,created_at
-		) VALUES(?,?,?,?,?,?,?,?,?,'building',?,0,?,?)`,
-			spec.GenerationID, spec.ProjectID, spec.Model.ID, spec.Model.Revision,
+			generation_id,project_id,identity_scheme,model_id,model_revision,model_hash,dimensions,table_hash,tokenizer_hash,
+			inventory_policy,source_revision,state,expected_count,row_count,content_digest,created_at
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,'building',?,0,?,?)`,
+			spec.GenerationID, spec.ProjectID, spec.Model.Scheme, spec.Model.ID, spec.Model.Revision,
 			spec.Model.ManifestSHA256, spec.Model.Dimensions, spec.Model.TableSHA256, spec.Model.TokenizerSHA256,
-			spec.SourceRevision, spec.ExpectedCount, spec.ContentDigest, now.UnixMilli(),
+			spec.InventoryPolicy, spec.SourceRevision, spec.ExpectedCount, spec.ContentDigest, now.UnixMilli(),
 		)
 		if insertErr != nil {
 			return fmt.Errorf("insert embedding generation: %w", insertErr)
 		}
 		generation = Generation{
 			GenerationID: spec.GenerationID, ProjectID: spec.ProjectID, Model: spec.Model,
-			SourceRevision: spec.SourceRevision, State: GenerationBuilding,
+			InventoryPolicy: spec.InventoryPolicy, SourceRevision: spec.SourceRevision, State: GenerationBuilding,
 			ExpectedCount: spec.ExpectedCount, ContentDigest: spec.ContentDigest, CreatedAt: now,
 		}
 		return tx.Commit()
@@ -176,6 +164,52 @@ func (r *SQLiteRepository) BeginGeneration(ctx context.Context, spec GenerationS
 		return Generation{}, err
 	}
 	return generation, nil
+}
+
+// buildingGeneration loads generationID inside tx and requires it to be
+// building.
+func buildingGeneration(ctx context.Context, tx *sql.Tx, generationID string) (Generation, error) {
+	generation, err := loadGeneration(ctx, tx, generationID)
+	if err != nil {
+		return Generation{}, generationLookupError(err)
+	}
+	if generation.State != GenerationBuilding {
+		return Generation{}, fmt.Errorf("embedding generation %s is %s, not building", generationID, generation.State)
+	}
+	return generation, nil
+}
+
+// requireCanonicalHash fails with ErrEmbeddingInventoryDrift when the item
+// left the project or its content changed since the inventory snapshot.
+func requireCanonicalHash(ctx context.Context, tx *sql.Tx, projectID, itemID, contentHash string) error {
+	var canonicalHash string
+	err := tx.QueryRowContext(ctx, "SELECT LOWER(content_hash) FROM context_items WHERE id=? AND project_id=?", itemID, projectID).Scan(&canonicalHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: embedding entry %s is absent from project inventory", ErrEmbeddingInventoryDrift, itemID)
+	}
+	if err != nil {
+		return err
+	}
+	if canonicalHash != contentHash {
+		return fmt.Errorf("%w: embedding entry %s content hash does not match canonical item", ErrEmbeddingInventoryDrift, itemID)
+	}
+	return nil
+}
+
+// refreshEntryCount updates row_count and enforces rows+exclusions <= expected.
+func refreshEntryCount(ctx context.Context, tx *sql.Tx, generation Generation) error {
+	var rows, exclusions int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM context_embeddings WHERE generation_id=?", generation.GenerationID).Scan(&rows); err != nil {
+		return err
+	}
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM context_embedding_exclusions WHERE generation_id=?", generation.GenerationID).Scan(&exclusions); err != nil {
+		return err
+	}
+	if rows+exclusions > generation.ExpectedCount {
+		return fmt.Errorf("embedding generation %s has %d entries, expected at most %d", generation.GenerationID, rows+exclusions, generation.ExpectedCount)
+	}
+	_, err := tx.ExecContext(ctx, "UPDATE context_embedding_generations SET row_count=? WHERE generation_id=? AND state='building'", rows, generation.GenerationID)
+	return err
 }
 
 func (r *SQLiteRepository) AppendGenerationRows(ctx context.Context, generationID string, rows []EmbeddingRow) error {
@@ -195,31 +229,17 @@ func (r *SQLiteRepository) AppendGenerationRows(ctx context.Context, generationI
 		}
 		defer func() { _ = tx.Rollback() }()
 
-		generation, err := loadGeneration(ctx, tx, generationID)
+		generation, err := buildingGeneration(ctx, tx, generationID)
 		if err != nil {
-			return generationLookupError(err)
+			return err
 		}
-		if generation.State != GenerationBuilding {
-			return fmt.Errorf("embedding generation %s is %s, not building", generationID, generation.State)
-		}
-
 		now := time.Now().UTC().UnixMilli()
 		for _, row := range rows {
 			if row.Dimensions != generation.Model.Dimensions {
 				return fmt.Errorf("embedding row %s has %d dimensions, want %d", row.ItemID, row.Dimensions, generation.Model.Dimensions)
 			}
-			var canonicalHash string
-			if err = tx.QueryRowContext(ctx,
-				"SELECT content_hash FROM context_items WHERE id=? AND project_id=?",
-				row.ItemID, generation.ProjectID,
-			).Scan(&canonicalHash); err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					return fmt.Errorf("embedding row %s is absent from project inventory", row.ItemID)
-				}
+			if err = requireCanonicalHash(ctx, tx, generation.ProjectID, row.ItemID, row.ContentHash); err != nil {
 				return err
-			}
-			if canonicalHash != row.ContentHash {
-				return fmt.Errorf("embedding row %s content hash does not match canonical item", row.ItemID)
 			}
 			if _, err = tx.ExecContext(ctx, `INSERT INTO context_embeddings(
 				generation_id,item_id,content_hash,dimensions,vector,updated_at
@@ -230,28 +250,127 @@ func (r *SQLiteRepository) AppendGenerationRows(ctx context.Context, generationI
 				return fmt.Errorf("append embedding row %s: %w", row.ItemID, err)
 			}
 		}
-		var rowCount int
-		if err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM context_embeddings WHERE generation_id=?", generationID).Scan(&rowCount); err != nil {
-			return err
-		}
-		if rowCount > generation.ExpectedCount {
-			return fmt.Errorf("embedding generation %s has %d rows, expected at most %d", generationID, rowCount, generation.ExpectedCount)
-		}
-		if _, err = tx.ExecContext(ctx, "UPDATE context_embedding_generations SET row_count=? WHERE generation_id=? AND state='building'", rowCount, generationID); err != nil {
+		if err = refreshEntryCount(ctx, tx, generation); err != nil {
 			return err
 		}
 		return tx.Commit()
 	})
 }
 
-func (r *SQLiteRepository) ActiveGeneration(ctx context.Context, projectID string, model embedding.ModelIdentity) (Generation, error) {
+// AppendGenerationExclusions records items the generation leaves without a
+// vector. They still count toward the generation's expected entries.
+func (r *SQLiteRepository) AppendGenerationExclusions(ctx context.Context, generationID string, exclusions []EmbeddingExclusion) error {
+	if len(exclusions) == 0 {
+		return nil
+	}
+	if len(exclusions) > maxEmbeddingRowsPerBatch {
+		return fmt.Errorf("embedding exclusion batch has %d entries, limit is %d", len(exclusions), maxEmbeddingRowsPerBatch)
+	}
+	for _, exclusion := range exclusions {
+		if strings.TrimSpace(exclusion.ItemID) == "" || !validEmbeddingHash(exclusion.ContentHash) ||
+			(exclusion.Reason != ExclusionOversize && exclusion.Reason != ExclusionEmpty) {
+			return fmt.Errorf("invalid embedding exclusion for %q", exclusion.ItemID)
+		}
+	}
+	return r.withBusyRetry(ctx, func() error {
+		tx, err := r.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		generation, err := buildingGeneration(ctx, tx, generationID)
+		if err != nil {
+			return err
+		}
+		for _, exclusion := range exclusions {
+			if err = requireCanonicalHash(ctx, tx, generation.ProjectID, exclusion.ItemID, exclusion.ContentHash); err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, `INSERT INTO context_embedding_exclusions(generation_id,item_id,content_hash,reason)
+				VALUES(?,?,?,?) ON CONFLICT(generation_id,item_id) DO UPDATE SET content_hash=excluded.content_hash,reason=excluded.reason`,
+				generationID, exclusion.ItemID, exclusion.ContentHash, exclusion.Reason); err != nil {
+				return fmt.Errorf("append embedding exclusion %s: %w", exclusion.ItemID, err)
+			}
+		}
+		if err = refreshEntryCount(ctx, tx, generation); err != nil {
+			return err
+		}
+		return tx.Commit()
+	})
+}
+
+// CopyGenerationEntries carries unchanged vectors and exclusions forward from
+// an earlier generation of the same project, encoder and inventory policy.
+// Every item must still match its canonical hash and exist in the source.
+func (r *SQLiteRepository) CopyGenerationEntries(ctx context.Context, fromGenerationID, toGenerationID string, items []EmbeddingInventoryItem) error {
+	for start := 0; start < len(items); start += maxEmbeddingRowsPerBatch {
+		chunk := items[start:min(start+maxEmbeddingRowsPerBatch, len(items))]
+		err := r.withBusyRetry(ctx, func() error {
+			tx, err := r.db.BeginTx(ctx, nil)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = tx.Rollback() }()
+			target, err := buildingGeneration(ctx, tx, toGenerationID)
+			if err != nil {
+				return err
+			}
+			source, err := loadGeneration(ctx, tx, fromGenerationID)
+			if err != nil {
+				return generationLookupError(err)
+			}
+			if source.ProjectID != target.ProjectID || source.Model != target.Model || source.InventoryPolicy != target.InventoryPolicy {
+				return errors.New("embedding entries can only be copied between generations of one project, encoder and inventory policy")
+			}
+			now := time.Now().UTC().UnixMilli()
+			for _, item := range chunk {
+				if err = requireCanonicalHash(ctx, tx, target.ProjectID, item.ItemID, item.ContentHash); err != nil {
+					return err
+				}
+				result, execErr := tx.ExecContext(ctx, `INSERT INTO context_embeddings(generation_id,item_id,content_hash,dimensions,vector,updated_at)
+					SELECT ?,item_id,content_hash,dimensions,vector,? FROM context_embeddings WHERE generation_id=? AND item_id=? AND content_hash=?`,
+					toGenerationID, now, fromGenerationID, item.ItemID, item.ContentHash)
+				if execErr != nil {
+					return fmt.Errorf("copy embedding row %s: %w", item.ItemID, execErr)
+				}
+				if copied, _ := result.RowsAffected(); copied == 1 {
+					continue
+				}
+				result, execErr = tx.ExecContext(ctx, `INSERT INTO context_embedding_exclusions(generation_id,item_id,content_hash,reason)
+					SELECT ?,item_id,content_hash,reason FROM context_embedding_exclusions WHERE generation_id=? AND item_id=? AND content_hash=?`,
+					toGenerationID, fromGenerationID, item.ItemID, item.ContentHash)
+				if execErr != nil {
+					return fmt.Errorf("copy embedding exclusion %s: %w", item.ItemID, execErr)
+				}
+				if copied, _ := result.RowsAffected(); copied != 1 {
+					return fmt.Errorf("embedding generation %s has no entry for %s", fromGenerationID, item.ItemID)
+				}
+			}
+			if err = refreshEntryCount(ctx, tx, target); err != nil {
+				return err
+			}
+			return tx.Commit()
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *SQLiteRepository) ActiveGeneration(ctx context.Context, projectID string, model embedding.ModelIdentity, inventoryPolicy string) (Generation, error) {
+	model.Scheme = model.EffectiveScheme()
 	if err := validateModelIdentity(model); err != nil {
 		return Generation{}, err
 	}
+	if !ValidInventoryPolicy(inventoryPolicy) {
+		return Generation{}, fmt.Errorf("unknown embedding inventory policy %q", inventoryPolicy)
+	}
 	generation, err := scanGeneration(r.db.QueryRowContext(ctx, generationSelect+`
-		WHERE project_id=? AND model_id=? AND model_revision=? AND model_hash=?
-		AND dimensions=? AND table_hash=? AND tokenizer_hash=? AND state='active'`,
-		projectID, model.ID, model.Revision, model.ManifestSHA256, model.Dimensions, model.TableSHA256, model.TokenizerSHA256,
+		WHERE project_id=? AND identity_scheme=? AND model_id=? AND model_revision=? AND model_hash=?
+		AND dimensions=? AND table_hash=? AND tokenizer_hash=? AND inventory_policy=? AND state='active'`,
+		projectID, model.Scheme, model.ID, model.Revision, model.ManifestSHA256, model.Dimensions,
+		model.TableSHA256, model.TokenizerSHA256, inventoryPolicy,
 	))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Generation{}, ErrNoActiveEmbeddingGeneration
@@ -295,7 +414,7 @@ func (r *SQLiteRepository) LoadActiveGeneration(ctx context.Context, generationI
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
-	if len(result) != generation.RowCount || len(result) != generation.ExpectedCount {
+	if len(result) != generation.RowCount {
 		return nil, fmt.Errorf("active embedding generation %s row count mismatch", generationID)
 	}
 	if err = rows.Close(); err != nil {
@@ -307,10 +426,83 @@ func (r *SQLiteRepository) LoadActiveGeneration(ctx context.Context, generationI
 	return result, nil
 }
 
+// LoadGenerationExclusions returns the generation's exclusions in item ID
+// order.
+func (r *SQLiteRepository) LoadGenerationExclusions(ctx context.Context, generationID string) ([]EmbeddingExclusion, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT item_id,content_hash,reason FROM context_embedding_exclusions
+		WHERE generation_id=? ORDER BY item_id COLLATE BINARY`, generationID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var result []EmbeddingExclusion
+	for rows.Next() {
+		var exclusion EmbeddingExclusion
+		if err = rows.Scan(&exclusion.ItemID, &exclusion.ContentHash, &exclusion.Reason); err != nil {
+			return nil, err
+		}
+		result = append(result, exclusion)
+	}
+	return result, rows.Err()
+}
+
+// LoadGenerationEntryHashes returns item ID → content hash for the vector
+// rows and the exclusions without decoding vectors.
+func (r *SQLiteRepository) LoadGenerationEntryHashes(ctx context.Context, generationID string) (map[string]string, map[string]string, error) {
+	load := func(table string) (map[string]string, error) {
+		rows, err := r.db.QueryContext(ctx, "SELECT item_id,content_hash FROM "+table+" WHERE generation_id=?", generationID)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = rows.Close() }()
+		result := map[string]string{}
+		for rows.Next() {
+			var id, hash string
+			if err = rows.Scan(&id, &hash); err != nil {
+				return nil, err
+			}
+			result[id] = hash
+		}
+		return result, rows.Err()
+	}
+	vectors, err := load("context_embeddings")
+	if err != nil {
+		return nil, nil, err
+	}
+	exclusions, err := load("context_embedding_exclusions")
+	if err != nil {
+		return nil, nil, err
+	}
+	return vectors, exclusions, nil
+}
+
+// ListGenerations returns the project's generations, newest first.
+func (r *SQLiteRepository) ListGenerations(ctx context.Context, projectID string) ([]Generation, error) {
+	rows, err := r.db.QueryContext(ctx, generationSelect+"WHERE project_id=? ORDER BY created_at DESC, generation_id", projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var result []Generation
+	for rows.Next() {
+		generation, scanErr := scanGeneration(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		result = append(result, generation)
+	}
+	return result, rows.Err()
+}
+
+// ActivateGeneration activates a complete building generation. Freshness is
+// checked per item at query time, so activation does not require the global
+// canonical revision to be unchanged; it only refuses to replace an active
+// generation built from a newer inventory snapshot (the candidate is then
+// superseded and the newer winner returned).
 func (r *SQLiteRepository) ActivateGeneration(
 	ctx context.Context,
 	generationID string,
-	expectedCanonicalRevision int64,
+	expectedSourceRevision int64,
 	expectedContentDigest string,
 ) (Generation, error) {
 	var activated Generation
@@ -330,7 +522,7 @@ func (r *SQLiteRepository) ActivateGeneration(
 			}
 		}()
 
-		activated, err = activateGeneration(ctx, conn, generationID, expectedCanonicalRevision, expectedContentDigest)
+		activated, err = activateGeneration(ctx, conn, generationID, expectedSourceRevision, expectedContentDigest)
 		if err != nil {
 			return err
 		}
@@ -387,21 +579,21 @@ func (r *SQLiteRepository) CleanupInactiveGenerations(ctx context.Context, polic
 		}
 		defer func() { _ = tx.Rollback() }()
 
-		rows, queryErr := tx.QueryContext(ctx, `SELECT generation_id,project_id,model_id,model_revision,state,created_at
+		rows, queryErr := tx.QueryContext(ctx, `SELECT generation_id,project_id,model_id,model_revision,inventory_policy,state,created_at
 			FROM context_embedding_generations WHERE state!='active'
-			ORDER BY project_id,model_id,model_revision,created_at DESC,generation_id`)
+			ORDER BY project_id,model_id,model_revision,inventory_policy,created_at DESC,generation_id`)
 		if queryErr != nil {
 			return queryErr
 		}
 		type inactiveGeneration struct {
-			id, projectID, modelID, revision string
-			state                            GenerationState
-			createdAt                        int64
+			id, projectID, modelID, revision, policy string
+			state                                    GenerationState
+			createdAt                                int64
 		}
 		var inactive []inactiveGeneration
 		for rows.Next() {
 			var item inactiveGeneration
-			if queryErr = rows.Scan(&item.id, &item.projectID, &item.modelID, &item.revision, &item.state, &item.createdAt); queryErr != nil {
+			if queryErr = rows.Scan(&item.id, &item.projectID, &item.modelID, &item.revision, &item.policy, &item.state, &item.createdAt); queryErr != nil {
 				_ = rows.Close()
 				return queryErr
 			}
@@ -421,7 +613,7 @@ func (r *SQLiteRepository) CleanupInactiveGenerations(ctx context.Context, polic
 			case GenerationBuilding, GenerationFailed:
 				remove = item.createdAt < cutoff
 			case GenerationSuperseded:
-				key := item.projectID + "\x00" + item.modelID + "\x00" + item.revision
+				key := item.projectID + "\x00" + item.modelID + "\x00" + item.revision + "\x00" + item.policy
 				supersededCounts[key]++
 				remove = supersededCounts[key] > policy.RetainSuperseded
 			}
@@ -456,14 +648,14 @@ func activateGeneration(
 	ctx context.Context,
 	conn *sql.Conn,
 	generationID string,
-	expectedCanonicalRevision int64,
+	expectedSourceRevision int64,
 	expectedContentDigest string,
 ) (Generation, error) {
 	candidate, err := loadGeneration(ctx, conn, generationID)
 	if err != nil {
 		return Generation{}, generationLookupError(err)
 	}
-	if candidate.SourceRevision != expectedCanonicalRevision || candidate.ContentDigest != expectedContentDigest {
+	if candidate.SourceRevision != expectedSourceRevision || candidate.ContentDigest != expectedContentDigest {
 		return Generation{}, errors.New("embedding activation expectation does not match generation")
 	}
 	if candidate.State == GenerationActive {
@@ -473,39 +665,32 @@ func activateGeneration(
 		return Generation{}, fmt.Errorf("embedding generation %s is %s, not building", generationID, candidate.State)
 	}
 
-	rowDigest, rowCount, err := validateStoredGenerationRows(ctx, conn, candidate)
+	entryDigest, rowCount, exclusionCount, err := validateStoredGenerationEntries(ctx, conn, candidate)
 	if err != nil {
 		return Generation{}, err
 	}
-	if rowCount != candidate.RowCount || rowCount != candidate.ExpectedCount || rowDigest != candidate.ContentDigest {
+	if rowCount != candidate.RowCount || rowCount+exclusionCount != candidate.ExpectedCount || entryDigest != candidate.ContentDigest {
 		return Generation{}, fmt.Errorf("embedding generation %s is incomplete or inconsistent", generationID)
 	}
-	inventory, err := loadEmbeddingInventory(ctx, conn, candidate.ProjectID)
-	if err != nil {
-		return Generation{}, err
-	}
-	if inventory.Revision != expectedCanonicalRevision || inventory.Digest != expectedContentDigest || len(inventory.Items) != candidate.ExpectedCount {
-		return Generation{}, ErrEmbeddingInventoryDrift
-	}
 
-	winner, err := activeGenerationForKey(ctx, conn, candidate.ProjectID, candidate.Model.ID, candidate.Model.Revision)
-	if err == nil && generationsEquivalent(winner, candidate) {
-		if _, err = conn.ExecContext(ctx,
-			"UPDATE context_embedding_generations SET state='superseded' WHERE generation_id=? AND state='building'",
-			candidate.GenerationID,
-		); err != nil {
-			return Generation{}, err
-		}
-		return winner, nil
+	supersede := func(id, state string) error {
+		_, execErr := conn.ExecContext(ctx, "UPDATE context_embedding_generations SET state='superseded' WHERE generation_id=? AND state=?", id, state)
+		return execErr
 	}
+	winner, err := activeGenerationForKey(ctx, conn, candidate.ProjectID, candidate.Model.ID, candidate.Model.Revision, candidate.InventoryPolicy)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Generation{}, err
 	}
 	if err == nil {
-		if _, err = conn.ExecContext(ctx,
-			"UPDATE context_embedding_generations SET state='superseded' WHERE generation_id=? AND state='active'",
-			winner.GenerationID,
-		); err != nil {
+		// An equivalent or newer active generation wins; the candidate is
+		// obsolete and the caller receives the winner.
+		if generationsEquivalent(winner, candidate) || winner.SourceRevision > candidate.SourceRevision {
+			if err = supersede(candidate.GenerationID, string(GenerationBuilding)); err != nil {
+				return Generation{}, err
+			}
+			return winner, nil
+		}
+		if err = supersede(winner.GenerationID, string(GenerationActive)); err != nil {
 			return Generation{}, err
 		}
 	}
@@ -527,71 +712,57 @@ func activateGeneration(
 	return candidate, nil
 }
 
-func validateStoredGenerationRows(ctx context.Context, query sqlQueryer, generation Generation) (string, int, error) {
+// validateStoredGenerationEntries decodes every vector (rejecting bad
+// dimensions or non-finite values) and digests the combined row and
+// exclusion entries in item ID order.
+func validateStoredGenerationEntries(ctx context.Context, query sqlQueryer, generation Generation) (string, int, int, error) {
 	rows, err := query.QueryContext(ctx, `SELECT item_id,content_hash,dimensions,vector
 		FROM context_embeddings WHERE generation_id=? ORDER BY item_id COLLATE BINARY`, generation.GenerationID)
 	if err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
-	defer func() { _ = rows.Close() }()
-	inventory := make([]EmbeddingInventoryItem, 0, generation.RowCount)
+	entries := make([]EmbeddingInventoryItem, 0, generation.ExpectedCount)
 	for rows.Next() {
 		row, scanErr := scanEmbeddingRow(rows)
 		if scanErr != nil {
-			return "", 0, scanErr
+			_ = rows.Close()
+			return "", 0, 0, scanErr
 		}
 		if row.Dimensions != generation.Model.Dimensions {
-			return "", 0, fmt.Errorf("embedding row %s dimension mismatch", row.ItemID)
+			_ = rows.Close()
+			return "", 0, 0, fmt.Errorf("embedding row %s dimension mismatch", row.ItemID)
 		}
-		inventory = append(inventory, EmbeddingInventoryItem{ItemID: row.ItemID, ContentHash: row.ContentHash})
+		entries = append(entries, EmbeddingInventoryItem{ItemID: row.ItemID, ContentHash: row.ContentHash})
 	}
 	if err = rows.Err(); err != nil {
-		return "", 0, err
+		_ = rows.Close()
+		return "", 0, 0, err
 	}
-	return embeddingInventoryDigest(inventory), len(inventory), nil
-}
-
-func loadEmbeddingInventory(ctx context.Context, query sqlQueryer, projectID string) (EmbeddingInventory, error) {
-	inventory := EmbeddingInventory{ProjectID: projectID}
-	if err := query.QueryRowContext(ctx, "SELECT COALESCE(MAX(sequence),0) FROM context_events").Scan(&inventory.Revision); err != nil {
-		return EmbeddingInventory{}, fmt.Errorf("read canonical revision: %w", err)
-	}
-	rows, err := query.QueryContext(ctx, `SELECT id,content,LOWER(content_hash)
-		FROM context_items WHERE project_id=? ORDER BY id COLLATE BINARY`, projectID)
+	_ = rows.Close()
+	rowCount := len(entries)
+	exclusions, err := query.QueryContext(ctx, `SELECT item_id,content_hash FROM context_embedding_exclusions
+		WHERE generation_id=? ORDER BY item_id COLLATE BINARY`, generation.GenerationID)
 	if err != nil {
-		return EmbeddingInventory{}, fmt.Errorf("read embedding inventory: %w", err)
+		return "", 0, 0, err
 	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var item EmbeddingInventoryItem
-		if err = rows.Scan(&item.ItemID, &item.Content, &item.ContentHash); err != nil {
-			return EmbeddingInventory{}, err
+	defer func() { _ = exclusions.Close() }()
+	for exclusions.Next() {
+		var entry EmbeddingInventoryItem
+		if err = exclusions.Scan(&entry.ItemID, &entry.ContentHash); err != nil {
+			return "", 0, 0, err
 		}
-		if !validEmbeddingHash(item.ContentHash) {
-			return EmbeddingInventory{}, fmt.Errorf("context item %s has invalid content hash", item.ItemID)
+		entries = append(entries, entry)
+	}
+	if err = exclusions.Err(); err != nil {
+		return "", 0, 0, err
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ItemID < entries[j].ItemID })
+	for i := 1; i < len(entries); i++ {
+		if entries[i].ItemID == entries[i-1].ItemID {
+			return "", 0, 0, fmt.Errorf("embedding item %s has both a vector and an exclusion", entries[i].ItemID)
 		}
-		inventory.Items = append(inventory.Items, item)
 	}
-	if err = rows.Err(); err != nil {
-		return EmbeddingInventory{}, err
-	}
-	inventory.Digest = embeddingInventoryDigest(inventory.Items)
-	return inventory, nil
-}
-
-func embeddingInventoryDigest(items []EmbeddingInventoryItem) string {
-	hash := sha256.New()
-	var encoded [binary.MaxVarintLen64]byte
-	for _, item := range items {
-		length := binary.PutUvarint(encoded[:], uint64(len(item.ItemID)))
-		_, _ = hash.Write(encoded[:length])
-		_, _ = hash.Write([]byte(item.ItemID))
-		contentHash := strings.ToLower(item.ContentHash)
-		length = binary.PutUvarint(encoded[:], uint64(len(contentHash)))
-		_, _ = hash.Write(encoded[:length])
-		_, _ = hash.Write([]byte(contentHash))
-	}
-	return hex.EncodeToString(hash.Sum(nil))
+	return embeddingInventoryDigest(entries), rowCount, len(entries) - rowCount, nil
 }
 
 func validateGenerationSpec(spec *GenerationSpec) error {
@@ -608,8 +779,15 @@ func validateGenerationSpec(spec *GenerationSpec) error {
 	if !validGenerationID(spec.GenerationID) {
 		return errors.New("invalid embedding generation ID")
 	}
+	spec.Model.Scheme = spec.Model.EffectiveScheme()
 	if err := validateModelIdentity(spec.Model); err != nil {
 		return err
+	}
+	if spec.InventoryPolicy == "" {
+		spec.InventoryPolicy = InventoryPolicyProjectAll
+	}
+	if !ValidInventoryPolicy(spec.InventoryPolicy) {
+		return fmt.Errorf("unknown embedding inventory policy %q", spec.InventoryPolicy)
 	}
 	if spec.SourceRevision < 0 || spec.ExpectedCount < 0 || !validEmbeddingHash(spec.ContentDigest) {
 		return errors.New("invalid embedding generation inventory metadata")
@@ -617,13 +795,26 @@ func validateGenerationSpec(spec *GenerationSpec) error {
 	return nil
 }
 
+// validateModelIdentity enforces what each scheme's hash fields attest. An
+// Ollama identity carries no table or tokenizer hash; a static identity
+// must carry all three.
 func validateModelIdentity(model embedding.ModelIdentity) error {
 	if strings.TrimSpace(model.ID) == "" || strings.TrimSpace(model.Revision) == "" ||
 		model.Dimensions <= 0 || model.Dimensions > maxStoredEmbeddingDimensions {
 		return errors.New("invalid embedding model identity")
 	}
-	if !validEmbeddingHash(model.ManifestSHA256) || !validEmbeddingHash(model.TableSHA256) || !validEmbeddingHash(model.TokenizerSHA256) {
-		return errors.New("invalid embedding model identity hashes")
+	switch model.EffectiveScheme() {
+	case embedding.IdentitySchemeStaticTable:
+		if !validEmbeddingHash(model.ManifestSHA256) || !validEmbeddingHash(model.TableSHA256) || !validEmbeddingHash(model.TokenizerSHA256) {
+			return errors.New("invalid embedding model identity hashes")
+		}
+	case embedding.IdentitySchemeOllamaEncoder:
+		if !strings.HasPrefix(model.ID, "ollama/") || !validEmbeddingHash(model.Revision) || !validEmbeddingHash(model.ManifestSHA256) ||
+			model.TableSHA256 != "" || model.TokenizerSHA256 != "" {
+			return errors.New("invalid ollama encoder identity")
+		}
+	default:
+		return fmt.Errorf("unknown embedding identity scheme %q", model.Scheme)
 	}
 	return nil
 }
@@ -682,7 +873,7 @@ func validGenerationID(value string) bool {
 }
 
 func validEmbeddingHash(value string) bool {
-	if len(value) != sha256.Size*2 || strings.ToLower(value) != value {
+	if len(value) != 64 || strings.ToLower(value) != value {
 		return false
 	}
 	_, err := hex.DecodeString(value)
@@ -729,8 +920,8 @@ func scanEmbeddingRow(row interface{ Scan(...any) error }) (EmbeddingRow, error)
 	return result, nil
 }
 
-const generationSelect = `SELECT generation_id,project_id,model_id,model_revision,model_hash,
-	dimensions,table_hash,tokenizer_hash,source_revision,state,expected_count,row_count,
+const generationSelect = `SELECT generation_id,project_id,identity_scheme,model_id,model_revision,model_hash,
+	dimensions,table_hash,tokenizer_hash,inventory_policy,source_revision,state,expected_count,row_count,
 	content_digest,created_at,activated_at FROM context_embedding_generations `
 
 func scanGeneration(row interface{ Scan(...any) error }) (Generation, error) {
@@ -738,9 +929,9 @@ func scanGeneration(row interface{ Scan(...any) error }) (Generation, error) {
 	var createdAt int64
 	var activatedAt sql.NullInt64
 	err := row.Scan(
-		&result.GenerationID, &result.ProjectID, &result.Model.ID, &result.Model.Revision,
+		&result.GenerationID, &result.ProjectID, &result.Model.Scheme, &result.Model.ID, &result.Model.Revision,
 		&result.Model.ManifestSHA256, &result.Model.Dimensions, &result.Model.TableSHA256,
-		&result.Model.TokenizerSHA256, &result.SourceRevision, &result.State,
+		&result.Model.TokenizerSHA256, &result.InventoryPolicy, &result.SourceRevision, &result.State,
 		&result.ExpectedCount, &result.RowCount, &result.ContentDigest, &createdAt, &activatedAt,
 	)
 	if err != nil {
@@ -758,10 +949,10 @@ func loadGeneration(ctx context.Context, query sqlQueryer, generationID string) 
 	return scanGeneration(query.QueryRowContext(ctx, generationSelect+"WHERE generation_id=?", generationID))
 }
 
-func activeGenerationForKey(ctx context.Context, query sqlQueryer, projectID, modelID, revision string) (Generation, error) {
+func activeGenerationForKey(ctx context.Context, query sqlQueryer, projectID, modelID, revision, inventoryPolicy string) (Generation, error) {
 	return scanGeneration(query.QueryRowContext(ctx, generationSelect+`
-		WHERE project_id=? AND model_id=? AND model_revision=? AND state='active'`,
-		projectID, modelID, revision,
+		WHERE project_id=? AND model_id=? AND model_revision=? AND inventory_policy=? AND state='active'`,
+		projectID, modelID, revision, inventoryPolicy,
 	))
 }
 
@@ -773,7 +964,7 @@ func generationLookupError(err error) error {
 }
 
 func generationsEquivalent(left, right Generation) bool {
-	return left.ProjectID == right.ProjectID && left.Model == right.Model &&
+	return left.ProjectID == right.ProjectID && left.Model == right.Model && left.InventoryPolicy == right.InventoryPolicy &&
 		left.SourceRevision == right.SourceRevision && left.ExpectedCount == right.ExpectedCount &&
 		left.RowCount == right.RowCount && left.ContentDigest == right.ContentDigest
 }
@@ -783,5 +974,4 @@ type sqlQueryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-var _ CanonicalEmbeddingInventory = (*SQLiteRepository)(nil)
 var _ SemanticProjectionRepository = (*SQLiteRepository)(nil)

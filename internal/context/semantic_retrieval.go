@@ -33,6 +33,22 @@ const (
 	SemanticFallbackProjectionCorrupt       SemanticFallbackReason = "projection_corrupt"
 	SemanticFallbackEmbeddingFailed         SemanticFallbackReason = "embedding_failed"
 	SemanticFallbackInvalidVector           SemanticFallbackReason = "invalid_vector"
+	// Reasons added with the Ollama runtime (spec D1, D3, B1).
+	SemanticFallbackProjectionIncomplete SemanticFallbackReason = "projection_incomplete"
+	SemanticFallbackEmbeddingWarming     SemanticFallbackReason = "embedding_warming"
+	SemanticFallbackEmbeddingBusy        SemanticFallbackReason = "embedding_busy"
+	SemanticFallbackEmbeddingTimeout     SemanticFallbackReason = "embedding_timeout"
+	SemanticFallbackEmbeddingUnavailable SemanticFallbackReason = "embedding_unavailable"
+	SemanticFallbackInputTooLong         SemanticFallbackReason = "embedding_input_too_long"
+	SemanticFallbackProfileMismatch      SemanticFallbackReason = "embedding_profile_mismatch"
+)
+
+// Component-local failures raised by the semantic runtime. They are
+// distinct from the caller's context cancellation, which is never a fallback.
+var (
+	ErrSemanticWarming = errors.New("semantic encoder is not ready")
+	ErrSemanticBusy    = errors.New("semantic encoder is busy past the query deadline")
+	ErrSemanticTimeout = errors.New("semantic query exceeded its deadline")
 )
 
 type TraceHasher interface {
@@ -132,7 +148,10 @@ func validSemanticFallbackReason(reason SemanticFallbackReason) bool {
 		SemanticFallbackAssetMissing, SemanticFallbackAssetInvalid,
 		SemanticFallbackProjectionMissing, SemanticFallbackProjectionStale,
 		SemanticFallbackProjectionRefreshFailed, SemanticFallbackProjectionCorrupt,
-		SemanticFallbackEmbeddingFailed, SemanticFallbackInvalidVector:
+		SemanticFallbackEmbeddingFailed, SemanticFallbackInvalidVector,
+		SemanticFallbackProjectionIncomplete, SemanticFallbackEmbeddingWarming, SemanticFallbackEmbeddingBusy,
+		SemanticFallbackEmbeddingTimeout, SemanticFallbackEmbeddingUnavailable, SemanticFallbackInputTooLong,
+		SemanticFallbackProfileMismatch:
 		return true
 	default:
 		return false
@@ -143,7 +162,21 @@ func validSemanticFallbackReason(reason SemanticFallbackReason) bool {
 // the fixed content-free enum shared by retrieval callers and manifests.
 func SemanticFallbackReasonForError(err error) SemanticFallbackReason {
 	switch {
-	case errors.Is(err, ErrSemanticInvalidVector), errors.Is(err, embedding.ErrInvalidEmbedding):
+	case errors.Is(err, ErrSemanticProjectionIncomplete):
+		return SemanticFallbackProjectionIncomplete
+	case errors.Is(err, ErrSemanticWarming):
+		return SemanticFallbackEmbeddingWarming
+	case errors.Is(err, ErrSemanticBusy):
+		return SemanticFallbackEmbeddingBusy
+	case errors.Is(err, ErrSemanticTimeout):
+		return SemanticFallbackEmbeddingTimeout
+	case errors.Is(err, embedding.ErrEmbeddingInputTooLong):
+		return SemanticFallbackInputTooLong
+	case errors.Is(err, embedding.ErrModelProfileMismatch):
+		return SemanticFallbackProfileMismatch
+	case errors.Is(err, embedding.ErrOllamaUnavailable), errors.Is(err, embedding.ErrModelNotFound):
+		return SemanticFallbackEmbeddingUnavailable
+	case errors.Is(err, ErrSemanticInvalidVector), errors.Is(err, embedding.ErrInvalidEmbedding), errors.Is(err, embedding.ErrEmbeddingResponse):
 		return SemanticFallbackInvalidVector
 	case errors.Is(err, ErrSemanticSnapshotCorrupt):
 		return SemanticFallbackProjectionCorrupt
