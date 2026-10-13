@@ -38,6 +38,11 @@ session 狀態由受信任 server 管理。HTTP(S) 格式驗證不會阻擋私�
 ## 執行環境
 
 - 設定 `OLLAMA_API_KEY`，供內建 `web_search` 使用。
+- 記憶檢索使用語意排序（`semantic-retrieval: {mode: active, fusion: score_normalized}`）：
+  研究 goal 多為中文，lexical 檢索讀不到中文。需要本機 Ollama 已有 `embeddinggemma:latest`；
+  模型不在或尚未載入時自動退回 lexical。設定會釘在 execution policy snapshot，
+  變更後既有 session 要用 `--new` 重新開始。詳見
+  [Semantic memory retrieval](../../../docs/reference/semantic-retrieval.md)。
 - 安裝 Node.js 18 以上版本及 npm，讓 `npx` 可在 PATH 中找到。
 - 首次啟動需要取得 npm 套件與相容 Chromium。
   執行 `npx -y --package=@playwright/mcp@latest playwright-core install chromium`，
