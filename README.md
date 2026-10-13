@@ -453,7 +453,7 @@ Control Decisions section before switching a point to `active`. See
 | `--agent-team` | — | `string` | `""` | Agent team name to load |
 | `--agent-team-search-path` | — | `string` | `""` | Team search paths (comma-separated), defaults to `.agent-teams/,~/.agent-teams/` |
 | `--memory` | — | `bool` | `false` | Enable long-term memory (RAG vector search) |
-| `--memory-model` | — | `string` | `""` | Embedding model for memory (default: `ollama/nomic-embed-text:latest`) |
+| `--memory-model` | — | `string` | `""` | Embedding model for memory (default: `ollama/embeddinggemma:latest`) |
 | `--archive-memory` | — | `bool` | `false` | Archive session summary to memory and exit |
 | `--show-history` | — | `bool` | `false` | Show previous session history on resume |
 | `--dry-run` | — | `bool` | `false` | LLM-free preview of skill matching and available agents (no model calls, no agent execution) |
@@ -1297,7 +1297,7 @@ eval "$(hufu workspace shell-init bash)"      # defines hcd and hproj
 | **Vector Store** | chromem-go (in-process, file-based) |
 | **Embedding** | Ollama embeddings |
 | **Storage Location** | `~/.local/share/hufu/memory/<projectHash>/` |
-| **Default Embedding Model** | `ollama/nomic-embed-text:latest` |
+| **Default Embedding Model** | `ollama/embeddinggemma:latest` |
 
 ### How It Works
 
@@ -1837,7 +1837,7 @@ The report includes:
 
 ```yaml
 provider-url: http://localhost:11434/v1
-embedding-model: ollama/nomic-embed-text:latest
+embedding-model: ollama/embeddinggemma:latest
 presentation:
   theme: auto
   display-preset: default
@@ -1862,7 +1862,7 @@ Complete reference for all default values, including their source files:
 | Setting | Default | Source |
 |---------|---------|--------|
 | Provider URL | `http://localhost:11434/v1` | `agent.go` |
-| Embedding Model | `ollama/nomic-embed-text:latest` (the `ollama/` prefix is dropped when the canonical context vector index calls the Ollama embeddings API) | `config.go` |
+| Embedding Model | `ollama/embeddinggemma:latest` (the `ollama/` prefix is dropped when the canonical context vector index calls the Ollama embeddings API) | `config.go` |
 
 ### Agent Settings
 

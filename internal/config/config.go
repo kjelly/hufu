@@ -23,7 +23,7 @@ const DefaultLocalProviderURL = "http://127.0.0.1:11434/v1"
 
 // DefaultProviderURL is retained for compatibility with existing callers.
 const DefaultProviderURL = DefaultLocalProviderURL
-const DefaultEmbeddingModel = "ollama/nomic-embed-text:latest"
+const DefaultEmbeddingModel = "ollama/embeddinggemma:latest"
 const DefaultOllamaAPIURL = "http://127.0.0.1:11434/api"
 
 type ModelEntry struct {

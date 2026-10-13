@@ -9,7 +9,7 @@ func TestOllamaEmbeddingModelName(t *testing.T) {
 		{in: "ollama/", want: ""},
 		{in: "", want: ""},
 		{in: "openai/text-embedding-3-small", want: "openai/text-embedding-3-small"},
-		{in: DefaultEmbeddingModel, want: "nomic-embed-text:latest"},
+		{in: DefaultEmbeddingModel, want: "embeddinggemma:latest"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
