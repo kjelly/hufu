@@ -32,12 +32,16 @@ func (f *fakeChatRuntime) submit(cmd conversation.Command) conversation.Ack {
 		status = conversation.AckAccepted
 	}
 	ack := conversation.Ack{CommandID: cmd.ID, Status: status, Reason: f.reason}
-	if cmd.Kind == conversation.CommandSubmitPrompt && (status == conversation.AckAccepted || status == conversation.AckQueued) {
+	switch {
+	case cmd.Kind == conversation.CommandSubmitPrompt && (status == conversation.AckAccepted || status == conversation.AckQueued):
 		f.turn++
 		ack.TurnID = fmt.Sprintf("turn-%d", f.turn)
 		if status == conversation.AckQueued {
 			ack.Position = 1
 		}
+	case (cmd.Kind == conversation.CommandCancelTurn || cmd.Kind == conversation.CommandWrapUp) && status == conversation.AckAccepted:
+		// Like the controller, name the turn the control applies to.
+		ack.TurnID = fmt.Sprintf("turn-%d", f.turn)
 	}
 	return ack
 }

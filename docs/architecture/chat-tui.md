@@ -64,7 +64,12 @@ and not durable. Each turn runs under its own `context.WithCancel` of the
 session context, so cancelling a turn never ends the session. Events
 (`TurnStarted`, `TurnSettled`, `ControlDone`, `QueueDropped`, `Closed`) are
 emitted in order; the actor is released before a result is announced, so a
-command sent in reaction to the event is admitted as idle. `Close` drops queued
+command sent in reaction to the event is admitted as idle. Acks and events
+reach the view on different goroutines, in either order. The view therefore
+merges them by turn ID: events decide a turn's lifecycle, and an Ack that
+arrives after its turn started, settled, or was dropped never moves the turn
+back. A prompt is shown once, before its progress card, by whichever arrives
+first. `Close` drops queued
 prompts (reported, never run), cancels the active turn, and waits for it up to
 the graceful wrap-up timeout; on timeout the caller runs emergency
 finalization.

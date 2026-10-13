@@ -35,6 +35,23 @@ const (
 	phaseClosing
 )
 
+// turnStage is how far controller events have taken a turn. Acks and events
+// reach the view on different goroutines, so an Ack can arrive after events
+// that followed it; the stage keeps such an Ack from rolling the view back.
+type turnStage int
+
+const (
+	turnUnseen turnStage = iota
+	turnStarted
+	turnSettled
+	turnDropped
+)
+
+const (
+	cancellingNotice = "cancelling — Ctrl+C again to quit"
+	droppedTag       = "dropped: session closed"
+)
+
 type chatOverlay int
 
 const (
@@ -65,6 +82,7 @@ type ChatModel struct {
 
 	transcript    chatTranscript
 	activeTurn    string
+	stages        map[string]turnStage
 	turnCount     int
 	queued        int
 	submitting    string // ID of the prompt command awaiting its Ack
@@ -100,6 +118,7 @@ func NewChatModel(opts ChatOptions) ChatModel {
 		prefix:     opts.CommandPrefix,
 		composer:   newChatComposer(dash.displayPreset, 6),
 		transcript: newChatTranscript(),
+		stages:     make(map[string]turnStage),
 	}
 	if m.prefix == "" {
 		m.prefix = "chat"
@@ -286,32 +305,27 @@ func (m ChatModel) handleAck(msg chatAckMsg) ChatModel {
 		case conversation.AckAccepted, conversation.AckQueued:
 			m = m.clearComposer(msg.draft)
 			m.notice = ""
-			item := chatItem{kind: itemUser, turnID: ack.TurnID, body: msg.cmd.Text}
-			if ack.Status == conversation.AckQueued {
-				item.tag = fmt.Sprintf("queued #%d", ack.Position)
-				m.queued++
-			} else if m.phase == phaseIdle {
-				m.phase = phaseRunning
-				m.activeTurn = ack.TurnID
-			}
-			m.transcript.add(item)
+			m = m.admitPrompt(ack, msg.cmd.Text)
 			// Sending a message returns the view to the newest content.
 			m.transcript.vp.GotoBottom()
 		default:
 			m.notice = "not sent: " + ack.Reason
 		}
 	case conversation.CommandCancelTurn:
-		if ack.Status == conversation.AckAccepted {
-			m.phase = phaseCancelling
-			m.notice = "cancelling — Ctrl+C again to quit"
-		} else {
+		// A cancel acknowledged after its turn settled changes nothing.
+		switch {
+		case ack.Status != conversation.AckAccepted:
 			m.notice = ack.Reason
+		case m.isActiveTurn(ack.TurnID):
+			m.phase = phaseCancelling
+			m.notice = cancellingNotice
 		}
 	case conversation.CommandWrapUp:
-		if ack.Status == conversation.AckAccepted {
-			m.notice = "wrapping up — the coordinator will summarize and finish"
-		} else {
+		switch {
+		case ack.Status != conversation.AckAccepted:
 			m.notice = ack.Reason
+		case m.isActiveTurn(ack.TurnID):
+			m.notice = "wrapping up — the coordinator will summarize and finish"
 		}
 	default:
 		if ack.Status != conversation.AckAccepted {
@@ -321,28 +335,74 @@ func (m ChatModel) handleAck(msg chatAckMsg) ChatModel {
 	return m
 }
 
+// admitPrompt shows an admitted prompt once. Its TurnStarted event may have
+// shown it already, and its turn may already have settled or been dropped;
+// the Ack then never overrides what the events decided.
+func (m ChatModel) admitPrompt(ack conversation.Ack, text string) ChatModel {
+	stage := m.stages[ack.TurnID]
+	if m.transcript.findTurnItem(itemUser, ack.TurnID) < 0 {
+		item := chatItem{kind: itemUser, turnID: ack.TurnID, body: text}
+		switch {
+		case stage == turnDropped:
+			item.tag = droppedTag
+		case stage == turnUnseen && ack.Status == conversation.AckQueued:
+			item.tag = fmt.Sprintf("queued #%d", ack.Position)
+			m.queued++
+		}
+		m.transcript.add(item)
+	}
+	if ack.Status == conversation.AckAccepted && stage == turnUnseen && m.phase == phaseIdle {
+		// Admitted, but its TurnStarted event has not arrived yet.
+		m.phase = phaseRunning
+		m.activeTurn = ack.TurnID
+	}
+	return m
+}
+
+func (m ChatModel) isActiveTurn(turnID string) bool {
+	return m.turnActive() && turnID != "" && turnID == m.activeTurn
+}
+
+// markTurn records a controller event for turnID; a stage never moves back.
+func (m ChatModel) markTurn(turnID string, stage turnStage) ChatModel {
+	if m.stages == nil {
+		m.stages = make(map[string]turnStage)
+	}
+	if stage > m.stages[turnID] {
+		m.stages[turnID] = stage
+	}
+	return m
+}
+
 func (m ChatModel) handleEvent(ev conversation.Event) ChatModel {
 	switch ev := ev.(type) {
 	case conversation.TurnStarted:
+		m = m.markTurn(ev.TurnID, turnStarted)
 		m.phase = phaseRunning
 		m.activeTurn = ev.TurnID
 		m.turnStartedAt, m.now = ev.StartedAt, ev.StartedAt
 		m.dash.statusText = "" // activity from an earlier turn is stale
-		if i := m.transcript.findTurnItem(itemUser, ev.TurnID); i >= 0 && m.transcript.items[i].tag != "" {
+		switch i := m.transcript.findTurnItem(itemUser, ev.TurnID); {
+		case i >= 0 && m.transcript.items[i].tag != "":
 			m.transcript.items[i].tag = ""
 			m.transcript.items[i].version++
 			m.queued = max(m.queued-1, 0)
+		case i < 0 && ev.Prompt != "":
+			// The Ack has not arrived yet; the prompt still precedes its card.
+			m.transcript.add(chatItem{kind: itemUser, turnID: ev.TurnID, body: ev.Prompt})
 		}
 		m.turnCount++
 		card := newProgressCard(ev.TurnID, m.turnCount, m.dash.tasks)
 		card.refresh(m.dash.tasks, m.dash.logs)
 		m.transcript.add(chatItem{kind: itemProgress, turnID: ev.TurnID, card: card})
 	case conversation.TurnSettled:
+		m = m.markTurn(ev.Result.TurnID, turnSettled)
 		m = m.settleTurn(ev.Result)
 	case conversation.QueueDropped:
 		for _, turnID := range ev.TurnIDs {
+			m = m.markTurn(turnID, turnDropped)
 			if i := m.transcript.findTurnItem(itemUser, turnID); i >= 0 {
-				m.transcript.items[i].tag = "dropped: session closed"
+				m.transcript.items[i].tag = droppedTag
 				m.transcript.items[i].version++
 			}
 		}
@@ -396,7 +456,7 @@ func (m ChatModel) settleTurn(result conversation.TurnResult) ChatModel {
 		m.activeTurn = ""
 		m.phase = phaseIdle
 	}
-	if m.notice == "cancelling — Ctrl+C again to quit" || strings.HasPrefix(m.notice, "wrapping up") {
+	if m.notice == cancellingNotice || strings.HasPrefix(m.notice, "wrapping up") {
 		m.notice = ""
 	}
 	return m
