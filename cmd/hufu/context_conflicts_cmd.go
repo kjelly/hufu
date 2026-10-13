@@ -13,7 +13,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/kjelly/hufu/internal/config"
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/memoryconflict"
 	"github.com/kjelly/hufu/internal/sidecar"
@@ -33,17 +32,23 @@ var conflictJudgeFactory = func(ctx context.Context, teamDir, workspace string) 
 	})
 }
 
-// conflictVectorFactory opens the same Ollama vector index as hufu context
-// query and rebuilds it for the scan scope; tests replace it with a fake.
-var conflictVectorFactory = func(ctx context.Context, workspace string, repo contextstore.Repository, scope contextstore.Scope) (memoryconflict.SimilarSearcher, error) {
-	store, err := contextstore.OpenOllamaVectorStore(workspace, config.ResolveEmbeddingModel(""), config.DefaultOllamaAPIURL)
+// conflictVectorFactory opens the semantic lane with the settings a run of
+// the scanned team uses and refreshes the project's generation so only new
+// or edited memories are embedded. Like a run, it needs a mode that changes
+// selection (active or auto). Tests replace it with a fake.
+var conflictVectorFactory = func(ctx context.Context, repo *contextstore.SQLiteRepository, scope contextstore.Scope, warn io.Writer) (memoryconflict.SimilarSearcher, error) {
+	settings, _, _, err := semanticSettingsFromRegistry(teamRegistryFromSearchPath(conflictsSearchPath), scope.TeamID, warn)
 	if err != nil {
 		return nil, err
 	}
-	if err = store.Rebuild(ctx, repo, scope); err != nil {
+	if !settings.ChangesSelection() {
+		return nil, fmt.Errorf("semantic-retrieval mode is %s; --vector needs active or auto", settings.Mode)
+	}
+	index, err := openContextSemanticIndex(ctx, repo, scope.ProjectID, settings, warn)
+	if err != nil {
 		return nil, err
 	}
-	return store, nil
+	return index, nil
 }
 
 var contextConflictsCmd = &cobra.Command{Use: "conflicts", Short: "Find and review contradicting persistent memories"}
@@ -65,7 +70,7 @@ func init() {
 	scan.IntVar(&conflictsTopK, "top-k", 5, "Token-overlap neighbors per memory")
 	scan.IntVar(&conflictsMaxPairs, "max-pairs", 20, "Maximum judge calls in this scan")
 	scan.IntVar(&conflictsMaxItems, "max-items", 2000, "Maximum memories per scope")
-	scan.BoolVar(&conflictsVector, "vector", false, "Also use Ollama embedding neighbors (requires a local embedding model)")
+	scan.BoolVar(&conflictsVector, "vector", false, "Also use semantic embedding neighbors (semantic-retrieval mode active or auto; refreshes the semantic index first)")
 	scan.IntVar(&conflictsVectorTopK, "vector-top-k", 5, "Embedding neighbors per memory with --vector")
 	scan.Float64Var(&conflictsMinVectorSimilarity, "min-vector-similarity", 0.45, "Minimum cosine similarity for embedding neighbors with --vector")
 	scan.BoolVar(&conflictsRetryUndetermined, "retry-undetermined", false, "Judge again pairs whose previous judge output was invalid")
@@ -126,9 +131,10 @@ func runConflictsScan(cmd *cobra.Command, _ []string) error {
 	pairOpts := memoryconflict.PairOptions{TopK: conflictsTopK, MaxItemsPerScope: conflictsMaxItems, VectorTopK: conflictsVectorTopK, MinVectorSimilarity: conflictsMinVectorSimilarity}
 	vectorFailed := false
 	if conflictsVector {
-		searcher, vectorErr := conflictVectorFactory(ctx, workspace, repo, contextstore.Scope{ProjectID: conflictsProject, TeamID: conflictsTeam})
+		searcher, vectorErr := conflictVectorFactory(ctx, repo, contextstore.Scope{ProjectID: conflictsProject, TeamID: conflictsTeam}, cmd.ErrOrStderr())
 		if vectorErr != nil {
 			vectorFailed = true
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: --vector unavailable: %v\n", vectorErr)
 		} else {
 			pairOpts.Vector = searcher
 		}

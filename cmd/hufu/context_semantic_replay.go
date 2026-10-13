@@ -33,8 +33,13 @@ func contextSemanticSettings(teamName string, warn io.Writer) (semantic.Settings
 // whether the team was found in the search path and whether its block
 // changed anything.
 func semanticSettingsForTeam(teamName string, warn io.Writer) (settings semantic.Settings, found, overridden bool, err error) {
+	return semanticSettingsFromRegistry(team.NewTeamRegistry(resolveSearchPaths()), teamName, warn)
+}
+
+// semanticSettingsFromRegistry is semanticSettingsForTeam with the team
+// looked up in registry.
+func semanticSettingsFromRegistry(registry *team.TeamRegistry, teamName string, warn io.Writer) (settings semantic.Settings, found, overridden bool, err error) {
 	cfg := config.LoadConfig().SemanticRetrieval
-	registry := team.NewTeamRegistry(resolveSearchPaths())
 	if discoverErr := registry.Discover(); discoverErr == nil && strings.TrimSpace(teamName) != "" {
 		if dir, resolveErr := registry.Resolve(teamName); resolveErr == nil {
 			found = true

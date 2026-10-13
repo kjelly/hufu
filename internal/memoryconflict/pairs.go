@@ -8,7 +8,7 @@ import (
 	contextstore "github.com/kjelly/hufu/internal/context"
 )
 
-// SimilarSearcher is satisfied by *contextstore.VectorStore.
+// SimilarSearcher is satisfied by *contextstore.SemanticIndex.
 type SimilarSearcher interface {
 	SearchSimilarTo(ctx context.Context, itemID string, req contextstore.SearchRequest) ([]contextstore.SearchResult, error)
 }
@@ -22,10 +22,13 @@ type PairOptions struct {
 	// Vector adds semantic neighbors; nil disables the vector source.
 	Vector     SimilarSearcher
 	VectorTopK int // default 5
-	// MinVectorSimilarity is the chromem cosine similarity floor; default
-	// 0.45. Measured with nomic-embed-text, unrelated memories score about
-	// 0.37-0.38 while "Use SQLite for storage" vs "Architecture migrated to
-	// PostgreSQL" scores 0.487, so 0.5 would miss that contradiction.
+	// MinVectorSimilarity is the cosine similarity floor between stored
+	// document vectors; default 0.45. Measured with embeddinggemma and its
+	// document prompt, four contradicting pairs (one Chinese) scored
+	// 0.539-0.748 ("Use SQLite for storage" vs "Architecture migrated to
+	// PostgreSQL": 0.539) while 28 unrelated pairs had median 0.326 and
+	// maximum 0.480; the earlier nomic-embed-text measurement put that
+	// contradiction at 0.487, so 0.5 would have missed it.
 	MinVectorSimilarity float64
 }
 

@@ -20,11 +20,15 @@ type fakeSemanticOllama struct {
 	mu         sync.Mutex
 	digest     string
 	embedCalls int
+	// embedInputs counts embedded texts; a preload embeds none.
+	embedInputs int
+	requests    int
 }
 
 func (f *fakeSemanticOllama) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.requests++
 	switch r.URL.Path {
 	case "/api/tags":
 		_ = json.NewEncoder(w).Encode(map[string]any{"models": []map[string]any{{"name": "embeddinggemma:latest", "digest": f.digest}}})
@@ -36,6 +40,7 @@ func (f *fakeSemanticOllama) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		f.embedCalls++
+		f.embedInputs += len(req.Input)
 		embeddings := make([][]float64, len(req.Input))
 		for i, input := range req.Input {
 			embeddings[i] = []float64{float64(len(input)%7 + 1), 1, 2, 3}
@@ -46,17 +51,32 @@ func (f *fakeSemanticOllama) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func setupSemanticCommandWorkspace(t *testing.T) (string, *fakeSemanticOllama) {
+// serveFakeSemanticOllama starts the fake encoder and makes it the
+// semantic-retrieval endpoint, with mode, for the rest of the test.
+func serveFakeSemanticOllama(t *testing.T, mode string) *fakeSemanticOllama {
 	t.Helper()
 	fake := &fakeSemanticOllama{digest: strings.Repeat("a", 64)}
 	server := httptest.NewServer(http.HandlerFunc(fake.serve))
 	t.Cleanup(server.Close)
 	t.Setenv("HOME", t.TempDir())
 	project := t.TempDir()
-	if err := os.WriteFile(filepath.Join(project, "hufu.yaml"), []byte("semantic-retrieval:\n  mode: shadow\n  endpoint: "+server.URL+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(project, "hufu.yaml"), []byte("semantic-retrieval:\n  mode: "+mode+"\n  endpoint: "+server.URL+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(project)
+	return fake
+}
+
+func setupSemanticCommandWorkspace(t *testing.T) (string, *fakeSemanticOllama) {
+	t.Helper()
+	return setupSemanticWorkspace(t, "shadow")
+}
+
+// setupSemanticWorkspace seeds two memories of project p, team team, behind
+// a fake encoder configured with mode.
+func setupSemanticWorkspace(t *testing.T, mode string) (string, *fakeSemanticOllama) {
+	t.Helper()
+	fake := serveFakeSemanticOllama(t, mode)
 	workspace := t.TempDir()
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
 	if err != nil {

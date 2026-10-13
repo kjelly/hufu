@@ -94,3 +94,25 @@ func TestSupplementalRetrievalCancelsDuringMMRWithoutPublishingPartialResults(t 
 		t.Fatal("ranking deadline lost actual completed source-work accounting")
 	}
 }
+
+func TestIsRetrievableHonorsRequestedVisibilityAndLifecycle(t *testing.T) {
+	now := time.Now()
+	private := ContextItem{Scope: Scope{ProjectID: "p", TeamID: "team", AgentID: "agent-a"}, Lifecycle: LifecycleCandidate}
+	agentScope := Scope{ProjectID: "p", TeamID: "team", AgentID: "agent-a"}
+	tests := []struct {
+		name string
+		req  SearchRequest
+		want bool
+	}{
+		{name: "ancestor visibility hides a private child", req: SearchRequest{Scope: Scope{ProjectID: "p", TeamID: "team"}}, want: false},
+		{name: "maintenance subtree with candidates", req: SearchRequest{Scope: agentScope, Visibility: VisibilitySubtree, IncludeCandidates: true}, want: true},
+		{name: "subtree still applies the lifecycle filter", req: SearchRequest{Scope: agentScope, Visibility: VisibilitySubtree}, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isRetrievable(private, tc.req, now); got != tc.want {
+				t.Fatalf("isRetrievable = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -18,7 +18,7 @@ The retrieval paths behave as follows:
 
 - `SearchExact` applies content matching, canonical scope visibility, supersession, expiry, validity, lifecycle, kind, and confidence in SQLite, orders by priority/creation/ID, then applies `Limit`.
 - `SearchLexical` ranks FTS5 matches, joins canonical rows, applies the same authorization and lifecycle constraints, then applies `Limit`. Query terms are alternatives (joined with `OR`, each quoted once), so a record that shares any term matches and BM25 ranks records sharing more rare terms first; requiring every term made a paragraph-long task goal match nothing.
-- `VectorStore.SearchVector` asks chromem for `Limit` neighbors, hydrates each ID from canonical SQLite, and applies `isRetrievable`. The canonical row—not vector metadata—is the authorization source.
+- `SemanticIndex.SearchVector` iterates the canonically authorized candidates (scope, lifecycle, validity, kind, confidence, and `AllowedItemIDs`) and scores only those against the active generation's vectors before taking `Limit`. The canonical row—not vector metadata—is the authorization source. (The chromem `VectorStore` this section originally described has been removed.)
 - `HybridRetrieve` runs all exact terms, lexical search, and optional vector search; filters kinds/confidence; fuses lexical/vector ranks with RRF; applies scope ranking, content deduplication/MMR, exact-result prefixing, file-path boosts, deterministic tie breakers, and only then the final limit.
 - Worker memory finally rechecks canonical scope, applies the restricted ancestor allowed-ID set, ranks memory tiers, deduplicates content, and applies item/token limits. A shared record that the canonical session or persistent lists already carry keeps only its canonical copy in the worker prompt.
 
@@ -39,7 +39,7 @@ type AllowedContextIDs struct {
 
 For SQLite exact and lexical searches, bind the normalized IDs as one JSON array parameter and join `json_each(?)` by value. This avoids caller-generated SQL, identifiers, and variable-count expansion, so sets larger than SQLite's bound-variable limit retain identical behavior. The JSON payload must be produced by `encoding/json`, never string concatenation.
 
-For vector retrieval, the same normalized set must be applied before final neighbor truncation. The current chromem API has no arbitrary allowed-ID filter. A correctness-first implementation would request the complete collection for restricted searches, discard disallowed IDs before canonical hydration, then rank the remaining authorized results. That has unbounded query cost and must be benchmarked before acceptance. Staged over-fetch is not acceptable because it reintroduces a silent ceiling. A future vector backend with native ID-set filtering would be preferable.
+For vector retrieval, the same normalized set must be applied before final neighbor truncation. `SemanticIndex` already does: it filters by `AllowedItemIDs` while iterating authorized candidates and ranks only the remainder, so no over-fetch ceiling exists. Staged over-fetch is not acceptable for any future backend because it reintroduces a silent ceiling.
 
 `HybridRetrieve` must pass the identical immutable constraint to every exact, lexical, and vector request and retain a final common allowed-ID assertion before fusion. Worker memory may then remove its 100,000 workaround only after parity tests pass.
 

@@ -25,8 +25,8 @@ const DefaultLocalProviderURL = "http://127.0.0.1:11434/v1"
 // DefaultProviderURL is retained for compatibility with existing callers.
 const DefaultProviderURL = DefaultLocalProviderURL
 
-// DefaultEmbeddingModel is the legacy chromem index model; it shares the
-// semantic-retrieval default so the two never drift apart.
+// DefaultEmbeddingModel is the legacy long-term memory store model; it shares
+// the semantic-retrieval default so the two never drift apart.
 const DefaultEmbeddingModel = semantic.DefaultModel
 const DefaultOllamaAPIURL = "http://127.0.0.1:11434/api"
 

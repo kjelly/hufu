@@ -326,18 +326,12 @@ func TestScopeMatrixContract_EmptyAgentIDSharedOnly_SearchLexical(t *testing.T) 
 	}
 }
 
-// --- Vector hydration path ---
+// --- Semantic vector path ---
 
 func TestScopeMatrix_VectorAgentASeesSharedAndOwn(t *testing.T) {
 	repo, shared := scopeMatrixFixture(t)
 	ctx := context.Background()
-	store, err := NewVectorStore(filepath.Join(t.TempDir(), "vectors"), "test-v1", testEmbedding)
-	if err != nil {
-		t.Fatalf("NewVectorStore: %v", err)
-	}
-	if err := store.Rebuild(ctx, repo, Scope{ProjectID: "proj"}); err != nil {
-		t.Fatalf("Rebuild: %v", err)
-	}
+	store := newRefreshedSemanticIndex(t, repo, "proj", newKeywordEmbedder(migrationKeywordVector))
 	got, err := store.SearchVector(ctx, SearchRequest{
 		Query: "private finding gamma",
 		Scope: Scope{ProjectID: "proj", TeamID: "team", SessionID: "sess", AgentID: "agent-a"},
@@ -356,13 +350,7 @@ func TestScopeMatrix_VectorAgentASeesSharedAndOwn(t *testing.T) {
 func TestScopeMatrix_VectorAgentBDoesNotSeeAgentA(t *testing.T) {
 	repo, _ := scopeMatrixFixture(t)
 	ctx := context.Background()
-	store, err := NewVectorStore(filepath.Join(t.TempDir(), "vectors"), "test-v1", testEmbedding)
-	if err != nil {
-		t.Fatalf("NewVectorStore: %v", err)
-	}
-	if err := store.Rebuild(ctx, repo, Scope{ProjectID: "proj"}); err != nil {
-		t.Fatalf("Rebuild: %v", err)
-	}
+	store := newRefreshedSemanticIndex(t, repo, "proj", newKeywordEmbedder(migrationKeywordVector))
 	got, err := store.SearchVector(ctx, SearchRequest{
 		Query: "gamma",
 		Scope: Scope{ProjectID: "proj", TeamID: "team", SessionID: "sess", AgentID: "agent-b"},
@@ -378,19 +366,13 @@ func TestScopeMatrix_VectorAgentBDoesNotSeeAgentA(t *testing.T) {
 }
 
 // TestScopeMatrix_EmptyAgentIDSeesAgentChild_Vector documents the
-// post-WP-1 vector hydration behavior. The isRetrievable helper now
-// enforces ancestor visibility: an empty request AgentID only matches
-// shared (NULL) items.
+// post-WP-1 vector behavior. The semantic index scores only candidates of
+// the canonical ancestor-visibility predicate: an empty request AgentID only
+// matches shared (NULL) items.
 func TestScopeMatrix_EmptyAgentIDSeesAgentChild_Vector(t *testing.T) {
 	repo, _ := scopeMatrixFixture(t)
 	ctx := context.Background()
-	store, err := NewVectorStore(filepath.Join(t.TempDir(), "vectors"), "test-v1", testEmbedding)
-	if err != nil {
-		t.Fatalf("NewVectorStore: %v", err)
-	}
-	if err := store.Rebuild(ctx, repo, Scope{ProjectID: "proj"}); err != nil {
-		t.Fatalf("Rebuild: %v", err)
-	}
+	store := newRefreshedSemanticIndex(t, repo, "proj", newKeywordEmbedder(migrationKeywordVector))
 	got, err := store.SearchVector(ctx, SearchRequest{
 		Query: "private finding",
 		Scope: Scope{ProjectID: "proj", TeamID: "team", SessionID: "sess"}, // AgentID empty
@@ -409,13 +391,7 @@ func TestScopeMatrix_EmptyAgentIDSeesAgentChild_Vector(t *testing.T) {
 func TestScopeMatrixContract_EmptyAgentIDSharedOnly_Vector(t *testing.T) {
 	repo, _ := scopeMatrixFixture(t)
 	ctx := context.Background()
-	store, err := NewVectorStore(filepath.Join(t.TempDir(), "vectors"), "test-v1", testEmbedding)
-	if err != nil {
-		t.Fatalf("NewVectorStore: %v", err)
-	}
-	if err := store.Rebuild(ctx, repo, Scope{ProjectID: "proj"}); err != nil {
-		t.Fatalf("Rebuild: %v", err)
-	}
+	store := newRefreshedSemanticIndex(t, repo, "proj", newKeywordEmbedder(migrationKeywordVector))
 	got, err := store.SearchVector(ctx, SearchRequest{
 		Query: "private finding",
 		Scope: Scope{ProjectID: "proj", TeamID: "team", SessionID: "sess"},
@@ -435,7 +411,8 @@ func TestScopeMatrixContract_EmptyAgentIDSharedOnly_Vector(t *testing.T) {
 // TestScopeMatrix_AllPathsAgreeOnAgentIsolation verifies that when an AgentID
 // is specified, all three SQLite-backed retrieval paths (Query, SearchExact,
 // SearchLexical) agree that Agent B cannot see Agent A's private items.
-// Vector hydration is checked separately above because it requires a rebuild.
+// The vector path is checked separately above because it requires a built
+// semantic generation.
 func TestScopeMatrix_AllPathsAgreeOnAgentIsolation(t *testing.T) {
 	repo, _ := scopeMatrixFixture(t)
 	ctx := context.Background()
