@@ -143,3 +143,51 @@ func CloneSearchResults(results []SearchResult) []SearchResult {
 	}
 	return out
 }
+
+// isRetrievable is the in-memory equivalent of SQLite's scope, supersede,
+// temporal, and lifecycle predicates, using the same ancestor-visibility
+// semantics as scopeAuthorize. Supplemental sources re-check every row with
+// it before fusion.
+func isRetrievable(item ContextItem, req SearchRequest, now time.Time) bool {
+	scope := req.Scope
+	if scope.ProjectID == "" || item.Scope.ProjectID != scope.ProjectID || item.SupersededBy != "" {
+		return false
+	}
+	if !req.IncludeCandidates && item.Lifecycle != "" && item.Lifecycle != LifecycleConfirmed {
+		return false
+	}
+	visibility := req.Visibility
+	if visibility == "" {
+		visibility = VisibilityAncestors
+	}
+	for _, level := range [][2]string{
+		{scope.TeamID, item.Scope.TeamID},
+		{scope.SessionID, item.Scope.SessionID},
+		{scope.BranchID, item.Scope.BranchID},
+		{scope.AgentID, item.Scope.AgentID},
+		{scope.TaskID, item.Scope.TaskID},
+		{scope.AttemptID, item.Scope.AttemptID},
+	} {
+		switch visibility {
+		case VisibilitySubtree:
+			if level[0] != "" && level[1] != "" && level[0] != level[1] {
+				return false
+			}
+		case VisibilityExact:
+			if level[0] != level[1] {
+				return false
+			}
+		default: // VisibilityAncestors
+			if level[0] != "" {
+				if level[1] != "" && level[0] != level[1] {
+					return false
+				}
+			} else if level[1] != "" {
+				return false
+			}
+		}
+	}
+	return (item.ValidFrom == nil || !item.ValidFrom.After(now)) &&
+		(item.ValidUntil == nil || item.ValidUntil.After(now)) &&
+		(item.ExpiresAt == nil || item.ExpiresAt.After(now))
+}

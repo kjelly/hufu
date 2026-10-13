@@ -1895,7 +1895,7 @@ Complete reference for all default values, including their source files:
 | Setting | Default | Source |
 |---------|---------|--------|
 | Provider URL | `http://localhost:11434/v1` | `agent.go` |
-| Embedding Model | `ollama/embeddinggemma:latest` (the `ollama/` prefix is dropped when the canonical context vector index calls the Ollama embeddings API) | `config.go` |
+| Embedding Model | `ollama/embeddinggemma:latest` (legacy long-term memory store only; canonical context retrieval uses the `semantic-retrieval` settings) | `config.go` |
 
 ### Agent Settings
 

@@ -48,7 +48,7 @@ One row per canonical `ContextItem`. `id` is the stable canonical identifier;
 | Trust and selection | `authority`, `trust_level`, `priority`, `must_keep`, `pinned`, `confidence` | Rendering authority boundary and deterministic retrieval/selection inputs. |
 | Provenance | `source_json`, `evidence_json`, `tags_json`, `metadata_json` | Source reference, evidence links, tags, and extensible metadata. |
 | Temporal lifecycle | `created_at`, `updated_at`, `valid_from`, `valid_until`, `expires_at`, `superseded_by` | Recency, validity window, expiry, and replacement relationship. |
-| Vector lifecycle | `embedding_state`, `embedding_model` | Rebuildable chromem index status and model used; canonical content is never deleted on model migration. |
+| Vector lifecycle | `embedding_state`, `embedding_model` | Status written by the retired chromem index; no longer updated. Semantic coverage lives in the embedding projection tables. Canonical content is never deleted on model migration. |
 
 Timestamps are UTC Unix milliseconds. Retrieval excludes superseded, expired,
 not-yet-valid, and no-longer-valid records unless an explicit maintenance query
@@ -148,16 +148,15 @@ their 24-hour recovery window.
 ## Operational checks
 
 Run `hufu context rebuild --workspace <workspace>` to rebuild FTS5, or add
-`--vector --project <project>` to rebuild the disposable vector index from
-confirmed current SQLite items. The vector index (`<workspace>/context-vectors`)
-embeds through Ollama with the configured `embedding-model`; a leading
-`ollama/` provider prefix, as in the default `ollama/embeddinggemma:latest`,
-is removed before calling the Ollama embeddings API, while the index keeps the
-configured string as its identity. Use `hufu context query`, `list`, `show`,
+`--vector --project <project>` to also refresh the project's semantic
+generation with the `semantic-retrieval` encoder, embedding only new or edited
+items (see [semantic retrieval](semantic-retrieval.md#querying-from-the-command-line)).
+The retired chromem index in `<workspace>/context-vectors` is no longer read
+and may be deleted. Use `hufu context query`, `list`, `show`,
 `candidates`, `history`, `confirm`, `reject`, and `supersede` for lifecycle
 inspection and explicit maintenance; `confirm` and `reject` refuse
 consolidation candidates, which are reviewed with
-`hufu context consolidation approve|reject`. To upgrade an old chromem store, first
+`hufu context consolidation approve|reject`. To upgrade a legacy chromem long-term memory store, first
 run `hufu context migrate-memory --workspace <workspace> --project <project>
 --legacy-project <old-project>` for its count/checksum dry run, then repeat
 with `--apply`; the destination database is backed up before mutation. These

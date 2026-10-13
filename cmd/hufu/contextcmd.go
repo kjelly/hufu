@@ -16,7 +16,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kjelly/hufu/internal/agent"
-	"github.com/kjelly/hufu/internal/config"
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/team"
@@ -162,6 +161,7 @@ func init() {
 	contextQueryCmd.Flags().StringVar(&contextLifecycle, "lifecycle", "", "Lifecycle filter: candidate, confirmed, or rejected")
 	contextQueryCmd.Flags().BoolVar(&contextQueryJSON, "json", false, "Emit JSON")
 	contextQueryCmd.Flags().BoolVar(&contextShowContent, "show-content", false, "Include safely redacted content (otherwise IDs and metadata only)")
+	contextQueryCmd.Flags().StringVar(&contextQuerySemanticMode, "semantic-mode", "", contextQuerySemanticModeUsage)
 	contextCmd.AddCommand(contextQueryCmd)
 	addContextReadFlags(contextListCmd, true)
 	contextCmd.AddCommand(contextListCmd)
@@ -170,11 +170,11 @@ func init() {
 	contextExplainCmd.Flags().BoolVar(&contextQueryJSON, "json", false, "Emit JSON")
 	contextCmd.AddCommand(contextExplainCmd)
 	contextRebuildCmd.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace directory containing context.sqlite")
-	contextRebuildCmd.Flags().BoolVar(&contextRebuildVector, "vector", false, "Also rebuild the disposable canonical vector index (requires --project and embedding provider access)")
+	contextRebuildCmd.Flags().BoolVar(&contextRebuildVector, "vector", false, "Also refresh the semantic memory index with the semantic-retrieval encoder, embedding only new or edited items (requires --project; same as `hufu context semantic build`)")
 	contextRebuildCmd.Flags().BoolVar(&contextRebuildAggregates, "aggregates", false, "Rebuild outcome-driven experience aggregates from event_store.jsonl")
 	contextRebuildCmd.Flags().StringVar(&contextPolicyVersion, "policy-version", "memory-policy-v1", "Memory policy version used for aggregate replay")
 	contextRebuildCmd.Flags().StringVar(&contextProject, "project", "", "Canonical project ID required with --vector")
-	contextRebuildCmd.Flags().StringVar(&contextTeam, "team", "", "Optional team scope for --vector")
+	contextRebuildCmd.Flags().StringVar(&contextTeam, "team", "", "Team whose semantic-retrieval block applies to --vector")
 	contextCmd.AddCommand(contextRebuildCmd)
 	for _, mutation := range []*cobra.Command{contextConfirmCmd, contextRejectCmd, contextSupersedeCmd} {
 		mutation.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace directory containing context.sqlite")
@@ -584,14 +584,20 @@ func runContextRebuild(cmd *cobra.Command, _ []string) error {
 	if strings.TrimSpace(contextProject) == "" {
 		return fmt.Errorf("--project is required with --vector")
 	}
-	vector, err := contextstore.OpenOllamaVectorStore(getContextWorkspace(), config.ResolveEmbeddingModel(""), config.DefaultOllamaAPIURL)
+	settings, err := contextSemanticSettings(contextTeam, cmd.ErrOrStderr())
 	if err != nil {
-		return fmt.Errorf("opening canonical vector index: %w", err)
+		return err
 	}
-	if err := vector.Rebuild(cmd.Context(), repo, contextstore.Scope{ProjectID: contextProject, TeamID: contextTeam}); err != nil {
-		return fmt.Errorf("rebuilding canonical vector index: %w", err)
+	encoder, err := openSemanticEncoder(cmd.Context(), settings, true)
+	if err != nil {
+		return err
 	}
-	_, err = fmt.Fprintln(cmd.OutOrStdout(), "context rebuild: FTS5 and canonical vector index rebuilt")
+	result, err := refreshContextSemantic(cmd.Context(), repo, encoder, contextProject, settings)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "context rebuild: FTS5 index rebuilt; semantic generation %s covers %d items (reused %d, embedded %d, excluded %d)\n",
+		result.GenerationID, result.Inventory, result.Reused, result.Embedded, result.Excluded)
 	return err
 }
 
@@ -604,14 +610,15 @@ func runContextQuery(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer repo.Close()
-	var vector contextstore.VectorSearcher
-	vectorStore, vectorErr := contextstore.OpenOllamaVectorStore(getContextWorkspace(), config.ResolveEmbeddingModel(""), config.DefaultOllamaAPIURL)
-	if vectorErr == nil {
-		vectorErr = vectorStore.Rebuild(cmd.Context(), repo, contextReadScope())
+	settings, err := contextSemanticSettings(contextTeam, cmd.ErrOrStderr())
+	if err != nil {
+		return err
 	}
-	if vectorErr == nil {
-		vector = vectorStore
+	mode, err := parseContextSemanticMode("semantic-mode", contextQuerySemanticMode, settings.Mode)
+	if err != nil {
+		return err
 	}
+	options := contextQueryRetrievalOptions(cmd.Context(), repo, contextProject, args[0], settings, mode, cmd.ErrOrStderr())
 	visibility := contextstore.VisibilityAncestors
 	// Session-tier memory has a session child scope. Querying it requires an
 	// explicit worker identity plus the tier filter; only then may the CLI use
@@ -620,7 +627,7 @@ func runContextQuery(cmd *cobra.Command, args []string) error {
 	if contextTier == "session" && contextAgent != "" {
 		visibility = contextstore.VisibilitySubtree
 	}
-	results, trace, err := contextstore.HybridRetrieve(cmd.Context(), repo, vector, contextstore.SearchRequest{Query: args[0], Scope: contextReadScope(), Visibility: visibility, IncludeCandidates: contextLifecycle != "" && contextLifecycle != string(contextstore.LifecycleConfirmed), Limit: 20})
+	results, trace, err := contextstore.HybridRetrieveWithOptions(cmd.Context(), repo, contextstore.SearchRequest{Query: args[0], Scope: contextReadScope(), Visibility: visibility, IncludeCandidates: contextLifecycle != "" && contextLifecycle != string(contextstore.LifecycleConfirmed), Limit: 20}, options)
 	if err != nil {
 		return err
 	}

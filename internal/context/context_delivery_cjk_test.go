@@ -2,9 +2,7 @@ package context
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -29,27 +27,18 @@ func TestContextDeliveryChineseSyntaxAndFakeEmbeddingContract(t *testing.T) {
 	if err != nil || len(lexical) != 0 {
 		t.Fatalf("Chinese lexical syntax/known limitation: %v, %v", lexical, err)
 	}
-	var embeddings atomic.Int32
-	embed := func(_ context.Context, text string) ([]float32, error) {
-		embeddings.Add(1)
+	embedder := newKeywordEmbedder(func(text string) []float32 {
 		switch text {
 		case "請使用資料表遷移", "修正資料庫結構":
-			return []float32{1, 0}, nil
+			return []float32{1, 0}
 		case "更新使用者畫面":
-			return []float32{0, 1}, nil
-		default:
-			return nil, fmt.Errorf("unexpected synthetic embedding input")
+			return []float32{0, 1}
 		}
-	}
-	vector, err := NewVectorStore(filepath.Join(dir, "vectors"), "synthetic-cjk-v1", embed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := vector.Rebuild(ctx, repo, scope); err != nil {
-		t.Fatal(err)
-	}
-	if calls := embeddings.Load(); calls != 2 {
-		t.Fatalf("seed embedding calls %d, want 2", calls)
+		return nil
+	})
+	vector := newRefreshedSemanticIndex(t, repo, "project", embedder)
+	if documents, _ := embedder.calls(); documents != 2 {
+		t.Fatalf("seed embedding calls %d, want 2", documents)
 	}
 	var work QueryWork
 	ctx = WithQueryWorkObserver(ctx, func(_ context.Context, observed QueryWork) { work = observed })
@@ -57,7 +46,7 @@ func TestContextDeliveryChineseSyntaxAndFakeEmbeddingContract(t *testing.T) {
 	if err != nil || len(results) != 1 || results[0].Item.ID != "relevant" {
 		t.Fatalf("fake semantic contract: %v, %v", results, err)
 	}
-	if embeddings.Load() != 3 || work.VectorCalls != 1 || work.LexicalCalls != 1 {
-		t.Fatalf("embedding/backend accounting: embedding=%d query=%+v", embeddings.Load(), work)
+	if documents, queries := embedder.calls(); documents != 2 || queries != 1 || work.VectorCalls != 1 || work.LexicalCalls != 1 {
+		t.Fatalf("embedding/backend accounting: documents=%d queries=%d query=%+v", documents, queries, work)
 	}
 }

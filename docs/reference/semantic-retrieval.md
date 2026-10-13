@@ -72,9 +72,10 @@ failed and retrieval falls back to exact and lexical.
 The endpoint must be loopback unless `allow-remote-endpoint: true`, because
 memory text is sent to it. Under `--no-net` a non-loopback endpoint is refused.
 
-The legacy `embedding-model` setting is separate: it names the chromem index
-used by `hufu context query` and `hufu context rebuild --vector`. Its default
-is the same `ollama/embeddinggemma:latest`.
+The legacy `embedding-model` setting is separate: it applies only to the
+legacy long-term memory store. `hufu context query`, `hufu context rebuild
+--vector`, and `hufu context conflicts scan --vector` use these settings (see
+[Querying from the command line](#querying-from-the-command-line)).
 
 ## Automatic routing
 
@@ -173,6 +174,30 @@ team that is not found, or a project with several teams, uses hufu.yaml
 alone. `status` and `verify` print the source, for example
 `hufu.yaml + team web-research`, and JSON adds `team` and `settings_source`.
 
+## Querying from the command line
+
+`hufu context query`, `hufu context rebuild --vector`, and
+`hufu context conflicts scan --vector` read the same generations and settings
+as a run (hufu.yaml merged with the `--team` block). Before using the lane
+they refresh the project's generation like `build`: only new or edited items
+are embedded, and a failed refresh is a warning, after which requests whose
+candidates are not covered fall back to exact and lexical.
+
+- `context query` picks the lane like a run: `off` and `shadow` stay exact and
+  lexical without contacting the encoder, `auto` routes by the query text,
+  and `active` always uses the lane with `fusion`. `--semantic-mode` overrides
+  the mode for one query. An unreachable encoder is a warning and the query
+  falls back.
+- `context rebuild --vector --project <p>` rebuilds FTS5 and then refreshes
+  the generation regardless of the mode, like `build`.
+- `context conflicts scan --vector` needs `active` or `auto`; otherwise it
+  reports `vector=unavailable`. Neighbors are scored from stored document
+  vectors, so the scan embeds no query text.
+
+Earlier versions kept a separate chromem index in `<workspace>/context-vectors/`
+and re-embedded every memory on each query. Nothing reads that directory any
+more; delete it when convenient.
+
 ## Traces
 
 In `shadow`, `active`, and `auto`, every ranking request appends one line to
@@ -256,8 +281,9 @@ hufu context ranking-replay --project <p> --team <t> --query <goal> \
   the model and its context fits the input limit, with the digest prefix and
   dimensions. An unreachable endpoint or a model that is not pulled is a
   warning, because retrieval then falls back to lexical.
-- `semantic.legacy-embedding-model`: the legacy `embedding-model`, which does
-  not affect semantic retrieval.
+- `semantic.legacy-embedding-model`: the legacy `embedding-model`, which
+  applies only to the legacy long-term memory store and does not affect
+  semantic retrieval.
 
 ## Known limits
 

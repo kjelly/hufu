@@ -58,7 +58,7 @@ func collectDoctorSemantic(ctx context.Context, report *doctorReport, cfg *confi
 	if legacy == "" {
 		legacy = config.DefaultEmbeddingModel
 	}
-	report.add("semantic.legacy-embedding-model", "", "pass", fmt.Sprintf("embedding-model %s indexes the legacy chromem store (context query, rebuild --vector); it does not affect semantic-retrieval", legacy))
+	report.add("semantic.legacy-embedding-model", "", "pass", fmt.Sprintf("embedding-model %s applies only to the legacy long-term memory store; it does not affect semantic-retrieval, which context query, rebuild --vector, and conflicts scan --vector use", legacy))
 	for _, key := range slices.Sorted(maps.Keys(encoders)) {
 		doctorCheckSemanticEncoder(ctx, report, encoders[key])
 	}

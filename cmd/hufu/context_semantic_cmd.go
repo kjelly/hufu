@@ -322,18 +322,10 @@ func runContextSemanticBuild(ctx context.Context, out io.Writer, opts *contextSe
 	if err != nil {
 		return err
 	}
-	builder, err := contextstore.NewSemanticBuilder(store, embedder, contextstore.SemanticBuilderOptions{
-		InventoryPolicy: contextstore.InventoryPolicyRetrievable, BatchSize: settings.IndexBatchSize,
-	})
+	started := time.Now()
+	result, err := refreshContextSemantic(ctx, store, embedder, projectID, settings)
 	if err != nil {
 		return err
-	}
-	buildCtx, cancel := context.WithTimeout(ctx, settings.IndexTimeout)
-	defer cancel()
-	started := time.Now()
-	result, err := builder.Refresh(buildCtx, projectID)
-	if err != nil {
-		return fmt.Errorf("build semantic generation: %w", err)
 	}
 	if opts.json {
 		return writeSemanticJSON(out, result)

@@ -1,7 +1,8 @@
 // Package semantic holds the operator configuration for canonical semantic
 // memory retrieval. It is separate from the legacy embedding-model setting:
-// that one names the chromem index model, this one controls whether and how
-// the coordinator and workers embed canonical context items.
+// that one names the legacy long-term memory store model, this one controls
+// whether and how the coordinator, workers, and the context CLI embed
+// canonical context items.
 package semantic
 
 import (

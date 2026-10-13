@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,7 +138,7 @@ func TestConflictsScanVectorUnavailableFallsBack(t *testing.T) {
 	seedConflictMemories(t, workspace)
 	stubConflictJudge(t, `{"verdict":"compatible","rationale":""}`)
 	original := conflictVectorFactory
-	conflictVectorFactory = func(context.Context, string, contextstore.Repository, contextstore.Scope) (memoryconflict.SimilarSearcher, error) {
+	conflictVectorFactory = func(context.Context, *contextstore.SQLiteRepository, contextstore.Scope, io.Writer) (memoryconflict.SimilarSearcher, error) {
 		return nil, errors.New("ollama unavailable")
 	}
 	t.Cleanup(func() { conflictVectorFactory = original })

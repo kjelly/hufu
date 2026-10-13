@@ -3,6 +3,7 @@ package context
 import (
 	"container/heap"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math"
@@ -25,6 +26,9 @@ var (
 	// falls back to lexical retrieval rather than ranking new memories
 	// lower only because they are not embedded yet.
 	ErrSemanticProjectionIncomplete = errors.New("semantic projection does not cover every authorized candidate")
+	// ErrVectorItemNotIndexed reports that an item has no stored vector for
+	// its current content.
+	ErrVectorItemNotIndexed = errors.New("context item is not in the vector index")
 )
 
 type RetrievalCandidateIterator interface {
@@ -121,11 +125,69 @@ func (s *SemanticIndex) SearchVector(ctx context.Context, req SearchRequest) ([]
 	}
 	// Coverage is checked before embedding the query so an incomplete
 	// projection costs no model call.
+	covered, err := s.coveredCandidates(ctx, req, snapshot, "")
+	if err != nil {
+		return nil, err
+	}
+	if len(covered) == 0 {
+		return []SearchResult{}, nil
+	}
+	query, err := s.embedder.EmbedQuery(ctx, req.Query)
+	if err != nil {
+		return nil, err
+	}
+	if err = validateSemanticQueryVector(query, snapshot.dimensions); err != nil {
+		return nil, err
+	}
+	return topSemanticResults(covered, snapshot, query, req.Limit), nil
+}
+
+// SearchSimilarTo ranks the authorized candidates of req against the stored
+// vector of itemID, so it makes no embedding request. The source item is
+// excluded. An item without a vector for its current content hash is
+// ErrVectorItemNotIndexed.
+func (s *SemanticIndex) SearchSimilarTo(ctx context.Context, itemID string, req SearchRequest) ([]SearchResult, error) {
+	if req.Scope.ProjectID == "" {
+		return nil, errors.New("project scope is required")
+	}
+	snapshot, err := s.ensureSnapshot(ctx, req.Scope.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	source, err := s.repo.Get(ctx, itemID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %s", ErrVectorItemNotIndexed, itemID)
+	}
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %w", ErrSemanticCanonicalRepo, err)
+	}
+	index, found := slices.BinarySearch(snapshot.ids, itemID)
+	if !found || snapshot.hashes[index] != strings.ToLower(source.ContentHash) {
+		return nil, fmt.Errorf("%w: %s", ErrVectorItemNotIndexed, itemID)
+	}
+	covered, err := s.coveredCandidates(ctx, req, snapshot, itemID)
+	if err != nil {
+		return nil, err
+	}
+	start := index * snapshot.dimensions
+	return topSemanticResults(covered, snapshot, snapshot.data[start:start+snapshot.dimensions], req.Limit), nil
+}
+
+// coveredCandidates lists the authorized candidates of req that have a
+// vector for their current content hash, skipping exclude. Any other
+// uncovered candidate makes the request ErrSemanticProjectionIncomplete.
+func (s *SemanticIndex) coveredCandidates(ctx context.Context, req SearchRequest, snapshot *semanticSnapshot, exclude string) ([]coveredCandidate, error) {
 	var covered []coveredCandidate
 	uncovered := 0
-	err = s.iterator.IterateRetrievable(ctx, req, func(item ContextItem) error {
+	err := s.iterator.IterateRetrievable(ctx, req, func(item ContextItem) error {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if item.ID == exclude {
+			return nil
 		}
 		if !inventoryPolicyCovers(s.policy, item) {
 			// Rows outside the policy (for example a rejected candidate a
@@ -157,18 +219,12 @@ func (s *SemanticIndex) SearchVector(ctx context.Context, req SearchRequest) ([]
 		}
 		return nil, fmt.Errorf("%w: %d of %d candidates lack vectors", ErrSemanticProjectionIncomplete, uncovered, uncovered+len(covered))
 	}
-	if len(covered) == 0 {
-		return []SearchResult{}, nil
-	}
-	query, err := s.embedder.EmbedQuery(ctx, req.Query)
-	if err != nil {
-		return nil, err
-	}
-	if err = validateSemanticQueryVector(query, snapshot.dimensions); err != nil {
-		return nil, err
-	}
+	return covered, nil
+}
 
-	limit := req.Limit
+// topSemanticResults scores covered candidates against query and returns
+// the best limit (default 20) in deterministic order.
+func topSemanticResults(covered []coveredCandidate, snapshot *semanticSnapshot, query []float32, limit int) []SearchResult {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -191,7 +247,7 @@ func (s *SemanticIndex) SearchVector(ctx context.Context, req SearchRequest) ([]
 	sort.Slice(results, func(i, j int) bool {
 		return searchResultBetter(results[i], results[j])
 	})
-	return results, nil
+	return results
 }
 
 // ensureSnapshot returns the snapshot of the project's active generation,

@@ -281,20 +281,16 @@ func TestWP1_LifecycleFilterAppliesToVector(t *testing.T) {
 	); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	store, err := NewVectorStore(filepath.Join(dir, "vectors"), "test-v1", testEmbedding)
-	if err != nil {
-		t.Fatalf("NewVectorStore: %v", err)
-	}
-	if err := store.Rebuild(ctx, repo, scope); err != nil {
-		t.Fatalf("Rebuild: %v", err)
-	}
+	// The retrievable inventory embeds candidates too; the request's
+	// lifecycle filter must still keep them out of a confirmed-only search.
+	store := newRefreshedSemanticIndex(t, repo, "p", newKeywordEmbedder(migrationKeywordVector))
 	got, err := store.SearchVector(ctx, SearchRequest{Query: "database upgrade", Scope: scope, Limit: 5})
 	if err != nil {
 		t.Fatalf("SearchVector: %v", err)
 	}
 	ids := idsOfResults(got)
-	if containsID(ids, "candidate-vec") {
-		t.Errorf("candidate leaked into vector search: %v", ids)
+	if containsID(ids, "candidate-vec") || !containsID(ids, "confirmed-vec") {
+		t.Errorf("vector search = %v, want the confirmed item without the candidate", ids)
 	}
 }
 
