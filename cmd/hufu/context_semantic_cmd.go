@@ -254,7 +254,7 @@ func (o *contextSemanticOptions) resolveSettings(ctx context.Context, store *con
 	case overridden:
 		return settings, semanticSource{team: teamName, label: "hufu.yaml + team " + teamName}, nil
 	default:
-		return settings, semanticSource{team: teamName, label: "hufu.yaml (team " + teamName + " has no override)"}, nil
+		return settings, semanticSource{team: teamName, label: "hufu.yaml; team " + teamName + " has no override"}, nil
 	}
 }
 

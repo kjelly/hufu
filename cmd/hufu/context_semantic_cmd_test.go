@@ -183,7 +183,7 @@ func TestContextSemanticCommandsUseTheTeamBlock(t *testing.T) {
 		wantSource string
 	}{
 		{name: "inferred team overrides", args: nil, wantMode: "active", wantFusion: "legacy", wantTeam: "team", wantSource: "hufu.yaml + team team"},
-		{name: "explicit team without block", args: []string{"--team", "plain"}, wantMode: "shadow", wantFusion: "score_normalized", wantTeam: "plain", wantSource: "hufu.yaml (team plain has no override)"},
+		{name: "explicit team without block", args: []string{"--team", "plain"}, wantMode: "shadow", wantFusion: "score_normalized", wantTeam: "plain", wantSource: "hufu.yaml; team plain has no override"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
