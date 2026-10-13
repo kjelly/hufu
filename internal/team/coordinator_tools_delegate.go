@@ -388,7 +388,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 			workerInput.MemoryStore = c.memoryStore
 		}
 	}
-	workerInput.WorkerMemory = c.recallWorkerMemory(ctx, agentDef, request.RetrievalQuery())
+	workerInput.WorkerMemory = c.recallWorkerMemory(ctx, agentDef, request)
 	compiled, compileErr := c.ContextCompiler().CompileWorkerContext(ctx, workerInput)
 	if compileErr != nil {
 		return "", fmt.Errorf("sub-agent context preflight failed: %w", compileErr)

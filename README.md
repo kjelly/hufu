@@ -141,6 +141,7 @@ hufu workspace path                            # print the active managed contro
 hufu inspect run run-123                       # inspect persisted run facts
 hufu inspect cost run-123                      # inspect generation-cost projection
 hufu inspect control-decisions --all-branches  # shadow/active control decision statistics
+hufu inspect semantic-retrieval run-123        # semantic memory routes, fallbacks, latency
 ```
 
 ### 1. Start Ollama
@@ -457,7 +458,9 @@ keeps English requests on the original lexical ranking. Requests that use the
 lane fuse it with `fusion: score_normalized` by default. The model loads in the background, so a run never waits for
 it, and any encoder failure falls back to exact and lexical retrieval. hufu
 never pulls the model (`ollama pull embeddinggemma` first). Operate the index
-with `hufu context semantic status|build|verify`. See
+with `hufu context semantic status|build|verify`; check per-task routes,
+fallbacks, and latency with `hufu inspect semantic-retrieval` or the report's
+Semantic Retrieval Runtime section. See
 [Semantic memory retrieval](docs/reference/semantic-retrieval.md).
 
 ---

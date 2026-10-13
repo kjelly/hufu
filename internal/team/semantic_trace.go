@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/embedding"
 )
 
 const (
@@ -82,4 +83,72 @@ func loadOrCreateSemanticTraceKey(workspace string) ([]byte, error) {
 		return nil, fmt.Errorf("write semantic trace key: %w", err)
 	}
 	return key, nil
+}
+
+// Sources recorded in semantic traces: the ranking that issued the query.
+const (
+	semanticSourceSharedPersistent = "shared_persistent"
+	semanticSourceWorkerPrivate    = "worker_private"
+)
+
+// SemanticTraceAttribution links a content-free semantic trace to the run,
+// task, and context request that issued it.
+type SemanticTraceAttribution struct {
+	RunID            string
+	TaskID           string
+	Attempt          int
+	ContextRequestID string
+	Phase            string
+	Trigger          string
+	Role             string
+	Agent            string
+	Source           string
+}
+
+// semanticTraceAttributionFor attributes a ranking run for request.
+func semanticTraceAttributionFor(request ContextRequest, source string) SemanticTraceAttribution {
+	return SemanticTraceAttribution{
+		RunID: request.RunID, TaskID: request.TaskID, Attempt: request.Attempt, ContextRequestID: request.RequestID,
+		Phase: string(request.Phase), Trigger: string(request.Trigger), Role: request.AgentRole, Agent: request.AgentName,
+		Source: source,
+	}
+}
+
+func (a SemanticTraceAttribution) apply(trace *contextstore.SemanticRetrievalTrace, route string, share float64) {
+	trace.RunID, trace.TaskID, trace.Attempt, trace.ContextRequestID = a.RunID, a.TaskID, a.Attempt, a.ContextRequestID
+	trace.Phase, trace.Trigger, trace.Role, trace.Agent, trace.Source = a.Phase, a.Trigger, a.Role, a.Agent, a.Source
+	trace.Route, trace.RouteShare = route, roundRouteShare(share)
+}
+
+// roundRouteShare keeps two decimals: enough to calibrate the auto threshold
+// without fingerprinting the text.
+func roundRouteShare(share float64) float64 {
+	return float64(int(share*100+0.5)) / 100
+}
+
+// attributedTraceSink stamps every trace of one request with its attribution
+// and route before writing it.
+func attributedTraceSink(sink func(contextstore.SemanticRetrievalTrace), attribution SemanticTraceAttribution, text string) func(contextstore.SemanticRetrievalTrace) {
+	if sink == nil {
+		return nil
+	}
+	share := embedding.LexicalDropShare(text)
+	return func(trace contextstore.SemanticRetrievalTrace) {
+		attribution.apply(&trace, contextstore.SemanticRouteSemantic, share)
+		sink(trace)
+	}
+}
+
+// writeLexicalRouteTrace records a request auto routing kept lexical, so the
+// trace file shows every routing decision, not only the embedded ones.
+func writeLexicalRouteTrace(hasher contextstore.TraceHasher, sink func(contextstore.SemanticRetrievalTrace), attribution SemanticTraceAttribution, query, text string) {
+	if hasher == nil || sink == nil {
+		return
+	}
+	trace, err := contextstore.NewLexicalRouteTrace(hasher, query)
+	if err != nil {
+		return
+	}
+	attribution.apply(&trace, contextstore.SemanticRouteLexical, embedding.LexicalDropShare(text))
+	sink(trace)
 }

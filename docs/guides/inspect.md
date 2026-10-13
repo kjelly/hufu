@@ -27,6 +27,7 @@ hufu inspect context <task-id> --run <run-id> --project <project-id>
 hufu inspect trace <run-id>
 hufu inspect cost [run-id] [--task <task-id>]
 hufu inspect replay <run-id>
+hufu inspect semantic-retrieval [run-id] [--task <task-id>]
 hufu inspect storage
 ```
 
@@ -61,8 +62,15 @@ hufu inspect context task-7 --run run-123 --project project-1 --agent worker-1
 hufu inspect trace run-123 --branch incident-fix
 hufu inspect cost run-123 --task task-7 --format json
 hufu inspect replay run-123 --format json
+hufu inspect semantic-retrieval run-123 --task task-7
 hufu inspect storage --workspace ./workspace --format json
 ```
+
+`inspect semantic-retrieval` summarizes the workspace's content-free semantic
+retrieval traces and the runtime status each run left when it closed (see
+[Semantic memory retrieval](../reference/semantic-retrieval.md#inspecting)).
+Those files are not part of the event chain, so the envelope reports
+`event_chain: not_applicable`; it rejects `--branch` and `--session`.
 
 `inspect storage` reports content-free SQLite facts: page/freelist counts, page
 size, journal mode, WAL autocheckpoint, schema version, database/WAL byte sizes,

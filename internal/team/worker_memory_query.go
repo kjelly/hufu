@@ -39,6 +39,10 @@ func (c *Coordinator) queryWorkerMemory(ctx context.Context, todoID, query strin
 		Policy:         def.Memory,
 		MaxItems:       limit,
 		MaxTokens:      def.Memory.MaxTokens,
+		Trace: SemanticTraceAttribution{
+			RunID: c.executionRunID, TaskID: todoID, Trigger: "memory_query", Agent: item.Agent,
+			Source: semanticSourceWorkerPrivate,
+		},
 	})
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("worker memory query failed: %v", err))

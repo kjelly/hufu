@@ -464,11 +464,21 @@ func (g *gatedEmbedder) acquire(ctx context.Context) bool {
 func (g *gatedEmbedder) release() { <-g.runtime.slot }
 
 func (g *gatedEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	probe := contextstore.SemanticQueryProbeFrom(ctx)
+	queued := time.Now()
 	if !g.acquire(ctx) {
+		probe.RecordQuery(0, false, time.Since(queued), 0)
 		return nil, contextstore.ErrSemanticBusy
 	}
 	defer g.release()
+	queueWait := time.Since(queued)
+	started := time.Now()
 	result, err := g.inner.EmbedQueryDetailed(ctx, text)
+	tokens := result.PromptTokens
+	if tokens == 0 {
+		tokens = result.Shaped.EstimatedTokens
+	}
+	probe.RecordQuery(tokens, result.Shaped.Truncated, queueWait, time.Since(started))
 	if err == nil && result.Shaped.Truncated {
 		g.runtime.mu.Lock()
 		g.runtime.stats.TruncatedQueries++

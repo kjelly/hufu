@@ -334,7 +334,7 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 		eligiblePersistent = append(eligiblePersistent, item)
 		allowedPersistent[item.ID] = true
 	}
-	ranking, err := c.rankSharedPersistentMemoryForRequest(ctx, request.RetrievalQuery(), request.Goal, eligiblePersistent, allowedPersistent)
+	ranking, err := c.rankSharedPersistentMemoryForRequest(ctx, request, eligiblePersistent, allowedPersistent)
 	if err != nil {
 		return ContextRoute{}, err
 	}

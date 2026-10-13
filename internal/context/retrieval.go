@@ -210,6 +210,7 @@ func HybridRetrieveWithOptions(
 	semanticResults := []SearchResult(nil)
 	semanticCandidateCount := 0
 	fallbackReason := SemanticFallbackNone
+	var probe *SemanticQueryProbe
 	if options.Mode != RetrievalOff {
 		remainder := req.SemanticQueryText()
 		switch {
@@ -221,7 +222,12 @@ func HybridRetrieveWithOptions(
 			semanticRequest := req
 			semanticRequest.Query = remainder
 			work.VectorCalls++
-			vectorResults, vectorErr := options.Vector.SearchVector(ctx, semanticRequest)
+			vectorCtx := ctx
+			if options.TraceSink != nil {
+				probe = &SemanticQueryProbe{}
+				vectorCtx = WithSemanticQueryProbe(ctx, probe)
+			}
+			vectorResults, vectorErr := options.Vector.SearchVector(vectorCtx, semanticRequest)
 			work.CandidateRows += len(vectorResults)
 			if vectorErr != nil {
 				if errors.Is(vectorErr, context.Canceled) || errors.Is(vectorErr, context.DeadlineExceeded) {
@@ -264,7 +270,7 @@ func HybridRetrieveWithOptions(
 	if options.Mode != RetrievalOff && options.TraceSink != nil {
 		semanticTrace, traceErr := buildSemanticRetrievalTrace(
 			options, req, trace, semanticResults, semanticCandidateCount,
-			fallbackReason, time.Since(semanticStarted),
+			fallbackReason, time.Since(semanticStarted), probe,
 		)
 		if traceErr != nil {
 			return nil, trace, traceErr
@@ -282,6 +288,7 @@ func buildSemanticRetrievalTrace(
 	semanticCandidateCount int,
 	fallbackReason SemanticFallbackReason,
 	latency time.Duration,
+	probe *SemanticQueryProbe,
 ) (SemanticRetrievalTrace, error) {
 	traceID, err := newSemanticTraceID()
 	if err != nil {
@@ -294,6 +301,7 @@ func buildSemanticRetrievalTrace(
 		SemanticResultCount: len(semanticResults), SelectedResultCount: len(trace.FusedResults),
 		LatencyMillis: latency.Milliseconds(), FallbackReason: fallbackReason,
 	}
+	probe.apply(&result)
 	if identity, ok := options.Vector.(semanticTraceIdentityProvider); ok {
 		model, generationID, sourceRevision := identity.SemanticTraceIdentity()
 		result.ModelID = model.ID

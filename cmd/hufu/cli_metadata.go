@@ -37,6 +37,7 @@ var canonicalExamples = []exampleMetadata{
 	{Section: "Model selection", Argv: `hufu run --team dev-team --profile coding-balanced -- "implement feature X"`},
 	{Section: "Progress and recovery", Argv: "hufu inspect overview --workspace ./workspace/dev-team"},
 	{Section: "Progress and recovery", Argv: "hufu inspect control-decisions --workspace ./workspace/dev-team"},
+	{Section: "Progress and recovery", Argv: "hufu inspect semantic-retrieval --workspace ./workspace/dev-team"},
 	{Section: "Progress and recovery", Argv: "hufu explain --team dev-team"},
 	{Section: "Progress and recovery", Argv: `hufu explain --ai "why did the task fail?" --model local/qwen3:8b`},
 	{Section: "Progress and recovery", Argv: "hufu session status --workspace ./workspace/dev-team --team dev-team"},

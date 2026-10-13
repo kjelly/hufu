@@ -72,10 +72,32 @@ type HybridRetrievalOptions struct {
 	FusionCarriedWeight float64
 }
 
+// Semantic routes recorded in traces: the semantic lane ran (shadow, active,
+// or auto routed to it), or auto kept the request lexical without embedding.
+const (
+	SemanticRouteSemantic = "semantic"
+	SemanticRouteLexical  = "lexical"
+)
+
 type SemanticRetrievalTrace struct {
-	TraceID                string                 `json:"trace_id"`
-	QueryHMAC              string                 `json:"query_hmac"`
-	Mode                   RetrievalMode          `json:"mode"`
+	TraceID   string        `json:"trace_id"`
+	QueryHMAC string        `json:"query_hmac"`
+	Mode      RetrievalMode `json:"mode"`
+	// Attribution: the run, task, and context request that issued the query,
+	// and which memory ranking ran it (shared_persistent or worker_private).
+	RunID            string `json:"run_id,omitempty"`
+	TaskID           string `json:"task_id,omitempty"`
+	Attempt          int    `json:"attempt,omitempty"`
+	ContextRequestID string `json:"context_request_id,omitempty"`
+	Phase            string `json:"phase,omitempty"`
+	Trigger          string `json:"trigger,omitempty"`
+	Role             string `json:"role,omitempty"`
+	Agent            string `json:"agent,omitempty"`
+	Source           string `json:"source,omitempty"`
+	// Route is SemanticRouteSemantic or SemanticRouteLexical; RouteShare is
+	// the routed text's share of non-ASCII letters and digits.
+	Route                  string                 `json:"route,omitempty"`
+	RouteShare             float64                `json:"route_share,omitempty"`
 	ModelID                string                 `json:"model_id,omitempty"`
 	ModelRevision          string                 `json:"model_revision,omitempty"`
 	ModelHash              string                 `json:"model_hash,omitempty"`
@@ -92,6 +114,23 @@ type SemanticRetrievalTrace struct {
 	SelectedResultCount    int                    `json:"selected_result_count"`
 	LatencyMillis          int64                  `json:"latency_millis"`
 	FallbackReason         SemanticFallbackReason `json:"fallback_reason"`
+	// Details the vector searcher reported through SemanticQueryProbe.
+	CoveredCandidateCount   int   `json:"covered_candidate_count,omitempty"`
+	UncoveredCandidateCount int   `json:"uncovered_candidate_count,omitempty"`
+	QueryTokens             int   `json:"query_tokens,omitempty"`
+	QueryTruncated          bool  `json:"query_truncated,omitempty"`
+	QueueWaitMillis         int64 `json:"queue_wait_millis,omitempty"`
+	EmbedMillis             int64 `json:"embed_millis,omitempty"`
+}
+
+// NewLexicalRouteTrace is the trace of a request auto routing kept lexical:
+// no embedding request was sent, so it carries only its identity.
+func NewLexicalRouteTrace(hasher TraceHasher, query string) (SemanticRetrievalTrace, error) {
+	traceID, err := newSemanticTraceID()
+	if err != nil {
+		return SemanticRetrievalTrace{}, err
+	}
+	return SemanticRetrievalTrace{TraceID: traceID, QueryHMAC: hasher.HashString(query), Mode: RetrievalOff, Route: SemanticRouteLexical}, nil
 }
 
 type semanticTraceIdentityProvider interface {

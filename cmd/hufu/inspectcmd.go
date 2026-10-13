@@ -48,6 +48,7 @@ the detailed audit, context, or decision maintenance commands.`,
   hufu inspect cost run-123 --task task-7 --format json
   hufu inspect replay run-123 --format json
   hufu inspect control-decisions --workspace ./workspace
+  hufu inspect semantic-retrieval run-123 --workspace ./workspace
   hufu inspect storage --workspace ./workspace --format json`,
 		Args:              cobra.NoArgs,
 		ValidArgsFunction: cobra.NoFileCompletions,
@@ -68,6 +69,7 @@ the detailed audit, context, or decision maintenance commands.`,
 		newInspectTraceCommand(options),
 		newInspectCostCommand(options),
 		newInspectControlDecisionsCommand(options),
+		newInspectSemanticRetrievalCommand(options),
 		newInspectReplayCommand(options),
 		newInspectStorageCommand(options),
 	)
@@ -449,6 +451,8 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 		return renderInspectCostText(writer, data)
 	case inspectpkg.ControlDecisionsData:
 		return renderInspectControlDecisionsText(writer, envelope.Query, data)
+	case inspectpkg.SemanticRetrievalData:
+		return renderInspectSemanticRetrievalText(writer, envelope.Query, data)
 	case inspectpkg.TaskData:
 		return renderInspectTaskText(writer, envelope.Query.BranchID, data)
 	case inspectpkg.EvidenceData:

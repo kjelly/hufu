@@ -42,14 +42,14 @@ func (c *Coordinator) initSemanticRetrieval(repo contextstore.Repository, noNet 
 
 // persistentSemanticLane is the shared persistent ranking's semantic lane,
 // or nil when semantic retrieval is off.
-func (c *Coordinator) persistentSemanticLane() *persistentSemanticLane {
+func (c *Coordinator) persistentSemanticLane(attribution SemanticTraceAttribution) *persistentSemanticLane {
 	if c == nil || c.semanticRuntime == nil {
 		return nil
 	}
 	return &persistentSemanticLane{
 		Vector: c.semanticRuntime, Mode: c.semanticRuntime.Mode(),
 		Router: c.semanticRuntime.router(), Fusion: c.semanticRuntime.Fusion(),
-		TraceHasher: c.semanticTraceHasher, TraceSink: c.semanticTraceSink,
+		TraceHasher: c.semanticTraceHasher, TraceSink: c.semanticTraceSink, Attribution: attribution,
 	}
 }
 
@@ -80,9 +80,11 @@ type sharedPersistentRanking struct {
 	Semantic    *SemanticRetrievalIdentity
 }
 
-// rankSharedPersistentMemoryForRequest ranks with the semantic lane when one
-// is configured. semanticQuery is the text the lane embeds (the request goal).
-func (c *Coordinator) rankSharedPersistentMemoryForRequest(ctx context.Context, query, semanticQuery string, base []contextstore.ContextItem, allowed map[string]bool) (sharedPersistentRanking, error) {
-	selected, scores, finalScores, aggregates, semanticIdentity, err := c.rankSharedPersistentMemoryWithLane(ctx, query, semanticQuery, base, allowed, c.persistentSemanticLane())
+// rankSharedPersistentMemoryForRequest ranks request's shared persistent
+// memory with the semantic lane when one is configured; the lane embeds the
+// request goal and its traces carry the request's attribution.
+func (c *Coordinator) rankSharedPersistentMemoryForRequest(ctx context.Context, request ContextRequest, base []contextstore.ContextItem, allowed map[string]bool) (sharedPersistentRanking, error) {
+	lane := c.persistentSemanticLane(semanticTraceAttributionFor(request, semanticSourceSharedPersistent))
+	selected, scores, finalScores, aggregates, semanticIdentity, err := c.rankSharedPersistentMemoryWithLane(ctx, request.RetrievalQuery(), request.Goal, base, allowed, lane)
 	return sharedPersistentRanking{Selected: selected, Scores: scores, FinalScores: finalScores, Aggregates: aggregates, Semantic: semanticIdentity}, err
 }

@@ -274,7 +274,8 @@ semantic-retrieval:
 
 模型在背景載入，run 不會等模型；encoder 任何失敗都會退回 exact 與 lexical。hufu 不會自動
 pull 模型（請先 `ollama pull embeddinggemma`）。索引用 `hufu context semantic status|build|verify`
-操作。詳見 [Semantic memory retrieval](docs/reference/semantic-retrieval.md)。
+操作；每個 task 的路由、fallback 與延遲用 `hufu inspect semantic-retrieval` 或 report 的
+Semantic Retrieval Runtime 區段查看。詳見 [Semantic memory retrieval](docs/reference/semantic-retrieval.md)。
 
 ---
 

@@ -51,6 +51,8 @@ type persistentSemanticLane struct {
 	Fusion      contextstore.FusionMode
 	TraceHasher contextstore.TraceHasher
 	TraceSink   func(contextstore.SemanticRetrievalTrace)
+	// Attribution stamps this request's traces with its run and task.
+	Attribution SemanticTraceAttribution
 }
 
 // requestLane routes one ranking request: it returns the lane to use (nil for
@@ -67,10 +69,12 @@ func (in persistentRankingInput) requestLane() (*persistentSemanticLane, context
 	}
 	route := resolveSemanticRoute(lane.Mode, lane.Router, lane.Fusion, in.Ranking.Fusion, text)
 	if route.Mode == contextstore.RetrievalOff {
+		writeLexicalRouteTrace(lane.TraceHasher, lane.TraceSink, lane.Attribution, in.Query, text)
 		return nil, route.Fusion
 	}
 	routed := *lane
 	routed.Mode = route.Mode
+	routed.TraceSink = attributedTraceSink(lane.TraceSink, lane.Attribution, text)
 	return &routed, route.Fusion
 }
 

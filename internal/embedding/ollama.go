@@ -320,7 +320,8 @@ func (e *OllamaEmbedder) EmbedQueryDetailed(ctx context.Context, text string) (Q
 	}
 	vectors, tokens, err := e.embed(ctx, []string{e.query.Prefix + shaped.Text})
 	if err != nil {
-		return QueryEmbedding{}, err
+		// Shaped is kept so callers can trace a failed query's budget.
+		return QueryEmbedding{Shaped: shaped}, err
 	}
 	return QueryEmbedding{Vector: vectors[0], Shaped: shaped, PromptTokens: tokens}, nil
 }

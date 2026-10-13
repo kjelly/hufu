@@ -140,6 +140,7 @@ type reportData struct {
 	Decisions             []team.DecisionIndexEntry
 	DecisionPrimitives    []team.DecisionPrimitiveRecord
 	ControlDecisions      []team.ControlDecisionSummary
+	SemanticRetrieval     *team.SemanticRetrievalReportData
 	RuntimeWorksets       *team.RuntimeWorksetProjection
 	RuntimeWorksetError   string
 	CanonicalRunError     string
@@ -276,6 +277,9 @@ func gatherReportData(tc *teamContext, teamName string) *reportData {
 		d.Decisions, _ = tc.coordinator.DecisionIndexEntries()
 		d.DecisionPrimitives, _ = tc.coordinator.DecisionPrimitiveResults(context.Background())
 		d.ControlDecisions, _ = tc.coordinator.ControlDecisionSummaries(context.Background())
+		if semantic, ok, _ := tc.coordinator.SemanticRetrievalReport(); ok {
+			d.SemanticRetrieval = &semantic
+		}
 		d.Decisions = team.RedactedDecisionIndexEntries(d.Decisions)
 	}
 	if tc.session != nil {
@@ -1006,6 +1010,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		}
 		b.WriteString("\n")
 		writeTaskResourceScopeReport(&b, data.Todos)
+		writeSemanticRetrievalRuntimeReport(&b, data.SemanticRetrieval)
 		writeSemanticRetrievalReport(&b, data.Todos)
 		var runMetrics *team.RunMetrics
 		if data.RunResult != nil {

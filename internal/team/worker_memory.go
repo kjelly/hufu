@@ -42,9 +42,15 @@ type WorkerMemoryRecallRequest struct {
 	Scope          contextstore.Scope // project/team/session/branch/agent
 	SessionLineage []WorkerMemoryLineageBranch
 	Query          string // task goal + constraints
-	Policy         agent.WorkerMemoryPolicy
-	MaxItems       int
-	MaxTokens      int
+	// SemanticQuery is the text the semantic lane embeds and auto routing
+	// reads: the task goal without the request metadata lines. Empty means
+	// Query.
+	SemanticQuery string
+	Policy        agent.WorkerMemoryPolicy
+	MaxItems      int
+	MaxTokens     int
+	// Trace attributes the recall's semantic traces to its run and task.
+	Trace SemanticTraceAttribution
 }
 
 // WorkerMemoryLineageBranch describes one branch visible to session-memory
@@ -262,7 +268,7 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 
 	querySnapshot := s.beginPrivateQuerySnapshot(ctx, req, maxItems, maxTokens)
 	// Route once per recall so auto mode counts one decision for all scopes.
-	route := resolveSemanticRoute(s.options.Mode, s.options.Router, s.options.Fusion, "", query)
+	options := s.recallOptions(req, query)
 	var allResults []rankedMemory
 	var semanticIdentity *SemanticRetrievalIdentity
 	lineage := req.SessionLineage
@@ -279,8 +285,8 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 		// scope-authorized (exact, FTS, and vector). Fetching all eligible
 		// branch records prevents post-fork matches from crowding out a valid
 		// pre-fork parent record before the provenance filter is applied.
-		sessionResults, _, retrievedSemantic, err := s.retrieve(ctx, route, contextstore.SearchRequest{
-			Query: query, Scope: sessionScope, Limit: 100000,
+		sessionResults, _, retrievedSemantic, err := s.retrieve(ctx, options, contextstore.SearchRequest{
+			Query: query, SemanticQuery: req.SemanticQuery, Scope: sessionScope, Limit: 100000,
 		})
 		if err != nil {
 			return WorkerMemoryBundle{Trace: WorkerMemoryTrace{WorkerID: req.WorkerID, Query: query, Skipped: true, SkipReason: fmt.Sprintf("session retrieval error: %v", err)}}, nil
@@ -310,10 +316,11 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 			TeamID:    req.Scope.TeamID,
 			AgentID:   req.Scope.AgentID,
 		}
-		persistentResults, _, retrievedSemantic, pErr := s.retrieve(ctx, route, contextstore.SearchRequest{
-			Query: query,
-			Scope: persistentScope,
-			Limit: maxItems * 3,
+		persistentResults, _, retrievedSemantic, pErr := s.retrieve(ctx, options, contextstore.SearchRequest{
+			Query:         query,
+			SemanticQuery: req.SemanticQuery,
+			Scope:         persistentScope,
+			Limit:         maxItems * 3,
 		})
 		if pErr == nil {
 			semanticIdentity = mergeSemanticRetrievalIdentity(semanticIdentity, retrievedSemantic)
@@ -419,16 +426,33 @@ func (s *trackingVectorSearcher) SemanticTraceIdentity() (embedding.ModelIdentit
 	return embedding.ModelIdentity{}, "", 0
 }
 
+// recallOptions resolves the options one recall runs with: auto routing on
+// the semantic query, the fusion, and a trace sink attributed to the recall.
+// A recall routed lexical runs without the semantic lane, as mode off.
+func (s *defaultWorkerMemoryService) recallOptions(req WorkerMemoryRecallRequest, query string) WorkerMemoryOptions {
+	text := req.SemanticQuery
+	if strings.TrimSpace(text) == "" {
+		text = query
+	}
+	route := resolveSemanticRoute(s.options.Mode, s.options.Router, s.options.Fusion, "", text)
+	options := s.options
+	options.Mode, options.Fusion = route.Mode, route.Fusion
+	if route.Mode == contextstore.RetrievalOff {
+		if s.options.Router != nil {
+			writeLexicalRouteTrace(options.TraceHasher, options.TraceSink, req.Trace, query, text)
+		}
+		options.Semantic = nil
+		return options
+	}
+	options.TraceSink = attributedTraceSink(options.TraceSink, req.Trace, text)
+	return options
+}
+
 func (s *defaultWorkerMemoryService) retrieve(
 	ctx context.Context,
-	route semanticRequestRoute,
+	options WorkerMemoryOptions,
 	req contextstore.SearchRequest,
 ) ([]contextstore.SearchResult, contextstore.RetrievalTrace, *SemanticRetrievalIdentity, error) {
-	options := s.options
-	options.Mode = route.Mode
-	if route.Mode == contextstore.RetrievalOff {
-		options.Semantic = nil
-	}
 	var tracker *trackingVectorSearcher
 	if options.Semantic != nil {
 		tracker = &trackingVectorSearcher{delegate: options.Semantic}
@@ -439,7 +463,7 @@ func (s *defaultWorkerMemoryService) retrieve(
 	}
 	results, trace, err := contextstore.HybridRetrieveWithOptions(ctx, s.repo, req, contextstore.HybridRetrievalOptions{
 		Vector: vector, Mode: options.Mode, UnavailableReason: options.UnavailableReason,
-		Fusion: route.Fusion, TraceHasher: options.TraceHasher, TraceSink: options.TraceSink,
+		Fusion: options.Fusion, TraceHasher: options.TraceHasher, TraceSink: options.TraceSink,
 	})
 	if err != nil {
 		return nil, trace, nil, err
@@ -1068,8 +1092,9 @@ func shouldRecallWorkerMemory(agentDef *agent.AgentDef, profile ExecutionProfile
 }
 
 // recallWorkerMemory is the shared helper used by both the DAG and direct
-// paths. It builds the request, calls the service, and returns the bundle.
-func (c *Coordinator) recallWorkerMemory(ctx context.Context, agentDef *agent.AgentDef, taskGoal string) *WorkerMemoryBundle {
+// paths. It builds the recall for request, calls the service, and returns the
+// bundle.
+func (c *Coordinator) recallWorkerMemory(ctx context.Context, agentDef *agent.AgentDef, request ContextRequest) *WorkerMemoryBundle {
 	ctx = c.withContextQueryPolicy(ctx)
 	if identity, ok := ContextQueryIdentitySnapshot(ctx); ok {
 		if finish := startContextStage(ctx, identity.ParentRequestID, identity.ModelExecutionID, "private_retrieval"); finish != nil {
@@ -1086,10 +1111,12 @@ func (c *Coordinator) recallWorkerMemory(ctx context.Context, agentDef *agent.Ag
 		BranchID:       scope.BranchID,
 		Scope:          scope,
 		SessionLineage: c.workerMemoryLineage(scope.BranchID),
-		Query:          taskGoal,
+		Query:          request.RetrievalQuery(),
+		SemanticQuery:  request.Goal,
 		Policy:         agentDef.Memory,
 		MaxItems:       agentDef.Memory.MaxItems,
 		MaxTokens:      agentDef.Memory.MaxTokens,
+		Trace:          semanticTraceAttributionFor(request, semanticSourceWorkerPrivate),
 	})
 	if err != nil {
 		return nil
@@ -1098,7 +1125,7 @@ func (c *Coordinator) recallWorkerMemory(ctx context.Context, agentDef *agent.Ag
 		observeWorkerContextSelection(ctx, bundle.Items)
 		return nil
 	}
-	c.rerankWorkerMemory(ctx, &bundle, taskGoal)
+	c.rerankWorkerMemory(ctx, &bundle, request.RetrievalQuery())
 	observeWorkerContextSelection(ctx, bundle.Items)
 	if len(bundle.Items) == 0 && bundle.querySnapshot == nil {
 		return nil

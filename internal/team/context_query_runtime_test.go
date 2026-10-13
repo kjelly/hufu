@@ -209,7 +209,7 @@ func queryRuntimeFixture(t *testing.T) (*Coordinator, WorkerContextInput, contex
 	if err != nil {
 		t.Fatal(err)
 	}
-	private := c.recallWorkerMemory(withContextQueryIdentity(ctx, request), def, request.RetrievalQuery())
+	private := c.recallWorkerMemory(withContextQueryIdentity(ctx, request), def, request)
 	if private == nil || private.querySnapshot == nil || canonical == nil || canonical.querySnapshot == nil {
 		t.Fatal("ordinary recall did not capture its primary")
 	}

@@ -169,12 +169,39 @@ hufu context semantic verify  -w <workspace> [--project <id>] [--strict] [--offl
 
 ## Traces
 
-In `shadow`, `active`, and `auto`, every semantic query appends one line to
-`<workspace>/semantic-retrieval-traces.jsonl`: mode, model and generation
-identity, result counts, the overlap with lexical results, latency, the
-fallback reason, and HMAC hashes of the query and the top result IDs. Query
-and memory text are never written. The HMAC key is `<workspace>/semantic-trace.key`
-(mode 0600).
+In `shadow`, `active`, and `auto`, every ranking request appends one line to
+`<workspace>/semantic-retrieval-traces.jsonl`:
+
+- **Attribution:** run, task, attempt, context request ID, phase, trigger,
+  role, agent, and `source` (`shared_persistent` or `worker_private`).
+- **Route:** `route` is `semantic` when the lane ran and `lexical` when `auto`
+  kept the request lexical (mode `off`, no embedding request);
+  `route_share` is the routed text's non-ASCII share, rounded to two decimals.
+- **Retrieval:** mode, model and generation identity, result counts, the
+  overlap with lexical results, latency, the fallback reason, and HMAC hashes
+  of the query and the top result IDs.
+- **Encoder:** covered and uncovered candidates, query tokens, whether the
+  query was cut to the budget, the wait for an encoder slot, and the
+  embedding time.
+
+Query and memory text are never written. The HMAC key is
+`<workspace>/semantic-trace.key` (mode 0600). When a run closes, its runtime
+status (warm state, model, generation, query, fallback, route, and refresh
+counts) is appended to `<workspace>/semantic-runtime-status.jsonl`.
+
+## Inspecting
+
+```bash
+hufu inspect semantic-retrieval [run-id] [--task <task-id>] [--format json]
+```
+
+Shows the runtime status the run (or the latest run) left at close, a table
+per source, route, and mode (requests, served without fallback, fallbacks,
+truncated queries, p50/p95 latency, p95 queue wait, p50/p95 embedding time),
+the fallback reasons, and one row per task attempt with its route and route
+share. Text output lists the latest 40 task rows; JSON lists all. The run
+report adds the same runtime status and route table as **Semantic Retrieval
+Runtime**.
 
 ## Rollback
 

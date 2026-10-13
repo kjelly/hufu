@@ -150,6 +150,7 @@ func (s *SemanticIndex) SearchVector(ctx context.Context, req SearchRequest) ([]
 		}
 		return nil, fmt.Errorf("%w: %w", ErrSemanticCanonicalRepo, err)
 	}
+	SemanticQueryProbeFrom(ctx).RecordCoverage(len(covered), uncovered)
 	if uncovered > 0 {
 		if s.onIncomplete != nil {
 			s.onIncomplete()

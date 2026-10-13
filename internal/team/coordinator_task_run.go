@@ -964,7 +964,7 @@ retryLoop:
 			attemptInput.CanonicalMemory = bundle
 			routeDecisions = decisions
 		}
-		attemptInput.WorkerMemory = c.recallWorkerMemory(withContextQueryIdentity(attemptCtx, request), agentDef, retrievalQuery)
+		attemptInput.WorkerMemory = c.recallWorkerMemory(withContextQueryIdentity(attemptCtx, request), agentDef, request)
 		compiled, compileErr := c.ContextCompiler().CompileWorkerContext(attemptCtx, attemptInput)
 		if compileErr == nil {
 			compileErr = validateRequiredEvidenceContext(attemptInput, compiled)

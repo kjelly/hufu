@@ -62,6 +62,10 @@ hufu inspect control-decisions --workspace ./workspace/dev-team
 ```
 
 ```sh
+hufu inspect semantic-retrieval --workspace ./workspace/dev-team
+```
+
+```sh
 hufu explain --team dev-team
 ```
 

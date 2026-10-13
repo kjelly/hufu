@@ -26,6 +26,8 @@ const (
 	KindCost     Kind = "cost"
 	// KindControlDecisions summarizes runtime control decision observations.
 	KindControlDecisions Kind = "control-decisions"
+	// KindSemanticRetrieval summarizes semantic retrieval traces.
+	KindSemanticRetrieval Kind = "semantic-retrieval"
 )
 
 type Format string
@@ -106,6 +108,8 @@ func (q InspectQuery) Validate(kind Kind) error {
 		}
 	case KindControlDecisions:
 		return q.validateControlDecisions()
+	case KindSemanticRetrieval:
+		return q.validateSemanticRetrieval()
 	case KindStorage:
 		if strings.TrimSpace(q.RunID) != "" || strings.TrimSpace(q.TaskID) != "" || q.Attempt != 0 ||
 			strings.TrimSpace(q.BranchID) != "" || strings.TrimSpace(q.SessionID) != "" || strings.TrimSpace(q.ProjectID) != "" ||
@@ -125,6 +129,16 @@ func (q InspectQuery) validateControlDecisions() error {
 	if strings.TrimSpace(q.TaskID) != "" || q.Attempt != 0 || strings.TrimSpace(q.ProjectID) != "" ||
 		strings.TrimSpace(q.TeamID) != "" || strings.TrimSpace(q.AgentID) != "" {
 		return fmt.Errorf("%w: control-decisions accepts only workspace, run, branch, and session", ErrInvalidQuery)
+	}
+	return nil
+}
+
+// validateSemanticRetrieval accepts workspace, run, and task only: the trace
+// files are workspace-wide, not branch or session projections.
+func (q InspectQuery) validateSemanticRetrieval() error {
+	if q.Attempt != 0 || strings.TrimSpace(q.BranchID) != "" || strings.TrimSpace(q.SessionID) != "" || strings.TrimSpace(q.ProjectID) != "" ||
+		strings.TrimSpace(q.TeamID) != "" || strings.TrimSpace(q.AgentID) != "" {
+		return fmt.Errorf("%w: semantic-retrieval accepts only workspace, run, and task", ErrInvalidQuery)
 	}
 	return nil
 }
