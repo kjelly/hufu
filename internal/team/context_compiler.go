@@ -177,6 +177,9 @@ type CanonicalContextBundle struct {
 	// SharedPersistentConflicts maps an item ID to its open memory conflicts.
 	// It is attribution only and must not change inclusion or ordering.
 	SharedPersistentConflicts map[string][]string
+	// SharedPersistentSemantic is the active semantic lane's identity for
+	// the shared persistent ranking (nil when off or shadow).
+	SharedPersistentSemantic *SemanticRetrievalIdentity
 }
 
 func repositoryInvariantCompilerItems(records []contextstore.ContextItem) ([]ContextItem, error) {
@@ -840,6 +843,9 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 	if err != nil {
 		return CompiledContext{}, err
 	}
+	if input.CanonicalMemory != nil {
+		compiled.Semantic = cloneSemanticRetrievalIdentity(input.CanonicalMemory.SharedPersistentSemantic)
+	}
 	return compiled, nil
 }
 
@@ -911,6 +917,9 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 	}
 	if input.WorkerMemory != nil {
 		compiled.Semantic = cloneSemanticRetrievalIdentity(input.WorkerMemory.Semantic)
+	}
+	if input.CanonicalMemory != nil {
+		compiled.Semantic = mergeSemanticRetrievalIdentity(compiled.Semantic, input.CanonicalMemory.SharedPersistentSemantic)
 	}
 	if err := validateRequiredEvidenceContext(input, compiled); err != nil {
 		return CompiledContext{}, err

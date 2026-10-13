@@ -101,12 +101,21 @@ func (b *SemanticBuilder) Plan(ctx context.Context, projectID string) (SemanticR
 		return SemanticRefreshPlan{}, fmt.Errorf("load active semantic generation: %w", err)
 	}
 	plan.Active = &active
-	vectors, exclusions, err := b.repo.LoadGenerationEntryHashes(ctx, active.GenerationID)
+	if err = diffSemanticGeneration(ctx, b.repo, &plan); err != nil {
+		return SemanticRefreshPlan{}, err
+	}
+	return plan, nil
+}
+
+// diffSemanticGeneration fills Reuse, Embed, Excluded and Dropped of a plan
+// whose Inventory and Active are set.
+func diffSemanticGeneration(ctx context.Context, repo SemanticProjectionRepository, plan *SemanticRefreshPlan) error {
+	vectors, exclusions, err := repo.LoadGenerationEntryHashes(ctx, plan.Active.GenerationID)
 	if err != nil {
-		return SemanticRefreshPlan{}, fmt.Errorf("load semantic generation entries: %w", err)
+		return fmt.Errorf("load semantic generation entries: %w", err)
 	}
 	matched := 0
-	for _, item := range inventory.Items {
+	for _, item := range plan.Inventory.Items {
 		if hash, ok := vectors[item.ItemID]; ok && hash == item.ContentHash {
 			plan.Reuse = append(plan.Reuse, item)
 			matched++
@@ -121,6 +130,25 @@ func (b *SemanticBuilder) Plan(ctx context.Context, projectID string) (SemanticR
 		plan.Embed = append(plan.Embed, item)
 	}
 	plan.Dropped = len(vectors) + len(exclusions) - matched
+	return nil
+}
+
+// PlanAgainstGeneration diffs the policy's current inventory against a
+// stored generation without an encoder; operator status and dry runs use it.
+// A nil generation means every item would be embedded.
+func PlanAgainstGeneration(ctx context.Context, repo SemanticBuildRepository, projectID, policy string, generation *Generation) (SemanticRefreshPlan, error) {
+	inventory, err := repo.LoadEmbeddingInventoryForPolicy(ctx, projectID, policy)
+	if err != nil {
+		return SemanticRefreshPlan{}, fmt.Errorf("load semantic inventory: %w", err)
+	}
+	plan := SemanticRefreshPlan{Inventory: inventory, Active: generation}
+	if generation == nil {
+		plan.Embed = inventory.Items
+		return plan, nil
+	}
+	if err = diffSemanticGeneration(ctx, repo, &plan); err != nil {
+		return SemanticRefreshPlan{}, err
+	}
 	return plan, nil
 }
 
@@ -272,6 +300,30 @@ func (b *SemanticBuilder) embedBatch(ctx context.Context, batch []EmbeddingInven
 	}
 	return rows, exclusions, nil
 }
+
+// ProjectIDs lists the distinct project IDs with canonical items.
+func (r *SQLiteRepository) ProjectIDs(ctx context.Context) ([]string, error) {
+	rows, err := r.db.QueryContext(ctx, "SELECT DISTINCT project_id FROM context_items ORDER BY project_id")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// SchemaVersion is the newest applied migration of the open store.
+func (r *SQLiteRepository) SchemaVersion() int { return r.schemaVersion }
+
+// SemanticSchemaVersion is the first schema with inventory policies.
+const SemanticSchemaVersion = 13
 
 // VerifyActiveGeneration loads the active generation exactly as queries do,
 // rejecting wrong dimensions, non-normalized vectors and count mismatches.

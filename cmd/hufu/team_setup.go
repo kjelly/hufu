@@ -212,6 +212,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	}
 	session.ExecutionRouteConfigs = cfg.ExecutionRoutes
 	session.GlobalControlDecisions = cfg.ControlDecisions.Clone()
+	session.GlobalSemanticRetrieval = cfg.SemanticRetrieval.Clone()
 	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)
 	// Provenance must be read before resolution overwrites the team's
 	// worker/coordinator fields with their resolved values.

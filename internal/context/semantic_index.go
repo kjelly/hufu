@@ -127,6 +127,12 @@ func (s *SemanticIndex) SearchVector(ctx context.Context, req SearchRequest) ([]
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if !inventoryPolicyCovers(s.policy, item) {
+			// Rows outside the policy (for example a rejected candidate a
+			// candidate-inclusive request can see) are not vector-scored;
+			// they never count as missing coverage.
+			return nil
+		}
 		hash := strings.ToLower(item.ContentHash)
 		if index, found := slices.BinarySearch(snapshot.ids, item.ID); found && snapshot.hashes[index] == hash {
 			covered = append(covered, coveredCandidate{item: item, index: index})

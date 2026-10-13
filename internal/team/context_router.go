@@ -334,10 +334,12 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 		eligiblePersistent = append(eligiblePersistent, item)
 		allowedPersistent[item.ID] = true
 	}
-	selected, scores, finalScores, aggregates, err := c.rankSharedPersistentMemoryAllowed(ctx, request.RetrievalQuery(), eligiblePersistent, allowedPersistent)
+	ranking, err := c.rankSharedPersistentMemoryForRequest(ctx, request.RetrievalQuery(), request.Goal, eligiblePersistent, allowedPersistent)
 	if err != nil {
 		return ContextRoute{}, err
 	}
+	selected, scores, finalScores, aggregates := ranking.Selected, ranking.Scores, ranking.FinalScores, ranking.Aggregates
+	route.Bundle.SharedPersistentSemantic = ranking.Semantic
 	selectedLookup := make(map[string]bool, len(selected))
 	for _, item := range selected {
 		selectedLookup[item.ID] = true

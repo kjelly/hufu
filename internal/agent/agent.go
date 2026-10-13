@@ -25,6 +25,7 @@ import (
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/providerintrospection"
 	"github.com/kjelly/hufu/internal/providerproxy"
+	"github.com/kjelly/hufu/internal/semantic"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
@@ -431,6 +432,9 @@ type TeamConfig struct {
 	// The host merges hufu.yaml's block under it before the coordinator is
 	// built; the team's fields win.
 	ControlDecisions control.Config
+	// SemanticRetrieval is the team's semantic-retrieval block. hufu.yaml's
+	// block is merged under it; the team's fields win.
+	SemanticRetrieval semantic.Config
 	// RequestContract is the single normalized team-level request contract
 	// owner. It is authoring-independent so decision profile selection cannot
 	// accidentally carry a second request contract authority.

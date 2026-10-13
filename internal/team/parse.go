@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/kjelly/hufu/internal/semantic"
 	"io"
 	"os"
 	"path/filepath"
@@ -59,6 +60,9 @@ type TeamSession struct {
 	// by the host before the coordinator is built. The team's own block
 	// (Config.ControlDecisions) overrides it field by field.
 	GlobalControlDecisions control.Config
+	// GlobalSemanticRetrieval is hufu.yaml's semantic-retrieval block; the
+	// team's own block (Config.SemanticRetrieval) overrides it field by field.
+	GlobalSemanticRetrieval semantic.Config
 	// CostCatalog is the host's validated global/project price catalog. It is
 	// immutable after setup and contains no provider credentials or endpoints.
 	CostCatalog          cost.Catalog
@@ -1221,6 +1225,10 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 		return cfg, DecisionAuthoringMetadata{}, err
 	}
 	cfg.ControlDecisions = yc.ControlDecisions.Clone()
+	if err := yc.SemanticRetrieval.Validate(); err != nil {
+		return cfg, DecisionAuthoringMetadata{}, err
+	}
+	cfg.SemanticRetrieval = yc.SemanticRetrieval.Clone()
 	cfg.RequestContract = requestContract
 
 	// Capability-aware routing (plan.md Stage 8) is independent of the

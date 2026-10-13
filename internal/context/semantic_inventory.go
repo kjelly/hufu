@@ -88,6 +88,18 @@ func inventoryPredicate(policy string) (string, error) {
 	}
 }
 
+// inventoryPolicyCovers mirrors inventoryPredicate for one item.
+func inventoryPolicyCovers(policy string, item ContextItem) bool {
+	if policy != InventoryPolicyRetrievable {
+		return true
+	}
+	lifecycle := item.Lifecycle
+	if lifecycle == "" {
+		lifecycle = LifecycleConfirmed
+	}
+	return (lifecycle == LifecycleCandidate || lifecycle == LifecycleConfirmed) && item.SupersededBy == ""
+}
+
 func loadEmbeddingInventory(ctx context.Context, query sqlQueryer, projectID, policy string) (EmbeddingInventory, error) {
 	predicate, err := inventoryPredicate(policy)
 	if err != nil {

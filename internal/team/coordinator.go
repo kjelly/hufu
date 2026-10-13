@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/kjelly/hufu/internal/semantic"
 	"io"
 	"log"
 	"net/http"
@@ -626,18 +627,26 @@ type Coordinator struct {
 	// isolated extra-model leaf starts. It keeps decision artifacts, the
 	// cross-run index, and the branch-scoped journal in the parent control
 	// workspace even though the leaf owns a separate worker workspace.
-	decisionControlPlaneMu           sync.Mutex
-	decisionControlPlane             *decisionControlPlane
-	decisionStore                    ArtifactStore
-	decisionIndexProjection          *DecisionIndex
-	dualWriteFailures                atomic.Int64
-	memoryStore                      *memory.MemoryStore
-	contextRepo                      contextstore.Repository // canonical context store used by prompt assembly and maintenance
-	ownsContextRepo                  bool
-	contextRepoCloseOnce             sync.Once
-	contextRepoCloseErr              error
-	memoryRankingPolicy              MemoryRuntimeRankingPolicy
-	workerMemorySvc                  WorkerMemoryService // WP-3 per-worker memory recall service.
+	decisionControlPlaneMu  sync.Mutex
+	decisionControlPlane    *decisionControlPlane
+	decisionStore           ArtifactStore
+	decisionIndexProjection *DecisionIndex
+	dualWriteFailures       atomic.Int64
+	memoryStore             *memory.MemoryStore
+	contextRepo             contextstore.Repository // canonical context store used by prompt assembly and maintenance
+	ownsContextRepo         bool
+	contextRepoCloseOnce    sync.Once
+	contextRepoCloseErr     error
+	memoryRankingPolicy     MemoryRuntimeRankingPolicy
+	workerMemorySvc         WorkerMemoryService // WP-3 per-worker memory recall service.
+	// semanticRuntime is the optional Ollama semantic lane (nil when the
+	// effective semantic-retrieval mode is off). Clones share it; only the
+	// constructing coordinator closes it.
+	semanticRuntime                  *SemanticRetrievalRuntime
+	ownsSemanticRuntime              bool
+	semanticSettings                 semantic.Settings
+	semanticTraceHasher              contextstore.TraceHasher
+	semanticTraceSink                func(contextstore.SemanticRetrievalTrace)
 	sharedMemorySvc                  SharedMemoryService // canonical shared persistent memory service.
 	asyncTasksWg                     sync.WaitGroup      // tracks in-flight async candidate writes before run finalization
 	skillsMu                         sync.RWMutex
@@ -1637,6 +1646,10 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 		if constructionComplete {
 			return
 		}
+		// The semantic refresher reads repo, so it stops before the close.
+		if c.ownsSemanticRuntime {
+			c.semanticRuntime.Close()
+		}
 		_ = repo.Close()
 		if ownedAuditLogger != nil {
 			_ = ownedAuditLogger.Close()
@@ -1645,7 +1658,9 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 	if err := c.loadAdoptedMemoryPolicy(context.Background()); err != nil {
 		return nil, fmt.Errorf("load adopted memory policy: %w", err)
 	}
-	c.workerMemorySvc = NewWorkerMemoryService(repo, nil)
+	if err := c.initSemanticRetrieval(repo, noNet); err != nil {
+		return nil, err
+	}
 	c.sharedMemorySvc = NewSharedMemoryService(repo)
 	// Routes and MCP action providers are bound before the policy snapshot,
 	// which pins them.

@@ -279,6 +279,8 @@ func cloneSession(orig *TeamSession, newWorkspace string) *TeamSession {
 	clone.ActionCatalog = orig.ActionCatalog.clone()
 	clone.GlobalControlDecisions = orig.GlobalControlDecisions.Clone()
 	clone.Config.ControlDecisions = orig.Config.ControlDecisions.Clone()
+	clone.GlobalSemanticRetrieval = orig.GlobalSemanticRetrieval.Clone()
+	clone.Config.SemanticRetrieval = orig.Config.SemanticRetrieval.Clone()
 	clone.actionCatalogFindings = append([]ContractFinding(nil), orig.actionCatalogFindings...)
 	return &clone
 }

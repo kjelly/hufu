@@ -432,16 +432,17 @@ func (s *defaultWorkerMemoryService) retrieve(
 	if err != nil {
 		return nil, trace, nil, err
 	}
-	fallback := contextstore.SemanticFallbackNone
+	var fallback contextstore.SemanticFallbackReason
 	switch {
 	case options.Mode != contextstore.RetrievalActive:
 		return results, trace, nil, nil
-	case strings.TrimSpace(contextstore.DecomposeQuery(req.Query).Remainder) == "":
-		fallback = contextstore.SemanticFallbackEmptyRemainder
 	case tracker == nil:
 		fallback = options.UnavailableReason
-	case tracker.called && tracker.err != nil:
-		fallback = contextstore.SemanticFallbackReasonForError(tracker.err)
+		if req.SemanticQueryText() == "" {
+			fallback = contextstore.SemanticFallbackEmptyRemainder
+		}
+	default:
+		fallback = trackedSemanticFallback(req, tracker)
 	}
 	return results, trace, semanticRetrievalIdentity(options.Mode, options.Semantic, fallback), nil
 }

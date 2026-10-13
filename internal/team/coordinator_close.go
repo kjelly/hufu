@@ -32,6 +32,10 @@ func (c *Coordinator) closeOwnedResources() error {
 	if err := c.closeContextPreflight(); err != nil {
 		closeErrs = append(closeErrs, err)
 	}
+	// The semantic refresher reads the canonical store, so it stops first.
+	if c.ownsSemanticRuntime {
+		c.semanticRuntime.Close()
+	}
 
 	c.terminalControlMu.Lock()
 	broker := c.terminalBroker

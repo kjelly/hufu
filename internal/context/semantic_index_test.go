@@ -257,10 +257,10 @@ func TestSemanticIndexFreshnessIsPerItem(t *testing.T) {
 		{ID: "b", Kind: ContextDecision, Content: "content b", Scope: Scope{ProjectID: "project", TeamID: "team"}, Confidence: 1},
 	}
 	tests := []struct {
-		name          string
-		mutate        func(*testing.T, *SQLiteRepository)
-		wantErr       error
-		wantIDs       []string
+		name           string
+		mutate         func(*testing.T, *SQLiteRepository)
+		wantErr        error
+		wantIDs        []string
 		wantIncomplete bool
 	}{
 		{name: "unrelated private and cross-project writes", mutate: func(t *testing.T, repository *SQLiteRepository) {

@@ -28,6 +28,23 @@ type persistentRankingInput struct {
 	Learning agent.MemoryLearningPolicy
 	Ranking  MemoryRuntimeRankingPolicy
 	Observer *contextstore.RetrievalObservation
+	// SemanticQuery is the text the semantic lane embeds (the request
+	// goal); empty means the whole Query.
+	SemanticQuery string
+	// Semantic is the optional semantic lane. Nil keeps the legacy
+	// exact+lexical retrieval byte for byte (mode off).
+	Semantic *persistentSemanticLane
+}
+
+// persistentSemanticLane configures the semantic lane of shared persistent
+// ranking. Shadow embeds and traces without changing the selection; active
+// fuses the vector results and narrows every lane to the authorized IDs
+// before the candidate limit (spec §7.3).
+type persistentSemanticLane struct {
+	Vector      contextstore.VectorSearcher
+	Mode        contextstore.RetrievalMode
+	TraceHasher contextstore.TraceHasher
+	TraceSink   func(contextstore.SemanticRetrievalTrace)
 }
 
 type persistentRankingResult struct {
@@ -43,6 +60,9 @@ type persistentRankingResult struct {
 	UsedGoalFallback  bool
 	// CandidateCutIDs were allowed but fell beyond CandidateTopK.
 	CandidateCutIDs []string
+	// Semantic is the active semantic lane's identity and fallback reason
+	// for the manifest; nil when the lane is off or shadow.
+	Semantic *SemanticRetrievalIdentity
 }
 
 // memoryReinforcementError marks a failure while reading experience
@@ -88,9 +108,23 @@ func rankPersistentMemory(ctx context.Context, repo contextstore.RetrievalReposi
 		candidateLimit = len(in.Base)
 	}
 	retrieve := func(query string) ([]contextstore.SearchResult, error) {
-		results, _, err := contextstore.HybridRetrieveWithOptions(ctx, repo, contextstore.SearchRequest{
-			Query: query, Scope: persistentContextScope(in.RequestScope), Limit: candidateLimit,
-		}, contextstore.HybridRetrievalOptions{Mode: contextstore.RetrievalActive, UnavailableReason: contextstore.SemanticFallbackProjectionMissing, Observer: in.Observer, Fusion: in.Ranking.Fusion, FusionCarriedWeight: in.Ranking.FusionCarriedWeight})
+		req := contextstore.SearchRequest{Query: query, Scope: persistentContextScope(in.RequestScope), Limit: candidateLimit}
+		options := contextstore.HybridRetrievalOptions{Mode: contextstore.RetrievalActive, UnavailableReason: contextstore.SemanticFallbackProjectionMissing, Observer: in.Observer, Fusion: in.Ranking.Fusion, FusionCarriedWeight: in.Ranking.FusionCarriedWeight}
+		lane := in.Semantic
+		var tracker *trackingVectorSearcher
+		if lane != nil && lane.Vector != nil {
+			tracker = &trackingVectorSearcher{delegate: lane.Vector}
+			options.Mode, options.Vector, options.UnavailableReason = lane.Mode, tracker, ""
+			options.TraceHasher, options.TraceSink = lane.TraceHasher, lane.TraceSink
+			req.SemanticQuery = in.SemanticQuery
+			if lane.Mode == contextstore.RetrievalActive && in.Allowed != nil {
+				req = req.WithAllowedItemIDs(allowedIDList(in.Allowed))
+			}
+		}
+		results, _, err := contextstore.HybridRetrieveWithOptions(ctx, repo, req, options)
+		if err == nil && tracker != nil {
+			out.Semantic = semanticRetrievalIdentity(lane.Mode, lane.Vector, trackedSemanticFallback(req, tracker))
+		}
 		return results, err
 	}
 	results, err := retrieve(in.Query)
@@ -234,4 +268,28 @@ func reinforceSearchResultsWith(ctx context.Context, experience contextstore.Exp
 		}
 	}
 	return entries, scores, aggregates, nil
+}
+
+// allowedIDList returns the IDs a ranking may consider.
+func allowedIDList(allowed map[string]bool) []string {
+	ids := make([]string, 0, len(allowed))
+	for id, ok := range allowed {
+		if ok {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// trackedSemanticFallback is the fallback reason of one hybrid retrieval
+// whose vector lane was observed by tracker.
+func trackedSemanticFallback(req contextstore.SearchRequest, tracker *trackingVectorSearcher) contextstore.SemanticFallbackReason {
+	switch {
+	case req.SemanticQueryText() == "":
+		return contextstore.SemanticFallbackEmptyRemainder
+	case tracker.called && tracker.err != nil:
+		return contextstore.SemanticFallbackReasonForError(tracker.err)
+	default:
+		return contextstore.SemanticFallbackNone
+	}
 }

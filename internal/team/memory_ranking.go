@@ -91,31 +91,39 @@ func (c *Coordinator) rankSharedPersistentMemory(ctx context.Context, query stri
 }
 
 func (c *Coordinator) rankSharedPersistentMemoryAllowed(ctx context.Context, query string, base []contextstore.ContextItem, allowed map[string]bool) ([]contextstore.ContextItem, map[string]MemoryScoreParts, map[string]float64, map[string]*contextstore.ExperienceAggregate, error) {
+	selected, scores, finalScores, aggregates, _, err := c.rankSharedPersistentMemoryWithLane(ctx, query, "", base, allowed, nil)
+	return selected, scores, finalScores, aggregates, err
+}
+
+// rankSharedPersistentMemoryWithLane is rankSharedPersistentMemoryAllowed
+// with an optional semantic lane; it also returns the lane's identity.
+func (c *Coordinator) rankSharedPersistentMemoryWithLane(ctx context.Context, query, semanticQuery string, base []contextstore.ContextItem, allowed map[string]bool, lane *persistentSemanticLane) ([]contextstore.ContextItem, map[string]MemoryScoreParts, map[string]float64, map[string]*contextstore.ExperienceAggregate, *SemanticRetrievalIdentity, error) {
 	policy := c.session.Config.MemoryLearning
 	experience, _ := c.contextRepo.(contextstore.ExperienceRepository)
 	ranked, err := rankPersistentMemory(ctx, c.contextRepo, experience, persistentRankingInput{
 		Query: query, RequestScope: c.contextScope(), Base: base, Allowed: allowed,
 		Learning: policy, Ranking: c.effectiveMemoryRankingPolicy(),
+		SemanticQuery: semanticQuery, Semantic: lane,
 	})
 	var reinforcementErr memoryReinforcementError
 	if errors.As(err, &reinforcementErr) {
-		return base, nil, nil, nil, reinforcementErr.err
+		return base, nil, nil, nil, nil, reinforcementErr.err
 	}
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	if strings.TrimSpace(query) == "" {
-		return ranked.Selected, nil, nil, nil, nil
+		return ranked.Selected, nil, nil, nil, nil, nil
 	}
 	switch policy.Mode {
 	case agent.MemoryLearningOff:
-		return ranked.Selected, ranked.Scores, ranked.FinalScores, nil, nil
+		return ranked.Selected, ranked.Scores, ranked.FinalScores, nil, ranked.Semantic, nil
 	case agent.MemoryLearningObserve:
 		c.persistMemoryRankingTrace(memoryRankingTrace(policy, query, ranked.Results, ranked.RelevanceEntries))
-		return ranked.Selected, ranked.Scores, ranked.FinalScores, nil, nil
+		return ranked.Selected, ranked.Scores, ranked.FinalScores, nil, ranked.Semantic, nil
 	}
 	c.persistMemoryRankingTrace(memoryRankingTrace(policy, query, ranked.Results, ranked.ReinforcedEntries))
-	return ranked.Selected, ranked.Scores, ranked.FinalScores, ranked.Aggregates, nil
+	return ranked.Selected, ranked.Scores, ranked.FinalScores, ranked.Aggregates, ranked.Semantic, nil
 }
 
 func relevanceMemoryEntries(results []contextstore.SearchResult, policy MemoryRuntimeRankingPolicy) ([]MemoryRankingEntry, map[string]MemoryScoreParts, map[string]float64) {
