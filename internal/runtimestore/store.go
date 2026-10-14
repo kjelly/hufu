@@ -35,8 +35,9 @@ var (
 	ErrNotFound = fmt.Errorf("runtime store not found: %w", os.ErrNotExist)
 	// ErrLegacyWorkspace reports a workspace written by a hufu that kept its
 	// event journal and runtime state in files. Such workspaces are not
-	// migrated; remove it with `hufu workspace delete` and start a new one.
-	ErrLegacyWorkspace = errors.New("workspace uses the retired file-based event log and runtime state; remove it with `hufu workspace delete` and start a new workspace")
+	// opened; convert it with `hufu workspace convert-storage` or remove it
+	// with `hufu workspace delete`.
+	ErrLegacyWorkspace = errors.New("workspace uses the retired file-based event log and runtime state; convert it with `hufu workspace convert-storage`, or remove it with `hufu workspace delete`")
 	// ErrReplaced reports that the database path no longer names the file a
 	// store opened. Writes through the open connection would reach a file no
 	// later reader sees.

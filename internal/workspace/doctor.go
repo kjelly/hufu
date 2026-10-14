@@ -36,7 +36,8 @@ const (
 	IssueEventChainInvalid         = "event_chain_invalid"
 	// IssueFileBasedRuntimeState marks a workspace that keeps its event log
 	// and runtime state in files, which hufu no longer reads. It is removed
-	// with `hufu workspace delete`, not repaired.
+	// with `hufu workspace convert-storage` or removed with `hufu workspace
+	// delete`; doctor does not repair it.
 	IssueFileBasedRuntimeState = "file_based_runtime_state"
 	IssueWorkspaceBusy         = "workspace_busy"
 )

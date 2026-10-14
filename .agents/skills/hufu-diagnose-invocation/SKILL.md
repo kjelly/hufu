@@ -12,7 +12,7 @@ Standard Operating Procedure (SOP) for investigating, diagnosing, and attributin
 **Never run a blind recursive `grep` across the entire repository or `.git`.**
 Hufu keeps its event journal, session checkpoint, and task journal in `<state_dir>/runtime.sqlite`, and audit logs under `<state_dir>/logs/`, in deterministic managed state directories. Follow the phases below to isolate the issue in 2–3 precise operations.
 
-**Never write to `runtime.sqlite` or `context.sqlite`.** Prefer `hufu inspect ...` and `hufu debug <run_id>` bundles; query the database directly only with `sqlite3 -readonly` (SQLite may leave empty `-wal`/`-shm` files next to it, which is harmless). A state directory that still has `session.json` or `logs/event_store.jsonl` but no `runtime.sqlite` is a retired file-based workspace that current Hufu refuses to run.
+**Never write to `runtime.sqlite` or `context.sqlite`.** Prefer `hufu inspect ...` and `hufu debug <run_id>` bundles; query the database directly only with `sqlite3 -readonly` (SQLite may leave empty `-wal`/`-shm` files next to it, which is harmless). A state directory that still has `session.json` or `logs/event_store.jsonl` but no `runtime.sqlite` is a retired file-based workspace that current Hufu refuses to run; the operator can convert it with `hufu workspace convert-storage --team <team>` (never convert on their behalf during diagnosis).
 
 ---
 

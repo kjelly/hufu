@@ -40,6 +40,25 @@ hufu workspace path --team <team>
 hufu workspace doctor
 ```
 
+## File-based runtime state
+
+Hufu keeps a workspace's event journal and runtime state in `runtime.sqlite`.
+A workspace written by an older Hufu, with `session.json` and
+`logs/event_store.jsonl` instead, is refused until it is converted:
+
+```sh
+hufu workspace convert-storage --team <team> --dry-run
+hufu workspace convert-storage --team <team> --yes
+```
+
+Conversion imports the event log with full hash-chain validation and the
+session checkpoint, session tree, compaction state, conversation history,
+terminal sessions, reliability report, task journal, and decision index as
+they are. It verifies everything in a staging database before replacing
+anything, holds the workspace lock so it never runs beside a run, and moves
+the original files into `legacy-runtime-files/` rather than deleting them.
+`--dry-run` imports and verifies without changing the workspace.
+
 `--workspace` remains an exact, unmanaged compatibility override;
 `--workspace-root` remains a root to which the team name is appended once;
 `--temp` remains unregistered and is cleaned up after execution.

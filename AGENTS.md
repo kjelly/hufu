@@ -786,7 +786,9 @@ the session tree (`session_branches`, `session_labels`, `session_tree_head`);
 `task_journal`; and `decision_index` (`logs/decisions/.lock` stays a file).
 Read-only commands never create it. A workspace that still has `session.json`
 or `logs/event_store.jsonl` but no `runtime.sqlite` is refused as file-based;
-remove it with `hufu workspace delete` and start a new one. `hufu debug`
+convert it with `hufu workspace convert-storage` (originals are kept in
+`legacy-runtime-files/`; `--dry-run` only verifies) or remove it with
+`hufu workspace delete`. `hufu debug`
 bundles carry JSONL exports of the event and task journals under their old
 `logs/` names.
 

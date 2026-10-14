@@ -79,6 +79,7 @@ func newWorkspaceCommand(deps workspaceCommandDeps) *cobra.Command {
 		newWorkspaceAliasCommand(deps),
 		newWorkspaceRebindCommand(deps),
 		newWorkspaceMigrateCommand(deps),
+		newWorkspaceConvertStorageCommand(deps),
 		newWorkspaceDeleteCommand(deps),
 		newWorkspaceRestoreCommand(deps),
 		newWorkspacePurgeCommand(deps),
