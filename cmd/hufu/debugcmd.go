@@ -120,17 +120,26 @@ var debugCmd = &cobra.Command{
 					finalErr = err
 				}
 			}
-			// The event journal lives in runtime.sqlite, which is never copied
-			// raw; the bundle carries its JSONL export under the historical name.
-			var exported bytes.Buffer
-			if err := team.ExportEventLog(cmd.Context(), workspacePath, &exported); err != nil {
-				inclusions[debugEventLogName] = fmt.Sprintf("error exporting: %v", err)
-			} else if exported.Len() == 0 {
-				inclusions[debugEventLogName] = "omitted (no events)"
-			} else if err := addBytesToTar(tw, utils.RedactJSONLData(exported.Bytes()), debugEventLogName); err != nil {
-				inclusions[debugEventLogName] = fmt.Sprintf("error writing to tar: %v", err)
-			} else {
-				inclusions[debugEventLogName] = "included (exported from runtime.sqlite, redacted)"
+			// The event and task journals live in runtime.sqlite, which is
+			// never copied raw; the bundle carries their JSONL exports under
+			// the historical names.
+			for _, journal := range []struct {
+				name   string
+				export func(context.Context, string, io.Writer) error
+			}{
+				{name: debugEventLogName, export: team.ExportEventLog},
+				{name: "logs/task_journal.jsonl", export: team.ExportTaskJournal},
+			} {
+				var exported bytes.Buffer
+				if err := journal.export(cmd.Context(), workspacePath, &exported); err != nil {
+					inclusions[journal.name] = fmt.Sprintf("error exporting: %v", err)
+				} else if exported.Len() == 0 {
+					inclusions[journal.name] = "omitted (no records)"
+				} else if err := addBytesToTar(tw, utils.RedactJSONLData(exported.Bytes()), journal.name); err != nil {
+					inclusions[journal.name] = fmt.Sprintf("error writing to tar: %v", err)
+				} else {
+					inclusions[journal.name] = "included (exported from runtime.sqlite, redacted)"
+				}
 			}
 		} else {
 			// When filtering by a specific runID, we omit files that have no durable
@@ -143,29 +152,14 @@ var debugCmd = &cobra.Command{
 			taskIDs := make(map[string]bool)
 			attempts := make(map[string]bool) // "taskID:attempt"
 
-			// filterJSONL adds relPath's rows for runID to the bundle and returns
-			// them unredacted for derived projections.
-			filterJSONL := func(relPath string, checkRunID bool, idField string) []byte {
-				fullPath := filepath.Join(workspacePath, relPath)
-				fJSON, err := debugOpenFile(fullPath)
-				if err != nil {
-					if errors.Is(err, errDebugSymlinkPath) {
-						inclusions[relPath] = "omitted (symlink path)"
-						return nil
-					}
-					if os.IsNotExist(err) {
-						inclusions[relPath] = "omitted (not found)"
-					} else {
-						inclusions[relPath] = fmt.Sprintf("error reading: %v", err)
-					}
-					return nil
-				}
-				defer func() { _ = fJSON.Close() }()
+			// filterJSONL adds source's JSONL rows for runID to the bundle under
+			// relPath and returns them unredacted for derived projections.
+			filterJSONL := func(relPath string, source io.Reader) []byte {
 				var filtered []byte
 				omittedLegacy := 0
-				scanner := bufio.NewScanner(fJSON)
+				scanner := bufio.NewScanner(source)
 				buf := make([]byte, 0, 64*1024)
-				// Event-store records can reach the store's 4 MiB line limit.
+				// Journal records can reach 4 MiB.
 				scanner.Buffer(buf, 4*1024*1024)
 				for scanner.Scan() {
 					var ev map[string]interface{}
@@ -281,7 +275,14 @@ var debugCmd = &cobra.Command{
 				return rows
 			}
 			addDerivedExecutionEvents(addRunEvents())
-			filterJSONL("logs/task_journal.jsonl", false, "task_id")
+			// The task journal lives in runtime.sqlite; the bundle carries its
+			// run's records as JSONL under the historical name.
+			var taskJournal bytes.Buffer
+			if err := team.ExportTaskJournal(cmd.Context(), workspacePath, &taskJournal); err != nil {
+				inclusions["logs/task_journal.jsonl"] = fmt.Sprintf("error reading: %v", err)
+			} else {
+				filterJSONL("logs/task_journal.jsonl", &taskJournal)
+			}
 
 			// task-output
 			outDir := filepath.Join(workspacePath, "logs", "task-output")

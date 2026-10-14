@@ -118,7 +118,7 @@ func TestWP13BlockedRecoveryFailureEventAcrossSurfaces(t *testing.T) {
 	if !strings.Contains(string(taskData), "Failure Event") || strings.Contains(string(taskData), "task-secret") {
 		t.Fatalf("workspace task artifact = %s", taskData)
 	}
-	journalData, err := os.ReadFile(filepath.Join(workspace, logsDir, taskJournalFile))
+	journalData, err := readTaskJournalLog(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestWP13ProtocolIncompleteFailureEventAcrossSurfaces(t *testing.T) {
 	if !foundTaskEvidence {
 		t.Fatalf("protocol task artifacts lost worker evidence: %v", taskFiles)
 	}
-	journalData, err := os.ReadFile(filepath.Join(workspace, logsDir, taskJournalFile))
+	journalData, err := readTaskJournalLog(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -303,7 +303,8 @@ func assertNoRetiredRuntimeFiles(t *testing.T, workspace string) {
 	for _, name := range []string{
 		"session.json", "session_tree.json", "conversation_compaction_state.json", "session_history.json",
 		filepath.Join(logsDir, "event_store.jsonl"), filepath.Join(logsDir, "terminal_sessions.json"),
-		filepath.Join(logsDir, "reliability_eval.json"),
+		filepath.Join(logsDir, "reliability_eval.json"), filepath.Join(logsDir, "task_journal.jsonl"),
+		filepath.Join(logsDir, decisionsDir, "index.jsonl"),
 	} {
 		if _, err := os.Stat(filepath.Join(workspace, name)); !os.IsNotExist(err) {
 			t.Errorf("run left retired runtime file %s (stat err %v)", name, err)

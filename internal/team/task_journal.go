@@ -1,34 +1,33 @@
 package team
 
-// The task journal is an append-only JSONL checkpoint of task results.
-// Unlike session.json (rewritten wholesale on every mutation, so a crash
-// mid-write loses everything), a torn journal only loses its last line.
+// The task journal is an append-only checkpoint of task results, one row per
+// record in runtime.sqlite's task_journal table. Unlike the session
+// checkpoint, which is replaced wholesale on every mutation, it only grows.
 // It also records tombstones: an on_failure invalidation writes a "del"
 // record so a restart cannot resurrect a result the DAG already rejected.
 // Entries loaded from the journal are pinned so the per-round generation
 // prune in ExecuteTasks does not discard them before their first lookup.
 
 import (
-	"bufio"
-	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
-	"os"
-	"path/filepath"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
 const (
-	taskJournalFile     = "task_journal.jsonl"
-	taskJournalMaxBytes = 5 << 20 // compact when the file exceeds 5MB
+	taskJournalMaxBytes = 5 << 20 // compact when the records exceed 5MB
 	taskJournalMaxAge   = 24 * time.Hour
-	// taskJournalMaxLine bounds a single journal line; task outputs are
-	// truncated upstream well below this.
-	taskJournalMaxLine = 4 << 20
 )
 
 type journalRecord struct {
@@ -81,8 +80,7 @@ func (c *Coordinator) recordDecisionAssumptionProjection(entry DecisionIndexEntr
 	})
 }
 
-func recordDecisionIndexTaskProjection(indexPath string, entry DecisionIndexEntry) error {
-	workspace := filepath.Dir(filepath.Dir(filepath.Dir(indexPath)))
+func recordDecisionIndexTaskProjection(workspace string, entry DecisionIndexEntry) error {
 	journal, err := openTaskJournal(workspace)
 	if err != nil {
 		return err
@@ -96,28 +94,19 @@ func recordDecisionIndexTaskProjection(indexPath string, entry DecisionIndexEntr
 }
 
 type taskJournal struct {
-	mu   sync.Mutex
-	f    *os.File
-	path string
-}
-
-func taskJournalPath(workspace string) string {
-	return filepath.Join(workspace, logsDir, taskJournalFile)
+	mu    sync.Mutex
+	store *runtimestore.Store
 }
 
 func openTaskJournal(workspace string) (*taskJournal, error) {
 	if workspace == "" {
 		return nil, fmt.Errorf("open task journal: empty workspace")
 	}
-	path := taskJournalPath(workspace)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("open task journal: %w", err)
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	store, err := runtimestore.Open(context.Background(), workspace)
 	if err != nil {
 		return nil, fmt.Errorf("open task journal: %w", err)
 	}
-	return &taskJournal{f: f, path: path}, nil
+	return &taskJournal{store: store}, nil
 }
 
 func (j *taskJournal) append(rec journalRecord) error {
@@ -146,10 +135,16 @@ func (j *taskJournal) append(rec journalRecord) error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if _, err := j.f.Write(append(data, '\n')); err != nil {
+	if err := insertTaskJournalRecord(context.Background(), j.store.DB(), data); err != nil {
 		return fmt.Errorf("append task journal: %w", err)
 	}
 	return nil
+}
+
+func insertTaskJournalRecord(ctx context.Context, q runtimestore.Queryer, record []byte) error {
+	_, err := q.ExecContext(ctx, `INSERT INTO task_journal(recorded_at, record) VALUES(?, ?)`,
+		time.Now().UTC().Format(time.RFC3339Nano), record)
+	return err
 }
 
 func (c *Coordinator) recordTaskFailureWithEvent(agentName, taskDesc, detail string, event *FailureEventPayload, fingerprints ...[]FailureFingerprint) {
@@ -227,7 +222,7 @@ func eventTaskID(event *FailureEventPayload) string {
 func (j *taskJournal) Close() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if err := j.f.Close(); err != nil {
+	if err := j.store.Close(); err != nil {
 		return fmt.Errorf("close task journal: %w", err)
 	}
 	return nil
@@ -235,31 +230,51 @@ func (j *taskJournal) Close() error {
 
 // loadTaskJournal replays the journal into per-agent cache entries: "put"
 // records add results, "del" tombstones remove earlier matching puts (by
-// normalized description), corrupt or torn lines are skipped, entries older
+// normalized description), undecodable records are skipped, entries older
 // than maxAge are dropped, and each agent keeps only its last perAgentCap
 // entries. Returned entries are pinned; the caller assigns generations.
-// A missing journal file returns (nil, nil).
+// A workspace without a journal returns (nil, nil). It never creates
+// runtime.sqlite.
 func loadTaskJournal(workspace string, now time.Time, maxAge time.Duration, perAgentCap int) (map[string][]cachedTaskEntry, error) {
-	f, err := os.Open(taskJournalPath(workspace))
+	store, err := runtimestore.OpenRead(context.Background(), workspace)
+	if errors.Is(err, runtimestore.ErrNotFound) {
+		return nil, nil
+	}
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("load task journal: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer func() { _ = store.Close() }()
+	records, err := readTaskJournalRecords(context.Background(), store.DB())
+	if err != nil {
+		return nil, fmt.Errorf("load task journal: %w", err)
+	}
+	return replayTaskJournal(records, now, maxAge, perAgentCap), nil
+}
 
-	out := make(map[string][]cachedTaskEntry)
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), taskJournalMaxLine)
-	for sc.Scan() {
-		line := bytes.TrimSpace(sc.Bytes())
-		if len(line) == 0 {
-			continue
+// readTaskJournalRecords returns every record in journal order.
+func readTaskJournalRecords(ctx context.Context, q runtimestore.Queryer) ([][]byte, error) {
+	rows, err := q.QueryContext(ctx, `SELECT record FROM task_journal ORDER BY sequence`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var records [][]byte
+	for rows.Next() {
+		var record []byte
+		if err := rows.Scan(&record); err != nil {
+			return nil, err
 		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func replayTaskJournal(records [][]byte, now time.Time, maxAge time.Duration, perAgentCap int) map[string][]cachedTaskEntry {
+	out := make(map[string][]cachedTaskEntry)
+	for _, record := range records {
 		var rec journalRecord
-		if err := json.Unmarshal(line, &rec); err != nil {
-			continue // torn last line after a crash, or manual corruption
+		if err := json.Unmarshal(record, &rec); err != nil {
+			continue // manual corruption
 		}
 		switch rec.Op {
 		case "put":
@@ -303,9 +318,6 @@ func loadTaskJournal(workspace string, now time.Time, maxAge time.Duration, perA
 			out[rec.Agent] = fresh
 		}
 	}
-	if err := sc.Err(); err != nil {
-		return out, fmt.Errorf("load task journal: %w", err)
-	}
 	for k, entries := range out {
 		if len(entries) == 0 {
 			delete(out, k)
@@ -313,78 +325,97 @@ func loadTaskJournal(workspace string, now time.Time, maxAge time.Duration, perA
 			out[k] = entries[len(entries)-perAgentCap:]
 		}
 	}
-	return out, nil
+	return out
 }
 
-// compactTaskJournalIfNeeded rewrites the journal keeping only the entries
-// that would survive a replay, then atomically renames it into place (the
-// rename is what makes a crash during compaction safe: readers see either
-// the old file or the new one, never a partial write). Survivors are
-// re-stamped with the current time, which extends their age window by one
-// compaction cycle — acceptable for a best-effort cache.
+// compactTaskJournalIfNeeded replaces the journal with only the entries
+// that would survive a replay, in one transaction, once its records exceed
+// maxBytes. Survivors are re-stamped with the current time, which extends
+// their age window by one compaction cycle — acceptable for a best-effort
+// cache.
 func compactTaskJournalIfNeeded(workspace string, maxBytes int64, now time.Time) error {
-	path := taskJournalPath(workspace)
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("compact task journal: %w", err)
-	}
-	if info.Size() <= maxBytes {
+	if !runtimestore.Exists(workspace) {
 		return nil
 	}
-
-	survivors, err := loadTaskJournal(workspace, now, taskJournalMaxAge, maxTaskCacheEntries)
-	if err != nil {
-		return fmt.Errorf("compact task journal: %w", err)
-	}
-	tmp := path + ".tmp"
-	f, err := os.Create(tmp)
-	if err != nil {
-		return fmt.Errorf("compact task journal: %w", err)
-	}
-	ts := now.Format(time.RFC3339)
-	for agentKey, entries := range survivors {
-		for _, e := range entries {
-			data, err := json.Marshal(journalRecord{
-				Op:                 "put",
-				Agent:              agentKey,
-				Desc:               e.taskDesc,
-				Verify:             e.verify,
-				VerifyMode:         normalizeVerifyMode(e.verifyMode),
-				VerifySpec:         cloneVerificationSpecPtr(e.verifySpec),
-				Verification:       cloneVerificationResult(e.verification),
-				Output:             e.output,
-				TS:                 ts,
-				RepoCommit:         e.identity.RepoCommit,
-				ProjectFingerprint: e.identity.ProjectFingerprint,
-				Identity:           &e.identity,
-			})
-			if err != nil {
-				continue
-			}
-			if _, err := f.Write(append(data, '\n')); err != nil {
-				_ = f.Close()
-				_ = os.Remove(tmp)
-				return fmt.Errorf("compact task journal: %w", err)
-			}
+	err := withRuntimeStore(workspace, func(store *runtimestore.Store) error {
+		ctx := context.Background()
+		var size int64
+		if err := store.DB().QueryRowContext(ctx, `SELECT COALESCE(SUM(length(record)), 0) FROM task_journal`).Scan(&size); err != nil {
+			return err
 		}
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("compact task journal: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+		if size <= maxBytes {
+			return nil
+		}
+		return store.WithTx(ctx, func(tx *sql.Tx) error {
+			records, err := readTaskJournalRecords(ctx, tx)
+			if err != nil {
+				return err
+			}
+			survivors := replayTaskJournal(records, now, taskJournalMaxAge, maxTaskCacheEntries)
+			if _, err := tx.ExecContext(ctx, `DELETE FROM task_journal`); err != nil {
+				return err
+			}
+			ts := now.Format(time.RFC3339)
+			for _, agentKey := range slices.Sorted(maps.Keys(survivors)) {
+				for _, e := range survivors[agentKey] {
+					data, err := json.Marshal(journalRecord{
+						Op:                 "put",
+						Agent:              agentKey,
+						Desc:               e.taskDesc,
+						Verify:             e.verify,
+						VerifyMode:         normalizeVerifyMode(e.verifyMode),
+						VerifySpec:         cloneVerificationSpecPtr(e.verifySpec),
+						Verification:       cloneVerificationResult(e.verification),
+						Output:             e.output,
+						TS:                 ts,
+						RepoCommit:         e.identity.RepoCommit,
+						ProjectFingerprint: e.identity.ProjectFingerprint,
+						Identity:           &e.identity,
+					})
+					if err != nil {
+						continue
+					}
+					if err := insertTaskJournalRecord(ctx, tx, data); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		})
+	})
+	if err != nil {
 		return fmt.Errorf("compact task journal: %w", err)
 	}
 	return nil
 }
 
+// ExportTaskJournal writes workspace's task journal records to w as JSONL in
+// journal order, the format the retired task_journal.jsonl used. A workspace
+// without runtime.sqlite exports nothing.
+func ExportTaskJournal(ctx context.Context, workspace string, w io.Writer) error {
+	store, err := runtimestore.OpenRead(ctx, workspace)
+	if errors.Is(err, runtimestore.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("export task journal: %w", err)
+	}
+	defer func() { _ = store.Close() }()
+	records, err := readTaskJournalRecords(ctx, store.DB())
+	if err != nil {
+		return fmt.Errorf("export task journal: %w", err)
+	}
+	for _, record := range records {
+		if _, err := w.Write(append(record, '\n')); err != nil {
+			return fmt.Errorf("export task journal: %w", err)
+		}
+	}
+	return nil
+}
+
 // initTaskJournal compacts, replays, and opens the workspace journal. Loaded
-// entries merge into the in-memory cache (skipping keys session.json already
-// rehydrated) tagged with the current generation and pinned. Everything here
+// entries merge into the in-memory cache (skipping keys the session
+// checkpoint already rehydrated) tagged with the current generation and pinned. Everything here
 // is best-effort: failures are logged and never block the run.
 func (c *Coordinator) initTaskJournal() {
 	if c.noJournal || c.journal != nil || c.session == nil || c.session.Workspace == "" {

@@ -55,4 +55,11 @@ CREATE TABLE session_tree_head (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   active_branch TEXT NOT NULL
 );`},
+	{Version: 2, Name: "decision index", SQL: `
+CREATE TABLE decision_index (
+  sequence INTEGER PRIMARY KEY,
+  decision_id TEXT NOT NULL,
+  entry BLOB NOT NULL
+);
+CREATE INDEX decision_index_decision ON decision_index(decision_id, sequence);`},
 }

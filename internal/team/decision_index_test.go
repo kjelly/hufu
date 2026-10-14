@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func newIndex(t *testing.T) *DecisionIndex {
@@ -105,7 +106,7 @@ func TestDecisionIndexConcurrentAppendPreservesEveryRow(t *testing.T) {
 	if len(entries) != count {
 		t.Fatalf("concurrent index entries = %d, want %d", len(entries), count)
 	}
-	data, err := os.ReadFile(index.Path())
+	data, err := readDecisionIndexLog(index)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +222,7 @@ func TestDecisionIndexLatestRowWins(t *testing.T) {
 	}
 
 	// Both rows are still on disk: the index is append-only.
-	data, err := os.ReadFile(index.Path())
+	data, err := readDecisionIndexLog(index)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,21 +231,17 @@ func TestDecisionIndexLatestRowWins(t *testing.T) {
 	}
 }
 
-// A crash during append truncates the last line. That must cost the last write,
-// never every earlier decision.
-func TestDecisionIndexSkipsTruncatedTail(t *testing.T) {
+// An undecodable row must cost only itself, never every earlier decision.
+func TestDecisionIndexSkipsUndecodableRow(t *testing.T) {
 	index := newIndex(t)
 	if err := index.Append(indexEntry("dec-1", time.Now())); err != nil {
 		t.Fatal(err)
 	}
-	file, err := os.OpenFile(index.Path(), os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := file.WriteString(`{"decision_id":"dec-2","run_i`); err != nil {
-		t.Fatal(err)
-	}
-	file.Close()
+	withJournal(t, index.workspace, func(q runtimestore.Queryer) {
+		if err := insertDecisionIndexRow(context.Background(), q, "dec-2", []byte(`{"decision_id":"dec-2","run_i`)); err != nil {
+			t.Fatal(err)
+		}
+	})
 
 	entries, err := index.List()
 	if err != nil {
@@ -335,7 +332,7 @@ func TestResolveDoesNotTouchTheDecisionRecord(t *testing.T) {
 	if err := index.Append(IndexEntryFor(canonicalRecord, question, state.FinalizationForecastRequired, state.FinalizedRecordRef)); err != nil {
 		t.Fatal(err)
 	}
-	indexBefore, err := os.ReadFile(index.Path())
+	indexBefore, err := readDecisionIndexLog(index)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +387,7 @@ func TestResolveDoesNotTouchTheDecisionRecord(t *testing.T) {
 		t.Fatalf("resolution changed final artifact identity: before record=%#v result=%#v after record=%#v result=%#v",
 			state.FinalizedRecordRef, finalizationResultRef, stateAfter.FinalizedRecordRef, derefArtifact(stateAfter.CanonicalRecord.FinalizationResultRef))
 	}
-	indexAfter, err := os.ReadFile(index.Path())
+	indexAfter, err := readDecisionIndexLog(index)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +444,7 @@ func TestDecisionIndexResolveRejectsCorruptOrMissingCanonicalV2State(t *testing.
 			if err := index.Append(IndexEntryFor(*state.CanonicalRecord, question, state.FinalizationForecastRequired, state.FinalizedRecordRef)); err != nil {
 				t.Fatal(err)
 			}
-			indexBefore, err := os.ReadFile(index.Path())
+			indexBefore, err := readDecisionIndexLog(index)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -456,7 +453,7 @@ func TestDecisionIndexResolveRejectsCorruptOrMissingCanonicalV2State(t *testing.
 			if _, err := index.Resolve(record.ID, DecisionOutcomeRecord{ResolvedOutcome: OutcomeFailed}); err == nil {
 				t.Fatal("resolution accepted invalid canonical v2 state")
 			}
-			indexAfter, err := os.ReadFile(index.Path())
+			indexAfter, err := readDecisionIndexLog(index)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -538,8 +535,12 @@ func TestEngineListsFinalizedDecisions(t *testing.T) {
 
 func TestDecisionIndexPathIsWorkspaceScoped(t *testing.T) {
 	workspace := t.TempDir()
-	if got := DecisionIndexPath(workspace); !strings.HasSuffix(got, "logs/decisions/index.jsonl") {
-		t.Fatalf("DecisionIndexPath = %q", got)
+	index, err := OpenDecisionIndex(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := index.Path(); got != runtimestore.Path(workspace) {
+		t.Fatalf("index Path = %q, want the workspace's runtime.sqlite", got)
 	}
 	if _, err := OpenDecisionIndex("  "); err == nil {
 		t.Fatal("an empty workspace was accepted")

@@ -59,7 +59,7 @@ func TestFailureRenderingIsSharedByWorkspaceAndJournal(t *testing.T) {
 	if err := journal.Close(); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(taskJournalPath(workspace))
+	data, err := readTaskJournalLog(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

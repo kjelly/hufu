@@ -1,7 +1,9 @@
 package team
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/runtimestore"
@@ -57,4 +59,68 @@ VALUES(?, ?, ?, '', '', ?)`, branch.id, branch.name, branch.parent, []byte(state
 			}
 		}
 	})
+}
+
+// readTaskJournalLog returns workspace's task journal as JSONL, the bytes the
+// retired task_journal.jsonl held.
+func readTaskJournalLog(workspace string) ([]byte, error) {
+	var log bytes.Buffer
+	err := ExportTaskJournal(context.Background(), workspace, &log)
+	return log.Bytes(), err
+}
+
+// writeTaskJournalLog appends each JSONL line of data as one task journal
+// record, verbatim.
+func writeTaskJournalLog(workspace string, data []byte) error {
+	store, err := runtimestore.Open(context.Background(), workspace)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		if err := insertTaskJournalRecord(context.Background(), store.DB(), line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// readDecisionIndexLog returns index's stored rows as JSONL in insertion
+// order, the bytes the retired logs/decisions/index.jsonl held.
+func readDecisionIndexLog(index *DecisionIndex) ([]byte, error) {
+	rows, err := readDecisionIndexRows(index.workspace)
+	if err != nil {
+		return nil, err
+	}
+	var log []byte
+	for _, row := range rows {
+		log = append(append(log, row...), '\n')
+	}
+	return log, nil
+}
+
+// writeDecisionIndexLog replaces index's rows with the JSONL lines of data,
+// verbatim, the way an out-of-band edit of the index would.
+func writeDecisionIndexLog(index *DecisionIndex, data []byte) error {
+	store, err := runtimestore.Open(context.Background(), index.workspace)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+	if _, err := store.DB().Exec(`DELETE FROM decision_index`); err != nil {
+		return err
+	}
+	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+		var row struct {
+			DecisionID string `json:"decision_id"`
+		}
+		_ = json.Unmarshal(line, &row)
+		if err := insertDecisionIndexRow(context.Background(), store.DB(), row.DecisionID, line); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -274,7 +274,7 @@ func TestRepeatedJSONAssertionPathsCanonicalizeInvalidationJournalAndFingerprint
 		}
 		data = append(data, append(line, '\n')...)
 	}
-	if err := os.WriteFile(filepath.Join(logs, taskJournalFile), data, 0o644); err != nil {
+	if err := writeTaskJournalLog(workspace, data); err != nil {
 		t.Fatal(err)
 	}
 	replayed, err := loadTaskJournal(workspace, time.Now(), taskJournalMaxAge, maxTaskCacheEntries)
@@ -377,7 +377,7 @@ func TestTypedVerificationInvalidationAndJournalTombstoneAreContractScoped(t *te
 		}
 		data = append(data, append(line, '\n')...)
 	}
-	if err := os.WriteFile(filepath.Join(logs, taskJournalFile), data, 0o644); err != nil {
+	if err := writeTaskJournalLog(workspace, data); err != nil {
 		t.Fatal(err)
 	}
 	replayed, err := loadTaskJournal(workspace, time.Now(), taskJournalMaxAge, maxTaskCacheEntries)
@@ -656,7 +656,7 @@ func TestVerifySpecTaskJournalRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(taskJournalPath(workspace), append(data, '\n'), 0o644); err != nil {
+	if err := writeTaskJournalLog(workspace, append(data, '\n')); err != nil {
 		t.Fatal(err)
 	}
 

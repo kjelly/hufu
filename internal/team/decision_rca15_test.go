@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -179,7 +178,7 @@ func TestRCA15FinalizationResultIndexIdentityRejectsEveryReferenceMutation(t *te
 			if err := index.Append(entry); err != nil {
 				t.Fatal(err)
 			}
-			data, err := os.ReadFile(index.Path())
+			data, err := readDecisionIndexLog(index)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -191,13 +190,13 @@ func TestRCA15FinalizationResultIndexIdentityRejectsEveryReferenceMutation(t *te
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(index.Path(), append(encoded, '\n'), 0o644); err != nil {
+			if err := writeDecisionIndexLog(index, append(encoded, '\n')); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := index.List(); err == nil || !strings.Contains(err.Error(), "finalization-result artifact") {
 				t.Fatalf("index accepted forged %s reference: %v", mutation.name, err)
 			}
-			if after, readErr := os.ReadFile(index.Path()); readErr != nil || string(after) == string(data) {
+			if after, readErr := readDecisionIndexLog(index); readErr != nil || string(after) == string(data) {
 				// The direct forged write is expected; this assertion prevents the
 				// validation path from silently rewriting or repairing the row.
 				if readErr != nil {
@@ -223,7 +222,7 @@ func TestRCA15RebuildAtomicOnEveryFinalizationReferenceMutation(t *testing.T) {
 			if err := index.Append(IndexEntryFor(*record, "Should we migrate now?", false, state.FinalizedRecordRef)); err != nil {
 				t.Fatal(err)
 			}
-			before, err := os.ReadFile(index.Path())
+			before, err := readDecisionIndexLog(index)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -233,7 +232,7 @@ func TestRCA15RebuildAtomicOnEveryFinalizationReferenceMutation(t *testing.T) {
 			if err := index.RebuildFromJournal(context.Background(), journal); err == nil {
 				t.Fatalf("rebuild accepted forged %s reference", mutation.name)
 			}
-			after, err := os.ReadFile(index.Path())
+			after, err := readDecisionIndexLog(index)
 			if err != nil {
 				t.Fatal(err)
 			}

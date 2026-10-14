@@ -54,9 +54,7 @@ func TestDebugCmd_RunIsolation(t *testing.T) {
 {"task_id":"task-2", "run_id": "run-B", "typed_result": {"receipt_ids": ["call-789"]}}
 {"task_id":"task-1", "typed_result": {"receipt_ids": ["legacy"]}}
 `
-	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "task_journal.jsonl"), []byte(journal), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeTaskJournal(t, workspaceDir, journal)
 
 	// Write global files that should NOT be in run-scoped debug bundles
 	const sessionMarker = "global-session-checkpoint"

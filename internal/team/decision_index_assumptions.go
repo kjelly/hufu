@@ -3,7 +3,6 @@ package team
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -43,7 +42,7 @@ func (i *DecisionIndex) checkAssumptionUnlocked(decisionID, assumptionID, status
 		}
 	}
 	if !found {
-		return DecisionIndexEntry{}, DecisionAssumption{}, fmt.Errorf("decision %q is not in the index at %s", decisionID, i.path)
+		return DecisionIndexEntry{}, DecisionAssumption{}, fmt.Errorf("decision %q is not in the index at %s", decisionID, i.Path())
 	}
 	if entry.Stale {
 		return DecisionIndexEntry{}, DecisionAssumption{}, fmt.Errorf("decision %q is stale and cannot accept assumption checks", decisionID)
@@ -108,20 +107,19 @@ func (i *DecisionIndex) checkAssumptionUnlocked(decisionID, assumptionID, status
 	if err := i.appendEntryUnlocked(entry); err != nil {
 		return DecisionIndexEntry{}, DecisionAssumption{}, err
 	}
-	if err := persistDecisionIndexSessionProjection(i.path, entry); err != nil {
+	if err := persistDecisionIndexSessionProjection(i.workspace, entry); err != nil {
 		return DecisionIndexEntry{}, DecisionAssumption{}, err
 	}
-	if err := recordDecisionIndexTaskProjection(i.path, entry); err != nil {
+	if err := recordDecisionIndexTaskProjection(i.workspace, entry); err != nil {
 		return DecisionIndexEntry{}, DecisionAssumption{}, err
 	}
 	return entry, assumption, nil
 }
 
 // persistDecisionIndexSessionProjection keeps the restart-facing session
-// projection aligned with operator changes. Missing session.json is normal for
-// a workspace addressed before its first coordinator run.
-func persistDecisionIndexSessionProjection(indexPath string, entry DecisionIndexEntry) error {
-	workspace := filepath.Dir(filepath.Dir(filepath.Dir(indexPath)))
+// projection aligned with operator changes. A missing session checkpoint is
+// normal for a workspace addressed before its first coordinator run.
+func persistDecisionIndexSessionProjection(workspace string, entry DecisionIndexEntry) error {
 	session, err := loadSessionQuiet(workspace)
 	if err != nil {
 		return fmt.Errorf("load session for decision projection: %w", err)

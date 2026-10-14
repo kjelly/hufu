@@ -430,6 +430,8 @@ func TestDebugCmd_RejectsJSONLSymlinks(t *testing.T) {
 	if err := os.WriteFile(externalJournal, []byte(`{"run_id":"run-filter","task_id":"1","secret":"outside-secret"}`+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	// The task journal lives in runtime.sqlite, so a stray file at its old
+	// path, even a symlink out of the workspace, is never read.
 	if err := os.Symlink(externalJournal, filepath.Join(logsDir, "task_journal.jsonl")); err != nil {
 		t.Skipf("symlink test unavailable: %v", err)
 	}
@@ -437,40 +439,16 @@ func TestDebugCmd_RejectsJSONLSymlinks(t *testing.T) {
 	cmd = newRootCommand()
 	cmd.SetArgs([]string{"debug", "run-filter", "-w", workspaceDir})
 	if err := cmd.Execute(); err != nil {
-		t.Fatalf("run-id export with filtered JSONL symlink failed: %v", err)
+		t.Fatalf("run-id export with a stray task journal symlink failed: %v", err)
 	}
-	f, err := os.Open(filepath.Join(tmpDir, "hufu-debug-run-filter.tar.gz"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	gr, err := gzip.NewReader(f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer gr.Close()
-	tr := tar.NewReader(gr)
-	var manifest []byte
-	for {
-		hdr, nextErr := tr.Next()
-		if nextErr == io.EOF {
-			break
-		}
-		if nextErr != nil {
-			t.Fatal(nextErr)
-		}
-		if hdr.Name == "logs/task_journal.jsonl" {
-			t.Fatal("run-id bundle followed task journal JSONL symlink")
-		}
-		if hdr.Name == "bundle-manifest.json" {
-			manifest, err = io.ReadAll(tr)
-			if err != nil {
-				t.Fatal(err)
-			}
+	runBundle := readDebugBundle(t, filepath.Join(tmpDir, "hufu-debug-run-filter.tar.gz"))
+	for name, data := range runBundle {
+		if strings.Contains(string(data), "outside-secret") {
+			t.Fatalf("run-id bundle followed the stray task journal symlink into %s", name)
 		}
 	}
-	if strings.Contains(string(manifest), "outside-secret") || !strings.Contains(string(manifest), "logs/task_journal.jsonl") || !strings.Contains(string(manifest), "symlink path") {
-		t.Fatalf("filtered JSONL symlink was not safely omitted: %s", manifest)
+	if manifest := string(runBundle["bundle-manifest.json"]); !strings.Contains(manifest, "logs/task_journal.jsonl") {
+		t.Fatalf("run-id bundle did not account for the task journal: %s", manifest)
 	}
 }
 

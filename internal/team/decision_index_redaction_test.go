@@ -2,7 +2,6 @@ package team
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 )
@@ -137,7 +136,7 @@ func TestDecisionIndexAppendReloadRedactsNestedProjection(t *testing.T) {
 			if err := index.Append(tt.entry); err != nil {
 				t.Fatal(err)
 			}
-			data, err := os.ReadFile(index.Path())
+			data, err := readDecisionIndexLog(index)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -1,15 +1,14 @@
 package team
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
 	"sort"
-	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 type readOnlyDecisionLineage []RunEvent
@@ -159,27 +158,19 @@ func validateDecisionIndexIdentity(entry DecisionIndexEntry, state decisionState
 	}
 	return nil
 }
-func (i *DecisionIndex) listFile() ([]DecisionIndexEntry, error) {
-	file, err := os.Open(i.path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("decision index: opening %s: %w", i.path, err)
-	}
-	defer func() { _ = file.Close() }()
 
+// listFile projects the stored rows into one row per decision, the latest
+// winning. It never creates runtime.sqlite.
+func (i *DecisionIndex) listFile() ([]DecisionIndexEntry, error) {
+	rows, err := readDecisionIndexRows(i.workspace)
+	if err != nil {
+		return nil, fmt.Errorf("decision index: reading %s: %w", i.Path(), err)
+	}
 	latest := map[string]DecisionIndexEntry{}
 	order := []string{}
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
+	for _, row := range rows {
 		var entry DecisionIndexEntry
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+		if err := json.Unmarshal(row, &entry); err != nil {
 			continue
 		}
 		if entry.DecisionID == "" {
@@ -198,9 +189,6 @@ func (i *DecisionIndex) listFile() ([]DecisionIndexEntry, error) {
 		}
 		latest[entry.DecisionID] = entry
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("decision index: reading %s: %w", i.path, err)
-	}
 
 	out := make([]DecisionIndexEntry, 0, len(order))
 	for _, id := range order {
@@ -213,6 +201,32 @@ func (i *DecisionIndex) listFile() ([]DecisionIndexEntry, error) {
 		return out[a].DecisionID < out[b].DecisionID
 	})
 	return out, nil
+}
+
+// readDecisionIndexRows returns the stored rows in insertion order.
+func readDecisionIndexRows(workspace string) ([][]byte, error) {
+	store, err := runtimestore.OpenRead(context.Background(), workspace)
+	if errors.Is(err, runtimestore.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = store.Close() }()
+	rows, err := store.DB().QueryContext(context.Background(), `SELECT entry FROM decision_index ORDER BY sequence`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var entries [][]byte
+	for rows.Next() {
+		var entry []byte
+		if err := rows.Scan(&entry); err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	return entries, rows.Err()
 }
 
 func branchScopedJournal(journal decisionJournal) (*branchScopedDecisionJournal, bool) {
