@@ -309,3 +309,88 @@ func TestOpenReadSharesTheWritableConnectionAndNeverCreates(t *testing.T) {
 		t.Fatal("OpenRead without an open writer did not open read-only")
 	}
 }
+
+// replaceDatabase swaps workspace's database for a fresh one holding the
+// session document body, as a restore from elsewhere would.
+func replaceDatabase(t *testing.T, workspace string, body string) {
+	t.Helper()
+	other := t.TempDir()
+	replacement, err := Open(context.Background(), other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replacement.PutDocument(context.Background(), DocumentSession, []byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	if err := replacement.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range Files {
+		if err := os.Remove(filepath.Join(workspace, name)); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Rename(Path(other), Path(workspace)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestWritesNeverLandInAReplacedDatabase pins that a connection whose file
+// was replaced never reports a write as successful: a held store refuses
+// every write entry point, and a new open reaches the file the path names.
+func TestWritesNeverLandInAReplacedDatabase(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name  string
+		write func(store *Store) error
+	}{
+		{name: "document", write: func(store *Store) error {
+			return store.PutDocument(ctx, DocumentSession, []byte(`{"rounds":3}`))
+		}},
+		{name: "delete", write: func(store *Store) error { return store.DeleteDocument(ctx, DocumentSession) }},
+		{name: "statement", write: func(store *Store) error {
+			return store.Exec(ctx, `INSERT INTO task_journal(recorded_at, record) VALUES('', '{}')`)
+		}},
+		{name: "transaction", write: func(store *Store) error {
+			return store.WithTx(ctx, func(tx *sql.Tx) error {
+				return PutDocument(ctx, tx, DocumentSession, []byte(`{"rounds":3}`))
+			})
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			held, err := Open(ctx, workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer held.Close()
+			if err := held.PutDocument(ctx, DocumentSession, []byte(`{"rounds":1}`)); err != nil {
+				t.Fatal(err)
+			}
+			replaceDatabase(t, workspace, `{"rounds":2}`)
+
+			if err := tt.write(held); !errors.Is(err, ErrReplaced) {
+				t.Fatalf("write through the replaced connection = %v, want ErrReplaced", err)
+			}
+			fresh, err := Open(ctx, workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := fresh.PutDocument(ctx, DocumentSession, []byte(`{"rounds":3}`)); err != nil {
+				t.Fatalf("write after reopening: %v", err)
+			}
+			if err := fresh.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reader, err := OpenReadOnly(ctx, workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reader.Close()
+			if body, _, err := reader.GetDocument(ctx, DocumentSession); err != nil || string(body) != `{"rounds":3}` {
+				t.Fatalf("session at the path = %q, %v; want the write made after reopening", body, err)
+			}
+		})
+	}
+}

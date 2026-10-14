@@ -5,13 +5,13 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -70,11 +70,13 @@ func newEventIdempotencyIdentity(branchID, key string) eventIdempotencyIdentity 
 // first validates the rows other writers committed after this store's
 // validated head, so the idempotency index and chain head include every
 // committed event before a new one is chained. Opening a store and
-// VerifyHashChain validate the whole journal. An append also confirms that
-// the row at its validated head is unchanged and revalidates everything when
-// it is not. The chain is self-contained: even a full validation cannot
-// detect a rewrite that recomputes every hash, which would need an anchor
-// kept outside the database.
+// VerifyHashChain validate the whole journal. Appends only insert; triggers
+// count every update or delete of a stored event, and an append revalidates
+// everything when that count moved or the head row no longer matches the
+// validated head event and its hash, so it never extends a damaged chain. The
+// chain is self-contained: even a full validation cannot detect a rewrite
+// that recomputes every hash and bypasses the triggers, which would need an
+// anchor kept outside the database.
 type EventStore struct {
 	// mu is a one-token semaphore so emergency callers can cancel lock
 	// acquisition. Once an append holds the database connection it runs to
@@ -98,6 +100,8 @@ type EventStore struct {
 	cacheHitCount   int
 	cachedEvents    []RunEvent
 	idempotencyKeys map[eventIdempotencyIdentity]RunEvent
+	// rewrites is the journal's rewrite counter when it was validated.
+	rewrites int64
 	// commitHook runs after an append commits. Its failure leaves the
 	// append's durability unknown, as an fsync failure did for the file log;
 	// tests inject one to exercise recovery. A reload restores the no-op.
@@ -571,27 +575,25 @@ func (es *EventStore) reopenIfReplaced() error {
 
 // syncCommittedEvents publishes the events other writers committed after the
 // validated head. The tail is loaded into private state and merged only once
-// it validates, so a rejected tail publishes nothing. A head row that no
-// longer matches means the journal was rewritten, and everything is
-// revalidated.
+// it validates, so a rejected tail publishes nothing. A rewrite of the
+// validated prefix — seen through the rewrite counter, or as a head row that
+// no longer matches what was validated — revalidates everything, so a
+// damaged chain is refused rather than extended.
 func (es *EventStore) syncCommittedEvents(ctx context.Context, q runtimestore.Queryer) error {
-	if es.sequence > 0 {
-		var id string
-		err := q.QueryRowContext(ctx, `SELECT id FROM events WHERE sequence = ?`, es.sequence).Scan(&id)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("read validated head: %w", err)
+	rewritten, err := es.prefixRewritten(ctx, q)
+	if err != nil {
+		return err
+	}
+	if rewritten {
+		es.scanCount++
+		state, err := loadFullState(ctx, q, es.runID, es.sessionID)
+		if err != nil {
+			return err
 		}
-		if id != es.lastEventID {
-			es.scanCount++
-			state, err := loadFullState(ctx, q, es.runID, es.sessionID)
-			if err != nil {
-				return err
-			}
-			hook := es.commitHook
-			es.publishState(state)
-			es.commitHook = hook
-			return nil
-		}
+		hook := es.commitHook
+		es.publishState(state)
+		es.commitHook = hook
+		return nil
 	}
 	tail := eventStoreState{
 		lastEventID:     es.lastEventID,
@@ -619,6 +621,50 @@ func (es *EventStore) syncCommittedEvents(ctx context.Context, q runtimestore.Qu
 	return nil
 }
 
+// prefixRewritten reports whether the journal changed other than by appends
+// since it was validated: the rewrite counter moved, or the head row differs
+// from the validated head event or no longer matches its own hash.
+func (es *EventStore) prefixRewritten(ctx context.Context, q runtimestore.Queryer) (bool, error) {
+	rewrites, err := readJournalRewrites(ctx, q)
+	if err != nil {
+		return false, err
+	}
+	if rewrites != es.rewrites {
+		return true, nil
+	}
+	if es.sequence == 0 {
+		return false, nil
+	}
+	rows, err := q.QueryContext(ctx, `SELECT `+eventColumns+` FROM events WHERE sequence = ?`, es.sequence)
+	if err != nil {
+		return false, fmt.Errorf("read validated head: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return true, rows.Err()
+	}
+	_, head, err := scanEventRow(rows)
+	if err != nil {
+		return false, fmt.Errorf("decode validated head: %w", err)
+	}
+	validated := es.cachedEvents[len(es.cachedEvents)-1]
+	if !sameStoredEvent(head, validated) ||
+		head.Hash != ComputeEventHash(head.PreviousHash, head.ID, head.Type, head.Timestamp, head.Payload) {
+		return true, nil
+	}
+	return false, rows.Err()
+}
+
+// sameStoredEvent compares two events field by field; an empty payload
+// equals a nil one, as storage cannot tell them apart.
+func sameStoredEvent(a, b RunEvent) bool {
+	if !bytes.Equal(a.Payload, b.Payload) {
+		return false
+	}
+	a.Payload, b.Payload = nil, nil
+	return reflect.DeepEqual(a, b)
+}
+
 func (es *EventStore) publishState(state eventStoreState) {
 	es.lastEventID = state.lastEventID
 	es.lastHash = state.lastHash
@@ -627,6 +673,7 @@ func (es *EventStore) publishState(state eventStoreState) {
 	es.sessionID = state.sessionID
 	es.cachedEvents = state.events
 	es.idempotencyKeys = state.idempotencyKeys
+	es.rewrites = state.rewrites
 	es.commitHook = noCommitHook
 	es.stateErr = nil
 	es.stateValid = true

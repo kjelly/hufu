@@ -404,7 +404,7 @@ func (i *DecisionIndex) appendEntryUnlocked(entry DecisionIndexEntry) error {
 		return fmt.Errorf("decision index: encoding entry: %w", err)
 	}
 	err = withRuntimeStore(i.workspace, func(store *runtimestore.Store) error {
-		return insertDecisionIndexRow(context.Background(), store.DB(), entry.DecisionID, line)
+		return store.Exec(context.Background(), insertDecisionIndexSQL, entry.DecisionID, line)
 	})
 	if err != nil {
 		return fmt.Errorf("decision index: appending %s: %w", entry.DecisionID, err)
@@ -433,8 +433,10 @@ func (i *DecisionIndex) replaceEntries(ctx context.Context, entries []DecisionIn
 	})
 }
 
+const insertDecisionIndexSQL = `INSERT INTO decision_index(decision_id, entry) VALUES(?, ?)`
+
 func insertDecisionIndexRow(ctx context.Context, q runtimestore.Queryer, decisionID string, entry []byte) error {
-	_, err := q.ExecContext(ctx, `INSERT INTO decision_index(decision_id, entry) VALUES(?, ?)`, decisionID, entry)
+	_, err := q.ExecContext(ctx, insertDecisionIndexSQL, decisionID, entry)
 	return err
 }
 

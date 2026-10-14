@@ -62,4 +62,17 @@ CREATE TABLE decision_index (
   entry BLOB NOT NULL
 );
 CREATE INDEX decision_index_decision ON decision_index(decision_id, sequence);`},
+	// Appends only insert events. Any update or delete is a rewrite of the
+	// validated journal; the counter lets an event store that validated the
+	// journal notice one with a single read and revalidate everything.
+	{Version: 3, Name: "event journal rewrite counter", SQL: `
+CREATE TABLE event_journal_meta (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  rewrites INTEGER NOT NULL
+);
+INSERT INTO event_journal_meta(id, rewrites) VALUES(1, 0);
+CREATE TRIGGER events_rewritten_by_update AFTER UPDATE ON events
+BEGIN UPDATE event_journal_meta SET rewrites = rewrites + 1 WHERE id = 1; END;
+CREATE TRIGGER events_rewritten_by_delete AFTER DELETE ON events
+BEGIN UPDATE event_journal_meta SET rewrites = rewrites + 1 WHERE id = 1; END;`},
 }

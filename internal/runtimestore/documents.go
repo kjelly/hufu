@@ -35,18 +35,38 @@ func (s *Store) GetDocument(ctx context.Context, name string) ([]byte, bool, err
 
 // PutDocument replaces the body of name.
 func (s *Store) PutDocument(ctx context.Context, name string, body []byte) error {
-	if s.readOnly {
-		return fmt.Errorf("write runtime document %q: store is read-only", name)
+	if err := s.checkWritable(); err != nil {
+		return fmt.Errorf("write runtime document %q: %w", name, err)
 	}
 	return PutDocument(ctx, s.db, name, body)
 }
 
 // DeleteDocument removes name. A missing document is not an error.
 func (s *Store) DeleteDocument(ctx context.Context, name string) error {
-	if s.readOnly {
-		return fmt.Errorf("delete runtime document %q: store is read-only", name)
+	if err := s.checkWritable(); err != nil {
+		return fmt.Errorf("delete runtime document %q: %w", name, err)
 	}
 	return DeleteDocument(ctx, s.db, name)
+}
+
+// Exec runs one write statement outside a caller's transaction.
+func (s *Store) Exec(ctx context.Context, query string, args ...any) error {
+	if err := s.checkWritable(); err != nil {
+		return fmt.Errorf("runtime store write: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("runtime store write: %w", err)
+	}
+	return nil
+}
+
+// checkWritable refuses writes through a read-only store and through a
+// connection whose file the path no longer names.
+func (s *Store) checkWritable() error {
+	if s.readOnly {
+		return fmt.Errorf("store is read-only")
+	}
+	return s.CheckCurrent()
 }
 
 // GetDocument reads name through q.
@@ -87,8 +107,8 @@ func DeleteDocument(ctx context.Context, q Queryer, name string) error {
 // WithTx runs fn in one IMMEDIATE transaction and commits when fn returns
 // nil. Any error rolls back every write fn made.
 func (s *Store) WithTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
-	if s.readOnly {
-		return fmt.Errorf("runtime store transaction: store is read-only")
+	if err := s.checkWritable(); err != nil {
+		return fmt.Errorf("runtime store transaction: %w", err)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

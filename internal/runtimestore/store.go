@@ -67,6 +67,9 @@ type sharedHandle struct {
 	refs int
 	// file identifies the database file the connection opened.
 	file os.FileInfo
+	// retired marks a connection closed because its file was replaced or
+	// removed; its remaining users fail on their next statement.
+	retired bool
 }
 
 var (
@@ -83,7 +86,7 @@ func Open(ctx context.Context, workspace string) (*Store, error) {
 	}
 	sharedMu.Lock()
 	defer sharedMu.Unlock()
-	if handle := handles[path]; handle != nil {
+	if handle := currentHandleLocked(path); handle != nil {
 		handle.refs++
 		return &Store{db: handle.db, path: path, shared: handle}, nil
 	}
@@ -93,6 +96,9 @@ func Open(ctx context.Context, workspace string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("open runtime store: create workspace: %w", err)
 	}
+	if err := createPrivate(path); err != nil {
+		return nil, fmt.Errorf("open runtime store: %w", err)
+	}
 	db, err := sql.Open("sqlite", writableDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("open runtime store: %w", err)
@@ -101,8 +107,8 @@ func Open(ctx context.Context, workspace string) (*Store, error) {
 	if err := sqlmigrate.Apply(ctx, db, "runtime store", migrations, nil); err != nil {
 		return nil, errors.Join(fmt.Errorf("open runtime store: %w", err), db.Close())
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return nil, errors.Join(fmt.Errorf("open runtime store: restrict permissions: %w", err), db.Close())
+	if err := restrictSidecars(path); err != nil {
+		return nil, errors.Join(fmt.Errorf("open runtime store: %w", err), db.Close())
 	}
 	file, err := os.Stat(path)
 	if err != nil {
@@ -111,6 +117,65 @@ func Open(ctx context.Context, workspace string) (*Store, error) {
 	handle := &sharedHandle{db: db, refs: 1, file: file}
 	handles[path] = handle
 	return &Store{db: db, path: path, shared: handle}, nil
+}
+
+// createPrivate makes sure the database file exists with mode 0600 before
+// SQLite opens it. SQLite creates the -wal, -shm, and -journal files with
+// the database file's mode, so they stay private too regardless of umask.
+func createPrivate(path string) error {
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err == nil {
+		return file.Close()
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("create database: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("restrict database permissions: %w", err)
+	}
+	return nil
+}
+
+// restrictSidecars tightens sidecars a previous connection left with a wider
+// mode; SQLite reuses an existing sidecar's permissions.
+func restrictSidecars(path string) error {
+	for _, name := range Files[1:] {
+		sidecar := filepath.Join(filepath.Dir(path), name)
+		if err := os.Chmod(sidecar, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("restrict %s permissions: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// currentHandleLocked returns the shared handle for path when path still
+// names the file it opened. A handle whose file was replaced or removed is
+// retired first. sharedMu must be held.
+func currentHandleLocked(path string) *sharedHandle {
+	handle := handles[path]
+	if handle == nil {
+		return nil
+	}
+	if current, err := os.Stat(path); err == nil && os.SameFile(handle.file, current) {
+		return handle
+	}
+	retireLocked(path, handle)
+	return nil
+}
+
+// retireLocked stops sharing handle and closes its connection at once. The
+// stale connection must close before any connection opens the path again:
+// SQLite removes the WAL file by name when its last connection closes, which
+// would discard a newer connection's uncheckpointed commits. sharedMu must be
+// held.
+func retireLocked(path string, handle *sharedHandle) {
+	if handles[path] == handle {
+		delete(handles, path)
+	}
+	if !handle.retired {
+		handle.retired = true
+		_ = handle.db.Close()
+	}
 }
 
 // OpenReadOnly opens an existing runtime.sqlite without creating, migrating,
@@ -155,7 +220,7 @@ func OpenRead(ctx context.Context, workspace string) (*Store, error) {
 		return nil, err
 	}
 	sharedMu.Lock()
-	if handle := handles[path]; handle != nil {
+	if handle := currentHandleLocked(path); handle != nil {
 		handle.refs++
 		sharedMu.Unlock()
 		return &Store{db: handle.db, path: path, readOnly: true, shared: handle}, nil
@@ -179,21 +244,24 @@ func (s *Store) Path() string { return s.path }
 
 // CheckCurrent fails with ErrReplaced when the database path no longer names
 // the file this store's shared connection opened. The stale connection is
-// then no longer shared, so the next Open reaches the file the path names.
-// Stores with their own read-only connection always pass.
+// then retired, so the next Open reaches the file the path names. Stores with
+// their own read-only connection always pass. Every write entry point checks
+// it: a write through a stale connection would report success for data no
+// later reader sees.
 func (s *Store) CheckCurrent() error {
 	if s.shared == nil {
 		return nil
+	}
+	sharedMu.Lock()
+	defer sharedMu.Unlock()
+	if s.shared.retired {
+		return fmt.Errorf("%w: %s", ErrReplaced, s.path)
 	}
 	current, err := os.Stat(s.path)
 	if err == nil && os.SameFile(s.shared.file, current) {
 		return nil
 	}
-	sharedMu.Lock()
-	if handles[s.path] == s.shared {
-		delete(handles, s.path)
-	}
-	sharedMu.Unlock()
+	retireLocked(s.path, s.shared)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrReplaced, err)
 	}
@@ -224,6 +292,9 @@ func (s *Store) Close() error {
 	}
 	if handles[s.path] == handle {
 		delete(handles, s.path)
+	}
+	if handle.retired {
+		return nil
 	}
 	return handle.db.Close()
 }

@@ -20,6 +20,8 @@ type eventStoreState struct {
 	sessionID       string
 	events          []RunEvent
 	idempotencyKeys map[eventIdempotencyIdentity]RunEvent
+	// rewrites is the journal's rewrite counter, read before its rows.
+	rewrites int64
 	// publishedKeys is the already published index a tail load checks for
 	// conflicts; it is read, never written. Nil for a full load.
 	publishedKeys map[eventIdempotencyIdentity]RunEvent
@@ -132,12 +134,28 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	return nil
 }
 
-// loadFullState reads and validates the whole journal.
+// loadFullState reads and validates the whole journal. The rewrite counter is
+// read first, so a rewrite racing the load shows up as a counter change.
 func loadFullState(ctx context.Context, q runtimestore.Queryer, runID, sessionID string) (eventStoreState, error) {
 	state := eventStoreState{runID: runID, sessionID: sessionID, idempotencyKeys: make(map[eventIdempotencyIdentity]RunEvent)}
+	rewrites, err := readJournalRewrites(ctx, q)
+	if err != nil {
+		return eventStoreState{}, err
+	}
+	state.rewrites = rewrites
 	var verifier eventchain.Verifier
 	if err := loadEvents(ctx, q, &state, &verifier); err != nil {
 		return eventStoreState{}, err
 	}
 	return state, nil
+}
+
+// readJournalRewrites returns the count of updates and deletes ever applied
+// to the events table.
+func readJournalRewrites(ctx context.Context, q runtimestore.Queryer) (int64, error) {
+	var rewrites int64
+	if err := q.QueryRowContext(ctx, `SELECT rewrites FROM event_journal_meta WHERE id = 1`).Scan(&rewrites); err != nil {
+		return 0, fmt.Errorf("read journal rewrite counter: %w", err)
+	}
+	return rewrites, nil
 }

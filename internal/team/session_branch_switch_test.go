@@ -91,8 +91,8 @@ func (s runtimeStateSnapshot) equal(other runtimeStateSnapshot) bool {
 // branch changes, and the caller's tree is restored.
 func TestBranchSwitchCommitsAllOrNothing(t *testing.T) {
 	tests := []struct {
-		name   string
-		run func(workspace string, st *SessionTree, es *EventStore) error
+		name string
+		run  func(workspace string, st *SessionTree, es *EventStore) error
 	}{
 		{name: "fork", run: func(workspace string, st *SessionTree, es *EventStore) error {
 			_, err := ForkSessionBranch(context.Background(), workspace, st, es, "child", "")

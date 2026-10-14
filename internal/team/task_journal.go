@@ -135,15 +135,16 @@ func (j *taskJournal) append(rec journalRecord) error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if err := insertTaskJournalRecord(context.Background(), j.store.DB(), data); err != nil {
+	if err := j.store.Exec(context.Background(), insertTaskJournalSQL, time.Now().UTC().Format(time.RFC3339Nano), data); err != nil {
 		return fmt.Errorf("append task journal: %w", err)
 	}
 	return nil
 }
 
+const insertTaskJournalSQL = `INSERT INTO task_journal(recorded_at, record) VALUES(?, ?)`
+
 func insertTaskJournalRecord(ctx context.Context, q runtimestore.Queryer, record []byte) error {
-	_, err := q.ExecContext(ctx, `INSERT INTO task_journal(recorded_at, record) VALUES(?, ?)`,
-		time.Now().UTC().Format(time.RFC3339Nano), record)
+	_, err := q.ExecContext(ctx, insertTaskJournalSQL, time.Now().UTC().Format(time.RFC3339Nano), record)
 	return err
 }
 

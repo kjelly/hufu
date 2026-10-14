@@ -42,6 +42,16 @@ func TestEventStoreAppendScansOnlyWhatOthersAppended(t *testing.T) {
 			appendRawChainedEvent(t, workspace, RunEvent{ID: "corrupt", Type: "task_progress"})
 			execJournal(t, workspace, `UPDATE events SET hash = 'forged' WHERE id = 'corrupt'`)
 		}, wantErr: "load events committed by other writers"},
+		{name: "a head payload rewritten under its id fails closed", afterOwn: func(t *testing.T, workspace string) {
+			execJournal(t, workspace, `UPDATE events SET payload = '{"progress":"forged"}' WHERE id = 'second'`)
+		}, wantErr: "load events committed by other writers"},
+		{name: "a rewrite deep in the validated prefix fails closed", afterOwn: func(t *testing.T, workspace string) {
+			execJournal(t, workspace, `UPDATE events SET payload = '{"progress":"forged"}' WHERE id = 'first'`)
+		}, wantErr: "load events committed by other writers"},
+		{name: "a head rewrite that bypasses the rewrite counter fails closed", afterOwn: func(t *testing.T, workspace string) {
+			execJournal(t, workspace, `DROP TRIGGER events_rewritten_by_update`)
+			execJournal(t, workspace, `UPDATE events SET payload = '{"progress":"forged"}' WHERE id = 'second'`)
+		}, wantErr: "load events committed by other writers"},
 		{name: "a journal truncated below the head is reloaded in full", afterOwn: func(t *testing.T, workspace string) {
 			execJournal(t, workspace, `DELETE FROM events WHERE sequence > 1`)
 		}, wantPrevious: "first", wantScans: 2},
