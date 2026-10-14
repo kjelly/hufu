@@ -3,6 +3,7 @@ package auditverify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,7 +16,7 @@ import (
 // VerifyBundle verifies a portable audit bundle without needing the original
 // workspace (spec.md §16.3): it extracts the archive into a temporary
 // directory, verifies bundle.json's own declared file hashes, reconstructs a
-// pseudo-workspace shaped exactly like a live one (logs/event_store.jsonl,
+// pseudo-workspace shaped exactly like a live one (runtime.sqlite,
 // logs/artifacts/...), and runs the exact same runWorkspaceAudit pipeline
 // VerifyWorkspaceRun uses against it -- never a second verification
 // algorithm for bundles.
@@ -88,7 +89,10 @@ func verifyBundleFile(ctx context.Context, bundlePath, expectedRunID string, opt
 	}
 
 	pseudoWorkspace := filepath.Join(tmpDir, "workspace")
-	if err := reconstructPseudoWorkspace(extractDir, pseudoWorkspace, manifest); err != nil {
+	if err := reconstructPseudoWorkspace(ctx, extractDir, pseudoWorkspace, manifest); err != nil {
+		if errors.Is(err, team.ErrEventLogInvalid) {
+			return chainBrokenResult(manifest.RunID, err), nil
+		}
 		return failResultf(manifest.RunID, CodeBundleFileMissing, "reconstruct workspace from bundle: %v", err), nil
 	}
 
@@ -185,12 +189,22 @@ func verifyWitnessLinkage(extractDir string, manifest AuditBundleManifest, resul
 }
 
 // reconstructPseudoWorkspace copies the bundle's canonical files into the
-// exact on-disk shape team.OpenEventStore/team.NewFileArtifactStore expect,
-// so runWorkspaceAudit can operate on it exactly as it would a live
-// workspace.
-func reconstructPseudoWorkspace(extractDir, pseudoWorkspace string, manifest AuditBundleManifest) error {
-	if err := copyExtractedFile(extractDir, "events.jsonl", filepath.Join(pseudoWorkspace, eventStoreRelPath)); err != nil {
+// exact shape team.OpenEventStore/team.NewFileArtifactStore expect, so
+// runWorkspaceAudit can operate on it exactly as it would a live workspace.
+// The event log is validated as it is imported.
+func reconstructPseudoWorkspace(ctx context.Context, extractDir, pseudoWorkspace string, manifest AuditBundleManifest) error {
+	eventsPath, err := safeJoin(extractDir, "events.jsonl")
+	if err != nil {
 		return fmt.Errorf("reconstruct event log: %w", err)
+	}
+	events, err := os.Open(eventsPath)
+	if err != nil {
+		return fmt.Errorf("reconstruct event log: %w", err)
+	}
+	_, importErr := team.ImportEventLog(ctx, pseudoWorkspace, events)
+	_ = events.Close()
+	if importErr != nil {
+		return fmt.Errorf("reconstruct event log: %w", importErr)
 	}
 	for _, file := range manifest.Files {
 		if file.Availability != AvailabilityIncluded {

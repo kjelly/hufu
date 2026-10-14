@@ -1,15 +1,17 @@
 package improve
 
 import (
-	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -24,22 +26,19 @@ func writeExecutionEvents(tb testing.TB, workspace string, rows []team.Execution
 	appendEventChain(tb, workspace, executionFixtureEvents(tb, rows))
 }
 
-// appendEventChain appends events to workspace's event store as schema v1
-// records chained after its current tail. It writes without per-event sync,
+// appendEventChain appends events to workspace's event journal as schema v1
+// records chained after its current tail. It rebuilds the journal through
+// team.ImportEventLog in one transaction instead of one commit per event,
 // which keeps large benchmark fixtures fast; the result validates like any
-// durable log.
+// durable journal.
 func appendEventChain(tb testing.TB, workspace string, events []team.RunEvent) {
 	tb.Helper()
-	path := filepath.Join(workspace, "logs", "event_store.jsonl")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	ctx := context.Background()
+	var log bytes.Buffer
+	if err := team.ExportEventLog(ctx, workspace, &log); err != nil {
 		tb.Fatal(err)
 	}
-	previousID, previousHash, count := eventChainTail(tb, path)
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		tb.Fatal(err)
-	}
-	writer := bufio.NewWriterSize(file, 256*1024)
+	previousID, previousHash, count := eventChainTail(tb, log.Bytes())
 	for i, event := range events {
 		event.SchemaVersion = 1
 		event.ID = fmt.Sprintf("fixture-%08d", count+i)
@@ -48,8 +47,8 @@ func appendEventChain(tb testing.TB, workspace string, events []team.RunEvent) {
 			event.SessionID = "fixture-session"
 		}
 		if len(event.Payload) > 0 {
-			// The marshaled record carries the compacted payload; hash
-			// exactly those bytes, as the event store does.
+			// The journal stores the compacted payload; hash exactly those
+			// bytes, as the event store does.
 			var compact bytes.Buffer
 			if err := json.Compact(&compact, event.Payload); err != nil {
 				tb.Fatal(err)
@@ -61,29 +60,34 @@ func appendEventChain(tb testing.TB, workspace string, events []team.RunEvent) {
 		if err != nil {
 			tb.Fatal(err)
 		}
-		if _, err := writer.Write(append(data, '\n')); err != nil {
-			tb.Fatal(err)
-		}
+		log.Write(append(data, '\n'))
 		previousID, previousHash = event.ID, event.Hash
 	}
-	if err := writer.Flush(); err != nil {
-		tb.Fatal(err)
+	if count > 0 {
+		// ImportEventLog only fills an empty journal; the exported prefix
+		// is imported again ahead of the new events.
+		store, err := runtimestore.Open(ctx, workspace)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		_, err = store.DB().ExecContext(ctx, "DELETE FROM events")
+		if closeErr := store.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			tb.Fatal(err)
+		}
 	}
-	if err := file.Close(); err != nil {
+	if _, err := team.ImportEventLog(ctx, workspace, &log); err != nil {
 		tb.Fatal(err)
 	}
 }
 
-func eventChainTail(tb testing.TB, path string) (id, hash string, count int) {
+// eventChainTail returns the last event id and hash of an exported journal
+// and its event count.
+func eventChainTail(tb testing.TB, log []byte) (id, hash string, count int) {
 	tb.Helper()
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return "", "", 0
-	}
-	if err != nil {
-		tb.Fatal(err)
-	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	lines := strings.Split(strings.TrimSpace(string(log)), "\n")
 	if len(lines) == 1 && lines[0] == "" {
 		return "", "", 0
 	}
@@ -92,6 +96,42 @@ func eventChainTail(tb testing.TB, path string) (id, hash string, count int) {
 		tb.Fatal(err)
 	}
 	return last.ID, last.Hash, len(lines)
+}
+
+// tamperEventJournal runs one statement against workspace's events table,
+// the way a tamperer would edit the journal behind the event store.
+func tamperEventJournal(tb testing.TB, workspace, query string, args ...any) {
+	tb.Helper()
+	ctx := context.Background()
+	store, err := runtimestore.Open(ctx, workspace)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	_, err = store.DB().ExecContext(ctx, query, args...)
+	if closeErr := store.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		tb.Fatal(err)
+	}
+}
+
+// runtimeStoreFiles returns the bytes of every runtime.sqlite file present in
+// workspace, keyed by name, so a test can prove a reader changed none of them.
+func runtimeStoreFiles(tb testing.TB, workspace string) map[string][]byte {
+	tb.Helper()
+	files := make(map[string][]byte)
+	for _, name := range runtimestore.Files {
+		data, err := os.ReadFile(filepath.Join(workspace, name))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			tb.Fatal(err)
+		}
+		files[name] = data
+	}
+	return files
 }
 
 var executionFixtureEventTypes = map[string]team.EventType{

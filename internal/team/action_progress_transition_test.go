@@ -128,7 +128,7 @@ func TestTaskTransitionWaitsForActionProgress(t *testing.T) {
 		t.Run(change.name, func(t *testing.T) {
 			c, task, item, events := newActionProgressTransitionCoordinator(t)
 			todoID := item.ID
-			originalSync := events.syncFile
+			originalSync := events.commitHook
 			var once sync.Once
 			transition := make(chan error, 1)
 			snapshotPrepared := make(chan struct{})
@@ -136,7 +136,7 @@ func TestTaskTransitionWaitsForActionProgress(t *testing.T) {
 			c.SetEventJournal(actionProgressTransitionJournal{EventJournal: eventStoreJournal{store: events}, beforeAppend: func() {
 				snapshotOnce.Do(func() { close(snapshotPrepared) })
 			}})
-			events.syncFile = func() error {
+			events.commitHook = func() error {
 				once.Do(func() {
 					// Progress is durable before its live projection is
 					// installed. A lifecycle snapshot must wait for both.

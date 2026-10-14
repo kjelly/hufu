@@ -30,16 +30,21 @@ const File = "runtime.sqlite"
 var Files = []string{File, File + "-wal", File + "-shm", File + "-journal"}
 
 var (
-	// ErrNotFound reports that a read-only open found no database.
-	ErrNotFound = errors.New("runtime store not found")
+	// ErrNotFound reports that a read-only open found no database. It wraps
+	// os.ErrNotExist so callers that treat a missing log as empty keep working.
+	ErrNotFound = fmt.Errorf("runtime store not found: %w", os.ErrNotExist)
 	// ErrLegacyWorkspace reports a workspace written by a hufu that kept its
 	// event journal and runtime state in files. Such workspaces are not
 	// migrated; remove it with `hufu workspace delete` and start a new one.
 	ErrLegacyWorkspace = errors.New("workspace uses the retired file-based event log and runtime state; remove it with `hufu workspace delete` and start a new workspace")
+	// ErrReplaced reports that the database path no longer names the file a
+	// store opened. Writes through the open connection would reach a file no
+	// later reader sees.
+	ErrReplaced = errors.New("runtime store file was replaced or removed")
 )
 
 // legacyMarkers are files only a file-based workspace contains.
-var legacyMarkers = []string{filepath.Join("logs", "event_store.jsonl"), "session.json"}
+var legacyMarkers = []string{filepath.Join("logs", "event_store.jsonl")}
 
 // Path returns the database path of workspace.
 func Path(workspace string) string {
@@ -60,6 +65,8 @@ type Store struct {
 type sharedHandle struct {
 	db   *sql.DB
 	refs int
+	// file identifies the database file the connection opened.
+	file os.FileInfo
 }
 
 var (
@@ -97,7 +104,11 @@ func Open(ctx context.Context, workspace string) (*Store, error) {
 	if err := os.Chmod(path, 0o600); err != nil {
 		return nil, errors.Join(fmt.Errorf("open runtime store: restrict permissions: %w", err), db.Close())
 	}
-	handle := &sharedHandle{db: db, refs: 1}
+	file, err := os.Stat(path)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("open runtime store: %w", err), db.Close())
+	}
+	handle := &sharedHandle{db: db, refs: 1, file: file}
 	handles[path] = handle
 	return &Store{db: db, path: path, shared: handle}, nil
 }
@@ -146,6 +157,29 @@ func (s *Store) DB() *sql.DB { return s.db }
 
 // Path returns the database path.
 func (s *Store) Path() string { return s.path }
+
+// CheckCurrent fails with ErrReplaced when the database path no longer names
+// the file this writable store opened. The stale connection is then no longer
+// shared, so the next Open reaches the file the path names. Read-only stores
+// always pass.
+func (s *Store) CheckCurrent() error {
+	if s.shared == nil {
+		return nil
+	}
+	current, err := os.Stat(s.path)
+	if err == nil && os.SameFile(s.shared.file, current) {
+		return nil
+	}
+	sharedMu.Lock()
+	if handles[s.path] == s.shared {
+		delete(handles, s.path)
+	}
+	sharedMu.Unlock()
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrReplaced, err)
+	}
+	return fmt.Errorf("%w: %s", ErrReplaced, s.path)
+}
 
 // ReadOnly reports whether the store was opened read-only.
 func (s *Store) ReadOnly() bool { return s.readOnly }

@@ -1,8 +1,6 @@
 package workspace
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,7 +15,7 @@ import (
 	"strings"
 
 	contextstore "github.com/kjelly/hufu/internal/context"
-	"github.com/kjelly/hufu/internal/eventchain"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 const (
@@ -301,18 +299,11 @@ func (m *WorkspaceManager) migrateOne(ctx context.Context, knownProject Project,
 		return item, err
 	}
 	contextDestination := filepath.Join(workspace.PendingPath, legacyContextFilename)
-	if hasContext {
-		if err = contextstore.BackupSQLiteReadOnly(ctx, filepath.Join(source, legacyContextFilename), contextDestination); err != nil {
-			return item, err
-		}
-	} else {
-		repository, openErr := contextstore.OpenSQLite(contextDestination)
-		if openErr != nil {
-			return item, openErr
-		}
-		if closeErr := repository.Close(); closeErr != nil {
-			return item, closeErr
-		}
+	created, err := copyLegacyDatabases(ctx, source, workspace.PendingPath, hasContext)
+	if err != nil {
+		return item, err
+	}
+	if created {
 		item.Warnings = append(item.Warnings, "context_store_created")
 	}
 	if err = registry.runMigrationHook(MigrationStageCopied); err != nil {
@@ -368,6 +359,34 @@ func (m *WorkspaceManager) migrateOne(ctx context.Context, knownProject Project,
 	workspace.UpdatedAt = registry.now().UTC()
 	item.Workspace = workspace
 	return item, nil
+}
+
+// copyLegacyDatabases snapshots source's databases into destination with the
+// online-backup API, creating an empty context store when source has none. It
+// reports whether it created the context store.
+func copyLegacyDatabases(ctx context.Context, source, destination string, hasContext bool) (bool, error) {
+	contextDestination := filepath.Join(destination, legacyContextFilename)
+	created := false
+	if hasContext {
+		if err := contextstore.BackupSQLiteReadOnly(ctx, filepath.Join(source, legacyContextFilename), contextDestination); err != nil {
+			return false, err
+		}
+	} else {
+		repository, err := contextstore.OpenSQLite(contextDestination)
+		if err != nil {
+			return false, err
+		}
+		if err := repository.Close(); err != nil {
+			return false, err
+		}
+		created = true
+	}
+	if runtimestore.Exists(source) {
+		if err := contextstore.BackupSQLiteReadOnly(ctx, runtimestore.Path(source), runtimestore.Path(destination)); err != nil {
+			return false, fmt.Errorf("copy runtime store: %w", err)
+		}
+	}
+	return created, nil
 }
 
 func inspectLegacyContext(ctx context.Context, source string) (string, contextstore.SQLiteSnapshotFacts, bool, error) {
@@ -467,7 +486,7 @@ func buildInventory(root string) ([]inventoryEntry, error) {
 		if err != nil {
 			return err
 		}
-		if relative == legacyContextFilename+"-shm" {
+		if relative == legacyContextFilename+"-shm" || relative == runtimestore.File+"-shm" {
 			return nil
 		}
 		info, err := entry.Info()
@@ -512,7 +531,7 @@ func copyLegacyTree(source, destination string) error {
 		if err != nil {
 			return err
 		}
-		if relative == legacyContextFilename || relative == legacyContextFilename+"-wal" || relative == legacyContextFilename+"-shm" {
+		if isSQLiteStoreFile(relative) {
 			return nil
 		}
 		target := filepath.Join(destination, relative)
@@ -598,8 +617,19 @@ func buildNonSQLiteInventory(root string) ([]inventoryEntry, error) {
 		return nil, err
 	}
 	return slices.DeleteFunc(items, func(item inventoryEntry) bool {
-		return item.Path == legacyContextFilename || item.Path == legacyContextFilename+"-wal" || item.Path == "operation.json" || item.Path == "workspace.json"
+		return isSQLiteStoreFile(item.Path) || item.Path == "operation.json" || item.Path == "workspace.json"
 	}), nil
+}
+
+// isSQLiteStoreFile reports whether relative names a workspace database or
+// one of its sidecars. Databases are copied with the online-backup API, never
+// byte for byte.
+func isSQLiteStoreFile(relative string) bool {
+	switch relative {
+	case legacyContextFilename, legacyContextFilename + "-wal", legacyContextFilename + "-shm":
+		return true
+	}
+	return slices.Contains(runtimestore.Files, relative)
 }
 
 func hashFile(path string) (string, error) {
@@ -642,41 +672,10 @@ func verifyLegacySession(root string) error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("session_unreadable: %w", err)
 	}
-	eventPath := filepath.Join(root, "logs", "event_store.jsonl")
-	if _, err := os.Stat(eventPath); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	if err := verifyEventChain(eventPath); err != nil {
+	if err := runtimestore.VerifyEventChain(context.Background(), root); err != nil {
 		return fmt.Errorf("%s: %w", IssueEventChainInvalid, err)
 	}
 	return nil
-}
-
-func verifyEventChain(path string) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = file.Close() }()
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	var chainVerifier eventchain.Verifier
-	for scanner.Scan() {
-		line := bytes.TrimSpace(scanner.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		var event eventchain.Entry
-		if err = json.Unmarshal(line, &event); err != nil {
-			return fmt.Errorf("decode event %d: %w", chainVerifier.Sequence()+1, err)
-		}
-		if err = chainVerifier.Verify(event); err != nil {
-			return err
-		}
-	}
-	return scanner.Err()
 }
 
 func markerMatchesOperation(root, operationID, workspaceID string) bool {

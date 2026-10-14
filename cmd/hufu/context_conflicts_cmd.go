@@ -60,7 +60,7 @@ var contextConflictsDismissCmd = &cobra.Command{Use: "dismiss <conflict-id>", Sh
 func init() {
 	contextCmd.AddCommand(contextConflictsCmd)
 	flags := contextConflictsCmd.PersistentFlags()
-	flags.StringVarP(&conflictsWorkspace, "workspace", "w", "", "Workspace containing context.sqlite and logs/event_store.jsonl")
+	flags.StringVarP(&conflictsWorkspace, "workspace", "w", "", "Workspace containing context.sqlite and runtime.sqlite")
 	flags.StringVar(&conflictsProject, "project", "", "Canonical context project scope (required)")
 	flags.StringVar(&conflictsTeam, "team", "", "Canonical context team scope (required)")
 	flags.BoolVar(&conflictsJSON, "json", false, "Emit stable JSON")

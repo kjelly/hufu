@@ -4,7 +4,7 @@ package improve
 // in spec.md ("Hufu 改善計畫：modernc SQLite + TEMP Analytics Tables + SQL
 // Aggregation"). It is an ephemeral, in-memory analytics database: nothing it
 // creates is ever written to disk, and it never mutates canonical storage
-// (context.sqlite, execution-events.jsonl, event_store.jsonl).
+// (context.sqlite, runtime.sqlite).
 
 import (
 	"context"

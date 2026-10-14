@@ -46,9 +46,9 @@ func AcquireDecisionWriterLease(ctx context.Context, workspace, branchID string)
 	ticker := time.NewTicker(decisionWriterRetryInterval)
 	defer ticker.Stop()
 	for {
-		if err := lockEventStoreFile(file); err == nil {
+		if err := lockExclusiveFile(file); err == nil {
 			return &DecisionWriterLease{file: file, path: path}, nil
-		} else if !errors.Is(err, ErrEventStoreWriterUnavailable) {
+		} else if !errors.Is(err, errFileLockHeld) {
 			_ = file.Close()
 			return nil, fmt.Errorf("lock decision writer lease: %w", err)
 		}
@@ -72,7 +72,7 @@ func (l *DecisionWriterLease) Close() error {
 		return nil
 	}
 	l.closed = true
-	unlockErr := unlockEventStoreFile(l.file)
+	unlockErr := unlockExclusiveFile(l.file)
 	closeErr := l.file.Close()
 	return errors.Join(unlockErr, closeErr)
 }

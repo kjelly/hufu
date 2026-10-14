@@ -9,20 +9,22 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func lockEventStoreFile(file *os.File) error {
+// lockExclusiveFile takes a non-blocking exclusive lock on file. The kernel
+// releases it when the process exits, so a crash never strands an owner.
+func lockExclusiveFile(file *os.File) error {
 	if file == nil {
-		return fmt.Errorf("%w: lock file is unavailable", ErrEventStoreWriterUnavailable)
+		return fmt.Errorf("%w: lock file is unavailable", errFileLockHeld)
 	}
 	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
-			return fmt.Errorf("%w: %v", ErrEventStoreWriterUnavailable, err)
+			return fmt.Errorf("%w: %v", errFileLockHeld, err)
 		}
 		return err
 	}
 	return nil
 }
 
-func unlockEventStoreFile(file *os.File) error {
+func unlockExclusiveFile(file *os.File) error {
 	if file == nil {
 		return nil
 	}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 const (
@@ -185,11 +186,8 @@ func (m *WorkspaceManager) inspectActiveWorkspace(ctx context.Context, project P
 			result.Issues = append(result.Issues, DoctorIssue{Code: code, ProjectID: project.ID, WorkspaceID: workspace.ID, Path: contextPath, Detail: inspectErr.Error()})
 		}
 	}
-	eventPath := filepath.Join(workspace.ControlRoot, "logs", "event_store.jsonl")
-	if _, statErr := os.Stat(eventPath); statErr == nil {
-		if verifyErr := verifyEventChain(eventPath); verifyErr != nil {
-			result.Issues = append(result.Issues, DoctorIssue{Code: IssueEventChainInvalid, ProjectID: project.ID, WorkspaceID: workspace.ID, Path: eventPath, Detail: verifyErr.Error()})
-		}
+	if verifyErr := runtimestore.VerifyEventChain(ctx, workspace.ControlRoot); verifyErr != nil {
+		result.Issues = append(result.Issues, DoctorIssue{Code: IssueEventChainInvalid, ProjectID: project.ID, WorkspaceID: workspace.ID, Path: runtimestore.Path(workspace.ControlRoot), Detail: verifyErr.Error()})
 	}
 }
 

@@ -59,7 +59,7 @@ func init() {
 	contextLearningCmd.Flags().BoolVar(&contextQueryJSON, "json", false, "Emit JSON")
 	contextCmd.AddCommand(contextLearningCmd)
 	for _, command := range []*cobra.Command{contextOutcomesCmd, contextExplainMemoryCmd, contextLearningDoctorCmd} {
-		command.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace containing context.sqlite and event_store.jsonl")
+		command.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace containing context.sqlite and runtime.sqlite")
 		command.Flags().StringVar(&contextPolicyVersion, "policy-version", "memory-policy-v1", "Memory policy version")
 		command.Flags().BoolVar(&contextQueryJSON, "json", false, "Emit JSON")
 		contextCmd.AddCommand(command)

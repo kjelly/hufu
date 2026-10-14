@@ -253,14 +253,7 @@ func TestInspectOverviewTextFailureUsesOneStderrTemplate(t *testing.T) {
 }
 
 func TestInspectOutputAliasConflictFailsBeforeReadingWorkspace(t *testing.T) {
-	workspace := t.TempDir()
-	logsDir := filepath.Join(workspace, "logs")
-	if err := os.MkdirAll(logsDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(logsDir, "event_store.jsonl"), []byte("not-json\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	workspace := tamperedInspectWorkspace(t)
 	command := newInspectCommand()
 	command.SetOut(&bytes.Buffer{})
 	command.SetErr(&bytes.Buffer{})
@@ -538,14 +531,7 @@ func TestInspectCommandCompletesFormatWithoutFiles(t *testing.T) {
 }
 
 func TestInspectInvalidFormatFailsBeforeReadingWorkspace(t *testing.T) {
-	workspace := t.TempDir()
-	logsDir := filepath.Join(workspace, "logs")
-	if err := os.MkdirAll(logsDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(logsDir, "event_store.jsonl"), []byte("not-json\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	workspace := tamperedInspectWorkspace(t)
 
 	command := newInspectCommand()
 	command.SetOut(&bytes.Buffer{})
@@ -559,6 +545,17 @@ func TestInspectInvalidFormatFailsBeforeReadingWorkspace(t *testing.T) {
 	if !strings.Contains(err.Error(), "invalid format") {
 		t.Fatalf("error = %v, want format validation before corrupt event-store read", err)
 	}
+}
+
+// tamperedInspectWorkspace returns a workspace whose event journal fails
+// validation, so any command that reads it before validating its own flags
+// reports an event-store error.
+func tamperedInspectWorkspace(t *testing.T) string {
+	t.Helper()
+	workspace := t.TempDir()
+	writeEventJournal(t, workspace, team.RunEvent{RunID: "run-1", Type: "run_started", Payload: []byte(`{"goal":"tampered"}`)})
+	tamperEventJournal(t, workspace, `UPDATE events SET type = 'tampered' WHERE sequence = 1`)
+	return workspace
 }
 
 func buildInspectCommandFixture(t *testing.T) (workspace, runID, taskID string) {

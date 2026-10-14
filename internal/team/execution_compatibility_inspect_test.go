@@ -64,6 +64,9 @@ func TestCompatibilityScannerCountsPhysicalEventsOnce(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(workspace, logsDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(workspace, logsDir, executionEventsFile), []byte(`{"version":4,"provider":"ollama"}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -179,13 +182,8 @@ func TestCompatibilityScannerRejectsCorruptHashChain(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(workspace, logsDir, eventStoreFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, bytes.Replace(data, []byte(`"status":"pending"`), []byte(`"status":"blocked"`), 1), 0o644); err != nil {
-		t.Fatal(err)
+	if !tamperJournalPayload(t, workspace, `"status":"pending"`, `"status":"blocked"`) {
+		t.Fatal("the journal has no task status to corrupt")
 	}
 	if _, err := InspectExecutionCompatibility(context.Background(), workspace, ""); err == nil {
 		t.Fatal("corrupt event chain was accepted")

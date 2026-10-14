@@ -8,12 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -120,8 +122,8 @@ func TestDoctorWorkspaceEmptyHistoryAndProbeSafety(t *testing.T) {
 	if matches, err := filepath.Glob(filepath.Join(workspace, ".hufu-doctor-probe-*")); err != nil || len(matches) != 0 {
 		t.Fatalf("temporary doctor probes remain: %v, err=%v", matches, err)
 	}
-	if _, err := os.Stat(filepath.Join(workspace, "logs", "event_store.jsonl")); !os.IsNotExist(err) {
-		t.Fatalf("doctor created event log: %v", err)
+	if files := runtimeStoreFiles(t, workspace); len(files) != 0 {
+		t.Fatalf("doctor created event journal files: %v", slices.Sorted(maps.Keys(files)))
 	}
 }
 
@@ -177,18 +179,8 @@ func TestDoctorWorkspaceHistoryCheckpointAndIntegrity(t *testing.T) {
 	if check := doctorCheckByID(t, report, "recovery.unresolved"); check.Status != "warning" || check.Count == nil || *check.Count != 1 {
 		t.Fatalf("active-branch recovery = %#v", check)
 	}
-	path := filepath.Join(workspace, "logs", "event_store.jsonl")
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	corrupt := bytes.Replace(before, []byte(`"type":"task_created"`), []byte(`"type":"task_started"`), 1)
-	if bytes.Equal(before, corrupt) {
-		t.Fatal("test fixture did not change event type")
-	}
-	if err := os.WriteFile(path, corrupt, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// The type is hashed; changing the first task event's type breaks the chain.
+	tamperEventJournal(t, workspace, `UPDATE events SET type = 'task_started' WHERE sequence = (SELECT MIN(sequence) FROM events WHERE type = 'task_created')`)
 	broken := collectWorkspaceReport(t, workspace)
 	if doctorCheckByID(t, broken, "events.integrity").Status != "fail" || doctorCheckByID(t, broken, "recovery.unresolved").Status != "unknown" {
 		t.Fatalf("corrupt history report = %#v", broken)

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestDebugCmd_RunIsolation(t *testing.T) {
@@ -33,15 +35,13 @@ func TestDebugCmd_RunIsolation(t *testing.T) {
 	}
 
 	// Write canonical events for two runs
-	events := `{"run_id":"run-A","type":"run_started","payload":{"team":"dev"}}
-{"run_id":"run-A","task_id":"task-1","type":"task_started","payload":{"id":"task-1","attempt":1}}
-{"run_id":"run-B","type":"run_started","payload":{"team":"dev"}}
-{"run_id":"run-B","task_id":"task-1","type":"task_started","payload":{"id":"task-1","attempt":1}}
-{"run_id":"run-B","task_id":"task-2","type":"task_started","payload":{"id":"task-2","attempt":1}}
-`
-	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "event_store.jsonl"), []byte(events), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeEventJournal(t, workspaceDir,
+		team.RunEvent{RunID: "run-A", Type: "run_started", Payload: []byte(`{"team":"dev"}`)},
+		team.RunEvent{RunID: "run-A", TaskID: "task-1", Type: "task_started", Payload: []byte(`{"id":"task-1","attempt":1}`)},
+		team.RunEvent{RunID: "run-B", Type: "run_started", Payload: []byte(`{"team":"dev"}`)},
+		team.RunEvent{RunID: "run-B", TaskID: "task-1", Type: "task_started", Payload: []byte(`{"id":"task-1","attempt":1}`)},
+		team.RunEvent{RunID: "run-B", TaskID: "task-2", Type: "task_started", Payload: []byte(`{"id":"task-2","attempt":1}`)},
+	)
 
 	// Write transcripts for both runs
 	os.WriteFile(filepath.Join(workspaceDir, "logs", "task-output", "task-1-run-A-attempt-1.jsonl"), []byte(`transcript A`), 0644)
@@ -123,6 +123,16 @@ func TestDebugCmd_RunIsolation(t *testing.T) {
 			content := string(b)
 			if !strings.Contains(content, "1 unscoped legacy rows omitted") {
 				t.Errorf("manifest missing legacy row omission report, got %s", content)
+			}
+		}
+		if name == "logs/event_store.jsonl" {
+			b, _ := io.ReadAll(tr)
+			content := string(b)
+			if strings.Contains(content, "run-B") || strings.Contains(content, "task-2") {
+				t.Errorf("event_store.jsonl contains run-B events")
+			}
+			if !strings.Contains(content, "run-A") {
+				t.Errorf("event_store.jsonl missing run-A events")
 			}
 		}
 		if strings.Contains(name, "task_journal.jsonl") {

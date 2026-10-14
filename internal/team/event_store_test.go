@@ -1,7 +1,6 @@
 package team
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,7 +23,7 @@ func TestEventStoreSyncFailureIsObservable(t *testing.T) {
 	defer es.Close()
 
 	const uncertainKey = "run:started:run-sync"
-	es.syncFile = func() error { return errors.New("injected sync failure") }
+	es.commitHook = func() error { return errors.New("injected sync failure") }
 	if err := es.Append(RunEvent{Type: "run_started", Actor: "user", IdempotencyKey: uncertainKey}); err == nil {
 		t.Fatal("Append returned nil for a failed fsync")
 	}
@@ -193,10 +192,10 @@ func TestEventStoreAppendFailsSafelyWhenSyncFunctionIsAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = store.Close() }()
-	store.syncFile = nil
+	store.commitHook = nil
 	if _, err := store.AppendPersistedContext(context.Background(), RunEvent{
 		Type: "sync_function_missing", Actor: "test", Payload: []byte(`{"ok":true}`),
-	}); err == nil || !strings.Contains(err.Error(), "sync function is unavailable") {
+	}); err == nil || !strings.Contains(err.Error(), "commit hook is unavailable") {
 		t.Fatalf("append error = %v, want missing sync function failure", err)
 	}
 	if store.stateValid || !store.degraded {
@@ -212,12 +211,12 @@ func configureEventStoreSyncFailure(t *testing.T, store *EventStore, occurrence 
 	if occurrence < 1 {
 		t.Fatalf("event occurrence = %d, want positive occurrence", occurrence)
 	}
-	previousSync := store.syncFile
+	previousSync := store.commitHook
 	if previousSync == nil {
 		t.Fatal("event store sync seam is unavailable")
 	}
 	syncCount := 0
-	store.syncFile = func() error {
+	store.commitHook = func() error {
 		syncCount++
 		if syncCount == occurrence {
 			return failure
@@ -237,27 +236,14 @@ func configureEventStoreSyncFailureForEventType(t *testing.T, store *EventStore,
 	if occurrence < 1 {
 		t.Fatalf("event occurrence = %d, want positive occurrence", occurrence)
 	}
-	previousSync := store.syncFile
+	previousSync := store.commitHook
 	if previousSync == nil {
 		t.Fatal("event store sync seam is unavailable")
 	}
 	matched := 0
-	store.syncFile = func() error {
-		data, err := os.ReadFile(store.path)
-		if err != nil {
-			return err
-		}
-		var appended RunEvent
-		for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
-			if line == "" {
-				continue
-			}
-			var event RunEvent
-			if err := json.Unmarshal([]byte(line), &event); err != nil {
-				return err
-			}
-			appended = event
-		}
+	store.commitHook = func() error {
+		// The hook runs after the committed event joined the cache.
+		appended := store.cachedEvents[len(store.cachedEvents)-1]
 		if appended.Type == eventType {
 			matched++
 			if matched == occurrence {
@@ -288,7 +274,7 @@ func TestLearningGapRepairReplaysEventWithoutWorker(t *testing.T) {
 	c := &Coordinator{eventStore: store, contextRepo: repo, session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{MemoryLearning: policy}}, sessionData: NewSession()}
 	payload, _ := json.Marshal(memoryEventPayload{SchemaVersion: 1, RetrievalID: "retrieval-1", ContextItemID: "memory-1", PolicyVersion: policy.PolicyVersion})
 	const key = "memory:retrieved:run:task:1:retrieval-1:memory-1"
-	store.syncFile = func() error { return errors.New("uncertain sync") }
+	store.commitHook = func() error { return errors.New("uncertain sync") }
 	if _, err := c.emitEventOnce(key, RunEvent{Type: "memory_retrieved", Actor: "runtime", TaskID: "task", Attempt: 1, Payload: payload}); err == nil {
 		t.Fatal("expected injected append failure")
 	}
@@ -327,7 +313,7 @@ func TestLearningGapCheckpointSurvivesRestart(t *testing.T) {
 	const key = "memory:retrieved:run:task:1:retrieval-1:memory-1"
 	// Inject a sync failure after the manifest checkpoint: the exposure append
 	// fails while the manifest itself is already durable.
-	store.syncFile = func() error { return errors.New("uncertain sync") }
+	store.commitHook = func() error { return errors.New("uncertain sync") }
 	if _, err := c.emitEventOnce(key, RunEvent{Type: "memory_retrieved", Actor: "runtime", TaskID: "task", Attempt: 1, Payload: payload}); err == nil {
 		t.Fatal("expected injected append failure")
 	}
@@ -466,11 +452,8 @@ func TestEventStoreTamperDetection(t *testing.T) {
 	_ = es.Append(RunEvent{Type: "run_finished", Actor: "coordinator", Payload: []byte(`{"outcome":"success"}`)})
 	_ = es.Close()
 
-	// Tamper with event log file directly
-	path := filepath.Join(dir, logsDir, eventStoreFile)
-	data, _ := os.ReadFile(path)
-	tampered := bytes.Replace(data, []byte("run_started"), []byte("run_hacked"), 1)
-	_ = os.WriteFile(path, tampered, 0o644)
+	// Tamper with the journal row directly
+	execJournal(t, dir, `UPDATE events SET type = 'run_hacked' WHERE type = 'run_started'`)
 
 	es2, err := OpenEventStore(dir)
 	if err == nil {
@@ -577,18 +560,10 @@ func TestEventStoreVerifyRefreshDetectsTamperAfterOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path := filepath.Join(workspace, logsDir, eventStoreFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data = bytes.Replace(data, []byte("task_progress"), []byte("task_tampered"), 1)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	execJournal(t, workspace, `UPDATE events SET type = 'task_tampered' WHERE type = 'task_progress'`)
 
 	if err := store.VerifyHashChain(); err == nil {
-		t.Fatal("VerifyHashChain accepted tampered durable JSONL")
+		t.Fatal("VerifyHashChain accepted a tampered durable row")
 	}
 	if _, err := store.ReadEvents(); err == nil {
 		t.Fatal("ReadEvents exposed the pre-tamper cache after failed refresh")
@@ -605,11 +580,10 @@ func TestEventStoreFailedRefreshInvalidatesStateAndBlocksAppend(t *testing.T) {
 	if err := store.Append(RunEvent{Type: "run_started", Actor: "user", IdempotencyKey: "started"}); err != nil {
 		t.Fatal(err)
 	}
-	originalPath := store.path
-	store.path = filepath.Join(workspace, "missing-parent", eventStoreFile)
+	execJournal(t, workspace, `UPDATE events SET type = 'run_tampered'`)
 
 	if err := store.VerifyHashChain(); err == nil {
-		t.Fatal("VerifyHashChain unexpectedly recovered a missing refresh path")
+		t.Fatal("VerifyHashChain unexpectedly recovered a tampered journal")
 	}
 	if _, err := store.ReadEvents(); err == nil {
 		t.Fatal("ReadEvents exposed stale cache after refresh failure")
@@ -618,12 +592,8 @@ func TestEventStoreFailedRefreshInvalidatesStateAndBlocksAppend(t *testing.T) {
 		t.Fatal("Append used stale chain state after refresh failure")
 	}
 
-	data, err := os.ReadFile(originalPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if count := bytes.Count(data, []byte("\n")); count != 1 {
-		t.Fatalf("original durable log gained an append after refresh failure: %d lines", count)
+	if count := len(readJournal(t, workspace)); count != 1 {
+		t.Fatalf("durable journal gained an append after refresh failure: %d rows", count)
 	}
 }
 
@@ -641,15 +611,7 @@ func TestEventStoreFailedRefreshDoesNotPublishPartialState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path := filepath.Join(workspace, logsDir, eventStoreFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data = bytes.Replace(data, []byte("task_created"), []byte("task_corrupt"), 1)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	execJournal(t, workspace, `UPDATE events SET type = 'task_corrupt' WHERE type = 'task_created'`)
 
 	if err := store.VerifyHashChain(); err == nil {
 		t.Fatal("VerifyHashChain accepted corruption after a valid prefix")
@@ -681,11 +643,7 @@ func TestEventStoreSuccessfulRefreshSwapsCacheAndAppendHandle(t *testing.T) {
 	if err := replacement.Close(); err != nil {
 		t.Fatal(err)
 	}
-	replacementPath := filepath.Join(replacementWorkspace, logsDir, eventStoreFile)
-	targetPath := filepath.Join(workspace, logsDir, eventStoreFile)
-	if err := os.Rename(replacementPath, targetPath); err != nil {
-		t.Fatal(err)
-	}
+	replaceRuntimeDatabase(t, workspace, replacementWorkspace)
 
 	if err := store.VerifyHashChain(); err != nil {
 		t.Fatalf("refresh replacement: %v", err)
@@ -738,17 +696,7 @@ func TestEventStoreRejectsNonEmptyFirstLink(t *testing.T) {
 			event.Timestamp = "2026-01-01T00:00:00Z"
 			event.Payload = json.RawMessage(`{"started":true}`)
 			event.Hash = ComputeEventHash(event.PreviousHash, event.ID, event.Type, event.Timestamp, event.Payload)
-			path := filepath.Join(workspace, logsDir, eventStoreFile)
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			data, err := json.Marshal(event)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
-				t.Fatal(err)
-			}
+			insertJournalEvents(t, workspace, event)
 			if _, err := NewEventStore(workspace, "run-first-link", "session-first-link"); err == nil {
 				t.Fatal("NewEventStore accepted a non-empty first link")
 			}
@@ -768,15 +716,7 @@ func TestCoordinatorStartupMarksCorruptEventStoreForRecovery(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(workspace, logsDir, eventStoreFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data = bytes.Replace(data, []byte("run_started"), []byte("run_tampered"), 1)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	execJournal(t, workspace, `UPDATE events SET type = 'run_tampered' WHERE type = 'run_started'`)
 
 	c, err := NewCoordinator(&TeamSession{
 		Workspace: workspace,

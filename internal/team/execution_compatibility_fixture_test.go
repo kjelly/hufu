@@ -105,6 +105,10 @@ func copyFixtureWorkspace(t *testing.T, source, destination string) {
 		if err != nil {
 			return err
 		}
+		if path == fixtureEventLog {
+			loadFixtureEventLog(t, destination, data)
+			return nil
+		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
@@ -119,6 +123,25 @@ func copyFixtureWorkspace(t *testing.T, source, destination string) {
 	}); err != nil {
 		t.Fatalf("copy fixture workspace: %v", err)
 	}
+}
+
+// fixtureEventLog is where a saved fixture keeps its event journal: the
+// portable JSONL export, loaded into runtime.sqlite when the fixture is copied.
+const fixtureEventLog = "logs/event_store.jsonl"
+
+// loadFixtureEventLog writes the fixture's events verbatim, without
+// validating them, so a deliberately broken chain reaches the inspector.
+func loadFixtureEventLog(t *testing.T, workspace string, data []byte) {
+	t.Helper()
+	var events []RunEvent
+	for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
+		var event RunEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("decode fixture event: %v", err)
+		}
+		events = append(events, event)
+	}
+	insertJournalEvents(t, workspace, events...)
 }
 
 type compatibilityFixtureError struct {

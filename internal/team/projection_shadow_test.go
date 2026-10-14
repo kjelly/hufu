@@ -85,15 +85,9 @@ func TestInitEventStoreMarksCorruptedHashChainForRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Corrupt the hash chain in event_store.jsonl
-	storePath := filepath.Join(workspace, logsDir, eventStoreFile)
-	data, err := os.ReadFile(storePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	corrupted := strings.Replace(string(data), `"id":"task-1"`, `"id":"task-corrupted"`, 1)
-	if err := os.WriteFile(storePath, []byte(corrupted), 0o644); err != nil {
-		t.Fatal(err)
+	// Corrupt the hash chain in the journal
+	if !tamperJournalPayload(t, workspace, `"id":"task-1"`, `"id":"task-corrupted"`) {
+		t.Fatal("the journal has no task to corrupt")
 	}
 
 	c := &Coordinator{
@@ -305,15 +299,9 @@ func TestRunAndRunDirectAgent_RecoveryRequiredDeniesAdmissionAndMakesNoCalls(t *
 		t.Fatal(err)
 	}
 
-	// Corrupt event store log
-	storePath := filepath.Join(workspace, logsDir, eventStoreFile)
-	data, err := os.ReadFile(storePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	corrupted := strings.Replace(string(data), `"id":"task-1"`, `"id":"task-corrupted"`, 1)
-	if err := os.WriteFile(storePath, []byte(corrupted), 0o644); err != nil {
-		t.Fatal(err)
+	// Corrupt the journal
+	if !tamperJournalPayload(t, workspace, `"id":"task-1"`, `"id":"task-corrupted"`) {
+		t.Fatal("the journal has no task to corrupt")
 	}
 
 	c := &Coordinator{

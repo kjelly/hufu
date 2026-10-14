@@ -1566,7 +1566,7 @@ func TestCompactionCanonicalCommitWinsPostCanonicalFailures(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				store.syncFile = func() error { return errors.New("injected attestation sync failure") }
+				store.commitHook = func() error { return errors.New("injected attestation sync failure") }
 				c.eventStore = store
 				t.Cleanup(func() { _ = store.Close() })
 			},
@@ -1580,7 +1580,7 @@ func TestCompactionCanonicalCommitWinsPostCanonicalFailures(t *testing.T) {
 					t.Fatal(err)
 				}
 				syncCalls := 0
-				store.syncFile = func() error {
+				store.commitHook = func() error {
 					syncCalls++
 					if syncCalls == 3 {
 						return errors.New("injected telemetry sync failure")
@@ -1621,11 +1621,7 @@ func TestCompactionCanonicalCommitWinsPostCanonicalFailures(t *testing.T) {
 				t.Fatal("post-canonical projection gap was not marked recoverable")
 			}
 			if test.name == "event attestation" {
-				data, readErr := os.ReadFile(filepath.Join(workspace, logsDir, eventStoreFile))
-				if readErr != nil {
-					t.Fatal(readErr)
-				}
-				if strings.Contains(string(data), string(EventContextWindowCompactionCommitted)) {
+				if strings.Contains(string(exportedJournal(t, workspace)), string(EventContextWindowCompactionCommitted)) {
 					t.Fatal("compaction telemetry was persisted after P2 attestation failure")
 				}
 			}

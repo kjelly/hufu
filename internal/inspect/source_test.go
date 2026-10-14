@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -56,7 +57,7 @@ func TestLoadLineageUsesOnlySelectedBranchAndPreservesGlobalOrdinals(t *testing.
 		t.Fatal(err)
 	}
 
-	eventPath := filepath.Join(workspace, "logs", "event_store.jsonl")
+	eventPath := runtimestore.Path(workspace)
 	treePath := filepath.Join(workspace, "session_tree.json")
 	eventsBefore, err := os.ReadFile(eventPath)
 	if err != nil {

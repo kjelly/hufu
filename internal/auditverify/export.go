@@ -1,6 +1,7 @@
 package auditverify
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -20,12 +21,11 @@ type ExportOptions struct {
 	ArtifactMode string
 }
 
-// eventStoreRelPath and artifact store paths mirror the on-disk convention
-// team.OpenEventStore/team.NewFileArtifactStore use (workspace/logs/...).
-// They are re-derived here, rather than imported, because team does not
-// export them; auditverify only ever reads this layout, never writes to it.
+// The artifact store paths mirror the on-disk convention
+// team.NewFileArtifactStore uses (workspace/logs/...). They are re-derived
+// here, rather than imported, because team does not export them; auditverify
+// only ever reads this layout, never writes to it.
 const (
-	eventStoreRelPath  = "logs/event_store.jsonl"
 	artifactDataRelDir = "logs/artifacts/data"
 	artifactMetaRelDir = "logs/artifacts/meta"
 )
@@ -57,7 +57,7 @@ func ExportRun(ctx context.Context, workspace, runID, outputPath string, opts Ex
 		return fmt.Errorf("build decision witness: %w", err)
 	}
 
-	entries, files, err := collectBundleEntries(workspace, projection, witness, opts)
+	entries, files, err := collectBundleEntries(ctx, workspace, projection, witness, opts)
 	if err != nil {
 		return fmt.Errorf("collect bundle files: %w", err)
 	}
@@ -89,7 +89,7 @@ func ExportRun(ctx context.Context, workspace, runID, outputPath string, opts Ex
 // collectBundleEntries gathers every bundle member except bundle.json itself
 // (whose hash depends on the rest) and returns both the raw entries to
 // archive and their AuditBundleFile records.
-func collectBundleEntries(workspace string, projection *runProjection, witness *DecisionWitness, opts ExportOptions) ([]bundleFileEntry, []AuditBundleFile, error) {
+func collectBundleEntries(ctx context.Context, workspace string, projection *runProjection, witness *DecisionWitness, opts ExportOptions) ([]bundleFileEntry, []AuditBundleFile, error) {
 	var entries []bundleFileEntry
 	var files []AuditBundleFile
 	add := func(path, role string, data []byte, availability string) {
@@ -110,11 +110,11 @@ func collectBundleEntries(workspace string, projection *runProjection, witness *
 	}
 	add("run-result.json", RoleRunResult, runResultData, AvailabilityIncluded)
 
-	eventsData, err := os.ReadFile(filepath.Join(workspace, eventStoreRelPath))
-	if err != nil {
-		return nil, nil, fmt.Errorf("read canonical event log: %w", err)
+	var eventsData bytes.Buffer
+	if err := team.ExportEventLog(ctx, workspace, &eventsData); err != nil {
+		return nil, nil, fmt.Errorf("export canonical event log: %w", err)
 	}
-	add("events.jsonl", RoleEvents, eventsData, AvailabilityIncluded)
+	add("events.jsonl", RoleEvents, eventsData.Bytes(), AvailabilityIncluded)
 
 	add("README.txt", RoleReadme, []byte(bundleReadme(projection.runResult.RunID)), AvailabilityIncluded)
 

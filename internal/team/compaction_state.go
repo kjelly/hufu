@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -197,7 +198,7 @@ func retainReachableCompactionState(workspace string, state *ConversationCompact
 	if _, err := os.Stat(filepath.Join(workspace, sessionTreeFile)); err != nil {
 		return state
 	}
-	if _, err := os.Stat(filepath.Join(workspace, logsDir, eventStoreFile)); err != nil {
+	if !runtimestore.Exists(workspace) {
 		return state
 	}
 	es, release, err := borrowEventStore(workspace, events)

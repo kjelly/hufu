@@ -12,6 +12,8 @@ import (
 
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/eventchain"
+	"github.com/kjelly/hufu/internal/runtimestore"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestMigrateLegacyWorkspaceIsNonDestructive(t *testing.T) {
@@ -206,30 +208,44 @@ func TestMigrateAllTeamsIsSortedAndStopsWithPendingList(t *testing.T) {
 
 func TestVerifyLegacySessionValidatesEventHashChain(t *testing.T) {
 	root := t.TempDir()
-	logs := filepath.Join(root, "logs")
-	if err := os.MkdirAll(logs, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	event := eventchain.Entry{ID: "evt-1", Type: "run_started", Timestamp: "2026-09-17T00:00:00Z", Payload: json.RawMessage(`{"ok":true}`)}
 	event.Hash = eventchain.ComputeHash("", event.ID, event.Type, event.Timestamp, event.Payload)
 	data, err := json.Marshal(event)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(logs, "event_store.jsonl")
-	if err = os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+	if _, err = team.ImportEventLog(t.Context(), root, bytes.NewReader(append(data, '\n'))); err != nil {
 		t.Fatal(err)
 	}
 	if err = verifyLegacySession(root); err != nil {
 		t.Fatal(err)
 	}
-	event.Hash = "tampered"
-	data, _ = json.Marshal(event)
-	if err = os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+	store, err := runtimestore.Open(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.DB().ExecContext(t.Context(), `UPDATE events SET hash = 'tampered' WHERE id = ?`, event.ID)
+	if closeErr := store.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err = verifyLegacySession(root); err == nil || !bytes.Contains([]byte(err.Error()), []byte(IssueEventChainInvalid)) {
 		t.Fatalf("tampered event error = %v", err)
+	}
+
+	// A workspace that still keeps the retired file log is refused rather
+	// than migrated with an unverified journal.
+	fileBased := t.TempDir()
+	if err = os.MkdirAll(filepath.Join(fileBased, "logs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(fileBased, "logs", "event_store.jsonl"), append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = verifyLegacySession(fileBased); !errors.Is(err, runtimestore.ErrLegacyWorkspace) {
+		t.Fatalf("file-based event log error = %v, want ErrLegacyWorkspace", err)
 	}
 }
 

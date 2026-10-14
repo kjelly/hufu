@@ -6,11 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 type DecisionResumeInfo struct {
@@ -31,9 +30,8 @@ func InspectDecisionResume(ctx context.Context, workspace, logicalRunID string) 
 	if workspace == "" || !decisionLogicalIDPattern.MatchString(logicalRunID) {
 		return DecisionResumeInfo{}, fmt.Errorf("decision resume requires an exact workspace and logical run id")
 	}
-	eventPath := filepath.Join(workspace, logsDir, eventStoreFile)
-	if _, err := os.Stat(eventPath); err != nil {
-		return DecisionResumeInfo{}, fmt.Errorf("decision resume event store: %w", err)
+	if !runtimestore.Exists(workspace) {
+		return DecisionResumeInfo{}, fmt.Errorf("decision resume event store: %w", runtimestore.ErrNotFound)
 	}
 	store, err := OpenEventStore(workspace)
 	if err != nil {

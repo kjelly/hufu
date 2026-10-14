@@ -50,15 +50,21 @@ func runWorkspaceAudit(ctx context.Context, workspace string, runID string, opts
 	// Phase A: canonical event integrity.
 	lineage, err := canonicalLineage(ctx, workspace)
 	if err != nil {
-		result := &AuditVerificationResult{SchemaVersion: AuditSchemaVersion, RunID: runID}
-		result.Integrity = AuditDimensionResult{Status: AuditDimensionFail, Reason: err.Error()}
-		result.SemanticRegression = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "integrity unavailable"}
-		result.RunInputBinding = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "integrity unavailable"}
-		result.addFinding(CodeEventChainBroken, FindingSeverityCritical, err.Error(), "", 0, "")
-		result.finalizeVerdict()
-		return result, nil, nil
+		return chainBrokenResult(runID, err), nil, nil
 	}
 	return runLineageAudit(ctx, workspace, runID, lineage, opts)
+}
+
+// chainBrokenResult is the verdict for an event log that cannot be read as a
+// valid chain.
+func chainBrokenResult(runID string, err error) *AuditVerificationResult {
+	result := &AuditVerificationResult{SchemaVersion: AuditSchemaVersion, RunID: runID}
+	result.Integrity = AuditDimensionResult{Status: AuditDimensionFail, Reason: err.Error()}
+	result.SemanticRegression = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "integrity unavailable"}
+	result.RunInputBinding = AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "integrity unavailable"}
+	result.addFinding(CodeEventChainBroken, FindingSeverityCritical, err.Error(), "", 0, "")
+	result.finalizeVerdict()
+	return result
 }
 
 // VerifyLineageRun audits a caller-selected, already branch-scoped lineage.

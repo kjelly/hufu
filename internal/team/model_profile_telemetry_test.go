@@ -274,7 +274,7 @@ func TestProviderBoundInvocationFailsClosedOnProfileTelemetryAppendFailure(t *te
 		t.Fatal(err)
 	}
 	defer func() { _ = store.Close() }()
-	store.syncFile = func() error { return errors.New("injected model profile append failure") }
+	store.commitHook = func() error { return errors.New("injected model profile append failure") }
 
 	var statusEvents []StatusEvent
 	c := &Coordinator{

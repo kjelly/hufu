@@ -8,8 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -790,11 +788,7 @@ func TestCoordinatorModelContinuationPersistenceFailurePrecedesDownshiftTelemetr
 	if providerCalls != 0 {
 		t.Fatalf("provider calls = %d, want 0 after continuation persistence failure", providerCalls)
 	}
-	data, readErr := os.ReadFile(filepath.Join(workspace, logsDir, eventStoreFile))
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	if strings.Contains(string(data), string(EventContextWindowDownshift)) {
+	if strings.Contains(string(exportedJournal(t, workspace)), string(EventContextWindowDownshift)) {
 		t.Fatal("downshift telemetry was persisted after continuation persistence failure")
 	}
 }

@@ -5,15 +5,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/team"
 )
 
-func writeMemoryEventStore(t *testing.T, workspace string, events []team.RunEvent) string {
+func writeMemoryEventStore(t *testing.T, workspace string, events []team.RunEvent) {
 	t.Helper()
 	store, err := team.NewEventStore(workspace, "memory-loader-run", "memory-loader-session")
 	if err != nil {
@@ -28,7 +28,6 @@ func writeMemoryEventStore(t *testing.T, workspace string, events []team.RunEven
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	return filepath.Join(workspace, "logs", "event_store.jsonl")
 }
 
 func TestLoadEventStoreExtractsMinimalMemoryPayloadFields(t *testing.T) {
@@ -133,8 +132,8 @@ func TestLoadEventStoreMissingStoreIsNotAnErrorAndDoesNotCreateFile(t *testing.T
 	if stats != (eventStoreLoadStats{}) {
 		t.Fatalf("stats = %+v, want zero value", stats)
 	}
-	if _, err := os.Stat(filepath.Join(workspace, "logs", "event_store.jsonl")); !os.IsNotExist(err) {
-		t.Fatalf("loader created missing event store: stat err = %v", err)
+	if files := runtimeStoreFiles(t, workspace); len(files) != 0 {
+		t.Fatalf("loader created missing event store files: %v", slices.Sorted(maps.Keys(files)))
 	}
 }
 
@@ -146,19 +145,10 @@ func TestLoadEventStoreLateHashFailureRollsBackPrefix(t *testing.T) {
 		events = append(events, team.RunEvent{ID: fmt.Sprintf("memory-%d", i), Type: memoryRetrievedEvent, Actor: "runtime", Payload: []byte(`{"retrieval_id":"r1"}`)})
 	}
 	events = append(events, team.RunEvent{ID: "memory-corrupt", Type: memoryUsageRecordedEvent, Actor: "runtime", Payload: []byte(`{"disposition":"applied"}`)})
-	path := writeMemoryEventStore(t, workspace, events)
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	corrupt, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	corrupt = bytes.Replace(corrupt, []byte(memoryUsageRecordedEvent), []byte("memory_usage_corrupt"), 1)
-	if err := os.WriteFile(path, corrupt, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeMemoryEventStore(t, workspace, events)
+	before := runtimeStoreFiles(t, workspace)
+	tamperEventJournal(t, workspace, `UPDATE events SET type = 'memory_usage_corrupt' WHERE id = 'memory-corrupt'`)
+	corrupt := runtimeStoreFiles(t, workspace)
 
 	session := newTestSession(t)
 	session.batchConfig.Memory = batchCandidate
@@ -177,14 +167,11 @@ func TestLoadEventStoreLateHashFailureRollsBackPrefix(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("memory_events rows after late validation failure = %d, want zero", count)
 	}
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Equal(after, before) {
+	after := runtimeStoreFiles(t, workspace)
+	if maps.EqualFunc(after, before, bytes.Equal) {
 		t.Fatal("test corruption was not applied")
 	}
-	if !bytes.Equal(after, corrupt) {
+	if !maps.EqualFunc(after, corrupt, bytes.Equal) {
 		t.Fatal("loader changed canonical event store")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 	"github.com/kjelly/hufu/internal/workspace/versionstore"
@@ -175,7 +176,8 @@ func TestCLISessionCheckoutRefusedWhileProjectLocked(t *testing.T) {
 // event store is an error, not a silently lineage-free fork.
 func TestCLISessionForkFailsClosedWithoutEventStore(t *testing.T) {
 	workspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspace, "logs"), []byte("not a directory"), 0o644); err != nil {
+	// A directory in place of runtime.sqlite cannot be opened as the journal.
+	if err := os.MkdirAll(runtimestore.Path(workspace), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	_, err := runCLI(t, "session", "fork", "--name", "x", "--workspace", workspace)

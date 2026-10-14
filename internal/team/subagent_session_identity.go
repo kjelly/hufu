@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/kjelly/hufu/internal/execution"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 // Session identity rule. A task's backend session identity is
@@ -87,7 +88,8 @@ func (c *Coordinator) durableBackendSessionBinding(ctx context.Context, taskID s
 }
 
 // lineageReadFailure classifies a lineage that could not be read. A
-// file-system error is a storage fault an operator can fix and then retry.
+// file-system or SQLite storage error is a fault an operator can fix and then
+// retry.
 // Anything else means the durable evidence itself did not validate (a broken
 // hash chain, malformed branch metadata), so no worker may run on it.
 func lineageReadFailure(cause, firstRead error) error {
@@ -96,7 +98,7 @@ func lineageReadFailure(cause, firstRead error) error {
 		err = fmt.Errorf("%w (first read: %v)", err, firstRead)
 	}
 	var pathErr *fs.PathError
-	if errors.As(cause, &pathErr) {
+	if errors.As(cause, &pathErr) || runtimestore.IsStorageFault(cause) {
 		return withFailureClassOverride(err, FailureEnvironment)
 	}
 	return withFailureClassOverride(err, FailureIdentityConflict)

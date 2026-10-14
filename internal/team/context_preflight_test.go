@@ -49,7 +49,7 @@ func TestPrepareContextPreflightRejectsReentryWithoutBlocking(t *testing.T) {
 	if after.ActiveBranch != branch.ID || len(after.Branches) != len(tree.Branches) {
 		t.Fatalf("preflight changed session tree: active=%q branches=%d, want active=%q branches=%d", after.ActiveBranch, len(after.Branches), branch.ID, len(tree.Branches))
 	}
-	for _, path := range []string{filepath.Join(workspace, "context.sqlite"), filepath.Join(workspace, "logs", "event_store.jsonl")} {
+	for _, path := range []string{filepath.Join(workspace, "context.sqlite"), filepath.Join(workspace, "runtime.sqlite")} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("preflight did not create %s: %v", path, err)
 		}
@@ -60,8 +60,8 @@ func TestPrepareContextPreflightRejectsReentryWithoutBlocking(t *testing.T) {
 	if len(c.sessionData.CoordinatorContextManifests) != 1 || c.sessionData.CoordinatorContextManifests[0].RunID != c.executionRunID {
 		t.Fatalf("preflight manifest/run identity mismatch: %#v / %q", c.sessionData.CoordinatorContextManifests, c.executionRunID)
 	}
-	events, err := os.ReadFile(filepath.Join(workspace, "logs", "event_store.jsonl"))
-	if err != nil || !strings.Contains(string(events), `"type":"context_manifest"`) || !strings.Contains(string(events), c.executionRunID) {
-		t.Fatalf("preflight context manifest was not replayable: %v: %s", err, events)
+	events := exportedJournal(t, workspace)
+	if !strings.Contains(string(events), `"type":"context_manifest"`) || !strings.Contains(string(events), c.executionRunID) {
+		t.Fatalf("preflight context manifest was not replayable: %s", events)
 	}
 }

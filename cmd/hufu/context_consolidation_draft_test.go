@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -116,9 +115,8 @@ func TestConsolidateDraftPersistsProposalAndIsIdempotent(t *testing.T) {
 	if candidate.Metadata["proposal_origin"] != "model" || candidate.Metadata["draft_model"] != "draft-model" || candidate.Metadata["derived_from"] != "src-a,src-b" {
 		t.Fatalf("candidate metadata = %v", candidate.Metadata)
 	}
-	events, err := os.ReadFile(filepath.Join(workspace, "logs", "event_store.jsonl"))
-	if err != nil || !strings.Contains(string(events), "memory_consolidation_proposed") || !strings.Contains(string(events), "proposal_origin") {
-		t.Fatalf("event store = %s err=%v", events, err)
+	if events := exportedEventLog(t, workspace); !strings.Contains(events, "memory_consolidation_proposed") || !strings.Contains(events, "proposal_origin") {
+		t.Fatalf("event store = %s", events)
 	}
 
 	out, err = helperRunConsolidateCLI(draftArgs(workspace, search)...)

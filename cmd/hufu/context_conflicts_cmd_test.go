@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -118,16 +117,13 @@ func TestConflictsCLIScanListShowDismiss(t *testing.T) {
 	if err != nil || !strings.Contains(out, "\tdismissed\t") {
 		t.Fatalf("list --all = %q err=%v", out, err)
 	}
-	events, err := os.ReadFile(filepath.Join(workspace, "logs", "event_store.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	events := exportedEventLog(t, workspace)
 	for _, want := range []string{"memory_conflict_detected", "memory_conflict_dismissed"} {
-		if !strings.Contains(string(events), want) {
+		if !strings.Contains(events, want) {
 			t.Fatalf("event store missing %s", want)
 		}
 	}
-	if strings.Contains(string(events), "PostgreSQL") || strings.Contains(string(events), "Separate services.") {
+	if strings.Contains(events, "PostgreSQL") || strings.Contains(events, "Separate services.") {
 		t.Fatal("event store leaked memory content or dismiss reason")
 	}
 }

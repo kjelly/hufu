@@ -344,13 +344,13 @@ func acquireCodexHomeStateLock(ctx context.Context, home string) (func(), error)
 		return nil, fmt.Errorf("open Codex state lock %q: %w", lockPath, err)
 	}
 	release := func() {
-		_ = unlockEventStoreFile(file)
+		_ = unlockExclusiveFile(file)
 		_ = file.Close()
 	}
 	for {
-		if err := lockEventStoreFile(file); err == nil {
+		if err := lockExclusiveFile(file); err == nil {
 			return sync.OnceFunc(release), nil
-		} else if !errors.Is(err, ErrEventStoreWriterUnavailable) {
+		} else if !errors.Is(err, errFileLockHeld) {
 			release()
 			return nil, fmt.Errorf("lock Codex state %q: %w", home, err)
 		}

@@ -5,24 +5,23 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"os"
+	"maps"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/kjelly/hufu/internal/eventchain"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
-const eventStoreFile = "event_store.jsonl"
-
-// ErrEventStoreWriterUnavailable indicates that the event log cannot be
-// exclusively acquired for an append.
+// ErrEventStoreWriterUnavailable indicates that another connection held the
+// runtime store's write lock past the busy timeout.
 var ErrEventStoreWriterUnavailable = errors.New("event store writer unavailable")
 
 const (
@@ -64,23 +63,24 @@ func newEventIdempotencyIdentity(branchID, key string) eventIdempotencyIdentity 
 	return eventIdempotencyIdentity{branchID: branchID, key: key}
 }
 
-// EventStore manages durable append-only event logging with hash chain verification.
+// EventStore is the hash-chained event journal kept in the workspace's
+// runtime.sqlite events table.
 //
-// Integrity model: every supported writer only appends, holding the
-// interprocess lock on the open log file, and nothing rewrites the log while a
-// store has it open. Opening a store and VerifyHashChain validate the whole
-// chain. An append validates only what other writers added past the prefix
-// this store already validated, and refuses to write once the log path no
-// longer names the open file. So an in-place rewrite of the validated prefix,
-// or a replacement that lands between that check and the write, goes unnoticed
-// until the next full validation. The chain is self-contained: even a full
-// validation cannot detect a rewrite that recomputes every hash, which would
-// need an anchor kept outside the log.
+// Integrity model: every writer appends inside one IMMEDIATE transaction that
+// first validates the rows other writers committed after this store's
+// validated head, so the idempotency index and chain head include every
+// committed event before a new one is chained. Opening a store and
+// VerifyHashChain validate the whole journal. An append also confirms that
+// the row at its validated head is unchanged and revalidates everything when
+// it is not. The chain is self-contained: even a full validation cannot
+// detect a rewrite that recomputes every hash, which would need an anchor
+// kept outside the database.
 type EventStore struct {
 	// mu is a one-token semaphore so emergency callers can cancel lock
-	// acquisition. Once acquired, kernel write/sync calls are not cancellable.
+	// acquisition. Once an append holds the database connection it runs to
+	// completion.
 	mu              chan struct{}
-	f               *os.File
+	store           *runtimestore.Store
 	path            string
 	runID           string
 	invocationID    string
@@ -97,12 +97,14 @@ type EventStore struct {
 	scanCount       int
 	cacheHitCount   int
 	cachedEvents    []RunEvent
-	syncFile        func() error
 	idempotencyKeys map[eventIdempotencyIdentity]RunEvent
-	// validatedSize is the byte length of the log prefix the published
-	// chain head, cache, and idempotency index were derived from.
-	validatedSize int64
+	// commitHook runs after an append commits. Its failure leaves the
+	// append's durability unknown, as an fsync failure did for the file log;
+	// tests inject one to exercise recovery. A reload restores the no-op.
+	commitHook func() error
 }
+
+func noCommitHook() error { return nil }
 
 // SetBranchID binds the store to a session branch: subsequent events appended
 // without an explicit BranchID are stamped with it. Empty means no stamping
@@ -133,36 +135,29 @@ func ComputeEventHash(prevHash, id, eventType, timestamp string, payload json.Ra
 	return eventchain.ComputeHash(prevHash, id, eventType, timestamp, payload)
 }
 
-// NewEventStore opens or creates the event_store.jsonl file in workspace/logs.
+// NewEventStore opens workspace's event journal, creating runtime.sqlite when
+// it does not exist.
 func NewEventStore(workspace, runID, sessionID string) (*EventStore, error) {
 	if workspace == "" {
 		return nil, fmt.Errorf("new event store: empty workspace")
 	}
-	path := filepath.Join(workspace, logsDir, eventStoreFile)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("new event store mkdir: %w", err)
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
+	store, err := runtimestore.Open(context.Background(), workspace)
 	if err != nil {
-		return nil, fmt.Errorf("new event store open: %w", err)
+		return nil, fmt.Errorf("new event store: %w", err)
 	}
-
 	es := &EventStore{
 		mu:              make(chan struct{}, 1),
-		f:               f,
-		path:            path,
+		store:           store,
+		path:            store.Path(),
 		runID:           runID,
 		sessionID:       sessionID,
-		syncFile:        f.Sync,
 		idempotencyKeys: make(map[eventIdempotencyIdentity]RunEvent),
 	}
 	es.mu <- struct{}{}
-
-	if err := es.rescan(); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("new event store rescan: %w", err)
+	if err := es.reload(); err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("new event store load: %w", err)
 	}
-
 	return es, nil
 }
 
@@ -171,10 +166,11 @@ func OpenEventStore(workspace string) (*EventStore, error) {
 	return NewEventStore(workspace, "", "")
 }
 
-// borrowEventStore returns open when it is workspace's live, valid event log,
-// and otherwise opens the log for a caller that must call release. Opening
-// rescans the whole log, which costs seconds on a long-lived workspace, so a
-// caller that already holds the store should lend it.
+// borrowEventStore returns open when it is workspace's live, valid event
+// journal, and otherwise opens the journal for a caller that must call
+// release. Opening validates the whole journal, which costs seconds on a
+// long-lived workspace, so a caller that already holds the store should lend
+// it.
 func borrowEventStore(workspace string, open *EventStore) (store *EventStore, release func(), err error) {
 	if open.servesWorkspace(workspace) {
 		return open, func() {}, nil
@@ -186,46 +182,43 @@ func borrowEventStore(workspace string, open *EventStore) (store *EventStore, re
 	return store, func() { _ = store.Close() }, nil
 }
 
-// servesWorkspace reports whether es is workspace's event log and can still
-// answer reads from validated state.
+// servesWorkspace reports whether es is workspace's event journal and can
+// still answer reads from validated state.
 func (es *EventStore) servesWorkspace(workspace string) bool {
 	if es == nil || es.mu == nil || strings.TrimSpace(workspace) == "" {
 		return false
 	}
+	path, err := filepath.Abs(runtimestore.Path(workspace))
+	if err != nil {
+		return false
+	}
 	es.lock()
 	defer es.release()
-	return !es.closed && es.stateValid && es.path == filepath.Join(workspace, logsDir, eventStoreFile)
+	return !es.closed && es.stateValid && es.path == path
 }
 
-// OpenEventStoreReadOnly opens and validates an existing event log without
-// creating the workspace, logs directory, or event file. Mutation methods on
-// the returned store fail closed.
+// OpenEventStoreReadOnly opens and validates an existing event journal
+// without creating or changing any file. A workspace without runtime.sqlite
+// returns an error wrapping os.ErrNotExist. Mutation methods on the returned
+// store fail closed.
 func OpenEventStoreReadOnly(workspace string) (*EventStore, error) {
 	if strings.TrimSpace(workspace) == "" {
 		return nil, fmt.Errorf("open read-only event store: empty workspace")
 	}
-	path := filepath.Join(workspace, logsDir, eventStoreFile)
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil, fmt.Errorf("open read-only event store: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("open read-only event store: %q is not a regular file", path)
-	}
-	f, err := os.Open(path)
+	store, err := runtimestore.OpenReadOnly(context.Background(), workspace)
 	if err != nil {
 		return nil, fmt.Errorf("open read-only event store: %w", err)
 	}
 	es := &EventStore{
 		mu:              make(chan struct{}, 1),
-		f:               f,
-		path:            path,
+		store:           store,
+		path:            store.Path(),
 		readOnly:        true,
 		idempotencyKeys: make(map[eventIdempotencyIdentity]RunEvent),
 	}
 	es.mu <- struct{}{}
-	if err := es.rescan(); err != nil {
-		_ = f.Close()
+	if err := es.reload(); err != nil {
+		_ = store.Close()
 		return nil, fmt.Errorf("open read-only event store: %w", err)
 	}
 	return es, nil
@@ -295,12 +288,11 @@ func (es *EventStore) AppendPersisted(event RunEvent) (RunEvent, error) {
 }
 
 // AppendPersistedBoundedContext bounds the caller's wait even when the event
-// store has already admitted an append and the underlying Write/Sync syscall
-// cannot be cancelled. The append remains owned by EventStore until the
-// syscall returns; a caller timeout is durability-unknown, never success.
-// Close acquires the same semaphore and therefore waits for an owned append
-// before closing the file rather than leaking an append worker against a
-// released file descriptor.
+// store has already admitted an append whose transaction cannot be cancelled.
+// The append remains owned by EventStore until the commit returns; a caller
+// timeout is durability-unknown, never success. Close acquires the same
+// semaphore and therefore waits for an owned append before closing the
+// database rather than leaking an append worker against a closed handle.
 func (es *EventStore) AppendPersistedBoundedContext(ctx context.Context, event RunEvent) (RunEvent, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -336,10 +328,10 @@ func (es *EventStore) AppendPersistedBoundedContext(ctx context.Context, event R
 }
 
 // AppendPersistedContext is the cancellable append boundary. Context
-// cancellation applies to admission and lock acquisition. After admission,
-// kernel write/sync calls may still run to completion; callers must treat a
-// deadline that expires in that window as durability-unknown and reconcile by
-// idempotency key on restart.
+// cancellation applies to admission and to waiting for the database
+// connection. Once the append holds the connection it runs to completion;
+// callers must treat a deadline that expires in that window as
+// durability-unknown and reconcile by idempotency key on restart.
 func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent) (RunEvent, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -355,49 +347,61 @@ func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent
 	if es.readOnly {
 		return RunEvent{}, fmt.Errorf("event store is read-only")
 	}
-	if es.f == nil || es.degraded || !es.stateValid {
-		if err := es.reopenAndRescan(); err != nil {
+	if es.degraded || !es.stateValid {
+		if err := es.reload(); err != nil {
 			return RunEvent{}, fmt.Errorf("recover degraded event store: %w", err)
 		}
 	}
-	if es.syncFile == nil {
-		err := fmt.Errorf("event store sync function is unavailable")
+	if es.commitHook == nil {
+		err := fmt.Errorf("event store commit hook is unavailable")
 		es.invalidateState(err)
 		return RunEvent{}, err
 	}
-	appendFile := es.f
-	if err := lockEventStoreFile(appendFile); err != nil {
-		return RunEvent{}, fmt.Errorf("acquire event store writer lock: %w", err)
+	// An open connection keeps writing to a removed or replaced file, where
+	// no later reader would see the event. Refuse; the next append reopens.
+	if err := es.store.CheckCurrent(); err != nil {
+		es.invalidateState(err)
+		return RunEvent{}, err
 	}
-	locked := true
-	releaseWriterLock := func() error {
-		if !locked {
-			return nil
+	conn, err := es.store.DB().Conn(ctx)
+	if err != nil {
+		return RunEvent{}, fmt.Errorf("acquire event store connection: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	// The transaction deliberately ignores ctx: database/sql rolls back a
+	// transaction whose context ends, which would turn an admitted append
+	// into a silent partial outcome.
+	dbctx := context.WithoutCancel(ctx)
+	tx, err := conn.BeginTx(dbctx, nil)
+	if err != nil {
+		if runtimestore.IsBusy(err) {
+			return RunEvent{}, fmt.Errorf("%w: %v", ErrEventStoreWriterUnavailable, err)
 		}
-		locked = false
-		return unlockEventStoreFile(appendFile)
+		return RunEvent{}, fmt.Errorf("begin event append: %w", err)
 	}
-	defer func() { _ = releaseWriterLock() }()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 	failClosed := func(err error) (RunEvent, error) {
-		unlockErr := releaseWriterLock()
 		es.invalidateState(err)
-		if unlockErr != nil {
-			return RunEvent{}, errors.Join(err, fmt.Errorf("release event store writer lock: %w", unlockErr))
-		}
 		return RunEvent{}, err
 	}
 
-	// The scan and publication are inside the interprocess lock so the
-	// idempotency index and chain head include every independent writer event.
-	if err := es.publishAppendedState(appendFile); err != nil {
-		return failClosed(fmt.Errorf("rescan event store before append: %w", err))
+	// The tail load and publication are inside the write transaction so the
+	// idempotency index and chain head include every committed writer event.
+	if err := es.syncCommittedEvents(dbctx, tx); err != nil {
+		return failClosed(fmt.Errorf("load events committed by other writers: %w", err))
 	}
 
-	// A failed Sync leaves durability uncertain: the event may nevertheless be
-	// visible after reopen. Treat a persisted idempotency key as success so a
-	// retry cannot fork the logical event stream with a duplicate observation.
-	// Branch identity is part of the logical operation: sibling and independent
-	// root branches must be able to record the same transition independently.
+	// A failed commit leaves durability uncertain: the event may nevertheless
+	// be visible after reload. Treat a persisted idempotency key as success so
+	// a retry cannot fork the logical event stream with a duplicate
+	// observation. Branch identity is part of the logical operation: sibling
+	// and independent root branches must be able to record the same
+	// transition independently.
 	if event.IdempotencyKey != "" {
 		branchID := event.BranchID
 		if branchID == "" {
@@ -421,6 +425,37 @@ func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent
 		}
 	}
 
+	event, err = es.prepareEvent(event)
+	if err != nil {
+		return RunEvent{}, err
+	}
+	if err := insertEvent(dbctx, tx, es.sequence+1, event); err != nil {
+		return failClosed(fmt.Errorf("write run event: %w", err))
+	}
+	committed = true
+	if err := tx.Commit(); err != nil {
+		return failClosed(fmt.Errorf("commit run event: %w", err))
+	}
+	// Return the pool's only connection before the hook runs.
+	_ = conn.Close()
+
+	es.sequence++
+	es.lastEventID = event.ID
+	es.lastHash = event.Hash
+	if event.IdempotencyKey != "" {
+		identity := newEventIdempotencyIdentity(event.BranchID, event.IdempotencyKey)
+		es.idempotencyKeys[identity] = cloneRunEvent(event)
+	}
+	es.cachedEvents = append(es.cachedEvents, cloneRunEvent(event))
+	if err := es.commitHook(); err != nil {
+		return failClosed(fmt.Errorf("sync run event: %w", err))
+	}
+	return event, nil
+}
+
+// prepareEvent redacts, stamps, validates, and chains event onto the
+// validated head.
+func (es *EventStore) prepareEvent(event RunEvent) (RunEvent, error) {
 	if IsTerminalEvent(event.Type) && IsEmptyPayload(event.Payload) {
 		return RunEvent{}, fmt.Errorf("reject terminal event %q with empty payload", event.Type)
 	}
@@ -429,8 +464,8 @@ func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent
 		if err != nil {
 			return RunEvent{}, fmt.Errorf("redact event payload: %w", err)
 		}
-		// The outer event marshal compacts RawMessage values. Compact here too
-		// so the hash is computed over exactly the bytes persisted on disk.
+		// Exports marshal RawMessage values compacted. Compact here too so the
+		// hash is computed over exactly the bytes every reader sees.
 		var compact bytes.Buffer
 		if err := json.Compact(&compact, redacted); err != nil {
 			return RunEvent{}, fmt.Errorf("compact redacted event payload: %w", err)
@@ -456,7 +491,7 @@ func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent
 	event.InvocationID = cmp.Or(event.InvocationID, es.invocationID)
 	if event.SessionID == "" {
 		if es.sessionID == "" {
-			es.sessionID = filepath.Base(filepath.Dir(filepath.Dir(es.path)))
+			es.sessionID = filepath.Base(filepath.Dir(es.path))
 		}
 		event.SessionID = es.sessionID
 	}
@@ -473,34 +508,6 @@ func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent
 	event.PreviousID = es.lastEventID
 	event.PreviousHash = es.lastHash
 	event.Hash = ComputeEventHash(event.PreviousHash, event.ID, event.Type, event.Timestamp, event.Payload)
-
-	data, err := json.Marshal(event)
-	if err != nil {
-		return RunEvent{}, fmt.Errorf("marshal run event: %w", err)
-	}
-
-	line := append(data, '\n')
-	n, err := es.f.Write(line)
-	if err != nil {
-		return failClosed(fmt.Errorf("write run event: %w", err))
-	}
-	if n != len(line) {
-		return failClosed(fmt.Errorf("write run event: %w", io.ErrShortWrite))
-	}
-
-	if err := es.syncFile(); err != nil {
-		return failClosed(fmt.Errorf("sync run event: %w", err))
-	}
-
-	es.sequence++
-	es.lastEventID = event.ID
-	es.lastHash = event.Hash
-	es.validatedSize += int64(len(line))
-	if event.IdempotencyKey != "" {
-		identity := newEventIdempotencyIdentity(event.BranchID, event.IdempotencyKey)
-		es.idempotencyKeys[identity] = cloneRunEvent(event)
-	}
-	es.cachedEvents = append(es.cachedEvents, cloneRunEvent(event))
 	return event, nil
 }
 
@@ -522,87 +529,118 @@ func (es *EventStore) release() {
 	}
 }
 
-// reopenAndRescan closes the file whose durable state is uncertain, reopens
-// it, and derives the chain head from bytes that are actually visible in the
-// event log. It deliberately refuses a malformed or broken chain instead of
-// appending from a guessed last hash.
-func (es *EventStore) reopenAndRescan() error {
+// reload strictly validates the whole journal and publishes it. It refuses
+// a broken chain instead of appending from a guessed last hash.
+func (es *EventStore) reload() error {
 	if es.closed {
 		return fmt.Errorf("event store closed")
 	}
-	var (
-		f   *os.File
-		err error
-	)
-	if es.readOnly {
-		f, err = os.Open(es.path)
-	} else {
-		f, err = os.OpenFile(es.path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
+	if err := es.reopenIfReplaced(); err != nil {
+		es.invalidateState(err)
+		return err
 	}
+	es.scanCount++
+	state, err := loadFullState(context.Background(), es.store.DB(), es.runID, es.sessionID)
 	if err != nil {
 		es.invalidateState(err)
 		return err
 	}
-	state, err := es.scanFile(f)
-	if err != nil {
-		_ = f.Close()
-		es.invalidateState(err)
-		return err
-	}
-
-	old := es.f
-	es.publishState(state, f, true)
-	if old != nil && old != f {
-		_ = old.Close()
-	}
+	es.publishState(state)
 	return nil
 }
 
-// rescan strictly validates the persisted JSONL and restores the chain head.
-// ReadEvents remains the tolerant inspection API for compatibility; append
-// recovery must be strict because silently skipping a line would fork the
-// hash chain.
-func (es *EventStore) rescan() error {
-	state, err := es.scanFile(es.f)
-	if err != nil {
-		es.invalidateState(err)
-		return err
+// reopenIfReplaced swaps a writable store whose file was removed or replaced
+// for one on the file the path names now.
+func (es *EventStore) reopenIfReplaced() error {
+	if es.store == nil {
+		return fmt.Errorf("event store database is unavailable")
 	}
-	es.publishState(state, es.f, true)
+	if es.readOnly || es.store.CheckCurrent() == nil {
+		return nil
+	}
+	// Close first: SQLite removes the stale connection's sidecars by name.
+	closeErr := es.store.Close()
+	es.store = nil
+	store, err := runtimestore.Open(context.Background(), filepath.Dir(es.path))
+	if err != nil {
+		return errors.Join(fmt.Errorf("reopen replaced event store: %w", err), closeErr)
+	}
+	es.store = store
 	return nil
 }
 
-func (es *EventStore) publishState(state eventStoreState, f *os.File, refreshSync bool) {
+// syncCommittedEvents publishes the events other writers committed after the
+// validated head. The tail is loaded into private state and merged only once
+// it validates, so a rejected tail publishes nothing. A head row that no
+// longer matches means the journal was rewritten, and everything is
+// revalidated.
+func (es *EventStore) syncCommittedEvents(ctx context.Context, q runtimestore.Queryer) error {
+	if es.sequence > 0 {
+		var id string
+		err := q.QueryRowContext(ctx, `SELECT id FROM events WHERE sequence = ?`, es.sequence).Scan(&id)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("read validated head: %w", err)
+		}
+		if id != es.lastEventID {
+			es.scanCount++
+			state, err := loadFullState(ctx, q, es.runID, es.sessionID)
+			if err != nil {
+				return err
+			}
+			hook := es.commitHook
+			es.publishState(state)
+			es.commitHook = hook
+			return nil
+		}
+	}
+	tail := eventStoreState{
+		lastEventID:     es.lastEventID,
+		lastHash:        es.lastHash,
+		sequence:        es.sequence,
+		runID:           es.runID,
+		sessionID:       es.sessionID,
+		idempotencyKeys: make(map[eventIdempotencyIdentity]RunEvent),
+		publishedKeys:   es.idempotencyKeys,
+	}
+	verifier := eventchain.ResumeVerifier(tail.sequence, tail.lastEventID, tail.lastHash)
+	if err := loadEvents(ctx, q, &tail, &verifier); err != nil {
+		return err
+	}
+	es.cachedEvents = append(es.cachedEvents, tail.events...)
+	if es.idempotencyKeys == nil {
+		es.idempotencyKeys = make(map[eventIdempotencyIdentity]RunEvent, len(tail.idempotencyKeys))
+	}
+	maps.Copy(es.idempotencyKeys, tail.idempotencyKeys)
+	es.lastEventID = tail.lastEventID
+	es.lastHash = tail.lastHash
+	es.sequence = tail.sequence
+	es.runID = tail.runID
+	es.sessionID = tail.sessionID
+	return nil
+}
+
+func (es *EventStore) publishState(state eventStoreState) {
 	es.lastEventID = state.lastEventID
 	es.lastHash = state.lastHash
 	es.sequence = state.sequence
 	es.runID = state.runID
 	es.sessionID = state.sessionID
-	es.validatedSize = state.size
 	es.cachedEvents = state.events
 	es.idempotencyKeys = state.idempotencyKeys
-	es.f = f
-	if f != nil && refreshSync {
-		es.syncFile = f.Sync
-	}
+	es.commitHook = noCommitHook
 	es.stateErr = nil
 	es.stateValid = true
 	es.degraded = false
 }
 
 // invalidateState removes every derived value that could permit a caller to
-// continue from an unvalidated file. The configured run/session identity is
+// continue from unvalidated rows. The configured run/session identity is
 // retained as an append default, while chain/cache/idempotency state is not.
 func (es *EventStore) invalidateState(err error) {
-	if es.f != nil {
-		_ = es.f.Close()
-	}
-	es.f = nil
-	es.syncFile = nil
+	es.commitHook = nil
 	es.lastEventID = ""
 	es.lastHash = ""
 	es.sequence = 0
-	es.validatedSize = 0
 	es.cachedEvents = nil
 	es.idempotencyKeys = nil
 	es.stateErr = err
@@ -649,30 +687,32 @@ func cloneRunEvents(events []RunEvent) []RunEvent {
 	return clones
 }
 
-// VerifyHashChain validates that all events form an unbroken cryptographic hash chain.
+// VerifyHashChain revalidates the whole journal as an unbroken hash chain.
 func (es *EventStore) VerifyHashChain() error {
 	es.lock()
 	defer es.release()
 	if es.closed {
 		return fmt.Errorf("event store closed")
 	}
-	if err := es.reopenAndRescan(); err != nil {
+	if err := es.reload(); err != nil {
 		return fmt.Errorf("refresh event store for verification: %w", err)
 	}
 	return nil
 }
 
-// Close closes the underlying log file.
+// Close releases the database. Validated state stays readable.
 func (es *EventStore) Close() error {
 	es.lock()
 	defer es.release()
-	if es.f != nil {
-		err := es.f.Close()
-		es.f = nil
-		es.closed = true
-		return err
-	}
 	es.closed = true
+	if es.store == nil {
+		return nil
+	}
+	err := es.store.Close()
+	es.store = nil
+	if err != nil {
+		return fmt.Errorf("close event store: %w", err)
+	}
 	return nil
 }
 

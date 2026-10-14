@@ -85,7 +85,6 @@ func TestOpenRefusesFileBasedWorkspaces(t *testing.T) {
 		marker string
 	}{
 		{name: "event log", marker: filepath.Join("logs", "event_store.jsonl")},
-		{name: "session checkpoint", marker: "session.json"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -232,5 +231,39 @@ func TestWithTxRollsBackEveryWriteOnError(t *testing.T) {
 	}
 	if _, ok, _ := store.GetDocument(ctx, DocumentSessionHistory); ok {
 		t.Fatal("a rolled-back transaction left a document")
+	}
+}
+
+func TestIsStorageFault(t *testing.T) {
+	cantOpen := t.TempDir()
+	if err := os.Mkdir(Path(cantOpen), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	notADatabase := t.TempDir()
+	if err := os.WriteFile(Path(notADatabase), []byte("this is not a database file at all, just text"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name      string
+		workspace string
+		want      bool
+	}{
+		{name: "database path is a directory", workspace: cantOpen, want: true},
+		{name: "database file is not a database", workspace: notADatabase, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := Open(context.Background(), tt.workspace)
+			if err == nil {
+				_ = store.Close()
+				t.Fatal("Open succeeded")
+			}
+			if got := IsStorageFault(err); got != tt.want {
+				t.Fatalf("IsStorageFault(%v) = %v, want %v", err, got, tt.want)
+			}
+		})
+	}
+	if IsStorageFault(errors.New("plain")) {
+		t.Fatal("a non-SQLite error is a storage fault")
 	}
 }

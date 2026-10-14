@@ -1,10 +1,9 @@
 package team
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -84,22 +83,11 @@ func ReadCheckedActiveExecutionTaskEvidence(workspace string) ([]*TodoItem, []Ru
 	if workspace == "" {
 		return nil, nil, nil
 	}
-	path := filepath.Join(workspace, logsDir, eventStoreFile)
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil, nil
-		}
-		return nil, nil, fmt.Errorf("open event store read-only: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	reader := &EventStore{}
-	state, err := reader.scanFile(f)
+	events, err := readValidatedEventJournal(context.Background(), workspace)
 	if err != nil {
 		return nil, nil, fmt.Errorf("validate event store: %w", err)
 	}
-	if len(state.events) == 0 {
+	if len(events) == 0 {
 		return nil, nil, nil
 	}
 	tree, err := LoadSessionTree(workspace)
@@ -110,7 +98,7 @@ func ReadCheckedActiveExecutionTaskEvidence(workspace string) ([]*TodoItem, []Ru
 	if tree != nil && strings.TrimSpace(tree.ActiveBranch) != "" {
 		activeBranch = tree.ActiveBranch
 	}
-	lineage, err := projectEventsForBranch(state.events, tree, activeBranch)
+	lineage, err := projectEventsForBranch(events, tree, activeBranch)
 	if err != nil {
 		return nil, nil, fmt.Errorf("project active event lineage: %w", err)
 	}

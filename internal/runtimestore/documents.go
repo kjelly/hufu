@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	modernsqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // Document names of the runtime state kept in runtime_documents.
@@ -105,4 +108,32 @@ func rollback(tx *sql.Tx) error {
 		return fmt.Errorf("roll back runtime store transaction: %w", err)
 	}
 	return nil
+}
+
+// IsStorageFault reports whether err is SQLite failing to reach or write the
+// database file (cannot open, I/O error, full disk, permissions, read-only
+// media, or a lock held past busy_timeout): faults an operator can fix and
+// retry. Corruption is not one: it means the stored evidence is invalid.
+func IsStorageFault(err error) bool {
+	var sqliteErr *modernsqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	switch sqliteErr.Code() & 0xff {
+	case sqlite3.SQLITE_CANTOPEN, sqlite3.SQLITE_IOERR, sqlite3.SQLITE_FULL, sqlite3.SQLITE_PERM,
+		sqlite3.SQLITE_READONLY, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED, sqlite3.SQLITE_NOMEM:
+		return true
+	}
+	return false
+}
+
+// IsBusy reports whether err is SQLite refusing a lock another connection
+// holds past busy_timeout.
+func IsBusy(err error) bool {
+	var sqliteErr *modernsqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	code := sqliteErr.Code() & 0xff
+	return code == sqlite3.SQLITE_BUSY || code == sqlite3.SQLITE_LOCKED
 }

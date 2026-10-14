@@ -79,7 +79,7 @@ func TestNonMemoryAppendFailureIsNotCountedAsAutomaticRepair(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	c := &Coordinator{eventStore: store, session: &TeamSession{Workspace: workspace}, sessionData: NewSession()}
-	store.syncFile = func() error { return errors.New("injected sync failure") }
+	store.commitHook = func() error { return errors.New("injected sync failure") }
 	if err := c.emitEvent("shared_working_memory_saved", "coordinator", "", map[string]string{"run_id": "run", "kind": "fact"}); err == nil {
 		t.Fatal("expected injected append failure")
 	}
@@ -123,12 +123,12 @@ func TestLearningGapRepairWritesToTheBranchThatFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 	const key = "memory:retrieved:run:task:1:retrieval-1:memory-1"
-	syncFile := store.syncFile
-	store.syncFile = func() error { return errors.New("injected sync failure") }
+	syncFile := store.commitHook
+	store.commitHook = func() error { return errors.New("injected sync failure") }
 	if _, err := c.emitEventOnce(key, RunEvent{Type: "memory_retrieved", Actor: "runtime", TaskID: "task", Attempt: 1, Payload: payload}); err == nil {
 		t.Fatal("expected injected append failure")
 	}
-	store.syncFile = syncFile
+	store.commitHook = syncFile
 	if gaps := c.sessionData.LearningGaps; len(gaps) != 1 || gaps[0].RepairEvent == nil || gaps[0].RepairEvent.BranchID != failedBranch.ID {
 		t.Fatalf("learning gaps = %+v, want one repair event pinned to %q", gaps, failedBranch.ID)
 	}

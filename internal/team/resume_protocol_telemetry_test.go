@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -226,10 +224,7 @@ func TestResumeProtocolRepairRebindsEachProviderInvocation(t *testing.T) {
 	if len(loadedProfiles) != 2 {
 		t.Fatalf("loaded profile events = %d, want 2", len(loadedProfiles))
 	}
-	jsonl, err := os.ReadFile(filepath.Join(c.session.Workspace, logsDir, eventStoreFile))
-	if err != nil {
-		t.Fatalf("read event JSONL: %v", err)
-	}
+	jsonl := exportedJournal(t, c.session.Workspace)
 	jsonlProfileEvents := 0
 	for line := range strings.SplitSeq(strings.TrimSpace(string(jsonl)), "\n") {
 		var event RunEvent

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 // Session identity rule and failure dispositions; the contract is the
@@ -230,10 +231,6 @@ func invalidateEventStoreState(t *testing.T, c *Coordinator) {
 	}
 }
 
-func eventLogPath(c *Coordinator) string {
-	return filepath.Join(c.session.Workspace, logsDir, eventStoreFile)
-}
-
 func TestSessionIdentityFailureClassification(t *testing.T) {
 	tests := []struct {
 		name string
@@ -310,18 +307,10 @@ func TestSessionIdentityFailureClassification(t *testing.T) {
 					t.Fatal(err)
 				}
 				invalidateEventStoreState(t, c)
-				data, err := os.ReadFile(eventLogPath(c))
-				if err != nil {
-					t.Fatal(err)
-				}
-				tampered := strings.Replace(string(data), `"session_id":"thread-1"`, `"session_id":"thread-X"`, 1)
-				if tampered == string(data) {
+				if !tamperJournalPayload(t, c.session.Workspace, `"session_id":"thread-1"`, `"session_id":"thread-X"`) {
 					t.Fatal("the event log has no binding to tamper with")
 				}
-				if err := os.WriteFile(eventLogPath(c), []byte(tampered), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				_, err = provider.RunAttempt(boundedAttemptContext(t), codexAttemptRequest(item, "start"))
+				_, err := provider.RunAttempt(boundedAttemptContext(t), codexAttemptRequest(item, "start"))
 				return err
 			},
 			want: FailureIdentityConflict,
@@ -332,10 +321,12 @@ func TestSessionIdentityFailureClassification(t *testing.T) {
 				workspace := newCodexWorkspace(t)
 				c, provider, item, _ := newCodexHarness(t, workspace, []fakeCodexStep{codexInitializeStep(t)})
 				invalidateEventStoreState(t, c)
-				if err := os.Remove(eventLogPath(c)); err != nil {
-					t.Fatal(err)
+				for _, name := range runtimestore.Files {
+					if err := os.Remove(filepath.Join(c.session.Workspace, name)); err != nil && !os.IsNotExist(err) {
+						t.Fatal(err)
+					}
 				}
-				if err := os.Mkdir(eventLogPath(c), 0o755); err != nil {
+				if err := os.Mkdir(runtimestore.Path(c.session.Workspace), 0o755); err != nil {
 					t.Fatal(err)
 				}
 				_, err := provider.RunAttempt(boundedAttemptContext(t), codexAttemptRequest(item, "start"))

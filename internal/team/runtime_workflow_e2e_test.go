@@ -2,6 +2,7 @@ package team
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -229,13 +230,8 @@ func TestActionTelemetryAndContextPersistence_E2E(t *testing.T) {
 		t.Fatalf("persisted runtime context paths = %#v", persistedContext)
 	}
 
-	// 2. Verify Event Store JSONL (Action telemetry order and fields)
-	f, err := os.Open(filepath.Join(tmpDir, "logs", "event_store.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
+	// 2. Verify the event journal (Action telemetry order and fields)
+	scanner := bufio.NewScanner(bytes.NewReader(exportedJournal(t, tmpDir)))
 
 	var events []map[string]interface{}
 	for scanner.Scan() {

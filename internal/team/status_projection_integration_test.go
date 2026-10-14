@@ -2,7 +2,6 @@ package team
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -479,17 +478,10 @@ func TestPersistPreCancelledDirectAgentReturnsTerminalizationFailure(t *testing.
 	defer func() { _ = store.Close() }()
 	syncCalls := 0
 	terminalTransitionAttempted := false
-	store.syncFile = func() error {
+	store.commitHook = func() error {
 		syncCalls++
-		data, readErr := os.ReadFile(store.path)
-		if readErr != nil {
-			return readErr
-		}
-		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-		var event RunEvent
-		if unmarshalErr := json.Unmarshal([]byte(lines[len(lines)-1]), &event); unmarshalErr != nil {
-			return unmarshalErr
-		}
+		// The hook runs after the committed event joined the cache.
+		event := store.cachedEvents[len(store.cachedEvents)-1]
 		if event.Type == string(EventTaskCancelled) {
 			terminalTransitionAttempted = true
 			return errors.New("injected terminal sync failure")
