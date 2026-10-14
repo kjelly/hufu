@@ -207,3 +207,33 @@ func hasRepairedDoctorIssue(result DoctorResult, code string) bool {
 	}
 	return false
 }
+
+func TestDoctorNamesFileBasedRuntimeStateWithoutChangingIt(t *testing.T) {
+	root := t.TempDir()
+	projectRoot := filepath.Join(root, "project")
+	if err := os.MkdirAll(filepath.Join(projectRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewManager(filepath.Join(root, "state"), WithIDGenerator(NewIDGenerator(bytes.NewReader(bytes.Repeat([]byte{0x72}, 96)))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := manager.Resolve(t.Context(), ResolveRequest{StartDir: projectRoot, TeamName: "default", Mode: ResolveEnsure})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(resolution.ControlRoot, "session.json")
+	if err := os.WriteFile(legacy, []byte(`{"rounds":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := manager.Doctor(t.Context(), DoctorRequest{StartDir: projectRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasDoctorIssue(result, IssueFileBasedRuntimeState) || hasDoctorIssue(result, IssueEventChainInvalid) {
+		t.Fatalf("doctor result = %+v, want the file-based workspace named as such", result)
+	}
+	if _, err := os.Stat(filepath.Join(resolution.ControlRoot, "runtime.sqlite")); !os.IsNotExist(err) {
+		t.Fatalf("doctor created runtime.sqlite in a file-based workspace: %v", err)
+	}
+}

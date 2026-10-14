@@ -394,3 +394,33 @@ func TestWritesNeverLandInAReplacedDatabase(t *testing.T) {
 		})
 	}
 }
+
+func TestDiagnoseCountsWithoutWriting(t *testing.T) {
+	workspace := t.TempDir()
+	writable, err := Open(context.Background(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writable.PutDocument(context.Background(), DocumentSession, []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before := dirNames(t, workspace)
+	reader, err := OpenReadOnly(context.Background(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	diagnostics, err := reader.Diagnose(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostics.SchemaVersion != int64(migrations[len(migrations)-1].Version) || diagnostics.Documents != 1 || diagnostics.PageCount == 0 {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+	if after := dirNames(t, workspace); !slices.Equal(before, after) {
+		t.Fatalf("diagnosis changed the workspace: %v -> %v", before, after)
+	}
+}

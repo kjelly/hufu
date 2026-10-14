@@ -34,7 +34,11 @@ const (
 	IssueLegacySourcePresent       = "legacy_source_present"
 	IssueContextQuickCheckFailed   = "context_quick_check_failed"
 	IssueEventChainInvalid         = "event_chain_invalid"
-	IssueWorkspaceBusy             = "workspace_busy"
+	// IssueFileBasedRuntimeState marks a workspace that keeps its event log
+	// and runtime state in files, which hufu no longer reads. It is removed
+	// with `hufu workspace delete`, not repaired.
+	IssueFileBasedRuntimeState = "file_based_runtime_state"
+	IssueWorkspaceBusy         = "workspace_busy"
 )
 
 func (m *WorkspaceManager) Doctor(ctx context.Context, request DoctorRequest) (DoctorResult, error) {
@@ -187,7 +191,11 @@ func (m *WorkspaceManager) inspectActiveWorkspace(ctx context.Context, project P
 		}
 	}
 	if verifyErr := runtimestore.VerifyEventChain(ctx, workspace.ControlRoot); verifyErr != nil {
-		result.Issues = append(result.Issues, DoctorIssue{Code: IssueEventChainInvalid, ProjectID: project.ID, WorkspaceID: workspace.ID, Path: runtimestore.Path(workspace.ControlRoot), Detail: verifyErr.Error()})
+		code := IssueEventChainInvalid
+		if errors.Is(verifyErr, runtimestore.ErrLegacyWorkspace) {
+			code = IssueFileBasedRuntimeState
+		}
+		result.Issues = append(result.Issues, DoctorIssue{Code: code, ProjectID: project.ID, WorkspaceID: workspace.ID, Path: runtimestore.Path(workspace.ControlRoot), Detail: verifyErr.Error()})
 	}
 }
 

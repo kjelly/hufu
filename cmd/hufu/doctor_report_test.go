@@ -429,3 +429,41 @@ func TestDoctorContractFailureIsCollected(t *testing.T) {
 		t.Fatalf("team contract report = %#v", report)
 	}
 }
+
+func TestDoctorReportsTheRuntimeStore(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(t *testing.T, workspace string)
+		wantStatus  string
+		wantMessage string
+		wantEvents  string
+	}{
+		{name: "no store yet", wantStatus: "pass", wantMessage: "no runtime store yet", wantEvents: "pass"},
+		{name: "current store", setup: func(t *testing.T, workspace string) {
+			if err := team.SaveSession(workspace, team.NewSession()); err != nil {
+				t.Fatal(err)
+			}
+		}, wantStatus: "pass", wantMessage: "runtime.sqlite schema v", wantEvents: "pass"},
+		{name: "file-based workspace", setup: func(t *testing.T, workspace string) {
+			if err := os.WriteFile(filepath.Join(workspace, "session.json"), []byte(`{}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, wantStatus: "fail", wantMessage: "hufu workspace delete", wantEvents: "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			if tt.setup != nil {
+				tt.setup(t, workspace)
+			}
+			report := collectWorkspaceReport(t, workspace)
+			check := doctorCheckByID(t, report, "runtime.store")
+			if check.Status != tt.wantStatus || !strings.Contains(check.Message, tt.wantMessage) {
+				t.Fatalf("runtime.store = %#v, want %s containing %q", check, tt.wantStatus, tt.wantMessage)
+			}
+			if events := doctorCheckByID(t, report, "events.integrity"); events.Status != tt.wantEvents {
+				t.Fatalf("events.integrity = %#v, want %s", events, tt.wantEvents)
+			}
+		})
+	}
+}
