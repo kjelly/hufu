@@ -28,6 +28,18 @@ Your files_read paths and new gap-resolution evidence must use bare opaque
 `sha256-` artifact IDs with exactly 64 lowercase hexadecimal characters.
 Put annotations in the separate purpose or explanation field, never in an ID.
 
+The inventory's sources bind each exact todo `task_id` to `workset_key`,
+`lens`, and `artifacts_read`. Use that mapping when choosing a resolver;
+workset suffixes and array positions are never task IDs. A submission that
+credits an artifact to the wrong dependency is rejected with its accepted
+readers. Correct the named reference and resubmit within this attempt's step
+budget; preserve all original source records, findings, and gaps.
+
+When Remediation Context contains a rejected report audit, fix only the
+reported contract/evidence problem and submit a complete replacement report.
+Keep the same accepted source identities. The DAG permits one repair and a
+fresh audit; do not repeat the rejected claim or invent a passing audit.
+
 The inventory's `required_gap_refs` is the exact runtime-owned gap universe.
 Make ONE resolution for each listed `(source_task_id, gap_index)` pair, in that
 order, and no other resolution. Each source's `gap_count` is the length of its

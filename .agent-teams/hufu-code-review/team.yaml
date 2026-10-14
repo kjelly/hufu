@@ -124,7 +124,8 @@ spec:
   policies:
     require_phase_success: true
     allow_phase_skip: true
-    fail_fast: true
+    # Permit only the declared, bounded report-verification repair edge.
+    fail_fast: false
   capabilities:
     required: [produce-workset, verify-review-tests, inventory-review-handoffs, verify-review-report]
   verification:
@@ -456,6 +457,9 @@ spec:
       agent: synthesizer
       phase: verify
       optional: true
+      side_effect: none
+      recovery: retry
+      max-retries: 1
       result-contract: { schema: schemas/report-v1.json, require-structured: true }
       constraints: |-
         PREPARE Runtime Outputs (receipt-verified; copy these JSON values verbatim):
@@ -489,6 +493,8 @@ spec:
       optional: true
       side_effect: none
       recovery: retry
+      max-retries: 1
+      on-failure-classes: [verification]
       action:
         capability: verify-review-report
         type: verify_review_report

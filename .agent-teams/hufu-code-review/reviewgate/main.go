@@ -206,7 +206,10 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	}
 	reportID, reportHash, err := verify(current, os.Getenv("HUFU_RUN_ID"))
 	if err != nil {
-		return err
+		// A completed audit with a rejected report is verification evidence,
+		// not a provider outage. The task-result assertion fails and its bounded
+		// DAG repair sends this diagnostic back to the report producer.
+		return json.NewEncoder(out).Encode(map[string]any{"outputs": map[string]any{"review_report_verification": map[string]any{"passed": false, "diagnostic": err.Error()}}})
 	}
 	if err := ctx.Err(); err != nil {
 		return err

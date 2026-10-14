@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/config"
@@ -15,6 +16,12 @@ import (
 // checkpointing, embedded provider execution, and objective verification. The
 // preceding accepted review inventory is a fixture; no model is called.
 func TestTeamAuditDispatchBindsScopeAndVerifiesProviderResult(t *testing.T) {
+	t.Run("accepted", func(t *testing.T) { testTeamAuditDispatch(t, false) })
+	t.Run("rejected", func(t *testing.T) { testTeamAuditDispatch(t, true) })
+}
+
+func testTeamAuditDispatch(t *testing.T, rejected bool) {
+	t.Helper()
 	teamDir, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatal(err)
@@ -39,6 +46,9 @@ func TestTeamAuditDispatchBindsScopeAndVerifiesProviderResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture := gateFixture(t)
+	if rejected {
+		replacePayload(t, &fixture.Tasks[4], func(p *payload) { p.GapResolutions[0].ResolvingTaskID = "3" })
+	}
 	fixture.SnapshotID = snapshot.ID
 	for i := range fixture.Tasks {
 		if fixture.Tasks[i].SnapshotID != "" {
@@ -68,14 +78,20 @@ func TestTeamAuditDispatchBindsScopeAndVerifiesProviderResult(t *testing.T) {
 	coordinator.TaskTracker().TodoList().Restore(saved.Tasks)
 	coordinator.TaskTracker().TodoList().SetRunID("run-1")
 	output, err := coordinator.ExecuteTasks(t.Context(), []team.TaskDef{{Agent: "reviewer", ContractID: "verify-review-report", Goal: "Audit all accepted review evidence"}})
-	if err != nil {
-		t.Fatalf("audit dispatch: %s, %v", output, err)
-	}
 	var audit *team.TodoItem
 	for _, item := range coordinator.TaskTracker().TodoList().Items() {
 		if item.ContractID == "verify-review-report" {
 			audit = item
 		}
+	}
+	if rejected {
+		if err == nil || audit == nil || audit.Status != team.TaskError || audit.FailureEvent == nil || audit.FailureEvent.FailureClass != team.FailureVerify || audit.VerifyResult == nil || !strings.Contains(audit.VerifyResult.Stderr, "lacks observed cross-workset evidence") {
+			t.Fatalf("report rejection lost classified diagnostic: audit=%+v err=%v output=%s", audit, err, output)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("audit dispatch: %s, %v", output, err)
 	}
 	if audit == nil || audit.Status != team.TaskDone || audit.RunInputSnapshotID != snapshot.ID || audit.VerifyResult == nil || audit.VerifyResult.ExitCode != 0 || audit.ExecutionReceipt == nil || audit.ExecutionReceipt.RunInputSnapshotID != snapshot.ID {
 		t.Fatalf("audit=%+v output=%s", audit, output)

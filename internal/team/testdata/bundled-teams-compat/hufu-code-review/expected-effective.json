@@ -341,8 +341,7 @@
     },
     "policies": {
       "require_phase_success": true,
-      "allow_phase_skip": true,
-      "fail_fast": true
+      "allow_phase_skip": true
     },
     "capabilities": {
       "required": [
@@ -488,6 +487,8 @@
       "id": "synthesize-review",
       "agent": "synthesizer",
       "phase": "VERIFY",
+      "side_effect": "none",
+      "recovery": "retry",
       "optional": true
     },
     {

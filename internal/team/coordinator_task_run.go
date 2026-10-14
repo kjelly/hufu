@@ -2633,6 +2633,11 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		}
 		verification, verifyErr := c.verifyTaskDeliverableWithSpecAndResult(ctx, nil, task, nil, typedResult)
 		if verification != nil {
+			if verifyErr != nil {
+				// Keep bounded provider diagnostics with failed objective evidence,
+				// so an authorized upstream repair can address the rejected output.
+				verification.Stderr += "\n" + preflightFailureEvidence(output)
+			}
 			_ = c.taskTracker.TodoList().SetVerificationResult(todoID, verification)
 		}
 		if verifyErr != nil {

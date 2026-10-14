@@ -384,8 +384,12 @@ func TestEmbeddedReviewGateAndTeamContracts(t *testing.T) {
 	}
 	replacePayload(t, &current.Tasks[4], func(p *payload) { p.InputReview = p.InputReview[1:] })
 	writeCheckpoint(t, root, raw(t, current))
-	if _, err := provider.Execute(ctx, team.Action{Capability: "verify-review-report", Type: "verify_review_report", Payload: `{"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}}`}); err == nil {
-		t.Fatal("configured embedded gate accepted an incomplete report")
+	result, err = provider.Execute(ctx, team.Action{Capability: "verify-review-report", Type: "verify_review_report", Payload: `{"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}}`})
+	if err != nil {
+		t.Fatalf("audit rejection became provider error: %v", err)
+	}
+	if !bytes.Contains(raw(t, result), []byte(`"passed":false`)) || !bytes.Contains(raw(t, result), []byte("omitted review or critic")) {
+		t.Fatalf("audit rejection lost diagnostic: %s", raw(t, result))
 	}
 }
 
