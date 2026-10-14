@@ -143,7 +143,7 @@ var debugCmd = &cobra.Command{
 			}
 		} else {
 			// When filtering by a specific runID, we omit files that have no durable
-			// run-scoped representation (e.g. session.json, stm.md, ltm.md,
+			// run-scoped representation (e.g. the session checkpoint, stm.md, ltm.md,
 			// logs/evidence_manifest.json) because they only reflect the current
 			// or latest run of the workspace, not necessarily the requested run.
 

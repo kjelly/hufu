@@ -165,7 +165,7 @@ func TestRedactJSONPreservesCostReservationTokenBounds(t *testing.T) {
 
 func TestRedactJSONPreservesManifestTokenCount(t *testing.T) {
 	// A memory injection manifest's per-item token estimate must survive
-	// session redaction; redacting it corrupts session.json and makes the
+	// session redaction; redacting it corrupts the session checkpoint and makes the
 	// manifest unparseable (regression for the token_count false positive).
 	input := []byte(`{"tasks":[{"memory_manifests":[{"retrieval_id":"retrieval-abc","items":[{"context_item_id":"m1","rank":1,"token_count":42,"base_score":0.8}]}]}]}`)
 	got, err := RedactJSON(input)

@@ -33,7 +33,7 @@ var taskStatusIcons = map[team.TaskStatus]string{
 // hasReportFindings reports whether any task carries a structured Finding.
 // The boolean "findings are present" line in Review Outcome tells the reader
 // something exists without saying what; the per-task detail lived only in
-// session.json/JSONL, never in report.md itself.
+// the session checkpoint and event journal, never in report.md itself.
 func hasReportFindings(todos []*team.TodoItem) bool {
 	for _, t := range todos {
 		if t != nil && t.TypedResult != nil && len(t.TypedResult.Findings) > 0 {

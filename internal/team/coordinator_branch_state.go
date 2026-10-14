@@ -66,7 +66,7 @@ func (c *Coordinator) updateBranchState() {
 // its full content: those fields change whenever a task advances, retries,
 // produces output, or is resolved. Detail that changes without any of them
 // waits for the next change; `hufu session` also refreshes the active
-// branch from session.json before it switches branches.
+// branch from the session checkpoint before it switches branches.
 func branchStateFingerprint(plan []*TodoItem, model, teamName string, compaction *StructuredSummary) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "model=%q team=%q\n", model, teamName)

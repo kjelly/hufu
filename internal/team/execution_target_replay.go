@@ -73,7 +73,7 @@ func ReplayTodoList(events []RunEvent) ([]*TodoItem, error) {
 // legacy-target preflight to recover a historical provider identity without
 // consulting current configuration.
 //
-// Startup resume preflight uses this alongside session.json because a crash
+// Startup resume preflight uses this alongside the session checkpoint because a crash
 // can append a task transition before its checkpoint is written. A missing
 // event store is a valid legacy/first-run state and returns no tasks/evidence.
 // Any existing but malformed or conflicting durable evidence fails closed so

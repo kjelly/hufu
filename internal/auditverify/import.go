@@ -21,8 +21,8 @@ import (
 // VerifyWorkspaceRun uses against it -- never a second verification
 // algorithm for bundles.
 //
-// Known limitation: the bundle format does not currently include
-// session_tree.json (it is not part of spec.md's bundle layout), so bundle
+// Known limitation: the bundle format does not currently include the
+// session tree (it is not part of spec.md's bundle layout), so bundle
 // verification only reconstructs the default "main" branch lineage. A run
 // recorded entirely on a non-main branch will not resolve in bundle mode
 // even though workspace-mode verification of the same run succeeds.

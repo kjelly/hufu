@@ -23,13 +23,13 @@ import (
 // A decision's own record lives in the run that formed it, and its events live
 // in that run's event log. Neither is reachable once the process exits, which
 // is why outcome resolution had no entry point. The index is the missing
-// addressing layer: one append-only file per workspace, listing every decision
+// addressing layer: one append-only table per workspace, listing every decision
 // any run has formed, so `hufu decision resolve` can find one later.
 //
 // It is a projection, not a source of truth. The DecisionRecord artifact and
 // the event log remain canonical; the index only says where to look and what
 // has been resolved. It is append-only for the same reason the event log is:
-// a crash mid-write costs at most the last line, never the history.
+// a crash mid-write costs at most the last row, never the history.
 
 const (
 	decisionsDir = "decisions"
@@ -94,7 +94,7 @@ type DecisionIndexEntry struct {
 	Outcome *DecisionOutcomeRecord `json:"outcome,omitempty"`
 
 	// IndexedAt is when this row was written, used to project the latest row
-	// per decision from the append-only file.
+	// per decision from the append-only table.
 	IndexedAt time.Time `json:"indexed_at"`
 }
 

@@ -364,7 +364,7 @@ func (c *Coordinator) initialDelegationPending() bool {
 // delegationPhase returns the only state allowed to control an exact initial
 // batch. Session history and memory are intentionally excluded: they can be
 // retained after archive or corruption and are not execution receipts. Legacy
-// session files derive active state from restored TODOs, then persist the
+// session checkpoints derive active state from restored TODOs, then persist the
 // explicit phase on the next checkpoint.
 func (c *Coordinator) delegationPhase() DelegationPhase {
 	if c == nil || c.session == nil || !c.session.Config.Delegation.RequireExactInitialBatch {

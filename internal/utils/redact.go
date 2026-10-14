@@ -210,7 +210,7 @@ var numericTelemetryKeys = map[string]struct{}{
 	"reserved_output_tokens": {},
 	// token_count is the per-item token estimate in a memory injection
 	// manifest. It matches the secret-key regex ("token") but is numeric
-	// telemetry, not a credential; redacting it corrupts session.json and
+	// telemetry, not a credential; redacting it corrupts the session checkpoint and
 	// makes the manifest unparseable.
 	"token_count": {},
 	"tokens":      {},

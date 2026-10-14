@@ -747,7 +747,7 @@ func slugifyBranchName(name string) string {
 	return res
 }
 
-// SnapshotBranchState captures the live session.json task plan (and the latest
+// SnapshotBranchState captures the live session checkpoint's task plan (and the latest
 // compaction summary) into the given branch's state, so switching away from a
 // branch preserves its in-progress work. Missing session data is a no-op.
 // ActiveModel/SelectedTeam are owned by the coordinator's runtime populate and

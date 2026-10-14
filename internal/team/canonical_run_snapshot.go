@@ -7,7 +7,7 @@ import (
 )
 
 // LoadCanonicalRunFinishedSnapshot returns the latest confirmed run_finished
-// reducer snapshot for a workspace. It never consults session.json or an
+// reducer snapshot for a workspace. It never consults the session checkpoint or an
 // in-memory coordinator result; those are projections and may be stale or
 // uncommitted. An empty result means the event has not been confirmed yet.
 func LoadCanonicalRunFinishedSnapshot(workspace, requestedRunID string) (*RunResult, error) {

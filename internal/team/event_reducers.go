@@ -1330,7 +1330,7 @@ func appendExecutionReceipt(receipts []ExecutionReceipt, receipt ExecutionReceip
 			// Task transition events carry progressively richer snapshots of one
 			// receipt. The later event is authoritative for terminal fields such
 			// as ExitCode, verification, handoff state, and repair provenance.
-			// Keeping the first snapshot made replay disagree with session.json
+			// Keeping the first snapshot made replay disagree with the session checkpoint
 			// and could make audit count a rejected attempt as successful.
 			receipts[i] = receipt
 			return receipts

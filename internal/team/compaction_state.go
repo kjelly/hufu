@@ -1,7 +1,8 @@
 package team
 
-// Durable coordinator conversation compaction state. This file is the
-// canonical owner of compacted coordinator history; session_history.json and
+// Durable coordinator conversation compaction state, kept as the
+// conversation_compaction_state runtime document. It is the canonical owner of
+// compacted coordinator history; the session_history document and
 // compaction_history.json remain compatibility projections only.
 
 import (

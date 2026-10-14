@@ -325,7 +325,7 @@ func TestLearningGapCheckpointSurvivesRestart(t *testing.T) {
 		t.Fatalf("learning gap not durably checkpointed: %+v", reloaded)
 	}
 
-	// Simulate a crash: reconstruct the coordinator from session.json with a
+	// Simulate a crash: reconstruct the coordinator from the session checkpoint with a
 	// fresh event store (sync restored). No worker run is involved.
 	reopened, err := NewEventStore(workspace, "run", "session")
 	if err != nil {

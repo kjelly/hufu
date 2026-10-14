@@ -163,7 +163,7 @@ func TestInitEventStoreRepairsStaleCheckpointAfterCrash(t *testing.T) {
 	if err := SaveSession(workspace, initialSD); err != nil {
 		t.Fatal(err)
 	}
-	// Second event appended to event store, but crash before session.json saved
+	// Second event appended to event store, but crash before the session checkpoint is saved
 	if _, err := store.AppendPersisted(RunEvent{
 		Type: string(EventAssistantMessageAdded), Actor: "assistant",
 		Payload: []byte(`{"role":"assistant","content":"world"}`),

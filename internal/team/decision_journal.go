@@ -152,7 +152,7 @@ func isCanonicalEventStoreJournal(journal EventJournal, store *EventStore) bool 
 }
 
 // decisionJournalFor returns one pinned decision view for the coordinator's
-// lifetime. A missing session-tree file is the legacy/unscoped main mode; an
+// lifetime. A workspace without a stored session tree is the legacy/unscoped main mode; an
 // invalid persisted tree fails closed instead of silently projecting another
 // branch. Custom injected journals are deliberately returned unchanged.
 func (c *Coordinator) decisionJournalFor() (EventJournal, error) {

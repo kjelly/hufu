@@ -26,8 +26,8 @@ func countEvents(t *testing.T, store *EventStore, eventType EventType) int {
 	return count
 }
 
-// sameJSON compares values by their persisted JSON, the form session.json
-// and replay share.
+// sameJSON compares values by their persisted JSON, the form the session
+// checkpoint and replay share.
 func sameJSON(t *testing.T, got, want any) bool {
 	t.Helper()
 	g, err := json.Marshal(got)

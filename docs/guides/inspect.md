@@ -74,7 +74,10 @@ Those files are not part of the event chain, so the envelope reports
 
 `inspect storage` reports content-free SQLite facts: page/freelist counts, page
 size, journal mode, WAL autocheckpoint, schema version, database/WAL byte sizes,
-and FTS/context row counts. A missing WAL is reported as zero bytes. The command
+and FTS/context row counts for `context.sqlite`. Once the workspace has a
+`runtime.sqlite`, a `runtime` section reports its page facts, journal mode,
+schema version, byte sizes, event rewrite count, and event, runtime-document,
+session-branch, task-journal, and decision-index row counts. A missing WAL is reported as zero bytes. The command
 does not create storage, migrate, checkpoint, optimize, vacuum, or rebuild a
 projection.
 
@@ -104,7 +107,7 @@ An absent optional projection is reported as `unavailable` or `skipped` and
 does not by itself cause a non-zero exit. `inspect replay` compares canonical
 in-memory replay with applicable stored projections. Drift reports contain
 bounded field paths, not the compared raw values. A historical or non-active
-run cannot use a non-run-scoped `session.json` as drift evidence, so that check
+run cannot use the non-run-scoped session checkpoint as drift evidence, so that check
 is reported unavailable instead.
 
 ## Data authority and redaction
@@ -139,6 +142,6 @@ remain available and retain their specialized semantics:
 
 Use `hufu inspect` when one safe, correlated operator view is needed; use the
 specialized command when maintaining or deeply diagnosing that subsystem.
-For scripts, migrate ad-hoc parsing of reports, `session.json`, or multiple
+For scripts, migrate ad-hoc parsing of reports, `runtime.sqlite` rows, or multiple
 command outputs to `hufu inspect ... --format json`. There is no separate
 `--json` mode for this command.

@@ -252,7 +252,7 @@ func preflightRestoredExecutionTargetsWithEvidence(session *team.TeamSession, cf
 }
 
 // preflightRestoredEventLineage performs the read-only crash-window check for
-// event-first transitions that may not yet be represented in session.json.
+// event-first transitions that may not yet be represented in the session checkpoint.
 func preflightRestoredEventLineage(session *team.TeamSession, cfg *config.Config, lookup targetExecutableLookup) error {
 	items, evidence, err := team.ReadCheckedActiveExecutionTaskEvidence(session.Workspace)
 	if err != nil {

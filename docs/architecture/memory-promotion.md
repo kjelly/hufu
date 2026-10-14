@@ -67,7 +67,7 @@ hufu context promotion apply <proposal-id>
 所有子命令共同接受：
 
 ```text
---workspace <path>       # context.sqlite / logs/event_store.jsonl 所在 workspace
+--workspace <path>       # context.sqlite / runtime.sqlite 所在 workspace
 --project <id>           # 必填，canonical context project scope
 --team <name>            # 必填，同時用於 context scope 與 TeamRegistry resolve
 --team-search-path <csv> # 可選；預設沿用 team.DefaultSearchPaths()
@@ -339,7 +339,7 @@ repository 提供 create/get/list/update-status/update-draft，所有狀態更�
 
 ### 7.3 Audit event
 
-不要新增 `workspace/logs/memory_promotion.jsonl` 作第二個 truth source。沿用 `<workspace>/logs/event_store.jsonl` 的 hash-chain event store，新增 content-free events：
+不要新增 `workspace/logs/memory_promotion.jsonl` 作第二個 truth source。沿用 `<workspace>/runtime.sqlite` 的 hash-chain event journal（`events` table），新增 content-free events：
 
 ```text
 memory_promotion_proposed

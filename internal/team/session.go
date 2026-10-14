@@ -116,7 +116,7 @@ type SessionData struct {
 	WorksetReceipts                    []WorksetExpansionReceipt `json:"workset_receipts,omitempty"`
 	WorksetStates                      []WorksetGroupState       `json:"workset_states,omitempty"`
 	// DelegationPhase records whether a strict initial delegation remains due.
-	// Older session files omit it; SetSessionData derives their phase from the
+	// Older session checkpoints omit it; SetSessionData derives their phase from the
 	// restored canonical task list for backward compatibility.
 	DelegationPhase DelegationPhase `json:"delegation_phase,omitempty"`
 	// RunResult is the canonical outcome of the latest execution. It is

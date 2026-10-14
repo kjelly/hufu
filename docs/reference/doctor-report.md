@@ -66,6 +66,7 @@ is compared with the provider's model list only when that list is nonempty.
 | `workspace.writable` | Active managed workspace admits an exclusive, temporary write probe. |
 | `teams.discovery` | Team search paths can be scanned. |
 | `teams.contract` | Loaded team execution targets and verifier contracts are valid; `subject` identifies a team or finding. |
+| `runtime.store` | `runtime.sqlite` opens read-only with a known schema, or does not exist yet. A retired file-based workspace (`session.json` or `logs/event_store.jsonl` without `runtime.sqlite`) fails; when this check fails, `events.integrity` and `recovery.unresolved` are `unknown`. |
 | `events.integrity` | The entire existing event chain validates, or no history exists. |
 | `recovery.unresolved` | Active-branch high-risk tasks with `partial` or `unknown` recovery state. |
 

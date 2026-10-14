@@ -2,17 +2,17 @@ package team
 
 import "fmt"
 
-// Branch switches rebuild session.json from the target branch's event
+// Branch switches rebuild the session checkpoint from the target branch's event
 // lineage. Every branch-specific field comes from replay; only the state that
 // belongs to the workspace rather than a branch is carried over from the live
 // session (carryWorkspaceSessionState). A field added to SessionData must be
 // classified in TestSessionDataFieldsAreClassifiedForBranchSwitch.
 
-// RebuildSessionForBranch rewrites workspace/session.json as branchID's
+// RebuildSessionForBranch rewrites the session checkpoint as branchID's
 // replayed session, so the next run resumes the branch's own state. When the
 // lineage has no task events, tasks fall back to the branch's TaskPlan
 // snapshot. A branch with no lineage yields a fresh session. A terminal
-// commit awaiting confirmation is recorded only in session.json: it stays
+// commit awaiting confirmation is recorded only in the session checkpoint: it stays
 // with a rebuild of its own branch and blocks a switch to any other.
 func RebuildSessionForBranch(workspace string, st *SessionTree, es *EventStore, branchID string) error {
 	return rebuildSessionForBranch(workspaceDocs(workspace), st, es, branchID)
@@ -62,10 +62,10 @@ func carryWorkspaceSessionState(next, live *SessionData) {
 
 // RefreshActiveBranchProjection rewrites the replayed task, conversation,
 // criterion and execution-policy projection of the active branch in place,
-// after canonical events were appended to it. The rest of session.json is
-// the same branch's live state and is kept, including recovery state that
-// only session.json records. A lineage with nothing to project leaves
-// session.json untouched.
+// after canonical events were appended to it. The rest of the session
+// checkpoint is the same branch's live state and is kept, including recovery
+// state that only the checkpoint records. A lineage with nothing to project
+// leaves the checkpoint untouched.
 func RefreshActiveBranchProjection(workspace string, st *SessionTree, es *EventStore) error {
 	if st == nil {
 		return fmt.Errorf("refresh active branch projection: session tree is nil")
@@ -96,7 +96,7 @@ func RefreshActiveBranchProjection(workspace string, st *SessionTree, es *EventS
 
 // RefuseBranchSwitchWithPendingTerminalCommit reports an error when making
 // targetBranchID active would leave a branch whose run awaits confirmation
-// that its run_finished event is durable. Only session.json records that
+// that its run_finished event is durable. Only the session checkpoint records that
 // commit, so a switch would lose it; the next run on its branch confirms it.
 // An empty target names a branch being created, which never owns a commit.
 func RefuseBranchSwitchWithPendingTerminalCommit(workspace, targetBranchID string) error {

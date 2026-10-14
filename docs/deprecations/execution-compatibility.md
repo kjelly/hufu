@@ -28,7 +28,7 @@ read-compatible during the sunset window:
 - v3 policy-route `legacy_provider`;
 - `provider_session_bound` event and the `provider` field of historical
   `execution-events.jsonl` files (no longer written; execution telemetry is
-  projected from `event_store.jsonl`).
+  projected from the event journal in `runtime.sqlite`).
 
 New writers must not emit these fields. Existing workspaces are not rewritten:
 the later materializer appends a self-contained canonical migration event after

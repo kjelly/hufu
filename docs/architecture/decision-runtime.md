@@ -2985,11 +2985,11 @@ Phase 5 就能開始；在那之前，依 §49 本節的規定，Phase 5 不得�
 ### 49.3 已實作的 Phase 5 前置（不是 Phase 5 本體）
 
 **跨 run 決策索引**：`internal/team/decision_index.go`。
-每個 workspace 一份 append-only 的 `logs/decisions/index.jsonl`，
-列出任何 run 形成過的決策。它是**投影**，不是事實來源——canonical 仍是
-run 內的 `DecisionRecord` artifact 與 event log；索引只負責「去哪裡找」
-以及「是否已結案」。後寫的列覆蓋先寫的，讀取時投影為每個決策一列；
-尾端被截斷的行會被跳過，一次 crash 最多損失最後一次寫入，
+每個 workspace 一份 append-only 的索引（`runtime.sqlite` 的 `decision_index` table；
+`logs/decisions/.lock` 序列化跨 process 的寫入），列出任何 run 形成過的決策。
+它是**投影**，不是事實來源——canonical 仍是 run 內的 `DecisionRecord` artifact
+與 event log；索引只負責「去哪裡找」以及「是否已結案」。後寫的列覆蓋先寫的，讀取時投影為每個決策一列；
+每次寫入是一筆 SQLite transaction，一次 crash 最多損失最後一次寫入，
 不會讓先前所有決策失去定址能力。
 
 決策 finalize 時由 `DecisionEngine` 寫入索引；**被門檻擋下的決策不入索引**

@@ -106,8 +106,9 @@ workspace-aware fork fails closed; `--metadata-only` forks only the session.
   A fork of an earlier branch or event first saves the active branch's live
   files, then materializes the snapshot at the fork point.
 - **checkout** saves the live files of the current branch, materializes the
-  target branch's head, and only then rebuilds `session.json` and switches
-  the active branch. Branches without a head need `--metadata-only`.
+  target branch's head, and only then rebuilds the session checkpoint and
+  switches the active branch (one `runtime.sqlite` transaction). Branches
+  without a head need `--metadata-only`.
 - **restore** appends a restore node on the active branch whose tree is the
   chosen snapshot's tree; history is never rewritten.
 
