@@ -141,3 +141,19 @@ Start with the outer `status`, `summary`, and `files_read`, then add
 status and summary. Supply the report as an object directly, without encoding
 it into a JSON string. The output allowance is reserved for that complete
 inventory and any precise schema repair.
+
+## Reader-facing report order
+
+The fixed report template leads with evidence coverage, original finding
+proposals, Critic verdicts and the corresponding next step, then preserves the
+full audit inventory. Do not duplicate or paraphrase this inventory in free text.
+A passing targeted test is not a clean-review verdict; `unverified` findings
+remain unverified, and gaps remain evidence limits. Existing saved reports are
+not rewritten by this presentation change.
+
+Reader-facing headings use each original finding's summary and location, with
+its original detail and independent verdict/rationale next to it. Task numbers,
+payload hashes, artifact IDs and source-to-critic links belong to the audit
+appendix. Keep the complete original records: the renderer uses the validated,
+ordered decisions to associate each verdict with the source finding. Do not
+invent a new issue title, impact or specific fix merely to improve presentation.

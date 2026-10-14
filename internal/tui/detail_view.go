@@ -94,6 +94,7 @@ func (m Model) renderDetailHeader(item *team.TodoItem) string {
 		agentModelLine += "  " + providerLine
 	}
 	parts = append(parts, agentModelLine)
+	parts = append(parts, m.resultIdentityLines(item.ID)...)
 	if skillsLine != "" {
 		parts = append(parts, skillsLine)
 	}

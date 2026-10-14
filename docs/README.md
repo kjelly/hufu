@@ -85,6 +85,8 @@ to re-create an abstraction that already exists in the runtime.
   active `systemone` modes for the agent matcher, unattended `ask_user`, path
   reviewer, and guard reviewer, and how to read their evidence.
 - [Read-only runtime inspection](guides/inspect.md)
+- [Historical task results](guides/historical-results.md) — team-scoped offline
+  result lookup and source-linked LLM history queries without run IDs.
 - [Managed workspace migration](guides/workspace-migration.md)
 - [Operator journeys](guides/operator-journeys.md)
 - [Operator CLI migration](guides/operator-cli-migration.md)
@@ -134,6 +136,8 @@ to re-create an abstraction that already exists in the runtime.
   completed or superseded plans belong in `archive/implementation-plans/`.
 - [Context delivery implementation plan](implementation-plans/context-delivery.md)
   — offline delivery assertions, bounded query hints, and explicit opt-in rollout.
+- [Historical task results and LLM query plan](implementation-plans/historical-task-results-llm-query.md)
+  — proposed natural-language history queries, durable result lookup, and source-linked answers without requiring run IDs.
 - [Current roadmap](roadmap.md) — a small navigation list of active follow-up
   work. It is not an implementation-state database.
 

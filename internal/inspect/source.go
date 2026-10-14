@@ -2,6 +2,7 @@ package inspect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -27,15 +28,27 @@ type Lineage struct {
 // branch. An empty BranchID selects only the active branch; sibling branches
 // are never searched implicitly.
 func LoadLineage(ctx context.Context, query InspectQuery) (Lineage, error) {
+	return loadLineageWithLimits(ctx, query, 0, 0)
+}
+
+func loadLineageWithLimits(ctx context.Context, query InspectQuery, maxEvents, maxPayloadBytes int) (Lineage, error) {
 	workspace := strings.TrimSpace(query.Workspace)
 	if workspace == "" {
 		return Lineage{}, fmt.Errorf("%w: workspace is required after CLI resolution", ErrInvalidQuery)
 	}
 	var global []team.RunEvent
+	payloadBytes := 0
 	if err := team.StreamValidatedRunEvents(ctx, workspace, func(event team.RunEvent) error {
+		payloadBytes += len(event.Payload)
+		if maxEvents > 0 && len(global) >= maxEvents || maxPayloadBytes > 0 && payloadBytes > maxPayloadBytes {
+			return fmt.Errorf("%w: historical event replay exceeds the read budget; no partial results were returned", ErrInvalidQuery)
+		}
 		global = append(global, event)
 		return nil
 	}); err != nil {
+		if errors.Is(err, ErrInvalidQuery) {
+			return Lineage{}, err
+		}
 		return Lineage{}, fmt.Errorf("%w: %v", ErrIntegrity, err)
 	}
 

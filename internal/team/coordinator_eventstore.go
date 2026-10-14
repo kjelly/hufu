@@ -561,8 +561,15 @@ func (c *Coordinator) emitEventOnce(idempotencyKey string, event RunEvent) (bool
 	if idempotencyKey == "" {
 		return false, errors.New("emit event once: empty idempotency key")
 	}
+	var durable RunEvent
+	committed := false
 	c.eventOnceMu.Lock()
-	defer c.eventOnceMu.Unlock()
+	defer func() {
+		c.eventOnceMu.Unlock()
+		if committed {
+			c.reportHistoricalResult(durable)
+		}
+	}()
 	if c.emittedTaskTransitions == nil {
 		c.emittedTaskTransitions = make(map[string]bool)
 	}
@@ -570,11 +577,14 @@ func (c *Coordinator) emitEventOnce(idempotencyKey string, event RunEvent) (bool
 		return false, nil
 	}
 	event.IdempotencyKey = idempotencyKey
-	if _, err := c.eventStore.AppendPersisted(event); err != nil {
+	var err error
+	durable, err = c.eventStore.AppendPersisted(event)
+	if err != nil {
 		c.recordLearningGap(event, err)
 		return false, err
 	}
 	c.emittedTaskTransitions[idempotencyKey] = true
+	committed = true
 	return true, nil
 }
 
@@ -875,13 +885,14 @@ func (c *Coordinator) appendTaskTransition(ctx context.Context, item *TodoItem, 
 	// A terminal/cancellation transition is itself recovery evidence. Do not
 	// let the already-cancelled worker context suppress its durable record.
 	appendCtx := context.WithoutCancel(ctx)
-	if _, err := c.EventJournal().Append(appendCtx, RunEvent{
+	durable, err := c.EventJournal().Append(appendCtx, RunEvent{
 		Type:           eventType,
 		Actor:          item.Agent,
 		TaskID:         item.ID,
 		IdempotencyKey: key,
 		Payload:        rawPayload,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("commit task transition append: %w", err)
 	}
 	c.eventOnceMu.Lock()
@@ -891,6 +902,7 @@ func (c *Coordinator) appendTaskTransition(ctx context.Context, item *TodoItem, 
 	c.emittedTaskTransitions[key] = true
 	c.emittedTaskTransitions[fmt.Sprintf("%s:%s:%d", item.ID, item.Status, item.Retries)] = true
 	c.eventOnceMu.Unlock()
+	c.reportHistoricalResult(durable)
 	return nil
 }
 
@@ -1464,6 +1476,9 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 		"materialized_action_payload_hash": item.MaterializedActionPayloadHash,
 		"bound_inputs":                     item.BoundInputs,
 		"attempt":                          item.Retries + 1,
+	}
+	if c != nil && c.session != nil {
+		payload["team"] = c.session.Config.Name
 	}
 	// A typed target is the sole durable execution identity for new
 	// occurrences. The legacy model/topology fields remain accepted below only

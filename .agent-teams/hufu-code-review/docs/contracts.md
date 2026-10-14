@@ -136,6 +136,15 @@ the independent report audit still rejects multiple accepted critics for one
 source. Runtime retries repair the same occurrence rather than authorizing
 another accepted source audit.
 
+The final report's main sections identify issues by the original finding
+summary and location and display their detail, independent verdict, rationale,
+missing evidence and next step. Task IDs and full payload/artifact hashes remain
+in the audit appendix, alongside the original-review to independent-critic
+links. The renderer indexes findings by the schema-validated ordered decision
+position, so a JSON integer spelling such as `0.0` cannot lose its title binding.
+Presentation does not mutate source records, rehash payloads or turn unverified
+claims into confirmed defects. Existing saved response bodies are not rewritten.
+
 Synthesis uses low reasoning effort and a 12-step budget because source review
 and critique already own semantic investigation. It groups gaps, reads sibling
 records, and uses at most two evidence-gathering rounds (four focused views per

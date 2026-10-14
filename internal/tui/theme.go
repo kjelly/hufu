@@ -111,6 +111,12 @@ func effectiveTheme(mode ThemeMode) ThemeMode {
 	return resolveAutoTheme(os.Getenv("COLORFGBG"))
 }
 
+// ResolveThemeMode applies the same environment and background defaults used
+// by the CLI palette, without querying or changing the terminal.
+func ResolveThemeMode(mode ThemeMode) ThemeMode {
+	return effectiveTheme(mode)
+}
+
 type semanticPalette struct {
 	foreground themeColor
 	muted      themeColor

@@ -172,6 +172,13 @@ type reporterState struct {
 func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEvent) {
 	width := previewTerminalWidth(120)
 	switch event.Type {
+	case "task_result_ready":
+		if opts.quietMode || opts.outputFormat == "json" {
+			return
+		}
+		if identity := resultStatusIdentity(event); identity != nil {
+			w.write(fmt.Sprintf("  Result ID: %s (team: %s, task: %s)\n  View: %s\n", identity.ResultID, safeResultsText(event.TeamName), identity.TaskID, team.HistoricalResultCommand(identity.ResultID, event.TeamName)))
+		}
 	case "model_profile_resolved":
 		if event.ModelProfile != nil {
 			profile := event.ModelProfile
@@ -1408,6 +1415,7 @@ type jsonStatusEvent struct {
 	Time            string                            `json:"time"`
 	ContextWindow   *team.ContextWindowTelemetryEvent `json:"context_window,omitempty"`
 	ModelProfile    *modelprofile.TelemetryProjection `json:"model_profile,omitempty"`
+	Result          *resultReadyIdentity              `json:"result,omitempty"`
 }
 
 type decisionJSONLEnvelope struct {
@@ -1438,6 +1446,10 @@ func makeJSONLReporter(notifier *notify.Notifier) team.StatusReporter {
 			notifier.NotifyWithData(event.Type, event.Agent, event.Message, event.Output, event.Data)
 		}
 		encoded := jsonStatusEvent{Type: event.Type, Team: event.TeamName, InvocationID: opts.invocationID, Agent: event.Agent, TodoID: event.TodoID, Model: event.Model, ExecutionTarget: event.ExecutionTarget, Backend: event.Backend, BackendKind: event.BackendKind, Message: event.Message, Tool: event.ToolName, Time: time.Now().UTC().Format(time.RFC3339Nano), ContextWindow: event.ContextWindowTelemetry, ModelProfile: event.ModelProfile}
+		encoded.Result = resultStatusIdentity(event)
+		if encoded.Result != nil {
+			encoded.RunID = encoded.Result.RunID
+		}
 		writeJSONLStatusEvent(os.Stderr, encoded)
 	}
 }
@@ -1624,6 +1636,11 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 
 	return func(event team.StatusEvent) {
 		switch event.Type {
+		case "task_result_ready":
+			if identity := resultStatusIdentity(event); identity != nil {
+				p.Send(tuipkg.TaskResultIdentityMsg{TodoID: event.TodoID, ResultID: identity.ResultID, Team: event.TeamName})
+				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: "Result ID: " + identity.ResultID + "\n" + team.HistoricalResultCommand(identity.ResultID, event.TeamName)})
+			}
 		case "model_profile_resolved":
 			if event.ModelProfile != nil {
 				profile := event.ModelProfile
