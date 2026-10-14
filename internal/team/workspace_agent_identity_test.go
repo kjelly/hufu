@@ -72,3 +72,19 @@ func TestCanonicalAgentWorkspaceKeyRejectsUnsafeNames(t *testing.T) {
 		}
 	}
 }
+
+// A coordinator built without a workspace (as many tests build one) must not
+// write its LLM log relative to the working directory: under go test that
+// directory is the package source tree.
+func TestWriteLLMLogWithoutWorkspaceWritesNothing(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	writeLLMLog("", "test", "worker", "entry\n")
+	entries, err := os.ReadDir(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("writeLLMLog without a workspace wrote %v into the working directory", entries)
+	}
+}

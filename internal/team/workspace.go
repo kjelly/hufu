@@ -256,7 +256,13 @@ func validateSharedContextFiles(workspace string, files []string) error {
 	return nil
 }
 
+// writeLLMLog appends entry to the agent's LLM log. A coordinator without a
+// workspace keeps no log: joining an empty workspace yields a relative path,
+// which would write into the process's working directory.
 func writeLLMLog(workspace, teamName, agentName, entry string) {
+	if strings.TrimSpace(workspace) == "" {
+		return
+	}
 	agentKey, err := canonicalAgentWorkspaceKey(agentName)
 	if err != nil {
 		return
