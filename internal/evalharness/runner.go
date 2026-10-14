@@ -20,6 +20,7 @@ import (
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/improve"
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
@@ -188,7 +189,7 @@ func runCaseWithExecution(ctx context.Context, fixture *SuiteFixture, c CaseFixt
 		coordinator.SetFreshSession(true)
 	}
 	// Follow the production CLI's crash-resume path when a fixture seeds a
-	// session.json checkpoint. Loading it after coordinator construction and
+	// session checkpoint (workspace-files session.json). Loading it after coordinator construction and
 	// before policy freeze makes ResumeInterruptedTasks exercise the same
 	// durable Todo projection instead of treating the file as inert input.
 	if restored := team.LoadSession(workspace); restored != nil {
@@ -660,11 +661,40 @@ func legacyTaskCreatedPayload(task *team.TodoItem) (json.RawMessage, error) {
 	return json.Marshal(payload)
 }
 
+// sessionSeedFile is the workspace-files key that seeds the session
+// checkpoint.
+const sessionSeedFile = "session.json"
+
+// seededRuntimeDocuments maps workspace-files keys named after retired runtime
+// state files to the runtime.sqlite documents that replaced them, so a case
+// seeds state where the runtime reads it.
+var seededRuntimeDocuments = map[string]string{
+	sessionSeedFile:               runtimestore.DocumentSession,
+	"logs/terminal_sessions.json": runtimestore.DocumentTerminalSessions,
+}
+
+// retiredSeedFiles are runtime state files with no seedable document. A case
+// seeding one would be silently ignored, so it is refused.
+var retiredSeedFiles = []string{
+	"session_tree.json", "conversation_compaction_state.json", "session_history.json",
+	"logs/reliability_eval.json", "logs/event_store.jsonl",
+}
+
 // seedWorkspaceFiles writes a case's WorkspaceFiles into its ephemeral
 // workspace before the run starts, e.g. a fan_out source manifest a
 // scripted tool_call references by workspace-relative path.
 func seedWorkspaceFiles(workspace string, files map[string]string) error {
 	for _, relPath := range slices.Sorted(maps.Keys(files)) {
+		key := filepath.ToSlash(filepath.Clean(relPath))
+		if document, ok := seededRuntimeDocuments[key]; ok {
+			if err := seedRuntimeDocument(workspace, key, document, files[relPath]); err != nil {
+				return err
+			}
+			continue
+		}
+		if slices.Contains(retiredSeedFiles, key) {
+			return fmt.Errorf("workspace file %s is runtime state kept in runtime.sqlite and cannot be seeded as a file", relPath)
+		}
 		absPath, err := resolveWorkspaceSeedPath(workspace, relPath)
 		if err != nil {
 			return err
@@ -675,6 +705,21 @@ func seedWorkspaceFiles(workspace string, files map[string]string) error {
 		if err := os.WriteFile(absPath, []byte(files[relPath]), 0o644); err != nil {
 			return fmt.Errorf("write workspace file %s: %w", relPath, err)
 		}
+	}
+	return nil
+}
+
+func seedRuntimeDocument(workspace, relPath, document, body string) error {
+	if !json.Valid([]byte(body)) {
+		return fmt.Errorf("workspace file %s is not valid JSON", relPath)
+	}
+	store, err := runtimestore.Open(context.Background(), workspace)
+	if err != nil {
+		return fmt.Errorf("seed workspace file %s: %w", relPath, err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.PutDocument(context.Background(), document, []byte(body)); err != nil {
+		return fmt.Errorf("seed workspace file %s: %w", relPath, err)
 	}
 	return nil
 }

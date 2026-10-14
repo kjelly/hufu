@@ -19,10 +19,7 @@ import (
 func TestInspectReplayMatchesEligibleSessionProjection(t *testing.T) {
 	fixture := buildRunFixture(t)
 	saveCanonicalReplaySession(t, fixture)
-	paths := []string{
-		runtimestore.Path(fixture.workspace),
-		filepath.Join(fixture.workspace, "session.json"),
-	}
+	paths := []string{runtimestore.Path(fixture.workspace)}
 	before := readExistingFiles(t, paths)
 	envelope, err := InspectReplay(t.Context(), InspectQuery{Workspace: fixture.workspace, RunID: fixture.runID, SessionID: "session-inspect"})
 	if err != nil {
@@ -410,15 +407,19 @@ func saveCanonicalReplaySession(t *testing.T, fixture runFixture) {
 	}
 }
 
-// writeTerminalSessions writes the terminal session projection, which still
-// lives in logs/ although the event journal no longer creates that directory.
+// writeTerminalSessions writes the terminal session projection as the
+// terminal_sessions runtime document.
 func writeTerminalSessions(t *testing.T, workspace string, data []byte) {
 	t.Helper()
-	logs := filepath.Join(workspace, "logs")
-	if err := os.MkdirAll(logs, 0o755); err != nil {
+	store, err := runtimestore.Open(t.Context(), workspace)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(logs, "terminal_sessions.json"), data, 0o600); err != nil {
+	err = store.PutDocument(t.Context(), runtimestore.DocumentTerminalSessions, data)
+	if closeErr := store.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 }

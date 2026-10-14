@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/executioncompat"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 // TestSavedLegacyFixturesReplayCanonicalAfterMaterialization pins the inspector and append-only
@@ -105,9 +106,19 @@ func copyFixtureWorkspace(t *testing.T, source, destination string) {
 		if err != nil {
 			return err
 		}
-		if path == fixtureEventLog {
+		switch path {
+		case fixtureEventLog:
 			loadFixtureEventLog(t, destination, data)
 			return nil
+		case fixtureSession:
+			putRuntimeDocument(t, destination, runtimestore.DocumentSession, data)
+			return nil
+		case fixtureSessionTree:
+			var tree SessionTree
+			if err := json.Unmarshal(data, &tree); err != nil {
+				return err
+			}
+			return SaveSessionTree(destination, &tree)
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
@@ -125,9 +136,13 @@ func copyFixtureWorkspace(t *testing.T, source, destination string) {
 	}
 }
 
-// fixtureEventLog is where a saved fixture keeps its event journal: the
-// portable JSONL export, loaded into runtime.sqlite when the fixture is copied.
-const fixtureEventLog = "logs/event_store.jsonl"
+// Saved fixtures keep their runtime state in the retired file layout, the
+// portable form; copying a fixture loads each into runtime.sqlite.
+const (
+	fixtureEventLog    = "logs/event_store.jsonl"
+	fixtureSession     = "session.json"
+	fixtureSessionTree = "session_tree.json"
+)
 
 // loadFixtureEventLog writes the fixture's events verbatim, without
 // validating them, so a deliberately broken chain reaches the inspector.

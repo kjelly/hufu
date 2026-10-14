@@ -3,8 +3,6 @@ package team
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -262,11 +260,8 @@ func TestInitEventStore_MalformedSessionTreeMarksRecoveryRequired(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	// Write malformed session_tree.json
-	treePath := filepath.Join(workspace, sessionTreeFile)
-	if err := os.WriteFile(treePath, []byte(`{ invalid json`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// Store a malformed session tree
+	storeRawSessionTree(t, workspace, "main", rawSessionBranch{id: "main", name: "main", state: `{ invalid json`})
 
 	c := &Coordinator{
 		session:     &TeamSession{Workspace: workspace},

@@ -94,8 +94,8 @@ func containsString(s, substr string) bool {
 }
 
 // TestCLISession_CheckoutRebuildsSession verifies that checkout rewrites
-// session.json from the branch's event lineage so the next run resumes the
-// checked-out branch's tasks.
+// the session checkpoint from the branch's event lineage so the next run
+// resumes the checked-out branch's tasks.
 func TestCLISession_CheckoutRebuildsSession(t *testing.T) {
 	tempDir := t.TempDir()
 
@@ -112,7 +112,7 @@ func TestCLISession_CheckoutRebuildsSession(t *testing.T) {
 	_ = es.Append(team.RunEvent{ID: "evt-context-1", BranchID: "main", Type: "task_context_manifest", TaskID: "1", Payload: mustMarshal(map[string]any{"id": "1", "context_manifests": []team.ContextInjectionManifest{contextManifest}})})
 	_ = es.Close()
 
-	// Write session.json to simulate a live main run with tasks 1+2.
+	// Save the session checkpoint to simulate a live main run with tasks 1+2.
 	liveSession := &team.SessionData{}
 	liveSession.AddEntry("user", "hello main")
 	liveSession.Tasks = []*team.TodoItem{{ID: "1", Desc: "task one", Status: team.TaskDone}, {ID: "2", Desc: "task two", Status: team.TaskDone}}
@@ -122,7 +122,7 @@ func TestCLISession_CheckoutRebuildsSession(t *testing.T) {
 
 	root := newRootCommand()
 
-	// Fork exp via CLI (persists the branch to session_tree.json).
+	// Fork exp via CLI (persists the branch to the session tree).
 	root.SetOut(new(bytes.Buffer))
 	root.SetArgs([]string{"session", "fork", "main", "--name", "exp", "--workspace", tempDir})
 	if err := root.Execute(); err != nil {
@@ -130,7 +130,7 @@ func TestCLISession_CheckoutRebuildsSession(t *testing.T) {
 	}
 
 	// Simulate an exp run: append an exp-only task to the event store and
-	// write session.json with exp's tasks.
+	// save the session checkpoint with exp's tasks.
 	es, _ = team.OpenEventStore(tempDir)
 	if es != nil {
 		_ = es.Append(team.RunEvent{ID: "evt-3", BranchID: "exp", Type: "task_completed", TaskID: "3", Payload: mustMarshal(map[string]string{"id": "3", "desc": "exp task three", "status": "done"})})
@@ -139,7 +139,7 @@ func TestCLISession_CheckoutRebuildsSession(t *testing.T) {
 	expSession := &team.SessionData{}
 	expSession.AddEntry("user", "hello exp")
 	expSession.Tasks = []*team.TodoItem{{ID: "3", Desc: "exp task three", Status: team.TaskDone}}
-	// Branch state exp's session.json holds that main's lineage never had,
+	// Branch state exp's checkpoint holds that main's lineage never had,
 	// and workspace state every branch shares.
 	expSession.PendingWrapUp = &team.PendingWrapUp{RunID: "run-exp", BranchID: "exp", RequestedAt: "2026-10-13T00:00:00Z"}
 	expSession.RecoveryRequired, expSession.RecoveryReason = true, "exp needs recovery"
@@ -149,7 +149,7 @@ func TestCLISession_CheckoutRebuildsSession(t *testing.T) {
 		t.Fatalf("SaveSession failed: %v", err)
 	}
 
-	// Checkout main: session.json must be rebuilt to main lineage (tasks 1+2 only).
+	// Checkout main: the checkpoint must be rebuilt to main lineage (tasks 1+2 only).
 	root = newRootCommand()
 	root.SetOut(new(bytes.Buffer))
 	root.SetArgs([]string{"session", "checkout", "main", "--workspace", tempDir})
@@ -210,7 +210,7 @@ func TestCLISession_CheckoutRefusesUnconfirmedTerminalCommit(t *testing.T) {
 		t.Fatalf("refused checkout switched the active branch to %+v", active)
 	}
 	if sd := team.LoadSession(tempDir); sd.PendingTerminalCommit == nil || len(sd.Entries) != 1 || sd.Entries[0].Content != "hello exp" {
-		t.Fatalf("refused checkout changed session.json: %+v", sd)
+		t.Fatalf("refused checkout changed the session checkpoint: %+v", sd)
 	}
 }
 

@@ -155,18 +155,11 @@ func compatibilityBranches(tree *SessionTree, requested string) ([]string, strin
 }
 
 func loadCompatibilitySession(workspace string) (*SessionData, error) {
-	data, err := os.ReadFile(filepath.Join(workspace, sessionFile))
+	session, _, err := loadSessionFrom(workspaceDocs(workspace))
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("inspect execution compatibility session: %w", err)
 	}
-	var session SessionData
-	if err := json.Unmarshal(data, &session); err != nil {
-		return nil, fmt.Errorf("inspect execution compatibility session: decode session.json: %w", err)
-	}
-	return &session, nil
+	return session, nil
 }
 
 type compatibilityTaskPayload struct {

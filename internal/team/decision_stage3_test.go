@@ -179,9 +179,7 @@ func TestDecisionOccurrenceLookupFindsAnchorBeforeAnyWorkerReceipt(t *testing.T)
 func TestDecisionOccurrenceLookupFailsClosedForCorruptBranchTree(t *testing.T) {
 	store, journal, req, _ := stage3PartialDecisionWithRunID(t, enginePolicy(3), "run-A")
 	workspace := filepath.Dir(filepath.Dir(store.root))
-	if err := os.WriteFile(filepath.Join(workspace, sessionTreeFile), []byte("{not-json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	storeRawSessionTree(t, workspace, "main", rawSessionBranch{id: "main", name: "main", state: "{not-json"})
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "resume decision"}})[0]
 	item.ID = req.TaskID
@@ -200,9 +198,7 @@ func TestDecisionOccurrenceLookupFailsClosedForCorruptBranchTree(t *testing.T) {
 func TestDecisionOccurrenceLookupFailsClosedForMissingActiveBranch(t *testing.T) {
 	store, journal, req, _ := stage3PartialDecisionWithRunID(t, enginePolicy(3), "run-A")
 	workspace := filepath.Dir(filepath.Dir(store.root))
-	if err := os.WriteFile(filepath.Join(workspace, sessionTreeFile), []byte(`{"active_branch":"missing","branches":{"main":{"id":"main","name":"main"}}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	storeRawSessionTree(t, workspace, "missing", rawSessionBranch{id: "main", name: "main"})
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "resume decision"}})[0]
 	item.ID = req.TaskID
@@ -221,9 +217,7 @@ func TestDecisionOccurrenceLookupFailsClosedForMissingActiveBranch(t *testing.T)
 func TestDecisionOccurrenceLookupFailsClosedForCyclicActiveBranch(t *testing.T) {
 	store, journal, req, _ := stage3PartialDecisionWithRunID(t, enginePolicy(3), "run-A")
 	workspace := filepath.Dir(filepath.Dir(store.root))
-	if err := os.WriteFile(filepath.Join(workspace, sessionTreeFile), []byte(`{"active_branch":"main","branches":{"main":{"id":"main","name":"main","parent_id":"main"}}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	storeRawSessionTree(t, workspace, "main", rawSessionBranch{id: "main", name: "main", parent: "main"})
 	tracker := NewTaskTracker()
 	item := tracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "resume decision"}})[0]
 	item.ID = req.TaskID

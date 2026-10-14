@@ -144,8 +144,8 @@ func archivePreviousSession(session *team.TeamSession) error {
 				stderrLog("%s Previous session archived to %s\n", doneStyle.Render("✓"), filepath.Base(archivedPath))
 			}
 		} else {
-			if err := os.Remove(filepath.Join(session.Workspace, "session.json")); err != nil && !os.IsNotExist(err) {
-				stderrLog("%s Failed to remove session file: %v\n", errStyle.Render("⚠"), err)
+			if err := team.DeleteSession(session.Workspace); err != nil {
+				stderrLog("%s Failed to remove session checkpoint: %v\n", errStyle.Render("⚠"), err)
 			}
 		}
 	}

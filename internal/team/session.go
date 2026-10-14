@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -21,7 +22,6 @@ func removeFileIfExists(path string) error {
 	return nil
 }
 
-const sessionFile = "session.json"
 const historyDirName = "history"
 const maxSessionEntries = 40
 
@@ -168,24 +168,17 @@ func LoadSession(workspace string) *SessionData {
 
 // LoadSessionReadOnly reads the mutable checkpoint projection without
 // creating, repairing, redacting, or warning about it. The boolean reports
-// whether session.json exists so offline inspectors can distinguish an absent
-// optional projection from malformed persisted JSON.
+// whether the session document exists so offline inspectors can distinguish
+// an absent optional projection from malformed persisted JSON.
 func LoadSessionReadOnly(workspace string) (*SessionData, bool, error) {
 	if strings.TrimSpace(workspace) == "" {
 		return nil, false, fmt.Errorf("load session read-only: empty workspace")
 	}
-	data, err := os.ReadFile(filepath.Join(workspace, sessionFile))
+	session, exists, err := loadSessionFrom(workspaceDocs(workspace))
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, false, nil
-		}
-		return nil, false, fmt.Errorf("load session read-only: %w", err)
+		return nil, exists, fmt.Errorf("load session read-only: %w", err)
 	}
-	var session SessionData
-	if err := json.Unmarshal(data, &session); err != nil {
-		return nil, true, fmt.Errorf("load session read-only: decode session.json: %w", err)
-	}
-	return &session, true, nil
+	return session, exists, nil
 }
 
 // loadSessionQuiet is the same load without the operator warning, for callers
@@ -194,26 +187,38 @@ func LoadSessionReadOnly(workspace string) (*SessionData, bool, error) {
 // warning used to surface in real runs as "corrupt session file in
 // /tmp/hufu-reliability-checkpoint-…", which reads like workspace damage.
 func loadSessionQuiet(workspace string) (*SessionData, error) {
-	data, err := os.ReadFile(filepath.Join(workspace, sessionFile))
-	if err != nil {
-		return nil, nil
+	session, _, err := loadSessionFrom(workspaceDocs(workspace))
+	return session, err
+}
+
+// loadSessionFrom decodes the session document. A missing document is a nil
+// session; the boolean reports whether one exists.
+func loadSessionFrom(docs runtimeDocs) (*SessionData, bool, error) {
+	data, exists, err := docs.getDocument(runtimestore.DocumentSession)
+	if err != nil || !exists {
+		return nil, exists, err
 	}
 	var session SessionData
 	if err := json.Unmarshal(data, &session); err != nil {
-		return nil, err
+		return nil, true, fmt.Errorf("decode session: %w", err)
 	}
-	return &session, nil
+	return &session, true, nil
 }
 
 func SaveSession(workspace string, session *SessionData) error {
-	if session == nil {
-		return errors.New("session is nil")
-	}
 	if strings.TrimSpace(workspace) == "" {
 		return errors.New("session workspace is empty")
 	}
+	return saveSessionTo(workspaceDocs(workspace), session)
+}
+
+// saveSessionTo redacts and writes session as the session document.
+func saveSessionTo(docs runtimeDocs, session *SessionData) error {
+	if session == nil {
+		return errors.New("session is nil")
+	}
 	session.UpdatedAt = time.Now().Format(time.RFC3339)
-	data, err := json.MarshalIndent(session, "", "  ")
+	data, err := json.Marshal(session)
 	if err != nil {
 		return err
 	}
@@ -229,7 +234,13 @@ func SaveSession(workspace string, session *SessionData) error {
 	if !json.Valid(data) {
 		return errors.New("redacted session is invalid JSON")
 	}
-	return AtomicWriteFile(filepath.Join(workspace, sessionFile), data, 0o600)
+	return docs.putDocument(runtimestore.DocumentSession, data)
+}
+
+// DeleteSession removes the session checkpoint. A missing one is not an
+// error.
+func DeleteSession(workspace string) error {
+	return workspaceDocs(workspace).deleteDocument(runtimestore.DocumentSession)
 }
 
 func NewSession() *SessionData {
@@ -353,7 +364,7 @@ func ArchiveSession(workspace string, summary string) error {
 		return fmt.Errorf("failed to write history file: %w", err)
 	}
 
-	if err := removeFileIfExists(filepath.Join(workspace, sessionFile)); err != nil {
+	if err := DeleteSession(workspace); err != nil {
 		return fmt.Errorf("failed to remove old session: %w", err)
 	}
 
@@ -361,9 +372,6 @@ func ArchiveSession(workspace string, summary string) error {
 }
 
 func HasSession(workspace string) bool {
-	fi, err := os.Stat(filepath.Join(workspace, sessionFile))
-	if err != nil {
-		return false
-	}
-	return !fi.IsDir()
+	_, exists, err := workspaceDocs(workspace).getDocument(runtimestore.DocumentSession)
+	return err == nil && exists
 }

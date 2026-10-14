@@ -176,13 +176,14 @@ func TestCLISessionCheckoutRefusedWhileProjectLocked(t *testing.T) {
 // event store is an error, not a silently lineage-free fork.
 func TestCLISessionForkFailsClosedWithoutEventStore(t *testing.T) {
 	workspace := t.TempDir()
-	// A directory in place of runtime.sqlite cannot be opened as the journal.
+	// A directory in place of runtime.sqlite cannot be opened as the journal
+	// or as the session tree, which the fork reads first.
 	if err := os.MkdirAll(runtimestore.Path(workspace), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	_, err := runCLI(t, "session", "fork", "--name", "x", "--workspace", workspace)
-	if err == nil || !strings.Contains(err.Error(), "open event store") {
-		t.Fatalf("err = %v, want an event store error", err)
+	if err == nil || !strings.Contains(err.Error(), "runtime store") {
+		t.Fatalf("err = %v, want a runtime store error", err)
 	}
 }
 

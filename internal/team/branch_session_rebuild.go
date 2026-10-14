@@ -15,14 +15,23 @@ import "fmt"
 // commit awaiting confirmation is recorded only in session.json: it stays
 // with a rebuild of its own branch and blocks a switch to any other.
 func RebuildSessionForBranch(workspace string, st *SessionTree, es *EventStore, branchID string) error {
+	return rebuildSessionForBranch(workspaceDocs(workspace), st, es, branchID)
+}
+
+// rebuildSessionForBranch is RebuildSessionForBranch reading and writing the
+// session through docs.
+func rebuildSessionForBranch(docs runtimeDocs, st *SessionTree, es *EventStore, branchID string) error {
 	b, lineage, tasks, err := branchReplayInputs(st, es, branchID)
 	if err != nil {
 		return err
 	}
-	if err := RefuseBranchSwitchWithPendingTerminalCommit(workspace, b.ID); err != nil {
+	live, _, err := loadSessionFrom(docs)
+	if err != nil {
+		return fmt.Errorf("rebuild session for branch %q: %w", b.ID, err)
+	}
+	if err := refusePendingTerminalCommitSwitch(live, b.ID); err != nil {
 		return err
 	}
-	live := LoadSession(workspace)
 	if live == nil {
 		live = NewSession()
 	}
@@ -30,7 +39,7 @@ func RebuildSessionForBranch(workspace string, st *SessionTree, es *EventStore, 
 	next.Tasks = tasks
 	carryWorkspaceSessionState(next, live)
 	next.PendingTerminalCommit = live.PendingTerminalCommit
-	if err := SaveSession(workspace, next); err != nil {
+	if err := saveSessionTo(docs, next); err != nil {
 		return fmt.Errorf("rebuild session for branch %q: %w", b.ID, err)
 	}
 	return nil
@@ -95,6 +104,10 @@ func RefuseBranchSwitchWithPendingTerminalCommit(workspace, targetBranchID strin
 	if err != nil {
 		return fmt.Errorf("check pending terminal commit: %w", err)
 	}
+	return refusePendingTerminalCommitSwitch(live, targetBranchID)
+}
+
+func refusePendingTerminalCommitSwitch(live *SessionData, targetBranchID string) error {
 	if live == nil || live.PendingTerminalCommit == nil {
 		return nil
 	}

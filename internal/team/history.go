@@ -3,15 +3,12 @@ package team
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"charm.land/fantasy"
 
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/utils"
 )
-
-const historyFile = "session_history.json"
 
 func SaveConversationHistory(workspace string, messages []fantasy.Message) error {
 	filtered := filterMessages(messages)
@@ -19,28 +16,26 @@ func SaveConversationHistory(workspace string, messages []fantasy.Message) error
 		return nil
 	}
 
-	data, err := json.MarshalIndent(filtered, "", "  ")
+	data, err := json.Marshal(filtered)
 	if err != nil {
 		return fmt.Errorf("marshal conversation history: %w", err)
 	}
 
-	path := filepath.Join(workspace, historyFile)
 	redacted, rerr := utils.RedactJSON(data)
 	if rerr != nil {
 		// On redaction failure never persist the unredacted marshaled JSON;
 		// fall back to text redaction so a best-effort scrub still happens.
 		redacted = []byte(utils.RedactSecrets(string(data)))
 	}
-	if err := os.WriteFile(path, redacted, 0o600); err != nil {
+	if err := workspaceDocs(workspace).putDocument(runtimestore.DocumentSessionHistory, redacted); err != nil {
 		return fmt.Errorf("write conversation history: %w", err)
 	}
 	return nil
 }
 
 func LoadConversationHistory(workspace string) []fantasy.Message {
-	path := filepath.Join(workspace, historyFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
+	data, exists, err := workspaceDocs(workspace).getDocument(runtimestore.DocumentSessionHistory)
+	if err != nil || !exists {
 		return nil
 	}
 
@@ -78,16 +73,10 @@ func filterMessages(messages []fantasy.Message) []fantasy.Message {
 
 func DeleteConversationHistory(workspace string) error {
 	_ = DeleteCompactionHistory(workspace)
-	path := filepath.Join(workspace, historyFile)
-	err := os.Remove(path)
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
+	return workspaceDocs(workspace).deleteDocument(runtimestore.DocumentSessionHistory)
 }
 
 func HasConversationHistory(workspace string) bool {
-	path := filepath.Join(workspace, historyFile)
-	_, err := os.Stat(path)
-	return err == nil
+	_, exists, err := workspaceDocs(workspace).getDocument(runtimestore.DocumentSessionHistory)
+	return err == nil && exists
 }

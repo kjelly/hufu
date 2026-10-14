@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -313,19 +312,15 @@ func collectDoctorWorkspace(ctx context.Context, report *doctorReport, workspace
 }
 
 func loadDoctorSessionTree(workspace string) (*team.SessionTree, error) {
-	data, err := os.ReadFile(filepath.Join(workspace, "session_tree.json"))
-	if os.IsNotExist(err) {
-		return team.NewSessionTree(), nil
-	}
+	tree, exists, err := team.LoadSavedSessionTree(workspace)
 	if err != nil {
 		return nil, err
 	}
-	var tree team.SessionTree
-	if err := json.Unmarshal(data, &tree); err != nil {
-		return nil, err
+	if !exists {
+		return team.NewSessionTree(), nil
 	}
 	if tree.ActiveBranch == "" || tree.Branches[tree.ActiveBranch] == nil {
 		return nil, fmt.Errorf("active branch is absent")
 	}
-	return &tree, nil
+	return tree, nil
 }

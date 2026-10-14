@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func TestRCA4V2RunAndResumeUseCanonicalFinalizedState(t *testing.T) {
@@ -366,10 +367,7 @@ func TestRCA4AssumptionMutationValidatesFinalizedStateFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	beforeSession, err := os.ReadFile(filepath.Join(workspace, sessionFile))
-	if err != nil {
-		t.Fatal(err)
-	}
+	beforeSession, _ := getRuntimeDocument(t, workspace, runtimestore.DocumentSession)
 	beforeTaskJournal, err := os.ReadFile(taskJournalPath(workspace))
 	if err != nil {
 		t.Fatal(err)
@@ -399,10 +397,7 @@ func TestRCA4AssumptionMutationValidatesFinalizedStateFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	afterSession, err := os.ReadFile(filepath.Join(workspace, sessionFile))
-	if err != nil {
-		t.Fatal(err)
-	}
+	afterSession, _ := getRuntimeDocument(t, workspace, runtimestore.DocumentSession)
 	afterTaskJournal, err := os.ReadFile(taskJournalPath(workspace))
 	if err != nil {
 		t.Fatal(err)

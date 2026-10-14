@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -192,16 +193,13 @@ func TestDoctorWorkspaceHistoryCheckpointAndIntegrity(t *testing.T) {
 
 func TestDoctorWorkspaceRejectsMalformedCheckpointAndBranch(t *testing.T) {
 	workspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspace, "session.json"), []byte("{"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentSession, []byte("{"))
 	if check := doctorCheckByID(t, collectWorkspaceReport(t, workspace), "recovery.unresolved"); check.Status != "fail" {
 		t.Fatalf("malformed checkpoint = %#v", check)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, "session.json"), []byte("{}"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workspace, "session_tree.json"), []byte(`{"active_branch":"lost","branches":{"main":{"id":"main"}}}`), 0o600); err != nil {
+	putRuntimeDocument(t, workspace, runtimestore.DocumentSession, []byte("{}"))
+	lost := &team.SessionTree{ActiveBranch: "lost", Branches: map[string]*team.SessionBranch{"main": {ID: "main"}}}
+	if err := team.SaveSessionTree(workspace, lost); err != nil {
 		t.Fatal(err)
 	}
 	if check := doctorCheckByID(t, collectWorkspaceReport(t, workspace), "recovery.unresolved"); check.Status != "fail" {

@@ -44,7 +44,7 @@ var (
 )
 
 // legacyMarkers are files only a file-based workspace contains.
-var legacyMarkers = []string{filepath.Join("logs", "event_store.jsonl")}
+var legacyMarkers = []string{filepath.Join("logs", "event_store.jsonl"), "session.json"}
 
 // Path returns the database path of workspace.
 func Path(workspace string) string {
@@ -145,6 +145,25 @@ func OpenReadOnly(ctx context.Context, workspace string) (*Store, error) {
 	return &Store{db: db, path: path, readOnly: true}, nil
 }
 
+// OpenRead opens workspace's runtime.sqlite for reading without creating or
+// changing any file. It shares this process's writable connection when one is
+// open, so reads see that connection's commits without another connection,
+// and otherwise opens read-only. Writes through the returned store fail.
+func OpenRead(ctx context.Context, workspace string) (*Store, error) {
+	path, err := resolvePath(workspace)
+	if err != nil {
+		return nil, err
+	}
+	sharedMu.Lock()
+	if handle := handles[path]; handle != nil {
+		handle.refs++
+		sharedMu.Unlock()
+		return &Store{db: handle.db, path: path, readOnly: true, shared: handle}, nil
+	}
+	sharedMu.Unlock()
+	return OpenReadOnly(ctx, workspace)
+}
+
 // Exists reports whether workspace has a runtime.sqlite.
 func Exists(workspace string) bool {
 	info, err := os.Lstat(Path(workspace))
@@ -159,9 +178,9 @@ func (s *Store) DB() *sql.DB { return s.db }
 func (s *Store) Path() string { return s.path }
 
 // CheckCurrent fails with ErrReplaced when the database path no longer names
-// the file this writable store opened. The stale connection is then no longer
-// shared, so the next Open reaches the file the path names. Read-only stores
-// always pass.
+// the file this store's shared connection opened. The stale connection is
+// then no longer shared, so the next Open reaches the file the path names.
+// Stores with their own read-only connection always pass.
 func (s *Store) CheckCurrent() error {
 	if s.shared == nil {
 		return nil

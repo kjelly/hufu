@@ -219,8 +219,8 @@ func TestExecutionWorldSkipsIdentifiedControlWorkspaceCheckpoint(t *testing.T) {
 	if err := os.MkdirAll(controlWorkspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Every run rewrites session.json and runtime.sqlite with its WAL.
-	checkpoints := append([]string{sessionFile}, runtimestore.Files...)
+	// Every run rewrites runtime.sqlite with its WAL.
+	checkpoints := runtimestore.Files
 	for _, name := range checkpoints {
 		if err := os.WriteFile(filepath.Join(controlWorkspace, name), []byte(`{"status":"before"}`), 0o644); err != nil {
 			t.Fatal(err)

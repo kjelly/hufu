@@ -662,18 +662,34 @@ func mapsEqual(first, second map[string]int64) bool {
 	return true
 }
 
+// verifyLegacySession checks the copied runtime state: the session
+// checkpoint must decode and the event journal must be one unbroken chain.
 func verifyLegacySession(root string) error {
-	sessionPath := filepath.Join(root, "session.json")
-	if data, err := os.ReadFile(sessionPath); err == nil {
-		var session json.RawMessage
-		if jsonErr := json.Unmarshal(data, &session); jsonErr != nil {
-			return fmt.Errorf("session_unreadable: %w", jsonErr)
-		}
-	} else if !os.IsNotExist(err) {
+	if err := verifySessionDocument(context.Background(), root); err != nil {
 		return fmt.Errorf("session_unreadable: %w", err)
 	}
 	if err := runtimestore.VerifyEventChain(context.Background(), root); err != nil {
 		return fmt.Errorf("%s: %w", IssueEventChainInvalid, err)
+	}
+	return nil
+}
+
+func verifySessionDocument(ctx context.Context, root string) error {
+	store, err := runtimestore.OpenReadOnly(ctx, root)
+	if errors.Is(err, runtimestore.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+	body, exists, err := store.GetDocument(ctx, runtimestore.DocumentSession)
+	if err != nil || !exists {
+		return err
+	}
+	var session json.RawMessage
+	if err := json.Unmarshal(body, &session); err != nil {
+		return fmt.Errorf("decode session: %w", err)
 	}
 	return nil
 }

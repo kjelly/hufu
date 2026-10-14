@@ -68,10 +68,13 @@ func TestDebugCmd_BundleContents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(filepath.Join(workspaceDir, "session.json"), []byte(`{}`), 0644); err != nil {
+	writeEventJournal(t, workspaceDir, team.RunEvent{RunID: "run-bundle", Type: "run_started", Payload: []byte(`{"team":"dev"}`)})
+	const sessionMarker = "session-checkpoint-marker"
+	checkpoint := team.NewSession()
+	checkpoint.AddEntry("user", sessionMarker)
+	if err := team.SaveSession(workspaceDir, checkpoint); err != nil {
 		t.Fatal(err)
 	}
-	writeEventJournal(t, workspaceDir, team.RunEvent{RunID: "run-bundle", Type: "run_started", Payload: []byte(`{"team":"dev"}`)})
 	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", ".env"), []byte("API_TOKEN=top-secret-value"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -125,11 +128,15 @@ func TestDebugCmd_BundleContents(t *testing.T) {
 			t.Fatalf("tar read error: %v", err)
 		}
 		foundFiles[hdr.Name] = true
+		content, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatalf("failed to read bundle entry %s: %v", hdr.Name, err)
+		}
 		if hdr.Name == "bundle-manifest.json" {
-			manifest, err = io.ReadAll(tr)
-			if err != nil {
-				t.Fatalf("failed to read bundle manifest: %v", err)
-			}
+			manifest = content
+		}
+		if strings.Contains(string(content), sessionMarker) {
+			t.Fatalf("directory debug bundle included the session checkpoint in %s", hdr.Name)
 		}
 	}
 
@@ -144,7 +151,7 @@ func TestDebugCmd_BundleContents(t *testing.T) {
 			t.Errorf("expected bundle to contain %s, but it didn't", ef)
 		}
 	}
-	if foundFiles["session.json"] || foundFiles["logs/.env"] {
+	if foundFiles["logs/.env"] {
 		t.Fatal("directory debug bundle included a sensitive or non-run-scoped file")
 	}
 	for name := range foundFiles {

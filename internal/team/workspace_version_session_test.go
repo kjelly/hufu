@@ -277,20 +277,12 @@ func TestWorkspaceControlRootInsideSubject(t *testing.T) {
 	f.write("app.go", "v1")
 	mustFork(t, f, "exp", "")
 	f.write("app.go", "v2")
-	treeBefore, err := os.ReadFile(filepath.Join(inside, sessionTreeFile))
-	if err != nil {
-		t.Fatal(err)
+	if tree, _ := LoadSessionTree(inside); tree.ActiveBranch != "exp" {
+		t.Fatalf("fork did not activate its branch: active = %s", tree.ActiveBranch)
 	}
 	mustCheckout(t, f, "main")
 	if f.read("app.go") != "v1" {
 		t.Fatal("managed file not restored")
-	}
-	treeAfter, err := os.ReadFile(filepath.Join(inside, sessionTreeFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(treeBefore) == string(treeAfter) {
-		t.Fatal("expected checkout to rewrite session_tree.json through the session tree, not through materialize")
 	}
 	if tree, _ := LoadSessionTree(inside); tree.ActiveBranch != "main" {
 		t.Fatalf("session tree was clobbered by materialize: active = %s", tree.ActiveBranch)
@@ -298,7 +290,7 @@ func TestWorkspaceControlRootInsideSubject(t *testing.T) {
 
 	same := f.version
 	same.ControlRoot = f.subject
-	if _, err = same.ExcludeSubtrees(); !errors.Is(err, versionstore.ErrVersionedWorkspaceUnresolved) {
+	if _, err := same.ExcludeSubtrees(); !errors.Is(err, versionstore.ErrVersionedWorkspaceUnresolved) {
 		t.Fatalf("control root == subject root: err = %v", err)
 	}
 }

@@ -15,13 +15,12 @@ import (
 // plan is read from a session snapshot so a concurrent checkpoint cannot race
 // the read.
 //
-// Rewriting session_tree.json is the most expensive step of a checkpoint. The
-// tree keeps one branch per run, and SaveSessionTree redacts the whole
-// document on every write. Checkpoints fire on every task mutation, and most
-// of them do not change what the branch records, so the tree is rewritten only
-// when that state changes. branchStateMu serializes the load-modify-save:
-// checkpoints from parallel tasks would otherwise overwrite each other's
-// update.
+// Only the active branch's row is read and written, in one transaction; the
+// tree keeps one branch per run, so the rest is never touched. Checkpoints
+// fire on every task mutation, and most of them do not change what the branch
+// records, so the row is written only when that state changes. branchStateMu
+// serializes the update: a snapshot taken outside it could be written after a
+// newer one.
 func (c *Coordinator) updateBranchState() {
 	// Take the snapshot under the lock too: a snapshot taken before it could
 	// be written after a newer one and roll the branch back.
@@ -46,23 +45,17 @@ func (c *Coordinator) updateBranchState() {
 	if fingerprint != "" && fingerprint == c.branchStateFingerprint {
 		return
 	}
-	st, err := LoadSessionTree(c.session.Workspace)
+	err := updateActiveBranchState(c.session.Workspace, func(state *BranchState) {
+		if len(plan) > 0 {
+			state.TaskPlan = plan
+		}
+		state.ActiveModel = model
+		state.SelectedTeam = teamName
+		if compaction != nil {
+			state.Compaction = compaction
+		}
+	})
 	if err != nil {
-		return
-	}
-	b := st.Branches[st.ActiveBranch]
-	if b == nil {
-		return
-	}
-	if len(plan) > 0 {
-		b.State.TaskPlan = plan
-	}
-	b.State.ActiveModel = model
-	b.State.SelectedTeam = teamName
-	if compaction != nil {
-		b.State.Compaction = compaction
-	}
-	if err := SaveSessionTree(c.session.Workspace, st); err != nil {
 		return
 	}
 	c.branchStateFingerprint = fingerprint

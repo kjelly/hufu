@@ -139,29 +139,9 @@ func runSessionFork(cmd *cobra.Command, args []string) error {
 
 // forkMetadataOnly is the pre-versioning fork: session lineage only.
 func forkMetadataOnly(vs *versionedSession, st *team.SessionTree, es *team.EventStore, name, target string) error {
-	ws := vs.workspace
-	if err := team.RefuseBranchSwitchWithPendingTerminalCommit(ws, ""); err != nil {
-		return err
-	}
-	team.SnapshotBranchState(ws, st, st.ActiveBranch)
-	b, err := st.CreateBranch(name, target, es)
+	b, err := team.ForkSessionBranch(context.Background(), vs.workspace, st, es, name, target)
 	if err != nil {
-		return fmt.Errorf("failed to fork branch: %w", err)
-	}
-	if err := team.MaterializeCompactionBranchWithEvents(ws, es, b.ParentID, b.ID, b.ForkEventID); err != nil {
-		return fmt.Errorf("failed to materialize compaction state for branch %q: %w", b.ID, err)
-	}
-	// Snapshot the live session into the new branch so the fork starts from
-	// the current state rather than a potentially stale parent snapshot.
-	team.SnapshotBranchState(ws, st, b.ID)
-	// Rebuild session.json for the new branch (its lineage = parent's
-	// up-to-fork + live state), then activate it.
-	if err := team.RebuildSessionForBranch(ws, st, es, b.ID); err != nil {
-		return fmt.Errorf("failed to rebuild session for new branch: %w", err)
-	}
-	st.ActiveBranch = b.ID
-	if err := team.SaveSessionTree(ws, st); err != nil {
-		return fmt.Errorf("failed to save session tree: %w", err)
+		return err
 	}
 	output := sessionForkOutput{BranchID: b.ID, ParentBranchID: b.ParentID, ForkEventID: b.ForkEventID, MetadataOnly: true}
 	if vs.version.Active() {
@@ -232,27 +212,9 @@ func runSessionCheckout(cmd *cobra.Command, args []string) error {
 // checkoutMetadataOnly is the pre-versioning checkout: session projection
 // only, the filesystem is untouched.
 func checkoutMetadataOnly(vs *versionedSession, st *team.SessionTree, es *team.EventStore, target string) error {
-	ws := vs.workspace
-	resolved, err := st.ResolveCheckoutBranch(target, es)
+	b, previous, err := team.CheckoutSessionBranch(context.Background(), vs.workspace, st, es, target)
 	if err != nil {
 		return err
-	}
-	if err := team.RefuseBranchSwitchWithPendingTerminalCommit(ws, resolved.ID); err != nil {
-		return err
-	}
-	previous := st.ActiveBranch
-	// Snapshot current branch's live state before switching.
-	team.SnapshotBranchState(ws, st, st.ActiveBranch)
-	b, err := st.CheckoutBranch(target, es)
-	if err != nil {
-		return err
-	}
-	// Rebuild session.json for the target branch so the next run resumes it.
-	if err := team.RebuildSessionForBranch(ws, st, es, b.ID); err != nil {
-		return fmt.Errorf("failed to rebuild session for branch %q: %w", b.ID, err)
-	}
-	if err := team.SaveSessionTree(ws, st); err != nil {
-		return fmt.Errorf("failed to save session tree: %w", err)
 	}
 	if sessionJSON {
 		return writeJSON(sessionCheckoutOutput{BranchID: b.ID, PreviousBranchID: previous, MetadataOnly: true})

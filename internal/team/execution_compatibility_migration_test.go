@@ -5,12 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/modelprofile"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func TestApplyExecutionCompatibilityMaterializesEventTaskIdempotently(t *testing.T) {
@@ -82,10 +81,7 @@ func TestMigrationAppendFailureDoesNotAdvanceProjection(t *testing.T) {
 	if err := SaveSession(workspace, legacy); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.ReadFile(filepath.Join(workspace, sessionFile))
-	if err != nil {
-		t.Fatal(err)
-	}
+	before, _ := getRuntimeDocument(t, workspace, runtimestore.DocumentSession)
 	openWithAppendFailure := func(path string) (*EventStore, error) {
 		store, err := OpenEventStore(path)
 		if err != nil {
@@ -97,10 +93,7 @@ func TestMigrationAppendFailureDoesNotAdvanceProjection(t *testing.T) {
 	if _, err := applyExecutionCompatibility(t.Context(), workspace, "", openWithAppendFailure); err == nil {
 		t.Fatal("migration append failure was accepted")
 	}
-	afterFailure, err := os.ReadFile(filepath.Join(workspace, sessionFile))
-	if err != nil {
-		t.Fatal(err)
-	}
+	afterFailure, _ := getRuntimeDocument(t, workspace, runtimestore.DocumentSession)
 	if !bytes.Equal(before, afterFailure) {
 		t.Fatal("session projection advanced after migration append failure")
 	}

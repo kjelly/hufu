@@ -2,10 +2,7 @@ package team
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -26,13 +23,12 @@ func (p *checkpointActionProvider) Execute(ctx context.Context, action Action) (
 	if env.TaskID == "" {
 		return nil, fmt.Errorf("missing action environment")
 	}
-	data, err := os.ReadFile(filepath.Join(p.workspace, "session.json"))
+	saved, _, err := LoadSessionReadOnly(p.workspace)
 	if err != nil {
 		return nil, err
 	}
-	var saved SessionData
-	if err := json.Unmarshal(data, &saved); err != nil {
-		return nil, err
+	if saved == nil {
+		return nil, fmt.Errorf("no session checkpoint")
 	}
 	item := todoItemByID(saved.Tasks, env.TaskID)
 	if item == nil || item.Status != TaskInProgress || item.RunInputSnapshotID == "" || item.RunInputSnapshotID != saved.ActiveRunInputSnapshotID {

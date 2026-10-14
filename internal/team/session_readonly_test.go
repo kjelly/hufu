@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func TestLoadSessionReadOnlyDoesNotCreateMissingWorkspace(t *testing.T) {
@@ -22,9 +24,7 @@ func TestLoadSessionReadOnlyDoesNotCreateMissingWorkspace(t *testing.T) {
 
 func TestLoadSessionReadOnlyReportsMalformedProjection(t *testing.T) {
 	workspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspace, "session.json"), []byte(`{"tasks":`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentSession, []byte(`{"tasks":`))
 	session, exists, err := LoadSessionReadOnly(workspace)
 	if err == nil || !exists || session != nil {
 		t.Fatalf("malformed session = %#v exists=%t err=%v", session, exists, err)

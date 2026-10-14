@@ -2,10 +2,7 @@ package team
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -181,28 +178,20 @@ func (c *Coordinator) decisionJournalFor() (EventJournal, error) {
 	if c.scopedDecisionJournal != nil {
 		return c.scopedDecisionJournal, nil
 	}
-	path := sessionTreePath(c.session.Workspace)
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return raw, nil
-		}
-		return nil, fmt.Errorf("decision journal: stat session tree: %w", err)
-	}
-	data, err := os.ReadFile(path)
+	tree, exists, err := loadStoredSessionTree(c.session.Workspace)
 	if err != nil {
-		return nil, fmt.Errorf("decision journal: read session tree: %w", err)
+		return nil, fmt.Errorf("decision journal: %w", err)
 	}
-	var tree SessionTree
-	if err := json.Unmarshal(data, &tree); err != nil {
-		return nil, fmt.Errorf("decision journal: decode session tree: %w", err)
+	if !exists {
+		return raw, nil
 	}
-	if _, err := validateActiveSessionBranch(&tree); err != nil {
+	if _, err := validateActiveSessionBranch(tree); err != nil {
 		return nil, fmt.Errorf("decision journal: %w", err)
 	}
 	if !isCanonicalEventStoreJournal(raw, c.eventStore) {
 		return raw, nil
 	}
-	scoped, err := newBranchScopedDecisionJournal(raw, &tree)
+	scoped, err := newBranchScopedDecisionJournal(raw, tree)
 	if err != nil {
 		return nil, err
 	}
@@ -261,10 +250,6 @@ func (c *Coordinator) pinDecisionControlPlane() (*decisionControlPlane, error) {
 	control = &decisionControlPlane{artifactStore: store, index: index, journal: journal}
 	c.decisionControlPlane = control
 	return control, nil
-}
-
-func sessionTreePath(workspace string) string {
-	return filepath.Join(workspace, sessionTreeFile)
 }
 
 var _ EventJournal = (*branchScopedDecisionJournal)(nil)

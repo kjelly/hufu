@@ -22,10 +22,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/tools"
 )
-
-const terminalSessionsFile = "terminal_sessions.json"
 
 const terminalScreenMaxBytes = 16 * 1024
 
@@ -355,12 +354,13 @@ func (o terminalLeaderObservation) String() string {
 type TerminalSessionManager struct {
 	mu               sync.RWMutex
 	workspace        string
-	path             string
 	sessions         map[string]*managedTerminalSession
 	eventSink        TerminalEventSink
 	activeTaskRound  func(string) bool
 	ptyCopyStartGate <-chan struct{}
-	persistFile      func(string, []byte, os.FileMode) error
+	// persistDocument is a test seam; nil writes the terminal_sessions
+	// runtime document.
+	persistDocument func([]byte) error
 	// processIdentity is a package-private seam for testing the post-launch
 	// durable identity validation failure without changing process state.
 	processIdentity func(int) (*ProcessIdentity, error)
@@ -374,7 +374,6 @@ func NewTerminalSessionManager(workspace string, sink TerminalEventSink) (*Termi
 	}
 	m := &TerminalSessionManager{
 		workspace: workspace,
-		path:      filepath.Join(workspace, logsDir, terminalSessionsFile),
 		sessions:  make(map[string]*managedTerminalSession),
 		eventSink: sink,
 	}
@@ -393,13 +392,12 @@ func LoadTerminalSessions(workspace string) ([]TerminalSession, error) {
 	if workspace == "" {
 		return nil, errors.New("load terminal sessions: empty workspace")
 	}
-	path := filepath.Join(workspace, logsDir, terminalSessionsFile)
-	data, err := os.ReadFile(path)
+	data, exists, err := workspaceDocs(workspace).getDocument(runtimestore.DocumentTerminalSessions)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("read terminal sessions: %w", err)
+	}
+	if !exists {
+		return nil, nil
 	}
 	var sessions []TerminalSession
 	if err := json.Unmarshal(data, &sessions); err != nil {
@@ -412,12 +410,12 @@ func LoadTerminalSessions(workspace string) ([]TerminalSession, error) {
 }
 
 func (m *TerminalSessionManager) restore() error {
-	data, err := os.ReadFile(m.path)
+	data, exists, err := workspaceDocs(m.workspace).getDocument(runtimestore.DocumentTerminalSessions)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return fmt.Errorf("read terminal sessions: %w", err)
+	}
+	if !exists {
+		return nil
 	}
 	var sessions []TerminalSession
 	if err := json.Unmarshal(data, &sessions); err != nil {
@@ -2012,18 +2010,22 @@ func (m *TerminalSessionManager) persistLocked() error {
 	for _, managed := range m.sessions {
 		sessions = append(sessions, deepCopyTerminalSession(managed.session))
 	}
-	data, err := json.MarshalIndent(sessions, "", "  ")
+	data, err := json.Marshal(sessions)
 	if err != nil {
 		return fmt.Errorf("encode terminal sessions: %w", err)
 	}
-	writeFile := AtomicWriteFile
-	if m.persistFile != nil {
-		writeFile = m.persistFile
+	write := m.writeSessionsDocument
+	if m.persistDocument != nil {
+		write = m.persistDocument
 	}
-	if err := writeFile(m.path, data, 0o644); err != nil {
+	if err := write(data); err != nil {
 		return fmt.Errorf("persist terminal sessions: %w", err)
 	}
 	return nil
+}
+
+func (m *TerminalSessionManager) writeSessionsDocument(data []byte) error {
+	return workspaceDocs(m.workspace).putDocument(runtimestore.DocumentTerminalSessions, data)
 }
 
 func (m *TerminalSessionManager) emit(eventType string, session TerminalSession, payload map[string]interface{}) {

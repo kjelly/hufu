@@ -41,7 +41,7 @@ CREATE TABLE task_journal (
 CREATE INDEX events_branch ON events(branch_id, sequence);
 CREATE TABLE session_branches (
   id TEXT PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
   parent_id TEXT NOT NULL DEFAULT '',
   fork_event_id TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,

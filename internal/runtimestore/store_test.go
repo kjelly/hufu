@@ -85,6 +85,7 @@ func TestOpenRefusesFileBasedWorkspaces(t *testing.T) {
 		marker string
 	}{
 		{name: "event log", marker: filepath.Join("logs", "event_store.jsonl")},
+		{name: "session checkpoint", marker: "session.json"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -265,5 +266,46 @@ func TestIsStorageFault(t *testing.T) {
 	}
 	if IsStorageFault(errors.New("plain")) {
 		t.Fatal("a non-SQLite error is a storage fault")
+	}
+}
+
+func TestOpenReadSharesTheWritableConnectionAndNeverCreates(t *testing.T) {
+	workspace := t.TempDir()
+	if _, err := OpenRead(context.Background(), workspace); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("OpenRead of an empty workspace = %v, want ErrNotFound", err)
+	}
+	if names := dirNames(t, workspace); len(names) != 0 {
+		t.Fatalf("OpenRead created %v", names)
+	}
+	writable, err := Open(context.Background(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := OpenRead(context.Background(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reader.DB() != writable.DB() {
+		t.Fatal("OpenRead opened a second connection while a writable one was open")
+	}
+	if err := reader.PutDocument(context.Background(), DocumentSession, []byte(`{}`)); err == nil {
+		t.Fatal("a store from OpenRead accepted a write")
+	}
+	if err := writable.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := reader.GetDocument(context.Background(), DocumentSession); err != nil {
+		t.Fatalf("the shared connection closed with the writer still borrowed: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	separate, err := OpenRead(context.Background(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer separate.Close()
+	if !separate.ReadOnly() || separate.DB() == writable.DB() {
+		t.Fatal("OpenRead without an open writer did not open read-only")
 	}
 }

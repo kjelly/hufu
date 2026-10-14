@@ -9,6 +9,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/audit"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func TestNewCoordinatorCompositionRootPartialInjection(t *testing.T) {
@@ -183,13 +184,7 @@ func TestNewCoordinatorErrorClosesOwnedResources(t *testing.T) {
 		t.Skip("open file descriptor inspection is unavailable")
 	}
 	workspace := t.TempDir()
-	logDir := filepath.Join(workspace, logsDir)
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(logDir, terminalSessionsFile), []byte("{invalid"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentTerminalSessions, []byte("{invalid"))
 	session := &TeamSession{
 		Workspace: workspace,
 		Dir:       t.TempDir(),

@@ -210,10 +210,9 @@ func isWithinRoot(root, resolved string) bool {
 }
 
 // hufuControlWorkspaceSnapshotPaths returns only the checkpoint paths owned by
-// the explicitly identified Hufu control workspace: session.json and
-// runtime.sqlite with its SQLite sidecars, which change during every run. A
-// project file with one of these names is not special unless it is exactly
-// this derived path.
+// the explicitly identified Hufu control workspace: runtime.sqlite with its
+// SQLite sidecars, which change during every run. A project file with one of
+// these names is not special unless it is exactly this derived path.
 func hufuControlWorkspaceSnapshotPaths(root, controlWorkspace string) ([]string, error) {
 	if strings.TrimSpace(controlWorkspace) == "" {
 		return nil, nil
@@ -229,7 +228,7 @@ func hufuControlWorkspaceSnapshotPaths(root, controlWorkspace string) ([]string,
 	if err != nil {
 		return nil, fmt.Errorf("execution world: derive control workspace path: %w", err)
 	}
-	paths := []string{filepath.ToSlash(filepath.Join(rel, sessionFile))}
+	var paths []string
 	for _, name := range runtimestore.Files {
 		paths = append(paths, filepath.ToSlash(filepath.Join(rel, name)))
 	}

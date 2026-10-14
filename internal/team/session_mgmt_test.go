@@ -8,6 +8,7 @@ import (
 
 	"time"
 
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -174,10 +175,9 @@ func TestSaveSession(t *testing.T) {
 			}
 
 			if !tt.wantErr {
-				// Verify file was created
-				sessionPath := filepath.Join(tmpDir, sessionFile)
-				if _, statErr := os.Stat(sessionPath); os.IsNotExist(statErr) {
-					t.Errorf("SaveSession() did not create session file")
+				// Verify the checkpoint was written
+				if !HasSession(tmpDir) {
+					t.Errorf("SaveSession() did not write the session checkpoint")
 				}
 
 				// Verify UpdatedAt was set
@@ -205,10 +205,7 @@ func TestSaveSessionRedactsSecretsOnDisk(t *testing.T) {
 	if err := SaveSession(workspace, session); err != nil {
 		t.Fatalf("SaveSession: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(workspace, sessionFile))
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
+	data, _ := getRuntimeDocument(t, workspace, runtimestore.DocumentSession)
 	if strings.Contains(string(data), "top-secret-value") {
 		t.Fatalf("session file contains secret: %s", data)
 	}
@@ -486,13 +483,12 @@ func TestArchiveSession(t *testing.T) {
 			},
 		},
 		{
-			name:    "archive removes session.json",
+			name:    "archive removes the session checkpoint",
 			summary: "Session done",
 			wantErr: false,
 			check: func(t *testing.T, workspace string) {
-				sessionPath := filepath.Join(workspace, sessionFile)
-				if _, err := os.Stat(sessionPath); !os.IsNotExist(err) {
-					t.Error("ArchiveSession should remove session.json")
+				if HasSession(workspace) {
+					t.Error("ArchiveSession should remove the session checkpoint")
 				}
 			},
 		},
@@ -512,11 +508,7 @@ func TestArchiveSession(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
-			// Create session.json first
-			sessionPath := filepath.Join(tmpDir, sessionFile)
-			if err := os.WriteFile(sessionPath, []byte(`{"rounds":1}`), 0o644); err != nil {
-				t.Fatalf("failed to create session file: %v", err)
-			}
+			putRuntimeDocument(t, tmpDir, runtimestore.DocumentSession, []byte(`{"rounds":1}`))
 
 			err := ArchiveSession(tmpDir, tt.summary)
 			if (err != nil) != tt.wantErr {
@@ -539,31 +531,27 @@ func TestHasSession(t *testing.T) {
 		want  bool
 	}{
 		{
-			name: "session file exists",
+			name: "session checkpoint exists",
 			setup: func(t *testing.T) string {
 				tmpDir := t.TempDir()
-				sessionPath := filepath.Join(tmpDir, sessionFile)
-				if err := os.WriteFile(sessionPath, []byte(`{"rounds":1}`), 0o644); err != nil {
-					t.Fatalf("failed to create session file: %v", err)
-				}
+				putRuntimeDocument(t, tmpDir, runtimestore.DocumentSession, []byte(`{"rounds":1}`))
 				return tmpDir
 			},
 			want: true,
 		},
 		{
-			name: "session file does not exist",
+			name: "session checkpoint does not exist",
 			setup: func(t *testing.T) string {
 				return t.TempDir()
 			},
 			want: false,
 		},
 		{
-			name: "session file is a directory",
+			name: "only a retired session.json file",
 			setup: func(t *testing.T) string {
 				tmpDir := t.TempDir()
-				sessionPath := filepath.Join(tmpDir, sessionFile)
-				if err := os.MkdirAll(sessionPath, 0o755); err != nil {
-					t.Fatalf("failed to create directory: %v", err)
+				if err := os.WriteFile(filepath.Join(tmpDir, "session.json"), []byte(`{"rounds":1}`), 0o644); err != nil {
+					t.Fatalf("failed to create session file: %v", err)
 				}
 				return tmpDir
 			},
@@ -636,7 +624,6 @@ func TestSessionDataSerialization(t *testing.T) {
 func TestSessionEntryWithOptionalTimestamp(t *testing.T) {
 	jsonData := `{"role": "user", "content": "Hello"}`
 	tmpDir := t.TempDir()
-	sessionPath := filepath.Join(tmpDir, sessionFile)
 
 	sessionJSON := `{
 		"created_at": "2024-01-01T00:00:00Z",
@@ -645,9 +632,7 @@ func TestSessionEntryWithOptionalTimestamp(t *testing.T) {
 		"entries": [` + jsonData + `]
 	}`
 
-	if err := os.WriteFile(sessionPath, []byte(sessionJSON), 0o644); err != nil {
-		t.Fatalf("failed to write session file: %v", err)
-	}
+	putRuntimeDocument(t, tmpDir, runtimestore.DocumentSession, []byte(sessionJSON))
 
 	loaded := LoadSession(tmpDir)
 	if loaded == nil {
@@ -706,10 +691,7 @@ func TestArchiveSessionSlugGeneration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
-			sessionPath := filepath.Join(tmpDir, sessionFile)
-			if err := os.WriteFile(sessionPath, []byte(`{"rounds":1}`), 0o644); err != nil {
-				t.Fatalf("failed to create session file: %v", err)
-			}
+			putRuntimeDocument(t, tmpDir, runtimestore.DocumentSession, []byte(`{"rounds":1}`))
 
 			err := ArchiveSession(tmpDir, tt.summary)
 			if err != nil {

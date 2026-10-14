@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -296,7 +296,7 @@ func replayReliabilityBoundary(s ReliabilityScenario) (ReliabilityBoundaryEviden
 			return evidence, err
 		}
 		defer func() { _ = os.RemoveAll(workspace) }()
-		if err := os.WriteFile(filepath.Join(workspace, sessionFile), []byte("{corrupt checkpoint"), 0o600); err != nil {
+		if err := workspaceDocs(workspace).putDocument(runtimestore.DocumentSession, []byte("{corrupt checkpoint")); err != nil {
 			return evidence, err
 		}
 		evidence.CheckpointCorrupted = true
@@ -357,15 +357,11 @@ func SaveReliabilityEvalReport(workspace string, report ReliabilityEvalReport) e
 	if report.GeneratedAt.IsZero() {
 		report.GeneratedAt = time.Now().UTC()
 	}
-	dir := filepath.Join(workspace, logsDir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(report, "", "  ")
+	b, err := json.Marshal(report)
 	if err != nil {
-		return err
+		return fmt.Errorf("encode reliability report: %w", err)
 	}
-	return AtomicWriteFile(filepath.Join(dir, "reliability_eval.json"), b, 0o644)
+	return workspaceDocs(workspace).putDocument(runtimestore.DocumentReliabilityEval, b)
 }
 
 func diagnosticDeterminism(scenarios []ReliabilityScenario) float64 {
@@ -549,10 +545,15 @@ func applyProductionReliabilityMetrics(report *ReliabilityEvalReport, observatio
 	report.Metrics.UnsafeReplayRate = quantitative.UnsafeReplayRate
 }
 
+// loadReliabilityEvalReport returns an error wrapping os.ErrNotExist when no
+// report was saved.
 func loadReliabilityEvalReport(workspace string) (ReliabilityEvalReport, error) {
-	data, err := os.ReadFile(filepath.Join(workspace, logsDir, "reliability_eval.json"))
+	data, exists, err := workspaceDocs(workspace).getDocument(runtimestore.DocumentReliabilityEval)
 	if err != nil {
 		return ReliabilityEvalReport{}, err
+	}
+	if !exists {
+		return ReliabilityEvalReport{}, fmt.Errorf("reliability report: %w", os.ErrNotExist)
 	}
 	var report ReliabilityEvalReport
 	if err := json.Unmarshal(data, &report); err != nil {

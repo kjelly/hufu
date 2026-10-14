@@ -14,6 +14,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func testCompactionState(t *testing.T, workspace string) *ConversationCompactionState {
@@ -343,10 +344,7 @@ func TestAppendHistoryCompactsSecretBearingHistory(t *testing.T) {
 	if checkpoint.EventID != compactionCheckpointEventID(checkpoint) {
 		t.Fatalf("checkpoint identity = %q, want %q", checkpoint.EventID, compactionCheckpointEventID(checkpoint))
 	}
-	data, err := os.ReadFile(filepath.Join(workspace, conversationCompactionStateFile))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data, _ := getRuntimeDocument(t, workspace, runtimestore.DocumentConversationCompactionState)
 	if strings.Contains(string(data), "sk-live-") {
 		t.Fatal("canonical compaction state leaked unredacted secrets")
 	}
@@ -465,15 +463,12 @@ func appendLegacyAttestationForTest(t *testing.T, workspace, branchID string, re
 func TestConversationCompactionStateCorruptionIsRecoveryRequired(t *testing.T) {
 	workspace := t.TempDir()
 	testCompactionState(t, workspace)
-	path := filepath.Join(workspace, conversationCompactionStateFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+	data, _ := getRuntimeDocument(t, workspace, runtimestore.DocumentConversationCompactionState)
+	tampered := strings.Replace(string(data), `"history_digest":"`, `"history_digest":"bad`, 1)
+	if tampered == string(data) {
+		t.Fatal("the compaction state has no history digest to corrupt")
 	}
-	data = []byte(strings.Replace(string(data), `"history_digest": "`, `"history_digest": "bad`, 1))
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentConversationCompactionState, []byte(tampered))
 	if _, exists, err := LoadConversationCompactionState(workspace); !exists || err == nil {
 		t.Fatalf("corrupt state result = exists %v, err %v", exists, err)
 	}
@@ -486,9 +481,7 @@ func TestEmptyCanonicalCompactionStateIsRecoveryRequired(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, conversationCompactionStateFile), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentConversationCompactionState, data)
 	if _, exists, err := LoadConversationCompactionState(workspace); !exists || err == nil {
 		t.Fatalf("empty state result = exists %v, err %v", exists, err)
 	}
@@ -667,9 +660,7 @@ func TestCurrentSnapshotWithEmptyModeAndGenerationEventIsRejected(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, conversationCompactionStateFile), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentConversationCompactionState, data)
 	if _, exists, err := LoadConversationCompactionState(workspace); !exists || err == nil || !strings.Contains(err.Error(), "attestation mode") {
 		t.Fatalf("empty-mode current snapshot result = exists:%v err:%v", exists, err)
 	}
@@ -693,9 +684,7 @@ func TestCurrentSnapshotDowngradeToLegacyGenerationFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, conversationCompactionStateFile), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentConversationCompactionState, data)
 	es, err := NewEventStore(workspace, "run-downgrade", "session-downgrade")
 	if err != nil {
 		t.Fatal(err)
@@ -1084,9 +1073,7 @@ func TestConversationCompactionStateRejectsScalarOnlyCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, conversationCompactionStateFile), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentConversationCompactionState, data)
 	if _, exists, err := LoadConversationCompactionState(workspace); !exists || err == nil || !strings.Contains(err.Error(), "source ranges do not match history") {
 		t.Fatalf("scalar-only canonical checkpoint result = exists:%v err:%v", exists, err)
 	}
@@ -1416,9 +1403,7 @@ func TestMalformedMaterializedChildCheckpointRetainedParentEventRequiresRecovery
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, conversationCompactionStateFile), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentConversationCompactionState, data)
 	es, err := OpenEventStore(workspace)
 	if err != nil {
 		t.Fatal(err)

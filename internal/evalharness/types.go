@@ -65,7 +65,9 @@ type CaseFixture struct {
 	// the run starts, keyed by path relative to the workspace root, e.g. a
 	// fan_out source manifest a task's tool_call references by a
 	// workspace-relative path. Written verbatim (already-formatted content,
-	// no templating).
+	// no templating). Keys named after retired runtime state files
+	// (session.json, logs/terminal_sessions.json) seed the matching
+	// runtime.sqlite document instead of a file.
 	WorkspaceFiles map[string]string `yaml:"workspace-files,omitempty"`
 	// ContextItems seeds confirmed shared-persistent context into the case's
 	// canonical SQLite store before coordinator construction. The harness owns

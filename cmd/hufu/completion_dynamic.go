@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -111,7 +110,7 @@ func completeBranchIDs(command *cobra.Command, _ []string, prefix string) ([]str
 	ctx, cancel := context.WithTimeout(completionContext(command), completionQueryTimeout)
 	defer cancel()
 	workspace := completionWorkspace(command)
-	if _, err := os.Stat(filepath.Join(workspace, "session_tree.json")); err != nil {
+	if exists, err := team.HasSessionTree(workspace); err != nil || !exists {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
 	tree, err := team.LoadSessionTree(workspace)

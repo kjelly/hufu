@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func TestBudgetSnapshotLoadsLegacyRedactedTokenCounter(t *testing.T) {
@@ -37,9 +39,7 @@ func TestLoadSessionLoadsLegacyRedactedDiagnosticBudget(t *testing.T) {
 			"created_at": "2026-08-11T00:00:00Z"
 		}]
 	}`
-	if err := os.WriteFile(filepath.Join(workspace, sessionFile), []byte(sessionData), 0o644); err != nil {
-		t.Fatalf("write legacy session: %v", err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentSession, []byte(sessionData))
 
 	loaded, err := loadSessionQuiet(workspace)
 	if err != nil {
@@ -74,9 +74,7 @@ func TestLoadSessionLoadsLegacyRedactedRepairCostTokens(t *testing.T) {
 			}
 		}
 	}`
-	if err := os.WriteFile(filepath.Join(workspace, sessionFile), []byte(sessionData), 0o644); err != nil {
-		t.Fatalf("write legacy session: %v", err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentSession, []byte(sessionData))
 
 	loaded, err := loadSessionQuiet(workspace)
 	if err != nil {
@@ -112,9 +110,7 @@ func TestLoadSession(t *testing.T) {
 						{"role": "assistant", "content": "Hi there!"}
 					]
 				}`
-				if err := os.WriteFile(filepath.Join(tmpDir, sessionFile), []byte(sessionData), 0o644); err != nil {
-					t.Fatalf("failed to create session file: %v", err)
-				}
+				putRuntimeDocument(t, tmpDir, runtimestore.DocumentSession, []byte(sessionData))
 				return tmpDir
 			},
 			wantErr: false,
@@ -131,9 +127,7 @@ func TestLoadSession(t *testing.T) {
 			name: "load invalid JSON returns nil",
 			setup: func(t *testing.T) string {
 				tmpDir := t.TempDir()
-				if err := os.WriteFile(filepath.Join(tmpDir, sessionFile), []byte("invalid json"), 0o644); err != nil {
-					t.Fatalf("failed to create session file: %v", err)
-				}
+				putRuntimeDocument(t, tmpDir, runtimestore.DocumentSession, []byte("invalid json"))
 				return tmpDir
 			},
 			wantNil: true,
