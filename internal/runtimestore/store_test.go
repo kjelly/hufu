@@ -59,6 +59,7 @@ func TestOpenSharesOneConnectionPerWorkspace(t *testing.T) {
 	if first.DB() != second.DB() {
 		t.Fatal("two writable opens of one workspace did not share a connection")
 	}
+	previousDB := second.DB()
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +75,11 @@ func TestOpenSharesOneConnectionPerWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer third.Close()
-	if third.DB() == second.DB() {
+	if third.DB() == previousDB {
 		t.Fatal("a closed shared connection was reused")
+	}
+	if err := third.PutDocument(t.Context(), DocumentSession, []byte(`{"reopened":true}`)); err != nil {
+		t.Fatalf("the reopened connection is not usable: %v", err)
 	}
 }
 

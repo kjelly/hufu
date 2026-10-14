@@ -115,6 +115,14 @@ StreamValidatedRunEvents
 缺少 `runtime.sqlite` 時會建立並 migrate 它。缺少 runtime store 應回傳 empty/unavailable
 狀態，不得建立任何檔案。
 
+`runtimestore.OpenReadOnly` 對既有資料庫擷取私有 DB/WAL 快照，讀取來源時不建立
+sidecar、不執行 migration 或 checkpoint。擷取前後檢查檔案 identity、大小、修改時間
+及內容雜湊；WAL 新增、變動或消失會使該次擷取失效。最多嘗試三次，擷取總時間
+上限五秒，並遵守 caller 的較短 deadline；無法穩定擷取時回傳錯誤。
+`immutable=1` 僅用於私有且沒有 WAL 的快照，不用於可能再次被寫入的來源。
+每個唯讀 handle 固定讀取開啟時的快照，後續提交需重新開啟才能觀察；`Close`
+清除私有檔案。Inspector 的 runtime storage reader 使用同一個 canonical opener。
+
 branch lineage 的第一筆 event 可以有 predecessor；global chain 必須先驗證完整，
 再驗證 branch slice，與現有 `auditverify` 語意一致。
 

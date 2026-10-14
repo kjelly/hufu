@@ -68,19 +68,24 @@ func InspectStorage(ctx context.Context, query InspectQuery) (*Envelope, error) 
 	return envelope(KindStorage, query, "", data), nil
 }
 
-// inspectRuntimeStorage diagnoses a snapshot of runtime.sqlite, so the live
-// database never gains a sidecar. A workspace without one returns nil.
+// inspectRuntimeStorage uses runtimestore's validated private snapshot, so the
+// live database never gains a sidecar. A workspace without one returns nil.
 func inspectRuntimeStorage(ctx context.Context, workspace string) (*RuntimeStorageData, error) {
 	path := runtimestore.Path(workspace)
 	if _, err := os.Lstat(path); os.IsNotExist(err) {
 		return nil, nil
 	}
-	snapshotPath, databaseBytes, walBytes, cleanup, err := snapshotSQLiteStorage(ctx, path, runtimestore.File)
+	databaseBytes, err := regularFileSize(path)
 	if err != nil {
-		return nil, fmt.Errorf("snapshot read-only: %w", err)
+		return nil, err
 	}
-	defer cleanup()
-	store, err := runtimestore.OpenReadOnly(ctx, filepath.Dir(snapshotPath))
+	var walBytes int64
+	if walInfo, statErr := os.Stat(path + "-wal"); statErr == nil {
+		walBytes = walInfo.Size()
+	} else if !os.IsNotExist(statErr) {
+		return nil, statErr
+	}
+	store, err := runtimestore.OpenReadOnly(ctx, workspace)
 	if err != nil {
 		return nil, err
 	}
