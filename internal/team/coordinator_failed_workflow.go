@@ -3,8 +3,8 @@ package team
 import "fmt"
 
 // maxCoordinatorCallsAfterWorkflowFailure bounds the coordinator tool calls a
-// run may make while its phase workflow is FAILED. Delegation and finish can
-// no longer succeed there, so without a bound the coordinator can spend a long
+// run may make while its phase workflow is FAILED. New delegation is forbidden,
+// so without a bound the coordinator can spend a long
 // stream inspecting the repository before it tries the one delegation that
 // ends the run. reconcile_task, which can reopen a workflow failed by a task,
 // does not count against the bound.
@@ -14,8 +14,8 @@ const reconcileTaskToolName = "reconcile_task"
 
 // workflowFailureResult is the ExecuteTasks result for a batch whose outcome
 // left the phase workflow FAILED. A failure caused by a task can still be
-// reopened with reconcile_task, so the error tells the coordinator exactly
-// that and how many calls remain. A structural failure has no reopening task:
+// reopened with reconcile_task when a verified replacement already exists;
+// otherwise the coordinator can acknowledge a partial finish. A structural failure has no reopening task:
 // the run enters wrap-up and the stream ends, so the runtime writes the
 // LLM-free partial summary at once.
 func (c *Coordinator) workflowFailureResult(err error) error {
@@ -27,8 +27,23 @@ func (c *Coordinator) workflowFailureResult(err error) error {
 		c.wrapUp.Store(1)
 		return markCoordinatorFatal(fmt.Errorf("%w; the workflow cannot be reopened, so the run ends", err))
 	}
-	return fmt.Errorf("%w; the workflow is now %s, so delegation and finish can no longer succeed: the only call that can reopen it is %s on task %s, and after %d other coordinator tool calls the run ends and the runtime writes the partial summary",
-		err, PhaseFailed, reconcileTaskToolName, taskID, maxCoordinatorCallsAfterWorkflowFailure)
+	items := c.taskTracker.TodoList().Items()
+	var candidates []string
+	for _, item := range items {
+		if item == nil || item.ID == taskID {
+			continue
+		}
+		resolution := &TaskResolution{Status: "reconciled", ResolvedBy: item.ID, Reason: "check available replacement"}
+		if ValidateResolution(resolution, taskID, items, c.executionRunID) == nil {
+			candidates = append(candidates, item.ID)
+		}
+	}
+	if len(candidates) == 0 {
+		return fmt.Errorf("%w; the workflow is %s and has no verified replacement for task %s. Do not delegate or reconcile unrelated tasks. Call finish with acknowledge_failed_tasks:true for a partial result; after %d other coordinator tool calls the runtime ends the run",
+			err, PhaseFailed, taskID, maxCoordinatorCallsAfterWorkflowFailure)
+	}
+	return fmt.Errorf("%w; the workflow is %s: use %s on task %s with a verified replacement from %v, or call finish with acknowledge_failed_tasks:true for a partial result. New delegation is forbidden; after %d other coordinator tool calls the runtime ends the run",
+		err, PhaseFailed, reconcileTaskToolName, taskID, candidates, maxCoordinatorCallsAfterWorkflowFailure)
 }
 
 // failedWorkflowCallStop enforces maxCoordinatorCallsAfterWorkflowFailure

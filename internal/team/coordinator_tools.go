@@ -376,10 +376,8 @@ func (t *finishTool) run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	}
 
 	todoList := t.coordinator.taskTracker.TodoList()
-	if t.coordinator.phaseWorkflow != nil {
-		if err := t.coordinator.phaseWorkflow.requireFinished(); err != nil {
-			return fantasy.NewTextErrorResponse("cannot finish: " + err.Error()), nil
-		}
+	if response, handled, err := t.finishWorkflow(ctx, args.AcknowledgeFailedTasks); handled {
+		return response, err
 	}
 	failedTasks := failedTodoItems(todoList.Items())
 	pendingTasks := pendingTodoItems(todoList.Items())
