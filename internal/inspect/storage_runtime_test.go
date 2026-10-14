@@ -52,7 +52,7 @@ func TestInspectStorageReportsRuntimeStoreReadOnly(t *testing.T) {
 				t.Fatalf("storage inspection changed workspace entries: before=%v after=%v", snapshotNames(before), snapshotNames(after))
 			}
 			runtime := envelope.Data.(StorageData).Runtime
-			if runtime == nil || runtime.Documents != 1 || runtime.SchemaVersion <= 0 || runtime.DatabaseBytes <= 0 || (tt.keepWriter && runtime.WALBytes == 0) {
+			if runtime == nil || runtime.Documents != 1 || runtime.SchemaVersion <= 0 || runtime.DatabaseBytes <= 0 || runtime.JournalMode != "wal" || (tt.keepWriter && runtime.WALBytes == 0) {
 				t.Fatalf("runtime storage = %+v", runtime)
 			}
 		})

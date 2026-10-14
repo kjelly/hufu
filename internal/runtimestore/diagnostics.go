@@ -3,6 +3,8 @@ package runtimestore
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 )
 
 // Diagnostics are content-free facts about a runtime store.
@@ -45,5 +47,33 @@ func (s *Store) Diagnose(ctx context.Context) (Diagnostics, error) {
 			return Diagnostics{}, fmt.Errorf("diagnose runtime store: %s: %w", q.query, err)
 		}
 	}
+	if s.readOnly && s.shared == nil {
+		// An immutable read-only connection ignores the WAL and reports a
+		// rollback journal; the header records the mode the writer uses.
+		mode, err := journalModeFromHeader(s.path)
+		if err != nil {
+			return Diagnostics{}, fmt.Errorf("diagnose runtime store: %w", err)
+		}
+		d.JournalMode = mode
+	}
 	return d, nil
+}
+
+// journalModeFromHeader reads the database header: SQLite sets the file
+// format versions at offsets 18 and 19 to 2 for a WAL database. Rollback
+// journal modes are not distinguished there.
+func journalModeFromHeader(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("read database header: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	header := make([]byte, 20)
+	if _, err := io.ReadFull(file, header); err != nil {
+		return "", fmt.Errorf("read database header: %w", err)
+	}
+	if header[18] == 2 && header[19] == 2 {
+		return "wal", nil
+	}
+	return "rollback", nil
 }

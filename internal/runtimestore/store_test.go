@@ -417,7 +417,7 @@ func TestDiagnoseCountsWithoutWriting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diagnostics.SchemaVersion != int64(migrations[len(migrations)-1].Version) || diagnostics.Documents != 1 || diagnostics.PageCount == 0 {
+	if diagnostics.SchemaVersion != int64(migrations[len(migrations)-1].Version) || diagnostics.Documents != 1 || diagnostics.PageCount == 0 || diagnostics.JournalMode != "wal" {
 		t.Fatalf("diagnostics = %+v", diagnostics)
 	}
 	if after := dirNames(t, workspace); !slices.Equal(before, after) {
