@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func TestRCA4V2RunAndResumeUseCanonicalFinalizedState(t *testing.T) {
@@ -216,7 +217,7 @@ func TestRCA4RebuildIsAtomicOnFinalizationIntegrityFailure(t *testing.T) {
 	if err := index.RebuildFromJournal(context.Background(), journal); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.ReadFile(index.Path())
+	before, err := readDecisionIndexLog(index)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +227,7 @@ func TestRCA4RebuildIsAtomicOnFinalizationIntegrityFailure(t *testing.T) {
 	if err := index.RebuildFromJournal(context.Background(), journal); err == nil {
 		t.Fatal("rebuild accepted missing finalization metadata")
 	}
-	after, err := os.ReadFile(index.Path())
+	after, err := readDecisionIndexLog(index)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +248,7 @@ func TestRCA4IndexRejectsLifecycleProjectionIdentitySubstitution(t *testing.T) {
 	if err := index.Append(IndexEntryFor(*record, "Should we migrate now?", false, state.FinalizedRecordRef)); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(index.Path())
+	data, err := readDecisionIndexLog(index)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +262,7 @@ func TestRCA4IndexRejectsLifecycleProjectionIdentitySubstitution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(index.Path(), append(encoded, '\n'), 0o644); err != nil {
+	if err := writeDecisionIndexLog(index, append(encoded, '\n')); err != nil {
 		t.Fatal(err)
 	}
 	for _, operation := range []string{"list", "get", "pending"} {
@@ -294,7 +295,7 @@ func TestRCA4IndexRejectsRecordDigestAliasConflict(t *testing.T) {
 	if err := index.Append(IndexEntryFor(*record, "Should we migrate now?", false, state.FinalizedRecordRef)); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(index.Path())
+	data, err := readDecisionIndexLog(index)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +308,7 @@ func TestRCA4IndexRejectsRecordDigestAliasConflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(index.Path(), append(encoded, '\n'), 0o644); err != nil {
+	if err := writeDecisionIndexLog(index, append(encoded, '\n')); err != nil {
 		t.Fatal(err)
 	}
 	for _, operation := range []string{"list", "get", "pending"} {
@@ -359,18 +360,15 @@ func TestRCA4AssumptionMutationValidatesFinalizedStateFirst(t *testing.T) {
 	if err := SaveSession(workspace, session); err != nil {
 		t.Fatal(err)
 	}
-	if err := recordDecisionIndexTaskProjection(index.Path(), entries[0]); err != nil {
+	if err := recordDecisionIndexTaskProjection(index.workspace, entries[0]); err != nil {
 		t.Fatal(err)
 	}
-	beforeIndex, err := os.ReadFile(index.Path())
+	beforeIndex, err := readDecisionIndexLog(index)
 	if err != nil {
 		t.Fatal(err)
 	}
-	beforeSession, err := os.ReadFile(filepath.Join(workspace, sessionFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	beforeTaskJournal, err := os.ReadFile(taskJournalPath(workspace))
+	beforeSession, _ := getRuntimeDocument(t, workspace, runtimestore.DocumentSession)
+	beforeTaskJournal, err := readTaskJournalLog(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,15 +393,12 @@ func TestRCA4AssumptionMutationValidatesFinalizedStateFirst(t *testing.T) {
 			t.Fatalf("failed assumption mutation appended %s events = %d, want zero", eventType, got)
 		}
 	}
-	afterIndex, err := os.ReadFile(index.Path())
+	afterIndex, err := readDecisionIndexLog(index)
 	if err != nil {
 		t.Fatal(err)
 	}
-	afterSession, err := os.ReadFile(filepath.Join(workspace, sessionFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	afterTaskJournal, err := os.ReadFile(taskJournalPath(workspace))
+	afterSession, _ := getRuntimeDocument(t, workspace, runtimestore.DocumentSession)
+	afterTaskJournal, err := readTaskJournalLog(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +443,7 @@ func TestRCA5ValidV2AssumptionMutationSucceeds(t *testing.T) {
 	if err := SaveSession(workspace, session); err != nil {
 		t.Fatal(err)
 	}
-	if err := recordDecisionIndexTaskProjection(index.Path(), entries[0]); err != nil {
+	if err := recordDecisionIndexTaskProjection(index.workspace, entries[0]); err != nil {
 		t.Fatal(err)
 	}
 	entry, assumption, err := index.CheckAssumption(record.ID, "A1", AssumptionSupported, "verified")
@@ -468,7 +463,7 @@ func TestRCA5ValidV2AssumptionMutationSucceeds(t *testing.T) {
 	if updatedSession == nil || len(updatedSession.DecisionProjections) != 1 || updatedSession.DecisionProjections[0].Assumptions[0].EffectiveStatus() != AssumptionSupported {
 		t.Fatalf("valid v2 session projection = %#v", updatedSession)
 	}
-	taskJournal, err := os.ReadFile(taskJournalPath(workspace))
+	taskJournal, err := readTaskJournalLog(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

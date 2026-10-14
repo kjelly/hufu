@@ -103,7 +103,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().BoolVar(&opts.enablePTYTerminal, "enable-pty-terminal", false, "Eagerly initialize experimental PTY handoff (normally starts automatically on terminal pty:true)")
 	rootCmd.Flags().BoolVar(&opts.rbashMode, "rbash", false, "Use restricted bash (rbash) for the bash tool")
 	rootCmd.Flags().BoolVar(&opts.noNet, "no-net", false, "Block all network access for agent subprocesses")
-	rootCmd.Flags().BoolVar(&opts.noJournal, "no-journal", false, "Disable the persistent task-result journal (workspace/logs/task_journal.jsonl)")
+	rootCmd.Flags().BoolVar(&opts.noJournal, "no-journal", false, "Disable the persistent task-result journal (the task_journal table in workspace/runtime.sqlite)")
 	rootCmd.Flags().BoolVar(&opts.forceMCP, "force-mcp", false, "Force MCP mode: disable built-in execution/network tools, require MCP servers")
 	rootCmd.Flags().BoolVar(&opts.direnv, "direnv", false, "Load .envrc/.env environment for bash tool; parses .env (key=value) and/or uses direnv for full shell support")
 	rootCmd.Flags().BoolVar(&opts.think, "think", false, "Show coordinator decision reasoning (skills, agents, tasks, system prompt)")

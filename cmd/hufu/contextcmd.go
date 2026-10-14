@@ -172,7 +172,7 @@ func init() {
 	contextCmd.AddCommand(contextExplainCmd)
 	contextRebuildCmd.Flags().StringVarP(&contextWorkspace, "workspace", "w", "", "Workspace directory containing context.sqlite")
 	contextRebuildCmd.Flags().BoolVar(&contextRebuildVector, "vector", false, "Also refresh the semantic memory index with the semantic-retrieval encoder, embedding only new or edited items (requires --project; same as `hufu context semantic build`)")
-	contextRebuildCmd.Flags().BoolVar(&contextRebuildAggregates, "aggregates", false, "Rebuild outcome-driven experience aggregates from event_store.jsonl")
+	contextRebuildCmd.Flags().BoolVar(&contextRebuildAggregates, "aggregates", false, "Rebuild outcome-driven experience aggregates from the event journal")
 	contextRebuildCmd.Flags().StringVar(&contextPolicyVersion, "policy-version", "memory-policy-v1", "Memory policy version used for aggregate replay")
 	contextRebuildCmd.Flags().StringVar(&contextProject, "project", "", "Canonical project ID required with --vector")
 	contextRebuildCmd.Flags().StringVar(&contextTeam, "team", "", "Team whose semantic-retrieval block applies to --vector")

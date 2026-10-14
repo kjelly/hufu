@@ -165,7 +165,7 @@ func activeSessionRunID(session *team.SessionData) (string, error) {
 	return "", nil
 }
 
-// ActiveSessionRunID returns the run currently materialized by session.json.
+// ActiveSessionRunID returns the run currently materialized by the session checkpoint.
 // Mutation facades use it to reject an older run that happens to share the
 // active branch before loading a coordinator or provider.
 func ActiveSessionRunID(session *team.SessionData) (string, error) {

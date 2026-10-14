@@ -37,7 +37,7 @@ var contextPromotionApplyCmd = &cobra.Command{Use: "apply <proposal-id>", Short:
 
 func init() {
 	contextCmd.AddCommand(contextPromotionCmd)
-	contextPromotionCmd.PersistentFlags().StringVarP(&promotionWorkspace, "workspace", "w", "", "Workspace containing context.sqlite and logs/event_store.jsonl")
+	contextPromotionCmd.PersistentFlags().StringVarP(&promotionWorkspace, "workspace", "w", "", "Workspace containing context.sqlite and runtime.sqlite")
 	contextPromotionCmd.PersistentFlags().StringVar(&promotionProject, "project", "", "Canonical context project scope (required)")
 	contextPromotionCmd.PersistentFlags().StringVar(&promotionTeam, "team", "", "Canonical context and target team (required)")
 	contextPromotionCmd.PersistentFlags().StringVar(&promotionSearchPath, "team-search-path", "", "Comma-separated team search paths")

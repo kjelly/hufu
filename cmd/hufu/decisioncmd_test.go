@@ -122,7 +122,7 @@ func TestDecisionListJSON(t *testing.T) {
 	if payload.Count != 2 || len(payload.Entries) != 2 {
 		t.Fatalf("payload = %#v, want two entries", payload)
 	}
-	if !strings.HasSuffix(payload.Index, filepath.Join("logs", "decisions", "index.jsonl")) {
+	if !strings.HasSuffix(payload.Index, "runtime.sqlite") {
 		t.Fatalf("index path = %q", payload.Index)
 	}
 	entry := payload.Entries[0]

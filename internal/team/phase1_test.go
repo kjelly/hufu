@@ -2,12 +2,11 @@ package team
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func TestPhase1DiagnosisPolicyDecisionTable(t *testing.T) {
@@ -226,10 +225,7 @@ func TestPhase1SessionRestoreNormalizesSharedDataBeforeCheckpoint(t *testing.T) 
 		t.Fatalf("shared SessionData retained secret: %s", shared)
 	}
 	c.saveCheckpoint()
-	disk, err := os.ReadFile(filepath.Join(dir, sessionFile))
-	if err != nil {
-		t.Fatal(err)
-	}
+	disk, _ := getRuntimeDocument(t, dir, runtimestore.DocumentSession)
 	if strings.Contains(string(disk), "legacy-session-secret") {
 		t.Fatalf("checkpointed session retained secret: %s", disk)
 	}

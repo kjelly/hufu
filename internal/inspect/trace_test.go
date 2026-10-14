@@ -3,8 +3,6 @@ package inspect
 import (
 	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -24,9 +22,6 @@ func TestInspectTraceOrdersAnchoredEntriesAndPlacesUnanchoredLast(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(fixture.workspace, "logs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	terminalJSON, err := json.Marshal([]team.TerminalSession{{
 		ID: "terminal-unanchored", RunID: fixture.runID, OwnerTaskID: fixture.taskID,
 		Agent: "worker", Command: []string{"echo", "private-terminal-command"}, State: team.TerminalSessionExited,
@@ -34,9 +29,7 @@ func TestInspectTraceOrdersAnchoredEntriesAndPlacesUnanchoredLast(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(fixture.workspace, "logs", "terminal_sessions.json"), terminalJSON, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTerminalSessions(t, fixture.workspace, terminalJSON)
 
 	query := InspectQuery{Workspace: fixture.workspace, RunID: fixture.runID}
 	first, err := InspectTrace(t.Context(), query)

@@ -2,18 +2,15 @@ package main
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
 	"testing"
 
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestMigrateInspectExecutionCommandUsesRootWorkspaceAndStableJSON(t *testing.T) {
 	workspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspace, "session.json"), []byte(`{"tasks":[{"id":"legacy","model":"qwen3:8b","subagent_provider":"hufu-local"}]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentSession, []byte(`{"tasks":[{"id":"legacy","model":"qwen3:8b","subagent_provider":"hufu-local"}]}`))
 	previousOpts := opts
 	previousBranch := migrateInspectExecutionBranch
 	previousJSON := migrateInspectExecutionJSON
@@ -80,9 +77,7 @@ func TestMigrateApplyExecutionCommandIsRegistered(t *testing.T) {
 
 func TestInspectorDoesNotEmitCompatibilityObservation(t *testing.T) {
 	workspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspace, "session.json"), []byte(`{"tasks":[{"id":"legacy","model":"qwen3:8b","subagent_provider":"hufu-local"}]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentSession, []byte(`{"tasks":[{"id":"legacy","model":"qwen3:8b","subagent_provider":"hufu-local"}]}`))
 	store, err := team.NewEventStore(workspace, "run-1", "session-1")
 	if err != nil {
 		t.Fatal(err)

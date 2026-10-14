@@ -2,8 +2,6 @@ package inspect
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -32,9 +30,6 @@ func TestDecisionAndTerminalAdaptersExposeOnlySafeAddressingFacts(t *testing.T) 
 		t.Fatalf("decision addresses = %#v", addresses)
 	}
 
-	if err := os.MkdirAll(filepath.Join(workspace, "logs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	sessions := []team.TerminalSession{{
 		ID: "terminal-1", RunID: "run-1", OwnerTaskID: "task-1", Agent: "worker",
 		Command: []string{"sh", "-c", "echo secret-command"}, WorkingDir: "/secret/workdir",
@@ -44,9 +39,7 @@ func TestDecisionAndTerminalAdaptersExposeOnlySafeAddressingFacts(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, "logs", "terminal_sessions.json"), encoded, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTerminalSessions(t, workspace, encoded)
 	facts, err := LoadTerminalFacts(InspectQuery{Workspace: workspace, RunID: "run-1", TaskID: "task-1"})
 	if err != nil {
 		t.Fatal(err)

@@ -16,7 +16,7 @@ type AnalyticsError struct {
 
 // AnalyticsErrorStage names the pipeline boundary that failed. The set below
 // is spec.md §18's list verbatim, plus load_memory: §18 predates WP-7 and
-// does not enumerate a stage for event_store.jsonl ingestion, which is the
+// does not enumerate a stage for event journal ingestion, which is the
 // same kind of boundary as load_execution/load_audit.
 type AnalyticsErrorStage string
 

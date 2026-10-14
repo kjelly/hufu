@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -42,10 +43,7 @@ func TestDynamicCompletionIsBoundedBranchAndRunScoped(t *testing.T) {
 	if err = store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.ReadFile(filepath.Join(workspace, "logs", "event_store.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	before, beforeNames := runtimeStoreFiles(t, workspace), completionDirectoryNames(t, workspace)
 
 	command := completionTestCommand(workspace)
 	runs, directive := completeRunIDs(command, nil, "run-")
@@ -69,11 +67,7 @@ func TestDynamicCompletionIsBoundedBranchAndRunScoped(t *testing.T) {
 	if len(featureTasks) != 1 || !strings.HasPrefix(featureTasks[0], "task-feature\t") {
 		t.Fatalf("explicit feature branch completion = %v", featureTasks)
 	}
-	after, err := os.ReadFile(filepath.Join(workspace, "logs", "event_store.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(before, after) {
+	if !maps.EqualFunc(before, runtimeStoreFiles(t, workspace), bytes.Equal) || !slices.Equal(beforeNames, completionDirectoryNames(t, workspace)) {
 		t.Fatal("run/task completion mutated the event store")
 	}
 }

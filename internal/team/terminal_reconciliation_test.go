@@ -22,7 +22,7 @@ func TestPendingTerminalCommitReconcilesDelayedAppendExactlyOnce(t *testing.T) {
 
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	store.syncFile = func() error {
+	store.commitHook = func() error {
 		select {
 		case <-entered:
 		default:
@@ -113,7 +113,7 @@ func TestEmergencyWaiterTimeoutDoesNotLeaveRecoveryAfterNormalCommit(t *testing.
 
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	store.syncFile = func() error {
+	store.commitHook = func() error {
 		select {
 		case <-entered:
 		default:

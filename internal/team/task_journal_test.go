@@ -1,8 +1,6 @@
 package team
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,11 +8,7 @@ import (
 
 func writeJournalLines(t *testing.T, workspace string, lines ...string) {
 	t.Helper()
-	path := taskJournalPath(workspace)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+	if err := writeTaskJournalLog(workspace, []byte(strings.Join(lines, "\n")+"\n")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -76,7 +70,7 @@ func TestTerminalTypedResultIsProjectedToJournal(t *testing.T) {
 	if err := journal.Close(); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(taskJournalPath(workspace))
+	data, err := readTaskJournalLog(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +234,7 @@ func TestCompactTaskJournal(t *testing.T) {
 	if err := compactTaskJournalIfNeeded(ws, 1<<20, now); err != nil {
 		t.Fatal(err)
 	}
-	data, _ := os.ReadFile(taskJournalPath(ws))
+	data, _ := readTaskJournalLog(ws)
 	if !strings.Contains(string(data), `"del"`) {
 		t.Fatalf("no-op compaction rewrote the file")
 	}
@@ -256,7 +250,7 @@ func TestCompactTaskJournal(t *testing.T) {
 	if len(got["coder"]) != 1 || got["coder"][0].taskDesc != "keep" {
 		t.Errorf("compaction survivors wrong: %+v", got["coder"])
 	}
-	data, _ = os.ReadFile(taskJournalPath(ws))
+	data, _ = readTaskJournalLog(ws)
 	if strings.Contains(string(data), `"del"`) || strings.Contains(string(data), "gone") {
 		t.Errorf("compacted journal still contains dead records:\n%s", data)
 	}

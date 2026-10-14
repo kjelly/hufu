@@ -1,12 +1,12 @@
 package team
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"charm.land/fantasy"
+
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func TestSaveAndLoadConversationHistory(t *testing.T) {
@@ -44,8 +44,7 @@ func TestLoadConversationHistoryMissing(t *testing.T) {
 
 func TestLoadConversationHistoryCorrupt(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, historyFile)
-	os.WriteFile(path, []byte("not valid json{}"), 0o644)
+	putRuntimeDocument(t, dir, runtimestore.DocumentSessionHistory, []byte("not valid json{}"))
 
 	loaded := LoadConversationHistory(dir)
 	if loaded != nil {

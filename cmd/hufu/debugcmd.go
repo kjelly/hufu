@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,8 +46,7 @@ var debugCmd = &cobra.Command{
 			runID = target
 
 			// Verify run-id exists
-			eventsPath := filepath.Join(workspacePath, "logs", "event_store.jsonl")
-			if err := verifyRunID(eventsPath, runID); err != nil {
+			if err := verifyRunID(cmd.Context(), workspacePath, runID); err != nil {
 				return fmt.Errorf("failed to verify run ID %q: %w", runID, err)
 			}
 		}
@@ -120,9 +120,30 @@ var debugCmd = &cobra.Command{
 					finalErr = err
 				}
 			}
+			// The event and task journals live in runtime.sqlite, which is
+			// never copied raw; the bundle carries their JSONL exports under
+			// the historical names.
+			for _, journal := range []struct {
+				name   string
+				export func(context.Context, string, io.Writer) error
+			}{
+				{name: debugEventLogName, export: team.ExportEventLog},
+				{name: "logs/task_journal.jsonl", export: team.ExportTaskJournal},
+			} {
+				var exported bytes.Buffer
+				if err := journal.export(cmd.Context(), workspacePath, &exported); err != nil {
+					inclusions[journal.name] = fmt.Sprintf("error exporting: %v", err)
+				} else if exported.Len() == 0 {
+					inclusions[journal.name] = "omitted (no records)"
+				} else if err := addBytesToTar(tw, utils.RedactJSONLData(exported.Bytes()), journal.name); err != nil {
+					inclusions[journal.name] = fmt.Sprintf("error writing to tar: %v", err)
+				} else {
+					inclusions[journal.name] = "included (exported from runtime.sqlite, redacted)"
+				}
+			}
 		} else {
 			// When filtering by a specific runID, we omit files that have no durable
-			// run-scoped representation (e.g. session.json, stm.md, ltm.md,
+			// run-scoped representation (e.g. the session checkpoint, stm.md, ltm.md,
 			// logs/evidence_manifest.json) because they only reflect the current
 			// or latest run of the workspace, not necessarily the requested run.
 
@@ -131,29 +152,14 @@ var debugCmd = &cobra.Command{
 			taskIDs := make(map[string]bool)
 			attempts := make(map[string]bool) // "taskID:attempt"
 
-			// filterJSONL adds relPath's rows for runID to the bundle and returns
-			// them unredacted for derived projections.
-			filterJSONL := func(relPath string, checkRunID bool, idField string) []byte {
-				fullPath := filepath.Join(workspacePath, relPath)
-				fJSON, err := debugOpenFile(fullPath)
-				if err != nil {
-					if errors.Is(err, errDebugSymlinkPath) {
-						inclusions[relPath] = "omitted (symlink path)"
-						return nil
-					}
-					if os.IsNotExist(err) {
-						inclusions[relPath] = "omitted (not found)"
-					} else {
-						inclusions[relPath] = fmt.Sprintf("error reading: %v", err)
-					}
-					return nil
-				}
-				defer func() { _ = fJSON.Close() }()
+			// filterJSONL adds source's JSONL rows for runID to the bundle under
+			// relPath and returns them unredacted for derived projections.
+			filterJSONL := func(relPath string, source io.Reader) []byte {
 				var filtered []byte
 				omittedLegacy := 0
-				scanner := bufio.NewScanner(fJSON)
+				scanner := bufio.NewScanner(source)
 				buf := make([]byte, 0, 64*1024)
-				// Event-store records can reach the store's 4 MiB line limit.
+				// Journal records can reach 4 MiB.
 				scanner.Buffer(buf, 4*1024*1024)
 				for scanner.Scan() {
 					var ev map[string]interface{}
@@ -233,8 +239,50 @@ var debugCmd = &cobra.Command{
 					inclusions[relPath] = "included (derived from event store, redacted)"
 				}
 			}
-			addDerivedExecutionEvents(filterJSONL("logs/event_store.jsonl", true, ""))
-			filterJSONL("logs/task_journal.jsonl", false, "task_id")
+			// addRunEvents adds the run's journal rows, exported as JSONL, and
+			// returns them unredacted for derived projections.
+			addRunEvents := func() []byte {
+				events, unscoped, err := team.ReadUnvalidatedRunEvents(cmd.Context(), workspacePath, runID)
+				if err != nil {
+					inclusions[debugEventLogName] = fmt.Sprintf("error reading: %v", err)
+					return nil
+				}
+				if unscoped > 0 {
+					inclusions[debugEventLogName+"_omitted_legacy_rows"] = fmt.Sprintf("%d unscoped legacy rows omitted", unscoped)
+				}
+				var rows []byte
+				for _, event := range events {
+					data, err := json.Marshal(event)
+					if err != nil {
+						inclusions[debugEventLogName] = fmt.Sprintf("error encoding: %v", err)
+						return nil
+					}
+					rows = append(append(rows, data...), '\n')
+					if event.TaskID != "" {
+						taskIDs[event.TaskID] = true
+						if event.Attempt != 0 {
+							attempts[fmt.Sprintf("%s:%d", event.TaskID, event.Attempt)] = true
+						}
+					}
+				}
+				if len(rows) == 0 {
+					inclusions[debugEventLogName] = "omitted (empty after filter)"
+				} else if err := addBytesToTar(tw, utils.RedactJSONLData(rows), debugEventLogName); err != nil {
+					inclusions[debugEventLogName] = fmt.Sprintf("error writing to tar: %v", err)
+				} else {
+					inclusions[debugEventLogName] = "included (filtered, redacted)"
+				}
+				return rows
+			}
+			addDerivedExecutionEvents(addRunEvents())
+			// The task journal lives in runtime.sqlite; the bundle carries its
+			// run's records as JSONL under the historical name.
+			var taskJournal bytes.Buffer
+			if err := team.ExportTaskJournal(cmd.Context(), workspacePath, &taskJournal); err != nil {
+				inclusions["logs/task_journal.jsonl"] = fmt.Sprintf("error reading: %v", err)
+			} else {
+				filterJSONL("logs/task_journal.jsonl", &taskJournal)
+			}
 
 			// task-output
 			outDir := filepath.Join(workspacePath, "logs", "task-output")
@@ -372,41 +420,24 @@ var debugCmd = &cobra.Command{
 	},
 }
 
-func verifyRunID(eventsPath string, runID string) error {
-	f, err := debugOpenFile(eventsPath)
-	if errors.Is(err, errDebugSymlinkPath) {
-		return fmt.Errorf("event store path contains a symlink")
+// debugEventLogName is where a bundle carries the event journal's JSONL
+// export, the path the retired file log used.
+const debugEventLogName = "logs/event_store.jsonl"
+
+// verifyRunID tolerates a damaged journal: a debug bundle must still find a
+// run whose chain no longer validates.
+func verifyRunID(ctx context.Context, workspacePath, runID string) error {
+	events, _, err := team.ReadUnvalidatedRunEvents(ctx, workspacePath, runID)
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("event store not found (is %s a valid workspace?)", workspacePath)
 	}
 	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("event store not found (is %s a valid workspace?)", filepath.Dir(filepath.Dir(eventsPath)))
-		}
-		return err
-	}
-	defer func() { _ = f.Close() }()
-
-	scanner := bufio.NewScanner(f)
-	// Event-store records can reach the store's 4 MiB line limit. The scan
-	// is tolerant: a debug bundle must still find a run in a damaged log.
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 4*1024*1024)
-
-	type miniEvent struct {
-		RunID string `json:"run_id"`
-	}
-
-	for scanner.Scan() {
-		var ev miniEvent
-		if err := json.Unmarshal(scanner.Bytes(), &ev); err == nil {
-			if ev.RunID == runID {
-				return nil
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("error reading event store: %w", err)
 	}
-	return fmt.Errorf("run ID %q not found in event store", runID)
+	if len(events) == 0 {
+		return fmt.Errorf("run ID %q not found in event store", runID)
+	}
+	return nil
 }
 
 func addBytesToTar(tw *tar.Writer, data []byte, name string) error {
@@ -561,6 +592,7 @@ func isDebugSensitivePath(rel string) bool {
 		name := strings.ToLower(strings.TrimSpace(part))
 		if name == ".env" || strings.HasPrefix(name, ".env.") ||
 			name == "session.json" || name == "stm.md" || name == "ltm.md" ||
+			strings.HasPrefix(name, "runtime.sqlite") ||
 			name == "acceptance_audit.jsonl" ||
 			name == "evidence_manifest.json" || name == "credentials" ||
 			name == "secrets" || strings.Contains(name, "credential") ||

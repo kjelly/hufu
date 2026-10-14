@@ -295,16 +295,15 @@ func TestSessionRestoreTasksAndCache(t *testing.T) {
 	}
 
 	// Verify change hook is registered and triggers saveCheckpoint
-	checkpointFile := filepath.Join(tmpDir, "session.json")
-	if _, err := os.Stat(checkpointFile); err == nil {
-		os.Remove(checkpointFile)
+	if err := DeleteSession(tmpDir); err != nil {
+		t.Fatal(err)
 	}
 
 	// Update task status, should trigger checkpoint saving
 	c.taskTracker.TodoList().UpdateStatus("2", TaskInProgress, "retrying")
 
-	if _, err := os.Stat(checkpointFile); err != nil {
-		t.Error("expected session.json checkpoint to be saved on status change")
+	if !HasSession(tmpDir) {
+		t.Error("expected the session checkpoint to be saved on status change")
 	} else {
 		saved := LoadSession(tmpDir)
 		if saved == nil || len(saved.Tasks) != 2 || saved.Tasks[1].Status != TaskInProgress {

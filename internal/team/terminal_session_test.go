@@ -17,6 +17,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
@@ -422,9 +423,7 @@ func TestTerminalSessionManager_ReconcileRestoredDeadProcessRetainsManualCustody
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(logsPath, terminalSessionsFile), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentTerminalSessions, data)
 
 	var events []string
 	manager, err := NewTerminalSessionManager(workspace, func(eventType, _ string, _ map[string]interface{}) {
@@ -508,9 +507,7 @@ func TestTerminalSessionManager_CloseRestoredSessionRetainsManualCustodyWithoutW
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(logsPath, terminalSessionsFile), data, 0o644); err != nil {
-				t.Fatal(err)
-			}
+			putRuntimeDocument(t, workspace, runtimestore.DocumentTerminalSessions, data)
 			var events []string
 			manager, err := NewTerminalSessionManager(workspace, func(eventType, _ string, _ map[string]interface{}) {
 				events = append(events, eventType)
@@ -1276,9 +1273,7 @@ func TestTerminalSessionLegacyRecordDefaultsToPipe(t *testing.T) {
 		t.Fatal(err)
 	}
 	legacy := `[{"id":"legacy","run_id":"run","owner_task_id":"task","state":"exited"}]`
-	if err := os.WriteFile(filepath.Join(logs, terminalSessionsFile), []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentTerminalSessions, []byte(legacy))
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -1572,12 +1567,12 @@ func TestTerminalClosePersistenceFailureRetainsCustodyAndSuppressesReleaseEvents
 		t.Fatal(err)
 	}
 	writes := 0
-	manager.persistFile = func(path string, data []byte, mode os.FileMode) error {
+	manager.persistDocument = func(data []byte) error {
 		writes++
 		if writes == 2 {
 			return fmt.Errorf("injected terminal finalization persistence failure")
 		}
-		return AtomicWriteFile(path, data, mode)
+		return manager.writeSessionsDocument(data)
 	}
 
 	if err := manager.Close(ctx, session.ID); err == nil || !strings.Contains(err.Error(), "injected terminal finalization persistence failure") {
@@ -1918,10 +1913,10 @@ func TestTerminalStartFailureAbortsWholeLaunchCustodyBeforeReturning(t *testing.
 					}
 				} else {
 					persistCalls := 0
-					manager.persistFile = func(path string, data []byte, mode os.FileMode) error {
+					manager.persistDocument = func(data []byte) error {
 						persistCalls++
 						if persistCalls > 1 {
-							return AtomicWriteFile(path, data, mode)
+							return manager.writeSessionsDocument(data)
 						}
 						if err := waitForMarker(); err != nil {
 							return err

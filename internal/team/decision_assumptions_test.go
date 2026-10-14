@@ -2,8 +2,6 @@ package team
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -274,8 +272,7 @@ func TestOperatorAssumptionCheckThroughTheIndex(t *testing.T) {
 	if _, _, err := index.CheckAssumption("dec-1", "", AssumptionSupported, ""); err == nil {
 		t.Fatal("a blank assumption ID was accepted")
 	}
-	workspace := filepath.Dir(filepath.Dir(filepath.Dir(index.Path())))
-	data, err := os.ReadFile(taskJournalPath(workspace))
+	data, err := readTaskJournalLog(index.workspace)
 	if err != nil {
 		t.Fatalf("read operator task journal projection: %v", err)
 	}

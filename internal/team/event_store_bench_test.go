@@ -1,20 +1,19 @@
 package team
 
 import (
-	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
 // The event-store benchmarks measure the costs that grow with history on a
-// synthetic log shaped like a long-lived workspace: about 2 KiB payloads, half
-// of them carrying an idempotency key. fsync is disabled on the appending
-// stores, so results measure CPU and allocation rather than the storage
-// device. Run them with:
+// synthetic journal shaped like a long-lived workspace: about 2 KiB payloads,
+// half of them carrying an idempotency key. Appends commit with
+// synchronous=FULL, so append results include the storage device's sync cost.
+// Run them with:
 //
 //	go test ./internal/team -run '^$' -bench 'BenchmarkEventStore(Append|Open|ReadEvents)$' -benchmem
 //
@@ -24,20 +23,12 @@ import (
 //	go test ./internal/team -run '^$' -bench 'BenchmarkEventStoreAppend$/events/interleaved' -benchtime=200x -benchmem
 var benchEventStoreSizes = []int{1_000, 10_000, 70_000}
 
-// writeBenchEventLog writes a hash-chained log of count events into a fresh
-// workspace and returns the workspace.
+// writeBenchEventLog imports a hash-chained journal of count events into a
+// fresh workspace and returns the workspace.
 func writeBenchEventLog(b *testing.B, count int) string {
 	b.Helper()
 	workspace := b.TempDir()
-	path := filepath.Join(workspace, logsDir, eventStoreFile)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		b.Fatal(err)
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		b.Fatal(err)
-	}
-	w := bufio.NewWriter(f)
+	var log bytes.Buffer
 	pad := strings.Repeat("x", 2048)
 	var previousID, previousHash string
 	for i := range count {
@@ -58,14 +49,11 @@ func writeBenchEventLog(b *testing.B, count int) string {
 		if err != nil {
 			b.Fatal(err)
 		}
-		_, _ = w.Write(line)
-		_ = w.WriteByte('\n')
+		log.Write(line)
+		log.WriteByte('\n')
 		previousID, previousHash = event.ID, event.Hash
 	}
-	if err := w.Flush(); err != nil {
-		b.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
+	if _, err := ImportEventLog(context.Background(), workspace, &log); err != nil {
 		b.Fatal(err)
 	}
 	return workspace
@@ -77,7 +65,7 @@ func openBenchAppender(b *testing.B, workspace string) *EventStore {
 	if err != nil {
 		b.Fatal(err)
 	}
-	store.syncFile = func() error { return nil }
+	store.commitHook = func() error { return nil }
 	b.Cleanup(func() { _ = store.Close() })
 	return store
 }
@@ -126,7 +114,7 @@ func BenchmarkEventStoreAppend(b *testing.B) {
 	}
 }
 
-// BenchmarkEventStoreOpen times the strict full scan every new store performs.
+// BenchmarkEventStoreOpen times the strict full load every new store performs.
 func BenchmarkEventStoreOpen(b *testing.B) {
 	for _, count := range benchEventStoreSizes {
 		b.Run(fmt.Sprintf("events=%d", count), func(b *testing.B) {

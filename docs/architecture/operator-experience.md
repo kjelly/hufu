@@ -488,7 +488,7 @@ hufu inspect overview --workspace /repo/workspace/hufu-dev \
 `overview` 成功時使用 inspector schema version 1。Session status 是 overview 的面向使用者
 façade，不是第二份 reducer。
 
-未指定 `--branch` 時使用 `session_tree.json` 經驗證的 active branch；沒有 tree 時使用既有
+未指定 `--branch` 時使用 session tree（`runtime.sqlite`）經驗證的 active branch；沒有 tree 時使用既有
 implicit main lineage。未指定 `--run` 時，只能採用 active session/run binding，或 selected
 lineage 中唯一的 run；兩者皆無或存在多個候選時回 not-found/ambiguous，不以 mtime、檔案順序
 或「最新」猜測。`--run`/`--branch` 都只做選擇，不 checkout 或修改 active state。

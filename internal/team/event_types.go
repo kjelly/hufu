@@ -3,7 +3,7 @@ package team
 import "github.com/kjelly/hufu/internal/cost"
 
 // EventType is the stable catalog identifier for a runtime event. RunEvent
-// deliberately keeps Type as a string so existing JSONL workspaces and API
+// deliberately keeps Type as a string so stored events, JSONL exports, and API
 // callers remain source and wire compatible while producers migrate.
 type EventType string
 

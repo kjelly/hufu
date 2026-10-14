@@ -3,16 +3,10 @@ package team
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/kjelly/hufu/internal/utils"
 )
-
-const sessionTreeFile = "session_tree.json"
 
 // BranchState captures branch-scoped metadata and snapshot configuration.
 type BranchState struct {
@@ -41,6 +35,10 @@ type SessionTree struct {
 	ActiveBranch string                    `json:"active_branch"`
 	Branches     map[string]*SessionBranch `json:"branches"`
 	Labels       map[string]string         `json:"labels"` // label name -> target (event ID, branch ID, or entry ID)
+	// stored holds the hash of each branch row and of the labels as
+	// runtime.sqlite last held them for this tree; nil for a tree built in
+	// memory. Saves write only what differs.
+	stored map[string]string
 }
 
 // NewSessionTree returns a new SessionTree initialized with a default "main" branch.
@@ -61,76 +59,6 @@ func NewSessionTree() *SessionTree {
 		},
 		Labels: make(map[string]string),
 	}
-}
-
-// LoadSessionTree loads session tree state from workspace/session_tree.json.
-// If the file does not exist, it returns a fresh SessionTree with default "main" branch.
-func LoadSessionTree(workspace string) (*SessionTree, error) {
-	if workspace == "" {
-		return NewSessionTree(), nil
-	}
-	path := filepath.Join(workspace, sessionTreeFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return NewSessionTree(), nil
-		}
-		return nil, fmt.Errorf("load session tree: %w", err)
-	}
-
-	var st SessionTree
-	if err := json.Unmarshal(data, &st); err != nil {
-		return nil, fmt.Errorf("unmarshal session tree: %w", err)
-	}
-
-	if st.Branches == nil {
-		st.Branches = make(map[string]*SessionBranch)
-	}
-	if st.Labels == nil {
-		st.Labels = make(map[string]string)
-	}
-	if len(st.Branches) == 0 {
-		st.Branches["main"] = &SessionBranch{
-			ID:        "main",
-			Name:      "main",
-			CreatedAt: time.Now().UTC().Format(time.RFC3339),
-		}
-	}
-	if st.ActiveBranch == "" || st.Branches[st.ActiveBranch] == nil {
-		st.ActiveBranch = "main"
-		if st.Branches["main"] == nil {
-			st.Branches["main"] = &SessionBranch{
-				ID:        "main",
-				Name:      "main",
-				CreatedAt: time.Now().UTC().Format(time.RFC3339),
-			}
-		}
-	}
-
-	return &st, nil
-}
-
-// SaveSessionTree atomically writes session tree state to workspace/session_tree.json.
-func SaveSessionTree(workspace string, st *SessionTree) error {
-	if st == nil {
-		return fmt.Errorf("save session tree: tree is nil")
-	}
-	if workspace == "" {
-		return fmt.Errorf("save session tree: empty workspace")
-	}
-	data, err := json.MarshalIndent(st, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal session tree: %w", err)
-	}
-	data, err = utils.RedactJSON(data)
-	if err != nil {
-		return fmt.Errorf("redact session tree JSON: %w", err)
-	}
-	if !json.Valid(data) {
-		return fmt.Errorf("redacted session tree is invalid JSON")
-	}
-	path := filepath.Join(workspace, sessionTreeFile)
-	return AtomicWriteFile(path, data, 0o600)
 }
 
 // GetBranch retrieves a branch by exact ID, exact Name, or label alias.
@@ -166,18 +94,9 @@ func (st *SessionTree) ResolveTarget(target string, es *EventStore) (branchID st
 		return b.ID, ""
 	}
 
-	if es != nil {
-		events, _ := es.ReadEvents()
-		for _, e := range events {
-			if e.ID == target {
-				// Events without a BranchID tag belong to the main lineage.
-				branch := e.BranchID
-				if branch == "" {
-					branch = "main"
-				}
-				return branch, e.ID
-			}
-		}
+	// Events without a BranchID tag belong to the main lineage.
+	if branch, _, ok := es.LookupEvent(target); ok {
+		return branch, target
 	}
 
 	return target, ""
@@ -218,14 +137,8 @@ func (st *SessionTree) CreateBranch(name string, forkTarget string, es *EventSto
 		parentBranchID = "main"
 	}
 
-	if forkEventID == "" && es != nil {
-		events, _ := es.ReadEvents()
-		for i := len(events) - 1; i >= 0; i-- {
-			if events[i].BranchID == parentBranchID || (events[i].BranchID == "" && parentBranchID == "main") {
-				forkEventID = events[i].ID
-				break
-			}
-		}
+	if forkEventID == "" {
+		forkEventID, _ = es.lastEventOnBranch(parentBranchID)
 	}
 
 	branchID := slugifyBranchName(name)
@@ -306,20 +219,10 @@ func (st *SessionTree) ResolveCheckoutBranch(target string, es *EventStore) (*Se
 	if b := st.GetBranch(branchID); b != nil {
 		return b, nil
 	}
-	if eventID != "" && es != nil {
-		events, _ := es.ReadEvents()
-		for _, e := range events {
-			if e.ID != eventID {
-				continue
-			}
-			// Events written before branch tagging belong to the main lineage.
-			eBranch := e.BranchID
-			if eBranch == "" {
-				eBranch = "main"
-			}
-			if targetBranch := st.GetBranch(eBranch); targetBranch != nil {
-				return targetBranch, nil
-			}
+	// Events written before branch tagging belong to the main lineage.
+	if eventBranch, _, ok := es.LookupEvent(eventID); ok {
+		if targetBranch := st.GetBranch(eventBranch); targetBranch != nil {
+			return targetBranch, nil
 		}
 	}
 	return nil, fmt.Errorf("branch or target %q not found", target)
@@ -844,20 +747,32 @@ func slugifyBranchName(name string) string {
 	return res
 }
 
-// SnapshotBranchState captures the live session.json task plan (and the latest
+// SnapshotBranchState captures the live session checkpoint's task plan (and the latest
 // compaction summary) into the given branch's state, so switching away from a
 // branch preserves its in-progress work. Missing session data is a no-op.
 // ActiveModel/SelectedTeam are owned by the coordinator's runtime populate and
 // are not touched here.
 func SnapshotBranchState(workspace string, st *SessionTree, branchID string) {
-	if st == nil || workspace == "" {
+	if workspace == "" {
+		return
+	}
+	snapshotBranchState(workspaceDocs(workspace), workspace, st, branchID)
+}
+
+// snapshotBranchState is SnapshotBranchState reading the session and
+// compaction state through docs.
+func snapshotBranchState(docs runtimeDocs, workspace string, st *SessionTree, branchID string) {
+	if st == nil {
 		return
 	}
 	b := st.Branches[branchID]
 	if b == nil {
 		return
 	}
-	sd := LoadSession(workspace)
+	sd, _, err := loadSessionFrom(docs)
+	if err != nil {
+		sd = nil
+	}
 	if sd != nil && len(sd.Tasks) > 0 {
 		plan := make([]*TodoItem, len(sd.Tasks))
 		for i, t := range sd.Tasks {
@@ -865,7 +780,7 @@ func SnapshotBranchState(workspace string, st *SessionTree, branchID string) {
 		}
 		b.State.TaskPlan = plan
 	}
-	if state, exists, err := LoadConversationCompactionState(workspace); exists && err == nil {
+	if state, exists, err := loadCompactionStateFrom(docs); exists && err == nil {
 		if checkpoint, ok := state.Branches[branchID]; ok {
 			if generation, generationOK := state.Generations[checkpoint.GenerationID]; generationOK {
 				b.State.Compaction = cloneStructuredSummary(&generation.Summary)

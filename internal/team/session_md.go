@@ -117,8 +117,8 @@ func ArchiveSessionMD(workspace string) (string, error) {
 	if err := removeFileIfExists(SessionMDPath(workspace)); err != nil {
 		return path, fmt.Errorf("failed to remove session md: %w", err)
 	}
-	if err := removeFileIfExists(filepath.Join(workspace, sessionFile)); err != nil {
-		return path, fmt.Errorf("failed to remove session json: %w", err)
+	if err := DeleteSession(workspace); err != nil {
+		return path, fmt.Errorf("failed to remove session checkpoint: %w", err)
 	}
 	return path, nil
 }

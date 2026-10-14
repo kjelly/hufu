@@ -134,8 +134,8 @@ func TestAcceptanceSpecDeepCopyPreventsCallerMutation(t *testing.T) {
 	if got := c.acceptanceSpec.Commands[0]; got != "true" {
 		t.Fatalf("acceptance result exposed internal command slice: %q", got)
 	}
-	if _, err := os.Stat(filepath.Join(workspace, sessionFile)); err != nil {
-		t.Fatalf("expected isolated session artifact in temp workspace: %v", err)
+	if !HasSession(workspace) {
+		t.Fatal("expected isolated session artifact in temp workspace")
 	}
 }
 

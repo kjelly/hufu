@@ -12,7 +12,7 @@ import (
 
 // sessionFieldClass records how a branch switch derives each SessionData
 // field: replayed from the target lineage, carried from the live session
-// (carryWorkspaceSessionState), or set when session.json is saved.
+// (carryWorkspaceSessionState), or set when the session checkpoint is saved.
 var sessionFieldClass = map[string]string{
 	"CreatedAt": "replay", "UpdatedAt": "save", "Rounds": "carry",
 	"ExecutionPolicySnapshot": "replay", "RunInputSnapshots": "replay",
@@ -90,7 +90,7 @@ func marshalPayload(t *testing.T, payload any) []byte {
 
 // TestCheckoutRestoresTheTargetBranchSession checks out branch A after
 // branch B diverged with different run inputs, a pending wrap-up and a
-// finished workflow. session.json must become A's replayed state, and the
+// finished workflow. The session checkpoint must become A's replayed state, and the
 // next start must match it, restore A's workflow, and accept A's work.
 func TestCheckoutRestoresTheTargetBranchSession(t *testing.T) {
 	session := workflowTestSession(t)
@@ -138,7 +138,7 @@ func TestCheckoutRestoresTheTargetBranchSession(t *testing.T) {
 	})})
 	appendBranchEvent(t, store, RunEvent{Type: string(EventWrapUpPhase), RunID: "run-2", Payload: marshalPayload(t, PendingWrapUp{RunID: "run-2", BranchID: branchB.ID, RequestedAt: "2026-10-13T00:00:00Z", Reason: "operator"})})
 
-	// session.json is B's live checkpoint.
+	// The session checkpoint is B's live state.
 	events := mustReadEvents(t, store)
 	liveB := ReduceToSessionData(FilterEventsForBranch(events, tree, branchB.ID))
 	if liveB.PendingWrapUp == nil || liveB.WorkflowState != PhaseDone || liveB.ActiveRunInputSnapshotID != inputsB.ID {
@@ -260,7 +260,7 @@ func TestProjectionRepairReplacesStaleRunInputs(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// session.json agrees on everything but the run inputs it never saved.
+	// The session checkpoint agrees on everything but the run inputs it never saved.
 	stale := NewSession()
 	stale.AddEntry("user", "hello")
 	if err := SaveSession(workspace, stale); err != nil {

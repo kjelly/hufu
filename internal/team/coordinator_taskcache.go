@@ -43,8 +43,8 @@ type cachedTaskEntry struct {
 	verification *VerificationResult
 	output       string
 	generation   int64 // cacheGeneration at time of storage
-	// pinned marks entries restored from a previous run (session.json or the
-	// task journal); the per-round generation prune keeps them so they survive
+	// pinned marks entries restored from a previous run (the session checkpoint
+	// or the task journal); the per-round generation prune keeps them so they survive
 	// until their first lookup. invalidateTaskCache removes them regardless.
 	pinned   bool
 	identity CacheIdentity
@@ -606,7 +606,7 @@ func (c *Coordinator) lookupTaskCacheAllGenerationsWithVerification(ctx context.
 
 // lookupTaskCacheCurrentRunWithVerification is restricted to entries produced
 // by this run: entries pinned from a previous
-// run (session.json / task journal) are skipped. Duplicate *rejection* must
+// run (session checkpoint / task journal) are skipped. Duplicate *rejection* must
 // use this variant — a user who explicitly asks to re-run a mission would
 // otherwise have the new run's first task killed as a "duplicate" of work
 // from the previous run. Cross-run reuse stays available through the

@@ -1,25 +1,23 @@
 package team
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/kjelly/hufu/internal/eventchain"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
-// StreamValidatedRunEvents reads the durable event log without constructing an
-// EventStore. It never creates, appends to, repairs, rescans into, or caches
-// the canonical event store. Each validated event is passed to visit in file
-// order. A callback may receive a valid prefix before a later chain error, so
-// callers persisting streamed rows must make that persistence transactional.
+// StreamValidatedRunEvents reads the durable event journal without
+// constructing an EventStore. It opens runtime.sqlite read-only, so it never
+// creates, appends to, repairs, or caches the canonical journal. Each
+// validated event is passed to visit in journal order. A callback may receive
+// a valid prefix before a later chain error, so callers persisting streamed
+// rows must make that persistence transactional.
 //
-// A missing event_store.jsonl is treated as an empty stream. Malformed JSON,
-// a broken hash chain, I/O errors, and callback errors are returned.
+// A workspace without runtime.sqlite is an empty stream. A broken hash chain,
+// a non-contiguous journal, read errors, and callback errors are returned.
 func StreamValidatedRunEvents(ctx context.Context, workspace string, visit func(RunEvent) error) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -30,45 +28,60 @@ func StreamValidatedRunEvents(ctx context.Context, workspace string, visit func(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	path := filepath.Join(workspace, logsDir, eventStoreFile)
-	f, err := os.Open(path)
+	store, err := runtimestore.OpenReadOnly(ctx, workspace)
+	if errors.Is(err, runtimestore.ErrNotFound) {
+		return nil
+	}
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return fmt.Errorf("open event store: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer func() { _ = store.Close() }()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	rows, err := store.DB().QueryContext(ctx, `SELECT `+eventColumns+` FROM events ORDER BY sequence`)
+	if err != nil {
+		return fmt.Errorf("read events: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
 	var chainVerifier eventchain.Verifier
-	for scanner.Scan() {
+	for rows.Next() {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		line := bytes.TrimSpace(scanner.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		var event RunEvent
-		if err := json.Unmarshal(line, &event); err != nil {
+		sequence, event, err := scanEventRow(rows)
+		if err != nil {
 			return fmt.Errorf("decode event %d: %w", chainVerifier.Sequence()+1, err)
 		}
-		if err := chainVerifier.Verify(eventchain.Entry{
-			ID: event.ID, PreviousID: event.PreviousID, Type: event.Type, Timestamp: event.Timestamp,
-			Payload: event.Payload, PreviousHash: event.PreviousHash, Hash: event.Hash,
-		}); err != nil {
+		if sequence != chainVerifier.Sequence()+1 {
+			return fmt.Errorf("event journal is not contiguous: found sequence %d after %d", sequence, chainVerifier.Sequence())
+		}
+		if err := chainVerifier.Verify(eventChainEntry(event)); err != nil {
 			return err
 		}
-
 		if err := visit(event); err != nil {
 			return fmt.Errorf("visit event %d (%s): %w", chainVerifier.Sequence(), event.ID, err)
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("scan event store: %w", err)
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read events: %w", err)
 	}
 	return nil
+}
+
+// readValidatedEventJournal strictly validates workspace's whole journal,
+// including decision idempotency, without creating or changing any file. A
+// workspace without runtime.sqlite has no events.
+func readValidatedEventJournal(ctx context.Context, workspace string) ([]RunEvent, error) {
+	store, err := runtimestore.OpenReadOnly(ctx, workspace)
+	if errors.Is(err, runtimestore.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open event store read-only: %w", err)
+	}
+	defer func() { _ = store.Close() }()
+	state, err := loadFullState(ctx, store.DB(), "", "")
+	if err != nil {
+		return nil, err
+	}
+	return state.events, nil
 }

@@ -85,7 +85,7 @@ finalization.
 | Turn summary | after a turn settles, one line at the bottom from the frozen card: outcome, status counts, and up to three failed tasks by ID, contract (or description), and agent — visible even when a long answer pushes the card out of view |
 | Sidebar models | the runtime's precedence: the coordinator runs on the resolved coordinator target; a worker on its own model, else the team route, else the resolved worker default |
 | Tool activity | `TaskLogMsg` lines built from already-redacted `StatusEvent`s, sanitized again before rendering |
-| Restored history | `session.json` entries loaded by the normal resume path, marked `restored` |
+| Restored history | session checkpoint entries loaded by the normal resume path, marked `restored` |
 | `/save` export | the coordinator's locked session snapshot (`Coordinator.SessionData()`), so saving during a running turn never reads the session the turn is writing |
 
 The view never writes task state, never synthesizes "verified", and never runs

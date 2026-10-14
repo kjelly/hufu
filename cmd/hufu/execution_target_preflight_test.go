@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -149,8 +148,8 @@ func TestPreflightExecutionTargetsRejectsUnsupportedLegacyAgentTypeBeforeLifecyc
 	if lookups != 0 {
 		t.Fatalf("unsupported legacy agent type reached executable lookup %d times", lookups)
 	}
-	if _, statErr := os.Stat(filepath.Join(workspace, "session.json")); !os.IsNotExist(statErr) {
-		t.Fatalf("preflight created session.json at %q: %v", workspace, statErr)
+	if len(runtimeStoreFiles(t, workspace)) != 0 {
+		t.Fatalf("preflight created runtime state at %q", workspace)
 	}
 }
 
@@ -432,8 +431,8 @@ func TestPreflightRestoredEventLineageRejectsCrashWindowBeforeCheckpointMutation
 	if session.Config.WorkerModel != "local/current" {
 		t.Fatalf("session worker target mutated to %q", session.Config.WorkerModel)
 	}
-	if _, err := os.Stat(filepath.Join(workspace, "session.json")); !os.IsNotExist(err) {
-		t.Fatalf("crash-window preflight created session checkpoint: %v", err)
+	if _, exists, err := team.LoadSessionReadOnly(workspace); err != nil || exists {
+		t.Fatalf("crash-window preflight created session checkpoint: exists=%v err=%v", exists, err)
 	}
 }
 
@@ -479,8 +478,8 @@ func TestPreflightRestoredEventLineageMigratesLegacyCodexBeforeCheckpointMutatio
 	if session.Config.WorkerModel != "local/current" {
 		t.Fatalf("session worker target mutated to %q", session.Config.WorkerModel)
 	}
-	if _, err := os.Stat(filepath.Join(workspace, "session.json")); !os.IsNotExist(err) {
-		t.Fatalf("legacy crash-window preflight created session checkpoint: %v", err)
+	if _, exists, err := team.LoadSessionReadOnly(workspace); err != nil || exists {
+		t.Fatalf("legacy crash-window preflight created session checkpoint: exists=%v err=%v", exists, err)
 	}
 }
 
@@ -520,8 +519,8 @@ func TestPreflightRestoredEventLineageRejectsAmbiguousLegacyQualifiedModel(t *te
 	if lookups != 0 {
 		t.Fatalf("backend executable lookups = %d, want no lookup for ambiguous identity", lookups)
 	}
-	if _, err := os.Stat(filepath.Join(workspace, "session.json")); !os.IsNotExist(err) {
-		t.Fatalf("ambiguous crash-window preflight created session checkpoint: %v", err)
+	if _, exists, err := team.LoadSessionReadOnly(workspace); err != nil || exists {
+		t.Fatalf("ambiguous crash-window preflight created session checkpoint: exists=%v err=%v", exists, err)
 	}
 }
 

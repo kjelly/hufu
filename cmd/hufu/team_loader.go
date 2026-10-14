@@ -67,10 +67,10 @@ func canonicalRuntimePath(path string) string {
 }
 
 // prepareSessionLifecycle handles the newSession/resume branch:
-//   - When newSession is set, the existing session.json (if any) is
+//   - When newSession is set, the existing session checkpoint (if any) is
 //     archived, conversation history is cleared, and a fresh session
 //     is started.
-//   - When newSession is false, the existing session.json (if any) is
+//   - When newSession is false, the existing session checkpoint (if any) is
 //     loaded and resumed.
 //
 // On success, it returns the SessionData to attach to the coordinator
@@ -104,8 +104,8 @@ func prepareSessionLifecycle(session *team.TeamSession, forceFresh bool) (*team.
 	return sessionData, nil, err
 }
 
-// loadOldSessionEntries reads the previous session.json (if any) for memory
-// archiving.
+// loadOldSessionEntries reads the previous session checkpoint (if any) for
+// memory archiving.
 func loadOldSessionEntries(workspacePath string) []team.SessionEntry {
 	oldSession := team.LoadSession(workspacePath)
 	if oldSession == nil {
@@ -116,9 +116,10 @@ func loadOldSessionEntries(workspacePath string) []team.SessionEntry {
 
 // archivePreviousSession implements the newSession archive flow:
 //   - If a session.md exists, archive it directly.
-//   - Otherwise, if session.json has entries, generate a session.md
-//     from it, save, and then archive it.
-//   - Remove the leftover session.json and clear conversation history.
+//   - Otherwise, if the session checkpoint has entries, generate a
+//     session.md from it, save, and then archive it; if it has none,
+//     remove the leftover checkpoint.
+//   - Clear conversation history.
 func archivePreviousSession(session *team.TeamSession) error {
 	existingMD := team.LoadSessionMD(session.Workspace)
 	if existingMD != "" {
@@ -144,8 +145,8 @@ func archivePreviousSession(session *team.TeamSession) error {
 				stderrLog("%s Previous session archived to %s\n", doneStyle.Render("✓"), filepath.Base(archivedPath))
 			}
 		} else {
-			if err := os.Remove(filepath.Join(session.Workspace, "session.json")); err != nil && !os.IsNotExist(err) {
-				stderrLog("%s Failed to remove session file: %v\n", errStyle.Render("⚠"), err)
+			if err := team.DeleteSession(session.Workspace); err != nil {
+				stderrLog("%s Failed to remove session checkpoint: %v\n", errStyle.Render("⚠"), err)
 			}
 		}
 	}

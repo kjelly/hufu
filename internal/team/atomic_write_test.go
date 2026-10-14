@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func TestAtomicWriteFileSuccess(t *testing.T) {
@@ -75,14 +77,8 @@ func TestSweepStaleAtomicTempFiles(t *testing.T) {
 
 func TestLoadSessionCrashRecovery(t *testing.T) {
 	dir := t.TempDir()
-	// Create corrupt session file
-	target := filepath.Join(dir, sessionFile)
-	if err := os.WriteFile(target, []byte(`{"created_at":`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// Create leftover temp file
-	tmpFile := target + ".tmp.12345"
-	_ = os.WriteFile(tmpFile, []byte(`temp data`), 0o644)
+	// A truncated checkpoint is rejected rather than half-decoded.
+	putRuntimeDocument(t, dir, runtimestore.DocumentSession, []byte(`{"created_at":`))
 
 	session := LoadSession(dir)
 	if session != nil {

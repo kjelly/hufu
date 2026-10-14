@@ -10,7 +10,9 @@ Standard Operating Procedure (SOP) for investigating, diagnosing, and attributin
 ## Core Principle
 
 **Never run a blind recursive `grep` across the entire repository or `.git`.**
-Hufu stores its runtime state, task journals, audit logs, and event streams in deterministic managed state directories and standard logging structures. Follow the phases below to isolate the issue in 2–3 precise operations.
+Hufu keeps its event journal, session checkpoint, and task journal in `<state_dir>/runtime.sqlite`, and audit logs under `<state_dir>/logs/`, in deterministic managed state directories. Follow the phases below to isolate the issue in 2–3 precise operations.
+
+**Never write to `runtime.sqlite` or `context.sqlite`.** Prefer `hufu inspect ...` and `hufu debug <run_id>` bundles; query the database directly only with `sqlite3 -readonly` (SQLite may leave empty `-wal`/`-shm` files next to it, which is harmless). A state directory that still has `session.json` or `logs/event_store.jsonl` but no `runtime.sqlite` is a retired file-based workspace that current Hufu refuses to run.
 
 ---
 
@@ -43,11 +45,13 @@ Hufu stores team sessions either in the project managed state path or a local `.
   - Project slug follows `<repo-name>--<hash>` (e.g., `agent-team-cli--1d1699dc8b9e18e8`).
 - **Check active open file descriptors of the PID** (fastest way to locate active workspace):
   ```bash
-  ls -l /proc/<PID>/fd 2>/dev/null | grep -E "(session\.json|context\.sqlite|audit)"
+  ls -l /proc/<PID>/fd 2>/dev/null | grep -E "(runtime\.sqlite|context\.sqlite|audit)"
   ```
-- **Map Invocation ID to Run ID & Team**:
+- **Map Invocation ID to Run ID & Team** (read-only query of each team's event journal):
   ```bash
-  grep -m 1 "inv-<TIMESTAMP>" ~/.local/state/hufu/projects/*/*/logs/event_store.jsonl 2>/dev/null
+  for db in ~/.local/state/hufu/projects/*/teams/*/runtime.sqlite; do
+    sqlite3 -readonly "$db" "SELECT DISTINCT run_id FROM events WHERE invocation_id = 'inv-<TIMESTAMP>'" 2>/dev/null | sed "s|^|$db |"
+  done
   ```
 
 ---
@@ -82,10 +86,11 @@ tmux capture-pane -pt hufu -S -50 2>/dev/null
 
 Drill down into the state directory `<state_dir>`:
 
-### 1. Inspect Task States (`session.json`)
+### 1. Inspect Task States (session checkpoint in `runtime.sqlite`)
 ```bash
-jq -c '{workflow_state: .workflow_state, tasks: [.tasks[]? | {id: .ID, agent: .Agent, goal: .goal, status: .Status, err: .runtime_error.message}]}' <state_dir>/session.json
+sqlite3 -readonly <state_dir>/runtime.sqlite "SELECT CAST(body AS TEXT) FROM runtime_documents WHERE name = 'session'" | jq -c '{workflow_state: .workflow_state, tasks: [.tasks[]? | {id: .ID, agent: .Agent, goal: .goal, status: .Status, err: .runtime_error.message}]}'
 ```
+- The checkpoint reflects the active branch's latest run only; for an older run use `hufu inspect run <run_id>`.
 - Check `workflow_state`: `PREPARE`, `VERIFY`, `FAILED`, `DONE`.
 - Identify which task failed and read its `failure_event` and `runtime_error`.
 
@@ -97,9 +102,15 @@ jq -c 'select(.timestamp >= "<run-start-time>") | {time: .timestamp, agent: .age
 - Look for `action == "result"` with non-null `error`.
 - Check if tool execution failed (e.g., action provider error, gate error, policy violation).
 
-### 3. Inspect Lifecycle Events (`logs/event_store.jsonl`)
+### 3. Inspect Lifecycle Events (event journal in `runtime.sqlite`)
+Export the run's events with a debug bundle (redacted; written to the current directory as `hufu-debug-<run_id>.tar.gz`, never overwritten), then read its JSONL export:
 ```bash
-grep "<run_id>" <state_dir>/logs/event_store.jsonl | jq -c '{time: .timestamp, type: .type, actor: .actor, tool: .payload.tool_name, status: .payload.action_status}' | tail -n 25
+hufu debug <run_id> --workspace <state_dir>
+tar -xzOf hufu-debug-<run_id>.tar.gz logs/event_store.jsonl | jq -c '{time: .timestamp, type: .type, actor: .actor, tool: .payload.tool_name, status: .payload.action_status}' | tail -n 25
+```
+Or query the journal directly (unredacted, newest first):
+```bash
+sqlite3 -readonly <state_dir>/runtime.sqlite "SELECT timestamp, type, actor, json_extract(CAST(payload AS TEXT), '$.tool_name'), json_extract(CAST(payload AS TEXT), '$.action_status') FROM events WHERE run_id = '<run_id>' ORDER BY sequence DESC LIMIT 25"
 ```
 - Observe the state transition chain: `phase_started` → `tool_observation_failed` → `phase_failed` → `run_finished`.
 

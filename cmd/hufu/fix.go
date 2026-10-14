@@ -246,7 +246,7 @@ func buildFixPrompt(question, taskDesc string, data *fixData) (string, error) {
 	}
 	sections = appendFixPromptSection(sections, "## Short-Term Memory (stm.md)\n```\n", data.STM, "\n```\n\n", 2, 6000)
 	sections = appendFixPromptSection(sections, "## Long-Term Memory (ltm.md)\n```\n", data.LTM, "\n```\n\n", 1, 4000)
-	sections = appendFixPromptSection(sections, "## Session History (session.json)\n```\n", data.SessionJSON, "\n```\n\n", 3, 8000)
+	sections = appendFixPromptSection(sections, "## Session History (session checkpoint)\n```\n", data.SessionJSON, "\n```\n\n", 3, 8000)
 	sections = appendFixPromptSection(sections, "## Reliability Metrics\n```\n", data.Reliability, "\n```\n\n", 2, 3000)
 	sections = appendFixPromptSection(sections, "## Execution Log (execution_trace.log)\n```\n", data.SessionLog, "\n```\n\n", 3, 8000)
 	sections = appendFixPromptSection(sections, "## Session Document (chat_history.md)\n```markdown\n", data.SessionMD, "\n```\n\n", 2, 4000)

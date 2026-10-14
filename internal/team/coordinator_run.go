@@ -2246,7 +2246,7 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	c.reconcileTaskStatusProjection()
 
 	// Replay the persistent task journal (crash-safe complement to the
-	// session.json checkpoint) and start appending to it for this run.
+	// session checkpoint) and start appending to it for this run.
 	c.initTaskJournal()
 	// Settle isolated attempt worlds before any resume decision: a task
 	// whose verified changes were already applied must complete, not re-run.

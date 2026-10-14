@@ -92,8 +92,10 @@ LLM's analysis or whether an observed code fragment proves a safety property.
 Security/disagreement classification still belongs to the reviewer. No
 natural-language goal is parsed by the adapter.
 
-The adapter reads `session.json` only from the root selected by the runtime's
-`HUFU_WORKSPACE`, run ID and action invocation ID. It requires the exact
+The adapter reads the session checkpoint (the `session` document in
+`runtime.sqlite`, through Hufu's read-only `actionstate` package) only from the
+root selected by the runtime's `HUFU_WORKSPACE`, run ID and action invocation
+ID. It requires the exact
 `runtime/runs/<run>/actions/<invocation>` layout and a matching in-progress
 gate occurrence. A staging-layout change fails closed. It does not search for
 another session, modify reviewed files, execute shell, or run additional tests.

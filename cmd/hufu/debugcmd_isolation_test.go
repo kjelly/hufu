@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestDebugCmd_RunIsolation(t *testing.T) {
@@ -33,15 +35,13 @@ func TestDebugCmd_RunIsolation(t *testing.T) {
 	}
 
 	// Write canonical events for two runs
-	events := `{"run_id":"run-A","type":"run_started","payload":{"team":"dev"}}
-{"run_id":"run-A","task_id":"task-1","type":"task_started","payload":{"id":"task-1","attempt":1}}
-{"run_id":"run-B","type":"run_started","payload":{"team":"dev"}}
-{"run_id":"run-B","task_id":"task-1","type":"task_started","payload":{"id":"task-1","attempt":1}}
-{"run_id":"run-B","task_id":"task-2","type":"task_started","payload":{"id":"task-2","attempt":1}}
-`
-	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "event_store.jsonl"), []byte(events), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeEventJournal(t, workspaceDir,
+		team.RunEvent{RunID: "run-A", Type: "run_started", Payload: []byte(`{"team":"dev"}`)},
+		team.RunEvent{RunID: "run-A", TaskID: "task-1", Type: "task_started", Payload: []byte(`{"id":"task-1","attempt":1}`)},
+		team.RunEvent{RunID: "run-B", Type: "run_started", Payload: []byte(`{"team":"dev"}`)},
+		team.RunEvent{RunID: "run-B", TaskID: "task-1", Type: "task_started", Payload: []byte(`{"id":"task-1","attempt":1}`)},
+		team.RunEvent{RunID: "run-B", TaskID: "task-2", Type: "task_started", Payload: []byte(`{"id":"task-2","attempt":1}`)},
+	)
 
 	// Write transcripts for both runs
 	os.WriteFile(filepath.Join(workspaceDir, "logs", "task-output", "task-1-run-A-attempt-1.jsonl"), []byte(`transcript A`), 0644)
@@ -54,12 +54,15 @@ func TestDebugCmd_RunIsolation(t *testing.T) {
 {"task_id":"task-2", "run_id": "run-B", "typed_result": {"receipt_ids": ["call-789"]}}
 {"task_id":"task-1", "typed_result": {"receipt_ids": ["legacy"]}}
 `
-	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "task_journal.jsonl"), []byte(journal), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeTaskJournal(t, workspaceDir, journal)
 
 	// Write global files that should NOT be in run-scoped debug bundles
-	os.WriteFile(filepath.Join(workspaceDir, "session.json"), []byte(`{"version": 1}`), 0644)
+	const sessionMarker = "global-session-checkpoint"
+	checkpoint := team.NewSession()
+	checkpoint.AddEntry("user", sessionMarker)
+	if err := team.SaveSession(workspaceDir, checkpoint); err != nil {
+		t.Fatal(err)
+	}
 	os.WriteFile(filepath.Join(workspaceDir, "stm.md"), []byte(`some memory`), 0644)
 	os.WriteFile(filepath.Join(workspaceDir, "logs", "evidence_manifest.json"), []byte(`{"manifest": true}`), 0644)
 
@@ -106,11 +109,18 @@ func TestDebugCmd_RunIsolation(t *testing.T) {
 			t.Fatal(err)
 		}
 		name := hdr.Name
+		entry, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if strings.Contains(name, "run-B") || strings.Contains(name, "artB") || strings.Contains(name, "task-2") {
 			t.Errorf("bundle should not contain run-B data: %s", name)
 		}
-		if name == "session.json" || name == "stm.md" || name == "ltm.md" || name == "logs/evidence_manifest.json" {
+		if name == "stm.md" || name == "ltm.md" || name == "logs/evidence_manifest.json" {
 			t.Errorf("bundle should not contain global file: %s", name)
+		}
+		if strings.Contains(string(entry), sessionMarker) {
+			t.Errorf("bundle should not contain the global session checkpoint: %s", name)
 		}
 		if name == "runtime/receipts/run-B-context.json" {
 			t.Errorf("bundle should not contain run-B context")
@@ -119,15 +129,22 @@ func TestDebugCmd_RunIsolation(t *testing.T) {
 			foundAContext = true
 		}
 		if name == "bundle-manifest.json" {
-			b, _ := io.ReadAll(tr)
-			content := string(b)
+			content := string(entry)
 			if !strings.Contains(content, "1 unscoped legacy rows omitted") {
 				t.Errorf("manifest missing legacy row omission report, got %s", content)
 			}
 		}
+		if name == "logs/event_store.jsonl" {
+			content := string(entry)
+			if strings.Contains(content, "run-B") || strings.Contains(content, "task-2") {
+				t.Errorf("event_store.jsonl contains run-B events")
+			}
+			if !strings.Contains(content, "run-A") {
+				t.Errorf("event_store.jsonl missing run-A events")
+			}
+		}
 		if strings.Contains(name, "task_journal.jsonl") {
-			b, _ := io.ReadAll(tr)
-			content := string(b)
+			content := string(entry)
 			if strings.Contains(content, "run-B") {
 				t.Errorf("task_journal.jsonl contains run-B content")
 			}

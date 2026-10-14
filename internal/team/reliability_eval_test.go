@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func TestReliabilityScenarioCorpusCoversPhase5Faults(t *testing.T) {
@@ -72,10 +73,9 @@ func TestSaveReliabilityEvalReportIsAtomicAndDurable(t *testing.T) {
 	if err := SaveReliabilityEvalReport(workspace, report); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(workspace, logsDir, "reliability_eval.json")
-	b, err := os.ReadFile(path)
-	if err != nil || len(b) == 0 {
-		t.Fatalf("saved eval report: err=%v bytes=%d", err, len(b))
+	b, exists := getRuntimeDocument(t, workspace, runtimestore.DocumentReliabilityEval)
+	if !exists || len(b) == 0 {
+		t.Fatalf("saved eval report: exists=%v bytes=%d", exists, len(b))
 	}
 }
 
@@ -100,9 +100,9 @@ func TestPersistReliabilityEvaluationUsesProductionObservation(t *testing.T) {
 	if report.Metrics.FalseCompletionRate != 0 || report.Metrics.EvidenceCoverage != 1 {
 		t.Fatalf("production metrics = %#v", report.Metrics)
 	}
-	data, err := os.ReadFile(filepath.Join(workspace, logsDir, "reliability_eval.json"))
-	if err != nil || len(data) == 0 {
-		t.Fatalf("production report: err=%v bytes=%d", err, len(data))
+	data, exists := getRuntimeDocument(t, workspace, runtimestore.DocumentReliabilityEval)
+	if !exists || len(data) == 0 {
+		t.Fatalf("production report: exists=%v bytes=%d", exists, len(data))
 	}
 }
 
@@ -151,10 +151,7 @@ func TestReliabilityRolloutConfigurationAndStrictEnforcement(t *testing.T) {
 	if result.Outcome != RunOutcomeBlocked || result.GoalSatisfied {
 		t.Fatalf("strict result = %#v, want blocked downgrade", result)
 	}
-	data, readErr := os.ReadFile(filepath.Join(workspace, logsDir, "reliability_eval.json"))
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
+	data, _ := getRuntimeDocument(t, workspace, runtimestore.DocumentReliabilityEval)
 	var saved ReliabilityEvalReport
 	if err := json.Unmarshal(data, &saved); err != nil {
 		t.Fatal(err)
@@ -208,34 +205,21 @@ func TestTeamYAMLRolloutFlowsIntoStrictRuntime(t *testing.T) {
 
 func TestCorruptHistoricalReliabilityReportFailsClosed(t *testing.T) {
 	workspace := t.TempDir()
-	logs := filepath.Join(workspace, logsDir)
-	if err := os.MkdirAll(logs, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(logs, "reliability_eval.json")
-	if err := os.WriteFile(path, []byte("{not-json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentReliabilityEval, []byte("{not-json"))
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}}
 	_, err := c.PersistReliabilityEvaluation(&RunResult{Outcome: RunOutcomePartial})
 	if err == nil || !strings.Contains(err.Error(), "load historical reliability report") {
 		t.Fatalf("corrupt history error = %v", err)
 	}
-	data, readErr := os.ReadFile(path)
-	if readErr != nil || string(data) != "{not-json" {
-		t.Fatalf("corrupt history was overwritten: err=%v data=%q", readErr, data)
+	data, _ := getRuntimeDocument(t, workspace, runtimestore.DocumentReliabilityEval)
+	if string(data) != "{not-json" {
+		t.Fatalf("corrupt history was overwritten: data=%q", data)
 	}
 }
 
 func TestTerminalCorruptHistoricalReportDowngradesRunAndPublishesBlocked(t *testing.T) {
 	workspace := t.TempDir()
-	logs := filepath.Join(workspace, logsDir)
-	if err := os.MkdirAll(logs, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(logs, "reliability_eval.json"), []byte("{malformed"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentReliabilityEval, []byte("{malformed"))
 	c := &Coordinator{session: &TeamSession{Workspace: workspace}, sessionData: NewSession()}
 	end := c.beginExecutionRun()
 	c.SetLastRunResult(&RunResult{Outcome: RunOutcomeCompleted, GoalSatisfied: true})

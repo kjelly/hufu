@@ -37,7 +37,7 @@ func TestEventStore_BranchIDTagging(t *testing.T) {
 }
 
 // initEventStore must bind the store to the active branch recorded in
-// workspace/session_tree.json so a run after `hufu session checkout <branch>`
+// the session tree so a run after `hufu session checkout <branch>`
 // writes its events into that branch's lineage (R1).
 func TestCoordinatorInitEventStore_TagsActiveBranch(t *testing.T) {
 	tempDir := t.TempDir()

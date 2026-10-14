@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	operatorpkg "github.com/kjelly/hufu/internal/operator"
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 )
@@ -146,7 +146,7 @@ func applyWorkspaceStatusScope(status *workspaceStatus, scope operatorpkg.Resolv
 func summarizeWorkspaceSession(workspace string, session *team.SessionData) workspaceStatus {
 	status := workspaceStatus{
 		Workspace: workspace,
-		Session:   filepath.Join(workspace, "session.json"),
+		Session:   runtimestore.Path(workspace),
 		CreatedAt: session.CreatedAt,
 		UpdatedAt: session.UpdatedAt,
 		Rounds:    session.Rounds,

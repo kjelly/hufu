@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,7 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kjelly/hufu/internal/actionstate"
 	"github.com/kjelly/hufu/internal/golangruntime"
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -311,14 +314,35 @@ func TestReviewGateRejectsUnassignedRequiredCritique(t *testing.T) {
 	}
 }
 
+// writeCheckpoint stores data as the session checkpoint of the control
+// workspace at root, where the runtime keeps it.
+func writeCheckpoint(t *testing.T, root string, data []byte) {
+	t.Helper()
+	store, err := runtimestore.Open(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.PutDocument(context.Background(), runtimestore.DocumentSession, data); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readCheckpoint(t *testing.T, root string) []byte {
+	t.Helper()
+	data, err := actionstate.SessionCheckpoint(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func actionFixture(t *testing.T) (string, []string) {
 	t.Helper()
 	root := t.TempDir()
 	s := gateFixture(t)
 	s.Tasks = append(s.Tasks, task{ID: "8", ContractID: "verify-review-report", Status: "in_progress", SnapshotID: s.SnapshotID})
-	if err := os.WriteFile(filepath.Join(root, "session.json"), raw(t, s), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeCheckpoint(t, root, raw(t, s))
 	workspace := filepath.Join(root, "runtime", "runs", "run-1", "actions", "action-1")
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
 		t.Fatal(err)
@@ -353,18 +377,13 @@ func TestEmbeddedReviewGateAndTeamContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(root, "session.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readCheckpoint(t, root)
 	var current session
 	if err := json.Unmarshal(data, &current); err != nil {
 		t.Fatal(err)
 	}
 	replacePayload(t, &current.Tasks[4], func(p *payload) { p.InputReview = p.InputReview[1:] })
-	if err := os.WriteFile(filepath.Join(root, "session.json"), raw(t, current), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeCheckpoint(t, root, raw(t, current))
 	if _, err := provider.Execute(ctx, team.Action{Capability: "verify-review-report", Type: "verify_review_report", Payload: `{"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}}`}); err == nil {
 		t.Fatal("configured embedded gate accepted an incomplete report")
 	}

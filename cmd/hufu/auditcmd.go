@@ -48,8 +48,9 @@ acceptance state, and task-level provenance are all independently re-checked
 against the durable workspace.
 
 Canonical audit verification uses the EventStore hash chain, the canonical
-run_finished event, and the EvidenceManifest -- never session.json, report.md,
-or the diagnostic logs/audit/ JSONL, which are secondary projections only.`,
+run_finished event, and the EvidenceManifest -- never the session checkpoint,
+report.md, or the diagnostic logs/audit/ JSONL, which are secondary projections
+only.`,
 	Args: cobra.NoArgs,
 }
 

@@ -12,16 +12,14 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestInspectReplayMatchesEligibleSessionProjection(t *testing.T) {
 	fixture := buildRunFixture(t)
 	saveCanonicalReplaySession(t, fixture)
-	paths := []string{
-		filepath.Join(fixture.workspace, "logs", "event_store.jsonl"),
-		filepath.Join(fixture.workspace, "session.json"),
-	}
+	paths := []string{runtimestore.Path(fixture.workspace)}
 	before := readExistingFiles(t, paths)
 	envelope, err := InspectReplay(t.Context(), InspectQuery{Workspace: fixture.workspace, RunID: fixture.runID, SessionID: "session-inspect"})
 	if err != nil {
@@ -211,9 +209,7 @@ func TestInspectReplayComparesTerminalLifecycleWithoutChangingTaskStatus(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, "logs", "terminal_sessions.json"), terminalJSON, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTerminalSessions(t, workspace, terminalJSON)
 	envelope, err := InspectReplay(t.Context(), InspectQuery{Workspace: workspace, RunID: "run-terminal"})
 	if err != nil {
 		t.Fatal(err)
@@ -349,26 +345,21 @@ func TestInspectReplayReportsProjectionChangedDuringRead(t *testing.T) {
 
 func TestInspectReplayRejectsBrokenGlobalHashChain(t *testing.T) {
 	fixture := buildRunFixture(t)
-	path := filepath.Join(fixture.workspace, "logs", "event_store.jsonl")
-	data, err := os.ReadFile(path)
+	store, err := runtimestore.Open(t.Context(), fixture.workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := bytes.Split(bytes.TrimSpace(data), []byte("\n"))
-	if len(lines) < 2 {
-		t.Fatalf("event fixture has %d lines", len(lines))
+	// The payload is hashed; replacing the second event's payload breaks the
+	// chain without touching any other row.
+	result, err := store.DB().ExecContext(t.Context(), `UPDATE events SET payload = ? WHERE sequence = 2`, []byte(`{"tampered":true}`))
+	if closeErr := store.Close(); err == nil {
+		err = closeErr
 	}
-	var event team.RunEvent
-	if err := json.Unmarshal(lines[1], &event); err != nil {
-		t.Fatal(err)
-	}
-	event.Payload = json.RawMessage(`{"tampered":true}`)
-	lines[1], err = json.Marshal(event)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, append(bytes.Join(lines, []byte("\n")), '\n'), 0o600); err != nil {
-		t.Fatal(err)
+	if changed, err := result.RowsAffected(); err != nil || changed != 1 {
+		t.Fatalf("tampered %d events (err %v), want 1", changed, err)
 	}
 	_, err = InspectReplay(t.Context(), InspectQuery{Workspace: fixture.workspace, RunID: fixture.runID})
 	if !errors.Is(err, ErrIntegrity) {
@@ -386,9 +377,7 @@ func TestInspectReplayDoesNotInferTaskStatusFromTerminalProjection(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(fixture.workspace, "logs", "terminal_sessions.json"), terminalJSON, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTerminalSessions(t, fixture.workspace, terminalJSON)
 	envelope, err := InspectReplay(t.Context(), InspectQuery{Workspace: fixture.workspace, RunID: fixture.runID})
 	if err != nil {
 		t.Fatal(err)
@@ -414,6 +403,23 @@ func saveCanonicalReplaySession(t *testing.T, fixture runFixture) {
 	}
 	canonical := team.ReduceToSessionData(selected.raw[:selected.terminalIndex+1])
 	if err := team.SaveSession(fixture.workspace, canonical); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeTerminalSessions writes the terminal session projection as the
+// terminal_sessions runtime document.
+func writeTerminalSessions(t *testing.T, workspace string, data []byte) {
+	t.Helper()
+	store, err := runtimestore.Open(t.Context(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.PutDocument(t.Context(), runtimestore.DocumentTerminalSessions, data)
+	if closeErr := store.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 }

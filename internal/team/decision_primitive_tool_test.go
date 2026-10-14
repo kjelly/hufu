@@ -475,11 +475,14 @@ func TestDecisionPrimitiveJournalIdempotencyConflicts(t *testing.T) {
 	if _, err := c.EventJournal().Append(t.Context(), event); !errors.Is(err, ErrDecisionIdempotencyConflict) {
 		t.Fatalf("duplicate helper identity accepted: %v", err)
 	}
-	// A separately appended, hash-valid tail must fail the same conflict
-	// gate when the store rescans. A valid chain alone does not bind a result.
-	appendRawChainedEvent(t, filepath.Join(c.session.Workspace, logsDir, eventStoreFile), event)
-	if err := c.EventJournal().VerifyHashChain(t.Context()); !errors.Is(err, ErrDecisionIdempotencyConflict) {
-		t.Fatalf("conflicting helper replay accepted: %v", err)
+	// A separately written, hash-valid event for the same identity cannot be
+	// stored at all: the journal keeps one event per branch and key, so a
+	// valid chain alone never binds a second result.
+	if err := insertRawChainedEvent(t, c.session.Workspace, event); err == nil {
+		t.Fatal("journal stored a conflicting helper replay")
+	}
+	if err := c.EventJournal().VerifyHashChain(t.Context()); err != nil {
+		t.Fatalf("refused replay damaged the journal: %v", err)
 	}
 }
 

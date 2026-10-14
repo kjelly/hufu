@@ -2,6 +2,7 @@ package team
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -81,17 +82,11 @@ func TestRuntimeWorkflow_Integration(t *testing.T) {
 
 	c.phaseWorkflow.failLocked("", "test-component", "test-provider", "TEST", "test failure", false, PhaseStatusFailure)
 
-	// Close the event logger so we can read the file
 	if c.eventStore != nil {
 		c.eventStore.Close()
 	}
 
-	f, err := os.Open(filepath.Join(tmpDir, "logs", "event_store.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(bytes.NewReader(exportedJournal(t, tmpDir)))
 
 	startedFound := false
 	failedFound := false
@@ -136,9 +131,9 @@ func TestRuntimeWorkflow_Integration(t *testing.T) {
 	}
 
 	if !startedFound {
-		t.Errorf("phase_started event not found in event_store.jsonl")
+		t.Errorf("phase_started event not found in the event journal")
 	}
 	if !failedFound {
-		t.Errorf("phase_failed event not found in event_store.jsonl")
+		t.Errorf("phase_failed event not found in the event journal")
 	}
 }

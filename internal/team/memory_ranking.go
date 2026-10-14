@@ -271,7 +271,7 @@ func QueryHash(query string) string {
 // RetrievalIDForItem returns the retrieval ID of the most recent durable memory
 // injection manifest that bound the given context item under the exact policy
 // version and query hash being explained, or "" when none exists. The manifest
-// is the attempt-scoped attribution boundary checkpointed in session.json; spec
+// is the attempt-scoped attribution boundary recorded in the session checkpoint; spec
 // §7 HF-MEM4-005 requires explain-memory to report the retrieval ID that bound
 // the item to the prompt, and §5.1 requires that binding to be attempt-scoped.
 // Filtering by policy version and query hash prevents an explain request for

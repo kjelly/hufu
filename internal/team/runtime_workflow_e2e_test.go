@@ -2,6 +2,7 @@ package team
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/providerintrospection"
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
@@ -229,13 +231,8 @@ func TestActionTelemetryAndContextPersistence_E2E(t *testing.T) {
 		t.Fatalf("persisted runtime context paths = %#v", persistedContext)
 	}
 
-	// 2. Verify Event Store JSONL (Action telemetry order and fields)
-	f, err := os.Open(filepath.Join(tmpDir, "logs", "event_store.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
+	// 2. Verify the event journal (Action telemetry order and fields)
+	scanner := bufio.NewScanner(bytes.NewReader(exportedJournal(t, tmpDir)))
 
 	var events []map[string]interface{}
 	for scanner.Scan() {
@@ -293,5 +290,27 @@ func TestActionTelemetryAndContextPersistence_E2E(t *testing.T) {
 	}
 	if actionCompletedFound < 2 {
 		t.Errorf("expected at least 2 action_completed, got %d", actionCompletedFound)
+	}
+
+	// 3. Runtime state lives only in runtime.sqlite.
+	assertNoRetiredRuntimeFiles(t, tmpDir)
+}
+
+// assertNoRetiredRuntimeFiles fails when a run left any file the runtime
+// state used to live in before it moved into runtime.sqlite.
+func assertNoRetiredRuntimeFiles(t *testing.T, workspace string) {
+	t.Helper()
+	for _, name := range []string{
+		"session.json", "session_tree.json", "conversation_compaction_state.json", "session_history.json",
+		filepath.Join(logsDir, "event_store.jsonl"), filepath.Join(logsDir, "terminal_sessions.json"),
+		filepath.Join(logsDir, "reliability_eval.json"), filepath.Join(logsDir, "task_journal.jsonl"),
+		filepath.Join(logsDir, decisionsDir, "index.jsonl"),
+	} {
+		if _, err := os.Stat(filepath.Join(workspace, name)); !os.IsNotExist(err) {
+			t.Errorf("run left retired runtime file %s (stat err %v)", name, err)
+		}
+	}
+	if !runtimestore.Exists(workspace) {
+		t.Error("run did not create runtime.sqlite")
 	}
 }

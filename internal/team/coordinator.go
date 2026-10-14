@@ -760,7 +760,7 @@ type Coordinator struct {
 	executionEventsMu sync.RWMutex
 	executionRunID    string
 	// workflowCheckpointMu orders checkpoints' workflow_state_changed
-	// appends with their session.json writes; workflowEventFingerprint is the
+	// appends with their session checkpoint writes; workflowEventFingerprint is the
 	// last snapshot appended.
 	workflowCheckpointMu     sync.Mutex
 	workflowEventFingerprint string
@@ -1199,7 +1199,7 @@ func (c *Coordinator) SetLastRunResult(res *RunResult) {
 	}
 	if active && !confirmed {
 		// Keep an ephemeral in-memory value available to the terminal owner and
-		// defer path, but never let an unconfirmed result enter session.json.
+		// defer path, but never let an unconfirmed result enter the session checkpoint.
 		return
 	}
 	if err := c.mutateSessionData(func(sd *SessionData) error {
@@ -1870,7 +1870,7 @@ func (c *Coordinator) resetRoundState() {
 }
 
 func (c *Coordinator) resetRoundStateLocked(clearWrapUp bool) {
-	// Rounds already run must survive the reset: session.json's round count and
+	// Rounds already run must survive the reset: the session checkpoint's round count and
 	// stm snapshots previously restarted at 0 on every continue, overwriting
 	// history from earlier segments of the same session.
 	c.baseRounds += c.round
@@ -2034,7 +2034,7 @@ func (c *Coordinator) persistPendingWrapUp(reason string) {
 	checkpoint.EventDurable = err == nil
 	if err == nil {
 		// An idempotent retry returns the original durable event. Reuse its
-		// payload so session.json remains an exact projection instead of gaining
+		// payload so the session checkpoint remains an exact projection instead of gaining
 		// a later RequestedAt value that never existed in the event stream.
 		if decodeErr := json.Unmarshal(durable.Payload, &checkpoint); decodeErr != nil {
 			err = fmt.Errorf("decode durable wrap-up event: %w", decodeErr)
@@ -2515,7 +2515,7 @@ func (c *Coordinator) SetWorkflowEngine(we WorkflowEngine) {
 }
 
 // EventJournal returns the coordinator's durable event boundary. Tests may
-// inject a failing or in-memory journal without opening a JSONL file.
+// inject a failing or in-memory journal without opening runtime.sqlite.
 func (c *Coordinator) EventJournal() EventJournal {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

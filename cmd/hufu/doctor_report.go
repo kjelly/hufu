@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -16,6 +15,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/semantic"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -244,6 +244,11 @@ func collectDoctorWorkspace(ctx context.Context, report *doctorReport, workspace
 	} else {
 		report.add("workspace.writable", "", "pass", "workspace is writable")
 	}
+	if !collectDoctorRuntimeStore(ctx, report, workspace) {
+		report.add("events.integrity", "", "unknown", "event history unavailable because the runtime store cannot be read")
+		report.add("recovery.unresolved", "", "unknown", "recovery count unavailable because the runtime store cannot be read")
+		return
+	}
 	var events []team.RunEvent
 	if err := team.StreamValidatedRunEvents(ctx, workspace, func(event team.RunEvent) error {
 		events = append(events, event)
@@ -312,20 +317,42 @@ func collectDoctorWorkspace(ctx context.Context, report *doctorReport, workspace
 	}
 }
 
-func loadDoctorSessionTree(workspace string) (*team.SessionTree, error) {
-	data, err := os.ReadFile(filepath.Join(workspace, "session_tree.json"))
-	if os.IsNotExist(err) {
-		return team.NewSessionTree(), nil
+// collectDoctorRuntimeStore reports runtime.sqlite's schema without changing
+// any file. It returns false when the store exists but cannot be read, so the
+// checks that read it are skipped rather than misreported.
+func collectDoctorRuntimeStore(ctx context.Context, report *doctorReport, workspace string) bool {
+	store, err := runtimestore.OpenReadOnly(ctx, workspace)
+	switch {
+	case errors.Is(err, runtimestore.ErrNotFound):
+		report.add("runtime.store", "", "pass", "no runtime store yet; the first run creates runtime.sqlite")
+		return true
+	case errors.Is(err, runtimestore.ErrLegacyWorkspace):
+		report.add("runtime.store", "", "fail", "workspace uses the retired file-based layout; remove it with `hufu workspace delete` and start a new workspace")
+		return false
+	case err != nil:
+		report.add("runtime.store", "", "fail", "runtime.sqlite cannot be opened or has an unsupported schema")
+		return false
 	}
+	defer func() { _ = store.Close() }()
+	diagnostics, err := store.Diagnose(ctx)
+	if err != nil {
+		report.add("runtime.store", "", "fail", "runtime.sqlite could not be diagnosed")
+		return false
+	}
+	report.add("runtime.store", "", "pass", fmt.Sprintf("runtime.sqlite schema v%d", diagnostics.SchemaVersion))
+	return true
+}
+
+func loadDoctorSessionTree(workspace string) (*team.SessionTree, error) {
+	tree, exists, err := team.LoadSavedSessionTree(workspace)
 	if err != nil {
 		return nil, err
 	}
-	var tree team.SessionTree
-	if err := json.Unmarshal(data, &tree); err != nil {
-		return nil, err
+	if !exists {
+		return team.NewSessionTree(), nil
 	}
 	if tree.ActiveBranch == "" || tree.Branches[tree.ActiveBranch] == nil {
 		return nil, fmt.Errorf("active branch is absent")
 	}
-	return &tree, nil
+	return tree, nil
 }

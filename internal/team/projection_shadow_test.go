@@ -3,8 +3,6 @@ package team
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -85,15 +83,9 @@ func TestInitEventStoreMarksCorruptedHashChainForRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Corrupt the hash chain in event_store.jsonl
-	storePath := filepath.Join(workspace, logsDir, eventStoreFile)
-	data, err := os.ReadFile(storePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	corrupted := strings.Replace(string(data), `"id":"task-1"`, `"id":"task-corrupted"`, 1)
-	if err := os.WriteFile(storePath, []byte(corrupted), 0o644); err != nil {
-		t.Fatal(err)
+	// Corrupt the hash chain in the journal
+	if !tamperJournalPayload(t, workspace, `"id":"task-1"`, `"id":"task-corrupted"`) {
+		t.Fatal("the journal has no task to corrupt")
 	}
 
 	c := &Coordinator{
@@ -171,7 +163,7 @@ func TestInitEventStoreRepairsStaleCheckpointAfterCrash(t *testing.T) {
 	if err := SaveSession(workspace, initialSD); err != nil {
 		t.Fatal(err)
 	}
-	// Second event appended to event store, but crash before session.json saved
+	// Second event appended to event store, but crash before the session checkpoint is saved
 	if _, err := store.AppendPersisted(RunEvent{
 		Type: string(EventAssistantMessageAdded), Actor: "assistant",
 		Payload: []byte(`{"role":"assistant","content":"world"}`),
@@ -268,11 +260,8 @@ func TestInitEventStore_MalformedSessionTreeMarksRecoveryRequired(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	// Write malformed session_tree.json
-	treePath := filepath.Join(workspace, sessionTreeFile)
-	if err := os.WriteFile(treePath, []byte(`{ invalid json`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// Store a malformed session tree
+	storeRawSessionTree(t, workspace, "main", rawSessionBranch{id: "main", name: "main", state: `{ invalid json`})
 
 	c := &Coordinator{
 		session:     &TeamSession{Workspace: workspace},
@@ -305,15 +294,9 @@ func TestRunAndRunDirectAgent_RecoveryRequiredDeniesAdmissionAndMakesNoCalls(t *
 		t.Fatal(err)
 	}
 
-	// Corrupt event store log
-	storePath := filepath.Join(workspace, logsDir, eventStoreFile)
-	data, err := os.ReadFile(storePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	corrupted := strings.Replace(string(data), `"id":"task-1"`, `"id":"task-corrupted"`, 1)
-	if err := os.WriteFile(storePath, []byte(corrupted), 0o644); err != nil {
-		t.Fatal(err)
+	// Corrupt the journal
+	if !tamperJournalPayload(t, workspace, `"id":"task-1"`, `"id":"task-corrupted"`) {
+		t.Fatal("the journal has no task to corrupt")
 	}
 
 	c := &Coordinator{

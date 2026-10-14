@@ -3,27 +3,22 @@ package team
 import (
 	"context"
 	"encoding/json"
-	"os"
+	"errors"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func TestTerminalCleanupLegacyDefaultsAndOwnershipGuard(t *testing.T) {
 	workspace := t.TempDir()
-	path := filepath.Join(workspace, logsDir, terminalSessionsFile)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	data, err := json.Marshal([]TerminalSession{{ID: "legacy", OwnerTaskID: "task-a", State: TerminalSessionExited}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentTerminalSessions, data)
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -36,10 +31,7 @@ func TestTerminalCleanupLegacyDefaultsAndOwnershipGuard(t *testing.T) {
 		t.Fatalf("legacy cleanup defaults = %#v", sessions[0])
 	}
 	var persisted []map[string]json.RawMessage
-	data, err = os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	data, _ = getRuntimeDocument(t, workspace, runtimestore.DocumentTerminalSessions)
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		t.Fatal(err)
 	}
@@ -60,13 +52,12 @@ func TestTerminalCleanupGracefulCustodyTransferAndLeaseRevocation(t *testing.T) 
 	workspace := t.TempDir()
 	var events []string
 	var gracefulDurable bool
-	sessionPath := filepath.Join(workspace, logsDir, terminalSessionsFile)
 	manager, err := NewTerminalSessionManager(workspace, func(eventType, _ string, _ map[string]interface{}) {
 		events = append(events, eventType)
 		if eventType == string(TerminalCleanupGracefulEvent) {
-			data, readErr := os.ReadFile(sessionPath)
+			data, exists := getRuntimeDocument(t, workspace, runtimestore.DocumentTerminalSessions)
 			var persisted []TerminalSession
-			if readErr == nil && json.Unmarshal(data, &persisted) == nil && len(persisted) == 1 {
+			if exists && json.Unmarshal(data, &persisted) == nil && len(persisted) == 1 {
 				gracefulDurable = persisted[0].CleanupState == TerminalCleanupGraceful
 			}
 		}
@@ -198,12 +189,8 @@ func TestTerminalCleanupForcedStatePersistenceFailureStopsEscalation(t *testing.
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	badPath := filepath.Join(workspace, "persist-failure-is-a-directory")
-	if err := os.Mkdir(badPath, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	manager.mu.Lock()
-	manager.path = badPath
+	manager.persistDocument = func([]byte) error { return errors.New("injected persistence failure") }
 	manager.mu.Unlock()
 	if err := <-cleanupDone; err == nil || !strings.Contains(err.Error(), "persist forced terminal cleanup state") {
 		t.Fatalf("forced persistence failure = %v", err)
@@ -212,7 +199,7 @@ func TestTerminalCleanupForcedStatePersistenceFailureStopsEscalation(t *testing.
 		t.Fatal("cleanup escalated to SIGKILL despite forced-state persistence failure")
 	}
 	manager.mu.Lock()
-	manager.path = filepath.Join(workspace, logsDir, terminalSessionsFile)
+	manager.persistDocument = nil
 	manager.mu.Unlock()
 	results, err := manager.CleanupTaskTerminals(context.Background(), TerminalCleanupRequest{
 		OwnerTaskID: "task-persist-failure", Reason: TerminalCleanupTaskFailed,
@@ -302,11 +289,8 @@ func TestTerminalCleanupActiveRoundAndIdentityMismatchAreFailClosed(t *testing.T
 		t.Fatal(err)
 	}
 	identity.StartTime++
-	path := filepath.Join(workspace, logsDir, terminalSessionsFile)
 	data, _ := json.Marshal([]TerminalSession{{ID: "unknown", RunID: "run", OwnerTaskID: "task-unknown", State: TerminalSessionUnknown, PID: cmd.Process.Pid, ProcessIdentity: identity}})
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentTerminalSessions, data)
 	restored, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
 		t.Fatal(err)

@@ -512,10 +512,7 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 		}
 		return nil
 	case inspectpkg.StorageData:
-		_, err := fmt.Fprintf(writer, "Page count: %d\nFreelist count: %d\nPage size: %d\nJournal mode: %s\nWAL autocheckpoint: %d\nSchema version: %d\nDatabase bytes: %d\nWAL bytes: %d\nFTS rows: %d\nContext rows: %d\n",
-			data.PageCount, data.FreelistCount, data.PageSize, data.JournalMode, data.WALAutoCheckpoint,
-			data.SchemaVersion, data.DatabaseBytes, data.WALBytes, data.FTSRows, data.ContextRows)
-		return err
+		return renderStorageText(writer, data)
 	case inspectpkg.ReplayData:
 		if _, err := fmt.Fprintf(writer, "Run: %s\nBranch: %s\nEvent chain: %s\nOverall: %s\n", data.RunID, envelope.Query.BranchID, data.EventChain, data.OverallStatus); err != nil {
 			return err
@@ -687,4 +684,19 @@ func recoveryReasonSuffix(recovery *inspectpkg.AttemptRecoveryData) string {
 		return fmt.Sprintf(" (vs attempt %d)", recovery.PreviousAttempt)
 	}
 	return ""
+}
+
+// renderStorageText renders context.sqlite's facts, then runtime.sqlite's.
+func renderStorageText(writer io.Writer, data inspectpkg.StorageData) error {
+	_, err := fmt.Fprintf(writer, "Page count: %d\nFreelist count: %d\nPage size: %d\nJournal mode: %s\nWAL autocheckpoint: %d\nSchema version: %d\nDatabase bytes: %d\nWAL bytes: %d\nFTS rows: %d\nContext rows: %d\n",
+		data.PageCount, data.FreelistCount, data.PageSize, data.JournalMode, data.WALAutoCheckpoint,
+		data.SchemaVersion, data.DatabaseBytes, data.WALBytes, data.FTSRows, data.ContextRows)
+	if err != nil || data.Runtime == nil {
+		return err
+	}
+	runtime := data.Runtime
+	_, err = fmt.Fprintf(writer, "\nRuntime store (runtime.sqlite)\nSchema version: %d\nJournal mode: %s\nPage count: %d\nFreelist count: %d\nDatabase bytes: %d\nWAL bytes: %d\nEvents: %d\nEvent rewrites: %d\nDocuments: %d\nSession branches: %d\nTask journal rows: %d\nDecision index rows: %d\n",
+		runtime.SchemaVersion, runtime.JournalMode, runtime.PageCount, runtime.FreelistCount, runtime.DatabaseBytes, runtime.WALBytes,
+		runtime.Events, runtime.EventRewrites, runtime.Documents, runtime.SessionBranches, runtime.TaskJournalRows, runtime.DecisionIndexRows)
+	return err
 }

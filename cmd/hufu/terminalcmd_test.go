@@ -3,12 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
+	"maps"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -24,10 +24,6 @@ func TestRenderTerminalScreenRendersOnlyChanges(t *testing.T) {
 
 func TestListTerminalSessionsRendersSafeCleanupDiagnostics(t *testing.T) {
 	workspace := t.TempDir()
-	logs := filepath.Join(workspace, "logs")
-	if err := os.MkdirAll(logs, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	sessions := []team.TerminalSession{{
 		ID: "session-1", OwnerTaskID: "task-1", State: team.TerminalSessionClosed,
 		Custodian: team.TerminalCustodianCoordinator, CleanupState: team.TerminalCleanupCompleted,
@@ -37,9 +33,7 @@ func TestListTerminalSessionsRendersSafeCleanupDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(logs, "terminal_sessions.json"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentTerminalSessions, data)
 	var text bytes.Buffer
 	if err := listTerminalSessions(&text, workspace, false); err != nil {
 		t.Fatal(err)
@@ -62,10 +56,6 @@ func TestListTerminalSessionsRendersSafeCleanupDiagnostics(t *testing.T) {
 
 func TestListTerminalSessionsDoesNotReconcileOrMutateActiveSession(t *testing.T) {
 	workspace := t.TempDir()
-	logs := filepath.Join(workspace, "logs")
-	if err := os.MkdirAll(logs, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	original := []team.TerminalSession{{
 		ID: "active-session", State: team.TerminalSessionRunning, Running: true,
 	}}
@@ -73,20 +63,14 @@ func TestListTerminalSessionsDoesNotReconcileOrMutateActiveSession(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(logs, "terminal_sessions.json")
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentTerminalSessions, data)
+	before := runtimeStoreFiles(t, workspace)
 	var output bytes.Buffer
 	if err := listTerminalSessions(&output, workspace, false); err != nil {
 		t.Fatal(err)
 	}
-	stored, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(stored) != string(data) {
-		t.Fatalf("terminal list mutated durable session state: got %s, want %s", stored, data)
+	if after := runtimeStoreFiles(t, workspace); !maps.EqualFunc(before, after, bytes.Equal) {
+		t.Fatal("terminal list mutated durable session state")
 	}
 	if !strings.Contains(output.String(), "active; wait for exit") {
 		t.Fatalf("active session guidance = %q", output.String())

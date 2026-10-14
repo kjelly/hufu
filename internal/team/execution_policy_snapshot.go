@@ -34,7 +34,7 @@ const (
 //
 // Environment values are represented only by a presence bit and a SHA-256
 // digest. The actual allowlisted child environment remains process-local and is
-// never written to session.json or the event store.
+// never written to the session checkpoint or the event store.
 type ExecutionPolicySnapshot struct {
 	Version            int                              `json:"version"`
 	TeamMaxConcurrent  int                              `json:"team_max_concurrent"`
@@ -940,7 +940,7 @@ func (c *Coordinator) executionPolicySnapshotMatchesCurrent(snapshot *ExecutionP
 }
 
 // canonicalExecutionPolicySnapshot reads the active branch's event-first
-// policy record. session.json is a projection only and must never supply an
+// policy record. The session checkpoint is a projection only and must never supply an
 // execution policy that the event journal cannot corroborate.
 func (c *Coordinator) canonicalExecutionPolicySnapshot() (*ExecutionPolicySnapshot, error) {
 	if c == nil || c.eventStore == nil {

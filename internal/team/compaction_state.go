@@ -1,7 +1,8 @@
 package team
 
-// Durable coordinator conversation compaction state. This file is the
-// canonical owner of compacted coordinator history; session_history.json and
+// Durable coordinator conversation compaction state, kept as the
+// conversation_compaction_state runtime document. It is the canonical owner of
+// compacted coordinator history; the session_history document and
 // compaction_history.json remain compatibility projections only.
 
 import (
@@ -11,8 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"sort"
@@ -20,11 +19,11 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
 const (
-	conversationCompactionStateFile     = "conversation_compaction_state.json"
 	conversationCompactionStateVersion  = 1
 	compactionGenerationEventType       = "coordinator_compaction_committed"
 	compactionGenerationEventKeyPrefix  = "compaction-generation:"
@@ -102,10 +101,6 @@ type CompactionReference struct {
 var errNoCanonicalCompactionState = errors.New("canonical compaction state does not exist")
 var errCompactionEventMissing = errors.New("deterministic compaction attestation is missing")
 
-func compactionStatePath(workspace string) string {
-	return filepath.Join(workspace, conversationCompactionStateFile)
-}
-
 func newCompactionState() *ConversationCompactionState {
 	return &ConversationCompactionState{
 		Version:     conversationCompactionStateVersion,
@@ -131,17 +126,22 @@ func cloneCompactionState(state *ConversationCompactionState) *ConversationCompa
 }
 
 // LoadConversationCompactionState returns exists=false only for a missing
-// canonical file. A present but invalid file is recovery-required.
+// canonical document. A present but invalid document is recovery-required.
 func LoadConversationCompactionState(workspace string) (*ConversationCompactionState, bool, error) {
 	if strings.TrimSpace(workspace) == "" {
 		return nil, false, nil
 	}
-	data, err := os.ReadFile(compactionStatePath(workspace))
+	return loadCompactionStateFrom(workspaceDocs(workspace))
+}
+
+// loadCompactionStateFrom is LoadConversationCompactionState over docs.
+func loadCompactionStateFrom(docs runtimeDocs) (*ConversationCompactionState, bool, error) {
+	data, exists, err := docs.getDocument(runtimestore.DocumentConversationCompactionState)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, false, nil
-		}
 		return nil, true, fmt.Errorf("read canonical compaction state: %w", err)
+	}
+	if !exists {
+		return nil, false, nil
 	}
 	var state ConversationCompactionState
 	if err := json.Unmarshal(data, &state); err != nil {
@@ -164,6 +164,12 @@ func saveConversationCompactionState(workspace string, state *ConversationCompac
 	if strings.TrimSpace(workspace) == "" {
 		return errNoCanonicalCompactionState
 	}
+	return saveCompactionStateTo(workspaceDocs(workspace), workspace, state, events)
+}
+
+// saveCompactionStateTo is saveConversationCompactionState writing through
+// docs. Pruning reads the saved session tree and events, never docs.
+func saveCompactionStateTo(docs runtimeDocs, workspace string, state *ConversationCompactionState, events *EventStore) error {
 	state, err := redactedCompactionState(state)
 	if err != nil {
 		return fmt.Errorf("redact canonical compaction state: %w", err)
@@ -172,11 +178,11 @@ func saveConversationCompactionState(workspace string, state *ConversationCompac
 	if err := validateCompactionState(state); err != nil {
 		return fmt.Errorf("validate canonical compaction state before save: %w", err)
 	}
-	data, err := json.MarshalIndent(state, "", "  ")
+	data, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("marshal canonical compaction state: %w", err)
 	}
-	return AtomicWriteFile(compactionStatePath(workspace), data, 0o600)
+	return docs.putDocument(runtimestore.DocumentConversationCompactionState, data)
 }
 
 // retainReachableCompactionState bounds immutable checkpoint growth without
@@ -190,14 +196,8 @@ func retainReachableCompactionState(workspace string, state *ConversationCompact
 	if state == nil || strings.TrimSpace(workspace) == "" {
 		return state
 	}
-	tree, err := LoadSessionTree(workspace)
-	if err != nil || tree == nil {
-		return state
-	}
-	if _, err := os.Stat(filepath.Join(workspace, sessionTreeFile)); err != nil {
-		return state
-	}
-	if _, err := os.Stat(filepath.Join(workspace, logsDir, eventStoreFile)); err != nil {
+	tree, exists, err := loadStoredSessionTree(workspace)
+	if err != nil || !exists {
 		return state
 	}
 	es, release, err := borrowEventStore(workspace, events)
@@ -1920,7 +1920,13 @@ func MaterializeCompactionBranch(workspace, parentBranchID, childBranchID string
 // caller that holds the workspace's event store, typically the one it forked
 // the branch from; the fork lineage is read from it instead of a rescan.
 func MaterializeCompactionBranchWithEvents(workspace string, events *EventStore, parentBranchID, childBranchID, forkEventID string) error {
-	state, exists, err := LoadConversationCompactionState(workspace)
+	return materializeCompactionBranch(workspaceDocs(workspace), workspace, events, parentBranchID, childBranchID, forkEventID)
+}
+
+// materializeCompactionBranch is MaterializeCompactionBranchWithEvents
+// reading and writing the compaction state through docs.
+func materializeCompactionBranch(docs runtimeDocs, workspace string, events *EventStore, parentBranchID, childBranchID, forkEventID string) error {
+	state, exists, err := loadCompactionStateFrom(docs)
 	if err != nil || !exists {
 		return err
 	}
@@ -1949,7 +1955,7 @@ func MaterializeCompactionBranchWithEvents(workspace string, events *EventStore,
 		// current compaction projection through BranchState or a mutable head.
 		delete(state.Branches, childBranchID)
 		delete(state.Checkpoints, childBranchID)
-		return saveConversationCompactionState(workspace, state, events)
+		return saveCompactionStateTo(docs, workspace, state, events)
 	}
 
 	ids := compactionGenerationAncestry(state, parent.GenerationID)
@@ -1984,7 +1990,7 @@ func MaterializeCompactionBranchWithEvents(workspace string, events *EventStore,
 	parent.EventID = compactionCheckpointEventID(parent)
 	state.Branches[childBranchID] = parent
 	state.Checkpoints[childBranchID] = []ConversationCompactionCheckpoint{parent}
-	return saveConversationCompactionState(workspace, state, events)
+	return saveCompactionStateTo(docs, workspace, state, events)
 }
 
 func compactionGenerationAncestry(state *ConversationCompactionState, generationID string) []string {

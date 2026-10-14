@@ -97,7 +97,7 @@ func TestRebuildSessionForBranchRestoresCriterionProgressTimestamp(t *testing.T)
 	}
 }
 
-// Checkout-time travel: rebuilding a branch must rewrite session.json from the
+// Checkout-time travel: rebuilding a branch must rewrite the session checkpoint from the
 // branch's event lineage so the next run resumes that branch's state (R3).
 func TestRebuildSessionForBranch(t *testing.T) {
 	tempDir := t.TempDir()
@@ -163,7 +163,7 @@ func TestRebuildSessionForBranch(t *testing.T) {
 	}
 }
 
-// A branch with no events and no snapshot must leave session.json untouched.
+// A branch with no events and no snapshot must leave the session checkpoint untouched.
 // A branch with no lineage owns no session state: switching to it must not
 // keep the previous branch's conversation, only workspace-level state.
 func TestRebuildSessionForBranch_EmptyBranchStartsFresh(t *testing.T) {

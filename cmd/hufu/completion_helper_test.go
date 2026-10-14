@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -48,10 +50,7 @@ func TestCompletionHelperRunTaskBranchIDsAreBoundedAndReadOnly(t *testing.T) {
 	if err = store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.ReadFile(filepath.Join(workspace, "logs", "event_store.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	before, beforeNames := runtimeStoreFiles(t, workspace), completionDirectoryNames(t, workspace)
 
 	runs := completionHelperRunIDs(workspace, "")
 	if len(runs) != 5 || runs[0] != "run-000" || runs[4] != "run-004" {
@@ -93,11 +92,7 @@ func TestCompletionHelperRunTaskBranchIDsAreBoundedAndReadOnly(t *testing.T) {
 		t.Fatalf("completionHelperBranchIDs missing feature branch: %v", branches)
 	}
 
-	after, err := os.ReadFile(filepath.Join(workspace, "logs", "event_store.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(before, after) {
+	if !maps.EqualFunc(before, runtimeStoreFiles(t, workspace), bytes.Equal) || !slices.Equal(beforeNames, completionDirectoryNames(t, workspace)) {
 		t.Fatal("completion-helper IDs mutated the event store")
 	}
 }

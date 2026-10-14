@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -56,13 +57,9 @@ func TestLoadLineageUsesOnlySelectedBranchAndPreservesGlobalOrdinals(t *testing.
 		t.Fatal(err)
 	}
 
-	eventPath := filepath.Join(workspace, "logs", "event_store.jsonl")
-	treePath := filepath.Join(workspace, "session_tree.json")
-	eventsBefore, err := os.ReadFile(eventPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	treeBefore, err := os.ReadFile(treePath)
+	// runtime.sqlite holds both the event journal and the session tree.
+	statePath := runtimestore.Path(workspace)
+	stateBefore, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,15 +82,11 @@ func TestLoadLineageUsesOnlySelectedBranchAndPreservesGlobalOrdinals(t *testing.
 		t.Fatalf("feature lineage = %#v", feature)
 	}
 
-	eventsAfter, err := os.ReadFile(eventPath)
+	stateAfter, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	treeAfter, err := os.ReadFile(treePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(eventsBefore, eventsAfter) || !bytes.Equal(treeBefore, treeAfter) {
+	if !bytes.Equal(stateBefore, stateAfter) {
 		t.Fatal("lineage loading changed persisted state")
 	}
 }

@@ -4600,7 +4600,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			// every TodoList mutation already checkpoints through onChange, and
 			// the step receipt recorded above lives in the in-memory receipt
 			// registry, which checkpoints do not persist. Checkpointing each
-			// result rewrote session.json and the session tree hundreds of times
+			// result rewrote the session checkpoint and the session tree hundreds of times
 			// per run.
 			return nil
 		},

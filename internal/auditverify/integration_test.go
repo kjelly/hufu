@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -166,10 +166,7 @@ func TestVerifyWorkspaceRunUnknownRunIsError(t *testing.T) {
 // AC-2: mutating any canonical event payload on disk makes audit FAIL.
 func TestVerifyWorkspaceRunFailsOnMutatedEventPayload(t *testing.T) {
 	fx := buildCompletedRunFixture(t)
-	path := filepath.Join(fx.workspace, "logs", "event_store.jsonl")
-	tamperLine(t, path, func(line string) string {
-		return strings.Replace(line, `"task_created"`, `"tampered_type"`, 1)
-	}, 1)
+	tamperEvent(t, fx.workspace, 2, `UPDATE events SET type = 'tampered_type' WHERE sequence = ? AND type = 'task_created'`)
 
 	result, err := VerifyWorkspaceRun(context.Background(), fx.workspace, fx.runID, VerifyOptions{})
 	if err != nil {
@@ -252,22 +249,20 @@ func TestVerifyWorkspaceRunPassesOnLegitimateFailure(t *testing.T) {
 	}
 }
 
-// tamperLine rewrites the nth line (0-indexed) of a JSONL file using fn, then
-// rewrites the whole file. It is deliberately dumb text surgery: the point is
-// to corrupt a persisted byte, not to author a new valid event.
-func tamperLine(t *testing.T, path string, fn func(string) string, n int) {
+// tamperEvent rewrites one journal row in place with query, bypassing the
+// event store the way an out-of-band edit would.
+func tamperEvent(t *testing.T, workspace string, sequence int, query string) {
 	t.Helper()
-	data, err := os.ReadFile(path)
+	store, err := runtimestore.Open(context.Background(), workspace)
 	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+		t.Fatal(err)
 	}
-	trimmed := strings.TrimSuffix(string(data), "\n")
-	lines := strings.Split(trimmed, "\n")
-	if n >= len(lines) {
-		t.Fatalf("tamperLine: line %d out of range (%d lines)", n, len(lines))
+	defer func() { _ = store.Close() }()
+	result, err := store.DB().Exec(query, sequence)
+	if err != nil {
+		t.Fatalf("tamper event %d: %v", sequence, err)
 	}
-	lines[n] = fn(lines[n])
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
-		t.Fatalf("write %s: %v", path, err)
+	if rows, _ := result.RowsAffected(); rows != 1 {
+		t.Fatalf("tamper event %d changed %d rows, want 1", sequence, rows)
 	}
 }

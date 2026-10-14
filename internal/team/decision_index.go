@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"golang.org/x/sys/unix"
 )
 
@@ -21,17 +23,16 @@ import (
 // A decision's own record lives in the run that formed it, and its events live
 // in that run's event log. Neither is reachable once the process exits, which
 // is why outcome resolution had no entry point. The index is the missing
-// addressing layer: one append-only file per workspace, listing every decision
+// addressing layer: one append-only table per workspace, listing every decision
 // any run has formed, so `hufu decision resolve` can find one later.
 //
 // It is a projection, not a source of truth. The DecisionRecord artifact and
 // the event log remain canonical; the index only says where to look and what
 // has been resolved. It is append-only for the same reason the event log is:
-// a crash mid-write costs at most the last line, never the history.
+// a crash mid-write costs at most the last row, never the history.
 
 const (
-	decisionsDir      = "decisions"
-	decisionIndexFile = "index.jsonl"
+	decisionsDir = "decisions"
 
 	// DecisionIndexSchemaVersion versions one index row.
 	DecisionIndexSchemaVersion = 2
@@ -93,7 +94,7 @@ type DecisionIndexEntry struct {
 	Outcome *DecisionOutcomeRecord `json:"outcome,omitempty"`
 
 	// IndexedAt is when this row was written, used to project the latest row
-	// per decision from the append-only file.
+	// per decision from the append-only table.
 	IndexedAt time.Time `json:"indexed_at"`
 }
 
@@ -150,9 +151,10 @@ func normalizeDecisionIndexEntry(entry DecisionIndexEntry) (DecisionIndexEntry, 
 	return entry, nil
 }
 
-// DecisionIndex is an append-only index file scoped to one workspace.
+// DecisionIndex is an append-only index of decision rows in one workspace's
+// runtime.sqlite.
 type DecisionIndex struct {
-	path          string
+	workspace     string
 	lockPath      string
 	journal       decisionJournal
 	artifactStore ArtifactStore
@@ -268,16 +270,7 @@ func (i *DecisionIndex) RebuildFromJournal(ctx context.Context, journal decision
 			rebuilt = append(rebuilt, entry)
 		}
 		sort.Slice(rebuilt, func(a, b int) bool { return rebuilt[a].DecisionID < rebuilt[b].DecisionID })
-		var data []byte
-		for _, entry := range rebuilt {
-			line, marshalErr := json.Marshal(entry)
-			if marshalErr != nil {
-				return fmt.Errorf("decision index rebuild: encoding %s: %w", entry.DecisionID, marshalErr)
-			}
-			data = append(data, line...)
-			data = append(data, '\n')
-		}
-		if err := AtomicWriteFile(i.path, data, 0o644); err != nil {
+		if err := i.replaceEntries(ctx, rebuilt); err != nil {
 			return fmt.Errorf("decision index rebuild: %w", err)
 		}
 		return nil
@@ -343,22 +336,21 @@ func (i *DecisionIndex) journalSnapshot() decisionJournal {
 	return i.journal
 }
 
-// DecisionIndexPath returns the index file's location for a workspace.
-func DecisionIndexPath(workspace string) string {
-	return filepath.Join(workspace, logsDir, decisionsDir, decisionIndexFile)
-}
-
-// OpenDecisionIndex opens (and creates) the index for a workspace.
+// OpenDecisionIndex opens the index for a workspace. Its rows live in
+// runtime.sqlite; logs/decisions/.lock serializes read-validate-append
+// sequences across processes. That lock cannot be a database transaction:
+// the sequences append events and write the session checkpoint through the
+// workspace's one shared connection.
 func OpenDecisionIndex(workspace string) (*DecisionIndex, error) {
 	if strings.TrimSpace(workspace) == "" {
 		return nil, fmt.Errorf("decision index: empty workspace")
 	}
-	path := DecisionIndexPath(workspace)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("decision index: creating %s: %w", filepath.Dir(path), err)
+	lockDir := filepath.Join(workspace, logsDir, decisionsDir)
+	if err := os.MkdirAll(lockDir, 0o755); err != nil {
+		return nil, fmt.Errorf("decision index: creating %s: %w", lockDir, err)
 	}
-	lockPath := filepath.Join(filepath.Dir(path), ".lock")
-	index := &DecisionIndex{path: path, lockPath: lockPath, mu: decisionIndexLockFor(lockPath)}
+	lockPath := filepath.Join(lockDir, ".lock")
+	index := &DecisionIndex{workspace: workspace, lockPath: lockPath, mu: decisionIndexLockFor(lockPath)}
 	if err := index.withExclusiveLock(func() error { return nil }); err != nil {
 		return nil, err
 	}
@@ -366,19 +358,18 @@ func OpenDecisionIndex(workspace string) (*DecisionIndex, error) {
 }
 
 // LoadDecisionIndexEntriesReadOnly reads the latest redacted addressing row
-// for each decision without creating the decisions directory, index, or lock
-// file. The returned rows remain a derived lookup projection; callers must
+// for each decision without creating runtime.sqlite or the lock file. The returned rows remain a derived lookup projection; callers must
 // use the canonical decision event lineage and record artifacts for truth.
 func LoadDecisionIndexEntriesReadOnly(workspace string) ([]DecisionIndexEntry, error) {
 	if strings.TrimSpace(workspace) == "" {
 		return nil, fmt.Errorf("load decision index read-only: empty workspace")
 	}
-	index := &DecisionIndex{path: DecisionIndexPath(workspace)}
+	index := &DecisionIndex{workspace: workspace}
 	return index.listFile()
 }
 
-// Path returns the index file path.
-func (i *DecisionIndex) Path() string { return i.path }
+// Path returns the database the index rows live in.
+func (i *DecisionIndex) Path() string { return runtimestore.Path(i.workspace) }
 
 // Append writes one row. Later rows for the same decision supersede earlier
 // ones on read, so an update never rewrites history in place.
@@ -404,31 +395,49 @@ func (i *DecisionIndex) Append(entry DecisionIndexEntry) error {
 	return i.withExclusiveLock(func() error { return i.appendEntryUnlocked(entry) })
 }
 
+// appendEntryUnlocked inserts one row. The commit is synchronous: the index
+// is the only way to find a decision after the process exits.
 func (i *DecisionIndex) appendEntryUnlocked(entry DecisionIndexEntry) error {
 	entry = entry.Redacted()
 	line, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("decision index: encoding entry: %w", err)
 	}
-	file, err := os.OpenFile(i.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	err = withRuntimeStore(i.workspace, func(store *runtimestore.Store) error {
+		return store.Exec(context.Background(), insertDecisionIndexSQL, entry.DecisionID, line)
+	})
 	if err != nil {
-		return fmt.Errorf("decision index: opening %s: %w", i.path, err)
-	}
-	if _, err := file.Write(append(line, '\n')); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("decision index: appending to %s: %w", i.path, err)
-	}
-	// The index is the only way to find a decision after the process exits;
-	// losing the tail of it to a page cache is not acceptable, and a Close
-	// error on a write path can still mean the bytes never landed.
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("decision index: syncing %s: %w", i.path, err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("decision index: closing %s: %w", i.path, err)
+		return fmt.Errorf("decision index: appending %s: %w", entry.DecisionID, err)
 	}
 	return nil
+}
+
+// replaceEntries swaps every row for entries in one transaction.
+func (i *DecisionIndex) replaceEntries(ctx context.Context, entries []DecisionIndexEntry) error {
+	return withRuntimeStore(i.workspace, func(store *runtimestore.Store) error {
+		return store.WithTx(ctx, func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM decision_index`); err != nil {
+				return err
+			}
+			for _, entry := range entries {
+				line, err := json.Marshal(entry)
+				if err != nil {
+					return fmt.Errorf("encoding %s: %w", entry.DecisionID, err)
+				}
+				if err := insertDecisionIndexRow(ctx, tx, entry.DecisionID, line); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	})
+}
+
+const insertDecisionIndexSQL = `INSERT INTO decision_index(decision_id, entry) VALUES(?, ?)`
+
+func insertDecisionIndexRow(ctx context.Context, q runtimestore.Queryer, decisionID string, entry []byte) error {
+	_, err := q.ExecContext(ctx, insertDecisionIndexSQL, decisionID, entry)
+	return err
 }
 
 // List projects the file into one row per decision, latest write winning,
@@ -499,7 +508,7 @@ func (i *DecisionIndex) Resolve(decisionID string, outcome DecisionOutcomeRecord
 			}
 		}
 		if !found {
-			return fmt.Errorf("decision %q is not in the index at %s", decisionID, i.path)
+			return fmt.Errorf("decision %q is not in the index at %s", decisionID, i.Path())
 		}
 		if updated.Resolved() {
 			return fmt.Errorf("decision %q was already resolved as %q at %s",

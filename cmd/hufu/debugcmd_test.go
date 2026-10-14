@@ -9,6 +9,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/runtimestore"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestDebugCmd_WorkspaceValidation(t *testing.T) {
@@ -20,14 +23,7 @@ func TestDebugCmd_WorkspaceValidation(t *testing.T) {
 
 	// 1. Create a fake workspace whose event store records a run
 	workspaceDir := "workspace"
-	if err := os.MkdirAll(filepath.Join(workspaceDir, "logs"), 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	eventsPath := filepath.Join(workspaceDir, "logs", "event_store.jsonl")
-	if err := os.WriteFile(eventsPath, []byte(`{"run_id":"run-12345","type":"run_started","payload":{"team":"dev"}}`+"\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeEventJournal(t, workspaceDir, team.RunEvent{RunID: "run-12345", Type: "run_started", Payload: []byte(`{"team":"dev"}`)})
 
 	// 2. Test missing run-id with an explicit compatibility workspace.
 	cmd := newRootCommand()
@@ -72,10 +68,11 @@ func TestDebugCmd_BundleContents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(filepath.Join(workspaceDir, "session.json"), []byte(`{}`), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "event_store.jsonl"), []byte(`{}`), 0644); err != nil {
+	writeEventJournal(t, workspaceDir, team.RunEvent{RunID: "run-bundle", Type: "run_started", Payload: []byte(`{"team":"dev"}`)})
+	const sessionMarker = "session-checkpoint-marker"
+	checkpoint := team.NewSession()
+	checkpoint.AddEntry("user", sessionMarker)
+	if err := team.SaveSession(workspaceDir, checkpoint); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", ".env"), []byte("API_TOKEN=top-secret-value"), 0644); err != nil {
@@ -131,11 +128,15 @@ func TestDebugCmd_BundleContents(t *testing.T) {
 			t.Fatalf("tar read error: %v", err)
 		}
 		foundFiles[hdr.Name] = true
+		content, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatalf("failed to read bundle entry %s: %v", hdr.Name, err)
+		}
 		if hdr.Name == "bundle-manifest.json" {
-			manifest, err = io.ReadAll(tr)
-			if err != nil {
-				t.Fatalf("failed to read bundle manifest: %v", err)
-			}
+			manifest = content
+		}
+		if strings.Contains(string(content), sessionMarker) {
+			t.Fatalf("directory debug bundle included the session checkpoint in %s", hdr.Name)
 		}
 	}
 
@@ -150,8 +151,16 @@ func TestDebugCmd_BundleContents(t *testing.T) {
 			t.Errorf("expected bundle to contain %s, but it didn't", ef)
 		}
 	}
-	if foundFiles["session.json"] || foundFiles["logs/.env"] {
+	if foundFiles["logs/.env"] {
 		t.Fatal("directory debug bundle included a sensitive or non-run-scoped file")
+	}
+	for name := range foundFiles {
+		if strings.Contains(name, runtimestore.File) {
+			t.Fatalf("directory debug bundle copied the runtime database raw: %s", name)
+		}
+	}
+	if !strings.Contains(string(manifest), "exported from runtime.sqlite") {
+		t.Fatalf("manifest did not record the event journal export: %s", manifest)
 	}
 	if foundFiles["runtime/artifacts/binary-output"] {
 		t.Fatal("directory debug bundle included binary content")
@@ -250,11 +259,10 @@ func TestDebugCmd_RunIDContents(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(workspaceDir, "logs", "task-output"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	runEvents := `{"run_id":"run-42","type":"run_started","payload":{"team":"dev"}}` + "\n" +
-		`{"run_id":"run-42","task_id":"task-7","type":"task_started","payload":{"id":"task-7","attempt":1}}` + "\n"
-	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "event_store.jsonl"), []byte(runEvents), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeEventJournal(t, workspaceDir,
+		team.RunEvent{RunID: "run-42", Type: "run_started", Payload: []byte(`{"team":"dev"}`)},
+		team.RunEvent{RunID: "run-42", TaskID: "task-7", Type: "task_started", Payload: []byte(`{"id":"task-7","attempt":1}`)},
+	)
 	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "task-output", "task-7-run-42-attempt-1.jsonl"), []byte(`transcript attempt 1`), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -339,6 +347,7 @@ func TestDebugCmd_RunIDContents(t *testing.T) {
 	}
 
 	expectedFiles := []string{
+		"logs/event_store.jsonl",
 		"logs/execution-events.jsonl",
 		"logs/task-output/task-7-run-42-attempt-1.jsonl",
 		"bundle-manifest.json",
@@ -363,6 +372,9 @@ func TestDebugCmd_RunIDContents(t *testing.T) {
 	}
 }
 
+// TestDebugCmd_RejectsJSONLSymlinks covers both symlink boundaries: a
+// runtime.sqlite that links outside the workspace is never opened, by run
+// or directory export, and a filtered JSONL symlink is omitted.
 func TestDebugCmd_RejectsJSONLSymlinks(t *testing.T) {
 	tmpDir := t.TempDir()
 	workspaceDir := filepath.Join(tmpDir, "workspace")
@@ -371,11 +383,13 @@ func TestDebugCmd_RejectsJSONLSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	externalEvents := filepath.Join(tmpDir, "external-events.jsonl")
-	if err := os.WriteFile(externalEvents, []byte(`{"run_id":"run-events-link","secret":"outside-secret"}`+"\n"), 0644); err != nil {
-		t.Fatal(err)
+	const outsideMarker = "outside-event-marker"
+	externalWorkspace := filepath.Join(tmpDir, "external")
+	writeEventJournal(t, externalWorkspace, team.RunEvent{RunID: "run-events-link", Type: "run_started", Payload: []byte(`{"note":"` + outsideMarker + `"}`)})
+	if !strings.Contains(exportedEventLog(t, externalWorkspace), outsideMarker) {
+		t.Fatal("external journal fixture does not carry the marker")
 	}
-	if err := os.Symlink(externalEvents, filepath.Join(logsDir, "event_store.jsonl")); err != nil {
+	if err := os.Symlink(runtimestore.Path(externalWorkspace), runtimestore.Path(workspaceDir)); err != nil {
 		t.Skipf("symlink test unavailable: %v", err)
 	}
 
@@ -390,20 +404,34 @@ func TestDebugCmd_RejectsJSONLSymlinks(t *testing.T) {
 
 	cmd := newRootCommand()
 	cmd.SetArgs([]string{"debug", "run-events-link", "-w", workspaceDir})
-	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "event store path contains a symlink") {
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "not a regular file") {
 		t.Fatalf("event store symlink was not rejected: %v", err)
 	}
+	cmd = newRootCommand()
+	cmd.SetArgs([]string{"debug", workspaceDir})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("directory export with a symlinked event store failed: %v", err)
+	}
+	bundle := readDebugBundle(t, filepath.Join(tmpDir, "hufu-debug-workspace.tar.gz"))
+	for name, data := range bundle {
+		if strings.Contains(string(data), outsideMarker) {
+			t.Fatalf("directory bundle followed the event store symlink into %s", name)
+		}
+	}
+	if manifest := string(bundle["bundle-manifest.json"]); !strings.Contains(manifest, "logs/event_store.jsonl") || !strings.Contains(manifest, "not a regular file") {
+		t.Fatalf("symlinked event store was not reported as omitted: %s", manifest)
+	}
 
-	if err := os.Remove(filepath.Join(logsDir, "event_store.jsonl")); err != nil {
+	if err := os.Remove(runtimestore.Path(workspaceDir)); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(logsDir, "event_store.jsonl"), []byte(`{"run_id":"run-filter","type":"run_started","payload":{"team":"dev"}}`+"\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeEventJournal(t, workspaceDir, team.RunEvent{RunID: "run-filter", Type: "run_started", Payload: []byte(`{"team":"dev"}`)})
 	externalJournal := filepath.Join(tmpDir, "external-task-journal.jsonl")
 	if err := os.WriteFile(externalJournal, []byte(`{"run_id":"run-filter","task_id":"1","secret":"outside-secret"}`+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	// The task journal lives in runtime.sqlite, so a stray file at its old
+	// path, even a symlink out of the workspace, is never read.
 	if err := os.Symlink(externalJournal, filepath.Join(logsDir, "task_journal.jsonl")); err != nil {
 		t.Skipf("symlink test unavailable: %v", err)
 	}
@@ -411,52 +439,23 @@ func TestDebugCmd_RejectsJSONLSymlinks(t *testing.T) {
 	cmd = newRootCommand()
 	cmd.SetArgs([]string{"debug", "run-filter", "-w", workspaceDir})
 	if err := cmd.Execute(); err != nil {
-		t.Fatalf("run-id export with filtered JSONL symlink failed: %v", err)
+		t.Fatalf("run-id export with a stray task journal symlink failed: %v", err)
 	}
-	f, err := os.Open(filepath.Join(tmpDir, "hufu-debug-run-filter.tar.gz"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	gr, err := gzip.NewReader(f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer gr.Close()
-	tr := tar.NewReader(gr)
-	var manifest []byte
-	for {
-		hdr, nextErr := tr.Next()
-		if nextErr == io.EOF {
-			break
-		}
-		if nextErr != nil {
-			t.Fatal(nextErr)
-		}
-		if hdr.Name == "logs/task_journal.jsonl" {
-			t.Fatal("run-id bundle followed task journal JSONL symlink")
-		}
-		if hdr.Name == "bundle-manifest.json" {
-			manifest, err = io.ReadAll(tr)
-			if err != nil {
-				t.Fatal(err)
-			}
+	runBundle := readDebugBundle(t, filepath.Join(tmpDir, "hufu-debug-run-filter.tar.gz"))
+	for name, data := range runBundle {
+		if strings.Contains(string(data), "outside-secret") {
+			t.Fatalf("run-id bundle followed the stray task journal symlink into %s", name)
 		}
 	}
-	if strings.Contains(string(manifest), "outside-secret") || !strings.Contains(string(manifest), "logs/task_journal.jsonl") || !strings.Contains(string(manifest), "symlink path") {
-		t.Fatalf("filtered JSONL symlink was not safely omitted: %s", manifest)
+	if manifest := string(runBundle["bundle-manifest.json"]); !strings.Contains(manifest, "logs/task_journal.jsonl") {
+		t.Fatalf("run-id bundle did not account for the task journal: %s", manifest)
 	}
 }
 
 func TestDebugCmd_RejectsDanglingOutputSymlink(t *testing.T) {
 	tmpDir := t.TempDir()
 	workspaceDir := filepath.Join(tmpDir, "workspace")
-	if err := os.MkdirAll(filepath.Join(workspaceDir, "logs"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "event_store.jsonl"), []byte(`{"run_id":"run-dangling","type":"run_started","payload":{"team":"dev"}}`+"\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeEventJournal(t, workspaceDir, team.RunEvent{RunID: "run-dangling", Type: "run_started", Payload: []byte(`{"team":"dev"}`)})
 
 	originalWD, err := os.Getwd()
 	if err != nil {
@@ -490,12 +489,7 @@ func TestDebugCmd_RejectsDanglingOutputSymlink(t *testing.T) {
 func TestDebugCmd_ConcurrentOutputSwapDoesNotWriteExternal(t *testing.T) {
 	tmpDir := t.TempDir()
 	workspaceDir := filepath.Join(tmpDir, "workspace")
-	if err := os.MkdirAll(filepath.Join(workspaceDir, "logs"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "event_store.jsonl"), []byte(`{"run_id":"run-swap","type":"run_started","payload":{"team":"dev"}}`+"\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeEventJournal(t, workspaceDir, team.RunEvent{RunID: "run-swap", Type: "run_started", Payload: []byte(`{"team":"dev"}`)})
 
 	originalWD, err := os.Getwd()
 	if err != nil {
@@ -566,9 +560,7 @@ func TestDebugCmd_ConcurrentSymlinkSwapDoesNotLeak(t *testing.T) {
 	if err := os.MkdirAll(metaDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "event_store.jsonl"), []byte(`{"run_id":"run-race","type":"run_started","payload":{"team":"dev"}}`+"\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
+	writeEventJournal(t, workspaceDir, team.RunEvent{RunID: "run-race", Type: "run_started", Payload: []byte(`{"team":"dev"}`)})
 	candidate := filepath.Join(dataDir, "race-artifact")
 	backup := filepath.Join(dataDir, "race-artifact.safe")
 	external := filepath.Join(tmpDir, "outside-secret.txt")
@@ -651,5 +643,36 @@ func TestDebugCmd_ConcurrentSymlinkSwapDoesNotLeak(t *testing.T) {
 		if strings.Contains(string(data), "outside-race-secret") {
 			t.Fatalf("concurrent symlink swap leaked external content in %s", hdr.Name)
 		}
+	}
+}
+
+// readDebugBundle returns every entry of the debug bundle at path by name.
+func readDebugBundle(t *testing.T, path string) map[string][]byte {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gr.Close()
+	entries := make(map[string][]byte)
+	tr := tar.NewReader(gr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return entries
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries[hdr.Name] = data
 	}
 }

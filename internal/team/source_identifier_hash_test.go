@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
@@ -97,7 +96,7 @@ func TestAcceptedPayloadHashSurvivesLaterSourceIdentifierDiscovery(t *testing.T)
 	tracked := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "review"}})[0]
 	tracked.Status, tracked.TypedResult = TaskDone, result
 	c.recordTerminalTypedTaskResult(tracked.ID)
-	data, err := os.ReadFile(taskJournalPath(workspace))
+	data, err := readTaskJournalLog(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

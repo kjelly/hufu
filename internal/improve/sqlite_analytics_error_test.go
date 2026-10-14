@@ -3,10 +3,10 @@ package improve
 import (
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -63,8 +63,8 @@ func TestAnalyticsErrorStagesMatchSpec(t *testing.T) {
 // with the load_execution boundary. A missing store is no data, not an error.
 func TestEventStoreLoadFailuresSurfaceLoadExecutionStage(t *testing.T) {
 	unreadable := func(t *testing.T, workspace string) {
-		// A directory in place of the log: opening succeeds, reading fails.
-		if err := os.MkdirAll(filepath.Join(workspace, "logs", "event_store.jsonl"), 0o755); err != nil {
+		// A directory in place of the journal database cannot be opened.
+		if err := os.MkdirAll(runtimestore.Path(workspace), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -72,15 +72,8 @@ func TestEventStoreLoadFailuresSurfaceLoadExecutionStage(t *testing.T) {
 		writeExecutionEvents(t, workspace, []team.ExecutionEvent{
 			{Timestamp: "2026-07-12T10:00:00Z", RunID: "run-1", Team: "dev", TaskID: "1", Agent: "developer", Attempt: 1, Status: "done", Model: "secret-model"},
 		})
-		path := filepath.Join(workspace, "logs", "event_store.jsonl")
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
 		// The payload is hashed; editing it must break the chain.
-		if err := os.WriteFile(path, []byte(strings.Replace(string(data), "secret-model", "secret-modex", 1)), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		tamperEventJournal(t, workspace, `UPDATE events SET payload = CAST(replace(CAST(payload AS TEXT), 'secret-model', 'secret-modex') AS BLOB) WHERE CAST(payload AS TEXT) LIKE '%secret-model%'`)
 	}
 	analyze := func(workspace string) error {
 		_, err := AnalyzeRecent(workspace, "dev", workspace, 1)

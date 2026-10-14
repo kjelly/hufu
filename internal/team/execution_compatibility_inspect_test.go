@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/executioncompat"
 	"github.com/kjelly/hufu/internal/modelprofile"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func appendCompatibilityEvent(t *testing.T, store *EventStore, event RunEvent) RunEvent {
@@ -64,6 +66,9 @@ func TestCompatibilityScannerCountsPhysicalEventsOnce(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(workspace, logsDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(workspace, logsDir, executionEventsFile), []byte(`{"version":4,"provider":"ollama"}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -90,11 +95,9 @@ func TestCompatibilityScannerCountsPhysicalEventsOnce(t *testing.T) {
 
 func TestCompatibilityScannerIsByteAndMtimeReadOnly(t *testing.T) {
 	workspace := t.TempDir()
-	path := filepath.Join(workspace, sessionFile)
-	data := []byte(`{"tasks":[{"id":"legacy","model":"qwen3:8b","subagent_provider":"hufu-local"}]}`)
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentSession, []byte(`{"tasks":[{"id":"legacy","model":"qwen3:8b","subagent_provider":"hufu-local"}]}`))
+	path := runtimestore.Path(workspace)
+	beforeNames := workspaceEntries(t, workspace)
 	before, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
@@ -118,8 +121,8 @@ func TestCompatibilityScannerIsByteAndMtimeReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(beforeBytes, afterBytes) || before.Mode() != after.Mode() || !before.ModTime().Equal(after.ModTime()) {
-		t.Fatalf("inspector mutated session.json: before=%v after=%v", before, after)
+	if !bytes.Equal(beforeBytes, afterBytes) || before.Mode() != after.Mode() || !before.ModTime().Equal(after.ModTime()) || !slices.Equal(beforeNames, workspaceEntries(t, workspace)) {
+		t.Fatalf("inspector mutated runtime.sqlite: before=%v after=%v", before, after)
 	}
 }
 
@@ -179,13 +182,8 @@ func TestCompatibilityScannerRejectsCorruptHashChain(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(workspace, logsDir, eventStoreFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, bytes.Replace(data, []byte(`"status":"pending"`), []byte(`"status":"blocked"`), 1), 0o644); err != nil {
-		t.Fatal(err)
+	if !tamperJournalPayload(t, workspace, `"status":"pending"`, `"status":"blocked"`) {
+		t.Fatal("the journal has no task status to corrupt")
 	}
 	if _, err := InspectExecutionCompatibility(context.Background(), workspace, ""); err == nil {
 		t.Fatal("corrupt event chain was accepted")

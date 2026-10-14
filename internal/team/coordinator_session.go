@@ -544,7 +544,7 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 	}
 
 	prof := c.ExecutionProfile()
-	// Legacy session files predate delegation_phase. Their durable TODO list is
+	// Legacy session checkpoints predate delegation_phase. Their durable TODO list is
 	// the only compatible evidence: any restored task means the initial batch
 	// is no longer pending; an empty/corrupt replacement session remains
 	// pending. Never infer this from STM/LTM or conversation prose.
@@ -582,7 +582,7 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 		c.hydrateConversationHistoryFromSessionData()
 	}
 	// Canonical compaction state is restored only after initEventStore has
-	// reconciled its branch-bound attestation. Until then session.json is not a
+	// reconciled its branch-bound attestation. Until then the session checkpoint is not a
 	// safe source for provider-visible coordinator history.
 }
 
@@ -766,7 +766,7 @@ func (c *Coordinator) syncConversationHistoryStateToSessionData() {
 }
 
 // saveCheckpoint commits the durable task projection to the event store and
-// reflects it into session.json. Parallel task goroutines call this
+// reflects it into the session checkpoint. Parallel task goroutines call this
 // concurrently, so the sessionData read-modify-write (Tasks, WorkflowState,
 // PhaseResults, RetryState) and the subsequent SaveSession are serialized
 // through sessionMu: mutate under the write lock, snapshot under the read
@@ -780,7 +780,7 @@ func (c *Coordinator) saveCheckpoint() {
 		return
 	}
 	// Task state is canonical in the event store.  Commit its complete replay
-	// projection before allowing session.json to advertise the newer state.
+	// projection before allowing the session checkpoint to advertise the newer state.
 	// In particular, a completed task must never reach the checkpoint unless
 	// its terminal event (including receipt and typed result) is durable.
 	tasks := c.taskTracker.TodoList().Items()
@@ -796,7 +796,7 @@ func (c *Coordinator) saveCheckpoint() {
 	// race a concurrent writer.
 	store := c.SessionStore()
 	// Like task state, the workflow snapshot is published as a canonical
-	// event before session.json may advertise it. One lock orders the
+	// event before the session checkpoint may advertise it. One lock orders the
 	// append and the write, so replay keeps the snapshot the checkpoint has.
 	c.workflowCheckpointMu.Lock()
 	defer c.workflowCheckpointMu.Unlock()

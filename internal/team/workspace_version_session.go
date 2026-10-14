@@ -277,16 +277,20 @@ func (o *WorkspaceSessionOps) finishFork(ctx context.Context, op versionstore.Op
 			return err
 		}
 	}
-	if err := MaterializeCompactionBranchWithEvents(o.Workspace, o.Events, branch.ParentID, branch.ID, branch.ForkEventID); err != nil {
-		return fmt.Errorf("failed to materialize compaction state for branch %q: %w", branch.ID, err)
-	}
-	SnapshotBranchState(o.Workspace, o.Tree, branch.ID)
-	if err := RebuildSessionForBranch(o.Workspace, o.Tree, o.Events, branch.ID); err != nil {
-		return fmt.Errorf("failed to rebuild session for new branch: %w", err)
-	}
-	o.Tree.ActiveBranch = branch.ID
-	if err := SaveSessionTree(o.Workspace, o.Tree); err != nil {
-		return fmt.Errorf("failed to save session tree: %w", err)
+	// The compaction state, session, and activation commit together.
+	err := switchSessionBranch(ctx, o.Workspace, o.Tree, func(batch *runtimeBatch) error {
+		if err := materializeCompactionBranch(batch, o.Workspace, o.Events, branch.ParentID, branch.ID, branch.ForkEventID); err != nil {
+			return fmt.Errorf("failed to materialize compaction state for branch %q: %w", branch.ID, err)
+		}
+		snapshotBranchState(batch, o.Workspace, o.Tree, branch.ID)
+		if err := rebuildSessionForBranch(batch, o.Tree, o.Events, branch.ID); err != nil {
+			return fmt.Errorf("failed to rebuild session for new branch: %w", err)
+		}
+		o.Tree.ActiveBranch = branch.ID
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	if err := o.step(ctx, op, versionstore.OperationCompleted, ""); err != nil {
 		return err
@@ -352,12 +356,16 @@ func (o *WorkspaceSessionOps) Checkout(ctx context.Context, target string) (Work
 
 // finishCheckout is the forward-completion half of a checkout (§19.2).
 func (o *WorkspaceSessionOps) finishCheckout(ctx context.Context, op versionstore.Operation, branch *SessionBranch, head versionstore.Snapshot) error {
-	o.Tree.ActiveBranch = branch.ID
-	if err := RebuildSessionForBranch(o.Workspace, o.Tree, o.Events, branch.ID); err != nil {
-		return fmt.Errorf("failed to rebuild session for branch %q: %w", branch.ID, err)
-	}
-	if err := SaveSessionTree(o.Workspace, o.Tree); err != nil {
-		return fmt.Errorf("failed to save session tree: %w", err)
+	// The session and activation commit together.
+	err := switchSessionBranch(ctx, o.Workspace, o.Tree, func(batch *runtimeBatch) error {
+		o.Tree.ActiveBranch = branch.ID
+		if err := rebuildSessionForBranch(batch, o.Tree, o.Events, branch.ID); err != nil {
+			return fmt.Errorf("failed to rebuild session for branch %q: %w", branch.ID, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	if op.ID != "" {
 		if err := o.step(ctx, op, versionstore.OperationCompleted, ""); err != nil {

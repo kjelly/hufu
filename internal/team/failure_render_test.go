@@ -11,6 +11,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func testFailureEvent() *FailureEventPayload {
@@ -58,7 +59,7 @@ func TestFailureRenderingIsSharedByWorkspaceAndJournal(t *testing.T) {
 	if err := journal.Close(); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(taskJournalPath(workspace))
+	data, err := readTaskJournalLog(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,10 +268,12 @@ func TestFailureEventAndEventStoreMaskSecrets(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	stored, err := os.ReadFile(filepath.Join(workspace, logsDir, eventStoreFile))
+	// The database file itself must not hold the secrets either.
+	database, err := os.ReadFile(runtimestore.Path(workspace))
 	if err != nil {
 		t.Fatal(err)
 	}
+	stored := append(exportedJournal(t, workspace), database...)
 	for _, secret := range []string{"command-secret-value", "path-secret-value", "stdout-secret-value", "bearer-secret-value", "hint-secret-value", "summary-secret-value", "output-secret-value"} {
 		if strings.Contains(string(stored), secret) {
 			t.Fatalf("secret %q leaked into event store: %s", secret, stored)

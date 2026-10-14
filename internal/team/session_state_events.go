@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// Branch-specific session state that session.json checkpoints and replay must
+// Branch-specific session state that the session checkpoint and replay must
 // rebuild from a branch's lineage: the runtime workflow, the acceptance
 // contract revisions, and the continuation checkpoint.
 
@@ -34,7 +34,7 @@ func newWorkflowStateChangedPayload(state Phase, results map[Phase]PhaseResult, 
 // coordinator last appended. The event carries no idempotency key: replay
 // keeps the last snapshot, so a repeated append is harmless, while a key
 // would swallow a return to an earlier state. The caller serializes calls
-// with the session.json write of the same snapshot, so the lineage and the
+// with the session checkpoint write of the same snapshot, so the lineage and the
 // checkpoint advance in the same order.
 func (c *Coordinator) emitWorkflowStateChange(payload WorkflowStateChangedPayload) error {
 	if c == nil || c.eventStore == nil || payload.State == "" {

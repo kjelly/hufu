@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"math"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -23,7 +21,7 @@ var contextFixtureKinds = []string{
 // validateFixtureBranch proves the seed alias against a checked event lineage.
 // Names are resolved to canonical branch IDs before writing a context row.
 func validateFixtureBranch(workspace string, fixture ContextItemFixture) (string, error) {
-	if _, err := os.Stat(filepath.Join(workspace, "session_tree.json")); err != nil {
+	if exists, err := team.HasSessionTree(workspace); err != nil || !exists {
 		return "", fmt.Errorf("context item %q requires an explicit session tree", fixture.ID)
 	}
 	tree, err := team.LoadSessionTree(workspace)

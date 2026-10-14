@@ -72,7 +72,7 @@
 - 📈 **Escalation on Retry** — Automatically escalate to a stronger model when retries are needed
 - 🔄 **DAG Task Scheduling** — Declare `on_failure` loops and `verify` commands for non-LLM task verification
 - 🪞 **Reflexion** — Structured failure hints inform retries with deterministic local fallback
-- 📓 **Task Journal** — Durable per-task results persisted to `<control-root>/logs/task_journal.jsonl`
+- 📓 **Task Journal** — Durable per-task results persisted to the `task_journal` table in `<control-root>/runtime.sqlite`
 - 🔎 **Read-only Inspector** — Correlate canonical run, task, evidence, context, trace, and replay metadata without executing runtime behavior
 - 🗂️ **Managed Workspaces** — Keep durable control state outside the subject repository, with explicit migration, trash, recovery, and garbage collection
 
@@ -520,7 +520,7 @@ Semantic Retrieval Runtime section. See
 | `--max-rounds` | — | `int` | `0` | Override team.yaml max-rounds (coordinator round limit) |
 | `--max-concurrent` | — | `int` | `0` | Override team.yaml max-concurrent (parallel worker dispatch) |
 | `--max-steps` | — | `int` | `0` | Override team.yaml max-steps (per-agent step budget) |
-| `--no-journal` | — | `bool` | `false` | Disable task journal (per-task results persisted to workspace/logs/task_journal.jsonl) |
+| `--no-journal` | — | `bool` | `false` | Disable task journal (per-task results persisted to the `task_journal` table in workspace/runtime.sqlite) |
 | `--unattended` | — | `bool` | `false` | No human present: ask_user returns safe defaults, --steps/--tui disabled |
 | `--max-duration` | — | `int64` | `0` | Budget: max total wall-clock seconds before forcing wrap-up |
 | `--max-total-tokens` | — | `int64` | `0` | Budget: max cumulative LLM tokens before forcing wrap-up |
@@ -1277,8 +1277,7 @@ state tracking:
 ├── status/              # Agent status files
 ├── history/             # Archived session files
 ├── logs/                # System and debug logs
-│   └── task_journal.jsonl  # Per-task durable results (journal)
-├── session.json         # Structured session data
+├── runtime.sqlite       # Event journal and runtime state (session, task journal)
 ├── chat_history.md      # Human-readable conversation transcript
 └── execution_trace.log  # Detailed execution trace log
 ```
@@ -1304,9 +1303,8 @@ eval "$(hufu workspace shell-init bash)"      # defines hcd and hproj
 | `status/` | Agent status tracking files |
 | `history/` | Archived historical session files |
 | `logs/` | System and debug logs |
-| `logs/task_journal.jsonl` | Per-task durable results (journal) |
+| `runtime.sqlite` | Hash-chained event journal, session checkpoint and branches, conversation history, task journal, and decision index (SQLite in WAL mode, with `-wal`/`-shm` sidecars) |
 | `compaction_history.json` | Structured compaction summary history |
-| `session.json` | Structured session data (machine-readable) |
 | `chat_history.md` | Human-readable conversation transcript |
 | `execution_trace.log` | Detailed execution trace log (TUI mode only) |
 
@@ -1641,7 +1639,7 @@ kill -USR1 <hufu-pid>
 
 ### Session Files
 
-- `session.json` — Structured session data (machine-readable)
+- `runtime.sqlite` — Structured session data (session checkpoint, branches, and message history) with the event journal
 - `chat_history.md` — Human-readable conversation transcript
 - `execution_trace.log` — Detailed execution trace log (TUI mode only)
 - `history/` — Archived historical session files
@@ -1812,14 +1810,14 @@ This ensures retries are never blind even without a sidecar configured.
 
 ## Task Journal
 
-Per-task results are durably persisted to `workspace/logs/task_journal.jsonl`:
+Per-task results are durably persisted to the `task_journal` table in `workspace/runtime.sqlite`:
 
 ```bash
 # Disable task journal
 go run ./cmd/hufu --no-journal "Task"
 ```
 
-Each line is a JSON object with task metadata and results, useful for audit trails and crash recovery.
+Each row is a JSON record with task metadata and results, useful for audit trails and crash recovery. `hufu debug` bundles export the journal as `logs/task_journal.jsonl`.
 
 ---
 

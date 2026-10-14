@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 // Phase 2 tests (spec.md §36 PR-05): workspace snapshot/delta.
@@ -217,9 +219,12 @@ func TestExecutionWorldSkipsIdentifiedControlWorkspaceCheckpoint(t *testing.T) {
 	if err := os.MkdirAll(controlWorkspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	checkpoint := filepath.Join(controlWorkspace, sessionFile)
-	if err := os.WriteFile(checkpoint, []byte(`{"status":"before"}`), 0o644); err != nil {
-		t.Fatal(err)
+	// Every run rewrites runtime.sqlite with its WAL.
+	checkpoints := runtimestore.Files
+	for _, name := range checkpoints {
+		if err := os.WriteFile(filepath.Join(controlWorkspace, name), []byte(`{"status":"before"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	world := NewLocalExecutionWorld()
@@ -230,12 +235,13 @@ func TestExecutionWorldSkipsIdentifiedControlWorkspaceCheckpoint(t *testing.T) {
 		t.Fatalf("Prepare: %v", err)
 	}
 	t.Cleanup(func() { _ = world.Release(context.Background(), prepared) })
-	if _, err := prepared.Baseline.fileState("workspace/hufu-code-review/session.json"); err == nil {
-		t.Fatal("identified Hufu control-workspace checkpoint was included in the provider snapshot")
-	}
-
-	if err := os.WriteFile(checkpoint, []byte(`{"status":"after"}`), 0o644); err != nil {
-		t.Fatal(err)
+	for _, name := range checkpoints {
+		if _, err := prepared.Baseline.fileState("workspace/hufu-code-review/" + name); err == nil {
+			t.Fatalf("identified Hufu control-workspace checkpoint %s was included in the provider snapshot", name)
+		}
+		if err := os.WriteFile(filepath.Join(controlWorkspace, name), []byte(`{"status":"after"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(root, "source.go"), []byte("package review\n"), 0o644); err != nil {
 		t.Fatal(err)

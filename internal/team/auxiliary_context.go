@@ -225,7 +225,7 @@ func (c *Coordinator) newAuxiliaryContextRequest(todoID string, attempt int, age
 
 func (c *Coordinator) recordAuxiliaryFallback(ctx context.Context, purpose, outcome string) error {
 	// Minimal in-memory coordinators used by deterministic helpers/tests have
-	// no durable session boundary. Do not manufacture a relative session.json;
+	// no durable session boundary. Do not manufacture a relative runtime store;
 	// real CLI coordinators always carry an explicit workspace.
 	if c == nil || c.session == nil || strings.TrimSpace(c.session.Workspace) == "" {
 		return nil

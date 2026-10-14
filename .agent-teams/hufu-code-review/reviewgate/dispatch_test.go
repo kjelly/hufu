@@ -28,7 +28,7 @@ func TestTeamAuditDispatchBindsScopeAndVerifiesProviderResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	loaded.ExecutionRouteConfigs = map[string]config.ExecutionRouteConfig{"review": {Candidates: []string{"ollama/fixture"}}}
-	coordinator, err := team.NewCoordinator(loaded, "", "", nil, nil, nil, team.RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
+	coordinator, err := team.NewCoordinator(loaded, "", "", nil, nil, team.RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestTeamPrepareDispatchExecutesImmutableWorksetAndGoVerifier(t *testing.T) 
 		t.Fatal(err)
 	}
 	loaded.ExecutionRouteConfigs = map[string]config.ExecutionRouteConfig{"review": {Candidates: []string{"ollama/fixture"}}}
-	coordinator, err := team.NewCoordinator(loaded, "", "", nil, nil, nil, team.RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
+	coordinator, err := team.NewCoordinator(loaded, "", "", nil, nil, team.RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

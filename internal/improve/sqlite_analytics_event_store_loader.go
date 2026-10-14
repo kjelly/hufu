@@ -1,6 +1,6 @@
 package improve
 
-// Streaming ingestion of the canonical event store (event_store.jsonl) into
+// Streaming ingestion of the canonical event journal (runtime.sqlite) into
 // the TEMP analytics schema. One validated pass feeds both tables: memory
 // events stream straight into memory_events, and every event feeds
 // team.ExecutionEventProjector, whose rows become execution_events. The

@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -538,11 +540,8 @@ func TestCLIAcceptanceCase5_ApproveAndApply(t *testing.T) {
 	}
 
 	// Audit event store must contain memory_promotion_applied
-	events, err := os.ReadFile(filepath.Join(workspace, "logs", "event_store.jsonl"))
-	if err != nil {
-		t.Fatalf("read event_store: %v", err)
-	}
-	if !strings.Contains(string(events), "memory_promotion_applied") {
+	events := exportedEventLog(t, workspace)
+	if !strings.Contains(events, "memory_promotion_applied") {
 		t.Fatalf("missing memory_promotion_applied event in audit log: %s", events)
 	}
 }
@@ -690,8 +689,8 @@ func TestContextPromotionNoEligibleAndDefaultOutputIsContentFree(t *testing.T) {
 
 	// A passive list is query-only: it must not deliver the pending outbox
 	// event or create the event store as a side effect of observation.
-	if _, err = os.Stat(filepath.Join(workspace, "logs", "event_store.jsonl")); !os.IsNotExist(err) {
-		t.Fatalf("read-only promotion list created or changed the event store: %v", err)
+	if files := runtimeStoreFiles(t, workspace); len(files) != 0 {
+		t.Fatalf("read-only promotion list created or changed the event store: %v", slices.Sorted(maps.Keys(files)))
 	}
 	repo, err = contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
 	if err != nil {

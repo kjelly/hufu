@@ -5,12 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/modelprofile"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func TestApplyExecutionCompatibilityMaterializesEventTaskIdempotently(t *testing.T) {
@@ -26,12 +25,7 @@ func TestApplyExecutionCompatibilityMaterializesEventTaskIdempotently(t *testing
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(workspace, logsDir, eventStoreFile)
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-
-	}
+	before := exportedJournal(t, workspace)
 	result, err := ApplyExecutionCompatibility(context.Background(), workspace, "")
 	if err != nil {
 		t.Fatalf("ApplyExecutionCompatibility: %v", err)
@@ -39,12 +33,9 @@ func TestApplyExecutionCompatibilityMaterializesEventTaskIdempotently(t *testing
 	if result.TaskMigrationEvents != 1 || !result.ProjectionRebuilt {
 		t.Fatalf("apply result = %#v", result)
 	}
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	after := exportedJournal(t, workspace)
 	if !bytes.HasPrefix(after, before) {
-		t.Fatal("materializer rewrote pre-existing event-store bytes")
+		t.Fatal("materializer rewrote pre-existing journal events")
 	}
 
 	report, err := InspectExecutionCompatibility(context.Background(), workspace, "")
@@ -78,10 +69,7 @@ func TestApplyExecutionCompatibilityMaterializesEventTaskIdempotently(t *testing
 	if second.TaskMigrationEvents != 0 || second.PolicyMigrationEvents != 0 {
 		t.Fatalf("repeat result = %#v", second)
 	}
-	afterRepeat, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	afterRepeat := exportedJournal(t, workspace)
 	if !bytes.Equal(beforeRepeat, afterRepeat) {
 		t.Fatal("repeat apply appended a duplicate migration")
 	}
@@ -93,10 +81,7 @@ func TestMigrationAppendFailureDoesNotAdvanceProjection(t *testing.T) {
 	if err := SaveSession(workspace, legacy); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.ReadFile(filepath.Join(workspace, sessionFile))
-	if err != nil {
-		t.Fatal(err)
-	}
+	before, _ := getRuntimeDocument(t, workspace, runtimestore.DocumentSession)
 	openWithAppendFailure := func(path string) (*EventStore, error) {
 		store, err := OpenEventStore(path)
 		if err != nil {
@@ -108,10 +93,7 @@ func TestMigrationAppendFailureDoesNotAdvanceProjection(t *testing.T) {
 	if _, err := applyExecutionCompatibility(t.Context(), workspace, "", openWithAppendFailure); err == nil {
 		t.Fatal("migration append failure was accepted")
 	}
-	afterFailure, err := os.ReadFile(filepath.Join(workspace, sessionFile))
-	if err != nil {
-		t.Fatal(err)
-	}
+	afterFailure, _ := getRuntimeDocument(t, workspace, runtimestore.DocumentSession)
 	if !bytes.Equal(before, afterFailure) {
 		t.Fatal("session projection advanced after migration append failure")
 	}
@@ -275,18 +257,11 @@ func TestApplyExecutionCompatibilityRefusesAmbiguousTaskWithoutAppending(t *test
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(workspace, logsDir, eventStoreFile)
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := exportedJournal(t, workspace)
 	if _, err := ApplyExecutionCompatibility(context.Background(), workspace, ""); err == nil {
 		t.Fatal("ambiguous task was materialized")
 	}
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	after := exportedJournal(t, workspace)
 	if !bytes.Equal(before, after) {
 		t.Fatal("ambiguous preflight appended an event")
 	}
@@ -315,18 +290,11 @@ func TestAmbiguousLegacyPolicySnapshotAppendsNothing(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(workspace, logsDir, eventStoreFile)
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := exportedJournal(t, workspace)
 	if _, err := ApplyExecutionCompatibility(t.Context(), workspace, ""); err == nil {
 		t.Fatal("ambiguous policy snapshot was materialized")
 	}
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	after := exportedJournal(t, workspace)
 	if !bytes.Equal(before, after) {
 		t.Fatal("ambiguous policy preflight appended an event")
 	}
@@ -426,18 +394,11 @@ func TestApplyExecutionCompatibilityRejectsProfileBindingConflictWithoutAppendin
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(workspace, logsDir, eventStoreFile)
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := exportedJournal(t, workspace)
 	if _, err := ApplyExecutionCompatibility(t.Context(), workspace, ""); err == nil {
 		t.Fatal("profile/binding conflict was materialized")
 	}
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	after := exportedJournal(t, workspace)
 	if !bytes.Equal(before, after) {
 		t.Fatal("profile/binding conflict appended an event")
 	}

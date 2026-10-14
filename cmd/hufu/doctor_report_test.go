@@ -8,17 +8,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -120,8 +123,8 @@ func TestDoctorWorkspaceEmptyHistoryAndProbeSafety(t *testing.T) {
 	if matches, err := filepath.Glob(filepath.Join(workspace, ".hufu-doctor-probe-*")); err != nil || len(matches) != 0 {
 		t.Fatalf("temporary doctor probes remain: %v, err=%v", matches, err)
 	}
-	if _, err := os.Stat(filepath.Join(workspace, "logs", "event_store.jsonl")); !os.IsNotExist(err) {
-		t.Fatalf("doctor created event log: %v", err)
+	if files := runtimeStoreFiles(t, workspace); len(files) != 0 {
+		t.Fatalf("doctor created event journal files: %v", slices.Sorted(maps.Keys(files)))
 	}
 }
 
@@ -177,18 +180,8 @@ func TestDoctorWorkspaceHistoryCheckpointAndIntegrity(t *testing.T) {
 	if check := doctorCheckByID(t, report, "recovery.unresolved"); check.Status != "warning" || check.Count == nil || *check.Count != 1 {
 		t.Fatalf("active-branch recovery = %#v", check)
 	}
-	path := filepath.Join(workspace, "logs", "event_store.jsonl")
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	corrupt := bytes.Replace(before, []byte(`"type":"task_created"`), []byte(`"type":"task_started"`), 1)
-	if bytes.Equal(before, corrupt) {
-		t.Fatal("test fixture did not change event type")
-	}
-	if err := os.WriteFile(path, corrupt, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// The type is hashed; changing the first task event's type breaks the chain.
+	tamperEventJournal(t, workspace, `UPDATE events SET type = 'task_started' WHERE sequence = (SELECT MIN(sequence) FROM events WHERE type = 'task_created')`)
 	broken := collectWorkspaceReport(t, workspace)
 	if doctorCheckByID(t, broken, "events.integrity").Status != "fail" || doctorCheckByID(t, broken, "recovery.unresolved").Status != "unknown" {
 		t.Fatalf("corrupt history report = %#v", broken)
@@ -200,16 +193,13 @@ func TestDoctorWorkspaceHistoryCheckpointAndIntegrity(t *testing.T) {
 
 func TestDoctorWorkspaceRejectsMalformedCheckpointAndBranch(t *testing.T) {
 	workspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspace, "session.json"), []byte("{"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	putRuntimeDocument(t, workspace, runtimestore.DocumentSession, []byte("{"))
 	if check := doctorCheckByID(t, collectWorkspaceReport(t, workspace), "recovery.unresolved"); check.Status != "fail" {
 		t.Fatalf("malformed checkpoint = %#v", check)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, "session.json"), []byte("{}"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workspace, "session_tree.json"), []byte(`{"active_branch":"lost","branches":{"main":{"id":"main"}}}`), 0o600); err != nil {
+	putRuntimeDocument(t, workspace, runtimestore.DocumentSession, []byte("{}"))
+	lost := &team.SessionTree{ActiveBranch: "lost", Branches: map[string]*team.SessionBranch{"main": {ID: "main"}}}
+	if err := team.SaveSessionTree(workspace, lost); err != nil {
 		t.Fatal(err)
 	}
 	if check := doctorCheckByID(t, collectWorkspaceReport(t, workspace), "recovery.unresolved"); check.Status != "fail" {
@@ -437,5 +427,43 @@ func TestDoctorContractFailureIsCollected(t *testing.T) {
 	report.finish()
 	if report.Status != "failed" || doctorCheckByID(t, report, "teams.contract").Status != "fail" {
 		t.Fatalf("team contract report = %#v", report)
+	}
+}
+
+func TestDoctorReportsTheRuntimeStore(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(t *testing.T, workspace string)
+		wantStatus  string
+		wantMessage string
+		wantEvents  string
+	}{
+		{name: "no store yet", wantStatus: "pass", wantMessage: "no runtime store yet", wantEvents: "pass"},
+		{name: "current store", setup: func(t *testing.T, workspace string) {
+			if err := team.SaveSession(workspace, team.NewSession()); err != nil {
+				t.Fatal(err)
+			}
+		}, wantStatus: "pass", wantMessage: "runtime.sqlite schema v", wantEvents: "pass"},
+		{name: "file-based workspace", setup: func(t *testing.T, workspace string) {
+			if err := os.WriteFile(filepath.Join(workspace, "session.json"), []byte(`{}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, wantStatus: "fail", wantMessage: "hufu workspace delete", wantEvents: "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			if tt.setup != nil {
+				tt.setup(t, workspace)
+			}
+			report := collectWorkspaceReport(t, workspace)
+			check := doctorCheckByID(t, report, "runtime.store")
+			if check.Status != tt.wantStatus || !strings.Contains(check.Message, tt.wantMessage) {
+				t.Fatalf("runtime.store = %#v, want %s containing %q", check, tt.wantStatus, tt.wantMessage)
+			}
+			if events := doctorCheckByID(t, report, "events.integrity"); events.Status != tt.wantEvents {
+				t.Fatalf("events.integrity = %#v, want %s", events, tt.wantEvents)
+			}
+		})
 	}
 }

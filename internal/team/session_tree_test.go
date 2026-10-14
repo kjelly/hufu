@@ -3,9 +3,10 @@ package team
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func TestSessionTree_DefaultMain(t *testing.T) {
@@ -271,13 +272,10 @@ func TestSaveSessionTreeRedactsSecretsAndUsesPrivateMode(t *testing.T) {
 	if err := SaveSessionTree(workspace, tree); err != nil {
 		t.Fatalf("SaveSessionTree: %v", err)
 	}
-	path := filepath.Join(workspace, sessionTreeFile)
+	path := runtimestore.Path(workspace)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
-	}
-	if !json.Valid(data) {
-		t.Fatalf("saved session tree is invalid JSON: %s", data)
 	}
 	if strings.Contains(string(data), "task-plan-secret") || strings.Contains(string(data), "compaction-secret") {
 		t.Fatalf("saved session tree leaked secret: %s", data)
