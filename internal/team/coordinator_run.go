@@ -22,7 +22,6 @@ import (
 	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
-	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
@@ -672,7 +671,6 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	// lifecycle, authority and token-budget checks cannot be bypassed by the
 	// former hand-assembled suffix.
 	rawSTM, rawLTM := "", ""
-	memoryStore := (*memory.MemoryStore)(nil)
 	var canonicalMemory *CanonicalContextBundle
 	var routeDecisions []ContextRouteDecision
 	canonical := false
@@ -703,10 +701,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		canonical, canonicalMemory, routeDecisions = foundCanonical, bundle, decisions
 	}
 	if !c.historicalMemoryDisabled() && !canonical {
-		rawSTM, rawLTM, memoryStore = LoadSTM(c.session.Workspace), LoadLTM(c.session.Workspace, c.session.Config.Name), c.memoryStore
+		rawSTM, rawLTM = LoadSTM(c.session.Workspace), LoadLTM(c.session.Workspace, c.session.Config.Name)
 	}
 	workerInput := buildWorkerContextInput(request, syntheticTask, agentDef, "", instructions, "", "", skillContext)
-	workerInput.RawSTM, workerInput.RawLTM, workerInput.MemoryStore, workerInput.CanonicalMemory = rawSTM, rawLTM, memoryStore, canonicalMemory
+	workerInput.RawSTM, workerInput.RawLTM, workerInput.CanonicalMemory = rawSTM, rawLTM, canonicalMemory
 	if directInvocation.AdmissionContext.IsBound() {
 		workerInput.ModelContext = directInvocation.ModelContext
 	} else {
@@ -2063,14 +2061,13 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 	if err != nil {
 		return "", err
 	}
-	memoryStore, routeDecisions := sources.store, sources.routeDecisions
+	routeDecisions := sources.routeDecisions
 	coordInput := CoordinatorContextInput{
 		Request:                contextRequest,
 		Goal:                   prompt,
 		SessionContext:         contextSummary,
 		RawSTM:                 sources.rawSTM,
 		RawLTM:                 sources.rawLTM,
-		MemoryStore:            memoryStore,
 		CanonicalMemory:        sources.canonical,
 		SidecarCompacter:       c.AgentPool().Sidecar(),
 		ModelContext:           modelSpec,
@@ -2095,16 +2092,6 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 		// model-visible project compaction; do not spend a second model call here.
 		systemPrompt += "\n\n---\n## Project Context (AGENTS.md)\n\n" + agentsMD
 		projectText.WriteString(agentsMD)
-	}
-	if memoryStore != nil && prompt != "" && allowHistoricalMemory {
-		var compactFn memory.CompactFunc
-		if sidecar := c.AgentPool().Sidecar(); sidecar != nil {
-			compactFn = sidecar.Compact
-		}
-		if memCtx, err := memory.AutoQuery(ctx, memoryStore, prompt, compactFn); err == nil && memCtx != "" {
-			systemPrompt += "\n\n---\n" + memCtx
-			memoryText.WriteString(memCtx + "\n")
-		}
 	}
 	if !isContinuation && allowHistoricalMemory && contextSummary != "" {
 		systemPrompt += "\n\n---\n## Session Context\n\n" + contextSummary

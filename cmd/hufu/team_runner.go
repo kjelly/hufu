@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/readline"
 	"github.com/kjelly/hufu/internal/team"
@@ -411,10 +410,6 @@ func buildTeamInfoForTUI(registry *team.TeamRegistry, loadedTeams map[string]*te
 		}
 		if gm := tc.session.Config.GuardModel; gm != "" {
 			teamInfo.GuardModel = gm
-		}
-		teamInfo.MemoryEnabled = opts.memoryEnabled && !opts.tempWorkspace
-		if teamInfo.MemoryEnabled {
-			teamInfo.MemoryModel = config.ResolveEmbeddingModel(opts.memoryModel)
 		}
 		teamInfo.SSHSessions = 0
 		teamInfo.PTYEnabled = opts.enablePTYTerminal

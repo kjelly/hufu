@@ -6,7 +6,6 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
-	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/sidecar"
 )
 
@@ -45,7 +44,7 @@ func TestCoordinatorSubServices_Defaults(t *testing.T) {
 		Dir:       t.TempDir(),
 		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -82,7 +81,7 @@ func TestCoordinatorSubServices_Override(t *testing.T) {
 		Dir:       t.TempDir(),
 		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
 	}
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
@@ -157,9 +156,6 @@ func (m *mockContextCompiler) ContextUsageReport() (ContextBudget, ContextUsageB
 func (m *mockContextCompiler) BuildMemorySuffix(agentRole string) string { return "" }
 func (m *mockContextCompiler) BuildTaskSTMContext() string               { return "" }
 func (m *mockContextCompiler) BuildLTMContext() string                   { return "" }
-func (m *mockContextCompiler) AutoQueryMemory(ctx context.Context, store *memory.MemoryStore, prompt string, compact memory.CompactFunc) (string, error) {
-	return "", nil
-}
 func (m *mockContextCompiler) AssembleContextWithinBudget(parts []string, budget int) string {
 	return assembleContextWithinBudget(parts, budget)
 }

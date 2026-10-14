@@ -347,7 +347,7 @@ func loadRouteTeam(t *testing.T, workspace string, routes map[string]config.Exec
 		t.Fatal(err)
 	}
 	session.ExecutionRouteConfigs = routes
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}

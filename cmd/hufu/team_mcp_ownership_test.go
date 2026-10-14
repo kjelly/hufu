@@ -215,7 +215,7 @@ func TestTeamContextCloseRunsEveryStepAndJoinsErrors(t *testing.T) {
 	probe.closeErr = errors.New("mcp close failed")
 	manager := buildTeamMCPManager(t.Context(), nil, nil)
 	session := &team.TeamSession{Dir: t.TempDir(), Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "close-order"}}
-	coordinator, err := team.NewCoordinator(session, "", "", manager, nil, nil, team.RoleModels{}, 1, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
+	coordinator, err := team.NewCoordinator(session, "", "", manager, nil, team.RoleModels{}, 1, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator error = %v", err)
 	}

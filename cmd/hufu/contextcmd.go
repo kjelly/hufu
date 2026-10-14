@@ -114,10 +114,11 @@ var contextSupersedeCmd = &cobra.Command{
 }
 
 var contextMigrateMemoryCmd = &cobra.Command{
-	Use:   "migrate-memory",
-	Short: "Import legacy MemoryRecord documents into canonical context (dry-run by default)",
-	Args:  cobra.NoArgs,
-	RunE:  runContextMigrateMemory,
+	Use:        "migrate-memory",
+	Short:      "Import legacy MemoryRecord documents into canonical context (dry-run by default)",
+	Args:       cobra.NoArgs,
+	RunE:       runContextMigrateMemory,
+	Deprecated: migrateMemoryDeprecation,
 }
 
 var contextShowCmd = &cobra.Command{

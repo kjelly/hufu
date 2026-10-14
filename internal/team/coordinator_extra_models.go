@@ -686,7 +686,6 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		delegatedTasks:                     delegatedTasksClone,
 		capabilityCache:                    capabilityCacheClone,
 		capabilityInflight:                 make(map[string]chan CapabilityResult),
-		memoryStore:                        orig.memoryStore,
 		contextRepo:                        orig.contextRepo,
 		memoryRankingPolicy:                orig.memoryRankingPolicy,
 		workerMemorySvc:                    orig.workerMemorySvc,

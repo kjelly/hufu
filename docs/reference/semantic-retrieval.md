@@ -72,9 +72,10 @@ failed and retrieval falls back to exact and lexical.
 The endpoint must be loopback unless `allow-remote-endpoint: true`, because
 memory text is sent to it. Under `--no-net` a non-loopback endpoint is refused.
 
-The legacy `embedding-model` setting is separate: it applies only to the
-legacy long-term memory store. `hufu context query`, `hufu context rebuild
---vector`, and `hufu context conflicts scan --vector` use these settings (see
+The legacy `embedding-model` setting and the `--memory-model` flag are
+deprecated and have no effect ([deprecation record](../deprecations/legacy-memory-store.md)).
+`hufu context query`, `hufu context rebuild --vector`, and
+`hufu context conflicts scan --vector` use these settings (see
 [Querying from the command line](#querying-from-the-command-line)).
 
 ## Automatic routing
@@ -281,9 +282,8 @@ hufu context ranking-replay --project <p> --team <t> --query <goal> \
   the model and its context fits the input limit, with the digest prefix and
   dimensions. An unreachable endpoint or a model that is not pulled is a
   warning, because retrieval then falls back to lexical.
-- `semantic.legacy-embedding-model`: the legacy `embedding-model`, which
-  applies only to the legacy long-term memory store and does not affect
-  semantic retrieval.
+- `semantic.legacy-embedding-model`: a warning when the deprecated
+  `embedding-model` setting is still in hufu.yaml; it has no effect.
 
 ## Known limits
 

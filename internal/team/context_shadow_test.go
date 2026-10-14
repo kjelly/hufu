@@ -10,7 +10,6 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
-	"github.com/kjelly/hufu/internal/memory"
 )
 
 // failingContextRepo lets tests force a shadow Append to fail (simulating a
@@ -110,7 +109,7 @@ func TestArchiveSessionSummaryUsesCanonicalContext(t *testing.T) {
 	}
 	defer repo.Close()
 	c := &Coordinator{contextRepo: repo, projectDir: "/project", session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team"}}}
-	handled, err := c.ArchiveSessionSummary(context.Background(), []memory.SessionSummaryEntry{{Role: "assistant", Content: strings.Repeat("use canonical archive ", 4), Timestamp: "2026-08-13T00:00:00Z"}})
+	handled, err := c.ArchiveSessionSummary(context.Background(), []SessionEntry{{Role: "assistant", Content: strings.Repeat("use canonical archive ", 4), Timestamp: "2026-08-13T00:00:00Z"}})
 	if err != nil || !handled {
 		t.Fatalf("ArchiveSessionSummary = (%t, %v)", handled, err)
 	}

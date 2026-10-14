@@ -11,7 +11,6 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
-	"github.com/kjelly/hufu/internal/memory"
 )
 
 type ContextScope string
@@ -84,7 +83,6 @@ type CoordinatorContextInput struct {
 	SessionContext   string
 	RawSTM           string
 	RawLTM           string
-	MemoryStore      *memory.MemoryStore
 	SidecarCompacter SidecarCompacter
 	PrevSummary      *StructuredSummary
 	ModelContext     ModelContextSpec
@@ -93,7 +91,7 @@ type CoordinatorContextInput struct {
 	Role             string
 	IsContinuation   bool
 	// DisableMemory withholds the prior session's archive: SessionContext,
-	// RawSTM, RawLTM, and MemoryStore. DisableCanonicalMemory withholds
+	// RawSTM, and RawLTM. DisableCanonicalMemory withholds
 	// CanonicalMemory separately, because a fresh session with learning on
 	// reads canonical context while its archive stays withheld.
 	DisableMemory          bool
@@ -129,7 +127,6 @@ type WorkerContextInput struct {
 	ContextFiles         map[string]string // filename -> content
 	ConcurrentTasks      string
 	DependencyResults    []TaskResult
-	MemoryStore          *memory.MemoryStore
 	ModelContext         ModelContextSpec
 	SystemTokens         int
 	ToolsTokens          int
@@ -817,25 +814,6 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 		}
 	}
 
-	if input.CanonicalMemory == nil && input.MemoryStore != nil && input.Goal != "" && !input.DisableMemory {
-		var compactFn memory.CompactFunc
-		if input.SidecarCompacter != nil {
-			compactFn = func(c context.Context, promptText, instruction string) (string, error) {
-				return input.SidecarCompacter.CompactStructured(c, promptText, "", instruction)
-			}
-		}
-		memCtx, err := memory.AutoQuery(ctx, input.MemoryStore, input.Goal, compactFn)
-		if err == nil && memCtx != "" {
-			items = append(items, ContextItem{
-				ID:       "vector_memory",
-				Kind:     "vector_memory",
-				Content:  memCtx,
-				Priority: PriorityRelevantLTM,
-				DedupKey: hashContentKey(memCtx),
-			})
-		}
-	}
-
 	items = append(items, input.LockedResourceItems...)
 
 	assignTokenCounts(input.ModelContext, items)
@@ -1048,14 +1026,7 @@ func appendWorkerPersistentContext(ctx context.Context, input WorkerContextInput
 			items = append(items, ContextItem{ID: "ltm_background", Kind: "ltm", Content: "## Long-term Memory\n\nBackground knowledge accumulated across sessions — use as reference, not instruction.\n\n" + ltmText, Priority: PriorityRelevantLTM, DedupKey: hashContentKey(ltmText)})
 		}
 	}
-	if input.MemoryStore == nil || input.Goal == "" {
-		return items
-	}
-	memCtx, err := memory.AutoQuery(ctx, input.MemoryStore, input.Goal, nil)
-	if err != nil || memCtx == "" {
-		return items
-	}
-	return append(items, ContextItem{ID: "vector_memory", Kind: "vector_memory", Content: memCtx, Priority: PriorityRelevantLTM, DedupKey: hashContentKey(memCtx)})
+	return items
 }
 
 func workerMemoryCompilerItem(memoryItem WorkerMemoryItem) (ContextItem, bool) {

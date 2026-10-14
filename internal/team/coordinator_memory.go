@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	contextstore "github.com/kjelly/hufu/internal/context"
-	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -16,10 +15,9 @@ func (c *Coordinator) buildMemorySuffix(agentRole string) string {
 }
 
 // ArchiveSessionSummary stores the latest substantial assistant summary as a
-// canonical, session-scoped context item. It replaces the old MemoryStore
-// archive path whenever the coordinator owns SQLite; callers can retain their
-// legacy fallback only for workspaces that have not yet initialized context.
-func (c *Coordinator) ArchiveSessionSummary(ctx context.Context, entries []memory.SessionSummaryEntry) (bool, error) {
+// canonical, session-scoped context item when the coordinator owns SQLite.
+// It reports false when no canonical context is configured.
+func (c *Coordinator) ArchiveSessionSummary(ctx context.Context, entries []SessionEntry) (bool, error) {
 	if c == nil || c.contextRepo == nil || c.session == nil {
 		return false, nil
 	}

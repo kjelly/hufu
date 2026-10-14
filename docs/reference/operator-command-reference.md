@@ -133,7 +133,7 @@ hufu chat --agent-team dev-team --ui chat
 
 ## Flag groups
 
-- **advanced:** `--provider-url`, `--provider-api-key`, `--profile`, `--var`, `--var-file`, `--memory`, `--template`
+- **advanced:** `--provider-url`, `--provider-api-key`, `--profile`, `--var`, `--var-file`, `--template`
 - **core:** `--team`, `--agent-team`, `--model`, `--worker-model`, `--coordinator-model`, `--default`, `--workspace`, `--workspace-root`
 - **display:** `--ui`, `--tui`, `--tui-compact`, `--display-mode`, `--theme`, `--display-preset`, `--no-color`, `--no-spinner`, `--no-summary`
 - **execution:** `--route`, `--plan`, `--auto-skills`, `--steps`, `--dry-run`, `--timeout`, `--graceful-wrap-up-timeout`, `--max-rounds`, `--input`, `--input-file`

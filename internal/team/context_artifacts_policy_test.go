@@ -81,7 +81,7 @@ func newContextArtifactsPolicyCoordinator(t *testing.T, workspace string, policy
 	if err := session.SetCompatibilityWorkspaceScope(subjectRoot); err != nil {
 		t.Fatal(err)
 	}
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

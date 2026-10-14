@@ -105,7 +105,7 @@ func newExecutionPolicySnapshotCoordinatorWithOptions(t *testing.T, workspace st
 	if err := session.SetCompatibilityWorkspaceScope(subjectRoot); err != nil {
 		t.Fatalf("bind execution-policy workspace scope: %v", err)
 	}
-	c, err := NewCoordinator(session, options.defaultProviderURL, options.defaultProviderAPIKey, nil, nil, options.modelList, RoleModels{
+	c, err := NewCoordinator(session, options.defaultProviderURL, options.defaultProviderAPIKey, nil, options.modelList, RoleModels{
 		Sidecar: "remote/sidecar-model", Guard: "remote/guard-model", Judge: "ollama/judge-model", PlanReviewer: "remote/plan-model",
 	}, maxConcurrent, false, false, false, nil, nil, nil, false, "", options.noNet, false, nil, false, false)
 	if err != nil {

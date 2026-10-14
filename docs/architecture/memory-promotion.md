@@ -48,7 +48,7 @@ canonical context schema 為準。
   experience_aggregates
 ```
 
-分析器只讀符合 scope 的 `ContextItem` 與同一 `policy_version` 的 `ExperienceAggregate`。舊的 `internal/memory.MemoryRecord` 必須先經既有 `hufu context migrate-memory` 匯入；Markdown LTM 不另建 parser。
+分析器只讀符合 scope 的 `ContextItem` 與同一 `policy_version` 的 `ExperienceAggregate`。舊的 `internal/memory.MemoryRecord` 必須先經既有 `hufu context migrate-memory` 匯入（此指令已棄用，見 [棄用紀錄](../deprecations/legacy-memory-store.md)）；Markdown LTM 不另建 parser。
 
 ### 2.2 CLI 放在既有 context 命令下
 

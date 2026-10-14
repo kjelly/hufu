@@ -51,8 +51,6 @@ type TeamInfo struct {
 	TeamName       string
 	DefaultModel   string
 	Agents         []AgentInfoEntry
-	MemoryEnabled  bool
-	MemoryModel    string
 	Skills         []string
 	SidecarModel   string
 	GuardModel     string

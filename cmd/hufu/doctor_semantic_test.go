@@ -84,7 +84,7 @@ func TestCollectDoctorSemantic(t *testing.T) {
 				case "semantic.encoder":
 					encoders = append(encoders, check)
 				case "semantic.legacy-embedding-model":
-					legacy = strings.Contains(check.Message, "does not affect semantic-retrieval")
+					legacy = true
 				}
 			}
 			if len(configs) != len(tc.wantConfig) {
@@ -95,8 +95,8 @@ func TestCollectDoctorSemantic(t *testing.T) {
 					t.Fatalf("config checks = %v, want %v", configs, tc.wantConfig)
 				}
 			}
-			if !legacy {
-				t.Fatalf("legacy embedding-model check missing: %+v", report.Checks)
+			if legacy {
+				t.Fatalf("legacy embedding-model check without embedding-model set: %+v", report.Checks)
 			}
 			if tc.wantEncoder == "" {
 				if len(encoders) != 0 {
@@ -106,6 +106,39 @@ func TestCollectDoctorSemantic(t *testing.T) {
 			}
 			if len(encoders) != 1 || encoders[0].Status != tc.wantEncoder || encoders[0].ReasonCode != tc.wantReason || !strings.Contains(encoders[0].Message, tc.wantMessage) {
 				t.Fatalf("encoder checks = %+v", encoders)
+			}
+		})
+	}
+}
+
+func TestDoctorWarnsAboutDeprecatedEmbeddingModel(t *testing.T) {
+	tests := []struct {
+		name           string
+		embeddingModel string
+		wantWarning    bool
+	}{
+		{name: "unset", embeddingModel: ""},
+		{name: "set", embeddingModel: "ollama/nomic-embed-text:latest", wantWarning: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			report := doctorReport{Checks: []doctorCheck{}}
+			collectDoctorSemantic(t.Context(), &report, &config.Config{EmbeddingModel: tc.embeddingModel}, nil)
+			var legacy []doctorCheck
+			for _, check := range report.Checks {
+				if check.ID == "semantic.legacy-embedding-model" {
+					legacy = append(legacy, check)
+				}
+			}
+			if !tc.wantWarning {
+				if len(legacy) != 0 {
+					t.Fatalf("unexpected legacy embedding-model check: %+v", legacy)
+				}
+				return
+			}
+			if len(legacy) != 1 || legacy[0].Status != "warning" || legacy[0].ReasonCode != "legacy_embedding_model_set" ||
+				!strings.Contains(legacy[0].Message, "deprecated and has no effect") {
+				t.Fatalf("legacy embedding-model checks = %+v", legacy)
 			}
 		})
 	}

@@ -151,7 +151,6 @@ func runCaseWithExecution(ctx context.Context, fixture *SuiteFixture, c CaseFixt
 		session,
 		server.URL+"/v1", "eval-harness-key",
 		nil, // mcpManager
-		nil, // memoryStore
 		nil, // modelList
 		// Judge is set unconditionally: a case whose team.yaml enables a
 		// decision profile needs a judge model configured or the decision

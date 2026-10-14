@@ -28,7 +28,6 @@ import (
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/mcp"
-	"github.com/kjelly/hufu/internal/memory"
 	"github.com/kjelly/hufu/internal/ollamaweb"
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/skill"
@@ -632,7 +631,6 @@ type Coordinator struct {
 	decisionStore           ArtifactStore
 	decisionIndexProjection *DecisionIndex
 	dualWriteFailures       atomic.Int64
-	memoryStore             *memory.MemoryStore
 	contextRepo             contextstore.Repository // canonical context store used by prompt assembly and maintenance
 	ownsContextRepo         bool
 	contextRepoCloseOnce    sync.Once
@@ -1379,7 +1377,6 @@ type coordinatorParams struct {
 	DefaultProviderURL    string
 	DefaultProviderAPIKey string
 	MCPManager            *mcp.MCPToolManager
-	MemoryStore           *memory.MemoryStore
 	ModelList             []config.ModelEntry
 	RoleModels            RoleModels
 	MaxConcurrent         int
@@ -1399,10 +1396,10 @@ type coordinatorParams struct {
 	OllamaWebTransport    http.RoundTripper // test-only seam; production always uses the default verified transport
 }
 
-func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, memoryStore *memory.MemoryStore, modelList []config.ModelEntry, roleModels RoleModels, maxConcurrent int, verbose bool, think bool, direnv bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool, forceMCP bool, forcedSkillNames []string, planMode bool, autoSkillsMode bool) (*Coordinator, error) {
+func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, modelList []config.ModelEntry, roleModels RoleModels, maxConcurrent int, verbose bool, think bool, direnv bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool, forceMCP bool, forcedSkillNames []string, planMode bool, autoSkillsMode bool) (*Coordinator, error) {
 	return newCoordinator(coordinatorParams{
 		Session: session, DefaultProviderURL: defaultProviderURL, DefaultProviderAPIKey: defaultProviderAPIKey,
-		MCPManager: mcpManager, MemoryStore: memoryStore, ModelList: modelList, RoleModels: roleModels,
+		MCPManager: mcpManager, ModelList: modelList, RoleModels: roleModels,
 		MaxConcurrent: maxConcurrent, Verbose: verbose, Think: think, Direnv: direnv,
 		AllowedPaths: allowedPaths, PathConsent: pathConsent, HookRegistry: hookRegistry,
 		RestrictedBash: rbashMode, RestrictedPath: restrictedPath, NoNet: noNet, ForceMCP: forceMCP,
@@ -1461,7 +1458,6 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 	defaultProviderURL := params.DefaultProviderURL
 	defaultProviderAPIKey := params.DefaultProviderAPIKey
 	mcpManager := params.MCPManager
-	memoryStore := params.MemoryStore
 	modelList := params.ModelList
 	roleModels := params.RoleModels
 	maxConcurrent := params.MaxConcurrent
@@ -1536,7 +1532,6 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 		pendingDiagnosticPackets:  make(map[string]DiagnosticPacket),
 		capabilityCache:           make(map[string]CapabilityResult),
 		capabilityInflight:        make(map[string]chan CapabilityResult),
-		memoryStore:               memoryStore,
 		modelList:                 modelList,
 		modelProfileRuntime:       NewModelProfileRuntime(pm, noNet),
 		sidecarModel:              roleModels.Sidecar,
@@ -1714,10 +1709,8 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 	)
 	c.coreTools = append(c.coreTools, c.decisionPrimitiveTools()...)
 
-	// MemoryStore is a legacy migration adapter only. The model-facing memory
-	// tools are backed by context.sqlite whenever it is available, so enabling
-	// canonical memory must not depend on creating a second record store.
-	if c.contextRepo != nil || c.memoryStore != nil {
+	// The model-facing memory tools are backed by context.sqlite.
+	if c.contextRepo != nil {
 		c.coreTools = append(c.coreTools,
 			&memorySaveLTMWrapper{coordinator: c},
 			&canonicalMemoryQueryTool{coordinator: c},

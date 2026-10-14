@@ -125,7 +125,7 @@ func newMCPActionCoordinator(t *testing.T, workspace, teamDir string, manager *m
 	if err := session.SetCompatibilityWorkspaceScope(project); err != nil {
 		t.Fatal(err)
 	}
-	c, err := NewCoordinator(session, "", "", manager, nil, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", manager, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		return nil, err
 	}

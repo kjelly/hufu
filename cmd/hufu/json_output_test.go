@@ -22,7 +22,7 @@ func TestJSONOutputMarksUnavailableMemoryEventCounts(t *testing.T) {
 	policy := agent.DefaultMemoryLearningPolicy()
 	policy.Mode = agent.MemoryLearningObserve
 	session := &team.TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "demo", MemoryLearning: policy}}
-	c, err := team.NewCoordinator(session, "", "", nil, nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := team.NewCoordinator(session, "", "", nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func (j jsonOutputEventJournal) VerifyHashChain(ctx context.Context) error {
 func TestDecisionPrimitiveJSONAndReportProjection(t *testing.T) {
 	workspace := t.TempDir()
 	session := &team.TeamSession{Dir: workspace, Workspace: workspace, Config: agent.TeamConfig{Name: "helper-json"}}
-	c, err := team.NewCoordinator(session, "", "", nil, nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := team.NewCoordinator(session, "", "", nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +338,7 @@ func TestJSONOutputProjectsFinalizationRedactionAndPreservesTypedScalars(t *test
 		Workspace: workspace,
 		Config:    agent.TeamConfig{Name: "finalization-json"},
 	}
-	coordinator, err := team.NewCoordinator(session, "", "", nil, nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	coordinator, err := team.NewCoordinator(session, "", "", nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}

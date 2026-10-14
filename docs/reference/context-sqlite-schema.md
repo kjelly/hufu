@@ -159,7 +159,9 @@ consolidation candidates, which are reviewed with
 `hufu context consolidation approve|reject`. To upgrade a legacy chromem long-term memory store, first
 run `hufu context migrate-memory --workspace <workspace> --project <project>
 --legacy-project <old-project>` for its count/checksum dry run, then repeat
-with `--apply`; the destination database is backed up before mutation. These
+with `--apply`; the destination database is backed up before mutation.
+`migrate-memory` is deprecated and will be removed with chromem support (see
+[the deprecation record](../deprecations/legacy-memory-store.md)). These
 commands never make Markdown or vector documents authoritative. The migration,
 projection, FTS rebuild, and redaction tests in `internal/context` provide the
 automated schema contract.

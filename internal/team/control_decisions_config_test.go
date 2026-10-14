@@ -103,7 +103,7 @@ func loadControlDecisionTeam(t *testing.T, teamBlock string, global control.Conf
 
 func newControlDecisionCoordinator(t *testing.T, session *TeamSession) (*Coordinator, error) {
 	t.Helper()
-	c, err := NewCoordinator(session, "", "", nil, nil, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 	if err != nil {
 		return nil, err
 	}
