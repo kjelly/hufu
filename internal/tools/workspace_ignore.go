@@ -38,6 +38,7 @@ var workspaceRecordNames = []string{
 	"runtime.sqlite-wal",
 	"runtime.sqlite-shm",
 	"runtime.sqlite-journal",
+	"runtime.sqlite.init.lock",
 }
 
 // workspaceRecordNameGlobs are base-name patterns of hufu execution record

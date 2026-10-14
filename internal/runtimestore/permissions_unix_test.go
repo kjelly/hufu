@@ -52,7 +52,9 @@ func TestOpenKeepsEverySidecarPrivate(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				seen++
+				if name != File+".init.lock" {
+					seen++
+				}
 				if mode := info.Mode().Perm(); mode != 0o600 {
 					t.Errorf("%s mode = %o, want 600", name, mode)
 				}

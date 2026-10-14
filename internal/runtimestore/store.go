@@ -25,9 +25,9 @@ import (
 // File is the database file name at the workspace root.
 const File = "runtime.sqlite"
 
-// Files lists the database and every SQLite sidecar that may sit next to it.
+// Files lists the database, SQLite sidecars, and initialization lock.
 // Snapshot, export, and tool-ignore lists exclude all of them.
-var Files = []string{File, File + "-wal", File + "-shm", File + "-journal"}
+var Files = []string{File, File + "-wal", File + "-shm", File + "-journal", File + ".init.lock"}
 
 var (
 	// ErrNotFound reports that a read-only open found no database. It wraps
@@ -96,6 +96,13 @@ func Open(ctx context.Context, workspace string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("open runtime store: create workspace: %w", err)
 	}
+	// sharedMu only serializes this process. Independent openers must also
+	// serialize file creation, the connection's WAL pragmas, and migrations.
+	lock, err := lockInitialization(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("open runtime store: acquire initialization lock: %w", err)
+	}
+	defer func() { _ = lock.Close() }()
 	if err := createPrivate(path); err != nil {
 		return nil, fmt.Errorf("open runtime store: %w", err)
 	}
