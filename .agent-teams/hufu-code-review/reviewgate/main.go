@@ -14,6 +14,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"github.com/kjelly/hufu/internal/actionstate"
 )
 
 type finding struct {
@@ -158,7 +160,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	data, err := os.ReadFile(filepath.Join(root, "session.json"))
+	data, err := actionstate.SessionCheckpoint(root)
 	if err != nil {
 		return fmt.Errorf("read review checkpoint: %w", err)
 	}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -133,18 +132,13 @@ func TestEmbeddedInventoryActionUsesCurrentCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(root, "session.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readCheckpoint(t, root)
 	var current session
 	if err := json.Unmarshal(data, &current); err != nil {
 		t.Fatal(err)
 	}
 	current.Tasks[len(current.Tasks)-1].ContractID = "inventory-review-handoffs"
-	if err := os.WriteFile(filepath.Join(root, "session.json"), raw(t, current), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeCheckpoint(t, root, raw(t, current))
 	ctx := team.WithActionEnvironment(t.Context(), team.ActionEnvironment{Workspace: workspace, RunID: "run-1", ActionInvocationID: "action-1", TaskID: "8"})
 	result, err := provider.Execute(ctx, team.Action{Capability: "inventory-review-handoffs", Type: "inventory_review_handoffs", Payload: `{"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}}`})
 	if err != nil {

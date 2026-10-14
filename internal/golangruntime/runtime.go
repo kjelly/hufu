@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/actionstate"
 	"github.com/kjelly/hufu/internal/processutil"
 	"github.com/traefik/yaegi/interp"
 	"github.com/traefik/yaegi/stdlib"
@@ -39,6 +40,14 @@ const (
 	defaultOutputLimit = 1024 * 1024
 	defaultErrorLimit  = 16 * 1024
 )
+
+// actionStateSymbols lends trusted actions read-only runtime state under the
+// import path normal Go builds of the same source use.
+var actionStateSymbols = interp.Exports{
+	"github.com/kjelly/hufu/internal/actionstate/actionstate": {
+		"SessionCheckpoint": reflect.ValueOf(actionstate.SessionCheckpoint),
+	},
+}
 
 // Program is an immutable identity for a statically inspected source package.
 type Program struct {
@@ -199,6 +208,10 @@ func RunChild(source, expectedDigest string, in io.Reader, out, errOut io.Writer
 	}
 	if err := runtime.Use(interp.Symbols); err != nil {
 		writeDiagnostic(errOut, "load Go interpreter symbols: %v\n", err)
+		return 1
+	}
+	if err := runtime.Use(actionStateSymbols); err != nil {
+		writeDiagnostic(errOut, "load Hufu action state symbols: %v\n", err)
 		return 1
 	}
 	if _, err := runtime.EvalPathWithContext(context.Background(), "action"); err != nil {
