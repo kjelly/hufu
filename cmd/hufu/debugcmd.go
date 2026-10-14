@@ -561,6 +561,7 @@ func isDebugSensitivePath(rel string) bool {
 		name := strings.ToLower(strings.TrimSpace(part))
 		if name == ".env" || strings.HasPrefix(name, ".env.") ||
 			name == "session.json" || name == "stm.md" || name == "ltm.md" ||
+			strings.HasPrefix(name, "runtime.sqlite") ||
 			name == "acceptance_audit.jsonl" ||
 			name == "evidence_manifest.json" || name == "credentials" ||
 			name == "secrets" || strings.Contains(name, "credential") ||

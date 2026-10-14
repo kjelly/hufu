@@ -40,7 +40,8 @@ var forbiddenRuntimeDirectories = map[string]struct{}{
 
 var forbiddenStateFiles = map[string]struct{}{
 	"session.json": {}, "session_tree.json": {}, "context.sqlite": {}, "task_journal.jsonl": {},
-	"events.jsonl": {}, "audit.jsonl": {},
+	"events.jsonl": {}, "audit.jsonl": {}, "runtime.sqlite": {}, "runtime.sqlite-wal": {},
+	"runtime.sqlite-shm": {}, "runtime.sqlite-journal": {},
 }
 
 var forbiddenCredentialFiles = map[string]struct{}{

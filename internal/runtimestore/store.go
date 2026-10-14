@@ -1,0 +1,234 @@
+// Package runtimestore owns runtime.sqlite, the authoritative per-workspace
+// store for hufu's event journal and runtime state. Memory stays in
+// context.sqlite. A writable open creates and migrates the database; a
+// read-only open never creates a file, runs a migration, or enables WAL.
+// VACUUM, PRAGMA optimize, and checkpoints are never run
+// (docs/architecture/sqlite-maintenance-policy.md).
+package runtimestore
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+
+	"github.com/kjelly/hufu/internal/sqlmigrate"
+
+	_ "modernc.org/sqlite" // registers the "sqlite" driver
+)
+
+// File is the database file name at the workspace root.
+const File = "runtime.sqlite"
+
+// Files lists the database and every SQLite sidecar that may sit next to it.
+// Snapshot, export, and tool-ignore lists exclude all of them.
+var Files = []string{File, File + "-wal", File + "-shm", File + "-journal"}
+
+var (
+	// ErrNotFound reports that a read-only open found no database.
+	ErrNotFound = errors.New("runtime store not found")
+	// ErrLegacyWorkspace reports a workspace written by a hufu that kept its
+	// event journal and runtime state in files. Such workspaces are not
+	// migrated; remove it with `hufu workspace delete` and start a new one.
+	ErrLegacyWorkspace = errors.New("workspace uses the retired file-based event log and runtime state; remove it with `hufu workspace delete` and start a new workspace")
+)
+
+// legacyMarkers are files only a file-based workspace contains.
+var legacyMarkers = []string{filepath.Join("logs", "event_store.jsonl"), "session.json"}
+
+// Path returns the database path of workspace.
+func Path(workspace string) string {
+	return filepath.Join(workspace, File)
+}
+
+// Store is an open runtime.sqlite handle.
+type Store struct {
+	db       *sql.DB
+	path     string
+	readOnly bool
+	shared   *sharedHandle
+}
+
+// sharedHandle lets every writable open of one workspace in a process share
+// a single connection, so the event journal and runtime documents serialize
+// on it instead of contending as separate writers.
+type sharedHandle struct {
+	db   *sql.DB
+	refs int
+}
+
+var (
+	sharedMu sync.Mutex
+	handles  = make(map[string]*sharedHandle)
+)
+
+// Open opens workspace's runtime.sqlite for writing, creating and migrating
+// it when missing. Callers must Close the store.
+func Open(ctx context.Context, workspace string) (*Store, error) {
+	path, err := resolvePath(workspace)
+	if err != nil {
+		return nil, err
+	}
+	sharedMu.Lock()
+	defer sharedMu.Unlock()
+	if handle := handles[path]; handle != nil {
+		handle.refs++
+		return &Store{db: handle.db, path: path, shared: handle}, nil
+	}
+	if err := refuseLegacy(workspace, path); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("open runtime store: create workspace: %w", err)
+	}
+	db, err := sql.Open("sqlite", writableDSN(path))
+	if err != nil {
+		return nil, fmt.Errorf("open runtime store: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := sqlmigrate.Apply(ctx, db, "runtime store", migrations, nil); err != nil {
+		return nil, errors.Join(fmt.Errorf("open runtime store: %w", err), db.Close())
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return nil, errors.Join(fmt.Errorf("open runtime store: restrict permissions: %w", err), db.Close())
+	}
+	handle := &sharedHandle{db: db, refs: 1}
+	handles[path] = handle
+	return &Store{db: db, path: path, shared: handle}, nil
+}
+
+// OpenReadOnly opens an existing runtime.sqlite without creating, migrating,
+// or otherwise changing any file. A missing database returns ErrNotFound, or
+// ErrLegacyWorkspace for a file-based workspace.
+func OpenReadOnly(ctx context.Context, workspace string) (*Store, error) {
+	path, err := resolvePath(workspace)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		if legacyErr := refuseLegacy(workspace, path); legacyErr != nil {
+			return nil, legacyErr
+		}
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open read-only runtime store: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("open read-only runtime store: %q is not a regular file", path)
+	}
+	db, err := sql.Open("sqlite", readOnlyDSN(path))
+	if err != nil {
+		return nil, fmt.Errorf("open read-only runtime store: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := sqlmigrate.Verify(ctx, db, "runtime store", migrations); err != nil {
+		return nil, errors.Join(fmt.Errorf("open read-only runtime store: %w", err), db.Close())
+	}
+	return &Store{db: db, path: path, readOnly: true}, nil
+}
+
+// Exists reports whether workspace has a runtime.sqlite.
+func Exists(workspace string) bool {
+	info, err := os.Lstat(Path(workspace))
+	return err == nil && info.Mode().IsRegular()
+}
+
+// DB returns the underlying handle. Writable handles open transactions with
+// BEGIN IMMEDIATE, so busy_timeout applies to a contended write.
+func (s *Store) DB() *sql.DB { return s.db }
+
+// Path returns the database path.
+func (s *Store) Path() string { return s.path }
+
+// ReadOnly reports whether the store was opened read-only.
+func (s *Store) ReadOnly() bool { return s.readOnly }
+
+// Close releases the store. The shared writable connection closes with its
+// last user.
+func (s *Store) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	if s.shared == nil {
+		err := s.db.Close()
+		s.db = nil
+		return err
+	}
+	sharedMu.Lock()
+	defer sharedMu.Unlock()
+	handle := s.shared
+	s.db, s.shared = nil, nil
+	handle.refs--
+	if handle.refs > 0 {
+		return nil
+	}
+	if handles[s.path] == handle {
+		delete(handles, s.path)
+	}
+	return handle.db.Close()
+}
+
+func resolvePath(workspace string) (string, error) {
+	if strings.TrimSpace(workspace) == "" {
+		return "", fmt.Errorf("open runtime store: empty workspace")
+	}
+	path, err := filepath.Abs(Path(workspace))
+	if err != nil {
+		return "", fmt.Errorf("open runtime store: resolve path: %w", err)
+	}
+	return path, nil
+}
+
+// refuseLegacy fails for a workspace that has file-based state but no
+// database. It runs only when the database does not exist yet.
+func refuseLegacy(workspace, path string) error {
+	if _, err := os.Lstat(path); err == nil {
+		return nil
+	}
+	for _, marker := range legacyMarkers {
+		if _, err := os.Lstat(filepath.Join(workspace, marker)); err == nil {
+			return fmt.Errorf("%w (%s)", ErrLegacyWorkspace, workspace)
+		}
+	}
+	return nil
+}
+
+// writableDSN applies the durability pragmas to every pooled connection:
+// WAL so read-only CLIs can read during a run, synchronous=FULL so a commit
+// is on disk, and IMMEDIATE transactions so busy_timeout covers writes.
+func writableDSN(path string) string {
+	uri := &url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
+	query := uri.Query()
+	query.Set("mode", "rwc")
+	query.Set("_txlock", "immediate")
+	query.Add("_pragma", "busy_timeout(5000)")
+	query.Add("_pragma", "foreign_keys(1)")
+	query.Add("_pragma", "journal_mode(WAL)")
+	query.Add("_pragma", "synchronous(FULL)")
+	uri.RawQuery = query.Encode()
+	return uri.String()
+}
+
+// readOnlyDSN never writes. A read-only open of a WAL database creates an
+// empty -wal when none exists; immutable mode prevents that in the quiescent
+// case, while a present WAL keeps normal locking so committed records that
+// were not checkpointed stay visible.
+func readOnlyDSN(path string) string {
+	uri := &url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
+	query := uri.Query()
+	query.Set("mode", "ro")
+	if _, err := os.Stat(path + "-wal"); errors.Is(err, os.ErrNotExist) {
+		query.Set("immutable", "1")
+	}
+	query.Add("_pragma", "query_only(1)")
+	query.Add("_pragma", "busy_timeout(5000)")
+	uri.RawQuery = query.Encode()
+	return uri.String()
+}

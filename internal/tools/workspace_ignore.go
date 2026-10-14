@@ -34,6 +34,10 @@ var workspaceRecordNames = []string{
 	"task_journal.jsonl",
 	"compaction_history.json",
 	"llm.log",
+	"runtime.sqlite",
+	"runtime.sqlite-wal",
+	"runtime.sqlite-shm",
+	"runtime.sqlite-journal",
 }
 
 // workspaceRecordNameGlobs are base-name patterns of hufu execution record
