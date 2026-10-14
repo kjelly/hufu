@@ -94,7 +94,20 @@ func validateRequiredEvidenceContext(input WorkerContextInput, compiled Compiled
 // Old manifests without a dependency hash cannot prove a complete audit.
 func (c *Coordinator) validateRequiredEvidenceDelivery(todoID string, attempt int, runIDs ...string) error {
 	item := c.todoItemByID(todoID)
-	if item == nil || !item.Execution.RequiresEvidence {
+	if item == nil {
+		return nil
+	}
+	// Schema-owned reference bindings apply independently of the opt-in
+	// context-delivery proof, including external results and replayed tasks.
+	if item.TypedResult != nil {
+		if err := c.validateResultReferenceReads(todoID, item.TypedResult); err != nil {
+			return err
+		}
+		if err := c.validateSubmittedEvidenceInputs(todoID, item.TypedResult.StructuredPayload); err != nil {
+			return err
+		}
+	}
+	if !item.Execution.RequiresEvidence {
 		return nil
 	}
 	task := taskDefFromTodoItem(item)
@@ -140,17 +153,15 @@ func (c *Coordinator) validateRequiredEvidenceDelivery(todoID string, attempt in
 	if !matched {
 		return fmt.Errorf("required evidence delivery is unproven for task %s attempt %d; submit partial or blocked", todoID, attempt)
 	}
-	if item.TypedResult != nil {
-		if err := c.validateSubmittedEvidenceInputs(todoID, item.TypedResult.StructuredPayload); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
 func (c *Coordinator) validateCompletedEvidenceDeliveries() error {
 	for _, item := range c.taskTracker.TodoList().Items() {
-		if item.Status == TaskDone && item.Execution.RequiresEvidence {
+		if item.Status == TaskDone {
+			if err := c.validateResultReferenceReads(item.ID, item.TypedResult); err != nil {
+				return err
+			}
 			attempt := c.taskAttempt(item.ID)
 			if item.TypedResult != nil && item.TypedResult.Attempt > 0 {
 				attempt = item.TypedResult.Attempt

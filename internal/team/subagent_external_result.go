@@ -246,7 +246,7 @@ func (defaultExternalResultCanonicalizer) Canonicalize(ctx context.Context, requ
 	if err != nil {
 		return nil, err
 	}
-	structuredPayload, err := canonicalExternalStructuredPayload(request, proposal)
+	structuredPayload, err := canonicalExternalStructuredPayload(request, proposal, filesRead)
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize external result: %w", err)
 	}
