@@ -141,8 +141,6 @@ to re-create an abstraction that already exists in the runtime.
   — offline delivery assertions, bounded query hints, and explicit opt-in rollout.
 - [Historical task results and LLM query plan](implementation-plans/historical-task-results-llm-query.md)
   — proposed natural-language history queries, durable result lookup, and source-linked answers without requiring run IDs.
-- [Belief and evidence inspection plan](implementation-plans/belief-evidence-implementation-plan.md)
-  — replayable finite Bayesian state, durable observations, runtime integration, and advisory policy.
 - [Current roadmap](roadmap.md) — a small navigation list of active follow-up
   work. It is not an implementation-state database.
 
@@ -161,7 +159,8 @@ to re-create an abstraction that already exists in the runtime.
   the [DecisionPrimitive control decisions implementation record](archive/implementation-plans/decision-primitive-control-decisions.md),
   the [learning runtime gap closure record](archive/implementation-plans/learning-runtime-gap-closure.md),
   the [semantic retrieval runtime record](archive/implementation-plans/semantic-retrieval-runtime.md),
-  and the [EventStore memory query implementation record](archive/implementation-plans/eventstore-memory-query-implementation-plan.md).
+  the [EventStore memory query implementation record](archive/implementation-plans/eventstore-memory-query-implementation-plan.md),
+  and the [replayable Bayesian belief implementation record](archive/implementation-plans/belief-evidence-implementation-plan.md).
 - `archive/migration-reports/` contains completed cutover evidence and reports.
 - `archive/roadmaps/` contains the retired large backlog roadmap.
 - `archive/analyses/` contains investigations and proposals retained for

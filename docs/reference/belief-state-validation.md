@@ -38,7 +38,7 @@ Use a short **GOTMPDIR as well as TMPDIR** for later full and race runs.
 | A: pure finite Bayesian core | Complete | Schema, exact update, bounded validation, deterministic digests; checks below. |
 | B: durable binding and replay | Complete | SQLite journal, immutable model binding, canonical receipt admission, tombstones and lineage replay; checks below. |
 | C: runtime integration and inspect | Complete | Opt-in team compilation, execution-policy pinning, canonical runtime observations, restart/branch repair, text/JSON inspection; checks below. |
-| D: advisory policy | Implemented and stage-validated; aggregate race pending | Frozen policies/catalog eligibility, durable generations, transactional head fence and historical inspection; checks below. |
+| D: advisory policy | Complete | Frozen policies/catalog eligibility, durable generations, transactional head fence and historical inspection; checks below. |
 
 The user selected explicitly synthetic models for initial runtime integration
 and advisory-only policy. Production calibration and active candidate dispatch
@@ -169,7 +169,7 @@ earlier availability fact.
 | Original baseline archive: `go test -race ./internal/team -run '^TestVerificationRepairReturnsToProducerOnce$' -count 20 -timeout 3m` | 1 | Independently reproduced the same pre-existing live-item assertion race (0.829s). |
 | `go test -race -timeout 20m ./internal/belief/... ./internal/team/... ./internal/inspect/...` | 1 | Found that baseline race, then reached the package timeout during `TestSessionDataConcurrentCheckpointNoRace`. |
 | `go test ./...` after the baseline test synchronization | 0 | Complete follow-up suite, local sockets allowed; all tests passed. |
-| `go test -race -timeout 40m ./internal/belief/... ./internal/team/... ./internal/inspect/...` | Running | Complete aggregate rerun. The final stateless append-capacity guard has a separate targeted follow-up. |
+| `go test -race -timeout 40m ./internal/belief/... ./internal/team/... ./internal/inspect/...` | 0 | Complete aggregate suite passed: belief 1.288s, team 1912.733s, preset 1.053s, inspect 119.184s. The final stateless append-capacity guard has its separate passing targeted follow-up. |
 
 The first complete test run included two development fixtures with incomplete
 metadata: a branch event lacked an actor and a catalog schema lacked explicit
@@ -192,8 +192,8 @@ The exact repair test reproduced the same race in an isolated archive of the
 original baseline. Commit `8c44625c` fixes only test synchronization: receive the
 relaunched worker result before inspecting the aliased item. All existing
 assertions remain. The targeted race suite, vet and complete lint passed after
-this fix. The full aggregate race suite is running with a 40-minute package
-limit; timing out does not count as passing.
+this fix. The full aggregate race suite passed with a 40-minute package
+limit; the earlier timed-out runs remain recorded as failures.
 
 Lint initially reported complexity 44 against the existing threshold 40 in
 the extended belief reducer. The binding checks were extracted into a shared
@@ -223,5 +223,44 @@ the CLI-test-only literal cleanup, `go test ./cmd/hufu -run '^TestBelief'`
 and `go vet ./cmd/hufu` also exited 0. No tests were skipped. One intermediate
 non-race run from before the final append guard exhausted its default
 10-minute package timeout; the final frozen-code complete run passed.
-The aggregate 40-minute race run remains in progress, so the PR stays draft
-and no all-suite-race success is claimed yet.
+The aggregate 40-minute race run subsequently exited 0 without a data-race
+report. Its full-package scope plus the final guard/CLI follow-ups complete
+the planned local gates. The timeout allowance skipped no test or assertion.
+
+## Requirements and artifact audit
+
+The implemented scope is the user's synthetic-model A–C delivery and D's
+advisory recommendations. Active dispatch, calibrated domain likelihoods and
+human usability measurements are outside that accepted scope. The
+[implemented plan](../archive/implementation-plans/belief-evidence-implementation-plan.md)
+is archived under the documentation lifecycle; the current contract is the
+[runtime reference](belief-state.md).
+
+| Requirement | Current evidence |
+| --- | --- |
+| Move and version the integrated plan; preserve phase commits | Initial documentation commits `de84101e` and `ee06ef23`; A `c48d2fe5`, B `31b4880b`, C `dbf86066`, D `cc551630`. The original baseline-to-`ee06ef23` diff contains documentation only. |
+| Finite schema, exact update, independence and deterministic identity | [Pure model/core](../../internal/belief/projector.go), [wire schema](../../internal/belief/model.schema.json), and [Go function: TestKnownPosteriorAndDuplicateReplay](../../internal/belief/projector_test.go). Other core cases cover zero support, ties, limits, shared-source/group refusal, wire errors, input immutability and fuzzing. Core model/projector files are unchanged since A. |
+| Existing journal/CAS only; authentic source, scope, deduplication and retraction | [Journal adapter](../../internal/team/belief_journal.go), [event reducer](../../internal/team/belief_events.go), [Go function: TestBeliefRetractionTombstoneAndPrior](../../internal/team/belief_journal_test.go), and [Go function: TestBeliefEventScopeCannotBeRebound](../../internal/team/belief_journal_test.go). No belief database or replacement scheduler was introduced. |
+| Crash/uncertain commit and branch isolation | [Go function: TestBeliefUnknownCommitUsesSameAdmission](../../internal/team/belief_journal_test.go), [Go function: TestBeliefRuntimeRepairsForkGapOnlyOnSelectedBranch](../../internal/team/belief_runtime_test.go), and policy branch/cursor tests. Sources after a fork remain invisible; repair writes no ancestor epoch. |
+| Runtime state and expendable cache; no repeat of completed execution | [Common runtime projection](../../internal/team/coordinator_belief.go), [Go function: TestBeliefRuntimeActionAndExpendableCache](../../internal/team/belief_runtime_test.go), real worker verification and normal session/checkpoint restart tests. Durable source/admission repair preserves the single action marker. |
+| Locked models/policies, version drift and unavailable artifacts | [Team compilation](../../internal/team/belief_config.go), [Go function: TestBeliefRuntimeMissingArtifactNeverReloadsTeamModel](../../internal/team/belief_runtime_test.go), model/policy resume drift and missing/restored artifact history tests. Unknown probabilities remain null. |
+| Read-only scoped inspection, equivalent text/JSON, no raw evidence | [Inspector](../../internal/inspect/beliefs.go), [Go function: TestBeliefInspectReconstructsWithoutWritingOrExposingRawEvidence](../../internal/inspect/beliefs_test.go), policy inspection and CLI SQLite fixtures. Tests compare bytes/modes/timestamps and reject private command/output leakage. |
+| Advisory generation and authority, with no extra dispatch or budget reset | [Policy journal](../../internal/team/belief_suggestion_journal.go), [Go function: TestBeliefPolicyRuntimeAdvisoryAndRestart](../../internal/team/belief_policy_runtime_test.go), catalog/grant tests, duplicate-source actor regression and capacity boundaries. Active mode is rejected. |
+| Reject late results in the write transaction | [Go function: TestEventStoreConditionalAppendAcrossHandles](../../internal/team/event_store_conditional_test.go), late-write injection, concurrent writers and uncertain advisory commit tests. The global head fence includes invisible sibling writes. |
+| Neutral core and safe configuration | Core changes add no concrete-team-name branch; the four changed JSON/schema files have zero IP/credential-pattern hits. Policy files cannot supply grants or shell commands. |
+| Automated gates | Complete normal tests, targeted and full planned-package race, vet, lint and document checks passed as recorded above. The full normal run covers all four package groups named in the plan. |
+
+The residual local scratch proposal was compared with the integrated plan and
+removed from `docs/tmp`; that directory contains no remaining proposal files
+and no path under it is tracked. Its source SHA256 was
+`6919048af8033d9af02d505586ff8c17c04b953ce792ecda59d2c810c0eff714`.
+The unmodified source backup is retained with the local validation artifacts,
+outside the documentation authority chain. No production guidance links to
+scratch files.
+
+The final document audit passed `bin/check-docs`: all active document headers,
+relative links and named Go function anchors are checked. The PR's initial
+docs failure was reproduced locally as a missing `Verified-Commit` header;
+commit `f6b3971d` added the required lifecycle metadata. The completed plan is
+now archived and linked from the documentation map. Final changes after the
+validated production commit are documentation only.

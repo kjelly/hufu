@@ -1,11 +1,11 @@
 # 可重播貝式信念狀態：A–D 實作計畫
 
-> Status: active
-> Authority: reference（程式、測試及 accepted ADR 優先）
+> Status: historical
+> Authority: reference
 > Verified-Commit: `cc5516300df2b0ee4316b398d8bdd07a0560fe51`
 > Supersedes: local scratch proposal, integrated into this versioned plan
-> Superseded-By: —
-> Implementation: A–D implemented; final integration validation in progress
+> Superseded-By: [Runtime reference](../../reference/belief-state.md) and [validation record](../../reference/belief-state-validation.md)
+> Implementation: A–D complete; all planned local validation gates passed (see validation record)
 > Baseline: `c03b785788fbe9b1f636e8b8baca745b6345114e`
 > 日期：2026-10-15
 > 本計畫依使用者最新需求取代原唯讀 inspector 計畫。每階段驗證後各 commit；不提交 docs/tmp。
