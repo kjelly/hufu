@@ -16,10 +16,12 @@ func TestVerificationRepairReturnsToProducerOnce(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	s.handleEvent(ctx, agentTaskResult{idx: 1, agentName: items[1].Agent, todoID: items[1].ID, err: errors.New("verification rejected report ownership")})
+	// The relaunched worker can replace the live TodoItem while persisting
+	// its canceled attempt. Drain its result before inspecting that alias.
+	drainRelaunchedTask(t, s)
 	if s.retries[1] != 1 || s.states[0] != TaskInProgress || items[0].RemediationContext == nil {
 		t.Fatalf("producer not repaired with diagnostic: retries=%v states=%v remediation=%#v", s.retries, s.states, items[0].RemediationContext)
 	}
-	drainRelaunchedTask(t, s)
 	// Simulate completion of the repaired producer followed by another rejected
 	// audit. The exhausted edge must retain failure rather than restart again.
 	s.coord.taskTracker.TodoList().UpdateStatus(items[0].ID, TaskDone, "repaired report")
