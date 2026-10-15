@@ -1,7 +1,10 @@
 # Replayable Bayesian belief state
 
-> Status: reference; initial finite-model implementation
-> Authority: reference (runtime code and tests are authoritative)
+> Status: active
+> Authority: reference
+> Verified-Commit: `cc5516300df2b0ee4316b398d8bdd07a0560fe51`
+> Supersedes: —
+> Superseded-By: —
 
 Beliefs are a rebuildable component alongside execution state. They describe
 probabilities under a locked model and its admitted evidence. They do not

@@ -1,7 +1,10 @@
 # Bayesian belief-state implementation validation
 
-> Status: active implementation record
+> Status: active
 > Authority: reference
+> Verified-Commit: `cc5516300df2b0ee4316b398d8bdd07a0560fe51`
+> Supersedes: —
+> Superseded-By: —
 > Baseline: `c03b785788fbe9b1f636e8b8baca745b6345114e`
 > Date: 2026-10-15
 
