@@ -435,6 +435,7 @@ type TeamConfig struct {
 	// SemanticRetrieval is the team's semantic-retrieval block. hufu.yaml's
 	// block is merged under it; the team's fields win.
 	SemanticRetrieval semantic.Config
+	Belief            *BeliefConfig
 	// RequestContract is the single normalized team-level request contract
 	// owner. It is authoring-independent so decision profile selection cannot
 	// accidentally carry a second request contract authority.

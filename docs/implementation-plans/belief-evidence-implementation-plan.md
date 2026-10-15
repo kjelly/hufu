@@ -91,7 +91,7 @@ crash windows：source durable/admission 缺失時 runtime 以固定 key 補 adm
 
 新增 team-owned `belief` 設定，至少 `model-file`；LoadTeam 使用現有 team resource loading 邊界驗證與編譯，缺省不啟用。拒絕路徑越界、symlink escape、過大檔案或 schema 不合法。compiled model 與 model artifact identity 進 immutable execution-policy snapshot，resume 不 silent reload 新模型。
 
-第一版 source adapter 只讀取已持久化 `ExecutionReceipt.VerifyResult`：真實 verification 的 exit code／timeout 等 typed 結果，對應模型宣告的 pass/fail outcome。不以 stdout、worker success 或 judge opinion 判定。
+第一版 source adapter 讀取已持久化 `ExecutionReceipt.VerifyResult`；若結果只在 canonical terminal event 的 `verify_result`，只能綁定同事件明示的 current receipt，且 run、task、occurrence attempt 必須一致。同一條件下也能讀取該事件已鎖定的 run-input hash，不能套用到其他歷史 receipt；同時存在且不同的 input hash 直接拒絕。真實 verification 的 exit code／timeout 等 typed 結果對應模型宣告的 pass/fail outcome。不改寫既有 receipt，也不以 stdout、worker success 或 judge opinion 判定。
 
 epoch 鎖定 run/branch/task/occurrence/attempt、已持久化 subject/input revision 與 verification/environment contract identity；identity 缺失就 diagnostic unavailable，不補假值。跨 revision／環境／模型／attempt 不沿用 posterior。初期採窄的每 occurrence epoch，避免默認跨 attempt 獨立。
 
@@ -122,6 +122,15 @@ team 宣告固定版本 policy 與既有 candidate IDs；所有候選必須在�
 相同 state/policy/generation key 冪等。resume 使用原 policy/model/snapshot binding；changed policy 不能改寫同 generation 的歷史理由。未知 distribution、未校準／合成 model 可以顯示 advisory，但不得被解讀為授權。
 
 驗收：記錄完整理由、同 snapshot 重播相同建議、零新增 tool/LLM/dispatch、budget 不重設、舊 generation 結果不污染新 generation、缺候選不擴增權限、歷史 policy 不讀現在設定。
+
+### 6.1 D 的可實作合約（尚未交付）
+
+- `belief.policy-file` 是 optional、team-relative 的嚴格 JSON。第一版只接受 `mode: advisory` 與固定 `max_posterior_v1` 演算法；選最大 Q9 mass，相同 mass 以 hypothesis ID 決定，不從文字解釋意圖。
+- policy 對模型每個 hypothesis 明確指定一個既有 `action-catalog` candidate ID。編譯時拒絕不存在或宣告副作用非 `none` 的候選，並從既有 catalog 取得 discover/propose 名單與 entry/catalog digest；policy 檔不能自填授權。來源 actor 沒有 proposal 權限時只記 unavailable。建議不等於 action proposal 或 invocation，不消耗或擴增既有 invocation grant。
+- 將 policy、綁定 model digest 與凍結的 candidate eligibility 存成既有 CAS artifact；runtime model binding 加 optional policy ref/digest。execution-policy snapshot 也鎖定 policy digest。歷史 policy 缺失只使建議 unavailable，不抹掉可重建的數學分布，也不能讀現在的 policy 檔補歷史。
+- `decision_generation` 是每個 belief epoch 的 advisory 序列；它不取代既有 active decision generation。有效 state 改變才前進；單純 closure、重複 admission、重播或相同 snapshot 不新增建議。每筆綁定 state digest、policy identity、source cursor、candidate ID 或 unavailable reason。
+- 寫入前以當前 journal 驗證預期 generation 與 state digest，拒絕晚到的舊計算。replay 逐筆驗證當時 cursor 的 state 與政策選擇；resume 保留已持久化的 generation，不重設 budget 或執行任何 candidate。
+- `inspect beliefs` 同時顯示歷史 policy binding 與建議。測試涵蓋 synthetic 選擇、同分、未知分布、缺模型／policy／候選、actor 權限、generation race、snapshot 重播、budget 不變與零額外 dispatch。
 
 ## 7. Commit 與驗證順序
 

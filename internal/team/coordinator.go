@@ -629,6 +629,8 @@ type Coordinator struct {
 	decisionControlPlaneMu  sync.Mutex
 	decisionControlPlane    *decisionControlPlane
 	decisionStore           ArtifactStore
+	beliefMu                sync.Mutex
+	beliefRuntime           *coordinatorBeliefs
 	decisionIndexProjection *DecisionIndex
 	dualWriteFailures       atomic.Int64
 	contextRepo             contextstore.Repository // canonical context store used by prompt assembly and maintenance
@@ -1413,6 +1415,11 @@ func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordi
 	}
 	if err := ensureCoordinatorWorkspaceScope(params.Session); err != nil {
 		return nil, err
+	}
+	if params.Session.Belief == nil {
+		if err := compileTeamBelief(params.Session); err != nil {
+			return nil, err
+		}
 	}
 	decisionSidecars := &decisionSidecarResolver{defaultModel: params.RoleModels.Sidecar}
 	primitiveService, err := catalog.New(params.Session.Config.DecisionPrimitives, catalog.WithSidecarGenerator(decisionSidecars.generator))

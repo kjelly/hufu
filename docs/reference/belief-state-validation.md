@@ -34,7 +34,7 @@ Use a short **GOTMPDIR as well as TMPDIR** for later full and race runs.
 | --- | --- | --- |
 | A: pure finite Bayesian core | Complete | Schema, exact update, bounded validation, deterministic digests; checks below. |
 | B: durable binding and replay | Complete | SQLite journal, immutable model binding, canonical receipt admission, tombstones and lineage replay; checks below. |
-| C: runtime integration and inspect | Pending | — |
+| C: runtime integration and inspect | Complete | Opt-in team compilation, execution-policy pinning, canonical runtime observations, restart/branch repair, text/JSON inspection; checks below. |
 | D: advisory policy | Pending | — |
 
 The user selected explicitly synthetic models for initial runtime integration
@@ -61,8 +61,8 @@ Benchmark hardware: Intel Core i7-6700K @ 4.00GHz, linux/amd64, Go 1.27.2,
 The initial lint run found a boolean style warning; the implementation was
 corrected and the complete lint gate passed on rerun.
 
-A delivers computation only. Coordinator state, automatic runtime observation
-admission, inspection, and policy consumption remain C–D work.
+A delivers computation only. Runtime integration is delivered by C; advisory
+policy consumption remains stage D work.
 
 ## Stage B
 
@@ -84,4 +84,50 @@ its environment revision hashes the recorded verifier contract and execution
 target. These are deliberately narrow historical receipt scopes, not a live OS
 or complete source-tree fingerprint. Replay only reads events and artifacts;
 it never executes the stored verifier command or repairs a missing artifact
-from current configuration. Runtime wiring and inspection are still stage C.
+from current configuration. Runtime wiring and inspection are delivered by C.
+
+## Stage C
+
+Team loading compiles a bounded model through a confined filesystem root and
+pins the selected model/experiment in the existing execution-policy snapshot.
+After canonical task transitions, the Coordinator derives observations from
+durable receipt verification or the terminal event's exact current-receipt
+binding. Existing receipt bytes, execution status, budgets and authorization
+remain under their original owners. Legacy event durations are explicitly
+decoded as integer nanoseconds.
+
+The disposable Coordinator projection rebuilds from historical model and
+adapter bindings. `inspect beliefs` uses the existing globally verified branch
+lineage, a read-only artifact store, and the same reducer. It reports execution
+separately from model identity, synthetic flag, effective observations,
+distributions, source references, retractions and historical diagnostics.
+
+| Command (short GOTMPDIR/TMPDIR for tests) | Exit | Evidence |
+| --- | --- | --- |
+| `go test ./internal/team ./internal/inspect ./cmd/hufu -run '^TestBelief'` | 0 | Team resource boundaries, policy drift, real action and worker verification, missing model, crash repair, fork isolation, text/JSON and read-only inspection. |
+| `go test ./internal/team -run '^TestBelief'` | 0 | Final restart/checkpoint and source-binding tests included. |
+| `go test -race ./internal/team ./internal/inspect -run '^TestBelief'` | 0 | Final runtime/inspection state: team 14.275s; inspect 2.124s. |
+| `go test ./...` with local sockets allowed | 0 | Complete suite passed; team 333.150s and tools 66.964s. |
+| `go test ./cmd/hufu -run '^TestBelief'` | 0 | Follow-up after the final CLI-only missing-binding diagnostic rendering fix; no source execution. |
+| `go vet ./...` | 0 | Final gate passed. |
+| `golangci-lint run --allow-serial-runners` | 0 | Final complete gate: 0 issues. The option waits for the shared lint lock; no checker is disabled. |
+
+An earlier full run failed the unchanged
+`TestBashHandsCompleteOutputToOffloader/normal`: captured output was 131,085
+bytes instead of 168,907. The original baseline was extracted with `git archive`
+and its exact test passed 30 consecutive repeats. The unchanged shell runner
+has a 250ms output-drain grace; the observation is consistent with scheduling
+sensitivity but was not reproduced in isolation, so this record does not claim
+a proven cause or a shell fix. The subsequent full suite passed. No test was
+skipped, and no tools/process implementation was changed by this feature.
+
+During development, the real action test exposed the legacy duration wire
+format mismatch, and lint found two functions above the existing complexity
+limit. The adapter was corrected and small validation/snapshot helpers were
+extracted; final tests and lint passed. The restart test uses the normal frozen
+input admission, session checkpoint, event-store startup and
+`ResumeInterruptedTasks` APIs and proves a completed action is not repeated.
+
+Usage and the deliberately narrow receipt/input/environment scope are described
+in [`belief-state.md`](belief-state.md). D remains unfinished and no policy
+recommendation or active candidate selection is delivered by A–C.

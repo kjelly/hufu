@@ -2,6 +2,7 @@ package team
 
 import (
 	"cmp"
+	jsonv1 "encoding/json"
 	"encoding/json/v2"
 	"fmt"
 	"slices"
@@ -31,16 +32,9 @@ func beliefSourceReceipt(event RunEvent, scope belief.Scope, key string) (Execut
 	if !slices.Contains([]string{"task_completed", "task_failed", "task_blocked", "task_protocol_incomplete"}, event.Type) || event.RunID != scope.RunID || event.TaskID != scope.TaskID || scope.SessionID != "" && event.SessionID != scope.SessionID {
 		return ExecutionReceipt{}, fmt.Errorf("belief source is not an owning task verification")
 	}
-	var payload struct {
-		Receipt  *ExecutionReceipt  `json:"execution_receipt"`
-		Receipts []ExecutionReceipt `json:"execution_receipts"`
-	}
-	if err := json.Unmarshal(event.Payload, &payload); err != nil {
-		return ExecutionReceipt{}, fmt.Errorf("invalid belief source receipt payload")
-	}
-	receipts := slices.Clone(payload.Receipts)
-	if payload.Receipt != nil {
-		receipts = append(receipts, *payload.Receipt)
+	receipts, err := beliefSourceReceipts(event)
+	if err != nil {
+		return ExecutionReceipt{}, err
 	}
 	var matched *ExecutionReceipt
 	for _, receipt := range receipts {
@@ -63,6 +57,47 @@ func beliefSourceReceipt(event RunEvent, scope belief.Scope, key string) (Execut
 		return ExecutionReceipt{}, fmt.Errorf("belief source receipt binding unavailable")
 	}
 	return *matched, nil
+}
+
+// Some current success paths store objective verification on the terminal
+// event rather than inside its current receipt. Bind that typed result only
+// to the explicit current receipt and matching occurrence. Historical receipts
+// never inherit a todo-wide result; persisted receipt bytes are never changed.
+func beliefSourceReceipts(event RunEvent) ([]ExecutionReceipt, error) {
+	var payload struct {
+		Receipt      *ExecutionReceipt   `json:"execution_receipt"`
+		Receipts     []ExecutionReceipt  `json:"execution_receipts"`
+		Verification *VerificationResult `json:"verify_result"`
+		Attempt      int                 `json:"attempt"`
+		InputHash    string              `json:"run_input_snapshot_hash"`
+	}
+	// Canonical execution events encode durations as integer nanoseconds.
+	if err := json.Unmarshal(event.Payload, &payload, jsonv1.FormatDurationAsNano(true)); err != nil {
+		return nil, fmt.Errorf("invalid belief source receipt payload: %w", err)
+	}
+	receipts := slices.Clone(payload.Receipts)
+	if payload.Receipt != nil {
+		// The current receipt is also commonly present in the history array.
+		// Remove only exact aliases before enriching that one current receipt.
+		identity := beliefIdentity("receipt_alias", payload.Receipt)
+		receipts = slices.DeleteFunc(receipts, func(receipt ExecutionReceipt) bool {
+			return beliefIdentity("receipt_alias", receipt) == identity
+		})
+		current := *payload.Receipt
+		if payload.Attempt > 0 && cmp.Or(current.OccurrenceAttempt, current.Attempt) == payload.Attempt && current.RunID == event.RunID && current.TaskID == event.TaskID {
+			if current.RunInputSnapshotHash != "" && payload.InputHash != "" && current.RunInputSnapshotHash != payload.InputHash {
+				return nil, fmt.Errorf("belief current receipt input revision mismatch")
+			}
+			if current.RunInputSnapshotHash == "" {
+				current.RunInputSnapshotHash = payload.InputHash
+			}
+			if current.VerifyResult == nil {
+				current.VerifyResult = payload.Verification
+			}
+		}
+		receipts = append(receipts, current)
+	}
+	return receipts, nil
 }
 func beliefReceiptKey(receipt ExecutionReceipt) string {
 	return beliefIdentity("receipt", struct {

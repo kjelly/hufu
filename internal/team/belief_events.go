@@ -34,6 +34,7 @@ type beliefEvent struct {
 	ModelRef       *ArtifactRef        `json:"model_ref,omitempty"`
 	ModelDigest    string              `json:"model_digest,omitempty"`
 	ReducerVersion string              `json:"reducer_version,omitempty"`
+	ExperimentID   string              `json:"experiment_id,omitempty"`
 	Epoch          *belief.Epoch       `json:"epoch,omitempty"`
 	EpochID        string              `json:"epoch_id,omitempty"`
 	Observation    *belief.Observation `json:"observation,omitempty"`
@@ -46,17 +47,19 @@ type beliefEvent struct {
 // BeliefEpochState is rebuilt solely from a caller-validated event lineage and immutable artifacts.
 // Unavailable means the inputs cannot support a calculation, not that execution failed.
 type BeliefEpochState struct {
-	Epoch       belief.Epoch   `json:"epoch"`
-	State       *belief.State  `json:"state"`
-	Closed      bool           `json:"closed"`
-	Unavailable string         `json:"unavailable,omitempty"`
-	Sources     []BeliefSource `json:"sources"`
-	Retracted   []string       `json:"retracted"`
+	Epoch        belief.Epoch         `json:"epoch"`
+	State        *belief.State        `json:"state"`
+	Closed       bool                 `json:"closed"`
+	Unavailable  string               `json:"unavailable,omitempty"`
+	Sources      []BeliefSource       `json:"sources"`
+	Observations []belief.Observation `json:"observations"`
+	Retracted    []string             `json:"retracted"`
 }
 
 type beliefEpochReducer struct {
 	value            BeliefEpochState
 	model            *belief.Model
+	experimentID     string
 	observations     map[string]belief.Observation
 	sources          map[string]BeliefSource
 	tombstones       map[string]bool
@@ -68,6 +71,7 @@ type beliefEpochReducer struct {
 func ProjectBeliefEpochs(ctx context.Context, events []RunEvent, artifacts ArtifactStore, runID string) ([]BeliefEpochState, error) {
 	models := map[string]*belief.Model{}
 	modelErrors := map[string]string{}
+	adapters := map[string]string{}
 	epochs := map[string]*beliefEpochReducer{}
 	eventIndex := map[string]int{}
 	sessionID := ""
@@ -112,6 +116,10 @@ func ProjectBeliefEpochs(ctx context.Context, events []RunEvent, artifacts Artif
 			}
 			models[payload.ModelDigest] = model
 			modelErrors[payload.ModelDigest] = reason
+			if previous, exists := adapters[payload.ModelDigest]; exists && previous != payload.ExperimentID {
+				return nil, fmt.Errorf("conflicting belief adapter binding")
+			}
+			adapters[payload.ModelDigest] = payload.ExperimentID
 		case EventBeliefEpochOpened:
 			if payload.Epoch == nil || payload.Epoch.ID == "" || !beliefEventMatchesScope(event, payload.Epoch.Scope) {
 				return nil, fmt.Errorf("invalid belief epoch binding")
@@ -126,7 +134,7 @@ func ProjectBeliefEpochs(ctx context.Context, events []RunEvent, artifacts Artif
 				}
 				continue
 			}
-			epochs[epoch.ID] = &beliefEpochReducer{value: BeliefEpochState{Epoch: epoch, Unavailable: modelErrors[epoch.ModelDigest], Sources: []BeliefSource{}, Retracted: []string{}}, model: models[epoch.ModelDigest], observations: map[string]belief.Observation{}, sources: map[string]BeliefSource{}, tombstones: map[string]bool{}, closeSourceIndex: -1}
+			epochs[epoch.ID] = &beliefEpochReducer{value: BeliefEpochState{Epoch: epoch, Unavailable: modelErrors[epoch.ModelDigest], Sources: []BeliefSource{}, Retracted: []string{}}, model: models[epoch.ModelDigest], experimentID: adapters[epoch.ModelDigest], observations: map[string]belief.Observation{}, sources: map[string]BeliefSource{}, tombstones: map[string]bool{}, closeSourceIndex: -1}
 		default:
 			epoch := epochs[payload.EpochID]
 			if epoch == nil {
@@ -149,6 +157,8 @@ func ProjectBeliefEpochs(ctx context.Context, events []RunEvent, artifacts Artif
 				epoch.value.Sources = append(epoch.value.Sources, epoch.sources[id])
 			}
 		}
+		slices.SortFunc(observations, func(a, b belief.Observation) int { return cmp.Compare(a.ID, b.ID) })
+		epoch.value.Observations = observations
 		if epoch.model != nil {
 			state, err := belief.Project(*epoch.model, epoch.value.Epoch, observations)
 			if err != nil {
@@ -185,6 +195,9 @@ func applyBeliefLifecycle(epoch *beliefEpochReducer, event RunEvent, payload bel
 			return fmt.Errorf("incomplete belief observation")
 		}
 		observation, source := *payload.Observation, *payload.Source
+		if epoch.experimentID != "" && observation.ExperimentID != epoch.experimentID {
+			return fmt.Errorf("belief observation adapter mismatch")
+		}
 		sourceIndex, ok := index[source.EventID]
 		if !ok {
 			return fmt.Errorf("belief source event is unavailable")

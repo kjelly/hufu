@@ -78,6 +78,9 @@ to re-create an abstraction that already exists in the runtime.
 
 ### Guides and references
 
+- [Replayable Bayesian belief state](reference/belief-state.md) — team models,
+  receipt-scoped inference, journal recovery, and read-only inspection.
+
 - [Decision authoring](guides/decision-authoring.md)
 - [Agent-team DecisionPrimitives](reference/decision-primitives.md) — trusted
   catalogs, explicit grants, bounded tool calls, and durable replay.

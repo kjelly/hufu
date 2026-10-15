@@ -903,6 +903,7 @@ func (c *Coordinator) appendTaskTransition(ctx context.Context, item *TodoItem, 
 	c.emittedTaskTransitions[fmt.Sprintf("%s:%s:%d", item.ID, item.Status, item.Retries)] = true
 	c.eventOnceMu.Unlock()
 	c.reportHistoricalResult(durable)
+	c.refreshBeliefs(&durable)
 	return nil
 }
 

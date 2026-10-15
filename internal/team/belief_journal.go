@@ -45,6 +45,19 @@ func (j *BeliefJournal) append(ctx context.Context, kind, taskID string, attempt
 	return err
 }
 func (j *BeliefJournal) BindModel(ctx context.Context, model belief.Model) error {
+	return j.bindModel(ctx, model, "")
+}
+
+// BindVerificationModel also pins the adapter selection, so crash repair uses
+// the historical experiment instead of reading the current team definition.
+func (j *BeliefJournal) BindVerificationModel(ctx context.Context, model belief.Model, experimentID string) error {
+	if err := validateBeliefVerificationExperiment(model, experimentID); err != nil {
+		return err
+	}
+	return j.bindModel(ctx, model, experimentID)
+}
+
+func (j *BeliefJournal) bindModel(ctx context.Context, model belief.Model, experimentID string) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	hash, err := belief.ModelDigest(model)
@@ -60,7 +73,7 @@ func (j *BeliefJournal) BindModel(ctx context.Context, model belief.Model) error
 		return err
 	}
 	ref := ArtifactRef{ID: stored.ID, SHA256: stored.SHA256, Kind: "belief_model"}
-	return j.append(ctx, EventBeliefModelBound, "", 0, "model:"+hash, beliefEvent{ModelRef: &ref, ModelDigest: hash, ReducerVersion: belief.ReducerVersion})
+	return j.append(ctx, EventBeliefModelBound, "", 0, "model:"+hash, beliefEvent{ModelRef: &ref, ModelDigest: hash, ReducerVersion: belief.ReducerVersion, ExperimentID: experimentID})
 }
 func (j *BeliefJournal) OpenEpoch(ctx context.Context, epoch belief.Epoch) error {
 	j.mu.Lock()

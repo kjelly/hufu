@@ -24,6 +24,7 @@ const (
 	KindStorage  Kind = "storage"
 	KindOverview Kind = "overview"
 	KindCost     Kind = "cost"
+	KindBeliefs  Kind = "beliefs"
 	// KindControlDecisions summarizes runtime control decision observations.
 	KindControlDecisions Kind = "control-decisions"
 	// KindSemanticRetrieval summarizes semantic retrieval traces.
@@ -86,6 +87,8 @@ func (q InspectQuery) Validate(kind Kind) error {
 		if strings.TrimSpace(q.RunID) == "" {
 			return fmt.Errorf("%w: run id is required for %s", ErrInvalidQuery, kind)
 		}
+	case KindBeliefs:
+		return q.validateBeliefs()
 	case KindTask:
 		if strings.TrimSpace(q.RunID) == "" || strings.TrimSpace(q.TaskID) == "" {
 			return fmt.Errorf("%w: run id and task id are required for task", ErrInvalidQuery)
@@ -118,6 +121,13 @@ func (q InspectQuery) Validate(kind Kind) error {
 		}
 	default:
 		return fmt.Errorf("%w: unsupported kind %q", ErrInvalidQuery, kind)
+	}
+	return nil
+}
+
+func (q InspectQuery) validateBeliefs() error {
+	if strings.TrimSpace(q.RunID) == "" || q.Attempt != 0 || q.ProjectID != "" || q.TeamID != "" || q.AgentID != "" {
+		return fmt.Errorf("%w: beliefs requires a run id and accepts only workspace, task, branch and session filters", ErrInvalidQuery)
 	}
 	return nil
 }
