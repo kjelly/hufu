@@ -103,5 +103,33 @@ func renderInspectBeliefsText(writer io.Writer, query inspectpkg.InspectQuery, d
 			return err
 		}
 	}
+	return renderInspectBeliefPolicies(writer, data)
+}
+
+func renderInspectBeliefPolicies(writer io.Writer, data inspectpkg.BeliefsData) error {
+	for _, policy := range data.Policies {
+		status := "available"
+		if policy.Unavailable != "" {
+			status = "unavailable (" + policy.Unavailable + ")"
+		}
+		if _, err := fmt.Fprintf(writer, "Policy: %s digest=%s status=%s mode=advisory\n", safeOverviewValue(policy.Version), safeOverviewValue(policy.Digest), safeOverviewValue(status)); err != nil {
+			return err
+		}
+	}
+	for _, suggestion := range data.Suggestions {
+		record := suggestion.Record
+		status := "available"
+		if record.Unavailable != "" {
+			status = "unavailable (" + record.Unavailable + ")"
+		}
+		if _, err := fmt.Fprintf(writer, "Advisory: epoch=%s generation=%d candidate=%s hypothesis=%s status=%s\n  Snapshot: %s state=%s\n  Policy: %s digest=%s\n  Cursor: %s hash=%s actor=%s\n  Validation: %s\n", safeOverviewValue(record.EpochID), record.DecisionGeneration, safeOverviewValue(valueOrUnavailable(record.SelectedCandidateID)), safeOverviewValue(valueOrUnavailable(record.SelectedHypothesisID)), safeOverviewValue(status), safeOverviewValue(record.SnapshotDigest), safeOverviewValue(valueOrUnavailable(record.StateDigest)), safeOverviewValue(record.PolicyVersion), safeOverviewValue(record.PolicyDigest), safeOverviewValue(record.SourceCursorID), safeOverviewValue(record.SourceCursorHash), safeOverviewValue(valueOrUnavailable(record.SourceActor)), safeOverviewValue(suggestion.Validation)); err != nil {
+			return err
+		}
+		if suggestion.Unavailable != "" {
+			if _, err := fmt.Fprintf(writer, "  Validation unavailable: %s\n", safeOverviewValue(suggestion.Unavailable)); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }

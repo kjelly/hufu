@@ -67,6 +67,9 @@ func InspectBeliefs(ctx context.Context, query InspectQuery) (*Envelope, error) 
 		data.Diagnostics = slices.DeleteFunc(data.Diagnostics, func(diagnostic team.BeliefDiagnostic) bool {
 			return diagnostic.TaskID != "" && diagnostic.TaskID != query.TaskID
 		})
+		data.Suggestions = slices.DeleteFunc(data.Suggestions, func(suggestion team.BeliefSuggestionView) bool {
+			return !slices.ContainsFunc(data.Epochs, func(epoch team.BeliefEpochState) bool { return epoch.Epoch.ID == suggestion.Record.EpochID })
+		})
 	}
 	result := envelope(KindBeliefs, query, lineage.BranchID, data)
 	if len(data.Models) == 0 {
@@ -79,6 +82,16 @@ func InspectBeliefs(ctx context.Context, query InspectQuery) (*Envelope, error) 
 	}
 	for _, epoch := range data.Epochs {
 		if epoch.Unavailable != "" {
+			result.Integrity.Projection = "unavailable"
+		}
+	}
+	for _, policy := range data.Policies {
+		if policy.Unavailable != "" {
+			result.Integrity.Projection = "unavailable"
+		}
+	}
+	for _, suggestion := range data.Suggestions {
+		if suggestion.Validation == "unavailable" {
 			result.Integrity.Projection = "unavailable"
 		}
 	}

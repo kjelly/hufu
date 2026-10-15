@@ -18,6 +18,8 @@ are rejected before model execution.
 belief:
   model-file: models/diagnostic.json
   experiment: comparison
+  # Optional; omitting this keeps belief calculation without policy advice.
+  policy-file: policies/diagnostic.json
 ```
 
 The selected experiment must declare `source: verification` and exactly the
@@ -79,11 +81,89 @@ source, yield `dependence_unresolved` with a null distribution.
 
 ## Persistence and recovery
 
-Models live in the existing immutable artifact store; model bindings, epochs,
+Models and optional bound policies live in the existing immutable artifact store; model bindings, epochs,
 admissions, retractions and closure are events in `runtime.sqlite`. Runtime
 model and adapter identity are pinned in the existing execution-policy
 snapshot. Changing a model or selected experiment fails resume with policy
 drift; use a new session for a changed execution policy.
+
+## Advisory policies
+
+An optional `belief.policy-file` enables deterministic suggestions after runtime
+observations. It is strict JSON, confined to the team directory, with a 64 KiB
+limit. The supported schema is
+[`policy.schema.json`](../../internal/belief/policy.schema.json), with this
+synthetic example:
+
+```json
+{
+  "schema_version": 1,
+  "version": "synthetic-v1",
+  "algorithm": "max_posterior_v1",
+  "mode": "advisory",
+  "choices": [
+    {"hypothesis_id": "h1", "candidate_id": "check-a"},
+    {"hypothesis_id": "h2", "candidate_id": "check-b"}
+  ]
+}
+```
+
+Every model hypothesis needs exactly one mapping. Each candidate must already
+exist in the team's validated `action-catalog`, declare `side-effect: none`,
+and have at least one actor in both its discover and propose lists. A policy
+file cannot supply grants. For example, a candidate can use the existing
+catalog contract:
+
+```yaml
+action-catalog:
+  check-a:
+    description: Inspect one bounded diagnostic result.
+    capability: diagnostics  # An existing action-providers capability.
+    type: check_a
+    agent: worker
+    side-effect: none
+    input-schema:
+      type: object
+      additional-properties: false
+    access:
+      discover: [worker]
+      propose: [worker]
+```
+
+The example policy also requires `check-b` to be declared. Runtime uses the
+source receipt event's actor to check the frozen proposal eligibility. A
+missing grant produces `candidate_not_authorized`; unknown distributions
+produce `distribution_unavailable`. Neither produces a selected candidate.
+
+`max_posterior_v1` selects the highest published Q9 mass, breaking a tie by
+hypothesis ID. This demonstrates consuming the distribution; it does not
+estimate information gain, cost or diagnostic accuracy. It never invokes the
+candidate, proposes an action, schedules a task, calls a model, or consumes or
+resets execution budgets. Active mode is rejected.
+
+The execution-policy snapshot pins the bound policy digest, which includes
+the model, policy and frozen catalog eligibility. Changing it fails resume.
+Each `belief_policy_suggested` event saves the snapshot and state digests,
+policy version/digest, candidate and hypothesis or an unavailable reason,
+source cursor/hash/actor, synthetic flag and epoch-local `decision_generation`.
+This sequence is separate from the active decision engine's generation.
+
+Retries of one snapshot return the same durable generation. Effective belief
+or source-actor changes advance it; closure and duplicate admission do not.
+The writer validates the expected snapshot and generation, then fences the
+global journal head inside the SQLite write transaction. A late computation
+must reread and recompute. A maximum of 1,024 generations per epoch and 4,096
+records per inspected run bounds replay; exceeding a limit reports unavailable
+bookkeeping and does not alter completed execution.
+
+Replay verifies each recommendation at its historical input cursor. Missing
+model or policy artifacts preserve the recorded choice, with validation marked
+unavailable; missing policy does not erase a reconstructable distribution.
+Availability failures recorded by the runtime are historical facts: restoring
+an artifact does not rewrite an earlier unavailable generation. Current team
+files never substitute for a locked artifact.
+
+## Reconstruction
 
 The Coordinator maintains a defensive in-memory projection. Discarding that
 cache does not change its digest: replay verifies the journal and selected
@@ -121,7 +201,8 @@ digest, effective experiment/outcome observations, source event/hash/receipt
 references and retractions. They omit raw
 worker output, verifier command/output and working directories. Unknown mass
 is null/unavailable, never zero or a uniform distribution. Missing model
-artifacts retain available source references.
+artifacts retain available source references. Policy bindings and historical
+suggestions include their provenance and validation status in both formats.
 
 Inspection does not repair bookkeeping, create a missing workspace, migrate
 storage, load team files, or execute historical operations. The useful result

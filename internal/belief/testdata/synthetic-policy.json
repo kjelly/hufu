@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "version": "synthetic-v1",
+  "algorithm": "max_posterior_v1",
+  "mode": "advisory",
+  "choices": [
+    {"hypothesis_id": "h1", "candidate_id": "check-a"},
+    {"hypothesis_id": "h2", "candidate_id": "check-b"}
+  ]
+}

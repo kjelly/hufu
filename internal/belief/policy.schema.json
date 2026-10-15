@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hufu.local/schemas/belief-policy-v1",
+  "title": "Finite advisory belief policy v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "version", "algorithm", "mode", "choices"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "version": {"$ref": "#/$defs/id"},
+    "algorithm": {"const": "max_posterior_v1"},
+    "mode": {"const": "advisory"},
+    "choices": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["hypothesis_id", "candidate_id"],
+        "properties": {
+          "hypothesis_id": {"$ref": "#/$defs/id"},
+          "candidate_id": {"$ref": "#/$defs/id"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_.:-]+$"}
+  }
+}

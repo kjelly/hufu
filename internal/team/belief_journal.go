@@ -45,7 +45,7 @@ func (j *BeliefJournal) append(ctx context.Context, kind, taskID string, attempt
 	return err
 }
 func (j *BeliefJournal) BindModel(ctx context.Context, model belief.Model) error {
-	return j.bindModel(ctx, model, "")
+	return j.bindModel(ctx, model, "", nil)
 }
 
 // BindVerificationModel also pins the adapter selection, so crash repair uses
@@ -54,10 +54,19 @@ func (j *BeliefJournal) BindVerificationModel(ctx context.Context, model belief.
 	if err := validateBeliefVerificationExperiment(model, experimentID); err != nil {
 		return err
 	}
-	return j.bindModel(ctx, model, experimentID)
+	return j.bindModel(ctx, model, experimentID, nil)
 }
 
-func (j *BeliefJournal) bindModel(ctx context.Context, model belief.Model, experimentID string) error {
+// BindRuntimeModel locks optional policy and eligibility artifacts together
+// with the model; subsequent replay never consults a live catalog or file.
+func (j *BeliefJournal) BindRuntimeModel(ctx context.Context, model belief.Model, experimentID string, policy *BoundBeliefPolicy) error {
+	if err := validateBeliefVerificationExperiment(model, experimentID); err != nil {
+		return err
+	}
+	return j.bindModel(ctx, model, experimentID, policy)
+}
+
+func (j *BeliefJournal) bindModel(ctx context.Context, model belief.Model, experimentID string, policy *BoundBeliefPolicy) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	hash, err := belief.ModelDigest(model)
@@ -73,7 +82,43 @@ func (j *BeliefJournal) bindModel(ctx context.Context, model belief.Model, exper
 		return err
 	}
 	ref := ArtifactRef{ID: stored.ID, SHA256: stored.SHA256, Kind: "belief_model"}
-	return j.append(ctx, EventBeliefModelBound, "", 0, "model:"+hash, beliefEvent{ModelRef: &ref, ModelDigest: hash, ReducerVersion: belief.ReducerVersion, ExperimentID: experimentID})
+	payload := beliefEvent{ModelRef: &ref, ModelDigest: hash, ReducerVersion: belief.ReducerVersion, ExperimentID: experimentID}
+	if policy != nil {
+		if policy.ModelDigest != hash {
+			return fmt.Errorf("belief policy model binding mismatch")
+		}
+		digest, err := boundBeliefPolicyDigest(*policy)
+		if err != nil {
+			return err
+		}
+		data, err := json.Marshal(policy, json.Deterministic(true))
+		if err != nil {
+			return err
+		}
+		stored, err := j.artifacts.Put(ctx, PutArtifactRequest{Content: data, Kind: "belief_policy", Role: "policy", MediaType: "application/json", Path: "belief/policies/" + digest + ".json", RunID: j.runID})
+		if err != nil {
+			return err
+		}
+		payload.PolicyRef = &ArtifactRef{ID: stored.ID, SHA256: stored.SHA256, Kind: "belief_policy"}
+		payload.PolicyDigest, payload.PolicyVersion = digest, policy.Policy.Version
+	}
+	events, err := j.events(ctx)
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		if event.Type != EventBeliefModelBound || event.RunID != j.runID {
+			continue
+		}
+		var previous beliefEvent
+		if err := json.Unmarshal(event.Payload, &previous); err != nil {
+			return err
+		}
+		if previous.ModelDigest == hash && !sameRuntimeBeliefBinding(previous, payload) {
+			return fmt.Errorf("conflicting belief runtime binding")
+		}
+	}
+	return j.append(ctx, EventBeliefModelBound, "", 0, "model:"+hash, payload)
 }
 func (j *BeliefJournal) OpenEpoch(ctx context.Context, epoch belief.Epoch) error {
 	j.mu.Lock()

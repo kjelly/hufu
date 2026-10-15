@@ -28,10 +28,12 @@ type BeliefDiagnostic struct {
 }
 
 type BeliefRunState struct {
-	RunID       string             `json:"run_id"`
-	Models      []BeliefModelState `json:"models"`
-	Epochs      []BeliefEpochState `json:"epochs"`
-	Diagnostics []BeliefDiagnostic `json:"diagnostics"`
+	RunID       string                 `json:"run_id"`
+	Models      []BeliefModelState     `json:"models"`
+	Epochs      []BeliefEpochState     `json:"epochs"`
+	Diagnostics []BeliefDiagnostic     `json:"diagnostics"`
+	Policies    []BeliefPolicyState    `json:"policies"`
+	Suggestions []BeliefSuggestionView `json:"suggestions"`
 }
 
 // ProjectBeliefRun reads only a caller-validated lineage and its locked
@@ -41,7 +43,7 @@ func ProjectBeliefRun(ctx context.Context, events []RunEvent, artifacts Artifact
 	if err != nil {
 		return BeliefRunState{}, err
 	}
-	view := BeliefRunState{RunID: runID, Models: []BeliefModelState{}, Epochs: epochs, Diagnostics: []BeliefDiagnostic{}}
+	view := BeliefRunState{RunID: runID, Models: []BeliefModelState{}, Epochs: epochs, Diagnostics: []BeliefDiagnostic{}, Policies: []BeliefPolicyState{}}
 	seen := map[string]bool{}
 	for _, event := range events {
 		if event.RunID != runID {
@@ -63,6 +65,9 @@ func ProjectBeliefRun(ctx context.Context, events []RunEvent, artifacts Artifact
 				item.ID, item.Version, item.Synthetic = model.ID, model.Version, new(model.Synthetic)
 			}
 			view.Models = append(view.Models, item)
+			if payload.PolicyDigest != "" {
+				view.Policies = append(view.Policies, projectBeliefPolicyBinding(ctx, artifacts, payload))
+			}
 		case EventBeliefUnavailable:
 			var diagnostic BeliefDiagnostic
 			if err := json.Unmarshal(event.Payload, &diagnostic, json.RejectUnknownMembers(true)); err != nil || event.Actor != beliefActor || diagnostic.SchemaVersion != 1 || !slices.Contains([]string{"model_binding_unavailable", "source_binding_unavailable", "bookkeeping_unavailable", "replay_unavailable"}, diagnostic.Code) {
@@ -71,7 +76,25 @@ func ProjectBeliefRun(ctx context.Context, events []RunEvent, artifacts Artifact
 			view.Diagnostics = append(view.Diagnostics, diagnostic)
 		}
 	}
+	view.Suggestions, err = ProjectBeliefSuggestions(ctx, events, artifacts, runID)
+	if err != nil {
+		return BeliefRunState{}, err
+	}
 	return view, nil
+}
+
+func projectBeliefPolicyBinding(ctx context.Context, artifacts ArtifactStore, payload beliefEvent) BeliefPolicyState {
+	result := BeliefPolicyState{ModelDigest: payload.ModelDigest, Digest: payload.PolicyDigest, Version: payload.PolicyVersion, Unavailable: "policy_unavailable"}
+	if payload.PolicyRef == nil {
+		return result
+	}
+	result.ArtifactID = payload.PolicyRef.ID
+	policy, reason := loadBoundBeliefPolicy(ctx, artifacts, *payload.PolicyRef, payload.PolicyDigest)
+	result.Unavailable = reason
+	if policy != nil && (policy.ModelDigest != payload.ModelDigest || policy.Policy.Version != payload.PolicyVersion) {
+		result.Unavailable = "policy_invalid"
+	}
+	return result
 }
 
 func cloneBeliefRunState(src BeliefRunState) BeliefRunState {
@@ -83,6 +106,13 @@ func cloneBeliefRunState(src BeliefRunState) BeliefRunState {
 		}
 	}
 	dst.Diagnostics = slices.Clone(src.Diagnostics)
+	dst.Policies = slices.Clone(src.Policies)
+	dst.Suggestions = slices.Clone(src.Suggestions)
+	for i := range dst.Suggestions {
+		if src.Suggestions[i].Record.Synthetic != nil {
+			dst.Suggestions[i].Record.Synthetic = new(*src.Suggestions[i].Record.Synthetic)
+		}
+	}
 	dst.Epochs = slices.Clone(src.Epochs)
 	for i := range dst.Epochs {
 		dst.Epochs[i].Sources = slices.Clone(src.Epochs[i].Sources)

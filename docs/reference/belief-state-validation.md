@@ -35,7 +35,7 @@ Use a short **GOTMPDIR as well as TMPDIR** for later full and race runs.
 | A: pure finite Bayesian core | Complete | Schema, exact update, bounded validation, deterministic digests; checks below. |
 | B: durable binding and replay | Complete | SQLite journal, immutable model binding, canonical receipt admission, tombstones and lineage replay; checks below. |
 | C: runtime integration and inspect | Complete | Opt-in team compilation, execution-policy pinning, canonical runtime observations, restart/branch repair, text/JSON inspection; checks below. |
-| D: advisory policy | Pending | — |
+| D: advisory policy | Implemented and stage-validated; aggregate race pending | Frozen policies/catalog eligibility, durable generations, transactional head fence and historical inspection; checks below. |
 
 The user selected explicitly synthetic models for initial runtime integration
 and advisory-only policy. Production calibration and active candidate dispatch
@@ -61,8 +61,8 @@ Benchmark hardware: Intel Core i7-6700K @ 4.00GHz, linux/amd64, Go 1.27.2,
 The initial lint run found a boolean style warning; the implementation was
 corrected and the complete lint gate passed on rerun.
 
-A delivers computation only. Runtime integration is delivered by C; advisory
-policy consumption remains stage D work.
+A delivers computation only. Runtime integration and advisory policy
+consumption are recorded under C and D below.
 
 ## Stage B
 
@@ -129,5 +129,96 @@ input admission, session checkpoint, event-store startup and
 `ResumeInterruptedTasks` APIs and proves a completed action is not repeated.
 
 Usage and the deliberately narrow receipt/input/environment scope are described
-in [`belief-state.md`](belief-state.md). D remains unfinished and no policy
-recommendation or active candidate selection is delivered by A–C.
+in [`belief-state.md`](belief-state.md). No policy recommendation or active
+candidate selection is delivered by A–C; D adds advisory records only.
+
+## Stage D
+
+An optional, confined `belief.policy-file` compiles a strict finite advisory
+policy against existing catalog candidates with side-effect `none`. Model and
+policy digests plus frozen discover/propose eligibility live in the existing
+CAS and execution-policy snapshot. A source actor without the frozen grant
+cannot select that candidate. The pure policy consumes the published Q9
+distribution with deterministic ties; it cannot call a provider or tool.
+
+Each historical suggestion binds the epoch, snapshot/state digests, policy
+version/digest, source cursor/hash/actor, candidate/hypothesis or unavailable
+reason, synthetic flag and epoch-local generation. The conditional journal
+checks the global chain head inside SQLite's write transaction. Late results
+are refused, uncertain commits reconcile to the existing generation, and
+inherited epochs remain read-only on a child branch.
+
+The runtime records suggestions after its existing observation refresh.
+Checkpoint/resume and cache reconstruction preserve the recorded generation
+without dispatching a candidate, repeating execution, changing task status or
+resetting execution budgets. Inspector projections retain historical choices
+when their artifacts are missing and distinguish validation unavailability
+from a recorded unavailable result. Restoring an artifact never rewrites an
+earlier availability fact.
+
+| Command (short GOTMPDIR/TMPDIR for tests) | Exit | Evidence |
+| --- | --- | --- |
+| `go test ./internal/belief ./internal/team ./internal/inspect ./cmd/hufu -run 'TestPolicy\|TestEventStoreConditional\|^TestBelief' -timeout 120s` | 0 | Final binding helper included: team 7.870s, inspect 0.973s, CLI 1.081s. Synthetic choice/tie/schema, authority, 100 retries, retraction, concurrent writers, late append, uncertain commit, forged history, missing/restored artifacts, branch/global-head isolation, real runtime restart/budgets and read-only/text inspection. |
+| `go test ./...` with local sockets allowed | 0 | Final complete suite: team 336.143s, CLI 238.726s, tools 64.207s; no skips. |
+| `go vet ./...` | 0 | Final complete gate passed. |
+| `golangci-lint run --allow-parallel-runners` | 0 | Final publication gate: 0 issues. A held shared lock blocked serial runners; the supported parallel option leaves all checkers enabled. |
+| `go test -race ./internal/belief/... ./internal/team/... ./internal/inspect/... -run 'TestPolicy\|TestEventStoreConditional\|^TestBelief\|^TestVerificationRepairReturnsToProducerOnce$' -count 1 -timeout 3m` | 0 | All new belief/policy/persistence tests and the synchronized repair test: team 42.873s; inspect 3.509s. |
+| Original baseline archive: `go test -race ./internal/team -run '^TestVerificationRepairReturnsToProducerOnce$' -count 20 -timeout 3m` | 1 | Independently reproduced the same pre-existing live-item assertion race (0.829s). |
+| `go test -race -timeout 20m ./internal/belief/... ./internal/team/... ./internal/inspect/...` | 1 | Found that baseline race, then reached the package timeout during `TestSessionDataConcurrentCheckpointNoRace`. |
+| `go test ./...` after the baseline test synchronization | 0 | Complete follow-up suite, local sockets allowed; all tests passed. |
+| `go test -race -timeout 40m ./internal/belief/... ./internal/team/... ./internal/inspect/...` | Running | Complete aggregate rerun. The final stateless append-capacity guard has a separate targeted follow-up. |
+
+The first complete test run included two development fixtures with incomplete
+metadata: a branch event lacked an actor and a catalog schema lacked explicit
+`additional-properties: false`. They were corrected. That same run also failed
+the unchanged `TestContextQuerySelectionRollsBackAllScopesOnFailure/shared_deadline`
+with 3 calls instead of 2 (145.050324ms). The context query implementation and
+test are unchanged from the passing original baseline. The final full suite
+passed; this record does not claim a proven cause or a context-query fix.
+
+The initial full race command reached Go's default 10-minute package timeout
+while `TestSetAcceptance_RejectedEmptyUpdateAudited` had just started. The
+captured log had no data-race report. This is not recorded as a passing race
+gate. The 20-minute rerun continued further and detected a race in the unchanged
+`TestVerificationRepairReturnsToProducerOnce`: its assertion read a live
+`TodoItem.RemediationContext` while the canceled repair worker installed a new
+projection into that same item. It later timed out during the concurrent
+checkpoint stress test; it was not a passing race gate.
+
+The exact repair test reproduced the same race in an isolated archive of the
+original baseline. Commit `8c44625c` fixes only test synchronization: receive the
+relaunched worker result before inspecting the aliased item. All existing
+assertions remain. The targeted race suite, vet and complete lint passed after
+this fix. The full aggregate race suite is running with a 40-minute package
+limit; timing out does not count as passing.
+
+Lint initially reported complexity 44 against the existing threshold 40 in
+the extended belief reducer. The binding checks were extracted into a shared
+validator, preserving the threshold and all enabled checkers; final lint and
+targeted regression checks passed.
+
+The final provenance regression also covers duplicate admission events that
+reference an alias of the same receipt from another actor. Both math and
+policy retain the first source, so a duplicate cannot change proposal
+eligibility or create a generation. The writer checks run-history and epoch
+capacity before appending; a valid append cannot cross the reader's replay
+limit. Boundary tests cover the last accepted slot and refusal at either
+limit. The final guard targeted race validation passed; the aggregate run began before
+that stateless guard, so its targeted follow-up is reported separately.
+
+Final frozen-code follow-ups:
+
+- `go test -race ./internal/belief/... ./internal/team/... ./internal/inspect/... -run 'TestPolicy|TestEventStoreConditional|^TestBelief|^TestVerificationRepairReturnsToProducerOnce$' -count 1 -timeout 3m`: exit 0; team 35.197s, inspect 3.289s, belief 1.550s. Includes both source-alias and append-capacity regressions.
+- `go test ./cmd/hufu -run '^TestBelief'`: exit 0 after the final CLI-test-only promoted-field literal cleanup.
+- `go vet ./...`: exit 0 with the final production code. The CLI-only test formatting follow-up is checked separately.
+- `golangci-lint run --allow-parallel-runners`: exit 0, 0 issues after that last test cleanup. The lock coordination option disables no checker and changes no threshold.
+
+Publication-stage required gates passed on the final production code:
+`go test ./...` exited 0 (team 381.005s), `go vet ./...` exited 0, and
+`golangci-lint run --allow-parallel-runners` exited 0 with 0 issues. After
+the CLI-test-only literal cleanup, `go test ./cmd/hufu -run '^TestBelief'`
+and `go vet ./cmd/hufu` also exited 0. No tests were skipped. One intermediate
+non-race run from before the final append guard exhausted its default
+10-minute package timeout; the final frozen-code complete run passed.
+The aggregate 40-minute race run remains in progress, so the PR stays draft
+and no all-suite-race success is claimed yet.

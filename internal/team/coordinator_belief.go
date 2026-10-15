@@ -114,6 +114,7 @@ func (c *Coordinator) refreshBeliefs(source *RunEvent) {
 	// The cache is expendable. Every publication is reconstructed from the
 	// durable lineage, including admissions repaired above.
 	runtime.rebuild(ctx)
+	runtime.suggestPolicies(ctx)
 }
 
 func validateBeliefVerificationExperimentValue(model *belief.Model, experimentID string) error {
@@ -143,7 +144,7 @@ func runtimeBeliefBindings(events []RunEvent) ([]runtimeBeliefBinding, error) {
 			continue
 		}
 		if prior, ok := seen[event.RunID]; ok {
-			if prior.ModelDigest != payload.ModelDigest || prior.ExperimentID != payload.ExperimentID {
+			if !sameRuntimeBeliefBinding(prior, payload) {
 				return nil, fmt.Errorf("conflicting runtime belief adapter")
 			}
 			continue
@@ -162,7 +163,7 @@ func (r *coordinatorBeliefs) bindCurrent(ctx context.Context, compiled *Compiled
 		}
 		if event.Type == EventBeliefModelBound {
 			var payload beliefEvent
-			if err := json.Unmarshal(event.Payload, &payload); err != nil || payload.ModelDigest != compiled.snapshot.ModelDigest || payload.ExperimentID != compiled.snapshot.ExperimentID {
+			if err := json.Unmarshal(event.Payload, &payload); err != nil || payload.ModelDigest != compiled.snapshot.ModelDigest || payload.ExperimentID != compiled.snapshot.ExperimentID || payload.PolicyDigest != compiled.snapshot.PolicyDigest {
 				return fmt.Errorf("belief runtime binding mismatch")
 			}
 			return nil
@@ -176,7 +177,20 @@ func (r *coordinatorBeliefs) bindCurrent(ctx context.Context, compiled *Compiled
 	if hasSource {
 		return fmt.Errorf("belief historical model binding missing")
 	}
-	return r.journal.BindVerificationModel(ctx, compiled.model, compiled.snapshot.ExperimentID)
+	return r.journal.BindRuntimeModel(ctx, compiled.model, compiled.snapshot.ExperimentID, compiled.policy)
+}
+
+func sameRuntimeBeliefBinding(a, b beliefEvent) bool {
+	if a.ModelDigest != b.ModelDigest || a.ReducerVersion != b.ReducerVersion || a.ExperimentID != b.ExperimentID || a.PolicyDigest != b.PolicyDigest || a.PolicyVersion != b.PolicyVersion {
+		return false
+	}
+	if a.ModelRef == nil || b.ModelRef == nil || a.ModelRef.Kind != b.ModelRef.Kind || !sameArtifactIdentity(*a.ModelRef, *b.ModelRef) {
+		return false
+	}
+	if a.PolicyRef == nil || b.PolicyRef == nil {
+		return a.PolicyRef == nil && b.PolicyRef == nil
+	}
+	return a.PolicyRef.Kind == b.PolicyRef.Kind && sameArtifactIdentity(*a.PolicyRef, *b.PolicyRef)
 }
 
 func isBeliefVerificationSource(kind string) bool {

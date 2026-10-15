@@ -6,4 +6,5 @@ package agent
 type BeliefConfig struct {
 	ModelFile  string `yaml:"model-file"`
 	Experiment string `yaml:"experiment"`
+	PolicyFile string `yaml:"policy-file,omitempty"`
 }

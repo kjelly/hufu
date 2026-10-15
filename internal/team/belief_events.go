@@ -35,6 +35,9 @@ type beliefEvent struct {
 	ModelDigest    string              `json:"model_digest,omitempty"`
 	ReducerVersion string              `json:"reducer_version,omitempty"`
 	ExperimentID   string              `json:"experiment_id,omitempty"`
+	PolicyRef      *ArtifactRef        `json:"policy_ref,omitempty"`
+	PolicyDigest   string              `json:"policy_digest,omitempty"`
+	PolicyVersion  string              `json:"policy_version,omitempty"`
 	Epoch          *belief.Epoch       `json:"epoch,omitempty"`
 	EpochID        string              `json:"epoch_id,omitempty"`
 	Observation    *belief.Observation `json:"observation,omitempty"`
@@ -72,6 +75,7 @@ func ProjectBeliefEpochs(ctx context.Context, events []RunEvent, artifacts Artif
 	models := map[string]*belief.Model{}
 	modelErrors := map[string]string{}
 	adapters := map[string]string{}
+	bindings := map[string]beliefEvent{}
 	epochs := map[string]*beliefEpochReducer{}
 	eventIndex := map[string]int{}
 	sessionID := ""
@@ -103,8 +107,8 @@ func ProjectBeliefEpochs(ctx context.Context, events []RunEvent, artifacts Artif
 		}
 		switch event.Type {
 		case EventBeliefModelBound:
-			if payload.ModelRef == nil || payload.ModelDigest == "" {
-				return nil, fmt.Errorf("incomplete belief model binding")
+			if err := validateBeliefRuntimeBinding(payload, bindings); err != nil {
+				return nil, err
 			}
 			model, reason := loadBoundBeliefModel(ctx, artifacts, *payload.ModelRef, payload.ModelDigest, payload.ReducerVersion)
 			if previous, ok := models[payload.ModelDigest]; ok && previous != nil && model != nil {
@@ -180,6 +184,20 @@ func ProjectBeliefEpochs(ctx context.Context, events []RunEvent, artifacts Artif
 		return cmp.Compare(a.Epoch.ID, b.Epoch.ID)
 	})
 	return out, nil
+}
+
+func validateBeliefRuntimeBinding(payload beliefEvent, bindings map[string]beliefEvent) error {
+	if payload.ModelRef == nil || payload.ModelDigest == "" {
+		return fmt.Errorf("incomplete belief model binding")
+	}
+	if (payload.PolicyRef == nil) != (payload.PolicyDigest == "") || (payload.PolicyVersion == "") != (payload.PolicyDigest == "") || payload.PolicyDigest != "" && !decisionDigestPattern.MatchString(payload.PolicyDigest) {
+		return fmt.Errorf("incomplete belief policy binding")
+	}
+	if previous, exists := bindings[payload.ModelDigest]; exists && !sameRuntimeBeliefBinding(previous, payload) {
+		return fmt.Errorf("conflicting belief runtime binding")
+	}
+	bindings[payload.ModelDigest] = payload
+	return nil
 }
 
 func beliefEventMatchesScope(event RunEvent, scope belief.Scope) bool {

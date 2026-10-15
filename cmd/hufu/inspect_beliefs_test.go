@@ -133,3 +133,26 @@ func TestBeliefInspectUnavailableKeepsSourceRefs(t *testing.T) {
 		t.Fatal("missing model binding hid its diagnostic")
 	}
 }
+
+func TestBeliefPolicyInspectTextPreservesHistoricalSelection(t *testing.T) {
+	data := inspectpkg.BeliefsData{
+		RunID:    "run-1",
+		Policies: []team.BeliefPolicyState{{Version: "synthetic-v1", Digest: "locked-policy", Unavailable: "policy_unavailable"}},
+		Suggestions: []team.BeliefSuggestionView{{
+			Record:     team.BeliefPolicySuggestion{Mode: "advisory", EpochID: "epoch-1", DecisionGeneration: 7, SelectedCandidateID: "check-b", SelectedHypothesisID: "h2", PolicyVersion: "synthetic-v1", PolicyDigest: "locked-policy", SnapshotDigest: "historical-snapshot", StateDigest: "historical-state", SourceCursorID: "admission-1", SourceCursorHash: "cursor-hash", SourceActor: "worker"},
+			Validation: "unavailable", Unavailable: "policy_unavailable",
+		}},
+	}
+	var output bytes.Buffer
+	if err := renderInspectBeliefsText(&output, inspectpkg.InspectQuery{}, data); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"mode=advisory", "generation=7 candidate=check-b hypothesis=h2 status=available", "historical-snapshot", "historical-state", "locked-policy", "admission-1 hash=cursor-hash actor=worker", "Validation unavailable: policy_unavailable"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("lost advisory history %q: %s", want, output.String())
+		}
+	}
+	if strings.Contains(output.String(), "unavailable=unavailable") || strings.Contains(output.String(), "0.000000000") {
+		t.Fatal("renderer invented a missing status or probability")
+	}
+}

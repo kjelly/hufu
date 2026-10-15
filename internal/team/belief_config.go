@@ -17,6 +17,7 @@ type ExecutionBeliefSnapshot struct {
 	ModelDigest    string `json:"model_digest"`
 	ReducerVersion string `json:"reducer_version"`
 	ExperimentID   string `json:"experiment_id"`
+	PolicyDigest   string `json:"policy_digest,omitempty"`
 }
 
 // CompiledBelief is process-local, immutable after team loading. Replay reads
@@ -24,6 +25,7 @@ type ExecutionBeliefSnapshot struct {
 type CompiledBelief struct {
 	model    belief.Model
 	snapshot ExecutionBeliefSnapshot
+	policy   *BoundBeliefPolicy
 }
 
 func executionPolicyBelief(session *TeamSession) *ExecutionBeliefSnapshot {
@@ -73,7 +75,28 @@ func compileTeamBelief(session *TeamSession) error {
 	if err != nil {
 		return err
 	}
-	session.Belief = &CompiledBelief{model: model, snapshot: ExecutionBeliefSnapshot{ModelDigest: digest, ReducerVersion: belief.ReducerVersion, ExperimentID: config.Experiment}}
+	compiled := &CompiledBelief{model: model, snapshot: ExecutionBeliefSnapshot{ModelDigest: digest, ReducerVersion: belief.ReducerVersion, ExperimentID: config.Experiment}}
+	if config.PolicyFile != "" {
+		data, err := readBeliefPolicyFile(session.Dir, config.PolicyFile)
+		if err != nil {
+			return err
+		}
+		policy, err := belief.DecodePolicy(data)
+		if err != nil {
+			return err
+		}
+		bound, err := CompileBeliefPolicy(model, policy, session.ActionCatalog)
+		if err != nil {
+			return err
+		}
+		digest, err := boundBeliefPolicyDigest(bound)
+		if err != nil {
+			return err
+		}
+		compiled.policy = &bound
+		compiled.snapshot.PolicyDigest = digest
+	}
+	session.Belief = compiled
 	return nil
 }
 
@@ -96,5 +119,33 @@ func validateExecutionBeliefSnapshot(snapshot *ExecutionBeliefSnapshot) error {
 	if !decisionDigestPattern.MatchString(snapshot.ModelDigest) || snapshot.ReducerVersion != belief.ReducerVersion || strings.TrimSpace(snapshot.ExperimentID) == "" {
 		return fmt.Errorf("invalid belief execution policy binding")
 	}
+	if snapshot.PolicyDigest != "" && !decisionDigestPattern.MatchString(snapshot.PolicyDigest) {
+		return fmt.Errorf("invalid belief policy digest")
+	}
 	return nil
+}
+
+func readBeliefPolicyFile(teamDir, relative string) ([]byte, error) {
+	if !filepath.IsLocal(relative) {
+		return nil, fmt.Errorf("belief policy-file must be team-relative")
+	}
+	root, err := os.OpenRoot(teamDir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	file, err := root.Open(relative)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > belief.MaxPolicyBytes {
+		return nil, fmt.Errorf("belief policy must be a bounded regular file")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, belief.MaxPolicyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }

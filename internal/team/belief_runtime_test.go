@@ -132,13 +132,16 @@ func (j *failBeliefAdmission) Append(ctx context.Context, event RunEvent) (RunEv
 	return j.EventJournal.Append(ctx, event)
 }
 
-func runBeliefAction(t *testing.T, failAdmission bool) (*Coordinator, string) {
+func runBeliefAction(t *testing.T, failAdmission bool, configure ...func(*TeamSession)) (*Coordinator, string) {
 	t.Helper()
 	marker := filepath.Join(t.TempDir(), "executions")
 	command := []string{"/bin/sh", "-c", `printf x >> "$1"; printf '%s' '{"outputs":{"ok":true}}'`, "belief-action", marker}
 	c, session := newCommandActionCoordinator(t, command, "run-belief-action")
 	writeBeliefModel(t, session.Dir)
 	session.Config.Belief = &agent.BeliefConfig{ModelFile: "model.json", Experiment: "comparison"}
+	for _, config := range configure {
+		config(session)
+	}
 	if err := compileTeamBelief(session); err != nil {
 		t.Fatal(err)
 	}

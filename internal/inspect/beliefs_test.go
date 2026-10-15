@@ -24,7 +24,11 @@ func (j beliefTestJournal) ReadEvents(context.Context) ([]team.RunEvent, error) 
 }
 func (j beliefTestJournal) VerifyHashChain(context.Context) error { return j.store.VerifyHashChain() }
 
-func beliefInspectFixture(t *testing.T) (workspace, digest, artifactID string) {
+func (j beliefTestJournal) AppendAtHead(ctx context.Context, event team.RunEvent, head string) (team.RunEvent, error) {
+	return j.store.AppendPersistedAtHead(ctx, event, head)
+}
+
+func beliefInspectFixture(t *testing.T, withPolicy ...bool) (workspace, digest, artifactID string) {
 	t.Helper()
 	workspace = t.TempDir()
 	store, err := team.NewEventStore(workspace, "run-belief", "session-belief")
@@ -57,7 +61,11 @@ func beliefInspectFixture(t *testing.T) (workspace, digest, artifactID string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := journal.BindVerificationModel(t.Context(), model, "comparison"); err != nil {
+	var policy *team.BoundBeliefPolicy
+	if len(withPolicy) > 0 && withPolicy[0] {
+		policy = beliefInspectPolicy(t, model)
+	}
+	if err := journal.BindRuntimeModel(t.Context(), model, "comparison", policy); err != nil {
 		t.Fatal(err)
 	}
 	receipt := team.ExecutionReceipt{RunID: "run-belief", TaskID: "task-1", Attempt: 1, ModelExecutionID: "execution-1", RunInputSnapshotHash: "input-revision-1", VerifyResult: &team.VerificationResult{ExitCode: 0, Fingerprint: "verify-1", Command: "never-execute-private-command", Stdout: "private-output", WorkDir: "/private/workdir"}}
@@ -84,6 +92,15 @@ func beliefInspectFixture(t *testing.T) (workspace, digest, artifactID string) {
 		t.Fatal(err)
 	}
 	digest = states[0].State.Digest
+	if policy != nil {
+		input, err := journal.ReadPolicyInput(t.Context(), epoch.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := journal.SuggestPolicy(t.Context(), epoch.ID, input.SnapshotDigest, input.DecisionGeneration); err != nil {
+			t.Fatal(err)
+		}
+	}
 	events, err := store.ReadEvents()
 	if err != nil {
 		t.Fatal(err)

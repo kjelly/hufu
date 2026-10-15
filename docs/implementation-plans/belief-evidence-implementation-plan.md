@@ -1,6 +1,6 @@
 # 可重播貝式信念狀態：A–D 實作計畫
 
-> Status: active implementation plan
+> Status: A–D implemented; final integration validation in progress
 > Authority: reference（程式、測試及 accepted ADR 優先）
 > Baseline: `c03b785788fbe9b1f636e8b8baca745b6345114e`
 > 日期：2026-10-15
@@ -123,7 +123,7 @@ team 宣告固定版本 policy 與既有 candidate IDs；所有候選必須在�
 
 驗收：記錄完整理由、同 snapshot 重播相同建議、零新增 tool/LLM/dispatch、budget 不重設、舊 generation 結果不污染新 generation、缺候選不擴增權限、歷史 policy 不讀現在設定。
 
-### 6.1 D 的可實作合約（尚未交付）
+### 6.1 D 的交付合約
 
 - `belief.policy-file` 是 optional、team-relative 的嚴格 JSON。第一版只接受 `mode: advisory` 與固定 `max_posterior_v1` 演算法；選最大 Q9 mass，相同 mass 以 hypothesis ID 決定，不從文字解釋意圖。
 - policy 對模型每個 hypothesis 明確指定一個既有 `action-catalog` candidate ID。編譯時拒絕不存在或宣告副作用非 `none` 的候選，並從既有 catalog 取得 discover/propose 名單與 entry/catalog digest；policy 檔不能自填授權。來源 actor 沒有 proposal 權限時只記 unavailable。建議不等於 action proposal 或 invocation，不消耗或擴增既有 invocation grant。
@@ -139,13 +139,14 @@ team 宣告固定版本 policy 與既有 candidate IDs；所有候選必須在�
 3. A 計算核心、合成 fixture、邊界測試，驗證後 commit。
 4. B journal／artifact／replay，驗證後 commit。
 5. C team config／snapshot／state machine／inspect，驗證後 commit。
-6. D advisory policy 及完整驗證／使用指南，驗證後 commit。
+6. D advisory policy、使用指南與階段驗證，驗證後 commit。
+7. 完整整合 race gate 與驗證紀錄可另作文件 commit；全部必要驗證完成前保持 Draft PR。
 
 每個程式階段必跑 targeted tests 與 `golangci-lint run`；階段 B/C 的持久化／concurrency 改動另跑相應 race tests。最後執行：
 
 ```bash
 go test ./internal/belief/... ./internal/team/... ./internal/inspect/... ./cmd/hufu/...
-go test -race ./internal/belief/... ./internal/team/... ./internal/inspect/...
+go test -race -timeout 40m ./internal/belief/... ./internal/team/... ./internal/inspect/...
 go test ./...
 go vet ./...
 golangci-lint run
