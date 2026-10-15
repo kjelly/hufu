@@ -14,6 +14,7 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 	internalmcp "github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 type gatewayTestExecutor struct {
@@ -202,6 +203,10 @@ func TestDynamicToolGatewayInvocationReceiptAndUTF8Truncation(t *testing.T) {
 	if !strings.Contains(string(transcriptData), `"tool":"`+target.Name+`"`) || !strings.Contains(string(transcriptData), `"tool_call_id":"logical-call"`) {
 		t.Fatalf("logical transcript=%s", transcriptData)
 	}
+	records := transcript.evidenceRecords()
+	if len(records) != 2 || records[1].Output != response.Content {
+		t.Fatal("transcript did not retain the gateway's bounded response")
+	}
 
 	receipt := &ExecutionReceipt{ToolInvocations: receipts, ToolInvocationsTruncated: truncated}
 	cloned := cloneExecutionReceipt(receipt)
@@ -212,6 +217,104 @@ func TestDynamicToolGatewayInvocationReceiptAndUTF8Truncation(t *testing.T) {
 	canonical := toCanonicalReceipts([]ExecutionReceipt{*receipt}, nil)
 	if len(canonical) != 1 || len(canonical[0].ToolInvocations) != 1 || canonical[0].ToolInvocations[0].LogicalTool != target.Name {
 		t.Fatalf("canonical receipt projection=%#v", canonical)
+	}
+}
+
+func TestDynamicToolGatewayPreservesContractEvidence(t *testing.T) {
+	for _, targetFromOutput := range []bool{false, true} {
+		for _, scenario := range []string{"matched", "tool_error", "transport_error", "missing_section", "output_limit"} {
+			t.Run(fmt.Sprintf("%s/output_target=%t", scenario, targetFromOutput), func(t *testing.T) {
+				contract := textEvidenceTestContract(t, targetFromOutput)
+				c := newDirectTypedCoordinator(t, "view", nil, nil)
+				todoID := resolverTodoID(t, c, "document-evidence")
+				key := "document-" + strings.Repeat("a", 600)
+				input := `{"key":"` + key + `"}`
+				secret := "sk-secret-1234567890abcdef"
+				content := "Document: " + key + "\n### Content\n" + strings.Repeat("界", 600) + "\nexact words\nAuthorization: Bearer " + secret + "\n### End\n"
+				executor := &gatewayTestExecutor{text: content, isErr: scenario == "tool_error"}
+				switch scenario {
+				case "transport_error":
+					executor.err = fmt.Errorf("%s%s", content, strings.Repeat("界", maxDynamicGatewayOutputBytes))
+				case "missing_section":
+					executor.text = strings.TrimSuffix(content, "### End\n")
+				case "output_limit":
+					executor.text = "Document: " + key + "\n### Content\n" + strings.Repeat("界", maxDynamicGatewayOutputBytes) + "\nexact words\n### End\n"
+				}
+				target := DynamicToolTarget{
+					Name: "source__read_document", Kind: "mcp", Server: "source", NativeName: "read_document",
+					DescriptorSHA256: strings.Repeat("a", 64), Required: []string{"key"},
+					InputSchema: map[string]any{
+						"type": "object", "additionalProperties": false, "required": []any{"key"},
+						"properties": map[string]any{"key": map[string]any{"type": "string"}},
+					},
+				}
+				gateway := newDynamicToolGateway(c, executor, []DynamicToolTarget{target})
+				transcript, err := newTaskTranscriptForAttempt(t.TempDir(), todoID, "run", 1, "worker")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = transcript.Close() })
+				var events []StatusEvent
+				c.SetStatusReporter(func(event StatusEvent) { events = append(events, event) })
+				evidence := new(toolCallEvidence)
+				ctx := gatewayTestContext(t, c, dynamicToolGatewayName, target.Name)
+				ctx = withDynamicToolInvocationSink(ctx, nil, dynamicInvocationDiagnosticsReporter(c, transcript, evidence, "worker", todoID))
+				response, err := gateway.Run(ctx, fantasy.ToolCall{ID: "observed", Input: `{"action":"call","target":"source__read_document","arguments":` + input + `}`})
+				if err != nil || response.IsError != (executor.isErr || executor.err != nil) || executor.calls != 1 {
+					t.Fatalf("gateway error=%v responseError=%t calls=%d", err, response.IsError, executor.calls)
+				}
+				records := transcript.evidenceRecords()
+				expectedOutput := utils.RedactSecrets(response.Content)
+				if executor.err != nil {
+					expectedOutput, _, _ = boundDynamicToolOutput(utils.RedactSecrets(executor.err.Error()))
+				}
+				if len(records) != 2 || records[0].Input != input || records[1].Output != expectedOutput || len(records[1].Output) > maxDynamicGatewayOutputBytes {
+					t.Fatal("logical evidence lost complete arguments or bounded tool output")
+				}
+				if err := transcript.Close(); err != nil {
+					t.Fatal(err)
+				}
+				data, err := os.ReadFile(transcript.path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(data), secret) || strings.Contains(records[1].Output, secret) {
+					t.Fatal("credential leaked into retained or durable evidence")
+				}
+				if scenario == "matched" && !strings.Contains(records[1].Output, "[REDACTED]") {
+					t.Fatal("credential beyond the preview was not redacted")
+				}
+				var durable []taskTranscriptRecord
+				for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
+					var record taskTranscriptRecord
+					if err := json.Unmarshal([]byte(line), &record); err != nil {
+						t.Fatal(err)
+					}
+					durable = append(durable, record)
+				}
+				if len(durable) != 2 || durable[0] != records[0] || durable[1] != records[1] {
+					t.Fatal("durable transcript differs from retained evidence")
+				}
+				if len(events) != 2 || len([]rune(events[0].ToolArgs)) > 503 || len([]rune(events[1].ToolResult)) > 503 || len([]rune(evidence.resultText)) > 503 {
+					t.Fatal("operator and retry previews exceeded their bounds")
+				}
+				payload, err := validateStructuredResultPayload(contract, contract.ref(true), []byte(strings.ReplaceAll(evidenceTestPayload, "document-a", key)), records)
+				if err != nil {
+					t.Fatal(err)
+				}
+				value, err := decodeResultContractJSON(payload.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "matched" {
+					if payload.EvidenceDowngrades != 0 || evidenceString(value, "/findings/0/sources/0/call_id") != "observed" {
+						t.Fatalf("full evidence failed citation binding: %s", payload.Value)
+					}
+				} else if payload.EvidenceDowngrades != 1 || evidenceString(value, "/findings/0/verdict") != "unverified" {
+					t.Fatalf("unusable evidence was accepted: %s", payload.Value)
+				}
+			})
+		}
 	}
 }
 

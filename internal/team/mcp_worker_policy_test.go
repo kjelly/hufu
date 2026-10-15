@@ -137,6 +137,10 @@ func TestMCPWorkerPolicyAuthenticityAndFrozenIsolation(t *testing.T) {
 
 func TestMCPWorkerTextEvidenceThroughGateway(t *testing.T) {
 	c, fake, ctx := workerObservationFixture(t)
+	// The quote and closing section must survive beyond diagnostic previews.
+	fake.setHandler(func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		return mcpgo.NewToolResultText("Document: document-a\n### Content\n" + strings.Repeat("頁面內容", 200) + "\nexact words\n### End\n"), nil
+	})
 	descriptor := c.mcpManager.SnapshotToolDescriptors()[0]
 	fingerprint, err := mcp.MCPToolDescriptorSHA256(descriptor)
 	if err != nil {

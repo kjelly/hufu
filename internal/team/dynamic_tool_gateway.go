@@ -438,7 +438,9 @@ func dynamicInvocationDiagnosticsReporter(c *Coordinator, transcript *taskTransc
 		if event.Phase == "authorized" || event.Phase == "denied" {
 			boundedInput := utils.TruncateRunes(utils.RedactSecrets(input), 500)
 			if transcript != nil {
-				_ = transcript.RecordToolCall(event.ToolCallID, event.LogicalTool, boundedInput)
+				// Evidence binding needs complete arguments, including targets
+				// that extend beyond the operator/retry preview.
+				_ = transcript.RecordToolCall(event.ToolCallID, event.LogicalTool, input)
 			}
 			audit.LogToolCall(agentName, event.LogicalTool, boundedInput, event.ToolCallID)
 			c.report(c.newEvent("tool_call").withAgent(agentName).withTodoID(todoID).withTool(event.LogicalTool, boundedInput))
@@ -457,7 +459,11 @@ func dynamicInvocationDiagnosticsReporter(c *Coordinator, transcript *taskTransc
 			isError := event.Phase == "denied" || event.IsError || event.ReasonCode != ""
 			boundedResult := utils.TruncateRunes(utils.RedactSecrets(result), 500)
 			if transcript != nil {
-				_ = transcript.RecordToolResult(event.ToolCallID, event.LogicalTool, boundedResult, isError)
+				// Preserve the gateway response for citation binding. Transport
+				// errors also reach this reporter, so bound redacted evidence
+				// independently of the operator/retry preview.
+				transcriptResult, _, _ := boundDynamicToolOutput(utils.RedactSecrets(result))
+				_ = transcript.RecordToolResult(event.ToolCallID, event.LogicalTool, transcriptResult, isError)
 			}
 			audit.LogToolResult(agentName, event.LogicalTool, boundedResult, isError, event.ToolCallID)
 			c.report(c.newEvent("tool_result").withAgent(agentName).withTodoID(todoID).withToolResult(event.LogicalTool, boundedResult))
