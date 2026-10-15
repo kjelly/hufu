@@ -95,6 +95,8 @@ crash windows：source durable/admission 缺失時 runtime 以固定 key 補 adm
 
 epoch 鎖定 run/branch/task/occurrence/attempt、已持久化 subject/input revision 與 verification/environment contract identity；identity 缺失就 diagnostic unavailable，不補假值。跨 revision／環境／模型／attempt 不沿用 posterior。初期採窄的每 occurrence epoch，避免默認跨 attempt 獨立。
 
+第一版 subject revision 使用 receipt 的 admitted run-input snapshot hash；environment revision 使用已記錄 verifier contract、工作目錄與 execution target 的 digest。這是單筆 receipt 的推斷範圍，並非完整程式樹或 live OS 的內容指紋；不得據此跨 receipt 累積真實環境診斷機率。
+
 ### 5.2 canonical 整合點
 
 從已 durable 的 task transition／receipt 產生 observation；放在共用 canonical transition owner 後方，涵蓋 normal/direct/action/extra-model/resume paths，不在各 worker success branch 另寫實作。

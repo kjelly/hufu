@@ -33,7 +33,7 @@ Use a short **GOTMPDIR as well as TMPDIR** for later full and race runs.
 | Stage | State | Evidence |
 | --- | --- | --- |
 | A: pure finite Bayesian core | Complete | Schema, exact update, bounded validation, deterministic digests; checks below. |
-| B: durable binding and replay | Pending | — |
+| B: durable binding and replay | Complete | SQLite journal, immutable model binding, canonical receipt admission, tombstones and lineage replay; checks below. |
 | C: runtime integration and inspect | Pending | — |
 | D: advisory policy | Pending | — |
 
@@ -61,5 +61,27 @@ Benchmark hardware: Intel Core i7-6700K @ 4.00GHz, linux/amd64, Go 1.27.2,
 The initial lint run found a boolean style warning; the implementation was
 corrected and the complete lint gate passed on rerun.
 
-A delivers computation only. Event persistence, Coordinator state, runtime
-observation admission, inspection, and policy consumption remain B–D work.
+A delivers computation only. Coordinator state, automatic runtime observation
+admission, inspection, and policy consumption remain C–D work.
+
+## Stage B
+
+`BeliefJournal` verifies the existing journal and branch lineage, pins models
+in the existing immutable artifact store, and writes append-only model/epoch/
+observation/retraction/closure events. Admission derives pass/fail from the
+source receipt, checks its occurrence and revision, and preserves the first
+source reference when another event repeats the same receipt. Different
+invocations in one correlation group produce an unresolved distribution.
+
+| Command (short GOTMPDIR/TMPDIR) | Exit | Evidence |
+| --- | --- | --- |
+| `go test ./internal/team -run '^TestBelief'` | 0 | Durable replay, 100 duplicate admissions, receipt aliases, prior reconstruction after tombstone, missing model, forged outcome/source/scope, revision isolation, closed epochs, fork cursors, crash gap and uncertain append. |
+| `go test -race ./internal/team -run '^TestBelief'` | 0 | Passed, including final session/attempt/task/branch binding checks. |
+| `golangci-lint run` | 0 | Final complete gate: 0 issues. |
+
+The first adapter's subject revision is the receipt's admitted run-input hash;
+its environment revision hashes the recorded verifier contract and execution
+target. These are deliberately narrow historical receipt scopes, not a live OS
+or complete source-tree fingerprint. Replay only reads events and artifacts;
+it never executes the stored verifier command or repairs a missing artifact
+from current configuration. Runtime wiring and inspection are still stage C.
