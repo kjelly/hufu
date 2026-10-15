@@ -139,7 +139,7 @@ to re-create an abstraction that already exists in the runtime.
 - [Historical task results and LLM query plan](implementation-plans/historical-task-results-llm-query.md)
   — proposed natural-language history queries, durable result lookup, and source-linked answers without requiring run IDs.
 - [Belief and evidence inspection plan](implementation-plans/belief-evidence-implementation-plan.md)
-  — read-only decision assumptions, check provenance, and run evidence inspection.
+  — replayable finite Bayesian state, durable observations, runtime integration, and advisory policy.
 - [Current roadmap](roadmap.md) — a small navigation list of active follow-up
   work. It is not an implementation-state database.
 
