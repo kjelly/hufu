@@ -1284,7 +1284,7 @@ retryLoop:
 		if checkpointStopped {
 			return "", err
 		}
-		if !attemptChangedNothing(steps, attemptDispositions) {
+		if !attemptChangedNothing(steps, attemptDispositions, c.readOnlyToolCall) {
 			changedState = true
 		}
 		transcriptRef := ""
@@ -1500,7 +1500,7 @@ retryLoop:
 						c.report(c.newEvent("step").withAgent(agentName).withMessage(protocolErrMsg).withTodoID(todoID))
 
 						{
-							observationEvidence, hasSuccessfulObservation := protocolRepairObservationEvidence(steps)
+							observationEvidence, hasSuccessfulObservation := protocolRepairObservationEvidence(steps, c.readOnlyToolCall)
 							repairEvidence := utils.TruncateRunes(output, 12000) + observationEvidence
 							rejectedSubmission := protocolRepairRejectedSubmission(attemptEvidence, steps)
 							repairEvidence += rejectedSubmission
@@ -1510,12 +1510,15 @@ retryLoop:
 							// not accepted as a completion below.
 							noRepairEvidence := strings.TrimSpace(output) == "" && !hasSuccessfulObservation && rejectedSubmission == ""
 							finalizationBinding := c.taskFinalizationBinding(todoID, false)
-							repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Bounded execution evidence\n%s\n\n## Repair Instructions\nThe worker has not supplied an accepted submit_result. Call submit_result exactly once using only the bounded evidence above and the bound result contract. Include a concise summary. Correct the rejected fields while preserving the existing evidence and valid parts of the submission. Do NOT execute work, call any other tools, or emit a prose final response.\n", utils.TruncateRunes(task.Goal, 4000), repairEvidence)
+							repairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Bounded execution evidence\n%s\n\n## Repair Instructions\n%s", utils.TruncateRunes(task.Goal, 4000), repairEvidence, protocolRepairInstructions(rejectedSubmission != "" || resultProtocolLoop))
 							if resultProtocolLoop {
 								repairPrompt += fmt.Sprintf("\n## Runtime validation error\n%s\n", schemaRepairDiagnostic(attemptEvidence.resultText))
 							}
 							if budgetExhausted {
 								repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Bounded execution evidence\n%s\n\n## Finalization Instructions\nYou ran out of steps (%d/%d) before submitting a result. The evidence above is bounded and this turn is only for reporting it. Call submit_result exactly once using the bound result contract, and do NOT call any other tools or emit a prose final response. Use `success` only when fully met; otherwise use `partial` or `blocked` truthfully.", utils.TruncateRunes(task.Goal, 4000), repairEvidence, len(steps), stepBudget)
+							}
+							if stalledAtOutputLimit(steps) {
+								repairPrompt += protocolRepairOutputLimitNote
 							}
 							repairPrompt += finalizationBinding
 							// Result-only repair must be a clean tool context. Replaying the
@@ -1694,7 +1697,7 @@ retryLoop:
 							// This preserves the typed-result/report pipeline without allowing
 							// an incomplete or mutating free-text claim to become success.
 							if task.InvariantVerification == "" && !repairSuccess && !reclassifyExecution && typedRes == nil &&
-								resolvedSideEffect == SideEffectNone && protocolAttemptWasReadOnly(steps) {
+								resolvedSideEffect == SideEffectNone && protocolAttemptWasReadOnly(steps, c.readOnlyToolCall) {
 								if promoted := promoteValidatedReadOnlyHandoff(task, todoID, agentName, output); promoted != nil {
 									c.attachTaskKnowledgeCoverage(todoID, attempt, contextManifest.ModelExecutionID, promoted)
 									c.storeSubmittedTaskResult(todoID, promoted)
@@ -1796,14 +1799,20 @@ retryLoop:
 								}
 							}
 							if !repairSuccess && repairReason == RepairFailureNoToolCall && !budgetExhausted &&
-								!protocolCapabilityRetryUsed && (protocolAttemptWasReadOnly(steps) || attemptDispositions.onlyPolicyDeniedToolCalls(steps)) && parentCtx.Err() == nil {
+								!protocolCapabilityRetryUsed && (protocolAttemptWasReadOnly(steps, c.readOnlyToolCall) || attemptDispositions.onlyPolicyDeniedToolCalls(steps)) && parentCtx.Err() == nil {
 								// No state-changing tool ran, so one fresh worker attempt is
 								// safe. Override the provisional protocol error only after the
 								// normal protocol branch has built its evidence; otherwise that
 								// branch would overwrite this execution classification.
 								protocolFailure = false
 								protocolCapabilityFallback = true
-								err = withFailureClassOverride(errors.New("model did not honour the submit_result tool contract after a read-only attempt"), FailureExecution)
+								fallbackReason := "model did not honour the submit_result tool contract after a read-only attempt"
+								if stalledAtOutputLimit(steps) {
+									// The retry hint quotes this error; it must not read
+									// as a refusal when the worker was cut off mid-submission.
+									fallbackReason = "model output reached the token limit before submit_result after a read-only attempt; keep reasoning short and the submission compact"
+								}
+								err = withFailureClassOverride(errors.New(fallbackReason), FailureExecution)
 								receipt.RepairProvenance.Error = err.Error()
 							}
 							c.applyResultContractReceipt(todoID, typedRes, &receipt)
@@ -2084,7 +2093,7 @@ retryLoop:
 			ContextCancelled:    parentCtx.Err() != nil,
 			Replayable:          CanAutomaticallyReplay(task),
 			ProtocolRepairRetry: c.protocolRepairAllowsRetry(task),
-			ProtocolRetrySafe:   protocolFailure && resolvedSideEffect == SideEffectNone && protocolAttemptWasReadOnly(steps),
+			ProtocolRetrySafe:   protocolFailure && resolvedSideEffect == SideEffectNone && protocolAttemptWasReadOnly(steps, c.readOnlyToolCall),
 		}
 		disposition, reason := DecideRecovery(recoveryInput)
 		if policyDenialRepairExhausted {
@@ -4897,7 +4906,11 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		stepBudget, hasStepBudget := ctx.Value(workerStepBudgetKey{}).(int)
 		budgetExhausted := hasStepBudget && stepBudget > 0 && len(result.Steps) >= stepBudget
 		if !budgetExhausted {
-			reportFn(c.newEvent("text").withAgent(agentName).withTodoID(todoID).withMessage("model stopped without a tool call or submit_result on a task that requires one; requesting one same-turn continuation before falling back to a fresh attempt"))
+			stallReason := "model stopped without a tool call or submit_result"
+			if stalledAtOutputLimit(result.Steps) {
+				stallReason = "model output reached the token limit before a tool call or submit_result"
+			}
+			reportFn(c.newEvent("text").withAgent(agentName).withTodoID(todoID).withMessage(stallReason + " on a task that requires one; requesting one same-turn continuation before falling back to a fresh attempt"))
 			continuationMessages := append([]fantasy.Message(nil), history...)
 			if strings.TrimSpace(prompt) != "" {
 				continuationMessages = append(continuationMessages, fantasy.NewUserMessage(prompt))
@@ -4905,9 +4918,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			for _, step := range result.Steps {
 				continuationMessages = append(continuationMessages, step.Messages...)
 			}
-			continuationMessages = append(continuationMessages, fantasy.NewUserMessage(
-				"You stopped without calling a tool or submit_result. If you are not finished, make your next tool call now. If you have gathered enough evidence, call submit_result now. Do not just describe what you plan to do next.",
-			))
+			continuationMessages = append(continuationMessages, fantasy.NewUserMessage(stallContinuationPrompt(result.Steps)))
 			nudgeCall := streamCall
 			nudgeCall.Prompt = ""
 			nudgeCall.Messages = continuationMessages

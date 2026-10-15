@@ -111,16 +111,21 @@ func handoffStateForMissingResult(budgetExhausted bool, dispositions *attemptToo
 	return ResultHandoffMissingAfterPossibleEffect
 }
 
+// readOnlyToolCallFunc classifies one recorded tool call. Recovery gates take
+// it explicitly: the static taxonomy is isReadOnlyToolCall, and a Coordinator
+// extends it with maintainer-declared MCP observation tools.
+type readOnlyToolCallFunc func(toolName, input string) bool
+
 // protocolAttemptWasReadOnly is deliberately conservative. It is used only
 // after a worker omitted submit_result to decide whether a single clean model
 // retry could replay the task without repeating a side effect. Unknown tools,
 // missing calls, and malformed bash input are all unsafe.
-func protocolAttemptWasReadOnly(steps []fantasy.StepResult) bool {
+func protocolAttemptWasReadOnly(steps []fantasy.StepResult, readOnly readOnlyToolCallFunc) bool {
 	sawCall := false
 	for _, step := range steps {
 		for _, call := range step.Content.ToolCalls() {
 			sawCall = true
-			if !isReadOnlyToolCall(call.ToolName, call.Input) {
+			if !readOnly(call.ToolName, call.Input) {
 				return false
 			}
 		}
@@ -132,13 +137,13 @@ func protocolAttemptWasReadOnly(steps []fantasy.StepResult) bool {
 // was read-only or refused before it ran. submit_result only reports the
 // outcome. An attempt with no recorded tool call, such as one run by an
 // external provider, may have changed state out of view, so it does not count.
-func attemptChangedNothing(steps []fantasy.StepResult, dispositions *attemptToolDispositions) bool {
+func attemptChangedNothing(steps []fantasy.StepResult, dispositions *attemptToolDispositions, readOnly readOnlyToolCallFunc) bool {
 	refused := dispositions.refusedCallIDs()
 	sawCall := false
 	for _, step := range steps {
 		for _, call := range step.Content.ToolCalls() {
 			sawCall = true
-			if call.ToolName != submitResultToolName && !isReadOnlyToolCall(call.ToolName, call.Input) && !refused[call.ToolCallID] {
+			if call.ToolName != submitResultToolName && !readOnly(call.ToolName, call.Input) && !refused[call.ToolCallID] {
 				return false
 			}
 		}
@@ -184,6 +189,45 @@ func stalledWithoutToolCall(steps []fantasy.StepResult) bool {
 	}
 	last := steps[len(steps)-1]
 	return len(last.Content.ToolCalls()) == 0
+}
+
+// stalledAtOutputLimit reports whether a turn's last step ended because the
+// model reached its output token limit. Reasoning tokens count toward that
+// limit, so a model deliberating over a large submission can exhaust it with
+// neither text nor a tool call. The provider cut the step off; the model did
+// not choose to stop, and the recovery prompt must say so: a generic "you
+// stopped" prompt invites the model to redo the same deliberation and be cut
+// off again.
+func stalledAtOutputLimit(steps []fantasy.StepResult) bool {
+	return len(steps) > 0 && steps[len(steps)-1].FinishReason == fantasy.FinishReasonLength
+}
+
+const (
+	stalledContinuationPrompt     = "You stopped without calling a tool or submit_result. If you are not finished, make your next tool call now. If you have gathered enough evidence, call submit_result now. Do not just describe what you plan to do next."
+	outputLimitContinuationPrompt = "Your previous response reached the output token limit before it made a tool call, so nothing was submitted; reasoning counts toward that limit. Do not repeat or re-verify your earlier reasoning. If you have gathered enough evidence, call submit_result now with a compact payload: keep reasoning short, state each finding once, shorten narrative fields, and omit optional fields so the complete call fits in one response. If you are not finished, make your next tool call now."
+	// protocolRepairOutputLimitNote is appended to a result-only repair whose
+	// worker was cut off, since the repair model has the same output limit.
+	protocolRepairOutputLimitNote = "\n\n## Output limit\nThe worker's last response reached the output token limit before it called submit_result; reasoning counts toward that limit. Keep reasoning brief: do not re-verify the evidence or deliberate over optional fields. Submit a compact result that states each material finding once, shortens narrative fields, and omits optional outer fields, so the complete submit_result call fits in one response.\n"
+)
+
+// stallContinuationPrompt is the same-turn continuation message for a worker
+// that ended its turn without a tool call on a task that requires one.
+func stallContinuationPrompt(steps []fantasy.StepResult) string {
+	if stalledAtOutputLimit(steps) {
+		return outputLimitContinuationPrompt
+	}
+	return stalledContinuationPrompt
+}
+
+// protocolRepairInstructions tells a result-only repair what to do. Only a
+// repair that has a rejected submission to correct is asked to correct one;
+// otherwise the model hunts for a submission that never existed.
+func protocolRepairInstructions(hasRejectedSubmission bool) string {
+	instructions := "The worker has not supplied an accepted submit_result. Call submit_result exactly once using only the bounded evidence above and the bound result contract. Include a concise summary."
+	if hasRejectedSubmission {
+		instructions += " Correct the rejected fields while preserving the existing evidence and valid parts of the submission."
+	}
+	return instructions + " Do NOT execute work, call any other tools, or emit a prose final response.\n"
 }
 
 // isReadOnlyToolCall is the narrow capability classification shared by retry

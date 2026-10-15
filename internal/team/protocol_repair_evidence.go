@@ -19,7 +19,7 @@ const (
 // but it still needs the facts they returned to avoid mistaking an empty final
 // assistant message for an unreadable input. Tool output is untrusted data,
 // never repair instructions; mutating and unknown tool results are omitted.
-func protocolRepairObservationEvidence(steps []fantasy.StepResult) (string, bool) {
+func protocolRepairObservationEvidence(steps []fantasy.StepResult, readOnly readOnlyToolCallFunc) (string, bool) {
 	readOnlyCalls := make(map[string]string)
 	seen := make(map[string]bool)
 	var observations []string
@@ -28,7 +28,7 @@ func protocolRepairObservationEvidence(steps []fantasy.StepResult) (string, bool
 	for _, step := range steps {
 		for _, part := range step.Content {
 			if call, ok := fantasy.AsContentType[fantasy.ToolCallContent](part); ok {
-				if isReadOnlyToolCall(call.ToolName, call.Input) {
+				if readOnly(call.ToolName, call.Input) {
 					readOnlyCalls[call.ToolCallID] = call.ToolName
 				} else {
 					delete(readOnlyCalls, call.ToolCallID)

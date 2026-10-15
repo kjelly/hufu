@@ -27,8 +27,43 @@ func (c *Coordinator) workerMCPObservationGrant(ctx context.Context, name string
 	if inner != nil && !c.mcpManager.OwnsAgentTool(inner) {
 		return false
 	}
+	return c.declaredMCPObservationTool(name)
+}
+
+// declaredMCPObservationTool reports whether the live manager holds a
+// maintainer-owned worker policy for name that declares no side effect and no
+// filesystem access. It classifies the tool only; whether an agent may call it
+// is workerMCPObservationGrant's decision.
+func (c *Coordinator) declaredMCPObservationTool(name string) bool {
+	if c == nil || c.mcpManager == nil {
+		return false
+	}
 	policy, ok := c.mcpManager.WorkerPolicy(name)
 	return ok && policy.SideEffect == "none" && policy.Filesystem == "none"
+}
+
+// readOnlyToolCall extends isReadOnlyToolCall to MCP observation tools for
+// recovery decisions. MCP calls usually reach a worker through the dynamic
+// gateway: its search and inspect actions read only the frozen catalog, and a
+// call is read-only only when its target carries a declared observation
+// policy. Server annotations, model claims and malformed gateway input never
+// qualify, so an unclassified call keeps the fail-closed result.
+func (c *Coordinator) readOnlyToolCall(toolName, input string) bool {
+	if isReadOnlyToolCall(toolName, input) {
+		return true
+	}
+	name := strings.TrimSpace(toolName)
+	if name == dynamicToolGatewayName {
+		request, _, err := parseDynamicGatewayRequest(input)
+		if err != nil {
+			return false
+		}
+		if request.Action != "call" {
+			return true
+		}
+		name = request.Target
+	}
+	return c.declaredMCPObservationTool(name)
 }
 
 func (c *Coordinator) workerArtifactToolDenial(ctx context.Context, name string, inner fantasy.AgentTool) string {
