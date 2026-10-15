@@ -74,7 +74,9 @@ browser 啟動、網站可達性或供應商 API。
 來源，該來源會顯示 `not_attempted`；worker 應在 limitations 記錄實際錯誤。
 網站拒絕存取、內容缺失或引文不符時，保留來源與精確缺口，不宣稱已驗證。
 完整流程仍要求兩份研究結果與 verifier 的完成報告；未完成工作回報
-`blocked` 或 `partial`。
+`blocked` 或 `partial`。工作已完成但記錄了存取缺口時回報
+`completed_with_gaps`，acceptance 以 `required-workers-accept-gaps`
+將其視為完成。
 
 ## 網站阻擋與證據缺口
 

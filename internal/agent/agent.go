@@ -1027,13 +1027,18 @@ type TaskResultAssertion struct {
 }
 
 type AcceptanceSpec struct {
-	Commands                 []string              `yaml:"commands" json:"commands,omitempty"`
-	RequiredArtifacts        []string              `yaml:"required-artifacts" json:"required_artifacts,omitempty"`
-	RequiredWorkers          []string              `yaml:"required-workers" json:"required_workers,omitempty"`
-	RequireNoUnresolvedTasks bool                  `yaml:"require-no-unresolved-tasks" json:"require_no_unresolved_tasks,omitempty"`
-	Mode                     string                `yaml:"mode,omitempty" json:"mode,omitempty"`
-	Verifications            []VerificationSpec    `yaml:"verifications" json:"verifications,omitempty"`
-	Criteria                 []AcceptanceCriterion `yaml:"criteria" json:"criteria,omitempty"`
+	Commands          []string `yaml:"commands" json:"commands,omitempty"`
+	RequiredArtifacts []string `yaml:"required-artifacts" json:"required_artifacts,omitempty"`
+	RequiredWorkers   []string `yaml:"required-workers" json:"required_workers,omitempty"`
+	// RequiredWorkersAcceptGaps lets a completed_with_gaps typed result satisfy
+	// RequiredWorkers. Research teams opt in: a worker that finished its search
+	// and recorded an inaccessible source has completed its stage. The default
+	// accepts success only, which staged coding workflows rely on.
+	RequiredWorkersAcceptGaps bool                  `yaml:"required-workers-accept-gaps" json:"required_workers_accept_gaps,omitempty"`
+	RequireNoUnresolvedTasks  bool                  `yaml:"require-no-unresolved-tasks" json:"require_no_unresolved_tasks,omitempty"`
+	Mode                      string                `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Verifications             []VerificationSpec    `yaml:"verifications" json:"verifications,omitempty"`
+	Criteria                  []AcceptanceCriterion `yaml:"criteria" json:"criteria,omitempty"`
 }
 
 // AcceptanceCriterion is a stable, named acceptance requirement. Existing

@@ -76,6 +76,13 @@ func validateAcceptanceRequiredWorkers(session *TeamSession) []ContractFinding {
 		return nil
 	}
 	var findings []ContractFinding
+	if session.Config.AcceptanceSpec.RequiredWorkersAcceptGaps && len(session.Config.AcceptanceSpec.RequiredWorkers) == 0 {
+		findings = append(findings, ContractFinding{
+			Severity: FindingSeverityWarning, Code: FindingRequirementInvalid,
+			Field:   "acceptance.required-workers-accept-gaps",
+			Message: "required-workers-accept-gaps has no effect without acceptance.required-workers",
+		})
+	}
 	seen := make(map[string]bool)
 	for index, name := range session.Config.AcceptanceSpec.RequiredWorkers {
 		field := fmt.Sprintf("acceptance.required-workers[%d]", index)

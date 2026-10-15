@@ -13,6 +13,7 @@
         "countercheck",
         "verifier"
       ],
+      "required_workers_accept_gaps": true,
       "require_no_unresolved_tasks": true,
       "mode": "blocking"
     },

@@ -85,6 +85,9 @@ acceptance:
   mode: blocking
   require-no-unresolved-tasks: true
   required-workers: [researcher, countercheck, verifier]
+  # A finished search that records an inaccessible source reports
+  # completed_with_gaps; that still completes the research stage.
+  required-workers-accept-gaps: true
 tasks:
   - id: primary-research
     agent: researcher
