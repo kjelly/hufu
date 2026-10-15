@@ -32,7 +32,7 @@ Use a short **GOTMPDIR as well as TMPDIR** for later full and race runs.
 
 | Stage | State | Evidence |
 | --- | --- | --- |
-| A: pure finite Bayesian core | In progress | Pending repository validation. |
+| A: pure finite Bayesian core | Complete | Schema, exact update, bounded validation, deterministic digests; checks below. |
 | B: durable binding and replay | Pending | — |
 | C: runtime integration and inspect | Pending | — |
 | D: advisory policy | Pending | — |
@@ -40,3 +40,26 @@ Use a short **GOTMPDIR as well as TMPDIR** for later full and race runs.
 The user selected explicitly synthetic models for initial runtime integration
 and advisory-only policy. Production calibration and active candidate dispatch
 are outside this implementation's acceptance scope.
+
+## Stage A
+
+`internal/belief` uses only the standard library in production. Model JSON is
+strictly decoded and cross-field validated; the schema fixture is also checked
+with the repository's existing Draft 2020-12 validator. Synthetic values are
+confined to testdata and remain explicitly marked in State.
+
+| Command (short GOTMPDIR/TMPDIR) | Exit | Evidence |
+| --- | --- | --- |
+| `go test ./internal/belief/...` | 0 | Known posterior, 100 duplicate replays, independence, null/zero, retraction by recomputation, quantization, identity, resource and wire validation. |
+| `go test -race ./internal/belief/...` | 0 | Passed. |
+| `go test ./internal/belief -run '^$' -fuzz '^FuzzProjection$' -fuzztime=5s` | 0 | 54,733 executions; no failure. |
+| `go test ./internal/belief -run '^$' -bench '^BenchmarkProjection$' -benchmem` | 0 | 52,583 ns/op, 6,648 B/op, 44 allocs/op; 2 hypotheses, 1 observation. |
+| `golangci-lint run` | 0 | 0 issues; executor permits writes to the standard lint cache. |
+
+Benchmark hardware: Intel Core i7-6700K @ 4.00GHz, linux/amd64, Go 1.27.2,
+6 benchmark workers as reported by Go. Timing is a measurement, not an SLO.
+The initial lint run found a boolean style warning; the implementation was
+corrected and the complete lint gate passed on rerun.
+
+A delivers computation only. Event persistence, Coordinator state, runtime
+observation admission, inspection, and policy consumption remain B–D work.

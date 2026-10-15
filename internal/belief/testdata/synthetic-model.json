@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "reducer_version": "finite_bayes_v1",
+  "id": "synthetic-two-state",
+  "version": "1",
+  "synthetic": true,
+  "prior_source": "Synthetic fixture values, not empirical estimates.",
+  "independence_basis": "Only one verification observation per correlation group is supported.",
+  "applicability": "An exhaustive two-state synthetic generator in a fixed epoch; no real diagnosis claim.",
+  "hypotheses": [
+    {"id": "h1", "meaning": "First state of the synthetic generator.", "prior_units": 400000000},
+    {"id": "h2", "meaning": "Second state of the synthetic generator.", "prior_units": 600000000}
+  ],
+  "experiments": [
+    {"id": "comparison", "correlation_group": "fixed_environment", "source": "verification", "outcomes": [
+      {"id": "pass", "likelihood_units": [200000000, 800000000]},
+      {"id": "fail", "likelihood_units": [800000000, 200000000]}
+    ]}
+  ]
+}
