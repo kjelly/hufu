@@ -18,7 +18,8 @@ type BeliefExecutionState struct {
 
 type BeliefsData struct {
 	team.BeliefRunState
-	Execution []BeliefExecutionState `json:"execution"`
+	Execution []BeliefExecutionState        `json:"execution"`
+	Episodes  []team.DiagnosticEpisodeState `json:"episodes"`
 }
 
 // InspectBeliefs uses the same validated selected lineage as other run
@@ -46,12 +47,19 @@ func InspectBeliefs(ctx context.Context, query InspectQuery) (*Envelope, error) 
 	if err != nil {
 		return nil, fmt.Errorf("%w: project beliefs: %v", ErrIntegrity, err)
 	}
+	episodes, err := team.ProjectDiagnosticEpisodes(ctx, selected.raw, artifacts, query.RunID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: project diagnostic episodes: %v", ErrIntegrity, err)
+	}
 	tasks, err := team.ReplayTodoList(selected.runEvents)
 	if err != nil {
 		return nil, fmt.Errorf("%w: project belief execution state: %v", ErrIntegrity, err)
 	}
-	data := BeliefsData{BeliefRunState: view, Execution: []BeliefExecutionState{}}
+	data := BeliefsData{BeliefRunState: view, Execution: []BeliefExecutionState{}, Episodes: episodes}
 	found := query.TaskID == ""
+	for _, episode := range episodes {
+		found = found || episode.Epoch.Scope.TaskID == query.TaskID
+	}
 	for _, task := range tasks {
 		if query.TaskID != "" && task.ID != query.TaskID {
 			continue
@@ -63,6 +71,7 @@ func InspectBeliefs(ctx context.Context, query InspectQuery) (*Envelope, error) 
 		return nil, fmt.Errorf("%w: task %q in run %q", ErrNotFound, query.TaskID, query.RunID)
 	}
 	if query.TaskID != "" {
+		data.Episodes = slices.DeleteFunc(data.Episodes, func(episode team.DiagnosticEpisodeState) bool { return episode.Epoch.Scope.TaskID != query.TaskID })
 		data.Epochs = slices.DeleteFunc(data.Epochs, func(epoch team.BeliefEpochState) bool { return epoch.Epoch.Scope.TaskID != query.TaskID })
 		data.Diagnostics = slices.DeleteFunc(data.Diagnostics, func(diagnostic team.BeliefDiagnostic) bool {
 			return diagnostic.TaskID != "" && diagnostic.TaskID != query.TaskID
@@ -72,7 +81,7 @@ func InspectBeliefs(ctx context.Context, query InspectQuery) (*Envelope, error) 
 		})
 	}
 	result := envelope(KindBeliefs, query, lineage.BranchID, data)
-	if len(data.Models) == 0 {
+	if len(data.Models) == 0 && len(data.Episodes) == 0 {
 		result.Diagnostics = append(result.Diagnostics, Diagnostic{Code: "belief_not_recorded", Severity: "info", Message: "No model binding is recorded for this run."})
 	}
 	for _, model := range data.Models {
@@ -92,6 +101,11 @@ func InspectBeliefs(ctx context.Context, query InspectQuery) (*Envelope, error) 
 	}
 	for _, suggestion := range data.Suggestions {
 		if suggestion.Validation == "unavailable" {
+			result.Integrity.Projection = "unavailable"
+		}
+	}
+	for _, episode := range data.Episodes {
+		if episode.Validation == "unavailable" {
 			result.Integrity.Projection = "unavailable"
 		}
 	}

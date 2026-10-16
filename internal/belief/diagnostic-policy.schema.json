@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "version",
+    "algorithm",
+    "threshold_units",
+    "limits",
+    "candidates"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-zA-Z0-9_.:-]+$"
+    },
+    "algorithm": {
+      "enum": [
+        "expected_gini_gain_per_cost_v1",
+        "fixed_order_v1"
+      ]
+    },
+    "threshold_units": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000000
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_rounds",
+        "max_attempts",
+        "max_cost_units",
+        "action_timeout_seconds",
+        "episode_timeout_seconds",
+        "max_events",
+        "max_observation_bytes",
+        "max_fence_retries"
+      ],
+      "properties": {
+        "max_rounds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "max_cost_units": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "action_timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        },
+        "episode_timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "max_events": {
+          "type": "integer",
+          "minimum": 8,
+          "maximum": 4096
+        },
+        "max_observation_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        "max_fence_retries": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        }
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "experiment_id",
+          "cost_units"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-zA-Z0-9_.:-]+$"
+          },
+          "experiment_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-zA-Z0-9_.:-]+$"
+          },
+          "cost_units": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "fixture_id",
+    "source_vectors",
+    "environment",
+    "failed_test_receipt_ref",
+    "scope"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "fixture_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9_]+$"
+    },
+    "source_vectors": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "input",
+          "expected",
+          "actual"
+        ],
+        "properties": {
+          "input": {
+            "type": "integer",
+            "minimum": -1000000,
+            "maximum": 1000000
+          },
+          "expected": {
+            "type": "integer",
+            "minimum": -1000000,
+            "maximum": 1000000
+          },
+          "actual": {
+            "type": "integer",
+            "minimum": -1000000,
+            "maximum": 1000000
+          }
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required_version",
+        "observed_version"
+      ],
+      "properties": {
+        "required_version": {
+          "type": "string",
+          "pattern": "^[!-~]{1,32}$"
+        },
+        "observed_version": {
+          "type": "string",
+          "pattern": "^[!-~]{1,32}$"
+        }
+      }
+    },
+    "failed_test_receipt_ref": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "scope": {
+      "const": "single_fault_fixture_v1"
+    }
+  }
+}

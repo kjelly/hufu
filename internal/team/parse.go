@@ -52,6 +52,8 @@ type TeamSession struct {
 	AgentResultContracts map[string]ResultContractRef
 	// Belief is compiled from the owning team's immutable model input.
 	Belief *CompiledBelief
+	// DiagnosticLoop contains prepared contracts only, with no execution path.
+	DiagnosticLoop *CompiledDiagnosticLoop
 	// ExecutionRouteConfigs are hufu.yaml's execution routes, supplied by the
 	// host before the coordinator is built. ExecutionRoutes holds the
 	// compiled routes the team binds, by name, and AgentExecutionRoutes binds
@@ -1234,6 +1236,9 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	if yc.Belief != nil {
 		cfg.Belief = new(*yc.Belief)
 	}
+	if yc.DiagnosticLoop != nil {
+		cfg.DiagnosticLoop = new(*yc.DiagnosticLoop)
+	}
 	cfg.RequestContract = requestContract
 
 	// Capability-aware routing (plan.md Stage 8) is independent of the
@@ -1688,6 +1693,9 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 		return nil, err
 	}
 	if err := compileTeamBelief(session); err != nil {
+		return nil, err
+	}
+	if err := compileTeamDiagnosticLoop(session); err != nil {
 		return nil, err
 	}
 	if err := validateTeamWorkerWorkspaces(session); err != nil {

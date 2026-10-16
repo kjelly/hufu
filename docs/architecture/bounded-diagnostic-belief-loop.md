@@ -6,10 +6,13 @@
 > Supersedes: —
 > Superseded-By: —
 
-本文件是唯一 canonical 規格，描述尚未實作的 opt-in extension；不是啟用指令，
-也不代表提案已獲接受。此 PR 只新增文件與導覽，不修改 runtime、team 設定或權限。
+本文件是 canonical 設計規格。階段 0–1 已提供離線 fixture/baseline、純計算與
+準備契約；階段 2 已提供離線 fixture episode 的 journal/replay/唯讀 inspect 與 shadow。
+真實執行中的 episode、runtime shadow、跨任務證據 admission 與 executor 尚未實作。
+目前只能準備 `mode: off` 設定，不能啟用診斷派送。原始 PR #19 僅新增文件。
 核對基準是 PR18 合併後的上述 `main`。以下「現況」是程式碼已存在的行為；
-「提案」中的型別、事件、設定名稱與驗收案例均是後續實作契約。
+階段 0–2 已交付的名稱與邊界見第 7 節；其餘「提案」中的型別、事件、設定與驗收
+案例仍是後續實作契約。
 
 目標是讓一個小型、可重播的 episode 完成：
 
@@ -376,22 +379,36 @@ disable 的控制先禁止新 dispatch，再取消/drain 現有 action，持久�
 
 ## 7. 實作順序與具體 integration points
 
-所有下列階段均屬未實作。每階段獨立 PR，可審查、可停用；直到第 4 階段才允許
-`bounded_read_only` 的顯式 opt-in。既有 `belief` advisory 不因任一階段自動升級。
+階段 0–1 的實作與使用方式見 [準備契約與離線驗證](../reference/diagnostic-preparation.md)。
+fixture/provider/schema 固定放在 `.agent-teams/hufu-dev/diagnostic-pilot/`。
+`diagnostic-loop` 的 `mode` 目前必須明寫 `off`；`shadow` 與 `bounded_read_only`
+均 fail closed。model/policy/adapter 的語義 digest、actor 與 catalog digest 綁入
+既有 execution policy snapshot；該設定本身不建立 episode。
+階段 2 的離線 harness 另以 `diagnostic_episode_opened/shadowed/observed` schema v1
+事件與 `diagnostic_fixture` immutable artifact 保存 synthetic model/policy/revisions/
+measurements。它不使用假的 receipt、child task 或 dispatch intent，也不呼叫 provider。
+所有決策以凍結 inputs 重算，inspect 沿用 canonical branch lineage，缺 artifact 時
+保留歷史引用並顯示 unavailable/null。具體使用方式見上述 reference。
+證據檢查只驗證 typed mapping/revisions，不代替未來 journal/receipt/artifact 授權。
+階段 2 目前只涵蓋離線 fixture；階段 3–5 仍未實作。直到第 4 階段才允許
+`bounded_read_only` 的顯式 opt-in。
+既有 `belief` advisory 不因任一階段自動升級。
 
 | 階段 | 修改位置與工作 | 必須通過的 acceptance |
 | --- | --- | --- |
 | 0：fixture 與 baseline | team-owned fixture/provider/schema、offline eval；沿用 [action provider](../../internal/team/action_provider.go) 邊界 | 固定 seed/output 可重現；沒有網路/host reads/subject writes；列出 synthetic 數字來源；baseline golden trace |
 | 1：契約與純計算 | [belief projector](../../internal/belief/projector.go)、[belief config](../../internal/team/belief_config.go)、[policy snapshot](../../internal/team/execution_policy_snapshot.go)；新增 episode config/model/policy artifact binding 與 source validator | 嚴格 schema/enum/size、revision、Q9、unknown/correlation/retraction 測試；舊設定/hash golden 不變；新模式還不能 dispatch |
-| 2：journal/replay/inspect | [belief journal](../../internal/team/belief_journal.go)、[events](../../internal/team/belief_events.go)、[reducer](../../internal/team/belief_reducer.go)、[projection](../../internal/team/belief_projection.go)、[inspect](../../cmd/hufu/inspect_beliefs.go) 的 versioned episode 分支 | admission 去重、cross-task mapping、fork isolation、缺 artifact 與每一 crash gap 重播測試；inspect 無寫入；shadow trace 與 replay digest 一致 |
-| 3：授權決策與 durable bridge | [dispatch](../../internal/team/team_action_dispatch.go)、[proposal](../../internal/team/team_action_proposal.go)、[binding](../../internal/team/team_action_binding.go)、[budget](../../internal/team/budget_manager.go)、[conditional journal](../../internal/team/event_store_conditional.go) | 共用 admission 未繞過 grants/phase/denial；decision/reservation/intent/mapping 唯一；同 branch 競爭、head drift、restart 不重置 budget；仍預設不執行 |
+| 2：journal/replay/inspect（離線範圍已實作） | [episode journal](../../internal/team/diagnostic_journal.go)、[events/replay](../../internal/team/diagnostic_events.go)、[frozen fixture](../../internal/team/diagnostic_fixture.go)、[inspect](../../cmd/hufu/inspect_beliefs.go)；shadow 僅限 team-owned 離線 fixture | observation 去重、fork isolation、缺損 artifact、每個離線 commit 邊界與 lost acknowledgment 重播；全域 head CAS；inspect 無寫入；shadow 與 inspect replay digest 一致；不宣稱真實 cross-task admission |
+| 3：授權決策與 durable bridge | [dispatch](../../internal/team/team_action_dispatch.go)、[proposal](../../internal/team/team_action_proposal.go)、[binding](../../internal/team/team_action_binding.go)、[budget](../../internal/team/budget_manager.go)、[conditional journal](../../internal/team/event_store_conditional.go)；真實 evidence admission 與 runtime shadow | 共用 admission 未繞過 grants/phase/denial；cross-task receipt mapping 與 provenance；decision/reservation/intent/mapping 唯一；同 branch 競爭、head drift、restart 不重置 budget；實際 dispatch crash gaps 與第 4 階段整合驗證；仍預設不執行 |
 | 4：bounded executor | [coordinator belief](../../internal/team/coordinator_belief.go) 外獨立 controller、[runtime actions](../../internal/team/runtime_workflow_actions.go)、[recovery](../../internal/team/recovery.go)、[task transitions](../../internal/team/coordinator_eventstore.go) | 完整下列矩陣、race/CGO-free/replay；停止時 drain；action count 可驗證；明確 opt-in 才可執行 |
 | 5：比較與發佈審查 | offline eval artifacts、inspect/reference/guide、設定驗證與最低版本文件 | paired baseline 報告、無準確率宣稱、disable/upgrade 測試；未達條件維持 shadow/off |
 
 每個 runtime 階段需要單元、整合與故障注入測試，以及 repository 的 `go test ./...`、
 `go vet ./...`、`golangci-lint run` 和 CI gates。不能因 pilot 很小略過 canonical
 transition、task journal、session persistence、CLI/JSON/report/TUI 的投影傳播。
-此文件 PR 只需 docs lifecycle/links、diff hygiene 與既有 PR CI，不宣稱已跑未實作測試。
+原始文件 PR 只驗證 docs lifecycle/links、diff hygiene 與既有 PR CI；階段 0–1
+與第 2 階段離線範圍的實作另須通過上列 code gates，不能宣稱已跑 runtime shadow、
+dispatch bridge 與第 3–5 階段尚未實作的測試。
 
 ## 8. 端到端驗收矩陣
 
@@ -436,10 +453,15 @@ mechanism 正確，但不能聲稱有診斷效益。若聲稱成本改善，須�
 
 以下不影響先交付文件，但在對應實作階段開始前需明確決議並更新本文件：
 
+階段 0–1 已定案：準備設定使用 `mode: off`，adapter 為
+`diagnostic_measurement_v1`，純排序另用 `DiagnosticPolicy`，不修改 v1 advisory
+policy。fixture 資源位置見第 7 節；typed evidence schema 與設定使用方式見
+[準備契約 reference](../reference/diagnostic-preparation.md)。以下尚未完成的決議仍保留：
+
 - 設定/事件/type 名稱與 schema 版本最終拼字（本文件名稱為提案）；v1 adapter 絕不混用。
 - 第 3 階段 durable dispatch bridge 採 journal intent 冪等 materialization 或同 transaction
   task admission 的具體實作；必須滿足相同 crash matrix，不能僅依 in-memory mutex。
-- team fixture 資料夾命名與獨立 pure provider 測試位置；core 必須保持 team-neutral。
+- 後續 consumer 的 team-owned domain/provider 配置；core 必須保持 team-neutral。
 - 發佈時最低可讀 binary 版本與 additive projection migration 是否必要；先證明 replay
   可重建，才決定是否需要 table，避免建立第二套 authority。
 

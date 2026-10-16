@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "fixture_id": "fixture_pass_pass",
+  "source_vectors": [
+    {
+      "input": 1,
+      "expected": 2,
+      "actual": 2
+    }
+  ],
+  "environment": {
+    "required_version": "v1",
+    "observed_version": "v1"
+  },
+  "failed_test_receipt_ref": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "scope": "single_fault_fixture_v1"
+}

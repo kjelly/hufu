@@ -42,7 +42,7 @@ func renderInspectBeliefsText(writer io.Writer, query inspectpkg.InspectQuery, d
 			return err
 		}
 	}
-	if len(data.Models) == 0 {
+	if len(data.Models) == 0 && len(data.Episodes) == 0 {
 		if _, err := fmt.Fprintln(writer, "Beliefs: not recorded"); err != nil {
 			return err
 		}
@@ -103,7 +103,10 @@ func renderInspectBeliefsText(writer io.Writer, query inspectpkg.InspectQuery, d
 			return err
 		}
 	}
-	return renderInspectBeliefPolicies(writer, data)
+	if err := renderInspectBeliefPolicies(writer, data); err != nil {
+		return err
+	}
+	return renderInspectDiagnosticEpisodes(writer, data)
 }
 
 func renderInspectBeliefPolicies(writer io.Writer, data inspectpkg.BeliefsData) error {

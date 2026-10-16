@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "synthetic": true,
+  "source": "fixture_design_v1",
+  "generator_version": 1,
+  "seed_range": [
+    0,
+    99
+  ],
+  "hypothesis_repetitions": {
+    "source_fault": 5,
+    "environment_fault": 3,
+    "other_fault": 2
+  },
+  "source_fail_percent": [
+    90,
+    10,
+    20
+  ],
+  "environment_fail_percent": [
+    10,
+    90,
+    20
+  ],
+  "condition": "Eligible failed test in the single_fault_fixture_v1 synthetic universe; failure is not an observation.",
+  "truth_boundary": "Oracle labels and seeds stay in the evaluation harness, never the provider request or fixture.",
+  "claim": "Engine and contract verification only; no real-world accuracy, calibration or savings claim."
+}

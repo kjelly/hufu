@@ -58,22 +58,29 @@ type State struct {
 // Project recomputes from the original prior and unique valid observations.
 // Multiple occurrences in a correlation group remain unresolved, never independent by default.
 func Project(model Model, epoch Epoch, observations []Observation) (State, error) {
+	state, _, err := projectExact(model, epoch, observations)
+	return state, err
+}
+
+// projectExact retains the unrounded weights for pure experiment selection.
+// Both public projections and selectors use the same validation and deduplication.
+func projectExact(model Model, epoch Epoch, observations []Observation) (State, []big.Int, error) {
 	modelHash, err := ModelDigest(model)
 	if err != nil {
-		return State{}, err
+		return State{}, nil, err
 	}
 	if !validID(epoch.ID) || epoch.ModelDigest != modelHash || !validID(epoch.Scope.RunID) || !validID(epoch.Scope.BranchID) || !validID(epoch.Scope.TaskID) || epoch.Scope.Attempt < 1 || !validID(epoch.SubjectRevision) || !validID(epoch.EnvironmentRevision) {
-		return State{}, invalid(InvalidEpoch, "binding")
+		return State{}, nil, invalid(InvalidEpoch, "binding")
 	}
 	if len(observations) > 4096 {
-		return State{}, invalid(ResourceLimit, "observation_inputs")
+		return State{}, nil, invalid(ResourceLimit, "observation_inputs")
 	}
 	unique, err := uniqueObservations(observations)
 	if err != nil {
-		return State{}, err
+		return State{}, nil, err
 	}
 	if len(unique) > MaxObservations {
-		return State{}, invalid(ResourceLimit, "observations")
+		return State{}, nil, invalid(ResourceLimit, "observations")
 	}
 	state := State{SchemaVersion: SchemaVersion, ReducerVersion: ReducerVersion, ModelDigest: modelHash, Synthetic: model.Synthetic, Epoch: epoch, Status: Prior, ObservationIDs: make([]string, 0, len(unique))}
 	weights := make([]big.Int, len(model.Hypotheses))
@@ -86,7 +93,7 @@ func Project(model Model, epoch Epoch, observations []Observation) (State, error
 	for _, observation := range unique {
 		experiment, outcome, err := resolveObservation(model, observation)
 		if err != nil {
-			return State{}, err
+			return State{}, nil, err
 		}
 		state.ObservationIDs = append(state.ObservationIDs, observation.ID)
 		// One source cannot masquerade as independent data under another experiment.
@@ -102,7 +109,7 @@ func Project(model Model, epoch Epoch, observations []Observation) (State, error
 		for i, mass := range outcome.LikelihoodUnits {
 			weights[i].Mul(&weights[i], new(big.Int).SetUint64(mass))
 			if weights[i].BitLen() > MaxIntermediateBits {
-				return State{}, invalid(ResourceLimit, "intermediate_bits")
+				return State{}, nil, invalid(ResourceLimit, "intermediate_bits")
 			}
 		}
 	}
@@ -121,14 +128,14 @@ func Project(model Model, epoch Epoch, observations []Observation) (State, error
 	}
 	state.InputDigest, err = digest("hufu-belief-input-v1", unique)
 	if err != nil {
-		return State{}, err
+		return State{}, nil, err
 	}
 	hash, err := digest("hufu-belief-state-v1", state)
 	if err != nil {
-		return State{}, err
+		return State{}, nil, err
 	}
 	state.Digest = hash
-	return state, nil
+	return state, weights, nil
 }
 func uniqueObservations(observations []Observation) ([]Observation, error) {
 	byID := map[string]Observation{}

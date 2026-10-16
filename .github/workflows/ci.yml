@@ -43,7 +43,7 @@ jobs:
         uses: golangci/golangci-lint-action@a4f60bb28d35aeee14e6880718e0c85ff1882e64 # v6.0.1
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
-          args: --timeout 5m
+          args: --timeout 5m ./... ./.agent-teams/hufu-dev/diagnostic-pilot/...
           only-new-issues: true
 
   vet:
@@ -81,7 +81,7 @@ jobs:
           fi
 
       - name: go vet
-        run: go vet ./...
+        run: go vet ./... ./.agent-teams/hufu-dev/diagnostic-pilot/...
 
   test:
     name: test (go test ./... -race -short -timeout 20m)
@@ -99,7 +99,7 @@ jobs:
       - name: Run tests
         # internal/team takes about 11 minutes under the race detector on the
         # release toolchain, beyond go test's default 10-minute package limit.
-        run: go test ./... -race -short -timeout 20m
+        run: go test -race -short -timeout 20m ./... ./.agent-teams/hufu-dev/diagnostic-pilot/...
 
   build:
     name: build (go build ./cmd/hufu)
@@ -158,7 +158,7 @@ jobs:
         run: CGO_ENABLED=0 go build -v ./cmd/hufu
 
       - name: CGO_ENABLED=0 test
-        run: CGO_ENABLED=0 go test ./...
+        run: CGO_ENABLED=0 go test ./... ./.agent-teams/hufu-dev/diagnostic-pilot/...
 
   # Offline deterministic workflow regression harness. All ten critical
   # semantic cases plus the core lifecycle baseline are implemented, so this

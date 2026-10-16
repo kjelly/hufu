@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "version": "fixture_design_v1",
+  "algorithm": "expected_gini_gain_per_cost_v1",
+  "threshold_units": 900000000,
+  "limits": {
+    "max_rounds": 2,
+    "max_attempts": 2,
+    "max_cost_units": 2,
+    "action_timeout_seconds": 5,
+    "episode_timeout_seconds": 20,
+    "max_events": 32,
+    "max_observation_bytes": 16384,
+    "max_fence_retries": 3
+  },
+  "candidates": [
+    {
+      "id": "check_environment",
+      "experiment_id": "check_environment",
+      "cost_units": 1
+    },
+    {
+      "id": "check_source",
+      "experiment_id": "check_source",
+      "cost_units": 1
+    }
+  ]
+}

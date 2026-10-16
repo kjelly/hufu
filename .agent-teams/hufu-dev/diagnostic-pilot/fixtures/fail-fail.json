@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "fixture_id": "fixture_fail_fail",
+  "source_vectors": [
+    {
+      "input": 1,
+      "expected": 2,
+      "actual": 3
+    }
+  ],
+  "environment": {
+    "required_version": "v1",
+    "observed_version": "v2"
+  },
+  "failed_test_receipt_ref": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "scope": "single_fault_fixture_v1"
+}

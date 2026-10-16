@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "fixture_ref",
+    "experiment_id"
+  ],
+  "properties": {
+    "fixture_ref": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "experiment_id": {
+      "enum": [
+        "check_source",
+        "check_environment"
+      ]
+    }
+  }
+}

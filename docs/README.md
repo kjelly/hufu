@@ -41,8 +41,8 @@ to re-create an abstraction that already exists in the runtime.
   decision-model adapter, the standalone `hufu decisionrt` CLI, native
   agent-team tools, and runtime control decisions.
 - [有界唯讀診斷 belief loop（提案）](architecture/bounded-diagnostic-belief-loop.md)
-  — draft specification for an opt-in diagnostic episode, durable execution,
-  stopping rules, and synthetic baseline fixtures; not implemented or enabled.
+  — staged proposal with offline fixtures, preparation, journal/replay and
+  read-only inspection; live episodes and dispatch remain deferred.
 - [Decision authoring UX](architecture/decision-authoring-ux.md) — canonical
   profile/request/routing schema, compatibility normalization, inspection,
   and dry-run migration contract.
@@ -83,6 +83,9 @@ to re-create an abstraction that already exists in the runtime.
 
 - [Replayable Bayesian belief state](reference/belief-state.md) — team models,
   receipt-scoped inference, journal recovery, and read-only inspection.
+- [Diagnostic preparation and offline shadow](reference/diagnostic-preparation.md)
+  — off-only runtime contracts, exact ranking, paired baseline, fixture episode
+  journal/replay and read-only inspection.
 
 - [Decision authoring](guides/decision-authoring.md)
 - [Agent-team DecisionPrimitives](reference/decision-primitives.md) — trusted
