@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `cc5516300df2b0ee4316b398d8bdd07a0560fe51`
+> Verified-Commit: `3e358d12d8c78e6b669b4ca680b168a2829088cb`
 > Supersedes: —
 > Superseded-By: —
 
@@ -89,6 +89,20 @@ admissions, retractions and closure are events in `runtime.sqlite`. Runtime
 model and adapter identity are pinned in the existing execution-policy
 snapshot. Changing a model or selected experiment fails resume with policy
 drift; use a new session for a changed execution policy.
+
+Task lifecycle append and live publication remain serialized together. Belief
+bookkeeping runs synchronously afterward, outside the shared task projection
+lock, under its own belief lock. A slow belief read therefore cannot hold up
+another task's durable transition or live publication. The originating terminal
+call still waits for its own bookkeeping; non-verification lifecycle events do
+not enter it. Conditional journal-head fencing continues to reject stale advice.
+
+Historical advice is validated in one ordered event pass, projecting the target
+epoch at each recommendation instead of repeatedly rebuilding every earlier
+epoch. Each read still validates the journal and locked artifacts. Completed
+local admissions skip redundant write checks; an admission missing its closure
+remains repairable. These optimizations add no persistent cache or background
+worker, and replay never executes the original action.
 
 ## Advisory policies
 

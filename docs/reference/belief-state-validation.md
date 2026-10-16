@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `cc5516300df2b0ee4316b398d8bdd07a0560fe51`
+> Verified-Commit: `3e358d12d8c78e6b669b4ca680b168a2829088cb`
 > Supersedes: —
 > Superseded-By: —
 > Baseline: `c03b785788fbe9b1f636e8b8baca745b6345114e`
@@ -264,3 +264,77 @@ docs failure was reproduced locally as a missing `Verified-Commit` header;
 commit `f6b3971d` added the required lifecycle metadata. The completed plan is
 now archived and linked from the documentation map. Final changes after the
 validated production commit are documentation only.
+
+## PR review follow-up (2026-10-16)
+
+Reviewed revision: `9fb5f30562bc72badc8ad97d46baab44ba3ff134`.
+The [initial assessment](https://github.com/kjelly/hufu/pull/18#issuecomment-6193029078)
+and [merge blocker](https://github.com/kjelly/hufu/pull/18#issuecomment-6204983011)
+were checked against that revision and the current callers.
+
+| Review point | Assessment and change |
+| --- | --- |
+| Top-level verification/input hash and nanosecond durations | Already fixed in C; the existing real worker/action and inspector regressions remain applicable. |
+| Nil verification panic in private receipt helpers | No reachable normal caller was found: callers check `VerifyResult` or use `beliefSourceReceipt`, which rejects receipts without verification. No fabricated identity or fallback probability was added. |
+| Bookkeeping under `taskProjectionMu` | Confirmed. Durable append and live publication retain their shared lock; the captured durable event is passed to synchronous belief bookkeeping after unlocking. The separate belief lock still serializes publications and journal-head fencing still rejects stale advisory writes. Non-verification transitions skip the belief path. |
+| Repeated historical suggestion prefixes | Confirmed. A shared ordered reducer validates events once and snapshots only the recommendation's epoch. Historical actor, cursor, generation, retraction, branch and unavailable-artifact checks are retained. No persistent cache was added. |
+| Source ordering with equal receipt keys | Added event ID and hash tie breakers. A two-experiment, same-receipt integration test repeatedly checks the entire projection. |
+| Current-branch completed admission replay | Added a per-refresh settled-receipt index. Local admission is settled only after closure; inherited admissions retain ancestor ownership. The partial-admission test repairs the missing close before testing the zero-I/O fast path. |
+| Multiplication after unresolved dependency | Skips further high-precision multiplication while still validating every remaining observation and retaining its identity. With current caps, the claimed intermediate-bit overflow is not reachable (`256 * 30 + 30 < 16384`); the unnecessary work is real. |
+| Public state digest helper | Optional API suggestion, not a current correctness defect. Callers obtain state digests from `belief.Project`; no external manual state rehash path exists. No unused public API was introduced. |
+
+The [Go function: TestBeliefBookkeepingReleasesTaskProjectionLock](../../internal/team/belief_concurrency_test.go)
+regression uses a channel-controlled journal read rather than a latency threshold. While the first terminal caller waits on belief I/O, its task
+is already published and another task can append and publish both progress and
+completion. After release, both epochs and their first advisory generations are
+verified, and live task state agrees with event replay. The caller still waits
+for its own synchronous bookkeeping; this is not an asynchronous worker design.
+
+The history fixture writes actual hash-chained events and immutable artifacts.
+The [Go function: TestBeliefHistoryReplayWorkGrowsLinearly](../../internal/team/belief_history_test.go)
+growth test verifies recommendations at 8, 32 and 128 historical decisions,
+including exactly one model resolution per read and one policy resolution per
+recommendation. The benchmark measures 16, 64 and 256 historical recommendations;
+it does not measure model quality or end-to-end production task latency.
+
+Benchmark command on both revisions:
+
+```bash
+go test ./internal/team -run '^$' -bench '^BenchmarkBeliefHistoryReplay$' -benchtime=3x -count=1 -timeout=5m
+```
+
+The pre-fix measurements use a `git archive` of the reviewed revision with the
+same benchmark fixture added; production code is untouched. Both runs use Go
+1.27.2, Linux/amd64, six logical Go CPUs and short `/tmp/hb` temporary roots.
+Other validation was active on the host, so elapsed times are indicative samples,
+not a production latency guarantee. Memory is decimal MB per replay.
+
+| Historical recommendations | Before ms/op | After ms/op | Before MB/op | After MB/op | Before allocations/op | After allocations/op |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 16 | 223.17 | 6.88 | 5.220 | 0.790 | 30,010 | 4,301 |
+| 64 | 2,051.32 | 37.67 | 68.224 | 3.055 | 377,432 | 16,420 |
+| 256 | 18,788.99 | 312.12 | 1,032.635 | 11.881 | 5,663,344 | 64,510 |
+
+Both benchmark commands exited 0. The deterministic growth regression guards
+artifact-resolution work, while the benchmark exposes timing and allocation
+costs. Full journal integrity verification still occurs on runtime refresh;
+this change removes repeated historical-prefix reconstruction and shared task
+lock contention, rather than claiming constant-time runtime bookkeeping.
+
+Follow-up checks use the installed Go 1.27.2 binary/`GOROOT`, `GOTOOLCHAIN=local`,
+`GOTMPDIR=/tmp/hb` and `TMPDIR=/tmp/hb`. Local test sockets are permitted.
+
+| Check | Exit | Evidence |
+| --- | ---: | --- |
+| Isolated reviewed revision: `go test ./internal/team -run '^TestBeliefBookkeepingReleasesTaskProjectionLock$' -count=1 -timeout=1m` | 1 | Expected regression: `belief I/O preceded live publication`; the same channel-controlled test passes with the fix. |
+| Initial `go test ./...` | 1 | Changed team package passed (333.466s), CLI passed (309.912s), inspector passed (8.662s). Unchanged `internal/tools` failed `TestBashHandsCompleteOutputToOffloader/normal`: captured 139,277 bytes instead of 168,907. |
+| Isolated reviewed revision: `go test ./internal/tools -run '^TestBashHandsCompleteOutputToOffloader$' -count=20 -timeout=3m` | 0 | The shell-output mismatch did not reproduce in these 20 targeted repetitions (1.200s); no root cause or fix is claimed. No tools source or test was changed. |
+| `go test -race ./internal/belief ./internal/team ./internal/inspect -run 'TestBelief\|TestUnresolved\|TestActionProgress.*Transition\|TestActionProgressWaits\|TestEventStoreConditional' -count=1 -timeout=5m` | 0 | Belief 1.790s, team 32.404s, inspector 2.036s; no race report. |
+| `go vet ./...` | 0 | Complete static analysis of the final source. |
+| `golangci-lint run --allow-parallel-runners` | 0 | Final source and tests: 0 issues; the supported runner-lock option disables no checker. |
+| `bin/check-docs` | 0 | Lifecycle headers, relative links and named Go function anchors validated. |
+| Final `go test ./...` rerun | 0 | Complete suite passed: team 211.006s, tools 50.452s, CLI 91.354s. The initial shell-output mismatch remains recorded above and is not claimed fixed. |
+
+The review fixes are committed in `3e358d12d8c78e6b669b4ca680b168a2829088cb`. The final document
+changes do not modify the validated code. The PR remains draft for re-review;
+no merge or new active policy behavior is enabled.
