@@ -22,9 +22,10 @@ and runtime state in files, so current Hufu can use it with its history.
 The event log is imported with full hash-chain validation; the session
 checkpoint, session tree, compaction state, conversation history, terminal
 sessions, reliability report, task journal, and decision index are imported
-as they are. Everything is verified in a staging database before it replaces
-anything, so a failed conversion leaves the workspace unchanged. The original
-files are moved, not deleted, into legacy-runtime-files/ in the workspace.
+as they are. Sources and backup destinations are checked before the verified
+staging database is published. Failures before publication leave the workspace
+unchanged. The originals are moved into legacy-runtime-files/, with a durable
+conversion record for verifying and resuming interrupted archiving.
 
 --dry-run imports and verifies without changing the workspace.`,
 		Args: cobra.MaximumNArgs(1),
@@ -83,8 +84,12 @@ func renderWorkspaceConversion(command *cobra.Command, result team.WorkspaceConv
 		verb, moved = "Would convert", "would move to"
 	}
 	if result.Resumed {
-		_, err := fmt.Fprintf(command.OutOrStdout(), "%s: runtime.sqlite was already in place; moved %d original file(s) to %s\n",
-			result.Workspace, len(result.MovedFiles), result.BackupDir)
+		action := "moved"
+		if result.DryRun {
+			action = "would move"
+		}
+		_, err := fmt.Fprintf(command.OutOrStdout(), "%s: verified the installed runtime.sqlite import; %s %d original file(s) to %s\n",
+			result.Workspace, action, len(result.MovedFiles), result.BackupDir)
 		return err
 	}
 	_, err := fmt.Fprintf(command.OutOrStdout(), "%s %s\n  events: %d\n  documents: %d\n  session branches: %d\n  task journal rows: %d\n  decision index rows: %d\n  originals (%d file(s)) %s %s\n",

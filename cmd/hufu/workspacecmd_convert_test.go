@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 	workspacepkg "github.com/kjelly/hufu/internal/workspace"
@@ -72,11 +74,52 @@ func TestWorkspaceConvertStorageCommand(t *testing.T) {
 	if err := locks.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// A backup collision must fail identically in preview and real conversion,
+	// before runtime.sqlite is installed or any original is moved.
+	backup := filepath.Join(ws, team.LegacyRuntimeBackupDir)
+	if err := os.MkdirAll(backup, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	conflict := filepath.Join(backup, "session.json")
+	if err := os.WriteFile(conflict, []byte("keep this backup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, flags := range [][]string{{"--dry-run"}, {"--yes"}} {
+		stdout, err = executeWorkspaceCommand(t, fixture.deps, append([]string{"convert-storage"}, flags...)...)
+		if err == nil || stdout != "" || runtimestore.Exists(ws) {
+			t.Fatalf("backup conflict (%v) = %q, %v", flags, stdout, err)
+		}
+		if _, err := os.Stat(filepath.Join(ws, "session.json")); err != nil {
+			t.Fatalf("source moved before backup preflight: %v", err)
+		}
+	}
+	if err := os.Remove(conflict); err != nil {
+		t.Fatal(err)
+	}
 	stdout, err = executeWorkspaceCommand(t, fixture.deps, "convert-storage", "--yes", "--output", "json")
 	if err != nil || !strings.Contains(stdout, `"events": 1`) || !runtimestore.Exists(ws) {
 		t.Fatalf("conversion = %q, %v", stdout, err)
 	}
 	if session := team.LoadSession(ws); session == nil || session.Rounds != 2 {
 		t.Fatalf("converted session = %+v", session)
+	}
+}
+
+func TestWorkspaceConvertStorageResumePresentation(t *testing.T) {
+	for _, dryRun := range []bool{true, false} {
+		var output bytes.Buffer
+		command := &cobra.Command{}
+		command.SetOut(&output)
+		err := renderWorkspaceConversion(command, team.WorkspaceConversion{
+			Workspace: "/example/workspace", BackupDir: "/example/workspace/legacy-runtime-files",
+			DryRun: dryRun, Resumed: true, MovedFiles: []string{"session.json"},
+		})
+		want := "moved 1 original file(s)"
+		if dryRun {
+			want = "would move 1 original file(s)"
+		}
+		if err != nil || !strings.Contains(output.String(), want) || !strings.Contains(output.String(), "verified") {
+			t.Fatalf("resume presentation (dry=%t) = %q, %v", dryRun, output.String(), err)
+		}
 	}
 }
