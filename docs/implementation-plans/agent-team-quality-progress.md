@@ -14,8 +14,8 @@
 | AT-00 baseline | 完成 | 本節全量與五團隊靜態檢查均通過 |
 | AT-02A structured results | 完成 | 9b4b1dc3；schemas／四角色接線、完整 gates 與 race 通過 |
 | AT-04 context artifacts | 完成 | f604aeab；12 個精確大小邊界、長單行 fallback 與使用說明；focused/race/lint 通過 |
-| AT-05 retrospective | 完成 | 指南、draft 模板、固定合成快照；CLI／fixture／race 通過 |
-| AT-01 semantic contracts | 待執行 | — |
+| AT-05 retrospective | 完成 | c5ba5d86；指南、draft 模板、固定合成快照；CLI／fixture／race 通過 |
+| AT-01 semantic contracts | 完成 | 既有契約對照與 10 個 typed fallback 組合；focused／race／lint 通過 |
 | AT-06 research/review contracts | 待執行 | — |
 | AT-09 integration | 待執行 | — |
 
@@ -109,3 +109,19 @@ AT-04 的新增案例與真實 team 載入邊界另以 `go test -race ./internal
 既有 CLI 正反例 `go test ./cmd/hufu -run '^Test(ResultsReport|ResultsPickReport|RequestedReports)' -count=1` 通過（exit 0，0.733s），涵蓋指定 snapshot、缺失／失配、匯出及 branch lineage。新增 fixture 同時列入最終全量測試與 focused race；指南相對連結通過 check-docs。回滾只移除新指南／fixture，不影響既有歷史讀取。
 
 AT-05 新增 fixture 已於實際工作樹的 focused race 執行成功；該批 team 案例 exit 0（74.099s），context 案例 exit 0（2.254s）。本輪 `go vet ./...`、`golangci-lint run`（0 issues）、build 及 check-docs 皆 exit 0；後續最終全量結果集中於 AT-09 記錄。
+
+## AT-01：Semantic 離線契約
+
+不修改任何 bundled semantic 配置。盤點發現既有測試分別驗證「typed error → reason」與泛用失敗 fallback，但沒有逐一把五種錯誤與實際 lexical 結果／trace 結合。因此新增 `internal/context/semantic_fallback_contract_test.go`，對 warming／busy／timeout／profile mismatch／projection incomplete × active／shadow 共 10 案例，要求結果與 lexical baseline 相同、content-free reason 正確且不洩漏 query、item ID／content 或原始錯誤。
+
+| 契約 | 既有覆蓋與結果 |
+|---|---|
+| off／shadow 選取相同，auto 依實際 query 與 0.15 門檻路由 | TestContextRouterSemanticLaneByMode、TestContextRouterAutoRoutesByQueryScript、TestRoutesSemantic |
+| 英文 lexical／private recall／授權先於 top-K | TestWorkerRecallUsesSemanticLaneForPrivateMemory、TestWorkerRecallAutoRoutesOncePerRecall、TestSemanticIndexAuthorizesBeforeDeterministicTopK、TestSemanticIndexAllowedIDsOnlyNarrowCanonicalAuthorization；包含其他 agent、candidate、expired 記錄 |
+| timeout／busy／cancellation、逐 item freshness、profile mismatch | TestSemanticRuntimeTimeoutBusyAndCancellation、TestSemanticRuntimeSearchAndPerItemRefresh、TestSemanticIndexFreshnessIsPerItem；新增 typed fallback 組合 |
+| 不下載模型、no-net／remote endpoint | TestSemanticRuntimeMissingModelFailsFast、TestSemanticRuntimeRefusesRemoteEndpointUnderNoNet、TestResolveValidation；只有本地 fake encoder |
+| off／shadow 不 pin selecting hash；active／auto 才 pin | TestExecutionPolicySnapshotPinsOnlySelectingSemanticRetrieval、TestCompileAndManifestPropagationKeepsShadowNilAndActiveConsistent |
+
+Focused 執行：`go test ./internal/semantic -count=1` exit 0（0.006s）；team 的 semantic／routing／wiring／recall／snapshot／replay focused suite exit 0（9.645s）；`go test ./internal/context -run '^Test(SemanticIndex|HybridRetrieve|SemanticFallbackReason)' -count=1` exit 0（1.472s）。新增 10 案例預驗證 exit 0（0.084s），最後再納入實際工作樹全量／race／lint。無真實召回率或 latency 結論；回滾只移除新增測試。
+
+實際工作樹新增 semantic 案例已於 focused race 通過（context exit 0，2.254s）；共用最終 vet／lint／build 均 exit 0，0 lint issues。
