@@ -40,6 +40,9 @@ to re-create an abstraction that already exists in the runtime.
   decisions, backend contracts, strict sidecar mapping, the System One
   decision-model adapter, the standalone `hufu decisionrt` CLI, native
   agent-team tools, and runtime control decisions.
+- [有界唯讀診斷 belief loop（提案）](architecture/bounded-diagnostic-belief-loop.md)
+  — draft specification for an opt-in diagnostic episode, durable execution,
+  stopping rules, and synthetic baseline fixtures; not implemented or enabled.
 - [Decision authoring UX](architecture/decision-authoring-ux.md) — canonical
   profile/request/routing schema, compatibility normalization, inspection,
   and dry-run migration contract.
