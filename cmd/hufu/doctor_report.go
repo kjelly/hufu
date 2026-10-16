@@ -327,7 +327,7 @@ func collectDoctorRuntimeStore(ctx context.Context, report *doctorReport, worksp
 		report.add("runtime.store", "", "pass", "no runtime store yet; the first run creates runtime.sqlite")
 		return true
 	case errors.Is(err, runtimestore.ErrLegacyWorkspace):
-		report.add("runtime.store", "", "fail", "workspace uses the retired file-based layout; remove it with `hufu workspace delete` and start a new workspace")
+		report.add("runtime.store", "", "fail", "workspace uses the retired file-based layout; convert it with `hufu workspace convert-storage`, or remove it with `hufu workspace delete`")
 		return false
 	case err != nil:
 		report.add("runtime.store", "", "fail", "runtime.sqlite cannot be opened or has an unsupported schema")

@@ -40,6 +40,40 @@ hufu workspace path --team <team>
 hufu workspace doctor
 ```
 
+## File-based runtime state
+
+Hufu keeps a workspace's event journal and runtime state in `runtime.sqlite`.
+A workspace written by an older Hufu, with `session.json` and
+`logs/event_store.jsonl` instead, is refused until it is converted:
+
+```sh
+hufu workspace convert-storage --team <team> --dry-run
+hufu workspace convert-storage --team <team> --yes
+```
+
+Conversion imports the event log with full hash-chain validation and the
+session checkpoint, session tree, compaction state, conversation history,
+terminal sessions, reliability report, task journal, and decision index as
+they are. It verifies everything in a staging database before replacing
+anything, holds the workspace lock so it never runs beside a run, and moves
+the original files into `legacy-runtime-files/` rather than deleting them.
+`--dry-run` imports and verifies without changing the workspace, including
+checking all backup destinations and their parent directories for conflicts.
+An existing database is never treated as a completed import on its own: recovery
+requires a conversion record with matching source and database content hashes.
+An empty, corrupt, unrelated, or subsequently modified database is refused
+without moving the originals.
+
+Failures before database publication leave the workspace unchanged. If archiving
+is interrupted after publication, the error reports that `runtime.sqlite` is
+installed and archiving is incomplete. Resolve the reported filesystem error
+and rerun the same command (or preview with `--dry-run`). Recovery verifies every
+imported source at its original or backup path, then moves only the remaining
+originals and writes the completion note. Do not run the workspace until this
+finishes: runtime writes change the imported state and prevent automatic
+recovery. Recovery also handles interruption after the last file move but before
+the completion note is written. Existing backup files are never overwritten.
+
 `--workspace` remains an exact, unmanaged compatibility override;
 `--workspace-root` remains a root to which the team name is appended once;
 `--temp` remains unregistered and is cleaned up after execution.

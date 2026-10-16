@@ -395,6 +395,7 @@ export extern "hufu workspace alias set" [selector: string@'nu-complete hufu wor
 export extern "hufu workspace alias clear" [selector: string@'nu-complete hufu workspace projects' --output: string]
 export extern "hufu workspace rebind" [selector: string@'nu-complete hufu workspace projects' new_root: path --output: string]
 export extern "hufu workspace migrate" [selector?: string@'nu-complete hufu workspace projects' --team: string --all-teams --legacy-root: path --output: string]
+export extern "hufu workspace convert-storage" [selector?: string@'nu-complete hufu workspace projects' --team: string --dry-run --yes --output: string]
 export extern "hufu workspace delete" [selector?: string@'nu-complete hufu workspace projects' --team: string --all-teams --yes --output: string]
 export extern "hufu workspace restore" [trash_id: string --yes --output: string]
 export extern "hufu workspace purge" [trash_id: string --yes --output: string]
