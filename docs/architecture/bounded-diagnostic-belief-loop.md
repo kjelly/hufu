@@ -227,7 +227,9 @@ controller 不冒充 source event actor、不補造 grant 或偽造模型呼叫�
 不繞過 `CatalogActionBinding` 或 `validateCatalogActionIntegrity`。既有 catalog
 action 強制 `DecisionProfileOff` 並拒絕 enabled profile override；episode controller
 不改此規則，也不透過 active DecisionPrimitive profile 派送 catalog action。decision commit 前、
-child task admission 時及實際 provider 啟動前都重驗授權、identity 與剩餘 budget。
+child task admission 時及實際 provider 啟動前都重驗授權、identity 與 budget ledger。
+新的 reservation 檢查未保留額度；已保留的 action 則核對自己的有效 reservation，
+不得再次扣額或因該 reservation 已把可用額度降為零而拒絕啟動（詳見下一節）。
 無法取得有效授權資訊就 `authorization_unavailable`；deny 就 `unauthorized_action`。
 可用候選被明確 deny 時停止，而非透過替代 action 試探權限。
 `side-effect: none` 只是必要 metadata；pilot provider 的唯讀實作與 path 邊界還需測試。
@@ -238,18 +240,43 @@ pilot 硬上限：2 輪、2 次 action attempts（含不確定 dispatch）、每
 episode 20 秒（含重啟停機時間）、總成本 2 units、無額外模型 calls、最多 32 個 episode
 事件、每 observation payload 16 KiB。不得調高 runtime/團隊原有更嚴格的上限。
 artifact/output 大小另受既有 runtime 限制。兩輪之間不重新給 token/cost/execution quota。
-持久化 reservation 在執行前扣除可用額度；失敗/timeout/不確定執行也佔 attempt 與成本，
-只有可證明尚未 dispatch 的取消能釋放 reservation，且不能抹除 audit history。
+持久化 reservation 在執行前扣除可用額度；`remaining = limit − consumed − reserved`。
+reservation 以 execution ID 綁定該 action 的 attempt/cost，從 reserved 結算至 consumed
+不再次扣額。失敗/timeout/不確定執行也佔 attempt 與成本；只有可證明尚未 dispatch 的
+取消能釋放 reservation，且不能抹除 audit history。
 
-每次啟動、admission 及選下一步前按此順序決定停止（第一個 reason 為主，其餘保留）：
+區分「不能再保留新的工作」與「已授權工作的 reservation 失效」：remaining 為零只
+禁止新的 reservation/dispatch，不阻止已持有有效 reservation 的 action 啟動、完成或
+admit 最後一份有效 evidence。provider-start 必須找到自己的 execution ID reservation、
+核對未重複執行、額度足夠且未失效；不能拿同一 action 的成本再與 remaining 比較。
+此規則同樣適用共用 runtime ledger；不能透過 episode reservation 繞過更嚴格的 runtime
+限制。reservation 缺失、額度不足、撤銷或 ledger 不一致立即停止；授權撤回、revision
+變動、disabled/cancellation、deadline 到期等硬限制也不因已有 reservation 而豁免。
 
-1. integrity/artifact/revision/authorization/policy/version 不符：blocked，不能再派送。
-2. cancellation、disabled、deadline、runtime budget 或 episode budget 耗盡：停止。
+執行前與 evidence admission 前先檢查硬限制，再在有效 reservation 範圍內完成執行或
+admission。不得因額度恰好用完，先把 episode 設成 terminal 而遺失已授權工作的最後
+observation。每次有效 observation durable admit 並重算後，依下列順序決定是否停止
+（第一個 reason 為主，其餘同時成立的原因保留供 audit）：
+
+1. integrity/artifact/revision/authorization/policy/version 不符，或 reservation/ledger
+   無效：blocked；失效證據不得更新 belief。
+2. cancellation、disabled、deadline 或 runtime 強制中止：停止；這與僅 remaining=0
+   不同，後者不是取消有效 reservation 的理由。
 3. unknown/invalid/timeout evidence、correlation unresolved、分布 unavailable：停止。
 4. 至少一個有效新 observation 且最大 posterior ≥ 0.90：`threshold_reached`。
 5. 連續一個已完成 round 沒有新增有效 evidence 或分布 Q9 未變：`no_progress`。
-6. 無未使用且合法候選、最佳 gain ≤ 0、達兩輪上限：分別 `no_candidate`、
-   `no_information_gain`、`round_limit`。
+6. 已完成兩輪：`round_limit`。
+7. 未達以上條件、但 runtime/episode 剩餘可用額度不足以保留下一個 action：
+   `budget_exhausted`；不建立下一份 reservation。
+8. 無未使用且合法候選或最佳 gain ≤ 0：分別 `no_candidate`、`no_information_gain`。
+
+第 7 項以合法候選的實際宣告成本檢查；沒有候選則走第 8 項，不捏造成本。初始 ready
+且沒有 pending reservation 時也先檢查硬限制，再套用適用的選擇/停止規則，確保零額度
+不會派送。恢復 pending action 則先按 execution ID 核對既有 reservation，不套用「下一個
+action」的額度條件。故正常第二輪耗完 2 units 後，達門檻者以 `threshold_reached` 結束，
+未達門檻且有進展者以 `round_limit` 結束；`budget_exhausted` 可作次要 audit reason，
+兩者都不會產生第三次 dispatch。較小預算在第一輪後耗完且未達其他停止條件時，則以
+`budget_exhausted` 結束。
 
 deadline 包含驗證與 bookkeeping；到期不新增 dispatch，取消並 drain 已啟動工作。
 收尾事件預留容量；達事件上限時只能提交 terminal 記錄。fence 衝突最多重算 3 次，
@@ -374,8 +401,8 @@ transition、task journal、session persistence、CLI/JSON/report/TUI 的投影�
 
 | Fixture / 故障注入 | 預期結果與必須斷言 |
 | --- | --- |
-| source fail → environment pass | 依上例 posterior 約 0.92045，兩次 action 後停止 threshold；原始失敗 task 不被改為 done |
-| source pass → environment fail | 可重現分布，最多兩輪；依門檻或 round limit 結束，不為提高 confidence 重跑 |
+| source fail → environment pass | 第二個 action 使用最後 reservation；兩份 evidence 均 admit，posterior 約 0.92045，主原因 `threshold_reached`，budget exhaustion 為次要原因；不改原失敗 task、不派送第三次 |
+| source pass → environment fail | 第二份 evidence admit 後 environment posterior 為 `243/280`（約 0.86786），主原因 `round_limit`，budget exhaustion 為次要原因；不為提高 confidence 派送第三次 |
 | 兩項 pass | `other_fault` 可上升但未達門檻也停止；沒有自動修復 |
 | action timeout / cancellation | receipt 與 timeout 分開可見；不當 fail likelihood；無下一 action，已用額度保留 |
 | duplicate event / receipt alias / duplicate admission | 同 observation 只生效一次；digest/generation/cost 不變；不觸發新 dispatch |
@@ -384,7 +411,11 @@ transition、task journal、session persistence、CLI/JSON/report/TUI 的投影�
 | source、subject 或 environment digest 改變 | admission 或 dispatch 前拒絕；舊 epoch 不繼承；顯式新 episode 從 prior 開始 |
 | 缺 model/policy/fixture/result artifact 或 hash 不符 | unavailable/blocked；保留 references；不讀現行 team file 代替 |
 | unauthorized catalog、缺 proposal、denied tool、phase/unattended 拒絕 | provider 呼叫數 0，標準 gate error 可追蹤，無替代路徑 |
-| budget 0、只餘 1 unit、deadline 到期、event capacity | 0 或至多 1 次 action；停止優先於 confidence；restart/fork 不免費補額度 |
+| budget 0、只餘 1 unit（沒有 pending reservation） | 分別 0 或至多 1 次 action；最後有效 evidence 仍 admit，未達門檻/其他優先條件才 `budget_exhausted`；restart/fork 不補額度 |
+| 最後 1 unit 已 reserve，provider 尚未啟動或此時重啟 | remaining=0 仍以自己的有效 reservation 啟動一次；不 double-charge、不建立第二份 mapping；reserved→consumed 後總額不變 |
+| 最後 action 結果已 durable、admission 前重啟 | 不重跑 action；最後 evidence admit 一次並依上述 threshold/round priority 停止；零新 reservation、零第三次 dispatch |
+| 最後 reservation 後撤權、revision 改變或 deadline 到期 | reservation 不豁免硬 fence；尚未啟動則呼叫數 0，已執行則拒絕失效 evidence、取消/drain；不得以 threshold 覆蓋硬停止 |
+| event capacity | 預留最後 admission/terminal 所需容量，不能保留無法完成 durable bookkeeping 的 action；達上限停止，不新增派送 |
 | unknown/out-of-scope、schema invalid、收集 verifier fail | 無 posterior update，停止且標示具體 evidence failure |
 | 合法 observation 使 Q9 不變、gain 0、候選耗盡 | 分別 no_progress/no_information_gain/no_candidate，有限步結束 |
 | decision/intent/task/result/admission/update 各邊界 kill | 逐列符合第 5 節表；最多一筆 mapping/admission；uncertain 停止，沒有 exactly-once 假設 |
