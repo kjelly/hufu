@@ -18,7 +18,8 @@ without weakening the whole-run gates.
 2. Expand all three review routes, including their no-op children.
 3. Run `inventory-review-handoffs` after all review children complete. This
    native action validates their accepted records and emits exact source IDs,
-   payload hashes, finding counts, and the required critic source IDs. Dispatch
+   payload hashes, finding/gap counts, workset keys, lenses, each source's
+   accepted artifact reads, and the required critic source IDs. Dispatch
    one critic per source ID in this runtime-owned checklist, not per agent name.
    Documentation escalation is a `review` record even when its worker is
    named `critic`; flagged findings still require a separate `critic-review`.
@@ -46,13 +47,30 @@ without weakening the whole-run gates.
    accepted critic dependency. The final audit independently re-derives the
    inventory, checks its current action receipt and snapshot, and compares
    every source hash and required ID before accepting the report.
-5. `verify-review-report` audits the current session checkpoint. It checks
+5. Dispatch synthesis and `verify-review-report` in the same batch: synthesis
+   is index 0; audit is index 1 with `depends_on: [0]` and `on_failure: 0`.
+   The report schema's `x-hufu-evidence-references` declaration rejects a
+   wrong resolving task/artifact pairing during submission, with the accepted
+   readers in feedback. Occurrence commit also checks the submitting task's
+   reads. Source records and hashes remain pinned on repair and replay.
+   `verify-review-report` audits the current session checkpoint. It checks
    current run/task receipts, native-action snapshot identities, payload hashes, workset bindings, typed
    findings and invariant claims, per-finding critic coverage, the complete
    report inventory, observed cross-workset evidence, scope and test receipts,
-   and truthful coverage status. Its `passed` output is blocking acceptance.
+   and truthful coverage status. A report rejection returns `passed: false`
+   and a diagnostic; the objective result assertion fails with class
+   `verification`. The declared DAG edge repairs synthesis once, supplies
+   Remediation Context, and reruns the dependent audit. Provider outages do
+   not authorize resetting synthesis. Prior attempts and receipts remain in
+   the event journal. A second rejection terminates with failed acceptance.
+   Its `passed` output is blocking acceptance.
 6. `finish` renders the report schema's fixed template from the validated
    payload, instead of allowing the coordinator to replace it with free prose.
+   When the workflow is FAILED, `finish` with `acknowledge_failed_tasks: true`
+   uses the canonical partial termination path, preserving failures and
+   acceptance rather than rendering an unaudited report. Reconciliation is
+   available only with an existing verified replacement of the same frozen
+   contract; unrelated synthesis cannot replace an audit.
 
 The workflow uses PREPARE → VERIFY. PREPARE actions bind the frozen review
 scope, produce the immutable manifests, and execute snapshot-pinned tests.
@@ -135,6 +153,15 @@ duplicate, reordered, and out-of-range decisions fail at result submission;
 the independent report audit still rejects multiple accepted critics for one
 source. Runtime retries repair the same occurrence rather than authorizing
 another accepted source audit.
+
+The final report's main sections identify issues by the original finding
+summary and location and display their detail, independent verdict, rationale,
+missing evidence and next step. Task IDs and full payload/artifact hashes remain
+in the audit appendix, alongside the original-review to independent-critic
+links. The renderer indexes findings by the schema-validated ordered decision
+position, so a JSON integer spelling such as `0.0` cannot lose its title binding.
+Presentation does not mutate source records, rehash payloads or turn unverified
+claims into confirmed defects. Existing saved response bodies are not rewritten.
 
 Synthesis uses low reasoning effort and a 12-step budget because source review
 and critique already own semantic investigation. It groups gaps, reads sibling

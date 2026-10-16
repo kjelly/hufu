@@ -116,7 +116,7 @@ func TestProtocolRepairObservationEvidenceIncludesOnlyBoundedReadOnlyResults(t *
 		fantasy.ToolCallContent{ToolCallID: "write-1", ToolName: "write", Input: `{"file_path":"out.md","content":"secret"}`},
 		fantasy.ToolResultContent{ToolCallID: "write-1", ToolName: "write", Result: fantasy.ToolResultOutputContentText{Text: "mutation output must be omitted"}},
 	}}}}
-	got, hasObservation := protocolRepairObservationEvidence(steps)
+	got, hasObservation := protocolRepairObservationEvidence(steps, isReadOnlyToolCall)
 	if !hasObservation {
 		t.Fatal("successful view result was not recognized as evidence")
 	}
@@ -137,7 +137,7 @@ func TestProtocolRepairObservationEvidenceIsBounded(t *testing.T) {
 		fantasy.ToolCallContent{ToolCallID: "read-1", ToolName: "view", Input: `{"file_path":"article.md"}`},
 		fantasy.ToolResultContent{ToolCallID: "read-1", ToolName: "view", Result: fantasy.ToolResultOutputContentText{Text: strings.Repeat("q", maxRepairObservationRunes+1000)}},
 	}}}}
-	got, hasObservation := protocolRepairObservationEvidence(steps)
+	got, hasObservation := protocolRepairObservationEvidence(steps, isReadOnlyToolCall)
 	if !hasObservation {
 		t.Fatal("successful view result was not recognized as evidence")
 	}
@@ -152,7 +152,7 @@ func TestProtocolRepairObservationEvidenceDoesNotReuseReadOnlyCallID(t *testing.
 		fantasy.ToolCallContent{ToolCallID: "reused", ToolName: "write", Input: `{"file_path":"out.md","content":"secret"}`},
 		fantasy.ToolResultContent{ToolCallID: "reused", ToolName: "write", Result: fantasy.ToolResultOutputContentText{Text: "mutation output"}},
 	}}}}
-	got, hasObservation := protocolRepairObservationEvidence(steps)
+	got, hasObservation := protocolRepairObservationEvidence(steps, isReadOnlyToolCall)
 	if got != "" || hasObservation {
 		t.Fatalf("reused call ID must not admit a mutating result: observed=%t evidence=%q", hasObservation, got)
 	}
@@ -163,7 +163,7 @@ func TestProtocolRepairObservationErrorIsNotCompletionEvidence(t *testing.T) {
 		fantasy.ToolCallContent{ToolCallID: "read-1", ToolName: "view", Input: `{"file_path":"missing.md"}`},
 		fantasy.ToolResultContent{ToolCallID: "read-1", ToolName: "view", Result: fantasy.ToolResultOutputContentError{Error: errors.New("file not found")}},
 	}}}}
-	got, hasObservation := protocolRepairObservationEvidence(steps)
+	got, hasObservation := protocolRepairObservationEvidence(steps, isReadOnlyToolCall)
 	if hasObservation || !strings.Contains(got, "file not found") {
 		t.Fatalf("read failure should inform repair but not justify completion: observed=%t evidence=%q", hasObservation, got)
 	}

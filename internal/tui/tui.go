@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"time"
@@ -141,11 +142,12 @@ func SetCompactMode(enabled bool) { defaultCompactMode = enabled }
 // ── Model ─────────────────────────────────────────────────────────────────────
 
 type Model struct {
-	prompt    string
-	tasks     []*team.TodoItem
-	logs      map[string][]string       // todoID → rendered log lines
-	fullLogs  map[string]map[int]string // todoID → log index → bounded expanded line
-	coordItem *team.TodoItem
+	prompt           string
+	tasks            []*team.TodoItem
+	logs             map[string][]string       // todoID → rendered log lines
+	fullLogs         map[string]map[int]string // todoID → log index → bounded expanded line
+	coordItem        *team.TodoItem
+	resultIdentities map[string]TaskResultIdentityMsg
 
 	col int // 0=pending 1=planned 2=in_progress 3=done 4=skip 5=error
 	row int // cursor within focused column
@@ -299,6 +301,7 @@ func NewWithOptions(prompt string, teamInfo TeamInfo, options Options) Model {
 		prompt:            prompt,
 		logs:              make(map[string][]string),
 		fullLogs:          make(map[string]map[int]string),
+		resultIdentities:  make(map[string]TaskResultIdentityMsg),
 		expandedLogIndex:  -1,
 		terminals:         make(map[string]string),
 		unread:            make(map[string]int),
@@ -417,6 +420,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.styles = newStyleSet(msg.mode, m.noColor)
 			return m, tea.ClearScreen
 		}
+
+	case TaskResultIdentityMsg:
+		if !validResultIdentity(msg) {
+			return m, nil
+		}
+		m.resultIdentities = maps.Clone(m.resultIdentities)
+		if m.resultIdentities == nil {
+			m.resultIdentities = make(map[string]TaskResultIdentityMsg)
+		}
+		m.resultIdentities[msg.TodoID] = msg
+		return m, nil
 
 	case TasksUpdatedMsg:
 		m.tasks = msg.Items

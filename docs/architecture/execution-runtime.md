@@ -83,7 +83,12 @@ An outcome team may declare `acceptance.required-workers` as a list of worker
 names. Acceptance requires at least one completed model-worker task with an
 explicit `status: success` typed result for each name. An empty run, a missing
 stage, a failed or `completed_with_gaps` stage, or a runtime-owned action using
-the same agent name cannot satisfy the check. Team loading rejects
+the same agent name cannot satisfy the check. A team whose stages can finish
+their work while reporting an external limitation, such as a research team
+that records an inaccessible source, may set
+`acceptance.required-workers-accept-gaps: true`; a `completed_with_gaps`
+result then also satisfies the check, while `partial`, `failed`, and `blocked`
+still do not. Staged coding teams leave it unset. Team loading rejects
 unknown, coordinator, and duplicate worker names. This check complements
 `require-no-unresolved-tasks`; it proves the declared stages ran, while the
 team's verifications and result contracts still define what their work must

@@ -297,6 +297,15 @@ Schema 可選用下列通用 runtime 擴充（都包含在 schema hash 中）：
   不會去引號或猜測；重複、未宣告 ID、hash 不符及來源 payload 變動皆拒絕。
   local/external 提交、commit、完成檢查及最終報告會檢查綁定；
   單純 JSON Schema 驗證不取代此有上下文的檢查。
+- `x-hufu-evidence-references`：在根節點用 `items_pointer` 選擇引用清單，
+  用 `task_id_pointer` 與 `references_pointer` 選擇各項的來源 task ID
+  與非空 artifact ID 陣列。來源必須是 `evidence_from` 中已接受的 task，
+  每個 artifact 都必須列在來源與提交者的 `files_read`。可用
+  `when: {pointer, value}` 限定適用項目、`source_match: {pointer, value}`
+  檢查來源 structured payload 類型，及 `exclude_task_id_pointer` 禁止
+  將引用歸給項目自身的來源。欄位與 vocabulary 由 schema 定義；runtime
+  不猜測 task/workset 編號。local/external 提交、commit、重播完成檢查
+  與最終報告皆驗證引用；提交拒絕後可在原 attempt 的 step budget 內修正。
 - `x-hufu-final-report`：字串形式的 Go text/template。`finish` 直接從唯一
   已完成的報告 task 的 validated payload 產生最終回覆，保留其判定與限制，
   取代 coordinator 的自由摘要。無報告或多份報告不明確時 fail closed；

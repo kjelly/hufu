@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/fantasy"
+
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
 	inspectpkg "github.com/kjelly/hufu/internal/inspect"
@@ -33,6 +35,7 @@ const defaultExplainAIQuestion = "Explain the current progress, blockers, likely
 type explainAIResult struct {
 	model    string
 	analysis string
+	usage    *fantasy.Usage
 }
 
 type explainAIEnvelope struct {
@@ -405,11 +408,23 @@ func retainExplainAITail[T any](values []T, limit int, omitted map[string]int, f
 }
 
 func analyzeExplainAI(ctx context.Context, snapshot *operatorpkg.OperatorSnapshot, requestedModel, prompt string) (result explainAIResult, resultErr error) {
+	result, resultErr = analyzeOperatorAI(ctx, snapshot, requestedModel, "explain_analysis", prompt, sidecar.CompactorProfile)
+	result.analysis = safeAIAnalysis(result.analysis)
+	return result, resultErr
+}
+
+// analyzeOperatorAI shares the tool-free provider boundary between progress
+// explanations and historical result queries. Callers own their total budget.
+func analyzeOperatorAI(ctx context.Context, snapshot *operatorpkg.OperatorSnapshot, requestedModel, purpose, prompt string, profile sidecar.Profile) (result explainAIResult, resultErr error) {
 	cfg := config.LoadConfig()
 	session, err := loadExplainAISession(snapshot)
 	if err != nil {
 		return result, err
 	}
+	if len(session.Config.Providers) == 0 && cfg != nil {
+		session.Config.Providers = cfg.Providers
+	}
+	prompt = utils.RedactSecrets(prompt)
 	model := resolveExplainAIModel(requestedModel, snapshot, session, cfg)
 	result.model = model
 	if model == "" {
@@ -441,12 +456,18 @@ func analyzeExplainAI(ctx context.Context, snapshot *operatorpkg.OperatorSnapsho
 	if err != nil {
 		return result, fmt.Errorf("initialize AI explanation model: %w", err)
 	}
-	analysis, err := analysisSidecar.ExecuteProfile(sidecar.WithPurpose(callCtx, "explain_analysis"), prompt, sidecar.CompactorProfile)
+	analysisSidecar.SetUsageObserver(func(generated *fantasy.AgentResult) {
+		if generated != nil {
+			usage := generated.TotalUsage
+			result.usage = &usage
+		}
+	})
+	analysis, err := analysisSidecar.ExecuteProfile(sidecar.WithPurpose(callCtx, purpose), prompt, profile)
 	if err != nil {
 		return result, fmt.Errorf("AI explanation failed: %w", err)
 	}
-	result.analysis = safeAIAnalysis(analysis)
-	if result.analysis == "" {
+	result.analysis = analysis
+	if strings.TrimSpace(result.analysis) == "" {
 		return result, fmt.Errorf("AI explanation returned an empty response")
 	}
 	return result, nil

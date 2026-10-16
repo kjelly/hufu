@@ -188,6 +188,7 @@ type teamManifestSpecFields struct {
 	DecisionPrimitives map[string]catalog.Entry              `yaml:"decision-primitives,omitempty"`
 	ControlDecisions   control.Config                        `yaml:"control-decisions,omitempty"`
 	SemanticRetrieval  semantic.Config                       `yaml:"semantic-retrieval,omitempty"`
+	Belief             *agent.BeliefConfig                   `yaml:"belief,omitempty"`
 	Request            RequestAuthoringConfig                `yaml:"request,omitempty"`
 	CapabilityRegistry map[string][]agent.DeclaredCapability `yaml:"capability-registry,omitempty"`
 	RoutingPolicy      agent.RoutingPolicyConfig             `yaml:"routing-policy,omitempty"`

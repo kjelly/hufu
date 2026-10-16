@@ -176,9 +176,50 @@ func TestFinalReportPreservesSourceFindingAndOriginalGap(t *testing.T) {
 	if err := reportTemplate.Execute(&output, report); err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"completed_with_gaps", "Prompt-only URL protection", "Only this snapshot lacks the registry", "Critic 對象：task 4", "unverified", "URL validator behavior", "resolved_cross_workset", "Sibling task 3 read AllTools"} {
+	for _, expected := range []string{"completed_with_gaps", "Prompt-only URL protection", "Only this snapshot lacks the registry", "原始審查 task 4 → 獨立複核 task 6", "unverified", "URL validator behavior", "resolved_cross_workset", "Sibling task 3 read AllTools"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("render omitted %q: %s", expected, output.String())
+		}
+	}
+	text := output.String()
+	if strings.Index(text, "## 審查結論") > strings.Index(text, "## Findings 摘要") ||
+		strings.Index(text, "## Findings 摘要") > strings.Index(text, "## Critic 判定") ||
+		strings.Index(text, "## Critic 判定") > strings.Index(text, "## 完整審查證據") {
+		t.Fatal("report does not lead with conclusions and findings")
+	}
+	if !strings.Contains(text, "不能據此判定程式沒有問題") || !strings.Contains(text, "目前不得宣稱此 finding 已確認或已排除") {
+		t.Fatal("report promoted missing evidence into a clean or confirmed verdict")
+	}
+}
+
+func TestFinalReportNextStepsFollowCriticVerdict(t *testing.T) {
+	schema, document := contractSchema(t, "report-v1.json")
+	renderer, err := template.New("report").Option("missingkey=error").Parse(document["x-hufu-final-report"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ verdict, expected string }{
+		{"confirmed", "處理已確認 finding"},
+		{"downgraded", "按 Critic 調整後的嚴重度評估與處理"},
+		{"rejected", "不列為已確認缺陷"},
+		{"unverified", "先補齊證據再判定"},
+	} {
+		_, critique, report := schemaFixture()
+		decision := critique["decisions"].([]any)[0].(map[string]any)
+		decision["verdict"] = test.verdict
+		if test.verdict != "unverified" {
+			decision["evidence"] = []any{"sha256-" + strings.Repeat("b", 64)}
+			decision["missing_evidence"] = ""
+		}
+		if err := schema.Validate(report); err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		if err := renderer.Execute(&out, report); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), test.expected) || !strings.Contains(out.String(), "（"+test.verdict+"）") {
+			t.Fatalf("wrong next step: %s", out.String())
 		}
 	}
 }

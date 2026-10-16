@@ -94,7 +94,8 @@ Dispatch the fixed contracts in this order:
    must occur exactly once. Agent names do not establish coverage. If a listed
    ID is absent, dispatch its critic now; do not start synthesis first.
    After every review child and required critic is done, dispatch exactly
-   one `synthesizer` with `contract_id="synthesize-review"`. Its
+   one `synthesizer` with `contract_id="synthesize-review"` AND the static
+   `reviewer` audit with `contract_id="verify-review-report"` in the SAME batch. Its
    `evidence_from` must list EVERY completed primary, routine documentation,
    documentation escalation, and critic todo ID, including no-op children.
    Do not pass expansion-parent IDs or PREPARE action IDs. The runtime hands
@@ -120,18 +121,26 @@ Dispatch the fixed contracts in this order:
    Do not ask it to re-review the repository or prove every source invariant.
    Its two evidence-gathering rounds may leave truthful retained gaps; the
    complete source inventory and independent report audit remain mandatory.
-7. After synthesis completes, dispatch `reviewer` with
-   `contract_id="verify-review-report"`. This is a static read-only action
-   bound to the canonical review.scope that validates the checkpoint's source identities, all required critiques,
-   per-finding coverage, report inventory, and gap resolutions. Do not replace
-   its output with your own assertions. A failed audit means the run has not
-   met acceptance; never waive it or claim success.
+7. The audit task in the synthesis batch must use `depends_on: [0]` and
+   `on_failure: 0`. The synthesis task is index 0; the audit is index 1.
+   For example (replace `<all review and critic todo IDs>` with the exact IDs):
+   `{"tasks":[{"agent":"synthesizer","contract_id":"synthesize-review","goal":"Synthesize all accepted review evidence.","evidence_from":["<all review and critic todo IDs>"]},{"agent":"reviewer","contract_id":"verify-review-report","goal":"Audit the synthesized review report.","depends_on":[0],"on_failure":0}]}`.
+   Do not dispatch the audit separately or redispatch an accepted synthesis.
+   The static audit validates source identities, critiques, finding coverage,
+   report inventory, and gap resolutions. An audit rejection returns
+   `review_report_verification.passed: false` with a diagnostic. The runtime
+   allows one repair of the synthesis and reruns its dependent audit, retaining
+   prior attempts and their evidence. The producer receives the rejection in
+   Remediation Context. Never waive the audit or claim success on rejection.
 8. Call `finish` only after all required children are terminal and every
    blocking `task_output_assert` and `workset_complete` check has passed.
    The runtime renders the final response from the synthesizer's validated
    payload. Do not append a broader clean/fail-closed claim or rewrite this
-   report from prose. If the report audit failed, finish only as an explicitly
-   acknowledged partial result; retain the rejection and unresolved tasks.
+   report from prose. If the report audit still fails after its bounded repair, call `finish`
+   with `acknowledge_failed_tasks:true`. The runtime retains failed acceptance,
+   rejection evidence, and unresolved tasks in the partial result. Never use
+   `reconcile_task` unless an existing verified task preserves the failed
+   task's exact frozen contract.
 
 Progress is tracked by the required acceptance criteria and the fixed contracts'
 `advances` links. PREPARE scope/test attestations, each complete verified workset,

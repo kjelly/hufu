@@ -71,6 +71,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.AddCommand(decisionCmd)
 	rootCmd.AddCommand(newDecisionRTCommand(defaultDecisionRTDeps()))
 	rootCmd.AddCommand(newExplainCommand())
+	rootCmd.AddCommand(newResultsCommand())
 	rootCmd.AddCommand(newInspectCommand())
 	rootCmd.AddCommand(modelsCmd)
 	rootCmd.AddCommand(migrateCmd)

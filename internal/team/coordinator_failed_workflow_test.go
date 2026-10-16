@@ -103,8 +103,8 @@ func TestWorkflowFailureResultNamesTheReopeningTask(t *testing.T) {
 	if !errors.Is(err, failure) || errors.Is(err, errCoordinatorFatal) || c.IsWrapUp() {
 		t.Fatalf("task failure result = %v (fatal=%v wrap-up=%v), want a recoverable error", err, errors.Is(err, errCoordinatorFatal), c.IsWrapUp())
 	}
-	if !strings.Contains(err.Error(), reconcileTaskToolName+" on task "+c.phaseWorkflow.failedTask()) {
-		t.Fatalf("task failure result = %q, want the reconcile_task instruction", err)
+	if !strings.Contains(err.Error(), "no verified replacement") || !strings.Contains(err.Error(), "acknowledge_failed_tasks:true") {
+		t.Fatalf("task failure result = %q, want actionable partial finish guidance", err)
 	}
 
 	structural := gateTestCoordinator()

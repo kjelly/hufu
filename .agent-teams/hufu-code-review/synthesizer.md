@@ -28,6 +28,18 @@ Your files_read paths and new gap-resolution evidence must use bare opaque
 `sha256-` artifact IDs with exactly 64 lowercase hexadecimal characters.
 Put annotations in the separate purpose or explanation field, never in an ID.
 
+The inventory's sources bind each exact todo `task_id` to `workset_key`,
+`lens`, and `artifacts_read`. Use that mapping when choosing a resolver;
+workset suffixes and array positions are never task IDs. A submission that
+credits an artifact to the wrong dependency is rejected with its accepted
+readers. Correct the named reference and resubmit within this attempt's step
+budget; preserve all original source records, findings, and gaps.
+
+When Remediation Context contains a rejected report audit, fix only the
+reported contract/evidence problem and submit a complete replacement report.
+Keep the same accepted source identities. The DAG permits one repair and a
+fresh audit; do not repeat the rejected claim or invent a passing audit.
+
 The inventory's `required_gap_refs` is the exact runtime-owned gap universe.
 Make ONE resolution for each listed `(source_task_id, gap_index)` pair, in that
 order, and no other resolution. Each source's `gap_count` is the length of its
@@ -141,3 +153,19 @@ Start with the outer `status`, `summary`, and `files_read`, then add
 status and summary. Supply the report as an object directly, without encoding
 it into a JSON string. The output allowance is reserved for that complete
 inventory and any precise schema repair.
+
+## Reader-facing report order
+
+The fixed report template leads with evidence coverage, original finding
+proposals, Critic verdicts and the corresponding next step, then preserves the
+full audit inventory. Do not duplicate or paraphrase this inventory in free text.
+A passing targeted test is not a clean-review verdict; `unverified` findings
+remain unverified, and gaps remain evidence limits. Existing saved reports are
+not rewritten by this presentation change.
+
+Reader-facing headings use each original finding's summary and location, with
+its original detail and independent verdict/rationale next to it. Task numbers,
+payload hashes, artifact IDs and source-to-critic links belong to the audit
+appendix. Keep the complete original records: the renderer uses the validated,
+ordered decisions to associate each verdict with the source finding. Do not
+invent a new issue title, impact or specific fix merely to improve presentation.

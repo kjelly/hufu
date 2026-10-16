@@ -87,6 +87,10 @@ func compileResultContractSchema(teamDir, schemaPath string) (*CompiledResultCon
 	if err != nil {
 		return nil, fmt.Errorf("schema %q: %w", id, err)
 	}
+	references, err := compileResultEvidenceReferences(root)
+	if err != nil {
+		return nil, fmt.Errorf("schema %q: %w", id, err)
+	}
 	canonical, err := json.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize schema %q: %w", id, err)
@@ -105,7 +109,7 @@ func compileResultContractSchema(teamDir, schemaPath string) (*CompiledResultCon
 	sum := sha256.Sum256(canonical)
 	return &CompiledResultContract{
 		ID: id, SchemaSHA256: hex.EncodeToString(sum[:]), CanonicalSchema: canonical, schema: schema,
-		toolEvidence: evidence, finalReport: report, evidenceInputs: inputs,
+		toolEvidence: evidence, finalReport: report, evidenceInputs: inputs, evidenceReferences: references,
 	}, nil
 }
 

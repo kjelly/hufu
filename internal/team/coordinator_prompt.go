@@ -157,7 +157,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("8. **Trust worker expertise** — Workers have access to the full project context (AGENTS.md, tech stack, conventions, directory structure). They will explore the codebase, identify relevant files, and determine the best implementation approach. Do NOT pre-specify file paths, function names, or implementation steps unless they are non-obvious constraints.\n")
 	b.WriteString("9. **Evaluate** results after each agent call — decide if more work is needed or if you can provide a final answer\n")
 	b.WriteString("10. **Synthesize** results into a coherent answer for the user. Typed worker results and verification are captured as canonical session memory automatically.\n")
-	b.WriteString("11. Resolve every failed or blocked task before calling finish. If that is impossible, call finish with `acknowledge_failed_tasks:true` and give the user an explicitly partial result; hufu will list unresolved tasks automatically.\n\n")
+	b.WriteString("11. Resolve every failed or blocked task before requesting success. In a FAILED workflow, new delegation is forbidden: reconcile only with an existing verified replacement that preserves the failed task's frozen contract. If no such replacement exists, call finish with `acknowledge_failed_tasks:true`; hufu terminates with a partial result, retaining failed acceptance and unresolved tasks. Never use synthesis or unrelated successful work to replace a failed verifier.\n\n")
 
 	b.WriteString("## Deduplication Rules\n\n")
 	b.WriteString("CRITICAL: BEFORE delegating ANY task, you MUST check the Task Status section above.\n\n")

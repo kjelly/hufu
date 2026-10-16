@@ -8,12 +8,15 @@ import (
 )
 
 type handoffSource struct {
-	TaskID           string `json:"task_id"`
-	ContractID       string `json:"contract_id"`
-	PayloadHash      string `json:"payload_sha256"`
-	FindingCount     int    `json:"finding_count"`
-	GapCount         int    `json:"gap_count"`
-	RequiresCritique bool   `json:"requires_critique"`
+	TaskID           string   `json:"task_id"`
+	ContractID       string   `json:"contract_id"`
+	PayloadHash      string   `json:"payload_sha256"`
+	FindingCount     int      `json:"finding_count"`
+	GapCount         int      `json:"gap_count"`
+	RequiresCritique bool     `json:"requires_critique"`
+	WorksetKey       string   `json:"workset_key"`
+	Lens             string   `json:"lens"`
+	ArtifactsRead    []string `json:"artifacts_read"`
 }
 
 type gapRef struct {
@@ -62,6 +65,7 @@ func collectReviewHandoffs(current session, runID string) (handoffInventory, err
 		inventory.Sources = append(inventory.Sources, handoffSource{
 			TaskID: item.ID, ContractID: item.ContractID, PayloadHash: item.Result.Payload.Hash,
 			FindingCount: len(r.Findings), GapCount: len(r.Gaps), RequiresCritique: requiresCritique,
+			WorksetKey: r.Key, Lens: r.Lens, ArtifactsRead: readReferences(item),
 		})
 	}
 	if len(inventory.Sources) == 0 {
@@ -88,6 +92,15 @@ func collectReviewHandoffs(current session, runID string) (handoffInventory, err
 		}
 	}
 	return inventory, nil
+}
+
+func readReferences(item task) []string {
+	refs := []string{}
+	for _, file := range item.Result.FilesRead {
+		refs = append(refs, file.Path)
+	}
+	sort.Strings(refs)
+	return refs
 }
 
 func verifyHandoffInventory(current session, runID string) error {

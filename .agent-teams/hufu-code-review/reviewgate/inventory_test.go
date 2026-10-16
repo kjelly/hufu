@@ -32,6 +32,9 @@ func TestInventoryIncludesDocumentationReviewPerformedByCritic(t *testing.T) {
 	if inventory.Sources[2].PayloadHash != item.Result.Payload.Hash || inventory.Sources[2].FindingCount != 1 {
 		t.Fatalf("source identity not preserved: %+v", inventory.Sources[2])
 	}
+	if inventory.Sources[2].TaskID != "13" || inventory.Sources[2].WorksetKey != "unit-0000" || inventory.Sources[2].Lens != "documentation-risk" || !slices.Equal(inventory.Sources[2].ArtifactsRead, []string{"snapshot-a", "snapshot-b"}) {
+		t.Fatalf("task/workset/artifact ownership lost: %+v", inventory.Sources[2])
+	}
 	if _, _, err := verify(fixture, "run-1"); err == nil || !strings.Contains(err.Error(), "unassigned required critique") {
 		t.Fatalf("missing independent documentation critique accepted: %v", err)
 	}

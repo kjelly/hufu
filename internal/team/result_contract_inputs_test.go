@@ -138,12 +138,12 @@ func TestResultEvidenceInputSubmissionRoutes(t *testing.T) {
 						t.Fatal(err)
 					}
 					request := AttemptRequest{Task: taskDefFromTodoItem(audit), resultContractSchema: contract, resultEvidenceInputs: c.dependencyResultsForTask(audit.ID)}
-					_, err = canonicalExternalStructuredPayload(request, &WorkerResultProposal{StructuredPayloadJSON: new(string(data))})
+					_, err = canonicalExternalStructuredPayload(request, &WorkerResultProposal{StructuredPayloadJSON: new(string(data))}, nil)
 					if (err != nil) != forged {
 						t.Fatalf("error=%v", err)
 					}
 					request.resultEvidenceInputs = nil
-					if _, err := canonicalExternalStructuredPayload(request, &WorkerResultProposal{StructuredPayloadJSON: new(string(data))}); err == nil {
+					if _, err := canonicalExternalStructuredPayload(request, &WorkerResultProposal{StructuredPayloadJSON: new(string(data))}, nil); err == nil {
 						t.Fatal("missing accepted inputs allowed")
 					}
 				}

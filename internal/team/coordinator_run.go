@@ -165,6 +165,7 @@ func (c *Coordinator) checkRunAdmission() error {
 			},
 		}
 	}
+	c.refreshBeliefs(nil)
 	return nil
 }
 

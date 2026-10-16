@@ -12,7 +12,7 @@
 
 - **Execution:** `hufu run`, `hufu chat`
 - **Teams and readiness:** `hufu team`, `hufu doctor`, `hufu init`, `hufu list`
-- **Progress and recovery:** `hufu explain`, `hufu session`, `hufu inspect`, `hufu status`, `hufu resume`, `hufu retry`, `hufu reconcile`, `hufu history`
+- **Progress and recovery:** `hufu explain`, `hufu session`, `hufu inspect`, `hufu results`, `hufu status`, `hufu resume`, `hufu retry`, `hufu reconcile`, `hufu history`
 - **Context and skills:** `hufu context`, `hufu skill`, `hufu install`
 - **Environment:** `hufu config`, `hufu models`, `hufu version`
 - **Advanced and diagnostics:** `hufu audit`, `hufu decision`, `hufu improve`, `hufu eval`, `hufu debug`, `hufu terminal`, `hufu migrate`, `hufu completion`, `hufu __complete`, `hufu examples`, `hufu help-flags`
@@ -68,6 +68,38 @@ hufu inspect semantic-retrieval --workspace ./workspace/dev-team
 ```sh
 hufu explain --team dev-team
 ```
+
+### Historical results
+
+```sh
+hufu results list --team dev-team --all-branches
+```
+
+```sh
+hufu result --team dev-team
+```
+
+```sh
+hufu result --team dev-team --render markdown --theme light
+```
+
+```sh
+hufu results runs --team dev-team --all-branches
+```
+
+```sh
+hufu results final --team dev-team --all-branches
+```
+
+```sh
+hufu results query "what did yesterday's review find?" --team dev-team
+```
+
+```sh
+hufu results invocation inv-123 --team dev-team --all-branches
+```
+
+### Progress and recovery
 
 ```sh
 hufu explain --ai "why did the task fail?" --model local/qwen3:8b

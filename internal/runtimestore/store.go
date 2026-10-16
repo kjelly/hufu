@@ -1,7 +1,8 @@
 // Package runtimestore owns runtime.sqlite, the authoritative per-workspace
 // store for hufu's event journal and runtime state. Memory stays in
 // context.sqlite. A writable open creates and migrates the database; a
-// read-only open never creates a file, runs a migration, or enables WAL.
+// read-only open never changes a source file, runs a migration, or enables WAL
+// on the source. It captures validated private files for SQLite to read.
 // VACUUM, PRAGMA optimize, and checkpoints are never run
 // (docs/architecture/sqlite-maintenance-policy.md).
 package runtimestore
@@ -58,6 +59,9 @@ type Store struct {
 	path     string
 	readOnly bool
 	shared   *sharedHandle
+	// cleanup removes a private read-only snapshot after its connection closes.
+	cleanup      func() error
+	snapshotPath string
 }
 
 // sharedHandle lets every writable open of one workspace in a process share
@@ -186,8 +190,10 @@ func retireLocked(path string, handle *sharedHandle) {
 	}
 }
 
-// OpenReadOnly opens an existing runtime.sqlite without creating, migrating,
-// or otherwise changing any file. A missing database returns ErrNotFound, or
+// OpenReadOnly captures an existing runtime.sqlite and its WAL in a private
+// snapshot without changing any source file. Reads see that snapshot; reopen
+// to observe later commits. A changing source is retried a bounded number of
+// times, then refused. A missing database returns ErrNotFound, or
 // ErrLegacyWorkspace for a file-based workspace.
 func OpenReadOnly(ctx context.Context, workspace string) (*Store, error) {
 	path, err := resolvePath(workspace)
@@ -207,19 +213,23 @@ func OpenReadOnly(ctx context.Context, workspace string) (*Store, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("open read-only runtime store: %q is not a regular file", path)
 	}
-	db, err := sql.Open("sqlite", readOnlyDSN(path))
+	snapshotPath, cleanup, err := snapshotRuntimeStore(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("open read-only runtime store: %w", err)
+		return nil, fmt.Errorf("snapshot read-only runtime store: %w", err)
+	}
+	db, err := sql.Open("sqlite", readOnlyDSN(snapshotPath))
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("open read-only runtime store: %w", err), cleanup())
 	}
 	db.SetMaxOpenConns(1)
 	if err := sqlmigrate.Verify(ctx, db, "runtime store", migrations); err != nil {
-		return nil, errors.Join(fmt.Errorf("open read-only runtime store: %w", err), db.Close())
+		return nil, errors.Join(fmt.Errorf("open read-only runtime store: %w", err), db.Close(), cleanup())
 	}
-	return &Store{db: db, path: path, readOnly: true}, nil
+	return &Store{db: db, path: path, readOnly: true, cleanup: cleanup, snapshotPath: snapshotPath}, nil
 }
 
 // OpenRead opens workspace's runtime.sqlite for reading without creating or
-// changing any file. It shares this process's writable connection when one is
+// changing any source file. It shares this process's writable connection when one is
 // open, so reads see that connection's commits without another connection,
 // and otherwise opens read-only. Writes through the returned store fail.
 func OpenRead(ctx context.Context, workspace string) (*Store, error) {
@@ -288,6 +298,10 @@ func (s *Store) Close() error {
 	if s.shared == nil {
 		err := s.db.Close()
 		s.db = nil
+		if s.cleanup != nil {
+			err = errors.Join(err, s.cleanup())
+			s.cleanup = nil
+		}
 		return err
 	}
 	sharedMu.Lock()
@@ -348,10 +362,9 @@ func writableDSN(path string) string {
 	return uri.String()
 }
 
-// readOnlyDSN never writes. A read-only open of a WAL database creates an
-// empty -wal when none exists; immutable mode prevents that in the quiescent
-// case, while a present WAL keeps normal locking so committed records that
-// were not checkpointed stay visible.
+// readOnlyDSN is only for a private snapshot. Its files cannot change, so a
+// missing WAL safely permits immutable mode. A copied WAL uses normal SQLite
+// recovery and locking; any sidecars it creates stay in the private directory.
 func readOnlyDSN(path string) string {
 	uri := &url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
 	query := uri.Query()

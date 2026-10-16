@@ -389,6 +389,9 @@ func (tx *taskResultOccurrenceTransaction) commit(result *TaskResult) error {
 	if err := tx.coordinator.validateSubmittedEvidenceInputs(tx.identity.TaskID, result.StructuredPayload); err != nil {
 		return err
 	}
+	if err := tx.coordinator.validateResultReferenceReads(tx.identity.TaskID, result); err != nil {
+		return err
+	}
 	if taskResultStatusIsSuccessful(result.Status) {
 		if err := tx.coordinator.validateRequiredEvidenceDelivery(tx.identity.TaskID, tx.identity.Attempt, tx.identity.RunID); err != nil {
 			return err

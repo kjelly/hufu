@@ -1,6 +1,8 @@
 package team
 
 import (
+	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -105,5 +107,94 @@ func TestAcceptanceRequiredWorkersRejectsInvalidTeamReferences(t *testing.T) {
 	findings := validateAcceptanceRequiredWorkers(session)
 	if len(findings) != 3 {
 		t.Fatalf("required worker findings = %#v, want duplicate, unknown, and coordinator", findings)
+	}
+}
+
+func TestAcceptanceRequiredWorkersAcceptGapsOnlyWhenTeamOptsIn(t *testing.T) {
+	cases := []struct {
+		status     string
+		acceptGaps bool
+		passed     bool
+	}{
+		{TaskResultStatusSuccess, false, true},
+		{TaskResultStatusCompletedWithGaps, false, false},
+		{TaskResultStatusPartial, false, false},
+		{TaskResultStatusSuccess, true, true},
+		{TaskResultStatusCompletedWithGaps, true, true},
+		{TaskResultStatusPartial, true, false},
+		{TaskResultStatusFailed, true, false},
+		{TaskResultStatusBlocked, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("%s/accept_gaps=%t", tc.status, tc.acceptGaps), func(t *testing.T) {
+			c := &Coordinator{
+				session:        &TeamSession{Config: agent.TeamConfig{Name: "research"}},
+				projectDir:     t.TempDir(),
+				taskTracker:    NewTaskTracker(),
+				acceptanceSpec: &AcceptanceSpec{RequiredWorkers: []string{"researcher"}, RequiredWorkersAcceptGaps: tc.acceptGaps},
+			}
+			item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "researcher", Desc: "research"}})[0]
+			c.taskTracker.TodoList().UpdateStatus(item.ID, TaskDone, "done")
+			if err := c.taskTracker.TodoList().SetTypedResult(item.ID, &TaskResult{Status: tc.status, Source: "submitted"}); err != nil {
+				t.Fatal(err)
+			}
+			result, err := c.runAcceptance(t.Context())
+			if result.IsPassed() != tc.passed || (err == nil) != tc.passed {
+				t.Fatalf("acceptance passed = %t, err = %v, want passed %t: %#v", result.IsPassed(), err, tc.passed, result)
+			}
+		})
+	}
+}
+
+func TestAcceptanceRequiredWorkersAcceptGapsWithoutWorkersWarns(t *testing.T) {
+	cases := []struct {
+		name     string
+		workers  []string
+		warnings int
+	}{
+		{"no required workers", nil, 1},
+		{"required workers", []string{"worker"}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			session := policyTestSession()
+			session.Config.AcceptanceSpec = &agent.AcceptanceSpec{RequiredWorkers: tc.workers, RequiredWorkersAcceptGaps: true}
+			warnings := 0
+			for _, finding := range validateAcceptanceRequiredWorkers(session) {
+				if finding.Field == "acceptance.required-workers-accept-gaps" && finding.Severity == FindingSeverityWarning {
+					warnings++
+				}
+			}
+			if warnings != tc.warnings {
+				t.Fatalf("accept-gaps warnings = %d, want %d", warnings, tc.warnings)
+			}
+		})
+	}
+}
+
+// Research stages may finish while recording an inaccessible source; staged
+// coding stages must report success.
+func TestBundledTeamsRequiredWorkerGapPolicy(t *testing.T) {
+	cases := []struct {
+		team       string
+		acceptGaps bool
+	}{
+		{"web-research", true},
+		{"hufu-coding", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.team, func(t *testing.T) {
+			session, err := LoadTeam(filepath.Join("..", "..", ".agent-teams", tc.team), nil, nil, DefaultProviderRegistry)
+			if err != nil {
+				t.Fatalf("LoadTeam(%s): %v", tc.team, err)
+			}
+			acceptance := session.Config.AcceptanceSpec
+			if acceptance == nil || len(acceptance.RequiredWorkers) == 0 {
+				t.Fatalf("%s declares no required workers: %#v", tc.team, acceptance)
+			}
+			if acceptance.RequiredWorkersAcceptGaps != tc.acceptGaps {
+				t.Fatalf("%s required-workers-accept-gaps = %t, want %t", tc.team, acceptance.RequiredWorkersAcceptGaps, tc.acceptGaps)
+			}
+		})
 	}
 }

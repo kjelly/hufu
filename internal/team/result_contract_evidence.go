@@ -527,6 +527,9 @@ func (c *Coordinator) renderedContractFinalReport() (string, bool, error) {
 	if err := c.validateSubmittedEvidenceInputs(selected.ID, payload); err != nil {
 		return "", true, err
 	}
+	if err := c.validateResultReferenceReads(selected.ID, selected.TypedResult); err != nil {
+		return "", true, err
+	}
 	sum := sha256.Sum256(payload.Value)
 	if payload.Contract != *selected.ResultContract || payload.SHA256 != hex.EncodeToString(sum[:]) {
 		return "", true, fmt.Errorf("final report payload identity does not match its contract or hash")

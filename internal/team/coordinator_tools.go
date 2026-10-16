@@ -376,10 +376,8 @@ func (t *finishTool) run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	}
 
 	todoList := t.coordinator.taskTracker.TodoList()
-	if t.coordinator.phaseWorkflow != nil {
-		if err := t.coordinator.phaseWorkflow.requireFinished(); err != nil {
-			return fantasy.NewTextErrorResponse("cannot finish: " + err.Error()), nil
-		}
+	if response, handled, err := t.finishWorkflow(ctx, args.AcknowledgeFailedTasks); handled {
+		return response, err
 	}
 	failedTasks := failedTodoItems(todoList.Items())
 	pendingTasks := pendingTodoItems(todoList.Items())
@@ -769,7 +767,7 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 		}
 	}
 	if len(spec.RequiredWorkers) > 0 {
-		c.checkRequiredWorkers(spec.RequiredWorkers, res)
+		c.checkRequiredWorkers(spec.RequiredWorkers, spec.RequiredWorkersAcceptGaps, res)
 	}
 
 	shell := "sh"
@@ -882,7 +880,7 @@ func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResul
 	return res, nil
 }
 
-func (c *Coordinator) checkRequiredWorkers(workers []string, res *AcceptanceResult) {
+func (c *Coordinator) checkRequiredWorkers(workers []string, acceptGaps bool, res *AcceptanceResult) {
 	var items []*TodoItem
 	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 		items = c.taskTracker.TodoList().Items()
@@ -890,7 +888,7 @@ func (c *Coordinator) checkRequiredWorkers(workers []string, res *AcceptanceResu
 	for _, worker := range workers {
 		completed := false
 		for _, item := range items {
-			if item != nil && strings.EqualFold(strings.TrimSpace(item.Agent), strings.TrimSpace(worker)) && isSuccessfulWorkerExecution(item) && item.TypedResult != nil && item.TypedResult.Status == TaskResultStatusSuccess {
+			if item != nil && strings.EqualFold(strings.TrimSpace(item.Agent), strings.TrimSpace(worker)) && isSuccessfulWorkerExecution(item) && requiredWorkerResultAccepted(item.TypedResult, acceptGaps) {
 				completed = true
 				break
 			}
@@ -901,6 +899,16 @@ func (c *Coordinator) checkRequiredWorkers(workers []string, res *AcceptanceResu
 			res.State = AcceptanceFailed
 		}
 	}
+}
+
+// requiredWorkerResultAccepted reports whether a typed result completes a
+// required worker stage. completed_with_gaps qualifies only for a team that
+// set required-workers-accept-gaps; partial, failed and blocked never do.
+func requiredWorkerResultAccepted(result *TaskResult, acceptGaps bool) bool {
+	if result == nil {
+		return false
+	}
+	return result.Status == TaskResultStatusSuccess || (acceptGaps && result.Status == TaskResultStatusCompletedWithGaps)
 }
 
 func acceptanceSpecHasChecks(spec AcceptanceSpec) bool {

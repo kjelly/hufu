@@ -39,13 +39,14 @@ func (r *ResultContractRef) clone() *ResultContractRef {
 // CompiledResultContract is one compiled result schema. It exists only in
 // the loaded TeamSession and is never persisted.
 type CompiledResultContract struct {
-	ID              string
-	SchemaSHA256    string
-	CanonicalSchema []byte
-	schema          *jsonschema.Schema
-	toolEvidence    *resultToolEvidenceSpec
-	evidenceInputs  *resultEvidenceInputsSpec
-	finalReport     *template.Template
+	ID                 string
+	SchemaSHA256       string
+	CanonicalSchema    []byte
+	schema             *jsonschema.Schema
+	toolEvidence       *resultToolEvidenceSpec
+	evidenceInputs     *resultEvidenceInputsSpec
+	evidenceReferences *resultEvidenceReferencesSpec
+	finalReport        *template.Template
 }
 
 // ref binds the compiled schema to one declaration's require-structured

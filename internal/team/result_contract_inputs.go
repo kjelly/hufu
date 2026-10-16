@@ -120,7 +120,7 @@ func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *Re
 	if err != nil {
 		return err
 	}
-	if compiled.evidenceInputs == nil {
+	if compiled.evidenceInputs == nil && compiled.evidenceReferences == nil {
 		return nil
 	}
 	if payload == nil {
@@ -134,5 +134,8 @@ func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *Re
 	if err := c.validateDependencyPayloads(results); err != nil {
 		return err
 	}
-	return validateResultEvidenceInputs(value, compiled.evidenceInputs, item.EvidenceFrom, results)
+	if err := validateResultEvidenceInputs(value, compiled.evidenceInputs, item.EvidenceFrom, results); err != nil {
+		return err
+	}
+	return validateResultEvidenceReferences(value, compiled.evidenceReferences, item.EvidenceFrom, results, nil)
 }

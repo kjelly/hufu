@@ -50,7 +50,7 @@ func (s *Store) Diagnose(ctx context.Context) (Diagnostics, error) {
 	if s.readOnly && s.shared == nil {
 		// An immutable read-only connection ignores the WAL and reports a
 		// rollback journal; the header records the mode the writer uses.
-		mode, err := journalModeFromHeader(s.path)
+		mode, err := journalModeFromHeader(s.snapshotPath)
 		if err != nil {
 			return Diagnostics{}, fmt.Errorf("diagnose runtime store: %w", err)
 		}

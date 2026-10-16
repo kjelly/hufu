@@ -398,7 +398,7 @@ func (c *Coordinator) attemptResultContractSchema(task TaskDef) *CompiledResultC
 
 // canonicalExternalStructuredPayload applies the local submit_result payload
 // rules to an external provider's proposal, through the same validator.
-func canonicalExternalStructuredPayload(request AttemptRequest, proposal *WorkerResultProposal) (*ResultPayload, error) {
+func canonicalExternalStructuredPayload(request AttemptRequest, proposal *WorkerResultProposal, filesRead []FileRef) (*ResultPayload, error) {
 	raw := ""
 	if proposal != nil && proposal.StructuredPayloadJSON != nil {
 		raw = strings.TrimSpace(*proposal.StructuredPayloadJSON)
@@ -425,6 +425,9 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 		return nil, err
 	}
 	if err := validateResultEvidenceInputs(value, request.resultContractSchema.evidenceInputs, request.Task.EvidenceFrom, request.resultEvidenceInputs); err != nil {
+		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
+	}
+	if err := validateResultEvidenceReferences(value, request.resultContractSchema.evidenceReferences, request.Task.EvidenceFrom, request.resultEvidenceInputs, &filesRead); err != nil {
 		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
 	}
 	return payload, nil

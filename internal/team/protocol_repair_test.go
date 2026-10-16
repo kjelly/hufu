@@ -302,17 +302,17 @@ func TestProtocolAttemptWasReadOnly(t *testing.T) {
 			fantasy.ToolCallContent{ToolName: "team_info", Input: `{"action":"task_result","agent":"worker"}`},
 		}}},
 	}
-	if !protocolAttemptWasReadOnly(readOnly) {
+	if !protocolAttemptWasReadOnly(readOnly, isReadOnlyToolCall) {
 		t.Fatal("read-only tool sequence must be eligible for the bounded capability fallback")
 	}
 
 	mutating := []fantasy.StepResult{{Response: fantasy.Response{Content: fantasy.ResponseContent{
 		fantasy.ToolCallContent{ToolName: "write", Input: `{"file_path":"changed.go"}`},
 	}}}}
-	if protocolAttemptWasReadOnly(mutating) {
+	if protocolAttemptWasReadOnly(mutating, isReadOnlyToolCall) {
 		t.Fatal("mutating tool sequence must never be eligible for worker replay")
 	}
-	if protocolAttemptWasReadOnly(nil) {
+	if protocolAttemptWasReadOnly(nil, isReadOnlyToolCall) {
 		t.Fatal("an attempt with no recorded tool calls is not sufficient proof for worker replay")
 	}
 }
@@ -907,6 +907,8 @@ type resultContractWorker struct {
 	calls        *int
 	callMessages *[][]fantasy.Message
 	onSecond     func()
+	// toolCall replaces the default read-only view call when set.
+	toolCall *fantasy.ToolCallContent
 }
 
 type policyDeniedThenSubmittedWorker struct {
@@ -977,12 +979,14 @@ func (m *resultContractWorker) response(call fantasy.AgentCall) *fantasy.AgentRe
 	if *m.calls == 2 && m.onSecond != nil {
 		m.onSecond()
 	}
+	toolCall := fantasy.ToolCallContent{ToolName: "view", Input: `{"file_path":"internal/team/coordinator.go"}`}
+	if m.toolCall != nil {
+		toolCall = *m.toolCall
+	}
 	return &fantasy.AgentResult{
 		Steps: []fantasy.StepResult{{
 			Messages: []fantasy.Message{fantasy.NewUserMessage("old worker tool history")},
-			Response: fantasy.Response{Content: fantasy.ResponseContent{
-				fantasy.ToolCallContent{ToolName: "view", Input: `{"file_path":"internal/team/coordinator.go"}`},
-			}},
+			Response: fantasy.Response{Content: fantasy.ResponseContent{toolCall}},
 		}},
 		Response: fantasy.Response{Content: fantasy.ResponseContent{
 			fantasy.TextContent{Text: "read-only inspection completed"},

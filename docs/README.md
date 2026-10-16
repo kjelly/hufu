@@ -78,6 +78,9 @@ to re-create an abstraction that already exists in the runtime.
 
 ### Guides and references
 
+- [Replayable Bayesian belief state](reference/belief-state.md) — team models,
+  receipt-scoped inference, journal recovery, and read-only inspection.
+
 - [Decision authoring](guides/decision-authoring.md)
 - [Agent-team DecisionPrimitives](reference/decision-primitives.md) — trusted
   catalogs, explicit grants, bounded tool calls, and durable replay.
@@ -85,6 +88,8 @@ to re-create an abstraction that already exists in the runtime.
   active `systemone` modes for the agent matcher, unattended `ask_user`, path
   reviewer, and guard reviewer, and how to read their evidence.
 - [Read-only runtime inspection](guides/inspect.md)
+- [Historical task results](guides/historical-results.md) — team-scoped offline
+  result lookup and source-linked LLM history queries without run IDs.
 - [Managed workspace migration](guides/workspace-migration.md)
 - [Operator journeys](guides/operator-journeys.md)
 - [Operator CLI migration](guides/operator-cli-migration.md)
@@ -134,6 +139,8 @@ to re-create an abstraction that already exists in the runtime.
   completed or superseded plans belong in `archive/implementation-plans/`.
 - [Context delivery implementation plan](implementation-plans/context-delivery.md)
   — offline delivery assertions, bounded query hints, and explicit opt-in rollout.
+- [Historical task results and LLM query plan](implementation-plans/historical-task-results-llm-query.md)
+  — proposed natural-language history queries, durable result lookup, and source-linked answers without requiring run IDs.
 - [Current roadmap](roadmap.md) — a small navigation list of active follow-up
   work. It is not an implementation-state database.
 
@@ -152,7 +159,8 @@ to re-create an abstraction that already exists in the runtime.
   the [DecisionPrimitive control decisions implementation record](archive/implementation-plans/decision-primitive-control-decisions.md),
   the [learning runtime gap closure record](archive/implementation-plans/learning-runtime-gap-closure.md),
   the [semantic retrieval runtime record](archive/implementation-plans/semantic-retrieval-runtime.md),
-  and the [EventStore memory query implementation record](archive/implementation-plans/eventstore-memory-query-implementation-plan.md).
+  the [EventStore memory query implementation record](archive/implementation-plans/eventstore-memory-query-implementation-plan.md),
+  and the [replayable Bayesian belief implementation record](archive/implementation-plans/belief-evidence-implementation-plan.md).
 - `archive/migration-reports/` contains completed cutover evidence and reports.
 - `archive/roadmaps/` contains the retired large backlog roadmap.
 - `archive/analyses/` contains investigations and proposals retained for

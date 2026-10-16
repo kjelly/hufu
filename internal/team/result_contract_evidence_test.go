@@ -105,7 +105,7 @@ func TestResultContractToolEvidence(t *testing.T) {
 func TestExternalToolEvidenceFailsClosed(t *testing.T) {
 	compiled := evidenceTestContract(t)
 	ref := compiled.ref(true)
-	payload, err := canonicalExternalStructuredPayload(AttemptRequest{Task: TaskDef{ResultContract: &ref}, resultContractSchema: compiled}, &WorkerResultProposal{StructuredPayloadJSON: new(evidenceTestPayload)})
+	payload, err := canonicalExternalStructuredPayload(AttemptRequest{Task: TaskDef{ResultContract: &ref}, resultContractSchema: compiled}, &WorkerResultProposal{StructuredPayloadJSON: new(evidenceTestPayload)}, nil)
 	if err != nil || payload.EvidenceDowngrades != 1 {
 		t.Fatalf("payload=%#v err=%v", payload, err)
 	}

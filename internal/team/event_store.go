@@ -337,6 +337,10 @@ func (es *EventStore) AppendPersistedBoundedContext(ctx context.Context, event R
 // callers must treat a deadline that expires in that window as
 // durability-unknown and reconcile by idempotency key on restart.
 func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent) (RunEvent, error) {
+	return es.appendPersistedContext(ctx, event, nil)
+}
+
+func (es *EventStore) appendPersistedContext(ctx context.Context, event RunEvent, expectedHead *string) (RunEvent, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -398,6 +402,9 @@ func (es *EventStore) AppendPersistedContext(ctx context.Context, event RunEvent
 	// idempotency index and chain head include every committed writer event.
 	if err := es.syncCommittedEvents(dbctx, tx); err != nil {
 		return failClosed(fmt.Errorf("load events committed by other writers: %w", err))
+	}
+	if expectedHead != nil && es.lastEventID != *expectedHead {
+		return RunEvent{}, ErrEventHeadChanged
 	}
 
 	// A failed commit leaves durability uncertain: the event may nevertheless
