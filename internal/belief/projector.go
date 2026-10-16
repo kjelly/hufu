@@ -94,6 +94,11 @@ func Project(model Model, epoch Epoch, observations []Observation) (State, error
 			unresolved = true
 		}
 		groups[experiment.CorrelationGroup], sources[observation.SourceID] = true, true
+		if unresolved {
+			// Keep validating the remaining observations and their identities,
+			// but no distribution can be computed for correlated evidence.
+			continue
+		}
 		for i, mass := range outcome.LikelihoodUnits {
 			weights[i].Mul(&weights[i], new(big.Int).SetUint64(mass))
 			if weights[i].BitLen() > MaxIntermediateBits {

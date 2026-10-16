@@ -24,7 +24,7 @@ type beliefFixture struct {
 	epoch     belief.Epoch
 }
 
-func newBeliefFixture(t *testing.T) beliefFixture {
+func newBeliefFixture(t testing.TB) beliefFixture {
 	t.Helper()
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-1", "session-1")
@@ -74,7 +74,7 @@ func (f beliefFixture) bind(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-func (f beliefFixture) admit(t *testing.T) {
+func (f beliefFixture) admit(t testing.TB) {
 	t.Helper()
 	if err := f.journal.AdmitVerification(t.Context(), f.epoch.ID, f.source.ID, "comparison", ""); err != nil {
 		t.Fatal(err)

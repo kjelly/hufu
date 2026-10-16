@@ -67,123 +67,56 @@ type beliefEpochReducer struct {
 	sources          map[string]BeliefSource
 	tombstones       map[string]bool
 	closeSourceIndex int
+	cursor           RunEvent
+	actor            string
 }
 
 // ProjectBeliefEpochs never reads the current team definition or executes source actions.
 // events must already be globally validated and restricted to the selected branch lineage.
 func ProjectBeliefEpochs(ctx context.Context, events []RunEvent, artifacts ArtifactStore, runID string) ([]BeliefEpochState, error) {
-	models := map[string]*belief.Model{}
-	modelErrors := map[string]string{}
-	adapters := map[string]string{}
-	bindings := map[string]beliefEvent{}
-	epochs := map[string]*beliefEpochReducer{}
-	eventIndex := map[string]int{}
-	sessionID := ""
-	for i, event := range events {
-		eventIndex[event.ID] = i
-		if event.RunID == runID && event.SessionID != "" {
-			if sessionID != "" && sessionID != event.SessionID {
-				return nil, fmt.Errorf("belief run has ambiguous sessions")
-			}
-			sessionID = event.SessionID
-		}
+	r, err := reduceBeliefRun(ctx, events, artifacts, runID)
+	if err != nil {
+		return nil, err
 	}
-	for _, event := range events {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if !isBeliefEvent(event.Type) || event.RunID != runID {
-			continue
-		}
-		if event.Actor != beliefActor {
-			return nil, fmt.Errorf("belief event has invalid authority")
-		}
-		var payload beliefEvent
-		if err := json.Unmarshal(event.Payload, &payload, json.RejectUnknownMembers(true)); err != nil {
-			return nil, fmt.Errorf("invalid belief event payload")
-		}
-		if payload.SchemaVersion != 1 {
-			return nil, fmt.Errorf("unsupported belief event version")
-		}
-		switch event.Type {
-		case EventBeliefModelBound:
-			if err := validateBeliefRuntimeBinding(payload, bindings); err != nil {
-				return nil, err
-			}
-			model, reason := loadBoundBeliefModel(ctx, artifacts, *payload.ModelRef, payload.ModelDigest, payload.ReducerVersion)
-			if previous, ok := models[payload.ModelDigest]; ok && previous != nil && model != nil {
-				old, _ := belief.ModelDigest(*previous)
-				next, _ := belief.ModelDigest(*model)
-				if old != next {
-					return nil, fmt.Errorf("conflicting belief model binding")
-				}
-			}
-			models[payload.ModelDigest] = model
-			modelErrors[payload.ModelDigest] = reason
-			if previous, exists := adapters[payload.ModelDigest]; exists && previous != payload.ExperimentID {
-				return nil, fmt.Errorf("conflicting belief adapter binding")
-			}
-			adapters[payload.ModelDigest] = payload.ExperimentID
-		case EventBeliefEpochOpened:
-			if payload.Epoch == nil || payload.Epoch.ID == "" || !beliefEventMatchesScope(event, payload.Epoch.Scope) {
-				return nil, fmt.Errorf("invalid belief epoch binding")
-			}
-			epoch := *payload.Epoch
-			if _, ok := models[epoch.ModelDigest]; !ok {
-				return nil, fmt.Errorf("belief epoch has no bound model")
-			}
-			if previous := epochs[epoch.ID]; previous != nil {
-				if previous.value.Epoch != epoch {
-					return nil, fmt.Errorf("conflicting belief epoch identity")
-				}
-				continue
-			}
-			epochs[epoch.ID] = &beliefEpochReducer{value: BeliefEpochState{Epoch: epoch, Unavailable: modelErrors[epoch.ModelDigest], Sources: []BeliefSource{}, Retracted: []string{}}, model: models[epoch.ModelDigest], experimentID: adapters[epoch.ModelDigest], observations: map[string]belief.Observation{}, sources: map[string]BeliefSource{}, tombstones: map[string]bool{}, closeSourceIndex: -1}
-		default:
-			epoch := epochs[payload.EpochID]
-			if epoch == nil {
-				return nil, fmt.Errorf("belief event has no epoch")
-			}
-			if !beliefEventMatchesScope(event, epoch.value.Epoch.Scope) {
-				return nil, fmt.Errorf("belief event scope mismatch")
-			}
-			if err := applyBeliefLifecycle(epoch, event, payload, events, eventIndex); err != nil {
-				return nil, err
-			}
-		}
+	out := make([]BeliefEpochState, 0, len(r.epochs))
+	for _, epoch := range r.epochs {
+		out = append(out, epoch.snapshot())
 	}
-	out := make([]BeliefEpochState, 0, len(epochs))
-	for _, epoch := range epochs {
-		observations := make([]belief.Observation, 0, len(epoch.observations))
-		for id, observation := range epoch.observations {
-			if !epoch.tombstones[id] {
-				observations = append(observations, observation)
-				epoch.value.Sources = append(epoch.value.Sources, epoch.sources[id])
-			}
-		}
-		slices.SortFunc(observations, func(a, b belief.Observation) int { return cmp.Compare(a.ID, b.ID) })
-		epoch.value.Observations = observations
-		if epoch.model != nil {
-			state, err := belief.Project(*epoch.model, epoch.value.Epoch, observations)
-			if err != nil {
-				epoch.value.Unavailable = "invalid_projection"
-			} else {
-				epoch.value.State = &state
-			}
-		}
-		for id := range epoch.tombstones {
-			epoch.value.Retracted = append(epoch.value.Retracted, id)
-		}
-		slices.Sort(epoch.value.Retracted)
-		slices.SortFunc(epoch.value.Sources, func(a, b BeliefSource) int {
-			return cmp.Compare(a.ReceiptKey, b.ReceiptKey)
-		})
-		out = append(out, epoch.value)
-	}
-	slices.SortFunc(out, func(a, b BeliefEpochState) int {
-		return cmp.Compare(a.Epoch.ID, b.Epoch.ID)
-	})
+	slices.SortFunc(out, func(a, b BeliefEpochState) int { return cmp.Compare(a.Epoch.ID, b.Epoch.ID) })
 	return out, nil
+}
+
+// snapshot owns all projected slices; later events cannot mutate a historical
+// policy input and repeated snapshots cannot duplicate sources or tombstones.
+func (epoch *beliefEpochReducer) snapshot() BeliefEpochState {
+	value := epoch.value
+	value.Sources = []BeliefSource{}
+	value.Retracted = []string{}
+	observations := make([]belief.Observation, 0, len(epoch.observations))
+	for id, observation := range epoch.observations {
+		if !epoch.tombstones[id] {
+			observations = append(observations, observation)
+			value.Sources = append(value.Sources, epoch.sources[id])
+		}
+	}
+	slices.SortFunc(observations, func(a, b belief.Observation) int { return cmp.Compare(a.ID, b.ID) })
+	value.Observations = observations
+	if epoch.model != nil {
+		state, err := belief.Project(*epoch.model, value.Epoch, observations)
+		if err != nil {
+			value.Unavailable = "invalid_projection"
+		} else {
+			value.State = &state
+		}
+	}
+	for id := range epoch.tombstones {
+		value.Retracted = append(value.Retracted, id)
+	}
+	slices.Sort(value.Retracted)
+	slices.SortFunc(value.Sources, func(a, b BeliefSource) int {
+		return cmp.Or(cmp.Compare(a.ReceiptKey, b.ReceiptKey), cmp.Compare(a.EventID, b.EventID), cmp.Compare(a.EventHash, b.EventHash))
+	})
+	return value
 }
 
 func validateBeliefRuntimeBinding(payload beliefEvent, bindings map[string]beliefEvent) error {

@@ -1282,7 +1282,7 @@ func (c *Coordinator) prepareInterruptedTaskForResume(ctx context.Context, taskI
 	projected.ModelTime = 0
 	projected.ToolTime = 0
 	if c.hasDurableEventJournal() {
-		if err := c.appendTaskTransition(ctx, projected, map[string]interface{}{
+		if _, err := c.appendTaskTransition(ctx, projected, map[string]interface{}{
 			"reset_for_resume": true,
 			"previous_status":  string(item.Status),
 		}); err != nil {

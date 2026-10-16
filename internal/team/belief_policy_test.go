@@ -20,7 +20,7 @@ func beliefTestPolicy() belief.Policy {
 	return belief.Policy{SchemaVersion: 1, Version: "synthetic-v1", Algorithm: belief.PolicyAlgorithm, Mode: "advisory", Choices: []belief.PolicyChoice{{HypothesisID: "h1", CandidateID: "check-a"}, {HypothesisID: "h2", CandidateID: "check-b"}}}
 }
 
-func beliefTestCatalog(t *testing.T, actor string) *ActionCatalogSnapshot {
+func beliefTestCatalog(t testing.TB, actor string) *ActionCatalogSnapshot {
 	t.Helper()
 	catalog := &ActionCatalogSnapshot{Version: 1}
 	for _, id := range []string{"check-a", "check-b"} {
@@ -38,7 +38,7 @@ func beliefTestCatalog(t *testing.T, actor string) *ActionCatalogSnapshot {
 	return catalog
 }
 
-func newBeliefPolicyFixture(t *testing.T) beliefFixture {
+func newBeliefPolicyFixture(t testing.TB) beliefFixture {
 	t.Helper()
 	f := newBeliefFixture(t)
 	policy, err := CompileBeliefPolicy(f.model, beliefTestPolicy(), beliefTestCatalog(t, "worker"))

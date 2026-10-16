@@ -56,68 +56,11 @@ type beliefPolicyContext struct {
 }
 
 func policyContext(ctx context.Context, events []RunEvent, artifacts ArtifactStore, runID, epochID string) (beliefPolicyContext, error) {
-	states, err := ProjectBeliefEpochs(ctx, events, artifacts, runID)
+	r, err := reduceBeliefRun(ctx, events, artifacts, runID)
 	if err != nil {
 		return beliefPolicyContext{}, err
 	}
-	index := slices.IndexFunc(states, func(s BeliefEpochState) bool { return s.Epoch.ID == epochID })
-	if index < 0 {
-		return beliefPolicyContext{}, fmt.Errorf("belief policy epoch unavailable")
-	}
-	return policyContextForState(events, runID, states[index])
-}
-
-func policyContextForState(events []RunEvent, runID string, state BeliefEpochState) (beliefPolicyContext, error) {
-	epochID := state.Epoch.ID
-	result := beliefPolicyContext{epoch: state}
-	byID := map[string]RunEvent{}
-	for _, event := range events {
-		byID[event.ID] = event
-	}
-	bound := false
-	admitted := map[string]bool{}
-	for _, event := range events {
-		if event.RunID != runID || !isBeliefEvent(event.Type) {
-			continue
-		}
-		var payload beliefEvent
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return beliefPolicyContext{}, err
-		}
-		if event.Type == EventBeliefModelBound && payload.ModelDigest == result.epoch.Epoch.ModelDigest {
-			if bound && !sameRuntimeBeliefBinding(result.binding, payload) {
-				return beliefPolicyContext{}, fmt.Errorf("conflicting belief policy binding")
-			}
-			result.binding = payload
-			bound = true
-		}
-		if event.Type == EventBeliefEpochOpened && payload.Epoch != nil && payload.Epoch.ID == epochID {
-			result.cursor = event
-		}
-		if payload.EpochID != epochID {
-			continue
-		}
-		switch event.Type {
-		case EventBeliefObservationAdmitted:
-			if payload.Observation == nil {
-				return beliefPolicyContext{}, fmt.Errorf("belief policy admission lacks observation")
-			}
-			if admitted[payload.Observation.ID] {
-				continue
-			}
-			admitted[payload.Observation.ID] = true
-			result.cursor = event
-			if payload.Source != nil {
-				result.actor = byID[payload.Source.EventID].Actor
-			}
-		case EventBeliefObservationRetracted:
-			result.cursor = event
-		}
-	}
-	if result.binding.PolicyDigest == "" || result.binding.PolicyVersion == "" || !decisionDigestPattern.MatchString(result.binding.PolicyDigest) {
-		return beliefPolicyContext{}, fmt.Errorf("belief epoch has no policy binding")
-	}
-	return result, nil
+	return r.policyContext(epochID)
 }
 
 func beliefPolicySnapshotDigest(epoch BeliefEpochState, actor string) string {
@@ -161,7 +104,11 @@ func buildBeliefSuggestion(ctx context.Context, input beliefPolicyContext, artif
 func ProjectBeliefSuggestions(ctx context.Context, events []RunEvent, artifacts ArtifactStore, runID string) ([]BeliefSuggestionView, error) {
 	views := []BeliefSuggestionView{}
 	last := map[string]BeliefPolicySuggestion{}
-	for i, event := range events {
+	reducer := newBeliefRunReducer(runID)
+	for _, event := range events {
+		if err := reducer.apply(ctx, event, artifacts); err != nil {
+			return nil, err
+		}
 		if event.RunID != runID || event.Type != EventBeliefPolicySuggested {
 			continue
 		}
@@ -172,7 +119,7 @@ func ProjectBeliefSuggestions(ctx context.Context, events []RunEvent, artifacts 
 		if err := json.Unmarshal(event.Payload, &record, json.RejectUnknownMembers(true)); err != nil {
 			return nil, fmt.Errorf("invalid belief policy suggestion")
 		}
-		input, err := policyContext(ctx, events[:i], artifacts, runID, record.EpochID)
+		input, err := reducer.policyContext(record.EpochID)
 		if err != nil {
 			return nil, err
 		}

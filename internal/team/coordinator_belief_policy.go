@@ -23,6 +23,11 @@ func (r *coordinatorBeliefs) suggestPolicies(ctx context.Context) {
 		if len(view.Policies) == 0 {
 			continue
 		}
+		reducer, err := reduceBeliefRun(ctx, events, r.journal.artifacts, view.RunID)
+		if err != nil {
+			r.unavailable(ctx, "", "", "replay_unavailable")
+			return
+		}
 		last := map[string]BeliefPolicySuggestion{}
 		for _, suggestion := range view.Suggestions {
 			last[suggestion.Record.EpochID] = suggestion.Record
@@ -31,7 +36,7 @@ func (r *coordinatorBeliefs) suggestPolicies(ctx context.Context) {
 			if epoch.Epoch.Scope.BranchID != r.branchID {
 				continue
 			}
-			input, err := policyContextForState(events, view.RunID, epoch)
+			input, err := reducer.policyContext(epoch.Epoch.ID)
 			if err != nil {
 				r.unavailable(ctx, epoch.Epoch.Scope.TaskID, "", "bookkeeping_unavailable")
 				return

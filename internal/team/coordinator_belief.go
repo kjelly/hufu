@@ -41,6 +41,12 @@ func (c *Coordinator) refreshBeliefs(source *RunEvent) {
 	if c == nil || c.session == nil || c.session.Belief == nil || c.eventStore == nil || c.modelFanout != nil {
 		return
 	}
+	// Non-verification lifecycle events cannot change beliefs. In particular,
+	// do not make unrelated task transitions wait for serialized belief I/O.
+	// Admission/bootstrap and crash repair explicitly use a nil source.
+	if source != nil && !isBeliefVerificationSource(source.Type) {
+		return
+	}
 	c.beliefMu.Lock()
 	defer c.beliefMu.Unlock()
 	ctx := context.Background()
@@ -85,6 +91,7 @@ func (c *Coordinator) refreshBeliefs(source *RunEvent) {
 		runtime.unavailable(ctx, "", "", "replay_unavailable")
 		return
 	}
+	settled := settledBeliefAdmissions(events, branchID)
 	for _, binding := range bindings {
 		if source != nil && source.RunID != binding.event.RunID {
 			continue
@@ -106,7 +113,7 @@ func (c *Coordinator) refreshBeliefs(source *RunEvent) {
 			if event.RunID != binding.event.RunID {
 				continue
 			}
-			if err := admitBeliefSource(ctx, writer, *model, binding.payload.ExperimentID, event, events); err != nil {
+			if err := admitBeliefSource(ctx, writer, *model, binding.payload.ExperimentID, event, settled); err != nil {
 				runtime.diagnostic(ctx, writer, event.TaskID, event.ID, "source_binding_unavailable")
 			}
 		}
@@ -197,7 +204,7 @@ func isBeliefVerificationSource(kind string) bool {
 	return slices.Contains([]string{"task_completed", "task_failed", "task_blocked", "task_protocol_incomplete"}, kind)
 }
 
-func admitBeliefSource(ctx context.Context, writer *BeliefJournal, model belief.Model, experimentID string, event RunEvent, lineage []RunEvent) error {
+func admitBeliefSource(ctx context.Context, writer *BeliefJournal, model belief.Model, experimentID string, event RunEvent, settled map[string]bool) error {
 	if !isBeliefVerificationSource(event.Type) {
 		return nil
 	}
@@ -219,10 +226,14 @@ func admitBeliefSource(ctx context.Context, writer *BeliefJournal, model belief.
 			continue
 		}
 		key := beliefReceiptKey(receipt)
-		if inheritedBeliefAdmission(lineage, key, writer.branchID) {
+		if settled[key] {
 			continue
 		}
-		admissionErrors = errors.Join(admissionErrors, admitBeliefReceipt(ctx, writer, model, experimentID, event, receipt))
+		err := admitBeliefReceipt(ctx, writer, model, experimentID, event, receipt)
+		admissionErrors = errors.Join(admissionErrors, err)
+		if err == nil && settled != nil {
+			settled[key] = true
+		}
 	}
 	return admissionErrors
 }
@@ -243,17 +254,39 @@ func admitBeliefReceipt(ctx context.Context, writer *BeliefJournal, model belief
 	return writer.CloseEpoch(ctx, epoch.ID, event.ID)
 }
 
-func inheritedBeliefAdmission(events []RunEvent, receiptKey, branchID string) bool {
+// Inherited admissions belong to their ancestor epoch. Local admissions are
+// settled only after closure: a crash between admission and close still needs
+// repair, while a completed epoch must not repeat the journal write checks.
+func settledBeliefAdmissions(events []RunEvent, branchID string) map[string]bool {
+	closed := map[string]bool{}
+	admitted := map[string][]string{}
+	settled := map[string]bool{}
 	for _, event := range events {
-		if event.Type != EventBeliefObservationAdmitted || effectiveBranchID(event.BranchID) == branchID {
+		if event.Type != EventBeliefObservationAdmitted && event.Type != EventBeliefEpochClosed {
 			continue
 		}
 		var payload beliefEvent
-		if json.Unmarshal(event.Payload, &payload) == nil && payload.Source != nil && payload.Source.ReceiptKey == receiptKey {
-			return true
+		if json.Unmarshal(event.Payload, &payload) != nil {
+			continue
+		}
+		if event.Type == EventBeliefEpochClosed {
+			closed[payload.EpochID] = true
+		} else if payload.Source != nil {
+			key := payload.Source.ReceiptKey
+			if effectiveBranchID(event.BranchID) != branchID {
+				settled[key] = true
+			}
+			admitted[payload.EpochID] = append(admitted[payload.EpochID], key)
 		}
 	}
-	return false
+	for epochID, keys := range admitted {
+		if closed[epochID] {
+			for _, key := range keys {
+				settled[key] = true
+			}
+		}
+	}
+	return settled
 }
 
 func (r *coordinatorBeliefs) diagnostic(ctx context.Context, writer *BeliefJournal, taskID, sourceID, code string) {

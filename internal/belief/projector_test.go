@@ -331,3 +331,18 @@ func TestUniqueObservationLimit(t *testing.T) {
 	_, err := Project(model, epoch, observations)
 	requireCode(t, err, ResourceLimit)
 }
+
+func TestUnresolvedObservationsStillValidateRemainingInputs(t *testing.T) {
+	model := syntheticModel(t)
+	observations := make([]Observation, MaxObservations)
+	for i := range observations {
+		observations[i] = Observation{ID: fmt.Sprintf("o%03d", i), ExperimentID: "comparison", OutcomeID: "pass", SourceID: fmt.Sprintf("s%03d", i)}
+	}
+	state, err := Project(model, syntheticEpoch(t, model), observations)
+	if err != nil || state.Status != DependenceUnresolved || state.Distribution != nil || len(state.ObservationIDs) != MaxObservations {
+		t.Fatalf("unresolved state=%+v error=%v", state, err)
+	}
+	observations[len(observations)-1].OutcomeID = "unknown"
+	_, err = Project(model, syntheticEpoch(t, model), observations)
+	requireCode(t, err, InvalidObservation)
+}
