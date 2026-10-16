@@ -12,8 +12,8 @@
 |---|---|---|
 | 計畫搬移 | 完成 | docs/tmp/spec.md 搬入正式實作計畫目錄，更新路徑與逐階段提交規則 |
 | AT-00 baseline | 完成 | 本節全量與五團隊靜態檢查均通過 |
-| AT-02A structured results | 完成 | schemas／四角色接線、完整 gates 與 race 通過 |
-| AT-04 context artifacts | 待執行 | — |
+| AT-02A structured results | 完成 | 9b4b1dc3；schemas／四角色接線、完整 gates 與 race 通過 |
+| AT-04 context artifacts | 完成 | 12 個精確大小邊界、長單行 fallback 與使用說明；focused/race/lint 通過 |
 | AT-05 retrospective | 待執行 | — |
 | AT-01 semantic contracts | 待執行 | — |
 | AT-06 research/review contracts | 待執行 | — |
@@ -83,3 +83,19 @@ Verifier 新增 `VERDICT: UNVERIFIED`，對應 blocked／partial；修正原指�
 | `go build -o /dev/null ./cmd/hufu` | 0 |
 
 回滾：還原本階段 frontmatter／schema／指示，在新的 session 執行；不更改既有 session 或歷史 payload。
+
+## AT-04：Context artifacts 邊界
+
+新增 `context_artifact_boundaries_test.go`，以完整 capture（含 exit footer）測試 production preview／min／cap 的等於及相鄰值，共 12 案例；成功發布後用 production view 分段重建完整 bytes，對照頭／中／尾、SHA256、byte size 與失敗 footer。另一個實際 bash 案例證明低於 preview 的 6000-byte 長單行仍會截斷、保留 exit 9、不發布 reference，寫入計數也只發生一次。
+
+新增 hufu-dev README，說明臨時配置、適用來源、授權、配額、發布失敗、超限 fallback 與 attempt-local refs 的限制。未修改 bundled team.yaml；無預設啟用、核心行為或權限變更。原有 service／capture／policy 測試繼續覆蓋無 view、closed sequence、asserted result-contains、配額、保存／journal 失敗、越權／缺失／損壞與 snapshot drift。實際 structured handoff 與臨時啟用的組合於 AT-09 驗證。
+
+| 檢查 | Exit／結果 |
+|---|---|
+| `go test ./internal/team -run '^Test(ContextArtifact\|ContextArtifacts\|BashOutputOffload\|BashSmallLongLineHonorsLegacyFallback)' -count=1` | 0；2.704s，含既有拒絕與 fallback 案例 |
+| hufu-dev validate／lint --fail-on error | 0／0，無 findings |
+| `bin/check-docs`／`git diff --check` | 0／0 |
+
+回滾：撤回新增測試／說明即可；未啟用任何 persistent policy，不需資料遷移。
+
+AT-04 的新增案例與真實 team 載入邊界另以 `go test -race ./internal/team -run '^Test(ContextArtifactProductionSizeBoundaries|BashSmallLongLineHonorsLegacyFallback|HufuDevResultContractsPreserveWorkerBoundaries)' -count=1 -timeout=10m` 通過（exit 0，3.557s）；`golangci-lint run` 通過（exit 0，0 issues）。新增 fake-worker 組合在隔離 overlay 的預先驗證也通過，最後仍須於 AT-09 對實際工作樹驗證。
