@@ -60,6 +60,11 @@ func writeResultKind(writer io.Writer, row inspectpkg.HistoricalResult, coverage
 	if _, err := fmt.Fprintf(writer, "Kind: individual agent task result (not the final run response)\nTask: %s · run: %s\n", safeResultsText(row.TaskID), safeResultsText(row.RunID)); err != nil {
 		return err
 	}
+	if row.OriginRunID != "" && row.OriginRunID != row.RunID {
+		if _, err := fmt.Fprintln(writer, "Original request run: "+safeResultsText(row.OriginRunID)); err != nil {
+			return err
+		}
+	}
 	_, err := fmt.Fprintf(writer, "\nRead this run's complete final response:\n  %s\n\n", safeResultsText(resultsScopedCommand("final", row, coverage)))
 	return err
 }

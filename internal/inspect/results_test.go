@@ -172,6 +172,7 @@ func TestHistoricalResultsKeepInvalidatedAttemptAndLatestResult(t *testing.T) {
 
 func TestHistoricalResultBranchInheritanceUsesStableID(t *testing.T) {
 	workspace, store := newHistoricalFixture(t)
+	request := appendHistoricalFixture(t, store, team.RunEvent{Type: "user_message_added"}, team.SessionMessageEventPayload{Role: "user", Content: "parent request"})
 	durable := appendHistoricalTask(t, store, "run-first", "1", "parent result")
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
@@ -205,6 +206,9 @@ func TestHistoricalResultBranchInheritanceUsesStableID(t *testing.T) {
 	}
 	if len(all.Results) != 1 || len(all.Results[0].Branches) != 2 {
 		t.Fatalf("inherited result duplicated: %#v", all.Results)
+	}
+	if all.Results[0].OriginalPrompt != "parent request" || all.Results[0].OriginalPromptEventID != request.ID {
+		t.Fatalf("inherited result lost its request: %#v", all.Results)
 	}
 }
 
@@ -246,5 +250,45 @@ func TestHistoricalResultsAreReadOnlyAndFailClosedForCorruption(t *testing.T) {
 	}
 	if got, err := LoadHistoricalResults(t.Context(), HistoricalResultScope{Workspace: workspace}); !errors.Is(err, ErrIntegrity) || len(got.Results) != 0 {
 		t.Fatalf("corrupted history was exposed: %#v, %v", got, err)
+	}
+}
+
+func TestHistoricalResultsBindOriginalRequestAcrossRunsAndResume(t *testing.T) {
+	workspace, store := newHistoricalFixture(t)
+	request := appendHistoricalFixture(t, store, team.RunEvent{Type: "user_message_added"}, team.SessionMessageEventPayload{Role: "user", Content: "原始調查 api_key=private-request-secret"})
+	appendHistoricalFixture(t, store, team.RunEvent{Type: "user_message_added"}, team.SessionMessageEventPayload{Role: "user", Content: "later continuation"})
+	appendHistoricalFixture(t, store, team.RunEvent{Type: "task_created", TaskID: "1"}, map[string]any{"id": "1", "status": "pending", "agent": "helper", "desc": "delegated verification"})
+	appendHistoricalFixture(t, store, team.RunEvent{RunID: "run-resume", Type: "run_started"}, map[string]any{"team": "review"})
+	appendHistoricalFixture(t, store, team.RunEvent{RunID: "run-resume", Type: "task_created", TaskID: "1"}, map[string]any{"id": "1", "status": "pending", "reset_for_resume": true})
+	appendHistoricalFixture(t, store, team.RunEvent{RunID: "run-resume", Type: "task_completed", TaskID: "1"}, map[string]any{"id": "1", "status": "done", "output": "resumed result"})
+	resumeRequest := appendHistoricalFixture(t, store, team.RunEvent{RunID: "run-resume", Type: "user_message_added"}, team.SessionMessageEventPayload{Role: "user", Content: "new run request"})
+	appendHistoricalFixture(t, store, team.RunEvent{RunID: "run-resume", Type: "run_finished"}, map[string]any{"outcome": "completed", "response": "final response"})
+	appendHistoricalFixture(t, store, team.RunEvent{RunID: "run-missing", Type: "run_started"}, map[string]any{"team": "review"})
+	appendHistoricalTask(t, store, "run-missing", "1", "unrelated result without prompt")
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := LoadHistoricalResults(t.Context(), HistoricalResultScope{Workspace: workspace, Team: "review", AllBranches: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Results) != 3 {
+		t.Fatalf("results = %#v", snapshot.Results)
+	}
+	for _, row := range snapshot.Results {
+		switch {
+		case row.Kind == "run_response":
+			if row.OriginalPrompt != "new run request" || row.OriginalPromptEventID != resumeRequest.ID {
+				t.Fatalf("final response used another run's prompt: %#v", row)
+			}
+		case row.RunID == "run-resume":
+			if row.OriginRunID != "run-first" || row.OriginalPromptEventID != request.ID || !strings.Contains(row.OriginalPrompt, "原始調查") || strings.Contains(row.OriginalPrompt, "private-request-secret") || strings.Contains(row.OriginalPrompt, "continuation") {
+				t.Fatalf("resumed task lost original redacted request: %#v", row)
+			}
+		default:
+			if row.OriginalPrompt != "" || row.OriginalPromptEventID != "" {
+				t.Fatalf("missing request borrowed another run's prompt: %#v", row)
+			}
+		}
 	}
 }

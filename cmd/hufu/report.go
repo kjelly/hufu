@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -90,7 +91,7 @@ func generateRequestedReports(loadedTeams map[string]*teamContext, combinedResul
 }
 
 // generateReports writes reports only for contexts accepted by include.
-func generateReports(loadedTeams map[string]*teamContext, combinedResult string, include func(*teamContext) bool) {
+func generateReports(loadedTeams map[string]*teamContext, _ string, include func(*teamContext) bool) {
 	for teamName, tc := range loadedTeams {
 		if tc == nil || !include(tc) {
 			continue
@@ -101,12 +102,14 @@ func generateReports(loadedTeams map[string]*teamContext, combinedResult string,
 		}
 
 		data := gatherReportData(tc, teamName)
-		content := buildReportMD(data, teamName, combinedResult)
-
+		if data.RunResult == nil {
+			fmt.Fprintf(os.Stderr, "Report unavailable for team %q: %s\n", teamName, data.CanonicalRunError)
+			continue
+		}
+		content := buildReportMD(data, teamName, data.RunResult.Response)
 		path := filepath.Join(tc.session.Workspace, "report.md")
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "%s Failed to write report for team %q: %v\n",
-				errStyle.Render("✗"), teamName, err)
+		if err := team.AtomicWriteFile(path, []byte(content), 0o600); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to export report for team %q: %v\n", teamName, err)
 			continue
 		}
 
@@ -125,6 +128,8 @@ type reportData struct {
 	TaskHistory           map[string]string
 	CurrentRunDiagnostics map[string]string
 	StartedAt             time.Time
+	CompletedAt           time.Time
+	ReportSource          *team.RunReport
 	SkillPatterns         []SkillPatternReport
 	ContextUsageSection   string
 	ResolvedProfile       team.ExecutionProfile
@@ -245,173 +250,37 @@ func reportExecutionTarget(item *team.TodoItem) string {
 	return item.ExecutionTarget.String()
 }
 
+// gatherReportData accepts only a completed run allocated by this coordinator.
+// Mutable checkpoints and loose files cannot supply historical report content.
 func gatherReportData(tc *teamContext, teamName string) *reportData {
-	d := &reportData{
-		TaskHistory:           make(map[string]string),
-		CurrentRunDiagnostics: make(map[string]string),
-		StartedAt:             time.Now(),
-		InvocationID:          opts.invocationID,
+	unavailable := func(reason string) *reportData {
+		return &reportData{SourceRunID: "run-unavailable", CanonicalRunError: reason}
 	}
-
-	if tc.sessionData != nil {
-		if t, err := time.Parse(time.RFC3339, tc.sessionData.CreatedAt); err == nil {
-			d.StartedAt = t
-		}
-		d.SessionData = tc.sessionData
+	if tc == nil || tc.session == nil || tc.coordinator == nil || !tc.coordinator.TerminalLifecycleConfirmed() {
+		return unavailable("no confirmed run in this execution")
 	}
-
-	if tc.coordinator != nil {
-		d.Todos = tc.coordinator.TaskTracker().TodoList().Items()
-		d.Skills = tc.coordinator.SkillUsage()
-		d.ContextUsageSection = tc.coordinator.RenderContextUsageSection()
-		d.ResolvedProfile = tc.coordinator.ExecutionProfile()
-		if sessions, err := tc.coordinator.TerminalSessions(context.Background()); err == nil {
-			d.TerminalSessions = sessions
-		}
-		if workerMemory, err := tc.coordinator.WorkerMemoryReport(context.Background()); err == nil {
-			d.WorkerMemory = workerMemory
-		}
-		d.MemoryLearning = tc.coordinator.MemoryLearningReport()
-		d.DeprecatedMemory = tc.coordinator.DeprecatedMemoryToolReport()
-		d.ContextRouting = tc.coordinator.ContextManifestReport()
-		d.Decisions, _ = tc.coordinator.DecisionIndexEntries()
-		d.DecisionPrimitives, _ = tc.coordinator.DecisionPrimitiveResults(context.Background())
-		d.ControlDecisions, _ = tc.coordinator.ControlDecisionSummaries(context.Background())
-		if semantic, ok := tc.coordinator.SemanticRetrievalReport(); ok {
-			d.SemanticRetrieval = &semantic
-		}
-		d.Decisions = team.RedactedDecisionIndexEntries(d.Decisions)
+	result := tc.coordinator.LastRunResult()
+	if result == nil || !slices.Contains(tc.coordinator.ExecutionRunIDs(), result.RunID) {
+		return unavailable("no completed run allocated in this execution")
 	}
-	if tc.session != nil {
-		canonical, err := team.LoadCanonicalRunFinishedSnapshot(tc.session.Workspace, "")
-		if err != nil {
-			d.CanonicalRunError = err.Error()
-		} else {
-			d.RunResult = canonical
-		}
+	saved, err := loadSavedReportForRun(context.Background(), tc.session.Workspace, teamName, result.RunID)
+	if err != nil {
+		return unavailable(err.Error())
 	}
-	if d.RunResult != nil {
-		d.SourceRunID = d.RunResult.RunID
-		if d.RunResult.EvidenceManifest != nil {
-			if d.SourceRunID == "" {
-				d.SourceRunID = d.RunResult.EvidenceManifest.RunID
-			}
-			d.EvidenceIdentity = d.RunResult.EvidenceManifest.ManifestHash
-		}
-	}
-	if d.SourceRunID == "" {
-		d.SourceRunID = "run-unavailable"
-	}
-	if d.EvidenceIdentity == "" {
-		d.EvidenceIdentity = "unavailable"
-	}
-	d.SkillPatterns = gatherSkillPatterns(tc, d.SourceRunID)
-	d.Cost, d.CostUnavailableReason = gatherReportCost(tc, d.SourceRunID)
-	if tc.session != nil {
-		var metrics *team.RunMetrics
-		if d.RunResult != nil {
-			metrics = &d.RunResult.Metrics
-		}
-		if hub, err := inspectpkg.LoadWorkerAttempts(context.Background(), tc.session.Workspace, metrics, time.Now()); err == nil {
-			d.Workers = &hub
-		}
-	}
-	if tc.session != nil && d.SourceRunID != "run-unavailable" {
-		if profiles, err := team.LoadModelProfileTelemetry(tc.session.Workspace, d.SourceRunID); err == nil {
-			d.ModelProfiles = profiles
-		}
-	}
-	if tc.session != nil && d.RunResult != nil {
-		if result, err := auditverify.VerifyWorkspaceRun(context.Background(), tc.session.Workspace, d.RunResult.RunID, auditverify.VerifyOptions{}); err != nil {
-			d.AuditUnavailableReason = err.Error()
-		} else {
-			d.AuditResult = result
-		}
-	}
-	if tc.session != nil {
-		if d.RunResult == nil {
-			// A workset pointer without a confirmed run_finished snapshot is only
-			// an uncommitted filesystem projection and must not enter the report.
-			d.RuntimeWorksetError = "canonical run_finished snapshot is unavailable"
-		} else if projection, err := team.LoadRuntimeWorksetProjection(tc.session.Workspace, d.RunResult); err != nil {
-			d.RuntimeWorksetError = err.Error()
-		} else {
-			d.RuntimeWorksets = projection
-		}
-		verifiedManifest, verified := verifiedEvidenceManifest(tc.session.Workspace, d.RunResult)
-		if verified {
-			d.Todos, d.HistoricalTodoCount = latestRunTodos(d.Todos, verifiedManifest)
-		}
-		d.STM = team.LoadSTM(tc.session.Workspace)
-
-		if d.ResolvedProfile.DisableHistoricalTaskReuse {
-			if verified {
-				d.CurrentRunDiagnostics = currentRunReportDiagnostics(d.Todos, verifiedManifest)
-			}
-		} else {
-			tasksDir := filepath.Join(tc.session.Workspace, "tasks", teamName)
-			entries, err := os.ReadDir(tasksDir)
-			if err == nil {
-				for _, entry := range entries {
-					if !entry.IsDir() {
-						continue
-					}
-					agentDir := filepath.Join(tasksDir, entry.Name())
-					taskEntries, err := os.ReadDir(agentDir)
-					if err != nil {
-						continue
-					}
-					var mdEntries []os.DirEntry
-					for _, te := range taskEntries {
-						if strings.HasSuffix(te.Name(), ".md") {
-							mdEntries = append(mdEntries, te)
-						}
-					}
-					sort.Slice(mdEntries, func(i, j int) bool {
-						return mdEntries[i].Name() > mdEntries[j].Name()
-					})
-					var b strings.Builder
-					count := 0
-					for _, te := range mdEntries {
-						if count >= 10 {
-							break
-						}
-						data, err := os.ReadFile(filepath.Join(agentDir, te.Name()))
-						if err != nil {
-							continue
-						}
-						fmt.Fprintf(&b, "### %s\n```\n%s\n```\n\n",
-							strings.TrimSuffix(te.Name(), ".md"),
-							limitStr(string(data), 1500))
-						count++
-					}
-					if count > 0 {
-						d.TaskHistory[entry.Name()] = b.String()
-					}
-				}
-			}
-		}
-	}
-
-	d.ReviewScope = gatherRuntimeReviewScope(d.Todos)
-	if !reviewScopeBoundToRunResult(d.ReviewScope, d.RunResult) {
-		d.ReviewScope = nil
-	}
-	return d
+	return reportDataFromSaved(saved)
 }
 
-func gatherReportCost(tc *teamContext, runID string) (*cost.View, string) {
-	if tc == nil || tc.coordinator == nil || runID == "run-unavailable" {
-		return nil, ""
-	}
-	view, err := tc.coordinator.CostView(runID, "")
+func loadSavedReportForRun(ctx context.Context, workspace, teamName, runID string) (*team.RunReport, error) {
+	snapshot, err := inspectpkg.LoadHistoricalResults(ctx, inspectpkg.HistoricalResultScope{Workspace: workspace, Team: teamName})
 	if err != nil {
-		return nil, err.Error()
+		return nil, err
 	}
-	if view == nil || !view.Available {
-		return nil, ""
+	for _, row := range snapshot.Results {
+		if row.Kind == "run_response" && row.RunID == runID {
+			return team.LoadRunReport(ctx, workspace, row.SourceEventID)
+		}
 	}
-	return view, ""
+	return nil, fmt.Errorf("%w: run %s is not visible in the selected lineage", team.ErrRunReportUnavailable, runID)
 }
 
 func gatherRuntimeReviewScope(todos []*team.TodoItem) *reviewScopeReport {
@@ -508,17 +377,6 @@ func renderReportAuditSection(data *reportData) string {
 	}
 	b.WriteString("\n")
 	return b.String()
-}
-
-func verifiedEvidenceManifest(workspace string, result *team.RunResult) (*team.EvidenceManifest, bool) {
-	if result == nil || result.EvidenceManifest == nil || result.EvidenceManifest.RunID == "" {
-		return nil, false
-	}
-	store, err := team.NewFileArtifactStore(workspace, workspace)
-	if err != nil || result.EvidenceManifest.Verify(context.Background(), store) != nil {
-		return nil, false
-	}
-	return result.EvidenceManifest, true
 }
 
 // currentRunReportDiagnostics is built only from canonical task receipts and
@@ -738,10 +596,23 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "# Execution Report — %s\n\n", teamName)
-	fmt.Fprintf(&b, "**Generated:** %s\n\n", time.Now().Format(time.RFC3339))
-
-	duration := time.Since(data.StartedAt).Round(time.Second)
+	completedAt := data.CompletedAt
+	if completedAt.IsZero() {
+		completedAt = time.Now()
+	}
+	fmt.Fprintf(&b, "**Generated:** %s\n\n", completedAt.Format(time.RFC3339))
+	duration := "unavailable"
+	if !data.StartedAt.IsZero() {
+		duration = completedAt.Sub(data.StartedAt).Round(time.Second).String()
+	}
 	fmt.Fprintf(&b, "**Duration:** %s\n\n", duration)
+	if saved := data.ReportSource; saved != nil {
+		fmt.Fprintf(&b, "**Source event:** `%s`\n\n**Source hash:** `%s`\n\n**Source branch:** `%s`\n\n", reportSafeMetadata(saved.SourceEventID, 160), reportSafeMetadata(saved.SourceHash, 160), reportSafeMetadata(saved.BranchID, 160))
+		if saved.OriginalPrompt != "" {
+			fmt.Fprintf(&b, "## Original Request\n\n%s\n\n", saved.OriginalPrompt)
+		}
+		b.WriteString("> Saved canonical run and task data. Mutable STM, task Markdown files and live workspace diagnostics are excluded. Historical artifact contents are not re-verified by this report.\n\n")
+	}
 	snapshotState := "unavailable"
 	if data.RunResult != nil {
 		snapshotState = "confirmed"
@@ -875,8 +746,12 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 			fmt.Fprintf(&b, "- **Decision chain:** `%v`\n", telemetry.DecisionChain)
 			fmt.Fprintf(&b, "- **Repair cost:** %d attempts, %d tokens, %dms\n", telemetry.RepairCost.Attempts, telemetry.RepairCost.Tokens, telemetry.RepairCost.WallClockMS)
 		}
-		fmt.Fprintf(&b, "- **Tasks unresolved:** %d\n", data.RunResult.Stats.TasksUnresolved)
-		fmt.Fprintf(&b, "- **Context-window telemetry:** %d admissions, %d CannotFit, %d compactions, %d downshifts\n", data.RunResult.Metrics.ContextWindowTelemetry.AdmissionEvents, data.RunResult.Metrics.ContextWindowTelemetry.CannotFit, data.RunResult.Metrics.ContextWindowTelemetry.CompactionCommits, data.RunResult.Metrics.ContextWindowTelemetry.Downshifts)
+		if data.ReportSource == nil || data.ReportSource.StatsAvailable {
+			fmt.Fprintf(&b, "- **Tasks unresolved:** %d\n", data.RunResult.Stats.TasksUnresolved)
+		}
+		if data.ReportSource == nil || data.ReportSource.MetricsAvailable {
+			fmt.Fprintf(&b, "- **Context-window telemetry:** %d admissions, %d CannotFit, %d compactions, %d downshifts\n", data.RunResult.Metrics.ContextWindowTelemetry.AdmissionEvents, data.RunResult.Metrics.ContextWindowTelemetry.CannotFit, data.RunResult.Metrics.ContextWindowTelemetry.CompactionCommits, data.RunResult.Metrics.ContextWindowTelemetry.Downshifts)
+		}
 		if data.RunResult.Acceptance != nil {
 			fmt.Fprintf(&b, "- **Acceptance:** `%s`\n", data.RunResult.Acceptance.EffectiveState())
 		}
@@ -898,54 +773,58 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		} else if data.RuntimeWorksetError != "" {
 			fmt.Fprintf(&b, "\n> ⚠️ Runtime workset projection was not accepted for run `%s`: %s\n", reportSafeMetadata(data.SourceRunID, 160), reportSafeMetadata(data.RuntimeWorksetError, 240))
 		}
-		metrics := data.RunResult.Metrics
-		b.WriteString("\n### Reliability Metrics\n\n")
-		fmt.Fprintf(&b, "- **Acceptance criteria passed:** %d\n", metrics.AcceptanceCriteriaPassed)
-		fmt.Fprintf(&b, "- **Typed run inputs resolved:** %d\n", metrics.TypedRunInputsResolved)
-		fmt.Fprintf(&b, "- **Input-bound actions:** %d\n", metrics.InputBoundActions)
-		fmt.Fprintf(&b, "- **Input-bound assertions:** %d passed, %d failed\n", metrics.InputBoundAssertionsPassed, metrics.InputBoundAssertionsFailed)
-		fmt.Fprintf(&b, "- **Protocol repairs:** %d attempted, %d succeeded\n", metrics.ProtocolRepairsAttempted, metrics.ProtocolRepairsSucceeded)
-		fmt.Fprintf(&b, "- **Policy-denied tool calls:** %d (safe fresh attempts: %d; schema repairs: %d; budget wrap-ups: %d)\n", metrics.PolicyDeniedToolCalls, metrics.SafeFreshAttempts, metrics.SchemaRepairDenials, metrics.StepBudgetWrapUps)
-		fmt.Fprintf(&b, "- **Worker success claims rejected by verification:** %d\n", metrics.WorkerSuccessRejected)
-		fmt.Fprintf(&b, "- **Weak verifier warnings:** %d\n", metrics.WeakVerifierWarnings)
-		fmt.Fprintf(&b, "- **Degraded results accepted via protocol recovery:** %d\n", metrics.DegradedResultsAccepted)
-		fmt.Fprintf(&b, "- **Preflight failures caught:** %d (non-asserting verifiers: %d)\n", metrics.PreflightFailuresCaught, metrics.NonAssertingVerifiersRejected)
-		fmt.Fprintf(&b, "- **Verifications overturned by evidence:** %d\n", metrics.VerificationsOverturned)
-		fmt.Fprintf(&b, "- **Failures by class:** %v\n", metrics.FailuresByClass)
-		fmt.Fprintf(&b, "- **Failures by phase:** %v\n", metrics.FailuresByPhase)
-		fmt.Fprintf(&b, "- **Typed verifier adoption:** %d/%d (%.0f%%)\n", metrics.TypedVerifiers, metrics.TasksWithVerifier, metrics.TypedVerifierAdoptionRate*100)
-		fmt.Fprintf(&b, "- **Tasks accepted without an objective verifier:** %d\n", metrics.TasksDoneWithoutObjectiveVerifier)
-		fmt.Fprintf(&b, "- **Retry attempts avoided:** %v\n", metrics.RetryAttemptsAvoidedByDisposition)
-		fmt.Fprintf(&b, "- **Protocol repair failures by reason:** %v\n", metrics.ProtocolRepairFailuresByReason)
-		fmt.Fprintf(&b, "- **Timeout tasks recovered through reconciliation:** %d\n", metrics.TimeoutTasksRecovered)
-		fmt.Fprintf(&b, "- **Cancelled tasks excluded from retry statistics:** %d\n", metrics.CancelledTasksExcludedFromRetries)
-		if metrics.TasksWithVerifier > 0 && metrics.TypedVerifiers == 0 {
-			b.WriteString("\n> ⚠️ No typed verifiers were used in this run. Prefer `verify_spec` for file/path and JSON assertions.\n")
-		}
-		fmt.Fprintf(&b, "- **Execution replays avoided:** %d\n", metrics.ExecutionReplaysAvoided)
-		fmt.Fprintf(&b, "- **Diagnostic tasks since criterion progress:** %d\n", metrics.DiagnosticTasksSinceProgress)
-		fmt.Fprintf(&b, "- **Repeated failure fingerprints:** %d\n", metrics.RepeatedFailureFingerprints)
-		fmt.Fprintf(&b, "- **Recovery strategy changes:** %d\n", metrics.RecoveryStrategyChanges)
-		fmt.Fprintf(&b, "- **Retries without structural change:** %d\n", metrics.RetriesWithoutStructuralChange)
-		if replans := metrics.ReplanMaterialChangeAccepted + metrics.ReplanWithoutMaterialChange + metrics.ReplanMaterialChangeRejected; replans > 0 {
-			fmt.Fprintf(&b, "- **Replacements of replan_required tasks:** %d changed the strategy, %d repeated it, %d refused\n", metrics.ReplanMaterialChangeAccepted, metrics.ReplanWithoutMaterialChange, metrics.ReplanMaterialChangeRejected)
-		}
-		fmt.Fprintf(&b, "- **Time since criterion progress:** %ds\n", metrics.TimeSinceCriterionProgressSeconds)
-		fmt.Fprintf(&b, "- **Tokens since criterion progress:** %d (limit %d)\n", metrics.TokensSinceCriterionProgress, metrics.MaxTokensWithoutProgress)
-		fmt.Fprintf(&b, "- **Turns since criterion progress:** %d (limit %d)\n", metrics.TurnsSinceCriterionProgress, metrics.MaxTurnsWithoutProgress)
-		fmt.Fprintf(&b, "- **Tasks since criterion progress:** %d (limit %d)\n", metrics.TasksSinceCriterionProgress, metrics.MaxTasksWithoutProgress)
-		if len(metrics.TasksByCriterion) > 0 {
-			b.WriteString("- **Tasks by criterion:**\n")
-			keys := make([]string, 0, len(metrics.TasksByCriterion))
-			for id := range metrics.TasksByCriterion {
-				keys = append(keys, id)
+		if data.ReportSource != nil && !data.ReportSource.MetricsAvailable {
+			b.WriteString("\n### Reliability Metrics\n\nUnavailable: metrics were not captured in the source event.\n\n")
+		} else {
+			metrics := data.RunResult.Metrics
+			b.WriteString("\n### Reliability Metrics\n\n")
+			fmt.Fprintf(&b, "- **Acceptance criteria passed:** %d\n", metrics.AcceptanceCriteriaPassed)
+			fmt.Fprintf(&b, "- **Typed run inputs resolved:** %d\n", metrics.TypedRunInputsResolved)
+			fmt.Fprintf(&b, "- **Input-bound actions:** %d\n", metrics.InputBoundActions)
+			fmt.Fprintf(&b, "- **Input-bound assertions:** %d passed, %d failed\n", metrics.InputBoundAssertionsPassed, metrics.InputBoundAssertionsFailed)
+			fmt.Fprintf(&b, "- **Protocol repairs:** %d attempted, %d succeeded\n", metrics.ProtocolRepairsAttempted, metrics.ProtocolRepairsSucceeded)
+			fmt.Fprintf(&b, "- **Policy-denied tool calls:** %d (safe fresh attempts: %d; schema repairs: %d; budget wrap-ups: %d)\n", metrics.PolicyDeniedToolCalls, metrics.SafeFreshAttempts, metrics.SchemaRepairDenials, metrics.StepBudgetWrapUps)
+			fmt.Fprintf(&b, "- **Worker success claims rejected by verification:** %d\n", metrics.WorkerSuccessRejected)
+			fmt.Fprintf(&b, "- **Weak verifier warnings:** %d\n", metrics.WeakVerifierWarnings)
+			fmt.Fprintf(&b, "- **Degraded results accepted via protocol recovery:** %d\n", metrics.DegradedResultsAccepted)
+			fmt.Fprintf(&b, "- **Preflight failures caught:** %d (non-asserting verifiers: %d)\n", metrics.PreflightFailuresCaught, metrics.NonAssertingVerifiersRejected)
+			fmt.Fprintf(&b, "- **Verifications overturned by evidence:** %d\n", metrics.VerificationsOverturned)
+			fmt.Fprintf(&b, "- **Failures by class:** %v\n", metrics.FailuresByClass)
+			fmt.Fprintf(&b, "- **Failures by phase:** %v\n", metrics.FailuresByPhase)
+			fmt.Fprintf(&b, "- **Typed verifier adoption:** %d/%d (%.0f%%)\n", metrics.TypedVerifiers, metrics.TasksWithVerifier, metrics.TypedVerifierAdoptionRate*100)
+			fmt.Fprintf(&b, "- **Tasks accepted without an objective verifier:** %d\n", metrics.TasksDoneWithoutObjectiveVerifier)
+			fmt.Fprintf(&b, "- **Retry attempts avoided:** %v\n", metrics.RetryAttemptsAvoidedByDisposition)
+			fmt.Fprintf(&b, "- **Protocol repair failures by reason:** %v\n", metrics.ProtocolRepairFailuresByReason)
+			fmt.Fprintf(&b, "- **Timeout tasks recovered through reconciliation:** %d\n", metrics.TimeoutTasksRecovered)
+			fmt.Fprintf(&b, "- **Cancelled tasks excluded from retry statistics:** %d\n", metrics.CancelledTasksExcludedFromRetries)
+			if metrics.TasksWithVerifier > 0 && metrics.TypedVerifiers == 0 {
+				b.WriteString("\n> ⚠️ No typed verifiers were used in this run. Prefer `verify_spec` for file/path and JSON assertions.\n")
 			}
-			sort.Strings(keys)
-			for _, id := range keys {
-				fmt.Fprintf(&b, "  - `%s`: %d\n", id, metrics.TasksByCriterion[id])
+			fmt.Fprintf(&b, "- **Execution replays avoided:** %d\n", metrics.ExecutionReplaysAvoided)
+			fmt.Fprintf(&b, "- **Diagnostic tasks since criterion progress:** %d\n", metrics.DiagnosticTasksSinceProgress)
+			fmt.Fprintf(&b, "- **Repeated failure fingerprints:** %d\n", metrics.RepeatedFailureFingerprints)
+			fmt.Fprintf(&b, "- **Recovery strategy changes:** %d\n", metrics.RecoveryStrategyChanges)
+			fmt.Fprintf(&b, "- **Retries without structural change:** %d\n", metrics.RetriesWithoutStructuralChange)
+			if replans := metrics.ReplanMaterialChangeAccepted + metrics.ReplanWithoutMaterialChange + metrics.ReplanMaterialChangeRejected; replans > 0 {
+				fmt.Fprintf(&b, "- **Replacements of replan_required tasks:** %d changed the strategy, %d repeated it, %d refused\n", metrics.ReplanMaterialChangeAccepted, metrics.ReplanWithoutMaterialChange, metrics.ReplanMaterialChangeRejected)
 			}
+			fmt.Fprintf(&b, "- **Time since criterion progress:** %ds\n", metrics.TimeSinceCriterionProgressSeconds)
+			fmt.Fprintf(&b, "- **Tokens since criterion progress:** %d (limit %d)\n", metrics.TokensSinceCriterionProgress, metrics.MaxTokensWithoutProgress)
+			fmt.Fprintf(&b, "- **Turns since criterion progress:** %d (limit %d)\n", metrics.TurnsSinceCriterionProgress, metrics.MaxTurnsWithoutProgress)
+			fmt.Fprintf(&b, "- **Tasks since criterion progress:** %d (limit %d)\n", metrics.TasksSinceCriterionProgress, metrics.MaxTasksWithoutProgress)
+			if len(metrics.TasksByCriterion) > 0 {
+				b.WriteString("- **Tasks by criterion:**\n")
+				keys := make([]string, 0, len(metrics.TasksByCriterion))
+				for id := range metrics.TasksByCriterion {
+					keys = append(keys, id)
+				}
+				sort.Strings(keys)
+				for _, id := range keys {
+					fmt.Fprintf(&b, "  - `%s`: %d\n", id, metrics.TasksByCriterion[id])
+				}
+			}
+			b.WriteString("\n---\n\n")
 		}
-		b.WriteString("\n---\n\n")
 	}
 	b.WriteString("---\n\n")
 

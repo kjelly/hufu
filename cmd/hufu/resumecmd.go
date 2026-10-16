@@ -172,7 +172,7 @@ func init() {
 	f.BoolVar(&opts.noNet, "no-net", false, "Block all network access for agent subprocesses")
 	f.BoolVar(&opts.forceMCP, "force-mcp", false, "Require MCP servers for execution")
 	f.BoolVar(&opts.unattended, "unattended", false, "Run without human interaction")
-	f.BoolVar(&opts.reportMode, "report", false, "Generate a full execution report")
+	f.BoolVar(&opts.reportMode, "report", false, "Export the saved run report to workspace/report.md")
 	f.BoolVar(&opts.noSummary, "no-summary", false, "Suppress the execution summary")
 	_ = resumeCmd.MarkFlagFilename("var-file")
 }

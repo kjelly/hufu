@@ -61,7 +61,7 @@ func TestControlDecisionJSONAndReportProjection(t *testing.T) {
 	if summary.Point != "path-reviewer" || summary.Calls != 2 || summary.Agreed != 1 || summary.Compared != 1 || summary.ErrorCodes["timeout"] != 1 {
 		t.Fatalf("summary = %#v", summary)
 	}
-	report := buildReportMD(gatherReportData(tc, "control-json"), "control-json", "done")
+	report := buildReportMD(&reportData{ControlDecisions: out.Teams[0].ControlDecisions}, "control-json", "done")
 	for _, want := range []string{"## Control Decisions", "| path-reviewer | shadow | systemone | 2 | 1 / 1 | 0 | 1 |", "not a calibrated accuracy"} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report omitted %q:\n%s", want, report)

@@ -222,7 +222,7 @@ func OpenReadOnly(ctx context.Context, workspace string) (*Store, error) {
 		return nil, errors.Join(fmt.Errorf("open read-only runtime store: %w", err), cleanup())
 	}
 	db.SetMaxOpenConns(1)
-	if err := sqlmigrate.Verify(ctx, db, "runtime store", migrations); err != nil {
+	if err := verifyReadOnlySchema(ctx, db); err != nil {
 		return nil, errors.Join(fmt.Errorf("open read-only runtime store: %w", err), db.Close(), cleanup())
 	}
 	return &Store{db: db, path: path, readOnly: true, cleanup: cleanup, snapshotPath: snapshotPath}, nil

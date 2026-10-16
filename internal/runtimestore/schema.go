@@ -1,6 +1,12 @@
 package runtimestore
 
-import "github.com/kjelly/hufu/internal/sqlmigrate"
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/kjelly/hufu/internal/sqlmigrate"
+)
 
 // migrations is the runtime.sqlite schema. Applied migrations are checksum
 // verified; an edited, renamed, or unknown migration fails closed.
@@ -75,4 +81,28 @@ CREATE TRIGGER events_rewritten_by_update AFTER UPDATE ON events
 BEGIN UPDATE event_journal_meta SET rewrites = rewrites + 1 WHERE id = 1; END;
 CREATE TRIGGER events_rewritten_by_delete AFTER DELETE ON events
 BEGIN UPDATE event_journal_meta SET rewrites = rewrites + 1 WHERE id = 1; END;`},
+	{Version: 4, Name: "immutable run report snapshots", SQL: `
+CREATE TABLE run_reports (
+  source_event_id TEXT PRIMARY KEY REFERENCES events(id),
+  source_hash TEXT NOT NULL,
+  schema_version INTEGER NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('available', 'unavailable')),
+  reason TEXT NOT NULL DEFAULT '',
+  snapshot BLOB
+);`},
+}
+
+func verifyReadOnlySchema(ctx context.Context, db *sql.DB) error {
+	var version int
+	if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
+		return fmt.Errorf("read runtime store schema version: %w", err)
+	}
+	required := migrations
+	if version == 3 {
+		// Version 4 adds only optional report snapshots. Preserve reads of
+		// pre-capture histories without migrating the source database, while
+		// still verifying every existing migration's name and checksum.
+		required = migrations[:3]
+	}
+	return sqlmigrate.Verify(ctx, db, "runtime store", required)
 }

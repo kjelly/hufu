@@ -148,7 +148,7 @@ managed workspace for the discovered project and selected team.`,
 	flags.Int64Var(&options.maxTotalTokens, "max-total-tokens", 0, "Maximum cumulative LLM tokens")
 	flags.BoolVar(&options.plan, "plan", false, "Require plan-first execution")
 	flags.BoolVar(&options.autoSkills, "auto-skills", false, "Enable automatic skill matching")
-	flags.BoolVar(&options.report, "report", false, "Generate an execution report")
+	flags.BoolVar(&options.report, "report", false, "Export the saved run report to workspace/report.md")
 	flags.BoolVarP(&options.steps, "steps", "s", false, "Confirm each task batch")
 	flags.BoolVar(&options.tui, "tui", false, "Show the real-time TUI")
 	flags.BoolVar(&options.think, "think", false, "Show coordinator decision reasoning")

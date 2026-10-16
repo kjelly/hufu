@@ -21,6 +21,9 @@ import (
 )
 
 func validateResultsPresentation(options *resultsCLIOptions, operation string) error {
+	if operation == "pick" && options.displayMode == "plain" {
+		return errors.New("pick requires an interactive terminal display; use runs/list/search with --display-mode plain")
+	}
 	if options.theme != "" {
 		if _, err := tuipkg.ParseThemeMode(options.theme); err != nil {
 			return err
@@ -40,7 +43,7 @@ func validateResultsPresentation(options *resultsCLIOptions, operation string) e
 	if options.payload && (operation != "show" || options.output != "text" || options.render == "markdown") {
 		return errors.New("show --payload prints a JSON value; use it without --output json or --render markdown")
 	}
-	if options.render == "markdown" && (options.output != "text" || !resultsReadFull(operation)) {
+	if options.render == "markdown" && (options.output != "text" || !resultsReadFull(operation) && operation != "pick") {
 		return errors.New("--render markdown applies to text read/final/show/latest results")
 	}
 	return nil
@@ -53,6 +56,8 @@ func presentResults(command *cobra.Command, options *resultsCLIOptions, operatio
 	var body bytes.Buffer
 	var err error
 	switch {
+	case operation == "report" && options.output == "text":
+		_, err = body.WriteString(utils.SanitizeTerminalText(response.ReportMarkdown))
 	case operation == "overview" && options.output == "text":
 		err = writeResultsOverview(&body, response, options)
 	case operation == "read" || operation == "final":

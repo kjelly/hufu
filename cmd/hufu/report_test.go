@@ -15,7 +15,7 @@ import (
 	"github.com/kjelly/hufu/internal/team"
 )
 
-func TestGenerateRequestedReportsWritesOnlyAutoReportTeams(t *testing.T) {
+func TestGenerateRequestedReportsDoesNotExportWithoutCurrentRun(t *testing.T) {
 	originalReportMode := opts.reportMode
 	opts.reportMode = false
 	t.Cleanup(func() { opts.reportMode = originalReportMode })
@@ -32,8 +32,8 @@ func TestGenerateRequestedReportsWritesOnlyAutoReportTeams(t *testing.T) {
 	}
 
 	generateRequestedReports(loadedTeams, "review complete")
-	if _, err := os.Stat(filepath.Join(autoWorkspace, "report.md")); err != nil {
-		t.Fatalf("auto-report team did not write report.md: %v", err)
+	if _, err := os.Stat(filepath.Join(autoWorkspace, "report.md")); !os.IsNotExist(err) {
+		t.Fatalf("auto-report must not fabricate a report without a current run: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(otherWorkspace, "report.md")); !os.IsNotExist(err) {
 		t.Fatalf("non-auto-report team unexpectedly wrote report.md: %v", err)
@@ -886,8 +886,8 @@ func TestGatherReportDataFreshIgnoresUnverifiedManifestRunID(t *testing.T) {
 				coordinator: coordinator,
 			}, "review")
 
-			if len(data.Todos) != 2 || data.HistoricalTodoCount != 0 {
-				t.Fatalf("unverified manifest was used for task filtering: todos=%d historical=%d", len(data.Todos), data.HistoricalTodoCount)
+			if len(data.Todos) != 0 || data.RunResult != nil || data.CanonicalRunError == "" {
+				t.Fatalf("uncommitted live state leaked into report: %+v", data)
 			}
 			if len(data.CurrentRunDiagnostics) != 0 {
 				t.Fatalf("unverified manifest produced current-run diagnostics: %#v", data.CurrentRunDiagnostics)

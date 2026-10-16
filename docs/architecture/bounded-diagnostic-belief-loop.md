@@ -406,7 +406,7 @@ measurements。它不使用假的 receipt、child task 或 dispatch intent，也
 每個 runtime 階段需要單元、整合與故障注入測試，以及 repository 的 `go test ./...`、
 `go vet ./...`、`golangci-lint run` 和 CI gates。不能因 pilot 很小略過 canonical
 transition、task journal、session persistence、CLI/JSON/report/TUI 的投影傳播。
-原始文件 PR 只驗證 docs lifecycle/links、diff hygiene 與既有 PR CI；階段 0–1 的
+原始文件 PR 只驗證 docs lifecycle/links、diff hygiene 與既有 PR CI；階段 0–1
 與第 2 階段離線範圍的實作另須通過上列 code gates，不能宣稱已跑 runtime shadow、
 dispatch bridge 與第 3–5 階段尚未實作的測試。
 

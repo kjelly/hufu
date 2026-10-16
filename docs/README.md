@@ -40,12 +40,12 @@ to re-create an abstraction that already exists in the runtime.
   decisions, backend contracts, strict sidecar mapping, the System One
   decision-model adapter, the standalone `hufu decisionrt` CLI, native
   agent-team tools, and runtime control decisions.
+- [有界唯讀診斷 belief loop（提案）](architecture/bounded-diagnostic-belief-loop.md)
+  — staged proposal with offline fixtures, preparation, journal/replay and
+  read-only inspection; live episodes and dispatch remain deferred.
 - [Decision authoring UX](architecture/decision-authoring-ux.md) — canonical
   profile/request/routing schema, compatibility normalization, inspection,
   and dry-run migration contract.
-- [Bounded diagnostic belief loop](architecture/bounded-diagnostic-belief-loop.md)
-  — staged proposal; offline fixtures and preparation are available, runtime
-  episodes and dispatch remain deferred.
 - [Run outcome](architecture/run-outcome.md) — the policy implemented by
   `EvaluateRunOutcome` and `CompletionGate`.
 - [Unified observability inspector](architecture/unified-observability-inspector.md)

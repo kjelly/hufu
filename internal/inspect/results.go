@@ -17,29 +17,31 @@ import (
 // HistoricalResult is an event-backed snapshot, not the latest TodoList entry.
 // Content belongs to this explicitly content-bearing API, not InspectTask.
 type HistoricalResult struct {
-	ResultID      string           `json:"result_id"`
-	Kind          string           `json:"kind"`
-	Team          string           `json:"team,omitempty"`
-	RunID         string           `json:"run_id"`
-	OriginRunID   string           `json:"origin_run_id"`
-	InvocationID  string           `json:"invocation_id,omitempty"`
-	SessionID     string           `json:"session_id"`
-	TaskID        string           `json:"task_id,omitempty"`
-	Agent         string           `json:"agent,omitempty"`
-	Attempt       int              `json:"attempt"`
-	Status        string           `json:"status"`
-	CurrentStatus string           `json:"current_status"`
-	Validity      string           `json:"validity"`
-	CompletedAt   time.Time        `json:"completed_at,omitzero"`
-	Description   string           `json:"description,omitempty"`
-	Summary       string           `json:"summary,omitempty"`
-	Output        string           `json:"output,omitempty"`
-	TypedResult   *team.TaskResult `json:"typed_result,omitempty"`
-	SourceEventID string           `json:"source_event_id"`
-	SourceHash    string           `json:"source_hash"`
-	Branches      []string         `json:"branches"`
-	Workspace     string           `json:"-"`
-	Ordinal       int64            `json:"-"`
+	ResultID              string           `json:"result_id"`
+	Kind                  string           `json:"kind"`
+	Team                  string           `json:"team,omitempty"`
+	RunID                 string           `json:"run_id"`
+	OriginRunID           string           `json:"origin_run_id"`
+	InvocationID          string           `json:"invocation_id,omitempty"`
+	SessionID             string           `json:"session_id"`
+	TaskID                string           `json:"task_id,omitempty"`
+	Agent                 string           `json:"agent,omitempty"`
+	Attempt               int              `json:"attempt"`
+	Status                string           `json:"status"`
+	CurrentStatus         string           `json:"current_status"`
+	Validity              string           `json:"validity"`
+	CompletedAt           time.Time        `json:"completed_at,omitzero"`
+	Description           string           `json:"description,omitempty"`
+	OriginalPrompt        string           `json:"original_prompt,omitempty"`
+	OriginalPromptEventID string           `json:"original_prompt_event_id,omitempty"`
+	Summary               string           `json:"summary,omitempty"`
+	Output                string           `json:"output,omitempty"`
+	TypedResult           *team.TaskResult `json:"typed_result,omitempty"`
+	SourceEventID         string           `json:"source_event_id"`
+	SourceHash            string           `json:"source_hash"`
+	Branches              []string         `json:"branches"`
+	Workspace             string           `json:"-"`
+	Ordinal               int64            `json:"-"`
 }
 
 type HistoricalResultScope struct {
@@ -169,7 +171,41 @@ type historicalTaskState struct {
 	rows      []int
 }
 
+type historicalPromptKey struct{ session, run string }
+type historicalPromptSource struct{ content, eventID string }
+
+// Keep the first user message of each originating run, independently of
+// later continuations and resume runs. Only the selected lineage is read.
+func historicalOriginalPrompts(ctx context.Context, events []IndexedEvent) (map[historicalPromptKey]historicalPromptSource, error) {
+	prompts := make(map[historicalPromptKey]historicalPromptSource)
+	for _, indexed := range events {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		event := indexed.Event
+		if event.Type != string(team.EventUserMessageAdded) {
+			continue
+		}
+		key := historicalPromptKey{event.SessionID, event.RunID}
+		if _, exists := prompts[key]; exists {
+			continue
+		}
+		var payload team.SessionMessageEventPayload
+		if err := unmarshalHistoricalJSON(event.Payload, &payload); err != nil {
+			return nil, fmt.Errorf("%w: decode historical request: %v", ErrIntegrity, err)
+		}
+		if strings.TrimSpace(payload.Content) != "" {
+			prompts[key] = historicalPromptSource{utils.RedactSecrets(payload.Content), event.ID}
+		}
+	}
+	return prompts, nil
+}
+
 func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch string, scope HistoricalResultScope) ([]HistoricalResult, []string, error) {
+	prompts, err := historicalOriginalPrompts(ctx, events)
+	if err != nil {
+		return nil, nil, err
+	}
 	rows := []HistoricalResult{}
 	teams := map[string]string{}
 	states := make(map[string]*historicalTaskState)
@@ -261,6 +297,11 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 			state.rows = append(state.rows, len(rows))
 			rows = append(rows, row)
 		}
+	}
+	for index := range rows {
+		row := &rows[index]
+		prompt := prompts[historicalPromptKey{row.SessionID, row.OriginRunID}]
+		row.OriginalPrompt, row.OriginalPromptEventID = prompt.content, prompt.eventID
 	}
 	return rows, slices.Sorted(maps.Keys(known)), nil
 }

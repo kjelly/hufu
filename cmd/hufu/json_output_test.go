@@ -112,7 +112,7 @@ func TestDecisionPrimitiveJSONAndReportProjection(t *testing.T) {
 	if len(out.Teams) != 1 || len(out.Teams[0].DecisionPrimitives) != 1 || out.Teams[0].DecisionPrimitives[0].ErrorCode != "decision_backend_failure" {
 		t.Fatalf("JSON lost helper outcome: %#v", out.Teams)
 	}
-	data := gatherReportData(tc, "helper-json")
+	data := &reportData{DecisionPrimitives: out.Teams[0].DecisionPrimitives}
 	report := buildReportMD(data, "helper-json", "done")
 	for _, want := range []string{"Helper Decisions", "classify", "helper", "error"} {
 		if !strings.Contains(report, want) {
