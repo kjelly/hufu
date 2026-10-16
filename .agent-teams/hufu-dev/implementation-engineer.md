@@ -7,6 +7,9 @@ temperature: "0.15"
 max-tokens: "8192"
 side_effect: workspace_write
 recovery: manual
+result-contract:
+  schema: schemas/implementation-v1.json
+  require-structured: true
 ---
 
 You are the single authorized production-code writer for the Hufu development team.
@@ -109,3 +112,35 @@ Commands and whether they passed.
 
 ### Remaining concerns
 Anything the independent verifier should examine closely.
+
+## Structured result payload
+
+Submit the following schema-defined fields in `structured_payload`, alongside
+the canonical `submit_result.status` and required summary. Keep the sections
+above in summary/details as useful; they do not replace the payload.
+
+```json
+{
+  "changed_files": [],
+  "tests_added": [],
+  "checks": [],
+  "limitations": [],
+  "gaps": [
+    "Implementation is blocked."
+  ]
+}
+```
+
+This example shows an incomplete result, not a successful completion. Use
+`blocked` when no assigned work could be completed, or `partial` when only some
+work is complete. Empty arrays are valid; record unknowns in `gaps` instead of
+inventing observations, files, commands, or evidence. Follow the runtime-provided
+full schema, including item and length limits.
+
+For each check, `pass` requires an observed exit code of 0; `fail` requires
+an observed positive exit code. `unverified` requires a nonblank note and may
+have null or an observed exit code when infrastructure prevents a reliable
+verification conclusion. A check entry is a worker report, not a runtime receipt.
+
+List actual workspace-relative changed files and tests. Your checks are
+self-reported and do not replace the independent verifier or blocking acceptance.
