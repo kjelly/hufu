@@ -9,9 +9,10 @@ import (
 )
 
 const (
-	FindingLegacyExecutionProvider = "legacy_execution_provider_field"
-	FindingUnknownTaskAgent        = "unknown_task_agent"
-	FindingDependencyCycle         = "dependency_cycle"
+	FindingLegacyExecutionProvider  = "legacy_execution_provider_field"
+	FindingUnknownTaskAgent         = "unknown_task_agent"
+	FindingDependencyCycle          = "dependency_cycle"
+	FindingLegacyTasksKeyDeprecated = "legacy_tasks_key_deprecated"
 )
 
 // TeamLintFinding is the stable, source-located projection exposed by the CLI.
@@ -49,6 +50,7 @@ type TeamLintOptions struct {
 	PlanFirst          *bool
 	ExecutionProfile   string
 	RejectLegacyFanOut bool
+	RejectLegacyTasks  bool
 }
 
 // LintTeam runs the deterministic offline rules with manifest policy only.
@@ -83,9 +85,17 @@ func LintTeamWithOptions(teamDir string, options TeamLintOptions) (TeamLintResul
 		result.Findings = append(result.Findings, lintOfflineTools(inspection.Session, inspection.Sources, policy, directives)...)
 		result.Findings = append(result.Findings, lintOfflineSkills(inspection.Session, inspection.Sources, directives)...)
 	}
+	inspection.Diagnostics = append(inspection.Diagnostics, lintLegacyTasksKey(inspection.Sources)...)
 	result.Findings = append(result.Findings, ProjectContractFindings(inspection.Diagnostics, inspection.Sources, inspection.Session)...)
 	if options.RejectLegacyFanOut {
 		applyRejectLegacyFanOutPolicy(result.Findings)
+	}
+	if options.RejectLegacyTasks {
+		for i := range result.Findings {
+			if result.Findings[i].Code == FindingLegacyTasksKeyDeprecated {
+				result.Findings[i].Severity = FindingSeverityError
+			}
+		}
 	}
 	SortTeamLintFindings(result.Findings)
 	return result, nil
@@ -140,11 +150,12 @@ func ProjectContractFindings(findings []ContractFinding, sources *TeamSourceInde
 			continue
 		}
 		seen[key] = true
-		loc, agentName := findingSourceLocation(finding.Field, sources, session)
+		field := sources.contractCollectionPath(finding.Field)
+		loc, agentName := findingSourceLocation(field, sources, session)
 		projected = append(projected, TeamLintFinding{
 			Code: finding.Code, Severity: finding.Severity,
 			File: loc.File, Line: loc.Line, Column: loc.Column, LocationStatus: loc.Status,
-			Agent: agentName, FieldPath: finding.Field, Message: finding.Message, Suggestion: finding.Hint,
+			Agent: agentName, FieldPath: field, Message: finding.Message, Suggestion: finding.Hint,
 		})
 	}
 	return projected

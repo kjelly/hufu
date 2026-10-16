@@ -88,7 +88,7 @@ acceptance:
   # A finished search that records an inaccessible source reports
   # completed_with_gaps; that still completes the research stage.
   required-workers-accept-gaps: true
-tasks:
+contracts:
   - id: primary-research
     agent: researcher
     side_effect: none

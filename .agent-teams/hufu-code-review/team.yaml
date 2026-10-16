@@ -273,7 +273,7 @@ spec:
   # The producer, snapshot-pinned Go verifier, and all three routed worksets
   # and the final report audit are blocking. Critic dispatch is conditional
   # on typed requires_critique; every dispatched critic audits one source.
-  tasks:
+  contracts:
     - id: produce-workset
       kind: outcome
       advances: [review-scope-attested, documentation-references-verified]

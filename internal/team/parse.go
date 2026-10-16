@@ -135,18 +135,16 @@ type teamConfigYAML struct {
 	teamManifestSpecFields `yaml:",inline"`
 	Advanced               rawAdvancedSection `yaml:"advanced"`
 	requestSet             bool
+	contractCollection     string // Authored path; process-local, never hashed or persisted.
 }
 
 // rawAdvancedSection is the authoring-time `advanced:` namespace (spec.md
 // Specification 01 §9): a purely optional alternative spelling for these
 // same fields at the top level. mergeAdvancedNamespace folds it back into
-// the legacy top-level fields before any other logic in this file runs, so
-// nothing downstream needs to know this namespace exists. Tasks is
-// declared here only so `advanced: tasks:` decodes under this file's
-// strict teamConfigYAML — like the legacy top-level Tasks field above, it
-// is not itself consumed here; loadTeamContractTasks re-parses tasks
-// (legacy and advanced) independently, since it is the actual source of
-// session.ContractTasks.
+// the legacy top-level fields before other config mapping runs. Tasks is a
+// read alias normalized separately by normalizeManifestContracts, which checks
+// key presence before clearing alias fields. loadTeamContractTasks re-decodes
+// through that same path as the source of session.ContractTasks.
 type rawAdvancedSection struct {
 	Workflow     agent.WorkflowConfig     `yaml:"workflow"`
 	Tasks        []TaskDef                `yaml:"tasks"`
@@ -183,12 +181,6 @@ func mergeAdvancedNamespace(yc *teamConfigYAML) error {
 			return errors.New("\"retry\" is defined both at the top level and under \"advanced\"; remove one")
 		}
 		yc.Retry = yc.Advanced.Retry
-	}
-	if len(yc.Advanced.Tasks) > 0 {
-		if len(yc.Tasks) > 0 {
-			return errors.New("\"tasks\" is defined both at the top level and under \"advanced\"; remove one")
-		}
-		yc.Tasks = yc.Advanced.Tasks
 	}
 	return nil
 }
@@ -1395,7 +1387,7 @@ func loadTeamContractTasks(teamDir string, vars map[string]string) ([]TaskDef, e
 	if err != nil {
 		return nil, fmt.Errorf("parse team task contracts: %w", err)
 	}
-	return yc.Tasks, nil
+	return yc.Contracts, nil
 }
 
 // LoadRunInputDefinitions reads and validates a team's typed run-input

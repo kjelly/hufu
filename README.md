@@ -175,6 +175,11 @@ spec:
   skills: code-review,git-commit
 ```
 
+For static execution constraints, use `spec.contracts` (or flat `contracts`).
+The old `tasks` spelling remains readable with a deprecation warning. See
+[Team manifest contracts](docs/reference/team-manifest-contracts.md) for workflow
+boundaries, compatibility and `team migrate --dry-run --canonical-contracts`.
+
 The flat schema is the same fields with no envelope:
 
 ```yaml

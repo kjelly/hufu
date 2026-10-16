@@ -114,3 +114,31 @@ func TestRunTeamMigrate_RejectsBothDirAndTeamFlag(t *testing.T) {
 		t.Fatal("runTeamMigrate() error = nil, want an error when both a directory and --team are given")
 	}
 }
+
+func TestRunTeamMigrateCanonicalContractsFlag(t *testing.T) {
+	dir := t.TempDir()
+	writeMigrateCmdFixture(t, dir, "name: contracts-cli\ntasks:\n  - id: inspect\n    agent: worker\n")
+	previousDryRun, previousContracts, previousAuthoring := teamMigrateDryRun, teamMigrateCanonicalContracts, teamMigrateCanonicalAuthoring
+	t.Cleanup(func() {
+		teamMigrateDryRun, teamMigrateCanonicalContracts, teamMigrateCanonicalAuthoring = previousDryRun, previousContracts, previousAuthoring
+	})
+	teamMigrateDryRun, teamMigrateCanonicalContracts, teamMigrateCanonicalAuthoring = true, true, false
+	if teamMigrateCmd.Flags().Lookup("canonical-contracts") == nil {
+		t.Fatal("canonical-contracts flag not registered")
+	}
+	output, err := runTeamMigrateCaptured(t, []string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "contracts:") || strings.Contains(output, "\n    tasks:") {
+		t.Fatalf("output = %s", output)
+	}
+	teamMigrateCanonicalContracts = false
+	output, err = runTeamMigrateCaptured(t, []string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "tasks:") {
+		t.Fatalf("default output = %s", output)
+	}
+}

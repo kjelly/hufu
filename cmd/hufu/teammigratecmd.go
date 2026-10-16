@@ -14,6 +14,7 @@ var (
 	teamMigrateTo                 string
 	teamMigrateDryRun             bool
 	teamMigrateCanonicalAuthoring bool
+	teamMigrateCanonicalContracts bool
 )
 
 var teamMigrateCmd = &cobra.Command{
@@ -36,6 +37,7 @@ func init() {
 	teamMigrateCmd.Flags().StringVar(&teamMigrateTo, "to", internalteam.SchemaVersionV1Alpha1, "Target schema version")
 	teamMigrateCmd.Flags().BoolVar(&teamMigrateDryRun, "dry-run", false, "Print the migrated manifest without writing it (required in this version)")
 	teamMigrateCmd.Flags().BoolVar(&teamMigrateCanonicalAuthoring, "canonical-authoring", false, "Rewrite supported legacy decision/request fields to canonical authoring")
+	teamMigrateCmd.Flags().BoolVar(&teamMigrateCanonicalContracts, "canonical-contracts", false, "Emit contracts instead of the legacy tasks key (upgrade binaries first)")
 }
 
 func runTeamMigrate(_ *cobra.Command, args []string) error {
@@ -53,11 +55,10 @@ func runTeamMigrate(_ *cobra.Command, args []string) error {
 	var out []byte
 	var already bool
 	var warnings []string
-	if teamMigrateCanonicalAuthoring {
-		out, already, warnings, err = internalteam.MigrateTeamManifestToV1Alpha1CanonicalAuthoringDetailed(teamDir)
-	} else {
-		out, already, err = internalteam.MigrateTeamManifestToV1Alpha1(teamDir)
-	}
+	out, already, warnings, err = internalteam.MigrateTeamManifestToV1Alpha1WithOptions(teamDir, internalteam.TeamManifestMigrationOptions{
+		CanonicalAuthoring: teamMigrateCanonicalAuthoring,
+		CanonicalContracts: teamMigrateCanonicalContracts,
+	})
 	if err != nil {
 		return err
 	}

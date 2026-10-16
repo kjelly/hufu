@@ -32,3 +32,13 @@ Before changing automation, replay its help and dry/read-only path, compare
 stdout JSON and exit codes, then migrate one entry point at a time. The
 [operator command reference](../reference/operator-command-reference.md) is
 generated from the same metadata used by `hufu examples`.
+
+## Static contract authoring
+
+Use `contracts:` for static execution constraints. `tasks:` remains a deprecated
+read alias; runtime task JSON retains its existing names. Preview a conversion
+with `hufu team migrate <directory> --dry-run --canonical-contracts`. The default
+migration output continues to use `tasks:` for older binaries.
+
+See [Team manifest contracts](../reference/team-manifest-contracts.md) for source-aware
+lint, template limits, compatibility and rollback.

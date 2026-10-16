@@ -46,12 +46,13 @@ type TeamSourceText struct {
 
 // TeamSourceIndex is a side-effect-free source map for lint projection.
 type TeamSourceIndex struct {
-	TeamDir       string
-	ManifestFile  string
-	Manifest      map[string]TeamSourceLocation
-	ManifestText  map[string]TeamSourceText
-	Agents        map[string]AgentSource
-	SchemaVersion string
+	TeamDir            string
+	ManifestFile       string
+	Manifest           map[string]TeamSourceLocation
+	ManifestText       map[string]TeamSourceText
+	Agents             map[string]AgentSource
+	SchemaVersion      string
+	ContractCollection string
 }
 
 // BuildTeamSourceIndex reads only the team definition. It never creates a
@@ -100,6 +101,11 @@ func BuildTeamSourceIndex(teamDir string, vars map[string]string) (*TeamSourceIn
 		} else {
 			index.SchemaVersion = envelope.APIVersion
 		}
+		var contracts teamConfigYAML
+		if err := normalizeManifestContracts(renderedBytes, index.SchemaVersion, &contracts); err != nil {
+			return nil, err
+		}
+		index.ContractCollection = contracts.contractCollection
 	} else {
 		index.SchemaVersion = SchemaVersionLegacyFlatV0
 	}
@@ -138,38 +144,50 @@ func parseSourceYAML(authored, rendered []byte) (*yaml.Node, string, error) {
 }
 
 func indexYAMLNode(target map[string]TeamSourceLocation, texts map[string]TeamSourceText, file, prefix string, node *yaml.Node, status string) {
-	if node == nil {
+	indexYAMLNodeActive(target, texts, file, prefix, node, status, make(map[*yaml.Node]bool))
+}
+
+func indexYAMLNodeActive(target map[string]TeamSourceLocation, texts map[string]TeamSourceText, file, prefix string, node *yaml.Node, status string, active map[*yaml.Node]bool) {
+	if node == nil || active[node] {
+		return
+	}
+	active[node] = true
+	defer delete(active, node)
+	if node.Kind == yaml.AliasNode {
+		indexYAMLNodeActive(target, texts, file, prefix, node.Alias, status, active)
 		return
 	}
 	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
-		indexYAMLNode(target, texts, file, prefix, node.Content[0], status)
+		indexYAMLNodeActive(target, texts, file, prefix, node.Content[0], status, active)
 		return
 	}
 	if node.Kind == yaml.SequenceNode {
 		for index, child := range node.Content {
 			path := fmt.Sprintf("%s[%d]", prefix, index)
 			target[path] = TeamSourceLocation{File: file, Line: child.Line, Column: child.Column, Status: status}
-			indexYAMLNode(target, texts, file, path, child, status)
+			indexYAMLNodeActive(target, texts, file, path, child, status, active)
 		}
 		return
 	}
 	if node.Kind != yaml.MappingNode {
 		return
 	}
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		key, value := node.Content[i], node.Content[i+1]
-		path := key.Value
+	fields, err := manifestMapping(node, make(map[*yaml.Node]bool))
+	if err != nil {
+		return
+	} // The strict loader reports invalid YAML separately.
+	for name, pair := range fields {
+		key, value := pair[0], pair[1]
+		path := name
 		if prefix != "" {
 			path = prefix + "." + path
 		}
 		target[path] = TeamSourceLocation{File: file, Line: key.Line, Column: key.Column, Status: status}
 		if texts != nil && value.Kind == yaml.ScalarNode {
-			texts[path] = TeamSourceText{
-				Text: value.Value, File: file, Line: value.Line, Column: value.Column,
-				Status: status, Block: value.Style == yaml.LiteralStyle || value.Style == yaml.FoldedStyle,
-			}
+			texts[path] = TeamSourceText{Text: value.Value, File: file, Line: value.Line, Column: value.Column,
+				Status: status, Block: value.Style == yaml.LiteralStyle || value.Style == yaml.FoldedStyle}
 		}
-		indexYAMLNode(target, texts, file, path, value, status)
+		indexYAMLNodeActive(target, texts, file, path, value, status, active)
 	}
 }
 
