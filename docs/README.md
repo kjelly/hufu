@@ -78,6 +78,9 @@ to re-create an abstraction that already exists in the runtime.
 
 ### Guides and references
 
+- [Replayable Bayesian belief state](reference/belief-state.md) — team models,
+  receipt-scoped inference, journal recovery, and read-only inspection.
+
 - [Decision authoring](guides/decision-authoring.md)
 - [Agent-team DecisionPrimitives](reference/decision-primitives.md) — trusted
   catalogs, explicit grants, bounded tool calls, and durable replay.
@@ -156,7 +159,8 @@ to re-create an abstraction that already exists in the runtime.
   the [DecisionPrimitive control decisions implementation record](archive/implementation-plans/decision-primitive-control-decisions.md),
   the [learning runtime gap closure record](archive/implementation-plans/learning-runtime-gap-closure.md),
   the [semantic retrieval runtime record](archive/implementation-plans/semantic-retrieval-runtime.md),
-  and the [EventStore memory query implementation record](archive/implementation-plans/eventstore-memory-query-implementation-plan.md).
+  the [EventStore memory query implementation record](archive/implementation-plans/eventstore-memory-query-implementation-plan.md),
+  and the [replayable Bayesian belief implementation record](archive/implementation-plans/belief-evidence-implementation-plan.md).
 - `archive/migration-reports/` contains completed cutover evidence and reports.
 - `archive/roadmaps/` contains the retired large backlog roadmap.
 - `archive/analyses/` contains investigations and proposals retained for

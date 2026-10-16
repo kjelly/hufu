@@ -702,8 +702,16 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return fmt.Errorf("commit task transition: task tracker is unavailable")
 	}
+	var durable RunEvent
 	c.taskProjectionMu.Lock()
-	defer c.taskProjectionMu.Unlock()
+	defer func() {
+		// Append and live publication stay atomic with respect to other task
+		// projections. Advisory I/O runs only after releasing that boundary.
+		c.taskProjectionMu.Unlock()
+		if durable.ID != "" {
+			c.refreshBeliefs(&durable)
+		}
+	}()
 	current := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
 	if current == nil {
 		return fmt.Errorf("commit task transition: task %s not found", taskID)
@@ -794,9 +802,11 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 		return fmt.Errorf("commit task transition: unsupported task status %s", next)
 	}
 	if c.hasDurableEventJournal() && !c.isModelFanoutLeaf(taskID) {
-		if err := c.appendTaskTransition(ctx, &projected, metadata); err != nil {
+		event, err := c.appendTaskTransition(ctx, &projected, metadata)
+		if err != nil {
 			return err
 		}
+		durable = event
 	}
 	if err := c.taskTracker.TodoList().TryApplyProjectedItem(&projected); err != nil {
 		return fmt.Errorf("apply task transition after durable append: %w", err)
@@ -861,16 +871,16 @@ func (c *Coordinator) commitTaskPlanLifecycle(ctx context.Context, taskID string
 // lifecycle transition. The cancellation event is selected here, at the
 // canonical transition owner, so a FailureCancelled TaskError can never be
 // represented by a separate side event before the terminal projection commit.
-func (c *Coordinator) appendTaskTransition(ctx context.Context, item *TodoItem, metadata map[string]interface{}) error {
+func (c *Coordinator) appendTaskTransition(ctx context.Context, item *TodoItem, metadata map[string]interface{}) (RunEvent, error) {
 	if item == nil {
-		return fmt.Errorf("append task transition: task is nil")
+		return RunEvent{}, fmt.Errorf("append task transition: task is nil")
 	}
 	eventType, err := taskTransitionEventType(item)
 	if err != nil {
-		return err
+		return RunEvent{}, err
 	}
 	if eventType == "" {
-		return fmt.Errorf("append task transition: unsupported task status %s", item.Status)
+		return RunEvent{}, fmt.Errorf("append task transition: unsupported task status %s", item.Status)
 	}
 
 	payload := c.taskTransitionPayloadWithCoordinator(item)
@@ -879,7 +889,7 @@ func (c *Coordinator) appendTaskTransition(ctx context.Context, item *TodoItem, 
 	}
 	rawPayload, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("commit task transition payload: %w", err)
+		return RunEvent{}, fmt.Errorf("commit task transition payload: %w", err)
 	}
 	key := taskTransitionEventKey(item)
 	// A terminal/cancellation transition is itself recovery evidence. Do not
@@ -893,7 +903,7 @@ func (c *Coordinator) appendTaskTransition(ctx context.Context, item *TodoItem, 
 		Payload:        rawPayload,
 	})
 	if err != nil {
-		return fmt.Errorf("commit task transition append: %w", err)
+		return RunEvent{}, fmt.Errorf("commit task transition append: %w", err)
 	}
 	c.eventOnceMu.Lock()
 	if c.emittedTaskTransitions == nil {
@@ -903,7 +913,7 @@ func (c *Coordinator) appendTaskTransition(ctx context.Context, item *TodoItem, 
 	c.emittedTaskTransitions[fmt.Sprintf("%s:%s:%d", item.ID, item.Status, item.Retries)] = true
 	c.eventOnceMu.Unlock()
 	c.reportHistoricalResult(durable)
-	return nil
+	return durable, nil
 }
 
 // CommitTaskResetForRetry is the event-first transition boundary for resetting

@@ -68,6 +68,7 @@ the detailed audit, context, or decision maintenance commands.`,
 		newInspectContextCommand(options),
 		newInspectTraceCommand(options),
 		newInspectCostCommand(options),
+		newInspectBeliefsCommand(options),
 		newInspectControlDecisionsCommand(options),
 		newInspectSemanticRetrievalCommand(options),
 		newInspectReplayCommand(options),
@@ -449,6 +450,8 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 		return err
 	case inspectpkg.CostData:
 		return renderInspectCostText(writer, data)
+	case inspectpkg.BeliefsData:
+		return renderInspectBeliefsText(writer, envelope.Query, data)
 	case inspectpkg.ControlDecisionsData:
 		return renderInspectControlDecisionsText(writer, envelope.Query, data)
 	case inspectpkg.SemanticRetrievalData:

@@ -63,7 +63,8 @@ type ExecutionPolicySnapshot struct {
 	// SemanticRetrievalHash pins the effective semantic-retrieval settings
 	// when the mode is active. Off and shadow never change selection, so
 	// they are omitted and never affect resume.
-	SemanticRetrievalHash string `json:"semantic_retrieval_hash,omitempty"`
+	SemanticRetrievalHash string                   `json:"semantic_retrieval_hash,omitempty"`
+	Belief                *ExecutionBeliefSnapshot `json:"belief,omitempty"`
 	// MCPActionProviders pins every MCP action provider's server, tool, and
 	// bound descriptor. It is omitted when a team declares none.
 	MCPActionProviders []ExecutionMCPActionProviderSnapshot `json:"mcp_action_providers,omitempty"`
@@ -287,6 +288,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 	snapshot.DecisionPrimitiveHash = c.decisionPrimitives.Hash()
 	snapshot.ControlDecisionHash = c.controlDecisions.Hash()
 	snapshot.SemanticRetrievalHash = activeSemanticRetrievalHash(c.semanticSettings)
+	snapshot.Belief = executionPolicyBelief(c.session)
 	if version >= executionPolicyPreviousSnapshotVersion && len(c.session.RunInputDefinitions) > 0 {
 		schemaHash, err := RunInputSchemaHash(c.session.RunInputDefinitions)
 		if err != nil {
@@ -595,6 +597,9 @@ func cloneExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) *ExecutionP
 	clone.MCPActionProviders = slices.Clone(snapshot.MCPActionProviders)
 	clone.MCPWorkerPolicies = slices.Clone(snapshot.MCPWorkerPolicies)
 	clone.ContextArtifacts = cloneExecutionContextArtifactPolicy(snapshot.ContextArtifacts)
+	if snapshot.Belief != nil {
+		clone.Belief = new(*snapshot.Belief)
+	}
 	if snapshot.ContextQuery != nil {
 		clone.ContextQuery = new(*snapshot.ContextQuery)
 	}
@@ -614,6 +619,9 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	}
 	if !supportedExecutionPolicySnapshotVersion(snapshot.Version) {
 		return fmt.Errorf("execution policy snapshot version %d is unsupported", snapshot.Version)
+	}
+	if err := validateExecutionBeliefSnapshot(snapshot.Belief); err != nil {
+		return err
 	}
 	if snapshot.DecisionPrimitiveHash != "" && !decisionDigestPattern.MatchString(snapshot.DecisionPrimitiveHash) {
 		return fmt.Errorf("invalid decision primitive policy hash")
