@@ -13,8 +13,8 @@
 | 計畫搬移 | 完成 | docs/tmp/spec.md 搬入正式實作計畫目錄，更新路徑與逐階段提交規則 |
 | AT-00 baseline | 完成 | 本節全量與五團隊靜態檢查均通過 |
 | AT-02A structured results | 完成 | 9b4b1dc3；schemas／四角色接線、完整 gates 與 race 通過 |
-| AT-04 context artifacts | 完成 | 12 個精確大小邊界、長單行 fallback 與使用說明；focused/race/lint 通過 |
-| AT-05 retrospective | 待執行 | — |
+| AT-04 context artifacts | 完成 | f604aeab；12 個精確大小邊界、長單行 fallback 與使用說明；focused/race/lint 通過 |
+| AT-05 retrospective | 完成 | 指南、draft 模板、固定合成快照；CLI／fixture／race 通過 |
 | AT-01 semantic contracts | 待執行 | — |
 | AT-06 research/review contracts | 待執行 | — |
 | AT-09 integration | 待執行 | — |
@@ -99,3 +99,13 @@ Verifier 新增 `VERDICT: UNVERIFIED`，對應 blocked／partial；修正原指�
 回滾：撤回新增測試／說明即可；未啟用任何 persistent policy，不需資料遷移。
 
 AT-04 的新增案例與真實 team 載入邊界另以 `go test -race ./internal/team -run '^Test(ContextArtifactProductionSizeBoundaries|BashSmallLongLineHonorsLegacyFallback|HufuDevResultContractsPreserveWorkerBoundaries)' -count=1 -timeout=10m` 通過（exit 0，3.557s）；`golangci-lint run` 通過（exit 0，0 issues）。新增 fake-worker 組合在隔離 overlay 的預先驗證也通過，最後仍須於 AT-09 對實際工作樹驗證。
+
+## AT-05：離線回顧指南與固定示例
+
+新增 `docs/guides/agent-team-retrospective.md`，保留 explicit workspace/team/branch 的既有 CLI 語法、unavailable／lineage／不可信資料的判讀方式、draft 候選模板與已填寫示例；不新增 helper、查詢 API、核准／套用流程，也未讀取真實歷史。
+
+`TestRetrospectiveSyntheticSnapshotProvenance` 以固定事件 IDs／timestamp，在兩個新建 SQLite workspace 重建相同 report bytes，固定 source hash 為 `fee2f15e0b0c7ea9d31cfb20e7845fa129cfea8299b3fbb616bbcd87521b89a9`。Worker 自稱通過，但 run 保持 partial，receipt／revision／metrics／成本不可得；快照完整性不被當成測試證明。
+
+既有 CLI 正反例 `go test ./cmd/hufu -run '^Test(ResultsReport|ResultsPickReport|RequestedReports)' -count=1` 通過（exit 0，0.733s），涵蓋指定 snapshot、缺失／失配、匯出及 branch lineage。新增 fixture 同時列入最終全量測試與 focused race；指南相對連結通過 check-docs。回滾只移除新指南／fixture，不影響既有歷史讀取。
+
+AT-05 新增 fixture 已於實際工作樹的 focused race 執行成功；該批 team 案例 exit 0（74.099s），context 案例 exit 0（2.254s）。本輪 `go vet ./...`、`golangci-lint run`（0 issues）、build 及 check-docs 皆 exit 0；後續最終全量結果集中於 AT-09 記錄。
