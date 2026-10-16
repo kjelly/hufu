@@ -33,7 +33,7 @@ type workspaceConversionRecord struct {
 func newWorkspaceConversionRecord(workspace string, present []string) (*workspaceConversionRecord, error) {
 	record := &workspaceConversionRecord{Version: 1, SourceHashes: make(map[string]string)}
 	for _, name := range present {
-		digest, err := conversionFileHash(filepath.Join(workspace, name))
+		digest, _, err := hashFileContents(filepath.Join(workspace, name))
 		if err != nil {
 			return nil, err
 		}
@@ -183,7 +183,7 @@ func verifyConversionSources(workspace string, record *workspaceConversionRecord
 		if !source {
 			path = filepath.Join(workspace, backupName)
 		}
-		digest, err := conversionFileHash(path)
+		digest, _, err := hashFileContents(path)
 		if err != nil {
 			return err
 		}
@@ -192,19 +192,6 @@ func verifyConversionSources(workspace string, record *workspaceConversionRecord
 		}
 	}
 	return requireConversionPathAbsent(filepath.Join(workspace, LegacyRuntimeBackupDir, "CONVERTED"))
-}
-
-func conversionFileHash(path string) (string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = file.Close() }()
-	digest := sha256.New()
-	if _, err := io.Copy(digest, file); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 // conversionFileExists rejects symlinks and non-directory ancestors. Both
