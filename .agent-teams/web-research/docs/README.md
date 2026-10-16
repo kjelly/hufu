@@ -15,6 +15,19 @@ researcher、countercheck、verifier 各使用獨立 headless Chromium context�
 5. runtime 以本 task attempt 的 runner 紀錄覆寫 call ID 與證據狀態。
    verifier 必須重新開啟來源，不能借用其他 worker 的工具紀錄。
 
+每個 worker 的 browser context 有一個目前頁面。對每個來源依序完成
+`browser_navigate({"url":"…"})` → 等待導覽結果 → `browser_snapshot({})`
+→ 讀取內容，再處理下一個網址。不可先批次導覽多個網址，再嘗試按 URL
+取快照；snapshot 沒有 URL 選擇功能。平行研究由不同 worker 的獨立 context
+提供。同一來源的導覽與快照也不可放在同一批工具呼叫中。
+
+若模型只看到 `use_dynamic_tool`，先 inspect 自己的兩個 target，確認
+`input_schema` 與 `worker_input_schema`，再依各 worker prompt 的範例逐步呼叫。
+snapshot 的 `arguments` 必須是 `{}`；`url`、`filename` 等欄位均不接受。
+參數被拒絕時，若目前頁面仍是預期來源，只需修正 snapshot 參數；若其間
+已導覽其他來源，先重新導覽。快照的 `Page URL` 應與預期來源及實際觀察到的
+重新導向一致，不能把別頁引文掛在原本想查的網址下。
+
 `--snapshot-mode none` 避免導覽自動輸出 snapshot 檔案；明確的
 `browser_snapshot` 仍回傳 inline YAML。`--codegen none` 與 `--no-webmcp`
 減少非來源內容。metadata、搜尋摘要、snapshot 檔案連結與失敗回傳皆不能
@@ -94,3 +107,47 @@ browser 啟動、網站可達性或供應商 API。
   無法完成引用綁定，必須如實保留缺口。
 - `hufu result final` 只讀取已保存報告，不重新抓取或驗證來源。
   更新後以 `--new` 重新研究，才能產生使用修正流程的新報告。
+
+## 原子主張與提交前檢查
+
+researcher、countercheck、verifier 的 prompt 均包含正反例與
+`Before submitting findings` 檢查表。若一句話的不同部分可能得到不同判定，
+就拆成獨立 finding；每項仍保留辨識事件必要的主體、時間與範圍。
+事件日期、留言數及觀察時間、各方發言、傷勢與因果機制各依其證據判定。
+「某人作出指控」與「指控內容成立」分開，不因前者有引文就支持後者。
+拆分後超過 finding 上限時，優先回答核心問題，揭露未處理部分，不能再合併。
+
+提交前逐項確認：引文支持完整主張、數字有對應觀察時點、說法有歸屬、
+來源獨立性依實際出處、未取得的必要證據有明確缺口。研究員使用
+`assessment: unverified`；verifier 使用 `verdict: unverified`，其
+`evidence_basis` 可為 `insufficient_evidence`。後者不是 verdict 或 assessment。
+這是模型須執行的語意檢查；JSON Schema 驗證不會自行證明主張已原子化。
+
+## snapshot 錯誤追查紀錄（2026-10-08）
+
+追查 run `run-20261008T142356.097246533Z-813ef9a14546`：
+
+- workspace 的 `logs/llm/web-research/verifier/llm.log:11190` 顯示當時
+  system prompt 已要求 snapshot 使用 `{}`，因此不能歸因為未載入此規則。
+- 同檔第 11564–11567 行，verifier 在一輪回覆中發出四個 navigate；
+  第 11656–11659 行又在同一輪回覆中發出四個帶 `url` 的 snapshot。
+  這是批次產生的四個錯誤呼叫，並非收到錯誤後連續重試四輪。
+- `logs/audit/audit-2026-10-08.jsonl:1752` 起可核對四個不同 call ID。
+  每次失敗各有 logical tool 與 gateway 的錯誤紀錄，不能重複計為八次。
+  14:27:05–14:27:06 UTC 的拒絕碼為 `dynamic_schema_invalid`，
+  訊息為 `arguments.url is not allowed`。
+- LLM log 第 11677 行隨後 inspect snapshot，第 11683 行的回傳包含
+  空物件 `worker_input_schema`；audit 第 1770–1773 行記錄以 `{}`
+  呼叫後成功。參數錯誤回饋有送達，且模型隨後修正。
+
+直接失敗原因是把讀取「目前頁面」誤用成按 URL 抓取的無狀態工具。
+gateway 的通用 `arguments` 介面允許任意欄位，各 target 的限制須 inspect；
+舊 prompt 雖要求 `{}`，仍缺少逐頁執行、gateway 範例與明確修復步驟。
+本次在三個 worker 補上這些規則，並保留既有 schema 拒絕機制。
+參數錯誤在 MCP request 前即被拒絕，不是網站阻擋或來源不可用。
+
+可由通用實作核對此路徑：
+[gateway 的工具介面、inspect 與呼叫驗證](../../../internal/team/dynamic_tool_gateway.go)、
+[參數驗證錯誤](../../../internal/team/dynamic_tool_schema.go)、
+[worker policy 的參數驗證](../../../internal/mcp/worker_policy.go)。
+此修正未改動 core；提示改進的模型遵循率仍需新執行驗證。
