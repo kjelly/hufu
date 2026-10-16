@@ -15,8 +15,8 @@
 | AT-02A structured results | 完成 | 9b4b1dc3；schemas／四角色接線、完整 gates 與 race 通過 |
 | AT-04 context artifacts | 完成 | f604aeab；12 個精確大小邊界、長單行 fallback 與使用說明；focused/race/lint 通過 |
 | AT-05 retrospective | 完成 | c5ba5d86；指南、draft 模板、固定合成快照；CLI／fixture／race 通過 |
-| AT-01 semantic contracts | 完成 | 既有契約對照與 10 個 typed fallback 組合；focused／race／lint 通過 |
-| AT-06 research/review contracts | 待執行 | — |
+| AT-01 semantic contracts | 完成 | 61b99600；既有契約對照與 10 個 typed fallback 組合；focused／race／lint 通過 |
+| AT-06 research/review contracts | 完成 | 既有負面案例已覆蓋；提交測試對照與執行證據 |
 | AT-09 integration | 待執行 | — |
 
 ## AT-00：Baseline 與覆蓋盤點
@@ -125,3 +125,17 @@ AT-05 新增 fixture 已於實際工作樹的 focused race 執行成功；該批
 Focused 執行：`go test ./internal/semantic -count=1` exit 0（0.006s）；team 的 semantic／routing／wiring／recall／snapshot／replay focused suite exit 0（9.645s）；`go test ./internal/context -run '^Test(SemanticIndex|HybridRetrieve|SemanticFallbackReason)' -count=1` exit 0（1.472s）。新增 10 案例預驗證 exit 0（0.084s），最後再納入實際工作樹全量／race／lint。無真實召回率或 latency 結論；回滾只移除新增測試。
 
 實際工作樹新增 semantic 案例已於 focused race 通過（context exit 0，2.254s）；共用最終 vet／lint／build 均 exit 0，0 lint issues。
+
+## AT-06：研究／審查既有契約證據
+
+本階段沒有發現需要新增的契約測試，不為產生 diff 重複現有案例；只提交覆蓋與執行結果。本輪未修改 web-research、hufu-coding、hufu-code-review 或其 action providers。
+
+| 要求 | 既有測試證據 |
+|---|---|
+| gaps 需 team 明示允許，缺階段／partial／blocked／failed 不補成成功 | TestAcceptanceRequiredWorkersAcceptGapsOnlyWhenTeamOptsIn、TestAcceptanceRequiredWorkersRejectsEmptyAndMissingStages、TestFinishRejectsZeroTaskRunWithRequiredWorkers |
+| 真實內容、錯引文、工具失敗、空內容與 search snippet 維持來源降級 | TestResultContractToolEvidence 的 success／wrong_quote／failed／empty／search 等案例；TestResultContractTextEvidence 的 truncation／metadata_only／wrong_tool／重複 call/result；無 browser 啟動 |
+| 雙方 files_read、ownership、hash、缺 evidence_from 拒絕 | TestResultReferenceOwnershipAndReads、TestReplayedResultReferenceChecksWithoutRequiredDelivery、TestResultEvidenceInputBinding、TestResultEvidenceInputReplayRejectsSourceDrift、TestRequiredEvidenceRejectsMissingAndModifiedContext、TestRequiredEvidenceManifestIntegrityAndScope、TestEvidenceDispatchRejectsCorruptOrMissingPayload |
+| 不用截斷 preview 代替來源，重播保留證據 | TestRequiredEvidenceNeverUsesTruncatedCoordinatorPreview、TestRequiredEvidenceDeliverySurvivesReplayAndBlocksLegacyFinish |
+| immutable report 保留原 finding／gap，缺 attestation 不造成功 | reviewgate 的 TestFinalReportPreservesSourceFindingAndOriginalGap、TestCriticAndReportSchemasRequireCompleteOrderedSourceCoverage、TestReportRequiresCompleteRuntimeAttestations、TestHumanReportEmptySourcesRemainHonest、TestTeamResultSchemasRejectFalseCompletion |
+
+Team 的 required-workers／tool evidence／references／evidence input/delivery／report focused suite exit 0（1.323s），最終全量檢查也覆蓋這些案例。Reviewgate 的上述報告／缺口／coverage focused suite exit 0（1.510s）；AT-00 已完整執行 reviewgate／reviewprep 兩 hidden packages，exit 0。沒有新的 hidden Go 變更，故未新增其 lint／vet gate。無 source 文字 heuristic、來源品質實機比較或人工 promotion 工作。
