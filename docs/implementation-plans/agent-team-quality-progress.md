@@ -16,8 +16,8 @@
 | AT-04 context artifacts | 完成 | f604aeab；12 個精確大小邊界、長單行 fallback 與使用說明；focused/race/lint 通過 |
 | AT-05 retrospective | 完成 | c5ba5d86；指南、draft 模板、固定合成快照；CLI／fixture／race 通過 |
 | AT-01 semantic contracts | 完成 | 61b99600；既有契約對照與 10 個 typed fallback 組合；focused／race／lint 通過 |
-| AT-06 research/review contracts | 完成 | 既有負面案例已覆蓋；提交測試對照與執行證據 |
-| AT-09 integration | 待執行 | — |
+| AT-06 research/review contracts | 完成 | 115345df；既有負面案例已覆蓋；提交測試對照與執行證據 |
+| AT-09 integration | 完成 | 實際工作樹整合、完整測試與最終 gates 通過；見下節 |
 
 ## AT-00：Baseline 與覆蓋盤點
 
@@ -139,3 +139,48 @@ Focused 執行：`go test ./internal/semantic -count=1` exit 0（0.006s）；tea
 | immutable report 保留原 finding／gap，缺 attestation 不造成功 | reviewgate 的 TestFinalReportPreservesSourceFindingAndOriginalGap、TestCriticAndReportSchemasRequireCompleteOrderedSourceCoverage、TestReportRequiresCompleteRuntimeAttestations、TestHumanReportEmptySourcesRemainHonest、TestTeamResultSchemasRejectFalseCompletion |
 
 Team 的 required-workers／tool evidence／references／evidence input/delivery／report focused suite exit 0（1.323s），最終全量檢查也覆蓋這些案例。Reviewgate 的上述報告／缺口／coverage focused suite exit 0（1.510s）；AT-00 已完整執行 reviewgate／reviewprep 兩 hidden packages，exit 0。沒有新的 hidden Go 變更，故未新增其 lint／vet gate。無 source 文字 heuristic、來源品質實機比較或人工 promotion 工作。
+
+
+## AT-09：整合與最終交付
+
+新增 `hufu_dev_workflow_integration_test.go`，使用真實 hufu-dev 臨時 copy／schemas、production coordinator／policy-gated bash／submit_result、臨時 SQLite stores 與 loopback fake provider。原本 blocking test/vet/lint acceptance 另由 AT-02A pin；此整合 fixture 使用明確宣告的小型客觀檢查，不假裝執行了專案全量 acceptance。
+
+- `TestHufuDevWorkflowStructuredHandoffAndArtifacts`：三角色依賴交接、原始需求與接受的 payload hash 傳遞；成功／failed／partial／blocked 的 canonical status 與 acceptance；相同成功案例 off/on 僅切換臨時 artifacts 設定，透過 production view 讀回尾端；超過 cap 不 offload，原命令成功保留。所有角色各執行一次，event replay 保留 payload hash 與 task status。
+- `TestHufuDevWorkflowRepairDoesNotReplayImplementation`：實際寫入後故意漏 required gaps，經現有 repeated-submit detector 進入 result-only repair；修正 payload 成功，repair receipt 保留 schema／上游 hash，worker 和 repair 各一次，marker 也只寫一次。
+- `TestHufuDevWorkflowSchemaDriftResumeAndRollback`：checkpoint 本體保存原 contract／payload hash／done status；改動臨時 schema 後 admission 拒絕 snapshot drift；還原定義後原 session 不重跑已完成工作、event replay 不變；全新的臨時 session 也能按原 contract 執行。
+
+三個主測試含六種 handoff/artifact 情境與 repair／rollback，皆不呼叫模型 generation；允許的 metadata 請求僅到本地 fake endpoint。未讀取真實 run、記憶或 registry，未啟用 bundled context-artifacts／修改 semantic mode。
+
+### 最終驗證
+
+最終程式驗證使用 f604aeab 為工作樹基底，加入 AT-05／AT-01／AT-09 的上述檔案；其後只分階段提交及修訂進度／計畫。所有檢查使用同一組程式與 fixtures，沒有以後續修改使已驗證內容失效。Go 1.27.2，GOMAXPROCS=4；短 TMPDIR/GOTMPDIR 與 /tmp lint cache 同前。
+
+| 指令／範圍 | Exit／結果 |
+|---|---|
+| `go test ./... -count=1` | 0；全部通過，cmd/hufu 231.210s、internal/context 54.616s、internal/team 305.846s |
+| `go vet ./...` | 0，無診斷 |
+| `golangci-lint run` | 0，0 issues |
+| `go build -o /tmp/hufu-quality-final-hufu ./cmd/hufu` | 0 |
+| `go test -race ./internal/team ./internal/context -run '^Test(ContextArtifactProductionSizeBoundaries\|BashSmallLongLineHonorsLegacyFallback\|RetrospectiveSyntheticSnapshotProvenance\|HufuDevWorkflow\|HybridRetrieveTypedFailuresPreserveLexicalResults)' -count=1 -timeout=10m` | 0；team 74.099s、context 2.254s，涵蓋所有後續新增案例 |
+| AT-02A 完整 `go test -race ./internal/team -count=1 -timeout=45m` | 0；1620.374s；此為 AT-02A 當時完整 package，最終新增案例另以上列 focused race 驗證，沒有宣稱再次執行完整 package |
+| 新 binary 的五團隊 validate／lint --fail-on error／explain | 15 項全部 0；hufu-coding、hufu-code-review 各一筆既有 legacy provider warning，沒有新增 finding |
+| `bin/check-docs` | 0；74 active files、154 total files、428 relative links、37 Go anchors |
+| `git diff --check` | 0 |
+| hidden reviewgate／reviewprep | AT-00 完整兩 package exit 0；AT-06 focused reviewgate exit 0，沒有 hidden Go 變更 |
+
+未觸發遠端 CI；Darwin／CGO-free jobs 沿用既有 CI，沒有本輪執行結果，不列為已通過。本地命令輸出保存於 /tmp/hufu-quality-final-*；版本化表格保存命令、範圍及 exit code，臨時 logs 不是文件權威。
+
+### 交付差異與限制
+
+| 表面 | Before → After／工程效益 |
+|---|---|
+| hufu-dev 四 worker | 無 result-contract → 三份 schema、四角色 required structured payload；降低交接欄位遺漏，明確保留 gaps 與負面狀態 |
+| tools／side-effect／recovery／delegation／acceptance | 與 AT-00 相同；single writer 與獨立驗證仍成立 |
+| context-artifacts | 預設仍關閉；新增精確邊界與限制說明，避免過度承諾完整保存 |
+| semantic | bundled modes 不變；新增 typed fallback 組合，保護 lexical 結果及 content-free trace |
+| retrospective | 無此固定示例 → 可重建的指南、draft 模板與合成來源證據；不需真實 workspace |
+| core runtime／其他團隊 | 無 production Go 變更、無 team-name policy 分支；既有研究／審查契約以測試證據交付 |
+
+相對初始程式基底 `2c188afe` 的檔案差異限於 hufu-dev Markdown／三份 schemas、新增五份 Go 測試、指南與計畫／進度文件。AT-09 最後提交整合測試與完成狀態；各階段提交與計畫／baseline 可由 git log 追溯。所有被版本化的文件均在正式 docs 目錄，docs/tmp/ 為空，沒有 force-add ignored files。
+
+回滾 fixture 只在新臨時 team／session 還原舊定義；測試證明原 frozen history 不會套用新 schema 或重跑完成任務。若日後撤回本輪功能，還原 worker frontmatter／schemas 並使用新的 session；不要修改使用者既有歷史。沒有新增 evidence attestation、revision-bound PASS、真實中文召回率、成本／延遲或上線成效承諾。

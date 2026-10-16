@@ -5,7 +5,7 @@
 > Verified-Commit: `2c188afe7c7078db43b84514cbaf305e4ffa9cf9`
 > Supersedes: —
 > Superseded-By: —
-> **狀態**：`READY_FOR_IMPLEMENTATION`；表示範圍與驗收已定義，不表示功能已完成或通過實機驗證。
+> **狀態**：`IMPLEMENTED_OFFLINE`；本輪保留項目已完成並通過離線驗收；不表示已通過真實模型評估或上線驗證。
 > **更新日期**：2026-10-16
 > **核對基準**：`2c188afe7c7078db43b84514cbaf305e4ffa9cf9`
 > **文件位置**：`docs/implementation-plans/agent-team-quality.md`；依使用者新指示自 docs/tmp/spec.md 搬入正式計畫目錄並提交。
@@ -77,11 +77,11 @@ AT-01／AT-06 若測試已完整覆蓋，交付測試名稱、執行結果與對
 
 ### 3.1 工作
 
-- [ ] 記錄 HEAD、既有 dirty paths、Go 與 golangci-lint 版本。保留使用者的無關修改。
-- [ ] 從 checkout 建置臨時 CLI，對五個 bundled teams 執行 validate、lint、explain。
-- [ ] 讀取 hufu-dev 的 team.yaml、四個 worker 與 maintainer 指示，記錄 tools、side-effect、recovery、delegation、acceptance、result-contract 的 before 值。
-- [ ] 對 AT-01／02A／04／05／06 的驗收案例建立「案例 → 既有測試 → 缺少覆蓋」對照，優先補實際缺口。
-- [ ] 先執行所列既有測試，將既存失敗與本次變更造成的失敗分開記錄。
+- [x] 記錄 HEAD、既有 dirty paths、Go 與 golangci-lint 版本。保留使用者的無關修改。
+- [x] 從 checkout 建置臨時 CLI，對五個 bundled teams 執行 validate、lint、explain。
+- [x] 讀取 hufu-dev 的 team.yaml、四個 worker 與 maintainer 指示，記錄 tools、side-effect、recovery、delegation、acceptance、result-contract 的 before 值。
+- [x] 對 AT-01／02A／04／05／06 的驗收案例建立「案例 → 既有測試 → 缺少覆蓋」對照，優先補實際缺口。
+- [x] 先執行所列既有測試，將既存失敗與本次變更造成的失敗分開記錄。
 
 ```bash
 git rev-parse HEAD
@@ -212,13 +212,13 @@ Schema 無法自行把 check.outcome 與 canonical status 做跨欄位判斷；�
 
 ### 5.3 測試與驗收
 
-- [ ] 大小比較使用完整 capture，覆蓋 PreviewBytes／MinBytes／MaxArtifactBytes 的等於與相鄰邊界，避免 exit-code footer 使案例落錯區間。
-- [ ] 覆蓋小於 preview 的長單行截斷，以及大於 preview、低於 min 的 legacy truncation offload。
-- [ ] 合法 offload 內容由 production view 分段重建，與完整遮罩 capture 的 bytes／digest 一致；包含頭、中、尾標記。
-- [ ] non-zero exit／IsError／exit footer 不因 offload 改變；工具僅執行一次。
-- [ ] 無 view、closed tool sequence、asserted result-contains 與不支援的 source 不啟用 offload，不擴權。
-- [ ] 配額、保存失敗、append 失敗、越權讀取、缺失與損壞各保留既有拒絕／fallback 語意。
-- [ ] context-artifacts 設定漂移會被 snapshot 拒絕；不假設程序重啟必能重建 attempt-local refs，未有既有恢復證明時明示 unavailable。
+- [x] 大小比較使用完整 capture，覆蓋 PreviewBytes／MinBytes／MaxArtifactBytes 的等於與相鄰邊界，避免 exit-code footer 使案例落錯區間。
+- [x] 覆蓋小於 preview 的長單行截斷，以及大於 preview、低於 min 的 legacy truncation offload。
+- [x] 合法 offload 內容由 production view 分段重建，與完整遮罩 capture 的 bytes／digest 一致；包含頭、中、尾標記。
+- [x] non-zero exit／IsError／exit footer 不因 offload 改變；工具僅執行一次。
+- [x] 無 view、closed tool sequence、asserted result-contains 與不支援的 source 不啟用 offload，不擴權。
+- [x] 配額、保存失敗、append 失敗、越權讀取、缺失與損壞各保留既有拒絕／fallback 語意。
+- [x] context-artifacts 設定漂移會被 snapshot 拒絕；不假設程序重啟必能重建 attempt-local refs，未有既有恢復證明時明示 unavailable。
 
 `TestBashOutputOffloadEndToEnd`、`TestContextArtifactFailuresFallBackWithoutReference` 等已覆蓋的案例直接沿用。實際 Codex／Playwright 輸出不在本輪測試或相容性承諾內。
 
@@ -256,12 +256,12 @@ Schema 無法自行把 check.outcome 與 canonical status 做跨欄位判斷；�
 
 以 `semantic_route_test.go`、`semantic_wiring_test.go`、`semantic_runtime_test.go` 及 `internal/semantic/config_test.go` 的 fake encoder 為起點：
 
-- [ ] 相同合成 memory／scope／query：off 與 shadow selected IDs 一致；shadow 可以留下 trace，但不更改注入選取。
-- [ ] auto 根據實際 retrieval query 的既有非 ASCII token 比例規則與 0.15 門檻路由；不按使用者語言標籤猜測，也不更改門檻。
-- [ ] 純英文 lexical route 與 off 的 selected IDs 一致；private memory 只在授權 scope 可見。
-- [ ] fake encoder 的 warming／busy／timeout／profile mismatch／projection incomplete 保留既有 lexical fallback 與 content-free reason。
-- [ ] 不可用模型不觸發下載；no-net／遠端端點的既有拒絕契約維持。
-- [ ] snapshot 語意依現有實作：off／shadow 不加入 selecting semantic hash；active／auto 才會固定該選取政策。不得要求所有模式切換一律產生 policy drift。
+- [x] 相同合成 memory／scope／query：off 與 shadow selected IDs 一致；shadow 可以留下 trace，但不更改注入選取。
+- [x] auto 根據實際 retrieval query 的既有非 ASCII token 比例規則與 0.15 門檻路由；不按使用者語言標籤猜測，也不更改門檻。
+- [x] 純英文 lexical route 與 off 的 selected IDs 一致；private memory 只在授權 scope 可見。
+- [x] fake encoder 的 warming／busy／timeout／profile mismatch／projection incomplete 保留既有 lexical fallback 與 content-free reason。
+- [x] 不可用模型不觸發下載；no-net／遠端端點的既有拒絕契約維持。
+- [x] snapshot 語意依現有實作：off／shadow 不加入 selecting semantic hash；active／auto 才會固定該選取政策。不得要求所有模式切換一律產生 policy drift。
 
 已由 `TestExecutionPolicySnapshotPinsOnlySelectingSemanticRetrieval` 等覆蓋的項目只記錄結果。缺少案例才補測；不為離線測試新增 encoder adapter、評分器或新 benchmark 系統。
 
@@ -273,12 +273,12 @@ Schema 無法自行把 check.outcome 與 canonical status 做跨欄位判斷；�
 
 ### 8.2 覆蓋要求
 
-- [ ] completed_with_gaps 只有在已完成工作且 team 明示允許時滿足 required worker；partial／blocked／failed 不被當成功。
-- [ ] 必要階段未執行時，其他成功結果不能補造完成狀態。
-- [ ] 合成 tool transcript：成功取得內容、引文 mismatch、工具 error、無可用內容維持既有不同來源分類。
-- [ ] 無 browser evidence 的 search snippet 不升格為已驗證引文；使用 fake tool transcript，不啟動 Playwright。
-- [ ] 既有 evidence payload/hash／雙方 files_read／缺少 evidence_from 的拒絕案例保持成立；不為其他 team 加接線。
-- [ ] immutable report 缺少所需證據時保留 coverage gap，不以 reviewer 數量或自然語言摘要推論無缺陷。
+- [x] completed_with_gaps 只有在已完成工作且 team 明示允許時滿足 required worker；partial／blocked／failed 不被當成功。
+- [x] 必要階段未執行時，其他成功結果不能補造完成狀態。
+- [x] 合成 tool transcript：成功取得內容、引文 mismatch、工具 error、無可用內容維持既有不同來源分類。
+- [x] 無 browser evidence 的 search snippet 不升格為已驗證引文；使用 fake tool transcript，不啟動 Playwright。
+- [x] 既有 evidence payload/hash／雙方 files_read／缺少 evidence_from 的拒絕案例保持成立；不為其他 team 加接線。
+- [x] immutable report 缺少所需證據時保留 coverage gap，不以 reviewer 數量或自然語言摘要推論無缺陷。
 
 優先引用 `acceptance_required_workers_test.go`、`result_contract_evidence_test.go`、`result_contract_references_test.go`、`task_evidence_delivery_test.go` 與 reviewgate／reviewprep 既有測試。去重 URL 的語意規則、真實 claim accuracy、歷史比較成效不屬於本輪新功能；不新增對來源文字的 heuristic parser。
 
@@ -318,16 +318,18 @@ git diff --check
 
 ### 9.3 完成定義
 
-- [ ] AT-00、AT-02A、AT-04、AT-05、AT-01、AT-06 均有成果或既有覆蓋證據，無未定義的必要設計／外部輸入。
-- [ ] hufu-dev 四個 worker 綁定正確 schema，負面／不完整結果能合法提交，blocking acceptance 不變。
-- [ ] AT-09 的 fake-model 整合案例通過，schema/hash/status 的保存及重播一致。
-- [ ] 文件準確區分 typed payload、worker 自述與 canonical receipt；不聲稱已新增 evidence attestation 或 revision-bound PASS。
-- [ ] Context-artifacts 的小輸出截斷、大小上限、配額與發布失敗限制均有案例或既有測試證據。
-- [ ] Semantic retrieval 僅離線驗證，bundled mode 與真實服務不變；真實歷史未被讀取。
-- [ ] test/vet/lint/build 與適用文件／race／隱藏 package 檢查通過，既存問題與未執行檢查如實列出。
-- [ ] 交付差異檔案、before/after、測試指令與 exit code、base SHA／工作區 diff、fixture 回滾方式與剩餘限制。
+- [x] AT-00、AT-02A、AT-04、AT-05、AT-01、AT-06 均有成果或既有覆蓋證據，無未定義的必要設計／外部輸入。
+- [x] hufu-dev 四個 worker 綁定正確 schema，負面／不完整結果能合法提交，blocking acceptance 不變。
+- [x] AT-09 的 fake-model 整合案例通過，schema/hash/status 的保存及重播一致。
+- [x] 文件準確區分 typed payload、worker 自述與 canonical receipt；不聲稱已新增 evidence attestation 或 revision-bound PASS。
+- [x] Context-artifacts 的小輸出截斷、大小上限、配額與發布失敗限制均有案例或既有測試證據。
+- [x] Semantic retrieval 僅離線驗證，bundled mode 與真實服務不變；真實歷史未被讀取。
+- [x] test/vet/lint/build 與適用文件／race／隱藏 package 檢查通過，既存問題與未執行檢查如實列出。
+- [x] 交付差異檔案、before/after、測試指令與 exit code、base SHA／工作區 diff、fixture 回滾方式與剩餘限制。
 
-## 10. Coding Agent 開始提示
+## 10. Coding Agent 實作入口（已完成）
+
+以下保留本輪執行範圍供重現；本輪不需再次實作整份清單。後續維護先核對實作進度與目前 HEAD，只處理新出現的缺口。
 
 > 依目前 `docs/implementation-plans/agent-team-quality.md`，先完成 AT-00，再按第 2 節順序處理保留項目。這次只做本地 repository 工程工作；用 fake models、固定 typed fixtures 與臨時 workspace，不呼叫真實 LLM／embedding／browser、不讀真實歷史、不遷移資料、不部署。保留 single-writer、原權限、blocking acceptance 與 canonical status。只新增未被現有測試覆蓋的案例，不修改泛用 runtime 行為、不加入 evidence／revision 擴充。每項完成後執行相應 focused checks，最後按 AT-09 驗證並交付工作區差異與結果。保持本計畫位於正式目錄；先提交計畫與 baseline，之後每完成一階段並驗證即 commit 一次，不 push/merge/部署。
 
