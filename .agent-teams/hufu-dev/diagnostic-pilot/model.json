@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "reducer_version": "finite_bayes_v1",
+  "id": "diagnostic_fixture_v1",
+  "version": "1",
+  "synthetic": true,
+  "prior_source": "fixture_design_v1: synthetic prior conditioned on an eligible failed test.",
+  "independence_basis": "Independent source/environment seeds in [0,99]; not an empirical independence claim.",
+  "applicability": "Only the registered single_fault_fixture_v1 synthetic universe; no real diagnosis or calibration claim.",
+  "hypotheses": [
+    {
+      "id": "source_fault",
+      "meaning": "Synthetic source latent state.",
+      "prior_units": 500000000
+    },
+    {
+      "id": "environment_fault",
+      "meaning": "Synthetic environment latent state.",
+      "prior_units": 300000000
+    },
+    {
+      "id": "other_fault",
+      "meaning": "Third named synthetic latent state; not arbitrary unknown causes.",
+      "prior_units": 200000000
+    }
+  ],
+  "experiments": [
+    {
+      "id": "check_source",
+      "correlation_group": "check_source",
+      "source": "verification",
+      "outcomes": [
+        {
+          "id": "pass",
+          "likelihood_units": [
+            100000000,
+            900000000,
+            800000000
+          ]
+        },
+        {
+          "id": "fail",
+          "likelihood_units": [
+            900000000,
+            100000000,
+            200000000
+          ]
+        }
+      ]
+    },
+    {
+      "id": "check_environment",
+      "correlation_group": "check_environment",
+      "source": "verification",
+      "outcomes": [
+        {
+          "id": "pass",
+          "likelihood_units": [
+            900000000,
+            100000000,
+            800000000
+          ]
+        },
+        {
+          "id": "fail",
+          "likelihood_units": [
+            100000000,
+            900000000,
+            200000000
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1421,6 +1421,11 @@ func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordi
 			return nil, err
 		}
 	}
+	if params.Session.DiagnosticLoop == nil {
+		if err := compileTeamDiagnosticLoop(params.Session); err != nil {
+			return nil, err
+		}
+	}
 	decisionSidecars := &decisionSidecarResolver{defaultModel: params.RoleModels.Sidecar}
 	primitiveService, err := catalog.New(params.Session.Config.DecisionPrimitives, catalog.WithSidecarGenerator(decisionSidecars.generator))
 	if err != nil {

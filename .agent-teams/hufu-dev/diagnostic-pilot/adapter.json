@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "version": "diagnostic_measurement_v1",
+  "source": "verification",
+  "experiments": [
+    "check_source",
+    "check_environment"
+  ],
+  "outcomes": [
+    "pass",
+    "fail"
+  ]
+}

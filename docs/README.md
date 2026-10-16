@@ -43,6 +43,9 @@ to re-create an abstraction that already exists in the runtime.
 - [Decision authoring UX](architecture/decision-authoring-ux.md) — canonical
   profile/request/routing schema, compatibility normalization, inspection,
   and dry-run migration contract.
+- [Bounded diagnostic belief loop](architecture/bounded-diagnostic-belief-loop.md)
+  — staged proposal; offline fixtures and preparation are available, runtime
+  episodes and dispatch remain deferred.
 - [Run outcome](architecture/run-outcome.md) — the policy implemented by
   `EvaluateRunOutcome` and `CompletionGate`.
 - [Unified observability inspector](architecture/unified-observability-inspector.md)
@@ -80,6 +83,9 @@ to re-create an abstraction that already exists in the runtime.
 
 - [Replayable Bayesian belief state](reference/belief-state.md) — team models,
   receipt-scoped inference, journal recovery, and read-only inspection.
+- [Diagnostic preparation and offline shadow](reference/diagnostic-preparation.md)
+  — off-only runtime contracts, exact ranking, paired baseline, fixture episode
+  journal/replay and read-only inspection.
 
 - [Decision authoring](guides/decision-authoring.md)
 - [Agent-team DecisionPrimitives](reference/decision-primitives.md) — trusted

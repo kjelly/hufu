@@ -436,6 +436,7 @@ type TeamConfig struct {
 	// block is merged under it; the team's fields win.
 	SemanticRetrieval semantic.Config
 	Belief            *BeliefConfig
+	DiagnosticLoop    *DiagnosticLoopConfig
 	// RequestContract is the single normalized team-level request contract
 	// owner. It is authoring-independent so decision profile selection cannot
 	// accidentally carry a second request contract authority.
