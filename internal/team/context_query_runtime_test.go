@@ -61,6 +61,79 @@ func TestContextQueryRuntimeStagesSharedAndPrivateWithoutAnotherPrimary(t *testi
 	}
 }
 
+func TestContextQueryRuntimePersistentOwnerDeliveryIsRequired(t *testing.T) {
+	// Session records have intentional tier precedence. Seed only shared and
+	// persistent records to test owner delivery at the unchanged four-item cap.
+	c, input, ctx := queryRuntimeFixtureForTiers(t, "shared", "persistent")
+	frozen := frozenQueryRuntimeRepository(t, c.contextRepo, input, "shared-target", "persistent-target")
+	// Even an overbroad eligibility projection must not authorize a different
+	// worker's private record. Keep the original primary snapshots and revision.
+	foreign := frozen.lexical[input.WorkerMemory.querySnapshot.sources[1].Request.Scope]
+	foreign.ID, foreign.Scope.AgentID = "foreign-private", "another-worker"
+	frozen.private = append(frozen.private, foreign)
+	activation := frozen.activations["persistent-target"]
+	activation.ContextItemID = foreign.ID
+	frozen.activations[foreign.ID] = activation
+	c.contextRepo = frozen
+	sources := c.queryEvaluationSources(input, input.CanonicalMemory.querySnapshot, input.WorkerMemory.querySnapshot)
+	if err := c.preparePrivateQueryEligibility(ctx, input.Request, sources); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range sources {
+		if _, ok := source.Eligible[foreign.ID]; ok {
+			t.Fatal("private eligibility admitted a foreign worker")
+		}
+	}
+	if _, ok := sources[2].Eligible["persistent-target"]; !ok {
+		t.Fatal("owner's persistent record was not eligible")
+	}
+	compiled, err := (&defaultContextCompiler{c: c}).CompileWorkerContext(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := BuildContextInjectionManifest(input.Request, compiled, nil, "worker", contextstore.EvaluationTime(ctx), c.session.Config.MemoryLearning)
+	if err != nil || manifest.Query == nil || querySourceAttribution(*manifest.Query, QueryPrivatePersistent).Mode != QueryModeActive {
+		t.Fatalf("persistent owner selection was not active: %v", err)
+	}
+	if !slices.ContainsFunc(manifest.Items, func(item ContextManifestItem) bool {
+		return item.ID == "persistent-target" && item.Included && item.Source == "worker_persistent"
+	}) {
+		t.Fatalf("owner's persistent record was not delivered in the manifest: %+v", manifest.Items)
+	}
+	if slices.ContainsFunc(manifest.Items, func(item ContextManifestItem) bool { return item.ID == foreign.ID && item.Included }) {
+		t.Fatal("foreign private record reached the compiled manifest")
+	}
+}
+
+func TestContextQueryRuntimeEligibilityDeadlineRollsBackAllSources(t *testing.T) {
+	c, input, ctx := queryRuntimeFixture(t)
+	repo := &queryEligibilityDeadline{queryRuntimeFrozenRepository: frozenQueryRuntimeRepository(t, c.contextRepo, input)}
+	c.contextRepo = repo
+	selected, attribution, err := c.evaluateWorkerContextQueries(ctx, input)
+	if err != nil || attribution == nil || !repo.expired || attribution.Mode != QueryModeLegacy || !reflect.DeepEqual(input, selected) {
+		t.Fatalf("eligibility deadline did not preserve exact primary bundles: err=%v attribution=%+v", err, attribution)
+	}
+	if len(attribution.Sources) != 3 {
+		t.Fatal("deadline omitted a participating source")
+	}
+	for _, source := range attribution.Sources {
+		if source.Mode != QueryModeLegacy || source.Fallback != QueryFallbackTimeout || source.SupplementalHash != "" {
+			t.Fatalf("eligibility timeout published partial or false attribution: %+v", source)
+		}
+	}
+}
+
+type queryEligibilityDeadline struct {
+	*queryRuntimeFrozenRepository
+	expired bool
+}
+
+func (r *queryEligibilityDeadline) IterateAgentActivations(ctx context.Context, _ contextstore.RepositoryQuery, _ func(contextstore.ContextItem, contextstore.ActivationRecord) error) error {
+	<-ctx.Done()
+	r.expired = true
+	return ctx.Err()
+}
+
 // SQLite's race/checkptr overhead is not a product latency SLA. A real store
 // may legitimately exhaust the fixed child deadline. This test still requires
 // either a complete active transaction or exact, attributed legacy rollback;
@@ -171,6 +244,11 @@ func TestContextQueryRuntimeCandidateLimitDoesNotReuseLegacyLineageOverfetch(t *
 
 func queryRuntimeFixture(t *testing.T) (*Coordinator, WorkerContextInput, context.Context) {
 	t.Helper()
+	return queryRuntimeFixtureForTiers(t, "shared", "session", "persistent")
+}
+
+func queryRuntimeFixtureForTiers(t *testing.T, tiers ...string) (*Coordinator, WorkerContextInput, context.Context) {
+	t.Helper()
 	c, repo := rankingTestCoordinator(t, agent.MemoryLearningObserve)
 	c.executionRunID, c.taskTracker = "run-query", NewTaskTracker()
 	def := &agent.AgentDef{Name: "worker", Role: "worker", MemoryID: "worker", Memory: agent.DefaultWorkerMemoryPolicy()}
@@ -193,6 +271,9 @@ func queryRuntimeFixture(t *testing.T) (*Coordinator, WorkerContextInput, contex
 		scope  contextstore.Scope
 		prefix string
 	}{{shared, "shared"}, {session, "session"}, {persistent, "persistent"}} {
+		if !slices.Contains(tiers, source.prefix) {
+			continue
+		}
 		records = append(records, contextstore.ContextItem{ID: source.prefix + "-target", Content: "migration sentinel " + source.prefix, Kind: contextstore.ContextPattern, Scope: source.scope, Lifecycle: contextstore.LifecycleConfirmed, TrustLevel: contextstore.TrustTrusted, Confidence: 1})
 		for noise := range 6 {
 			records = append(records, contextstore.ContextItem{ID: fmt.Sprintf("noise-%d-%d", index, noise), Content: request.RetrievalQuery() + fmt.Sprintf(" distractor %d-%d", index, noise), Kind: contextstore.ContextPattern, Scope: source.scope, Lifecycle: contextstore.LifecycleConfirmed, TrustLevel: contextstore.TrustTrusted, Confidence: 1})
@@ -265,7 +346,7 @@ type queryRuntimeFrozenRepository struct {
 // Fixture setup freezes actual canonical/activation rows. The expected target
 // IDs are authored, not inferred from the candidate ranker. SQL authorization
 // is independently covered by the real-store test and context package tests.
-func frozenQueryRuntimeRepository(t *testing.T, repo contextstore.Repository, input WorkerContextInput) *queryRuntimeFrozenRepository {
+func frozenQueryRuntimeRepository(t *testing.T, repo contextstore.Repository, input WorkerContextInput, targets ...string) *queryRuntimeFrozenRepository {
 	t.Helper()
 	revision, err := repo.Revision(t.Context())
 	if err != nil {
@@ -288,7 +369,10 @@ func frozenQueryRuntimeRepository(t *testing.T, repo contextstore.Repository, in
 		}
 		frozen.activations[item.ID] = record
 	}
-	for _, id := range []string{"shared-target", "session-target", "persistent-target"} {
+	if len(targets) == 0 {
+		targets = []string{"shared-target", "session-target", "persistent-target"}
+	}
+	for _, id := range targets {
 		item, err := repo.Get(t.Context(), id)
 		if err != nil {
 			t.Fatal(err)
@@ -322,7 +406,13 @@ func (r *queryRuntimeFrozenRepository) SearchLexical(ctx context.Context, reques
 		return nil, err
 	}
 	item, ok := r.lexical[request.Scope]
-	if !ok || request.Query != "migration sentinel" || request.Limit <= 0 || request.Limit > contextstore.SupplementalMaxSourceRows || !slices.Contains(request.AllowedItemIDs, item.ID) {
+	if request.Query != "migration sentinel" || request.Limit <= 0 || request.Limit > contextstore.SupplementalMaxSourceRows {
+		return nil, errors.New("unexpected supplemental query")
+	}
+	if !ok && request.Scope == r.workerScope && request.AllowedItemIDs != nil && len(request.AllowedItemIDs) == 0 {
+		return []contextstore.SearchResult{}, nil
+	}
+	if !ok || !slices.Contains(request.AllowedItemIDs, item.ID) {
 		return nil, errors.New("unexpected supplemental query or authorization")
 	}
 	return contextstore.CloneSearchResults([]contextstore.SearchResult{{Item: item, Score: 1}}), nil
