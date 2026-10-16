@@ -220,7 +220,8 @@ type teamManifestSpecFields struct {
 	ContextRouting   agent.ContextRoutingPolicy `yaml:"context-routing,omitempty"`
 	Compaction       rawCompactionPolicy        `yaml:"compaction,omitempty"`
 	ContextArtifacts *rawContextArtifactsPolicy `yaml:"context-artifacts,omitempty"`
-	Tasks            []TaskDef                  `yaml:"tasks,omitempty"`
+	Contracts        []TaskDef                  `yaml:"contracts,omitempty"`
+	Tasks            []TaskDef                  `yaml:"tasks,omitempty"` // Deprecated read alias.
 }
 
 // manifestEnvelope is a minimal, non-strict probe used only to detect
@@ -405,11 +406,14 @@ func decodeTeamManifestYAML(file string, data []byte) (teamConfigYAML, string, e
 		if err := decoder.Decode(&yc); err != nil {
 			return teamConfigYAML{}, "", fmt.Errorf("failed to parse team config: %w", err)
 		}
-		if err := mergeAdvancedNamespace(&yc); err != nil {
-			return teamConfigYAML{}, "", fmt.Errorf("invalid team config: %w", err)
-		}
 		if err := annotateManifestAuthoringPresence(data, SchemaVersionLegacyFlatV0, &yc); err != nil {
 			return teamConfigYAML{}, "", err
+		}
+		if err := normalizeManifestContracts(data, SchemaVersionLegacyFlatV0, &yc); err != nil {
+			return teamConfigYAML{}, "", err
+		}
+		if err := mergeAdvancedNamespace(&yc); err != nil {
+			return teamConfigYAML{}, "", fmt.Errorf("invalid team config: %w", err)
 		}
 		return yc, SchemaVersionLegacyFlatV0, nil
 
@@ -433,6 +437,9 @@ func decodeTeamManifestYAML(file string, data []byte) (teamConfigYAML, string, e
 		yc := teamConfigYAML{teamManifestSpecFields: manifest.Spec.teamManifestSpecFields}
 		yc.Name = metadataName
 		if err := annotateManifestAuthoringPresence(data, SchemaVersionV1Alpha1, &yc); err != nil {
+			return teamConfigYAML{}, "", err
+		}
+		if err := normalizeManifestContracts(data, SchemaVersionV1Alpha1, &yc); err != nil {
 			return teamConfigYAML{}, "", err
 		}
 		return yc, SchemaVersionV1Alpha1, nil

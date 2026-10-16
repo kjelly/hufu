@@ -24,6 +24,7 @@ var (
 		ForceMCP           bool
 		PlanFirst          bool
 		RejectLegacyFanOut bool
+		RejectLegacyTasks  bool
 	}
 )
 
@@ -83,6 +84,7 @@ func init() {
 	teamLintCmd.Flags().BoolVar(&teamLintPolicy.NoNet, "no-net", false, "Evaluate with network tools disabled")
 	teamLintCmd.Flags().BoolVar(&teamLintPolicy.ForceMCP, "force-mcp", false, "Evaluate with built-in execution tools disabled")
 	teamLintCmd.Flags().BoolVar(&teamLintPolicy.PlanFirst, "plan", false, "Evaluate with plan-first enabled")
+	teamLintCmd.Flags().BoolVar(&teamLintPolicy.RejectLegacyTasks, "reject-legacy-tasks", false, "Escalate legacy_tasks_key_deprecated to error severity")
 	teamLintCmd.Flags().BoolVar(&teamLintPolicy.RejectLegacyFanOut, "reject-legacy-fanout", false, "Escalate legacy_fanout_deprecated to error severity")
 	teamLintCmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
 		cmd.Root().SilenceErrors = true
@@ -114,7 +116,7 @@ func runTeamLint(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return lintCLIError(cmd, format, err.Error())
 	}
-	options := internalteam.TeamLintOptions{Registry: internalteam.DefaultProviderRegistry, ExecutionProfile: teamLintPolicy.ExecutionProfile, RejectLegacyFanOut: teamLintPolicy.RejectLegacyFanOut}
+	options := internalteam.TeamLintOptions{Registry: internalteam.DefaultProviderRegistry, ExecutionProfile: teamLintPolicy.ExecutionProfile, RejectLegacyFanOut: teamLintPolicy.RejectLegacyFanOut, RejectLegacyTasks: teamLintPolicy.RejectLegacyTasks}
 	options.Unattended = changedBoolFlag(cmd, "unattended", teamLintPolicy.Unattended)
 	options.NoNet = changedBoolFlag(cmd, "no-net", teamLintPolicy.NoNet)
 	options.ForceMCP = changedBoolFlag(cmd, "force-mcp", teamLintPolicy.ForceMCP)

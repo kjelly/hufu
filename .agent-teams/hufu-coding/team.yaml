@@ -80,7 +80,7 @@ spec:
   # `semantic_rejection` here is what actually authorizes the reset; omitting
   # it would make every genuine `status: failed` report fail closed instead
   # (see dag_scheduler.go's selfHealEligible) rather than silently ignored.
-  tasks:
+  contracts:
     - id: sa-analyze
       agent: sa
       side_effect: none

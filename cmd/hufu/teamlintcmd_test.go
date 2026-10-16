@@ -237,3 +237,48 @@ func writeTeamLintFixture(t *testing.T, manifest string) string {
 	}
 	return dir
 }
+
+func TestTeamLintRejectLegacyTasksFlag(t *testing.T) {
+	dir := writeTeamLintFixture(t, "name: cli-contracts\ntasks: []\n")
+	previousPolicy := teamLintPolicy
+	previousName, previousFormat, previousFailOn, previousIgnore := teamLintName, teamLintFormat, teamLintFailOn, teamLintIgnore
+	t.Cleanup(func() {
+		teamLintPolicy = previousPolicy
+		teamLintName, teamLintFormat, teamLintFailOn, teamLintIgnore = previousName, previousFormat, previousFailOn, previousIgnore
+	})
+	teamLintName, teamLintFormat, teamLintFailOn, teamLintIgnore = "", "json", "error", nil
+	teamLintPolicy.RejectLegacyTasks = false
+	cmd := &cobra.Command{}
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	if err := runTeamLint(cmd, []string{dir}); err != nil {
+		t.Fatal(err)
+	}
+	var document teamLintJSONDocument
+	if err := json.Unmarshal(output.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.Findings == nil {
+		t.Fatal("missing findings")
+	}
+	count := 0
+	for _, finding := range *document.Findings {
+		if finding.Code == "legacy_tasks_key_deprecated" {
+			count++
+			if finding.Severity != "warning" || finding.Line == 0 || finding.FieldPath != "tasks" || finding.Suggestion == "" {
+				t.Fatalf("warning = %+v", finding)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("legacy warning count = %d", count)
+	}
+	if teamLintCmd.Flags().Lookup("reject-legacy-tasks") == nil {
+		t.Fatal("strict flag not registered")
+	}
+	teamLintPolicy.RejectLegacyTasks = true
+	output.Reset()
+	if err := runTeamLint(cmd, []string{dir}); err == nil {
+		t.Fatal("strict lint accepted legacy tasks")
+	}
+}

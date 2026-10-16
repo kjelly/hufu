@@ -230,7 +230,7 @@ at the next start, not mid-run.
 A static task binds an MCP provider like any other:
 
 ```yaml
-tasks:
+contracts:
   - id: collect-debug
     agent: reviewer
     phase: prepare
@@ -378,7 +378,7 @@ action-providers:
     mode: trusted-static
     timeout: 300
 
-tasks:
+contracts:
   - id: prepare-workset
     agent: reviewer
     phase: prepare
@@ -622,7 +622,7 @@ action-catalog:
       discover: [preparer, executor]
       propose: [preparer]
 
-tasks:
+contracts:
   - id: prepare-release
     agent: preparer
     phase: prepare

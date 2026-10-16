@@ -109,7 +109,7 @@ the run before any work starts.
 ## 3. Declaring a decision task
 
 ```yaml
-tasks:
+contracts:
   - agent: deployer
     goal: change br0 without dropping the tunnel
     decision-profile: high-stakes

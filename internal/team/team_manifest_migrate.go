@@ -1,6 +1,7 @@
 package team
 
 import (
+	"bytes"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -27,12 +28,11 @@ import (
 // through Go's text/template and then re-serializing the rendered result
 // would silently bake a specific run's variable values into the migrated
 // file, destroying any `{{.Var}}` placeholders the original author wrote.
-// The legacy `advanced:` alias namespace is expanded into its canonical
-// fields for free by decodeTeamManifestYAML (it always calls
-// mergeAdvancedNamespace on the legacy path before returning), so the
-// migrated output never contains an `advanced:` block.
+// The shared decoder normalizes the legacy advanced namespace and task
+// collection aliases before returning. Migrated output never contains an
+// advanced block; collection spelling is selected only at serialization.
 func MigrateTeamManifestToV1Alpha1(teamDir string) (out []byte, already bool, err error) {
-	out, already, _, err = migrateTeamManifestToV1Alpha1(teamDir, false)
+	out, already, _, err = MigrateTeamManifestToV1Alpha1WithOptions(teamDir, TeamManifestMigrationOptions{})
 	return out, already, err
 }
 
@@ -40,7 +40,7 @@ func MigrateTeamManifestToV1Alpha1(teamDir string) (out []byte, already bool, er
 // migration while rewriting supported legacy decision/request spellings to
 // the canonical authoring shape. It never writes the source file.
 func MigrateTeamManifestToV1Alpha1CanonicalAuthoring(teamDir string) ([]byte, bool, error) {
-	out, already, _, err := migrateTeamManifestToV1Alpha1(teamDir, true)
+	out, already, _, err := MigrateTeamManifestToV1Alpha1WithOptions(teamDir, TeamManifestMigrationOptions{CanonicalAuthoring: true})
 	return out, already, err
 }
 
@@ -48,10 +48,19 @@ func MigrateTeamManifestToV1Alpha1CanonicalAuthoring(teamDir string) ([]byte, bo
 // warnings for legacy authoring that cannot be removed without changing its
 // disabled semantics.
 func MigrateTeamManifestToV1Alpha1CanonicalAuthoringDetailed(teamDir string) (out []byte, already bool, warnings []string, err error) {
-	return migrateTeamManifestToV1Alpha1(teamDir, true)
+	return MigrateTeamManifestToV1Alpha1WithOptions(teamDir, TeamManifestMigrationOptions{CanonicalAuthoring: true})
 }
 
-func migrateTeamManifestToV1Alpha1(teamDir string, canonicalAuthoring bool) (out []byte, already bool, warnings []string, err error) {
+// TeamManifestMigrationOptions independently selects authoring migrations.
+type TeamManifestMigrationOptions struct {
+	CanonicalAuthoring bool
+	CanonicalContracts bool
+}
+
+// MigrateTeamManifestToV1Alpha1WithOptions returns a pure preview. By default it
+// emits tasks for compatibility with older binaries; CanonicalContracts opts in
+// to contracts. It never renders runtime variables or writes source files.
+func MigrateTeamManifestToV1Alpha1WithOptions(teamDir string, options TeamManifestMigrationOptions) (out []byte, already bool, warnings []string, err error) {
 	data, filename, found, err := findTeamManifestFile(teamDir)
 	if err != nil {
 		return nil, false, nil, err
@@ -59,36 +68,84 @@ func migrateTeamManifestToV1Alpha1(teamDir string, canonicalAuthoring bool) (out
 	if !found {
 		return nil, false, nil, fmt.Errorf("%s: no team.yml or team.yaml found to migrate", teamDir)
 	}
-	if canonicalAuthoring && authoringContainsTemplateMarker(data) {
+	if options.CanonicalAuthoring && authoringContainsTemplateMarker(data) {
 		return nil, false, nil, fmt.Errorf("canonical authoring migration requires resolved decision/request templates")
 	}
 
 	yc, version, err := decodeTeamManifestYAML(filename, data)
 	if err != nil {
-		return nil, false, nil, err
+		return nil, false, nil, fmt.Errorf("cannot migrate unrendered manifest (quote string templates; typed or structural templates require manual review): %w", err)
 	}
 	original := yc
-	if canonicalAuthoring {
+	if options.CanonicalAuthoring {
 		warnings, err = canonicalizeTeamAuthoring(&yc)
 		if err != nil {
 			return nil, false, nil, err
 		}
 	}
 
-	out, err = marshalTeamManifestV1Alpha1(teamDir, yc)
+	out, err = marshalTeamManifestV1Alpha1(teamDir, yc, options.CanonicalContracts)
 	if err != nil {
 		return nil, false, nil, err
 	}
-	if canonicalAuthoring {
-		migrated, _, decodeErr := decodeTeamManifestYAML("team.yaml", out)
-		if decodeErr != nil {
-			return nil, false, nil, fmt.Errorf("reload canonical authoring migration: %w", decodeErr)
-		}
+	migrated, _, decodeErr := decodeTeamManifestYAML("team.yaml", out)
+	if decodeErr != nil {
+		return nil, false, nil, fmt.Errorf("reload migrated manifest: %w", decodeErr)
+	}
+	if verifyErr := verifyContractMigration(original.Contracts, migrated.Contracts); verifyErr != nil {
+		return nil, false, nil, verifyErr
+	}
+	if options.CanonicalAuthoring {
 		if verifyErr := verifyCanonicalAuthoringMigration(original, migrated); verifyErr != nil {
 			return nil, false, nil, verifyErr
 		}
 	}
 	return out, version == SchemaVersionV1Alpha1, warnings, nil
+}
+
+// Compare the complete authored representation, not the partial compatibility
+// snapshot. YAML's serializer normalizes nil/empty fields; additionally pin the
+// compiler's identity so that normalization cannot hide an authorization change.
+func verifyContractMigration(before, after []TaskDef) error {
+	if len(before) != len(after) {
+		return fmt.Errorf("contract migration changed contract count")
+	}
+	left, err := yaml.Marshal(before)
+	if err != nil {
+		return err
+	}
+	right, err := yaml.Marshal(after)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(left, right) {
+		return fmt.Errorf("contract migration changed normalized contracts")
+	}
+	for index, original := range before {
+		migrated := after[index]
+		oldHash, hashErr := migrationContractHash(original)
+		if hashErr != nil {
+			return hashErr
+		}
+		newHash, hashErr := migrationContractHash(migrated)
+		if hashErr != nil {
+			return hashErr
+		}
+		if oldHash != newHash {
+			return fmt.Errorf("contract migration changed compiled identity at index %d", index)
+		}
+	}
+	return nil
+}
+
+func migrationContractHash(contract TaskDef) (string, error) {
+	name := strings.ToLower(strings.TrimSpace(contract.Agent))
+	id := strings.TrimSpace(contract.ID)
+	if id == "" {
+		id = name
+	}
+	return effectiveContractHash(id, name, contract.Execution, contract.OutputMode, contract.SideEffect,
+		contract.Recovery, contract.MaxRetries, contract.Action, contract.FanOut, contract.Optional, contract)
 }
 
 func canonicalizeTeamAuthoring(yc *teamConfigYAML) ([]string, error) {
@@ -221,7 +278,7 @@ func mapKeysAsSet[V any](values map[string]V) map[string]struct{} {
 // yaml.v3 marshals struct fields in declaration order and sorts map keys,
 // so the output is deterministic for a given yc (§3 principle 5: migration
 // pure/deterministic).
-func marshalTeamManifestV1Alpha1(teamDir string, yc teamConfigYAML) ([]byte, error) {
+func marshalTeamManifestV1Alpha1(teamDir string, yc teamConfigYAML, canonicalContracts bool) ([]byte, error) {
 	name := strings.TrimSpace(yc.Name)
 	if name == "" {
 		absDir, err := filepath.Abs(teamDir)
@@ -232,6 +289,11 @@ func marshalTeamManifestV1Alpha1(teamDir string, yc teamConfigYAML) ([]byte, err
 	}
 
 	spec := yc.teamManifestSpecFields
+	// Normalized state has exactly one collection. Select the public spelling
+	// only at this serialization boundary, never in hashing or binding.
+	if !canonicalContracts {
+		spec.Tasks, spec.Contracts = spec.Contracts, nil
+	}
 	// Identity now lives solely in metadata.name. Keeping spec.name around
 	// too would just reintroduce the mismatch this schema version's
 	// metadata/spec name check exists to prevent (§7).

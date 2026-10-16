@@ -18,7 +18,7 @@ acceptance:
   mode: blocking
   require-no-unresolved-tasks: true
   required-workers: [explorer, challenger, arbiter, reviser]
-tasks:
+contracts:
   - id: explore-article
     agent: explorer
     side_effect: none

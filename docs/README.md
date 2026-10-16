@@ -84,6 +84,9 @@ to re-create an abstraction that already exists in the runtime.
 - [定性 belief 基礎](reference/qualitative-belief.md) — provenance-bearing claims,
   explicit support/counterevidence, gaps and retractions; standalone pure Go API
   without runtime, storage or CLI integration.
+- [Team manifest contracts](reference/team-manifest-contracts.md) — static
+  execution contracts, workflow boundaries, compatible aliases and preview migration.
+
 - [Replayable Bayesian belief state](reference/belief-state.md) — team models,
   receipt-scoped inference, journal recovery, and read-only inspection.
 - [Diagnostic preparation and offline shadow](reference/diagnostic-preparation.md)
