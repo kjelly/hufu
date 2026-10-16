@@ -29,7 +29,33 @@ hufu results runs --team <team> --all-branches
 
 `runs` 顯示最終回覆列表，每筆都有完成時間、team、執行 outcome、最多三行原文預覽和完整閱讀指令。這些預覽不是 LLM 摘要，`completed` 表示 run 完成，不表示報告沒有 findings。storage path、index 和個別 worker 的執行約束不出現在這個列表。
 
+`runs` 與個別任務列表都會顯示 `Original request`（原始提問）及 `Branches (visible in)`（可讀到這筆結果的 branch，包含繼承它的 branches）。`list` 另外以 `Agent task` 標示協調者交給 agent 的子任務，以 `Result (excerpt)` 顯示保存結果的摘要或文字摘錄，方便對照「原始提問 → 子任務 → 結果」。
+
+原始提問來自該任務起始 run、相同 session 與選定 branch lineage 的第一筆 canonical user message，重試或跨 run 恢復不會改用新 run 的提問；run 最終回覆則使用自己的 run。這是保存的提問原文，不是模型產生的摘要，也不保證等於多 team invocation 的完整 CLI prompt。舊紀錄沒有保存提問時會明確標示缺少資料，不以 agent 描述猜測。列表最多預覽 300 字元；`show` 顯示完整提問與子任務描述。JSON 同時提供 `original_prompt` 與 `original_prompt_event_id` 供精確追溯。
+
 要查個別 agent 的結果或重試紀錄，使用 `hufu results list --team <team>`。JSON 預設查詢只回傳最新一筆保存的 run_response；`runs --output json` 回傳分頁列表，`list --output json` 保留 worker 查詢。沒有保存的最終回覆時，runs 列表會說明仍可查個別任務。
+
+## 互動式模糊搜尋與閱讀
+
+```bash
+# 搜尋原始提問與保存的最終回覆，選取後直接顯示全文
+hufu result pick --team <team> --all-branches
+
+# 預先填入搜尋文字
+hufu result pick "逾時" --team <team> --all-branches
+
+# 改查個別 agent 任務結果
+hufu result pick --tasks --team <team> --all-branches
+hufu result pick --tasks --team <team> --agent verifier --status done
+```
+
+這是內建的 Bubble Tea 選擇器，不需要安裝 `fzf`，也不呼叫模型。直接輸入文字即時篩選，支援中文及不連續字元的模糊比對；空白分隔的多個詞必須全部命中。上下鍵或 Ctrl+P／Ctrl+N 移動，Enter 選取並離開選擇器、顯示完整保存結果；Esc 或 Ctrl+C 取消，stdout 不輸出結果。
+
+預設每筆是一次 run 的最終回覆，畫面顯示原始提問、時間、team、branch 與結果預覽。`--tasks` 改為個別 agent 任務，預設只列 `done`，可搭配 `--agent`／`--status`。搜尋欄位包含原始提問、子任務描述、結果摘要（這三者各最多前 1000 字元）、team、agent、branch 與 result／run／task ID；選取後的全文不受預覽長度限制。
+
+所有候選沿用明確的 team／workspace／branch／run／invocation／時間範圍；沒有 `--all-branches` 時仍只查目前 branch lineage。不使用列表的 20 筆分頁上限；`--limit`／`--cursor` 不適用。範圍超過 10000 筆時會要求先以篩選條件縮小，不會默默漏掉較舊結果。
+
+選擇器使用 terminal stdin 與 stderr，stdout 保留給選中的完整結果，因此可用 `--output json` 或 `--render markdown`，也可將結果導向檔案。stdin／stderr 非終端或設定 `--display-mode plain` 時，改用 `runs`／`list`／`search`。沒有結果時明確提示；選取器不會重新執行任務或重新查詢其他 scope。
 
 ## 用自然語言指定 team 查詢
 
@@ -145,3 +171,46 @@ query 沒有 literal 命中時，會在同一個已授權的 team、branch、時
 第一版從事件重建，index_state 顯示 `event_replay`；沒有自動索引維護、embedding 呼叫或 workspace 寫入。單次 snapshot 的上限為一百萬 events 與 256 MiB event payload，超限直接失敗，不回傳貌似完整的部分結果。只有 journal／Markdown 而無 canonical anchor 的內容不納入；已被刪除且無 durable copy 的內容無法恢復。workspace 被明確 purge 後，相關歷史資料也隨之消失。
 
 設計與後續性能／語意品質工作見 [改善計畫](../implementation-plans/historical-task-results-llm-query.md)。
+
+## 歷史執行報告與 Markdown 匯出
+
+新執行的 `run_finished` 與報告快照會在同一筆 SQLite transaction 保存到
+`runtime.sqlite`。不需要加 `--report`，也不依賴 task journal。
+每份快照綁定來源 event ID／hash、team、session、invocation、run 與來源 branch；
+切換 branch、開始新任務或覆寫 `report.md` 不會改寫它。
+
+```bash
+# 搜尋原始任務，選取後閱讀該 run 的執行報告
+hufu result pick --team web-research --all-branches --view report
+
+# 閱讀最近一個 run 的報告，或用 worker／run response 的 result-id 定位
+hufu result report --team web-research
+hufu result report <result-id> --team web-research --all-branches
+
+# 匯出同一份保存資料，或以 JSON 同時取得 report 與 report_markdown
+hufu result report <result-id> --team web-research --export report.md
+hufu result report <result-id> --team web-research --output json
+```
+
+`--branch`、`--all-branches`、`--run` 與時間範圍和其他 result 指令相同。
+繼承自父 branch 的報告按 event lineage 可見；選取 worker 結果時，讀取的是該結果
+完成所在 run 的報告。`pick --view report` 不能與 `--tasks` 同用。
+預設 `result`、`result final` 和 `pick` 繼續顯示最終回覆。
+
+執行時的 `--report` 與 team 的 `auto-report: true` 現在只控制是否將當次 team run
+的保存報告匯出為 workspace 的 `report.md`；每個 team 使用自己的回覆。
+歷史保存不再由這個 flag 決定。dry-run 或尚未確認持久完成的 run 不會匯出舊報告。
+匯出為原子寫入，檔案權限為 `0600`；
+`result report --export` 不能覆寫 runtime／context SQLite 檔案。
+
+報告包含當次原始請求、最終回覆、觸及的任務契約／結果、findings、驗證紀錄、
+run outcome／metrics，以及事件中保存的成本、模型與 context routing 資料。
+任務重試／恢復會保留原契約；其他 run 未觸及的任務不會混入。
+不讀取可變 STM、任務 Markdown 或即時 workspace 診斷，不重新查驗外部 artifact；
+缺少的觀測資料不宣稱為已量測。這是執行當時的報告，不代表目前 artifact 仍存在。
+Markdown 由版本化結構快照渲染；未保存 Markdown 的舊版排版副本。
+
+本功能啟用前的 run 沒有報告快照時，會明確回報 unavailable；不會以最新 checkpoint
+或舊 `report.md` 補成歷史報告，也不會在查詢時寫入／遷移 DB。
+每份快照上限 8 MiB；超限或無法投影時記錄 unavailable，保留原本 run outcome。
+真正的 SQLite 寫入失敗會使整筆 transaction 回滾，沿用 terminal persistence 的恢復流程。

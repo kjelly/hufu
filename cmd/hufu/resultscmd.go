@@ -20,6 +20,7 @@ import (
 	operatorpkg "github.com/kjelly/hufu/internal/operator"
 	"github.com/kjelly/hufu/internal/resultquery"
 	"github.com/kjelly/hufu/internal/sidecar"
+	"github.com/kjelly/hufu/internal/team"
 	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 )
 
@@ -32,28 +33,34 @@ type resultsCLIOptions struct {
 	payload                                                                                        bool
 	theme, displayMode, displayPreset                                                              string
 	quiet, noColor                                                                                 bool
+	pickTasks                                                                                      bool
+	pickView, exportPath                                                                           string
 }
 
 type resultsDeps struct {
+	report    func(context.Context, string, string) (*team.RunReport, error)
 	workspace workspaceCommandDeps
 	load      func(context.Context, inspectpkg.HistoricalResultScope) (inspectpkg.HistoricalSnapshot, error)
 	generate  func(context.Context, *operatorpkg.OperatorSnapshot, string, string, string, sidecar.Profile) (explainAIResult, error)
 	now       func() time.Time
+	pick      func(context.Context, io.Reader, io.Writer, []inspectpkg.HistoricalResult, string) (int, error)
 }
 
 type resultsEnvelope struct {
-	SchemaVersion int                             `json:"schema_version"`
-	Kind          string                          `json:"kind"`
-	Team          string                          `json:"team_scope,omitempty"`
-	Operation     string                          `json:"operation"`
-	Coverage      []inspectpkg.HistoricalCoverage `json:"coverage"`
-	Matched       int                             `json:"matched_count"`
-	Results       []inspectpkg.HistoricalResult   `json:"results"`
-	NextCursor    string                          `json:"next_cursor,omitempty"`
-	Query         *resultquery.Result             `json:"query,omitempty"`
-	Model         string                          `json:"model,omitempty"`
-	Error         string                          `json:"error,omitempty"`
-	Usage         resultsAnalysisUsage            `json:"usage"`
+	Report         *team.RunReport                 `json:"report,omitempty"`
+	ReportMarkdown string                          `json:"report_markdown,omitempty"`
+	SchemaVersion  int                             `json:"schema_version"`
+	Kind           string                          `json:"kind"`
+	Team           string                          `json:"team_scope,omitempty"`
+	Operation      string                          `json:"operation"`
+	Coverage       []inspectpkg.HistoricalCoverage `json:"coverage"`
+	Matched        int                             `json:"matched_count"`
+	Results        []inspectpkg.HistoricalResult   `json:"results"`
+	NextCursor     string                          `json:"next_cursor,omitempty"`
+	Query          *resultquery.Result             `json:"query,omitempty"`
+	Model          string                          `json:"model,omitempty"`
+	Error          string                          `json:"error,omitempty"`
+	Usage          resultsAnalysisUsage            `json:"usage"`
 }
 
 type resultsAnalysisUsage struct {
@@ -100,9 +107,21 @@ func newResultsCommandWithDeps(deps resultsDeps) *cobra.Command {
 	registerStaticFlagCompletion(command, "output", []string{"text", "json"})
 	registerStaticFlagCompletion(command, "status", []string{"done", "error", "blocked", "skipped", "protocol_incomplete"})
 	command.RunE = func(cmd *cobra.Command, _ []string) error { return runResults(cmd, options, deps, "read", "") }
-	for _, operation := range []string{"runs", "list", "search", "latest", "show", "final", "invocation", "query"} {
+	for _, operation := range []string{"runs", "list", "search", "latest", "show", "final", "invocation", "query", "pick", "report"} {
 		child := &cobra.Command{Use: operation, ValidArgsFunction: cobra.NoFileCompletions, Args: cobra.NoArgs}
 		switch operation {
+		case "report":
+			child.Use += " [result-id]"
+			child.Short = "Read an immutable execution report for a saved result (default: latest run)"
+			child.Args = cobra.MaximumNArgs(1)
+			child.Flags().StringVar(&options.exportPath, "export", "", "Export the saved report as Markdown to this path")
+		case "pick":
+			child.Flags().StringVar(&options.pickView, "view", "final", "Selected content: final or report (report requires final-response mode)")
+			registerStaticFlagCompletion(child, "view", []string{"final", "report"})
+			child.Use += " [text]"
+			child.Short = "Fuzzy-search saved final responses and read the selection (--tasks for agent tasks)"
+			child.Args = cobra.MaximumNArgs(1)
+			child.Flags().BoolVar(&options.pickTasks, "tasks", false, "Search individual agent task results instead of final responses")
 		case "runs":
 			child.Short = "Browse saved final responses with short previews and reading commands"
 		case "list":
@@ -191,6 +210,9 @@ func runResults(command *cobra.Command, options *resultsCLIOptions, deps results
 		request.Question = value
 		return runResultsQuery(command, options, deps, request, all, response)
 	}
+	if operation == "pick" {
+		return runResultsPick(command, options, deps, request, all, response, value)
+	}
 	plan := resultquery.Plan{Selectors: resultquery.Selectors{}, StatusBasis: "at_terminal", Order: "newest", Limit: options.limit}
 	if operation == "list" || operation == "search" || operation == "latest" {
 		plan.Statuses = options.statuses
@@ -241,15 +263,18 @@ func runResults(command *cobra.Command, options *resultsCLIOptions, deps results
 			return err
 		}
 	}
+	if operation == "report" {
+		return presentRunReport(command, options, deps, response)
+	}
 	return presentResults(command, options, operation, response, full)
 }
 
 func resultsReadFull(operation string) bool {
-	return slices.Contains([]string{"show", "latest", "final", "read"}, operation)
+	return slices.Contains([]string{"show", "latest", "final", "read", "report"}, operation)
 }
 
 func isFinalResultsOperation(operation string) bool {
-	return slices.Contains([]string{"read", "final", "overview"}, operation)
+	return slices.Contains([]string{"read", "final", "overview", "report"}, operation)
 }
 
 func validateResultsOptions(options *resultsCLIOptions, now time.Time) (resultquery.Request, error) {
@@ -422,22 +447,35 @@ func writeResults(writer io.Writer, format string, response resultsEnvelope, ful
 		}
 	}
 	for _, row := range response.Results {
-		if _, err := fmt.Fprintf(writer, "\n%s  %s  %s/%s  %s (%s)\n%s\n", row.CompletedAt.Format(time.RFC3339), safeResultsText(row.ResultID), safeResultsText(row.Team), safeResultsText(row.Agent), safeResultsText(row.Status), safeResultsText(row.Validity), operatorpkg.SafeDisplayText(row.Description, 300)); err != nil {
+		if _, err := fmt.Fprintf(writer, "\n%s  %s  %s/%s  %s (%s)\n", row.CompletedAt.Format(time.RFC3339), safeResultsText(row.ResultID), safeResultsText(row.Team), safeResultsText(row.Agent), safeResultsText(row.Status), safeResultsText(row.Validity)); err != nil {
 			return err
+		}
+		if err := writeResultsRequest(writer, row, full); err != nil {
+			return err
+		}
+		if row.Kind == "task" {
+			description := operatorpkg.SafeDisplayText(row.Description, 300)
+			if full {
+				description = safeResultsText(row.Description)
+			}
+			if _, err := fmt.Fprintln(writer, "Agent task: "+description); err != nil {
+				return err
+			}
+		}
+		if !full {
+			if _, err := fmt.Fprintln(writer, "Result (excerpt): "+operatorpkg.SafeDisplayText(firstNonEmpty(row.Summary, row.Output, "(No result text saved.)"), 300)); err != nil {
+				return err
+			}
 		}
 		if err := writeResultKind(writer, row, response.Coverage); err != nil {
 			return err
 		}
-		if !full {
-			if _, err := fmt.Fprintln(writer, operatorpkg.SafeDisplayText(row.Summary, 300)); err != nil {
-				return err
-			}
-		} else {
+		if full {
 			if _, err := fmt.Fprintln(writer, formatHistoricalDeliverable(row)); err != nil {
 				return err
 			}
 		}
-		if _, err := fmt.Fprintf(writer, "View: hufu results show %s%s\n", row.ResultID, resultsTeamArgument(row.Team)); err != nil {
+		if _, err := fmt.Fprintf(writer, "View: %s\n", safeResultsText(resultsScopedCommand("show", row, response.Coverage))); err != nil {
 			return err
 		}
 	}

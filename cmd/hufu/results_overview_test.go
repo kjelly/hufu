@@ -24,7 +24,7 @@ func TestResultsRunsShowsFinalResponsesRatherThanInternalAttempts(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"Saved final responses: 1", "showing 1", "Preview (excerpt)", "coordinator final response", "hufu results list", "Read full response:", "--all-branches"} {
+	for _, required := range []string{"Saved final responses: 1", "showing 1", "Original request: 請調查原始連線逾時問題", "Branches (visible in):", "Preview (excerpt)", "coordinator final response", "hufu results list", "Read full response:", "--all-branches"} {
 		if !strings.Contains(output, required) {
 			t.Fatalf("overview omitted %q: %s", required, output)
 		}
@@ -102,5 +102,30 @@ func TestResultsOverviewCursorContinuesFinalResponsesOnly(t *testing.T) {
 	next, _, err := executeResultsTest(t, deps, append(args, "--cursor", first.NextCursor)...)
 	if err != nil || len(next.Results) != 1 || next.Results[0].ResultID == first.Results[0].ResultID || next.Results[0].Kind != "run_response" {
 		t.Fatalf("next overview page: %#v, %v", next, err)
+	}
+}
+
+func TestResultsRequestPreviewAndFullText(t *testing.T) {
+	row := inspectpkg.HistoricalResult{OriginalPrompt: strings.Repeat("原", 350) + "END_OF_REQUEST", Branches: []string{"main", "child"}}
+	var output bytes.Buffer
+	if err := writeResultsRequest(&output, row, false); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), "END_OF_REQUEST") || !strings.Contains(output.String(), "Branches (visible in): main, child") {
+		t.Fatalf("preview not bounded or branches missing: %s", output.String())
+	}
+	output.Reset()
+	if err := writeResultsRequest(&output, row, true); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), row.OriginalPrompt) {
+		t.Fatal("full view truncated original request")
+	}
+	output.Reset()
+	if err := writeResultsRequest(&output, inspectpkg.HistoricalResult{}, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "Not saved") {
+		t.Fatal("missing request not explained")
 	}
 }

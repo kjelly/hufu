@@ -116,7 +116,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().BoolVar(&opts.planMode, "plan", false, "Force plan-first mode: agents must submit plans before executing")
 	rootCmd.Flags().BoolVar(&opts.autoSkills, "auto-skills", false, "Enable automatic skill detection via sidecar/LLM matching")
 	rootCmd.Flags().StringVar(&opts.fixQuestion, "fix", "", "Analyze previous execution data and suggest improvements for the given question")
-	rootCmd.Flags().BoolVar(&opts.reportMode, "report", false, "Generate a full execution report as a markdown file")
+	rootCmd.Flags().BoolVar(&opts.reportMode, "report", false, "Export the saved run report to workspace/report.md")
 	rootCmd.Flags().BoolVar(&opts.defaultTeam, "default", false, "Use the built-in default team (coordinator + Helper); no .agent-teams/ directory required")
 	rootCmd.Flags().StringVar(&opts.helperTools, "helper-tools", "", "Comma-separated extra tools to enable for the default Helper worker when --default is set (e.g. 'bash' or 'bash,sudo,ssh'). Whitespace is trimmed.")
 	rootCmd.Flags().StringSliceVar(&opts.allowPaths, "allow-path", nil, "Additional filesystem paths to allow for the active team; can be repeated.")

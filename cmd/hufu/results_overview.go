@@ -37,7 +37,13 @@ func writeResultsOverview(writer io.Writer, response resultsEnvelope, options *r
 		return err
 	}
 	for index, row := range response.Results {
-		if _, err := fmt.Fprintf(writer, "\n%d. %s · %s · %s\nPreview (excerpt):\n", index+1, row.CompletedAt.Format(time.RFC3339), safeResultsText(row.Team), safeResultsText(row.Status)); err != nil {
+		if _, err := fmt.Fprintf(writer, "\n%d. %s · %s · %s\n", index+1, row.CompletedAt.Format(time.RFC3339), safeResultsText(row.Team), safeResultsText(row.Status)); err != nil {
+			return err
+		}
+		if err := writeResultsRequest(writer, row, false); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(writer, "Preview (excerpt):"); err != nil {
 			return err
 		}
 		if err := writeResultPreview(writer, row.Output); err != nil {
@@ -59,6 +65,25 @@ func writeResultsOverview(writer io.Writer, response resultsEnvelope, options *r
 	if response.NextCursor != "" {
 		_, err := fmt.Fprintf(writer, "\nNext page: --cursor %s\n", response.NextCursor)
 		return err
+	}
+	return nil
+}
+
+func writeResultsRequest(writer io.Writer, row inspectpkg.HistoricalResult, full bool) error {
+	prompt := "(Not saved in this run's canonical history.)"
+	if row.OriginalPrompt != "" {
+		prompt = operatorpkg.SafeDisplayText(row.OriginalPrompt, 300)
+		if full {
+			prompt = safeResultsText(row.OriginalPrompt)
+		}
+	}
+	if _, err := fmt.Fprintln(writer, "Original request: "+prompt); err != nil {
+		return err
+	}
+	if len(row.Branches) > 0 {
+		if _, err := fmt.Fprintln(writer, "Branches (visible in): "+operatorpkg.SafeDisplayText(strings.Join(row.Branches, ", "), 300)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

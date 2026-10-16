@@ -52,6 +52,7 @@ func resultsTestFixture(t *testing.T) (string, []string) {
 		return durable
 	}
 	appendEvent(team.RunEvent{Type: "run_started"}, map[string]any{"team": "review"})
+	appendEvent(team.RunEvent{Type: "user_message_added", Actor: "user"}, team.SessionMessageEventPayload{Role: "user", Content: "請調查原始連線逾時問題"})
 	ids := []string{}
 	for i := range 3 {
 		id := fmt.Sprint(i + 1)
@@ -64,6 +65,7 @@ func resultsTestFixture(t *testing.T) (string, []string) {
 	}
 	appendEvent(team.RunEvent{Type: "run_finished"}, map[string]any{"outcome": "completed", "response": "coordinator final response"})
 	appendEvent(team.RunEvent{Type: "run_started", RunID: "run-other"}, map[string]any{"team": "other"})
+	appendEvent(team.RunEvent{Type: "user_message_added", RunID: "run-other", Actor: "user"}, team.SessionMessageEventPayload{Role: "user", Content: "OTHER_TEAM_SENTINEL"})
 	appendEvent(team.RunEvent{Type: "task_created", RunID: "run-other", TaskID: "1"}, map[string]any{"id": "1", "status": "pending", "agent": "other-agent", "desc": "OTHER_TEAM_SENTINEL"})
 	appendEvent(team.RunEvent{Type: "task_completed", RunID: "run-other", TaskID: "1"}, map[string]any{"id": "1", "status": "done", "agent": "other-agent", "output": "OTHER_TEAM_SENTINEL"})
 	return workspace, ids
@@ -153,6 +155,24 @@ func TestResultsFinalReadsSavedResponseAndShowExplainsWorkerResult(t *testing.T)
 		if _, _, err := executeResultsTest(t, deps, append([]string{"final", "--workspace", workspace}, flags...)...); err == nil {
 			t.Fatalf("final silently ignored worker/pagination filter: %v", flags)
 		}
+	}
+}
+
+func TestResultsListConnectsOriginalRequestTaskAndResult(t *testing.T) {
+	workspace, ids := resultsTestFixture(t)
+	deps := resultsTestDeps(t)
+	_, output, err := executeResultsTest(t, deps, "list", "--workspace", workspace, "--team", "review", "--all-branches")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"Original request: 請調查原始連線逾時問題", "Agent task: timeout 分析", "Result (excerpt): 調整 deadline", "Branches (visible in):", "View: hufu results show", "--all-branches"} {
+		if !strings.Contains(output, required) {
+			t.Fatalf("list omitted %q: %s", required, output)
+		}
+	}
+	value, _, err := executeResultsTest(t, deps, "show", ids[0], "--workspace", workspace, "--team", "review", "--output", "json")
+	if err != nil || len(value.Results) != 1 || value.Results[0].OriginalPrompt != "請調查原始連線逾時問題" || value.Results[0].OriginalPromptEventID == "" {
+		t.Fatalf("JSON omitted original request provenance: %#v, %v", value, err)
 	}
 }
 

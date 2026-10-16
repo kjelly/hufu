@@ -173,6 +173,37 @@ func TestOpenRejectsAnUnknownSchemaVersion(t *testing.T) {
 	}
 }
 
+func TestPreReportReadOnlySchemaStillRejectsInvalidMigrations(t *testing.T) {
+	for _, mutation := range []string{
+		`UPDATE schema_migrations SET checksum='forged' WHERE version=3`,
+		`DELETE FROM schema_migrations WHERE version=2`,
+		`DELETE FROM schema_migrations WHERE version=3`,
+	} {
+		t.Run(mutation, func(t *testing.T) {
+			workspace := t.TempDir()
+			store, err := Open(t.Context(), workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			if _, err := store.DB().Exec(`DROP TABLE run_reports; DELETE FROM schema_migrations WHERE version=4`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.DB().Exec(mutation); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reader, err := OpenReadOnly(t.Context(), workspace)
+			if err == nil {
+				_ = reader.Close()
+				t.Fatal("read-only compatibility accepted an invalid migration registry")
+			}
+		})
+	}
+}
+
 func TestRuntimeDocuments(t *testing.T) {
 	store, err := Open(context.Background(), t.TempDir())
 	if err != nil {

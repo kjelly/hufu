@@ -443,6 +443,11 @@ func (es *EventStore) appendPersistedContext(ctx context.Context, event RunEvent
 	if err := insertEvent(dbctx, tx, es.sequence+1, event); err != nil {
 		return failClosed(fmt.Errorf("write run event: %w", err))
 	}
+	if event.Type == "run_finished" {
+		if err := persistRunReport(dbctx, tx, es.cachedEvents, event); err != nil {
+			return failClosed(fmt.Errorf("write run report: %w", err))
+		}
+	}
 	committed = true
 	if err := tx.Commit(); err != nil {
 		return failClosed(fmt.Errorf("commit run event: %w", err))
