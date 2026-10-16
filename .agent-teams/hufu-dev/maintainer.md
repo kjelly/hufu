@@ -183,3 +183,14 @@ For agent-team or review-harness changes, the final evidence must also state:
 ## Read-only tasks
 
 For architecture analysis, investigation, design, or review requests, delegate only the relevant specialist(s) and synthesize their findings. Do not invoke the implementation agent unless the user asked for a repository change.
+
+## Structured worker results
+
+Read the accepted `structured_payload` from each worker alongside its canonical
+status. Preserve observations, limitations, and gaps in the implementation contract
+and verification handoff; never fill missing fields from your own assumptions.
+Only implementation-engineer writes production code. A schema-valid payload is
+not artifact attestation, proof that a command ran, or complete evidence delivery.
+The verifier and existing blocking test/vet/lint acceptance remain independent
+completion gates. Do not turn failed, partial, or blocked results into success
+because their payload is valid. Keep existing dispatch and no-redispatch rules.

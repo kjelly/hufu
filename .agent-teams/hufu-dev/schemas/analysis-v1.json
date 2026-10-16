@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "scope",
+    "observations",
+    "risks",
+    "recommendations",
+    "gaps"
+  ],
+  "properties": {
+    "scope": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "maxLength": 2000
+    },
+    "observations": {
+      "$ref": "#/$defs/texts"
+    },
+    "risks": {
+      "$ref": "#/$defs/texts"
+    },
+    "recommendations": {
+      "$ref": "#/$defs/texts"
+    },
+    "gaps": {
+      "$ref": "#/$defs/texts"
+    }
+  },
+  "$defs": {
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "maxLength": 1000
+    },
+    "texts": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/text"
+      }
+    }
+  }
+}

@@ -12,7 +12,7 @@
 |---|---|---|
 | 計畫搬移 | 完成 | docs/tmp/spec.md 搬入正式實作計畫目錄，更新路徑與逐階段提交規則 |
 | AT-00 baseline | 完成 | 本節全量與五團隊靜態檢查均通過 |
-| AT-02A structured results | 待執行 | — |
+| AT-02A structured results | 完成 | schemas／四角色接線、完整 gates 與 race 通過 |
 | AT-04 context artifacts | 待執行 | — |
 | AT-05 retrospective | 待執行 | — |
 | AT-01 semantic contracts | 待執行 | — |
@@ -58,3 +58,28 @@
 | `bin/check-docs` | 0 | 正式計畫與相對連結通過 |
 
 Baseline 無程式測試／lint 失敗，可以開始 AT-02A。原始本地輸出暫存於 `/tmp/hufu-quality-baseline/`；此表保存命令、範圍、exit code 與結果，臨時 log 不是版本化權威。
+
+## AT-02A：結構化結果
+
+新增三份自含 Draft 2020-12 schema，runtime/integration 共用 analysis，implementation 與 verifier 各自使用其 schema。四角色 require-structured，維持 team.yaml、工具、side-effect、recovery、delegation 及 acceptance。
+
+Verifier 新增 `VERDICT: UNVERIFIED`，對應 blocked／partial；修正原指示只允許 PASS／FAIL 與基礎設施未驗證情境的衝突。Check outcome 只表示 worker 觀察，不是 receipt；不新增 evidence_from、revision attestation 或 runtime policy。
+
+新增 `hufu_dev_result_contract_test.go`，從實際 bundled team 複製到臨時目錄測試：四角色編譯／hash、缺 payload 拒絕後更正、success/failed/partial/blocked 均可合法提交、check outcome 與 exit code 條件、未知欄位／型別／長度／陣列上限，以及 worker PASS 自述無法繞過實際失敗的 acceptance。
+
+有效工具集保留 loader 既有的 wait_for（AT-00 表列的是 frontmatter tools）；初次測試將有效工具誤比為原始 frontmatter，已依原本 golden 與 loader 修正比較，沒有擴張工具權限。Bundled compatibility golden 未變更。
+
+| 檢查 | Exit／結果 |
+|---|---|
+| `go test ./internal/team -run '^TestHufuDev' -count=1` | 0；0.628s，包含所有巢狀子案例 |
+| hufu-dev validate／lint --fail-on error | 0／0，無 findings |
+| Bundled hufu-dev compatibility | 0，既有 golden 相同 |
+| `go vet ./...` | 0 |
+| `bin/check-docs`／`git diff --check` | 0／0 |
+| `go test ./... -count=1` | 0；internal/team 286.610s |
+| 最終 `golangci-lint run`（/tmp cache） | 0；0 issues，無 cache 寫入警告 |
+| `go test -race ./internal/team` | 1；600.174s，預設 10m timeout；中止於仍執行中的 TestFreezeExecutionPolicyAtStartupPersistsPolicyForEachFreshRootBranch，無 DATA RACE 診斷 |
+| `go test -race ./internal/team -count=1 -timeout=45m` | 0；1620.374s，完整同一測試集通過，無 DATA RACE 診斷 |
+| `go build -o /dev/null ./cmd/hufu` | 0 |
+
+回滾：還原本階段 frontmatter／schema／指示，在新的 session 執行；不更改既有 session 或歷史 payload。
