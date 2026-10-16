@@ -204,11 +204,14 @@ namespace（建議 `diagnostic_episode_*`），不把跨 task 資料寫成 v1
 `model_inconsistent`。使用 deterministic rational arithmetic；比較有理數，不依賴
 浮點誤差；同分依 catalog ID 字典序。每個 candidate 保存分數分子/分母、成本及排除
 原因。成本為正整數 synthetic work units，兩個 pilot action 各 1，不是金額。
-既有 `max_posterior_v1` 不改寫成此策略。
+既有 `max_posterior_v1` 不改寫成此策略。首輪 golden score 為
+`check_source = 7009/31200`、`check_environment = 5521/28800`，故選 source。
 
 baseline 為 `fixed_order_v1`：`check_environment` 然後 `check_source`，略過已做或
 不合法項。使用完全相同 prior、fixture、授權、budget、stop rule、adapter 與 executor；
-唯一變因是候選排序。它不是繞過授權的 fallback：策略無法算出分數就停止，不偷換
+唯一變因是候選排序。此模型任一單次 pass/fail 都不會到達 0.90；正常且資源
+充足時兩種策略都執行兩次、消耗 2 units。預期成本差為零，順序不同而最終有效
+evidence 集合與 posterior 相同，這也是必須 assert 的 golden baseline。它不是繞過授權的 fallback：策略無法算出分數就停止，不偷換
 baseline。shadow 只記錄「會選什麼」，不消耗 execution quota；bounded mode 才可能派送。
 
 ### 4.1 權限與執行路徑
