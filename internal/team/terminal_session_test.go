@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -120,26 +121,68 @@ func TestTerminalSessionLifecycleFactsAndExplicitWaitTargets(t *testing.T) {
 	ctx := WithTerminalTaskID(context.Background(), "task-lifecycle")
 	session, err := manager.Start(ctx, TerminalStartRequest{
 		RunID: "run-lifecycle", OwnerTaskID: "task-lifecycle",
-		Command: []string{"sh", "-c", "printf observed; sleep 0.08"},
+		Command: []string{"sh", "-c", `printf observed; read -r line; [ "$line" = release ]`},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The terminal output artifact exists immediately, but it must not satisfy
-	// an exit wait for this process invocation.
-	shortCtx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
-	defer cancel()
-	if _, err := waiter.Wait(shortCtx, TerminalWaitRequest{SessionID: session.ID, Target: TerminalWaitExit}); err == nil {
-		t.Fatal("existing output artifact must not satisfy an exit wait")
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if err := manager.Close(cleanupCtx, session.ID); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	waitCtx, cancelWait := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelWait()
+
+	// Observe actual output before testing the wait contract. The child stays
+	// blocked on stdin until we release it, regardless of scheduler latency.
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		read, err := manager.Read(ctx, session.ID)
+		if err != nil {
+			t.Fatalf("Read: %v", err)
+		}
+		if !read.Session.ObservedAt.IsZero() {
+			if !read.Session.Running || !read.Session.ExitedAt.IsZero() || !read.Session.ReleasedAt.IsZero() {
+				t.Fatalf("output observation must precede exit and release: %+v", read.Session)
+			}
+			break
+		}
+		select {
+		case <-waitCtx.Done():
+			t.Fatalf("waiting for output: %v", waitCtx.Err())
+		case <-ticker.C:
+		}
 	}
-	if _, err := manager.Read(ctx, session.ID); err != nil {
-		t.Fatalf("Read: %v", err)
+	if len(session.OutputRefs) != 1 {
+		t.Fatalf("output refs = %+v, want one artifact", session.OutputRefs)
 	}
-	if _, err := waiter.Wait(context.Background(), TerminalWaitRequest{SessionID: session.ID, Target: TerminalWaitExit}); err != nil {
-		t.Fatalf("Wait(exit): %v", err)
+	artifact, err := os.ReadFile(filepath.Join(workspace, session.OutputRefs[0].Path))
+	if err != nil || string(artifact) != "observed" {
+		t.Fatalf("output artifact = %q, %v; want observed", artifact, err)
 	}
-	if _, err := waiter.Wait(context.Background(), TerminalWaitRequest{SessionID: session.ID, Target: TerminalWaitResourceReleased}); err != nil {
-		t.Fatalf("Wait(resource_released): %v", err)
+	for _, target := range []TerminalWaitTarget{TerminalWaitExit, TerminalWaitResourceReleased} {
+		shortCtx, cancel := context.WithTimeout(waitCtx, 15*time.Millisecond)
+		_, err := waiter.Wait(shortCtx, TerminalWaitRequest{SessionID: session.ID, Target: target})
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Wait(%s) with only output = %v, want deadline exceeded", target, err)
+		}
+	}
+	if err := manager.Write(ctx, session.ID, TerminalInput{Data: []byte("release\n")}); err != nil {
+		t.Fatalf("release terminal session: %v", err)
+	}
+	for _, target := range []TerminalWaitTarget{TerminalWaitExit, TerminalWaitResourceReleased} {
+		result, err := waiter.Wait(waitCtx, TerminalWaitRequest{SessionID: session.ID, Target: target})
+		if err != nil {
+			t.Fatalf("Wait(%s): %v", target, err)
+		}
+		if result.Session.Running || result.Session.ExitCode == nil || *result.Session.ExitCode != 0 {
+			t.Fatalf("Wait(%s) = %+v, want successful exit after release", target, result)
+		}
 	}
 	if _, err := waiter.Wait(context.Background(), TerminalWaitRequest{SessionID: session.ID, Target: TerminalWaitArtifactVerified}); err == nil || !strings.Contains(err.Error(), "ArtifactVerifier") {
 		t.Fatalf("Wait(artifact_verified) error = %v, want verifier-bound rejection", err)
@@ -305,6 +348,31 @@ func (f *fakeTerminalSessionSource) List(_ context.Context, _ string) ([]Termina
 	result := make([]TerminalSession, len(f.sessions))
 	copy(result, f.sessions)
 	return result, nil
+}
+
+func TestTerminalSessionWaiterObservedOutputDoesNotSatisfyLifecycleTargets(t *testing.T) {
+	for _, target := range []TerminalWaitTarget{TerminalWaitExit, TerminalWaitResourceReleased} {
+		t.Run(string(target), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			source := &fakeTerminalSessionSource{sessions: []TerminalSession{{
+				ID:         "observed-running",
+				State:      TerminalSessionRunning,
+				Running:    true,
+				ObservedAt: time.Now().UTC(),
+				OutputRefs: []ArtifactRef{{Path: "output.log", Type: "terminal_output"}},
+			}}}
+			// Cancel when the snapshot is supplied: no wall-clock interval is
+			// needed to prove that output alone does not complete either wait.
+			source.onList = func(_ *fakeTerminalSessionSource) { cancel() }
+			_, err := NewTerminalSessionWaiter(source).Wait(ctx, TerminalWaitRequest{
+				SessionID: "observed-running", Target: target,
+			})
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Wait(%s) with observed output = %v, want cancellation", target, err)
+			}
+		})
+	}
 }
 
 func TestTerminalSessionWaiterUsesLifecycleFactsNotOutputExistence(t *testing.T) {
