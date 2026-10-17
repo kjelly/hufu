@@ -203,6 +203,8 @@ func (c *Coordinator) queryEvaluationSources(input WorkerContextInput, shared *c
 		}
 		source := ContextQuerySource{Kind: kind, Request: contextstore.SearchRequest{Scope: sourceScope, Limit: max(1, c.effectiveMemoryRankingPolicy().CandidateTopK)}}
 		switch {
+		case !workerMemoryPhaseAllowed(input.Request.Phase):
+			source.Disabled = QueryFallbackHistoryNotAllowed
 		case input.AgentDef == nil || input.AgentDef.Memory.Mode == agent.WorkerMemoryOff || input.AgentDef.Memory.Mode == "":
 			source.Disabled = QueryFallbackMemoryDisabled
 		case !shouldRecallWorkerMemory(input.AgentDef, c.ExecutionProfile()):

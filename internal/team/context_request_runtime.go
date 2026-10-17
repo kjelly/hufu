@@ -27,6 +27,20 @@ func (c *Coordinator) contextRunID() string {
 	return "run-context-" + hashContentKey(seed)[:16]
 }
 
+// candidateRunID is the one run identity that makes current-run candidates
+// visible, shared by routed context and context_get. Candidates are stamped
+// with the execution run, so without one, or for a request bound to another
+// run, it returns "" and no candidate is visible.
+func (c *Coordinator) candidateRunID(request ContextRequest) string {
+	if c == nil || c.executionRunID == "" {
+		return ""
+	}
+	if request.RunID != "" && request.RunID != c.executionRunID {
+		return ""
+	}
+	return c.executionRunID
+}
+
 func taskContextPhase(task TaskDef) Phase {
 	if task.Phase != "" {
 		// Task phases originate in team YAML and may be lower-case even when

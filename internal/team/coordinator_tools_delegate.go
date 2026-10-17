@@ -387,7 +387,11 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 			workerInput.RawLTM = LoadLTM(c.session.Workspace, c.session.Config.Name)
 		}
 	}
-	workerInput.WorkerMemory = c.recallWorkerMemory(ctx, agentDef, request)
+	workerMemory, recallErr := c.recallWorkerMemory(ctx, agentDef, request)
+	if recallErr != nil {
+		return "", fmt.Errorf("sub-agent worker memory preflight failed: %w", recallErr)
+	}
+	workerInput.WorkerMemory = workerMemory
 	compiled, compileErr := c.ContextCompiler().CompileWorkerContext(ctx, workerInput)
 	if compileErr != nil {
 		return "", fmt.Errorf("sub-agent context preflight failed: %w", compileErr)

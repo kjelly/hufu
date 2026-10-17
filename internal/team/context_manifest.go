@@ -53,6 +53,7 @@ type ContextInjectionManifest struct {
 	ToolCallID                string                     `json:"tool_call_id,omitempty"`
 	FailureClass              string                     `json:"failure_class,omitempty"`
 	Items                     []ContextManifestItem      `json:"items"`
+	OverBudget                bool                       `json:"over_budget,omitzero"`
 	Semantic                  *SemanticRetrievalIdentity `json:"semantic_retrieval,omitempty"`
 	Query                     *ContextQueryAttribution   `json:"query_attribution,omitempty"`
 	Fingerprint               string                     `json:"fingerprint"`
@@ -120,14 +121,21 @@ func BuildContextInjectionManifest(request ContextRequest, compiled CompiledCont
 			return ContextInjectionManifest{}, err
 		}
 	}
+	for _, filtered := range compiled.FilteredItems {
+		id := manifestItemID(filtered.ID)
+		if seen[id] {
+			continue
+		}
+		decision := decisionByID[id]
+		items = append(items, ContextManifestItem{ID: id, Kind: filtered.Kind, Source: filtered.Source, Reason: filtered.Reason, BaseScore: decision.BaseScore, FinalScore: decision.FinalScore})
+		seen[id] = true
+	}
 	for _, decision := range decisions {
 		id := manifestItemID(decision.ContextItemID)
 		if seen[id] {
 			continue
 		}
-		if compiled.Query != nil && decision.Included && decision.Kind != string(contextstore.ContextInvariant) {
-			decision.Included, decision.Reason = false, ContextOmittedInjectLimit
-		}
+		decision = unmaterializedContextDecision(decision, compiled.Query)
 		manifestItem := ContextManifestItem{ID: id, Kind: decision.Kind, Source: decision.Source, Included: decision.Included, Reason: decision.Reason, BaseScore: decision.BaseScore, FinalScore: decision.FinalScore}
 		if manifestItem.Kind == "" {
 			manifestItem.Kind = "canonical_memory"
@@ -141,7 +149,7 @@ func BuildContextInjectionManifest(request ContextRequest, compiled CompiledCont
 		}
 		items = append(items, manifestItem)
 	}
-	manifest := ContextInjectionManifest{SchemaVersion: ContextManifestSchemaVersion, RequestID: request.RequestID, RequestHash: request.Fingerprint(), RunID: request.RunID, TaskID: request.TaskID, Attempt: request.Attempt, Agent: agentName, AgentRole: request.AgentRole, ModelExecutionID: request.ModelExecutionID, Environment: request.EnvironmentFingerprint, Phase: request.Phase, Trigger: request.Trigger, Purpose: request.Purpose, ParentTrigger: request.ParentTrigger, ParentRequestID: request.ParentRequestID, ParentManifestFingerprint: request.ParentManifestFingerprint, ModelCalled: true, Outcome: "model_call", Items: items, Semantic: cloneSemanticRetrievalIdentity(compiled.Semantic), CreatedAt: createdAt.UTC()}
+	manifest := ContextInjectionManifest{SchemaVersion: ContextManifestSchemaVersion, RequestID: request.RequestID, RequestHash: request.Fingerprint(), RunID: request.RunID, TaskID: request.TaskID, Attempt: request.Attempt, Agent: agentName, AgentRole: request.AgentRole, ModelExecutionID: request.ModelExecutionID, Environment: request.EnvironmentFingerprint, Phase: request.Phase, Trigger: request.Trigger, Purpose: request.Purpose, ParentTrigger: request.ParentTrigger, ParentRequestID: request.ParentRequestID, ParentManifestFingerprint: request.ParentManifestFingerprint, ModelCalled: true, Outcome: "model_call", Items: items, OverBudget: compiled.OverBudget, Semantic: cloneSemanticRetrievalIdentity(compiled.Semantic), CreatedAt: createdAt.UTC()}
 	if request.Failure != nil {
 		if len(request.Failure.EvidenceRefs) > 0 {
 			manifest.ToolCallID = request.Failure.EvidenceRefs[0]
@@ -156,6 +164,18 @@ func BuildContextInjectionManifest(request ContextRequest, compiled CompiledCont
 		return WithContextQueryAttribution(manifest, *compiled.Query)
 	}
 	return manifest, nil
+}
+
+// An absent compiler item cannot be counted as injected. Query evaluation
+// retains its more specific injection-limit reason for historical memory.
+func unmaterializedContextDecision(decision ContextRouteDecision, query *ContextQueryAttribution) ContextRouteDecision {
+	if decision.Included {
+		decision.Included, decision.Reason = false, ContextOmittedNotMaterialized
+		if query != nil && decision.Kind != string(contextstore.ContextInvariant) {
+			decision.Reason = ContextOmittedInjectLimit
+		}
+	}
+	return decision
 }
 
 func validInvariantVerificationSeverity(severity InvariantSeverity) bool {
@@ -450,6 +470,9 @@ func (c *Coordinator) reportContextRouted(manifest *ContextInjectionManifest) {
 		state = "fallback/no-model"
 	}
 	message := fmt.Sprintf("context routed: request=%s attempt=%d %s/%s included=%d tokens=%d omitted=%d reasons=%s state=%s", manifest.RequestID, manifest.Attempt, manifest.Trigger, manifest.Purpose, included, includedTokens, omitted, strings.Join(reasons, ","), state)
+	if manifest.OverBudget {
+		message += " over_budget=true"
+	}
 	c.report(c.newEvent("context_routed").withAgent(manifest.Agent).withTodoID(manifest.TaskID).withMessage(message))
 }
 

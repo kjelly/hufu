@@ -124,6 +124,11 @@ func (c *Coordinator) selectWorkerToolsForTask(def *agent.AgentDef, task TaskDef
 		return nil
 	}
 	candidate := filterImplicitArtifactPolicyDeniedTools(def, agent.SelectTools(c.coreTools, def.Tools), task.WorksetBinding != nil, c.effectiveSideEffect(task) == SideEffectNone)
+	if !workerMemoryPhaseAllowed(task.Phase) {
+		candidate = slices.DeleteFunc(candidate, func(tool fantasy.AgentTool) bool {
+			return tool != nil && tool.Info().Name == "memory_query"
+		})
+	}
 	return c.filterCoordinatorOnlyWorkerTools(c.filterDeniedWorkerToolsWithGrants(c.filterLegacyMemoryMutationTools(def, candidate), c.taskToolGrants(def, task)))
 }
 

@@ -657,6 +657,9 @@ func (c *Coordinator) createGatedAgent(ctx context.Context, provider *agent.Open
 // error only when the failure is not something the model can work around (a
 // cancelled context, for instance).
 func (c *Coordinator) authorizeToolInvocation(ctx context.Context, agentName, toolName string) (string, error) {
+	if denial := c.workerMemoryToolDenial(ctx, toolName); denial != "" {
+		return denial, nil
+	}
 	if isOllamaWebTool(toolName) && !c.ollamaWebToolGranted(agentName, toolName) {
 		return fmt.Sprintf("tool %q requires an explicit agent tools grant and was not executed", toolName), nil
 	}

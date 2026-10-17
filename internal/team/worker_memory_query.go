@@ -22,6 +22,9 @@ func (c *Coordinator) queryWorkerMemory(ctx context.Context, todoID, query strin
 	if item == nil {
 		return fantasy.NewTextErrorResponse("memory_query requires the calling task")
 	}
+	if !workerMemoryPhaseAllowed(item.Phase) {
+		return fantasy.NewTextErrorResponse(verifyMemoryQueryDenial)
+	}
 	def := c.agentDefByName(item.Agent)
 	if def == nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("memory_query requires a known worker; %q is not one", item.Agent))
@@ -30,15 +33,17 @@ func (c *Coordinator) queryWorkerMemory(ctx context.Context, todoID, query strin
 		return fantasy.NewTextResponse("Memory recall is disabled for this agent.")
 	}
 	scope := resolveWorkerScope(c.contextScope(), def, c.activeBranchID())
+	lineage, lineageOK := c.workerMemoryLineage(scope.BranchID)
 	bundle, err := c.workerMemorySvc.Recall(ctx, WorkerMemoryRecallRequest{
-		WorkerID:       def.MemoryID,
-		BranchID:       scope.BranchID,
-		Scope:          scope,
-		SessionLineage: c.workerMemoryLineage(scope.BranchID),
-		Query:          query,
-		Policy:         def.Memory,
-		MaxItems:       limit,
-		MaxTokens:      def.Memory.MaxTokens,
+		WorkerID:           def.MemoryID,
+		BranchID:           scope.BranchID,
+		Scope:              scope,
+		SessionLineage:     lineage,
+		LineageUnavailable: !lineageOK,
+		Query:              query,
+		Policy:             def.Memory,
+		MaxItems:           limit,
+		MaxTokens:          def.Memory.MaxTokens,
 		Trace: SemanticTraceAttribution{
 			RunID: c.executionRunID, TaskID: todoID, Trigger: "memory_query", Agent: item.Agent,
 			Source: semanticSourceWorkerPrivate,
@@ -47,6 +52,8 @@ func (c *Coordinator) queryWorkerMemory(ctx context.Context, todoID, query strin
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("worker memory query failed: %v", err))
 	}
+	c.reportWorkerMemoryDegraded(ctx, bundle.Trace)
+	note := workerMemoryUnavailableNote(bundle.Trace)
 	var b strings.Builder
 	for _, recalled := range bundle.Items {
 		if kind != "" && recalled.Kind != kind {
@@ -58,7 +65,13 @@ func (c *Coordinator) queryWorkerMemory(ctx context.Context, todoID, query strin
 		fmt.Fprintf(&b, "- [%.2f] %s (id: %s)\n", recalled.FinalScore, recalled.Content, recalled.ID)
 	}
 	if b.Len() == 0 {
+		if note != "" {
+			return fantasy.NewTextResponse("No memories could be returned. " + note)
+		}
 		return fantasy.NewTextResponse("No relevant memories found.")
+	}
+	if note != "" {
+		b.WriteString("\n" + note)
 	}
 	return fantasy.NewTextResponse(strings.TrimSpace(b.String()))
 }
@@ -77,4 +90,27 @@ func (*canonicalMemoryQueryTool) unboundArtifactPolicyTool() {}
 func isUnboundArtifactPolicyTool(tool fantasy.AgentTool) bool {
 	_, ok := tool.(unboundArtifactPolicyTool)
 	return ok
+}
+
+const verifyMemoryQueryDenial = "memory_query is unavailable during VERIFY; use the task's authorized evidence"
+
+func workerMemoryPhaseAllowed(phase Phase) bool {
+	return !strings.EqualFold(strings.TrimSpace(string(phase)), string(PhaseVerify))
+}
+
+func (c *Coordinator) workerMemoryToolDenial(ctx context.Context, name string) string {
+	if name != "memory_query" {
+		return ""
+	}
+	todoID, _ := ctx.Value(todoIDKey{}).(string)
+	if todoID == "" || todoID == CoordTodoID {
+		return ""
+	}
+	if item := c.todoItemByID(todoID); item != nil && !workerMemoryPhaseAllowed(item.Phase) {
+		return verifyMemoryQueryDenial
+	}
+	if metadata, ok := invocationMetadataFromContext(ctx); ok && !workerMemoryPhaseAllowed(metadata.Phase) {
+		return verifyMemoryQueryDenial
+	}
+	return ""
 }

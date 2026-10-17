@@ -8,6 +8,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
+	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/sidecar"
 	internaltools "github.com/kjelly/hufu/internal/tools"
@@ -636,6 +637,7 @@ func (cc *defaultContextCompiler) FormatDependencyResults(dependencies []TaskRes
 const coordinatorAgentIdentity = "coordinator"
 
 func (cc *defaultContextCompiler) CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInput) (CompiledContext, error) {
+	ctx = contextstore.WithEvaluationTime(ctx, contextEvaluationTime(ctx, input.CanonicalMemory))
 	var query *ContextQueryAttribution
 	if cc.c != nil {
 		ctx = cc.c.withContextQueryPolicy(ctx)
@@ -652,6 +654,7 @@ func (cc *defaultContextCompiler) CompileCoordinatorContext(ctx context.Context,
 }
 
 func (cc *defaultContextCompiler) CompileWorkerContext(ctx context.Context, input WorkerContextInput) (CompiledContext, error) {
+	ctx = contextstore.WithEvaluationTime(ctx, contextEvaluationTime(ctx, input.CanonicalMemory))
 	if cc.c != nil {
 		ctx = cc.c.withContextQueryPolicy(ctx)
 		forAgent := input.TaskDef.Agent

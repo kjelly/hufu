@@ -110,6 +110,7 @@ func (c *Coordinator) canonicalContextBundle(ctx context.Context) (*CanonicalCon
 }
 
 func (c *Coordinator) canonicalContextBundleForQuery(ctx context.Context, query string) (*CanonicalContextBundle, bool, error) {
+	ctx = contextstore.WithEvaluationTime(ctx, contextstore.EvaluationTime(ctx))
 	if c == nil || c.contextRepo == nil {
 		return nil, false, nil
 	}
@@ -137,7 +138,7 @@ func (c *Coordinator) canonicalContextBundleForQuery(ctx context.Context, query 
 		}
 		ltm, scores, finalScores, aggregates = baseLTM, nil, nil, nil
 	}
-	return &CanonicalContextBundle{SharedSession: stm, SharedPersistent: ltm, SharedPersistentScores: scores, SharedPersistentFinalScores: finalScores, SharedPersistentAggregates: aggregates, SharedPersistentConflicts: c.openConflictsForItems(ctx, ltm)}, true, nil
+	return &CanonicalContextBundle{EvaluatedAt: contextstore.EvaluationTime(ctx), SharedSession: stm, SharedPersistent: ltm, SharedPersistentScores: scores, SharedPersistentFinalScores: finalScores, SharedPersistentAggregates: aggregates, SharedPersistentConflicts: c.openConflictsForItems(ctx, ltm)}, true, nil
 }
 
 // coordinatorMemorySources is the memory a coordinator prompt draws on:

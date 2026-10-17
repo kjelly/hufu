@@ -54,6 +54,7 @@ type ContextItem struct {
 	Scope                ContextScope
 	Priority             int
 	TokenCount           int
+	tokenEstimator       string
 	Confidence           float64
 	Freshness            time.Time
 	Provenance           []string
@@ -177,6 +178,8 @@ type CanonicalContextBundle struct {
 	// SharedPersistentSemantic is the active semantic lane's identity for
 	// the shared persistent ranking (nil when off or shadow).
 	SharedPersistentSemantic *SemanticRetrievalIdentity
+	// EvaluatedAt freezes lifecycle and expiry checks across routing and compilation.
+	EvaluatedAt time.Time
 }
 
 func repositoryInvariantCompilerItems(records []contextstore.ContextItem) ([]ContextItem, error) {
@@ -209,10 +212,12 @@ type CompiledContext struct {
 	CompactedSummary *StructuredSummary
 	IncludedItems    []ContextItem
 	OmittedItems     []ContextItem
-	UsedTokens       int
-	OverBudget       bool
-	Fingerprint      string
-	Semantic         *SemanticRetrievalIdentity
+	// FilteredItems are canonical rows dropped before budgeting, without content.
+	FilteredItems []FilteredContextItem
+	UsedTokens    int
+	OverBudget    bool
+	Fingerprint   string
+	Semantic      *SemanticRetrievalIdentity
 }
 
 func canonicalCompilerItems(records []contextstore.ContextItem, priority int, source string, workerSTMOnly bool, includeCandidates bool) []ContextItem {
@@ -222,21 +227,7 @@ func canonicalCompilerItems(records []contextstore.ContextItem, priority int, so
 func canonicalCompilerItemsAt(records []contextstore.ContextItem, priority int, source string, workerSTMOnly bool, includeCandidates bool, now time.Time) []ContextItem {
 	items := make([]ContextItem, 0, len(records))
 	for _, record := range records {
-		// Shared session STM may carry the current run's candidates (visible to
-		// the run's own prompts); persistent LTM never does. The coordinator
-		// already filters SharedSession to confirmed + current-run candidates, so
-		// includeCandidates only relaxes the lifecycle guard for that list.
-		if record.Lifecycle == contextstore.LifecycleCandidate {
-			if !includeCandidates {
-				continue
-			}
-		} else if record.Lifecycle != "" && record.Lifecycle != contextstore.LifecycleConfirmed {
-			continue
-		}
-		if record.SupersededBy != "" || strings.TrimSpace(record.Content) == "" || (record.ExpiresAt != nil && !now.Before(*record.ExpiresAt)) {
-			continue
-		}
-		if workerSTMOnly && record.Kind == contextstore.ContextProgress {
+		if canonicalRecordFilterReason(record, now, workerSTMOnly, includeCandidates) != "" {
 			continue
 		}
 		provenance := make([]string, 0, len(record.Evidence)+1)
@@ -471,10 +462,8 @@ func BudgetContextItems(items []ContextItem, budget ContextBudget) ([]ContextIte
 		item := items[i]
 		cost := item.TokenCount
 		if cost <= 0 {
-			cost = len([]rune(item.Content)) / 4
-			if cost == 0 && len(item.Content) > 0 {
-				cost = 1
-			}
+			cost = estimateTextTokens(item.Content, item.tokenEstimator)
+			item.TokenCount = cost
 		}
 
 		if usedTokens+cost <= maxTokens {
@@ -482,17 +471,10 @@ func BudgetContextItems(items []ContextItem, budget ContextBudget) ([]ContextIte
 			usedTokens += cost
 		} else {
 			overBudget = true
-			if item.Compressible && maxTokens > usedTokens {
-				remainingChars := (maxTokens - usedTokens) * 4
-				if remainingChars > 50 {
-					runes := []rune(item.Content)
-					if len(runes) > remainingChars {
-						item.Content = string(runes[:remainingChars]) + "..."
-						item.TokenCount = len(runes[:remainingChars]) / 4
-						item.Compressed = true
-					}
-					selected = append(selected, item)
-					usedTokens += item.TokenCount
+			if truncatable(item) {
+				if truncated, ok := truncateContextItemToTokens(item, maxTokens-usedTokens); ok {
+					selected = append(selected, truncated)
+					usedTokens += truncated.TokenCount
 					continue
 				}
 			}
@@ -712,6 +694,7 @@ func opaqueArtifactID(id string) string {
 
 // CompileCoordinatorContext collects all coordinator context sources and executes the pipeline.
 func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInput) (CompiledContext, error) {
+	ctx = contextstore.WithEvaluationTime(ctx, contextEvaluationTime(ctx, input.CanonicalMemory))
 	if finish := startContextStage(ctx, input.Request.RequestID, input.Request.ModelExecutionID, "compilation"); finish != nil {
 		defer finish()
 	}
@@ -821,6 +804,9 @@ func CompileCoordinatorContext(ctx context.Context, input CoordinatorContextInpu
 	if err != nil {
 		return CompiledContext{}, err
 	}
+	if input.CanonicalMemory != nil && !input.DisableCanonicalMemory {
+		compiled.FilteredItems = canonicalBundleFilteredItems(input.CanonicalMemory, false, contextstore.EvaluationTime(ctx))
+	}
 	if input.CanonicalMemory != nil {
 		compiled.Semantic = cloneSemanticRetrievalIdentity(input.CanonicalMemory.SharedPersistentSemantic)
 	}
@@ -865,6 +851,7 @@ func workerNormativeContextItems(input WorkerContextInput) []ContextItem {
 
 // CompileWorkerContext collects all worker context sources and executes the pipeline.
 func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (CompiledContext, error) {
+	ctx = contextstore.WithEvaluationTime(ctx, contextEvaluationTime(ctx, input.CanonicalMemory))
 	if finish := startContextStage(ctx, input.Request.RequestID, input.Request.ModelExecutionID, "compilation"); finish != nil {
 		defer finish()
 	}
@@ -895,6 +882,9 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 	}
 	if input.WorkerMemory != nil {
 		compiled.Semantic = cloneSemanticRetrievalIdentity(input.WorkerMemory.Semantic)
+	}
+	if input.CanonicalMemory != nil && !input.DisableCanonicalMemory {
+		compiled.FilteredItems = canonicalBundleFilteredItems(input.CanonicalMemory, true, contextstore.EvaluationTime(ctx))
 	}
 	if input.CanonicalMemory != nil {
 		compiled.Semantic = mergeSemanticRetrievalIdentity(compiled.Semantic, input.CanonicalMemory.SharedPersistentSemantic)
@@ -1044,6 +1034,7 @@ func assignTokenCounts(spec ModelContextSpec, items []ContextItem) {
 		estimator = globalRegistry.GetSpec(spec.ModelID).Estimator
 	}
 	for i := range items {
+		items[i].tokenEstimator = estimator
 		if items[i].TokenCount > 0 {
 			continue
 		}
