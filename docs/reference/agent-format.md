@@ -319,77 +319,6 @@ Schema 可選用下列通用 runtime 擴充（都包含在 schema hash 中）：
   取代 coordinator 的自由摘要。無報告或多份報告不明確時 fail closed；
   明確承認失敗的 partial finish 仍可結束並揭露缺少報告的原因。
 
-### 固定集合與有限選項決策
-
-當結果必須逐項處理已知集合時，在結果 schema 根節點宣告
-`x-hufu-fixed-collections`。runtime 從已接受的 `evidence_from` payload
-建立固定項目；模型只提供每個項目的語意決策。以下是一般資產審核的例子：
-
-```json
-{
-  "x-hufu-fixed-collections": [{
-    "items_pointer": "/decisions",
-    "source_contracts": ["schemas/assets.json"],
-    "source_pointer": "/entries",
-    "task_id_field": "origin",
-    "index_field": "position",
-    "value_bindings": {"asset": "/id"},
-    "choice_fields": ["state"]
-  }]
-}
-```
-
-canonical schema 的 `/decisions` 仍宣告為 array，item 是直接宣告的
-`additionalProperties: false` object，包含 `origin`、`position`、`asset`、
-`state`、`reason` 等欄位。`state` 必須是必要的 string enum，例如
-`["accept", "reject", "uncertain"]`。每個 `choice_fields` 欄位須有 2–21 個
-唯一的 lowercase 或 snake_case 選項；選項的意義由 team 定義。
-需要強制結構化結果的任務仍須設定 `require-structured: true`。
-
-每個匹配來源 schema 的上游 payload 都依 `source_pointer` 取出 array；
-按照 durable `evidence_from` 順序，再按照原始 array 順序，產生固定列。
-預設 `source_scope` 是 `evidence_from`，只讀該明確清單。若 producer 與
-consumer 位於同一個 DAG batch，可宣告 `source_scope: dependency_results`：
-改從 runtime 已交付的直接 `depends_on`／`evidence_from` 結果中選取符合
-`source_contracts` 的 payload，依交付順序與原始 array 順序建立列。
-這不會讀取間接依賴、其他任務或整個 session，也不需要模型預測 Todo ID。
-來源 scope 是 schema 契約的一部分，未宣告時不會自動擴大來源。
-`task_id_field` 與 `index_field` 是 runtime 產生的來源 ID 與零起算索引；
-`value_bindings` 將每個來源 item 的 JSON pointer 值複製到指定固定欄位，
-空 pointer 代表整個來源 item。至少要宣告一個固定欄位，名稱不可重疊。
-來源只取最外層指定 array，不會從 prose 或巢狀複本猜測更多項目。
-
-worker 收到必要的 **Runtime Fixed Collections** manifest，其中列出固定值、
-來源 hash、opaque row key 與 decision schema。提交時該欄位改用 object：
-每個 runtime-issued key 對應一個只含決策欄位的 object。工具 schema 會在
-portable 大小限制內列出精確 key 與選項；較大的 schema 保留 object 形狀，
-完整 manifest 與 runtime 驗證仍是權威。不要自行生成 row key、重送 array，
-或在決策中填入 runtime-owned 欄位。空集合提交 `{}`，儲存為 `[]`。
-
-runtime 在 schema 驗證與 payload hashing **之前**組合 canonical array。
-重複、額外、遺漏或未知 key、固定欄位覆寫、無效 enum 與條件證據不符都會
-拒絕；worker 可在同 attempt 修正。來源內容與 task ID 參與完整 SHA-256 row
-key，因此上游在執行中被替換時，舊決策也不能套用到等長的新清單。
-`ResultPayload.collection_bindings` 由 runtime 記錄來源 payload hash；worker
-不能提交此 metadata。commit、依賴讀取、replay/completion 與最終報告重驗
-來源和固定列；既有 receipt hash 綁定的是已組裝的 canonical payload。
-依賴驗證會沿固定集合的來源鏈檢查 provenance，並拒絕循環，避免把間接引用的
-舊決策當成目前有效的證據。列舉值正規化保留含重複 key 或多份 JSON 的原文，
-不能透過大小寫修正先合併掉無效輸入。
-
-每份 schema 最多 8 個互不重疊的集合，每個集合最多 2048 列；manifest
-最多 32 KiB，超過時須拆分任務，不能截斷。target path 只支援直接宣告的
-object properties，item 也須直接宣告；不猜測 `$ref`、分支或 array parent。
-來源 schema 必須在 team 中載入。至少要有一份匹配的已接受來源；有來源且
-array 為空，與缺少來源不同，後者 fail closed。其餘 schema、payload、
-evidence source 與 context budget 限制仍適用。
-固定值的型別、欄位限制與已知列數也在模型執行前檢查；矛盾的設定直接拒絕。
-
-這是既有 worker 的結構化決策契約，不會額外呼叫模型、加入推論工具，或
-改變 `no-net` 等授權。有限選項只約束答案集合；語意與證據仍須由模型判讀，
-不可從關鍵字猜測或在無效輸出時默選答案。team 可宣告 uncertainty 選項或
-要求回報 `blocked`；處置仍受該 team 的完成與證據契約約束。
-
 例如，在 schema 根節點宣告（欄位名稱與降級值由團隊定義）：
 
 ```json
@@ -483,6 +412,77 @@ false 可交付空清單或部分輸入，但列出的每項仍須有效。hash 
 canonical payload bytes 重算，`value_bindings` 將 review 欄位與該輸入
 payload 的欄位逐值比較。完成稽核不要求每項事實皆已證實；
 未驗證結論可以交付，必須保留證據缺口與準確的原因。
+
+### 固定集合與有限選項決策
+
+當結果必須逐項處理已知集合時，在結果 schema 根節點宣告
+`x-hufu-fixed-collections`。runtime 從已接受的 `evidence_from` payload
+建立固定項目；模型只提供每個項目的語意決策。以下是一般資產審核的例子：
+
+```json
+{
+  "x-hufu-fixed-collections": [{
+    "items_pointer": "/decisions",
+    "source_contracts": ["schemas/assets.json"],
+    "source_pointer": "/entries",
+    "task_id_field": "origin",
+    "index_field": "position",
+    "value_bindings": {"asset": "/id"},
+    "choice_fields": ["state"]
+  }]
+}
+```
+
+canonical schema 的 `/decisions` 仍宣告為 array，item 是直接宣告的
+`additionalProperties: false` object，包含 `origin`、`position`、`asset`、
+`state`、`reason` 等欄位。`state` 必須是必要的 string enum，例如
+`["accept", "reject", "uncertain"]`。每個 `choice_fields` 欄位須有 2–21 個
+唯一的 lowercase 或 snake_case 選項；選項的意義由 team 定義。
+需要強制結構化結果的任務仍須設定 `require-structured: true`。
+
+每個匹配來源 schema 的上游 payload 都依 `source_pointer` 取出 array；
+按照 durable `evidence_from` 順序，再按照原始 array 順序，產生固定列。
+預設 `source_scope` 是 `evidence_from`，只讀該明確清單。若 producer 與
+consumer 位於同一個 DAG batch，可宣告 `source_scope: dependency_results`：
+改從 runtime 已交付的直接 `depends_on`／`evidence_from` 結果中選取符合
+`source_contracts` 的 payload，依交付順序與原始 array 順序建立列。
+這不會讀取間接依賴、其他任務或整個 session，也不需要模型預測 Todo ID。
+來源 scope 是 schema 契約的一部分，未宣告時不會自動擴大來源。
+`task_id_field` 與 `index_field` 是 runtime 產生的來源 ID 與零起算索引；
+`value_bindings` 將每個來源 item 的 JSON pointer 值複製到指定固定欄位，
+空 pointer 代表整個來源 item。至少要宣告一個固定欄位，名稱不可重疊。
+來源只取最外層指定 array，不會從 prose 或巢狀複本猜測更多項目。
+
+worker 收到必要的 **Runtime Fixed Collections** manifest，其中列出固定值、
+來源 hash、opaque row key 與 decision schema。提交時該欄位改用 object：
+每個 runtime-issued key 對應一個只含決策欄位的 object。工具 schema 會在
+portable 大小限制內列出精確 key 與選項；較大的 schema 保留 object 形狀，
+完整 manifest 與 runtime 驗證仍是權威。不要自行生成 row key、重送 array，
+或在決策中填入 runtime-owned 欄位。空集合提交 `{}`，儲存為 `[]`。
+
+runtime 在 schema 驗證與 payload hashing **之前**組合 canonical array。
+重複、額外、遺漏或未知 key、固定欄位覆寫、無效 enum 與條件證據不符都會
+拒絕；worker 可在同 attempt 修正。來源內容與 task ID 參與完整 SHA-256 row
+key，因此上游在執行中被替換時，舊決策也不能套用到等長的新清單。
+`ResultPayload.collection_bindings` 由 runtime 記錄來源 payload hash；worker
+不能提交此 metadata。commit、依賴讀取、replay/completion 與最終報告重驗
+來源和固定列；既有 receipt hash 綁定的是已組裝的 canonical payload。
+依賴驗證會沿固定集合的來源鏈檢查 provenance，並拒絕循環，避免把間接引用的
+舊決策當成目前有效的證據。列舉值正規化保留含重複 key 或多份 JSON 的原文，
+不能透過大小寫修正先合併掉無效輸入。
+
+每份 schema 最多 8 個互不重疊的集合，每個集合最多 2048 列；manifest
+最多 32 KiB，超過時須拆分任務，不能截斷。target path 只支援直接宣告的
+object properties，item 也須直接宣告；不猜測 `$ref`、分支或 array parent。
+來源 schema 必須在 team 中載入。至少要有一份匹配的已接受來源；有來源且
+array 為空，與缺少來源不同，後者 fail closed。其餘 schema、payload、
+evidence source 與 context budget 限制仍適用。
+固定值的型別、欄位限制與已知列數也在模型執行前檢查；矛盾的設定直接拒絕。
+
+這是既有 worker 的結構化決策契約，不會額外呼叫模型、加入推論工具，或
+改變 `no-net` 等授權。有限選項只約束答案集合；語意與證據仍須由模型判讀，
+不可從關鍵字猜測或在無效輸出時默選答案。team 可宣告 uncertainty 選項或
+要求回報 `blocked`；處置仍受該 team 的完成與證據契約約束。
 
 ### 已驗證的替代任務（reconcile_task）
 

@@ -1,155 +1,185 @@
 ---
 name: hufu-diagnose-invocation
-description: Investigate, diagnose, and troubleshoot Hufu invocations or runs (`inv-...` or `run-...`). Use when asked to check if an invocation's progress is normal, diagnose stuck/deadlocked runs, analyze failures, inspect live tmux/processes, and attribute root causes across Hufu runtime, agent team, and repository codebase.
+description: Diagnose Hufu invocations or runs through public status, inspect, results, and debug interfaces. Use to assess progress, investigate failures or suspected stalls, and distinguish runtime, team-contract, and target-repository causes.
 ---
 
-# Hufu Diagnose Invocation Skill
+# Hufu Diagnose Invocation
 
-Standard Operating Procedure (SOP) for investigating, diagnosing, and attributing root causes of Hufu agent team executions using an Invocation ID (`inv-...`) or Run ID (`run-...`).
+Investigate the requested `inv-...` or `run-...` using Hufu's public diagnostic
+interfaces. Treat their scoped, canonical output as the evidence boundary.
 
-## Core Principle
+## Interface contract
 
-**Never run a blind recursive `grep` across the entire repository or `.git`.**
-Hufu keeps its event journal, session checkpoint, and task journal in `<state_dir>/runtime.sqlite`, and audit logs under `<state_dir>/logs/`, in deterministic managed state directories. Follow the phases below to isolate the issue in 2–3 precise operations.
+- Start with `hufu status`, `hufu inspect`, and `hufu results`. Use JSON output
+  for filtering, counting, and comparison; confirm flags with `--help` or
+  full command help, such as `hufu help --all inspect run`. Diagnose with the
+  same Hufu version used for the run when
+  available; a binary on PATH may differ from the checkout being investigated.
+- Obtain workspace, team, run, session, branch, and result identities from CLI
+  output or the user's launch record. Do not reconstruct managed paths from
+  project slugs or inspect process file descriptors to locate runtime storage.
+- Do not query databases, parse checkpoints, or read internal audit/journal
+  files directly as part of this workflow. Read-only access still couples the
+  diagnosis to implementation details and can bypass scope and presentation
+  guarantees. Do not scan the whole repository or `.git` for an invocation.
+- If an interface lacks needed evidence, record the exact command, scope,
+  version, and missing information. Try another documented diagnostic command
+  or a debug export; report any remaining observability gap. Do not silently
+  replace the interface with storage-specific queries or claim a missing
+  feature without first checking the CLI.
+- Diagnosis does not authorize retries, recovery, migration, session checkout,
+  cancellation, or edits to runtime state. Recommend a concrete remedy from
+  the evidence; perform it only within the user's authorized task.
 
-**Never write to `runtime.sqlite` or `context.sqlite`.** Prefer `hufu inspect ...` and `hufu debug <run_id>` bundles; query the database directly only with `sqlite3 -readonly` (SQLite may leave empty `-wal`/`-shm` files next to it, which is harmless). A state directory that still has `session.json` or `logs/event_store.jsonl` but no `runtime.sqlite` is a retired file-based workspace that current Hufu refuses to run; the operator can convert it with `hufu workspace convert-storage --team <team>` (never convert on their behalf during diagnosis).
+The examples below assume variables have been populated from the user or CLI
+output. Substitute the actual identities; do not infer IDs from task prose.
 
----
+## 1. Resolve the target and scope
 
-## Diagnostic Workflow
+For a known team, inspect the current workspace:
 
-```text
-Phase 1: Locate & Map  ──►  Phase 2: Live Status  ──►  Phase 3: Deep-Dive Logs  ──►  Phase 4: Tri-Layer Attribution  ──►  Phase 5: Actionable Report
-(Find PID, state dir)       (Process, tmux, step)     (Audit, session, events)       (Runtime vs Team vs Repo)            (Clear synthesis)
-```
-
----
-
-## Phase 1: Fast Location & Identification
-
-When given an Invocation ID (`inv-...`) or Run ID (`run-...`):
-
-### 1. Check for Active Processes
 ```bash
-ps aux | grep -E "hufu.*(inv-|--agent-team)" | grep -v grep
+hufu status --team "$team_name" --json --workers
 ```
-- Note the **PID**, **CPU%**, **start time**, and CLI arguments (e.g., `--agent-team`, `--model`, `--new`, prompt).
 
-### 2. Locate the Managed State Directory
-Hufu stores team sessions either in the project managed state path or a local `./workspace/`:
-- **Default managed state**: `~/.local/state/hufu/projects/<project-slug>/teams/<team-name>/`
-  - Find recent project state dirs:
-    ```bash
-    ls -td ~/.local/state/hufu/projects/* 2>/dev/null | head -n 3
-    ```
-  - Project slug follows `<repo-name>--<hash>` (e.g., `agent-team-cli--1d1699dc8b9e18e8`).
-- **Check active open file descriptors of the PID** (fastest way to locate active workspace):
-  ```bash
-  ls -l /proc/<PID>/fd 2>/dev/null | grep -E "(runtime\.sqlite|context\.sqlite|audit)"
-  ```
-- **Map Invocation ID to Run ID & Team** (read-only query of each team's event journal):
-  ```bash
-  for db in ~/.local/state/hufu/projects/*/teams/*/runtime.sqlite; do
-    sqlite3 -readonly "$db" "SELECT DISTINCT run_id FROM events WHERE invocation_id = 'inv-<TIMESTAMP>'" 2>/dev/null | sed "s|^|$db |"
-  done
-  ```
+This returns the current workspace/run/invocation identities and task counts.
+It describes the active session, which may already differ from the requested
+invocation. Never substitute the latest run for the user's target.
 
----
+For an invocation, discover its saved results and their run/branch identities:
 
-## Phase 2: Live Status & Terminal Observation
-
-Determine whether the execution is **RUNNING**, **STUCK/DEADLOCKED**, or **TERMINATED**.
-
-### 1. If the Process is RUNNING:
-Check the interactive terminal (tmux pane) if available:
 ```bash
-tmux capture-pane -pt hufu -S -50 2>/dev/null
+hufu results invocation "$invocation_id" --team "$team_name" --all-branches --output json --limit 50
 ```
-- **Identify current Step & Actor**: Look for `step <N>`, `hufu-<team>/coordinator [model] › <tool>`.
-- **Read Coordinator Thoughts**: Look for `💬 <thought>` to understand what the model is trying to do.
-- **Detect Tool Call Loops (Deadlocks)**:
-  - Is the model repeatedly calling `finish` and receiving `cannot finish: ...`?
-  - Is the model repeatedly calling `agent` and getting `delegation policy violation`?
-  - Is `coordinator policy repair budget` being consumed?
-  - If CPU% is high without new tools for minutes, the model may be waiting on slow streaming/inference or stuck in a tool loop.
 
-### 2. If the Process is TERMINATED:
-- Check exit code and final terminal output in tmux or stderr.
-- Note whether the run produced a final `report.md`:
-  ```bash
-  cat <state_dir>/report.md | head -n 40
-  ```
+If the team is unknown, omit `--team` for this discovery query, then narrow
+subsequent queries to the matching team and exact workspace. If the user
+provided an exact workspace, pass `--workspace "$workspace"` explicitly.
+Follow `next_cursor` using `--cursor` with the same query filters; the first
+page is not the whole invocation. Saved result rows can represent different
+attempts or snapshots of a task: use canonical task identity and run summaries
+rather than counting rows as tasks.
 
----
+`results` exposes saved results, not every in-flight task. An empty result page
+alone does not establish that a run never started or has stopped. Check current
+status and the supplied launch output as well.
 
-## Phase 3: Deep-Dive Artifact & Log Inspection
+For historical runs, resolve their branch from the returned result metadata or
+`hufu session list --workspace "$workspace" --json`. `inspect` defaults to the
+active branch; `results` defaults to the active lineage. Historical `not found`
+responses therefore require a scope check before concluding data is missing.
+Use an exact `--branch` for `inspect`; use `--all-branches` only for deliberate
+historical discovery with `results`. Do not switch branches to inspect one.
 
-Drill down into the state directory `<state_dir>`:
+## 2. Assess progress and outcome
 
-### 1. Inspect Task States (session checkpoint in `runtime.sqlite`)
+For the current session:
+
 ```bash
-sqlite3 -readonly <state_dir>/runtime.sqlite "SELECT CAST(body AS TEXT) FROM runtime_documents WHERE name = 'session'" | jq -c '{workflow_state: .workflow_state, tasks: [.tasks[]? | {id: .ID, agent: .Agent, goal: .goal, status: .Status, err: .runtime_error.message}]}'
+hufu status --workspace "$workspace" --json --workers --verbose
 ```
-- The checkpoint reflects the active branch's latest run only; for an older run use `hufu inspect run <run_id>`.
-- Check `workflow_state`: `PREPARE`, `VERIFY`, `FAILED`, `DONE`.
-- Identify which task failed and read its `failure_event` and `runtime_error`.
 
-### 2. Inspect Tool Calls & Errors (`logs/audit/audit-YYYY-MM-DD.jsonl`)
-Filter recent calls for the invocation:
+For a specific run and its event timeline:
+
 ```bash
-jq -c 'select(.timestamp >= "<run-start-time>") | {time: .timestamp, agent: .agent, tool: .tool, action: .action, err: .error, input: (.input | if . then fromjson? // . else null end)}' <state_dir>/logs/audit/audit-*.jsonl | tail -n 30
+hufu inspect run "$run_id" --workspace "$workspace" --branch "$branch_id" --format json
+hufu inspect trace "$run_id" --workspace "$workspace" --branch "$branch_id" --format json
 ```
-- Look for `action == "result"` with non-null `error`.
-- Check if tool execution failed (e.g., action provider error, gate error, policy violation).
 
-### 3. Inspect Lifecycle Events (event journal in `runtime.sqlite`)
-Export the run's events with a debug bundle (redacted; written to the current directory as `hufu-debug-<run_id>.tar.gz`, never overwritten), then read its JSONL export:
+Compare successive snapshots with the same scope. Look for new events,
+worker/attempt changes, task transitions, retry activity, and freshness metadata.
+These are separate CLI reads, so account for their observation times while a
+run is changing. Do not classify a normal inference or verifier wait as a
+failure merely because the terminal printed a 30-second waiting message.
+
+Use the run's canonical outcome, acceptance, stop reason, and unresolved task
+summary together. A report being present or a worker saying "done" does not
+prove acceptance. Missing or unavailable observations are not zero failures or
+proof of a deadlock. Describe uncertainty when progress cannot be established.
+
+If runtime observations leave an OS-liveness question, supplement them with
+only the process or terminal already identified by the launch record:
+
 ```bash
-hufu debug <run_id> --workspace <state_dir>
-tar -xzOf hufu-debug-<run_id>.tar.gz logs/event_store.jsonl | jq -c '{time: .timestamp, type: .type, actor: .actor, tool: .payload.tool_name, status: .payload.action_status}' | tail -n 25
+ps -p "$pid" -o pid,ppid,comm,pcpu,etime
+tmux capture-pane -pt "$pane" -S -50
 ```
-Or query the journal directly (unredacted, newest first):
+
+Use tmux only when the relevant pane is known. Do not dump all process arguments,
+environments, or unrelated panes. Process presence and CPU activity supplement
+CLI evidence; neither proves task success or a deadlock by itself.
+
+## 3. Inspect the relevant failure or result
+
+Choose the task from status/trace evidence and inspect its persisted attempts:
+
 ```bash
-sqlite3 -readonly <state_dir>/runtime.sqlite "SELECT timestamp, type, actor, json_extract(CAST(payload AS TEXT), '$.tool_name'), json_extract(CAST(payload AS TEXT), '$.action_status') FROM events WHERE run_id = '<run_id>' ORDER BY sequence DESC LIMIT 25"
+hufu inspect task "$task_id" --run "$run_id" --workspace "$workspace" --branch "$branch_id" --format json
 ```
-- Observe the state transition chain: `phase_started` → `tool_observation_failed` → `phase_failed` → `run_finished`.
 
-### 4. Use Native Hufu CLI Diagnostics (Read-Only)
+Examine the reported failure class, reason, retry disposition, verification,
+recovery, and attempt identities before deciding whether the cause is a
+provider error, invalid submission, semantic rejection, or failed verification.
+Do not infer failure classification or recovery permission from model prose.
+
+Read the exact saved result or its complete structured payload when needed:
+
 ```bash
-hufu inspect run <run_id> --workspace <state_dir>
-hufu inspect trace <run_id> --workspace <state_dir> | tail -n 20
+hufu results show "$result_id" --workspace "$workspace" --team "$team_name" --all-branches --output json
+hufu results show "$result_id" --workspace "$workspace" --team "$team_name" --all-branches --payload
+hufu results report "$result_id" --workspace "$workspace" --team "$team_name" --all-branches
 ```
 
----
+Use JSON tools to compare these exported payloads against the owning team's
+contract, such as exact source IDs, collection membership, or coverage gaps.
+A missing payload must remain unavailable; do not reconstruct it from a
+summary. For evidence provenance or replay consistency, use the relevant
+public projection:
 
-## Phase 4: Tri-Layer Root Cause Attribution
+```bash
+hufu inspect evidence "$run_id" --workspace "$workspace" --branch "$branch_id" --format json
+hufu inspect replay "$run_id" --workspace "$workspace" --branch "$branch_id" --format json
+```
 
-Categorize findings into one of three distinct layers:
+When these interfaces cannot explain the failure, export a debug bundle:
 
-| Layer | Responsibility | Typical Signatures |
-| :--- | :--- | :--- |
-| **Layer 1: Hufu Runtime Bug** (`internal/**`) | Core scheduler, state machine, policy gates, token management | • **Policy/Gate Deadlock**: Delegation policy tells coordinator `"If no unfinished work remains, call finish directly"`, but `requireFinished()` returns `"cannot finish: workflow verification gate is not satisfied: current phase is FAILED"`.<br>• `coordinator policy repair budget exhausted`.<br>• Context window overflow / compaction failure (`CannotFit`).<br>• Shadow export parity mismatch warnings. |
-| **Layer 2: Agent Team Defect** (`.agent-teams/<team>/`) | Team YAML, worker prompts, action providers (`./reviewprep`, etc.) | • **Overly Strict Workflow Policy**: `policies.fail_fast: true` + `require_phase_success: true` killing the entire run on a minor pre-check.<br>• **Action Provider Grep/Regex Flaws**: Using raw `git grep -F` on qualified Go symbols (`package.Type`), causing false-negative symbol missing errors.<br>• **Archive Deadlinks**: Rigidly failing on superseded/gitignored paths in historical docs.<br>• Missing recovery instructions in coordinator prompt. |
-| **Layer 3: Target Repository Defect** (Codebase under review) | The user's actual source code, tests, docs | • **Dangling Documentation**: Readme/docs describe structs/types that don't exist in `*.go` (e.g., `DecisionPrimitive`).<br>• Compilation errors (`go build ./...` fails).<br>• Broken unit tests or lint violations. |
+```bash
+hufu debug "$run_id" --workspace "$workspace"
+```
 
----
+The command writes a diagnostic archive in the current directory and refuses
+to overwrite one. Use a scratch directory when an export is needed. Read the
+export's manifest to discover included evidence; do not assume fixed archive
+member names or reach back into live storage for omitted content. Treat export
+errors and omissions explicitly, keep its redaction intact, and do not upload
+or share the bundle without authorization.
 
-## Phase 5: Output Report Structure
+## 4. Attribute the cause
 
-When reporting back to the user, present the diagnosis clearly using this structure:
+| Layer | Evidence to establish |
+| --- | --- |
+| Hufu runtime | A reproducible scheduling, contract enforcement, persistence, recovery, or projection defect, tied to the relevant task/attempt and event evidence. |
+| Agent team | A team schema, prompt, workflow, action adapter, or verification rule that caused the observed rejection or prevented valid recovery. |
+| Target repository | A concrete defect in the reviewed code, tests, or documentation, supported by the target revision and actual verification evidence. |
+| Provider/environment | An observed timeout, unavailable service/model, missing credential or executable, or permission failure. Do not mislabel it as a target-code defect. |
 
-1. **執行狀態與總結 (Execution Status & Verdict)**:
-   - 是否正常（Running / Failed / Deadlocked）
-   - 耗時、當前 Step、Invocation ID、Run ID
-2. **執行歷程時間線 (Timeline of Events)**:
-   - 關鍵節點：啟動 → 哪一個 Phase/Task 失敗 → Coordinator 嘗試了什麼 → 最終如何終止
-3. **三層歸因分析 (Tri-Layer Attribution)**:
-   - **Hufu Runtime 層**
-   - **Agent Team 配置與 Action Provider 層**
-   - **專案代碼/文件層**
-4. **關鍵代碼與日誌證據 (Verifiable Evidence)**:
-   - 引用具體的檔案路徑與行號（使用 `file:///...` 格式）及終端日誌
-5. **具體處置建議 (Actionable Remediation)**:
-   - 如何安全中斷卡死進程（若仍在跑）
-   - 如何修復 Team 配置或 Action Provider
-   - 如何修復 Codebase 本身的缺陷並重試
+Read the smallest relevant source/config/test surface after locating the
+failure through the interface. Source inspection explains behavior; it does
+not replace the run's canonical evidence. Keep confirmed causes, hypotheses,
+and missing evidence distinct. A strict gate rejecting an invalid result is
+not by itself a runtime bug; successful execution does not prove the reviewed
+repository has no defects.
+
+## 5. Report the finding
+
+Scale the report to the question. Include:
+
+- Current or terminal status, target identities and scope, and observation time.
+- The decisive task/attempt transitions and the layer responsible for failure.
+- Reproducible CLI commands and their relevant output, with code/file links
+  where they establish the cause. Use normal Markdown file links.
+- A concrete next action, and any missing evidence or interface limitation.
+
+If the user asked only whether progress is normal, answer that first. Do not
+turn a status check into a full audit or claim an observability defect merely
+because one command presents only a summary.

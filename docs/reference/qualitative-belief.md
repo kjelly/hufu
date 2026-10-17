@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: 2026-10-16
+> Verified-Commit: `2389ae726f394fda2897a786369a9764920ee06d`
 > Supersedes: —
 > Superseded-By: —
 
