@@ -26,7 +26,7 @@ func (s *defaultWorkerMemoryService) beginPrivateQuerySnapshot(ctx context.Conte
 	persistent := req.Scope
 	persistent.SessionID, persistent.BranchID, persistent.TaskID, persistent.AttemptID = "", "", "", ""
 	snapshot := &contextQueryPrivateSnapshot{request: req, maxItems: maxItems, maxTokens: maxTokens, sources: []ContextQuerySource{
-		{Kind: QueryPrivateSession, Request: contextstore.SearchRequest{Scope: req.Scope, Limit: 100000}, Revision: strconv.FormatInt(revision, 10), RestrictedLineage: restricted, Unavailable: err != nil},
+		{Kind: QueryPrivateSession, Request: contextstore.SearchRequest{Scope: req.Scope, Limit: 100000}, Revision: strconv.FormatInt(revision, 10), RestrictedLineage: restricted, Unavailable: err != nil || req.LineageUnavailable},
 		{Kind: QueryPrivatePersistent, Request: contextstore.SearchRequest{Scope: persistent, Limit: maxItems * 3}, Revision: strconv.FormatInt(revision, 10), RestrictedLineage: restricted, Unavailable: err != nil},
 	}}
 	if req.Policy.Mode != agent.WorkerMemoryPersistent {
@@ -36,6 +36,18 @@ func (s *defaultWorkerMemoryService) beginPrivateQuerySnapshot(ctx context.Conte
 		snapshot.sources[0].Disabled = QueryFallbackMemoryDisabled
 	}
 	return snapshot
+}
+
+// Failed primary sources cannot be retried through supplemental search.
+func (snapshot *contextQueryPrivateSnapshot) markUnavailable(kind ContextQuerySourceKind) {
+	if snapshot == nil {
+		return
+	}
+	for index := range snapshot.sources {
+		if snapshot.sources[index].Kind == kind {
+			snapshot.sources[index].Unavailable = true
+		}
+	}
 }
 
 func (snapshot *contextQueryPrivateSnapshot) capturePrimary(rows []rankedMemory) {
@@ -185,6 +197,7 @@ func (snapshot *contextQueryPrivateSnapshot) mergeSelection(selection ContextQue
 	}
 	bundle := selectWorkerMemoryRows(rows, snapshot.maxItems, snapshot.maxTokens, snapshot.request.WorkerID, snapshot.request.Query, legacy.Semantic)
 	bundle.querySnapshot = snapshot
+	bundle.Trace.Degraded = slices.Clone(legacy.Trace.Degraded)
 	return bundle
 }
 

@@ -94,7 +94,10 @@ func TestWP6CoordinatorUsesCheckedOutBranchAndForkMemoryIDs(t *testing.T) {
 	if got := c.contextScope().BranchID; got != "" {
 		t.Fatalf("shared context scope branch = %q, want empty", got)
 	}
-	lineage := c.workerMemoryLineage(feature.ID)
+	lineage, lineageOK := c.workerMemoryLineage(feature.ID)
+	if !lineageOK {
+		t.Fatal("worker memory lineage unavailable")
+	}
 	if len(lineage) != 2 || lineage[0].BranchID != feature.ID || lineage[1].BranchID != "main" {
 		t.Fatalf("lineage = %#v, want feature then main", lineage)
 	}
@@ -184,7 +187,11 @@ func TestWP6SavedSessionMemoryRecallsAcrossForkAtWorkerScope(t *testing.T) {
 		}
 		return wp6IDs(bundle)
 	}
-	childIDs := recall(featureScope, c.workerMemoryLineage(feature.ID))
+	featureLineage, lineageOK := c.workerMemoryLineage(feature.ID)
+	if !lineageOK {
+		t.Fatal("feature lineage unavailable")
+	}
+	childIDs := recall(featureScope, featureLineage)
 	for _, item := range []contextstore.ContextItem{before, featureItem} {
 		if !childIDs[item.ID] {
 			t.Errorf("child recall omitted %q: %v", item.ID, childIDs)

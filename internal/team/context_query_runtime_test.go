@@ -290,7 +290,10 @@ func queryRuntimeFixtureForTiers(t *testing.T, tiers ...string) (*Coordinator, W
 	if err != nil {
 		t.Fatal(err)
 	}
-	private := c.recallWorkerMemory(withContextQueryIdentity(ctx, request), def, request)
+	private, recallErr := c.recallWorkerMemory(withContextQueryIdentity(ctx, request), def, request)
+	if recallErr != nil {
+		t.Fatal(recallErr)
+	}
 	if private == nil || private.querySnapshot == nil || canonical == nil || canonical.querySnapshot == nil {
 		t.Fatal("ordinary recall did not capture its primary")
 	}

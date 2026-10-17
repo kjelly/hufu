@@ -51,6 +51,8 @@ type WorkerMemoryRecallRequest struct {
 	MaxTokens     int
 	// Trace attributes the recall's semantic traces to its run and task.
 	Trace SemanticTraceAttribution
+	// LineageUnavailable limits session recall to the active branch.
+	LineageUnavailable bool
 }
 
 // WorkerMemoryLineageBranch describes one branch visible to session-memory
@@ -99,12 +101,14 @@ type WorkerMemoryReport struct {
 // WorkerMemoryTrace records retrieval metadata for observability. It never
 // contains item content — only IDs, scope, scores, and token counts.
 type WorkerMemoryTrace struct {
-	WorkerID   string   `json:"worker_id"`
-	Query      string   `json:"query"`
-	ItemIDs    []string `json:"item_ids"`
-	Tokens     int      `json:"tokens"`
-	Skipped    bool     `json:"skipped"`
-	SkipReason string   `json:"skip_reason,omitempty"`
+	WorkerID      string   `json:"worker_id"`
+	Query         string   `json:"query"`
+	ItemIDs       []string `json:"item_ids"`
+	Tokens        int      `json:"tokens"`
+	Skipped       bool     `json:"skipped"`
+	SkipReason    string   `json:"skip_reason,omitempty"`
+	Degraded      []string `json:"degraded,omitempty"`
+	BudgetSkipped int      `json:"budget_skipped,omitempty"`
 }
 
 // WorkerMemoryService is the per-worker memory recall and ingestion service.
@@ -271,6 +275,10 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 	options := s.recallOptions(req, query)
 	var allResults []rankedMemory
 	var semanticIdentity *SemanticRetrievalIdentity
+	var degraded []string
+	if req.LineageUnavailable {
+		degraded = append(degraded, "lineage:unavailable")
+	}
 	lineage := req.SessionLineage
 	if len(lineage) == 0 {
 		lineage = []WorkerMemoryLineageBranch{{BranchID: req.Scope.BranchID}}
@@ -289,7 +297,12 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 			Query: query, SemanticQuery: req.SemanticQuery, Scope: sessionScope, Limit: 100000,
 		})
 		if err != nil {
-			return WorkerMemoryBundle{Trace: WorkerMemoryTrace{WorkerID: req.WorkerID, Query: query, Skipped: true, SkipReason: fmt.Sprintf("session retrieval error: %v", err)}}, nil
+			if isContextCancellation(err) {
+				return WorkerMemoryBundle{}, fmt.Errorf("recall worker session memory: %w", err)
+			}
+			degraded = append(degraded, "session:"+branch.BranchID+":"+workerMemoryErrorClass(err))
+			querySnapshot.markUnavailable(QueryPrivateSession)
+			continue
 		}
 		semanticIdentity = mergeSemanticRetrievalIdentity(semanticIdentity, retrievedSemantic)
 		for _, r := range sessionResults {
@@ -322,7 +335,13 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 			Scope:         persistentScope,
 			Limit:         maxItems * 3,
 		})
-		if pErr == nil {
+		switch {
+		case pErr != nil && isContextCancellation(pErr):
+			return WorkerMemoryBundle{}, fmt.Errorf("recall worker persistent memory: %w", pErr)
+		case pErr != nil:
+			degraded = append(degraded, "persistent:"+workerMemoryErrorClass(pErr))
+			querySnapshot.markUnavailable(QueryPrivatePersistent)
+		default:
 			semanticIdentity = mergeSemanticRetrievalIdentity(semanticIdentity, retrievedSemantic)
 			for _, r := range persistentResults {
 				// Skip items already retrieved in the session query.
@@ -341,6 +360,7 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 	observeWorkerRetrievalCandidates(ctx, allResults)
 	bundle := selectWorkerMemoryRows(allResults, maxItems, maxTokens, req.WorkerID, query, semanticIdentity)
 	bundle.querySnapshot = querySnapshot
+	bundle.Trace.Degraded = degraded
 	return bundle, nil
 }
 
@@ -360,7 +380,7 @@ func selectWorkerMemoryRows(allResults []rankedMemory, maxItems, maxTokens int, 
 	// Dedupe by content hash and enforce limits.
 	seen := map[string]bool{}
 	var items []WorkerMemoryItem
-	totalTokens := 0
+	totalTokens, budgetSkipped := 0, 0
 	for _, r := range allResults {
 		key := r.item.ContentHash
 		if key == "" {
@@ -371,7 +391,11 @@ func selectWorkerMemoryRows(allResults []rankedMemory, maxItems, maxTokens int, 
 		}
 		seen[key] = true
 		tokens := estimateTokenCount(r.item.Content)
-		if totalTokens+tokens > maxTokens && len(items) > 0 {
+		if tokens > maxTokens {
+			budgetSkipped++
+			continue
+		}
+		if totalTokens+tokens > maxTokens {
 			break
 		}
 		totalTokens += tokens
@@ -398,10 +422,11 @@ func selectWorkerMemoryRows(allResults []rankedMemory, maxItems, maxTokens int, 
 		Items:    items,
 		Semantic: cloneSemanticRetrievalIdentity(semanticIdentity),
 		Trace: WorkerMemoryTrace{
-			WorkerID: workerID,
-			Query:    query,
-			ItemIDs:  ids,
-			Tokens:   totalTokens,
+			WorkerID:      workerID,
+			Query:         query,
+			ItemIDs:       ids,
+			Tokens:        totalTokens,
+			BudgetSkipped: budgetSkipped,
 		},
 	}
 }
@@ -1020,12 +1045,9 @@ func hasItem(results []rankedMemory, id string) bool {
 	return false
 }
 
-// estimateTokenCount provides a rough token estimate for budget enforcement.
-// It uses the same heuristic as the context compiler's fallback estimator.
+// estimateTokenCount uses the compiler's script-aware fallback for recall budgets.
 func estimateTokenCount(text string) int {
-	// Rough estimate: ~4 characters per token for English text.
-	// This is intentionally conservative to avoid over-counting.
-	return len(text) / 4
+	return estimateTextTokens(text, "")
 }
 
 // RenderWorkerMemorySection renders the recalled memory as a prompt section
@@ -1091,46 +1113,49 @@ func shouldRecallWorkerMemory(agentDef *agent.AgentDef, profile ExecutionProfile
 	return true
 }
 
-// recallWorkerMemory is the shared helper used by both the DAG and direct
-// paths. It builds the recall for request, calls the service, and returns the
-// bundle.
-func (c *Coordinator) recallWorkerMemory(ctx context.Context, agentDef *agent.AgentDef, request ContextRequest) *WorkerMemoryBundle {
+// recallWorkerMemory serves DAG, direct, and sub-agent dispatch. VERIFY does
+// not recall private memory. Failed sources degrade independently; cancellation
+// propagates to the caller before any model is dispatched.
+func (c *Coordinator) recallWorkerMemory(ctx context.Context, agentDef *agent.AgentDef, request ContextRequest) (*WorkerMemoryBundle, error) {
 	ctx = c.withContextQueryPolicy(ctx)
 	if identity, ok := ContextQueryIdentitySnapshot(ctx); ok {
 		if finish := startContextStage(ctx, identity.ParentRequestID, identity.ModelExecutionID, "private_retrieval"); finish != nil {
 			defer finish()
 		}
 	}
-	if c.workerMemorySvc == nil || !shouldRecallWorkerMemory(agentDef, c.ExecutionProfile()) {
-		return nil
+	if !workerMemoryPhaseAllowed(request.Phase) || c.workerMemorySvc == nil || !shouldRecallWorkerMemory(agentDef, c.ExecutionProfile()) {
+		return nil, nil
 	}
 	baseScope := c.contextScope()
 	scope := resolveWorkerScope(baseScope, agentDef, c.activeBranchID())
+	lineage, lineageOK := c.workerMemoryLineage(scope.BranchID)
 	bundle, err := c.workerMemorySvc.Recall(ctx, WorkerMemoryRecallRequest{
-		WorkerID:       agentDef.MemoryID,
-		BranchID:       scope.BranchID,
-		Scope:          scope,
-		SessionLineage: c.workerMemoryLineage(scope.BranchID),
-		Query:          request.RetrievalQuery(),
-		SemanticQuery:  request.Goal,
-		Policy:         agentDef.Memory,
-		MaxItems:       agentDef.Memory.MaxItems,
-		MaxTokens:      agentDef.Memory.MaxTokens,
-		Trace:          semanticTraceAttributionFor(request, semanticSourceWorkerPrivate),
+		WorkerID:           agentDef.MemoryID,
+		BranchID:           scope.BranchID,
+		Scope:              scope,
+		SessionLineage:     lineage,
+		LineageUnavailable: !lineageOK,
+		Query:              request.RetrievalQuery(),
+		SemanticQuery:      request.Goal,
+		Policy:             agentDef.Memory,
+		MaxItems:           agentDef.Memory.MaxItems,
+		MaxTokens:          agentDef.Memory.MaxTokens,
+		Trace:              semanticTraceAttributionFor(request, semanticSourceWorkerPrivate),
 	})
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("recall worker memory: %w", err)
 	}
+	c.reportWorkerMemoryDegraded(ctx, bundle.Trace)
 	if len(bundle.Items) == 0 && bundle.querySnapshot == nil {
 		observeWorkerContextSelection(ctx, bundle.Items)
-		return nil
+		return nil, nil
 	}
 	c.rerankWorkerMemory(ctx, &bundle, request.RetrievalQuery())
 	observeWorkerContextSelection(ctx, bundle.Items)
 	if len(bundle.Items) == 0 && bundle.querySnapshot == nil {
-		return nil
+		return nil, nil
 	}
-	return &bundle
+	return &bundle, nil
 }
 
 // activeBranchID returns the current session branch ID. For WP-3, this is
@@ -1150,26 +1175,30 @@ func (c *Coordinator) activeBranchID() string {
 // workerMemoryLineage converts the active session tree into branch-local
 // retrieval scopes. Ancestor branch records are admitted only when an event
 // naming their canonical memory ID appears in the active branch's event
-// lineage; FilterEventsForBranch supplies the fork-point cutoff.
-func (c *Coordinator) workerMemoryLineage(branchID string) []WorkerMemoryLineageBranch {
+// lineage; FilterEventsForBranch supplies the fork-point cutoff. False reports
+// unavailable lineage, so recall can expose its active-branch-only fallback.
+func (c *Coordinator) workerMemoryLineage(branchID string) ([]WorkerMemoryLineageBranch, bool) {
 	if c == nil || c.session == nil || c.session.Workspace == "" {
-		return nil
+		return nil, true
 	}
 	tree, err := LoadSessionTree(c.session.Workspace)
-	if err != nil || tree.GetBranch(branchID) == nil {
-		return nil
+	if err != nil {
+		return nil, false
+	}
+	if tree.GetBranch(branchID) == nil {
+		return nil, true
 	}
 	eventsStore := c.eventStore
 	if eventsStore == nil {
 		eventsStore, err = OpenEventStore(c.session.Workspace)
 		if err != nil {
-			return nil
+			return nil, false
 		}
 		defer func() { _ = eventsStore.Close() }()
 	}
 	events, err := eventsStore.ReadEvents()
 	if err != nil {
-		return nil
+		return nil, false
 	}
 
 	allowed := make(map[string]map[string]bool)
@@ -1204,7 +1233,7 @@ func (c *Coordinator) workerMemoryLineage(branchID string) []WorkerMemoryLineage
 		})
 		current = branch.ParentID
 	}
-	return out
+	return out, true
 }
 
 // shouldIngestWorkerMemory returns true when per-worker memory ingestion

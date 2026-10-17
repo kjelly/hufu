@@ -111,6 +111,9 @@ type memoryReinforcementError struct{ err error }
 func (e memoryReinforcementError) Error() string { return e.err.Error() }
 func (e memoryReinforcementError) Unwrap() error { return e.err }
 
+// maxRetrievalAllowlistIDs keeps an SQL IN predicate within parameter limits.
+const maxRetrievalAllowlistIDs = 8192
+
 // rankPersistentMemory is the shared-persistent memory ranking used for prompt
 // selection. It performs no writes.
 func rankPersistentMemory(ctx context.Context, repo contextstore.RetrievalRepository, experience contextstore.ExperienceRepository, in persistentRankingInput) (out persistentRankingResult, err error) {
@@ -150,6 +153,9 @@ func rankPersistentMemory(ctx context.Context, repo contextstore.RetrievalReposi
 	out.Route, out.Fusion = route, fusion
 	retrieve := func(query string) ([]contextstore.SearchResult, error) {
 		req := contextstore.SearchRequest{Query: query, Scope: persistentContextScope(in.RequestScope), Limit: candidateLimit}
+		if in.Allowed != nil && len(in.Allowed) <= maxRetrievalAllowlistIDs {
+			req = req.WithAllowedItemIDs(allowedIDList(in.Allowed))
+		}
 		options := contextstore.HybridRetrievalOptions{Mode: contextstore.RetrievalActive, UnavailableReason: contextstore.SemanticFallbackProjectionMissing, Observer: in.Observer, Fusion: fusion, FusionCarriedWeight: in.Ranking.FusionCarriedWeight}
 		var tracker *trackingVectorSearcher
 		if lane != nil && lane.Vector != nil {
@@ -165,6 +171,15 @@ func rankPersistentMemory(ctx context.Context, repo contextstore.RetrievalReposi
 		if err == nil && tracker != nil {
 			out.SemanticFallback = trackedSemanticFallback(req, tracker)
 			out.Semantic = semanticRetrievalIdentity(lane.Mode, lane.Vector, out.SemanticFallback)
+		}
+		if err == nil && in.Allowed != nil {
+			filtered := results[:0]
+			for _, result := range results {
+				if in.Allowed[result.Item.ID] {
+					filtered = append(filtered, result)
+				}
+			}
+			results = filtered
 		}
 		return results, err
 	}
@@ -185,13 +200,6 @@ func rankPersistentMemory(ctx context.Context, repo contextstore.RetrievalReposi
 		}
 	}
 	if in.Allowed != nil {
-		filtered := results[:0]
-		for _, result := range results {
-			if in.Allowed[result.Item.ID] {
-				filtered = append(filtered, result)
-			}
-		}
-		results = filtered
 		if len(results) > in.Ranking.CandidateTopK {
 			for _, result := range results[in.Ranking.CandidateTopK:] {
 				out.CandidateCutIDs = append(out.CandidateCutIDs, result.Item.ID)

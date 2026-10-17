@@ -959,7 +959,12 @@ retryLoop:
 			attemptInput.CanonicalMemory = bundle
 			routeDecisions = decisions
 		}
-		attemptInput.WorkerMemory = c.recallWorkerMemory(withContextQueryIdentity(attemptCtx, request), agentDef, request)
+		workerMemory, recallErr := c.recallWorkerMemory(withContextQueryIdentity(attemptCtx, request), agentDef, request)
+		if recallErr != nil {
+			closeTranscript()
+			return "", fmt.Errorf("worker memory recall preflight failed: %w", recallErr)
+		}
+		attemptInput.WorkerMemory = workerMemory
 		compiled, compileErr := c.ContextCompiler().CompileWorkerContext(attemptCtx, attemptInput)
 		if compileErr == nil {
 			compileErr = validateRequiredEvidenceContext(attemptInput, compiled)
