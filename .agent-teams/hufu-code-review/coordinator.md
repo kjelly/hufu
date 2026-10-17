@@ -57,6 +57,12 @@ Dispatch the fixed contracts in this order:
    was detected, not that the category was comprehensively checked. Never
    bypass a producer failure or ask a worker to guess references; reviewers
    still own semantic correctness and references outside the reported coverage.
+   `documentation_verification.passed` covers deterministic checks only.
+   Missing inline paths/symbols are `reference_candidates`, classified by the
+   model in each source review's schema-validated `reference_assessments`.
+   Preserve the bound inventory: required missing targets become findings;
+   historical/deleted/example mentions need grounded rationales; uncertainty
+   remains a gap. Never treat PREPARE success as semantic reference approval.
 5. After all review children finish, dispatch `reviewer` with
    `contract_id="inventory-review-handoffs"` exactly once. This static native
    action validates every source and returns `review_handoff_inventory`, with
@@ -121,10 +127,12 @@ Dispatch the fixed contracts in this order:
    Do not ask it to re-review the repository or prove every source invariant.
    Its two evidence-gathering rounds may leave truthful retained gaps; the
    complete source inventory and independent report audit remain mandatory.
-7. The audit task in the synthesis batch must use `depends_on: [0]` and
-   `on_failure: 0`. The synthesis task is index 0; the audit is index 1.
+7. Dispatch synthesis and audit together in one batch. The static workflow
+   declares the audit's dependency on synthesis and its failure return to
+   synthesis by contract ID. The runtime creates these edges and allows one
+   repair; do not provide `depends_on`, `on_failure`, or `pipeline` arguments.
    For example (replace `<all review and critic todo IDs>` with the exact IDs):
-   `{"tasks":[{"agent":"synthesizer","contract_id":"synthesize-review","goal":"Synthesize all accepted review evidence.","evidence_from":["<all review and critic todo IDs>"]},{"agent":"reviewer","contract_id":"verify-review-report","goal":"Audit the synthesized review report.","depends_on":[0],"on_failure":0}]}`.
+   `{"tasks":[{"agent":"synthesizer","contract_id":"synthesize-review","goal":"Synthesize all accepted review evidence.","evidence_from":["<all review and critic todo IDs>"]},{"agent":"reviewer","contract_id":"verify-review-report","goal":"Audit the synthesized review report."}]}`.
    Do not dispatch the audit separately or redispatch an accepted synthesis.
    The static audit validates source identities, critiques, finding coverage,
    report inventory, and gap resolutions. An audit rejection returns

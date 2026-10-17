@@ -35,15 +35,19 @@ func TestReviewProgressContractsAndBudgets(t *testing.T) {
 			t.Fatalf("milestone %q no longer uses a blocking acceptance check", criterion.ID)
 		}
 	}
-	for _, contract := range session.ContractTasks {
-		bound, _, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: contract.Agent, ContractID: contract.ID}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if bound[0].Kind != TaskKindOutcome || len(bound[0].Advances) == 0 {
+	requests := make([]TaskDef, len(session.ContractTasks))
+	for i, contract := range session.ContractTasks {
+		requests[i] = TaskDef{Agent: contract.Agent, ContractID: contract.ID}
+	}
+	bound, _, err := CompileTaskGoalContracts(session, requests)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, contract := range session.ContractTasks {
+		if bound[i].Kind != TaskKindOutcome || len(bound[i].Advances) == 0 {
 			t.Fatalf("contract %q lost its static progress links", contract.ID)
 		}
-		if err := c.validateTaskCriterionLinks(bound); err != nil {
+		if err := c.validateTaskCriterionLinks([]TaskDef{bound[i]}); err != nil {
 			t.Fatalf("contract %q: %v", contract.ID, err)
 		}
 		// An unfinished aggregate workset must not replay accepted children.
@@ -175,7 +179,7 @@ func TestReviewWorksetProgressRequiresAllVerifiedChildren(t *testing.T) {
 	manifest := WorksetManifest{SchemaVersion: WorksetSchemaVersion}
 	for _, key := range []string{"one", "two"} {
 		manifest.Items = append(manifest.Items, WorksetItem{
-			Key: key, Bindings: map[string]string{"key": key, "review_revision": "frozen-head", "lens": "general"},
+			Key: key, Bindings: map[string]string{"key": key, "review_revision": "frozen-head", "lens": "general", "reference_candidate_ids": "[]"},
 		})
 	}
 	data, err := json.Marshal(manifest)

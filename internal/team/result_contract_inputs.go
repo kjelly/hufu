@@ -120,7 +120,7 @@ func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *Re
 	if err != nil {
 		return err
 	}
-	if compiled.evidenceInputs == nil && compiled.evidenceReferences == nil {
+	if compiled.evidenceInputs == nil && compiled.evidenceReferences == nil && compiled.worksetInputs == nil && len(compiled.fixedCollections) == 0 {
 		return nil
 	}
 	if payload == nil {
@@ -130,8 +130,18 @@ func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *Re
 	if err != nil {
 		return err
 	}
+	if err := validateResultWorksetInputs(value, compiled.worksetInputs, item.WorksetBinding); err != nil {
+		return err
+	}
 	results := c.dependencyResultsForTask(todoID)
 	if err := c.validateDependencyPayloads(results); err != nil {
+		return err
+	}
+	plans, err := buildResultFixedCollections(compiled.fixedCollections, item.EvidenceFrom, results)
+	if err != nil {
+		return err
+	}
+	if err := validateResultFixedCollections(value, payload.CollectionBindings, plans); err != nil {
 		return err
 	}
 	if err := validateResultEvidenceInputs(value, compiled.evidenceInputs, item.EvidenceFrom, results); err != nil {

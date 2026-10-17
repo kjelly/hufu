@@ -122,6 +122,35 @@ rejections, the worker stream stops and enters the existing bounded result-only
 repair path. Changing JSON paths or call IDs cannot bypass that limit, and
 result-only repair does not replay worker tools.
 
+Schemas can declare `x-hufu-fixed-collections` to separate known membership
+from model judgment. The runtime builds source-hash-bound row keys from accepted
+evidence and supplies a required manifest to workers and result-only repairs.
+Workers submit keyed decision objects with required finite string enums; the
+runtime generates the array, order, identities and copied values before schema
+validation and receipt hashing. Unknown, missing or duplicate keys and fixed
+field overrides are rejected within the attempt. Runtime-owned payload metadata
+pins source hashes for commit, dependency, replay and report validation. This
+uses the existing worker protocol and policy gates, with no additional inference
+tools, provider calls or semantic keyword parsing. See the
+[fixed collection contract](../reference/agent-format.md#固定集合與有限選項決策).
+
+A task's explicit `on_failure` edge owns its failure routing before generic
+criterion retry. Its failure-class allowlist, repair limit, replay policy and
+failure-signature checks remain authoritative even when an acceptance
+criterion is still failed. A denied or exhausted edge cannot fall back to
+criterion routing. Transient action-provider retries retain their existing
+same-task policy. Successful tasks that made no criterion progress can still
+route bounded criterion remediation.
+
+When either failure route selects another task, the source's canonical failure
+class, attempt, findings and verification diagnostic are redacted and committed
+with the target's reset. A pending repair receives the same context through a
+task transition without consuming a retry. An append failure publishes neither
+the reset nor the new context. SQLite replay restores the context and worker
+dispatch includes it in the required failure-context input. Criterion routing
+cannot restart a terminal task with its own failure edge, and counts retries
+already consumed by other routes or restored from the durable occurrence.
+
 Blocking acceptance self-healing respects unresolved task recovery
 dispositions. A task requiring `reconcile_only` or `needs_human` prevents
 acceptance from reopening worker dispatch, even when the task's side-effect

@@ -150,6 +150,7 @@ above in summary/details as useful; they do not replace the payload.
       "note": "The test process could not start."
     }
   ],
+  "implementation_gap_assessments": {},
   "failures": [],
   "gaps": [
     "Required tests remain unverified."
@@ -173,3 +174,26 @@ finished and passed; `failed` for an observed confirmed rejection; `partial` or
 `blocked` for unresolved execution/evidence gaps. Never use `completed_with_gaps`
 for unfinished verification. Put confirmed defects in `failures`; put missing or
 ambiguous evidence in `gaps`. Do not add a second overall verdict to the payload.
+
+## Fixed implementation-gap handoff
+
+The maintainer supplies the accepted implementation result through
+`evidence_from`. Account for every implementation `/gaps` entry using
+`implementation_gap_assessments`, an object keyed by the **Runtime Fixed
+Collections** manifest. Supply only `assessment` (`addressed`, `unresolved`,
+`unverified`) and a concrete `reason` per key. The runtime copies the original
+`reported_gap`, source task ID and index into the stored array. These copied
+strings remain the implementer's claims, not verified facts. An accepted
+implementation with no gaps has an empty manifest: submit `{}`, stored as `[]`.
+Missing implementation evidence is not an empty gap list and fails closed.
+
+Independently inspect the diff and run the existing checks. A gap is `addressed`
+only with your own observed evidence; explain any unresolved/unknown result in
+`failures` or `gaps` as appropriate. A confirmed defect in required behavior
+uses outer `status: failed`; missing evidence needed for a required verification
+conclusion uses `partial`/`blocked`. A nonblocking limitation may remain
+`unresolved` only with an explicit scope justification in `reason` and `gaps`;
+it must not silently become a new acceptance requirement. Keep the existing
+success criteria and required checks. Never infer test outcomes from prose or
+the finite choices: command exits still come from tools, and the existing
+blocking acceptance remains mandatory.

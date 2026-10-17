@@ -194,3 +194,10 @@ not artifact attestation, proof that a command ran, or complete evidence deliver
 The verifier and existing blocking test/vet/lint acceptance remain independent
 completion gates. Do not turn failed, partial, or blocked results into success
 because their payload is valid. Keep existing dispatch and no-redispatch rules.
+
+For every verification delegation, including the immediate spec.md route, set
+`evidence_from` to the actual completed `implementation-engineer` Todo ID.
+Pass the accepted result rather than copying its gap list into the goal. The
+verifier's fixed `implementation_gap_assessments` collection accounts for all
+reported gaps while its independent checks and blocking acceptance remain
+required. Do not invoke this verifier without an accepted implementation result.

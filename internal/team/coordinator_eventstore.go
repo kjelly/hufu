@@ -779,6 +779,9 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 	if fe, ok := metadata["failure_event"].(*FailureEventPayload); ok && fe != nil {
 		projected.FailureEvent = fe
 	}
+	if remediation, ok := metadata["remediation_context"].(*RemediationContext); ok && remediation != nil {
+		projected.RemediationContext = redactedRemediationContext(remediation)
+	}
 	if fo, ok := metadata["failure_output"].(string); ok && fo != "" {
 		projected.Output = fo
 	}
@@ -922,6 +925,12 @@ func (c *Coordinator) appendTaskTransition(ctx context.Context, item *TodoItem, 
 // output/timing/runtime errors) before mutating TodoList; if the append fails,
 // the task status, retry count, and checkpoint remain untouched.
 func (c *Coordinator) CommitTaskResetForRetry(ctx context.Context, taskID string, detail string, modelOverride ...string) error {
+	return c.commitTaskResetForRetry(ctx, taskID, detail, nil, modelOverride...)
+}
+
+// commitTaskResetForRetry includes fresh remediation in the reset projection,
+// so a failed append cannot leak an uncommitted correction into the live task.
+func (c *Coordinator) commitTaskResetForRetry(ctx context.Context, taskID string, detail string, remediation *RemediationContext, modelOverride ...string) error {
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return fmt.Errorf("commit task reset for retry: task tracker is unavailable")
 	}
@@ -935,6 +944,9 @@ func (c *Coordinator) CommitTaskResetForRetry(ctx context.Context, taskID string
 		return fmt.Errorf("commit task reset for retry: at most one model override is allowed")
 	}
 	projected := *current
+	if remediation != nil {
+		projected.RemediationContext = redactedRemediationContext(remediation)
+	}
 	// A retry is a new lifecycle occurrence. Clear its active worker lease
 	// before the reset becomes visible so a late prior-attempt callback cannot
 	// project a result into the admitted retry.

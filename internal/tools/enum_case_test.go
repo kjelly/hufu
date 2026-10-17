@@ -36,6 +36,11 @@ func TestCanonicalToolArgumentCase(t *testing.T) {
 		{name: "exact member of case-distinct enum", input: `{"mode":"Fast"}`, changed: false},
 		{name: "free text never touched", input: `{"summary":"SUCCESS"}`, changed: false},
 		{name: "invalid JSON", input: `{"status":`, changed: false},
+		{name: "duplicate enum", input: `{"status":"BLOCKED","status":"Success"}`, changed: false},
+		{name: "duplicate nested member", input: `{"status":"Success","findings":[{"severity":"WARNING","detail":"first","detail":"second"}]}`, changed: false},
+		{name: "trailing scalar", input: `{"status":"Success"} true`, changed: false},
+		{name: "trailing object", input: `{"status":"Success"} {}`, changed: false},
+		{name: "large numbers remain lossless", input: `{"status":"Success","count":1e1000}`, want: `{"count":1e1000,"status":"success"}`, changed: true},
 		{name: "empty", input: ``, changed: false},
 	}
 	for _, test := range tests {

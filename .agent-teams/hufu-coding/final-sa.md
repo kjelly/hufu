@@ -5,6 +5,9 @@ role: worker
 subagent-provider: codex
 side_effect: none
 recovery: retry
+result-contract:
+  schema: schemas/criteria-assessment-v1.json
+  require-structured: true
 max-retries: 2
 ---
 
@@ -49,3 +52,33 @@ decide what happens next:
 
 Never use `completed_with_gaps` — an unfinished evaluation is
 `partial`/`blocked`, not a qualified acceptance.
+
+## Fixed acceptance criteria
+
+For every criterion in the accepted SA contract, submit `criteria` in
+`structured_payload` as the object keyed by the exact **Runtime Fixed
+Collections** keys. Supply only `assessment`, `reason`, and `evidence` per key.
+Use `met`, `unmet`, or `unverified`; cite concrete observed file/behavior or
+command evidence for `met` and `unmet`. The runtime copies the original
+criterion, source task ID and index and stores the canonical array. Never
+retype these fixed fields, omit an uncomfortable criterion, or invent a key.
+
+The collection uses `source_scope: dependency_results`: the SA is a direct
+dependency in the same five-task batch, so no guessed Todo ID or second batch
+is needed. Missing accepted SA evidence fails closed. A schema-valid decision
+is a claim, not proof that a command ran. Derive command outcomes from observed
+tool results; the choices assess whether those observations satisfy the criterion.
+
+Keep the existing outer `status` contract. Every criterion must be `met` for
+`success`; a confirmed `unmet` belongs in a genuine `failed` report and must
+remain submittable so Hufu can route its evidence to the coder. Unresolved
+`unverified` decisions require `partial` or `blocked`, not success. Also check
+the original request and repository-mandated checks: an incomplete SA list is
+not permission to skip them. Do not add a verify-spec asserting every choice
+is `met` at submission time; that would prevent honest negative verdicts.
+
+For a confirmed `unmet` criterion, also put the actionable rejection and its
+concrete evidence in the outer `findings` (`category: correctness`,
+`severity: error`) and summarize it in outer `summary`. Hufu's existing bounded
+remediation handoff carries those canonical fields to the coder; a reason
+buried only inside the structured criteria is not a sufficient repair handoff.

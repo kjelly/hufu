@@ -81,7 +81,12 @@ func TestPrepareDocumentationVerificationAcceptsVariableSelectors(t *testing.T) 
 	commit(t, missing, "document a missing selector", "2025-01-02T00:00:00Z")
 	config = fixtureConfig(missing, "out")
 	config.Routing = routingDocumentation
-	if _, err := Prepare(t.Context(), config); err == nil || !strings.Contains(err.Error(), `Go symbol "c.MissingMethod" does not exist`) {
-		t.Fatalf("Prepare error = %v, want the missing selector to fail closed", err)
+	result, err = Prepare(t.Context(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verification = result.Outputs["documentation_verification"].(documentationVerification)
+	if !verification.Passed || len(verification.ReferenceCandidates) != 1 || verification.ReferenceCandidates[0].Target != "c.MissingMethod" || verification.ReferenceCandidates[0].Type != "go_symbol" {
+		t.Fatalf("verification = %#v, want the missing selector classified by the reviewer", verification)
 	}
 }

@@ -10,6 +10,10 @@ import (
 // validateAcceptedDependencyPayload checks persisted identity without binding
 // tool evidence again: downstream workers must see the already downgraded value.
 func (c *Coordinator) validateAcceptedDependencyPayload(source *TodoItem) error {
+	return c.validateAcceptedDependencyPayloadGraph(source, make(map[string]bool), make(map[string]bool))
+}
+
+func (c *Coordinator) validateAcceptedDependencyPayloadGraph(source *TodoItem, visiting, validated map[string]bool) error {
 	if source == nil || source.TypedResult == nil {
 		return fmt.Errorf("evidence source has no accepted result")
 	}
@@ -20,6 +24,15 @@ func (c *Coordinator) validateAcceptedDependencyPayload(source *TodoItem) error 
 		}
 		return nil
 	}
+	if visiting[source.ID] {
+		return fmt.Errorf("fixed collection evidence contains a dependency cycle")
+	}
+	key := source.ID + ":" + payload.SHA256
+	if validated[key] {
+		return nil
+	}
+	visiting[source.ID] = true
+	defer delete(visiting, source.ID)
 	if source.ResultContract == nil || payload.Contract != *source.ResultContract || len(payload.Value) > resultPayloadMaxBytes {
 		return fmt.Errorf("evidence source %s payload does not match its admitted contract", source.ID)
 	}
@@ -35,7 +48,42 @@ func (c *Coordinator) validateAcceptedDependencyPayload(source *TodoItem) error 
 	if err != nil {
 		return err
 	}
-	return compiled.schema.Validate(value)
+	if err := compiled.schema.Validate(value); err != nil {
+		return err
+	}
+	if err := validateResultWorksetInputs(value, compiled.worksetInputs, source.WorksetBinding); err != nil {
+		return err
+	}
+	var results []TaskResult
+	if len(compiled.fixedCollections) > 0 {
+		results = c.dependencyResultsForTask(source.ID)
+	}
+	plans, err := buildResultFixedCollections(compiled.fixedCollections, source.EvidenceFrom, results)
+	if err != nil {
+		return err
+	}
+	if err := validateResultFixedCollections(value, payload.CollectionBindings, plans); err != nil {
+		return err
+	}
+	for _, plan := range plans {
+		for _, binding := range plan.binding.Sources {
+			upstream := c.todoItemByID(binding.TaskID)
+			if upstream == nil {
+				return fmt.Errorf("fixed collection upstream source is unavailable")
+			}
+			for i := range results {
+				if results[i].TaskID == upstream.ID {
+					upstream.TypedResult = &results[i]
+					break
+				}
+			}
+			if err := c.validateAcceptedDependencyPayloadGraph(upstream, visiting, validated); err != nil {
+				return err
+			}
+		}
+	}
+	validated[key] = true
+	return nil
 }
 
 func validateRequiredEvidenceInputs(task TaskDef, results []TaskResult) error {
@@ -61,13 +109,14 @@ func validateRequiredEvidenceInputs(task TaskDef, results []TaskResult) error {
 }
 
 func (c *Coordinator) validateDependencyPayloads(results []TaskResult) error {
+	visiting, validated := make(map[string]bool), make(map[string]bool)
 	for _, result := range results {
 		source := c.todoItemByID(result.TaskID)
 		if source == nil {
 			return fmt.Errorf("dependency %s has no admitted task", result.TaskID)
 		}
 		source.TypedResult = &result
-		if err := c.validateAcceptedDependencyPayload(source); err != nil {
+		if err := c.validateAcceptedDependencyPayloadGraph(source, visiting, validated); err != nil {
 			return err
 		}
 	}

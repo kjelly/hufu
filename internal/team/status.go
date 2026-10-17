@@ -324,9 +324,9 @@ type TodoItem struct {
 	ExecutionReceipts []ExecutionReceipt   `json:"execution_receipts,omitempty"`
 	FailureEvent      *FailureEventPayload `json:"failure_event,omitempty"`
 	// RemediationContext carries the canonical failure/result of the task
-	// whose on_failure back-edge most recently reset this task (spec.md
-	// §9.3). It is set by dagScheduler right before an authorized semantic
-	// reset and read (non-destructively) each time this occurrence is
+	// whose failure most recently routed an on_failure or criterion repair to
+	// this task (spec.md §9.3). It is committed with the target transition
+	// and read (non-destructively) each time this occurrence is
 	// dispatched; the next genuine reset always replaces it with fresh
 	// evidence rather than stacking.
 	RemediationContext *RemediationContext `json:"remediation_context,omitempty"`

@@ -161,7 +161,7 @@ func (t *submitResultTool) submissionContract() taskResultSubmissionContract {
 		// itself is then rejected by structuredPayloadForSubmission.
 		compiled, _ := t.coordinator.compiledResultContract(item.ResultContract)
 		contract.ResultContract = item.ResultContract.clone()
-		contract.resultPayloadSchema = providerVisibleResultPayloadSchema(*item.ResultContract, compiled)
+		contract.resultPayloadSchema = t.coordinator.fixedCollectionSubmissionSchema(t.todoID, *item.ResultContract, compiled)
 	}
 	return contract
 }
@@ -419,6 +419,11 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 //nolint:gocyclo // submitResultTool.Run handles the full lifecycle of a worker result submission.
 func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	contract := t.submissionContract()
+	if t.coordinator != nil {
+		if err := t.coordinator.validateFixedCollectionInputJSON(t.todoID, call.Input); err != nil {
+			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
+	}
 	call.Input = canonicalToolArgumentObjects(call.Input, t.Info())
 	call.Input, _ = tools.CanonicalToolArgumentCase(call.Input, t.Info())
 	input, err := decodeSubmitResultInput([]byte(call.Input), contract)

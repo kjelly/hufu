@@ -103,6 +103,7 @@ This example is for missing inputs, not a complete audit. Replace all text with 
   "structured_payload": {
     "audit_complete": false,
     "input_review": [],
+    "claim_assessments": {},
     "question": "待查核的原始問題",
     "summary": "尚未收到兩份可用研究結果。",
     "overall_limitations": "尚未收到兩份完整研究輸入，稽核未完成。",
@@ -121,3 +122,25 @@ This example is for missing inputs, not a complete audit. Replace all text with 
 ```
 
 For a complete audit, fill `input_review` with the two actual input blocks: `task_id` is the exact Todo ID as a JSON string (`"2"`, not `2`, `"\"2\""` or `"countercheck-todo-2"`), `payload_sha256` is the accepted block's hash, and `lens` must match that same block. Runtime checks ID, hash and lens together against `evidence_from`; incomplete audits may list only received inputs, but cannot invent them. Each real source requires `title`, `publisher`, `publication_date`, `url`, `source_type`, `page_status`, `quote`, `relation`, and **`independence_group`**. Use `checked` or `unverified`, not researcher `fetched`. `findings`, `sources` and `input_review` are arrays, never `{"item": [...]}` or encoded strings. On schema rejection, fix exact paths in the same submission without repeating fetches or discarding findings and citations.
+
+## Account for every input claim
+
+The runtime freezes every `/findings` entry from both accepted research
+payloads into `claim_assessments`. Submit that field as an object with one
+decision per **Runtime Fixed Collections** key; each decision contains only
+`handling` and `reason`. The runtime supplies `claim`, `source_task_id`, and
+`source_index` and stores an array. Do not create keys, resend fixed fields,
+or submit an array. The `{}` in the missing-input example is only the empty
+submission shape; real manifests require every issued key. Missing accepted
+research inputs fail closed before the audit starts.
+
+Use `addressed` when the final evidence-qualified findings cover the original
+claim; `duplicate` when another finding covers the same proposition (identify
+that proposition in `reason`); `out_of_scope` only with a reason grounded in
+the original question; `unverified` when evidence remains insufficient, with
+the gap also retained in findings/limitations. These are accounting decisions,
+not factual verdicts or source verification. Keep every original input row,
+even duplicates; normalize/split/merge propositions only in the final
+`findings`. The existing checked-source/quotation and two-input evidence
+contracts still govern the final verdicts. Do not count an `addressed` row as
+proof of its claim or use it to bypass the browser evidence checks.

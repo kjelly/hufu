@@ -60,30 +60,40 @@ func TestDocumentationVerificationAcceptsForwardReferencesOfAHistoricalReview(t 
 	}
 }
 
-func TestDocumentationVerificationStillFailsAReferenceMissingEverywhere(t *testing.T) {
+func TestDocumentationVerificationDefersInlineReferencesMissingEverywhere(t *testing.T) {
 	repo, planCommit, _ := forwardReferenceRepo(t, forwardPlanDocument+"It also needs `internal/never/there.go`.\n")
-	_, err := Prepare(t.Context(), documentationScopeConfig(repo, planCommit))
-	if err == nil || !strings.Contains(err.Error(), `repository path "internal/never/there.go" does not exist`) {
-		t.Fatalf("Prepare error = %v, want the reference missing at every revision", err)
+	result, err := Prepare(t.Context(), documentationScopeConfig(repo, planCommit))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(err.Error(), "internal/fixture/data.json") || strings.Contains(err.Error(), "fixture.Future") {
-		t.Fatalf("Prepare error = %v, want forward references kept out of the issues", err)
+	v := result.Outputs["documentation_verification"].(documentationVerification)
+	if !v.Passed || len(v.ReferenceCandidates) != 1 || v.ReferenceCandidates[0].Target != "internal/never/there.go" || len(v.ForwardReferences) != 3 {
+		t.Fatalf("verification = %#v", v)
 	}
 }
 
-func TestDocumentationVerificationWithoutALaterCommitIsUnchanged(t *testing.T) {
+func TestDocumentationVerificationDefersInlinePathsAtHeadAndWorkingTree(t *testing.T) {
 	repo, _, _ := forwardReferenceRepo(t, forwardPlanDocument)
 	writeAndCommit(t, repo, "docs/architecture/next.md", "Planned: `internal/later/missing.go`.\n", "plan more", "2025-01-04T00:00:00Z")
-	if _, err := Prepare(t.Context(), documentationScopeConfig(repo, "HEAD")); err == nil || !strings.Contains(err.Error(), "internal/later/missing.go") {
-		t.Fatalf("review ending at HEAD: error = %v, want the missing path", err)
+	result, err := Prepare(t.Context(), documentationScopeConfig(repo, "HEAD"))
+	if err != nil {
+		t.Fatal(err)
 	}
-
+	v := result.Outputs["documentation_verification"].(documentationVerification)
+	if !v.Passed || len(v.ReferenceCandidates) != 1 || v.ReferenceCandidates[0].Target != "internal/later/missing.go" {
+		t.Fatalf("HEAD verification = %#v", v)
+	}
 	writeFile(t, filepath.Join(repo, "docs/architecture/draft.md"), "Planned: `internal/later/unwritten.go`.\n")
-	config := fixtureConfig(repo, "out")
+	config := fixtureConfig(repo, "worktree-out")
 	config.Scope = resolverScope{Kind: "working_tree", History: "first_parent", Head: "HEAD"}
 	config.Routing = routingDocumentation
-	if _, err := Prepare(t.Context(), config); err == nil || !strings.Contains(err.Error(), "internal/later/unwritten.go") {
-		t.Fatalf("working-tree review: error = %v, want the missing path", err)
+	result, err = Prepare(t.Context(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v = result.Outputs["documentation_verification"].(documentationVerification)
+	if !v.Passed || len(v.ReferenceCandidates) != 1 || v.ReferenceCandidates[0].Target != "internal/later/unwritten.go" {
+		t.Fatalf("working tree verification = %#v", v)
 	}
 }
 
@@ -93,7 +103,7 @@ func TestDocumentationVerificationWithoutALaterCommitIsUnchanged(t *testing.T) {
 // documentationVerification once made it an empty object, so the team's
 // acceptance assertion on /passed could not resolve.
 func TestEmbeddedRuntimeEmitsDocumentationVerification(t *testing.T) {
-	repo, planCommit, head := forwardReferenceRepo(t, forwardPlanDocument)
+	repo, planCommit, head := forwardReferenceRepo(t, forwardPlanDocument+"The residual local scratch proposal was removed from `docs/tmp`; no path under it is tracked.\n")
 	scope := resolverScope{Kind: "last_n", Count: 1, History: "first_parent", Head: planCommit}
 	payload, err := json.Marshal(wireConfig{
 		Scope: &scope, Routing: routingDocumentation,
@@ -130,7 +140,7 @@ func TestEmbeddedRuntimeEmitsDocumentationVerification(t *testing.T) {
 		t.Fatalf("decode embedded runtime output: %v; stdout=%s", err, result.Stdout)
 	}
 	verification := output.Outputs.DocumentationVerification
-	if !verification.Passed || len(verification.CheckedFiles) != 1 || len(verification.ForwardReferences) != 3 || verification.ReferenceTip != head || verification.ReviewedRevision != planCommit {
+	if !verification.Passed || len(verification.ReferenceCandidates) != 1 || verification.ReferenceCandidates[0].Target != "docs/tmp" || len(verification.CheckedFiles) != 1 || len(verification.ForwardReferences) != 3 || verification.ReferenceTip != head || verification.ReviewedRevision != planCommit {
 		t.Fatalf("embedded documentation_verification = %#v, want a pass with three forward references at %s", verification, head)
 	}
 }
@@ -151,7 +161,7 @@ func TestDocumentationVerificationIgnoresReferencesOnlyAnotherBranchProvides(t *
 	commit(t, repo, "unrelated change on main", "2025-01-03T00:00:00Z")
 
 	_, err = Prepare(t.Context(), documentationScopeConfig(repo, strings.TrimSpace(featureCommit)))
-	for _, want := range []string{`repository path "internal/fixture/data.json" does not exist`, `Go symbol "fixture.Future" does not exist`} {
+	for _, want := range []string{`relative link target "../../internal/fixture/data.json" does not exist`} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("Prepare error = %v, want %q: a commit that does not descend from the review cannot provide a forward reference", err, want)
 		}

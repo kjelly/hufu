@@ -141,6 +141,19 @@ func TestEmbeddedInventoryActionUsesCurrentCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	current.Tasks[len(current.Tasks)-1].ContractID = "inventory-review-handoffs"
+	current.Tasks[0].Binding.Bindings["reference_candidate_ids"] = `["ref-000000","ref-000001","ref-000002"]`
+	replacePayload(t, &current.Tasks[0], func(p *payload) {
+		var r record
+		if err := json.Unmarshal(p.Record, &r); err != nil {
+			t.Fatal(err)
+		}
+		r.References = []referenceAssessment{
+			{ID: "ref-000000", Kind: "required", Rationale: "Current instruction requires this target", Evidence: []string{"snapshot-a"}, FindingIndex: new(0)},
+			{ID: "ref-000001", Kind: "uncertain", Rationale: "Context is incomplete", Evidence: []string{"snapshot-a"}, GapIndex: new(0)},
+			{ID: "ref-000002", Kind: "deleted", Rationale: "Scratch cleanup record", Evidence: []string{"snapshot-a"}},
+		}
+		p.Record = raw(t, r)
+	})
 	writeCheckpoint(t, root, raw(t, current))
 	ctx := team.WithActionEnvironment(t.Context(), team.ActionEnvironment{Workspace: workspace, RunID: "run-1", ActionInvocationID: "action-1", TaskID: "8"})
 	result, err := provider.Execute(ctx, team.Action{Capability: "inventory-review-handoffs", Type: "inventory_review_handoffs", Payload: `{"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}}`})
@@ -162,5 +175,10 @@ func TestEmbeddedInventoryActionUsesCurrentCheckpoint(t *testing.T) {
 	}
 	if !slices.Equal(inventory.RequiredGapRefs, []gapRef{{"3", 0}}) || inventory.Sources[0].GapCount != 1 || inventory.Sources[1].GapCount != 0 {
 		t.Fatalf("native inventory changed the gap universe: %+v", inventory)
+	}
+	current.Tasks[0].Binding.Bindings["reference_candidate_ids"] = `["ref-000000","ref-000001","ref-000003"]`
+	writeCheckpoint(t, root, raw(t, current))
+	if _, err := provider.Execute(ctx, team.Action{Capability: "inventory-review-handoffs", Type: "inventory_review_handoffs", Payload: `{"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}}`}); err == nil || !strings.Contains(err.Error(), "substituted") {
+		t.Fatalf("embedded inventory accepted substituted reference classification: %v", err)
 	}
 }

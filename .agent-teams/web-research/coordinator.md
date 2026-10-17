@@ -29,3 +29,9 @@ If a failed task has an already completed, objectively verified replacement, cal
 The verifier's schema declares a runtime-rendered final report. Once its task completes, call `finish` immediately with a short procedural response such as "查核流程已完成；請呈現 verifier 的證據報告。" Runtime replaces this procedural response with the verifier's complete typed findings, verdicts, limitations and source links. Do not write a separate factual synthesis, compress the report into an unsupported claim, or reproduce it in intermediate assistant messages. Never turn a search-result snippet, source count, or model confidence into proof.
 
 Call `finish` only after the verifier has submitted a complete structured audit and all required tasks are successful. If the evidence remains inconclusive after a completed search, finish with that inconclusive finding and explain the limits; do not manufacture certainty. If a required worker or audit failed, report the run as incomplete and preserve the reason.
+
+The verifier's `claim_assessments` collection accounts for every original
+research claim through runtime-issued keys. Preserve both `evidence_from`
+inputs; do not replace them with a deduplicated prose list. The verifier may
+merge duplicate propositions in final findings while retaining every input's
+handling and uncertainty in the runtime-rendered report.

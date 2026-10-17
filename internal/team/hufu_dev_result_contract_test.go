@@ -44,7 +44,7 @@ func hufuDevPayload(role string) []byte {
 	case "implementation-engineer":
 		return []byte(`{"changed_files":[],"tests_added":[],"checks":[],"limitations":[],"gaps":[]}`)
 	case "verifier":
-		return []byte(`{"checks":[],"failures":[],"gaps":[]}`)
+		return []byte(`{"checks":[],"failures":[],"gaps":[],"implementation_gap_assessments":[]}`)
 	default:
 		return []byte(`{"scope":"Assigned boundary","observations":[],"risks":[],"recommendations":[],"gaps":[]}`)
 	}
@@ -149,7 +149,12 @@ func TestHufuDevStructuredSubmissionKeepsIncompleteStatuses(t *testing.T) {
 			t.Run(role+"/"+status, func(t *testing.T) {
 				ref := session.AgentResultContracts[role]
 				c := &Coordinator{session: session, taskTracker: NewTaskTracker(), executionRunID: "run-dev-contract"}
-				item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: role, Desc: "bounded fixture", ResultContract: &ref}})[0]
+				var sources []string
+				if role == "verifier" {
+					source := fixedCollectionAcceptedSource(t, c, session.ResultContracts["schemas/implementation-v1.json"], hufuDevPayload("implementation-engineer"))
+					sources = []string{source.ID}
+				}
+				item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: role, Desc: "bounded fixture", ResultContract: &ref, EvidenceFrom: sources}})[0]
 				ctx := occurrenceTestContext(c, item.ID, 1)
 				tool := &submitResultTool{coordinator: c, todoID: item.ID}
 				// Even a negative submission must carry a valid structured payload.
@@ -164,6 +169,9 @@ func TestHufuDevStructuredSubmissionKeepsIncompleteStatuses(t *testing.T) {
 				var value map[string]any
 				if err := json.Unmarshal(hufuDevPayload(role), &value); err != nil {
 					t.Fatal(err)
+				}
+				if role == "verifier" {
+					value["implementation_gap_assessments"] = map[string]any{}
 				}
 				input, err = json.Marshal(map[string]any{"status": status, "summary": "Bounded fixture", "structured_payload": value})
 				if err != nil {
@@ -211,22 +219,29 @@ func TestHufuDevSchemasRejectMissingUnknownAndUnboundedFields(t *testing.T) {
 }
 
 func TestHufuDevWorkerClaimsCannotSatisfyAcceptance(t *testing.T) {
-	session := loadHufuDevQualityTeam(t)
-	ref := session.AgentResultContracts["verifier"]
-	// The model claims a passing check; the independent acceptance actually
-	// executes a failing command. A valid payload must not stand in for it.
-	payload, err := validateStructuredResultPayload(session.ResultContracts[ref.ID], ref,
-		[]byte(`{"checks":[{"command":"go test ./...","outcome":"pass","exit_code":0,"note":""}],"failures":[],"gaps":[]}`))
+	c, item, plans, value := adoptedFixedCollectionFixture(t, "hufu-dev")
+	c.projectDir = t.TempDir()
+	// Even complete accounting plus a claimed passing command cannot replace
+	// execution of the independent acceptance command.
+	for _, decision := range value["implementation_gap_assessments"].(map[string]any) {
+		decision.(map[string]any)["assessment"] = "addressed"
+	}
+	value["checks"] = []any{map[string]any{"command": "go test ./...", "outcome": "pass", "exit_code": 0, "note": "Claimed pass"}}
+	value["gaps"] = []any{}
+	if len(plans[0].rows) != 2 {
+		t.Fatal("missing implementation gap inventory")
+	}
+	raw, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := newBudgetCoordinator(t)
-	c.projectDir = t.TempDir()
-	c.session = session
+	payload, rejection := c.structuredPayloadForSubmission(item.ID, raw)
+	if rejection != "" {
+		t.Fatal(rejection)
+	}
 	if err := c.SetAcceptanceSpec(AcceptanceSpec{Mode: "blocking", Commands: []string{"exit 7"}}); err != nil {
 		t.Fatal(err)
 	}
-	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "verifier", Desc: "claimed pass", ResultContract: &ref}})[0]
 	if err := c.taskTracker.TodoList().SetTypedResult(item.ID, &TaskResult{
 		Status: TaskResultStatusSuccess, Source: "submitted", StructuredPayload: payload,
 	}); err != nil {
@@ -236,5 +251,8 @@ func TestHufuDevWorkerClaimsCannotSatisfyAcceptance(t *testing.T) {
 	acceptance, err := c.runAcceptance(t.Context())
 	if err == nil || acceptance == nil || acceptance.IsPassed() {
 		t.Fatalf("worker claim bypassed acceptance: %#v, %v", acceptance, err)
+	}
+	if len(acceptance.VerificationEvidence) != 1 || acceptance.VerificationEvidence[0].ExitCode != 7 {
+		t.Fatalf("acceptance did not execute its independent command: %#v", acceptance)
 	}
 }

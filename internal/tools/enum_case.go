@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"strings"
 
 	"charm.land/fantasy"
@@ -25,6 +26,11 @@ import (
 func CanonicalToolArgumentCase(input string, info fantasy.ToolInfo) (string, bool) {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" || trimmed == "{}" || len(info.Parameters) == 0 {
+		return input, false
+	}
+	// Normalization must never erase duplicate members or trailing JSON.
+	// Keep ambiguous input intact for the owning tool's validation boundary.
+	if !jsontext.Value(input).IsValid() {
 		return input, false
 	}
 	decoder := json.NewDecoder(strings.NewReader(input))

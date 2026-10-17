@@ -279,14 +279,29 @@ type documentationVerification struct {
 	// They are reported for the reviewers, not failed.
 	ForwardReferences []string `json:"forward_references,omitempty"`
 	ReferenceTip      string   `json:"reference_tip,omitempty"`
+	// Missing inline paths/symbols are observations, not existence requirements.
+	// The bound reviewer classifies their meaning using surrounding source.
+	ReferenceCandidates []referenceCandidate `json:"reference_candidates,omitempty"`
+}
+
+type referenceCandidate struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Document string `json:"document"`
+	Target   string `json:"target"`
+	Excerpt  string `json:"excerpt"`
+	// Zero-based positions in the document's added diff lines and that line's
+	// non-link code spans. These are not source-file line numbers.
+	AddedLineIndex int `json:"added_line_index"`
+	InlineIndex    int `json:"inline_index"`
 }
 
 type routedWorkset struct {
-	name        string
-	description string
-	paths       []string
-	batches     []*batch
-	extraInputs []artifact
+	name         string
+	description  string
+	paths        []string
+	batches      []*batch
+	verification documentationVerification
 }
 
 type reviewSourceSnapshot struct {
@@ -991,9 +1006,9 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 	verificationArtifact.Description = "documentation verification report"
 
 	worksets := []routedWorkset{
-		{name: "primary", description: "primary review workset manifest", paths: primaryPaths, batches: primaryBatches, extraInputs: []artifact{verificationArtifact}},
-		{name: "documentation", description: "documentation review workset manifest", paths: routineDocumentationPaths, batches: documentationBatches, extraInputs: []artifact{verificationArtifact}},
-		{name: "documentation-escalation", description: "documentation escalation workset manifest", paths: escalatedDocumentationPaths, batches: escalationBatches, extraInputs: []artifact{verificationArtifact}},
+		{name: "primary", description: "primary review workset manifest", paths: primaryPaths, batches: primaryBatches, verification: verification},
+		{name: "documentation", description: "documentation review workset manifest", paths: routineDocumentationPaths, batches: documentationBatches, verification: verification},
+		{name: "documentation-escalation", description: "documentation escalation workset manifest", paths: escalatedDocumentationPaths, batches: escalationBatches, verification: verification},
 	}
 	artifacts := make([]artifact, 0, 1+len(worksets)*2)
 	outputs := map[string]any{
@@ -1036,9 +1051,11 @@ func writeRoutedWorkset(artifactRoot, outputDir string, r reviewRange, scope sco
 	}
 	for index := range items {
 		items[index].Bindings["route"] = workset.name
-		if items[index].Lens == "documentation" || items[index].Lens == "documentation-risk" {
-			items[index].Inputs = append(items[index].Inputs, workset.extraInputs...)
+		report, err := writeItemReferenceReport(artifactRoot, worksetDir, workset.name, &items[index], workset.verification)
+		if err != nil {
+			return artifact{}, nil, 0, err
 		}
+		items[index].Inputs = append(items[index].Inputs, report)
 	}
 	partitionObserved := observeBudget(workset.batches, workset.paths)
 	partitionScope := scope
@@ -1061,13 +1078,76 @@ func writeRoutedWorkset(artifactRoot, outputDir string, r reviewRange, scope sco
 	artifacts := make([]artifact, 0, len(items)*2)
 	for _, entry := range items {
 		for _, input := range entry.Inputs {
-			if input.Kind == "review_diff" || input.Kind == "review_source_snapshot" {
+			if input.Kind == "review_diff" || input.Kind == "review_source_snapshot" || input.Kind == "documentation_verification" {
 				artifacts = append(artifacts, input)
 			}
 		}
 	}
 	itemCount := len(items)
 	return manifestArtifact, artifacts, itemCount, nil
+}
+
+// Every child gets its own candidate inventory, including an explicit empty
+// inventory. The aggregate PREPARE report is never an assigned worker input.
+func writeItemReferenceReport(artifactRoot, worksetDir, route string, entry *item, verification documentationVerification) (artifact, error) {
+	report := struct {
+		Passed                  bool                 `json:"passed"`
+		ReviewedRevision        string               `json:"reviewed_revision"`
+		WorksetKey              string               `json:"workset_key"`
+		Route                   string               `json:"route"`
+		TouchedPaths            []string             `json:"touched_paths"`
+		DeterministicCheckScope string               `json:"deterministic_check_scope"`
+		CheckedLinks            int                  `json:"checked_links"`
+		CheckedPaths            int                  `json:"checked_paths"`
+		CheckedSymbols          int                  `json:"checked_symbols"`
+		ReferenceCandidateIDs   []string             `json:"reference_candidate_ids"`
+		ReferenceCandidates     []referenceCandidate `json:"reference_candidates"`
+		ForwardReferences       []string             `json:"forward_references,omitempty"`
+		ReferenceTip            string               `json:"reference_tip,omitempty"`
+	}{
+		Passed: verification.Passed, ReviewedRevision: verification.ReviewedRevision,
+		WorksetKey: entry.Key, Route: route, TouchedPaths: entry.TouchedPaths,
+		DeterministicCheckScope: "review_scope", CheckedLinks: verification.CheckedLinks,
+		CheckedPaths: verification.CheckedPaths, CheckedSymbols: verification.CheckedSymbols,
+		ReferenceCandidateIDs: []string{}, ReferenceCandidates: []referenceCandidate{},
+		ReferenceTip: verification.ReferenceTip,
+	}
+	for _, candidate := range verification.ReferenceCandidates {
+		if containsString(entry.TouchedPaths, candidate.Document) {
+			report.ReferenceCandidateIDs = append(report.ReferenceCandidateIDs, candidate.ID)
+			report.ReferenceCandidates = append(report.ReferenceCandidates, candidate)
+		}
+	}
+	if len(report.ReferenceCandidateIDs) > 128 {
+		return artifact{}, fmt.Errorf("workset %s/%s exceeds 128 reference candidates; narrow the review scope", route, entry.Key)
+	}
+	for _, reference := range verification.ForwardReferences {
+		for _, path := range entry.TouchedPaths {
+			if strings.HasPrefix(reference, path+": ") {
+				report.ForwardReferences = append(report.ForwardReferences, reference)
+				break
+			}
+		}
+	}
+	ids, err := json.Marshal(report.ReferenceCandidateIDs)
+	if err != nil {
+		return artifact{}, err
+	}
+	entry.Bindings["reference_candidate_ids"] = string(ids)
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return artifact{}, err
+	}
+	reportPath := filepath.Join(worksetDir, "batches", entry.Key, "documentation-verification.json")
+	if err := os.WriteFile(reportPath, append(data, '\n'), 0o644); err != nil {
+		return artifact{}, err
+	}
+	result, err := fileArtifact(artifactRoot, reportPath, "documentation_verification")
+	if err != nil {
+		return artifact{}, err
+	}
+	result.Description = "documentation verification report"
+	return result, nil
 }
 
 func noopBatch(route string) *batch {
@@ -1735,8 +1815,6 @@ func isRoutineDocumentationPath(lower string) bool {
 func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange, diffPlan selectedCommitDiffPlan, paths []string) (documentationVerification, error) {
 	verification := documentationVerification{Passed: true, CheckedFiles: append([]string(nil), paths...), ReviewedRevision: reviewTargetLabel(r)}
 	seenLinks := make(map[string]struct{})
-	seenPaths := make(map[string]struct{})
-	seenSymbols := make(map[string]struct{})
 	symbolResolver := newReviewGoSymbolResolver(ctx, repo, r)
 	defer symbolResolver.close()
 	forward := newForwardReferenceChecker(ctx, repo, r)
@@ -1763,7 +1841,7 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 		if err != nil {
 			return verification, err
 		}
-		for _, line := range addedLines {
+		for lineIndex, line := range addedLines {
 			for _, match := range markdownLinkPattern.FindAllStringSubmatch(line, -1) {
 				target := strings.Trim(match[1], "<>")
 				repositoryPath, ok := repositoryLinkPath(documentPath, target)
@@ -1789,26 +1867,33 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 				}
 			}
 			inlineText := markdownLinkPattern.ReplaceAllString(line, "")
-			for _, match := range inlineCodePattern.FindAllStringSubmatch(inlineText, -1) {
+			for inlineIndex, match := range inlineCodePattern.FindAllStringSubmatch(inlineText, -1) {
 				token := strings.TrimSpace(match[1])
 				if strings.HasPrefix(token, "workspace:path/") {
 					verification.Issues = append(verification.Issues, fmt.Sprintf("%s: %q is not the canonical workspace resource syntax; use workspace:path:<path>", documentPath, token))
 					continue
 				}
 				if repositoryPath, ok := repositoryCodePath(documentPath, token); ok {
-					if _, duplicate := seenPaths[repositoryPath]; !duplicate {
-						seenPaths[repositoryPath] = struct{}{}
-						verification.CheckedPaths++
-						found, checkErr := reviewPathExists(ctx, repo, r, repositoryPath)
-						if checkErr != nil {
-							return verification, checkErr
+					// Preserve distinct mentions: the same path can be historical
+					// in one sentence and required in another. No prose is parsed.
+					verification.CheckedPaths++
+					found, checkErr := reviewPathExists(ctx, repo, r, repositoryPath)
+					if checkErr != nil {
+						return verification, checkErr
+					}
+					if !found {
+						later, laterErr := forward.pathExists(repositoryPath)
+						if laterErr != nil {
+							return verification, laterErr
 						}
-						if !found {
-							later, laterErr := forward.pathExists(repositoryPath)
-							if laterErr != nil {
-								return verification, laterErr
-							}
-							recordMissingReference(&verification, fmt.Sprintf("%s: repository path %q does not exist at %s", documentPath, repositoryPath, reviewTargetLabel(r)), later, forward.tip)
+						if later {
+							recordMissingReference(&verification, fmt.Sprintf("%s: repository path %q does not exist at %s", documentPath, repositoryPath, reviewTargetLabel(r)), true, forward.tip)
+						} else {
+							verification.ReferenceCandidates = append(verification.ReferenceCandidates, referenceCandidate{
+								ID: fmt.Sprintf("ref-%06d", len(verification.ReferenceCandidates)), Type: "path",
+								Document: documentPath, Target: repositoryPath, Excerpt: line,
+								AddedLineIndex: lineIndex, InlineIndex: inlineIndex,
+							})
 						}
 					}
 				}
@@ -1821,22 +1906,26 @@ func verifyDocumentationChanges(ctx context.Context, repo string, r reviewRange,
 				}
 				// A bare CamelCase code span can name a product concept rather than
 				// a Go declaration (for example DecisionPrimitive). Count it as a
-				// symbol only when it resolves. A package-qualified reference is an
-				// unambiguous Go claim and therefore still fails closed when absent.
+				// symbol only when it resolves. A package-qualified reference is a
+				// Go reference candidate whose meaning belongs to the reviewer.
 				if !found && !qualifiedGoSymbol.MatchString(token) {
 					continue
 				}
-				if _, duplicate := seenSymbols[token]; duplicate {
-					continue
-				}
-				seenSymbols[token] = struct{}{}
 				verification.CheckedSymbols++
 				if !found {
 					later, laterErr := forward.symbolExists(token)
 					if laterErr != nil {
 						return verification, laterErr
 					}
-					recordMissingReference(&verification, fmt.Sprintf("%s: Go symbol %q does not exist at %s", documentPath, token, reviewTargetLabel(r)), later, forward.tip)
+					if later {
+						recordMissingReference(&verification, fmt.Sprintf("%s: Go symbol %q does not exist at %s", documentPath, token, reviewTargetLabel(r)), true, forward.tip)
+					} else {
+						verification.ReferenceCandidates = append(verification.ReferenceCandidates, referenceCandidate{
+							ID: fmt.Sprintf("ref-%06d", len(verification.ReferenceCandidates)), Type: "go_symbol",
+							Document: documentPath, Target: token, Excerpt: line,
+							AddedLineIndex: lineIndex, InlineIndex: inlineIndex,
+						})
+					}
 				}
 			}
 		}

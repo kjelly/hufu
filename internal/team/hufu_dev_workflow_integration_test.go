@@ -163,6 +163,7 @@ func TestHufuDevWorkflowStructuredHandoffAndArtifacts(t *testing.T) {
 					value["changed_files"] = []string{"implementation.txt"}
 				}
 				if role == "verifier" {
+					value["implementation_gap_assessments"] = map[string]any{}
 					status = tc.status
 					if status == TaskResultStatusSuccess || status == TaskResultStatusFailed {
 						command := "grep -q '^x$' implementation.txt"

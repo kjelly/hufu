@@ -47,6 +47,8 @@ type ExecutionPolicySnapshot struct {
 	// ResultContracts pins every bound result contract schema. It is omitted
 	// when a team declares none, so their ConfigurationHash is unchanged.
 	ResultContracts []ExecutionResultContractPolicySnapshot `json:"result_contracts,omitempty"`
+	// StaticWorkflowHash pins opt-in named contract edges and their contracts.
+	StaticWorkflowHash string `json:"static_workflow_hash,omitempty"`
 	// ExecutionRoutes pins every worker's bound execution route by digest.
 	// It is omitted when no worker binds a route.
 	ExecutionRoutes []ExecutionRoutePolicySnapshot `json:"execution_routes,omitempty"`
@@ -263,6 +265,27 @@ func newExecutionPolicyState(c *Coordinator) (*executionPolicyState, error) {
 	return newExecutionPolicyStateForVersion(c, executionPolicySnapshotVersion)
 }
 
+func populateRunContractPolicySnapshot(snapshot *ExecutionPolicySnapshot, session *TeamSession) error {
+	workflowHash, err := staticContractEdgesHash(session)
+	if err != nil {
+		return err
+	}
+	snapshot.StaticWorkflowHash = workflowHash
+	if snapshot.Version >= executionPolicyPreviousSnapshotVersion && len(session.RunInputDefinitions) > 0 {
+		schemaHash, err := RunInputSchemaHash(session.RunInputDefinitions)
+		if err != nil {
+			return fmt.Errorf("hash run input schema: %w", err)
+		}
+		snapshot.RunInputSchemaHash = schemaHash
+		policyHash, err := executionRunInputPolicyHash(session)
+		if err != nil {
+			return err
+		}
+		snapshot.RunInputPolicyHash = policyHash
+	}
+	return nil
+}
+
 // newExecutionPolicyStateForVersion is used only to compare a v3 durable
 // snapshot with the current admission inputs during the compatibility window.
 // Production writers always call newExecutionPolicyState and therefore emit
@@ -291,17 +314,8 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 	snapshot.SemanticRetrievalHash = activeSemanticRetrievalHash(c.semanticSettings)
 	snapshot.Belief = executionPolicyBelief(c.session)
 	snapshot.DiagnosticLoop = executionPolicyDiagnostic(c.session)
-	if version >= executionPolicyPreviousSnapshotVersion && len(c.session.RunInputDefinitions) > 0 {
-		schemaHash, err := RunInputSchemaHash(c.session.RunInputDefinitions)
-		if err != nil {
-			return nil, fmt.Errorf("hash run input schema: %w", err)
-		}
-		snapshot.RunInputSchemaHash = schemaHash
-		policyHash, err := executionRunInputPolicyHash(c.session)
-		if err != nil {
-			return nil, err
-		}
-		snapshot.RunInputPolicyHash = policyHash
+	if err := populateRunContractPolicySnapshot(snapshot, c.session); err != nil {
+		return nil, err
 	}
 	if version >= executionPolicyPreviousSnapshotVersion {
 		snapshot.ResultContracts = executionPolicyResultContracts(c.session)
@@ -633,6 +647,9 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	}
 	if snapshot.DecisionPrimitiveHash != "" && !decisionDigestPattern.MatchString(snapshot.DecisionPrimitiveHash) {
 		return fmt.Errorf("invalid decision primitive policy hash")
+	}
+	if snapshot.StaticWorkflowHash != "" && !decisionDigestPattern.MatchString(snapshot.StaticWorkflowHash) {
+		return fmt.Errorf("invalid static workflow policy hash")
 	}
 	if snapshot.ControlDecisionHash != "" && !decisionDigestPattern.MatchString(snapshot.ControlDecisionHash) {
 		return fmt.Errorf("invalid control decision policy hash")

@@ -111,6 +111,7 @@ type dagScheduler struct {
 	criterionRetryCounts []int
 	results              []agentTaskResult
 	needsReset           []bool
+	pendingRemediation   map[int]*RemediationContext
 	revDeps              [][]int // revDeps[i] lists the tasks that depend on i
 	eventCh              chan agentTaskResult
 	inProgress           int
@@ -314,9 +315,10 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 	if s.needsReset[idx] {
 		s.needsReset[idx] = false
 		s.states[idx] = TaskError // no longer in flight; lets resetTask apply
-		if err := s.resetTask(ctx, idx, "reset by DAG retry"); err != nil {
+		if err := s.resetTaskWithRemediation(ctx, idx, "reset by DAG retry", s.pendingRemediation[idx]); err != nil {
 			return
 		}
+		delete(s.pendingRemediation, idx)
 		c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 		s.launchReady(ctx)
 		return
@@ -390,7 +392,10 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 		s.launchReady(ctx)
 		return
 	}
-	if s.routeCriterionRetry(ctx, idx, res.failedCriteria) {
+	// An explicit failure edge owns this failure's routing, class allowlist,
+	// retry budget, and remediation evidence. Criterion routing must not
+	// preempt it or provide another route after it is denied or exhausted.
+	if s.tasks[idx].OnFailure == nil && s.routeCriterionRetry(ctx, idx, res.failedCriteria) {
 		return
 	}
 	maxRetries := s.tasks[idx].MaxRetries
@@ -448,16 +453,13 @@ func (s *dagScheduler) handleEvent(ctx context.Context, res agentTaskResult) {
 	}
 	targetIdx := *s.tasks[idx].OnFailure
 	c.report(c.newEvent("step").withMessage(fmt.Sprintf("DAG loop triggered: task %q failed, jumping back to task %q (retry %d/%d)", s.tasks[idx].Agent, s.tasks[targetIdx].Agent, s.retries[idx], maxRetries)))
-	// Attach durable remediation evidence (spec.md §9.3) from the source
-	// failing task to the reset target's TodoItem *before* resetWave/
-	// CommitTaskResetForRetry runs, so its projected-copy-then-emit path
-	// (coordinator_eventstore.go) captures it in the same reset event and it
-	// survives process restart/event replay. A later genuine reset always
-	// overwrites this with fresh evidence rather than stacking.
+	// Commit the source evidence with the target reset, without mutating the
+	// live occurrence before the durable transition succeeds.
+	var remediation *RemediationContext
 	if targetIdx != idx {
-		s.todoItems[targetIdx].RemediationContext = buildRemediationContext(res.todoID, s.todoItems[idx])
+		remediation = buildRemediationContext(res.todoID, c.todoItemByID(res.todoID))
 	}
-	if err := s.resetWave(ctx, targetIdx); err != nil {
+	if err := s.resetWaveWithRemediation(ctx, targetIdx, remediation); err != nil {
 		return
 	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
@@ -550,6 +552,11 @@ func (s *dagScheduler) routeCriterionRetry(ctx context.Context, idx int, failed 
 		// once as the selected remediation. A completed/errored task is a true
 		// retry and must honor its own MaxRetries counter.
 		if s.states[targetIdx] != TaskPending {
+			// A terminal task with its own failure edge must not receive a
+			// second retry policy through some other task's failed criterion.
+			if s.tasks[targetIdx].OnFailure != nil {
+				continue
+			}
 			if !CanAutomaticallyReplay(s.tasks[targetIdx]) {
 				s.states[targetIdx] = TaskBlocked
 				item := s.todoItems[targetIdx]
@@ -559,7 +566,7 @@ func (s *dagScheduler) routeCriterionRetry(ctx context.Context, idx int, failed 
 				continue
 			}
 			maxRetries := s.tasks[targetIdx].MaxRetries
-			if maxRetries <= 0 || s.criterionRetryCounts[targetIdx] >= maxRetries {
+			if maxRetries <= 0 || max(s.criterionRetryCounts[targetIdx], s.retries[targetIdx], s.todoItems[targetIdx].Retries) >= maxRetries {
 				continue
 			}
 			s.criterionRetryCounts[targetIdx]++
@@ -574,7 +581,11 @@ func (s *dagScheduler) routeCriterionRetry(ctx context.Context, idx int, failed 
 		// Do not reset the target's dependent wave here. Criterion routing is a
 		// remediation dispatch, not an on_failure DAG loop; resetting a whole
 		// wave would bypass per-task retry counters for matching tasks.
-		if err := s.resetTask(ctx, targetIdx, "criterion retry routed"); err != nil {
+		var remediation *RemediationContext
+		if s.states[idx] == TaskError {
+			remediation = buildRemediationContext(s.todoItems[idx].ID, s.coord.todoItemByID(s.todoItems[idx].ID))
+		}
+		if err := s.resetTaskWithRemediation(ctx, targetIdx, "criterion retry routed", remediation); err != nil {
 			return false
 		}
 		s.coord.report(s.coord.newEvent("todos_updated").withTodos(s.coord.taskTracker.TodoList().Items()))
@@ -591,6 +602,10 @@ func (s *dagScheduler) routeCriterionRetry(ctx context.Context, idx int, failed 
 // instance (and the inflight dedup would hand that instance the stale
 // in-flight result), so the reset is deferred until their event arrives.
 func (s *dagScheduler) resetWave(ctx context.Context, targetIdx int) error {
+	return s.resetWaveWithRemediation(ctx, targetIdx, nil)
+}
+
+func (s *dagScheduler) resetWaveWithRemediation(ctx context.Context, targetIdx int, remediation *RemediationContext) error {
 	visited := make(map[int]bool)
 	q := []int{targetIdx}
 	for len(q) > 0 {
@@ -600,10 +615,20 @@ func (s *dagScheduler) resetWave(ctx context.Context, targetIdx int) error {
 			continue
 		}
 		visited[curr] = true
+		var correction *RemediationContext
+		if curr == targetIdx {
+			correction = remediation
+		}
 		if s.states[curr] == TaskInProgress {
 			s.needsReset[curr] = true
+			if correction != nil {
+				if s.pendingRemediation == nil {
+					s.pendingRemediation = make(map[int]*RemediationContext)
+				}
+				s.pendingRemediation[curr] = cloneRemediationContext(correction)
+			}
 		} else {
-			if err := s.resetTask(ctx, curr, "reset by DAG retry"); err != nil {
+			if err := s.resetTaskWithRemediation(ctx, curr, "reset by DAG retry", correction); err != nil {
 				return err
 			}
 		}
@@ -617,8 +642,17 @@ func (s *dagScheduler) resetWave(ctx context.Context, targetIdx int) error {
 // instead of being served the stale output. Must not be called on a task that
 // is currently in flight — mark it via needsReset instead.
 func (s *dagScheduler) resetTask(ctx context.Context, i int, detail string) error {
+	return s.resetTaskWithRemediation(ctx, i, detail, nil)
+}
+
+func (s *dagScheduler) resetTaskWithRemediation(ctx context.Context, i int, detail string, remediation *RemediationContext) error {
 	s.coord.invalidateTaskCacheWithTypedVerification(strings.ToLower(s.tasks[i].Agent), s.taskDesc(i), s.tasks[i].VerifySpec, s.tasks[i].Verify, s.tasks[i].VerifyMode)
 	if s.states[i] == TaskPending {
+		if remediation != nil {
+			return s.coord.CommitTaskTransition(ctx, s.todoItems[i].ID, TaskPending, TaskPending, "", "", map[string]interface{}{
+				"remediation_context": remediation,
+			})
+		}
 		return nil // never ran in this wave; nothing else to reset
 	}
 	if !CanAutomaticallyReplay(s.tasks[i]) {
@@ -634,9 +668,9 @@ func (s *dagScheduler) resetTask(ctx context.Context, i int, detail string) erro
 	}
 	var err error
 	if override == "" {
-		err = s.coord.CommitTaskResetForRetry(ctx, s.todoItems[i].ID, detail)
+		err = s.coord.commitTaskResetForRetry(ctx, s.todoItems[i].ID, detail, remediation)
 	} else {
-		err = s.coord.CommitTaskResetForRetry(ctx, s.todoItems[i].ID, detail, override)
+		err = s.coord.commitTaskResetForRetry(ctx, s.todoItems[i].ID, detail, remediation, override)
 	}
 	if err != nil {
 		return err

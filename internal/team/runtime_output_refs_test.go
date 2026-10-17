@@ -193,7 +193,7 @@ func TestHufuCodeReviewSynthesisReceivesPrepareOutputsWithoutCoordinatorConstrai
 	inventory.TypedResult.RuntimeOutputs, inventory.TypedResult.RuntimeOutputsHash = outputs, digest
 	inventory.ExecutionReceipt.RuntimeOutputsHash = digest
 	c.taskTracker.TodoList().Restore([]*TodoItem{item, &verifier, &inventory})
-	bound, _, err := CompileTaskGoalContracts(c.session, []TaskDef{{Agent: "synthesizer", ContractID: "synthesize-review", Goal: "Synthesize all results"}})
+	bound, _, err := CompileTaskGoalContracts(c.session, []TaskDef{{Agent: "synthesizer", ContractID: "synthesize-review", Goal: "Synthesize all results"}, {Agent: "reviewer", ContractID: "verify-review-report", Goal: "Audit synthesized results"}})
 	if err != nil {
 		t.Fatal(err)
 	}

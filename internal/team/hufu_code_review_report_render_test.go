@@ -6,14 +6,9 @@ import (
 	"testing"
 )
 
-func TestHufuCodeReviewReportRendersOptionalInvariantEvidence(t *testing.T) {
-	contract, err := compileResultContractSchema(hufuCodeReviewTeamDir(t), "schemas/report-v1.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// This is a schema-valid report boundary fixture. Runtime evidence binding
-	// independently verifies the actual source task IDs and payload hashes.
-	const fixture = `{
+// A canonical report fixture; submission may use a different runtime-owned
+// collection shape, which is tested separately.
+const hufuCodeReviewReportFixture = `{
 		"audit_complete":true,"coverage":"complete","gap_resolutions":[],
 		"scope":{"requested":{"kind":"last_n","history":"first_parent","head":"HEAD","count":10,"commit_type":"feat"},
 			"requested_input_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -23,12 +18,18 @@ func TestHufuCodeReviewReportRendersOptionalInvariantEvidence(t *testing.T) {
 			"artifact_id":"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			"requested_input_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","exit_code":0,"timed_out":false,"output_truncated":false},
 		"input_review":[{"task_id":"3","payload_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			"record":{"kind":"review","review_revision":"head","workset_key":"unit-0000","lens":"general","findings":[],"gaps":[],"invariant_assessments":[]}}]
+			"record":{"kind":"review","review_revision":"head","workset_key":"unit-0000","lens":"general","findings":[],"gaps":[],"invariant_assessments":[],"reference_assessments":[]}}]
 	}`
+
+func TestHufuCodeReviewReportRendersOptionalInvariantEvidence(t *testing.T) {
+	contract, err := compileResultContractSchema(hufuCodeReviewTeamDir(t), "schemas/report-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, status := range []string{"preserved", "violated", "unknown"} {
 		for _, evidence := range []string{"omitted", "empty", "present", "null"} {
 			t.Run(status+"/"+evidence, func(t *testing.T) {
-				value, err := decodeResultContractJSON([]byte(fixture))
+				value, err := decodeResultContractJSON([]byte(hufuCodeReviewReportFixture))
 				if err != nil {
 					t.Fatal(err)
 				}

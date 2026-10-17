@@ -43,6 +43,9 @@ type ResultPayload struct {
 	// SHA256 is the hex SHA-256 of Value.
 	SHA256             string `json:"sha256"`
 	EvidenceDowngrades int    `json:"evidence_downgrades,omitzero"`
+	// CollectionBindings are issued by the runtime after assembly, never
+	// accepted from the worker's structured_payload.
+	CollectionBindings []ResultCollectionBinding `json:"collection_bindings,omitempty"`
 }
 
 func (p *ResultPayload) clone() *ResultPayload {
@@ -51,6 +54,7 @@ func (p *ResultPayload) clone() *ResultPayload {
 	}
 	clone := *p
 	clone.Value = append(json.RawMessage(nil), p.Value...)
+	clone.CollectionBindings = cloneResultCollectionBindings(p.CollectionBindings)
 	return &clone
 }
 
@@ -233,7 +237,22 @@ func (c *Coordinator) structuredPayloadForSubmission(todoID string, raw json.Raw
 		}
 		return nil, ""
 	}
-	payload, err := validateStructuredResultPayload(compiled, *ref, raw, observations...)
+	plans, err := c.fixedCollectionPlans(todoID)
+	var bindings []ResultCollectionBinding
+	var assembled []byte
+	if err == nil {
+		assembled, bindings, err = assembleResultFixedCollections(raw, plans)
+	}
+	if err != nil {
+		err = fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
+	}
+	var payload *ResultPayload
+	if err == nil {
+		payload, err = validateStructuredResultPayload(compiled, *ref, assembled, observations...)
+	}
+	if err == nil {
+		payload.CollectionBindings = bindings
+	}
 	if err == nil {
 		if bindingErr := c.validateSubmittedEvidenceInputs(todoID, payload); bindingErr != nil {
 			err = fmt.Errorf("%s: bind evidence inputs: %w", structuredPayloadInvalidCode, bindingErr)
@@ -360,6 +379,9 @@ func resultContractPromptSection(ref *ResultContractRef, compiled *CompiledResul
 		fmt.Fprintf(b, " Include %s that satisfies the schema below when you can.\n", field)
 	}
 	b.WriteString("Do not put credentials, tokens, or keys in the payload; a payload containing them is rejected.\n")
+	if compiled != nil && len(compiled.fixedCollections) > 0 {
+		b.WriteString("This schema describes the canonical STORED result. For fields declared in Runtime Fixed Collections, submit keyed decision objects according to that manifest instead of arrays. The runtime supplies the final array and its fixed fields before validating this schema.\n")
+	}
 	if compiled != nil && len(compiled.CanonicalSchema) <= resultContractPromptSchemaMaxBytes {
 		fmt.Fprintf(b, "\n```json\n%s\n```\n", compiled.CanonicalSchema)
 	}
@@ -416,13 +438,28 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 		}
 		return nil, nil
 	}
-	payload, err := validateStructuredResultPayload(request.resultContractSchema, *ref, []byte(raw))
+	if request.resultContractSchema == nil {
+		return nil, fmt.Errorf("%s: result contract is not loaded", resultContractDriftCode)
+	}
+	plans, err := buildResultFixedCollections(request.resultContractSchema.fixedCollections, request.Task.EvidenceFrom, request.resultEvidenceInputs)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
+	}
+	assembled, bindings, err := assembleResultFixedCollections([]byte(raw), plans)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
+	}
+	payload, err := validateStructuredResultPayload(request.resultContractSchema, *ref, assembled)
 	if err != nil {
 		return nil, err
 	}
+	payload.CollectionBindings = bindings
 	value, err := decodeResultContractJSON(payload.Value)
 	if err != nil {
 		return nil, err
+	}
+	if err := validateResultWorksetInputs(value, request.resultContractSchema.worksetInputs, request.Task.WorksetBinding); err != nil {
+		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
 	}
 	if err := validateResultEvidenceInputs(value, request.resultContractSchema.evidenceInputs, request.Task.EvidenceFrom, request.resultEvidenceInputs); err != nil {
 		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)

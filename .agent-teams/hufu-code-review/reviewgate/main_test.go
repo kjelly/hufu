@@ -57,7 +57,7 @@ func fixtureTask(t *testing.T, id, contract, status string, value payload, r rec
 		"typed_result": map[string]any{"status": status, "findings": r.Findings,
 			"files_read":         []map[string]string{{"path": "snapshot-a"}, {"path": "snapshot-b"}},
 			"structured_payload": map[string]any{"value": value, "sha256": hex.EncodeToString(sum[:])}},
-		"workset_binding": map[string]any{"bindings": map[string]string{"review_revision": r.Revision, "key": r.Key, "lens": r.Lens}},
+		"workset_binding": map[string]any{"bindings": map[string]string{"review_revision": r.Revision, "key": r.Key, "lens": r.Lens, "reference_candidate_ids": "[]"}},
 	}), &item); err != nil {
 		t.Fatal(err)
 	}

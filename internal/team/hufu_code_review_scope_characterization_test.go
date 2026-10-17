@@ -151,7 +151,7 @@ func TestHufuCodeReviewSequentialCritiquesAndFullSynthesisHandoff(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	bound, _, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "synthesizer", ContractID: "synthesize-review", EvidenceFrom: ids}})
+	bound, _, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "synthesizer", ContractID: "synthesize-review", EvidenceFrom: ids}, {Agent: "reviewer", ContractID: "verify-review-report"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,5 +473,57 @@ func TestHufuCodeReviewGatesRecurringRuntimeInvariants(t *testing.T) {
 	memory, ok := byID["sqlite-canonical-memory"]
 	if !ok || !slices.Contains(memory.AppliesTo, "internal/context/") {
 		t.Errorf("canonical memory invariant lost internal/context coverage: %#v", memory)
+	}
+}
+
+func TestHufuCodeReviewReferenceScopeReachesWorkerPromptAndSubmission(t *testing.T) {
+	for _, contractID := range []string{"review-primary-workset", "review-documentation-workset", "review-documentation-escalation"} {
+		t.Run(contractID, func(t *testing.T) {
+			session := loadHufuCodeReviewTeam(t)
+			session.Workspace = t.TempDir()
+			var parent TaskDef
+			for _, task := range session.ContractTasks {
+				if task.ID == contractID {
+					parent = task
+				}
+			}
+			if parent.FanOut == nil {
+				t.Fatal("missing fan-out contract")
+			}
+			parent.FanOut = &FanOutSpec{Source: "manifest.json", GoalTemplate: parent.FanOut.GoalTemplate}
+			writeWorksetManifest(t, session.Workspace, `{"schema_version":3,"items":[{"key":"unit-0000","bindings":{"key":"unit-0000","lens":"documentation-risk","review_revision":"frozen","reference_candidate_ids":"[]"}},{"key":"unit-0001","bindings":{"key":"unit-0001","lens":"documentation-risk","review_revision":"frozen","reference_candidate_ids":"[\"ref-000000\"]"}}]}`)
+			c := &Coordinator{session: session, taskTracker: NewTaskTracker(), executionRunID: "run-scope"}
+			children, err := c.expandFanOutTasks([]TaskDef{parent})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, child := range children {
+				ctx, err := CompileWorkerContext(t.Context(), WorkerContextInput{Goal: child.Goal, TaskDef: child, ModelContext: ModelContextSpec{ContextWindow: 16384, MaxOutputTokens: 256, SafetyMarginTokens: 64}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(ctx.Prompt, "Assigned reference_candidate_ids="+child.WorksetBinding.Bindings["reference_candidate_ids"]) || strings.Contains(ctx.Prompt, "{reference_candidate_ids}") {
+					t.Fatalf("scope missing from actual compiled prompt: %s", ctx.Prompt)
+				}
+				item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: child.Agent, Desc: child.Goal, ResultContract: child.ResultContract, WorksetBinding: child.WorksetBinding}})[0]
+				makePayload := func(include bool) []byte {
+					refs := []any{}
+					if include {
+						refs = append(refs, map[string]any{"reference_id": "ref-000000", "kind": "deleted", "rationale": "The assigned source records scratch removal", "evidence": []string{"sha256-" + strings.Repeat("a", 64)}, "finding_index": nil, "gap_index": nil})
+					}
+					data, err := json.Marshal(map[string]any{"record": map[string]any{"kind": "review", "review_revision": "frozen", "workset_key": child.WorksetBinding.ItemKey, "lens": "documentation-risk", "findings": []any{}, "gaps": []any{}, "invariant_assessments": []any{}, "reference_assessments": refs}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					return data
+				}
+				if _, message := c.structuredPayloadForSubmission(item.ID, makePayload(i == 0)); message == "" {
+					t.Fatal("wrong item scope passed submission")
+				}
+				if _, message := c.structuredPayloadForSubmission(item.ID, makePayload(i == 1)); message != "" {
+					t.Fatalf("corrected item scope rejected: %s", message)
+				}
+			}
+		})
 	}
 }

@@ -36,6 +36,8 @@ type EffectiveTaskContract struct {
 	DecisionProvenance    []EvidenceProvenance      `json:"decision_provenance,omitempty"`
 	ContextConstraints    string                    `json:"context_constraints,omitempty"`
 	ContextFactRefs       []FactRef                 `json:"context_fact_refs,omitempty"`
+	DependsOnContracts    []string                  `json:"depends_on_contracts,omitempty"`
+	OnFailureContract     string                    `json:"on_failure_contract,omitempty"`
 }
 
 const effectiveTaskContractRevision = 1
@@ -49,6 +51,9 @@ const effectiveTaskContractRevision = 1
 func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef, []EffectiveTaskContract, error) {
 	if session == nil || !session.Config.Delegation.BindInitialTaskContracts || !matchesInitialContractBatch(tasks, session.Config.Delegation) {
 		return tasks, nil, nil
+	}
+	if err := validateStaticContractEdges(session); err != nil {
+		return nil, nil, err
 	}
 	contracts := make(map[string]TaskDef, len(session.ContractTasks))
 	for _, contract := range session.ContractTasks {
@@ -109,7 +114,10 @@ func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskD
 		bound[i].ContractHash = hash
 		bound[i].ContractRevision = effectiveTaskContractRevision
 		contextConstraints, contextRefs := staticTaskContext(contract)
-		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: name, Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, InvariantVerification: contract.InvariantVerification, OnFailureClasses: append([]TaskFailureClass(nil), contract.OnFailureClasses...), DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance), ContextConstraints: contextConstraints, ContextFactRefs: contextRefs})
+		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: name, Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, InvariantVerification: contract.InvariantVerification, OnFailureClasses: append([]TaskFailureClass(nil), contract.OnFailureClasses...), DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance), ContextConstraints: contextConstraints, ContextFactRefs: contextRefs, DependsOnContracts: append([]string(nil), contract.DependsOnContracts...), OnFailureContract: contract.OnFailureContract})
+	}
+	if err := bindStaticContractEdges(session, bound); err != nil {
+		return nil, nil, err
 	}
 	return bound, effective, nil
 }
@@ -129,6 +137,9 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 	}
 	bound := append([]TaskDef(nil), tasks...)
 	effective := make([]EffectiveTaskContract, 0, len(bound))
+	if err := validateStaticContractEdges(session); err != nil {
+		return nil, nil, err
+	}
 	contracts := make(map[string]TaskDef, len(session.ContractTasks))
 	for _, contract := range session.ContractTasks {
 		contractID := strings.TrimSpace(contract.ID)
@@ -185,7 +196,10 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 		bound[i].ContractHash = hash
 		bound[i].ContractRevision = effectiveTaskContractRevision
 		contextConstraints, contextRefs := staticTaskContext(contract)
-		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: strings.ToLower(strings.TrimSpace(contract.Agent)), Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, InvariantVerification: contract.InvariantVerification, OnFailureClasses: append([]TaskFailureClass(nil), contract.OnFailureClasses...), DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance), ContextConstraints: contextConstraints, ContextFactRefs: contextRefs})
+		effective = append(effective, EffectiveTaskContract{ID: contractID, Revision: effectiveTaskContractRevision, Hash: hash, Agent: strings.ToLower(strings.TrimSpace(contract.Agent)), Execution: cloneExecutionContract(contract.Execution), OutputMode: contract.OutputMode, SideEffect: contract.SideEffect, Recovery: contract.Recovery, MaxRetries: contract.MaxRetries, Action: cloneActionPtr(contract.Action), FanOut: cloneFanOutSpec(contract.FanOut), Optional: contract.Optional, InvariantVerification: contract.InvariantVerification, OnFailureClasses: append([]TaskFailureClass(nil), contract.OnFailureClasses...), DecisionFacts: cloneDecisionFacts(contract.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), contract.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(contract.DecisionBaseRates), DecisionAssumptions: cloneDecisionAssumptions(contract.DecisionAssumptions), DecisionProvenance: cloneEvidenceProvenance(contract.DecisionProvenance), ContextConstraints: contextConstraints, ContextFactRefs: contextRefs, DependsOnContracts: append([]string(nil), contract.DependsOnContracts...), OnFailureContract: contract.OnFailureContract})
+	}
+	if err := bindStaticContractEdges(session, bound); err != nil {
+		return nil, nil, err
 	}
 	return bound, effective, nil
 }
@@ -345,9 +359,13 @@ func effectiveContractHash(id, agent string, execution ExecutionContract, output
 		ResultContract        *resultContractSpec       `json:"result_contract,omitempty"`
 		ContextConstraints    string                    `json:"context_constraints,omitempty"`
 		ContextFactRefs       []FactRef                 `json:"context_fact_refs,omitempty"`
-	}{id, effectiveTaskContractRevision, agent, execution, outputMode, sideEffect, recovery, maxRetries, actionContractIdentity(action), cloneFanOutSpec(fanOut), optional, "", nil, nil, nil, nil, nil, nil, nil, "", nil}
+		DependsOnContracts    []string                  `json:"depends_on_contracts,omitempty"`
+		OnFailureContract     string                    `json:"on_failure_contract,omitempty"`
+	}{id, effectiveTaskContractRevision, agent, execution, outputMode, sideEffect, recovery, maxRetries, actionContractIdentity(action), cloneFanOutSpec(fanOut), optional, "", nil, nil, nil, nil, nil, nil, nil, "", nil, nil, ""}
 	if len(evidence) > 0 {
 		declared := evidence[0]
+		payload.DependsOnContracts = append([]string(nil), declared.DependsOnContracts...)
+		payload.OnFailureContract = declared.OnFailureContract
 		payload.InvariantVerification = declared.InvariantVerification
 		payload.OnFailureClasses = append([]TaskFailureClass(nil), declared.OnFailureClasses...)
 		payload.DecisionFacts = cloneDecisionFacts(declared.DecisionFacts)
@@ -388,6 +406,9 @@ func ValidateTeamTaskContracts(session *TeamSession) []ContractFinding {
 		return nil
 	}
 	var findings []ContractFinding
+	if err := validateStaticContractEdges(session); err != nil {
+		findings = append(findings, contractFinding("contracts", "static_contract_edges_invalid", err.Error()))
+	}
 	for index, task := range session.ContractTasks {
 		findings = append(findings, validateInvariantVerificationContract(session, index, task)...)
 		if err := validateActionInputBindings(task.Action, session.RunInputDefinitions); err != nil {

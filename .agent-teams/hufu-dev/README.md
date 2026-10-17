@@ -46,3 +46,9 @@ go test ./internal/team -run '^Test(ContextArtifact|ContextArtifacts|BashOutputO
 整合測試 `TestHufuDevWorkflowStructuredHandoffAndArtifacts` 另外以相同 fake-worker 任務切換臨時設定，檢查結構化交接、完整讀回及超限 fallback。此離線覆蓋不代表真實模型品質、成本、延遲或實際 Codex／瀏覽器輸出的相容性已驗證。
 
 回滾 fixture 時恢復舊 team 定義並使用新的臨時 session；既有 session 遇到設定／schema 漂移會拒絕恢復。不要覆寫歷史事件、payload 或 artifact。配置細節見 [agent format](../../docs/reference/agent-format.md)。
+
+## 實作缺口逐項核對
+
+verifier 的 `implementation_gap_assessments` 對已接受 implementation `/gaps` 逐項回報 `addressed`／`unresolved`／`unverified`。runtime 複製原始缺口與身份；worker 提交 issued-key object，儲存形狀是 array。來源可由直接依賴或明確 `evidence_from` 交付；缺少來源不等於空清單。這不取代獨立檢查、命令退出碼與 blocking acceptance。
+
+變更 schema 後使用新的 session；不要修改歷史 payload 或略過 policy drift 驗證。
