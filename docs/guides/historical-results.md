@@ -13,10 +13,11 @@
 ```bash
 hufu result --team <team>
 hufu results --team <team>
+hufu result final --team <team>
 hufu result --team <team> --all-branches
 ```
 
-`result` 是 `results` 的別名。不帶子指令時，stdout 直接印出範圍內最近一次 run 保存的完整最終回覆正文，不再把個別 agent 的驗證回條當成最後的結果。stderr 顯示 team、完成時間、invocation、run、result 與來源 event，便於確認讀取的是哪一次執行；`--quiet` 可關閉這些資訊。這個查詢不呼叫模型、不重新執行任務，也不以 summary 或 reason 取代正文；沒有保存的正文時明確報錯。`--agent`／`--status` 須搭配 `list`，分頁須搭配 `runs`。
+`result` 是 `results` 的別名。不帶子指令時，stdout 直接印出範圍內最近一次 run 保存的完整最終回覆正文，不再把個別 agent 的驗證回條當成最後的結果。預設讀取與 `final` 的 stderr 顯示完整 `Original request`（原始任務）、可見 branches、team、完成時間、invocation、run、result 與來源 event，便於確認讀取的是哪一次執行；`--quiet` 可關閉這些資訊。原始任務不截斷，保留換行；舊紀錄缺少原文時明確標示，不能用報告的「問題」或 agent 描述代替。這個查詢不呼叫模型、不重新執行任務，也不以 summary 或 reason 取代正文；沒有保存的正文時明確報錯。`--agent`／`--status` 須搭配 `list`，分頁須搭配 `runs`。
 
 這是指定 team 的保存回覆正文。CLI 即時 status、execution summary、team／agent 包裝標題和多 team invocation 的完整聚合文件，並非這個歷史記錄的保存契約；不能把較舊的多 run 回覆自行拼湊成原始 CLI 文件。JSON 查詢仍使用 historical_results envelope，在 results[0].output 保存完整正文與來源資訊，不等於 `run --output json` 的整份執行統計文件。
 

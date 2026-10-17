@@ -15,29 +15,54 @@ import (
 
 func TestResultsSourceIdentifiesSavedRunWithoutChangingStdout(t *testing.T) {
 	workspace, _ := resultsTestFixture(t)
-	for _, test := range []struct {
-		flags    []string
-		metadata bool
-	}{{nil, true}, {[]string{"--quiet"}, false}, {[]string{"--output", "json"}, false}} {
-		command := newResultsCommandWithDeps(resultsTestDeps(t))
-		var stdout, stderr bytes.Buffer
-		command.SetOut(&stdout)
-		command.SetErr(&stderr)
-		command.SetArgs(append([]string{"--team", "review", "--workspace", workspace}, test.flags...))
-		if err := command.Execute(); err != nil {
+	for _, operation := range []string{"", "final"} {
+		for _, test := range []struct {
+			flags    []string
+			metadata bool
+		}{{nil, true}, {[]string{"--quiet"}, false}, {[]string{"--output", "json"}, false}} {
+			command := newResultsCommandWithDeps(resultsTestDeps(t))
+			var stdout, stderr bytes.Buffer
+			command.SetOut(&stdout)
+			command.SetErr(&stderr)
+			args := []string{"--team", "review", "--workspace", workspace}
+			if operation != "" {
+				args = append([]string{operation}, args...)
+			}
+			command.SetArgs(append(args, test.flags...))
+			if err := command.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if test.metadata {
+				for _, want := range []string{"Original request: 請調查原始連線逾時問題", "team=review", "completed=2026-10-13T10:00:00Z", "Invocation: inv-results", "Run: run-review", "source event:"} {
+					if !strings.Contains(stderr.String(), want) {
+						t.Fatalf("missing %q: %s", want, stderr.String())
+					}
+				}
+			} else if stderr.Len() != 0 {
+				t.Fatalf("machine/quiet metadata: %s", stderr.String())
+			}
+			if len(test.flags) == 0 && stdout.String() != "coordinator final response\n" {
+				t.Fatalf("stdout changed: %q", stdout.String())
+			}
+		}
+	}
+}
+
+func TestResultsSourcePreservesOriginalRequestAndHandlesMissingHistory(t *testing.T) {
+	for _, prompt := range []string{"", strings.Repeat("原", 350) + "\n第二行 END_OF_REQUEST", "安全\x1b]52;c;UNSAFE_CLIPBOARD\a內容"} {
+		var stderr bytes.Buffer
+		row := inspectpkg.HistoricalResult{OriginalPrompt: prompt}
+		if err := writeResultsSource(&stderr, resultsEnvelope{Results: []inspectpkg.HistoricalResult{row}}, true); err != nil {
 			t.Fatal(err)
 		}
-		if test.metadata {
-			for _, want := range []string{"team=review", "completed=2026-10-13T10:00:00Z", "Invocation: inv-results", "Run: run-review", "source event:"} {
-				if !strings.Contains(stderr.String(), want) {
-					t.Fatalf("missing %q: %s", want, stderr.String())
-				}
-			}
-		} else if stderr.Len() != 0 {
-			t.Fatalf("machine/quiet metadata: %s", stderr.String())
+		want := "Original request: " + prompt
+		if prompt == "" {
+			want = "Original request: (Not saved in this run's canonical history.)"
+		} else if strings.ContainsRune(prompt, '\x1b') {
+			want = "Original request: 安全內容"
 		}
-		if len(test.flags) == 0 && stdout.String() != "coordinator final response\n" {
-			t.Fatalf("stdout changed: %q", stdout.String())
+		if !strings.Contains(stderr.String(), want) || strings.Contains(stderr.String(), "UNSAFE_CLIPBOARD") || strings.ContainsRune(stderr.String(), '\x1b') {
+			t.Fatalf("original request was truncated, invented or unsafe: %q", stderr.String())
 		}
 	}
 }
