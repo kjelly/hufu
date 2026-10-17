@@ -81,6 +81,8 @@ func (t *contextGetTool) Run(ctx context.Context, call fantasy.ToolCall) (fantas
 	request := t.coordinator.contextToolRequest(ctx, "context item "+wantID, "", nil)
 	request.ActionType = "context_get:" + call.ID
 	request.AssignRequestID()
+	now := contextstore.EvaluationTime(ctx)
+	ctx = contextstore.WithEvaluationTime(ctx, now)
 	item, reason, err := t.coordinator.GetAuthorizedContextItem(ctx, request, wantID)
 	if err != nil {
 		if reason == "" {
@@ -91,7 +93,7 @@ func (t *contextGetTool) Run(ctx context.Context, call fantasy.ToolCall) (fantas
 		}
 		return fantasy.NewTextErrorResponse("context item is not visible: " + string(reason)), nil
 	}
-	compiled := CompiledContext{Prompt: utils.TruncateRunes(utils.RedactSecrets(item.Content), contextToolOutputMaxRunes), IncludedItems: canonicalCompilerItems([]contextstore.ContextItem{item}, PriorityRelevantLTM, "context_get", false, item.Lifecycle == contextstore.LifecycleCandidate)}
+	compiled := CompiledContext{Prompt: utils.TruncateRunes(utils.RedactSecrets(item.Content), contextToolOutputMaxRunes), IncludedItems: canonicalCompilerItemsAt([]contextstore.ContextItem{item}, PriorityRelevantLTM, "context_get", false, item.Lifecycle == contextstore.LifecycleCandidate, now)}
 	manifest, err := BuildContextInjectionManifest(request, compiled, []ContextRouteDecision{{ContextItemID: item.ID, Included: true, Reason: reason}}, request.AgentName, time.Now().UTC(), t.coordinator.session.Config.MemoryLearning)
 	if err != nil {
 		return fantasy.NewTextErrorResponse("context attribution failed: " + utils.RedactSecrets(err.Error())), nil
@@ -186,6 +188,7 @@ func (c *Coordinator) contextToolRequest(ctx context.Context, goal string, trigg
 // by routed context. It deliberately does not accept a caller-supplied item:
 // opaque IDs are lookup keys, never authorization tokens.
 func (c *Coordinator) GetAuthorizedContextItem(ctx context.Context, request ContextRequest, id string) (contextstore.ContextItem, ContextDecisionReason, error) {
+	ctx = contextstore.WithEvaluationTime(ctx, contextstore.EvaluationTime(ctx))
 	if c == nil || c.contextRepo == nil || c.session == nil {
 		return contextstore.ContextItem{}, ContextOmittedLifecycle, fmt.Errorf("canonical context unavailable")
 	}
@@ -207,7 +210,7 @@ func (c *Coordinator) GetAuthorizedContextItem(ctx context.Context, request Cont
 		if err != nil {
 			return contextstore.ContextItem{}, ContextOmittedLifecycle, fmt.Errorf("context activation projection: %w", err)
 		}
-		eligible, reason, eligibilityErr := EvaluateContextEligibility(item, request, request.RunID, time.Now().UTC())
+		eligible, reason, eligibilityErr := EvaluateContextEligibility(item, request, c.candidateRunID(request), contextstore.EvaluationTime(ctx))
 		if eligibilityErr != nil {
 			return contextstore.ContextItem{}, reason, eligibilityErr
 		}

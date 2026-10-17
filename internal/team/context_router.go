@@ -14,22 +14,25 @@ import (
 type ContextDecisionReason string
 
 const (
-	ContextIncludedRequired      ContextDecisionReason = "required"
-	ContextIncludedRelevant      ContextDecisionReason = "relevant"
-	ContextOmittedLifecycle      ContextDecisionReason = "lifecycle_ineligible"
-	ContextOmittedExpired        ContextDecisionReason = "expired"
-	ContextOmittedPhase          ContextDecisionReason = "phase_mismatch"
-	ContextOmittedTrigger        ContextDecisionReason = "trigger_mismatch"
-	ContextOmittedRole           ContextDecisionReason = "role_mismatch"
-	ContextOmittedCapability     ContextDecisionReason = "capability_mismatch"
-	ContextOmittedTool           ContextDecisionReason = "tool_mismatch"
-	ContextOmittedErrorClass     ContextDecisionReason = "error_class_mismatch"
-	ContextOmittedEnvironment    ContextDecisionReason = "environment_mismatch"
-	ContextOmittedBelowThreshold ContextDecisionReason = "below_relevance"
-	ContextOmittedInjectLimit    ContextDecisionReason = "inject_limit"
-	ContextOmittedBudget         ContextDecisionReason = "token_budget"
-	ContextOmittedDuplicate      ContextDecisionReason = "duplicate"
-	ContextOmittedNotApplicable  ContextDecisionReason = "not_applicable"
+	ContextIncludedRequired       ContextDecisionReason = "required"
+	ContextIncludedRelevant       ContextDecisionReason = "relevant"
+	ContextOmittedLifecycle       ContextDecisionReason = "lifecycle_ineligible"
+	ContextOmittedExpired         ContextDecisionReason = "expired"
+	ContextOmittedPhase           ContextDecisionReason = "phase_mismatch"
+	ContextOmittedTrigger         ContextDecisionReason = "trigger_mismatch"
+	ContextOmittedRole            ContextDecisionReason = "role_mismatch"
+	ContextOmittedCapability      ContextDecisionReason = "capability_mismatch"
+	ContextOmittedTool            ContextDecisionReason = "tool_mismatch"
+	ContextOmittedErrorClass      ContextDecisionReason = "error_class_mismatch"
+	ContextOmittedEnvironment     ContextDecisionReason = "environment_mismatch"
+	ContextOmittedBelowThreshold  ContextDecisionReason = "below_relevance"
+	ContextOmittedInjectLimit     ContextDecisionReason = "inject_limit"
+	ContextOmittedBudget          ContextDecisionReason = "token_budget"
+	ContextOmittedDuplicate       ContextDecisionReason = "duplicate"
+	ContextOmittedNotApplicable   ContextDecisionReason = "not_applicable"
+	ContextOmittedEmptyContent    ContextDecisionReason = "empty_content"
+	ContextOmittedWorkerSTMOnly   ContextDecisionReason = "worker_stm_only"
+	ContextOmittedNotMaterialized ContextDecisionReason = "not_materialized"
 )
 
 type ContextRouteDecision struct {
@@ -254,7 +257,9 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 		return ContextRoute{Request: request}, nil
 	}
 	ctx = c.withContextQueryPolicy(ctx)
-	route := ContextRoute{Request: request}
+	now := contextstore.EvaluationTime(ctx)
+	ctx = contextstore.WithEvaluationTime(ctx, now)
+	route := ContextRoute{Request: request, Bundle: CanonicalContextBundle{EvaluatedAt: now}}
 	mode := c.invariantVerificationModeForRequest(request)
 	if !validInvariantVerificationMode(mode) {
 		return ContextRoute{}, fmt.Errorf("task %q has invalid invariant verification mode %q", request.TaskID, mode)
@@ -300,14 +305,14 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 	if err != nil {
 		return ContextRoute{}, err
 	}
-	now := contextstore.EvaluationTime(ctx)
+	runID := c.candidateRunID(request)
 	eligibleSession := make([]contextstore.ContextItem, 0, len(sessionItems))
 	for _, item := range sessionItems {
 		item, err = activationItemFromRepository(ctx, c.contextRepo, item)
 		if err != nil {
 			return ContextRoute{}, fmt.Errorf("context item %s activation projection: %w", item.ID, err)
 		}
-		eligible, reason, eligibilityErr := EvaluateContextEligibility(item, request, c.executionRunID, now)
+		eligible, reason, eligibilityErr := EvaluateContextEligibility(item, request, runID, now)
 		if eligibilityErr != nil {
 			return ContextRoute{}, fmt.Errorf("context item %s activation: %w", item.ID, eligibilityErr)
 		}
@@ -323,7 +328,7 @@ func (router coordinatorContextRouter) Route(ctx context.Context, request Contex
 		if err != nil {
 			return ContextRoute{}, fmt.Errorf("context item %s activation projection: %w", item.ID, err)
 		}
-		eligible, reason, eligibilityErr := EvaluateContextEligibility(item, request, c.executionRunID, now)
+		eligible, reason, eligibilityErr := EvaluateContextEligibility(item, request, runID, now)
 		if eligibilityErr != nil {
 			return ContextRoute{}, fmt.Errorf("context item %s activation: %w", item.ID, eligibilityErr)
 		}

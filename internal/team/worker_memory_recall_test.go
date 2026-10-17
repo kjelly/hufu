@@ -200,12 +200,8 @@ func TestWP3_MaxTokensLimitEnforced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
-	// With MaxTokens=50, at most 1 item should fit (each is ~1300 chars / 4 = ~325 tokens).
-	if len(bundle.Items) > 1 {
-		t.Errorf("MaxTokens=50 but got %d items with total tokens %d", len(bundle.Items), bundle.Trace.Tokens)
-	}
-	if bundle.Trace.Tokens > 50 && len(bundle.Items) > 1 {
-		t.Errorf("token budget exceeded: %d > 50", bundle.Trace.Tokens)
+	if len(bundle.Items) != 0 || bundle.Trace.Tokens > 50 || bundle.Trace.BudgetSkipped == 0 {
+		t.Fatalf("oversized records bypassed the budget: items=%d trace=%+v", len(bundle.Items), bundle.Trace)
 	}
 }
 
