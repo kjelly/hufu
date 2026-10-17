@@ -62,7 +62,7 @@
       "additionalProperties": false,
       "required": ["claim", "assessment", "reasoning", "sources", "open_questions"],
       "properties": {
-        "claim": {"type": "string", "minLength": 1, "maxLength": 1000, "description": "One atomic, independently checkable claim. Merge duplicates; do not combine date, trigger, count and elapsed time."},
+        "claim": {"type": "string", "minLength": 1, "maxLength": 1000, "description": "One independently adjudicable proposition, preserving speaker, cited person/document and event/time context. Split claims about different speakers or independently verifiable numbers. Support for a subset or a different speaker never establishes the whole claim; do not qualify a compound supported claim with only one part verified."},
         "assessment": {"type": "string", "enum": ["supported", "contradicted", "mixed", "unverified"]},
         "reasoning": {"type": "string", "minLength": 1, "maxLength": 2000},
         "sources": {

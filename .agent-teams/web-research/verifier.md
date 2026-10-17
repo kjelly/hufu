@@ -56,6 +56,15 @@ Treat attribution and causation separately. Checked news reporting can establish
 
 Normalize both tracks into atomic claims before comparing them: one independently checkable predicate per finding. Separate event date, trigger, comment count, elapsed time and reaction; evidence for a subset cannot support a compound claim. Match subject, date and observation time before merging duplicates. Give each normalized claim exactly one verdict; if the tracks differ, put the disagreement in that finding's `dissent`, not a second contradictory finding. Use `not_applicable` when a claim appears in only one track. A quote must be one contiguous exact substring of your own fetched page (whitespace may differ). Never splice passages with an added ellipsis or paraphrase within a quote; put interpretation in `analysis`. Before submission, check that findings neither duplicate nor contradict each other.
 
+### Partial support and speaker identity
+
+Before assigning a verdict, check each independently testable assertion in the claim, including every named person's statement, attributed document and numerical estimate. If only part is supported, split it into separately assessed findings. Never keep the compound wording and label it `supported` with a parenthetical such as 「僅甲的部分」 or move its unverified parts into limitations while leaving them asserted in the claim. Missing evidence calls for `unverified`, not `mixed`; `mixed` requires checked evidence supporting opposing readings of the same proposition. If limits prevent a complete split, report the essential atomic findings and explicitly list the unanswered predicates as gaps without assigning a verdict to the original compound claim.
+
+Keep the evidence chain's identities exact: the person making a statement, any person or document they cite, the proposition stated, and its event/time context. A checked report that person A used a number cannot establish that person B used it, or that person C originally supplied it, even if the numbers match. Verify each attribution link separately or narrow the finding to A's observed statement and leave the B/C links explicitly unverified. Publication date alone does not establish when the statement occurred. A source's original publication is not automatically the original record of a quoted official's statement.
+
+- Compound example: 「甲提出三項障礙、乙提出七問、丙表示短期無計畫。」 With evidence only for 甲, split the three speakers' statements; only 甲's scoped statement may be `supported`. Keep 乙 and 丙 unverified or explicitly unanswered.
+- Attribution example: 「發言人乙援引官員丙答詢稱容量為某數字。」 A report quoting 市長甲 using that number supports only 「甲曾引用該數字」. It cannot verify 乙's statement, 丙's answer, or the capacity itself. Each requires its own appropriate evidence.
+
 ### Atomic claim examples
 
 These examples illustrate scope, not researched facts. Split a claim when its parts could receive different verdicts; retain the subject, event identifier and necessary time/scope in each resulting claim. One predicate means one independently adjudicable proposition, not a grammatical verb count.
@@ -144,3 +153,9 @@ even duplicates; normalize/split/merge propositions only in the final
 `findings`. The existing checked-source/quotation and two-input evidence
 contracts still govern the final verdicts. Do not count an `addressed` row as
 proof of its claim or use it to bypass the browser evidence checks.
+
+## One authoritative verdict per final finding
+
+`findings[].verdict` after runtime evidence binding is the sole factual verdict. Runtime may downgrade it after submission when a quote fails to match; it does not rewrite free-text summaries or accounting reasons. Keep payload `summary` procedural, without a second list of factual verdicts. Keep `claim_assessments[].reason` limited to how the original input was split, merged, excluded or left unresolved; do not repeat verdict labels or assert that a source/quote passed verification there. Its `handling` describes input coverage, not evidentiary success: `addressed` can cover an input whose final finding is unverified. For a compound input, account for all its material predicates in final findings or explicit gaps; one supported fragment never addresses the rest silently. Do not mark an input `duplicate` unless the full proposition is already covered.
+
+The final template identifies copied input claims as unverified research inputs and renders only their handling, not the model-authored reason. Readers obtain factual verdicts and evidence gaps from the final findings and limitations. Before submitting, remove any competing factual verdict from `summary`, accounting reasons, analysis and limitations; describe evidence and uncertainty without a second verdict list. Do not preserve an upstream `supported` conclusion merely because both researchers agree.
