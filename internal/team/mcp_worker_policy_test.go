@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,6 +13,62 @@ import (
 	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/tools"
 )
+
+func TestWorkflowMCPObservationsPreserveFrozenAuthority(t *testing.T) {
+	for _, phase := range []Phase{PhasePrepare, PhaseAudit, PhaseVerify} {
+		for _, scenario := range []string{"allowed", "no_net", "agent_no_net", "context_no_net", "denied", "undeclared"} {
+			t.Run(string(phase)+"/"+scenario, func(t *testing.T) {
+				c := newDirectTypedCoordinator(t, "source__read_document,sink__write_note", nil, nil)
+				c.mcpManager = readOnlyRecoveryManager(t)
+				c.phaseWorkflow = &runtimeWorkflow{enabled: true, state: phase}
+				def := c.session.Agents["worker"]
+				ctx := t.Context()
+				switch scenario {
+				case "no_net":
+					c.noNet = true
+				case "agent_no_net":
+					def.NoNet = true
+				case "context_no_net":
+					ctx = context.WithValue(ctx, tools.AgentNetworkBlockKey, true)
+				case "denied":
+					c.session.Config.ToolsDenied = []string{"source__read_document"}
+				case "undeclared":
+					def.Tools = "view"
+				}
+				task := TaskDef{Agent: "worker", Execution: ExecutionContract{RequiresResult: true}}
+				snapshot, err := c.resolveNewTaskToolAuthorization(ctx, task, def)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantTargets := 0
+				if scenario == "allowed" {
+					wantTargets = 1
+				}
+				if len(snapshot.Targets) != wantTargets {
+					t.Fatalf("frozen targets = %#v, want %d", snapshot.Targets, wantTargets)
+				}
+				if len(snapshot.Targets) > 0 && snapshot.Targets[0].Name != "source__read_document" {
+					t.Fatal("observation phase froze an unclassified mutation")
+				}
+				item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "observe", DynamicToolAuthorization: snapshot}})[0]
+				for _, mode := range []WorkerToolResolutionMode{WorkerToolResolutionNormal, WorkerToolResolutionResultRepair, WorkerToolResolutionResume} {
+					resolved, err := c.ToolResolver().ResolveTaskTools(ctx, def, WorkerToolResolutionRequest{Task: task, TodoID: item.ID, Mode: mode})
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantObservation := scenario == "allowed" && mode == WorkerToolResolutionNormal
+					if slices.Contains(resolved.AuthorizedNames, "source__read_document") != wantObservation || slices.Contains(resolved.AuthorizedNames, "sink__write_note") {
+						t.Fatalf("%s authorized = %v, want observation=%t and no mutation", mode, resolved.AuthorizedNames, wantObservation)
+					}
+				}
+				allowed := tools.GetToolsAllowed(c.withEffectiveToolsAllowedForTask(ctx, def, []string{"source__read_document", "sink__write_note"}, task))
+				if slices.Contains(allowed, "source__read_document") != (scenario == "allowed") || slices.Contains(allowed, "sink__write_note") {
+					t.Fatalf("legacy authorization differs from frozen resolver: %v", allowed)
+				}
+			})
+		}
+	}
+}
 
 func workerObservationPolicy() mcp.WorkerToolPolicy {
 	return mcp.WorkerToolPolicy{SideEffect: "none", Filesystem: "none", InputSchema: map[string]any{

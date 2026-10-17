@@ -3815,7 +3815,9 @@ func (c *Coordinator) withEffectiveToolsAllowedForTask(ctx context.Context, def 
 		} else if c.mcpManager != nil {
 			mcpNames := make(map[string]bool)
 			for _, t := range c.mcpManager.AsAgentTools() {
-				mcpNames[t.Info().Name] = true
+				if !c.workflowMCPToolAllowed(ctx, def, t.Info().Name, t) {
+					mcpNames[t.Info().Name] = true
+				}
 			}
 			for name := range def.MCPTools {
 				name = strings.TrimSpace(name)

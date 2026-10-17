@@ -38,18 +38,28 @@
       "random",
       "math"
     ],
+    "workflow": {
+      "phases": [
+        "prepare",
+        "verify"
+      ]
+    },
+    "policies": {
+      "require_phase_success": true,
+      "allow_phase_skip": true
+    },
+    "verification": {
+      "required": true
+    },
     "delegation": {
       "AllowedWorkers": [
         "researcher",
         "countercheck",
         "verifier"
       ],
-      "InitialBatch": [
-        "researcher",
-        "countercheck"
-      ],
-      "RequireExactInitialBatch": true,
-      "InitialCoordinatorTool": "agent",
+      "InitialBatch": null,
+      "RequireExactInitialBatch": false,
+      "InitialCoordinatorTool": "",
       "BindInitialTaskContracts": false,
       "BindTaskGoalContracts": true,
       "NoRedispatchAfterSuccess": [
@@ -110,18 +120,21 @@
     {
       "id": "primary-research",
       "agent": "researcher",
+      "phase": "PREPARE",
       "side_effect": "none",
       "recovery": "retry"
     },
     {
       "id": "counter-research",
       "agent": "countercheck",
+      "phase": "PREPARE",
       "side_effect": "none",
       "recovery": "retry"
     },
     {
       "id": "evidence-audit",
       "agent": "verifier",
+      "phase": "VERIFY",
       "side_effect": "none",
       "recovery": "retry"
     }

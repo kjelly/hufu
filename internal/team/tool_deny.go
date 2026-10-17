@@ -433,8 +433,6 @@ var executionCapabilityTools = map[string]bool{
 	"download":           true,
 	"fetch":              true,
 	"agentic_fetch":      true,
-	"web_search":         true,
-	"web_fetch":          true,
 	"terminal":           true,
 	"terminal_start":     true,
 	"terminal_write":     true,

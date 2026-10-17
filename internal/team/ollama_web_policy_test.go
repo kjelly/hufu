@@ -113,7 +113,7 @@ func TestOllamaWebEffectivePolicyAndPreflight(t *testing.T) {
 		{name: "agent force-mcp", declared: "view,web_search", forceMCP: true},
 		{name: "team or CLI no-net", declared: "view,web_search", cliNoNet: true},
 		{name: "team or CLI force-mcp", declared: "view,web_search", cliMCP: true},
-		{name: "prepare phase", declared: "view,web_search", phase: true},
+		{name: "prepare observation still needs key", declared: "view,web_search", phase: true, missing: true},
 		{name: "closed sequence", declared: "view,web_search", sequence: []string{"view"}},
 		{name: "result-only", declared: "view,web_search", mode: WorkerToolResolutionResultRepair},
 	} {
@@ -166,8 +166,8 @@ func TestOllamaWebRuntimeGateIgnoresSessionPermissionOverride(t *testing.T) {
 
 func TestOllamaWebReadOnlyAndPhaseTaxonomy(t *testing.T) {
 	for _, name := range []string{"web_search", "web_fetch"} {
-		if !tools.IsReadOnlyObservationTool(name) || readOnlyToolMutation(name, "") || !executionCapabilityTools[name] {
-			t.Fatalf("%q must be read-only but phase-gated", name)
+		if !tools.IsReadOnlyObservationTool(name) || readOnlyToolMutation(name, "") || executionCapabilityTools[name] {
+			t.Fatalf("%q must remain available as an explicitly granted observation across workflow phases", name)
 		}
 	}
 }

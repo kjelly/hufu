@@ -5,6 +5,17 @@ max-rounds: 8
 max-concurrent: 2
 max-retries: 1
 allow-free-text-results: false
+# PREPARE runs both independent searches; VERIFY audits their accepted inputs.
+# Skipping permits omission of the unused AUDIT/EXECUTE phases, not bypassing
+# either required research contract or the final evidence audit.
+workflow:
+  phases: [prepare, verify]
+policies:
+  require_phase_success: true
+  allow_phase_skip: true
+  fail_fast: false
+verification:
+  required: true
 tools:
   denied: [web_fetch, write, edit, multiedit, bash, sudo, ssh, scp, lua, golang, download, fetch, agentic_fetch, grep, glob, ls, random, math]
 requires:
@@ -73,10 +84,6 @@ mcp-servers:
         inputSchema: {type: object, additionalProperties: false, properties: {}}
 delegation:
   bind-task-goal-contracts: true
-  initial-batch:
-    agents: [researcher, countercheck]
-    exact: true
-    first-tool: agent
   allowed-workers: [researcher, countercheck, verifier]
   no-redispatch-after-success: [researcher, countercheck, verifier]
   share-request-with: [researcher, countercheck, verifier]
@@ -91,6 +98,7 @@ acceptance:
 contracts:
   - id: primary-research
     agent: researcher
+    phase: prepare
     side_effect: none
     recovery: retry
     max_retries: 1
@@ -104,6 +112,7 @@ contracts:
         - {pointer: /structured_payload/value/findings, op: min_items, value: 1}
   - id: counter-research
     agent: countercheck
+    phase: prepare
     side_effect: none
     recovery: retry
     max_retries: 1
@@ -117,6 +126,7 @@ contracts:
         - {pointer: /structured_payload/value/findings, op: min_items, value: 1}
   - id: evidence-audit
     agent: verifier
+    phase: verify
     side_effect: none
     recovery: retry
     max_retries: 1
