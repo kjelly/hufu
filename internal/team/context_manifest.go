@@ -90,7 +90,7 @@ func BuildContextInjectionManifest(request ContextRequest, compiled CompiledCont
 		}
 		decision = queryCompilerManifestScores(compiled, item, decision)
 		manifestItem := ContextManifestItem{ID: id, Kind: item.Kind, Source: item.Source, Included: included, Reason: reason, Tokens: item.TokenCount, Compressed: item.Compressed, BaseScore: decision.BaseScore, FinalScore: decision.FinalScore, DisclosureLevel: contextDisclosureLevel(item.Kind)}
-		if item.Kind == "dependency_result" {
+		if item.Kind == "dependency_result" || item.Kind == "previous_response" {
 			manifestItem.ContentHash = hashContentKey(item.Content)
 		}
 		if item.Kind == string(contextstore.ContextInvariant) {

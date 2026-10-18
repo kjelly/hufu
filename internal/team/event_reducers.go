@@ -87,6 +87,11 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			}
 		case string(EventWorkflowStateChanged):
 			reduceWorkflowStateChanged(session, e)
+		case string(EventWorkflowCycleStarted):
+			if payload, err := decodeWorkflowCycleStarted(e); err == nil {
+				resetWorkflowCycleProjection(session, e.RunID, payload.TaskIDFloor)
+				session.addEntryAt("user", payload.Request, e.Timestamp)
+			}
 		case "acceptance_contract_modified":
 			reduceAcceptanceContractModified(session, e)
 		case "coordinator_continuation_checkpoint":
@@ -395,6 +400,16 @@ func sameReceiptMigrationIdentity(receipt ExecutionReceipt, migration ReceiptBac
 
 func reduceToTodoList(events []RunEvent) todoReplayResult {
 	events = normalizeReplayEvents(events)
+	// Earlier cycles remain in the journal for historical run inspection, but
+	// cannot establish tasks or verification evidence in the active cycle.
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type == string(EventWorkflowCycleStarted) {
+			if _, err := decodeWorkflowCycleStarted(events[i]); err == nil {
+				events = events[i+1:]
+				break
+			}
+		}
+	}
 	taskMap := make(map[string]*TodoItem)
 	var taskOrder []string
 	result := newTodoReplayResult()

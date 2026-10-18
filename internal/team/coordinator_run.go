@@ -2046,10 +2046,10 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 	// historical source out of the coordinator's first-turn context until the
 	// initial batch is accepted; the phase prompt and narrowed agent schema are
 	// then the sole normative dispatch inputs.
-	allowHistoricalMemory := !c.historicalMemoryDisabled() && !c.initialDelegationPending()
+	allowHistoricalMemory := !c.historicalMemoryDisabled() && !c.initialContextWithheld()
 	// Canonical context never carries the prior session's archive, so a fresh
 	// session with learning on reads it while the archive stays withheld.
-	allowCanonicalMemory := !c.canonicalMemoryDisabled() && !c.initialDelegationPending()
+	allowCanonicalMemory := !c.canonicalMemoryDisabled() && !c.initialContextWithheld()
 	var contextSummary string
 	if !isContinuation && allowHistoricalMemory && c.sessionData != nil && len(c.sessionData.Entries) > 1 && len(c.conversationHistory) == 0 {
 		contextSummary = c.sessionData.ContextSummary()
@@ -2192,6 +2192,11 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}
+	newWorkflowCycle, err := c.beginFollowUpWorkflow(ctx, userPrompt)
+	if err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return "", err
+	}
 	if err := c.startSemanticRunInputBoundary(ctx); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return "", err
@@ -2282,7 +2287,9 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	}
 	c.continuationResume = nil
 
-	c.addSessionUserMessage(userPrompt)
+	if !newWorkflowCycle {
+		c.addSessionUserMessage(userPrompt)
+	}
 	ctx, _, err = c.resolveProviderBoundInvocationContext(ctx, c.resolveAgentModel(orchDef, ""), orchDef)
 	if err != nil {
 		c.finalizePublicInvocationFailure(err)
@@ -2376,6 +2383,11 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}
+	newWorkflowCycle, err := c.beginFollowUpWorkflow(ctx, additionalPrompt)
+	if err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return "", err
+	}
 	if err := c.startSemanticRunInputBoundary(ctx); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return "", err
@@ -2392,7 +2404,11 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	// arriving after this boundary sets wrapUp for the current round instead of
 	// being erased by the reset.
 	wasWrapUp := c.resetRoundStateConsumingWrapUp()
-	c.advanceRequestContractRevision(additionalPrompt)
+	if newWorkflowCycle {
+		c.advanceRequestContractRevision("")
+	} else {
+		c.advanceRequestContractRevision(additionalPrompt)
+	}
 	if err := c.startProviderExecutionBoundary(ctx); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return "", err
@@ -2428,7 +2444,9 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	orchDefCopy := *orchDef
 	orchDefCopy.System = systemPrompt
 
-	c.addSessionUserMessage(additionalPrompt)
+	if !newWorkflowCycle {
+		c.addSessionUserMessage(additionalPrompt)
+	}
 
 	c.report(c.newEvent("start").withAgent(orchDef.Name).withMessage("continuing with additional input").withModel(c.resolveAgentModel(orchDef, "")).withTodoID(CoordTodoID))
 

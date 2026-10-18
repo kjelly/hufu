@@ -15,17 +15,7 @@ const maxOriginalRequestRunes = 16000
 // lists agentName in delegation.share-request-with. A resumed run's own prompt
 // only asks to resume, so the request is then the latest earlier user message.
 func (c *Coordinator) originalRequestFor(agentName string) string {
-	if c == nil || c.session == nil {
-		return ""
-	}
-	shared := false
-	for _, name := range c.session.Config.Delegation.ShareRequestWith {
-		if strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(agentName)) {
-			shared = true
-			break
-		}
-	}
-	if !shared {
+	if !c.sharesRequestWith(agentName) {
 		return ""
 	}
 	request := strings.TrimSpace(c.initialPrompt)
@@ -43,6 +33,18 @@ func (c *Coordinator) originalRequestFor(agentName string) string {
 		}
 	})
 	return request
+}
+
+func (c *Coordinator) sharesRequestWith(agentName string) bool {
+	if c == nil || c.session == nil {
+		return false
+	}
+	for _, name := range c.session.Config.Delegation.ShareRequestWith {
+		if strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(agentName)) {
+			return true
+		}
+	}
+	return false
 }
 
 // originalRequestContextItem renders the run's request as reference context

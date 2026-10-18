@@ -357,7 +357,7 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 		if !prof.DisableHistoricalMemory {
 			c.hydrateConversationHistoryFromSessionData()
 		}
-		if c.initialDelegationPending() {
+		if c.initialContextWithheld() {
 			c.conversationHistoryMu.Lock()
 			c.conversationHistory = nil
 			c.conversationHistorySourceCounts = nil
@@ -397,7 +397,7 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 		if !prof.DisableHistoricalMemory {
 			c.hydrateConversationHistoryFromSessionData()
 		}
-		if c.initialDelegationPending() {
+		if c.initialContextWithheld() {
 			c.conversationHistoryMu.Lock()
 			c.conversationHistory = nil
 			c.conversationHistorySourceCounts = nil
@@ -430,7 +430,14 @@ func (c *Coordinator) replaceCanonicalProjection(replayedSD *SessionData, replay
 	if replayedSD == nil {
 		return
 	}
+	cycleChanged := c.workflowCycleID() != replayedSD.WorkflowCycleID
 	_ = c.mutateSessionData(func(sd *SessionData) error {
+		sd.WorkflowCycleID, sd.WorkflowTaskIDFloor = replayedSD.WorkflowCycleID, replayedSD.WorkflowTaskIDFloor
+		sd.WorkflowState, sd.PhaseResults, sd.RetryState = replayedSD.WorkflowState, replayedSD.PhaseResults, replayedSD.RetryState
+		if cycleChanged {
+			sd.RunResult, sd.ContinuationCheckpoint = replayedSD.RunResult, replayedSD.ContinuationCheckpoint
+			sd.DiagnosticPackets, sd.PlanRevisions, sd.PlanReviews = replayedSD.DiagnosticPackets, replayedSD.PlanRevisions, replayedSD.PlanReviews
+		}
 		sd.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(replayedSD.ExecutionPolicySnapshot)
 		// Run inputs are compared by the shadow check, so a repair must
 		// replace them too or every start reports the same mismatch again.
@@ -457,6 +464,14 @@ func (c *Coordinator) replaceCanonicalProjection(replayedSD *SessionData, replay
 		}
 		return nil
 	})
+	if cycleChanged {
+		c.SetTaskCache(newDefaultTaskCache(taskCacheDependenciesFor(c)))
+		if c.phaseWorkflow != nil {
+			if err := c.phaseWorkflow.restore(replayedSD.WorkflowState, replayedSD.PhaseResults, "", replayedSD.RetryState); err != nil {
+				c.markSessionRecovery(err.Error())
+			}
+		}
+	}
 }
 
 func isProjectionPrefixOrRecoverable(live, replayedSD *SessionData, replayedTasks []*TodoItem) bool {
@@ -482,6 +497,24 @@ func isProjectionPrefixOrRecoverable(live, replayedSD *SessionData, replayedTask
 		if live.Entries[i].Role != replayedSD.Entries[i].Role || live.Entries[i].Content != replayedSD.Entries[i].Content {
 			return false
 		}
+	}
+	if live.WorkflowCycleID != replayedSD.WorkflowCycleID && replayedSD.WorkflowCycleID != "" {
+		// A crash after a durable cycle boundary may leave the previous
+		// cycle's checkpoint behind. Only terminal tasks below the recorded
+		// high-water mark can be replaced by that boundary.
+		if live.PendingWrapUp != nil {
+			return false
+		}
+		for _, task := range live.Tasks {
+			if task == nil || isInterruptedStatus(task.Status) {
+				return false
+			}
+			var id int
+			if _, err := fmt.Sscanf(task.ID, "%d", &id); err == nil && id > replayedSD.WorkflowTaskIDFloor {
+				return false
+			}
+		}
+		return true
 	}
 	if len(live.Tasks) > len(replayedTasks) {
 		return false

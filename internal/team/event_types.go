@@ -40,6 +40,7 @@ const (
 	EventPolicyDecision                          EventType = "policy_decision"
 	EventRecoveryDecision                        EventType = "recovery_decision"
 	EventWorkflowStateChanged                    EventType = "workflow_state_changed"
+	EventWorkflowCycleStarted                    EventType = "workflow_cycle_started"
 	EventCoordinatorCompactionCommitted          EventType = "coordinator_compaction_committed"
 	EventCoordinatorCompactionCheckpointAttested EventType = "coordinator_compaction_checkpoint_attested"
 	EventCoordinatorModelContinuationAdmitted    EventType = "coordinator_model_continuation_admitted"
@@ -136,7 +137,7 @@ func IsKnownEventType(eventType string) bool {
 		EventArtifactCreated, EventCriterionReevaluated,
 		EventCriterionCheckpoint, EventMemoryRetrieved,
 		EventMemoryUsageRecorded, EventMemoryOutcomeRecorded,
-		EventPolicyDecision, EventRecoveryDecision, EventWorkflowStateChanged,
+		EventPolicyDecision, EventRecoveryDecision, EventWorkflowStateChanged, EventWorkflowCycleStarted,
 		EventCoordinatorCompactionCommitted, EventCoordinatorCompactionCheckpointAttested,
 		EventCoordinatorModelContinuationAdmitted, EventContextWindowAdmission,
 		EventContextWindowCompactionCommitted, EventContextWindowDownshift,

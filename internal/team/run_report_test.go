@@ -44,6 +44,24 @@ func newReportStore(t *testing.T) (string, *EventStore) {
 	return dir, store
 }
 
+func TestRunReportUsesFollowUpCycleRequestAndFreshTasks(t *testing.T) {
+	dir, store := newReportStore(t)
+	appendReportEvent(t, store, RunEvent{Type: "task_completed", TaskID: "1"}, map[string]any{"id": "1", "status": "done", "output": "previous result"})
+	appendReportEvent(t, store, RunEvent{Type: string(EventWorkflowStateChanged)}, WorkflowStateChangedPayload{State: PhaseDone, PhaseResults: map[Phase]PhaseResult{PhaseVerify: {Status: PhaseStatusSuccess}}})
+	appendReportEvent(t, store, RunEvent{Type: "run_started", RunID: "run-followup"}, map[string]any{"team": "demo"})
+	appendReportEvent(t, store, RunEvent{Type: string(EventWorkflowCycleStarted), RunID: "run-followup"}, WorkflowCycleStartedPayload{TaskIDFloor: 1, Request: "follow-up investigation"})
+	appendReportEvent(t, store, RunEvent{Type: "task_created", RunID: "run-followup", TaskID: "2"}, map[string]any{"id": "2", "status": "pending", "desc": "fresh task"})
+	appendReportEvent(t, store, RunEvent{Type: "task_completed", RunID: "run-followup", TaskID: "2"}, map[string]any{"id": "2", "status": "done", "output": "fresh result"})
+	finish := appendReportEvent(t, store, RunEvent{Type: "run_finished", RunID: "run-followup"}, map[string]any{"outcome": "completed", "response": "follow-up answer"})
+	report, err := LoadRunReport(t.Context(), dir, finish.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.OriginalPrompt != "follow-up investigation" || len(report.Tasks) != 1 || report.Tasks[0].ID != "2" || report.Tasks[0].Output != "fresh result" {
+		t.Fatalf("report mixed cycle evidence: %#v", report)
+	}
+}
+
 func TestRunReportCapturedWithoutExportAndRemainsRunBound(t *testing.T) {
 	dir, store := newReportStore(t)
 	appendReportEvent(t, store, RunEvent{Type: "user_message_added"}, SessionMessageEventPayload{Role: "user", Content: "調查本次任務"})

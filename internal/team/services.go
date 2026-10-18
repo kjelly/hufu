@@ -663,6 +663,13 @@ func (cc *defaultContextCompiler) CompileWorkerContext(ctx context.Context, inpu
 		}
 		if forAgent != "" {
 			input.LockedResourceItems = cc.c.InjectLockedRequiredResources(nil, forAgent)
+			if input.Request.Trigger == ContextTriggerTaskDispatch || input.Request.Trigger == ContextTriggerRetry || input.Request.Trigger == ContextTriggerToolFailure {
+				var err error
+				input.PreviousResponse, err = cc.c.previousResponseForWorker(ctx, forAgent)
+				if err != nil {
+					return CompiledContext{}, fmt.Errorf("worker follow-up context preflight failed: %w", err)
+				}
+			}
 		}
 	}
 	var query *ContextQueryAttribution

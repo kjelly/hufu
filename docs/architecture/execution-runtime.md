@@ -576,3 +576,38 @@ Once `run_finished` is committed, normal completion does not rewrite unresolved
 tasks as skipped. The sealed terminal snapshot keeps their states and original
 diagnostics for inspection and recovery, without appending task transitions
 after the run boundary.
+
+### Follow-up workflows in one conversation
+
+A completed workflow is one execution cycle, not the end of its conversation.
+An additional user request through `run` or `chat` starts a new cycle in the
+same session and branch. Conversation history, prior reports, immutable policy,
+and historical results remain available; active tasks, phase results, retry
+state, continuation budgets, and criterion evidence start fresh. Old research
+can explain a follow-up, but cannot satisfy its required tasks or verification.
+
+The event-first `workflow_cycle_started` boundary includes the redacted request
+and the previous task ID high-water mark. Replay restores that request even if
+the process stops before checkpointing, and new task IDs never alias previous
+receipts or grants. Historical run inspection still reads the original events.
+Task journal history is retained, but its cache entries cannot repopulate a
+later cycle; recovery reuses that cycle's own canonical tasks instead.
+
+Workers listed in `delegation.share-request-with` also receive the complete
+preceding workflow response on follow-up dispatch, retries, and recovery. The
+runtime reads that response from the active branch's event lineage before the
+cycle boundary, preferring `run_finished.response` and using the final assistant
+message for older sessions. It does not substitute a task-progress summary or
+a prior session's archived memory. The report is fenced historical reference,
+never instructions, current evidence, or completion credit. It is required and
+cannot be truncated: insufficient model capacity fails context preflight before
+dispatch. Explicit profiles disabling historical memory still withhold it.
+The context manifest records `previous_response:<event-id>`, its event source,
+and the hash of the complete injected fragment. `inspect context --show-content`
+resolves and verifies this reference without depending on `context.sqlite`.
+
+Interrupted and failed workflows keep their existing recovery behavior.
+`resume` never starts a new cycle, and dry-run and direct-agent entry points do
+not implicitly reopen completed workflows. Execution-policy compatibility is
+still enforced across the session. `--new` remains the explicit way to start a
+separate conversation or adopt incompatible execution settings.

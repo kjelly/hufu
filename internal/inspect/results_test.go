@@ -58,6 +58,33 @@ func appendHistoricalTask(t *testing.T, store *team.EventStore, run, task, conte
 	})
 }
 
+func TestHistoricalResultsPreserveFollowUpCycleRequest(t *testing.T) {
+	workspace, store := newHistoricalFixture(t)
+	appendHistoricalFixture(t, store, team.RunEvent{Type: string(team.EventUserMessageAdded)}, team.SessionMessageEventPayload{Role: "user", Content: "original investigation"})
+	appendHistoricalTask(t, store, "run-first", "1", "previous report")
+	appendHistoricalFixture(t, store, team.RunEvent{Type: string(team.EventWorkflowStateChanged)}, team.WorkflowStateChangedPayload{
+		State: team.PhaseDone, PhaseResults: map[team.Phase]team.PhaseResult{team.PhaseVerify: {Status: team.PhaseStatusSuccess}},
+	})
+	appendHistoricalFixture(t, store, team.RunEvent{Type: string(team.EventRunStarted), RunID: "run-followup"}, map[string]any{"team": "review"})
+	request := appendHistoricalFixture(t, store, team.RunEvent{Type: string(team.EventWorkflowCycleStarted), RunID: "run-followup"}, team.WorkflowCycleStartedPayload{TaskIDFloor: 1, Request: "investigate that report further"})
+	appendHistoricalTask(t, store, "run-followup", "2", "follow-up finding")
+	snapshot, err := LoadHistoricalResults(t.Context(), HistoricalResultScope{Workspace: workspace, Team: "review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Results) != 2 {
+		t.Fatalf("historical cycles lost results: %#v", snapshot.Results)
+	}
+	for _, row := range snapshot.Results {
+		if row.TaskID == "2" && (row.OriginalPrompt != "investigate that report further" || row.OriginalPromptEventID != request.ID) {
+			t.Fatalf("follow-up request not linked: %#v", row)
+		}
+		if row.TaskID == "1" && row.OriginalPrompt != "original investigation" {
+			t.Fatalf("previous request overwritten: %#v", row)
+		}
+	}
+}
+
 func TestHistoricalResultsSeparateRepeatedTaskIDsAndTeams(t *testing.T) {
 	workspace, store := newHistoricalFixture(t)
 	first := appendHistoricalTask(t, store, "run-first", "1", "逾時問題：延長 deadline")

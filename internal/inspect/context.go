@@ -30,6 +30,7 @@ type ContextManifestItemData struct {
 	ModelExecutionID    string                        `json:"model_execution_id,omitempty"`
 	Kind                string                        `json:"kind,omitempty"`
 	Source              string                        `json:"source,omitempty"`
+	ContentHash         string                        `json:"content_hash,omitempty"`
 	Included            bool                          `json:"included"`
 	Tokens              int                           `json:"tokens,omitzero"`
 	Reason              string                        `json:"reason"`
@@ -144,7 +145,7 @@ func inspectContext(ctx context.Context, query InspectQuery, options ContextOpti
 			data.Manifests = append(data.Manifests, ContextManifestItemData{
 				ContextItemID: itemID, ManifestFingerprint: manifest.Fingerprint, RequestID: manifest.RequestID,
 				Agent: manifest.Agent, Attempt: manifest.Attempt, ModelExecutionID: manifest.ModelExecutionID,
-				Kind: item.Kind, Source: contextstore.RedactSecrets(item.Source), Included: item.Included,
+				Kind: item.Kind, Source: contextstore.RedactSecrets(item.Source), ContentHash: item.ContentHash, Included: item.Included,
 				Tokens: item.Tokens, Reason: string(item.Reason),
 				Query: manifest.Query, QueryStatus: historicalQueryStatus(manifest.Query),
 			})
@@ -171,11 +172,58 @@ func inspectContext(ctx context.Context, query InspectQuery, options ContextOpti
 	if query.Attempt > 0 && len(data.Attempts) == 0 {
 		return nil, fmt.Errorf("%w: attempt %d for task %q in run %q", ErrNotFound, query.Attempt, query.TaskID, query.RunID)
 	}
+	responseItems, err := loadPreviousResponseItems(query, options, lineage, data.Manifests, itemIDs, redactContent)
+	if err != nil {
+		return nil, err
+	}
 	data.Items, err = loadContextItems(ctx, query, options, itemIDs, redactContent)
 	if err != nil {
 		return nil, err
 	}
+	data.Items = append(data.Items, responseItems...)
+	slices.SortFunc(data.Items, func(a, b ContextItemData) int { return strings.Compare(a.ID, b.ID) })
 	return envelope(KindContext, query, lineage.BranchID, data), nil
+}
+
+// Full follow-up reports live in the event journal, not the memory database.
+// Resolve only manifest-bound references from the selected branch, and verify
+// the actual injected bytes before exposing content through --show-content.
+func loadPreviousResponseItems(query InspectQuery, options ContextOptions, lineage Lineage, manifests []ContextManifestItemData, ids map[string]struct{}, redactContent contextContentRedactor) ([]ContextItemData, error) {
+	byID := make(map[string]team.RunEvent, len(lineage.Events))
+	for _, indexed := range lineage.Events {
+		byID[indexed.Event.ID] = indexed.Event
+	}
+	var out []ContextItemData
+	for _, manifest := range manifests {
+		if manifest.Kind != "previous_response" {
+			continue
+		}
+		eventID, ok := strings.CutPrefix(manifest.ContextItemID, "previous_response:")
+		event, found := byID[eventID]
+		if !ok || !found {
+			return nil, fmt.Errorf("%w: preceding response is outside the selected event lineage", ErrIntegrity)
+		}
+		item, err := team.PreviousResponseContextItem(event)
+		if err != nil || item.ID != manifest.ContextItemID || item.Source != manifest.Source || item.DedupKey != manifest.ContentHash {
+			return nil, fmt.Errorf("%w: preceding response does not match injected content", ErrIntegrity)
+		}
+		if _, pending := ids[item.ID]; !pending {
+			continue
+		}
+		projected := ContextItemData{
+			ID: item.ID, Kind: "previous_response", SourceType: "event_store", SourceRef: event.ID,
+			Available: true, Scope: contextstore.Scope{ProjectID: query.ProjectID, TeamID: query.TeamID, SessionID: event.SessionID},
+		}
+		if options.ShowContent {
+			projected.Content, err = redactContent(item.Content)
+			if err != nil {
+				return nil, fmt.Errorf("%w: redact preceding response: %v", ErrIntegrity, err)
+			}
+		}
+		out = append(out, projected)
+		delete(ids, item.ID)
+	}
+	return out, nil
 }
 
 func historicalQueryStatus(query *team.ContextQueryAttribution) string {

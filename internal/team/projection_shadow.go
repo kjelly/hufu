@@ -18,6 +18,9 @@ func CompareCanonicalProjection(live *SessionData, events []RunEvent) error {
 	if live == nil {
 		return fmt.Errorf("live session projection is nil")
 	}
+	if err := validateWorkflowCycleLineage(events); err != nil {
+		return err
+	}
 	if _, err := executionPolicySnapshotFromEvents(events); err != nil {
 		return err
 	}
@@ -30,6 +33,9 @@ func CompareCanonicalProjection(live *SessionData, events []RunEvent) error {
 	}
 	if !sameConversationProjection(live.Entries, replayed.Entries) {
 		return fmt.Errorf("conversation entries differ")
+	}
+	if live.WorkflowCycleID != replayed.WorkflowCycleID || live.WorkflowTaskIDFloor != replayed.WorkflowTaskIDFloor {
+		return fmt.Errorf("workflow cycle projection differs")
 	}
 	if err := compareTaskProjection(live.Tasks, replayed.Tasks); err != nil {
 		return err
@@ -541,7 +547,7 @@ func hasCurrentCanonicalProjectionEvents(events []RunEvent) bool {
 			continue
 		}
 		switch EventType(event.Type) {
-		case EventExecutionPolicySnapshot, EventRunInputsResolved, EventUserMessageAdded, EventAssistantMessageAdded, EventTaskCreated, EventTaskStarted, EventTaskVerifying, EventTaskCompleted, EventTaskFailed, EventTaskBlocked, EventTaskSkipped, EventTaskProtocolIncomplete:
+		case EventExecutionPolicySnapshot, EventRunInputsResolved, EventUserMessageAdded, EventAssistantMessageAdded, EventWorkflowCycleStarted, EventTaskCreated, EventTaskStarted, EventTaskVerifying, EventTaskCompleted, EventTaskFailed, EventTaskBlocked, EventTaskSkipped, EventTaskProtocolIncomplete:
 			return true
 		}
 	}

@@ -1247,6 +1247,23 @@ func (tl *TodoList) Restore(items []*TodoItem) {
 	}
 }
 
+// restoreWorkflowCycle replaces the active task projection while reserving
+// IDs owned by previous cycles. The caller owns checkpoint publication.
+func (tl *TodoList) restoreWorkflowCycle(items []*TodoItem, floor int) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	tl.items = items
+	tl.next = floor
+	for _, item := range items {
+		if item != nil {
+			var id int
+			if _, err := fmt.Sscanf(item.ID, "%d", &id); err == nil {
+				tl.next = max(tl.next, id)
+			}
+		}
+	}
+}
+
 // cloneTodoItem returns a deep copy of item (slice and pointer fields detached)
 // so callers can mutate the result without aliasing the source. Nil-safe.
 func cloneTodoItem(item *TodoItem) *TodoItem {

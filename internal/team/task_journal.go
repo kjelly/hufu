@@ -428,7 +428,7 @@ func (c *Coordinator) initTaskJournal() {
 		log.Printf("warning: task journal compaction failed: %v", err)
 	}
 	prof := c.ExecutionProfile()
-	if !prof.DisableJournalRestore && !prof.DisableHistoricalTaskReuse {
+	if !prof.DisableJournalRestore && !prof.DisableHistoricalTaskReuse && c.workflowCycleID() == "" {
 		loaded, err := loadTaskJournal(ws, now, taskJournalMaxAge, maxTaskCacheEntries)
 		if err != nil {
 			log.Printf("warning: task journal load failed: %v", err)
