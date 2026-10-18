@@ -460,6 +460,13 @@ portable 大小限制內列出精確 key 與選項；較大的 schema 保留 obj
 完整 manifest 與 runtime 驗證仍是權威。不要自行生成 row key、重送 array，
 或在決策中填入 runtime-owned 欄位。空集合提交 `{}`，儲存為 `[]`。
 
+manifest 的 `items_pointer` 相對於 `structured_payload`；
+`submission_pointer` 則是完整工具參數中的路徑，例如
+`/structured_payload/claim_assessments`。呼叫 `submit_result` 時仍須提供外層
+`status`、`summary` 與完整 `structured_payload`，不可把 row key 或決策欄位
+放到工具參數最外層。大型契約遭拒時，回饋會提供錯誤物件的欄位與局部範例；
+局部範例不能取代完整提交，其餘有效欄位與已發出的 key 都必須保留。
+
 runtime 在 schema 驗證與 payload hashing **之前**組合 canonical array。
 重複、額外、遺漏或未知 key、固定欄位覆寫、無效 enum 與條件證據不符都會
 拒絕；worker 可在同 attempt 修正。來源內容與 task ID 參與完整 SHA-256 row

@@ -22,7 +22,7 @@ func TestFixedCollectionRepairRetainsTheSameManifest(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, required := range []string{"Runtime Fixed Collections", plans[0].rows[0].Key, `"asset":"asset-0-0"`, `"uncertain"`} {
+			for _, required := range []string{"Runtime Fixed Collections", plans[0].rows[0].Key, `"asset":"asset-0-0"`, `"uncertain"`, `"submission_pointer":"/structured_payload/decisions"`, "complete outer argument object"} {
 				if !strings.Contains(prompt, required) {
 					t.Fatalf("repair dropped required fixed input %q", required)
 				}

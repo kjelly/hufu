@@ -122,9 +122,25 @@ rejections, the worker stream stops and enters the existing bounded result-only
 repair path. Changing JSON paths or call IDs cannot bypass that limit, and
 result-only repair does not replay worker tools.
 
+If result-only repair is exhausted, a task with `side_effect: none` and an
+explicit retry policy may use its remaining normal retry budget only when
+every recorded work tool was an independently classified observation. Rejected
+`submit_result` calls are reporting, not side effects, and do not invalidate
+that proof. Reporting alone is insufficient: an actual observation must be
+recorded, and unknown or mutating tools still prevent replay. Failed repair
+history remains attached to the original attempt's execution receipt.
+
+Argument errors retain the rejected field's full path. When a full tool
+example exceeds 2 KiB, feedback uses the rejected schema's allowed fields and
+a bounded local example instead of repeating an entire fixed collection.
+The local example is explicitly not a complete submission.
+
 Schemas can declare `x-hufu-fixed-collections` to separate known membership
 from model judgment. The runtime builds source-hash-bound row keys from accepted
 evidence and supplies a required manifest to workers and result-only repairs.
+Each manifest includes a `submission_pointer` rooted at `/structured_payload`;
+the collection's `items_pointer` is relative to that payload, not to the outer
+`submit_result` arguments.
 Workers submit keyed decision objects with required finite string enums; the
 runtime generates the array, order, identities and copied values before schema
 validation and receipt hashing. Unknown, missing or duplicate keys and fixed

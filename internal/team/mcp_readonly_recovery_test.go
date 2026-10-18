@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"encoding/json/v2"
 	"strings"
 	"testing"
 	"time"
@@ -111,11 +112,18 @@ func TestProtocolRepairFailureAfterDeclaredGatewayObservationRetriesOnce(t *test
 	cases := []struct {
 		name        string
 		target      string
+		rejected    bool
+		neverRetry  bool
+		persistent  bool
 		workerCalls int
 		done        bool
 	}{
-		{"declared observation retries", "source__read_document", 2, true},
-		{"undeclared tool does not replay", "sink__write_note", 1, false},
+		{name: "declared observation retries", target: "source__read_document", workerCalls: 2, done: true},
+		{name: "rejected reporting call retries", target: "source__read_document", rejected: true, workerCalls: 2, done: true},
+		{name: "rejected reporting retry stays bounded", target: "source__read_document", rejected: true, persistent: true, workerCalls: 2},
+		{name: "never policy prevents replay", target: "source__read_document", rejected: true, neverRetry: true, workerCalls: 1},
+		{name: "undeclared tool does not replay", target: "sink__write_note", workerCalls: 1},
+		{name: "rejected reporting after undeclared tool does not replay", target: "sink__write_note", rejected: true, workerCalls: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -140,22 +148,31 @@ func TestProtocolRepairFailureAfterDeclaredGatewayObservationRetriesOnce(t *test
 				mcpManager:     readOnlyRecoveryManager(t),
 			}
 			item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "researcher", Desc: "research the event"}})[0]
-			c.workerAgentOverride = &resultContractWorker{
-				calls:    &workerCalls,
+			worker := &resultContractWorker{
+				calls: &workerCalls, rejectedSubmission: tc.rejected,
 				toolCall: &fantasy.ToolCallContent{ToolCallID: "gateway-1", ToolName: dynamicToolGatewayName, Input: gatewayCallInput(tc.target)},
-				onSecond: func() {
+			}
+			if !tc.persistent {
+				worker.onSecond = func() {
 					c.storeSubmittedTaskResult(item.ID, &TaskResult{
 						TaskID: item.ID, Agent: "researcher", Status: "success", Summary: "fresh attempt submitted", Source: "submitted",
 					})
-				},
+				}
 			}
-			// The repair agent never calls submit_result, as in the incident.
+			c.workerAgentOverride = worker
 			c.repairAgentOverride = &scriptedRepairAgent{calls: &repairCalls}
+			if tc.rejected {
+				c.repairAgentOverride = &scriptedRepairAgent{calls: &repairCalls, steps: func(int) []fantasy.StepResult { return invalidSchemaRepairSteps() }}
+			}
+			recovery := RecoveryRetry
+			if tc.neverRetry {
+				recovery = RecoveryNever
+			}
 
 			// A required structured payload, like research-v1, rules out
 			// promoting the worker's prose as a read-only handoff.
 			_, _ = c.executeTask(withTestProtocolRepairInvocationContext(context.Background()), TaskDef{
-				Agent: "researcher", Goal: "research the event", Execution: ExecutionContract{RequiresResult: true},
+				Agent: "researcher", Goal: "research the event", SideEffect: SideEffectNone, Recovery: recovery, Execution: ExecutionContract{RequiresResult: true},
 				ResultContract: &ResultContractRef{ID: "schemas/research.json", SchemaSHA256: strings.Repeat("a", 64), RequireStructured: true},
 			}, item.ID)
 			if workerCalls != tc.workerCalls {
@@ -163,6 +180,24 @@ func TestProtocolRepairFailureAfterDeclaredGatewayObservationRetriesOnce(t *test
 			}
 			if got := c.taskTracker.TodoList().Items()[0]; (got.Status == TaskDone) != tc.done {
 				t.Fatalf("task status = %s, want done=%t", got.Status, tc.done)
+			}
+			if tc.rejected && tc.workerCalls == 2 && repairCalls < 2 {
+				t.Fatalf("worker retried before bounded result-only repair: %d repair calls", repairCalls)
+			}
+			if tc.rejected {
+				got := c.taskTracker.TodoList().Items()[0]
+				raw, err := json.Marshal(taskTransitionPayload(got))
+				if err != nil {
+					t.Fatal(err)
+				}
+				replayed := ReduceToTodoList([]RunEvent{{Type: string(EventTaskCreated), TaskID: got.ID, Payload: raw}})
+				if len(replayed) != 1 || len(replayed[0].ExecutionReceipts) == 0 {
+					t.Fatal("replay lost the original attempt's execution receipts")
+				}
+				provenance := replayed[0].ExecutionReceipts[0].RepairProvenance
+				if provenance == nil || provenance.Success || len(provenance.History) != 2 || provenance.History[0].FailureReason != RepairFailureInvalidSchema {
+					t.Fatalf("replay lost the failed repair diagnostics: %#v", provenance)
+				}
 			}
 		})
 	}

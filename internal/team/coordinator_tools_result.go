@@ -446,7 +446,15 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 				}
 			}
 		}
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid submit_result arguments: %v. Valid example: %s", err, compactToolExampleJSON(t.Info()))), nil
+		info := t.Info()
+		violation := validateToolArguments(call.Input, info)
+		if violation == nil {
+			violation = &toolArgumentSchemaError{Path: "$", Expected: "complete tool argument object", Actual: "invalid arguments"}
+		}
+		if violation.schema == nil {
+			violation.schema, violation.schemaPath = map[string]any{"type": "object", "properties": info.Parameters}, "$"
+		}
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid submit_result arguments: %v. %s", err, buildToolSchemaValidationPrompt(submitResultToolName, violation, info))), nil
 	}
 	validationInfo := t.Info()
 	// Top-level presence has task-specific semantic handling below (including

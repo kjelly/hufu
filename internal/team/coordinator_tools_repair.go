@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -56,6 +58,10 @@ type toolArgumentSchemaError struct {
 	Expected string
 	Actual   string
 	Detail   string
+	// schema and schemaPath locate the smallest rejected schema, so a large
+	// tool contract can return a useful local example without repeating it all.
+	schema     map[string]any
+	schemaPath string
 }
 
 func (e *toolArgumentSchemaError) Error() string {
@@ -178,9 +184,31 @@ func buildProtocolRepairPrompt(toolName string, violation *toolArgumentSchemaErr
 }
 
 func buildToolSchemaValidationPrompt(toolName string, violation *toolArgumentSchemaError, info fantasy.ToolInfo) string {
-	return fmt.Sprintf("%s%s: expected %s, got %s. Valid example: %s",
-		toolSchemaValidationPromptPrefix(toolName), violation.Path, violation.Expected, violation.Actual, compactToolExampleJSON(info))
+	message := toolSchemaValidationPromptPrefix(toolName) + violation.Error()
+	example := compactToolExampleJSON(info)
+	if len(example) <= maxToolRepairExampleBytes {
+		return message + ". Valid example: " + example
+	}
+	// A full example containing every runtime-issued collection key can bury
+	// the actual error and get truncated before its useful sibling fields.
+	// Show the rejected object only, explicitly retaining the outer contract.
+	if violation.schema != nil {
+		if properties, ok := violation.schema["properties"].(map[string]any); ok {
+			fields := slices.Sorted(maps.Keys(properties))
+			if encoded := compactJSON(fields); len(encoded) <= maxToolRepairExampleBytes {
+				message += fmt.Sprintf(". Allowed fields at %s: %s", violation.schemaPath, encoded)
+			}
+		}
+		if violation.schemaPath != "$" {
+			if focused := compactJSON(generateCompactExample(violation.schema)); len(focused) <= maxToolRepairExampleBytes {
+				message += fmt.Sprintf(". Example at %s ONLY: %s", violation.schemaPath, focused)
+			}
+		}
+	}
+	return message + ". Return the complete tool argument object using the current tool schema; preserve other valid fields and every runtime-issued collection key. A local example is not the complete submission."
 }
+
+const maxToolRepairExampleBytes = 2048
 
 // Keep diagnostic production and the submit_result loop classifier coupled;
 // changing a field-specific message must not bypass the rejection budget.
@@ -334,7 +362,12 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 	return nil
 }
 
-func validateSchemaValue(value any, schema map[string]any, path string) *toolArgumentSchemaError {
+func validateSchemaValue(value any, schema map[string]any, path string) (violation *toolArgumentSchemaError) {
+	defer func() {
+		if violation != nil && violation.schema == nil {
+			violation.schema, violation.schemaPath = schema, path
+		}
+	}()
 	if alternatives, ok := schema["oneOf"].([]any); ok {
 		for _, alternative := range alternatives {
 			if candidate, ok := alternative.(map[string]any); ok && validateSchemaValue(value, candidate, path) == nil {

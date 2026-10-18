@@ -117,13 +117,20 @@ func handoffStateForMissingResult(budgetExhausted bool, dispositions *attemptToo
 type readOnlyToolCallFunc func(toolName, input string) bool
 
 // protocolAttemptWasReadOnly is deliberately conservative. It is used only
-// after a worker omitted submit_result to decide whether a single clean model
-// retry could replay the task without repeating a side effect. Unknown tools,
+// after a worker omitted or failed submit_result to decide whether a bounded
+// model retry could replay the task without repeating a side effect. Unknown tools,
 // missing calls, and malformed bash input are all unsafe.
 func protocolAttemptWasReadOnly(steps []fantasy.StepResult, readOnly readOnlyToolCallFunc) bool {
 	sawCall := false
 	for _, step := range steps {
 		for _, call := range step.Content.ToolCalls() {
+			// Reporting a result cannot replay an external effect. A rejected
+			// report must not invalidate the observations that preceded it.
+			// Require a real observation as well: reporting alone proves nothing
+			// about work performed outside the recorded tool sequence.
+			if call.ToolName == submitResultToolName {
+				continue
+			}
 			sawCall = true
 			if !readOnly(call.ToolName, call.Input) {
 				return false
