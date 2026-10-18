@@ -11,7 +11,7 @@ import (
 )
 
 var offlineRuntimeToolNames = []string{
-	"context_query", "context_get", "load_skill",
+	"context_query", "context_get", "load_skill", recallObservationToolName,
 	"stm_write", "ltm_update", "memory_save",
 	decisionPrimitiveToolName,
 }

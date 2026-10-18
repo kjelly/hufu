@@ -337,6 +337,9 @@ func (g *dynamicToolGateway) call(ctx context.Context, callID string, request dy
 		reportDynamicToolInvocation(ctx, event, "", err.Error())
 		return dynamicGatewayError(code, err.Error()), nil
 	}
+	if !isError {
+		g.coordinator.captureToolObservation(ctx, fantasy.ToolCall{ID: callID}, target.Name, input, content)
+	}
 	if response, ok := tools.OffloadToolOutput(ctx, tools.ToolOutputCapture{
 		ToolName: dynamicToolGatewayName, Content: content, IsError: isError,
 		LegacyWouldTruncate: len(content) > maxDynamicGatewayOutputBytes,

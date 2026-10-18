@@ -138,6 +138,20 @@ func runIndexedEvents(lineage Lineage, query InspectQuery) []IndexedEvent {
 func eventTraceEntry(indexed IndexedEvent) TraceEntry {
 	event := indexed.Event
 	status, reasonCode := eventStatusAndReason(event.Payload)
+	refs := []string{}
+	switch team.EventType(event.Type) {
+	case team.EventToolObservationRecorded:
+		var publication team.ToolObservationPayload
+		if json.Unmarshal(event.Payload, &publication) == nil {
+			refs = normalizeOpaqueRefs([]string{publication.Artifact.ID, publication.Artifact.SHA256})
+		}
+	case team.EventToolObservationRead:
+		var read team.ObservationReadPayload
+		if json.Unmarshal(event.Payload, &read) == nil {
+			refs = normalizeOpaqueRefs([]string{read.ObservationID, read.SHA256, read.ContentSHA256})
+			status = "historical"
+		}
+	}
 	return TraceEntry{
 		Ref: TraceRef{
 			RunID: event.RunID, SessionID: event.SessionID, BranchID: event.BranchID,
@@ -145,7 +159,7 @@ func eventTraceEntry(indexed IndexedEvent) TraceEntry {
 			EventID: event.ID, EventHash: event.Hash, EventOrdinal: indexed.Ordinal, Source: "event_store",
 		},
 		Kind: event.Type, AnchorEventID: event.ID, AnchorEventOrdinal: indexed.Ordinal,
-		Timestamp: event.Timestamp, Status: status, ReasonCode: reasonCode, Refs: []string{},
+		Timestamp: event.Timestamp, Status: status, ReasonCode: reasonCode, Refs: refs,
 	}
 }
 

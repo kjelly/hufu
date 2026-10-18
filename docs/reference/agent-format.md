@@ -654,6 +654,36 @@ userinfo、`localhost` 或非公開 IP 字面值。一般 hostname 的遠端 DNS
 工具保留來源 URL 供引用，但不保證模型會產生正確引用。對 hosted service
 的請求也可能消耗其配額。
 
+### 同一對話的歷史觀測結果
+
+Worker 必須在 `tools` 明確列出 `recall_observation` 才能保存及查詢自己的
+歷史觀測；空白或 `all` 不會隱含啟用。可重用內容限目前分支可見的同一 team 與角色，
+仍須符合當前來源工具的授權與限制，且不能跨越 bound workset 的 artifact 邊界。
+
+```jsonl
+{"action":"search","query":"https://example.com/source","limit":5}
+{"action":"read","observation_id":"<搜尋傳回的 observation_id>","offset":0,"limit":8192}
+```
+
+搜尋採用模型明確提供的字面文字，可省略 query 以列出最近觀測。搜尋與讀取都須
+依 `next_offset` 分頁，`-1` 代表結束；搜尋的 offset 是候選位置，讀取則是 UTF-8
+byte offset。搜尋預覽不是引用證據。讀取保留原始時間、來源呼叫、artifact 雜湊及
+本輪讀取片段雜湊，不會重新執行來源工具，也不代表完成了新的查證。
+
+結果契約若要允許歷史內容支持引文，須在 `x-hufu-tool-evidence` 同時設定
+`allow_historical: true` 與 `historical_pointer: /historical_observation`，並在
+source schema 宣告可為 null 的對應物件欄位。Runtime 沿用契約的來源與內文擷取
+規則，以 `evidence_text` 回傳內文片段；只有本輪實際讀到且符合來源的精確引文
+可通過綁定，並優先採用符合的本輪新觀測。該欄位由 runtime 填入，模型不得自填：
+`read_event_id`、`observation_id`、`source_run_id`、`source_task_id`、`source_call_id`、`observed_at`、
+`sha256`、`content_sha256`、`content_format`、`tool`、`read_call_id`、`offset`、
+`bytes`、`total_bytes`，多模型執行另含 `model_execution_id`。`sha256` 指原始觀測 artifact；`content_sha256` 指交付片段。
+沒有此契約設定的角色仍須取得本輪工具證據，尤其不能拿另一個研究角色的舊結果
+冒充自己的獨立驗證。新鮮度與需要補查的問題由 team 的模型指引決定。
+
+第一版不回填啟用前的工具逐字稿；工具與契約變更遵循既有 policy snapshot 相容性
+檢查，部署這些 team 變更後須以新的相容 session 開始累積。
+
 ### 工具命名
 
 - 內建工具：直接使用名稱（`bash`、`read`、`write` 等）

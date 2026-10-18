@@ -87,6 +87,8 @@ func ValidateEventPayload(event RunEvent) error {
 
 func validateCurrentEventPayload(event RunEvent) error {
 	switch EventType(event.Type) {
+	case EventToolObservationRecorded, EventToolObservationRead:
+		return validateToolObservationEvent(event)
 	case EventDecisionPrimitiveStarted, EventDecisionPrimitiveSettled:
 		return validateDecisionPrimitiveEvent(event)
 	case EventControlDecisionObserved:

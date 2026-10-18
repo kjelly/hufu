@@ -423,6 +423,7 @@ type backendSemaphoreState struct {
 
 type Coordinator struct {
 	mu                    sync.RWMutex
+	observationCaptureMu  sync.Mutex
 	closeOnce             sync.Once
 	closeErr              error
 	session               *TeamSession
@@ -1608,7 +1609,7 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 	// Context lookup is coordinator-owned so it can use the canonical router.
 	// It still enters the exact same selection, policy, unattended, force-MCP,
 	// and closed-sequence gates as every other worker tool.
-	c.coreTools = append(c.coreTools, &contextQueryTool{coordinator: c}, &contextGetTool{coordinator: c})
+	c.coreTools = append(c.coreTools, &contextQueryTool{coordinator: c}, &contextGetTool{coordinator: c}, &recallObservationTool{coordinator: c})
 	phaseWorkflow, err := newRuntimeWorkflow(session)
 	if err != nil {
 		return nil, err

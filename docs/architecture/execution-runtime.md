@@ -627,3 +627,64 @@ Interrupted and failed workflows keep their existing recovery behavior.
 not implicitly reopen completed workflows. Execution-policy compatibility is
 still enforced across the session. `--new` remains the explicit way to start a
 separate conversation or adopt incompatible execution settings.
+
+### On-demand historical observations
+
+A worker can explicitly declare `recall_observation` to retain and retrieve
+successful observation tool results within the visible conversation branch.
+The runtime uses the existing immutable artifact store and records a
+`tool_observation_recorded` publication with its producer, tool call, timestamp,
+and artifact digest. No model-generated summary replaces the source bytes.
+Capture is bounded to 32 observations per task attempt, 1 MiB of output and
+64 KiB of arguments per observation. Oversized, failed, mutating, unknown, and
+protocol tool results are not retained. MCP sources require the existing
+maintainer-owned `sideEffect: none` and `filesystem: none` policy; gateway
+capture occurs after logical authorization and before output truncation.
+Dependency artifacts read through `view.artifact_ref` are excluded so their
+attempt-local grants do not become historical grants.
+
+The tool supports `action: search` and `action: read`. Search uses literal
+model-supplied text in stored arguments and output, returning bounded previews
+and opaque observation IDs. It inspects at most 64 authorized candidates or
+8 MiB of decoded source data per call. Follow `next_offset` even when a page
+has no matching rows; `-1` means the search is exhausted. A read delivers up to
+32 KiB of UTF-8 text, with byte offsets and `next_offset` for further fragments.
+The runtime validates the original artifact and records a
+`tool_observation_read` event before returning content. That event binds the
+original publication and digest, original observation time, current read call,
+range, content format, and the SHA-256 of the exact delivered fragment.
+`inspect trace` exposes the publication and read references without source
+content; task transcripts retain the delivered historical evidence.
+
+Access is restricted to the same team and worker identity and the active branch's
+visible ancestry. Current source-tool grants, team denials, session denials,
+MCP input policy, and network restrictions still apply. An explicit profile
+disabling historical memory withholds recall. Bound worksets, coordinators,
+and implicit `all` tool grants do not acquire this capability. Reads do not
+execute the original tool, become fresh observations, restore prior task cache
+entries, or satisfy an objective requirement to perform a new source call.
+Storage failure only makes an observation unavailable for reuse; it never
+replays a source call. Read integrity or attribution failures return no content.
+The current task/run's own observations remain in its normal tool history;
+recall excludes that occurrence rather than duplicating its live transcript.
+
+Result schemas can explicitly admit historical evidence with
+`x-hufu-tool-evidence.allow_historical: true` and a `historical_pointer` naming
+a nullable provenance field in each source object. Their existing extraction
+rules produce `evidence_text` and a source target from the immutable result.
+Only exact text fragments actually read into the current runner-owned
+transcript can support quotations. Runtime assigns the provenance field and
+binds the citation to the current recall call while retaining the original
+producer reference; search previews and model-supplied provenance earn no
+evidence credit. A matching fresh observation takes precedence. Schemas without
+this opt-in retain their current-attempt evidence requirements, including
+external-provider submissions without a local transcript.
+
+Teams decide freshness, relevance, and independent verification. For example,
+web-research lets each research track reuse its own historical snapshots when
+their observation time fits the question; the verifier still opens sources
+independently under a fresh-evidence contract. No webpage, URL interpretation,
+or team-specific freshness rule lives in the runtime. The first version uses
+literal lookup, not semantic ranking, and does not backfill old transcripts.
+Changing tool grants or result schemas still requires a new compatible session
+under the execution-policy snapshot rules.

@@ -1,6 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "x-hufu-tool-evidence": {
+    "allow_historical": true,
+    "historical_pointer": "/historical_observation",
     "groups_pointer": "/findings",
     "items_pointer": "/sources",
     "value_pointer": "/url",
@@ -94,6 +96,29 @@
         "fetch_status": {"type": "string", "enum": ["fetched", "failed", "unusable_response", "not_attempted", "pending"], "description": "Runtime-owned observation status; omit on submission."},
         "citation_status": {"type": "string", "enum": ["matched", "mismatch", "missing_quote", "unavailable"], "description": "Runtime-owned exact quote matching status; omit on submission."},
         "tool_call_id": {"type": "string", "maxLength": 200},
+        "historical_observation": {
+          "description": "Runtime-owned original observation and current read provenance; null for a fresh observation. Omit on submission.",
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["read_event_id", "observation_id", "source_run_id", "source_task_id", "source_call_id", "observed_at", "sha256", "content_sha256", "content_format", "tool", "read_call_id", "offset", "bytes", "total_bytes"],
+          "properties": {
+            "read_event_id": {"type": "string"},
+            "model_execution_id": {"type": "string"},
+            "observation_id": {"type": "string"},
+            "source_run_id": {"type": "string"},
+            "source_task_id": {"type": "string"},
+            "source_call_id": {"type": "string"},
+            "observed_at": {"type": "string"},
+            "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "content_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+            "content_format": {"type": "string", "enum": ["tool_output", "evidence_text"]},
+            "tool": {"type": "string"},
+            "read_call_id": {"type": "string"},
+            "offset": {"type": "integer", "minimum": 0},
+            "bytes": {"type": "integer", "minimum": 0},
+            "total_bytes": {"type": "integer", "minimum": 0}
+          }
+        },
         "quote": {"type": "string", "maxLength": 800, "description": "One contiguous exact substring of this worker's successful fetch; no added ellipsis, splicing or paraphrase."},
         "relation": {"type": "string", "minLength": 1, "maxLength": 1000},
         "independence_group": {"type": "string", "minLength": 1, "maxLength": 300}
