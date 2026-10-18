@@ -30,6 +30,8 @@ semantic-retrieval:
 mcp-servers:
   playwright_researcher:
     type: local
+    environment:
+      PLAYWRIGHT_MCP_OUTPUT_DIR: /tmp/hufu-playwright/researcher
     command: [npx, -y, '@playwright/mcp@latest', --headless, --isolated, --browser, chromium, --image-responses, omit, --snapshot-mode, none, --codegen, none, --no-webmcp]
     allowedTools: [browser_navigate, browser_snapshot]
     toolPolicies:
@@ -48,6 +50,8 @@ mcp-servers:
         inputSchema: {type: object, additionalProperties: false, properties: {}}
   playwright_countercheck:
     type: local
+    environment:
+      PLAYWRIGHT_MCP_OUTPUT_DIR: /tmp/hufu-playwright/countercheck
     command: [npx, -y, '@playwright/mcp@latest', --headless, --isolated, --browser, chromium, --image-responses, omit, --snapshot-mode, none, --codegen, none, --no-webmcp]
     allowedTools: [browser_navigate, browser_snapshot]
     toolPolicies:
@@ -66,6 +70,8 @@ mcp-servers:
         inputSchema: {type: object, additionalProperties: false, properties: {}}
   playwright_verifier:
     type: local
+    environment:
+      PLAYWRIGHT_MCP_OUTPUT_DIR: /tmp/hufu-playwright/verifier
     command: [npx, -y, '@playwright/mcp@latest', --headless, --isolated, --browser, chromium, --image-responses, omit, --snapshot-mode, none, --codegen, none, --no-webmcp]
     allowedTools: [browser_navigate, browser_snapshot]
     toolPolicies:

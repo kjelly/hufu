@@ -134,6 +134,12 @@ For a complete audit, fill `input_review` with the two actual input blocks: `tas
 
 ## Account for every input claim
 
+The two research tracks can contribute up to 24 original claims in total.
+The final `findings` array also permits up to 24 entries, so distinct inputs
+do not need to be merged merely to fit a smaller report limit. These are
+ceilings, not targets. Merge only genuinely equivalent propositions; preserve
+atomic claims and explicit gaps within the report budget.
+
 The runtime freezes every `/findings` entry from both accepted research
 payloads into `claim_assessments`. Submit that field as an object with one
 decision per **Runtime Fixed Collections** key; each decision contains only

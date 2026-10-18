@@ -92,7 +92,7 @@
     "findings": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 16,
+      "maxItems": 24,
       "items": {"$ref": "#/$defs/finding"}
     },
     "overall_limitations": {"type": "string", "minLength": 1, "maxLength": 2500},
