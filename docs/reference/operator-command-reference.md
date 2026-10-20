@@ -66,6 +66,10 @@ hufu inspect semantic-retrieval --workspace ./workspace/dev-team
 ```
 
 ```sh
+hufu inspect routes run-123 --workspace ./workspace/dev-team --output json
+```
+
+```sh
 hufu explain --team dev-team
 ```
 

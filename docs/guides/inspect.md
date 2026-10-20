@@ -26,6 +26,7 @@ hufu inspect context <task-id> --run <run-id> --project <project-id>
                      [--agent <agent-id> | --all-agents] [--show-content]
 hufu inspect trace <run-id>
 hufu inspect cost [run-id] [--task <task-id>]
+hufu inspect routes <run-id> [--task <task-id>]
 hufu inspect replay <run-id>
 hufu inspect semantic-retrieval [run-id] [--task <task-id>]
 hufu inspect storage
@@ -87,6 +88,48 @@ admission-bound, and open-reservation amounts remain separate; unknown, local,
 and subscription invocations are counted instead of being folded into zero.
 When the run ID is omitted, the command uses the same exact active/sole-run
 binding rules as `inspect overview` and fails on ambiguity.
+
+## Recorded worker routes
+
+```sh
+hufu inspect routes run-123 --workspace ./workspace --branch main --output json
+```
+
+`routes` requires a run ID and accepts an optional task filter. It binds the
+exact workspace, session and branch using the existing inspector. It does not
+select a model or recommend a route.
+
+The version 1 data contains `source_head`, `tasks`, `attempts`, `attempt_count`,
+`groups`, `evidence_coverage`, and content-free diagnostics. `run_outcome` and
+`acceptance_state` retain their canonical meanings. Later runs do not change
+a historical projection. Source branch IDs identify inherited events separately
+from the queried branch.
+
+- Task identity retains the original creation event and origin run. Resetting
+  or resuming a task does not create another task occurrence. Unchanged completed
+  ancestor tasks are counted as `reused`, outside the selected run's evidence denominator.
+- `route_kind` is `named`, `unbound`, or `unavailable`. Named routes retain the
+  durable route digest. Actual targets come from receipts; a missing target is
+  empty, never silently replaced with the route's primary.
+- Each dispatch retains the existing `attempt_key` and start event ID.
+  Extra-model executions have separate `execution_key`, `model_execution_id`,
+  and `receipt_hash`. Dispatch and occurrence attempt numbers remain separate.
+- `attempt_class` is `initial`, `retry`, `fallback`, or `unavailable`.
+  Fallback takes precedence over retry. Latency uses persisted timestamps;
+  no clock-dependent duration is added for a running attempt.
+- Legacy receipts without a unique dispatch match remain visible. When several
+  already-counted dispatches could own a receipt, its row has `counted: false`
+  and adds no attempt or target completion credit. `attempt_count` and group
+  counts include only counted rows; attribution diagnostics mean coverage is
+  incomplete, not that additional executions are known to be absent.
+
+`completion_evidence` is `verified`, `not_verified`, or `unavailable`. A done
+task needs a uniquely evidence-bound successful receipt, persisted objective
+verification, and applicable offline evidence checks to be `verified`. Exit
+zero, model prose, or run completion alone is insufficient. An unavailable
+winner earns no target completion credit. Artifact or binding contradictions
+fail with an integrity error; missing historical evidence stays unavailable.
+Verifier commands and providers are never executed by the query.
 
 ## Output and exit status
 

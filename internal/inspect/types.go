@@ -24,6 +24,7 @@ const (
 	KindStorage  Kind = "storage"
 	KindOverview Kind = "overview"
 	KindCost     Kind = "cost"
+	KindRoutes   Kind = "routes"
 	KindBeliefs  Kind = "beliefs"
 	// KindControlDecisions summarizes runtime control decision observations.
 	KindControlDecisions Kind = "control-decisions"
@@ -109,18 +110,32 @@ func (q InspectQuery) Validate(kind Kind) error {
 		if q.Attempt != 0 || strings.TrimSpace(q.ProjectID) != "" || strings.TrimSpace(q.TeamID) != "" || strings.TrimSpace(q.AgentID) != "" {
 			return fmt.Errorf("%w: cost accepts only workspace, run, task, branch, and session", ErrInvalidQuery)
 		}
+	case KindRoutes:
+		return q.validateRoutes()
 	case KindControlDecisions:
 		return q.validateControlDecisions()
 	case KindSemanticRetrieval:
 		return q.validateSemanticRetrieval()
 	case KindStorage:
-		if strings.TrimSpace(q.RunID) != "" || strings.TrimSpace(q.TaskID) != "" || q.Attempt != 0 ||
-			strings.TrimSpace(q.BranchID) != "" || strings.TrimSpace(q.SessionID) != "" || strings.TrimSpace(q.ProjectID) != "" ||
-			strings.TrimSpace(q.TeamID) != "" || strings.TrimSpace(q.AgentID) != "" {
-			return fmt.Errorf("%w: storage inspection accepts only workspace and format", ErrInvalidQuery)
-		}
+		return q.validateStorage()
 	default:
 		return fmt.Errorf("%w: unsupported kind %q", ErrInvalidQuery, kind)
+	}
+	return nil
+}
+
+func (q InspectQuery) validateStorage() error {
+	if strings.TrimSpace(q.RunID) != "" || strings.TrimSpace(q.TaskID) != "" || q.Attempt != 0 ||
+		strings.TrimSpace(q.BranchID) != "" || strings.TrimSpace(q.SessionID) != "" || strings.TrimSpace(q.ProjectID) != "" ||
+		strings.TrimSpace(q.TeamID) != "" || strings.TrimSpace(q.AgentID) != "" {
+		return fmt.Errorf("%w: storage inspection accepts only workspace and format", ErrInvalidQuery)
+	}
+	return nil
+}
+
+func (q InspectQuery) validateRoutes() error {
+	if strings.TrimSpace(q.RunID) == "" || q.Attempt != 0 || q.ProjectID != "" || q.TeamID != "" || q.AgentID != "" {
+		return fmt.Errorf("%w: routes requires run and accepts only workspace, session, branch, and task", ErrInvalidQuery)
 	}
 	return nil
 }

@@ -38,6 +38,7 @@ var canonicalExamples = []exampleMetadata{
 	{Section: "Progress and recovery", Argv: "hufu inspect overview --workspace ./workspace/dev-team"},
 	{Section: "Progress and recovery", Argv: "hufu inspect control-decisions --workspace ./workspace/dev-team"},
 	{Section: "Progress and recovery", Argv: "hufu inspect semantic-retrieval --workspace ./workspace/dev-team"},
+	{Section: "Progress and recovery", Argv: "hufu inspect routes run-123 --workspace ./workspace/dev-team --output json"},
 	{Section: "Progress and recovery", Argv: "hufu explain --team dev-team"},
 	{Section: "Historical results", Argv: "hufu results list --team dev-team --all-branches"},
 	{Section: "Historical results", Argv: "hufu result --team dev-team"},

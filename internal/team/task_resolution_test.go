@@ -2,6 +2,7 @@ package team
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -50,6 +51,23 @@ func verifiedResolutionFixture(t *testing.T) (*Coordinator, *TodoItem, *TodoItem
 	replacement.ExecutionReceipt.ResultContractID = ref.ID
 	replacement.ExecutionReceipt.ResultPayloadSHA256 = payload.SHA256
 	return c, original, replacement
+}
+
+func TestValidatePersistedResultPayloadReceipt(t *testing.T) {
+	for _, required := range []bool{true, false} {
+		t.Run(fmt.Sprintf("required=%t", required), func(t *testing.T) {
+			c, _, item := verifiedResolutionFixture(t)
+			item.ResultContract.RequireStructured = required
+			item.TypedResult.StructuredPayload.Contract.RequireStructured = required
+			if err := ValidatePersistedResultPayloadReceipt(item, c.executionRunID); err != nil {
+				t.Fatalf("valid persisted payload: %v", err)
+			}
+			item.TypedResult.StructuredPayload.Value = []byte(`{"verdict":"reject"}`)
+			if err := ValidatePersistedResultPayloadReceipt(item, c.executionRunID); err == nil {
+				t.Fatal("altered value with an old validation hash was accepted")
+			}
+		})
+	}
 }
 
 func TestVerifiedResolutionSatisfiesAllFinalizationGatesAndReplay(t *testing.T) {

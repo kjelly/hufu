@@ -175,7 +175,7 @@ func TestObservabilityCostFixturePreservesFailureAndOverhead(t *testing.T) {
 
 // observabilityEvidenceFixture supplies real CAS evidence and a persisted
 // objective verification result. No verifier command is executed to build it.
-func observabilityEvidenceFixture(t *testing.T) runFixture {
+func observabilityEvidenceFixture(t *testing.T, routes ...*team.ExecutionRouteBinding) runFixture {
 	t.Helper()
 	fixture := runFixture{workspace: t.TempDir(), runID: "run-evidence", taskID: "task-evidence"}
 	store, err := team.NewEventStore(fixture.workspace, fixture.runID, "session-evidence")
@@ -201,6 +201,13 @@ func observabilityEvidenceFixture(t *testing.T) runFixture {
 		StartedAt: workerEpoch, FinishedAt: workerEpoch.Add(time.Second),
 		VerifyResult: &team.VerificationResult{Command: "fixture-verifier-must-not-run", ExitCode: 0, Fingerprint: "fixture-verification"},
 	}
+	var route *team.ExecutionRouteBinding
+	var candidates []execution.ExecutionTarget
+	if len(routes) > 0 {
+		route = routes[0]
+		candidates = route.Candidates
+		receipt.CandidateIndex = new(0)
+	}
 	manifest := &team.EvidenceManifest{
 		RunID: fixture.runID, Status: "accepted", ArtifactRefs: []team.ArtifactRef{put.ArtifactRef},
 		EvidenceResults: []team.EvidenceResult{
@@ -223,12 +230,16 @@ func observabilityEvidenceFixture(t *testing.T) runFixture {
 		{Type: "run_started", Actor: "coordinator", Payload: jsonBytes(t, map[string]any{"goal": "fixture"})},
 		{Type: "task_created", Actor: "coordinator", TaskID: fixture.taskID, Payload: jsonBytes(t, map[string]any{
 			"id": fixture.taskID, "agent": "worker", "status": team.TaskPending, "execution_target": target,
+			"execution_topology": []execution.ExecutionTarget{target},
+			"execution_route":    route, "execution_candidates": candidates,
 		})},
 		{Type: "task_started", Actor: "coordinator", TaskID: fixture.taskID, Attempt: 1, Payload: jsonBytes(t, map[string]any{
 			"id": fixture.taskID, "agent": "worker", "status": team.TaskInProgress, "attempt": 1, "dispatch_attempt": 1,
 		})},
 		{Type: "task_completed", Actor: "worker", TaskID: fixture.taskID, Attempt: 1, Payload: jsonBytes(t, map[string]any{
 			"id": fixture.taskID, "agent": "worker", "status": team.TaskDone, "execution_target": target,
+			"execution_topology": []execution.ExecutionTarget{target},
+			"execution_route":    route, "execution_candidates": candidates,
 			"execution_receipts": []team.ExecutionReceipt{receipt},
 		})},
 		{Type: "run_finished", Actor: "coordinator", Payload: jsonBytes(t, team.RunResult{

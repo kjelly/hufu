@@ -47,6 +47,28 @@
 
 結論：原始產品程式未修改；baseline 的失敗可由本機 socket 權限與 `GOTMPDIR` 路徑長度解釋。在確認的環境設定下，含新增 fixture 的完整 suite、vet、lint 全部通過，可以開始 WP-01。沒有把 sandbox 失敗、被中止的重跑或無效的 `TMPDIR` 設定標成通過。
 
+## WP-01：route／attempt 唯讀投影（完成）
+
+新增 `hufu inspect routes <run-id>`，支援 exact workspace、session、branch 與 optional task，並提供 text／JSON。沿用 scope binding、validated lineage、task replay、worker lifecycle projector 與 offline audit。
+
+- `internal/inspect/routes*.go`：task origin／creation event、receipt/model execution 身份、route digest、actual target、retry／fallback、完成證據、分組與資料缺口。
+- 歷史資料在指定 run 的最後 event 截止；祖先事件只用來恢復身份及狀態，不受後續 run 改寫。重設 task 不建立新的統計 occurrence。
+- Extra-model receipt 保留同一 dispatch key 及各自 execution key。歸因有歧義的 receipt 標為不計數，不重複增加既有 dispatch／完成 credit。
+- 成功 credit 需唯一證據綁定、passing verifier、適用的 payload／contract／invariant checks；unknown 不升級為成功。artifact、binding、target 與 frozen route 的矛盾回 integrity error。
+- 從 `internal/team/task_resolution.go` 抽出既有純 payload／receipt 驗證供 inspector 重用；原 resolution path 保留原有 required-contract 行為。
+- 補齊 WP-00 證據 fixture 的 frozen topology：原 fixture 通過 audit，但嚴格 task replay 指出缺少 topology，不能用 audit 單獨證明 replay 可用。
+- 同步 `docs/guides/inspect.md`、命令 metadata 產生的 reference 與 Nushell completion。抽出既有 overview renderer，以保持 lint 複雜度門檻；未增加 lint exclusion。
+
+新增測試涵蓋：verified 正例、未驗證／缺證據、verifier failed／timed out／overturned、歷史 run、跨 run 身份、branch 繼承與隔離、artifact corruption、read-only、missing workspace、額外模型、dispatch 重號、歧義 receipt、retry／fallback、route candidate 矛盾，以及 CLI text／JSON 一致性。沿用既有 event-chain corruption／schema 檢查與 resolution regressions。
+
+驗證（最後程式版本）：
+
+- `GOTMPDIR=/tmp go test ./internal/inspect ./cmd/hufu ./internal/team -run 'Test(InspectRoutes|Route|Observability|ValidatePersistedResultPayloadReceipt|VerifiedResolution)' -count=1`：exit 0。
+- `GOTMPDIR=/tmp go test ./...`：exit 0；`/tmp/hufu-observability-wp01-test-complete.log`。
+- `GOTMPDIR=/tmp go vet ./...`：exit 0；`/tmp/hufu-observability-wp01-vet-complete.log`。
+- `GOTMPDIR=/tmp GOLANGCI_LINT_CACHE=/tmp/hufu-observability-lint-cache golangci-lint run`：exit 0，`0 issues`；`/tmp/hufu-observability-wp01-lint-complete.log`。
+- 完整 tests 使用允許本機 socket 的執行環境；沒有真實模型試跑，沒有新增 runtime 寫入、排程或選路政策。核心變更均為 team-neutral。
+
 ## 尚未完成
 
-WP-01、WP-02、WP-03、WP-04、WP-05 尚未實作。未執行的驗收不得視為通過。
+WP-02、WP-03、WP-04、WP-05 尚未實作。未執行的驗收不得視為通過。
