@@ -81,6 +81,9 @@ func InspectEconomics(ctx context.Context, query InspectQuery) (*Envelope, error
 }
 
 func projectEconomics(ctx context.Context, query InspectQuery, lineage Lineage) (EconomicsData, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	routes, err := projectRoutes(ctx, query, lineage)
 	if err != nil {
 		return EconomicsData{}, err
@@ -151,7 +154,7 @@ func projectEconomics(ctx context.Context, query InspectQuery, lineage Lineage) 
 	if data.RecordedInvocations > 0 {
 		data.KnownCostCoverage = new(float64(data.UsageInvocations) / float64(data.RecordedInvocations))
 	}
-	if err := economicsAttribution(&data, routes, scoped); err != nil {
+	if err := economicsAttributionContext(ctx, &data, routes, scoped); err != nil {
 		return EconomicsData{}, err
 	}
 	data.CostPerVerifiedTaskReasons = economicsCompleteness(query.RunID, raw, policy, scoped, routes, data)

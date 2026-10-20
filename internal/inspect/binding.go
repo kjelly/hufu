@@ -21,21 +21,46 @@ type BoundReadTarget struct {
 }
 
 func BindReadTarget(ctx context.Context, request operatorpkg.BindingRequest) (BoundReadTarget, error) {
+	return bindReadTarget(ctx, request, 0, 0, true)
+}
+
+// BindReadTargetWithLimits binds an explicitly selected historical run without
+// loading the mutable active-session checkpoint. Its Session field is nil.
+// Event limits are checked before payload reads, including during startup.
+func BindReadTargetWithLimits(ctx context.Context, request operatorpkg.BindingRequest, maxEvents, maxPayloadBytes int) (BoundReadTarget, error) {
+	if strings.TrimSpace(request.RunID) == "" || strings.TrimSpace(request.SessionID) == "" ||
+		strings.TrimSpace(request.BranchID) == "" || maxEvents <= 0 || maxPayloadBytes <= 0 {
+		return BoundReadTarget{}, fmt.Errorf("%w: bounded binding requires explicit scope and positive limits", ErrInvalidQuery)
+	}
+	bound, err := bindReadTarget(ctx, request, maxEvents, maxPayloadBytes, false)
+	if err != nil {
+		return BoundReadTarget{}, err
+	}
+	if bound.Scope.BranchID != request.BranchID {
+		return BoundReadTarget{}, fmt.Errorf("%w: bounded binding requires a canonical branch ID", ErrInvalidQuery)
+	}
+	return bound, nil
+}
+
+func bindReadTarget(ctx context.Context, request operatorpkg.BindingRequest, maxEvents, maxPayloadBytes int, includeSession bool) (BoundReadTarget, error) {
 	query := InspectQuery{
 		Workspace: request.Workspace.WorkspaceExact,
 		BranchID:  strings.TrimSpace(request.BranchID),
 		SessionID: strings.TrimSpace(request.SessionID),
 	}
-	lineage, err := LoadLineage(ctx, query)
+	lineage, err := loadLineageWithLimits(ctx, query, maxEvents, maxPayloadBytes)
 	if err != nil {
 		return BoundReadTarget{}, err
 	}
-	session, exists, err := team.LoadSessionReadOnly(query.Workspace)
-	if err != nil {
-		return BoundReadTarget{}, fmt.Errorf("%w: active session projection is unreadable", ErrIntegrity)
-	}
-	if !exists {
-		session = nil
+	var session *team.SessionData
+	if includeSession {
+		loaded, exists, err := team.LoadSessionReadOnly(query.Workspace)
+		if err != nil {
+			return BoundReadTarget{}, fmt.Errorf("%w: active session projection is unreadable", ErrIntegrity)
+		}
+		if exists {
+			session = loaded
+		}
 	}
 
 	runID, selection, err := selectBindingRun(lineage, request, session)

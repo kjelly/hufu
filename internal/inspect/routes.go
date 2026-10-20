@@ -134,6 +134,9 @@ func observationEvents(lineage Lineage, query InspectQuery) ([]IndexedEvent, err
 }
 
 func projectRoutes(ctx context.Context, query InspectQuery, lineage Lineage) (RoutesData, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	events, err := observationEvents(lineage, query)
 	if err != nil {
 		return RoutesData{}, err
@@ -174,9 +177,15 @@ func projectRoutes(ctx context.Context, query InspectQuery, lineage Lineage) (Ro
 		return RoutesData{}, err
 	}
 	// Lifecycle projection owns dispatch identity and retry/fallback semantics.
-	views := ProjectWorkerAttempts(todos, events, time.Time{})
+	views, err := projectWorkerAttemptsContext(ctx, todos, events, time.Time{})
+	if err != nil {
+		return RoutesData{}, err
+	}
 	found := query.TaskID == ""
 	for _, todo := range todos {
+		if err := ctx.Err(); err != nil {
+			return RoutesData{}, err
+		}
 		if todo == nil || query.TaskID != "" && todo.ID != query.TaskID {
 			continue
 		}
@@ -201,7 +210,7 @@ func projectRoutes(ctx context.Context, query InspectQuery, lineage Lineage) (Ro
 				Code: row.Reason, Severity: "info", Message: "Completion evidence is not fully verified.", Ref: safeOpaqueRef(row.TaskID),
 			})
 		}
-		attempts, err := routeAttempts(todo, row, views, events, query.RunID)
+		attempts, err := routeAttemptsContext(ctx, todo, row, views, events, query.RunID)
 		if err != nil {
 			return RoutesData{}, err
 		}

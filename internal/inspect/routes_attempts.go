@@ -2,6 +2,7 @@ package inspect
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"slices"
 	"time"
@@ -11,6 +12,10 @@ import (
 )
 
 func routeAttempts(todo *team.TodoItem, task RouteTask, views []WorkerAttemptView, events []IndexedEvent, runID string) ([]RouteAttempt, error) {
+	return routeAttemptsContext(context.Background(), todo, task, views, events, runID)
+}
+
+func routeAttemptsContext(ctx context.Context, todo *team.TodoItem, task RouteTask, views []WorkerAttemptView, events []IndexedEvent, runID string) ([]RouteAttempt, error) {
 	var selected []WorkerAttemptView
 	for _, view := range views {
 		if view.TaskID == todo.ID && view.InvocationRunID == runID {
@@ -29,6 +34,9 @@ func routeAttempts(todo *team.TodoItem, task RouteTask, views []WorkerAttemptVie
 	byStart := make(map[string][]team.ExecutionReceipt)
 	var unbound []team.ExecutionReceipt
 	for _, receipt := range todo.ExecutionReceipts {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if receipt.RunID != runID || receipt.TaskID != todo.ID {
 			continue
 		}
@@ -45,6 +53,9 @@ func routeAttempts(todo *team.TodoItem, task RouteTask, views []WorkerAttemptVie
 	}
 	var rows []RouteAttempt
 	for _, view := range selected {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		receipts := byStart[view.StartedEventID]
 		if len(receipts) == 0 {
 			// The primary is an admission fact, not proof that this attempt
@@ -62,6 +73,9 @@ func routeAttempts(todo *team.TodoItem, task RouteTask, views []WorkerAttemptVie
 			continue
 		}
 		for _, receipt := range receipts {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			row, err := routeReceiptRow(view, receipt, task, branches[view.StartedEventID], events)
 			if err != nil {
 				return nil, err
@@ -70,6 +84,9 @@ func routeAttempts(todo *team.TodoItem, task RouteTask, views []WorkerAttemptVie
 		}
 	}
 	for _, receipt := range unbound {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		// Legacy data can have a receipt without a dispatch-start event.
 		// Keep the real execution, but do not invent a start or retry class.
 		view := WorkerAttemptView{

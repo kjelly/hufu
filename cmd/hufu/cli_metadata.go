@@ -19,7 +19,7 @@ var commandGroups = []commandGroupMetadata{
 	{ID: "progress", Title: "Progress and recovery", Commands: []string{"explain", "session", "inspect", "results", "status", "resume", "retry", "reconcile", "history"}},
 	{ID: "experience", Title: "Context and skills", Commands: []string{"context", "skill", "install"}},
 	{ID: "environment", Title: "Environment", Commands: []string{"config", "models", "version"}},
-	{ID: "advanced", Title: "Advanced and diagnostics", Commands: []string{"audit", "decision", "improve", "eval", "debug", "terminal", "migrate", "completion", "__complete", "examples", "help-flags"}},
+	{ID: "advanced", Title: "Advanced and diagnostics", Commands: []string{"audit", "decision", "improve", "eval", "debug", "terminal", "migrate", "mcp", "completion", "__complete", "examples", "help-flags"}},
 }
 
 type exampleMetadata struct {
@@ -61,6 +61,7 @@ var canonicalExamples = []exampleMetadata{
 	{Section: "Learning and publication", Argv: "hufu context semantic verify --workspace ./workspace/dev-team --strict"},
 	{Section: "Automation", Argv: `hufu run --team dev-team --quiet --output json --event-format jsonl -- "run checks"`},
 	{Section: "Automation", Argv: `hufu run --team ops-team --unattended -- "check service health"`},
+	{Section: "Automation", Argv: "hufu mcp serve --workspace /path/to/workspace --session session-123 --branch main --run run-123"},
 	{Section: "Display", Argv: `hufu run --team dev-team --tui --theme light --display-preset epaper -- "monitor a long task"`},
 	{Section: "Display", Argv: "hufu chat --agent-team dev-team --ui chat"},
 }

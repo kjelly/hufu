@@ -250,3 +250,54 @@ specialized command when maintaining or deeply diagnosing that subsystem.
 For scripts, migrate ad-hoc parsing of reports, `runtime.sqlite` rows, or multiple
 command outputs to `hufu inspect ... --format json`. There is no separate
 `--json` mode for this command.
+## Fixed-scope MCP stdio service
+
+Run a local, read-only MCP server for one existing run:
+
+```sh
+hufu mcp serve --workspace /absolute/path/to/workspace \
+  --session session-123 --branch main --run run-123
+```
+
+All four flags are required. `--branch` must be the canonical branch ID, not
+a mutable name or label. Startup validates the existing workspace and identity;
+it does not create a workspace, connect to a model or launch another MCP server.
+The process runs as the current OS user. Its startup scope is the upper bound
+of what clients can read; this is not a multi-tenant authorization service.
+
+| Tool | Arguments | Result |
+|---|---|---|
+| `hufu_run_status` | `{}` | Existing run metadata projection |
+| `hufu_run_routes` | `{}` or `{"task_id":"task-123"}` | Route/attempt observations in the fixed scope |
+| `hufu_run_economics` | `{}` | Observed run costs and evidence coverage |
+| `hufu_capabilities` | `{}` | Server tool/input schemas and schema version; no team discovery |
+
+Arguments reject unknown properties and duplicate JSON keys. The client cannot
+override workspace, session, branch or run. Query responses contain `source_head`
+and `result` (the existing inspector envelope). Tool content is JSON text; error
+content is `{"code":"..."}` with MCP `isError: true`. Codes are
+`invalid_argument`, `not_found`, `scope_conflict`, `integrity_error`,
+`resource_limit`, `cancelled` and `internal_error`. Internal exception text is
+not returned.
+
+Each query validates fresh persisted data. Later calls may observe a newer
+head, but checkout of another active branch cannot redirect the server.
+The server also checks that its startup event anchor remains in the selected
+lineage. Compare responses only when their source heads agree.
+
+Limits apply at startup as well as during queries: 100,000 journal events and
+32 MiB of event payload, measured before payload loading in the same SQLite
+read transaction. Each query has a cumulative 32 MiB artifact read budget.
+Artifacts are read only for existing integrity checks, never returned as body
+content. A limit failure returns no partial statistics.
+
+There are at most four active tool handlers, with excess work rejected. Each
+handler has a 15-second deadline and accepts MCP cancellation notifications.
+Serialized responses, including JSON escaping and protocol overhead, are
+limited to 1 MiB. Input frames are limited to 64 KiB; an oversized input frame
+terminates the connection. EOF or SIGTERM cancels and drains active handlers.
+Stdout is reserved for SDK JSON-RPC frames; startup/transport errors use stderr.
+
+Validation uses generated offline fixtures and the existing SDK client. No
+external MCP host or real model trial is required. This service offers no
+content download, write tools, shell execution or HTTP transport.

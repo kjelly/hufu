@@ -283,11 +283,11 @@ func normalizeArtifactParentSourceIDs(ids []string) []string {
 	return normalized
 }
 
-func (s *FileArtifactStore) Verify(_ context.Context, ref ArtifactRef) error {
+func (s *FileArtifactStore) Verify(ctx context.Context, ref ArtifactRef) error {
 	if s == nil || !validArtifactID(ref.ID) {
 		return fmt.Errorf("artifact reference has no id")
 	}
-	b, err := os.ReadFile(filepath.Join(s.root, "data", ref.ID))
+	b, err := readArtifactFile(ctx, filepath.Join(s.root, "data", ref.ID))
 	if err != nil {
 		return fmt.Errorf("read artifact %q: %w", ref.ID, err)
 	}
@@ -298,21 +298,31 @@ func (s *FileArtifactStore) Verify(_ context.Context, ref ArtifactRef) error {
 	return nil
 }
 
-func (s *FileArtifactStore) Open(_ context.Context, id string) (io.ReadCloser, error) {
+func (s *FileArtifactStore) Open(ctx context.Context, id string) (io.ReadCloser, error) {
 	if s == nil || !validArtifactID(id) {
 		return nil, fmt.Errorf("artifact id is required")
 	}
-	return os.Open(filepath.Join(s.root, "data", id))
+	path := filepath.Join(s.root, "data", id)
+	if ctx != nil {
+		if _, bounded := ctx.Value(artifactReadBudgetKey{}).(*ArtifactReadBudget); bounded {
+			data, err := readArtifactFile(ctx, path)
+			if err != nil {
+				return nil, err
+			}
+			return io.NopCloser(bytes.NewReader(data)), nil
+		}
+	}
+	return os.Open(path)
 }
 
 // Get resolves immutable artifact metadata by opaque ID. Callers that already
 // hold an artifact reference must use this instead of interpreting the ID as a
 // filesystem path.
-func (s *FileArtifactStore) Get(_ context.Context, id string) (ArtifactRef, error) {
+func (s *FileArtifactStore) Get(ctx context.Context, id string) (ArtifactRef, error) {
 	if s == nil || !validArtifactID(id) {
 		return ArtifactRef{}, fmt.Errorf("artifact id is required")
 	}
-	b, err := os.ReadFile(filepath.Join(s.root, "meta", id+".json"))
+	b, err := readArtifactFile(ctx, filepath.Join(s.root, "meta", id+".json"))
 	if err != nil {
 		return ArtifactRef{}, fmt.Errorf("read artifact metadata %q: %w", id, err)
 	}
@@ -330,11 +340,11 @@ func (s *FileArtifactStore) Get(_ context.Context, id string) (ArtifactRef, erro
 // TrustedArtifactMetadata returns immutable origin metadata stored alongside
 // the canonical artifact reference. Old metadata files intentionally resolve
 // to an empty origin, retaining compatibility without promoting declarations.
-func (s *FileArtifactStore) TrustedArtifactMetadata(_ context.Context, supplied ArtifactRef) (ArtifactOriginMetadata, error) {
+func (s *FileArtifactStore) TrustedArtifactMetadata(ctx context.Context, supplied ArtifactRef) (ArtifactOriginMetadata, error) {
 	if s == nil || !validArtifactID(supplied.ID) {
 		return ArtifactOriginMetadata{}, fmt.Errorf("artifact reference has no id")
 	}
-	b, err := os.ReadFile(filepath.Join(s.root, "meta", supplied.ID+".json"))
+	b, err := readArtifactFile(ctx, filepath.Join(s.root, "meta", supplied.ID+".json"))
 	if err != nil {
 		return ArtifactOriginMetadata{}, fmt.Errorf("read artifact metadata %q: %w", supplied.ID, err)
 	}
@@ -471,7 +481,7 @@ func resolveArtifactSourcePath(sourceRoot, sourcePath string) (string, error) {
 	return candidate, nil
 }
 
-func (s *FileArtifactStore) ListByTask(_ context.Context, taskID string) ([]ArtifactRef, error) {
+func (s *FileArtifactStore) ListByTask(ctx context.Context, taskID string) ([]ArtifactRef, error) {
 	if s == nil {
 		return nil, fmt.Errorf("artifact store is nil")
 	}
@@ -484,7 +494,7 @@ func (s *FileArtifactStore) ListByTask(_ context.Context, taskID string) ([]Arti
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		b, readErr := os.ReadFile(filepath.Join(s.root, "meta", entry.Name()))
+		b, readErr := readArtifactFile(ctx, filepath.Join(s.root, "meta", entry.Name()))
 		if readErr != nil {
 			return nil, readErr
 		}

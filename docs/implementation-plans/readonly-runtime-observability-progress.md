@@ -163,7 +163,52 @@ signal、raw mode 或 subprocess lifecycle，因此沒有新增此功能專用�
   包含最後新增的 action catalog 身份測試；完整 suite 使用允許本機 fake server
   socket 的環境，未進行真實模型試跑。
 
-## 尚未完成
+## WP-05：固定 scope 的唯讀 stdio MCP（完成）
 
-WP-05 尚未實作。未執行的驗收不得視為通過。
+- 事件讀取新增 `StreamValidatedRunEventsWithLimits`，在同一 SQLite 唯讀交易中
+  先量測事件數／payload bytes，再讀取並驗證事件；超限不交付部分事件。
+- 新增 bounded binding 與 `ScopedReader`，要求 explicit canonical scope，
+  不載入無關的 active-session checkpoint；每次查詢重新驗證身份與已綁定 event anchor。
+- Artifact store 的讀取入口支援 request-scoped 累計預算，讀取前檢查大小、
+  限制實際讀取、保留 sticky limit error，避免 audit 將超限降成成功的診斷。
+  Unix 路徑拒絕 final-component symlink，使用 nonblocking open 後拒絕 FIFO。
+- 新增 `hufu mcp serve --workspace ABS --session ID --branch ID --run ID`，
+  使用現有 MCP SDK，提供 status/routes/economics/server capabilities 四個唯讀工具。
+  所有 scope 旗標必填，工具參數拒絕未知欄位、重複 key 及 scope override。
+- 每個 handler 有 15 秒 deadline，最多四個並行 handler；超額立即拒絕。
+  工具 JSON 與完整 SDK wire response 分別限量，包含 escaping／request ID 後
+  的輸出不得超過 1 MiB；超限回完整的 `resource_limit` tool error。
+  另限制輸入 frame 為 64 KiB，超限關閉連線。
+- EOF／signal 取消並排空 handlers；取消時關閉 transport I/O，避免 client 不讀
+  stdout 時卡住 SDK writer。錯誤只輸出固定代碼；stdout 只有 JSON-RPC。
+- Worker attempt、receipt matching、cost attribution 的主要迴圈加入取消檢查；
+  historical cost coverage 改用 occurrence/target 索引，保留既有判定語意。
+- SDK client 啟動真實 subprocess，CLI fixture 走完整 `main()` 入口；
+  檢查 initialize/list/call、全部 stdout frames、兩個服務 scope、checkout 隔離、
+  外部 task 與 scope override 拒絕、敏感內容省略、EOF／SIGTERM。
+  另一個真實 stdio fixture 驗證四個並行 handler、超額拒絕、取消通知、
+  正式的 15 秒 timeout 與執行中 EOF drain；pipe 測試驗證阻塞 stdout 可被取消。
+- 初次完整 suite 發現既有 status 呼叫傳入 nil context 的相容性回歸：
+  `/tmp/hufu-wp05-full-test.log`（exit 1）。共用唯讀入口已保留原本接受 nil 的
+  行為；`TestWorkerHubSurfacesRenderOneProjection` 與最後完整 suite 重跑通過，
+  沒有排除測試或降低 lint gate。
+
+最後版本驗證：
+
+- 定向 regression／transport 測試：exit 0；`/tmp/hufu-wp05-regression-focused.log`。
+- `GOTMPDIR=/tmp go test ./...`：exit 0；`/tmp/hufu-wp05-full-test-final.log`。
+- `GOTMPDIR=/tmp go vet ./...`：exit 0；`/tmp/hufu-wp05-vet-final.log`。
+- lint：exit 0，`0 issues`；`/tmp/hufu-wp05-lint-complete.log`。
+- 受影響的 `internal/mcpserver`、`internal/inspect`、`internal/team`、`cmd/hufu`
+  定向 `go test -race`：exit 0；`/tmp/hufu-wp05-race-final.log`。
+- 已更新 inspect guide、generated command reference、CLI metadata 與 completion。
+  沒有新增 provider 呼叫、runtime mutation、資料庫 migration 或 team-specific 核心政策。
+
+## 交付核對
+
+文件已移入正式 implementation-plans 目錄並提交；WP-00～WP-05 均完成，
+各工作包在驗證後獨立提交。Baseline 的本機 socket 權限及暫存路徑問題、
+各階段結果與 WP-05 回歸修正均保留上述紀錄。最後完整 suite 包含先前各階段，
+不以單一新功能的定向測試代替整體驗收。
+
 真實模型品質與節費試跑依使用者確認另立任務，不列為本計畫的待辦或驗收門檻。

@@ -1,6 +1,7 @@
 package inspect
 
 import (
+	"context"
 	"fmt"
 	"math"
 
@@ -8,6 +9,10 @@ import (
 )
 
 func economicsAttribution(data *EconomicsData, routes RoutesData, ledger cost.Projection) error {
+	return economicsAttributionContext(context.Background(), data, routes, ledger)
+}
+
+func economicsAttributionContext(ctx context.Context, data *EconomicsData, routes RoutesData, ledger cost.Projection) error {
 	for _, group := range routes.Groups {
 		data.Routes = append(data.Routes, RouteEconomics{RouteGroup: group, ExcludesOverhead: true, Reason: "no_samples"})
 	}
@@ -18,6 +23,9 @@ func economicsAttribution(data *EconomicsData, routes RoutesData, ledger cost.Pr
 		attempt int
 	}]int{}
 	for _, invocation := range sortedInvocations(ledger) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		reservation, amount := invocation.Reservation, usageAmount(invocation)
 		if !workerCostPurpose(reservation.Purpose) ||
 			reservation.Purpose == cost.PurposeRepair && reservation.Role == "coordinator" && reservation.TaskID == "" {
@@ -50,6 +58,9 @@ func economicsAttribution(data *EconomicsData, routes RoutesData, ledger cost.Pr
 			}
 			// Unknown identity can affect every route for this occurrence.
 			for i := range data.Routes {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				for _, attempt := range matches {
 					if sameEconomicsGroup(data.Routes[i].RouteGroup, attempt) {
 						data.Routes[i].Reason = "attribution_unavailable"

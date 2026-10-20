@@ -372,6 +372,8 @@ export extern "hufu context semantic verify" [--workspace(-w): string --project:
 
 export extern "hufu team capabilities" [team: string@'nu-complete hufu teams' --output: string@'nu-complete hufu inspect formats']
 
+export extern "hufu mcp serve" [--workspace: string --session: string --branch: string --run: string]
+
 export extern "hufu team create" [
   name: string
   --preset: string

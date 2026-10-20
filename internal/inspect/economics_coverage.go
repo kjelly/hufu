@@ -54,6 +54,11 @@ func economicsHistoricalCoverage(runID string, events []team.RunEvent, policy *t
 		return false
 	}
 	profiles := map[string]bool{}
+	type occurrenceTarget struct {
+		task, target string
+		attempt      int
+	}
+	covered := map[occurrenceTarget]bool{}
 	admitted := false
 	for _, event := range events {
 		if event.Type == string(team.EventExecutionPolicySnapshot) {
@@ -93,21 +98,16 @@ func economicsHistoricalCoverage(runID string, events []team.RunEvent, policy *t
 		if invocation.Reservation.Purpose != cost.PurposeExternal && !profiles[invocation.Reservation.ProviderInvocationID] {
 			return false
 		}
+		reservation := invocation.Reservation
+		if workerCostPurpose(reservation.Purpose) {
+			covered[occurrenceTarget{reservation.TaskID, reservation.ExecutionTarget, reservation.OccurrenceAttempt}] = true
+		}
 	}
 	for _, attempt := range routes.Attempts {
 		if !attempt.Counted {
 			return false
 		}
-		found := false
-		for _, invocation := range ledger.Invocations {
-			reservation := invocation.Reservation
-			if workerCostPurpose(reservation.Purpose) && reservation.TaskID == attempt.TaskID &&
-				reservation.OccurrenceAttempt == attempt.OccurrenceAttempt &&
-				reservation.ExecutionTarget == attempt.ExecutionTarget {
-				found = true
-			}
-		}
-		if !found {
+		if !covered[occurrenceTarget{attempt.TaskID, attempt.ExecutionTarget, attempt.OccurrenceAttempt}] {
 			return false
 		}
 	}

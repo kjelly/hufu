@@ -1,9 +1,9 @@
 # Hufu 唯讀路由分析、成本統計與工具整合實作計畫
 
-> **狀態**：剩餘工作可開始實作；WP-00～WP-04 的完成與驗證紀錄見 [進度文件](readonly-runtime-observability-progress.md)。接續 WP-05。
+> **狀態**：已完成；WP-00～WP-05 的完成與驗證紀錄見 [進度文件](readonly-runtime-observability-progress.md)。
 > **修訂日期**：2026-10-20
 > **核對基準**：`kjelly/hufu`，HEAD `3715d61001b9122a3828e3202487f7446598f894`。
-> **交付性質**：本文件保留各工作包的功能與驗收契約；實際完成狀態以進度文件與對應程式碼為準。剩餘工作可由 Coding Agent 使用本機程式碼、合成 fixture 與離線測試完成。
+> **交付性質**：本文件保留已實作功能的驗收契約；工作使用本機程式碼、合成 fixture 與離線測試完成，不代表真實模型品質或節費成效已獲驗證。
 > **使用者確認的驗收範圍**：本次不含真實試跑；日後另立任務。
 > **文件位置**：依使用者指示移入 `docs/implementation-plans/readonly-runtime-observability.md` 並納入版本控制；每完成一個工作包，驗證後獨立提交。
 
@@ -25,7 +25,7 @@
 
 本計畫不需要帳號、API key、付費模型、真實使用者任務或人工審核資料。測試資料由 Coding Agent 在測試暫存目錄建立。真實使用資料的成效驗證屬於另一個使用者任務，不是本文件的前置工作或未完成項。
 
-## 2. 已核對的現況與重用入口
+## 2. 實作前基準與重用入口
 
 以下連結均相對於本文件。開始工作時再次記錄 HEAD；若已前進，以實際程式與既有測試校正入口，不重做已存在的能力。
 
@@ -296,14 +296,14 @@ golangci-lint run
 - `git diff -- cmd/hufu internal` 沒有具體 team 名稱分支或只服務單一團隊的核心政策。
 - 移除新命令／UI 入口即可停止使用新功能；既有 workspace 不需 migration、rollback 或資料清除。
 
-## 6. Coding Agent 起始指令
+## 6. 後續維護指引
 
 ```text
 Read AGENTS.md and this plan at its current path.
 Record HEAD and inspect existing implementation/tests before editing.
 Read readonly-runtime-observability-progress.md and verify completed work against the checkout.
-WP-00 through WP-04 are recorded as complete; reuse their implementation and fixtures.
-Finish WP-05 in a reviewable change.
+WP-00 through WP-05 are complete; do not treat them as a new implementation backlog.
+For future changes, preserve the implemented contracts and reuse their fixtures.
 Use canonical read-only scope binding, event replay, evidence and cost projections.
 Keep all validation offline with generated fixtures and the existing MCP SDK client.
 Do not run real models, collect user data, add adaptive routing, or deploy services.
