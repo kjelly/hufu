@@ -8,7 +8,7 @@
 >
 > **文件 ID**：HF-TEAM-AUTHORING-UX-2026-10-20
 > **類型**：Implementation Plan / Coding Agent Spec
-> **狀態**：Ready for implementation（規格已收斂；新功能尚未實作）
+> **狀態**：PR-0 已完成；PR-1、PR-2 尚未實作。驗證見 [階段紀錄](../reference/team-authoring-baseline.md)。
 > **基準**：`kjelly/hufu` 此工作目錄於 2026-10-20 的程式碼；實作前確認相關符號仍存在。
 > **交付順序**：PR-0 → PR-1 → PR-2。每階段均須可獨立編譯、測試與使用。
 > **文件位置**：`docs/implementation-plans/team-yaml-simplification.md`；依使用者指示移入正式文件並逐階段提交。
@@ -78,6 +78,7 @@ preset: coding-reviewed
 - 未知名稱報錯並列出 Team Preset 名稱；Agent-only Preset（例如 `coding`）不得當作 Team Preset。
 - 展開的 name、role、description、System、tools、side effect、generation fallback、限制及 Helper 行為，須與該 Team Preset 的 `Render()` 產物走原管線等價。
 - 只展開現有 Registry 定義，不自動加入 workflow、acceptance、unattended、學習、額外 sandbox 或更高權限。
+- 保留各 Preset 原有的 lint 結果；`safe-ops` 的外部寫入缺少 reconcile 時，既有 `side_effect_retry_without_reconcile` error 不因單檔語法而消失。比較 compact / Render 的 findings，而非要求所有 Preset 一律 lint 成功；baseline 證據見 [team authoring baseline](../reference/team-authoring-baseline.md)。
 - 保留舊的 `team.yaml` 可省略行為。新增欄位是 additive extension，不更換 apiVersion。
 
 ### 2.2 Inline worker
@@ -210,12 +211,12 @@ spec:
 
 **範圍只限已確認的不一致，不進行全面 validator 重構。**
 
-- [ ] 缺少 authored coordinator 時，取消 `FindingMissingCoordinator` 的 error，改為 info；訊息準確說明使用既有 coordinator 選取／fallback，不能忽略 legacy 名稱 heuristic。
-- [ ] Info 不使 `TeamInspection.Complete` 變 false；`lint --fail-on error` 成功，`--fail-on info` 可按既有契約失敗。
-- [ ] 保留多個明確 coordinator、Helper collision、duplicate identity、unknown schema、invalid YAML 的原錯誤行為；其他 lint error、policy override、ignore、deprecated alias 嚴重度均不變。
-- [ ] 更新相關 unit / CLI JSON / process exit tests；檢查 `team create --preset coding-reviewed` 原始產物不再被誤判缺少 coordinator。
-- [ ] 修正 `README.md`、`README.tw.md`、`docs/reference/agent-format.md` 與 CLI help 中和 parser 不符的必填敘述；精確說明 filename inference、frontmatter / team.yaml 可省略。
-- [ ] 不加入 `preset` / `agents` 新語法。
+- [x] 缺少 authored coordinator 時，取消 `FindingMissingCoordinator` 的 error，改為 info；訊息準確說明使用既有 coordinator 選取／fallback，不能忽略 legacy 名稱 heuristic。
+- [x] Info 不使 `TeamInspection.Complete` 變 false；`lint --fail-on error` 成功，`--fail-on info` 可按既有契約失敗。
+- [x] 保留多個明確 coordinator、Helper collision、duplicate identity、unknown schema、invalid YAML 的原錯誤行為；其他 lint error、policy override、ignore、deprecated alias 嚴重度均不變。
+- [x] 更新相關 unit / CLI JSON / process exit tests；檢查 `team create --preset coding-reviewed` 原始產物不再被誤判缺少 coordinator。
+- [x] 修正 `README.md`、`README.tw.md`、`docs/reference/agent-format.md` 與 CLI help 中和 parser 不符的必填敘述；精確說明 filename inference、frontmatter / team.yaml 可省略。
+- [x] 不加入 `preset` / `agents` 新語法。
 
 **完成條件**：worker-only、明確 coordinator 與既有 Preset scaffold 在 compile／validate 與預設 lint 門檻下對 coordinator 問題有一致結論；不承諾所有既有 lint 規則與 runtime validity 完全相同。
 

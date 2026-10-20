@@ -37,7 +37,8 @@ Use a directory argument, or --team to resolve a discoverable team name. This
 checks delegation references, tool-policy conflicts, machine-readable
 requirements, and bound task execution/output contracts before they can consume
 an execution retry. Environment-dependent requirements are checked by doctor and
-again after runtime CLI/profile policy is resolved.`,
+again after runtime CLI/profile policy is resolved. An authored coordinator is
+optional: existing role/name selection or the built-in coordinator is used.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runTeamValidate,
 }

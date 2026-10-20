@@ -897,11 +897,11 @@ go run ./cmd/hufu
 
 ## Team Configuration
 
-The team configuration file defines the team's overall behavior and default parameters. Complete configuration reference:
+The team configuration file is optional. Without it, the directory name identifies the team and built-in defaults apply. The legacy flat format below can omit `name`; versioned manifests still require `metadata.name`. Complete configuration reference:
 
 ```yaml
-# === Required Fields ===
-name: my-team                    # Team name (required)
+# === Optional identity ===
+name: my-team                    # Defaults to the directory name (legacy flat format)
 
 # === Optional Fields ===
 description: "My development team"  # Team description
@@ -1086,11 +1086,13 @@ Please follow best practices and ensure proper error handling.
 
 ### Frontmatter Fields
 
+Frontmatter is optional: a plain `worker.md` uses its filename as the name and its entire body as the system prompt. An authored coordinator is optional; runtime preserves legacy role/name selection before using its built-in fallback. `team create --preset coding-reviewed` generates workers, without an authored coordinator.
+
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `name` | ✅ | — | Agent name, used for `@<name>` invocation |
+| `name` | ❌ | Filename stem | Agent name, used for `@<name>` invocation |
 | `description` | ❌ | — | Agent description |
-| `role` | ❌ | `worker` | Agent role (`worker` or `coordinator`) |
+| `role` | ❌ | Filename convention | `coordinator.md` infers `coordinator`; other files infer `worker` |
 | `tools` | ❌ | — | Available tools list (comma-separated) |
 | `skills` | ❌ | — | Skills to load (comma-separated) |
 | `guard` | ❌ | — | Guard rules (YAML list) |

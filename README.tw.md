@@ -569,11 +569,11 @@ go run ./cmd/hufu
 
 ## 團隊配置
 
-團隊配置檔定義了團隊的整體行為和預設參數。以下是完整的配置參考：
+團隊配置檔可省略，此時以目錄名識別團隊並使用內建預設。下列 legacy flat 格式的 `name` 可省略；版本化 manifest 仍須提供 `metadata.name`。以下是配置參考：
 
 ```yaml
-# === 必要欄位 ===
-name: my-team                    # 團隊名稱（必要）
+# === 選填識別欄位 ===
+name: my-team                    # legacy flat 格式預設使用目錄名
 
 # === 選填欄位 ===
 description: "我的開發團隊"       # 團隊描述
@@ -690,11 +690,13 @@ provider-url: http://localhost:11434/v1
 
 ### Frontmatter 欄位說明
 
+Frontmatter 可省略：純文字 `worker.md` 以檔名作為名稱，整份內容作為 system prompt。自訂 coordinator 可省略，runtime 先保留既有 role／名稱選取，再使用內建 fallback。`team create --preset coding-reviewed` 產生 workers，不產生自訂 coordinator。
+
 | 欄位 | 必要 | 預設值 | 說明 |
 |------|------|--------|------|
-| `name` | ✅ | — | Agent 名稱，用於 `@<name>` 呼叫 |
+| `name` | ❌ | 檔名（不含副檔名） | Agent 名稱，用於 `@<name>` 呼叫 |
 | `description` | ❌ | — | Agent 描述 |
-| `role` | ❌ | `worker` | Agent 角色（`worker` 或 `coordinator`） |
+| `role` | ❌ | 檔名慣例 | `coordinator.md` 推導為 coordinator，其餘為 worker |
 | `tools` | ❌ | — | 可用工具列表（逗號分隔） |
 | `skills` | ❌ | — | 要載入的 skills（逗號分隔） |
 | `model` | ❌ | 團隊預設 | 使用的 LLM model |

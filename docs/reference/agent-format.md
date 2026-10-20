@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `08163ebe`
+> Verified-Commit: 2026-10-20
 > Supersedes: —
 > Superseded-By: —
 
@@ -161,7 +161,11 @@ AgentDef.ProviderURL > TeamConfig.ProviderURL > CLI --ollama-url > 全域預設
 
 ## Agent 檔案格式
 
-Agent 定義檔案為 Markdown + YAML Frontmatter：
+Agent 定義檔案為 Markdown，YAML frontmatter 可省略；省略時以檔名（不含副檔名）推導 name，整份內容作為 system prompt。`coordinator.md` 推導 coordinator role，其餘推導 worker；明示的 name／role 優先。`team.yaml` 也可省略，legacy flat 的 team name 預設取目錄名；版本化 manifest 仍要求 `metadata.name`。
+
+未寫 `name` 時，檔名識別符須符合 `^[a-zA-Z][a-zA-Z0-9_-]*$`；不符合時需明示 `name`。明示名稱保留既有相容規則。
+
+不需要自訂 coordinator 時，runtime 沿用既有 role／名稱選取與內建 fallback。`team lint` 對缺少 authored coordinator 僅回報 info；`--fail-on error` 不因此失敗，但 lint 的其他 authoring／invocation-policy 規則仍獨立適用。
 
 ```markdown
 ---
@@ -183,12 +187,12 @@ max-retries: 3
 
 | 欄位 | 必要 | 預設 | 說明 |
 |------|------|------|------|
-| `name` | ✓ | - | Agent 名稱（唯一） |
-| `description` | ✓ | - | Agent 描述 |
+| `name` | ✗ | 檔名（不含副檔名） | Agent 名稱（唯一） |
+| `description` | ✗ | 空字串 | Agent 描述 |
 | `model` | ✗ | 團隊設定 | LLM 模型（執行期覆寫見下方） |
 | `max-tokens` | ✗ | 團隊設定 | 最大生成 token 數 |
 | `temperature` | ✗ | 團隊設定 | 生成溫度（0-1） |
-| `role` | ✗ | `worker` | Agent 角色 |
+| `role` | ✗ | 檔名慣例 | `coordinator.md` 為 coordinator，其餘為 worker |
 | `tools` | ✗ | - | 可用工具列表 |
 | `skills` | ✗ | - | 適用技能列表 |
 | `timeout` | ✗ | 團隊設定 | 執行逾時（秒） |

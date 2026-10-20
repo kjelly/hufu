@@ -1639,7 +1639,11 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 		}
 	}
 	if mode == TeamCompileLint && coordinatorPath == "" {
-		*diagnostics = append(*diagnostics, ContractFinding{Severity: FindingSeverityError, Code: FindingMissingCoordinator, Field: "agents", Message: "team has no authored coordinator agent"})
+		*diagnostics = append(*diagnostics, ContractFinding{
+			Severity: FindingSeverityInfo, Code: FindingMissingCoordinator, Field: "agents",
+			Message: "team has no authored coordinator; runtime uses existing role/name selection or the built-in coordinator",
+			Hint:    "add coordinator.md only if a custom coordinator is needed",
+		})
 	}
 
 	builtInHelper := &agent.AgentDef{

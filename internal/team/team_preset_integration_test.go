@@ -31,6 +31,18 @@ func TestTeamPreset_RenderedFilesCompileThroughOrdinaryPipeline(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CompileTeam(%q): %v", name, err)
 			}
+			lint, err := LintTeam(dir, nil, nil, DefaultProviderRegistry)
+			if err != nil || !lint.Complete {
+				t.Fatalf("preset lint = %#v, err=%v", lint, err)
+			}
+			for _, finding := range lint.Findings {
+				if finding.Code == FindingMissingCoordinator && finding.Severity != FindingSeverityInfo {
+					t.Fatalf("coordinator finding = %#v, want info", finding)
+				}
+			}
+			if name == "coding-reviewed" && TeamLintReachesThreshold(lint.Findings, FindingSeverityError) {
+				t.Fatalf("coding-reviewed scaffold failed lint: %#v", lint.Findings)
+			}
 			// A normal team preset does not require authored tasks: the
 			// team loads and validates with zero static task contracts.
 			if len(spec.RuntimeSession().ContractTasks) != 0 {

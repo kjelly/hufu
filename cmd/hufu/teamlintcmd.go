@@ -61,7 +61,11 @@ var teamLintCmd = &cobra.Command{
 	Use:   "lint [team-directory]",
 	Short: "Report deterministic team authoring drift",
 	Long: `Inspect a team definition without calling a model, opening a network
-connection, creating a workspace, starting MCP, or executing verifier commands.`,
+connection, creating a workspace, starting MCP, or executing verifier commands.
+
+A missing authored coordinator is informational because runtime supports an
+existing role/name selection or built-in fallback. Lint also includes authoring
+and invocation-policy checks beyond team validate; --fail-on selects the gate.`,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) <= 1 {
 			return nil

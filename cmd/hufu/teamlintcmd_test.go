@@ -282,3 +282,39 @@ func TestTeamLintRejectLegacyTasksFlag(t *testing.T) {
 		t.Fatal("strict lint accepted legacy tasks")
 	}
 }
+
+func TestTeamLintFallbackProcessContract(t *testing.T) {
+	binary := buildProcessContractBinary(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "worker.md"), []byte("---\npreset: readonly\n---\nInspect the project.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, stdout, stderr := runProcessContract(t, binary, "team", "validate", dir); code != 0 {
+		t.Fatalf("validate: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	for _, test := range []struct {
+		threshold string
+		ignored   bool
+		want      int
+	}{{"error", false, 0}, {"warning", false, 0}, {"info", false, 1}, {"info", true, 0}} {
+		args := []string{"team", "lint", dir, "--format", "json", "--fail-on", test.threshold}
+		if test.ignored {
+			args = append(args, "--ignore", "missing_coordinator")
+		}
+		code, stdout, stderr := runProcessContract(t, binary, args...)
+		if code != test.want {
+			t.Fatalf("lint %v: code=%d stdout=%q stderr=%q", args, code, stdout, stderr)
+		}
+		var doc teamLintJSONDocument
+		if err := json.Unmarshal(stdout, &doc); err != nil {
+			t.Fatal(err)
+		}
+		if doc.SchemaVersion != 1 || !doc.Complete || doc.Findings == nil || len(*doc.Findings) != 1 {
+			t.Fatalf("document = %#v", doc)
+		}
+		finding := (*doc.Findings)[0]
+		if finding.Code != "missing_coordinator" || finding.Severity != "info" || finding.Ignored != test.ignored {
+			t.Fatalf("finding = %#v", finding)
+		}
+	}
+}

@@ -36,8 +36,40 @@ both temporary-directory variables. Neither tests nor runtime code were changed
 to work around the sandbox. A concurrent lint retry was rejected by the linter
 runner lock; it was rerun sequentially after the original lint finished.
 
+The same baseline CLI also confirms a separate, preserved lint policy:
+`team create ops --preset safe-ops` succeeds, but lint reports
+`side_effect_retry_without_reconcile` for the operator's external writes. PR-0
+only changes the coordinator finding; it does not suppress this safety error.
+Compact/expanded preset parity tests must compare that existing behavior rather
+than require every preset to pass all lint policies.
+
 ## Stage records
 
 Stage results are added only after the commands finish and the corresponding
 implementation gates pass. Baseline failures, if any, must remain visible here
 and must not be described as newly introduced failures.
+
+### PR-0 — Coordinator fallback lint
+
+The stage changes only the missing-authored-coordinator finding to `info` and
+keeps inspection complete. It preserves runtime role/name matching, built-in
+fallback, multiple-coordinator errors, other lint policies, JSON v1 and ignore
+semantics. README English/Chinese, the agent reference, and CLI help now describe
+optional manifests/frontmatter and filename inference accurately.
+
+Regression coverage includes worker-only and legacy-name selection, compiled
+Team Preset scaffolds, CLI validate/lint process exit codes, error/warning/info
+thresholds, `--ignore`, and complete JSON output. `safe-ops` retains its existing
+external-write recovery error.
+
+| Check | Result |
+|---|---|
+| `go build -o /tmp/hufu-yaml-pr0 ./cmd/hufu` | PASS |
+| Targeted coordinator/preset/CLI process regressions | PASS |
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test ./internal/team/... ./cmd/hufu/...` | PASS (`internal/team`: 198.732s; `cmd/hufu`: 86.169s) |
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test ./...` | PASS, exit 0 (`internal/team`: 198.155s; unchanged packages reused valid cached results) |
+| `go vet ./...` | PASS |
+| `GOLANGCI_LINT_CACHE=/tmp/hufu-yaml-lint-cache golangci-lint run` | PASS, `0 issues` |
+| `bin/check-docs` and `git diff --check` | PASS |
+
+PR-1 (single-file Team Preset) and PR-2 (inline workers) remain outstanding.
