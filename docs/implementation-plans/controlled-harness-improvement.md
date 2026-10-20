@@ -14,12 +14,28 @@
 
 ## 實作進度
 
-- [ ] Baseline：完整測試、build、vet、lint、文件及隱藏 team 測試。
+- [x] Baseline：完整測試、build、vet、lint、文件及隱藏 team 測試。
 - [ ] PR 1：契約、materializer 與 plan CLI。
 - [ ] PR 2：耐久 controller 與總預算。
 - [ ] PR 3：手動 probe 與 runtime 閉環。
 - [ ] PR 4：有界 Propose–Probe–Compose。
 - [ ] PR 5：bundle、lesson 與完整驗收。
+
+### Baseline 驗證紀錄
+
+2026-10-20 在 `b83b787d` 執行；此提交只保存本計畫與文件索引，
+Go 原始碼與 `af4875f1720d2315cbaa2f2e866d11cb78ab1882` 相同。
+下列命令全部 exit 0；測試沿用 Go 正常 cache，並非全部強制重跑。
+
+| 命令 | 結果 |
+|---|---|
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test ./...` | 通過；`internal/team` 243.774s |
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test ./.agent-teams/hufu-code-review/reviewgate ./.agent-teams/hufu-code-review/reviewprep ./.agent-teams/web-research/tests` | 三組通過 |
+| `go build -o /tmp/hufu-harness-baseline ./cmd/hufu` | 通過 |
+| `go vet ./...` | 通過 |
+| `GOLANGCI_LINT_CACHE=/tmp/hufu-harness-lint golangci-lint run` | 0 issues |
+| `bin/check-docs` | 78 active、158 total、440 relative links、37 Go anchors |
+| `git diff --check` | 通過 |
 
 ## 1. 交付目標與完成邊界
 
