@@ -93,6 +93,23 @@ ollama serve
 
 ### 2. 建立團隊
 
+標準團隊可以只用一份 YAML：
+
+```bash
+hufu team create dev --preset coding-reviewed --single-file --model ollama/qwen3:8b
+hufu team validate .agent-teams/dev
+hufu list dev
+```
+
+`team.yaml` 只需 `preset: coding-reviewed` 及明示的 model；成員在記憶體展開，不產生 Agent Markdown。
+Team Preset 為 `coding-single`、`coding-reviewed`、`research`、`safe-ops`。
+需要進階契約時可加入不同名 `.md`；同名一律拒絕，`team add --force` 也不能取代 manifest 成員。
+`--single-file` 不覆寫既有目錄，也不與 `--force`、`--wizard`、`--expanded`、`--from`、明示的 `--category` 共用。
+既有未帶此旗標的建立流程不變。`coding-reviewed` 只提供 reviewer，不保證固定順序或客觀審查 gate；
+Helper 與工具權限維持既有行為，Preset 名稱不代表 OS sandbox。`safe-ops` 仍須滿足既有 reconciliation／recovery lint 規則。
+
+下列多檔格式仍可使用：
+
 在專案根目錄建立 `.agent-teams/` 資料夾，並加入團隊定義：
 
 ```bash

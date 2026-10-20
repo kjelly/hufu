@@ -41,6 +41,7 @@ func runTeamShow(_ *cobra.Command, args []string) error {
 
 	var teamYAMLRaw map[string]interface{}
 	hasTeamYAML := false
+	manifestFile := ""
 	var agentFiles []string
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -48,6 +49,10 @@ func runTeamShow(_ *cobra.Command, args []string) error {
 		}
 		switch {
 		case entry.Name() == "team.yaml" || entry.Name() == "team.yml":
+			if manifestFile == "team.yml" {
+				continue
+			}
+			manifestFile = entry.Name()
 			hasTeamYAML = true
 			if data, readErr := os.ReadFile(filepath.Join(teamDir, entry.Name())); readErr == nil {
 				_ = yaml.Unmarshal(data, &teamYAMLRaw)
@@ -63,7 +68,7 @@ func runTeamShow(_ *cobra.Command, args []string) error {
 
 	fmt.Fprintln(&b, "Authored files:")
 	if hasTeamYAML {
-		fmt.Fprintln(&b, "  team.yaml")
+		fmt.Fprintln(&b, "  "+manifestFile)
 	}
 	for _, f := range agentFiles {
 		fmt.Fprintf(&b, "  %s\n", f)
@@ -71,7 +76,22 @@ func runTeamShow(_ *cobra.Command, args []string) error {
 
 	if len(teamYAMLRaw) > 0 {
 		fmt.Fprintln(&b, "\nTeam overrides:")
-		writeSortedRawFields(&b, "  ", teamYAMLRaw)
+		fields := teamYAMLRaw
+		if nested, ok := teamYAMLRaw["spec"].(map[string]interface{}); ok {
+			fields = nested
+		}
+		_, composed := fields["preset"]
+		if composed {
+			data, err := yaml.Marshal(teamYAMLRaw)
+			if err != nil {
+				return err
+			}
+			for line := range strings.SplitSeq(strings.TrimSuffix(string(data), "\n"), "\n") {
+				fmt.Fprintln(&b, "  "+line)
+			}
+		} else {
+			writeSortedRawFields(&b, "  ", teamYAMLRaw)
+		}
 	}
 
 	fmt.Fprintln(&b, "\nAgents:")

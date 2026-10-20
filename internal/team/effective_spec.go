@@ -247,6 +247,10 @@ func InspectTeam(teamDir string, vars map[string]string, forcedSkills []string, 
 	session, err := loadTeamWithMode(teamDir, vars, forcedSkills, registry, mode, &diagnostics)
 	if err != nil {
 		if mode == TeamCompileLint {
+			if compositionErr, ok := errors.AsType[*compositionError](err); ok {
+				inspection.Diagnostics = []ContractFinding{compositionErr.finding}
+				return inspection, nil
+			}
 			if schemaErr, ok := errors.AsType[*UnsupportedSchemaVersionError](err); ok {
 				inspection.Diagnostics = []ContractFinding{{
 					Severity: FindingSeverityError,
@@ -268,6 +272,7 @@ func InspectTeam(teamDir string, vars map[string]string, forcedSkills []string, 
 	if err != nil {
 		return nil, err
 	}
+	session.addCompositionSourceIndex(sources)
 	inspection.Spec = spec
 	inspection.Session = session
 	inspection.Diagnostics = diagnostics
@@ -409,6 +414,11 @@ func newEffectiveTeamSpec(absDir string, session *TeamSession) (*EffectiveTeamSp
 			agentSpec.ResultContract = ref.clone()
 		}
 
+		if source, exists := session.compositionSources[normalizedName(def.FileAlias)]; exists {
+			composed := source.effectiveAgent(def)
+			composed.ResultContract = agentSpec.ResultContract
+			agentSpec = composed
+		}
 		spec.Agents[key] = agentSpec
 	}
 

@@ -122,6 +122,7 @@ type NormalizedTeamConfig struct {
 // on the original authored YAML, and changes nothing about strict decode
 // (omitempty only affects marshaling).
 type teamManifestSpecFields struct {
+	Preset                   string `yaml:"preset,omitempty"`
 	Name                     string `yaml:"name,omitempty"`
 	Description              string `yaml:"description,omitempty"`
 	MaxRounds                int    `yaml:"max-rounds,omitempty"`
@@ -473,6 +474,16 @@ func annotateManifestAuthoringPresence(data []byte, version string, yc *teamConf
 	}
 	if mapping.Kind != yaml.MappingNode {
 		return fmt.Errorf("scan manifest authoring presence: spec must be a mapping")
+	}
+	fields, err := manifestMapping(mapping, make(map[*yaml.Node]bool))
+	if err != nil {
+		return err
+	}
+	if pair, exists := fields["preset"]; exists {
+		node, err := compositionScalar(pair[1])
+		if err != nil || node.Tag != "!!str" || strings.TrimSpace(node.Value) == "" {
+			return fmt.Errorf("preset must be a non-empty string (line %d, column %d)", pair[0].Line, pair[0].Column)
+		}
 	}
 	seen := make(map[string]struct{}, len(mapping.Content)/2)
 	for i := 0; i < len(mapping.Content); i += 2 {

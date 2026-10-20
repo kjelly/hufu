@@ -92,6 +92,24 @@ go run ./cmd/hufu [prompt]
 
 ## Quick Start
 
+For a standard coding team, create one YAML file:
+
+```bash
+hufu team create dev --preset coding-reviewed --single-file --model ollama/qwen3:8b
+hufu team validate .agent-teams/dev
+hufu list dev
+```
+
+The generated `team.yaml` contains `preset: coding-reviewed` and the explicit
+model. Team Presets (`coding-single`, `coding-reviewed`, `research`, `safe-ops`)
+expand in memory; no agent Markdown files are generated in this mode. Add
+Markdown agents with different names for advanced contracts. All same-name
+collisions are errors; `--force` does not replace manifest members. Existing
+create defaults stay unchanged. A reviewed preset supplies a reviewer but does
+not impose execution order or an objective review gate. Helper and runtime
+permissions retain their existing behavior; a preset name is not an OS sandbox.
+`safe-ops` still needs its existing reconciliation/recovery constraints to pass lint.
+
 ### 0. Try it in 4 commands (no config)
 
 ```bash

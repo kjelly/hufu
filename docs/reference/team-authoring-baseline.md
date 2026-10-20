@@ -72,4 +72,50 @@ external-write recovery error.
 | `GOLANGCI_LINT_CACHE=/tmp/hufu-yaml-lint-cache golangci-lint run` | PASS, `0 issues` |
 | `bin/check-docs` and `git diff --check` | PASS |
 
-PR-1 (single-file Team Preset) and PR-2 (inline workers) remain outstanding.
+PR-0 was committed as `a56bbf57`. Later stage results follow below.
+
+### PR-1 — Single-file Team Presets
+
+Parent implementation baseline: `a56bbf57`. Team-level `preset` is now accepted
+in flat and v1alpha1 manifests and compiled in memory using the same Agent
+normalizer as Markdown. Same-name or alias collisions fail closed; distinct
+Markdown members, contracts, delegation and existing model/tool policy work
+through the shared loader. Provenance is process-local and excluded from policy
+hashes. CLI list/show/explain/add and migration understand the new source.
+
+`team create --single-file` creates only team.yaml, defaults to coding-single,
+and refuses existing directories and the declared incompatible flags (including
+explicit false/empty flag values). Exclusive creation and non-recursive,
+identity-checked cleanup protect existing or concurrently replaced files.
+Legacy create output and runtime authorization are unchanged. README English /
+Chinese, references and the Team Builder skill document the supported scope.
+
+Evidence: `TestTeamCompositionPresetParity` compares every AgentDef field, the
+compatibility projection, roster variables, coordinator selection and lint
+codes/severities across all four presets and both schema shapes. The
+fake-provider test executes a compiled worker through RunDirectAgent with a
+typed submission and verifies policy hash equivalence. Other composition tests
+cover strict types, unknown presets, all collision forms, discovery, prompt
+splitting, contract/delegation binding, no generated Markdown and raw-template
+migration. `TestTeamSingleFile*` covers the real CLI journey, output formats,
+invalid flag combinations, JSON failure without partial output,
+rollback on write/validation failures, concurrent creation, symlinks and foreign
+directory replacement. Existing bundled teams still list successfully.
+
+| Check | Result |
+|---|---|
+| `go build -o /tmp/hufu-yaml-pr1 ./cmd/hufu` | PASS |
+| Focused composition and CLI regressions (`-count=1`) | PASS (team: 1.303s; CLI: 9.294s) |
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test ./internal/team/... ./cmd/hufu/...` | PASS (team: 262.039s; CLI: 128.084s) |
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test ./...` | PASS (team: 214.194s; evalharness: 61.602s; other valid cached results reused where applicable) |
+| `go vet ./...` | PASS |
+| `GOLANGCI_LINT_CACHE=/tmp/hufu-yaml-lint-cache golangci-lint run` | PASS, `0 issues` after removing one leading blank line |
+| `bin/check-docs` and `git diff --check` | PASS |
+
+Migration deliberately retains the existing nil/empty normalization for task
+slices. Its regression checks the complete serialized contracts and compiled
+contract identity with the existing migration verifier, alongside full AgentDef
+equality. No runtime contract was weakened for this test. The safe-ops recovery
+lint error remains identical across compact and expanded forms.
+
+PR-2 (inline workers and distinct-name three-source composition) remains outstanding.

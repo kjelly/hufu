@@ -1,10 +1,12 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -23,6 +25,8 @@ var listCmd = &cobra.Command{
 	Short:   "List discoverable teams and their agents",
 	Long: `Show every team hufu can find, and for each team its agents with their
 role, model, tools and skills — so you know what you can call before you call it.
+
+Malformed manifests or invalid composed rosters return an error, without partial JSON.
 
 Usage:
   hufu list
@@ -96,41 +100,110 @@ func runList(cmd *cobra.Command, args []string) error {
 	}
 
 	teams := registry.ListTeams()
-	sort.Strings(teams)
-	shown := 0
+	slices.Sort(teams)
+	records := make([]listedTeam, 0, len(teams))
+	composed := make(map[string]bool)
 	for _, name := range teams {
 		if want != "" && strings.ToLower(name) != want {
 			continue
 		}
-		shown++
 		dir, err := registry.Resolve(name)
 		if err != nil {
-			continue
+			return err
 		}
-		if listOutput == "json" {
-			continue
+		record, isComposed, err := collectListedTeamChecked(name, dir)
+		if err != nil {
+			return fmt.Errorf("team %s: %w", name, err)
 		}
-		printTeam(name, dir)
+		records = append(records, record)
+		composed[name] = isComposed
 	}
-
-	if want != "" && shown == 0 {
+	if want != "" && len(records) == 0 {
 		return fmt.Errorf("team %q not found. Available: %s", want, strings.Join(teams, ", "))
 	}
 	if listOutput == "json" {
-		records := make([]listedTeam, 0, shown)
-		for _, name := range teams {
-			if want != "" && strings.ToLower(name) != want {
-				continue
-			}
-			dir, err := registry.Resolve(name)
-			if err != nil {
-				continue
-			}
-			records = append(records, collectListedTeam(name, dir))
-		}
 		return json.NewEncoder(os.Stdout).Encode(records)
 	}
+	for _, record := range records {
+		if composed[record.Name] {
+			printComposedTeam(record)
+		} else {
+			printTeam(record.Name, record.Dir)
+		}
+	}
 	return nil
+}
+
+// New authoring uses the runtime compiler; legacy agent field display stays best-effort.
+func collectListedTeamChecked(name, dir string) (listedTeam, bool, error) {
+	composed, err := team.HasTeamComposition(dir, nil)
+	if err != nil {
+		return listedTeam{}, false, err
+	}
+	if !composed {
+		return collectListedTeam(name, dir), false, nil
+	}
+	spec, err := team.CompileTeam(dir, nil, nil, team.DefaultProviderRegistry)
+	if err != nil {
+		return listedTeam{}, true, err
+	}
+	session := spec.RuntimeSession()
+	record := listedTeam{Name: name, Dir: dir, Agents: make([]listedAgent, 0)}
+	seen := make(map[*agent.AgentDef]bool)
+	for _, def := range session.Agents {
+		if seen[def] || strings.EqualFold(def.FileAlias, "helper") {
+			continue
+		}
+		seen[def] = true
+		record.Agents = append(record.Agents, listedAgent{
+			Name: def.Name, Description: def.Description, Role: def.Role,
+			Model: cmp.Or(def.Generation.Model, session.Config.Generation.Model),
+			Tools: splitNormalizedList(def.Tools), Skills: splitNormalizedList(def.Skills),
+			MemoryID: def.MemoryID, MemoryMode: string(def.Memory.Mode),
+		})
+	}
+	slices.SortFunc(record.Agents, func(a, b listedAgent) int { return strings.Compare(a.Name, b.Name) })
+	for _, definition := range session.RunInputDefinitions {
+		record.Inputs = append(record.Inputs, listedRunInput{Name: definition.Name, Type: definition.Schema.Type, Required: definition.Required, Default: definition.Default})
+	}
+	return record, true, nil
+}
+
+func printComposedTeam(record listedTeam) {
+	fmt.Printf("%s %s  \n", teamStyle.Render("@"+record.Name), dimStyle.Render(record.Dir))
+	for _, def := range record.Agents {
+		fmt.Printf("  %s %s", agentStyle.Render("@"+def.Name), dimStyle.Render("["+def.Role+"]"))
+		if def.Model != "" {
+			fmt.Printf(" %s", dimStyle.Render(def.Model))
+		}
+		fmt.Println()
+		if def.Description != "" {
+			fmt.Printf("      %s\n", def.Description)
+		}
+		if len(def.Tools) > 0 {
+			fmt.Printf("      tools:  %s\n", strings.Join(def.Tools, ","))
+		}
+		if len(def.Skills) > 0 {
+			fmt.Printf("      skills: %s\n", strings.Join(def.Skills, ","))
+		}
+		if def.MemoryMode != "" && def.MemoryMode != "off" {
+			fmt.Printf("      memory: %s\n", def.MemoryMode)
+		}
+		if def.MemoryID != "" {
+			fmt.Printf("      memory-id: %s\n", def.MemoryID)
+		}
+	}
+	if len(record.Inputs) > 0 {
+		fmt.Println("  typed run inputs:")
+		for _, input := range record.Inputs {
+			value := "(none)"
+			if len(input.Default) > 0 {
+				value = string(input.Default)
+			}
+			fmt.Printf("      %s (%s, required=%t, default=%s)\n", input.Name, input.Type, input.Required, value)
+		}
+	}
+	fmt.Println()
 }
 
 func collectListedTeam(name, dir string) listedTeam {

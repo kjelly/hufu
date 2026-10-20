@@ -8,7 +8,7 @@
 >
 > **文件 ID**：HF-TEAM-AUTHORING-UX-2026-10-20
 > **類型**：Implementation Plan / Coding Agent Spec
-> **狀態**：PR-0 已完成；PR-1、PR-2 尚未實作。驗證見 [階段紀錄](../reference/team-authoring-baseline.md)。
+> **狀態**：PR-0、PR-1 已完成；PR-2 尚未實作。驗證見 [階段紀錄](../reference/team-authoring-baseline.md)。
 > **基準**：`kjelly/hufu` 此工作目錄於 2026-10-20 的程式碼；實作前確認相關符號仍存在。
 > **交付順序**：PR-0 → PR-1 → PR-2。每階段均須可獨立編譯、測試與使用。
 > **文件位置**：`docs/implementation-plans/team-yaml-simplification.md`；依使用者指示移入正式文件並逐階段提交。
@@ -222,17 +222,17 @@ spec:
 
 ### PR-1 — 單檔 Team Preset 與建立／檢查體驗
 
-- [ ] 新增 flat / v1alpha1 共用 typed `preset`、Registry expansion、process-local provenance。
-- [ ] 抽出來源無關 Agent normalizer，先供 Markdown / Team Preset 共用；不要等 PR-2 才建立，避免 PR-1 另做一套不相容的展開。
-- [ ] 同時完成 Preset + `.md` 的不同名組合與同名拒絕，包括 explicit name／alias；不要留下未定義的混合狀態。
-- [ ] 接入 compile / validate / lint / explain / list / show / team add / migrate；保留 discovery，新增只有 manifest 的整合案例。
-- [ ] 提供 opt-in `team create NAME --single-file`：預設 `coding-single`，可用 `--preset` 指定 Team Preset，`--model` 有值時寫入。產物只有 `team.yaml`。
-- [ ] 本模式拒絕 Agent-only Preset、`--force`、`--wizard`、`--expanded`、`--from`，以及明示的 `--category`；即使某個互斥旗標明示為 false／空值，也依 `Flags().Changed` 拒絕。所有拒絕在寫檔前完成。原本未帶 `--single-file` 的流程不變。
-- [ ] 不存在的 team 才能建立：使用 exclusive `os.Mkdir` 取得新目錄所有權；若 parent 不存在只建立 parent。目標已存在（含空目錄／symlink）即拒絕，不以先 Stat 再 MkdirAll 當作排他保證。
-- [ ] 只對本次成功取得所有權的新目錄寫檔、compile 並執行 `ValidateEffectiveTeam` 的 error gate；寫入或驗證失敗時只清理本次建立的產物，再以非遞迴 remove 嘗試移除空目錄，保留原有 parent／其他 team 及並行新增的非本次檔案。測試注入寫入或驗證失敗，不新增供使用者觸發故障的旗標。
-- [ ] 比較所有 Team Preset 的 compact / Render fixture：既有 snapshot 加第 5 節補充比較；確認 fallback、Helper、model precedence 與 policy hash。
-- [ ] 同 PR 更新 README 中英、reference、`.agents/skills/team-builder/SKILL.md`、CLI help / examples，說明不同名限制及 `coding-reviewed` 不代表強制 review gate。
-- [ ] 此階段 `agents` 尚不支援，維持 strict unknown-field rejection。
+- [x] 新增 flat / v1alpha1 共用 typed `preset`、Registry expansion、process-local provenance。
+- [x] 抽出來源無關 Agent normalizer，先供 Markdown / Team Preset 共用；不要等 PR-2 才建立，避免 PR-1 另做一套不相容的展開。
+- [x] 同時完成 Preset + `.md` 的不同名組合與同名拒絕，包括 explicit name／alias；不要留下未定義的混合狀態。
+- [x] 接入 compile / validate / lint / explain / list / show / team add / migrate；保留 discovery，新增只有 manifest 的整合案例。
+- [x] 提供 opt-in `team create NAME --single-file`：預設 `coding-single`，可用 `--preset` 指定 Team Preset，`--model` 有值時寫入。產物只有 `team.yaml`。
+- [x] 本模式拒絕 Agent-only Preset、`--force`、`--wizard`、`--expanded`、`--from`，以及明示的 `--category`；即使某個互斥旗標明示為 false／空值，也依 `Flags().Changed` 拒絕。所有拒絕在寫檔前完成。原本未帶 `--single-file` 的流程不變。
+- [x] 不存在的 team 才能建立：使用 exclusive `os.Mkdir` 取得新目錄所有權；若 parent 不存在只建立 parent。目標已存在（含空目錄／symlink）即拒絕，不以先 Stat 再 MkdirAll 當作排他保證。
+- [x] 只對本次成功取得所有權的新目錄寫檔、compile 並執行 `ValidateEffectiveTeam` 的 error gate；寫入或驗證失敗時只清理本次建立的產物，再以非遞迴 remove 嘗試移除空目錄，保留原有 parent／其他 team 及並行新增的非本次檔案。測試注入寫入或驗證失敗，不新增供使用者觸發故障的旗標。
+- [x] 比較所有 Team Preset 的 compact / Render fixture：既有 snapshot 加第 5 節補充比較；確認 fallback、Helper、model precedence 與 policy hash。
+- [x] 同 PR 更新 README 中英、reference、`.agents/skills/team-builder/SKILL.md`、CLI help / examples，說明不同名限制及 `coding-reviewed` 不代表強制 review gate。
+- [x] 此階段 `agents` 尚不支援，維持 strict unknown-field rejection。
 
 **完成條件**：`hufu team create dev --preset coding-reviewed --single-file` 生成一份 manifest；discover、compile、validate、lint、explain、list、show 與 fake-provider run 全鏈可用，所有非法組合不寫入既有目錄。
 

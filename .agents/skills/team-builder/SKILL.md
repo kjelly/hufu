@@ -9,6 +9,26 @@ Design a runnable, contract-valid Hufu agent team under `.agent-teams/<team-name
 Optimize for the task's observable outcome and failure boundaries, not the
 largest possible collection of agents.
 
+## Single-file Team Presets
+
+`team.yaml` may contain just `preset: coding-reviewed`. The four Team Presets
+(`coding-single`, `coding-reviewed`, `research`, `safe-ops`) expand in memory
+through the ordinary compiler. `--single-file` defaults to `coding-single`,
+accepts `--model`, and refuses existing directories or combinations with
+`--force`, `--wizard`, `--expanded`, `--from`, or an explicit `--category`.
+Agent-only presets do not use this flag. Existing creation commands keep their
+original output defaults.
+
+Add different-name Markdown agents for advanced prompts or contracts. Any name
+or filename-alias collision with a manifest member is rejected, including
+`team add --force`; there is no same-name patch or inheritance. To customize a
+preset's member, author the full Markdown roster without the team-level preset.
+Use `team explain` for effective sources, `team show` for authored YAML, and
+`hufu list` for the roster. Inline `agents` declarations are not yet supported.
+A reviewed preset provides a reviewer, not an enforced ordering or objective
+review gate. Helper and runtime tool policy remain unchanged, and `safe-ops`
+still requires its existing reconciliation/recovery checks to pass lint.
+
 ## Workflow
 
 Use progressive disclosure: ask only what the task's risk actually requires.
@@ -29,13 +49,16 @@ goal → risk classification → choose preset/topology → generate → compile
    actions, or a strict acceptance requirement (a false "success" would be
    worse than a blocked run). Everything else — most coding, writing, and
    research tasks — is **low-risk**.
-3. **Low-risk: choose a preset and generate immediately.** Prefer
-   `hufu team create <name> --preset <preset>` over hand-authoring files —
+3. **Low-risk: choose a preset and generate immediately.** For a built-in
+   Team Preset prefer `hufu team create <name> --preset <preset> --single-file`.
+   Agent-only presets continue to use `hufu team create <name> --preset <preset>`.
+   Prefer these commands over hand-authoring files —
    see [Presets](#presets) below for the six agent presets and four team
-   presets. This is the same mechanism the CLI itself uses, so the result
-   uses identical conventions (filename-inferred identity, `preset:`
-   frontmatter, no default-valued `team.yaml` fields) to what a user would
-   get by running the command directly. Only fall back to hand-authoring
+   presets. Both formats use the same compiler and Agent Preset grants;
+   single-file mode declares a team-level preset, while the existing mode
+   writes filename-inferred Markdown agents with preset frontmatter.
+   Neither format needs redundant default-valued team fields.
+   Only fall back to hand-authoring
    individual agent files when no preset's topology fits (e.g. a genuinely
    novel pipeline shape) — even then, prefer `preset:` frontmatter per agent
    over a raw `tools:` allowlist. Do not ask about model, deliverable

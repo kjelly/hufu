@@ -47,6 +47,20 @@ func runTeamAdd(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("team directory %s does not exist; create it first with `hufu team create %s`", teamDir, teamName)
 	}
 
+	composed, err := internalteam.HasTeamComposition(teamDir, nil)
+	if err != nil {
+		return err
+	}
+	if composed {
+		spec, err := internalteam.CompileTeam(teamDir, nil, nil, internalteam.DefaultProviderRegistry)
+		if err != nil {
+			return err
+		}
+		if spec.RuntimeSession().IsComposedAgent(agentName) {
+			return fmt.Errorf("agent %q is defined by the manifest; choose a different name (--force does not replace manifest members)", agentName)
+		}
+	}
+
 	var content string
 	if strings.TrimSpace(teamAddPreset) != "" {
 		agentPreset, ok := preset.Lookup(teamAddPreset)

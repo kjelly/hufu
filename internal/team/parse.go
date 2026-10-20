@@ -28,6 +28,8 @@ import (
 )
 
 type TeamSession struct {
+	compositionSources map[string]compositionAgentSource // Process-local, never part of runtime policy.
+
 	Config            agent.TeamConfig
 	DecisionAuthoring DecisionAuthoringMetadata
 	Dir               string
@@ -596,6 +598,12 @@ func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.
 		body = strings.TrimSpace(text)
 	}
 
+	return normalizeAgentDefinition(fm, body, path, inferredRole)
+}
+
+// normalizeAgentDefinition is shared by authored Markdown and manifest composition.
+// It does not decode source text or render templates.
+func normalizeAgentDefinition(fm agentFrontmatter, body, path, inferredRole string) (*agent.AgentDef, error) {
 	name := fm.Name
 	if name == "" {
 		inferredName, err := inferAgentNameFromFilename(path)
@@ -1584,6 +1592,11 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 		identityOwners[key] = agentIdentityOwner{def: def, path: path}
 		return nil
 	}
+	candidates, err := loadTeamComposition(absDir, vars)
+	if err != nil {
+		return nil, err
+	}
+	session.compositionSources = make(map[string]compositionAgentSource)
 	for _, entry := range entries {
 		// README.md is excluded, not just any frontmatter-less .md: a file
 		// with no frontmatter is deliberately still a valid minimal agent
@@ -1612,6 +1625,12 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 		}
 		fileAlias := strings.TrimSuffix(entry.Name(), ".md")
 		def.FileAlias = fileAlias
+		candidates = append(candidates, compositionAgentCandidate{def: def, path: path})
+	}
+	validCandidates := make([]compositionAgentCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		def, path := candidate.def, candidate.path
+		fileAlias := def.FileAlias
 		if err := registerIdentity(fileAlias, def, path); err != nil {
 			if mode == TeamCompileLint && errors.Is(err, lintIdentityCollision) {
 				continue
@@ -1627,6 +1646,12 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 		if err := registerCoordinator(def, path); err != nil {
 			return nil, err
 		}
+		validCandidates = append(validCandidates, candidate)
+	}
+	for _, candidate := range validCandidates {
+		def := candidate.def
+		fileAlias := def.FileAlias
+
 		fileKey := normalizedName(fileAlias)
 		nameKey := normalizedName(def.Name)
 		if _, exists := session.Agents[fileKey]; !exists {
@@ -1637,7 +1662,11 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 				session.Agents[nameKey] = def
 			}
 		}
+		if candidate.source != nil {
+			session.compositionSources[normalizedName(fileAlias)] = *candidate.source
+		}
 	}
+
 	if mode == TeamCompileLint && coordinatorPath == "" {
 		*diagnostics = append(*diagnostics, ContractFinding{
 			Severity: FindingSeverityInfo, Code: FindingMissingCoordinator, Field: "agents",
@@ -1703,7 +1732,12 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 
 	// Inject built-in vars AFTER agents loaded (AGENT_COUNT, AGENT_NAMES)
 	workerNames := make([]string, 0)
+	seenWorkers := make(map[*agent.AgentDef]bool)
 	for _, def := range session.Agents {
+		if len(session.compositionSources) > 0 && seenWorkers[def] {
+			continue
+		}
+		seenWorkers[def] = true
 		if def.Role != "orchestrator" && def.Role != "coordinator" {
 			workerNames = append(workerNames, def.Name)
 		}
