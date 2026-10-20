@@ -214,7 +214,10 @@ type ProviderInvocationUsage struct {
 // provider invocation reaches a terminal state. ResponseObserved records
 // whether any response object or stream part crossed the transport boundary.
 type ProviderInvocationResult struct {
-	Usage            *ProviderInvocationUsage
+	Usage *ProviderInvocationUsage
+	// UsageReported preserves explicit presence from a trusted transport,
+	// including all-zero usage. SDK zero-value structs alone do not set it.
+	UsageReported    bool
 	Outcome          ProviderInvocationOutcome
 	ResponseObserved bool
 }
@@ -324,6 +327,7 @@ func admittedStream[T any](ctx context.Context, stream iter.Seq[T], state *provi
 
 func (m *admittedLanguageModel) streamContext(ctx context.Context, request ProviderRequest, state *providerStreamState, release func()) (context.Context, context.CancelFunc, func(ProviderInvocationResult), func() bool) {
 	ctx = withProviderTransportIdentity(ctx, request)
+	ctx = withProviderUsageObservation(ctx)
 	streamCtx, cancel := context.WithCancel(ctx)
 	var once sync.Once
 	finalize := func(result ProviderInvocationResult) {
@@ -371,7 +375,7 @@ func (m *admittedLanguageModel) commitInvocation(ctx context.Context, request *P
 
 func (m *admittedLanguageModel) settleInvocation(ctx context.Context, request ProviderRequest, result ProviderInvocationResult) {
 	if m.invocationSettler != nil {
-		m.invocationSettler.SettleProviderInvocation(ctx, request, result)
+		m.invocationSettler.SettleProviderInvocation(ctx, request, observedProviderUsage(ctx, result))
 	}
 }
 
@@ -419,6 +423,7 @@ func (m *admittedLanguageModel) Generate(ctx context.Context, call fantasy.Call)
 		return nil, err
 	}
 	ctx = withProviderTransportIdentity(ctx, request)
+	ctx = withProviderUsageObservation(ctx)
 	response, providerErr := m.inner.Generate(ctx, call)
 	result := ProviderInvocationResult{Outcome: providerInvocationOutcome(ctx, providerErr), ResponseObserved: response != nil}
 	if response != nil {
@@ -478,6 +483,7 @@ func (m *admittedLanguageModel) GenerateObject(ctx context.Context, call fantasy
 		return nil, err
 	}
 	ctx = withProviderTransportIdentity(ctx, request)
+	ctx = withProviderUsageObservation(ctx)
 	response, providerErr := m.inner.GenerateObject(ctx, call)
 	result := ProviderInvocationResult{Outcome: providerInvocationOutcome(ctx, providerErr), ResponseObserved: response != nil}
 	if response != nil {

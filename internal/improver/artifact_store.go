@@ -96,7 +96,7 @@ func (s *ObjectStore) Put(kind string, raw []byte) (paired.ArtifactRef, error) {
 		name += ".json"
 	}
 	if err := checkSanitized(name, raw); err != nil {
-		return paired.ArtifactRef{}, errors.New("objects: content requires sanitization")
+		return paired.ArtifactRef{}, fmt.Errorf("objects: %s content requires sanitization", kind)
 	}
 	temp := ".pending-" + rand.Text()
 	file, err := s.root.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)

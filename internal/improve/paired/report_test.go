@@ -49,6 +49,7 @@ func TestIncompleteOrConflictingEvidenceNeverImproves(t *testing.T) {
 		{"resume", func(e *Evaluation) { e.ResumeConsistent = false }, "blocked"},
 		{"changed_tools", func(e *Evaluation) { e.ProtectedSurfaceValid = false }, "rejected"},
 		{"overspent", func(e *Evaluation) { e.Budget.SpentTokens = 1001 }, "rejected"},
+		{"stage_overspent", func(e *Evaluation) { e.ResourceOver = true }, "rejected"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			input := evaluationFixture()

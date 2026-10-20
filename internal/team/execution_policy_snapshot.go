@@ -377,7 +377,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 		snapshot.ExecutionWorlds = append(snapshot.ExecutionWorlds, ExecutionWorldPolicySnapshot{
 			Backend:                    backend,
 			ExecutionWorld:             cfg.ExecutionWorld,
-			ProjectRootHash:            executionPolicyValueHash("codex_project_root", c.projectDir),
+			ProjectRootHash:            ExecutionPolicyProjectRootHash(c.projectDir),
 			CoordinatorNetworkDisabled: c.noNet,
 			AgentNetworkPolicies:       agentNetworkPolicies,
 			InheritEnv:                 variables,
@@ -585,6 +585,13 @@ func captureExecutionPolicyEnvironment(allowlist []string) ([]string, []Executio
 func executionPolicyValueHash(name, value string) string {
 	sum := sha256.Sum256([]byte(name + "\x00" + value))
 	return hex.EncodeToString(sum[:])
+}
+
+// ExecutionPolicyProjectRootHash identifies an execution-world project root
+// using the versioned policy's existing hash domain. Consumers that compare
+// explicitly owned roots must use this encoding rather than guessing hashes.
+func ExecutionPolicyProjectRootHash(root string) string {
+	return executionPolicyValueHash("codex_project_root", root)
 }
 
 func executionPolicyConfigurationHash(snapshot *ExecutionPolicySnapshot) (string, error) {

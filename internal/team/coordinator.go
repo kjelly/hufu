@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/kjelly/hufu/internal/semantic"
 	"io"
@@ -1377,40 +1378,67 @@ type RoleModels struct {
 }
 
 type coordinatorParams struct {
-	DecisionPrimitives    *catalog.Service
-	ControlDecisions      *control.Service
-	Session               *TeamSession
-	DefaultProviderURL    string
-	DefaultProviderAPIKey string
-	MCPManager            *mcp.MCPToolManager
-	ModelList             []config.ModelEntry
-	RoleModels            RoleModels
-	MaxConcurrent         int
-	Verbose               bool
-	Think                 bool
-	Direnv                bool
-	AllowedPaths          []string
-	PathConsent           *tools.PathConsent
-	HookRegistry          *hooks.HookRegistry
-	RestrictedBash        bool
-	RestrictedPath        string
-	NoNet                 bool
-	ForceMCP              bool
-	ForcedSkillNames      []string
-	PlanMode              bool
-	AutoSkillsMode        bool
-	OllamaWebTransport    http.RoundTripper // test-only seam; production always uses the default verified transport
+	DecisionPrimitives      *catalog.Service
+	ControlDecisions        *control.Service
+	Session                 *TeamSession
+	DefaultProviderURL      string
+	DefaultProviderAPIKey   string
+	MCPManager              *mcp.MCPToolManager
+	ModelList               []config.ModelEntry
+	RoleModels              RoleModels
+	MaxConcurrent           int
+	Verbose                 bool
+	Think                   bool
+	Direnv                  bool
+	AllowedPaths            []string
+	PathConsent             *tools.PathConsent
+	HookRegistry            *hooks.HookRegistry
+	RestrictedBash          bool
+	RestrictedPath          string
+	NoNet                   bool
+	ForceMCP                bool
+	ForcedSkillNames        []string
+	PlanMode                bool
+	AutoSkillsMode          bool
+	OllamaWebTransport      http.RoundTripper // test-only seam; production always uses the default verified transport
+	ProviderBoundaryFactory agent.ProviderBoundaryFactory
 }
 
-func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, modelList []config.ModelEntry, roleModels RoleModels, maxConcurrent int, verbose bool, think bool, direnv bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool, forceMCP bool, forcedSkillNames []string, planMode bool, autoSkillsMode bool) (*Coordinator, error) {
-	return newCoordinator(coordinatorParams{
+// CoordinatorOption injects trusted construction dependencies. Options cannot
+// be supplied through authored team configuration or changed during a run.
+type CoordinatorOption func(*coordinatorParams) error
+
+func WithProviderBoundaryFactory(factory agent.ProviderBoundaryFactory) CoordinatorOption {
+	return func(params *coordinatorParams) error {
+		if factory == nil {
+			return errors.New("provider boundary factory is required")
+		}
+		if params.ProviderBoundaryFactory != nil {
+			return errors.New("provider boundary factory is already configured")
+		}
+		params.ProviderBoundaryFactory = factory
+		return nil
+	}
+}
+
+func NewCoordinator(session *TeamSession, defaultProviderURL, defaultProviderAPIKey string, mcpManager *mcp.MCPToolManager, modelList []config.ModelEntry, roleModels RoleModels, maxConcurrent int, verbose bool, think bool, direnv bool, allowedPaths []string, pathConsent *tools.PathConsent, hookRegistry *hooks.HookRegistry, rbashMode bool, restrictedPath string, noNet bool, forceMCP bool, forcedSkillNames []string, planMode bool, autoSkillsMode bool, options ...CoordinatorOption) (*Coordinator, error) {
+	params := coordinatorParams{
 		Session: session, DefaultProviderURL: defaultProviderURL, DefaultProviderAPIKey: defaultProviderAPIKey,
 		MCPManager: mcpManager, ModelList: modelList, RoleModels: roleModels,
 		MaxConcurrent: maxConcurrent, Verbose: verbose, Think: think, Direnv: direnv,
 		AllowedPaths: allowedPaths, PathConsent: pathConsent, HookRegistry: hookRegistry,
 		RestrictedBash: rbashMode, RestrictedPath: restrictedPath, NoNet: noNet, ForceMCP: forceMCP,
 		ForcedSkillNames: forcedSkillNames, PlanMode: planMode, AutoSkillsMode: autoSkillsMode,
-	}, RuntimeServices{})
+	}
+	for _, option := range options {
+		if option == nil {
+			return nil, errors.New("nil coordinator option")
+		}
+		if err := option(&params); err != nil {
+			return nil, err
+		}
+	}
+	return newCoordinator(params, RuntimeServices{})
 }
 
 func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordinator, error) {
@@ -1508,7 +1536,13 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 		}
 		return coordinator.openArtifactRef(ctx, ref)
 	}), tools.WithWorkspaceName(filepath.Base(session.Workspace)), tools.WithHooks(hookRegistry), tools.WithRestrictedBash(rbashMode), tools.WithRestrictedPath(restrictedPath), tools.WithNetworkBlock(noNet), tools.WithForceMCP(forceMCP), tools.WithDirenv(direnv), tools.WithOllamaWebClient(ollamaweb.NewHTTPClient(ollamaWebKey, params.OllamaWebTransport)))
-	pm, err := agent.NewProviderManager(defaultProviderURL, defaultProviderAPIKey, session.Config.Providers)
+	var pm *agent.ProviderManager
+	var err error
+	if params.ProviderBoundaryFactory == nil {
+		pm, err = agent.NewProviderManager(defaultProviderURL, defaultProviderAPIKey, session.Config.Providers)
+	} else {
+		pm, err = agent.NewProviderManagerWithBoundaryFactory(defaultProviderURL, defaultProviderAPIKey, session.Config.Providers, params.ProviderBoundaryFactory)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create provider manager: %w", err)
 	}

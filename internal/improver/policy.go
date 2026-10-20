@@ -74,7 +74,7 @@ func RegisterRoots(roots map[string]string) (RegisteredRoots, error) {
 			!filepath.IsAbs(physical) || filepath.Clean(physical) != physical {
 			return RegisteredRoots{}, errors.New("invalid logical root registration")
 		}
-		hash := paired.BytesDigest([]byte(physical))
+		hash := team.ExecutionPolicyProjectRootHash(physical)
 		if _, exists := result.byHash[hash]; exists {
 			return RegisteredRoots{}, errors.New("distinct logical roots cannot share a physical root")
 		}

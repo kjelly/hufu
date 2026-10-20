@@ -50,7 +50,7 @@ func testPolicy(t *testing.T, project, model string) *team.ExecutionPolicySnapsh
 		Backends:    []team.ExecutionBackendPolicySnapshot{{Backend: "hufu-local", Kind: "llm", MaxConcurrent: 1, IdentityHash: "fixed-transport"}},
 		ModelRoutes: []team.ExecutionModelRouteSnapshot{{Model: model, Backend: "hufu-local"}},
 		ExecutionWorlds: []team.ExecutionWorldPolicySnapshot{{
-			Backend: "hufu-local", ExecutionWorld: "local", ProjectRootHash: paired.BytesDigest([]byte(project)),
+			Backend: "hufu-local", ExecutionWorld: "local", ProjectRootHash: team.ExecutionPolicyProjectRootHash(project),
 		}},
 	}
 	// Match the durable v5 serialization, whose nil collections are null.

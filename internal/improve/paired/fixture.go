@@ -38,7 +38,15 @@ func (v Verifier) RuntimeSpec() agent.VerificationSpec {
 	if mode == "blocking" {
 		mode = "success"
 	}
-	return agent.VerificationSpec{Type: agent.VerificationType(v.Type), Mode: mode, TaskResultAssertions: v.Assertions}
+	assertions := slices.Clone(v.Assertions)
+	for i := range assertions {
+		// The fixture addresses the submitted value. Canonical TaskResult
+		// wraps it with the runtime-owned schema identity and content digest.
+		if assertions[i].Pointer == "/structured_payload" || strings.HasPrefix(assertions[i].Pointer, "/structured_payload/") {
+			assertions[i].Pointer = "/structured_payload/value" + strings.TrimPrefix(assertions[i].Pointer, "/structured_payload")
+		}
+	}
+	return agent.VerificationSpec{Type: agent.VerificationType(v.Type), Mode: mode, TaskResultAssertions: assertions}
 }
 
 func ParseFixture(raw []byte) (Fixture, error) {

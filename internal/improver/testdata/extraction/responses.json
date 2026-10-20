@@ -9,7 +9,7 @@
       "steps": [{
         "tool_call": {
           "name": "submit_result",
-          "arguments": "{\"status\":\"success\",\"summary\":\"fixture result\",\"structured_payload\":{\"category\":\"denied\"}}"
+          "arguments": "{\"status\":\"failed\",\"summary\":\"required classification was not produced\",\"structured_payload\":{\"category\":\"denied\"}}"
         },
         "usage": {"input_tokens": 100, "output_tokens": 20}
       }]

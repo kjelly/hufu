@@ -459,7 +459,27 @@ func (c *Coordinator) beginPublicInvocationExecutionRun(parent context.Context) 
 	if err != nil {
 		return nil, nil, err
 	}
+	binding, err := claimInvocationBinding(parent)
+	if err != nil {
+		lease.release()
+		return nil, nil, err
+	}
+	if binding != nil && c.currentInvocationID() == "" {
+		c.SetInvocationID(NewInvocationID())
+	}
 	ctx, end := c.beginInvocationExecutionRunWithLease(parent, lease)
+	if binding != nil {
+		if err := c.commitInvocationBinding(ctx, binding); err != nil {
+			binding.state.Store(3)
+			c.finalizePublicInvocationFailure(err)
+			end()
+			return nil, nil, err
+		}
+		return ctx, func() {
+			binding.state.Store(3)
+			end()
+		}, nil
+	}
 	return ctx, end, nil
 }
 

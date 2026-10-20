@@ -18,9 +18,10 @@ func (e *probeExitError) ProcessExitCode() int { return 2 }
 
 func newImproveProbeCommand() *cobra.Command {
 	command := &cobra.Command{
-		Use: "probe", Short: "Plan controlled, paired harness experiments",
+		Use: "probe", Short: "Run controlled, paired harness experiments",
+		SilenceUsage: true, SilenceErrors: true,
 	}
-	command.AddCommand(newProbePlanCommand())
+	command.AddCommand(newProbePlanCommand(), newProbeRunCommand(), newProbeResumeCommand(), newProbeShowCommand())
 	return command
 }
 

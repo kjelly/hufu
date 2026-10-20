@@ -138,6 +138,7 @@ to re-create an abstraction that already exists in the runtime.
 - [Operator requirement traceability](reference/operator-requirement-traceability.md)
 - [Operator usability evaluation](reference/operator-usability-evaluation.md)
 - [Improvement artifact schemas](reference/improvement-artifact-schemas.md)
+- [Controlled harness probes](reference/controlled-harness-probes.md)
 - [Agent definition format](reference/agent-format.md)
 - [Skill discovery](reference/skill-discovery.md)
 - [Execution compatibility sunset](deprecations/execution-compatibility.md)

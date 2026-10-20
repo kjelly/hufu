@@ -262,6 +262,8 @@ func (p *Prepared) captureVariants(configDir, buildDigest string) error {
 }
 
 func (p *Prepared) finishPreview() error {
+	p.Preview.Variants = nil
+	p.Preview.Slots = nil
 	names := []string{"baseline"}
 	if p.Config.Mode == "manual" {
 		names = append(names, p.Config.CandidateDirs[0].ID)

@@ -221,8 +221,11 @@ var numericTelemetryKeys = map[string]struct{}{
 	"max-evidence-input-tokens":  {},
 	"per-call-max-output-tokens": {},
 	// Controlled experiment allocation limits, never credential strings.
-	"per_stage_tokens": {},
-	"pipeline_tokens":  {},
+	"per_stage_tokens":    {},
+	"pipeline_tokens":     {},
+	"spent_tokens":        {},
+	"limit_tokens":        {},
+	"attributable_tokens": {},
 }
 
 // Structured telemetry keys contain a bounded metadata object rather than a

@@ -38,6 +38,9 @@ func (a providerRequestAdmission) AdmitProviderRequest(ctx context.Context, requ
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := requireInvocationBinding(ctx); err != nil {
+		return err
+	}
 	if bound := request.AdmissionContext; bound.IsBound() && bound.ModelID != "" && bound.ModelID != request.ModelID {
 		return fmt.Errorf("provider admission context model %q does not match request model %q", bound.ModelID, request.ModelID)
 	}
@@ -152,7 +155,7 @@ func (a providerRequestAdmission) SettleProviderInvocation(ctx context.Context, 
 	}
 	_, _ = a.c.costManager.Settle(ctx, a.c.EventJournal(), CostSettlementRequest{
 		RunID: strings.TrimSpace(a.c.executionRunID), ProviderInvocationID: request.InvocationID,
-		Usage: usage, Outcome: cost.Outcome(result.Outcome),
+		Usage: usage, UsageReported: result.UsageReported, Outcome: cost.Outcome(result.Outcome),
 	})
 }
 

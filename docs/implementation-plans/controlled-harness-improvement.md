@@ -5,7 +5,7 @@
 > Verified-Commit: `af4875f1720d2315cbaa2f2e866d11cb78ab1882`
 > Supersedes: —
 > Superseded-By: —
-> Execution-Status: PR 1–2 已完成；PR 3–5 依第 12 節繼續交付。
+> Execution-Status: PR 1–3 已完成；PR 4–5 依第 12 節繼續交付。
 > 日期：2026-10-20。
 > 程式碼查核基準：`af4875f1720d2315cbaa2f2e866d11cb78ab1882`。
 > 範圍決定：使用者已選擇「本次只做可離線驗收的功能，真實評測與隔離部署另案處理」。
@@ -17,7 +17,7 @@
 - [x] Baseline：完整測試、build、vet、lint、文件及隱藏 team 測試。
 - [x] PR 1：契約、materializer 與 plan CLI。
 - [x] PR 2：耐久 controller 與總預算。
-- [ ] PR 3：手動 probe 與 runtime 閉環。
+- [x] PR 3：手動 probe 與 runtime 閉環。
 - [ ] PR 4：有界 Propose–Probe–Compose。
 - [ ] PR 5：bundle、lesson 與完整驗收。
 
@@ -90,6 +90,39 @@ T01–T07、T20 的相關離線邊界已有測試；runtime execution、journal�
 T08–T14 使用 fake executor 驗收，沒有真實 provider、部署或品質評測。
 本階段不增加 run／resume／show CLI；canonical runtime adapter 與各顯示投影屬 PR 3。
 一般 `cmd/hufu`／`internal/team` 的執行語意沒有改動。
+
+### PR 3 驗證紀錄
+
+2026-10-20，在 `d6728c9e` 上完成手動 probe 閉環：
+
+- immutable runtime factory、明確的 `structured_only` overlay 與 policy preflight；
+  每個 arm／attempt 使用獨立的 team copy、child runtime 及 scripted cursor。
+- 通用 `RunTask`、pre-provider invocation binding 與 construction-time transport
+  injection；既有 coordinator、task verification 與 whole-run acceptance 語意保留。
+- 共用 socket-free scripted transport，eval harness 沿用相同實作；trusted transport
+  的 explicit zero usage 與 missing usage 分開保存，普通 SDK 預設零仍保持未知。
+- canonical child event log／receipt／artifact 匯入、post-drain completion marker、
+  frozen closure、readonly reconciliation 與報告重建；不依賴來源 team 或 child 目錄。
+- `probe run/resume/show`、JSON／plain／既有 TUI；真實 PTY 測完成、resize、取消、
+  terminal restoration。fixture 始終保留 `simulation_only`。
+- 操作文件：[Controlled harness probes](../reference/controlled-harness-probes.md)。
+
+驗證全部 exit 0：
+
+| 命令 | 結果 |
+|---|---|
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test ./...` | CLI 245.490s、eval harness 115.047s、improver 41.326s、team 348.134s；其他套件通過 |
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test -race ./internal/improver ./internal/agent ./internal/team ./internal/scripted -run 'TestProbe\|TestExperiment\|TestInvocationBinding\|TestCoordinatorRunTask\|TestProviderUsagePresence\|TestCostManagerExplicit\|TestScripted\|TestBoundary' -count=1` | 通過；improver 150.790s |
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test ./internal/improver -run 'TestProbeClassification\|TestExperimentOffline' -count=1` | 最後新增的 verifier 分類與偽造報告測試通過，2.748s |
+| `go vet ./...` | 通過 |
+| `go build -o /tmp/hufu-paired-phase3 ./cmd/hufu` | 通過 |
+| `GOLANGCI_LINT_CACHE=/tmp/hufu-harness-lint golangci-lint run` | 最終版本 0 issues |
+| `bin/check-docs`、`git diff --check` | 通過 |
+
+覆蓋 T15–T19、T21 的 runtime／tool／usage／報告邊界；沒有呼叫真實模型。
+沒有完整 usage 或可核對完成證據的 provider failure 維持 unknown／blocked，
+不以錯誤文字猜測是否可重試。PR 4 繼續交付 bounded proposal scheduling，
+PR 5 交付 Markdown review bundle、exact patch 與 lesson。
 
 ## 1. 交付目標與完成邊界
 
@@ -240,6 +273,9 @@ cases:
 
 此新 fixture 契約的 `mode: blocking` 在 adapter 明確映射為既有 task verifier 的
 `Mode: success`；現有 verifier 不接受 `blocking`，不能原字串直傳，也不修改既有 mode enum。
+Fixture 的 `/structured_payload` 指向模型提交的值；canonical `TaskResult`
+另外保存 schema identity 與 digest，因此 adapter 必須將這個 prefix 映射為
+`/structured_payload/value`，保留後續 JSON Pointer escapes，且不改寫凍結 fixture。
 跨檔案的普通 `$ref` 先封存、轉為單一文件的 fragment refs，再交既有 compiler；
 跨 resource 的 dynamic refs／dynamic anchors 首版拒絕，不改寫其 scope 語意。
 
@@ -262,7 +298,7 @@ Steps 重用現有 ProviderStep 的 content／tool_call／match／forbidden 形�
     {
       "stage": "executor", "case_id": "case_a", "variant_slot_id": "baseline", "attempt": 1,
       "steps": [{
-        "tool_call": {"name": "submit_result", "arguments": "{\"status\":\"success\",\"summary\":\"fixture result\",\"structured_payload\":{\"category\":\"denied\"}}"},
+        "tool_call": {"name": "submit_result", "arguments": "{\"status\":\"failed\",\"summary\":\"required classification was not produced\",\"structured_payload\":{\"category\":\"denied\"}}"},
         "usage": {"input_tokens": 100, "output_tokens": 20}
       }]
     },
@@ -303,6 +339,13 @@ agents:
 ```
 
 Profile 在新的 bounded invocation 啟用 memory-off／closed sequence／typed verification，會將這些限制記入固定 policy；不是把一般 team 執行冒充成原樣比較。明示衝突設定仍拒絕。PR 1 建立完整示例檔組，PR 3 驗收結果須為 `simulation_only`、simulation_decision=`eligible_for_review`、兩個 scored slots、synthetic executor tokens 各 120。Retry 示範另用具備 attempt 2 script 的 fixture，不能把此範例沒有 retry script 當成功能缺陷。
+
+Baseline 用 schema-valid、明示 `failed` 的 typed result 表達 functional failure。
+若回傳不符合 assertion 的 `success`，既有 runtime 會在 submit admission 拒絕並要求修正；
+測試該分支須提供完整的有界 repair script，不能把 script 耗盡產生的 transport error
+當作已驗證的 functional failure。未提供整體 acceptance 時，child run 保留 canonical
+`unverified`／`acceptance_not_configured`；case pass 只取已完成 task 的 schema、receipt
+及 verifier evidence，不把整次 run 改寫成 completed。
 
 ## 5. 候選可變面與 materialization
 

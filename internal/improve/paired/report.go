@@ -109,6 +109,7 @@ type Evaluation struct {
 	Budget                BudgetSummary
 	ProtectedSurfaceValid bool
 	ResumeConsistent      bool
+	ResourceOver          bool
 }
 
 type variantScore struct {
@@ -141,7 +142,7 @@ func Evaluate(input Evaluation) (Report, error) {
 	observed, pairing, integrity, baselineValid := collectObservations(input, expected, &report.Coverage)
 	coverage := report.Coverage.Scored == report.Coverage.Planned && pairing
 	resource := input.Budget.UnknownStages == 0 && input.Budget.ReservedTokens == 0 &&
-		input.Budget.SpentTokens <= input.Budget.LimitTokens
+		input.Budget.SpentTokens <= input.Budget.LimitTokens && !input.ResourceOver
 	report.Gates = []Gate{
 		booleanGate("pairing_integrity", pairing),
 		booleanGate("baseline_evidence_valid", baselineValid),

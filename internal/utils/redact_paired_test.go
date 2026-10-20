@@ -7,7 +7,7 @@ import (
 
 func TestPairedAllocationLimitsRemainNumericOnly(t *testing.T) {
 	resetLearnedSecrets(t)
-	for _, key := range []string{"per_stage_tokens", "pipeline_tokens"} {
+	for _, key := range []string{"per_stage_tokens", "pipeline_tokens", "spent_tokens", "limit_tokens", "attributable_tokens"} {
 		for _, value := range []string{"12000", `"sensitive_value"`, "true"} {
 			raw := []byte(`{"` + key + `":` + value + `}`)
 			redacted, err := RedactJSON(raw)
