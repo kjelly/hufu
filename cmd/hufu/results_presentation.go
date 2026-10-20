@@ -76,7 +76,7 @@ func presentResults(command *cobra.Command, options *resultsCLIOptions, operatio
 		}
 	}
 	if full && options.output == "text" && !options.quiet {
-		if err := writeResultsSource(command.ErrOrStderr(), response); err != nil {
+		if err := writeResultsSource(command.ErrOrStderr(), response, operation == "read" || operation == "final"); err != nil {
 			return err
 		}
 	}
@@ -84,11 +84,16 @@ func presentResults(command *cobra.Command, options *resultsCLIOptions, operatio
 	return err
 }
 
-func writeResultsSource(writer io.Writer, response resultsEnvelope) error {
+func writeResultsSource(writer io.Writer, response resultsEnvelope, includeRequest bool) error {
 	if len(response.Results) != 1 {
 		return nil
 	}
 	row := response.Results[0]
+	if includeRequest {
+		if err := writeResultsRequest(writer, row, true); err != nil {
+			return err
+		}
+	}
 	_, err := fmt.Fprintf(writer, "Saved result · team=%s · completed=%s\nInvocation: %s\nRun: %s\nResult: %s · source event: %s\n",
 		cmpTeamLabel(row.Team), row.CompletedAt.UTC().Format(time.RFC3339), safeResultsText(row.InvocationID),
 		safeResultsText(row.RunID), safeResultsText(row.ResultID), safeResultsText(row.SourceEventID))

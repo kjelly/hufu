@@ -207,3 +207,9 @@ which additionally proves the running Codex worker cannot expose a native
 multi-agent tool. The deterministic (non-live) test suite cannot observe real
 Codex CLI behavior, so it only proves Hufu's own configuration is correct —
 see the completion report for the exact split.
+
+## 固定驗收條件
+
+verifier 與 final-sa 使用 `schemas/criteria-assessment-v1.json`，由 runtime 從直接依賴中的 SA `/acceptance_criteria` 產生固定列。worker 僅對 issued keys 填入 `met`／`unmet`／`unverified`、理由與證據。原有五階段 DAG、外層 status 與 coder 修正回跳維持原契約；負面判定可以正常提交。已知命令結果仍取自工具，不靠模型選項生成。
+
+變更 schema 後使用新的 session；不要修改歷史 payload 或略過 policy drift 驗證。

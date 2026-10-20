@@ -663,6 +663,13 @@ func (cc *defaultContextCompiler) CompileWorkerContext(ctx context.Context, inpu
 		}
 		if forAgent != "" {
 			input.LockedResourceItems = cc.c.InjectLockedRequiredResources(nil, forAgent)
+			if input.Request.Trigger == ContextTriggerTaskDispatch || input.Request.Trigger == ContextTriggerRetry || input.Request.Trigger == ContextTriggerToolFailure {
+				var err error
+				input.PreviousResponse, err = cc.c.previousResponseForWorker(ctx, forAgent)
+				if err != nil {
+					return CompiledContext{}, fmt.Errorf("worker follow-up context preflight failed: %w", err)
+				}
+			}
 		}
 	}
 	var query *ContextQueryAttribution
@@ -761,7 +768,7 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 	}
 	var supplementalTools []fantasy.AgentTool
 	mcpAllowed := r.c.phaseWorkflow == nil || !r.c.phaseWorkflow.Enabled() || r.c.phaseWorkflow.State() == PhaseExecute
-	if !resultOnly && r.c.mcpManager != nil && mcpAllowed {
+	if !resultOnly && r.c.mcpManager != nil {
 		managerTools := r.c.mcpManager.AsAgentTools()
 		managerTools, unavailable, err := filterManagerToolsThroughSnapshot(dynamicAuthorization, r.c.managerMCPDescriptors(), managerTools, task.Execution.ToolSequence)
 		if err != nil {
@@ -770,8 +777,8 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 		if err := r.c.recordDynamicToolUnavailable(ctx, todo, unavailable); err != nil {
 			return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %w", err)
 		}
-		supplementalTools = append(supplementalTools, managerTools...)
-		if len(def.MCPTools) > 0 {
+		supplementalTools = append(supplementalTools, r.c.filterWorkflowMCPTools(ctx, def, managerTools)...)
+		if mcpAllowed && len(def.MCPTools) > 0 {
 			if err := r.c.mcpManager.LoadAgentMCPServer(def.Name, def.MCPTools, def.Shell); err != nil {
 				return ResolvedWorkerTools{}, fmt.Errorf("load MCP server for agent %s: %w", def.Name, err)
 			}

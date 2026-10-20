@@ -30,6 +30,12 @@ func testTeamAuditDispatch(t *testing.T, rejected bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Isolate the audit action against an already accepted synthesis fixture.
+	// The complete declarative batch and repair edges are tested in internal/team.
+	for i := range loaded.ContractTasks {
+		loaded.ContractTasks[i].DependsOnContracts = nil
+		loaded.ContractTasks[i].OnFailureContract = ""
+	}
 	loaded.Workspace = t.TempDir()
 	if err := loaded.SetCompatibilityWorkspaceScope(t.TempDir()); err != nil {
 		t.Fatal(err)
@@ -138,6 +144,8 @@ func TestTeamPrepareDispatchExecutesImmutableWorksetAndGoVerifier(t *testing.T) 
 	git("commit", "-m", "baseline")
 	write("calc/value.go", "package calc\n\nfunc Value() int { return 2 }\n")
 	write("calc/value_test.go", "package calc\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) { if Value() != 2 { t.Fatal(Value()) } }\n")
+	write(".gitignore", "docs/tmp\n")
+	write("docs/reference/belief-state-validation.md", "The residual local scratch proposal was compared with the integrated plan and\nremoved from `docs/tmp`; that directory contains no remaining proposal files\nand no path under it is tracked.\n")
 	git("add", ".")
 	git("commit", "-m", "feat: change value")
 	// A failing dirty test must be ignored by the reviewed-revision verifier.
@@ -176,5 +184,65 @@ func TestTeamPrepareDispatchExecutesImmutableWorksetAndGoVerifier(t *testing.T) 
 	}
 	if items[1].TypedResult.RuntimeOutputs["targeted_go_tests"] == nil || len(items[0].TypedResult.Artifacts) < 3 {
 		t.Fatal("PREPARE omitted test receipt or routed workset artifacts")
+	}
+	var verification struct {
+		Passed     bool `json:"passed"`
+		Candidates []struct {
+			ID       string `json:"id"`
+			Document string `json:"document"`
+			Target   string `json:"target"`
+		} `json:"reference_candidates"`
+	}
+	if err := json.Unmarshal(raw(t, items[0].TypedResult.RuntimeOutputs["documentation_verification"]), &verification); err != nil {
+		t.Fatal(err)
+	}
+	if !verification.Passed || len(verification.Candidates) != 1 || verification.Candidates[0].ID != "ref-000000" || verification.Candidates[0].Document != "docs/reference/belief-state-validation.md" || verification.Candidates[0].Target != "docs/tmp" {
+		t.Fatalf("PREPARE lost the cleanup reference classification obligation: %+v", verification)
+	}
+	// Read the reports produced by the actual embedded action, rather than only
+	// checking the compiled producer's structs. Interpreter JSON encoding and
+	// artifact materialization are part of the worker's real input boundary.
+	store, err := team.NewFileArtifactStore(loaded.Workspace, loaded.Workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, assigned := 0, 0
+	for _, artifact := range items[0].TypedResult.Artifacts {
+		if artifact.Kind != "documentation_verification" {
+			continue
+		}
+		reader, err := store.Open(t.Context(), artifact.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var report struct {
+			Key        string   `json:"workset_key"`
+			IDs        []string `json:"reference_candidate_ids"`
+			Candidates []struct {
+				ID string `json:"id"`
+			} `json:"reference_candidates"`
+		}
+		err = json.NewDecoder(reader).Decode(&report)
+		_ = reader.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if report.Key == "" { // The aggregate report remains coordinator evidence.
+			continue
+		}
+		if report.IDs == nil || report.Candidates == nil || len(report.IDs) != len(report.Candidates) {
+			t.Fatalf("embedded report lost its explicit inventory: %+v", report)
+		}
+		if len(report.IDs) == 0 {
+			empty++
+		} else {
+			assigned++
+			if len(report.IDs) != 1 || report.IDs[0] != "ref-000000" || report.Candidates[0].ID != report.IDs[0] {
+				t.Fatalf("embedded report substituted candidates: %+v", report)
+			}
+		}
+	}
+	if empty == 0 || assigned == 0 {
+		t.Fatalf("embedded reports missed empty or assigned scopes: empty=%d assigned=%d", empty, assigned)
 	}
 }

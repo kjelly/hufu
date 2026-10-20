@@ -7,7 +7,7 @@ import (
 )
 
 // RemediationContext carries the canonical failure/result of the task whose
-// on_failure back-edge most recently reset another task, so that task's next
+// on_failure or criterion route most recently selected another task, so its next
 // dispatch can address the concrete rejection instead of repeating work a
 // downstream verifier/reviewer/final gate already showed was insufficient.
 //
@@ -84,9 +84,9 @@ func cloneRemediationContext(rc *RemediationContext) *RemediationContext {
 // buildRemediationContext derives a RemediationContext from the source
 // task's own already-canonical, already-redacted evidence (its terminal
 // FailureEvent, typed result, and verification result). Called only when the
-// source's failure class is authorized to trigger the on_failure reset
-// (dagScheduler.handleEvent), so a class this task's contract does not
-// consider semantic never becomes remediation evidence for another task.
+// scheduler routes a failed task to another task. Explicit on_failure routes
+// first enforce their class allowlist; criterion routes are available only
+// when the failing source has no explicit failure edge.
 func buildRemediationContext(sourceTaskID string, source *TodoItem) *RemediationContext {
 	if source == nil {
 		return nil

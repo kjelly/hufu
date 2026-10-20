@@ -553,7 +553,7 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 	} else if sd.DelegationPhase == "" {
 		sd.DelegationPhase = DelegationPhaseInitialPending
 	}
-	if c.initialDelegationPending() {
+	if c.initialContextWithheld() {
 		// A fresh/replacement session must not send stale in-memory conversation
 		// turns to the first coordinator model call. Session entries, STM, LTM,
 		// and vector memory are all non-canonical for delegation state; the
@@ -643,6 +643,11 @@ func (c *Coordinator) applyLiveTaskProjection(tasks []*TodoItem) {
 	}
 	c.setRestoredTodoIDs(tasks)
 	prof := c.ExecutionProfile()
+	if c.workflowCycleID() != "" && !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore && c.taskTracker != nil {
+		var floor int
+		c.viewSessionData(func(sd *SessionData) { floor = sd.WorkflowTaskIDFloor })
+		c.taskTracker.TodoList().restoreWorkflowCycle(tasks, floor)
+	}
 	if len(tasks) > 0 && !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
 		if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 			c.taskTracker.TodoList().Restore(tasks)

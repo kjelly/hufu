@@ -1,5 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-hufu-fixed-collections": [
+    {
+      "items_pointer": "/claim_assessments",
+      "source_contracts": [
+        "schemas/research-v1.json"
+      ],
+      "source_pointer": "/findings",
+      "task_id_field": "source_task_id",
+      "index_field": "source_index",
+      "value_bindings": {
+        "claim": "/claim"
+      },
+      "choice_fields": [
+        "handling"
+      ]
+    }
+  ],
   "x-hufu-tool-evidence": {
     "groups_pointer": "/findings",
     "items_pointer": "/sources",
@@ -52,10 +69,10 @@
     "hash_pointer": "/payload_sha256", "complete_pointer": "/audit_complete",
     "value_bindings": {"/lens": "/lens"}
   },
-  "x-hufu-final-report": "# 事實查核報告\n\n問題：{{.question}}\n\n稽核流程完成：{{.audit_complete}}\n\n## 比較的研究輸入\n{{range .input_review}}\n- task {{.task_id}}｜{{.lens}}｜payload sha256 {{.payload_sha256}}\n{{end}}{{range .findings}}\n## {{.claim}}\n\n判定：{{.verdict}}\n\n{{.analysis}}\n\n研究員一致性：{{.researcher_agreement}}\n\n不同意見：{{.dissent}}\n\n限制：{{.limitations}}\n{{range .sources}}\n- {{.title}}｜{{.publisher}}｜{{.publication_date}}\n  來源：{{.url}}\n  證據：{{.page_status}}；抓取：{{.fetch_status}}；引用驗證：{{.citation_status}}{{if .tool_call_id}}；工具紀錄：{{.tool_call_id}}{{end}}{{if .quote}}\n  提交引文（僅 matched 可作證據）：{{.quote}}{{end}}\n{{end}}{{end}}\n## 整體限制\n\n{{.overall_limitations}}\n",
+  "x-hufu-final-report": "# 事實查核報告\n\n問題：{{.question}}\n\n稽核流程完成：{{.audit_complete}}\n\n## 比較的研究輸入\n{{range .input_review}}\n- task {{.task_id}}｜{{.lens}}｜payload sha256 {{.payload_sha256}}\n{{end}}{{range .findings}}\n## {{.claim}}\n\n判定：{{.verdict}}\n\n{{.analysis}}\n\n研究員一致性：{{.researcher_agreement}}\n\n不同意見：{{.dissent}}\n\n限制：{{.limitations}}\n{{range .sources}}\n- {{.title}}｜{{.publisher}}｜{{.publication_date}}\n  來源：{{.url}}\n  證據：{{.page_status}}；抓取：{{.fetch_status}}；引用驗證：{{.citation_status}}{{if .tool_call_id}}；工具紀錄：{{.tool_call_id}}{{end}}{{if .quote}}\n  提交引文（僅 matched 可作證據）：{{.quote}}{{end}}\n{{end}}{{end}}\n## 整體限制\n\n{{.overall_limitations}}\n\n## 原始主張處理紀錄\n\n以下為研究輸入，並非已確認事實。處理狀態僅表示輸入涵蓋情形；addressed 不代表已證實，最終判定與證據缺口以上方查核結果為準。\n{{range .claim_assessments}}\n- task {{.source_task_id}} / {{.source_index}}：{{.claim}}\n  處理：{{.handling}}\n{{end}}",
   "type": "object",
   "additionalProperties": false,
-  "required": ["audit_complete", "input_review", "question", "summary", "findings", "overall_limitations"],
+  "required": ["audit_complete", "input_review", "question", "summary", "findings", "overall_limitations", "claim_assessments"],
   "properties": {
     "audit_complete": {"type": "boolean"},
     "input_review": {
@@ -71,14 +88,63 @@
       }
     },
     "question": {"type": "string", "minLength": 1, "maxLength": 2000},
-    "summary": {"type": "string", "minLength": 1, "maxLength": 3000},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 3000, "description": "Procedural audit summary only; factual verdicts belong exclusively to findings[].verdict after runtime evidence binding."},
     "findings": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 16,
+      "maxItems": 24,
       "items": {"$ref": "#/$defs/finding"}
     },
-    "overall_limitations": {"type": "string", "minLength": 1, "maxLength": 2500}
+    "overall_limitations": {"type": "string", "minLength": 1, "maxLength": 2500},
+    "claim_assessments": {
+      "type": "array",
+      "maxItems": 24,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source_task_id",
+          "source_index",
+          "claim",
+          "handling",
+          "reason"
+        ],
+        "properties": {
+          "source_task_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 200
+          },
+          "source_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "claim": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 1000
+          },
+          "handling": {
+            "type": "string",
+            "enum": [
+              "addressed",
+              "duplicate",
+              "out_of_scope",
+              "unverified"
+            ]
+          },
+          "reason": {
+            "description": "Input-accounting explanation only: split, merge, exclusion or unresolved coverage. Do not restate factual verdicts or quotation-validation success; runtime can downgrade findings after submission. Not rendered in the final report.",
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 1500
+          }
+        }
+      }
+    }
   },
   "allOf": [{
     "if": {"properties": {"audit_complete": {"const": true}}, "required": ["audit_complete"]},
@@ -96,7 +162,7 @@
       "additionalProperties": false,
       "required": ["claim", "verdict", "researcher_agreement", "evidence_basis", "analysis", "sources", "dissent", "limitations"],
       "properties": {
-        "claim": {"type": "string", "minLength": 1, "maxLength": 1000, "description": "One atomic, independently checkable claim. Merge duplicates; do not combine date, trigger, count and elapsed time."},
+        "claim": {"type": "string", "minLength": 1, "maxLength": 1000, "description": "One independently adjudicable proposition, preserving speaker, cited person/document and event/time context. Split claims about different speakers or independently verifiable numbers. Support for a subset or a different speaker never establishes the whole claim; do not qualify a compound supported claim with only one part verified."},
         "verdict": {"type": "string", "enum": ["supported", "contradicted", "mixed", "unverified"]},
         "researcher_agreement": {"type": "string", "enum": ["agree", "disagree", "partial", "not_applicable"]},
         "evidence_basis": {"type": "string", "enum": ["official_primary_checked", "primary_source_checked", "independent_corroboration", "single_source", "conflicting_sources", "insufficient_evidence"]},

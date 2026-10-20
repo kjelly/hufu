@@ -324,9 +324,9 @@ type TodoItem struct {
 	ExecutionReceipts []ExecutionReceipt   `json:"execution_receipts,omitempty"`
 	FailureEvent      *FailureEventPayload `json:"failure_event,omitempty"`
 	// RemediationContext carries the canonical failure/result of the task
-	// whose on_failure back-edge most recently reset this task (spec.md
-	// §9.3). It is set by dagScheduler right before an authorized semantic
-	// reset and read (non-destructively) each time this occurrence is
+	// whose failure most recently routed an on_failure or criterion repair to
+	// this task (spec.md §9.3). It is committed with the target transition
+	// and read (non-destructively) each time this occurrence is
 	// dispatched; the next genuine reset always replaces it with fresh
 	// evidence rather than stacking.
 	RemediationContext *RemediationContext `json:"remediation_context,omitempty"`
@@ -1244,6 +1244,23 @@ func (tl *TodoList) Restore(items []*TodoItem) {
 	tl.mu.Unlock()
 	if onChange != nil {
 		onChange()
+	}
+}
+
+// restoreWorkflowCycle replaces the active task projection while reserving
+// IDs owned by previous cycles. The caller owns checkpoint publication.
+func (tl *TodoList) restoreWorkflowCycle(items []*TodoItem, floor int) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	tl.items = items
+	tl.next = floor
+	for _, item := range items {
+		if item != nil {
+			var id int
+			if _, err := fmt.Sscanf(item.ID, "%d", &id); err == nil {
+				tl.next = max(tl.next, id)
+			}
+		}
 	}
 }
 

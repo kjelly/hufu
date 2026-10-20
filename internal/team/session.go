@@ -135,6 +135,8 @@ type SessionData struct {
 	// state. They are deliberately separate from task prose and conversation
 	// history so a resumed run cannot infer a completed phase from model text.
 	WorkflowState               Phase                      `json:"workflow_state,omitempty"`
+	WorkflowCycleID             string                     `json:"workflow_cycle_id,omitempty"`
+	WorkflowTaskIDFloor         int                        `json:"workflow_task_id_floor,omitzero"`
 	PhaseResults                map[Phase]PhaseResult      `json:"phase_results,omitempty"`
 	RuntimeWorkspace            string                     `json:"runtime_workspace,omitempty"`
 	RetryState                  *RetryState                `json:"retry_state,omitempty"`

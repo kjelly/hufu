@@ -596,6 +596,15 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	if err := c.validateDependencyPayloads(depResults); err != nil {
 		return "", fmt.Errorf("worker dependency preflight failed: %w", err)
 	}
+	collectionPlans, err := c.fixedCollectionPlans(todoID)
+	if err != nil {
+		return "", fmt.Errorf("worker fixed collection preflight failed: %w", err)
+	}
+	collectionContext, err := resultFixedCollectionContext(collectionPlans)
+	if err != nil {
+		return "", err
+	}
+	runtimeContext += collectionContext
 
 	rawSTM, rawLTM := "", ""
 	var canonicalMemory *CanonicalContextBundle
@@ -3811,7 +3820,9 @@ func (c *Coordinator) withEffectiveToolsAllowedForTask(ctx context.Context, def 
 		} else if c.mcpManager != nil {
 			mcpNames := make(map[string]bool)
 			for _, t := range c.mcpManager.AsAgentTools() {
-				mcpNames[t.Info().Name] = true
+				if !c.workflowMCPToolAllowed(ctx, def, t.Info().Name, t) {
+					mcpNames[t.Info().Name] = true
+				}
 			}
 			for name := range def.MCPTools {
 				name = strings.TrimSpace(name)
@@ -5798,7 +5809,7 @@ func appendSubmittedResultRetryEvidence(b *strings.Builder, result *TaskResult) 
 }
 
 // appendRemediationContext renders the bounded, already-redacted evidence a
-// DAG on_failure back-edge attached to this task's TodoItem (spec.md §9.3):
+// scheduler repair route attached to this task's TodoItem (spec.md §9.3):
 // the source task's own failure class, status, summary, findings, and
 // verification result. This is the cross-task analog of
 // appendSubmittedResultRetryEvidence above, which only ever carries a task's

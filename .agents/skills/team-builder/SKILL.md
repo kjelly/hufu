@@ -193,6 +193,59 @@ files:
 Treat a model's prose as a claim, not evidence. A `success` result must mean
 the declared outcome and its required verification are both complete.
 
+### Fixed collections and finite choices
+
+When a downstream worker must account for every item in an already known
+list, use the result-contract extension `x-hufu-fixed-collections`. See
+[the authoring guide](../../../docs/reference/agent-format.md#固定集合與有限選項決策)
+for the complete contract. Suitable cases include acceptance criteria,
+finding dispositions, original research-claim accounting, and implementation
+gaps. Do not impose a fixed collection on open-ended discovery or creative
+output before its input list has been established.
+
+- Let deterministic code produce known identities, indices, ordering, copied
+  input text, counts, and observed command outcomes. Use model choices only
+  for semantic judgments, with explicit uncertainty and evidence requirements.
+- Bind an accepted upstream structured array by exact `source_contracts` and
+  `source_pointer`. Default `source_scope: evidence_from` reads explicit Todo
+  IDs. Use `source_scope: dependency_results` for a same-batch DAG consumer:
+  it selects from runtime-delivered direct dependency/evidence results, so
+  the coordinator never has to predict a producer's future Todo ID.
+- Set `require-structured: true`. Define the canonical target as a directly
+  declared array of closed objects; the target item cannot be a `$ref`.
+  Declare copied fields through `value_bindings` and/or source ID/index
+  fields. Each required `choice_fields` property is a string enum with
+  2–21 lowercase or snake_case values, including an uncertainty disposition
+  when the task permits one.
+- Tell the worker to submit an object keyed by the exact **Runtime Fixed
+  Collections** keys and decision fields only. Runtime builds the stored
+  array. Never put invented example keys, fixed identities, or manual
+  index/count reconstruction in the worker instructions. An accepted empty
+  source array yields `{}` on submission and `[]` in storage; missing
+  accepted evidence fails closed.
+- Keep input accounting separate from semantic merge: duplicate research
+  claims still need individual dispositions even when final findings merge
+  them. Copying an upstream assertion does not verify it. Preserve the
+  team's existing tool-evidence, command verification, and acceptance gates.
+- Allow honest negative choices to be submitted. Map confirmed rejection to
+  the team's existing failure/remediation contract and missing evidence to
+  partial/blocked. Do not add an admission assertion requiring every choice
+  to pass: it would prevent a verifier from reporting a real failure.
+
+Prefer team schema/prompt changes over new core policy. Keep domain enums
+with the team; the runtime must not branch on team names or infer categories
+from prose. For the current bounds (8 collections/schema, 2048 rows/collection,
+32 KiB manifest), split oversized evidence sets explicitly rather than
+truncating their membership. Retain provider/output budgets for the decisions.
+
+Validate the real team schemas and test missing/extra/duplicate keys, fixed
+field overwrite, invalid choices, honest rejection and uncertainty, missing
+versus empty inputs, and changed upstream content. Exercise the actual source
+scope and local/external route used by the team; generic fixtures alone do
+not prove that its handoff or recovery wiring is correct. A new schema changes
+the frozen policy, so use a fresh session rather than modifying historical
+payloads or bypassing resume drift detection.
+
 ## Directory Layout
 
 ```

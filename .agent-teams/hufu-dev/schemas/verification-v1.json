@@ -5,7 +5,8 @@
   "required": [
     "checks",
     "failures",
-    "gaps"
+    "gaps",
+    "implementation_gap_assessments"
   ],
   "properties": {
     "checks": {
@@ -20,6 +21,53 @@
     },
     "gaps": {
       "$ref": "#/$defs/texts"
+    },
+    "implementation_gap_assessments": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source_task_id",
+          "source_index",
+          "reported_gap",
+          "assessment",
+          "reason"
+        ],
+        "properties": {
+          "source_task_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 200
+          },
+          "source_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reported_gap": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 1000
+          },
+          "assessment": {
+            "type": "string",
+            "enum": [
+              "addressed",
+              "unresolved",
+              "unverified"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 1500
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -125,5 +173,23 @@
         }
       ]
     }
-  }
+  },
+  "x-hufu-fixed-collections": [
+    {
+      "items_pointer": "/implementation_gap_assessments",
+      "source_contracts": [
+        "schemas/implementation-v1.json"
+      ],
+      "source_pointer": "/gaps",
+      "task_id_field": "source_task_id",
+      "index_field": "source_index",
+      "value_bindings": {
+        "reported_gap": ""
+      },
+      "choice_fields": [
+        "assessment"
+      ],
+      "source_scope": "dependency_results"
+    }
+  ]
 }

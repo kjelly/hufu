@@ -8,8 +8,33 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/tools"
 )
+
+// workflowMCPToolAllowed keeps observation phases useful without granting
+// arbitrary MCP execution. Reuse the call-time observation boundary, including
+// live adapter authenticity, explicit agent grants and network restrictions.
+func (c *Coordinator) workflowMCPToolAllowed(ctx context.Context, def *agent.AgentDef, name string, inner fantasy.AgentTool) bool {
+	if c == nil || c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || c.phaseWorkflow.State() == PhaseExecute {
+		return true
+	}
+	if def == nil {
+		return false
+	}
+	ctx = context.WithValue(ctx, tools.AgentNameKey, def.Name)
+	return c.workerMCPObservationGrant(ctx, name, inner)
+}
+
+func (c *Coordinator) filterWorkflowMCPTools(ctx context.Context, def *agent.AgentDef, candidates []fantasy.AgentTool) []fantasy.AgentTool {
+	filtered := make([]fantasy.AgentTool, 0, len(candidates))
+	for _, tool := range candidates {
+		if c.workflowMCPToolAllowed(ctx, def, tool.Info().Name, tool) {
+			filtered = append(filtered, tool)
+		}
+	}
+	return filtered
+}
 
 // workerMCPObservationGrant requires both an explicit agent grant and an
 // authentic, live manager policy. Server annotations and lookalike handlers

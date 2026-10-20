@@ -139,6 +139,15 @@ func (c *Coordinator) compileAuxiliaryPrompt(ctx context.Context, purpose, rawPr
 			if err := c.validateDependencyPayloads(input.DependencyResults); err != nil {
 				return "", nil, err
 			}
+			plans, err := c.fixedCollectionPlans(todoID)
+			if err != nil {
+				return "", nil, err
+			}
+			collectionContext, err := resultFixedCollectionContext(plans)
+			if err != nil {
+				return "", nil, err
+			}
+			input.RuntimeContext += collectionContext
 		}
 	}
 	compiled, err := c.ContextCompiler().CompileWorkerContext(ctx, input)

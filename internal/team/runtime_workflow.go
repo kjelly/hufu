@@ -900,6 +900,9 @@ func (w *runtimeWorkflow) restore(state Phase, results map[Phase]PhaseResult, ro
 		}
 	}
 	w.state = state
+	if state == PhaseInit {
+		w.failedTaskID, w.failedFromPhase = "", ""
+	}
 	w.results = make(map[Phase]PhaseResult, len(results))
 	for phase, result := range results {
 		w.results[phase] = result

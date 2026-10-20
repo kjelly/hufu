@@ -37,7 +37,7 @@ func TestWebResearchReportRetainsSourcesAndPreciseGaps(t *testing.T) {
 		}
 	}
 	raw, err := json.Marshal(map[string]any{
-		"audit_complete": false, "input_review": []any{}, "question": "one atomic question",
+		"claim_assessments": []any{}, "audit_complete": false, "input_review": []any{}, "question": "one atomic question",
 		"summary": "Evidence gaps", "overall_limitations": "Input audit incomplete",
 		"findings": []any{map[string]any{
 			"claim": "one atomic claim", "verdict": "supported", "researcher_agreement": "not_applicable",
@@ -102,6 +102,20 @@ func TestWebResearchPromptJSONExamplesSatisfyContracts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// The example shows the issued-key submission shape. This check
+			// validates its stored shape; runtime assembly is covered by the
+			// real-team fixed collection tests with accepted research inputs.
+			if name == "verifier" {
+				var value map[string]any
+				if err := json.Unmarshal(submission.StructuredPayload, &value); err != nil {
+					t.Fatal(err)
+				}
+				value["claim_assessments"] = []any{}
+				submission.StructuredPayload, err = json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			_, err = validateStructuredResultPayload(compiled, compiled.ref(true), submission.StructuredPayload)
 			if err != nil {
 				t.Fatalf("prompt example does not satisfy contract: %v", err)
@@ -130,7 +144,7 @@ func TestWebResearchCompleteAuditRequiresBothInputLenses(t *testing.T) {
 				inputs[1].(map[string]any)["lens"] = "primary_search"
 			}
 			raw, err := json.Marshal(map[string]any{
-				"audit_complete": name != "incomplete", "input_review": inputs,
+				"claim_assessments": []any{}, "audit_complete": name != "incomplete", "input_review": inputs,
 				"question": "check an event", "summary": "insufficient evidence", "overall_limitations": "missing observations",
 				"findings": []any{map[string]any{
 					"claim": "one atomic claim", "verdict": "unverified", "researcher_agreement": "not_applicable",

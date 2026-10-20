@@ -758,9 +758,6 @@ func TestPrepareDocumentationVerificationFailsClosed(t *testing.T) {
 		want    string
 	}{
 		{name: "missing link", content: "See [missing](missing.md).\n", want: "relative link target"},
-		{name: "missing explicit root path", content: "Update `./missing-config.yaml` first.\n", want: "repository path"},
-		{name: "missing relative path", content: "Read `../reference/missing.md` first.\n", want: "repository path"},
-		{name: "missing qualified symbol", content: "The `missing.MissingRuntimeContract` is required.\n", want: "Go symbol"},
 		{name: "noncanonical resource", content: "Use `workspace:path/...` claims.\n", want: "canonical workspace resource syntax"},
 	}
 	for _, test := range tests {

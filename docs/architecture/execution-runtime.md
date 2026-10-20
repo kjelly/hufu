@@ -122,6 +122,51 @@ rejections, the worker stream stops and enters the existing bounded result-only
 repair path. Changing JSON paths or call IDs cannot bypass that limit, and
 result-only repair does not replay worker tools.
 
+If result-only repair is exhausted, a task with `side_effect: none` and an
+explicit retry policy may use its remaining normal retry budget only when
+every recorded work tool was an independently classified observation. Rejected
+`submit_result` calls are reporting, not side effects, and do not invalidate
+that proof. Reporting alone is insufficient: an actual observation must be
+recorded, and unknown or mutating tools still prevent replay. Failed repair
+history remains attached to the original attempt's execution receipt.
+
+Argument errors retain the rejected field's full path. When a full tool
+example exceeds 2 KiB, feedback uses the rejected schema's allowed fields and
+a bounded local example instead of repeating an entire fixed collection.
+The local example is explicitly not a complete submission.
+
+Schemas can declare `x-hufu-fixed-collections` to separate known membership
+from model judgment. The runtime builds source-hash-bound row keys from accepted
+evidence and supplies a required manifest to workers and result-only repairs.
+Each manifest includes a `submission_pointer` rooted at `/structured_payload`;
+the collection's `items_pointer` is relative to that payload, not to the outer
+`submit_result` arguments.
+Workers submit keyed decision objects with required finite string enums; the
+runtime generates the array, order, identities and copied values before schema
+validation and receipt hashing. Unknown, missing or duplicate keys and fixed
+field overrides are rejected within the attempt. Runtime-owned payload metadata
+pins source hashes for commit, dependency, replay and report validation. This
+uses the existing worker protocol and policy gates, with no additional inference
+tools, provider calls or semantic keyword parsing. See the
+[fixed collection contract](../reference/agent-format.md#固定集合與有限選項決策).
+
+A task's explicit `on_failure` edge owns its failure routing before generic
+criterion retry. Its failure-class allowlist, repair limit, replay policy and
+failure-signature checks remain authoritative even when an acceptance
+criterion is still failed. A denied or exhausted edge cannot fall back to
+criterion routing. Transient action-provider retries retain their existing
+same-task policy. Successful tasks that made no criterion progress can still
+route bounded criterion remediation.
+
+When either failure route selects another task, the source's canonical failure
+class, attempt, findings and verification diagnostic are redacted and committed
+with the target's reset. A pending repair receives the same context through a
+task transition without consuming a retry. An append failure publishes neither
+the reset nor the new context. SQLite replay restores the context and worker
+dispatch includes it in the required failure-context input. Criterion routing
+cannot restart a terminal task with its own failure edge, and counts retries
+already consumed by other routes or restored from the durable occurrence.
+
 Blocking acceptance self-healing respects unresolved task recovery
 dispositions. A task requiring `reconcile_only` or `needs_human` prevents
 acceptance from reopening worker dispatch, even when the task's side-effect
@@ -547,3 +592,38 @@ Once `run_finished` is committed, normal completion does not rewrite unresolved
 tasks as skipped. The sealed terminal snapshot keeps their states and original
 diagnostics for inspection and recovery, without appending task transitions
 after the run boundary.
+
+### Follow-up workflows in one conversation
+
+A completed workflow is one execution cycle, not the end of its conversation.
+An additional user request through `run` or `chat` starts a new cycle in the
+same session and branch. Conversation history, prior reports, immutable policy,
+and historical results remain available; active tasks, phase results, retry
+state, continuation budgets, and criterion evidence start fresh. Old research
+can explain a follow-up, but cannot satisfy its required tasks or verification.
+
+The event-first `workflow_cycle_started` boundary includes the redacted request
+and the previous task ID high-water mark. Replay restores that request even if
+the process stops before checkpointing, and new task IDs never alias previous
+receipts or grants. Historical run inspection still reads the original events.
+Task journal history is retained, but its cache entries cannot repopulate a
+later cycle; recovery reuses that cycle's own canonical tasks instead.
+
+Workers listed in `delegation.share-request-with` also receive the complete
+preceding workflow response on follow-up dispatch, retries, and recovery. The
+runtime reads that response from the active branch's event lineage before the
+cycle boundary, preferring `run_finished.response` and using the final assistant
+message for older sessions. It does not substitute a task-progress summary or
+a prior session's archived memory. The report is fenced historical reference,
+never instructions, current evidence, or completion credit. It is required and
+cannot be truncated: insufficient model capacity fails context preflight before
+dispatch. Explicit profiles disabling historical memory still withhold it.
+The context manifest records `previous_response:<event-id>`, its event source,
+and the hash of the complete injected fragment. `inspect context --show-content`
+resolves and verifies this reference without depending on `context.sqlite`.
+
+Interrupted and failed workflows keep their existing recovery behavior.
+`resume` never starts a new cycle, and dry-run and direct-agent entry points do
+not implicitly reopen completed workflows. Execution-policy compatibility is
+still enforced across the session. `--new` remains the explicit way to start a
+separate conversation or adopt incompatible execution settings.

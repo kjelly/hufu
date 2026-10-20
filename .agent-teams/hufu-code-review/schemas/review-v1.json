@@ -219,6 +219,131 @@
               }
             }
           }
+        },
+        "reference_assessments": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "reference_id": {
+                "type": "string",
+                "pattern": "^ref-[0-9]{6}$"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "required",
+                  "historical",
+                  "deleted",
+                  "example",
+                  "uncertain"
+                ]
+              },
+              "rationale": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "evidence": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": {
+                  "type": "string",
+                  "pattern": "^sha256-[0-9a-f]{64}$"
+                }
+              },
+              "finding_index": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 31
+              },
+              "gap_index": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 31
+              }
+            },
+            "required": [
+              "reference_id",
+              "kind",
+              "rationale",
+              "evidence",
+              "finding_index",
+              "gap_index"
+            ],
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "const": "required"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "finding_index": {
+                      "type": "integer"
+                    },
+                    "gap_index": {
+                      "type": "null"
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "const": "uncertain"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "finding_index": {
+                      "type": "null"
+                    },
+                    "gap_index": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "historical",
+                        "deleted",
+                        "example"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "finding_index": {
+                      "type": "null"
+                    },
+                    "gap_index": {
+                      "type": "null"
+                    }
+                  }
+                }
+              }
+            ]
+          }
         }
       },
       "required": [
@@ -228,7 +353,8 @@
         "lens",
         "findings",
         "gaps",
-        "invariant_assessments"
+        "invariant_assessments",
+        "reference_assessments"
       ],
       "additionalProperties": false,
       "allOf": [
@@ -247,11 +373,19 @@
               },
               "gaps": {
                 "maxItems": 0
+              },
+              "reference_assessments": {
+                "maxItems": 0
               }
             }
           }
         }
       ]
     }
+  },
+  "x-hufu-workset-inputs": {
+    "items_pointer": "/record/reference_assessments",
+    "item_id_pointer": "/reference_id",
+    "binding": "reference_candidate_ids"
   }
 }

@@ -47,8 +47,13 @@ without weakening the whole-run gates.
    accepted critic dependency. The final audit independently re-derives the
    inventory, checks its current action receipt and snapshot, and compares
    every source hash and required ID before accepting the report.
-5. Dispatch synthesis and `verify-review-report` in the same batch: synthesis
-   is index 0; audit is index 1 with `depends_on: [0]` and `on_failure: 0`.
+5. Dispatch synthesis and `verify-review-report` in the same batch. The audit
+   declares `depends-on-contracts: [synthesize-review]` and
+   `on-failure-contract: synthesize-review` in team.yaml. The runtime resolves
+   these names to batch dependencies and durable occurrence IDs. The
+   coordinator supplies neither numeric edges nor a pipeline flag; an
+   incomplete or duplicated pair is rejected before task creation. The
+   declarations and retry policy are pinned for resume.
    The report schema's `x-hufu-evidence-references` declaration rejects a
    wrong resolving task/artifact pairing during submission, with the accepted
    readers in feedback. Occurrence commit also checks the submitting task's
@@ -232,3 +237,86 @@ remains the existing whole-run policy; it does not disable these guards.
 Changed task contracts and acceptance criteria require a fresh `--new` run;
 resuming an old frozen policy does not retrofit these milestones into its
 completed receipts.
+
+## Documentation reference contract
+
+PREPARE requires explicit Markdown link targets to resolve (retaining the
+existing forward-reference rule), and checks canonical workspace resource
+syntax. Inline code formatting alone asserts no current existence requirement.
+For an absent inline repository path or qualified Go symbol with no later
+resolution, the producer records `reference_candidates` with an ID, type,
+document, target, excerpt, and zero-based added-line/code-span indices (not
+source line numbers). `checked_paths`/`checked_symbols` count existence
+observations, not semantic approvals. `passed: true` means the deterministic
+checks completed without explicit-link/syntax errors; it does not discharge
+semantic review. The existing archive exclusion and forward-reference
+observations remain unchanged.
+
+Every workset binds an ordered `reference_candidate_ids` JSON array, selected
+by its touched documents. Different mentions of the same target stay distinct,
+even when identical text appears in different contexts or twice on one line.
+Each item receives a separate verification artifact with only its candidate
+entries and forward references, including explicit empty arrays. The aggregate
+PREPARE report is not an assigned child input. The item report supplies
+observations and the immutable source supplies context. Its deterministic
+counters retain review-wide scope and are labelled `review_scope`. Each
+item is bounded to 128 candidates; excess fails explicitly without truncating
+coverage. No-op and non-documentation items bind an empty array.
+
+The existing reviewer model returns schema-validated `reference_assessments`:
+`required`, `historical`, `deleted`, `example`, or `uncertain`. Each assessment
+cites read artifacts and explains the context. `required` must link to a finding
+that requires critique. `uncertain` must link to a gap and retain
+`completed_with_gaps`. The other kinds require null finding/gap indices.
+Missing, invalid, or ambiguous model output never defaults to an exemption.
+The handoff inventory and final report audit compare ordered IDs against the
+immutable binding and check evidence and finding/gap indices. Synthesis and
+critique retain the full source record and hash. These checks establish
+coverage and consistency; they do not prove the model's semantic judgment.
+
+For example, the cleanup record in `docs/reference/belief-state-validation.md`
+says a proposal was removed from `docs/tmp` and nothing there is tracked. Its
+missing path becomes a candidate for `deleted`, rather than failing PREPARE.
+A separate instruction requiring that same path still needs its own assessment
+and finding. Deterministic adapters must not recognize English/Chinese deletion
+keywords or infer meaning from `.gitignore`. Explicit links remain existence
+requirements even when surrounding prose describes history; use inline code
+for non-navigable historical references.
+
+The three review fan-out goals interpolate `reference_candidate_ids` explicitly,
+so the worker sees the exact ordered list, including `[]`. The review schema
+uses the generic `x-hufu-workset-inputs` extension to bind
+`/record/reference_assessments` entries' `/reference_id` to that frozen array.
+Local submission and external canonicalization reject count/order/membership
+mismatches before publication, allowing correction on the same task. Commit,
+accepted-dependency checks, replay/completion, and report checks repeat the
+binding validation. Native handoff inventory remains an independent final gate.
+
+## Runtime-owned gap collection
+
+The report schema declares the generic `x-hufu-fixed-collections` contract for
+`/gap_resolutions`. Membership comes only from `/record/gaps` in accepted
+`schemas/review-v1.json` evidence sources. The runtime supplies source task IDs,
+zero-based gap indices and array order. Critic records and prose cannot create
+additional gaps. The handoff inventory and final native audit remain independent
+checks against all admitted review occurrences.
+
+The synthesizer receives a runtime manifest mapping opaque, source-hash-bound
+keys to fixed gap identities. It submits `gap_resolutions` as an object keyed by
+those keys. Each value contains only `status`, `resolving_task_id`, `evidence`
+and `explanation`. The finite semantic choice is `retained` or
+`resolved_cross_workset`; the model must inspect the evidence to choose. There
+is no automatic choice on malformed, missing or ambiguous output.
+
+The runtime rejects extra/missing/duplicate keys, identity overrides and invalid
+choices before publication, allowing correction on the same attempt. It then
+assembles and validates the canonical report array and pins source hashes in
+runtime-owned payload metadata. Existing cross-workset artifact ownership/read
+checks run against that array. Replay, dependency delivery and final rendering
+reject stale provenance, even if replacement sources have the same gap count.
+The final report format and independent gap audit continue to consume arrays.
+
+For the 51-gap regression, a proposed 52nd decision is rejected at submission;
+the runtime always generates exactly the 51 original identities. This change
+uses the existing worker model's structured enum decisions and grants no new
+tools or network access. Changed schema hashes require a fresh `--new` run.

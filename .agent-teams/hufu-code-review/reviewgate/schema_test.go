@@ -56,7 +56,7 @@ func TestEmbeddedReviewDefinitionsMatchAuthoritativeSchema(t *testing.T) {
 
 func schemaFixture() (map[string]any, map[string]any, map[string]any) {
 	review := map[string]any{"kind": "review", "review_revision": "frozen-head", "workset_key": "unit-0001", "lens": "general",
-		"invariant_assessments": []any{}, "findings": []any{map[string]any{"summary": "Prompt-only URL protection", "detail": "A private URL can pass the configured tool restriction", "severity": "info", "location": "team.yaml:20", "evidence": []any{"sha256-" + strings.Repeat("b", 64)}, "requires_critique": true}},
+		"reference_assessments": []any{}, "invariant_assessments": []any{}, "findings": []any{map[string]any{"summary": "Prompt-only URL protection", "detail": "A private URL can pass the configured tool restriction", "severity": "info", "location": "team.yaml:20", "evidence": []any{"sha256-" + strings.Repeat("b", 64)}, "requires_critique": true}},
 		"gaps": []any{map[string]any{"description": "Only this snapshot lacks the registry", "missing_evidence": "AllTools body"}},
 	}
 	input := map[string]any{"task_id": "4", "payload_sha256": strings.Repeat("a", 64), "record": review}

@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "criteria"
+  ],
+  "properties": {
+    "criteria": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source_task_id",
+          "source_index",
+          "criterion",
+          "assessment",
+          "reason",
+          "evidence"
+        ],
+        "properties": {
+          "source_task_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 200
+          },
+          "source_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "criterion": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 1000
+          },
+          "assessment": {
+            "type": "string",
+            "enum": [
+              "met",
+              "unmet",
+              "unverified"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 1500
+          },
+          "evidence": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S",
+              "maxLength": 1000
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "assessment": {
+                  "enum": [
+                    "met",
+                    "unmet"
+                  ]
+                }
+              },
+              "required": [
+                "assessment"
+              ]
+            },
+            "then": {
+              "properties": {
+                "evidence": {
+                  "minItems": 1
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "x-hufu-fixed-collections": [
+    {
+      "items_pointer": "/criteria",
+      "source_contracts": [
+        "schemas/coding-task-contract-v1.json"
+      ],
+      "source_pointer": "/acceptance_criteria",
+      "task_id_field": "source_task_id",
+      "index_field": "source_index",
+      "value_bindings": {
+        "criterion": ""
+      },
+      "choice_fields": [
+        "assessment"
+      ],
+      "source_scope": "dependency_results"
+    }
+  ]
+}

@@ -46,6 +46,8 @@ type CompiledResultContract struct {
 	toolEvidence       *resultToolEvidenceSpec
 	evidenceInputs     *resultEvidenceInputsSpec
 	evidenceReferences *resultEvidenceReferencesSpec
+	worksetInputs      *resultWorksetInputsSpec
+	fixedCollections   []resultFixedCollectionSpec
 	finalReport        *template.Template
 }
 

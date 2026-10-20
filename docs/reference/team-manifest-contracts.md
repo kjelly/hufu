@@ -22,7 +22,6 @@ revisions, task persistence and workflow behavior are unchanged. Coordinator
 dispatch continues to use the existing binding rules, including exact
 `contract_id` for task-goal binding. `when-goal-contains` remains unsupported.
 
-
 ## 單檔 Team Preset
 
 標準團隊可只有 `.agent-teams/dev/team.yaml`：
@@ -46,6 +45,42 @@ Flat `agents`／版本化 `spec.agents` 可宣告以 Agent Preset 為基礎的 i
 Team Preset、inline 與 Markdown 只允許不同名組合；同名不提供 patch 或 replacement。
 Static contracts、delegation、action catalog 與 team worker defaults 可引用這些 worker；per-agent 進階契約及 coordinator 仍以 Markdown 宣告。
 完整欄位、工具限制與模板時序見 [inline worker 規格](agent-format.md#inline-worker)。
+
+## Fixed batch contract graphs
+
+Static contracts can own a fixed batch graph using contract IDs:
+
+```yaml
+contracts:
+  - id: draft
+    agent: writer
+    phase: verify
+    side_effect: none
+    recovery: retry
+  - id: check
+    agent: checker
+    phase: verify
+    depends-on-contracts: [draft]
+    on-failure-contract: draft
+    on-failure-classes: [verification]
+    max_retries: 1
+```
+
+With static contract binding enabled, dispatch both contracts in one `agent`
+call using only their `agent`, `contract_id`, goal, and needed evidence inputs.
+The runtime resolves the named edges to batch positions and persists the
+resulting task IDs. Every connected group must appear exactly once in the same
+batch, including the producer when only the checker declares edges. Model
+`depends_on`, `on_failure`, and `pipeline` values are replaced for this group.
+Batch order does not change which contracts the edges reference.
+
+Targets must exist, remain in the same phase, and have no fan-out. Dependencies
+must be unique and acyclic. A failure target must be the task itself or a
+transitive dependency. Invalid declarations fail preflight; incomplete or
+duplicate groups fail before creating tasks. Existing failure-class checks,
+retry limits, remediation context, and recovery behavior still apply. Contract
+hashes and the execution policy snapshot pin the declarations and retry policy;
+changing them requires a new run rather than resuming an older policy.
 
 ## Authoring
 

@@ -204,6 +204,9 @@ spec:
         output: targeted_go_tests
         assertions:
           - { pointer: /passed, op: equals, value: true }
+      # PREPARE validates explicit links/syntax and records missing inline
+      # references. Semantic classifications are mandatory source-review records
+      # checked by the handoff inventory and final audit in VERIFY.
       - &documentation-references-verified
         type: task_output_assert
         source-task: produce-workset
@@ -327,7 +330,7 @@ spec:
         source-artifact:
           task_id: produce-workset
           artifact: primary review workset manifest
-        goal-template: 'Review primary workset item {key} with the {lens} lens. Result identity: record.workset_key="{key}", record.review_revision="{review_revision}", record.lens="{lens}". The item key is distinct from the Workset ID.'
+        goal-template: 'Review primary workset item {key} with the {lens} lens. Result identity: record.workset_key="{key}", record.review_revision="{review_revision}", record.lens="{lens}". The item key is distinct from the Workset ID. Assigned reference_candidate_ids={reference_candidate_ids}. Return exactly these IDs in record.reference_assessments, in this order; an empty list requires [].'
       execution:
         requires-result: true
         requires-grounded-result: true
@@ -364,7 +367,7 @@ spec:
         source-artifact:
           task_id: produce-workset
           artifact: documentation review workset manifest
-        goal-template: 'Review routine documentation workset item {key} with the {lens} lens. Result identity: record.workset_key="{key}", record.review_revision="{review_revision}", record.lens="{lens}". The item key is distinct from the Workset ID.'
+        goal-template: 'Review routine documentation workset item {key} with the {lens} lens. Result identity: record.workset_key="{key}", record.review_revision="{review_revision}", record.lens="{lens}". The item key is distinct from the Workset ID. Assigned reference_candidate_ids={reference_candidate_ids}. Return exactly these IDs in record.reference_assessments, in this order; an empty list requires [].'
       execution:
         requires-result: true
         requires-grounded-result: true
@@ -391,7 +394,7 @@ spec:
         source-artifact:
           task_id: produce-workset
           artifact: documentation escalation workset manifest
-        goal-template: 'Adversarially review escalated documentation workset item {key} with the {lens} lens. Result identity: record.workset_key="{key}", record.review_revision="{review_revision}", record.lens="{lens}". The item key is distinct from the Workset ID.'
+        goal-template: 'Adversarially review escalated documentation workset item {key} with the {lens} lens. Result identity: record.workset_key="{key}", record.review_revision="{review_revision}", record.lens="{lens}". The item key is distinct from the Workset ID. Assigned reference_candidate_ids={reference_candidate_ids}. Return exactly these IDs in record.reference_assessments, in this order; an empty list requires [].'
       execution:
         requires-result: true
         requires-grounded-result: true
@@ -459,7 +462,7 @@ spec:
       optional: true
       side_effect: none
       recovery: retry
-      max-retries: 1
+      max_retries: 1
       result-contract: { schema: schemas/report-v1.json, require-structured: true }
       constraints: |-
         PREPARE Runtime Outputs (receipt-verified; copy these JSON values verbatim):
@@ -467,7 +470,7 @@ spec:
         targeted_go_tests: {test_attestation}
         Review Handoff Inventory (receipt-verified; every listed required source must have a critic-review dependency):
         {handoff_inventory}
-        Use required_gap_refs as the exact resolution key list; each source gap_count counts only original record.gaps entries. Do not create indices from prose or nested critic records.
+        The runtime Fixed Collections manifest owns gap membership and identity. Submit gap_resolutions as an object keyed by its issued keys, with decision fields only. The runtime generates source_task_id, gap_index, order, and the final array from accepted review records; never recreate those fields or create indices from prose or nested critic records.
       fact_refs:
         - { name: scope_attestation, task_id: produce-workset, runtime_output: scope }
         - { name: test_attestation, task_id: verify-targeted-go-tests, runtime_output: targeted_go_tests }
@@ -493,7 +496,9 @@ spec:
       optional: true
       side_effect: none
       recovery: retry
-      max-retries: 1
+      max_retries: 1
+      depends-on-contracts: [synthesize-review]
+      on-failure-contract: synthesize-review
       on-failure-classes: [verification]
       action:
         capability: verify-review-report

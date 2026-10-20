@@ -98,7 +98,7 @@ func newResultsCommandWithDeps(deps resultsDeps) *cobra.Command {
 	flags.StringVar(&options.theme, "theme", "", "Display theme: auto, light, dark, or mono (default: config or auto)")
 	flags.StringVar(&options.displayMode, "display-mode", "auto", "Display mode: auto, terminal, or plain")
 	flags.StringVar(&options.displayPreset, "display-preset", "", "Display preset: default or epaper (default: config or default)")
-	flags.BoolVarP(&options.quiet, "quiet", "q", false, "Suppress source metadata on stderr")
+	flags.BoolVarP(&options.quiet, "quiet", "q", false, "Suppress the original request and source metadata on stderr")
 	flags.BoolVar(&options.noColor, "no-color", false, "Disable ANSI color output (also honors NO_COLOR)")
 	registerStaticFlagCompletion(command, "theme", []string{"auto", "light", "dark", "mono"})
 	registerStaticFlagCompletion(command, "display-mode", []string{"auto", "terminal", "plain"})

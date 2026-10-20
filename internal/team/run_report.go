@@ -135,11 +135,18 @@ func projectRunReport(events []RunEvent, tree *SessionTree, terminal RunEvent) (
 				}
 				report.Team = strings.ToLower(strings.TrimSpace(payload.Team))
 			}
-		case string(EventUserMessageAdded):
+		case string(EventUserMessageAdded), string(EventWorkflowCycleStarted):
 			if report.OriginalPrompt == "" {
 				var message SessionMessageEventPayload
 				if err := json.Unmarshal(event.Payload, &message); err != nil {
 					return nil, err
+				}
+				if event.Type == string(EventWorkflowCycleStarted) {
+					cycle, err := decodeWorkflowCycleStarted(event)
+					if err != nil {
+						return nil, err
+					}
+					message.Content = cycle.Request
 				}
 				report.OriginalPrompt = message.Content
 			}

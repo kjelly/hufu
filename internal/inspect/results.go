@@ -183,7 +183,7 @@ func historicalOriginalPrompts(ctx context.Context, events []IndexedEvent) (map[
 			return nil, err
 		}
 		event := indexed.Event
-		if event.Type != string(team.EventUserMessageAdded) {
+		if event.Type != string(team.EventUserMessageAdded) && event.Type != string(team.EventWorkflowCycleStarted) {
 			continue
 		}
 		key := historicalPromptKey{event.SessionID, event.RunID}
@@ -193,6 +193,13 @@ func historicalOriginalPrompts(ctx context.Context, events []IndexedEvent) (map[
 		var payload team.SessionMessageEventPayload
 		if err := unmarshalHistoricalJSON(event.Payload, &payload); err != nil {
 			return nil, fmt.Errorf("%w: decode historical request: %v", ErrIntegrity, err)
+		}
+		if event.Type == string(team.EventWorkflowCycleStarted) {
+			var cycle team.WorkflowCycleStartedPayload
+			if err := unmarshalHistoricalJSON(event.Payload, &cycle); err != nil {
+				return nil, fmt.Errorf("%w: decode follow-up request: %v", ErrIntegrity, err)
+			}
+			payload.Content = cycle.Request
 		}
 		if strings.TrimSpace(payload.Content) != "" {
 			prompts[key] = historicalPromptSource{utils.RedactSecrets(payload.Content), event.ID}

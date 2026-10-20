@@ -164,15 +164,17 @@ func writeDigestRecord(writer hash.Hash, parts ...string) {
 	}
 }
 
-func (c *Coordinator) resolveNewTaskToolAuthorization(_ context.Context, task TaskDef, def *agent.AgentDef) (*DynamicToolAuthorizationSnapshot, error) {
+func (c *Coordinator) resolveNewTaskToolAuthorization(ctx context.Context, task TaskDef, def *agent.AgentDef) (*DynamicToolAuthorizationSnapshot, error) {
 	if c == nil || def == nil {
 		return nil, fmt.Errorf("resolve new task tool authorization: agent definition is required")
 	}
 	descriptors := c.managerMCPDescriptors()
 	baseNames := agentToolNames(c.selectWorkerToolsForTask(def, task))
-	names := make([]string, len(descriptors))
-	for i := range descriptors {
-		names[i] = descriptors[i].Name
+	names := make([]string, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		if c.workflowMCPToolAllowed(ctx, def, descriptor.Name, nil) {
+			names = append(names, descriptor.Name)
+		}
 	}
 	modes := []WorkerToolResolutionMode{workerToolResolutionModeForTask(task)}
 	if task.PlanFirst {

@@ -161,7 +161,7 @@ func (t *submitResultTool) submissionContract() taskResultSubmissionContract {
 		// itself is then rejected by structuredPayloadForSubmission.
 		compiled, _ := t.coordinator.compiledResultContract(item.ResultContract)
 		contract.ResultContract = item.ResultContract.clone()
-		contract.resultPayloadSchema = providerVisibleResultPayloadSchema(*item.ResultContract, compiled)
+		contract.resultPayloadSchema = t.coordinator.fixedCollectionSubmissionSchema(t.todoID, *item.ResultContract, compiled)
 	}
 	return contract
 }
@@ -419,6 +419,11 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 //nolint:gocyclo // submitResultTool.Run handles the full lifecycle of a worker result submission.
 func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	contract := t.submissionContract()
+	if t.coordinator != nil {
+		if err := t.coordinator.validateFixedCollectionInputJSON(t.todoID, call.Input); err != nil {
+			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
+	}
 	call.Input = canonicalToolArgumentObjects(call.Input, t.Info())
 	call.Input, _ = tools.CanonicalToolArgumentCase(call.Input, t.Info())
 	input, err := decodeSubmitResultInput([]byte(call.Input), contract)
@@ -441,7 +446,15 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 				}
 			}
 		}
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid submit_result arguments: %v. Valid example: %s", err, compactToolExampleJSON(t.Info()))), nil
+		info := t.Info()
+		violation := validateToolArguments(call.Input, info)
+		if violation == nil {
+			violation = &toolArgumentSchemaError{Path: "$", Expected: "complete tool argument object", Actual: "invalid arguments"}
+		}
+		if violation.schema == nil {
+			violation.schema, violation.schemaPath = map[string]any{"type": "object", "properties": info.Parameters}, "$"
+		}
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid submit_result arguments: %v. %s", err, buildToolSchemaValidationPrompt(submitResultToolName, violation, info))), nil
 	}
 	validationInfo := t.Info()
 	// Top-level presence has task-specific semantic handling below (including

@@ -48,6 +48,9 @@ type executionIdentityEventPayload struct {
 // agrees with its legacy dual-write fields and frozen topology. The historic
 // no-error ReduceToTodoList helper remains available for narrow projections.
 func ReplayTodoList(events []RunEvent) ([]*TodoItem, error) {
+	if err := validateWorkflowCycleLineage(events); err != nil {
+		return nil, err
+	}
 	if err := validateReplayExecutionIdentities(events); err != nil {
 		return nil, err
 	}

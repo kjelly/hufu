@@ -91,6 +91,14 @@ func compileResultContractSchema(teamDir, schemaPath string) (*CompiledResultCon
 	if err != nil {
 		return nil, fmt.Errorf("schema %q: %w", id, err)
 	}
+	worksetInputs, err := compileResultWorksetInputs(root)
+	if err != nil {
+		return nil, fmt.Errorf("schema %q: %w", id, err)
+	}
+	collections, err := compileResultFixedCollections(root)
+	if err != nil {
+		return nil, fmt.Errorf("schema %q: %w", id, err)
+	}
 	canonical, err := json.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize schema %q: %w", id, err)
@@ -106,10 +114,12 @@ func compileResultContractSchema(teamDir, schemaPath string) (*CompiledResultCon
 	if err != nil {
 		return nil, fmt.Errorf("compile schema %q: %w", id, err)
 	}
+	bindFixedCollectionSchemas(collections, schema)
 	sum := sha256.Sum256(canonical)
 	return &CompiledResultContract{
 		ID: id, SchemaSHA256: hex.EncodeToString(sum[:]), CanonicalSchema: canonical, schema: schema,
-		toolEvidence: evidence, finalReport: report, evidenceInputs: inputs, evidenceReferences: references,
+		toolEvidence: evidence, finalReport: report, evidenceInputs: inputs, evidenceReferences: references, worksetInputs: worksetInputs,
+		fixedCollections: collections,
 	}, nil
 }
 
@@ -290,6 +300,9 @@ func compileTeamResultContracts(session *TeamSession) error {
 			return err
 		}
 		task.ResultContract = &ref
+	}
+	if err := validateFixedCollectionSourceContracts(schemas); err != nil {
+		return fmt.Errorf("%s: %w", resultContractInvalidCode, err)
 	}
 	session.ResultContracts = schemas
 	session.AgentResultContracts = agentRefs

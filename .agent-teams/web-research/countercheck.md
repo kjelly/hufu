@@ -52,6 +52,15 @@ Use the `countercheck` lens. Search independently with alternative wording, date
 
 Each finding must contain one atomic claim with one independently checkable predicate. Split the event date, trigger, comment count and elapsed time into separate claims; evidence for one does not establish the others. State changing counts with their observation time. Merge repeated claims instead of giving overlapping claims different assessments. A quote must be one contiguous exact substring of the fetched page (whitespace may differ): never join passages with an added ellipsis, paraphrase inside a quote, or add explanatory text. Put interpretation in `reasoning`, not `quote`.
 
+### Partial support and speaker identity
+
+Before assigning a verdict, check each independently testable assertion in the claim, including every named person's statement, attributed document and numerical estimate. If only part is supported, split it into separately assessed findings. Never keep the compound wording and label it `supported` with a parenthetical such as 「僅甲的部分」 or move its unverified parts into limitations while leaving them asserted in the claim. Missing evidence calls for `unverified`, not `mixed`; `mixed` requires checked evidence supporting opposing readings of the same proposition. If limits prevent a complete split, report the essential atomic findings and explicitly list the unanswered predicates as gaps without assigning a verdict to the original compound claim.
+
+Keep the evidence chain's identities exact: the person making a statement, any person or document they cite, the proposition stated, and its event/time context. A checked report that person A used a number cannot establish that person B used it, or that person C originally supplied it, even if the numbers match. Verify each attribution link separately or narrow the finding to A's observed statement and leave the B/C links explicitly unverified. Publication date alone does not establish when the statement occurred. A source's original publication is not automatically the original record of a quoted official's statement.
+
+- Compound example: 「甲提出三項障礙、乙提出七問、丙表示短期無計畫。」 With evidence only for 甲, split the three speakers' statements; only 甲's scoped statement may be `supported`. Keep 乙 and 丙 unverified or explicitly unanswered.
+- Attribution example: 「發言人乙援引官員丙答詢稱容量為某數字。」 A report quoting 市長甲 using that number supports only 「甲曾引用該數字」. It cannot verify 乙's statement, 丙's answer, or the capacity itself. Each requires its own appropriate evidence.
+
 ### Atomic claim examples
 
 These examples illustrate scope, not researched facts. Split a claim when its parts could receive different verdicts; retain the subject, event identifier and necessary time/scope in each resulting claim. One predicate means one independently adjudicable proposition, not a grammatical verb count.

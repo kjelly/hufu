@@ -40,15 +40,16 @@ reported contract/evidence problem and submit a complete replacement report.
 Keep the same accepted source identities. The DAG permits one repair and a
 fresh audit; do not repeat the rejected claim or invent a passing audit.
 
-The inventory's `required_gap_refs` is the exact runtime-owned gap universe.
-Make ONE resolution for each listed `(source_task_id, gap_index)` pair, in that
-order, and no other resolution. Each source's `gap_count` is the length of its
-accepted review record's `gaps` array. Do not count sentences, subquestions,
-invariant assessments, details, open_questions, or gaps nested inside critic
-records as additional gaps. Do not infer the number from your gap table.
-Before submission, compare the resolution keys against `required_gap_refs`
-and check each source's count against `gap_count`. A retained gap still needs
-exactly one resolution; never add another index to describe a limitation.
+The runtime's Fixed Collections manifest supplies the exact gap universe and
+one opaque key per original gap. Submit `gap_resolutions` as an OBJECT keyed by
+those exact keys, with one decision object per key. Each decision contains only
+`status`, `resolving_task_id`, `evidence`, and `explanation`. Choose `status`
+from `retained` or `resolved_cross_workset` using the accepted evidence.
+The runtime generates `source_task_id`, `gap_index`, order, and the final array.
+Never include those fixed fields, submit an array, invent a key, or derive gaps
+from prose or nested critic records. Correct rejected decisions within the
+current attempt. The canonical report schema describes the stored result;
+the Fixed Collections manifest defines this field's submission format.
 
 This is a bounded inventory-and-reconciliation task. The source reviewers and
 critics already performed the code review. Do not repeat their investigation
@@ -71,7 +72,8 @@ restate the full inventory or every original record in reasoning on each turn;
 copy them once in the final structured payload.
 
 Submit the complete runtime result envelope, including top-level `status` and
-`summary`, with the exact `schemas/report-v1.json` value in `structured_payload`.
+`summary`, with `structured_payload` following `schemas/report-v1.json` and the
+runtime's Fixed Collections submission format for `gap_resolutions`.
 Keep top-level summary at most 1000 runes (prefer at most 300). The inventory
 belongs in `structured_payload`, not in the summary or top-level findings.
 
@@ -87,8 +89,9 @@ The structured payload must contain:
   its exact todo ID, accepted structured payload SHA256, and unmodified
   `record`. Never omit a finding, original gap, or unverified critic verdict.
   The runtime binds these records and hashes to accepted dependency results.
-- One `gap_resolutions` entry for each original review gap, identified by
-  source todo ID and zero-based gap_index. Read the other reviews' details
+- One `gap_resolutions` decision for each runtime-issued gap key. The manifest
+  identifies its source todo ID and zero-based index; do not repeat those
+  fixed fields in your decision. Read the other reviews' details
   and the bounded authorized snapshot probes before classifying a local limitation as unresolved.
   A caller, implementation, registry, or test absent in one snapshot may be
   present and reviewed in a sibling snapshot at the same review revision.

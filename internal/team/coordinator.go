@@ -159,6 +159,10 @@ type TaskDef struct {
 	PlanFirst    bool     `json:"plan_first,omitzero"`
 	PlanID       string   `json:"plan_id,omitempty"`
 	DependsOn    []int    `json:"depends_on,omitempty" yaml:"depends-on,omitempty"` // 0-based indices into the tasks array for this call
+	// Named static edges are configuration-only. Contract compilation resolves
+	// them against the current batch; durable occurrences retain resolved IDs.
+	DependsOnContracts []string `json:"-" yaml:"depends-on-contracts,omitempty"`
+	OnFailureContract  string   `json:"-" yaml:"on-failure-contract,omitempty"`
 	// OrderAfter holds runtime-added ordering edges (0-based indices). A task
 	// waits until each of these tasks has finished, whatever its outcome, but a
 	// failure never blocks it. Resource serialization fills it for mutations

@@ -305,6 +305,13 @@ func TestProtocolAttemptWasReadOnly(t *testing.T) {
 	if !protocolAttemptWasReadOnly(readOnly, isReadOnlyToolCall) {
 		t.Fatal("read-only tool sequence must be eligible for the bounded capability fallback")
 	}
+	readOnly[0].Content = append(readOnly[0].Content, submitResultCall("bad", `{"handling":"addressed"}`), submitResultOutcome("bad", "invalid schema"))
+	if !protocolAttemptWasReadOnly(readOnly, isReadOnlyToolCall) {
+		t.Fatal("rejected result reporting must preserve proof of observation-only execution")
+	}
+	if protocolAttemptWasReadOnly([]fantasy.StepResult{{Response: fantasy.Response{Content: fantasy.ResponseContent{submitResultCall("only", `{}`)}}}}, isReadOnlyToolCall) {
+		t.Fatal("reporting without any observed work is not sufficient proof for worker replay")
+	}
 
 	mutating := []fantasy.StepResult{{Response: fantasy.Response{Content: fantasy.ResponseContent{
 		fantasy.ToolCallContent{ToolName: "write", Input: `{"file_path":"changed.go"}`},
@@ -909,6 +916,8 @@ type resultContractWorker struct {
 	onSecond     func()
 	// toolCall replaces the default read-only view call when set.
 	toolCall *fantasy.ToolCallContent
+	// rejectedSubmission records a failed reporting call after the observation.
+	rejectedSubmission bool
 }
 
 type policyDeniedThenSubmittedWorker struct {
@@ -983,10 +992,14 @@ func (m *resultContractWorker) response(call fantasy.AgentCall) *fantasy.AgentRe
 	if m.toolCall != nil {
 		toolCall = *m.toolCall
 	}
+	content := fantasy.ResponseContent{toolCall}
+	if m.rejectedSubmission && (*m.calls != 2 || m.onSecond == nil) {
+		content = append(content, submitResultCall("invalid-submit", `{"handling":"addressed"}`), submitResultOutcome("invalid-submit", "invalid submit_result arguments: unknown field handling"))
+	}
 	return &fantasy.AgentResult{
 		Steps: []fantasy.StepResult{{
 			Messages: []fantasy.Message{fantasy.NewUserMessage("old worker tool history")},
-			Response: fantasy.Response{Content: fantasy.ResponseContent{toolCall}},
+			Response: fantasy.Response{Content: content},
 		}},
 		Response: fantasy.Response{Content: fantasy.ResponseContent{
 			fantasy.TextContent{Text: "read-only inspection completed"},

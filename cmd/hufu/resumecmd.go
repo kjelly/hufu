@@ -92,6 +92,7 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = team.WithSessionResume(ctx)
 	injector := newPromptInjector(nil)
 	activeCoord := new(activeCoordinator)
 	var loadedTeams map[string]*teamContext

@@ -48,6 +48,16 @@ type record struct {
 	InputReview []inputReview         `json:"input_review"`
 	Decisions   []decision            `json:"decisions"`
 	Invariants  []invariantAssessment `json:"invariant_assessments"`
+	References  []referenceAssessment `json:"reference_assessments"`
+}
+
+type referenceAssessment struct {
+	ID           string   `json:"reference_id"`
+	Kind         string   `json:"kind"`
+	Rationale    string   `json:"rationale"`
+	Evidence     []string `json:"evidence"`
+	FindingIndex *int     `json:"finding_index"`
+	GapIndex     *int     `json:"gap_index"`
 }
 
 type invariantAssessment struct {
@@ -426,6 +436,47 @@ func verifyReview(item task, r record) error {
 	}
 	if err := verifyInvariants(item, r); err != nil {
 		return err
+	}
+	return verifyReferenceAssessments(item, r)
+}
+
+// The producer binds the candidate inventory; only the model interprets prose.
+// Every missing path must receive a grounded classification. Uncertainty stays
+// visible in the existing gap/coverage contract, never an implicit exemption.
+func verifyReferenceAssessments(item task, r record) error {
+	var ids []string
+	encoded := item.Binding.Bindings["reference_candidate_ids"]
+	if err := json.Unmarshal([]byte(encoded), &ids); err != nil || ids == nil || len(ids) > 128 {
+		return fmt.Errorf("task %s missing or invalid reference candidate binding", item.ID)
+	}
+	if len(ids) != len(r.References) {
+		return fmt.Errorf("task %s omitted or added reference assessments", item.ID)
+	}
+	seen := make(map[string]bool)
+	for i, assessment := range r.References {
+		if assessment.ID != ids[i] || seen[assessment.ID] || strings.TrimSpace(assessment.Rationale) == "" || !observed(item, assessment.Evidence) {
+			return fmt.Errorf("task %s reference %d is substituted, duplicated, or ungrounded", item.ID, i)
+		}
+		seen[assessment.ID] = true
+		switch assessment.Kind {
+		case "required":
+			if assessment.FindingIndex == nil || *assessment.FindingIndex < 0 || *assessment.FindingIndex >= len(r.Findings) || assessment.GapIndex != nil {
+				return fmt.Errorf("task %s required missing reference %s lacks a finding", item.ID, assessment.ID)
+			}
+			if !r.Findings[*assessment.FindingIndex].RequiresCritique {
+				return fmt.Errorf("task %s required missing reference %s must receive critique", item.ID, assessment.ID)
+			}
+		case "uncertain":
+			if assessment.GapIndex == nil || *assessment.GapIndex < 0 || *assessment.GapIndex >= len(r.Gaps) || assessment.FindingIndex != nil {
+				return fmt.Errorf("task %s uncertain reference %s lacks a gap", item.ID, assessment.ID)
+			}
+		case "historical", "deleted", "example":
+			if assessment.FindingIndex != nil || assessment.GapIndex != nil {
+				return fmt.Errorf("task %s non-required reference %s has an incompatible finding or gap", item.ID, assessment.ID)
+			}
+		default:
+			return fmt.Errorf("task %s reference %s has an invalid kind", item.ID, assessment.ID)
+		}
 	}
 	return nil
 }
