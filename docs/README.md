@@ -148,6 +148,10 @@ to re-create an abstraction that already exists in the runtime.
 
 ### Planning
 
+- [Controlled harness improvement](implementation-plans/controlled-harness-improvement.md)
+  — paired structured-result probes, durable budgets, bounded proposals and
+  review bundles, with offline acceptance.
+
 - `implementation-plans/` contains active, versioned delivery plans. Plans are
   reference material subordinate to code, tests, and normative contracts;
   completed or superseded plans belong in `archive/implementation-plans/`.
