@@ -15,17 +15,18 @@ const SchemaVersion = 1
 type Kind string
 
 const (
-	KindRun      Kind = "run"
-	KindTask     Kind = "task"
-	KindTrace    Kind = "trace"
-	KindEvidence Kind = "evidence"
-	KindContext  Kind = "context"
-	KindReplay   Kind = "replay"
-	KindStorage  Kind = "storage"
-	KindOverview Kind = "overview"
-	KindCost     Kind = "cost"
-	KindRoutes   Kind = "routes"
-	KindBeliefs  Kind = "beliefs"
+	KindRun       Kind = "run"
+	KindTask      Kind = "task"
+	KindTrace     Kind = "trace"
+	KindEvidence  Kind = "evidence"
+	KindContext   Kind = "context"
+	KindReplay    Kind = "replay"
+	KindStorage   Kind = "storage"
+	KindOverview  Kind = "overview"
+	KindCost      Kind = "cost"
+	KindRoutes    Kind = "routes"
+	KindEconomics Kind = "economics"
+	KindBeliefs   Kind = "beliefs"
 	// KindControlDecisions summarizes runtime control decision observations.
 	KindControlDecisions Kind = "control-decisions"
 	// KindSemanticRetrieval summarizes semantic retrieval traces.
@@ -111,6 +112,11 @@ func (q InspectQuery) Validate(kind Kind) error {
 			return fmt.Errorf("%w: cost accepts only workspace, run, task, branch, and session", ErrInvalidQuery)
 		}
 	case KindRoutes:
+		return q.validateRoutes()
+	case KindEconomics:
+		if q.TaskID != "" {
+			return fmt.Errorf("%w: economics does not accept a task filter", ErrInvalidQuery)
+		}
 		return q.validateRoutes()
 	case KindControlDecisions:
 		return q.validateControlDecisions()

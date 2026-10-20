@@ -27,6 +27,7 @@ hufu inspect context <task-id> --run <run-id> --project <project-id>
 hufu inspect trace <run-id>
 hufu inspect cost [run-id] [--task <task-id>]
 hufu inspect routes <run-id> [--task <task-id>]
+hufu inspect economics <run-id>
 hufu inspect replay <run-id>
 hufu inspect semantic-retrieval [run-id] [--task <task-id>]
 hufu inspect storage
@@ -88,6 +89,51 @@ admission-bound, and open-reservation amounts remain separate; unknown, local,
 and subscription invocations are counted instead of being folded into zero.
 When the run ID is omitted, the command uses the same exact active/sole-run
 binding rules as `inspect overview` and fails on ambiguity.
+
+## Observed generation economics
+
+```sh
+hufu inspect economics run-123 --workspace ./workspace --branch main --output json
+```
+
+`economics` accepts workspace, session, branch and a required run ID. Task filters
+are rejected. It combines the routes projection and canonical cost ledger from
+one validated event head, without a provider call or verifier execution.
+`comparison_scope` is `single_run_observed`: these observations do not establish
+model quality, causal savings, or a preferred route.
+
+Amounts are integer USD micros estimated from recorded usage and prices, not
+payments. `usage_cost_micros` includes failed calls and retries and is a known
+subtotal. Open reservations, admission bounds, unknown prices, local execution
+and subscriptions remain distinct in `cost`; unknown amounts are not zero.
+`known_cost_coverage` measures usage-settled invocations divided by recorded
+reservations, not the completeness of historical recording.
+
+`cost_per_verified_task_micros` includes overhead and rounds upward. It is null
+unless the run is terminal, there is at least one evidence-qualified completed
+task, all invocations have usage-derived prices, and no cross-run task cost gap
+exists. Historical qualification requires a validated v5 frozen cost policy
+before execution, a matching admitted backend, and accounting for recorded
+provider-profile invocations and worker attempts. Missing or legacy invocation
+identities, unmatched profile invocations and missing attempt costs make this
+qualification unavailable, even when every existing reservation is settled.
+Explicit budget denial is a no-send path. This scope covers Hufu's admitted
+generation boundaries; it is not an accounting of arbitrary shell, tool or
+external service charges.
+
+Tasks created or changed during the selected run form the denominator;
+unchanged completed ancestors are `reused`. Missing evidence remains in the
+denominator and is reported separately. Route costs exclude coordinator,
+guard, judge and other shared overhead. Initial/retry/fallback amounts are
+mutually exclusive and require a unique execution match. Multiple executions
+within one occurrence cannot be distinguished by current cost events: their
+known occurrence subtotal and unassigned subtotal remain visible, while complete
+breakdowns are null with `attribution_unavailable`. This does not by itself
+invalidate a fully accounted run total.
+
+Latency uses nearest-rank p50/p95 over completed attempts with valid persisted
+start/end times, with sample and exclusion counts. Empty samples are null;
+running attempts never receive a live elapsed duration in this observation.
 
 ## Recorded worker routes
 

@@ -70,6 +70,10 @@ hufu inspect routes run-123 --workspace ./workspace/dev-team --output json
 ```
 
 ```sh
+hufu inspect economics run-123 --workspace ./workspace/dev-team --output json
+```
+
+```sh
 hufu explain --team dev-team
 ```
 

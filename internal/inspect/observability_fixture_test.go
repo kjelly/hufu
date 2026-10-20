@@ -177,6 +177,11 @@ func TestObservabilityCostFixturePreservesFailureAndOverhead(t *testing.T) {
 // objective verification result. No verifier command is executed to build it.
 func observabilityEvidenceFixture(t *testing.T, routes ...*team.ExecutionRouteBinding) runFixture {
 	t.Helper()
+	return observabilityEvidenceFixtureWithEvents(t, nil, routes...)
+}
+
+func observabilityEvidenceFixtureWithEvents(t *testing.T, transform func([]team.RunEvent) []team.RunEvent, routes ...*team.ExecutionRouteBinding) runFixture {
+	t.Helper()
 	fixture := runFixture{workspace: t.TempDir(), runID: "run-evidence", taskID: "task-evidence"}
 	store, err := team.NewEventStore(fixture.workspace, fixture.runID, "session-evidence")
 	if err != nil {
@@ -247,6 +252,9 @@ func observabilityEvidenceFixture(t *testing.T, routes ...*team.ExecutionRouteBi
 			Acceptance:       &team.AcceptanceResult{State: team.AcceptancePassed, Passed: true},
 			EvidenceManifest: manifest, Stats: team.RunStats{TasksTotal: 1, TasksDone: 1, AttemptsTotal: 1},
 		})},
+	}
+	if transform != nil {
+		events = transform(events)
 	}
 	for _, event := range events {
 		if _, err := store.AppendPersisted(event); err != nil {

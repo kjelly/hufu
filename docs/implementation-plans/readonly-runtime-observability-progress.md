@@ -69,6 +69,42 @@
 - `GOTMPDIR=/tmp GOLANGCI_LINT_CACHE=/tmp/hufu-observability-lint-cache golangci-lint run`：exit 0，`0 issues`；`/tmp/hufu-observability-wp01-lint-complete.log`。
 - 完整 tests 使用允許本機 socket 的執行環境；沒有真實模型試跑，沒有新增 runtime 寫入、排程或選路政策。核心變更均為 team-neutral。
 
+## WP-02：生成成本與完成證據統計（完成）
+
+新增 `hufu inspect economics <run-id>`，僅接受 workspace、session、branch、run，
+提供 text／JSON，拒絕局部 task filter。
+
+- 同一 bound lineage／event head 組裝 WP-01 routes 與 canonical cost ledger。
+  從 `team.ProjectCostView` 抽出純 `ProjectCostLedger` 共用解碼、envelope 與
+  frozen policy 驗證；原有 `inspect cost` 行為保留。
+- Task denominator、verified evidence coverage、狀態數、recorded invocation
+  coverage、usage subtotal、open／unknown／local／subscription、overhead、
+  occurrence subtotal 與 directly-attributed route cost 分開呈現。
+- 失敗呼叫仍計費；provider invocation ID 去重。Retry／fallback 只有唯一執行
+  歸因時才提供完整細分；歧義成本留在 occurrence／unassigned subtotal。
+- 完整每件 verified task 成本需 terminal、非零 verified denominator、完整 usage
+  計價、無跨 run task gap。另核對執行前 v5 frozen cost policy、backend 類別、
+  provider profile invocation 與 worker attempt 記帳；所有既有 reservation
+  已結算不能單獨證明完整性。這是 admitted generation scope，不是外部工具帳單。
+- Latency 使用 persisted timestamps 的 nearest-rank p50／p95，列出樣本及排除數；
+  無樣本為 null，不使用查詢當下的 elapsed time。
+- 完整 fixture 產生 21 micros／verified task：failed 7 + success 11 + overhead 3；
+  route subtotal 為 18。無 policy／漏記 invocation／open reservation 等反例回 null
+  並保留已知小計。只有價格事件時保持 `cost.View.available`，不虛構 usage 或 coverage。
+- 新增重複 settlement、跨 run 歷史隔離、零任務／零 ledger、未知計價、歧義 fallback、
+  overflow、read-only replay、scope rejection 與 CLI text／JSON 測試。
+  同步 inspect guide、generated command reference 與 Nushell completion。
+
+驗證：
+
+- 最後定向測試：exit 0；`/tmp/hufu-observability-wp02-focused-final.log`。
+- 最後 `GOTMPDIR=/tmp go vet ./...`：exit 0；`/tmp/hufu-observability-wp02-vet-final.log`。
+- 最後 lint：exit 0；`/tmp/hufu-observability-wp02-lint-final.log`。
+- 最後 `GOTMPDIR=/tmp go test ./...`：exit 0；
+  `/tmp/hufu-observability-wp02-test-final.log`。包含價格事件邊界修正。
+- 完整 tests 使用允許本機 fake server socket 的環境，未進行真實模型試跑。
+  沒有新增 runtime 寫入、排程或模型選擇行為。
+
 ## 尚未完成
 
-WP-02、WP-03、WP-04、WP-05 尚未實作。未執行的驗收不得視為通過。
+WP-03、WP-04、WP-05 尚未實作。未執行的驗收不得視為通過。
