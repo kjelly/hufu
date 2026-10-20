@@ -5,7 +5,7 @@
 > Verified-Commit: `af4875f1720d2315cbaa2f2e866d11cb78ab1882`
 > Supersedes: —
 > Superseded-By: —
-> Execution-Status: PR 1 已完成；PR 2–5 依第 12 節繼續交付。
+> Execution-Status: PR 1–2 已完成；PR 3–5 依第 12 節繼續交付。
 > 日期：2026-10-20。
 > 程式碼查核基準：`af4875f1720d2315cbaa2f2e866d11cb78ab1882`。
 > 範圍決定：使用者已選擇「本次只做可離線驗收的功能，真實評測與隔離部署另案處理」。
@@ -16,7 +16,7 @@
 
 - [x] Baseline：完整測試、build、vet、lint、文件及隱藏 team 測試。
 - [x] PR 1：契約、materializer 與 plan CLI。
-- [ ] PR 2：耐久 controller 與總預算。
+- [x] PR 2：耐久 controller 與總預算。
 - [ ] PR 3：手動 probe 與 runtime 閉環。
 - [ ] PR 4：有界 Propose–Probe–Compose。
 - [ ] PR 5：bundle、lesson 與完整驗收。
@@ -59,6 +59,37 @@ Go 原始碼與 `af4875f1720d2315cbaa2f2e866d11cb78ab1882` 相同。
 `--out` 建立預覽檔，明示指定的 workspace 沒有被建立。
 T01–T07、T20 的相關離線邊界已有測試；runtime execution、journal、resume 與 export
 仍由後續階段交付。
+
+### PR 2 驗證紀錄
+
+2026-10-20，在 `45bfcddd` 上完成 `internal/improver` 的耐久控制器：
+
+- private content-addressed object store；artifact 先同步及 exclusive publish，
+  journal 才引用；readonly opening、digest／size／permission／symlink 檢查。
+- `StoreJournal` 沿用 canonical SQLite event store；`ReplayLedger` 純重播，
+  `LoadCommittedPlan` 固定 branch／run／session／plan，global-head CAS 衝突後重讀重算。
+- 初始 baseline＋第一候選完整 envelope、逐 stage 分配、所有 attempts 花費及
+  probe 次數、未知用量保留、超額記錄、有限 retry、不可挪用 required 預算。
+- durable UTC deadline＋process 內 monotonic deadline；clock rollback／cancel 停止 admission。
+  真實 child identity binding 與單次 Start 授權先於 provider；`StageExecutor` 返回前須 drain。
+- crash reconciliation、已完成 child 匯入一次、lost acknowledgement、late／conflicting
+  completion、缺失 evidence、未引用物件均有故障測試。已發布判定遇到衝突也會 blocked。
+
+最終版本驗證全部 exit 0：
+
+| 命令 | 結果 |
+|---|---|
+| `go test ./internal/improver ./internal/improve/paired -count=1` | 通過 |
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test -race ./internal/improver -run 'TestController\|TestObjects\|TestLedger\|TestCommitted' -count=1` | 通過，17.126s；包含兩個 OS process 的同 slot admission |
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test ./...` | 通過；CLI 122.743s、team 214.244s |
+| `go vet ./...` | 通過 |
+| `go build -o /tmp/hufu-paired-phase2 ./cmd/hufu` | 通過 |
+| `GOLANGCI_LINT_CACHE=/tmp/hufu-harness-lint golangci-lint run` | 0 issues |
+| `bin/check-docs`、`git diff --cached --check` | 通過 |
+
+T08–T14 使用 fake executor 驗收，沒有真實 provider、部署或品質評測。
+本階段不增加 run／resume／show CLI；canonical runtime adapter 與各顯示投影屬 PR 3。
+一般 `cmd/hufu`／`internal/team` 的執行語意沒有改動。
 
 ## 1. 交付目標與完成邊界
 
@@ -416,15 +447,27 @@ Stage retry 最多一次且只限已證明停止、可核對花費的 transient 
 | 事件 | 必填 payload 核心 |
 |---|---|
 | `improvement_run_created` | plan_ref、parent branch、deadline、schema_version |
+| `improvement_envelope_reserved` | group；完整 required slots 的 token／probe envelope 由 frozen plan 推導 |
 | `improvement_variant_bound` | slot、snapshot_ref、variant_digest、canonical origin |
-| `improvement_stage_admitted` | stage、generation、slot、planned child workspace identity、reservation |
+| `improvement_stage_admitted` | stage_id（對應 plan 的 stage／slot）、generation、owner、planned child workspace identity、reservation |
 | `improvement_stage_bound` | 真實 child invocation/run/branch IDs |
 | `improvement_stage_started` | ownership／dispatch reference |
 | `improvement_stage_completed` | canonical refs、evidence_digest、usage settlement、outcome |
 | `improvement_stage_transition` | failed／blocked／cancelled／skipped_budget、stable reason_code |
-| `improvement_run_finished` | report_ref、decision、budget summary |
+| `improvement_admission_stopped` | cancel_requested／deadline_exceeded／clock_rollback；停止後續 admission，仍可 reconcile／settle |
+| `improvement_run_finished` | report_ref、decision；budget summary 由 reducer 重建，報告不是 ledger 權威 |
 
 Stage states 為 planned → admitted → bound → running → completed，另有 failed／blocked／cancelled／skipped_budget。completed 表示證據收集完成，不代表品質通過。reducer 拒絕非法 transition、身份衝突、過期 generation；同內容重送冪等。AppendAtHead 衝突後重讀重算，不只使用 mutex。Payload 自有 version；只有新增 SQL 結構才 append migration，不改舊 migration checksum 或全域 policy hash 語意。
+
+第二階段的 `Controller`／`StoreJournal` 直接使用上述 canonical event store；
+`ReplayLedger` 是純投影，`LoadCommittedPlan` 僅從指定 branch 的 creation event 載入。
+`ObjectStore` 以 private directory descriptor 限制路徑，先同步 bytes、exclusive publish
+再引用，任何讀取都核對 digest／size／permission。未引用物件不計費、不形成 evidence。
+`StageExecutor` 是 runtime adapter 的接線介面：必須在 provider 前提交實際 identity，
+並在返回前完成取消及 drain；此階段只有 fake executor 驗收，不代表真實 runtime 已接線。
+dispatch 的 `Start` 授權只能取得一次；lost acknowledgement 必須 reconciliation。
+已發布報告之後出現 conflicting completion，保留原 report ref 供稽核，但目前 decision
+改為 blocked；不得繼續採用舊 report 的成功判定。
 
 | Crash／取消點 | 恢復行為 |
 |---|---|
