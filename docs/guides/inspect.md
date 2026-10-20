@@ -92,6 +92,22 @@ binding rules as `inspect overview` and fails on ambiguity.
 
 ## Observed generation economics
 
+`hufu inspect overview --run <run-id>` also includes an optional `observations`
+summary in its operator snapshot. It contains route/target distribution,
+evidence-qualified task counts, the known usage subtotal, recorded-invocation
+coverage and data-gap reason codes. Its `source_head` must match the snapshot's
+event ID and hash; it uses the same bound lineage as the run outcome and cost
+projection. The summary never changes the canonical outcome or recommends a
+model.
+
+The CLI overview and the existing TUI operator panel share a plain summary
+renderer. In the TUI, open the panel with `L` and use `G` to reach the observations
+at the bottom; normal scrolling and resize remain available. Missing fields in
+older snapshots and failed projections display unavailable, while missing cost
+amounts remain unknown. A failed latest background query clears cached operator
+presentation; late older replies cannot restore it or change runtime tasks.
+Scope changes also clear details belonging to the previous scope.
+
 ```sh
 hufu inspect economics run-123 --workspace ./workspace --branch main --output json
 ```

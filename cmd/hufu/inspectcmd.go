@@ -711,5 +711,6 @@ func renderInspectOverviewText(writer io.Writer, data inspectpkg.OverviewData) e
 			return err
 		}
 	}
-	return nil
+	_, err := io.WriteString(writer, operatorpkg.RenderObservationSummary(snapshot.Observations))
+	return err
 }

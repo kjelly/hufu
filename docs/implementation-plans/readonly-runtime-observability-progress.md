@@ -105,6 +105,39 @@
 - 完整 tests 使用允許本機 fake server socket 的環境，未進行真實模型試跑。
   沒有新增 runtime 寫入、排程或模型選擇行為。
 
+## WP-03：共用操作摘要與 TUI 呈現（完成）
+
+- `operator.OperatorSnapshot` 新增 optional `observations` presentation DTO，
+  保留 route／target distribution、verified／unavailable counts、usage subtotal、
+  recorded-invocation coverage 與 reason codes。DTO 不 import inspector 或自行查詢。
+- Inspector 使用既有 bound lineage 組裝摘要，snapshot validator 要求 observation
+  event ID／hash 與 snapshot freshness 相同；normalize 深拷貝新欄位，snapshot hash
+  納入摘要，nil 欄位保持舊 snapshot 相容。
+- CLI overview 與 TUI operator panel 共用純文字 renderer；無樣本／無成本為 unknown，
+  舊 snapshot 與 optional projection failure 為 unavailable。現有 `L`／`G`／scroll
+  可閱讀新增區塊；resize 重新包行，沒有新增動畫、按鍵 mutation 或 provider 呼叫。
+- 背景 overview 查詢失敗會送出帶 generation 的 unavailable message，清除舊
+  operator presentation，不改 runtime tasks／outcome。Scope 切換清除前一 scope
+  的 details；較舊 snapshot／failure／details 不得覆寫較新資料。
+- 新增同一 fixture 的 economics → overview JSON → CLI／TUI 數字一致性、read-only、
+  head mismatch／aliasing／unknown、resize／epaper／無色、scope／late replies、
+  真正非同步 reporter success／failure／shutdown 測試。
+
+驗證：
+
+- 既有 focused baseline：exit 0；`/tmp/hufu-observability-wp03-baseline.log`。
+- 定向測試：exit 0；`/tmp/hufu-observability-wp03-focused.log`。
+- `GOTMPDIR=/tmp go vet ./...`：exit 0；`/tmp/hufu-observability-wp03-vet.log`。
+- lint：exit 0，`0 issues`；`/tmp/hufu-observability-wp03-lint.log`。
+- `GOTMPDIR=/tmp go test -race ./internal/tui ./cmd/hufu -run 'Test(OperatorObservations|OperatorSnapshotGeneration)' -count=1`：
+  exit 0；`/tmp/hufu-observability-wp03-race.log`。
+- `GOTMPDIR=/tmp go test ./...`：exit 0；`/tmp/hufu-observability-wp03-test.log`。
+  使用允許本機 fake server socket 的測試環境。
+
+測試層級是 L1 Model、L2 View／CLI、L3 teatest reporter integration。未改 TTY、
+signal、raw mode 或 subprocess lifecycle，因此沒有新增此功能專用的 L4 PTY test；
+不把上述測試稱為完整 terminal E2E。未進行真實模型試跑。
+
 ## 尚未完成
 
-WP-03、WP-04、WP-05 尚未實作。未執行的驗收不得視為通過。
+WP-04、WP-05 尚未實作。未執行的驗收不得視為通過。

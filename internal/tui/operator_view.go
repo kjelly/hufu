@@ -24,10 +24,22 @@ func (m *Model) acceptOperatorGeneration(generation uint64) bool {
 }
 
 func (m *Model) acceptOperatorDetailsGeneration(generation uint64) bool {
+	if generation != 0 && !m.hasOperatorSummary {
+		return false
+	}
 	if generation == 0 {
 		return m.operatorGeneration == 0
 	}
 	return generation == m.operatorGeneration
+}
+
+func (m *Model) clearOperatorDetails() {
+	m.operatorEvidence = OperatorEvidenceDetail{}
+	m.operatorPromotions = nil
+	m.operatorPromotionStatus = ""
+	m.operatorPromotionTotal = 0
+	m.operatorPromotionLimited = false
+	m.operatorAttempts = nil
 }
 
 func (m *Model) loadOperatorContent() {
@@ -125,6 +137,7 @@ func (m Model) buildOperatorContent() string {
 		writeOperatorCommand(&output, []string{"hufu", "improve", "--workspace", m.operatorScope.WorkspaceExact, "--team", m.operatorScope.TeamName})
 	}
 	output.WriteString(m.styles.dim.Render("Skill draft review/promote and context promotion are distinct lifecycles. Promotion review is human-gated: approve does not apply; publication needs a separate exact confirmation."))
+	output.WriteString("\n\n" + wrapText(operator.RenderObservationSummary(m.operatorSnapshot.Observations), max(m.width-4, 10)))
 	return output.String()
 }
 
