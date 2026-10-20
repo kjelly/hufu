@@ -21,6 +21,12 @@ const (
 	completionResultLimit  = 100
 )
 
+// Keep the query budget separate from the lookup so functional tests can use
+// cancellation without depending on database I/O finishing within 150ms.
+var newCompletionQueryContext = func(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, completionQueryTimeout)
+}
+
 type completionCandidate struct {
 	id, description string
 }
@@ -70,7 +76,7 @@ func registerFlagCompletion(root *cobra.Command, path []string, name string, com
 }
 
 func completeRunIDs(command *cobra.Command, _ []string, prefix string) ([]string, cobra.ShellCompDirective) {
-	ctx, cancel := context.WithTimeout(completionContext(command), completionQueryTimeout)
+	ctx, cancel := newCompletionQueryContext(completionContext(command))
 	defer cancel()
 	lineage, err := inspectpkg.LoadLineage(ctx, inspectpkg.InspectQuery{Workspace: completionWorkspace(command), BranchID: commandFlagValue(command, "branch")})
 	if err != nil {
@@ -90,7 +96,7 @@ func completeTaskIDs(command *cobra.Command, _ []string, prefix string) ([]strin
 	if runID == "" {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	ctx, cancel := context.WithTimeout(completionContext(command), completionQueryTimeout)
+	ctx, cancel := newCompletionQueryContext(completionContext(command))
 	defer cancel()
 	lineage, err := inspectpkg.LoadLineage(ctx, inspectpkg.InspectQuery{Workspace: completionWorkspace(command), BranchID: commandFlagValue(command, "branch")})
 	if err != nil {
@@ -107,7 +113,7 @@ func completeTaskIDs(command *cobra.Command, _ []string, prefix string) ([]strin
 }
 
 func completeBranchIDs(command *cobra.Command, _ []string, prefix string) ([]string, cobra.ShellCompDirective) {
-	ctx, cancel := context.WithTimeout(completionContext(command), completionQueryTimeout)
+	ctx, cancel := newCompletionQueryContext(completionContext(command))
 	defer cancel()
 	workspace := completionWorkspace(command)
 	if exists, err := team.HasSessionTree(workspace); err != nil || !exists {
@@ -144,7 +150,7 @@ func completeContextIDs(command *cobra.Command, _ []string, prefix string) ([]st
 	if projectID == "" {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	ctx, cancel := context.WithTimeout(completionContext(command), completionQueryTimeout)
+	ctx, cancel := newCompletionQueryContext(completionContext(command))
 	defer cancel()
 	repository, err := contextstore.OpenSQLiteReadOnly(filepath.Join(completionWorkspace(command), "context.sqlite"))
 	if err != nil {
@@ -168,7 +174,7 @@ func completePromotionIDs(command *cobra.Command, _ []string, prefix string) ([]
 	if projectID == "" || teamID == "" {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	ctx, cancel := context.WithTimeout(completionContext(command), completionQueryTimeout)
+	ctx, cancel := newCompletionQueryContext(completionContext(command))
 	defer cancel()
 	repository, err := contextstore.OpenSQLiteReadOnly(filepath.Join(completionWorkspace(command), "context.sqlite"))
 	if err != nil {

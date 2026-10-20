@@ -25,6 +25,7 @@ import (
 // completion-helper CLI subcommand, and the generated Nushell script.
 
 func TestCompletionHelperRunTaskBranchIDsAreBoundedAndReadOnly(t *testing.T) {
+	withoutCompletionQueryTimeout(t)
 	workspace := t.TempDir()
 	tree := team.NewSessionTree()
 	tree.Branches["feature"] = &team.SessionBranch{ID: "feature", Name: "feature", CreatedAt: "2026-09-14T00:00:00Z"}
@@ -98,6 +99,7 @@ func TestCompletionHelperRunTaskBranchIDsAreBoundedAndReadOnly(t *testing.T) {
 }
 
 func TestCompletionHelperProposalIDsAreScopedAndReadOnly(t *testing.T) {
+	withoutCompletionQueryTimeout(t)
 	workspace := t.TempDir()
 	database := filepath.Join(workspace, "context.sqlite")
 	repository, err := contextstore.OpenSQLite(database)
@@ -142,6 +144,7 @@ func TestCompletionHelperProposalIDsAreScopedAndReadOnly(t *testing.T) {
 }
 
 func TestCompletionHelperCmdIsHiddenAndPrintsPlainIDLines(t *testing.T) {
+	withoutCompletionQueryTimeout(t)
 	root := newRootCommand()
 	workspace := t.TempDir()
 	store, err := team.NewEventStore(workspace, "", "")
