@@ -5,12 +5,12 @@
 > Verified-Commit: `af4875f1720d2315cbaa2f2e866d11cb78ab1882`
 > Supersedes: —
 > Superseded-By: —
-> Execution-Status: PR 1–4 已完成；PR 5 依第 12 節繼續交付。
+> Execution-Status: PR 1–5 已完成，離線驗收全部通過。
 > 日期：2026-10-20。
 > 程式碼查核基準：`af4875f1720d2315cbaa2f2e866d11cb78ab1882`。
 > 範圍決定：使用者已選擇「本次只做可離線驗收的功能，真實評測與隔離部署另案處理」。
 > 依使用者最新目標移入正式計畫目錄，逐階段實作與提交。
-> 下列新型別、設定格式、事件與 CLI 為待實作契約，不代表目前已有這些功能。
+> 下列契約的實作狀態與實測結果見「實作進度」；真實模型品質評估不屬於本次驗收。
 
 ## 實作進度
 
@@ -19,7 +19,7 @@
 - [x] PR 2：耐久 controller 與總預算。
 - [x] PR 3：手動 probe 與 runtime 閉環。
 - [x] PR 4：有界 Propose–Probe–Compose。
-- [ ] PR 5：bundle、lesson 與完整驗收。
+- [x] PR 5：bundle、lesson 與完整驗收。
 
 ### Baseline 驗證紀錄
 
@@ -154,6 +154,39 @@ PR 5 交付 Markdown review bundle、exact patch 與 lesson。
 
 T22–T25 的越界拒絕／重試、composition 退步／相同 digest reuse、optional budget、
 固定 selection 與 CLI frozen-source removal 均有離線測試。沒有真實模型評測或部署。
+
+### PR 5 驗證紀錄
+
+2026-10-20，在 `eb74a5ea` 上完成 review bundle：
+
+- `probe export` 只讀控制 workspace，驗證 committed report 與完整 evidence closure，
+  保存原始 parent journal／child receipts；不依賴來源 team 或 child 目錄。
+- exact unified patch 在 temporary baseline 上經 Git round-trip，核對原始 bytes、
+  tested variant digest 與 protected surfaces；支援 YAML 序列化、CRLF、無末尾換行及中文路徑。
+- 新 review 目錄經完整寫入、同步、再驗證後，以既有 teampkg publisher 抽出的共用
+  `fsutil.PublishDirectoryNoReplace` 原子發布；既有目錄與檔案不覆寫。
+- JSON／Markdown 來自同一 journal-derived report；保存 gate、逐 pair 結果、
+  pipeline／executor usage、attempts、baseline reuse 與觀察到的 admission-to-settlement 時間。
+- 有證據的 reflection 只輸出候選 lesson；invalid／missing evidence 輸出 `no_entry`，
+  fixture 標 synthetic，`adoption_authorized` 固定 false，沒有 memory／promotion 寫入。
+- `VerifyReviewBundle` 在來源與 control workspace 刪除後仍可離線驗證；
+  改寫 patch／candidate／Markdown／report、偽造模式與遺失證據皆拒絕。
+
+最終驗證全部 exit 0：
+
+| 命令 | 結果 |
+|---|---|
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test ./...` | CLI 265.363s、improver 223.535s、team 336.995s；其他套件通過 |
+| 匯出／patch／publication／CLI focused tests | 通過；improver 76.623s、CLI 4.750s |
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test ./internal/improver -run TestReviewBundleRequiresFinalReportAndPreservesNoChange -count=1` | 最後補上的未完成拒絕與 no-change 測試通過，4.561s |
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test -race ./internal/fsutil ./internal/improver -run 'TestPublishDirectoryConcurrentNoReplace\|TestReviewBundlePublicationFailuresLeaveNoPartialDestination' -count=1` | 通過；fsutil 1.079s、improver 48.323s |
+| `go vet ./...` | 最終版本通過 |
+| `go build -o /tmp/hufu-paired-phase5 ./cmd/hufu` | 通過 |
+| `GOLANGCI_LINT_CACHE=/tmp/hufu-harness-lint golangci-lint run` | 最終版本 0 issues |
+| `bin/check-docs`、`git diff --cached --check` | 通過 |
+
+T26–T28 覆蓋 patch/base drift、synthetic／invalid lesson、惡意文字不執行、
+匯出中斷清理、既有目錄不覆寫、來源 evidence 遺失與多種投影一致性。
 
 ## 1. 交付目標與完成邊界
 
@@ -596,6 +629,16 @@ show／export 不呼叫模型，不遷移來源 DB，不建立缺失的 journal�
 報告至少含：版本／build／fixture／variant IDs、effective models、execution_mode、逐 pair score／tokens／wall-clock、完整 coverage、各 gate、decision／reason_code、所有原始 attempts、baseline reuse、executor attributable tokens、pipeline spent/reserved/unknown、尚未回收 stage。時間只報觀察值；沒有延遲優化或美元節省結論。
 
 Review bundle 包含 manifest、exact unified patch、baseline／candidate inventories、source base hashes、typed changes、strict report ref／digest、canonical evidence 物件及可選 lesson。export 先遍歷 ref closure並驗證來源，再原子建立新目錄；同目錄存在即拒絕，不能只匯出指向會被刪除的臨時 workspace 路徑。不得夾帶 credential、原始未清理 trace 或設定檔 secret。
+
+實作的 `manifest.result` 保存完整 report projection；`timings` 逐 attempt 記錄 parent
+admission 到 settlement 的觀察秒數，包括 orchestration／recovery 間隔，不解讀成模型延遲。
+匯出上限為 100,000 個 refs／512 MiB unique object bytes，parent journal 編碼前上限 16 MiB。
+為保留原始 hash chain，parent journal 包含該控制 workspace 的完整、content-free experiment
+lifecycle；混入一般 runtime events 時拒絕匯出。輸出目錄父層必須存在，
+Linux／macOS／Windows 使用共用 exclusive rename，其他平台拒絕發布。
+非空 patch 需要本機 Git 做 temporary baseline round-trip，沒有外部服務依賴。
+未完成、blocked、cancelled 的實驗保留 `show` 診斷，不產生可採用的 bundle；
+成功匯出歷史 rejected report 仍 exit 0，因為此操作只保存審核資料。
 
 產生 patch 後在全新 baseline copy 進行 round-trip，重新載入、核對 authored bytes／variant_digest等於已測 candidate。失敗就不提供可採用 bundle。這個檢查只作用於暫存 copy，不套用正式 team。Bundle 明示 `adoption_authorized: false`；fixture 加 `synthetic: true`。Bundle 方便人工審查；人員批准、送 PR、正式 apply 與部署均不列入 coding agent 的 Done 條件。
 

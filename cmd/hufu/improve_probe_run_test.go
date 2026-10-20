@@ -59,6 +59,25 @@ func TestProbeRunShowResumeFrozenJSON(t *testing.T) {
 			t.Fatalf("%s report changed: %v", operation, err)
 		}
 	}
+	destination := filepath.Join(root, "review")
+	raw, err = executeProbeCommand(t, "export", "--experiment", "extraction_pair", "--workspace", path, "--out", destination, "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bundle improver.ReviewBundle
+	if err := json.Unmarshal(raw, &bundle, json.RejectUnknownMembers(true)); err != nil ||
+		bundle.Decision != report.Decision || bundle.SelectedVariant != report.SelectedVariant || !bundle.Synthetic {
+		t.Fatalf("export JSON differs from report: %v", err)
+	}
+	if _, err := executeProbeCommand(t, "export", "--experiment", "extraction_pair", "--workspace", path, "--out", destination); err == nil {
+		t.Fatal("export overwrote a previous bundle")
+	}
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := improver.VerifyReviewBundle(t.Context(), destination); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestProbeShowMissingAndNonterminalTUIAreSideEffectFree(t *testing.T) {

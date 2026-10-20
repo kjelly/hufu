@@ -1,6 +1,6 @@
 //go:build linux
 
-package teampkg
+package fsutil
 
 import "golang.org/x/sys/unix"
 

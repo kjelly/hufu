@@ -21,7 +21,7 @@ func newImproveProbeCommand() *cobra.Command {
 		Use: "probe", Short: "Run controlled, paired harness experiments",
 		SilenceUsage: true, SilenceErrors: true,
 	}
-	command.AddCommand(newProbePlanCommand(), newProbeRunCommand(), newProbeResumeCommand(), newProbeShowCommand())
+	command.AddCommand(newProbePlanCommand(), newProbeRunCommand(), newProbeResumeCommand(), newProbeShowCommand(), newProbeExportCommand())
 	return command
 }
 
