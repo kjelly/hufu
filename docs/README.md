@@ -115,6 +115,8 @@ to re-create an abstraction that already exists in the runtime.
   active, and auto (per-request script routing) Ollama embedding lane for
   canonical memory, per-item freshness, and the `hufu context semantic`
   commands.
+- [Team authoring baseline](reference/team-authoring-baseline.md) — pre-change
+  build, full-suite, vet, lint, and coordinator-fallback evidence.
 - [Context delivery baseline](reference/context-delivery-baseline.md) — pre-change
   full-suite results and the Unix socket temporary-path requirement.
 - [Context delivery evaluation](reference/context-delivery-evaluation.md) — provider
