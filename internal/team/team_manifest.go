@@ -300,6 +300,12 @@ func validateManifestTemplateVars(vars map[string]string, filename string) error
 	return nil
 }
 
+// RenderTeamManifest renders captured manifest bytes with the loader's variable
+// binding rules. It does not read files, compile contracts or start services.
+func RenderTeamManifest(data []byte, filename string, overrides map[string]string) ([]byte, map[string]string, error) {
+	return renderTeamManifest(data, filename, overrides)
+}
+
 func renderTeamManifest(data []byte, filename string, overrides map[string]string) ([]byte, map[string]string, error) {
 	vars, err := manifestTemplateVars(data, filename, overrides)
 	if err != nil {

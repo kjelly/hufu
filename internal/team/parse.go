@@ -1454,6 +1454,10 @@ func LoadTeam(teamDir string, vars map[string]string, forcedSkills []string, reg
 }
 
 func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []string, registry *ProviderRegistry, mode TeamCompileMode, diagnostics *[]ContractFinding) (*TeamSession, error) {
+	return loadTeamWithOptions(teamDir, vars, forcedSkills, registry, mode, diagnostics, TeamLoadOptions{})
+}
+
+func loadTeamWithOptions(teamDir string, vars map[string]string, forcedSkills []string, registry *ProviderRegistry, mode TeamCompileMode, diagnostics *[]ContractFinding, options TeamLoadOptions) (*TeamSession, error) {
 	absDir, err := filepath.Abs(teamDir)
 	if err != nil {
 		return nil, fmt.Errorf("invalid team directory: %w", err)
@@ -1761,6 +1765,9 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 	session.Config.Vars = interfaceVars
 
 	skillDirs := teamSkillSearchPaths(absDir)
+	if options.SkillSearchPaths != nil {
+		skillDirs = options.SkillSearchPaths
+	}
 
 	allSkills := skill.DiscoverSkills(skillDirs, false)
 

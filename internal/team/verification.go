@@ -485,6 +485,12 @@ func ExecuteVerificationSpecWithStepsAndTaskResult(parentCtx context.Context, sh
 	}
 }
 
+// ValidateVerificationSpec performs the runtime's static verifier validation
+// without running a command or reading task evidence.
+func ValidateVerificationSpec(spec VerificationSpec) error {
+	return validateVerificationSpec(spec)
+}
+
 func validateVerificationSpec(spec VerificationSpec) error {
 	if err := validateVerificationMode(spec.Mode); err != nil {
 		return err

@@ -5,7 +5,7 @@
 > Verified-Commit: `af4875f1720d2315cbaa2f2e866d11cb78ab1882`
 > Supersedes: —
 > Superseded-By: —
-> Execution-Status: ready for implementation；依第 12 節分階段交付。
+> Execution-Status: PR 1 已完成；PR 2–5 依第 12 節繼續交付。
 > 日期：2026-10-20。
 > 程式碼查核基準：`af4875f1720d2315cbaa2f2e866d11cb78ab1882`。
 > 範圍決定：使用者已選擇「本次只做可離線驗收的功能，真實評測與隔離部署另案處理」。
@@ -15,7 +15,7 @@
 ## 實作進度
 
 - [x] Baseline：完整測試、build、vet、lint、文件及隱藏 team 測試。
-- [ ] PR 1：契約、materializer 與 plan CLI。
+- [x] PR 1：契約、materializer 與 plan CLI。
 - [ ] PR 2：耐久 controller 與總預算。
 - [ ] PR 3：手動 probe 與 runtime 閉環。
 - [ ] PR 4：有界 Propose–Probe–Compose。
@@ -36,6 +36,29 @@ Go 原始碼與 `af4875f1720d2315cbaa2f2e866d11cb78ab1882` 相同。
 | `GOLANGCI_LINT_CACHE=/tmp/hufu-harness-lint golangci-lint run` | 0 issues |
 | `bin/check-docs` | 78 active、158 total、440 relative links、37 Go anchors |
 | `git diff --check` | 通過 |
+
+### PR 1 驗證紀錄
+
+2026-10-20，在 baseline 提交 `2edff617` 上完成：
+
+- `internal/improve/paired`：嚴格設定／fixture／program 契約、preview 與 committed plan
+  的型別區分、整數不失真的 canonical digest、純配對計分。
+- `internal/improver`：受限檔案封存、authored／effective 雙層比較、Markdown／flat／
+  versioned inline／shorthand／skill body、template 展開後預檢、局部 schema closure
+  bundling、policy 欄位分類與 schema coverage fixture。
+- `hufu improve probe plan --config <file> [--json] [--out <new-file>]`：
+  不讀 host provider 設定、不建立 workspace、不建立 provider；輸出明示 runtime preflight pending。
+- 完整範例位於 `internal/improver/testdata/extraction/`；fixture 仍不代表真實品質結果。
+
+驗證全部通過：focused tests、`TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test ./...`
+（最終 `internal/team` 267.900s）、`go vet ./...`、
+`go build -o /tmp/hufu-paired-phase1 ./cmd/hufu`、
+`GOLANGCI_LINT_CACHE=/tmp/hufu-harness-lint golangci-lint run`（0 issues）、
+`bin/check-docs`、`git diff --check`。
+實際 binary smoke test 以完整範例輸出合法 JSON，stderr 為空；
+`--out` 建立預覽檔，明示指定的 workspace 沒有被建立。
+T01–T07、T20 的相關離線邊界已有測試；runtime execution、journal、resume 與 export
+仍由後續階段交付。
 
 ## 1. 交付目標與完成邊界
 
@@ -184,6 +207,11 @@ cases:
 
 每 case 必須有唯一合法 ID、非空 UTF-8 input 及非空 verify assertions。`critical` 預設 false。結果 schema 使用現有 Draft 2020-12 result-contract compiler，所有 `$ref` 必須解析為 fixture closure 內的檔案；禁網路 schema ref。固定字彙使用 enum。首版 assertion ops 僅 `exists`、`non_empty`、`equals`、`min_items`、`contains_scalar`，其型別與資源限制重用現有 validator。只允許指向 `/structured_payload` 子樹，不評分 summary 自述。
 
+此新 fixture 契約的 `mode: blocking` 在 adapter 明確映射為既有 task verifier 的
+`Mode: success`；現有 verifier 不接受 `blocking`，不能原字串直傳，也不修改既有 mode enum。
+跨檔案的普通 `$ref` 先封存、轉為單一文件的 fragment refs，再交既有 compiler；
+跨 resource 的 dynamic refs／dynamic anchors 首版拒絕，不改寫其 scope 語意。
+
 輸入、schema 與 evaluator 檔案都在第一次 stage admission 前凍結。首版所有 case 都是 required development cases，沒有 optional case、hidden holdout 或連線取得資料。驗證條件是公開的任務要求，可以隨固定 task contract 提供；不宣稱 blind grading。禁止 shell command、任意 renderer、程式碼判分或模型評分。
 
 每個資料檔最多 1 MiB，case input／單份提示內容最多 64 KiB；closure 最多 1000 個 regular files、合計 32 MiB。超過拒絕，不能默默截斷。PR 1 用常數集中管理限制並測試邊界。
@@ -298,6 +326,10 @@ PR 1 必須建立 typed classification table：
 - tool grants、roles、generation、result contracts、routes、capabilities、verification、network、memory、budget 都是 fixed；有 hash 包含物理 root 時需從受信任的 resolved typed input 重建 logical projection，不能直接刪 hash。
 - `subject_root`、`team_root`、`control_root` 僅按 materializer 登記的精確 root 映射為各自 logical IDs；禁止通用 regex 忽略所有 path／hash。
 - 指定 System／skill bodies 是 variant；未指定提示與 roster 都是 fixed。
+- `AgentDef.Capabilities` 是 loader 從 System 推導的描述文字，與機器可驗證的
+  capabilities／requirements／tool grants 不同。只在指定 System surface 上確認其
+  等於既有推導函式輸出後列為 derived variant；固定 worker、禁止動態委派，
+  不以這段文字變動取得能力。其餘 worker 的描述仍固定。
 - run IDs、receipt IDs、時間戳是 evidence；仍保留於原始 policy 或 journal。
 - build／policy schema 不支援、未知欄位、無法分類的 opaque policy hash都拒絕 strict comparison。
 

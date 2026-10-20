@@ -231,6 +231,12 @@ func CompileTeam(teamDir string, vars map[string]string, forcedSkills []string, 
 // lint. Lint mode converts explicitly recoverable authoring failures into
 // diagnostics while preserving ordinary parse, template, and I/O errors.
 func InspectTeam(teamDir string, vars map[string]string, forcedSkills []string, registry *ProviderRegistry, mode TeamCompileMode) (*TeamInspection, error) {
+	return InspectTeamWithOptions(teamDir, vars, forcedSkills, registry, mode, TeamLoadOptions{})
+}
+
+// InspectTeamWithOptions applies explicit discovery boundaries while retaining
+// the same normalization, contract compilation and diagnostics as InspectTeam.
+func InspectTeamWithOptions(teamDir string, vars map[string]string, forcedSkills []string, registry *ProviderRegistry, mode TeamCompileMode, options TeamLoadOptions) (*TeamInspection, error) {
 	if mode != TeamCompileRuntime && mode != TeamCompileLint {
 		return nil, fmt.Errorf("unsupported team compile mode %q", mode)
 	}
@@ -244,7 +250,7 @@ func InspectTeam(teamDir string, vars map[string]string, forcedSkills []string, 
 	}
 	inspection := &TeamInspection{Sources: sources}
 	var diagnostics []ContractFinding
-	session, err := loadTeamWithMode(teamDir, vars, forcedSkills, registry, mode, &diagnostics)
+	session, err := loadTeamWithOptions(teamDir, vars, forcedSkills, registry, mode, &diagnostics, options)
 	if err != nil {
 		if mode == TeamCompileLint {
 			if compositionErr, ok := errors.AsType[*compositionError](err); ok {

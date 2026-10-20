@@ -632,6 +632,12 @@ func cloneExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) *ExecutionP
 	return &clone
 }
 
+// ValidateExecutionPolicySnapshot verifies the durable structure and its
+// original configuration hash without changing policy or initializing runtime.
+func ValidateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
+	return validateExecutionPolicySnapshot(snapshot)
+}
+
 func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	if snapshot == nil {
 		return fmt.Errorf("execution policy snapshot is missing")
