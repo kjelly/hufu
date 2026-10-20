@@ -370,6 +370,8 @@ export extern "hufu context semantic status" [--workspace(-w): string --project:
 export extern "hufu context semantic build" [--workspace(-w): string --project: string --team: string@'nu-complete hufu teams' --json --dry-run]
 export extern "hufu context semantic verify" [--workspace(-w): string --project: string --team: string@'nu-complete hufu teams' --json --strict --offline]
 
+export extern "hufu team capabilities" [team: string@'nu-complete hufu teams' --output: string@'nu-complete hufu inspect formats']
+
 export extern "hufu team create" [
   name: string
   --preset: string

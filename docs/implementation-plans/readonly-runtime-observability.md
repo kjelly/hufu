@@ -1,9 +1,9 @@
 # Hufu 唯讀路由分析、成本統計與工具整合實作計畫
 
-> **狀態**：Ready for implementation；從 WP-00 開始，依依賴順序完成 WP-01～WP-05。
+> **狀態**：剩餘工作可開始實作；WP-00～WP-04 的完成與驗證紀錄見 [進度文件](readonly-runtime-observability-progress.md)。接續 WP-05。
 > **修訂日期**：2026-10-20
 > **核對基準**：`kjelly/hufu`，HEAD `3715d61001b9122a3828e3202487f7446598f894`。
-> **交付性質**：本文件列出尚待實作的功能與驗收契約，不代表功能已存在。全部工作可由 Coding Agent 使用本機程式碼、合成 fixture 與離線測試完成。
+> **交付性質**：本文件保留各工作包的功能與驗收契約；實際完成狀態以進度文件與對應程式碼為準。剩餘工作可由 Coding Agent 使用本機程式碼、合成 fixture 與離線測試完成。
 > **使用者確認的驗收範圍**：本次不含真實試跑；日後另立任務。
 > **文件位置**：依使用者指示移入 `docs/implementation-plans/readonly-runtime-observability.md` 並納入版本控制；每完成一個工作包，驗證後獨立提交。
 
@@ -301,8 +301,9 @@ golangci-lint run
 ```text
 Read AGENTS.md and this plan at its current path.
 Record HEAD and inspect existing implementation/tests before editing.
-Implement WP-00 first, reusing characterization tests and fixture helpers.
-Continue through WP-01 and WP-02, then WP-03, WP-04 and WP-05 in reviewable changes.
+Read readonly-runtime-observability-progress.md and verify completed work against the checkout.
+WP-00 through WP-04 are recorded as complete; reuse their implementation and fixtures.
+Finish WP-05 in a reviewable change.
 Use canonical read-only scope binding, event replay, evidence and cost projections.
 Keep all validation offline with generated fixtures and the existing MCP SDK client.
 Do not run real models, collect user data, add adaptive routing, or deploy services.

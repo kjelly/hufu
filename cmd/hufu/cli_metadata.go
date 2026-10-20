@@ -31,6 +31,7 @@ var canonicalExamples = []exampleMetadata{
 	{Section: "Quick start", Argv: "hufu doctor"},
 	{Section: "Quick start", Argv: "hufu team create dev-team --wizard"},
 	{Section: "Quick start", Argv: "hufu team check dev-team"},
+	{Section: "Quick start", Argv: "hufu team capabilities dev-team --output json"},
 	{Section: "Quick start", Argv: `hufu run --team dev-team -- "review this codebase"`},
 	{Section: "Quick start", Argv: `hufu run --profile coding -- "implement the feature"`},
 	{Section: "Model selection", Argv: `hufu run --team dev-team -m codex/gpt-6-luna --worker-model coder=codex/gpt-6-sol --worker-model reviewer=codex/gpt-6-sol -- "implement feature X"`},

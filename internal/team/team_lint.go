@@ -69,6 +69,12 @@ func LintTeamWithOptions(teamDir string, options TeamLintOptions) (TeamLintResul
 	if err != nil {
 		return TeamLintResult{}, err
 	}
+	return lintTeamInspection(teamDir, options, inspection)
+}
+
+// lintTeamInspection lets metadata readers reuse the same offline findings
+// without loading a second, potentially different team definition.
+func lintTeamInspection(teamDir string, options TeamLintOptions, inspection *TeamInspection) (TeamLintResult, error) {
 	result := TeamLintResult{Team: filepath.Base(filepath.Clean(teamDir)), Complete: inspection.Complete, Findings: make([]TeamLintFinding, 0)}
 	if inspection.Session != nil {
 		policy, policyErr := resolveTeamLintPolicy(inspection.Session, options)

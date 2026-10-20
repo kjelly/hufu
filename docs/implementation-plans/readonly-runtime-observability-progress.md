@@ -138,6 +138,32 @@
 signal、raw mode 或 subprocess lifecycle，因此沒有新增此功能專用的 L4 PTY test；
 不把上述測試稱為完整 terminal E2E。未進行真實模型試跑。
 
+## WP-04：靜態能力清單（完成）
+
+- 新增 `hufu team capabilities <team> --output text|json`，沿用 team discovery、
+  靜態 compiler 與 lint findings，不啟動 runtime、provider 或 MCP server。
+- 清單保留 skill precedence 與 team/project/user 來源；draft 單獨列示，
+  不遮蔽正式技能、不進入 runtime。缺失技能明確列為 unavailable。
+- Action catalog/provider identity 沿用 canonical hash；技能新增 version/domain
+  content digest，排除路徑、時間與衍生摘要。Digest 不代表簽章或執行檔可信。
+- Remote MCP schema/hash/availability 保持 unknown；只有通過既有驗證的
+  explicit policy 才投影 effect/grant，不解析 shell 或自然語言推測副作用。
+- JSON 省略 endpoint、argv、環境內容、skill body 及絕對來源路徑；
+  非安全識別名稱使用穩定 opaque label。同步 reference、CLI examples 與 completion。
+- 測試涵蓋同名技能遮蔽、draft 與正式技能並存、缺失技能、重複 agent、
+  canonical action hash/grants、MCP unknown/invalid policy、敏感設定不外洩、
+  digest 身份、穩定清單與 CLI text/JSON。
+
+驗證：
+
+- 定向測試：exit 0；`/tmp/hufu-wp04-focused.log`。
+- `GOTMPDIR=/tmp go vet ./...`：exit 0；`/tmp/hufu-wp04-vet.log`。
+- lint：exit 0，`0 issues`；`/tmp/hufu-wp04-lint.log`。
+- `GOTMPDIR=/tmp go test ./...`：exit 0；`/tmp/hufu-wp04-full-test.log`。
+  包含最後新增的 action catalog 身份測試；完整 suite 使用允許本機 fake server
+  socket 的環境，未進行真實模型試跑。
+
 ## 尚未完成
 
-WP-04、WP-05 尚未實作。未執行的驗收不得視為通過。
+WP-05 尚未實作。未執行的驗收不得視為通過。
+真實模型品質與節費試跑依使用者確認另立任務，不列為本計畫的待辦或驗收門檻。

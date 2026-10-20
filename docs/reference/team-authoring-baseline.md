@@ -200,3 +200,33 @@ tests live in `internal/team/team_inline_test.go` and
 | T23 | `TestTeamInlineStaticCommandsNeverExecute`, `TestTeamInlineProcessJourney`, `TestTeamInlineProviderAndPolicyParity` |
 | T24 | `TestTeamInlineMigration`, `TestTeamInlineMergePrecedence`, `TestTeamInlineProviderAndPolicyParity`, `TestTeamCompositionDiscoveryMigrationAndBindings`, `TestTeamInlineProcessJourney` |
 | T25 | `TestBundledTeamsNormalize`, `TestTeamCompatFixtures`, `TestLegacyAndV1Alpha1NormalizeIdentically`, `TestLoadTeamKeepsBuiltInHelperForValidAgents`, full package/suite gates |
+## Static capability inventory
+
+Use `hufu team capabilities <team> --output text|json` to inspect local skill,
+action-provider and MCP declarations without starting the team. The command
+uses team discovery and the static compiler/lint pipeline; it does not create
+a workspace, execute providers, install packages or connect to MCP servers.
+
+The JSON inventory has `schema_version: 1`, `team`, `complete`, `capabilities`
+and content-free `diagnostics`. Each capability includes `id`, `name`, `origin`,
+`owner`, `content_digest`, `availability`, `declared_tools`, `declared_grants`,
+`effect_class` and `diagnostics`. Rows sort by origin, owner and ID.
+
+`available` means a local definition is statically available, not that execution
+is authorized. `draft` skills remain excluded from runtime discovery.
+`unavailable` identifies a missing or invalid local requirement; `unknown`
+preserves facts that cannot be established offline, including remote tool
+availability and native schemas. Normal skill precedence is retained; `sources`
+shows team/project/user shadowing without exposing absolute paths.
+
+Effects come from validated explicit declarations, never from shell commands or
+prose. Missing declarations and hashes are null. Action hashes reuse canonical
+catalog/provider identity; skill hashes use a versioned content digest that
+excludes filesystem paths and timestamps. These hashes do not authenticate an
+author, and a command-provider identity does not attest to executable contents.
+Unqueried MCP descriptors have no digest.
+
+The inventory omits endpoints, command arguments, environment values and skill
+bodies. Unusual identifiers are rendered as stable opaque identifiers. Installed
+teams are listed by their underlying capability types; package archive inventory
+remains available through `hufu team package inspect`.

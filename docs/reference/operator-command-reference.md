@@ -34,6 +34,10 @@ hufu team check dev-team
 ```
 
 ```sh
+hufu team capabilities dev-team --output json
+```
+
+```sh
 hufu run --team dev-team -- "review this codebase"
 ```
 
