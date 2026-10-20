@@ -118,4 +118,85 @@ contract identity with the existing migration verifier, alongside full AgentDef
 equality. No runtime contract was weakened for this test. The safe-ops recovery
 lint error remains identical across compact and expanded forms.
 
-PR-2 (inline workers and distinct-name three-source composition) remains outstanding.
+### PR-2 — Inline workers and three-source composition
+
+Parent implementation baseline: `c926af45`. Flat and v1alpha1 manifests now
+accept scalar or mapping inline workers with a required Agent Preset. Strict
+node validation rejects null (including aliases), implicit string coercions,
+unknown/advanced fields, duplicate or reserved identities, invalid numeric
+limits, wildcard tools and empty final grants. The shared normalizer, identity
+registry and existing downstream contract/policy gates remain authoritative.
+
+Preset, inline and Markdown members compose only under distinct identities.
+All six Agent Presets and explicit mapping fields compare equal to Markdown
+AgentDefs. Regression fixtures cover team-level denies and no-net, template
+timing, action catalog and capability routing, static result contracts, worker
+memory/workspace defaults, model routes, CLI/profile overrides and Helper.
+The fake provider executes an inline worker through typed submit_result;
+format/map-order changes preserve the configuration hash and existing
+resume-drift decisions for tool, model and network changes.
+
+Prompt, tool and skill lint now retain inline YAML field paths, including
+versioned and aliased instructions. Folded/escaped prompts point to their
+owning scalar; generated text has field-only provenance. Migration preserves
+literal templates, scalar/mapping shape, explicit zero values and empty maps
+and lists, while expanding aliases/merges into self-contained declarations.
+
+CLI process tests cover list/show/explain/validate/lint/add/migration, stable
+JSON and exit codes, ignored findings, no partial JSON, collision rejection
+without writes, and a real versioned migration reload. Instrumented executable
+fixtures prove static commands do not start MCP, verifiers or acceptance.
+README English/Chinese, references, CLI help and the Team Builder skill now
+describe the same supported boundaries.
+
+| Check | Result |
+|---|---|
+| `go build -o /tmp/hufu-yaml-pr2 ./cmd/hufu` | PASS |
+| Focused `TestTeamInline*` regressions (`-count=1`) | PASS (team: 1.772s; CLI: 20.543s); the later team-policy assertion is included in the full stage gate below |
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test ./internal/team/... ./cmd/hufu/...` | PASS (team: 252.128s; CLI: 160.320s; preset: cached) |
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test ./...` | PASS, exit 0 (team/CLI cached from the stage gate; evalharness: 42.405s; tools: 49.009s; all other packages passed or reused valid cached results) |
+| `go vet ./...` | PASS |
+| `GOLANGCI_LINT_CACHE=/tmp/hufu-yaml-lint-cache golangci-lint run` | PASS, `0 issues` |
+| `bin/check-docs` and `git diff --check` | PASS |
+
+All three stages and the plan's completion conditions are satisfied. The plan
+remains at its requested path with historical status; current authoring
+guidance lives in the references. No live model, external deployment or
+operator action is needed to reproduce the automated validation.
+
+## Plan verification map
+
+The plan's T01–T25 cases map to the following executable tests. Command outcomes
+are recorded per stage above; this map does not replace a passing test run.
+Composition tests live in `internal/team/team_composition_test.go`; inline
+tests live in `internal/team/team_inline_test.go` and
+`cmd/hufu/team_inline_test.go`. Single-file process/ownership tests live in
+`cmd/hufu/team_single_file_test.go`.
+
+| Case | Executable evidence |
+|---|---|
+| T01 | `TestTeamLintMissingCoordinator`, `TestTeamLintFallbackProcessContract` |
+| T02 | `TestTeamLintMultipleCoordinators`, `TestAgentIdentityInference_DuplicateInferredNameCollision`, `TestLoadTeamRejectsReservedHelperIdentity` |
+| T03 | `TestTeamLintUnsupportedSchemaIsFinding`, `TestTeamLintMalformedYAMLIsExit2`, `TestTeamLintJSONBackwardCompatibleV1`, `TestTeamLintIgnoreByCode`, `TestTeamLintProfileMatchesRuntimePolicyProjection` |
+| T04 | `TestTeamPreset_RenderedFilesCompileThroughOrdinaryPipeline`, `TestAgentIdentityInference_CoordinatorFilenameInfersCoordinatorRole` |
+| T05 | `TestTeamCompositionPresetParity` |
+| T06 | `TestTeamCompositionInvalidPreset` |
+| T07 | `TestTeamCompositionCollisionAndMixedSources` |
+| T08 | `TestTeamSingleFileProcessJourney`, `TestTeamCompositionDiscoveryMigrationAndBindings`, `TestTeamCompositionProviderExecutionAndPolicyParity` |
+| T09 | `TestTeamSingleFileProcessJourney`, `TestRunTeamCreate_DefaultScaffoldsSingleWorker`, `TestRunTeamCreate_TeamPreset` |
+| T10 | `TestTeamSingleFileProcessJourney`, `TestTeamSingleFileConcurrentCreate`, `TestTeamSingleFileOwnershipAndRollback` |
+| T11 | `TestTeamSingleFileOwnershipAndRollback`, `TestTeamSingleFileCleanupPreservesReplacedDirectory` |
+| T12 | `TestTeamSingleFileProcessJourney`, `TestTeamInlineProcessJourney`, `TestRunTeamAdd_RollsBackOnValidationFailure` |
+| T13 | `TestTeamInlineAgentParity`, `TestTeamInlineMappingParity` |
+| T14 | `TestTeamInlineStrictDecoding`, `TestTeamInlineDecodeErrorSource`, `TestTeamInlineProcessErrors` |
+| T15 | `TestTeamInlineSemanticFailures`, `TestTeamInlineStrictDecoding`, `TestTeamLintMissingCoordinator` |
+| T16 | `TestTeamInlineMappingParity`, `TestTeamInlineCannotUndoTeamToolPolicy`, `TestTeamInlineSemanticFailures` |
+| T17 | `TestTeamInlineThreeSourceComposition`, `TestTeamInlineProviderAndPolicyParity`, `TestTeamInlineProcessJourney` |
+| T18 | `TestTeamInlinePromptAndSkillLint`, `TestTeamInlineAliasPromptSource`, `TestTeamInlineProcessJourney`, `TestTeamInlineProcessErrors` |
+| T19 | `TestTeamInlineTemplateTiming`, `TestTeamInlineMappingParity` |
+| T20 | `TestTeamInlineBindingsAndDefaults`, `TestTeamInlineCapabilityRouting`, `TestTeamCompositionDiscoveryMigrationAndBindings` |
+| T21 | `TestTeamInlineBindingsAndDefaults`, `TestTeamInlineMappingParity`, `TestTeamInlineModelOverrides`, `TestTeamInlineProfileOverrides`, existing `TestWorkerModelProfileAndCLIEndToEnd` |
+| T22 | `TestTeamCompositionProviderExecutionAndPolicyParity`, `TestTeamInlineProviderAndPolicyParity`, existing `TestExecutionPolicySnapshotGatesDirectTaskExecutionOnLiveDrift` |
+| T23 | `TestTeamInlineStaticCommandsNeverExecute`, `TestTeamInlineProcessJourney`, `TestTeamInlineProviderAndPolicyParity` |
+| T24 | `TestTeamInlineMigration`, `TestTeamInlineMergePrecedence`, `TestTeamInlineProviderAndPolicyParity`, `TestTeamCompositionDiscoveryMigrationAndBindings`, `TestTeamInlineProcessJourney` |
+| T25 | `TestBundledTeamsNormalize`, `TestTeamCompatFixtures`, `TestLegacyAndV1Alpha1NormalizeIdentically`, `TestLoadTeamKeepsBuiltInHelperForValidAgents`, full package/suite gates |

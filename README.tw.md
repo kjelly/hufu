@@ -108,6 +108,22 @@ Team Preset 為 `coding-single`、`coding-reviewed`、`research`、`safe-ops`。
 既有未帶此旗標的建立流程不變。`coding-reviewed` 只提供 reviewer，不保證固定順序或客觀審查 gate；
 Helper 與工具權限維持既有行為，Preset 名稱不代表 OS sandbox。`safe-ops` 仍須滿足既有 reconciliation／recovery lint 規則。
 
+自訂成員時，也可直接撰寫以下 `team.yaml`：
+
+```yaml
+agents:
+  architect: readonly
+  coder:
+    preset: coding
+    instructions: 實作修改、執行測試並回報結果。
+  reviewer: review
+```
+
+每位 inline worker 必須指定 Agent Preset（`readonly`、`coding`、`review`、`research`、`writer`、`ops`）。
+Inline、Team Preset 與 Markdown 可用不同名成員組合；自訂 coordinator 或進階契約仍使用 Markdown。
+Inline tools 會加上 Preset grants，再套 deny；最後為空則拒絕，避免意外啟用全部工具。
+Inline 模板使用 manifest vars，此時尚無自動 roster 變數。詳見 [inline worker 規格](docs/reference/agent-format.md#inline-worker)。
+
 下列多檔格式仍可使用：
 
 在專案根目錄建立 `.agent-teams/` 資料夾，並加入團隊定義：

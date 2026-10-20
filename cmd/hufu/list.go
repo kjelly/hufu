@@ -26,6 +26,7 @@ var listCmd = &cobra.Command{
 	Long: `Show every team hufu can find, and for each team its agents with their
 role, model, tools and skills — so you know what you can call before you call it.
 
+Includes Team Preset, inline worker and Markdown members, without injected helpers.
 Malformed manifests or invalid composed rosters return an error, without partial JSON.
 
 Usage:

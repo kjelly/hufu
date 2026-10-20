@@ -2,7 +2,9 @@ package team
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -56,7 +58,7 @@ func HasTeamComposition(dir string, vars map[string]string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", file, err)
 	}
-	return cfg.Preset != "", nil
+	return cfg.Preset != "" || cfg.Agents != nil, nil
 }
 
 func loadTeamComposition(dir string, vars map[string]string) ([]compositionAgentCandidate, error) {
@@ -68,8 +70,16 @@ func loadTeamComposition(dir string, vars map[string]string) ([]compositionAgent
 	if err != nil {
 		return nil, err
 	}
+	prefix := ""
+	if version == SchemaVersionV1Alpha1 {
+		prefix = "spec."
+	}
+	inline, err := normalizeInlineAgents(cfg.Agents, file, prefix, dir)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.Preset == "" {
-		return nil, nil
+		return inline, nil
 	}
 	field := "preset"
 	if version == SchemaVersionV1Alpha1 {
@@ -99,7 +109,7 @@ func loadTeamComposition(dir string, vars map[string]string) ([]compositionAgent
 		source := &compositionAgentSource{file: file, field: field, detail: "team-preset:" + teamPreset.Name + "/" + alias, preset: declaration.AgentPreset, origin: SourcePreset, frontmatter: fm}
 		candidates = append(candidates, compositionAgentCandidate{def: def, path: filepath.Join(dir, file) + ":" + field + "[" + alias + "]", source: source})
 	}
-	return candidates, nil
+	return append(candidates, inline...), nil
 }
 
 // IsComposedAgent distinguishes manifest declarations from authored Markdown.
@@ -127,9 +137,30 @@ func (s *TeamSession) addCompositionSourceIndex(index *TeamSourceIndex) {
 		}
 		loc := index.Location(source.field)
 		// The declaration is exact; generated prompt text has no authored span.
-		index.Agents[def.FileAlias] = AgentSource{File: source.file, Body: def.System, BodyStatus: LocationFieldOnly, Fields: map[string]TeamSourceLocation{
+		bodyLocation := loc
+		bodyLocation.Status = LocationFieldOnly
+		agentSource := AgentSource{File: source.file, Body: def.System, BodyField: source.field, BodyStatus: LocationFieldOnly, Fields: map[string]TeamSourceLocation{
 			"name": loc, "role": loc, "tools": loc, "preset": loc, "side_effect": loc,
+			"system": bodyLocation,
 		}}
+		if source.origin == SourceTeam {
+			agentSource.FieldPath = source.field
+			for field, location := range index.Manifest {
+				if leaf, ok := strings.CutPrefix(field, source.field+"."); ok {
+					agentSource.Fields[leaf] = location
+				}
+			}
+			if location, exists := index.Manifest[source.field+".instructions"]; exists {
+				agentSource.BodyField = source.field + ".instructions"
+				// Point prompt findings to the owning scalar, including folded or escaped YAML.
+				// A decoded prompt does not have a generally exact per-character YAML span.
+				if text, exists := index.ManifestText[agentSource.BodyField]; exists {
+					location.Status = text.Status
+				}
+				agentSource.Fields["system"] = location
+			}
+		}
+		index.Agents[def.FileAlias] = agentSource
 	}
 }
 
@@ -145,4 +176,53 @@ func (source compositionAgentSource) effectiveAgent(def *agent.AgentDef) Effecti
 		Tools:      ResolvedValue[string]{Value: def.Tools, Source: SourcePreset, Detail: toolsDetail},
 		SideEffect: ResolvedValue[string]{Value: def.SideEffect, Source: SourcePreset, Detail: toolsDetail},
 	}
+}
+
+func normalizeInlineAgents(agents *teamAgentDeclarations, file, prefix, dir string) ([]compositionAgentCandidate, error) {
+	if agents == nil {
+		return nil, nil
+	}
+	candidates := make([]compositionAgentCandidate, 0, len(*agents))
+	for _, id := range slices.Sorted(maps.Keys(*agents)) {
+		declaration := (*agents)[id]
+		field := prefix + "agents." + id
+		invalid := func(code, leaf, message, hint string) error {
+			errorField := field
+			if leaf != "" {
+				errorField += "." + leaf
+			}
+			return &compositionError{finding: ContractFinding{Severity: FindingSeverityError, Code: code, Field: errorField, Message: file + ": " + message, Hint: hint}}
+		}
+		key := normalizedName(id)
+		if key == "helper" || strings.Contains(key, "coordinat") || strings.Contains(key, "orchestr") {
+			return nil, invalid(FindingInlineAgentInvalid, "", "reserved inline worker identifier "+id, "choose another worker identifier; use coordinator.md for a custom coordinator")
+		}
+		fm := declaration.frontmatter
+		if _, ok := preset.Lookup(fm.Preset); !ok {
+			leaf := ""
+			if declaration.node.Kind == yaml.MappingNode {
+				leaf = "preset"
+			}
+			return nil, invalid(FindingInlineAgentInvalid, leaf, fmt.Sprintf("unknown Agent Preset %q", fm.Preset), "choose one of: "+strings.Join(preset.Names(), ", "))
+		}
+		fm.Name, fm.Role = id, "worker"
+		if fm.Description == "" {
+			fm.Description = id
+		}
+		body := declaration.instructions
+		if !declaration.hasInstructions {
+			body = "Perform the " + id + " role for this team."
+		}
+		def, err := normalizeAgentDefinition(fm, strings.TrimSpace(body), file+":"+field, "worker")
+		if err != nil {
+			return nil, invalid(FindingInlineAgentInvalid, "", err.Error(), "correct the inline fields or use Markdown for advanced contracts")
+		}
+		if strings.TrimSpace(def.Tools) == "" {
+			return nil, invalid(FindingInlineAgentToolsEmpty, "tools", "inline worker has no remaining tools; empty grants must not reach the wildcard selector", "retain at least one concrete tool from the Agent Preset")
+		}
+		def.FileAlias = id
+		source := &compositionAgentSource{file: file, field: field, detail: "inline:" + file + ":" + field, preset: fm.Preset, origin: SourceTeam, frontmatter: fm}
+		candidates = append(candidates, compositionAgentCandidate{def: def, path: filepath.Join(dir, file) + ":" + field, source: source})
+	}
+	return candidates, nil
 }

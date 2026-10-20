@@ -1,17 +1,17 @@
 # Hufu Team YAML Simplification — 可直接實作規格
 
-> Status: active
+> Status: historical
 > Authority: reference
-> Verified-Commit: 2026-10-20
+> Verified-Commit: 2026-10-20（PR-2 驗收；父提交 `c926af45`）
 > Supersedes: docs/tmp/spec.md（本機草案）
-> Superseded-By: —
+> Superseded-By: [Agent 定義規格](../reference/agent-format.md)、[Team manifest contracts](../reference/team-manifest-contracts.md)
 >
 > **文件 ID**：HF-TEAM-AUTHORING-UX-2026-10-20
 > **類型**：Implementation Plan / Coding Agent Spec
-> **狀態**：PR-0、PR-1 已完成；PR-2 尚未實作。驗證見 [階段紀錄](../reference/team-authoring-baseline.md)。
-> **基準**：`kjelly/hufu` 此工作目錄於 2026-10-20 的程式碼；實作前確認相關符號仍存在。
+> **狀態**：PR-0、PR-1、PR-2 均已完成並通過驗收。各階段命令結果與 T01–T25 測試對照見 [階段紀錄](../reference/team-authoring-baseline.md)。
+> **基準**：`kjelly/hufu`；PR-2 自 `c926af45` 接續實作，2026-10-20 完成全套驗證。
 > **交付順序**：PR-0 → PR-1 → PR-2。每階段均須可獨立編譯、測試與使用。
-> **文件位置**：`docs/implementation-plans/team-yaml-simplification.md`；依使用者指示移入正式文件並逐階段提交。
+> **文件位置**：保持本檔目前位置；依目標完成實作並逐階段提交。
 
 ## 0. 目標與執行範圍
 
@@ -24,6 +24,18 @@
 
 效益是減少樣板檔案與重複設定，保留既有 Markdown 進階能力。本功能不承諾提升模型品質、降低 token 用量或加快 worker 執行。
 
+| 可交付能力 | 可驗證的效益 |
+|---|---|
+| Team Preset 單檔建立 | `coding-reviewed` 從 manifest 加兩份 worker Markdown 減為一份 manifest；完整 AgentDef 與既有展開格式等價。 |
+| Scalar / inline worker | 自訂 worker 的名稱、Preset 與短 instructions 可集中維護；不必為每個短角色建立 Markdown。 |
+| 三來源統一檢查 | 同名／alias 衝突在執行前拒絕；list、lint、explain 對同一 roster 提供一致結果。 |
+
+### 交付與後續使用
+
+本檔保留已完成的設計、階段工作與驗收矩陣，不是要求重新建立這些功能。PR-0 提交為 `a56bbf57`，PR-1 提交為 `c926af45`；PR-2 的結果見階段紀錄。後續修改以現行 code／tests 與上方 reference 文件為準。依文件位置限制保留本檔原路徑，以 historical 狀態標示完成。
+
+本規格沒有必須先由使用者處理的帳號、設備、外部環境或產品決策。工作項僅包含 repository 內的程式、fixture、自動化測試與文件；實際模型品質評測與部署不列入交付。
+
 ### 實作邊界
 
 - 沿用 `decodeTeamManifestYAML`、`loadTeamWithMode`、`CompileTeam` / `InspectTeam`、既有 Team / Agent Preset Registry，不建立第二條執行管線。
@@ -33,17 +45,9 @@
 - 編譯、列舉與靜態檢查不啟動模型、MCP server、shell、verifier 或 acceptance，不建立 runtime workspace。
 - 本計畫不包含部署、發布、遠端服務設定、真實模型帳號開通、使用者訪談或人工驗收；自動化測試使用 fixture / fake provider。
 
-### 明確排除的功能
-
-以下不是待辦，不得在本次實作：
-
-- Preset 成員的同名 field patch、隱式繼承，及由 `.md` 同名取代 Preset 成員。
-- Inline coordinator、自訂 inline `role`，及變更 legacy coordinator 名稱 heuristic。
-- `--single-file` 覆寫既有目錄，或替所有既有 `--force` 建立流程重新設計 rollback。
-- 將全部 lint error 與 runtime validity 強行統一、批次調整既有 lint 嚴重度或改寫 ignore 契約。
-- 自動遷移現有團隊、compact export、新 workflow DSL、強制 reviewer gate、自然語言自動選擇高權限 Preset。
-
 ## 1. 已核對的基準與修改位置
+
+下表同時標示導入前問題與目前程式入口；已完成的差異以 PR-0／PR-1 階段紀錄為準，不作為新增待辦。
 
 | 現況 | 實作依據 |
 |---|---|
@@ -51,14 +55,14 @@
 | flat 與 `hufu.io/v1alpha1/spec` 共用欄位 | `internal/team/team_manifest.go` 的 `teamManifestSpecFields`、`decodeTeamManifestYAML` |
 | Team Preset 已有 `coding-single`、`coding-reviewed`、`research`、`safe-ops` | `internal/team/preset/team_preset.go` 的 `LookupTeam`、`Render` |
 | Agent Preset 已有 `readonly`、`coding`、`review`、`research`、`writer`、`ops` | `internal/team/preset/preset.go` 的 `Lookup` |
-| Preset grants 與 explicit allowlist 聯集，再套 deny | `internal/team/parse.go` 的 `parseAgentContent` |
-| 缺少 authored coordinator 時 runtime 有 fallback，lint 卻回報 error | `internal/team/coordinator_prompt.go:GetOrchestratorDef`、`parse.go:FindingMissingCoordinator` |
+| Preset grants 與 explicit allowlist 聯集，再套 deny | `internal/team/parse.go` 的 `normalizeAgentDefinition`（PR-1 已從 `parseAgentContent` 抽出） |
+| 導入前缺少 authored coordinator 時 lint 誤報 error；PR-0 已改 info | `internal/team/coordinator_prompt.go:GetOrchestratorDef`、`parse.go:FindingMissingCoordinator` |
 | 無明確 coordinator 時，runtime 仍依名稱含 `coordinat` / `orchestr` 選取 | `GetOrchestratorDef` 的第二段搜尋；本次保留舊行為 |
 | 空字串工具清單在 selector 中表示全部可用工具 | `internal/agent/agent.go:SelectToolNames`；新語法須防止意外產生空字串 |
 | Helper 在載入時注入，且包含寫檔工具 | `loadTeamWithMode`；不得把簡短設定或 `readonly` 成員描述成整個團隊唯讀 |
 | Team discovery 已接受只有 `team.yaml` 的目錄 | `internal/team/discovery.go:hasTeamFile`；補整合測試即可，不重寫 discovery |
-| `hufu list` 目前只掃描 `.md` | `cmd/hufu/list.go:collectListedTeam`、`printTeam`；必須支援新成員來源 |
-| explain 的 provenance 重新讀取 `.md` | `internal/team/effective_spec.go:newEffectiveTeamSpec`；新成員來源須由編譯結果提供 |
+| PR-1 的 `hufu list` 已支援 Team Preset，PR-2 須覆蓋 inline | `cmd/hufu/list.go:collectListedTeam`、`printTeam`；重用共用 inspection |
+| PR-1 已提供 composition provenance，legacy 路徑仍讀 `.md` | `internal/team/effective_spec.go:newEffectiveTeamSpec`、`team_composition.go`；PR-2 擴充 inline 來源 |
 | 既有相容性 snapshot 沒有 prompt、model、skills、Agent timeout | `internal/team/compat_snapshot.go:AgentSnapshot`；不能單靠它證明等價 |
 | 既有 create helper 對 preexisting 目錄失敗時不復原被覆寫內容 | `cmd/hufu/team_create_core.go:writeTeamFilesWithValidation`；新旗標拒絕既有目錄 |
 
@@ -143,7 +147,7 @@ agents:
 | 三種來源使用不同 identity | 接受；排序與 map 插入順序不影響結果 |
 | 兩個明確 Markdown coordinator | 維持既有拒絕／fatal finding |
 
-想自訂 Preset 成員時，改用不含 team-level `preset` 的完整 `agents` 或既有 `.md` 定義；不要在錯誤訊息引導使用未支援的覆寫語法。此規則在 PR-1 首次允許 Preset + Markdown 時就必須完成，不能留待後續 PR。
+想自訂 Preset 成員時，改用不含 team-level `preset` 的完整 `agents` 或既有 `.md` 定義；不要在錯誤訊息引導使用未支援的覆寫語法。成員宣告順序不代表 workflow；`coding-reviewed` 提供 reviewer 成員，不建立強制 review gate。
 
 ### 2.4 權限與模板
 
@@ -155,7 +159,7 @@ agents:
 - 缺值、recursive delimiter、渲染後殘留 `{@` / `@}` 的情況，按既有 manifest 規則報錯；不新增 escape 或二次解析機制。
 - Markdown 的模板時序與變數集合保持不變；不承諾與 inline 在未提供相同變數時等價。
 - 等價測試使用兩種格式皆可用且值相同的變數；另測試 `.md` 的既有 `TEAM_NAME` 行為與 inline 缺值拒絕。
-- Inline 的 `AGENT_COUNT` / `AGENT_NAMES` **輸出 roster 計算**仍須包含所有新增 worker 並依 definition 去重；不因此提前對 inline prompt 注入這些變數。
+- 含 composition 成員時，`AGENT_COUNT` / `AGENT_NAMES` **輸出 roster 計算**包含三種來源及既有 Helper，按 worker definition 去重後排序；不同 alias 不重複計數。沒有 composition 成員的舊團隊保留既有計數行為，不趁此修正 legacy 差異。不因此提前對 inline prompt 注入這些變數。
 
 ### 2.5 版本化格式
 
@@ -184,13 +188,21 @@ spec:
 8. `EffectiveTeamSpec` 的 name / role / tools / side-effect 來源及 explain 使用此 provenance，不再把沒有 `.md` 的新成員標成 builtin。保留現有 `ValueSource` enum 與 JSON 欄位；以 `SourcePreset` / `SourceTeam` 搭配 `Detail` 表示 `team-preset:<name>/<id>`、`inline:<manifest>:<field>`。工具來自 Agent Preset 時保留該來源與 deny 資訊。
 9. Provenance 不寫入 execution-policy hash，不改現有 policy snapshot schema；以實際相同的 `AgentDef` / policy 測試格式等價與 drift。若出現差異，先修正 normalization，不能移除既有 drift 欄位或放寬 resume。
 
+### Migration 與 YAML 保留規則
+
+- 延續現有 `team migrate --dry-run`：輸出至 stdout，不增加寫回功能，也不自動遷移現有團隊。測試可將輸出寫入自己的臨時 fixture 後重新編譯。
+- 保留新欄位的存在與 authored value：省略 `agents` 與明示 `agents: {}` 可區分；scalar shorthand 不變成帶有預設值的 mapping。Mapping 中的 `false`、`0`、空 list 與 literal template 不得被 `omitempty` 或 normalizer 吞掉。
+- YAML alias／merge 可以展開成自足的 declaration，不要求保留 anchor 名稱、註解、排版或原 key 順序；不得輸出 dangling alias。Merge 的 explicit-key 與 sequence precedence 沿用 `manifestMapping`，循環拒絕。
+- Runtime 在渲染後查 Registry；raw migration 不查未渲染的 Preset 字串。沿用既有不支援 typed／structural template 遷移時報錯的規則，不新增猜測或人工修復步驟。
+
 ### 診斷規則
 
-新 declaration 在 runtime compile／validate 拒絕，lint 也不得通過 `--fail-on error`。錯誤需含 owning manifest、`agents.<id>.<field>`（版本化格式為 `spec.agents...`）與可採取的建議；有 YAML node 時保留 line / column。跨來源衝突列出雙方來源，不依讀取順序選 winner。
+新 declaration 在 runtime compile／validate 拒絕，未被 ignore 的 error 也不得通過 lint 的 `--fail-on error`。錯誤需含 owning manifest、可確定的最小欄位路徑與可採取的建議；一般為 `agents.<id>.<field>`，scalar shorthand／保留 id 可指向 `agents.<id>`，版本化格式加 `spec.`。有 YAML node 時保留 line / column。跨來源衝突列出雙方來源，不依讀取順序選 winner。
 
 - 在 lint inspection 中，能安全投影的語意錯誤以既有 `TeamLintFinding` 表達；新 code 固定為 `team_preset_unknown`、`inline_agent_invalid`、`inline_agent_tools_empty`，跨來源 identity collision 沿用 `duplicate_agent`。
 - 結構／型別解碼失敗維持 `load_error` / exit 2；不能產生安全有效 roster 時 `Complete=false`，不得繼續派工。Fatal semantic finding 維持 exit 1。
 - 使用既有 `exact` / `rendered` / `field_only`；無法定位時不可捏造精確行列。
+- Inline instructions 的 prompt finding 指回 owning `instructions` YAML scalar；不要求計算 folded、quoted escape 或模板展開後某個 token 在原檔的精確位置。`field_path` 必須是該 instructions 路徑；line / column 依 source index，模板造成位置變化時沿用 `rendered`。由 Preset／省略欄位產生的文字只有 declaration 來源，使用 `field_only`，不得捏造 `.md` 或原文座標。Markdown 原定位方式不變。
 - 新 finding code 加入既有 known-code registry 並測試 `--ignore` 的原投影／threshold 行為；ignore 不會改變 compile 的有效性，也不授權 runtime 執行。
 - 不修改現有 lint JSON schema version、欄位型別、`--fail-on`、`--ignore`、unknown schema 與其他 exit-code 契約。
 
@@ -202,7 +214,7 @@ spec:
 | `hufu list`，text / table / JSON | 新語法團隊透過共用離線 inspection 取得已解析 roster，按 definition 去重並穩定排序，顯示 Preset / inline / authored Markdown 成員，不新增注入的 Helper 或 fallback coordinator。保留原 JSON 欄位名稱與型別；未使用新語法的合法團隊維持原輸出與 best-effort Agent 欄位讀取。先用共用 manifest reader / decoder 判定是否含新欄位；manifest 不可解析或新語法 inspection 不完整時，回傳非零並在 stderr 指向來源，不退回空 roster。這項錯誤處理也適用不可解析的 legacy manifest，須補 CLI 測試與 help 說明。JSON 輸出先收集成功再編碼，失敗時不輸出半份文件。 |
 | `team show` | 保持 authored view，呈現實際 `preset` / `agents`，不展開成 `.md` 或當作使用者寫過的 Agent 檔。保留原 manifest 檔名及 versioned shape。 |
 | `team add` | 寫入前用同一 composition identity 資料檢查欲新增名稱；與 Preset / inline 衝突即拒絕，`--force` 不能跨來源取代。不同名仍建立 `.md`。舊 `.md` 對 `.md` 的 force / rollback 語意不變。 |
-| `team migrate` | 保留原 migration 語意；新增欄位在 flat → v1alpha1 round trip 不遺失 declaration、instructions 或模板，不自動改成 compact 格式。 |
+| `team migrate --dry-run` | 保留原 preview 語意；新增欄位在 flat → v1alpha1 round trip 不遺失 declaration、instructions 或模板，不自動改成 compact 格式。 |
 | `@team` / 直接 `@worker` / `run --team` | 新成員與既有 session 成員同樣可解析、委派；以 fake provider / 無模型解析測試，不依賴真實模型。 |
 
 ## 4. 分階段工作與驗收
@@ -238,16 +250,27 @@ spec:
 
 ### PR-2 — Inline worker 與三種來源的不同名組合
 
-- [ ] 加入本文件精確列出的 `agents` typed schema、scalar shorthand、strict decoder；不接受 inline role／進階欄位／同名 patch。
-- [ ] Inline 重用 PR-1 的來源無關 normalizer，保留 Markdown 兼容解析，驗證空工具結果拒絕。
-- [ ] 完成 Preset + inline + Markdown 的不同名組合；重複、保留名、heuristic 名稱等錯誤有穩定來源資訊。
-- [ ] 註冊所有成員後再做 contracts、delegation、action catalog、worker routing、memory/result-contract/team workspace defaults 與 model route 的現有綁定及驗證；不得漏掉新成員或 alias 去重。
-- [ ] 補 source index 與 prompt/tool/skill lint；inline instructions 的 finding 指回 YAML 欄位。
-- [ ] 擴充 PR-1 的 list / show / add / migrate / direct worker 功能與 fixtures，確保三種來源都能檢查及列出。
-- [ ] 實作第 2.4 節模板行為與缺值測試，不更動現有模板 bootstrap 或 coordinator selector。
-- [ ] 更新文件與 Team Builder Skill，提供單檔 → 不同名混合 → 既有 Markdown contracts 的範例；有被排除欄位的需求時，明確使用 `.md`。
+- [x] 加入本文件精確列出的 `agents` typed schema、scalar shorthand、strict decoder；不接受 inline role／進階欄位／同名 patch。
+- [x] Inline 重用 PR-1 的來源無關 normalizer，保留 Markdown 兼容解析，驗證空工具結果拒絕。
+- [x] 完成 Preset + inline + Markdown 的不同名組合；重複、保留名、heuristic 名稱等錯誤有穩定來源資訊。
+- [x] 註冊所有成員後再做 contracts、delegation、action catalog、worker routing、memory/result-contract/team workspace defaults 與 model route 的現有綁定及驗證；不得漏掉新成員或 alias 去重。
+- [x] 補 source index 與 prompt/tool/skill lint；inline instructions 的 finding 指回 YAML 欄位。
+- [x] 擴充 PR-1 的 list / show / add / migrate / direct worker 功能與 fixtures，確保三種來源都能檢查及列出。
+- [x] 實作第 2.4 節模板行為與缺值測試，不更動現有模板 bootstrap 或 coordinator selector。
+- [x] 更新文件與 Team Builder Skill，提供單檔 → 不同名混合 → 既有 Markdown contracts 的範例；有被排除欄位的需求時，明確使用 `.md`。
 
 **完成條件**：第 2.2 / 2.3 / 2.5 節案例通過 compile／validate／lint／explain／list；同變數條件下 inline 與對應 `.md` 的有效 AgentDef 等價；所有禁用語法在執行前拒絕。
+
+依下列順序完成 PR-2；每列驗收完成後才進入下一列，修正共用程式時保留 PR-1 既有測試。
+
+| 順序 | 修改入口與工作 | 可執行驗收 |
+|---|---|---|
+| A | `team_inline.go`、`team_manifest.go`：補齊嚴格 decoder、presence 與 raw serialization | 在 `internal/team/team_inline_test.go` 覆蓋 T13–T16 的型別／語法案例及 T24；兩種 schema 都測，含 alias／merge／cycle、`agents: {}` 與明示零值。 |
+| B | `team_composition.go`、`parse.go`：檢查所有候選、套同一 normalizer 與下游綁定 | 同檔覆蓋 T17、T19–T22；三來源 fixture 含有不同 name／FileAlias 的 Markdown，驗證 roster、defaults、contracts、delegation 及 policy parity。 |
+| C | `team_lint*.go`、`effective_spec.go`、CLI list / show / add | 新增 `cmd/hufu/team_inline_test.go` process tests；覆蓋 T12、T18、T23 與 migration preview，檢查 exit code、stderr、完整 JSON、來源定位及檢查前後的檔案清單／內容。 |
+| D | README 中英、reference、Team Builder Skill 及階段紀錄 | 說明已交付語法與 Markdown 進階欄位邊界；執行第 6 節全部 gates，記錄實際結果，再勾選 PR-2。 |
+
+可直接重用 `team_composition_test.go` 的全欄位比較、`verifyContractMigration`、fake-provider direct worker 與 policy hash fixture，以及 `cmd/hufu/team_single_file_test.go` 的 process runner。Fixture 必須獨立生成臨時團隊；不能要求使用者先建團隊、提供金鑰或執行命令。
 
 ## 5. 必要自動化測試矩陣
 
@@ -270,13 +293,13 @@ spec:
 | T15 | PR-2 | role / coordinator / orchestrator-helper / helper、進階欄位：新 inline 拒絕；舊 .md 同名／heuristic 行為不變。 |
 | T16 | PR-2 | Preset grant + explicit allow + deny、implied tools、network/path 限制：和同內容 .md 相同；wildcard / 空字串 / deny-all 空結果拒絕。 |
 | T17 | PR-2 | 三來源不同名聯集與全部重名矩陣：固定結果、穩定排序、無 alias 重複計數。 |
-| T18 | PR-2 | instructions / skill 相關 lint 確實執行且指回 YAML；explain 不把 inline 當 builtin；list 無漏列或半份 JSON。 |
+| T18 | PR-2 | instructions / skill 相關 lint 確實執行且指回 YAML；plain／literal block／folded／quoted escape／template 均掃描有效文字，prompt finding 指回 owning scalar；explain 不把 inline 當 builtin；list 無漏列或半份 JSON。 |
 | T19 | PR-2 | 共同 vars 的 inline / .md prompt 等價；缺值／recursive／殘留 delimiter 拒絕；inline 未提供 TEAM_NAME 失敗，明示提供成功；.md 原變數行為不變。 |
 | T20 | PR-2 | contracts / delegation / action catalog / capability routing 引用新 worker 成功，引用不存在或不可達 worker 依原規則拒絕。 |
 | T21 | PR-1/2 | Team / Agent / CLI / profile generation、worker-model / execution-route、team worker defaults：舊 precedence 不變。 |
 | T22 | PR-1/2 | 在相同 team name、project root、provider / backend 設定與環境下，新舊格式使用相同有效配置的 policy snapshot 相容。工具／target 變更後，兩種格式的 resume 接受／拒絕結果須與既有 Markdown baseline 一致；原本已固定的政策欄位仍拒絕 drift，不新增 snapshot 欄位／版本，也不放寬比較。 |
 | T23 | PR-1/2 | inspect / list / validate / lint / explain 無模型、MCP、shell、網路與 workspace 寫入；run 整合採 fake provider。 |
-| T24 | PR-1/2 | migration round trip 保留新 declaration、instructions 與 literal template；改變 map 順序不改有效配置或 hash。 |
+| T24 | PR-1/2 | migration preview 不改輸入；round trip 保留 declaration、instructions、literal template、空 mapping 與明示零值；alias／merge 展開後無 dangling reference，cycle 拒絕；改變 map 順序不改有效配置或 hash。 |
 | T25 | 全部 | 無新欄位的既有長篇 manifests、bundled teams、Helper availability、workflow / contracts / verification：原 golden 與整合測試不退化。 |
 
 ### 等價證據的必要補強
@@ -291,6 +314,8 @@ spec:
 測試可直接比較正規化的 AgentDef／現有 policy 投影，勿把所有 runtime session 狀態直接序列化，也不要為測試擴大 public CLI JSON、輸出 system prompt 或敏感資訊。來源位置與 provenance 是刻意不同的欄位，不列入執行等價 hash。
 
 可重用：`internal/team/team_manifest_test.go`、`team_lint_test.go`、`agent_preset_test.go`、`agent_identity_inference_test.go`、`team_preset_integration_test.go`、`effective_spec_test.go`、`compat_snapshot_test.go`、`bundled_team_compat_test.go`、`execution_policy_snapshot_test.go`；`cmd/hufu/team_create_core_test.go`、`teamcreatecmd_test.go`、`teamcreatewizard_test.go`、`teamaddcmd_test.go`、`teamlintcmd_test.go`、`teamexplaincmd_test.go`、`teamshowcmd_test.go`、`usability_test.go`。新增 composition 與 list 的專門測試，避免只測 decoder 而漏掉 CLI。
+
+驗收記錄須把 T01–T25 對應到實際 test 名稱與最近一次成功命令；已在 PR-0／PR-1 通過的案例可引用既有紀錄。不得僅以 build 成功、部分 snapshot 相等或測試檔存在宣稱整個矩陣通過。T20–T22 的 defaults、模型 precedence 與 drift 分別沿用現有 action catalog、delegation、worker policy、CLI override 與 execution-policy fixture；只補足新來源的接線，不擴充 runtime 功能。
 
 ## 6. 每階段必跑驗證與總完成條件
 
@@ -309,10 +334,10 @@ golangci-lint run
 
 總完成條件：
 
-- [ ] PR-0、PR-1、PR-2 各自工作項與所屬測試通過。
-- [ ] 一份 YAML 可建立標準 Preset 團隊或自訂 inline worker 團隊；不同名 Markdown 成員可共存。
-- [ ] 同名來源、禁用欄位與危險空工具結果均在執行前拒絕。
-- [ ] 建立、discover、list、show、explain、validate、lint、direct worker、migration 均支援已交付的新語法。
-- [ ] 舊 authoring、runtime／resume／權限契約維持原語意，且有 snapshot 以外的 prompt / model / policy 證據。
-- [ ] README 中英、reference、Team Builder Skill 與 CLI examples 描述相同的支援邊界。
-- [ ] 全套測試、vet、lint 通過；沒有依賴人工決策、真實模型或遠端環境的未結事項。
+- [x] PR-0、PR-1、PR-2 各自工作項與所屬測試通過。
+- [x] 一份 YAML 可建立標準 Preset 團隊或自訂 inline worker 團隊；不同名 Markdown 成員可共存。
+- [x] 同名來源、禁用欄位與危險空工具結果均在執行前拒絕。
+- [x] 建立、discover、list、show、explain、validate、lint、direct worker、migration 均支援已交付的新語法。
+- [x] 舊 authoring、runtime／resume／權限契約維持原語意，且有 snapshot 以外的 prompt / model / policy 證據。
+- [x] README 中英、reference、Team Builder Skill 與 CLI examples 描述相同的支援邊界。
+- [x] 全套測試、vet、lint 通過；沒有依賴人工決策、真實模型或遠端環境的未結事項。

@@ -110,6 +110,24 @@ not impose execution order or an objective review gate. Helper and runtime
 permissions retain their existing behavior; a preset name is not an OS sandbox.
 `safe-ops` still needs its existing reconciliation/recovery constraints to pass lint.
 
+For a custom roster, author `team.yaml` with inline workers instead:
+
+```yaml
+agents:
+  architect: readonly
+  coder:
+    preset: coding
+    instructions: Implement the change, run tests, and report the result.
+  reviewer: review
+```
+
+Each worker needs an Agent Preset (`readonly`, `coding`, `review`, `research`,
+`writer`, or `ops`). You can combine inline workers, a Team Preset, and Markdown
+members when their names differ. Use Markdown for a custom coordinator or
+advanced contracts. Inline tools add to Preset grants; deny wins and an empty
+final grant is rejected. Inline templates use manifest vars, before automatic
+roster variables exist. See the [inline worker reference](docs/reference/agent-format.md#inline-worker).
+
 ### 0. Try it in 4 commands (no config)
 
 ```bash

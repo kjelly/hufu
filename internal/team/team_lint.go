@@ -165,6 +165,14 @@ func findingSourceLocation(field string, sources *TeamSourceIndex, session *Team
 	if sources == nil {
 		return TeamSourceLocation{Status: LocationFieldOnly}, ""
 	}
+	if loc, exists := sources.Manifest[field]; exists {
+		path := strings.TrimPrefix(field, "spec.")
+		if rest, ok := strings.CutPrefix(path, "agents."); ok {
+			identity, _, _ := strings.Cut(rest, ".")
+			return loc, identity
+		}
+		return loc, ""
+	}
 	if rest, ok := strings.CutPrefix(field, "agents."); ok {
 		identity, agentField, found := strings.Cut(rest, ".")
 		if !found {

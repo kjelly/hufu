@@ -119,11 +119,6 @@ func TestTeamCompositionInvalidPreset(t *testing.T) {
 			}
 		})
 	}
-	dir := t.TempDir()
-	writeLintTestFile(t, filepath.Join(dir, "team.yaml"), "agents: {coder: coding}\n")
-	if _, err := CompileTeam(dir, nil, nil, DefaultProviderRegistry); err == nil {
-		t.Fatal("PR-1 accepted future agents syntax")
-	}
 }
 
 func TestTeamCompositionCollisionAndMixedSources(t *testing.T) {

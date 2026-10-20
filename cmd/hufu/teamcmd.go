@@ -38,7 +38,9 @@ checks delegation references, tool-policy conflicts, machine-readable
 requirements, and bound task execution/output contracts before they can consume
 an execution retry. Environment-dependent requirements are checked by doctor and
 again after runtime CLI/profile policy is resolved. An authored coordinator is
-optional: existing role/name selection or the built-in coordinator is used.`,
+optional: existing role/name selection or the built-in coordinator is used.
+Manifests can declare a Team Preset and inline workers; Markdown members with
+different names may be added for advanced agent contracts.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runTeamValidate,
 }

@@ -81,6 +81,8 @@ func runTeamShow(_ *cobra.Command, args []string) error {
 			fields = nested
 		}
 		_, composed := fields["preset"]
+		_, inline := fields["agents"]
+		composed = composed || inline
 		if composed {
 			data, err := yaml.Marshal(teamYAMLRaw)
 			if err != nil {

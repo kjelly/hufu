@@ -20,7 +20,7 @@ type TeamLintIgnoreSelector struct {
 
 var teamLintKnownCodes = func() map[string]bool {
 	codes := []string{
-		FindingTeamPresetUnknown,
+		FindingTeamPresetUnknown, FindingInlineAgentInvalid, FindingInlineAgentToolsEmpty,
 		FindingLegacyTasksKeyDeprecated, FindingVerifierNotAsserting, FindingVerifierInvalid, FindingExecutableUnresolved,
 		FindingAcceptanceVacuous, FindingCompletionToolDenied, FindingDelegationWorkerUnknown,
 		FindingDelegationWorkerRole, FindingDelegationWorkerDenied, FindingToolPolicyConflict,

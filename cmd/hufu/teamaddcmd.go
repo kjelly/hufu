@@ -24,7 +24,9 @@ var teamAddCmd = &cobra.Command{
 (.agent-teams/<team>/<agent>.md), then compile and validate the full team.
 --preset selects a deterministic agent preset. The new file is rolled back
 (removed, or restored if it already existed and --force overwrote it) if
-validation fails; existing files are never overwritten without --force.`,
+validation fails; existing files are never overwritten without --force.
+Manifest members (Team Preset or inline workers) cannot be replaced, even
+with --force; choose a different agent name.`,
 	Args: cobra.ExactArgs(2),
 	RunE: runTeamAdd,
 }

@@ -148,9 +148,6 @@ to re-create an abstraction that already exists in the runtime.
 
 ### Planning
 
-- [Team YAML simplification](implementation-plans/team-yaml-simplification.md)
-  — staged coordinator lint correction, single-file presets, and inline workers.
-
 - `implementation-plans/` contains active, versioned delivery plans. Plans are
   reference material subordinate to code, tests, and normative contracts;
   completed or superseded plans belong in `archive/implementation-plans/`.
@@ -163,6 +160,9 @@ to re-create an abstraction that already exists in the runtime.
 
 ## Archive
 
+- [Team YAML implementation record](implementation-plans/team-yaml-simplification.md)
+  — completed coordinator lint correction, single-file presets, and inline
+  workers; retained at the requested path with `Status: historical`.
 - `archive/superseded-specs/` contains replaced architecture and consumer
   specifications, including the former `SubagentProvider`-first model and the
   old coding-team implementation spec.

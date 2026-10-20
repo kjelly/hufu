@@ -122,15 +122,16 @@ type NormalizedTeamConfig struct {
 // on the original authored YAML, and changes nothing about strict decode
 // (omitempty only affects marshaling).
 type teamManifestSpecFields struct {
-	Preset                   string `yaml:"preset,omitempty"`
-	Name                     string `yaml:"name,omitempty"`
-	Description              string `yaml:"description,omitempty"`
-	MaxRounds                int    `yaml:"max-rounds,omitempty"`
-	MinimumCoordinatorRounds int    `yaml:"minimum-coordinator-rounds,omitempty"`
-	MaxSteps                 int    `yaml:"max-steps,omitempty"`
-	Workspace                string `yaml:"workspace,omitempty"`
-	Timeout                  int64  `yaml:"timeout,omitempty"`
-	VerifyTimeout            int64  `yaml:"verify-timeout,omitempty"`
+	Agents                   *teamAgentDeclarations `yaml:"agents,omitempty"`
+	Preset                   string                 `yaml:"preset,omitempty"`
+	Name                     string                 `yaml:"name,omitempty"`
+	Description              string                 `yaml:"description,omitempty"`
+	MaxRounds                int                    `yaml:"max-rounds,omitempty"`
+	MinimumCoordinatorRounds int                    `yaml:"minimum-coordinator-rounds,omitempty"`
+	MaxSteps                 int                    `yaml:"max-steps,omitempty"`
+	Workspace                string                 `yaml:"workspace,omitempty"`
+	Timeout                  int64                  `yaml:"timeout,omitempty"`
+	VerifyTimeout            int64                  `yaml:"verify-timeout,omitempty"`
 	// MaxRetries is a pointer so an omitted key (built-in default) can be
 	// distinguished from an explicit "max-retries: 0" override; the zero
 	// value of a plain int is indistinguishable from an explicit 0.
@@ -405,10 +406,10 @@ func decodeTeamManifestYAML(file string, data []byte) (teamConfigYAML, string, e
 		decoder := yaml.NewDecoder(bytes.NewReader(data))
 		decoder.KnownFields(true)
 		if err := decoder.Decode(&yc); err != nil {
-			return teamConfigYAML{}, "", fmt.Errorf("failed to parse team config: %w", err)
+			return teamConfigYAML{}, "", teamManifestDecodeError(file, "", err)
 		}
 		if err := annotateManifestAuthoringPresence(data, SchemaVersionLegacyFlatV0, &yc); err != nil {
-			return teamConfigYAML{}, "", err
+			return teamConfigYAML{}, "", teamManifestInlineError(file, "", err)
 		}
 		if err := normalizeManifestContracts(data, SchemaVersionLegacyFlatV0, &yc); err != nil {
 			return teamConfigYAML{}, "", err
@@ -426,7 +427,7 @@ func decodeTeamManifestYAML(file string, data []byte) (teamConfigYAML, string, e
 		decoder := yaml.NewDecoder(bytes.NewReader(data))
 		decoder.KnownFields(true)
 		if err := decoder.Decode(&manifest); err != nil {
-			return teamConfigYAML{}, "", fmt.Errorf("failed to parse team config: %w", err)
+			return teamConfigYAML{}, "", teamManifestDecodeError(file, "spec.", err)
 		}
 		metadataName := strings.TrimSpace(manifest.Metadata.Name)
 		if metadataName == "" {
@@ -438,7 +439,7 @@ func decodeTeamManifestYAML(file string, data []byte) (teamConfigYAML, string, e
 		yc := teamConfigYAML{teamManifestSpecFields: manifest.Spec.teamManifestSpecFields}
 		yc.Name = metadataName
 		if err := annotateManifestAuthoringPresence(data, SchemaVersionV1Alpha1, &yc); err != nil {
-			return teamConfigYAML{}, "", err
+			return teamConfigYAML{}, "", teamManifestInlineError(file, "spec.", err)
 		}
 		if err := normalizeManifestContracts(data, SchemaVersionV1Alpha1, &yc); err != nil {
 			return teamConfigYAML{}, "", err
@@ -483,6 +484,11 @@ func annotateManifestAuthoringPresence(data []byte, version string, yc *teamConf
 		node, err := compositionScalar(pair[1])
 		if err != nil || node.Tag != "!!str" || strings.TrimSpace(node.Value) == "" {
 			return fmt.Errorf("preset must be a non-empty string (line %d, column %d)", pair[0].Line, pair[0].Column)
+		}
+	}
+	if pair, exists := fields["agents"]; exists {
+		if scalar, err := compositionScalar(pair[1]); err == nil && scalar.Tag == "!!null" {
+			return &inlineAgentDecodeError{field: "agents", line: pair[0].Line, column: pair[0].Column, cause: fmt.Errorf("agents must be a non-null mapping")}
 		}
 	}
 	seen := make(map[string]struct{}, len(mapping.Content)/2)
