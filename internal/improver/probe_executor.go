@@ -23,11 +23,12 @@ import (
 // StageEvidence binds an imported child to the exact durable admission. The
 // completion marker is published only after all child resources have closed.
 type StageEvidence struct {
-	SchemaVersion int           `json:"schema_version"`
-	Request       StageRequest  `json:"request"`
-	Child         ChildEvidence `json:"child"`
-	StopReason    string        `json:"stop_reason"`
-	Script        *ScriptFacts  `json:"script,omitzero"`
+	SchemaVersion int                 `json:"schema_version"`
+	Request       StageRequest        `json:"request"`
+	Child         ChildEvidence       `json:"child"`
+	StopReason    string              `json:"stop_reason"`
+	Script        *ScriptFacts        `json:"script,omitzero"`
+	RoleInput     *paired.ArtifactRef `json:"role_input,omitzero"`
 }
 
 type ScriptFacts struct {
@@ -40,13 +41,14 @@ type ScriptFacts struct {
 // ProbeExecutor owns no parent journal or provider cursor. Each Execute opens
 // a fresh runtime; Reconcile only reads a post-drain marker and imported bytes.
 type ProbeExecutor struct {
-	factory  *RuntimeFactory
-	plan     paired.ExperimentPlan
-	fixture  paired.Fixture
-	program  *paired.Program
-	inputs   Tree
-	objects  Objects
-	children string
+	factory          *RuntimeFactory
+	plan             paired.ExperimentPlan
+	fixture          paired.Fixture
+	program          *paired.Program
+	inputs           Tree
+	objects          Objects
+	children         string
+	roleInputBuilder func(context.Context, StageRequest) (roleInput, error)
 }
 
 func NewProbeExecutor(prepared Prepared, plan paired.ExperimentPlan, objects Objects, children string, settings RuntimeSettings) (*ProbeExecutor, error) {
@@ -97,27 +99,38 @@ func NewProbeExecutor(prepared Prepared, plan paired.ExperimentPlan, objects Obj
 	if info.Mode().Perm() != 0o700 {
 		return nil, errors.New("probe child area must be private")
 	}
-	return &ProbeExecutor{factory, frozenPlan, fixture, program, inputs, objects, children}, nil
+	return &ProbeExecutor{factory: factory, plan: frozenPlan, fixture: fixture, program: program,
+		inputs: inputs, objects: objects, children: children}, nil
 }
 
-func (e *ProbeExecutor) checkRequest(request StageRequest) (paired.Case, string, error) {
+func (e *ProbeExecutor) validateRequest(request StageRequest) error {
 	if request.Generation < 1 || request.Generation > e.plan.Limits.StageRetries+1 ||
 		!opaqueID(request.Owner) || !paired.SafeRelativePath(request.ChildWorkspaceID) ||
 		filepath.Base(request.ChildWorkspaceID) != request.ChildWorkspaceID ||
 		request.Deadline.IsZero() || request.Limits != e.plan.Limits ||
-		request.Spec.Kind != "executor" || request.StageID != request.Spec.ID {
-		return paired.Case{}, "", errors.New("invalid probe admission")
+		request.StageID != request.Spec.ID {
+		return errors.New("invalid probe admission")
 	}
 	stages, _, err := plannedStages(e.plan)
 	if err != nil {
-		return paired.Case{}, "", err
+		return err
 	}
 	found := false
 	for _, spec := range stages {
 		found = found || spec == request.Spec
 	}
 	if !found {
-		return paired.Case{}, "", errors.New("probe stage is outside the frozen plan")
+		return errors.New("probe stage is outside the frozen plan")
+	}
+	return nil
+}
+
+func (e *ProbeExecutor) checkRequest(request StageRequest) (paired.Case, string, error) {
+	if err := e.validateRequest(request); err != nil {
+		return paired.Case{}, "", err
+	}
+	if request.Spec.Kind != "executor" {
+		return paired.Case{}, "", errors.New("executor case requested for an auxiliary stage")
 	}
 	for _, item := range e.fixture.Cases {
 		if item.ID == request.Spec.Slot.Case {
@@ -139,7 +152,7 @@ func (e *ProbeExecutor) script(request StageRequest) (*scripted.Provider, error)
 		return nil, errors.New("fixture program is missing")
 	}
 	for _, script := range e.program.Scripts {
-		if script.Stage == "executor" && script.CaseID == request.Spec.Slot.Case &&
+		if script.Stage == request.Spec.Kind && script.CaseID == request.Spec.Slot.Case &&
 			script.VariantSlotID == request.Spec.Slot.Variant && script.Attempt == request.Generation {
 			return scripted.NewObservedProvider("scripted", script.Steps, func(ctx context.Context, usage *scripted.Usage) {
 				var observed *agent.ProviderInvocationUsage
@@ -155,7 +168,10 @@ func (e *ProbeExecutor) script(request StageRequest) (*scripted.Provider, error)
 }
 
 func (e *ProbeExecutor) Execute(ctx context.Context, request StageRequest, beforeProvider func(paired.RuntimeIdentity) error) (result Settlement, retErr error) {
-	item, input, err := e.checkRequest(request)
+	if err := e.validateRequest(request); err != nil {
+		return result, err
+	}
+	task, roleInputRef, err := e.prepareStageTask(ctx, request)
 	if err != nil {
 		return result, err
 	}
@@ -178,13 +194,13 @@ func (e *ProbeExecutor) Execute(ctx context.Context, request StageRequest, befor
 		}
 	}
 	root := filepath.Join(e.children, request.ChildWorkspaceID)
-	runtime, err := e.factory.open(root, request.Spec.Slot.Variant, "executor", boundary)
+	runtime, err := e.factory.open(root, task.slot, task.role, boundary)
 	if err != nil {
 		return result, err
 	}
 	defer func() { retErr = errors.Join(retErr, runtime.close()) }()
 	policy, err := runtimePolicyDigest(runtime.policy, runtime.overlay)
-	if err != nil || policy != e.plan.Models["executor"].PolicyDigest {
+	if err != nil || policy != e.plan.Models[task.role].PolicyDigest {
 		return result, errors.Join(err, errors.New("child runtime policy drift"))
 	}
 	var identity paired.RuntimeIdentity
@@ -197,7 +213,7 @@ func (e *ProbeExecutor) Execute(ctx context.Context, request StageRequest, befor
 		bound = true
 		return nil
 	})
-	_, runErr := runtime.coordinator.RunTask(child, runtime.task(e.factory.config.Worker, input, item.Verify))
+	_, runErr := runtime.coordinator.RunTask(child, runtime.task(e.factory.config.Worker, task.input, task.verifier))
 	if err := runtime.close(); err != nil {
 		return result, errors.Join(runErr, err)
 	}
@@ -210,7 +226,7 @@ func (e *ProbeExecutor) Execute(ctx context.Context, request StageRequest, befor
 	if err != nil {
 		return result, errors.Join(runErr, err)
 	}
-	stage := StageEvidence{SchemaVersion: 1, Request: request, Child: evidence, StopReason: "completed"}
+	stage := StageEvidence{SchemaVersion: 1, Request: request, Child: evidence, StopReason: "completed", RoleInput: roleInputRef}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		stage.StopReason = "timed_out"
 	} else if ctx.Err() != nil {
@@ -283,7 +299,7 @@ func publishCompletion(dir string, ref paired.ArtifactRef) error {
 }
 
 func (e *ProbeExecutor) Reconcile(ctx context.Context, request StageRequest) (Reconciliation, error) {
-	if _, _, err := e.checkRequest(request); err != nil {
+	if err := e.validateRequest(request); err != nil {
 		return Reconciliation{State: "unknown"}, err
 	}
 	root, err := openSourceRoot(filepath.Join(e.children, request.ChildWorkspaceID))
@@ -333,7 +349,7 @@ func sameStageRequest(a, b StageRequest) bool {
 }
 
 func (e *ProbeExecutor) inspect(ctx context.Context, stage StageEvidence) (Settlement, error) {
-	item, input, err := e.checkRequest(stage.Request)
+	task, err := e.readStageTask(ctx, stage)
 	if err != nil {
 		return Settlement{}, err
 	}
@@ -341,16 +357,22 @@ func (e *ProbeExecutor) inspect(ctx context.Context, stage StageEvidence) (Settl
 		return Settlement{}, errors.New("stage evidence version or execution mode mismatch")
 	}
 	digest, err := runtimePolicyDigest(stage.Child.Policy, stage.Child.Overlay)
-	if err != nil || digest != e.plan.Models["executor"].PolicyDigest {
+	if err != nil || digest != e.plan.Models[task.role].PolicyDigest {
 		return Settlement{}, errors.New("stage evidence policy differs from frozen plan")
 	}
 	observation, err := inspectChildEvidence(ctx, e.objects, stage.Child)
 	if err != nil {
 		return Settlement{}, err
 	}
-	outcome, err := classifyProbe(observation, e.factory.config.Worker, input, item.Verify, stage.Child.Overlay.ResultSchemaHash)
+	outcome, err := classifyProbe(observation, e.factory.config.Worker, task.input, task.verifier, stage.Child.Overlay.ResultSchemaHash)
 	if err != nil {
 		return Settlement{}, err
+	}
+	if task.role != "executor" && (outcome == "passed" || outcome == "failed") {
+		outcome, err = e.classifyRole(ctx, stage, observation, outcome)
+		if err != nil {
+			return Settlement{}, err
+		}
 	}
 	if stage.Script != nil {
 		facts := stage.Script
@@ -381,7 +403,7 @@ func classifyProbe(observation childObservation, worker, input string, verifier 
 	}
 	task := observation.session.Tasks[0]
 	spec := verifier.RuntimeSpec()
-	if task.Agent != worker || task.Goal != input || !reflect.DeepEqual(task.VerifySpec, &spec) ||
+	if task.Agent != worker || task.Goal != input || !sameVerificationSpec(task.VerifySpec, &spec) ||
 		task.ResultContract == nil || task.ResultContract.SchemaSHA256 != schemaHash {
 		return "", errors.New("canonical task differs from frozen worker, input or verifier")
 	}
@@ -402,7 +424,7 @@ func classifyProbe(observation childObservation, worker, input string, verifier 
 		verification := task.VerifyResult
 		if task.Status == team.TaskDone && typed.Status == team.TaskResultStatusSuccess &&
 			verification != nil && !verification.TimedOut && !verification.Overturned &&
-			verification.ExitCode == 0 && reflect.DeepEqual(verification.Spec, &spec) {
+			verification.ExitCode == 0 && sameVerificationSpec(verification.Spec, &spec) {
 			return "passed", nil
 		}
 		if typed.Status == team.TaskResultStatusFailed {
@@ -426,6 +448,14 @@ func classifyProbe(observation childObservation, worker, input string, verifier 
 		return "failed", nil
 	}
 	return "unknown", nil
+}
+
+// Canonical replay decodes numeric assertion values into JSON number types.
+// Compare their contract encoding, not Go's int-versus-float representation.
+func sameVerificationSpec(a, b *agent.VerificationSpec) bool {
+	left, leftErr := paired.CanonicalJSON(a)
+	right, rightErr := paired.CanonicalJSON(b)
+	return leftErr == nil && rightErr == nil && bytes.Equal(left, right)
 }
 
 var _ StageExecutor = (*ProbeExecutor)(nil)

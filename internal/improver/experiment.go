@@ -138,8 +138,16 @@ func (e *Experiment) Report(ctx context.Context) (ExperimentReport, error) {
 // first and never redispatched by replay. progress receives the same projection
 // consumed by Report and does not own any runtime resource.
 func (e *Experiment) RunManual(ctx context.Context, build BuildIdentity, settings RuntimeSettings, progress func(LedgerState)) (ExperimentReport, error) {
-	if e.workspace.readOnly || e.Plan.Mode != "manual" {
-		return ExperimentReport{}, errors.New("manual execution requires a writable manual experiment")
+	if e.Plan.Mode != "manual" {
+		return ExperimentReport{}, errors.New("manual execution requires a manual experiment")
+	}
+	return e.Run(ctx, build, settings, progress)
+}
+
+// Run advances the frozen manual or bounded refinement schedule.
+func (e *Experiment) Run(ctx context.Context, build BuildIdentity, settings RuntimeSettings, progress func(LedgerState)) (ExperimentReport, error) {
+	if e.workspace.readOnly {
+		return ExperimentReport{}, errors.New("execution requires a writable experiment")
 	}
 	if build.BinaryDigest != e.Plan.BinaryDigest || build.SourceRevision != e.Plan.SourceRevision {
 		return ExperimentReport{}, errors.New("runtime build drift; start a new experiment")
@@ -159,6 +167,7 @@ func (e *Experiment) RunManual(ctx context.Context, build BuildIdentity, setting
 	if err != nil {
 		return ExperimentReport{}, err
 	}
+	e.attachRoleInputs(executor)
 	bindings, err := FrozenBindings(e.objects, e.Plan)
 	if err != nil {
 		return ExperimentReport{}, err
@@ -186,6 +195,10 @@ func (e *Experiment) RunManual(ctx context.Context, build BuildIdentity, setting
 			progress(state)
 		}
 		stage := state.Stages[spec.ID]
+		if spec.Kind != "executor" {
+			executor, runErr = e.advanceRefinement(ctx, state, spec, executor, settings, progress)
+			continue
+		}
 		if stage.State != "planned" {
 			continue
 		}

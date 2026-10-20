@@ -14,6 +14,7 @@ func TestStageTasksNeverPromotesUnknownEvidence(t *testing.T) {
 		want       team.TaskStatus
 	}{
 		{"planned", "planned", nil, team.TaskPending},
+		{"reused", "skipped", nil, team.TaskSkipped},
 		{"started", "started", nil, team.TaskInProgress},
 		{"missing_result", "completed", nil, team.TaskBlocked},
 		{"unknown_usage", "completed", &Settlement{Outcome: "passed"}, team.TaskBlocked},

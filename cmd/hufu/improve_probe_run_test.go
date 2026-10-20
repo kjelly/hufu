@@ -73,3 +73,41 @@ func TestProbeShowMissingAndNonterminalTUIAreSideEffectFree(t *testing.T) {
 		t.Fatal("invalid read/display created workspace")
 	}
 }
+
+func TestRefineCLIUsesFrozenOfflineExample(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.CopyFS(source, os.DirFS("../../internal/improver/testdata/refinement")); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "workspace")
+	command := newProbeExecutionCommand("refine")
+	var stdout, stderr bytes.Buffer
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+	command.SetArgs([]string{"--config", filepath.Join(source, "experiment.yaml"), "--workspace", path, "--json"})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var report improver.ExperimentReport
+	if err := json.Unmarshal(stdout.Bytes(), &report, json.RejectUnknownMembers(true)); err != nil {
+		t.Fatal(err)
+	}
+	if report.Decision != "simulation_only" || report.SelectedVariant != "domain" ||
+		report.Coverage.Scored != 4 || report.Budget.SpentTokens != 830 || len(report.Stages) != 8 {
+		t.Fatalf("unexpected refine report: %+v", report)
+	}
+	if err := os.RemoveAll(source); err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []string{"show", "resume"} {
+		raw, err := executeProbeCommand(t, operation, "--experiment", "extraction_refinement", "--workspace", path, "--json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var loaded improver.ExperimentReport
+		if err := json.Unmarshal(raw, &loaded, json.RejectUnknownMembers(true)); err != nil || !reflect.DeepEqual(loaded, report) {
+			t.Fatalf("%s changed the frozen refinement: %v", operation, err)
+		}
+	}
+}

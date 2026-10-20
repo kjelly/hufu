@@ -32,7 +32,7 @@ func validateProbeDisplay(command *cobra.Command, asJSON, asTUI bool) error {
 
 func runProbeDisplay(command *cobra.Command, experiment *improver.Experiment, build improver.BuildIdentity, settings improver.RuntimeSettings, asTUI bool) (improver.ExperimentReport, error) {
 	if !asTUI {
-		return experiment.RunManual(command.Context(), build, settings, probeProgress(command.ErrOrStderr()))
+		return experiment.Run(command.Context(), build, settings, probeProgress(command.ErrOrStderr()))
 	}
 	ctx, cancel := context.WithCancel(command.Context())
 	defer cancel()
@@ -87,7 +87,7 @@ func runProbeDisplay(command *cobra.Command, experiment *improver.Experiment, bu
 		}
 	}()
 	go func() {
-		report, runErr := experiment.RunManual(ctx, build, settings, func(state improver.LedgerState) {
+		report, runErr := experiment.Run(ctx, build, settings, func(state improver.LedgerState) {
 			program.Send(tuipkg.TasksUpdatedMsg{Items: improver.StageTasks(state)})
 			program.Send(tuipkg.StatusBarMsg{Text: fmt.Sprintf("spent=%d reserved=%d unknown=%d",
 				state.Budget.SpentTokens, state.Budget.ReservedTokens, state.Budget.UnknownStages)})

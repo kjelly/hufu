@@ -1,0 +1,8 @@
+name: extraction_fixture
+agents:
+  extractor:
+    preset: readonly
+    tools:
+      allowed: [submit_result]
+      denied: [view, grep, glob, ls]
+    instructions: Return a category in the required structured payload.

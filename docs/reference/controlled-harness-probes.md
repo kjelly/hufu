@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `d6728c9e`
+> Verified-Commit: `720cf1e1`
 > Supersedes: —
 > Superseded-By: —
 
@@ -15,8 +15,8 @@ responses. It does not provide an OS sandbox for shell or coding tasks.
 The [implementation plan](../implementation-plans/controlled-harness-improvement.md)
 defines the configuration and fixture formats. The runnable offline example is
 [`internal/improver/testdata/extraction/`](../../internal/improver/testdata/extraction/experiment.yaml).
-The manual runner is available; automatic refinement and bundle export are
-subsequent stages of that plan.
+The manual runner and bounded refinement are available. Bundle export is the
+final stage of that plan.
 
 ## Run the offline example
 
@@ -124,3 +124,79 @@ records the resulting evidence before releasing the workspace lease.
 
 No command in this workflow applies changes to the source team, promotes
 memory, approves adoption or deploys a candidate.
+
+## Bounded refinement
+
+```bash
+/tmp/hufu-probe improve refine \
+  --config internal/improver/testdata/refinement/experiment.yaml \
+  --workspace /tmp/hufu-refinement-workspace --json
+```
+
+The [complete refinement fixture](../../internal/improver/testdata/refinement/experiment.yaml)
+uses one round: baseline probes, a procedure proposal and its probes, a domain
+proposal and its probes, one composition and its probes, deterministic candidate
+selection, and optional reflection. Both proposers receive the same baseline
+evidence. Domain proposals never receive procedure results. Each role uses its
+own schema and bounded child runtime with only `submit_result`.
+
+The fixture deliberately makes both individual candidates pass and their
+composition fail. The selected candidate is `domain`, with four scored
+executor slots and 830 scripted tokens across all eight stages. This remains
+`simulation_only`; it illustrates control flow rather than model improvement.
+Use `probe show` and `probe resume` with experiment ID `extraction_refinement`
+to inspect or resume it. Source files are unnecessary after freezing.
+
+A proposal payload has this shape:
+
+```json
+{
+  "schema_version": 1,
+  "hypothesis": "Explicit instructions address the observed failure.",
+  "observed_failure_refs": ["probe_0001"],
+  "changes": [{
+    "surface_id": "surface_001",
+    "before_hash": "<exact hash from the registered baseline surface>",
+    "replacement_text": "Return the requested category exactly."
+  }],
+  "expected_behavior": "Satisfy the frozen result verifier.",
+  "applicability": "The supplied classification task."
+}
+```
+
+Reference strings are logical stage IDs within the experiment. The runtime
+resolves them to committed canonical evidence; the model cannot supply paths.
+Failure references must identify actual baseline failures. Changes require
+unique registered surfaces, matching base hashes and bounded UTF-8 text;
+templates, secrets and protected changes are rejected before probe admission.
+There can be at most 64 changes in one proposal.
+
+Composition uses a strict union:
+
+- `{"schema_version":1,"action":"keep_baseline"}` creates no new candidate.
+- `{"schema_version":1,"action":"use_candidate","candidate_slot":"domain"}`
+  selects an existing `procedure` or `domain` candidate for reuse.
+- `{"schema_version":1,"action":"compose","proposal":{...}}` supplies a complete
+  proposal using the same shape above.
+
+Every new digest is probed against all required pairs. An identical digest
+with complete existing observations is reused without creating a new
+composition binding or manufacturing receipts. The corresponding planned
+probe stages become `skipped` with reason `candidate_reused`. `keep_baseline`
+skips only the composition; the final deterministic comparison still considers
+the other verified candidates.
+
+An invalid, fully settled proposal can retry once when `stage_retries: 1` and
+additional free budget permit it. Required probe reservations remain protected.
+A bound candidate is immutable. Resume reconciles original role completion
+markers before binding a candidate and never repeats an already completed
+proposal to improve its score.
+
+Optional domain, composition and reflection groups require sufficient budget
+for their complete remaining work. Otherwise they become `skipped_budget`
+without partial admission. Verified candidates remain available for selection.
+Reflection receives the deterministic candidate preference and can return
+`no_entry`; any lesson must reference the selected candidate and committed
+baseline, candidate and verification evidence. The final report still checks
+the complete pipeline budget after reflection. Nothing enters active memory
+or the promotion lifecycle.

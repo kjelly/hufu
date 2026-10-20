@@ -80,4 +80,5 @@ func newProbePlanCommand() *cobra.Command {
 
 func init() {
 	improveCmd.AddCommand(newImproveProbeCommand())
+	improveCmd.AddCommand(newProbeExecutionCommand("refine"))
 }

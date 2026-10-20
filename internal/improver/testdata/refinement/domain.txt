@@ -1,0 +1,1 @@
+Propose one bounded change to the registered instruction surface using domain guidance. Use only the supplied baseline evidence; other proposals are not part of this input.

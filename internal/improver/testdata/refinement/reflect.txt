@@ -1,0 +1,1 @@
+Return no_entry when the evidence does not support a useful contrast lesson. Otherwise return a lesson using only the supplied evidence IDs. This fixture is synthetic and cannot justify real adoption.

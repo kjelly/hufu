@@ -5,7 +5,7 @@
 > Verified-Commit: `af4875f1720d2315cbaa2f2e866d11cb78ab1882`
 > Supersedes: —
 > Superseded-By: —
-> Execution-Status: PR 1–3 已完成；PR 4–5 依第 12 節繼續交付。
+> Execution-Status: PR 1–4 已完成；PR 5 依第 12 節繼續交付。
 > 日期：2026-10-20。
 > 程式碼查核基準：`af4875f1720d2315cbaa2f2e866d11cb78ab1882`。
 > 範圍決定：使用者已選擇「本次只做可離線驗收的功能，真實評測與隔離部署另案處理」。
@@ -18,7 +18,7 @@
 - [x] PR 1：契約、materializer 與 plan CLI。
 - [x] PR 2：耐久 controller 與總預算。
 - [x] PR 3：手動 probe 與 runtime 閉環。
-- [ ] PR 4：有界 Propose–Probe–Compose。
+- [x] PR 4：有界 Propose–Probe–Compose。
 - [ ] PR 5：bundle、lesson 與完整驗收。
 
 ### Baseline 驗證紀錄
@@ -123,6 +123,37 @@ T08–T14 使用 fake executor 驗收，沒有真實 provider、部署或品質�
 沒有完整 usage 或可核對完成證據的 provider failure 維持 unknown／blocked，
 不以錯誤文字猜測是否可重試。PR 4 繼續交付 bounded proposal scheduling，
 PR 5 交付 Markdown review bundle、exact patch 與 lesson。
+
+### PR 4 驗證紀錄
+
+2026-10-20，在 `720cf1e1` 上完成 bounded refinement：
+
+- proposer／composer／reflector 使用獨立的 strict result schemas；
+  materializer 核對 surface ID、before hash、內容限制及 authored／effective 保護面。
+- procedure／domain view 都只引用同一 baseline；所有 view refs 綁定 parent journal
+  已提交的 canonical child evidence。Report reader 重新驗證 role 成本、來源及 candidate binding。
+- 兩 proposals、一個 composition、完整新 digest 重測、固定 objective 與 tie-break；
+  同 digest 且 coverage 完整才省略新 composition probe，並保留 `candidate_reused` 原因。
+- invalid proposal 最多重試一次且不得侵占 required envelope；optional group 預算不足整組
+  跳過。完成但未記帳的 proposal 可由原 completion marker 恢復並綁定，不重新呼叫模型。
+- `hufu improve refine` 與通用 resume／show／TUI；完整離線範例位於
+  `internal/improver/testdata/refinement/`。Reflection 使用 deterministic candidate preference，
+  typed lesson 仍只供下一階段匯出，不寫入 memory／promotion。
+- 數值 verifier 以 canonical contract encoding 比對，保留 JSON replay 的數值語意。
+
+最終版本驗證全部 exit 0：
+
+| 命令 | 結果 |
+|---|---|
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test ./...` | CLI 214.708s、improver 104.683s、team 287.532s；其他套件通過 |
+| `TMPDIR=/tmp/hy GOTMPDIR=/tmp/hy go test -race ./internal/improver -run 'TestRefinementResumeImportsCompletedProposalBeforeBinding' -count=1` | 通過，206.605s |
+| `go vet ./...` | 通過 |
+| `go build -o /tmp/hufu-paired-phase4 ./cmd/hufu` | 通過 |
+| `GOLANGCI_LINT_CACHE=/tmp/hufu-harness-lint golangci-lint run` | 0 issues |
+| `bin/check-docs`、`git diff --check` | 通過 |
+
+T22–T25 的越界拒絕／重試、composition 退步／相同 digest reuse、optional budget、
+固定 selection 與 CLI frozen-source removal 均有離線測試。沒有真實模型評測或部署。
 
 ## 1. 交付目標與完成邊界
 
@@ -500,7 +531,7 @@ Stage retry 最多一次且只限已證明停止、可核對花費的 transient 
 | `improvement_admission_stopped` | cancel_requested／deadline_exceeded／clock_rollback；停止後續 admission，仍可 reconcile／settle |
 | `improvement_run_finished` | report_ref、decision；budget summary 由 reducer 重建，報告不是 ledger 權威 |
 
-Stage states 為 planned → admitted → bound → running → completed，另有 failed／blocked／cancelled／skipped_budget。completed 表示證據收集完成，不代表品質通過。reducer 拒絕非法 transition、身份衝突、過期 generation；同內容重送冪等。AppendAtHead 衝突後重讀重算，不只使用 mutex。Payload 自有 version；只有新增 SQL 結構才 append migration，不改舊 migration checksum 或全域 policy hash 語意。
+Stage states 為 planned → admitted → bound → running → completed，另有 failed／blocked／cancelled／skipped／skipped_budget。`skipped` 用於不產生新 composition 或重用相同已驗證候選，保留明確 reason_code；不冒充 budget failure。completed 表示證據收集完成，不代表品質通過。reducer 拒絕非法 transition、身份衝突、過期 generation；同內容重送冪等。AppendAtHead 衝突後重讀重算，不只使用 mutex。Payload 自有 version；只有新增 SQL 結構才 append migration，不改舊 migration checksum 或全域 policy hash 語意。
 
 第二階段的 `Controller`／`StoreJournal` 直接使用上述 canonical event store；
 `ReplayLedger` 是純投影，`LoadCommittedPlan` 僅從指定 branch 的 creation event 載入。
@@ -530,6 +561,12 @@ dispatch 的 `Start` 授權只能取得一次；lost acknowledgement 必須 reco
 Refine 固定順序：baseline → procedure proposal／probe → domain proposal／probe → compose／probe → deterministic select → reflect → export。兩 proposal 都只看同一 baseline evidence；domain 不偷看 procedure winner。每個模型角色都是同一 structured_only runtime 的 bounded child，沒有工具存取或自主檔案修改。
 
 `ChangeProposalV1` 必填 schema_version、hypothesis、observed_failure_refs、changes、expected_behavior、applicability；changes 是非空的 `{surface_id, before_hash, replacement_text}` array。surface_id 只能選 plan 登記值，每項只出現一次。由 deterministic materializer 核對 before_hash、大小及 allowed surface 後套入 experiment-owned copy。模型輸出不是 patch 執行命令。
+
+單一 proposal 最多 64 個 changes。模型看到的 evidence refs 是本實驗的 logical stage IDs
+（例如 `probe_0001`）；受控 input artifact 將它們綁定至 parent journal 已提交的
+canonical evidence refs。reader 核對相同綁定，不接受模型指定檔案路徑或外來實驗。
+兩 proposer 的 view 只包含 baseline；reflection 才收到 deterministic selected_variant，
+且此偏好不是 adoption authorization，最終報告仍以整個 pipeline 的實際結算評 gate。
 
 Compose 回傳 typed union：`keep_baseline`、`use_candidate`（已綁定 slot ID）、`compose`（同 ChangeProposal changes）。不能新增未計畫 slot。新的 variant_digest 必須完整重跑 required pairs；與已驗證候選 digest 完全相同且 fixed context 相同才能引用原 evidence。來源候選各自通過不使組合自動通過。
 

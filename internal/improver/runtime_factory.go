@@ -67,11 +67,11 @@ type ProbeGeneration struct {
 // RuntimeFactory owns immutable input bytes. It never retains or reuses a
 // coordinator, worker, provider cursor, session, or control workspace.
 type RuntimeFactory struct {
-	config   paired.Config
-	variants map[string]Tree
-	schema   []byte
-	settings RuntimeSettings
-	overlays map[string]RuntimeOverlay
+	config      paired.Config
+	variants    map[string]Tree
+	roleSchemas map[string][]byte
+	settings    RuntimeSettings
+	overlays    map[string]RuntimeOverlay
 }
 
 func NewRuntimeFactory(prepared Prepared, settings RuntimeSettings) (*RuntimeFactory, error) {
@@ -98,13 +98,9 @@ func NewRuntimeFactory(prepared Prepared, settings RuntimeSettings) (*RuntimeFac
 	if err != nil {
 		return nil, err
 	}
-	compiled, err := team.CompileResultContractDocument("paired-result.json", prepared.Schema)
-	if err != nil {
-		return nil, err
-	}
 	settings.Providers = maps.Clone(settings.Providers)
-	factory := &RuntimeFactory{config: cfg, variants: map[string]Tree{}, schema: bytes.Clone(prepared.Schema),
-		settings: settings, overlays: map[string]RuntimeOverlay{}}
+	factory := &RuntimeFactory{config: cfg, variants: map[string]Tree{},
+		settings: settings, overlays: map[string]RuntimeOverlay{}, roleSchemas: map[string][]byte{}}
 	for slot, variant := range prepared.Variants {
 		owned, _, err := materializeTree(variant.Tree, cfg.Vars, cfg.Worker, baseline.BuildDigest, cfg.AllowedSurfaces)
 		if err != nil {
@@ -120,6 +116,18 @@ func NewRuntimeFactory(prepared Prepared, settings RuntimeSettings) (*RuntimeFac
 		factory.variants[slot] = Tree{files: files}
 	}
 	for role, model := range cfg.Models {
+		schema := prepared.Schema
+		if role != "executor" {
+			schema, err = paired.RoleSchema(role)
+			if err != nil {
+				return nil, err
+			}
+		}
+		compiled, err := team.CompileResultContractDocument("paired-result.json", schema)
+		if err != nil {
+			return nil, err
+		}
+		factory.roleSchemas[role] = bytes.Clone(schema)
 		generation, err := resolveProbeGeneration(baseline, cfg, model)
 		if err != nil {
 			return nil, fmt.Errorf("role %s: %w", role, err)
@@ -258,12 +266,18 @@ func (f *RuntimeFactory) open(root, slot, role string, boundary agent.ProviderBo
 		return nil, err
 	}
 	applyRuntimeOverlay(session, overlay, f.settings)
-	compiled, err := team.CompileResultContractDocument("paired-result.json", f.schema)
+	compiled, err := team.CompileResultContractDocument("paired-result.json", f.roleSchemas[role])
 	if err != nil {
 		return nil, err
 	}
-	if authored, exists := session.AgentResultContracts[strings.ToLower(f.config.Worker)]; exists && authored.SchemaSHA256 != compiled.SchemaSHA256 {
+	if authored, exists := session.AgentResultContracts[strings.ToLower(f.config.Worker)]; role == "executor" && exists && authored.SchemaSHA256 != compiled.SchemaSHA256 {
 		return nil, errors.New("unsupported_profile: worker result contract differs from frozen fixture schema")
+	}
+	if role != "executor" {
+		worker := exactWorker(session, f.config.Worker)
+		worker.System = refinementSystemPrompt
+		worker.Capabilities = team.ExtractCapabilitiesFromSystem(worker.System)
+		worker.Skills = ""
 	}
 	session.ResultContracts = map[string]*team.CompiledResultContract{compiled.ID: compiled}
 	session.AgentResultContracts = map[string]team.ResultContractRef{strings.ToLower(f.config.Worker): {

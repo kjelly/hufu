@@ -53,6 +53,11 @@ func ProjectReport(ctx context.Context, objects Objects, plan paired.ExperimentP
 		Objective: plan.Objective, Budget: state.Budget, ProtectedSurfaceValid: true,
 		ResumeConsistent: state.StopReason != "clock_rollback", ResourceOver: state.ResourceOver,
 	}
+	rolesConsistent, err := verifyRoleStages(ctx, reader, state, specs)
+	if err != nil {
+		return ExperimentReport{}, err
+	}
+	evaluation.ResumeConsistent = evaluation.ResumeConsistent && rolesConsistent
 	for _, slot := range plan.Slots {
 		if slot.Variant != "baseline" && !slices.Contains(evaluation.Candidates, slot.Variant) {
 			if _, bound := state.Variants[slot.Variant]; bound || plan.Mode == "manual" {
@@ -144,6 +149,54 @@ func ProjectReport(ctx context.Context, objects Objects, plan paired.ExperimentP
 		}
 	}
 	return report, nil
+}
+
+func verifyRoleStages(ctx context.Context, reader *ProbeExecutor, state LedgerState, specs []StageSpec) (bool, error) {
+	consistent := true
+	for _, spec := range specs {
+		if spec.Kind == "executor" {
+			continue
+		}
+		stage := state.Stages[spec.ID]
+		if stage == nil {
+			return false, errors.New("missing role stage")
+		}
+		binding, bound := state.Variants[spec.Group]
+		bindingVerified := false
+		for _, attempt := range stage.Attempts {
+			if attempt.Settlement == nil {
+				consistent = false
+				continue
+			}
+			request := requestFromAttempt(reader.plan, state, spec, attempt)
+			actual, err := reader.ReadSettlement(ctx, request, attempt.Settlement.Evidence)
+			if err != nil || actual != *attempt.Settlement {
+				return false, errors.Join(err, errors.New("role settlement differs from canonical evidence"))
+			}
+			var evidence StageEvidence
+			if err := readObjectJSON(reader.objects, actual.Evidence, &evidence); err != nil {
+				return false, err
+			}
+			if err := validateRoleProvenance(reader.objects, state, evidence); err != nil {
+				return false, err
+			}
+			if bound && actual.Outcome == "passed" {
+				result, err := reader.readRoleResult(ctx, request, actual)
+				origin := "validated_proposal"
+				if spec.Kind == "compose" {
+					origin = "validated_composition"
+				}
+				if err != nil || result.Variant == nil || result.Variant.VariantDigest != binding.Digest || binding.Origin != origin {
+					return false, errors.Join(err, errors.New("bound variant differs from its verified proposal"))
+				}
+				bindingVerified = true
+			}
+		}
+		if bound && !bindingVerified {
+			return false, errors.New("variant has no verified originating proposal")
+		}
+	}
+	return consistent, nil
 }
 
 func reportManifestReference(objects Objects, manifest paired.RunManifest, publish, required bool) (*paired.ArtifactRef, error) {

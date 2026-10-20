@@ -114,7 +114,7 @@ func (c *Controller) Reconcile(ctx context.Context, executor StageExecutor) erro
 	var failures []error
 	for _, spec := range specs {
 		stage := state.Stages[spec.ID]
-		if len(stage.Attempts) == 0 || slices.Contains([]string{"completed", "cancelled", "failed", "skipped_budget"}, stage.State) {
+		if len(stage.Attempts) == 0 || slices.Contains([]string{"completed", "cancelled", "failed", "skipped", "skipped_budget"}, stage.State) {
 			continue
 		}
 		attempt := stage.Attempts[len(stage.Attempts)-1]

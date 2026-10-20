@@ -426,7 +426,7 @@ func transitionStage(s *LedgerState, value stageTransition, limits paired.Limits
 		return errors.New("invalid transition target or reason")
 	}
 	if value.Generation == 0 {
-		if stage.State != "planned" || !slices.Contains([]string{"skipped_budget", "cancelled", "failed"}, value.State) {
+		if stage.State != "planned" || !slices.Contains([]string{"skipped", "skipped_budget", "cancelled", "failed"}, value.State) {
 			return errors.New("invalid planned transition")
 		}
 		if _, exists := s.Envelopes[stage.Spec.Group]; exists {

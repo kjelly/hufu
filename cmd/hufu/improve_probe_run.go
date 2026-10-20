@@ -58,9 +58,17 @@ func validateProbeOverrides(command *cobra.Command) error {
 }
 
 func newProbeRunCommand() *cobra.Command {
+	return newProbeExecutionCommand("manual")
+}
+
+func newProbeExecutionCommand(mode string) *cobra.Command {
 	var configPath, path string
 	var asJSON, asTUI bool
 	command := &cobra.Command{Use: "run", Short: "Freeze and execute a manual paired experiment"}
+	if mode == "refine" {
+		command.Use, command.Short = "refine", "Run one bounded propose, probe, compose and reflect schedule"
+		command.SilenceUsage, command.SilenceErrors = true, true
+	}
 	configureProbeOperation(command)
 	command.RunE = func(command *cobra.Command, _ []string) (retErr error) {
 		if configPath == "" || path == "" {
@@ -80,8 +88,8 @@ func newProbeRunCommand() *cobra.Command {
 		if err != nil {
 			return &probeExitError{err}
 		}
-		if prepared.Config.Mode != "manual" {
-			return &probeExitError{errors.New("probe run requires mode: manual")}
+		if prepared.Config.Mode != mode {
+			return &probeExitError{fmt.Errorf("%s requires mode: %s", command.Name(), mode)}
 		}
 		settings := probeRuntimeSettings(prepared.Config.ExecutionMode)
 		workspace, err := improver.OpenProbeWorkspace(path, false)

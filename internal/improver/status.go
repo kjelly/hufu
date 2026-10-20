@@ -20,7 +20,7 @@ func StageTasks(state LedgerState) []*team.TodoItem {
 			status = team.TaskPending
 		case "admitted", "bound", "started":
 			status = team.TaskInProgress
-		case "cancelled", "skipped_budget":
+		case "cancelled", "skipped", "skipped_budget":
 			status = team.TaskSkipped
 		case "failed":
 			status = team.TaskError
