@@ -146,6 +146,9 @@ to re-create an abstraction that already exists in the runtime.
 
 ### Planning
 
+- [Team YAML simplification](implementation-plans/team-yaml-simplification.md)
+  — staged coordinator lint correction, single-file presets, and inline workers.
+
 - `implementation-plans/` contains active, versioned delivery plans. Plans are
   reference material subordinate to code, tests, and normative contracts;
   completed or superseded plans belong in `archive/implementation-plans/`.
