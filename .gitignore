@@ -23,3 +23,7 @@ spec.md
 review.md
 /data/
 /.envrc
+
+# Local test performance evidence (JSONL, profiles, private build caches).
+/work/
+/scripts/__pycache__/
