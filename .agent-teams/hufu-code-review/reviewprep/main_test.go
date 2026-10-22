@@ -88,7 +88,7 @@ func TestVerifyReviewTestsRunsTargetedPackageInReviewedRevisionSnapshot(t *testi
 	if !ok {
 		t.Fatalf("targeted_go_tests output = %#v", result.Outputs["targeted_go_tests"])
 	}
-	if !receipt.Passed || receipt.ExitCode != 0 || !slices.Equal(receipt.Packages, []string{"./calc"}) {
+	if !receipt.Completed || !receipt.Passed || receipt.ExitCode != 0 || !slices.Equal(receipt.Packages, []string{"./calc"}) {
 		t.Fatalf("targeted Go test receipt = %#v", receipt)
 	}
 	if len(result.Artifacts) != 1 || result.Artifacts[0].ID != receipt.ArtifactID || result.Artifacts[0].SHA256 != receipt.ArtifactSHA256 {
@@ -148,8 +148,19 @@ func TestRunVerifyReviewTestsReturnsFailedEvidenceWithoutActionFailure(t *testin
 	if err := json.Unmarshal(receiptJSON, &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Passed || receipt.ExitCode == 0 || receipt.Diagnostic == "" || receipt.ArtifactID == "" || len(result.Artifacts) != 1 {
+	if !receipt.Completed || receipt.Passed || receipt.ExitCode == 0 || receipt.Diagnostic == "" || receipt.ArtifactID == "" || len(result.Artifacts) != 1 {
 		t.Fatalf("failed verifier evidence = %#v, artifacts = %#v", receipt, result.Artifacts)
+	}
+	data, err := os.ReadFile(filepath.Join(repo, result.Artifacts[0].Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted goTestVerification
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if !persisted.Completed || persisted.Passed || persisted.OutputSHA256 != sha256Hex([]byte(receipt.Diagnostic)) {
+		t.Fatalf("persisted negative test evidence = %+v", persisted)
 	}
 }
 

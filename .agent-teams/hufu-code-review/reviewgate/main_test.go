@@ -87,7 +87,7 @@ func gateFixture(t *testing.T) session {
 	c := fixtureTask(t, "5", "critic-review", "success", payload{Record: raw(t, c1)}, c1, []string{"3"})
 	d := fixtureTask(t, "6", "critic-review", "completed_with_gaps", payload{Record: raw(t, c2)}, c2, []string{"4"})
 	scope := raw(t, map[string]any{"requested": map[string]any{"kind": "last_n", "count": 10, "history": "first_parent", "head": "HEAD"}, "resolved": map[string]any{"base": "base", "head": "frozen-head", "selected_commit_count": 10}, "satisfied": true})
-	tests := raw(t, map[string]any{"passed": true, "reviewed_revision": "frozen-head", "command": []string{"go", "test"}, "artifact_id": "tests-artifact"})
+	tests := raw(t, map[string]any{"completed": true, "passed": true, "exit_code": 0, "timed_out": false, "output_truncated": false, "reviewed_revision": "frozen-head", "command": []string{"go", "test"}, "artifact_id": "tests-artifact"})
 	report := payload{Scope: scope, Tests: tests, Coverage: "completed_with_gaps", InputReview: []inputReview{entry(a, first, t), entry(b, second, t), entry(c, c1, t), entry(d, c2, t)}, GapResolutions: []gapResolution{
 		{TaskID: "3", Index: 0, Status: "resolved_cross_workset", ResolvingTaskID: "4", Evidence: []string{"snapshot-b"}},
 	}}
@@ -244,7 +244,8 @@ func TestReviewGapCoverageDiagnostics(t *testing.T) {
 	}
 }
 
-func TestReviewGateAcceptsCompleteReviewWithoutFindings(t *testing.T) {
+func completeReviewFixture(t *testing.T) session {
+	t.Helper()
 	fixture := gateFixture(t)
 	r := record{Kind: "review", Revision: "frozen-head", Key: "unit-0", Lens: "noop"}
 	source := fixtureTask(t, "3", "review-primary-workset", "success", payload{Record: raw(t, r)}, r, nil)
@@ -256,6 +257,11 @@ func TestReviewGateAcceptsCompleteReviewWithoutFindings(t *testing.T) {
 	final := fixtureTask(t, "4", "synthesize-review", "success", report, record{}, []string{"3"})
 	fixture.Tasks = append([]task{source, final}, fixture.Tasks[5:]...)
 	setFixtureInventory(t, &fixture)
+	return fixture
+}
+
+func TestReviewGateAcceptsCompleteReviewWithoutFindings(t *testing.T) {
+	fixture := completeReviewFixture(t)
 	if id, _, err := verify(fixture, "run-1"); err != nil || id != "4" {
 		t.Fatalf("id=%s error=%v", id, err)
 	}

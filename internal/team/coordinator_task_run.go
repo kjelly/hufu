@@ -1190,6 +1190,16 @@ retryLoop:
 				c.sessionToolPermissionsMu.Unlock()
 			}))
 
+			compiledResult := c.attemptResultContractSchema(task)
+			_, inputErr := c.resultRuntimeInputValues(compiledResult)
+			if inputErr != nil {
+				err = c.blockTaskExecutionEnvelopePreflight(task, c.todoItemByID(todoID), inputErr)
+				return
+			}
+			var runtimeInputLookup func() (map[string]any, error)
+			if compiledResult != nil && len(compiledResult.runtimeInputs) > 0 {
+				runtimeInputLookup = func() (map[string]any, error) { return c.resultRuntimeInputValues(compiledResult) }
+			}
 			if c.workerAgentOverride != nil {
 				output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, currentPrompt, conversationHistory, timing, c.planSubmissionStop(task, todoID)...)
 			} else {
@@ -1237,8 +1247,9 @@ retryLoop:
 							BackendBinding:              backendBinding,
 							ArtifactScope:               cloneArtifactAccessScope(attemptArtifactScope),
 							invariantRepairInstructions: invariantRepairPrompt,
-							resultContractSchema:        c.attemptResultContractSchema(task),
+							resultContractSchema:        compiledResult,
 							resultEvidenceInputs:        c.dependencyResultsForTask(todoID),
+							resultRuntimeInputs:         runtimeInputLookup,
 							timing:                      timing,
 						})
 					}()
@@ -1544,6 +1555,7 @@ retryLoop:
 							repairPrompt += protocolRepairEvidenceSummary(steps, transcriptArtifact)
 							repairAttempts := make([]RepairAttemptProvenance, 0, 2)
 							var repairTools ResolvedWorkerTools
+							var repairCallEvidence *toolCallEvidence
 							runRepair := func(prompt string) ([]fantasy.StepResult, error) {
 								var repairAg fantasy.Agent
 								workerCtx := withoutCoordinatorRequestPreflight(parentCtx)
@@ -1611,6 +1623,8 @@ retryLoop:
 									return nil, errors.New("protocol result-only repair agent unavailable")
 								}
 								repairCtx := context.WithValue(workerCtx, tools.AgentToolsAllowedKey, []string{"submit_result"})
+								repairCallEvidence = &toolCallEvidence{}
+								repairCtx = context.WithValue(repairCtx, toolCallEvidenceKey{}, repairCallEvidence)
 								repairCtx = context.WithValue(repairCtx, protocolRepairExecutionKey{}, true)
 								// Protocol repair has no separate execution receipt. The
 								// parent worker context is receipt-backed, so override its
@@ -1680,7 +1694,17 @@ retryLoop:
 							// and never replays the worker execution (§7).
 							if !repairSuccess && repairReason == RepairFailureInvalidSchema {
 								typedRes = nil
-								schemaRepairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous submit_result call was rejected because its arguments did not match the active result schema. Correct the exact runtime validation error below. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve only the bounded execution evidence below. Do NOT execute work, call any other tools, or emit a prose final response.\n\n## Runtime validation error\n%s\n%s\n## Bounded execution evidence\n%s%s", utils.TruncateRunes(task.Goal, 4000), schemaRepairDiagnostic(repairDiagnostic), schemaRepairRejectionNote(rejectedSubmission), repairEvidence, finalizationBinding)
+								// If the worker only observed evidence, the first repair is
+								// the first actual submission. Preserve that rejected report
+								// too; the schema-only turn cannot reconstruct its findings
+								// or artifact IDs from the worker's short final message.
+								schemaRejectedSubmission := rejectedSubmission
+								schemaEvidence := repairEvidence
+								if schemaRejectedSubmission == "" {
+									schemaRejectedSubmission = protocolRepairRejectedSubmission(repairCallEvidence, repairSteps)
+									schemaEvidence += schemaRejectedSubmission
+								}
+								schemaRepairPrompt := fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous submit_result call was rejected because its arguments did not match the active result schema. Correct the exact runtime validation error below. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve only the bounded execution evidence below. Do NOT execute work, call any other tools, or emit a prose final response.\n\n## Runtime validation error\n%s\n%s\n## Bounded execution evidence\n%s%s", utils.TruncateRunes(task.Goal, 4000), schemaRepairDiagnostic(repairDiagnostic), schemaRepairRejectionNote(rejectedSubmission), schemaEvidence, finalizationBinding)
 								schemaRepairSteps, schemaRepairErr := runRepair(schemaRepairPrompt)
 								repairSuccess = typedRes != nil && typedRes.Source == "submitted" && validateCompletedTaskResult(typedRes) == nil
 								if schemaRepairErr != nil {
@@ -1698,7 +1722,7 @@ retryLoop:
 									Attempt:         2,
 									InvocationRunID: c.executionRunID,
 									Success:         repairSuccess,
-									Prompt:          omitRejectedSubmission(schemaRepairPrompt, rejectedSubmission),
+									Prompt:          omitRejectedSubmission(schemaRepairPrompt, schemaRejectedSubmission),
 									SubmittedResult: typedRes,
 									FailureReason:   repairReason,
 									Error:           repairValidationError(schemaRepairSteps),
@@ -2012,6 +2036,7 @@ retryLoop:
 				if appliedHint != "" {
 					c.persistReflexionLessonAsync(agentName, todoID, task.Goal, appliedHintTrigger, appliedHint, true, false)
 				}
+				c.forgetRecoveredFailures(todoID)
 				closeTranscript()
 				return coordinatorOutput, nil
 			}
@@ -3279,14 +3304,17 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	var repairReason RepairFailureReason
 	var repairSuccess bool
 	var runErr error
+	var rejectedSubmission string
 	for attempt := priorAttempts + 1; attempt <= 2; attempt++ {
 		c.setCurrentTaskAttempt(item.ID, attempt)
 		attemptCtx := context.WithValue(repairCtx, executionAttemptKey{}, attempt)
 		if identity, ok := c.activeTaskResultOccurrence(item.ID); ok {
 			attemptCtx = withSubmitResultRuntimeIdentity(attemptCtx, identity)
 		}
+		repairCallEvidence := &toolCallEvidence{}
+		attemptCtx = context.WithValue(attemptCtx, toolCallEvidenceKey{}, repairCallEvidence)
 		if attempt > priorAttempts+1 {
-			repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous result-only repair call did not match the active result schema. Correct the exact runtime validation error below. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve the execution facts below. Do NOT execute work, inspect files, call any other tool, or emit a prose final response.\n\n## Runtime validation error\n%s\n\n## Execution Output\n%s%s%s", task.Goal, schemaRepairDiagnostic(latestRepairAttemptError(repairHistory)), output, invariantRepairInstructions, finalizationBinding)
+			repairPrompt = fmt.Sprintf("## Goal\n%s\n\n## Schema-only repair\nThe previous result-only repair call did not match the active result schema. Correct the exact runtime validation error below. This is the final repair attempt. Call submit_result exactly once with corrected schema and preserve the execution facts below. Do NOT execute work, inspect files, call any other tool, or emit a prose final response.\n\n## Runtime validation error\n%s\n\n## Execution Output\n%s%s%s%s", task.Goal, schemaRepairDiagnostic(latestRepairAttemptError(repairHistory)), output, rejectedSubmission, invariantRepairInstructions, finalizationBinding)
 		}
 		preparedPrompt, prepareErr := c.prepareAuxiliaryPrompt(repairCtx, "result_repair", repairPrompt)
 		if prepareErr != nil {
@@ -3295,12 +3323,16 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 			repairHistory = append(repairHistory, RepairAttemptProvenance{
 				Attempt:         attempt,
 				InvocationRunID: c.executionRunID,
-				Prompt:          repairPrompt,
+				Prompt:          omitRejectedSubmission(repairPrompt, rejectedSubmission),
 				FailureReason:   repairFailurePreparation,
 			})
 			break
 		}
 		_, steps, callErr := c.runAgentWithStatusAndHistory(attemptCtx, repairAgent, agentName, preparedPrompt, nil, timing, fantasy.StepCountIs(1))
+		promptForReceipt := omitRejectedSubmission(repairPrompt, rejectedSubmission)
+		if rejectedSubmission == "" {
+			rejectedSubmission = protocolRepairRejectedSubmission(repairCallEvidence, steps)
+		}
 		runErr = callErr
 		typedRes = c.GetTaskResult(item.ID)
 		if callErr != nil {
@@ -3314,7 +3346,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 			Attempt:         attempt,
 			InvocationRunID: c.executionRunID,
 			Success:         repairSuccess,
-			Prompt:          repairPrompt,
+			Prompt:          promptForReceipt,
 			SubmittedResult: typedRes,
 			FailureReason:   repairReason,
 			Error:           repairDiagnostic,
@@ -3424,6 +3456,7 @@ func (c *Coordinator) finishProtocolRepair(ctx context.Context, item *TodoItem, 
 	c.releaseIsolatedAttempt(isolatedAttemptFromContext(ctx))
 	c.recordTerminalTypedTaskResult(item.ID)
 	c.reconcileTaskStatusProjection()
+	c.forgetRecoveredFailures(item.ID)
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 	c.report(c.newEvent("done").withAgent(agentName).withOutput(output).withMessage("protocol result-only repair completed").withModel(resolvedModel).withTodoID(item.ID))
 	return output, nil

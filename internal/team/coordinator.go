@@ -526,12 +526,16 @@ type Coordinator struct {
 	// Context budget reporting (§5.4). Populated by buildSystemPrompt so the
 	// execution report can emit a token-usage breakdown without re-deriving the
 	// assembled prompt.
-	ctxReportMu                sync.RWMutex
-	lastCtxBreakdown           ContextUsageBreakdown
-	lastCtxBudget              ContextBudget
-	lastCtxModel               string
-	lastCtxReportReady         bool
-	wrapUp                     atomic.Int32
+	ctxReportMu        sync.RWMutex
+	lastCtxBreakdown   ContextUsageBreakdown
+	lastCtxBudget      ContextBudget
+	lastCtxModel       string
+	lastCtxReportReady bool
+	wrapUp             atomic.Int32
+	// blockedWrapUpTasks is guarded by wrapUpMu. A task-derived stop can be
+	// released after its exact occurrences recover, without clearing an
+	// operator, budget, or workflow stop stored as wrapUp=1.
+	blockedWrapUpTasks         map[string]struct{}
 	initialDelegationAttempted atomic.Bool
 	finishCalled               atomic.Bool // set when the finish tool completes; cleared per orchestrator run
 	continuationInterrupted    atomic.Bool // set when a continuation stops before a workflow can safely finish
@@ -1894,6 +1898,7 @@ func (c *Coordinator) resetRoundStateLocked(clearWrapUp bool) {
 	c.round = 0
 	if clearWrapUp {
 		c.wrapUp.Store(0)
+		c.blockedWrapUpTasks = nil
 	}
 	c.acceptanceRecovery.Store(false)
 	c.finishCalled.Store(false)
@@ -1936,7 +1941,7 @@ func (c *Coordinator) resetRoundStatePreservingWrapUp() {
 func (c *Coordinator) resetRoundStateConsumingWrapUp() bool {
 	c.wrapUpMu.Lock()
 	defer c.wrapUpMu.Unlock()
-	wasWrapUp := c.wrapUp.Load() == 1
+	wasWrapUp := c.IsWrapUp()
 	c.resetRoundStateLocked(true)
 	return wasWrapUp
 }
@@ -2075,7 +2080,7 @@ func (c *Coordinator) persistPendingWrapUp(reason string) {
 }
 
 func (c *Coordinator) IsWrapUp() bool {
-	return c.wrapUp.Load() == 1
+	return c.wrapUp.Load() != 0
 }
 
 func (c *Coordinator) TaskTracker() *TaskTracker {

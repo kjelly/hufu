@@ -8,16 +8,20 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // This extension binds schema-declared review entries to accepted evidence_from
 // payloads. It interprets no prose and has no consumer-specific vocabulary.
 type resultEvidenceInputsSpec struct {
+	RuntimeBind     bool              `json:"runtime_bind,omitzero"`
 	ItemsPointer    string            `json:"items_pointer"`
 	TaskIDPointer   string            `json:"task_id_pointer"`
 	HashPointer     string            `json:"hash_pointer"`
 	CompletePointer string            `json:"complete_pointer"`
 	ValueBindings   map[string]string `json:"value_bindings,omitempty"`
+	arraySchema     *jsonschema.Schema
 }
 
 func compileResultEvidenceInputs(root map[string]any) (*resultEvidenceInputsSpec, error) {
@@ -51,6 +55,11 @@ func compileResultEvidenceInputs(root map[string]any) (*resultEvidenceInputsSpec
 			return nil, err
 		}
 		if err := validateJSONPointer(source); err != nil {
+			return nil, err
+		}
+	}
+	if spec.RuntimeBind {
+		if err := validateRuntimeEvidenceBinding(root, spec); err != nil {
 			return nil, err
 		}
 	}
@@ -120,7 +129,7 @@ func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *Re
 	if err != nil {
 		return err
 	}
-	if compiled.evidenceInputs == nil && compiled.evidenceReferences == nil && compiled.worksetInputs == nil && len(compiled.fixedCollections) == 0 {
+	if compiled.evidenceInputs == nil && compiled.evidenceReferences == nil && compiled.worksetInputs == nil && len(compiled.fixedCollections) == 0 && len(compiled.runtimeInputs) == 0 {
 		return nil
 	}
 	if payload == nil {
@@ -128,6 +137,13 @@ func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *Re
 	}
 	value, err := decodeResultContractJSON(payload.Value)
 	if err != nil {
+		return err
+	}
+	runtimeInputs, err := c.resultRuntimeInputValues(compiled)
+	if err != nil {
+		return err
+	}
+	if err := validateResultRuntimeInputs(value, compiled.runtimeInputs, runtimeInputs); err != nil {
 		return err
 	}
 	if err := validateResultWorksetInputs(value, compiled.worksetInputs, item.WorksetBinding); err != nil {

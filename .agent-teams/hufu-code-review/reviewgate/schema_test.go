@@ -74,7 +74,7 @@ func schemaFixture() (map[string]any, map[string]any, map[string]any) {
 	tests := report["test_verification"].(map[string]any)
 	tests["artifact_sha256"], tests["requested_input_hash"] = strings.Repeat("a", 64), "sha256:"+strings.Repeat("a", 64)
 	tests["base_revision"], tests["packages"], tests["exit_code"] = "frozen-head", []any{"./internal/example"}, 0
-	tests["timed_out"], tests["output_truncated"] = false, false
+	tests["completed"], tests["timed_out"], tests["output_truncated"] = true, false, false
 	return review, critique, report
 }
 
@@ -84,6 +84,30 @@ func TestTeamResultSchemasRejectFalseCompletion(t *testing.T) {
 		value      func() any
 		valid      bool
 	}{
+		{"report_failed_tests_with_gap", "report-v1.json", func() any {
+			_, _, r := schemaFixture()
+			tests := r["test_verification"].(map[string]any)
+			tests["passed"], tests["exit_code"], tests["diagnostic"] = false, 1, "FAIL: target test"
+			return r
+		}, true},
+		{"report_failed_tests_claims_complete", "report-v1.json", func() any {
+			_, _, r := schemaFixture()
+			tests := r["test_verification"].(map[string]any)
+			tests["passed"], tests["exit_code"], tests["diagnostic"] = false, 1, "FAIL: target test"
+			r["coverage"] = "complete"
+			return r
+		}, false},
+		{"report_failed_tests_missing_diagnostic", "report-v1.json", func() any {
+			_, _, r := schemaFixture()
+			tests := r["test_verification"].(map[string]any)
+			tests["passed"], tests["exit_code"] = false, 1
+			return r
+		}, false},
+		{"report_tests_incomplete", "report-v1.json", func() any {
+			_, _, r := schemaFixture()
+			r["test_verification"].(map[string]any)["completed"] = false
+			return r
+		}, false},
 		{"review", "review-v1.json", func() any { r, _, _ := schemaFixture(); return map[string]any{"record": r} }, true},
 		{"review_annotated_artifact_reference", "review-v1.json", func() any {
 			r, _, _ := schemaFixture()
@@ -189,6 +213,27 @@ func TestFinalReportPreservesSourceFindingAndOriginalGap(t *testing.T) {
 	}
 	if !strings.Contains(text, "不能據此判定程式沒有問題") || !strings.Contains(text, "目前不得宣稱此 finding 已確認或已排除") {
 		t.Fatal("report promoted missing evidence into a clean or confirmed verdict")
+	}
+}
+
+func TestFinalReportPreservesFailedTestDiagnostic(t *testing.T) {
+	_, document := contractSchema(t, "report-v1.json")
+	reportTemplate, err := template.New("report").Option("missingkey=error").Parse(document["x-hufu-final-report"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, report := schemaFixture()
+	tests := report["test_verification"].(map[string]any)
+	tests["passed"], tests["exit_code"] = false, 1
+	tests["diagnostic"] = "FAIL: TestTerminalBroker: bind: invalid argument"
+	var output bytes.Buffer
+	if err := reportTemplate.Execute(&output, report); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"passed=false", tests["diagnostic"].(string), "尚未判定為程式缺陷"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("report lost negative test evidence %q", expected)
+		}
 	}
 }
 

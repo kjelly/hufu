@@ -1732,6 +1732,21 @@
     "complete_pointer": "/audit_complete",
     "value_bindings": {
       "/record": "/record"
+    },
+    "runtime_bind": true
+  },
+  "x-hufu-fixed-collections": [
+    {
+      "items_pointer": "/record/decisions",
+      "source_contracts": [
+        "schemas/review-v1.json"
+      ],
+      "source_pointer": "/record/findings",
+      "index_field": "finding_index",
+      "choice_fields": [
+        "verdict",
+        "severity"
+      ]
     }
-  }
+  ]
 }

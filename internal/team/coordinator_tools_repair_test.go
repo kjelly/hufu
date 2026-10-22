@@ -177,6 +177,68 @@ func TestValidateToolArgumentsHonorsPrefixItemsAndMinimum(t *testing.T) {
 	}
 }
 
+func TestSubmitResultUnionReportsTheRejectedObjectMember(t *testing.T) {
+	info := submitResultToolInfo(taskResultSubmissionContract{})
+	for _, tc := range []struct {
+		name, entry, path string
+	}{
+		{name: "missing path", entry: `{"artifact_ref":"sha256-evidence"}`, path: "$.files_read[0].path"},
+		{name: "boxed text", entry: `{"$text":"sha256-evidence"}`, path: "$.files_read[0].path"},
+		{name: "object path", entry: `{"path":{"$text":"sha256-evidence"}}`, path: "$.files_read[0].path"},
+		{name: "object purpose", entry: `{"path":"sha256-evidence","purpose":{"$text":"review"}}`, path: "$.files_read[0].purpose"},
+		{name: "extra field", entry: `{"path":"sha256-evidence","lines":[1]}`, path: "$.files_read[0].lines"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := `{"status":"success","summary":"review","files_read":[` + tc.entry + `]}`
+			err := validateToolArguments(input, info)
+			if err == nil || err.Path != tc.path {
+				t.Fatalf("error = %v, want path %s", err, tc.path)
+			}
+			feedback := buildToolSchemaValidationPrompt(submitResultToolName, err, info)
+			if !strings.Contains(feedback, tc.path) || strings.Contains(feedback, "sha256-evidence") {
+				t.Fatalf("feedback lost the member path or echoed evidence values: %s", feedback)
+			}
+		})
+	}
+	for _, entry := range []string{`"sha256-evidence"`, `{"path":"sha256-evidence","purpose":"review"}`} {
+		if err := validateToolArguments(`{"status":"success","summary":"review","files_read":[`+entry+`]}`, info); err != nil {
+			t.Fatalf("valid shorthand or object was rejected: %v", err)
+		}
+	}
+}
+
+func TestSubmitResultRepairShowsOptionalQuestionObjectExample(t *testing.T) {
+	info := submitResultToolInfo(taskResultSubmissionContract{})
+	input := `{"status":"success","summary":"review","open_questions":[{"$text":"private question"}]}`
+	violation := validateToolArguments(input, info)
+	if violation == nil || violation.Path != "$.open_questions[0].question" {
+		t.Fatalf("violation = %v, want the missing question field", violation)
+	}
+	feedback := buildToolSchemaValidationPrompt(submitResultToolName, violation, info)
+	for _, want := range []string{`Example at $.open_questions[0] ONLY: {"question":"value"}`, "Valid example:"} {
+		if !strings.Contains(feedback, want) {
+			t.Fatalf("repair feedback lacks %q: %s", want, feedback)
+		}
+	}
+	if strings.Contains(feedback, "private question") {
+		t.Fatal("schema feedback echoed submitted evidence")
+	}
+	if err := validateToolArguments(`{"status":"success","summary":"review","open_questions":[{"question":"actual question"}]}`, info); err != nil {
+		t.Fatalf("corrected object was rejected: %v", err)
+	}
+}
+
+func TestUnionDiagnosticDoesNotGuessBetweenSameTypedBranches(t *testing.T) {
+	schema := map[string]any{"oneOf": []any{
+		map[string]any{"type": "object", "required": []string{"first"}},
+		map[string]any{"type": "object", "required": []string{"second"}},
+	}}
+	err := validateSchemaValue(map[string]any{}, schema, "$.choice")
+	if err == nil || err.Path != "$.choice" || err.Expected != "exactly one declared schema" {
+		t.Fatalf("ambiguous branch diagnostic = %v", err)
+	}
+}
+
 func TestCoordinatorToolArgumentRepairExecutesCorrectedCallExactlyOnce(t *testing.T) {
 	c := &Coordinator{}
 	base := &protocolRecordingTool{}

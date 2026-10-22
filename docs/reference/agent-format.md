@@ -413,6 +413,46 @@ canonical payload bytes 重算，`value_bindings` 將 review 欄位與該輸入
 payload 的欄位逐值比較。完成稽核不要求每項事實皆已證實；
 未驗證結論可以交付，必須保留證據缺口與準確的原因。
 
+若要避免模型重抄來源，可在 `x-hufu-evidence-inputs` 設定
+`"runtime_bind": true`。worker 必須完全省略 `items_pointer` 欄位；runtime
+按 durable `evidence_from` 順序，自已接受的結果填入 task ID、重算比對過的
+payload hash 與 `value_bindings`。來源缺失、hash 不符、重複 ID 或 worker
+自行提供該欄位皆拒絕。此模式要求非空且有界的來源清單，僅支援直接宣告的
+object 路徑與 array；綁定欄位及其他 runtime 集合路徑不得重疊。
+canonical schema、儲存格式與來源比對規則不變；重播驗證已儲存的來源副本，
+不會重新填入較新的來源。可搭配 fixed collection，讓模型只提交逐項判斷。
+
+### Runtime output 結果綁定
+
+對於已由原生 action 產生的不可變資料，在結果 schema 宣告：
+
+```json
+"x-hufu-runtime-inputs": [
+  {"target": "/verification", "source_task": "verify", "output": "evidence"}
+]
+```
+
+`source_task` 必須是本 team 宣告的原生 action task。runtime 在 worker
+執行前檢查來源已完成、屬於目前 run、符合 frozen input snapshot，且 output
+digest 與 execution receipt 一致。worker 必須省略 `target`；runtime 填入完整
+原值後驗證 canonical schema，來源值不套用模型字串型別轉換。目標必須是直接
+宣告的 object property 路徑，不得與其他 runtime 綁定或 fixed collection 重疊。
+綁定宣告納入 schema/policy hash；缺失、舊 run、篡改、無效型別與模型覆寫均拒絕。
+本地、external provider 及 result-only repair 共用此邊界；重播檢查已儲存的值，
+不重寫成較新的來源。此綁定供模型提交的結果使用，原生 actions 僅作資料來源。
+
+### 輸入的簡易型別轉換
+
+工具參數、team action catalog 參數及結構化結果在驗證前，依 schema 明確
+宣告的型別轉換字串：`"true"`／`"false"` 轉 boolean，JSON 數字字串轉
+number，十進位整數字串轉 integer（保留精度）。可去除前後空白；不接受
+`yes`、`1` 作為 boolean，也不猜測 union 或只在條件分支宣告的型別。
+string 欄位、自由文字與來源識別碼保持原值；`const: true/false` 亦支援。
+巢狀直接宣告的 properties、array items 與單純 local `$ref` 可套用轉換。
+轉換後仍完整檢查 enum、const、範圍、required、證據與授權；持久化及 hash
+都使用驗證後的 canonical 值。此規則不改變 verifier 的嚴格 JSON 比對，
+也不將 `{"item": ...}` 猜成 array。
+
 ### 固定集合與有限選項決策
 
 當結果必須逐項處理已知集合時，在結果 schema 根節點宣告

@@ -12,12 +12,15 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 
+	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
 const (
-	// resultPayloadMaxBytes bounds one submitted structured payload.
-	resultPayloadMaxBytes = 256 << 10
+	// resultPayloadMaxBytes bounds a complete canonical structured payload,
+	// including accepted records copied by runtime evidence binding. Aggregate
+	// reports need room for those records as well as the worker's decisions.
+	resultPayloadMaxBytes = 2 << 20
 	// resultPayloadMaxErrors and resultPayloadErrorMaxRunes bound the
 	// validation feedback returned to a worker.
 	resultPayloadMaxErrors     = 20
@@ -79,9 +82,13 @@ func validateStructuredResultPayload(compiled *CompiledResultContract, ref Resul
 	if len(raw) > resultPayloadMaxBytes {
 		return nil, fmt.Errorf("%s: structured_payload is %d bytes, above the %d byte limit", structuredPayloadInvalidCode, len(raw), resultPayloadMaxBytes)
 	}
-	value, err := decodeResultContractJSON(raw)
+	value, err := decodeUniqueJSON(raw)
 	if err != nil {
 		return nil, fmt.Errorf("%s: structured_payload is not a single JSON value: %w", structuredPayloadInvalidCode, err)
+	}
+	if schema, schemaErr := decodeResultContractJSON(compiled.CanonicalSchema); schemaErr == nil {
+		root, _ := schema.(map[string]any)
+		value, _ = tools.CanonicalSchemaScalarTypes(value, root)
 	}
 	if err := compiled.schema.Validate(value); err != nil {
 		return nil, fmt.Errorf("%s: structured_payload does not satisfy result contract %q:\n%s", structuredPayloadInvalidCode, ref.ID, formatResultPayloadValidationError(err))
@@ -243,6 +250,16 @@ func (c *Coordinator) structuredPayloadForSubmission(todoID string, raw json.Raw
 	if err == nil {
 		assembled, bindings, err = assembleResultFixedCollections(raw, plans)
 	}
+	if err == nil {
+		assembled, err = assembleRuntimeEvidenceInputs(assembled, compiled.evidenceInputs, c.todoItemByID(todoID).EvidenceFrom, c.dependencyResultsForTask(todoID))
+	}
+	if err == nil {
+		var values map[string]any
+		values, err = c.resultRuntimeInputValues(compiled)
+		if err == nil {
+			assembled, err = assembleResultRuntimeInputs(assembled, compiled.runtimeInputs, values)
+		}
+	}
 	if err != nil {
 		err = fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
 	}
@@ -329,6 +346,8 @@ func providerVisibleResultPayloadSchema(ref ResultContractRef, compiled *Compile
 	if compiled != nil {
 		if value, err := decodeResultContractJSON(compiled.CanonicalSchema); err == nil {
 			if schema, ok := value.(map[string]any); ok {
+				omitRuntimeEvidenceInputs(schema, compiled.evidenceInputs)
+				omitRuntimeResultInputs(schema, compiled.runtimeInputs)
 				delete(schema, "$schema")
 				if dynamicSchemaEligible(schema) {
 					if _, described := schema["description"]; !described {
@@ -382,8 +401,22 @@ func resultContractPromptSection(ref *ResultContractRef, compiled *CompiledResul
 	if compiled != nil && len(compiled.fixedCollections) > 0 {
 		b.WriteString("This schema describes the canonical STORED result. For fields declared in Runtime Fixed Collections, submit keyed decision objects according to that manifest instead of arrays. The runtime supplies the final array and its fixed fields before validating this schema.\n")
 	}
-	if compiled != nil && len(compiled.CanonicalSchema) <= resultContractPromptSchemaMaxBytes {
-		fmt.Fprintf(b, "\n```json\n%s\n```\n", compiled.CanonicalSchema)
+	if compiled != nil {
+		schema := compiled.CanonicalSchema
+		runtimeOwned := len(compiled.runtimeInputs) > 0
+		for _, binding := range compiled.runtimeInputs {
+			fmt.Fprintf(b, "The runtime supplies `%s` from receipt-verified native task `%s` output `%s`. Omit this field entirely; never copy or summarize its value in the submission.\n", binding.Target, binding.SourceTask, binding.Output)
+		}
+		if spec := compiled.evidenceInputs; spec != nil && spec.RuntimeBind {
+			fmt.Fprintf(b, "The runtime supplies `%s` from every accepted evidence_from source, including source IDs, hashes and copied values. Omit this field entirely; attempts to supply it are rejected. The stored result retains the complete bound sources.\n", spec.ItemsPointer)
+			runtimeOwned = true
+		}
+		if runtimeOwned {
+			schema, _ = json.Marshal(providerVisibleResultPayloadSchema(*ref, compiled))
+		}
+		if len(schema) <= resultContractPromptSchemaMaxBytes {
+			fmt.Fprintf(b, "\n```json\n%s\n```\n", schema)
+		}
 	}
 	return b.String()
 }
@@ -449,6 +482,24 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
 	}
+	assembled, err = assembleRuntimeEvidenceInputs(assembled, request.resultContractSchema.evidenceInputs, request.Task.EvidenceFrom, request.resultEvidenceInputs)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
+	}
+	var runtimeInputs map[string]any
+	if len(request.resultContractSchema.runtimeInputs) > 0 {
+		if request.resultRuntimeInputs == nil {
+			return nil, fmt.Errorf("%s: runtime input lookup is unavailable", structuredPayloadInvalidCode)
+		}
+		runtimeInputs, err = request.resultRuntimeInputs()
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
+		}
+	}
+	assembled, err = assembleResultRuntimeInputs(assembled, request.resultContractSchema.runtimeInputs, runtimeInputs)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
+	}
 	payload, err := validateStructuredResultPayload(request.resultContractSchema, *ref, assembled)
 	if err != nil {
 		return nil, err
@@ -457,6 +508,9 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 	value, err := decodeResultContractJSON(payload.Value)
 	if err != nil {
 		return nil, err
+	}
+	if err := validateResultRuntimeInputs(value, request.resultContractSchema.runtimeInputs, runtimeInputs); err != nil {
+		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
 	}
 	if err := validateResultWorksetInputs(value, request.resultContractSchema.worksetInputs, request.Task.WorksetBinding); err != nil {
 		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)

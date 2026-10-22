@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 )
 
 // taskResultProjection compares ordered arrays of objects using an explicitly
@@ -11,9 +12,10 @@ import (
 // worker claim. A missing left-hand array is allowed only when explicitly
 // requested and the right-hand array exists and is empty (omitempty results).
 type taskResultProjection struct {
-	Pointer      string   `json:"pointer"`
-	Fields       []string `json:"fields"`
-	AllowMissing bool     `json:"allow_missing,omitzero"`
+	Pointer       string         `json:"pointer"`
+	Fields        []string       `json:"fields"`
+	AllowMissing  bool           `json:"allow_missing,omitzero"`
+	FieldDefaults map[string]any `json:"field_defaults,omitempty"`
 }
 
 func decodeTaskResultProjection(value any) (taskResultProjection, error) {
@@ -23,9 +25,10 @@ func decodeTaskResultProjection(value any) (taskResultProjection, error) {
 		return projection, fmt.Errorf("equals_projection value must fit within %d bytes", maxTaskResultValueBytes)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&projection); err != nil {
-		return projection, fmt.Errorf("equals_projection requires {pointer, fields, optional allow_missing}: %w", err)
+		return projection, fmt.Errorf("equals_projection requires {pointer, fields, optional allow_missing and field_defaults}: %w", err)
 	}
 	if len(projection.Pointer) > maxTaskResultPointerBytes {
 		return projection, fmt.Errorf("equals_projection pointer exceeds %d bytes", maxTaskResultPointerBytes)
@@ -45,6 +48,11 @@ func decodeTaskResultProjection(value any) (taskResultProjection, error) {
 			return projection, fmt.Errorf("equals_projection fields must be unique nonempty keys of at most 128 bytes")
 		}
 		seen[field] = true
+	}
+	for field := range projection.FieldDefaults {
+		if !slices.Contains(projection.Fields, field) {
+			return projection, fmt.Errorf("equals_projection field_defaults must name compared fields")
+		}
 	}
 	return projection, nil
 }
@@ -81,6 +89,14 @@ func evaluateTaskResultProjection(document, value any, resolveErr error, policy 
 		for _, field := range projection.Fields {
 			leftValue, leftExists := leftItem[field]
 			rightValue, rightExists := rightItem[field]
+			if fallback, declared := projection.FieldDefaults[field]; declared {
+				if !leftExists || leftValue == nil {
+					leftValue, leftExists = fallback, true
+				}
+				if !rightExists || rightValue == nil {
+					rightValue, rightExists = fallback, true
+				}
+			}
 			if !leftExists || !rightExists || !equalJSONValues(leftValue, rightValue) {
 				// Do not echo worker-controlled field values (possibly secrets).
 				return fmt.Errorf("equals_projection item %d field %q must match %q at the same index", i, field, projection.Pointer)

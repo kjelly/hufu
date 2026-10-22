@@ -79,7 +79,7 @@ func (t *protocolRepairWrapper) Run(ctx context.Context, call fantasy.ToolCall) 
 	}
 
 	call.Input = canonicalToolArgumentObjects(call.Input, t.base.Info())
-	call.Input, _ = tools.CanonicalToolArgumentCase(call.Input, t.base.Info())
+	call.Input, _ = tools.CanonicalToolArguments(call.Input, t.base.Info())
 	validationErr := validateToolArguments(call.Input, t.base.Info())
 	t.state.mu.Lock()
 	pending := t.state.pending
@@ -186,9 +186,6 @@ func buildProtocolRepairPrompt(toolName string, violation *toolArgumentSchemaErr
 func buildToolSchemaValidationPrompt(toolName string, violation *toolArgumentSchemaError, info fantasy.ToolInfo) string {
 	message := toolSchemaValidationPromptPrefix(toolName) + violation.Error()
 	example := compactToolExampleJSON(info)
-	if len(example) <= maxToolRepairExampleBytes {
-		return message + ". Valid example: " + example
-	}
 	// A full example containing every runtime-issued collection key can bury
 	// the actual error and get truncated before its useful sibling fields.
 	// Show the rejected object only, explicitly retaining the outer contract.
@@ -204,6 +201,11 @@ func buildToolSchemaValidationPrompt(toolName string, violation *toolArgumentSch
 				message += fmt.Sprintf(". Example at %s ONLY: %s", violation.schemaPath, focused)
 			}
 		}
+	}
+	// Required-only examples omit optional fields, including the malformed
+	// one. Keep its local example even when the overall example is small.
+	if len(example) <= maxToolRepairExampleBytes {
+		return message + ". Valid example: " + example
 	}
 	return message + ". Return the complete tool argument object using the current tool schema; preserve other valid fields and every runtime-issued collection key. A local example is not the complete submission."
 }
@@ -369,12 +371,7 @@ func validateSchemaValue(value any, schema map[string]any, path string) (violati
 		}
 	}()
 	if alternatives, ok := schema["oneOf"].([]any); ok {
-		for _, alternative := range alternatives {
-			if candidate, ok := alternative.(map[string]any); ok && validateSchemaValue(value, candidate, path) == nil {
-				return nil
-			}
-		}
-		return &toolArgumentSchemaError{Path: path, Expected: "exactly one declared schema", Actual: jsonValueType(value)}
+		return validateSchemaAlternatives(value, alternatives, path)
 	}
 	expected, _ := schema["type"].(string)
 	if expected != "" && !matchesJSONType(value, expected) {
@@ -458,6 +455,32 @@ func validateSchemaValue(value any, schema map[string]any, path string) (violati
 		return validateStringSchema(value.(string), schema, path)
 	}
 	return nil
+}
+
+func validateSchemaAlternatives(value any, alternatives []any, path string) *toolArgumentSchemaError {
+	var typedViolation *toolArgumentSchemaError
+	typedBranches := 0
+	for _, alternative := range alternatives {
+		candidate, ok := alternative.(map[string]any)
+		if !ok {
+			continue
+		}
+		err := validateSchemaValue(value, candidate, path)
+		if err == nil {
+			return nil
+		}
+		if typ, ok := candidate["type"].(string); ok && matchesJSONType(value, typ) {
+			typedBranches++
+			typedViolation = err
+		}
+	}
+	// A string-or-object field with a malformed object should name the
+	// rejected member, not merely say "got object". This selects only a
+	// diagnostic; no invalid branch becomes accepted.
+	if typedBranches == 1 {
+		return typedViolation
+	}
+	return &toolArgumentSchemaError{Path: path, Expected: "exactly one declared schema", Actual: jsonValueType(value)}
 }
 
 func validateStringSchema(value string, schema map[string]any, path string) *toolArgumentSchemaError {

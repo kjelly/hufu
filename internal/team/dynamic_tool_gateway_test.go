@@ -77,6 +77,36 @@ func TestDynamicToolGatewaySchemaIsInventoryIndependent(t *testing.T) {
 	}
 }
 
+func TestDynamicToolGatewayConvertsScalarStringsBeforeAuthorizationAndTransport(t *testing.T) {
+	for _, workerSchema := range []bool{false, true} {
+		t.Run(fmt.Sprint(workerSchema), func(t *testing.T) {
+			c := newDirectTypedCoordinator(t, "view", nil, nil)
+			target := gatewayTestTarget()
+			if workerSchema {
+				target.WorkerInputSchema = cloneJSONMap(target.InputSchema)
+			}
+			executor := &gatewayTestExecutor{text: "ok"}
+			gateway := newDynamicToolGateway(c, executor, []DynamicToolTarget{target})
+			ctx := gatewayTestContext(t, c, dynamicToolGatewayName, target.Name)
+			invalid := `{"action":"call","target":"github__get_issue","arguments":{"owner":"kjelly","issue_number":"1","labels":[],"metadata":{"open":"yes"}}}`
+			response, err := gateway.Run(ctx, fantasy.ToolCall{Input: invalid})
+			if err != nil || !response.IsError || executor.calls != 0 {
+				t.Fatal("invalid scalar reached transport")
+			}
+			valid := strings.ReplaceAll(invalid, `"yes"`, `"false"`)
+			response, err = gateway.Run(ctx, fantasy.ToolCall{Input: valid})
+			if err != nil || response.IsError || executor.calls != 1 || executor.input != `{"issue_number":1,"labels":[],"metadata":{"open":false},"owner":"kjelly"}` {
+				t.Fatalf("canonical arguments did not reach transport: %#v %v input=%s", response, err, executor.input)
+			}
+			deniedCtx := gatewayTestContext(t, c, dynamicToolGatewayName)
+			response, err = gateway.Run(deniedCtx, fantasy.ToolCall{Input: valid})
+			if err != nil || !response.IsError || executor.calls != 1 {
+				t.Fatal("conversion bypassed authorization")
+			}
+		})
+	}
+}
+
 func TestDynamicToolGatewaySearchAndInspectExposeOnlyAttemptCatalog(t *testing.T) {
 	target := gatewayTestTarget()
 	gateway := newDynamicToolGateway(nil, &gatewayTestExecutor{}, []DynamicToolTarget{target})

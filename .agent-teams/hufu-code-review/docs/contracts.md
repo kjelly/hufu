@@ -146,12 +146,31 @@ item key, reviewed revision, and lens. The schema rejects Workset IDs in the
 item-key field, and the final audit requires equality with the durable binding.
 
 Dispatch critiques sequentially, with one `critic-review` task and one source
-per `agent` call. A non-fan-out workflow contract cannot appear twice in one
+per `agent` call. Before a primary review is accepted, its ordered invariant
+copies must match the attested ID, status, summary, finding index, and missing
+evidence. The projection explicitly defaults an omitted index to null and an
+omitted/empty evidence list to `[]`, matching the inventory gate. An invented
+zero index or discarded missing evidence is rejected during submission, while
+the original review occurrence can still be corrected.
+
+A non-fan-out workflow contract cannot appear twice in one
 batch. The synthesis contract declares `max-evidence-sources: 64`, covering the
 producer's 32-review budget plus one accepted critique per review. Its full
 source inventory must not be reduced to the default eight-source handoff.
 Select unique source review IDs, never individual finding IDs. A single
 accepted critic covers all findings in its source, including unflagged ones.
+The critique schema declares `x-hufu-evidence-inputs.runtime_bind: true`:
+the runtime copies the source ID, accepted payload hash, and exact source record
+into `record.input_review`. The critic omits this field. A fixed collection
+binds `record.decisions` to the accepted source's `/record/findings`. The model
+submits only decision fields under runtime-issued keys; runtime supplies finding
+indices, ascending order and the final array. Keys are bound to source identity
+and payload hash, so a replacement source cannot reuse previous decisions.
+The report schema uses the same runtime binding for `/input_review`: synthesis
+omits the complete source inventory from its submission. Runtime copies every
+accepted review and critique dependency, including each critique's nested source
+record. Synthesis still declares `audit_complete` and supplies every semantic
+gap-resolution decision; source-copy automation does not replace that review.
 The critique and report schemas use the existing 32-finding bound to require
 exactly that many decisions, in ascending finding-index order. Missing,
 duplicate, reordered, and out-of-range decisions fail at result submission;
@@ -192,7 +211,7 @@ golangci-lint run
 
 Result schemas must fit the runtime full-schema prompt budget (32 KiB canonical JSON). Ordered critic finding indices use one shared prefixItems rule; the per-count conditions only enforce exact coverage lengths. The team schema tests reject missing, duplicate, reordered, and out-of-range decisions and prevent schema growth from silently removing the full model-visible contract.
 
-The synthesizer reserves 65,536 output tokens for the full inventory envelope, which includes verbatim dependency records. Both normal synthesis and result-only repair receive the admitted schema; diagnostics and planning must not consume the inventory output allowance.
+The synthesizer reserves 65,536 output tokens for semantic decisions and the result envelope. Runtime binding inserts dependency records, scope, and test evidence; the model does not transcribe them. Both normal synthesis and result-only repair receive the model-facing schema with those fields removed.
 
 A bounded cross-workset gap resolution cites one artifact from one other
 accepted review. The schema rejects combined-artifact claims during submission,
@@ -237,6 +256,44 @@ remains the existing whole-run policy; it does not disable these guards.
 Changed task contracts and acceptance criteria require a fresh `--new` run;
 resuming an old frozen policy does not retrofit these milestones into its
 completed receipts.
+
+## Workset source and input budgets
+
+The producer first groups diff hunks by lens, then refines those groups using
+the immutable source bundle and per-item reference report. This second pass
+applies to primary, documentation, and documentation-escalation routes. It
+splits primary paths first, then diff hunks when only one path remains. Item
+keys, paths, route annotations, reference candidate bindings, and artifact
+hashes are generated from the final partitions. The existing total diff and
+32-item limits are checked again before publishing any manifests; additional
+splits never silently narrow the requested scope.
+
+The team's producer action explicitly sets `max_source_snapshot_bytes: 393216`
+(384 KiB) and `max_review_input_tokens: 200000`. The latter sums the planning
+estimate of each assigned diff, source snapshot, and reference report,
+including their headers. The estimate is one token per two UTF-8 bytes,
+rounded up per artifact; it is not provider-reported usage or a guarantee of
+the model's tokenizer. This leaves headroom under the unchanged 500,000-token
+attempt guard for instructions, reasoning, result submission, rereads, and
+repairs. Each manifest item records `source_snapshot_bytes` and
+`estimated_review_input_tokens` for comparison with the actual artifacts.
+
+Primary text files are complete; they are never truncated to satisfy these
+budgets. Related caller/test evidence has a separate shared 64 KiB content
+allowance, in deterministic priority order, plus section metadata. Every
+truncated related section retains its path, role, full byte count and hash,
+and explicit `content_truncated: true` and `omitted_bytes` fields. These are
+visible evidence limitations: reviewers must report relevant gaps and cannot
+infer absent behavior from an omitted suffix. Small callers and focused tests
+still appear in full. Binary, missing, and symlink observations retain their
+existing explicit status markers.
+
+If a single primary file and indivisible diff hunk still cannot fit,
+PREPARE returns `workset_item_too_large` with observed sizes, configured limits,
+and remediation before publishing worksets. Split that source file or choose
+an explicit input budget with sufficient attempt headroom. Increasing worker
+retries does not repair an oversized evidence unit. Adapter and payload changes
+require a fresh invocation; historical accepted artifacts remain immutable.
 
 ## Documentation reference contract
 
@@ -320,3 +377,28 @@ For the 51-gap regression, a proposed 52nd decision is rejected at submission;
 the runtime always generates exactly the 51 original identities. This change
 uses the existing worker model's structured enum decisions and grants no new
 tools or network access. Changed schema hashes require a fresh `--new` run.
+
+### Snapshot test execution and negative evidence
+
+PREPARE requires `targeted_go_tests.completed: true`, not a green reviewed
+program. A normally completed `go test` with exit code 1 preserves `passed:
+false` and its diagnostic. Launch errors, cancellation, timeouts, and other
+exit codes leave execution incomplete and block the workflow. The report audit
+requires exact receipt-bound test evidence, checks pass/exit-code consistency,
+and requires `completed_with_gaps` for failing tests or truncated output. The
+rendered report includes the failure diagnostic and does not classify an
+environment failure as a confirmed code defect. The diagnostic remains in the
+runtime-redacted output; the immutable verification artifact retains its hash.
+
+`schemas/report-v1.json` uses `x-hufu-runtime-inputs` to bind `/scope` from
+`produce-workset.scope` and `/test_verification` from
+`verify-targeted-go-tests.targeted_go_tests`. The worker omits both fields.
+Runtime verifies the source's current run, input snapshot, output digest, and
+native receipt before inserting the complete values. The report audit retains
+its exact equality check, including the diagnostic. The model receives only
+compact `targeted_go_test_status` for coverage decisions, so a large failure
+log cannot become a lossy summary during result submission or repair.
+
+Snapshot Go verification preserves configured build/module caches and
+`GOTMPDIR`, contains test temporaries under inherited `TMPDIR`, and runs with
+`GOMAXPROCS=2` and `go test -p 2`.

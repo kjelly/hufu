@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 var errCatalogArgumentsNotRedactionStable = errors.New("team_action_arguments_not_redaction_stable: arguments would change under durable-event redaction")
@@ -13,12 +15,21 @@ var errCatalogArgumentsNotRedactionStable = errors.New("team_action_arguments_no
 // canonicalizeCatalogArguments validates raw model JSON against an input schema and
 // returns canonical bytes plus their sha256 hash.
 func canonicalizeCatalogArguments(schema RunInputSchema, raw []byte) (json.RawMessage, string, error) {
+	if len(raw) > maxRunInputValueBytes {
+		return nil, "", fmt.Errorf("arguments: value exceeds %d bytes", maxRunInputValueBytes)
+	}
 	decoded, err := decodeUniqueJSON(raw)
 	if err != nil {
 		return nil, "", fmt.Errorf("arguments: %w", err)
 	}
 	if _, ok := decoded.(map[string]any); !ok {
 		return nil, "", errors.New("arguments must be a JSON object")
+	}
+	if normalized, changed := tools.CanonicalSchemaScalarTypes(decoded, catalogScalarSchema(schema)); changed {
+		raw, err = json.Marshal(normalized)
+		if err != nil {
+			return nil, "", err
+		}
 	}
 	canonical, err := validateAndCanonicalizeRunInput(schema, raw)
 	if err != nil {
@@ -32,6 +43,21 @@ func canonicalizeCatalogArguments(schema RunInputSchema, raw []byte) (json.RawMe
 		return nil, "", errCatalogArgumentsNotRedactionStable
 	}
 	return canonical, runInputHash(canonical), nil
+}
+
+func catalogScalarSchema(schema RunInputSchema) map[string]any {
+	root := map[string]any{"type": schema.Type}
+	if schema.Items != nil {
+		root["items"] = catalogScalarSchema(*schema.Items)
+	}
+	if len(schema.Properties) > 0 {
+		properties := make(map[string]any, len(schema.Properties))
+		for name, child := range schema.Properties {
+			properties[name] = catalogScalarSchema(child)
+		}
+		root["properties"] = properties
+	}
+	return root
 }
 
 // canonicalizeCatalogIntegers re-encodes every number in canonical arguments

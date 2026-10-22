@@ -175,7 +175,10 @@ func TestHufuCodeReviewSynthesisReceivesPrepareOutputsWithoutCoordinatorConstrai
 	resultCopy, receiptCopy := *item.TypedResult, *item.ExecutionReceipt
 	verifier.TypedResult, verifier.ExecutionReceipt = &resultCopy, &receiptCopy
 	verifier.TypedResult.TaskID, verifier.ExecutionReceipt.TaskID = verifier.ID, verifier.ID
-	outputs, digest, err = CanonicalizeRuntimeOutputs(map[string]any{"targeted_go_tests": map[string]any{"passed": true, "exit_code": 0}})
+	outputs, digest, err = CanonicalizeRuntimeOutputs(map[string]any{
+		"targeted_go_tests":       map[string]any{"passed": false, "exit_code": 1, "diagnostic": strings.Repeat("should-not-reach-model\n", 4000)},
+		"targeted_go_test_status": map[string]any{"completed": true, "passed": false, "timed_out": false, "output_truncated": false},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,9 +208,12 @@ func TestHufuCodeReviewSynthesisReceivesPrepareOutputsWithoutCoordinatorConstrai
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`scope: {"requested":{"count":10},"satisfied":true}`, `targeted_go_tests: {"exit_code":0,"passed":true}`, `"required_critic_source_task_ids":["13"]`} {
+	for _, want := range []string{`Scope context (for analysis only): {"requested":{"count":10},"satisfied":true}`, `Test status (for coverage decisions only): {"completed":true,"output_truncated":false,"passed":false,"timed_out":false}`, `"required_critic_source_task_ids":["13"]`} {
 		if !strings.Contains(final[0].Constraints, want) {
 			t.Fatalf("static synthesis context omitted %s: %s", want, final[0].Constraints)
 		}
+	}
+	if strings.Contains(final[0].Constraints, "should-not-reach-model") {
+		t.Fatal("synthesis context asks the model to transcribe a large diagnostic")
 	}
 }

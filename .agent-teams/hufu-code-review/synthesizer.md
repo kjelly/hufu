@@ -67,28 +67,29 @@ establish a resolution, use `retained`, describe exactly what was checked and
 the remaining limitation, and make no whole-run absence claim. It is valid
 to retain a gap after this bounded check. Neither an unresolved gap nor the
 availability of another artifact requires another search. Never omit an
-original gap, finding, critic, or source record to shorten the output. Do not
-restate the full inventory or every original record in reasoning on each turn;
-copy them once in the final structured payload.
+original gap, finding, critic, or source record from your analysis. Runtime
+preserves every accepted record in the final report. Do not restate those
+records in reasoning or copy them into your submission.
 
 Submit the complete runtime result envelope, including top-level `status` and
 `summary`, with `structured_payload` following `schemas/report-v1.json` and the
 runtime's Fixed Collections submission format for `gap_resolutions`.
 Keep top-level summary at most 1000 runes (prefer at most 300). The inventory
 belongs in `structured_payload`, not in the summary or top-level findings.
+Omit optional outer `open_questions`, `decisions`, `risks`, `suggested_next_tasks`,
+and `facts`; preserve limitations in the structured gap decisions. Keep any
+`details` brief. Use actual JSON strings, never `{"$text":"..."}` wrappers.
 
 The structured payload must contain:
 
-- Copy `scope` and `test_verification` verbatim from the receipt-verified
-  `PREPARE Runtime Outputs` JSON in constraints. These values are injected
-  by the static contract, independently of the coordinator's delegation prose.
-  Do not search for metadata files or reconstruct missing values. The deterministic audit binds
-  them back to the current accepted action results. Do not derive test status,
-  selected count, revisions, or requested scope from another review's prose.
-- `audit_complete: true` and one `input_review` entry per dependency, using
-  its exact todo ID, accepted structured payload SHA256, and unmodified
-  `record`. Never omit a finding, original gap, or unverified critic verdict.
-  The runtime binds these records and hashes to accepted dependency results.
+- Omit `scope` and `test_verification` entirely. The runtime binds the complete
+  native values and diagnostic from the current accepted PREPARE actions.
+  Use the compact scope context and test status only for coverage decisions.
+  Do not search for metadata files, copy diagnostics, or reconstruct these fields.
+- `audit_complete: true` after reviewing every dependency. Omit `input_review`
+  entirely: runtime binding inserts every exact todo ID, accepted payload
+  SHA256, and unmodified record from `evidence_from`. Never submit an empty,
+  abbreviated, or model-copied source array.
 - One `gap_resolutions` decision for each runtime-issued gap key. The manifest
   identifies its source todo ID and zero-based index; do not repeat those
   fixed fields in your decision. Read the other reviews' details
@@ -112,7 +113,10 @@ The structured payload must contain:
   the available evidence, without inventing a whole-run absence claim.
 - `coverage: completed_with_gaps` and result status `completed_with_gaps`
   whenever any source review has an original gap (even one subsequently
-  resolved), or any critic decision is `unverified`. Otherwise use
+  resolved), any critic decision is `unverified`, the injected test_verification
+  status has `passed: false`, or its `output_truncated` is true. Failing tests describe
+  the reviewed snapshot or its execution environment, not a failed review
+  workflow. Runtime preserves their diagnostic; do not claim they passed. Otherwise use
   `coverage: complete` and result status `success`. Code findings may remain
   even when review coverage is complete.
 
@@ -127,20 +131,20 @@ If required dependency results are absent, submit `blocked` rather than
 pretending the supplied subset represents every workset. The team audit
 independently compares this inventory with all completed review occurrences.
 
-Each source entry uses exactly `task_id`, `payload_sha256`, and `record`; do not use `todo_id` or abbreviated hashes. `structured_payload` must be a JSON object, never a JSON-encoded string.
-Copy EVERY field in the injected scope and targeted_go_tests objects, including observed_budget, requested_input_hash, artifact_sha256, base_revision, packages, exit_code, timed_out, and output_truncated. Do not construct a smaller metadata summary.
+Runtime-owned source entries use `task_id`, `payload_sha256`, and `record`.
+Do not submit these entries yourself. `structured_payload` must be a JSON
+object, never a JSON-encoded string.
+Never submit scope or test_verification, including abbreviated metadata or diagnostic summaries. Runtime supplies every field unchanged.
 
-There are TWO allowed record kinds. Copy each dependency's exact
-`structured_payload.record`, never its whole structured payload and never a
-record nested deeper inside it. A critic dependency has `kind: critique`,
+There are TWO allowed record kinds. Read each dependency's exact
+`structured_payload.record`, never a record nested deeper inside it. A critic dependency has `kind: critique`,
 `input_review`, and `decisions`; keep that whole critique record. Do not replace
-it with the reviewed source inside its input_review. The critic's outer
+it in your analysis with the reviewed source inside its input_review. The critic's outer
 `audit_complete` is not part of its record. A review dependency has
 `kind: review` and its original findings, gaps, and invariant assessments.
-When a oneOf validation lists both alternatives' errors, select the branch
-matching the dependency record's kind. For a critique record, ignore the
-review branch's missing review fields; correct only the critique branch's
-actual offending field. Keep the original source record unchanged.
+Runtime copies both kinds unchanged. A rejected runtime-owned source field
+must be omitted from your submission, rather than rewritten to fit a different
+record kind.
 For every `retained` gap use `resolving_task_id: ""` and `evidence: []`.
 Do not scrub symbolic API/error names or change original source strings;
 accepted source payloads have already passed canonical validation. Remove

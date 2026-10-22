@@ -24,6 +24,16 @@ import (
 //
 // Unknown or invalid JSON is returned unchanged for the validator to report.
 func CanonicalToolArgumentCase(input string, info fantasy.ToolInfo) (string, bool) {
+	return canonicalToolArguments(input, info, false)
+}
+
+// CanonicalToolArguments applies schema-directed scalar conversion and enum
+// case folding before validation, authorization and execution see the input.
+func CanonicalToolArguments(input string, info fantasy.ToolInfo) (string, bool) {
+	return canonicalToolArguments(input, info, true)
+}
+
+func canonicalToolArguments(input string, info fantasy.ToolInfo, scalarTypes bool) (string, bool) {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" || trimmed == "{}" || len(info.Parameters) == 0 {
 		return input, false
@@ -40,7 +50,12 @@ func CanonicalToolArgumentCase(input string, info fantasy.ToolInfo) (string, boo
 		return input, false
 	}
 	root := map[string]any{"type": "object", "properties": info.Parameters}
-	canonical, changed := canonicalEnumCase(value, root)
+	changed := false
+	if scalarTypes {
+		value, changed = CanonicalSchemaScalarTypes(value, root)
+	}
+	canonical, folded := canonicalEnumCase(value, root)
+	changed = changed || folded
 	if !changed {
 		return input, false
 	}

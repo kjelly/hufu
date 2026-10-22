@@ -309,6 +309,7 @@ func (c *Coordinator) reEvaluateAffectedCriteria(ctx context.Context, item *Todo
 		c.noProgressStopTripped = false
 		c.reliabilityUsageByAttempt = make(map[string]int)
 		c.metricsMu.Unlock()
+		c.releaseRecoveredTaskWrapUp()
 		if c.sessionData != nil {
 			progressedAt = time.Now().UTC().Format(time.RFC3339Nano)
 			c.sessionMu.Lock()

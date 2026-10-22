@@ -80,7 +80,7 @@
           "type": "task_output_assert",
           "assertions": [
             {
-              "pointer": "/passed",
+              "pointer": "/completed",
               "op": "equals",
               "value": true
             }
@@ -202,13 +202,13 @@
           }
         },
         {
-          "id": "targeted-go-tests-passed",
+          "id": "targeted-go-tests-completed",
           "required": true,
           "verify": {
             "type": "task_output_assert",
             "assertions": [
               {
-                "pointer": "/passed",
+                "pointer": "/completed",
                 "op": "equals",
                 "value": true
               }
@@ -239,7 +239,7 @@
           "depends_on": [
             "review-scope-attested",
             "test-scope-attested",
-            "targeted-go-tests-passed",
+            "targeted-go-tests-completed",
             "documentation-references-verified"
           ],
           "verify": {
@@ -314,7 +314,7 @@
           "depends_on": [
             "review-handoffs-inventoried",
             "test-scope-attested",
-            "targeted-go-tests-passed"
+            "targeted-go-tests-completed"
           ],
           "verify": {
             "type": "task_output_assert",

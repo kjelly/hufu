@@ -425,7 +425,7 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		}
 	}
 	call.Input = canonicalToolArgumentObjects(call.Input, t.Info())
-	call.Input, _ = tools.CanonicalToolArgumentCase(call.Input, t.Info())
+	call.Input, _ = tools.CanonicalToolArguments(call.Input, t.Info())
 	input, err := decodeSubmitResultInput([]byte(call.Input), contract)
 	if err != nil {
 		if strings.Contains(err.Error(), `unknown field "raw_output_ref"`) {

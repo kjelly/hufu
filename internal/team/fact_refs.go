@@ -94,8 +94,16 @@ func factRefSelectorCount(ref FactRef) int {
 }
 
 func (c *Coordinator) resolveRuntimeOutputRef(ref FactRef, output string) (string, error) {
+	value, err := c.resolveRuntimeOutputValue(ref, output)
+	if err != nil {
+		return "", err
+	}
+	return stringifyFactValue(value), nil
+}
+
+func (c *Coordinator) resolveRuntimeOutputValue(ref FactRef, output string) (any, error) {
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
-		return "", fmt.Errorf("fact_ref %q: canonical task occurrences are unavailable", ref.Name)
+		return nil, fmt.Errorf("fact_ref %q: canonical task occurrences are unavailable", ref.Name)
 	}
 	items := c.taskTracker.TodoList().Items()
 	runID := coordinatorRuntimeRunID(c)
@@ -104,13 +112,13 @@ func (c *Coordinator) resolveRuntimeOutputRef(ref FactRef, output string) (strin
 		Assertions: []JSONAssertion{{Pointer: "", Op: "exists"}},
 	}
 	if _, err := ReplayTaskOutputAssertions(items, runID, c.RunInputSnapshot(), spec); err != nil {
-		return "", fmt.Errorf("fact_ref %q: runtime output is not canonical: %w", ref.Name, err)
+		return nil, fmt.Errorf("fact_ref %q: runtime output is not canonical: %w", ref.Name, err)
 	}
 	source, err := uniqueTaskOutputSource(items, ref.TaskID, runID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return stringifyFactValue(source.TypedResult.RuntimeOutputs[output]), nil
+	return source.TypedResult.RuntimeOutputs[output], nil
 }
 
 // stringifyFactValue renders a fact for text substitution: a plain string is

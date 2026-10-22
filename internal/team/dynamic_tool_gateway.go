@@ -306,11 +306,13 @@ func (g *dynamicToolGateway) call(ctx context.Context, callID string, request dy
 		reportDynamicToolInvocation(ctx, dynamicInvocation(target, callID, "denied", "dynamic_target_not_authorized"), "", "target is not authorized for this attempt")
 		return dynamicGatewayError("dynamic_target_not_authorized", "target is not authorized for this attempt"), nil
 	}
-	if target.WorkerInputSchema != nil {
-		parameters, _ := target.WorkerInputSchema["properties"].(map[string]any)
-		canonical, _ := tools.CanonicalToolArgumentCase(string(request.Arguments), fantasy.ToolInfo{Parameters: parameters})
-		request.Arguments = json.RawMessage(canonical)
+	argumentSchema := target.WorkerInputSchema
+	if argumentSchema == nil {
+		argumentSchema = target.InputSchema
 	}
+	parameters, _ := argumentSchema["properties"].(map[string]any)
+	canonical, _ := tools.CanonicalToolArguments(string(request.Arguments), fantasy.ToolInfo{Parameters: parameters})
+	request.Arguments = json.RawMessage(canonical)
 	input, err := validateDynamicArguments(target.InputSchema, request.Arguments)
 	if err != nil {
 		reportDynamicToolInvocation(ctx, dynamicInvocation(target, callID, "denied", "dynamic_schema_invalid"), "", err.Error())

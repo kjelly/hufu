@@ -96,33 +96,37 @@ type Config struct {
 	Scope        resolverScope `json:"scope"`
 	// Since and MaxCommits are retained for direct Go callers during the
 	// provider payload migration. New action requests use Scope exclusively.
-	Since             string `json:"since"`
-	MaxCommits        int    `json:"max_commits"`
-	MaxTotalDiffBytes int    `json:"max_total_diff_bytes"`
-	MaxTotalDiffLines int    `json:"max_total_diff_lines"`
-	MaxChangedPaths   int    `json:"max_changed_paths"`
-	MaxWorksetItems   int    `json:"max_workset_items"`
-	MaxDiffBytes      int    `json:"max_diff_bytes"`
-	MaxDiffLines      int    `json:"max_diff_lines"`
-	MaxPaths          int    `json:"max_paths"`
-	Routing           string `json:"routing"`
+	Since                  string `json:"since"`
+	MaxCommits             int    `json:"max_commits"`
+	MaxTotalDiffBytes      int    `json:"max_total_diff_bytes"`
+	MaxTotalDiffLines      int    `json:"max_total_diff_lines"`
+	MaxChangedPaths        int    `json:"max_changed_paths"`
+	MaxWorksetItems        int    `json:"max_workset_items"`
+	MaxDiffBytes           int    `json:"max_diff_bytes"`
+	MaxDiffLines           int    `json:"max_diff_lines"`
+	MaxPaths               int    `json:"max_paths"`
+	MaxSourceSnapshotBytes int    `json:"max_source_snapshot_bytes"`
+	MaxReviewInputTokens   int    `json:"max_review_input_tokens"`
+	Routing                string `json:"routing"`
 }
 
 type wireConfig struct {
-	Repository        string         `json:"repository"`
-	OutputDir         string         `json:"output_dir"`
-	ArtifactRoot      string         `json:"artifact_root"`
-	Scope             *resolverScope `json:"scope,omitempty"`
-	Since             string         `json:"since,omitempty"`
-	MaxCommits        string         `json:"max_commits,omitempty"`
-	MaxTotalDiffBytes int            `json:"max_total_diff_bytes"`
-	MaxTotalDiffLines int            `json:"max_total_diff_lines"`
-	MaxChangedPaths   int            `json:"max_changed_paths"`
-	MaxWorksetItems   int            `json:"max_workset_items"`
-	MaxDiffBytes      int            `json:"max_diff_bytes"`
-	MaxDiffLines      int            `json:"max_diff_lines"`
-	MaxPaths          int            `json:"max_paths"`
-	Routing           string         `json:"routing,omitempty"`
+	Repository             string         `json:"repository"`
+	OutputDir              string         `json:"output_dir"`
+	ArtifactRoot           string         `json:"artifact_root"`
+	Scope                  *resolverScope `json:"scope,omitempty"`
+	Since                  string         `json:"since,omitempty"`
+	MaxCommits             string         `json:"max_commits,omitempty"`
+	MaxTotalDiffBytes      int            `json:"max_total_diff_bytes"`
+	MaxTotalDiffLines      int            `json:"max_total_diff_lines"`
+	MaxChangedPaths        int            `json:"max_changed_paths"`
+	MaxWorksetItems        int            `json:"max_workset_items"`
+	MaxDiffBytes           int            `json:"max_diff_bytes"`
+	MaxDiffLines           int            `json:"max_diff_lines"`
+	MaxPaths               int            `json:"max_paths"`
+	MaxSourceSnapshotBytes int            `json:"max_source_snapshot_bytes"`
+	MaxReviewInputTokens   int            `json:"max_review_input_tokens"`
+	Routing                string         `json:"routing,omitempty"`
 }
 
 type actionResult struct {
@@ -131,6 +135,7 @@ type actionResult struct {
 }
 
 type goTestVerification struct {
+	Completed        bool     `json:"completed"`
 	Passed           bool     `json:"passed"`
 	ReviewedRevision string   `json:"reviewed_revision"`
 	BaseRevision     string   `json:"base_revision"`
@@ -145,6 +150,7 @@ type goTestVerification struct {
 }
 
 type goTestReceipt struct {
+	Completed          bool     `json:"completed"`
 	Passed             bool     `json:"passed"`
 	ReviewedRevision   string   `json:"reviewed_revision"`
 	BaseRevision       string   `json:"base_revision"`
@@ -244,23 +250,28 @@ type reviewRange struct {
 }
 
 type item struct {
-	Key          string            `json:"key"`
-	Lens         string            `json:"lens"`
-	Bindings     map[string]string `json:"bindings"`
-	TouchedPaths []string          `json:"touched_paths"`
-	Inputs       []artifact        `json:"inputs,omitempty"`
-	DiffPath     string            `json:"diff_path"`
-	DiffSHA      string            `json:"diff_sha256"`
-	DiffBytes    int               `json:"diff_bytes"`
-	DiffLines    int               `json:"diff_lines"`
+	Key                        string            `json:"key"`
+	Lens                       string            `json:"lens"`
+	Bindings                   map[string]string `json:"bindings"`
+	TouchedPaths               []string          `json:"touched_paths"`
+	Inputs                     []artifact        `json:"inputs,omitempty"`
+	DiffPath                   string            `json:"diff_path"`
+	DiffSHA                    string            `json:"diff_sha256"`
+	DiffBytes                  int               `json:"diff_bytes"`
+	DiffLines                  int               `json:"diff_lines"`
+	SourceSnapshotBytes        int               `json:"source_snapshot_bytes"`
+	EstimatedReviewInputTokens int               `json:"estimated_review_input_tokens"`
 }
 
 type batch struct {
-	lens     string
-	paths    []string
-	pathSeen map[string]struct{}
-	diff     bytes.Buffer
-	lines    int
+	lens         string
+	paths        []string
+	pathSeen     map[string]struct{}
+	diff         bytes.Buffer
+	lines        int
+	parts        []batchPart
+	preamble     string
+	sourceBundle []byte
 }
 
 type documentationVerification struct {
@@ -510,6 +521,7 @@ func decodeWireConfig(payload string) (Config, error) {
 		MaxTotalDiffBytes: wire.MaxTotalDiffBytes, MaxTotalDiffLines: wire.MaxTotalDiffLines,
 		MaxChangedPaths: wire.MaxChangedPaths, MaxWorksetItems: wire.MaxWorksetItems,
 		MaxDiffBytes: wire.MaxDiffBytes, MaxDiffLines: wire.MaxDiffLines, MaxPaths: wire.MaxPaths,
+		MaxSourceSnapshotBytes: wire.MaxSourceSnapshotBytes, MaxReviewInputTokens: wire.MaxReviewInputTokens,
 		Routing: wire.Routing,
 	}
 	return config, nil
@@ -641,6 +653,10 @@ func Prepare(ctx context.Context, config Config) (result actionResult, resultErr
 		return prepareRoutedReview(ctx, repo, artifactRoot, outputDir, paths, resolution, diffPlan, snapshot, config)
 	}
 	batches, err := buildBatches(ctx, repo, reviewRangeValue, diffPlan, paths, config)
+	if err != nil {
+		return actionResult{}, err
+	}
+	batches, err = boundReviewBatches(artifactRoot, outputDir, batches, snapshot, config, "", nil)
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -786,7 +802,8 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 	}
 	reportArtifact.Description = "Go test evidence from the immutable reviewed-revision snapshot"
 	receipt := goTestReceipt{
-		Passed: verification.Passed, ReviewedRevision: verification.ReviewedRevision,
+		Completed: verification.Completed,
+		Passed:    verification.Passed, ReviewedRevision: verification.ReviewedRevision,
 		BaseRevision: verification.BaseRevision, Packages: verification.Packages,
 		Command: verification.Command, ExitCode: verification.ExitCode,
 		TimedOut: verification.TimedOut, OutputTruncated: verification.OutputTruncated,
@@ -807,6 +824,10 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 			ObservedBudget: observedBudget{ChangedPaths: len(paths)}, Satisfied: true,
 		},
 		"targeted_go_tests": receipt,
+		"targeted_go_test_status": map[string]any{
+			"completed": receipt.Completed, "passed": receipt.Passed,
+			"timed_out": receipt.TimedOut, "output_truncated": receipt.OutputTruncated,
+		},
 	}, Artifacts: []artifact{reportArtifact}}, nil
 }
 
@@ -843,7 +864,7 @@ func targetedGoTestPackages(snapshotRoot string, changed []string) []string {
 }
 
 func runSnapshotGoTests(ctx context.Context, snapshot *reviewSourceSnapshot, packages, environment []string) goTestVerification {
-	arguments := append([]string{"test", "-mod=readonly", "-count=1"}, packages...)
+	arguments := append([]string{"test", "-p", "2", "-mod=readonly", "-count=1"}, packages...)
 	command := exec.CommandContext(ctx, "go", arguments...)
 	command.Dir = snapshot.root
 	command.Env = environment
@@ -861,7 +882,8 @@ func runSnapshotGoTests(ctx context.Context, snapshot *reviewSourceSnapshot, pac
 		}
 	}
 	return goTestVerification{
-		Passed: runErr == nil, ReviewedRevision: snapshot.revision,
+		Completed: ctx.Err() == nil && (exitCode == 0 || exitCode == 1),
+		Passed:    runErr == nil, ReviewedRevision: snapshot.revision,
 		BaseRevision: snapshot.baseRevision, Packages: packages,
 		Command: append([]string{"go"}, arguments...), ExitCode: exitCode,
 		TimedOut:     errors.Is(ctx.Err(), context.DeadlineExceeded),
@@ -874,7 +896,7 @@ func sanitizedGoTestEnvironment(ctx context.Context) ([]string, error) {
 	// Resolve operator settings before GOENV=off disables their persistent Go
 	// configuration. Probe outside the reviewed module, without workspace,
 	// build flags, toolchain downloads, or network access.
-	probe := exec.CommandContext(ctx, "go", "env", "-json", "GOPATH", "GOMODCACHE", "GOCACHE")
+	probe := exec.CommandContext(ctx, "go", "env", "-json", "GOPATH", "GOMODCACHE", "GOCACHE", "GOTMPDIR")
 	probe.Dir = os.TempDir()
 	probe.Env = replaceEnvironmentValue(offlineGoEnvironment(), "GOWORK", "off")
 	probe.Env = replaceEnvironmentValue(probe.Env, "GOFLAGS", "-buildvcs=false")
@@ -913,12 +935,16 @@ func sanitizedGoTestEnvironment(ctx context.Context) ([]string, error) {
 		}
 		env = append(env, key+"="+paths[key])
 	}
+	// Preserve the operator's build scratch location independently of TMPDIR.
+	if paths["GOTMPDIR"] != "" {
+		env = append(env, "GOTMPDIR="+paths["GOTMPDIR"])
+	}
 	// The snapshot has no .git, but Go stamps VCS information whenever any
 	// parent directory has one: an empty /tmp/.git made every go build under
 	// the snapshot run git status, fail with exit 128, and fail the tests
 	// that build the CLI. Snapshot tests must not depend on what encloses
 	// the temporary directory.
-	return append(env, "GOENV=off", "GONOSUMDB=*", "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local", "GOFLAGS=-buildvcs=false"), nil
+	return append(env, "GOENV=off", "GONOSUMDB=*", "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local", "GOFLAGS=-buildvcs=false", "GOMAXPROCS=2"), nil
 }
 
 func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir string, paths []string, resolution rangeResolution, diffPlan selectedCommitDiffPlan, snapshot *reviewSourceSnapshot, config Config) (actionResult, error) {
@@ -970,6 +996,18 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 	annotateBatches(primaryBatches, "primary")
 	annotateBatches(documentationBatches, "documentation")
 	annotateBatches(escalationBatches, "documentation-escalation")
+	primaryBatches, err = boundReviewBatches(artifactRoot, filepath.Join(outputDir, "primary"), primaryBatches, snapshot, config, "primary", &verification)
+	if err != nil {
+		return actionResult{}, err
+	}
+	documentationBatches, err = boundReviewBatches(artifactRoot, filepath.Join(outputDir, "documentation"), documentationBatches, snapshot, config, "documentation", &verification)
+	if err != nil {
+		return actionResult{}, err
+	}
+	escalationBatches, err = boundReviewBatches(artifactRoot, filepath.Join(outputDir, "documentation-escalation"), escalationBatches, snapshot, config, "documentation-escalation", &verification)
+	if err != nil {
+		return actionResult{}, err
+	}
 	allBatches := append(append(append([]*batch(nil), primaryBatches...), documentationBatches...), escalationBatches...)
 	observed := observeBudget(allBatches, paths)
 	if err := enforceTotalBudget(config, observed); err != nil {
@@ -1025,6 +1063,10 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 		current := &worksets[index]
 		if len(current.batches) == 0 {
 			current.batches = []*batch{noopBatch(current.name)}
+			current.batches, err = boundReviewBatches(artifactRoot, filepath.Join(outputDir, current.name), current.batches, snapshot, config, current.name, &verification)
+			if err != nil {
+				return actionResult{}, err
+			}
 		}
 		manifestArtifact, worksetArtifacts, itemCount, writeErr := writeRoutedWorkset(artifactRoot, outputDir, r, scope, *current, snapshot)
 		if writeErr != nil {
@@ -1056,6 +1098,7 @@ func writeRoutedWorkset(artifactRoot, outputDir string, r reviewRange, scope sco
 			return artifact{}, nil, 0, err
 		}
 		items[index].Inputs = append(items[index].Inputs, report)
+		items[index].EstimatedReviewInputTokens += estimateReviewInputTokens(int(report.Bytes))
 	}
 	partitionObserved := observeBudget(workset.batches, workset.paths)
 	partitionScope := scope
@@ -1090,6 +1133,23 @@ func writeRoutedWorkset(artifactRoot, outputDir string, r reviewRange, scope sco
 // Every child gets its own candidate inventory, including an explicit empty
 // inventory. The aggregate PREPARE report is never an assigned worker input.
 func writeItemReferenceReport(artifactRoot, worksetDir, route string, entry *item, verification documentationVerification) (artifact, error) {
+	data, err := itemReferenceReportData(route, entry, verification)
+	if err != nil {
+		return artifact{}, err
+	}
+	reportPath := filepath.Join(worksetDir, "batches", entry.Key, "documentation-verification.json")
+	if err := os.WriteFile(reportPath, data, 0o644); err != nil {
+		return artifact{}, err
+	}
+	result, err := fileArtifact(artifactRoot, reportPath, "documentation_verification")
+	if err != nil {
+		return artifact{}, err
+	}
+	result.Description = "documentation verification report"
+	return result, nil
+}
+
+func itemReferenceReportData(route string, entry *item, verification documentationVerification) ([]byte, error) {
 	report := struct {
 		Passed                  bool                 `json:"passed"`
 		ReviewedRevision        string               `json:"reviewed_revision"`
@@ -1119,7 +1179,7 @@ func writeItemReferenceReport(artifactRoot, worksetDir, route string, entry *ite
 		}
 	}
 	if len(report.ReferenceCandidateIDs) > 128 {
-		return artifact{}, fmt.Errorf("workset %s/%s exceeds 128 reference candidates; narrow the review scope", route, entry.Key)
+		return nil, fmt.Errorf("workset %s/%s exceeds 128 reference candidates; narrow the review scope", route, entry.Key)
 	}
 	for _, reference := range verification.ForwardReferences {
 		for _, path := range entry.TouchedPaths {
@@ -1131,23 +1191,14 @@ func writeItemReferenceReport(artifactRoot, worksetDir, route string, entry *ite
 	}
 	ids, err := json.Marshal(report.ReferenceCandidateIDs)
 	if err != nil {
-		return artifact{}, err
+		return nil, err
 	}
 	entry.Bindings["reference_candidate_ids"] = string(ids)
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
-		return artifact{}, err
+		return nil, err
 	}
-	reportPath := filepath.Join(worksetDir, "batches", entry.Key, "documentation-verification.json")
-	if err := os.WriteFile(reportPath, append(data, '\n'), 0o644); err != nil {
-		return artifact{}, err
-	}
-	result, err := fileArtifact(artifactRoot, reportPath, "documentation_verification")
-	if err != nil {
-		return artifact{}, err
-	}
-	result.Description = "documentation verification report"
-	return result, nil
+	return append(data, '\n'), nil
 }
 
 func noopBatch(route string) *batch {
@@ -1168,7 +1219,8 @@ func annotateBatches(batches []*batch, route string) {
 	for _, current := range batches {
 		content := bytes.Clone(current.diff.Bytes())
 		current.diff.Reset()
-		fmt.Fprintf(&current.diff, "# hufu-review-route: %s\n", route)
+		current.preamble = fmt.Sprintf("# hufu-review-route: %s\n", route)
+		current.diff.WriteString(current.preamble)
 		_, _ = current.diff.Write(content)
 		current.lines++
 	}
@@ -1215,6 +1267,12 @@ func applyConfigDefaults(config *Config) {
 		config.MaxDiffLines = 600
 		config.MaxPaths = 16
 	}
+	if config.MaxSourceSnapshotBytes == 0 {
+		config.MaxSourceSnapshotBytes = defaultMaxSourceSnapshotBytes
+	}
+	if config.MaxReviewInputTokens == 0 {
+		config.MaxReviewInputTokens = defaultMaxReviewInputTokens
+	}
 }
 
 func validateConfig(config Config) error {
@@ -1229,6 +1287,9 @@ func validateConfig(config Config) error {
 	}
 	if config.MaxDiffBytes <= 0 || config.MaxDiffLines <= 0 || config.MaxPaths <= 0 {
 		return errors.New("max_diff_bytes, max_diff_lines, and max_paths must be positive")
+	}
+	if config.MaxSourceSnapshotBytes <= 0 || config.MaxReviewInputTokens <= 0 {
+		return errors.New("max_source_snapshot_bytes and max_review_input_tokens must be positive")
 	}
 	if config.MaxTotalDiffBytes <= 0 || config.MaxTotalDiffLines <= 0 || config.MaxChangedPaths <= 0 || config.MaxWorksetItems <= 0 {
 		return errors.New("max_total_diff_bytes, max_total_diff_lines, max_changed_paths, and max_workset_items must be positive")
@@ -2704,13 +2765,36 @@ func overlayWorktreeSnapshotPath(repo, snapshotRoot, changedPath string) error {
 	}
 }
 
-func (s *reviewSourceSnapshot) writeBundleArtifact(artifactRoot, directory string, primaryPaths []string) (artifact, error) {
+func (s *reviewSourceSnapshot) writeBundleArtifact(artifactRoot, directory string, primaryPaths []string, data []byte) (artifact, error) {
+	if data == nil {
+		partition, err := filepath.Rel(artifactRoot, directory)
+		if err != nil {
+			return artifact{}, fmt.Errorf("identify source snapshot partition: %w", err)
+		}
+		data, err = s.bundleData(filepath.ToSlash(partition), primaryPaths)
+		if err != nil {
+			return artifact{}, err
+		}
+	}
+	path := filepath.Join(directory, "source-snapshot.txt")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return artifact{}, err
+	}
+	result, err := fileArtifact(artifactRoot, path, "review_source_snapshot")
+	if err != nil {
+		return artifact{}, err
+	}
+	result.Description = "immutable reviewed-revision source, caller, and focused-test snapshot"
+	return result, nil
+}
+
+func (s *reviewSourceSnapshot) bundleData(partition string, primaryPaths []string) ([]byte, error) {
 	if s == nil || s.root == "" {
-		return artifact{}, errors.New("reviewed source snapshot is unavailable")
+		return nil, errors.New("reviewed source snapshot is unavailable")
 	}
 	relatedPaths, err := s.relatedGoPaths(primaryPaths)
 	if err != nil {
-		return artifact{}, err
+		return nil, err
 	}
 	primarySet := make(map[string]struct{}, len(primaryPaths))
 	ordered := make([]string, 0, len(primaryPaths)+len(relatedPaths))
@@ -2722,38 +2806,31 @@ func (s *reviewSourceSnapshot) writeBundleArtifact(artifactRoot, directory strin
 		ordered = append(ordered, current)
 	}
 	ordered = append(ordered, relatedPaths...)
-	partition, err := filepath.Rel(artifactRoot, directory)
-	if err != nil {
-		return artifact{}, fmt.Errorf("identify source snapshot partition: %w", err)
-	}
 
 	var bundle strings.Builder
 	fmt.Fprintf(&bundle, "# Immutable reviewed source snapshot\nreview_revision: %s\nreview_base_revision: %s\nworkset_partition: %s\n", s.revision, s.baseRevision, filepath.ToSlash(partition))
 	bundle.WriteString("Read this artifact as the source/caller/test authority for the assigned workset. Do not substitute the live checkout.\n")
-	fmt.Fprintf(&bundle, "primary_paths: %d\nrelated_paths: %d\ncontent_budget_bytes: %d\n", len(primarySet), len(relatedPaths), maxSnapshotContentBytes)
-	remaining := maxSnapshotContentBytes
+	fmt.Fprintf(&bundle, "primary_paths: %d\nrelated_paths: %d\nrelated_content_budget_bytes: %d\n", len(primarySet), len(relatedPaths), maxRelatedSnapshotContentBytes)
+	remaining := maxRelatedSnapshotContentBytes
 	for _, current := range ordered {
 		role := "related"
 		if _, primary := primarySet[current]; primary {
 			role = "primary"
 		}
-		used, writeErr := s.writeBundleSection(&bundle, current, role, remaining)
-		if writeErr != nil {
-			return artifact{}, writeErr
+		limit := remaining
+		if role == "primary" {
+			limit = maxSnapshotContentBytes
 		}
-		remaining -= used
+		used, writeErr := s.writeBundleSection(&bundle, current, role, limit)
+		if writeErr != nil {
+			return nil, writeErr
+		}
+		if role == "related" {
+			remaining -= used
+		}
 	}
 
-	path := filepath.Join(directory, "source-snapshot.txt")
-	if err := os.WriteFile(path, []byte(bundle.String()), 0o644); err != nil {
-		return artifact{}, err
-	}
-	result, err := fileArtifact(artifactRoot, path, "review_source_snapshot")
-	if err != nil {
-		return artifact{}, err
-	}
-	result.Description = "immutable reviewed-revision source, caller, and focused-test snapshot"
-	return result, nil
+	return []byte(bundle.String()), nil
 }
 
 func (s *reviewSourceSnapshot) writeBundleSection(bundle *strings.Builder, repositoryPath, role string, remaining int) (int, error) {
@@ -2795,6 +2872,9 @@ func (s *reviewSourceSnapshot) writeBundleSection(bundle *strings.Builder, repos
 	}
 	content := data
 	if len(content) > remaining {
+		if role == "primary" {
+			return 0, fmt.Errorf("workset_item_too_large: primary source %q exceeds %d bytes; split the source file before review", repositoryPath, remaining)
+		}
 		allowed := remaining
 		if allowed < 0 {
 			allowed = 0
@@ -3244,7 +3324,7 @@ func writeItems(artifactRoot, outputDir string, batches []*batch, snapshot *revi
 			return nil, fmt.Errorf("describe batch diff %q: %w", key, err)
 		}
 		diffArtifact.Description = "bounded workset diff"
-		snapshotArtifact, err := snapshot.writeBundleArtifact(artifactRoot, dir, current.paths)
+		snapshotArtifact, err := snapshot.writeBundleArtifact(artifactRoot, dir, current.paths, current.sourceBundle)
 		if err != nil {
 			return nil, fmt.Errorf("write batch source snapshot %q: %w", key, err)
 		}
@@ -3255,6 +3335,8 @@ func writeItems(artifactRoot, outputDir string, batches []*batch, snapshot *revi
 			Inputs:       []artifact{diffArtifact, snapshotArtifact},
 			DiffPath:     filepath.ToSlash(filepath.Join("batches", key, "diff.patch")),
 			DiffSHA:      sha256Hex(current.diff.Bytes()), DiffBytes: current.diff.Len(), DiffLines: current.lines,
+			SourceSnapshotBytes:        int(snapshotArtifact.Bytes),
+			EstimatedReviewInputTokens: estimateReviewInputTokens(current.diff.Len()) + estimateReviewInputTokens(int(snapshotArtifact.Bytes)),
 		})
 	}
 	return items, nil
@@ -3331,6 +3413,7 @@ func (b *batch) shouldFlush(bytesToAdd, linesToAdd int, newPath bool, config Con
 }
 
 func (b *batch) add(path string, unit []byte, lines int) {
+	b.parts = append(b.parts, batchPart{path: path, diff: unit, lines: lines})
 	b.diff.Write(unit)
 	b.lines += lines
 	if _, ok := b.pathSeen[path]; !ok {

@@ -108,6 +108,20 @@ step-budget finalization and resumed repair. Provider compliance is still
 checked: prose alone, an invalid payload or an incomplete result does not
 complete the task.
 
+Schema-only repair receives the complete rejected submission as fenced data,
+including its findings and evidence references. The JSON is never cut at a
+fixed character limit: model-context admission checks the complete repair
+request and fails closed if it cannot fit. When the worker only produced
+prose, the first result-repair turn's rejected submission supplies that data
+to the second turn, including during resumed repair. Stream callbacks preserve
+the arguments when returned steps omit them. Receipt prompt copies omit those
+model-controlled arguments; repair does not add tools or replay execution.
+
+Complete structured result payloads and their rendered final reports are bounded
+at 2 MiB, including records copied by runtime evidence binding. The same limit
+applies during assembly, validation, persistence replay, and evidence delivery;
+an oversized aggregate fails preflight without dropping a source record.
+
 Provider-facing result schemas retain portable fields, required properties and
 enum values even when the full schema uses local `$defs` references or
 unsupported conditional constraints. References are inlined within bounded
@@ -130,10 +144,21 @@ that proof. Reporting alone is insufficient: an actual observation must be
 recorded, and unknown or mutating tools still prevent replay. Failed repair
 history remains attached to the original attempt's execution receipt.
 
+A blocked task stops new delegation while its occurrence or reliability scope
+remains unresolved. If the original permitted retry later completes and its
+reliability scope clears, Hufu releases that task-derived stop. Other blocked
+occurrences and explicit operator, budget, or workflow wrap-up requests still
+prevent delegation. Successful recovery never erases the earlier failure
+receipt or bypasses the final acceptance checks.
+
 Argument errors retain the rejected field's full path. When a full tool
 example exceeds 2 KiB, feedback uses the rejected schema's allowed fields and
 a bounded local example instead of repeating an entire fixed collection.
 The local example is explicitly not a complete submission.
+For a union with exactly one branch matching the submitted JSON type, an
+invalid value reports that branch's rejected member (for example
+`files_read[0].path`), rather than only reporting an invalid object. This
+improves repair feedback without accepting an invalid union alternative.
 
 Schemas can declare `x-hufu-fixed-collections` to separate known membership
 from model judgment. The runtime builds source-hash-bound row keys from accepted
@@ -552,11 +577,21 @@ Teams may declare an `equals_projection` task-result assertion to compare two
 ordered object arrays before a successful worker result is committed and again
 at objective verification. The assertion's `pointer` selects the first array;
 its configuration-owned `value` contains a reference `pointer`, 1–16 unique
-`fields`, and optional boolean `allow_missing`. Both arrays must have the same
+`fields`, optional boolean `allow_missing`, and optional `field_defaults`.
+Both arrays must have the same
 length, and every selected field must exist and match at the same index.
 Additional fields are ignored; array order is significant. This supports an
 outer result summary paired with a richer schema-defined record without
 teaching the runtime domain-specific field names.
+
+`field_defaults` may declare a JSON fallback for a selected field. During
+comparison only, an omitted or null field uses that fallback on either side;
+the submitted and stored results remain unchanged. For optional references and
+evidence arrays, `{finding_index: null, missing_evidence: []}` treats omitted
+references as null and omitted/empty evidence lists alike. Zero remains a real
+index, nonempty evidence must still match in order, and numeric strings remain
+distinct from numbers. Defaults for unselected fields fail contract validation.
+Without this explicit policy, selected fields remain required on both sides.
 
 `allow_missing: true` permits an omitted first array only when the reference
 array exists and is empty, accommodating canonical `omitempty` fields. Null,

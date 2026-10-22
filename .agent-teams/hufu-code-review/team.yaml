@@ -157,13 +157,15 @@ spec:
       runtime: golang
       source: ./reviewgate
       mode: trusted-static
-      timeout: 30
+      # Checkpoint reads may copy the runtime SQLite store. Cover its bounded
+      # two-minute snapshot budget plus interpreter and verification work.
+      timeout: 180
 
     inventory-review-handoffs:
       runtime: golang
       source: ./reviewgate
       mode: trusted-static
-      timeout: 30
+      timeout: 180
 
   delegation:
     bind-task-goal-contracts: true
@@ -198,12 +200,12 @@ spec:
           - { pointer: /requested, op: equals_input, input: review.scope }
           - { pointer: /requested_input_hash, op: equals_input_hash, input: review.scope }
           - { pointer: /satisfied, op: equals, value: true }
-      - &targeted-go-tests-passed
+      - &targeted-go-tests-completed
         type: task_output_assert
         source-task: verify-targeted-go-tests
         output: targeted_go_tests
         assertions:
-          - { pointer: /passed, op: equals, value: true }
+          - { pointer: /completed, op: equals, value: true }
       # PREPARE validates explicit links/syntax and records missing inline
       # references. Semantic classifications are mandatory source-review records
       # checked by the handoff inventory and final audit in VERIFY.
@@ -246,15 +248,15 @@ spec:
       - id: test-scope-attested
         required: true
         verify: *test-scope-attested
-      - id: targeted-go-tests-passed
+      - id: targeted-go-tests-completed
         required: true
-        verify: *targeted-go-tests-passed
+        verify: *targeted-go-tests-completed
       - id: documentation-references-verified
         required: true
         verify: *documentation-references-verified
       - id: primary-reviews-complete
         required: true
-        depends-on: [review-scope-attested, test-scope-attested, targeted-go-tests-passed, documentation-references-verified]
+        depends-on: [review-scope-attested, test-scope-attested, targeted-go-tests-completed, documentation-references-verified]
         verify: *primary-reviews-complete
       - id: documentation-reviews-complete
         required: true
@@ -270,7 +272,7 @@ spec:
         verify: *review-handoffs-inventoried
       - id: review-report-audited
         required: true
-        depends-on: [review-handoffs-inventoried, test-scope-attested, targeted-go-tests-passed]
+        depends-on: [review-handoffs-inventoried, test-scope-attested, targeted-go-tests-completed]
         verify: *review-report-audited
 
   # The producer, snapshot-pinned Go verifier, and all three routed worksets
@@ -288,7 +290,7 @@ spec:
         capability: produce-workset
         type: prepare_review_workset
         payload: >-
-          {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"},"routing":"documentation","max_total_diff_bytes":2097152,"max_total_diff_lines":30000,"max_changed_paths":256,"max_workset_items":32,"max_diff_bytes":96000,"max_diff_lines":2000,"max_paths":32}
+          {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"},"routing":"documentation","max_total_diff_bytes":2097152,"max_total_diff_lines":30000,"max_changed_paths":256,"max_workset_items":32,"max_diff_bytes":96000,"max_diff_lines":2000,"max_paths":32,"max_source_snapshot_bytes":393216,"max_review_input_tokens":200000}
         input-bindings:
           - input: review.scope
             target: /scope
@@ -300,7 +302,7 @@ spec:
 
     - id: verify-targeted-go-tests
       kind: outcome
-      advances: [test-scope-attested, targeted-go-tests-passed]
+      advances: [test-scope-attested, targeted-go-tests-completed]
       agent: reviewer
       phase: prepare
       side_effect: none
@@ -317,7 +319,7 @@ spec:
         type: task_result_assert
         task-result-assertions:
           - { pointer: /runtime_outputs/scope/satisfied, op: equals, value: true }
-          - { pointer: /runtime_outputs/targeted_go_tests/passed, op: equals, value: true }
+          - { pointer: /runtime_outputs/targeted_go_tests/completed, op: equals, value: true }
 
     - id: review-primary-workset
       kind: outcome
@@ -349,12 +351,14 @@ spec:
           # The handoff inventory rejects a record whose invariant claims differ
           # from the attested ones, after reviewers can no longer be
           # redispatched. Check the copy here, where submit_result can still be
-          # corrected. Optional fields are compared by the inventory only.
+          # corrected. Compare optional fields too, using the same empty-value
+          # equivalence as the inventory; zero is a real finding index.
           - pointer: /invariant_verification/assessments
             op: equals_projection
             value:
               pointer: /structured_payload/value/record/invariant_assessments
-              fields: [invariant_id, status, summary]
+              fields: [invariant_id, status, summary, finding_index, missing_evidence]
+              field_defaults: {finding_index: null, missing_evidence: []}
               allow_missing: true
 
     - id: review-documentation-workset
@@ -465,15 +469,15 @@ spec:
       max_retries: 1
       result-contract: { schema: schemas/report-v1.json, require-structured: true }
       constraints: |-
-        PREPARE Runtime Outputs (receipt-verified; copy these JSON values verbatim):
-        scope: {scope_attestation}
-        targeted_go_tests: {test_attestation}
+        Scope and test_verification are runtime-owned result fields. Omit them from your submission; runtime binding supplies the complete receipt-verified values, including the full diagnostic.
+        Scope context (for analysis only): {scope_attestation}
+        Test status (for coverage decisions only): {test_status}
         Review Handoff Inventory (receipt-verified; every listed required source must have a critic-review dependency):
         {handoff_inventory}
         The runtime Fixed Collections manifest owns gap membership and identity. Submit gap_resolutions as an object keyed by its issued keys, with decision fields only. The runtime generates source_task_id, gap_index, order, and the final array from accepted review records; never recreate those fields or create indices from prose or nested critic records.
       fact_refs:
         - { name: scope_attestation, task_id: produce-workset, runtime_output: scope }
-        - { name: test_attestation, task_id: verify-targeted-go-tests, runtime_output: targeted_go_tests }
+        - { name: test_status, task_id: verify-targeted-go-tests, runtime_output: targeted_go_test_status }
         - { name: handoff_inventory, task_id: inventory-review-handoffs, runtime_output: review_handoff_inventory }
       execution:
         requires-result: true
