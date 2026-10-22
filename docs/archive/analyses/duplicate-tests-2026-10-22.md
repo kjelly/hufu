@@ -111,3 +111,12 @@ reproduced on the base; no claim is made about its cause or a full-suite speedup
 `golangci-lint run` passes with **0 issues**. `bin/check-docs` and
 `git diff --check` also pass. Required full-suite correctness gaps remain
 explicitly recorded rather than hidden by a skip, retry or weakened assertion.
+
+## Follow-up diagnosis and completed validation
+
+The [follow-up investigation](issue28-validation-diagnostics-2026-10-22.md)
+identifies the five local cleanup failures as unreaped orphan zombies under the
+container's PID 1. It records controlled main/PR checks with a subreaper, complete
+fresh race executions, exact retained-case outcome comparison, independent
+successful PR CI evidence, and the package-wide timeout diagnosis. The earlier
+failures above remain the historical results of the original container run.
