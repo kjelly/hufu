@@ -1,24 +1,11 @@
 package context
 
-// WP-0 — Scope matrix baseline and contract tests.
-//
-// This file pins the *current* shared-memory visibility behavior of the
-// canonical SQLite repository across all four retrieval paths (Query,
-// SearchExact, SearchLexical, and vector hydration). It is intentionally
-// production-code-free: WP-0 must not change any runtime behavior.
-//
-// The most important fixture here is the "empty AgentID query sees agent
-// child" baseline (TestScopeMatrix_EmptyAgentIDSeesAgentChild_*). The current
-// scopeWhere implementation omits a predicate when a child scope field is
-// empty, which means a coordinator-level (AgentID="") query matches rows
-// scoped to *any* agent. WP-1 will close this wildcard. These tests document
-// the pre-fix behavior so the WP-1 change is a visible, deliberate contract
-// transition rather than a silent regression.
-//
-// The WP-1 contract tests (TestScopeMatrixContract_*) assert the *target*
-// isolation behavior and are expected to fail today. They use t.Skip to
-// remain green on main while serving as executable specs for WP-1; once WP-1
-// lands, remove the skip and they become regression guards.
+// Scope matrix regression tests pin shared-memory visibility across Query,
+// SearchExact, SearchLexical, and semantic vector retrieval. All paths use the
+// canonical ancestor-visibility predicate: an empty AgentID matches only shared
+// records (agent_id IS NULL), never agent-scoped private items. The
+// TestScopeMatrixContract_EmptyAgentIDSharedOnly_* cases guard this contract;
+// the remaining cases cover own-agent access, task scope, and team isolation.
 
 import (
 	"context"
@@ -133,33 +120,6 @@ func TestScopeMatrix_QueryAgentBSeesSharedAndOwn(t *testing.T) {
 	}
 }
 
-// TestScopeMatrix_EmptyAgentIDSeesAgentChild_Query documents the CURRENT
-// (post-WP-1) behavior: a query with an empty AgentID matches ONLY shared
-// records (agent_id IS NULL). Agent-scoped private items are invisible.
-// This was the wildcard that WP-1 closed.
-func TestScopeMatrix_EmptyAgentIDSeesAgentChild_Query(t *testing.T) {
-	repo, _ := scopeMatrixFixture(t)
-	ctx := context.Background()
-	got, err := repo.Query(ctx, RepositoryQuery{
-		Scope: Scope{ProjectID: "proj", TeamID: "team", SessionID: "sess"}, // AgentID empty
-	})
-	if err != nil {
-		t.Fatalf("Query: %v", err)
-	}
-	ids := idsOfItems(got)
-	// Post-WP-1: the empty-AgentID query sees ONLY shared items.
-	for _, want := range []string{"shared-decision", "shared-progress"} {
-		if !containsID(ids, want) {
-			t.Errorf("shared query missing shared item %q: got %v", want, ids)
-		}
-	}
-	for _, leak := range []string{"agent-a-finding", "agent-a-pattern", "agent-b-finding", "task-a-detail"} {
-		if containsID(ids, leak) {
-			t.Errorf("shared query leaked private item %q: %v", leak, ids)
-		}
-	}
-}
-
 // TestScopeMatrixContract_EmptyAgentIDSharedOnly_Query is the WP-1
 // contract: an empty-AgentID (coordinator/shared) query must only see
 // shared ancestor records (AgentID IS NULL), never agent-scoped private
@@ -220,26 +180,6 @@ func TestScopeMatrix_SearchExactAgentBDoesNotSeeAgentA(t *testing.T) {
 	}
 }
 
-// TestScopeMatrix_EmptyAgentIDSeesAgentChild_SearchExact documents the
-// post-WP-1 behavior: an empty-AgentID exact search matches ONLY shared
-// records.
-func TestScopeMatrix_EmptyAgentIDSeesAgentChild_SearchExact(t *testing.T) {
-	repo, _ := scopeMatrixFixture(t)
-	ctx := context.Background()
-	got, err := repo.SearchExact(ctx, SearchRequest{
-		Query: "gamma",
-		Scope: Scope{ProjectID: "proj", TeamID: "team", SessionID: "sess"}, // AgentID empty
-	})
-	if err != nil {
-		t.Fatalf("SearchExact: %v", err)
-	}
-	ids := idsOfResults(got)
-	// Post-WP-1: empty-AgentID exact search sees only shared items.
-	if containsID(ids, "agent-a-finding") {
-		t.Errorf("shared exact search leaked private item: %v", ids)
-	}
-}
-
 func TestScopeMatrixContract_EmptyAgentIDSharedOnly_SearchExact(t *testing.T) {
 	repo, _ := scopeMatrixFixture(t)
 	ctx := context.Background()
@@ -287,26 +227,6 @@ func TestScopeMatrix_SearchLexicalAgentBDoesNotSeeAgentA(t *testing.T) {
 	ids := idsOfResults(got)
 	if containsID(ids, "agent-a-finding") {
 		t.Errorf("Agent B lexical search leaked Agent A item: %v", ids)
-	}
-}
-
-// TestScopeMatrix_EmptyAgentIDSeesAgentChild_SearchLexical documents the
-// post-WP-1 behavior: an empty-AgentID lexical search matches ONLY shared
-// records.
-func TestScopeMatrix_EmptyAgentIDSeesAgentChild_SearchLexical(t *testing.T) {
-	repo, _ := scopeMatrixFixture(t)
-	ctx := context.Background()
-	got, err := repo.SearchLexical(ctx, SearchRequest{
-		Query: "private finding",
-		Scope: Scope{ProjectID: "proj", TeamID: "team", SessionID: "sess"}, // AgentID empty
-	})
-	if err != nil {
-		t.Fatalf("SearchLexical: %v", err)
-	}
-	ids := idsOfResults(got)
-	// Post-WP-1: empty-AgentID lexical search sees only shared items.
-	if containsID(ids, "agent-a-finding") {
-		t.Errorf("shared lexical search leaked private item: %v", ids)
 	}
 }
 
@@ -362,29 +282,6 @@ func TestScopeMatrix_VectorAgentBDoesNotSeeAgentA(t *testing.T) {
 	ids := idsOfResults(got)
 	if containsID(ids, "agent-a-finding") {
 		t.Errorf("Agent B vector search leaked Agent A item: %v", ids)
-	}
-}
-
-// TestScopeMatrix_EmptyAgentIDSeesAgentChild_Vector documents the
-// post-WP-1 vector behavior. The semantic index scores only candidates of
-// the canonical ancestor-visibility predicate: an empty request AgentID only
-// matches shared (NULL) items.
-func TestScopeMatrix_EmptyAgentIDSeesAgentChild_Vector(t *testing.T) {
-	repo, _ := scopeMatrixFixture(t)
-	ctx := context.Background()
-	store := newRefreshedSemanticIndex(t, repo, "proj", newKeywordEmbedder(migrationKeywordVector))
-	got, err := store.SearchVector(ctx, SearchRequest{
-		Query: "private finding",
-		Scope: Scope{ProjectID: "proj", TeamID: "team", SessionID: "sess"}, // AgentID empty
-		Limit: 10,
-	})
-	if err != nil {
-		t.Fatalf("SearchVector: %v", err)
-	}
-	ids := idsOfResults(got)
-	// Post-WP-1: empty-AgentID vector search sees only shared items.
-	if containsID(ids, "agent-a-finding") {
-		t.Errorf("shared vector search leaked private item: %v", ids)
 	}
 }
 

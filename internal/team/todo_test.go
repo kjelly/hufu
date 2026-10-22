@@ -459,41 +459,6 @@ func TestTodoToolHandleUpdatePreventDoneToAny(t *testing.T) {
 	}
 }
 
-func TestTodoToolHandleUpdatePreventErrorToDoneDup(t *testing.T) {
-	c := &Coordinator{
-		taskTracker: NewTaskTracker(),
-		session: &TeamSession{
-			Config: agent.TeamConfig{Name: "test-team"},
-		},
-		reportStatus: func(event StatusEvent) {},
-	}
-	c.taskTracker.TodoList().AddBatch([]TodoSpec{
-		{Agent: "researcher", Desc: "find bugs"},
-	})
-
-	c.taskTracker.TodoList().UpdateStatus("1", TaskInProgress, "")
-	c.taskTracker.TodoList().UpdateStatus("1", TaskError, "failed")
-
-	tool := &todoTool{coordinator: c}
-
-	c.updateSnapshot(func(s *currentSnapshot) { s.Agent = "researcher" })
-	c.updateSnapshot(func(s *currentSnapshot) { s.TodoID = "1" })
-
-	// TaskError -> TaskDone should be blocked (not a valid retry)
-	resp, err := tool.handleUpdate("researcher", "1", "done", "")
-	if err != nil {
-		t.Fatalf("handleUpdate returned error: %v", err)
-	}
-	if resp.IsError != true {
-		t.Fatal("expected error response when updating error task to done")
-	}
-
-	all := c.taskTracker.TodoList().Items()
-	if all[0].Status != TaskError {
-		t.Errorf("expected item 1 to remain error, got %s", all[0].Status)
-	}
-}
-
 func TestTodoToolHandleUpdatePreventSkippedToAny(t *testing.T) {
 	c := &Coordinator{
 		taskTracker: NewTaskTracker(),
