@@ -580,11 +580,13 @@ func TestE2E_AltScreenEntry(t *testing.T) {
 			found = true
 			break
 		}
-		// Check if process already exited
-		if proc.cmd.ProcessState != nil {
+		// The waiter owns Cmd state; observe its completion notification.
+		select {
+		case <-proc.waitDone:
 			// Process exited before entering TUI — acceptable if provider unreachable
 			t.Logf("process exited before entering TUI (provider unreachable) — output length: %d", len(proc.output.String()))
 			return
+		default:
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
