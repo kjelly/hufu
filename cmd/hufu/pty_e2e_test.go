@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kjelly/hufu/internal/team"
 	"golang.org/x/sys/unix"
 )
 
@@ -48,13 +48,14 @@ func (b *safeBuffer) Bytes() []byte {
 
 // ptyProcess wraps a process running in a pseudo-terminal.
 type ptyProcess struct {
-	master   *os.File
-	slave    *os.File
-	cmd      *exec.Cmd
-	output   *safeBuffer
-	waitDone chan struct{}
-	waitErr  error
-	readDone chan struct{}
+	master    *os.File
+	slave     *os.File
+	cmd       *exec.Cmd
+	output    *safeBuffer
+	waitDone  chan struct{}
+	waitErr   error
+	readDone  chan struct{}
+	workspace string
 }
 
 func ptyTestDir(t *testing.T) string {
@@ -388,6 +389,7 @@ func startBlockedTUI(t *testing.T) *ptyProcess {
 		"--context-window", "131072", "--timeout", "60",
 		"--workspace", workspaceRoot, chatFixtureSlowToken,
 	}, 30, 100)
+	proc.workspace = filepath.Join(workspaceRoot, "default")
 	select {
 	case <-server.slow:
 	case <-time.After(30 * time.Second):
@@ -401,24 +403,35 @@ func interruptBlockedTUI(t *testing.T, proc *ptyProcess) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	// Standard signals can coalesce. Repeat while the blocked process is alive;
-	// the interval is a delivery cadence, not a correctness deadline. Deterministic
-	// interrupt-handler unit tests cover the individual graceful and force stages.
-	poll := time.Tick(20 * time.Millisecond)
+	// Acknowledge the first stage before sending the second interrupt. Repeated
+	// signals can kill the process after its handler is removed during teardown.
+	if err := proc.sendSignal(os.Interrupt); err != nil {
+		t.Fatalf("send first SIGINT: %v", err)
+	}
+	poll := time.NewTicker(10 * time.Millisecond)
+	defer poll.Stop()
 	for {
-		if err := proc.sendSignal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			t.Fatalf("send SIGINT: %v", err)
+		session, _, err := team.LoadSessionReadOnly(proc.workspace)
+		if err != nil {
+			t.Fatalf("read wrap-up checkpoint: %v", err)
+		}
+		if session != nil && session.PendingWrapUp != nil && session.PendingWrapUp.EventDurable {
+			break
 		}
 		select {
 		case <-proc.waitDone:
-			if code := proc.waitExit(t, 30*time.Second); code != 130 {
-				t.Fatalf("exit after SIGINT = %d, want 130; output=%q", code, truncateContractOutput(proc.output.Bytes()))
-			}
-			return
+			t.Fatalf("TUI exited before acknowledging wrap-up; output=%q", truncateContractOutput(proc.output.Bytes()))
 		case <-ctx.Done():
-			t.Fatalf("SIGINT did not stop the blocked TUI; output=%q", truncateContractOutput(proc.output.Bytes()))
-		case <-poll:
+			t.Fatalf("SIGINT did not persist wrap-up; output=%q", truncateContractOutput(proc.output.Bytes()))
+		case <-poll.C:
 		}
+	}
+	if err := proc.sendSignal(os.Interrupt); err != nil {
+		t.Fatalf("send second SIGINT: %v", err)
+	}
+	deadline, _ := ctx.Deadline()
+	if code := proc.waitExit(t, time.Until(deadline)); code != 130 {
+		t.Fatalf("exit after SIGINT = %d, want 130; output=%q", code, truncateContractOutput(proc.output.Bytes()))
 	}
 }
 
