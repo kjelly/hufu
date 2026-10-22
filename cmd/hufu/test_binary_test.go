@@ -1,7 +1,7 @@
 package main
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,12 +11,16 @@ import (
 	"testing"
 )
 
-var cliTestBinary struct {
+// cliBinaryCache owns one build for the whole test process, including failures.
+// Its directory must outlive individual tests and their t.Cleanup callbacks.
+type cliBinaryCache struct {
 	once sync.Once
 	root string
 	path string
 	err  error
 }
+
+var cliTestBinary cliBinaryCache
 
 func TestMain(m *testing.M) {
 	code := m.Run()
@@ -32,25 +36,39 @@ func TestMain(m *testing.M) {
 
 func buildTestBinary(t *testing.T) string {
 	t.Helper()
-	cliTestBinary.once.Do(func() {
-		cliTestBinary.root, cliTestBinary.err = os.MkdirTemp(os.TempDir(), "hufu-cli-tests-")
-		if cliTestBinary.err != nil {
-			return
-		}
-		_, source, _, ok := runtime.Caller(0)
-		if !ok {
-			cliTestBinary.err = errors.New("locate CLI module root")
-			return
-		}
-		cliTestBinary.path = filepath.Join(cliTestBinary.root, "hufu")
-		command := exec.CommandContext(t.Context(), "go", "build", "-p", "2", "-o", cliTestBinary.path, "./cmd/hufu")
-		command.Dir = filepath.Clean(filepath.Join(filepath.Dir(source), "..", ".."))
-		if output, err := command.CombinedOutput(); err != nil {
-			cliTestBinary.err = fmt.Errorf("build CLI test binary: %w\n%s", err, output)
-		}
-	})
-	if cliTestBinary.err != nil {
-		t.Fatal(cliTestBinary.err)
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate CLI module root")
 	}
-	return cliTestBinary.path
+	moduleRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "..", ".."))
+	path, err := cliTestBinary.build(t.Context(), moduleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// build publishes a path only after go build succeeds. sync.Once publishes the
+// same diagnostic to all waiters; no caller can use a partial or stale binary.
+func (binary *cliBinaryCache) build(ctx context.Context, moduleRoot string) (string, error) {
+	binary.once.Do(func() {
+		binary.root, binary.err = os.MkdirTemp(os.TempDir(), "hufu-cli-tests-")
+		if binary.err != nil {
+			binary.err = fmt.Errorf("create CLI test binary directory: %w", binary.err)
+			return
+		}
+		name := "hufu"
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		path := filepath.Join(binary.root, name)
+		command := exec.CommandContext(ctx, "go", "build", "-p", "2", "-o", path, "./cmd/hufu")
+		command.Dir = moduleRoot
+		if output, err := command.CombinedOutput(); err != nil {
+			binary.err = fmt.Errorf("build CLI test binary: %w\n%s", err, output)
+			return
+		}
+		binary.path = path
+	})
+	return binary.path, binary.err
 }
