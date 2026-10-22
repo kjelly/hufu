@@ -1,6 +1,7 @@
 package team
 
 import (
+	"cmp"
 	"regexp"
 	"strconv"
 	"strings"
@@ -38,7 +39,13 @@ func scanTeamPromptDirectives(session *TeamSession, sources *TeamSourceIndex) []
 		if def == nil {
 			continue
 		}
-		directives = append(directives, scanPromptText(source.Body, source.File, source.BodyLine, 1, source.BodyStatus, def.Name, "agents."+normalizedName(def.Name)+".system")...)
+		local := scanPromptText(source.Body, source.File, source.BodyLine, 1, source.BodyStatus, def.Name, cmp.Or(source.BodyField, "agents."+normalizedName(def.Name)+".system"))
+		if source.BodyField != "" {
+			for i := range local {
+				local[i].Location = source.Fields["system"]
+			}
+		}
+		directives = append(directives, local...)
 	}
 	for index, task := range session.ContractTasks {
 		for _, entry := range []struct {

@@ -61,7 +61,7 @@ func lintOfflineSkills(session *TeamSession, sources *TeamSourceIndex, directive
 	}
 	for _, def := range authoredAgentDefinitions(session, sources) {
 		for index, name := range skill.ParseSkillList(def.Skills) {
-			field := fmt.Sprintf("agents.%s.skills[%d]", normalizedName(def.Name), index)
+			field := fmt.Sprintf("%s[%d]", agentFieldPath(sources, def, "skills"), index)
 			findings = append(findings, lintRequiredSkill(name, def.Name, field, agentFieldLocation(sources, def, "skills"), catalog)...)
 		}
 	}

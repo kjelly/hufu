@@ -183,6 +183,55 @@ func TestCostManagerSettlementKeepsConservativeBoundWithoutCompleteUsage(t *test
 	}
 }
 
+func TestCostManagerExplicitZeroUsageSurvivesReplay(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		usage    *cost.TokenUsage
+		reported bool
+		known    bool
+	}{
+		{"explicit_zero", &cost.TokenUsage{}, true, true},
+		{"sdk_default_zero", &cost.TokenUsage{}, false, false},
+		{"absent_even_when_marked", nil, true, false},
+		{"invalid_even_when_marked", &cost.TokenUsage{InputTokens: -1}, true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manager, _ := newTestCostManager(t, "2", "")
+			store, journal := newCostEventStore(t)
+			reservation, err := manager.Reserve(t.Context(), journal, costReservationRequest("provider-zero", 100, 100))
+			if err != nil {
+				t.Fatal(err)
+			}
+			settlement, err := manager.Settle(t.Context(), journal, CostSettlementRequest{
+				RunID: "run-cost", ProviderInvocationID: "provider-zero", Usage: test.usage,
+				UsageReported: test.reported, Outcome: cost.OutcomeSuccess,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (settlement.Usage != nil) != test.known || settlement.FinalMicros == nil {
+				t.Fatalf("usage presence changed: %+v", settlement)
+			}
+			if test.known && *settlement.FinalMicros != 0 ||
+				!test.known && *settlement.FinalMicros != *reservation.ReservedMicros {
+				t.Fatal("zero or unknown cost was settled incorrectly")
+			}
+			events, err := store.ReadEvents()
+			if err != nil {
+				t.Fatal(err)
+			}
+			restarted, _ := newTestCostManager(t, "2", "")
+			if err := restarted.Rehydrate(events); err != nil {
+				t.Fatal(err)
+			}
+			invocation, ok := restarted.Projection().Invocation("run-cost", "provider-zero")
+			if !ok || invocation.Settlement == nil || (invocation.Settlement.Usage != nil) != test.known {
+				t.Fatal("replay lost explicit usage presence")
+			}
+		})
+	}
+}
+
 func TestCostManagerRehydrateKeepsOpenReservationCharged(t *testing.T) {
 	first, _ := newTestCostManager(t, "1.50", "")
 	store, journal := newCostEventStore(t)

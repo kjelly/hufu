@@ -56,6 +56,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(teamCmd)
+	rootCmd.AddCommand(newMCPCommand())
 	rootCmd.AddCommand(installCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(statusCmd)

@@ -93,6 +93,22 @@ func validateResolutionPayloadReceipt(resolver *TodoItem, runID string) error {
 	if resolver.ResultContract == nil || !resolver.ResultContract.RequireStructured {
 		return nil
 	}
+	return ValidatePersistedResultPayloadReceipt(resolver, runID)
+}
+
+// ValidatePersistedResultPayloadReceipt checks the durable payload/contract/
+// receipt binding without loading a team, running a verifier, or changing state.
+// It validates the recorded validation evidence, not a current schema file.
+func ValidatePersistedResultPayloadReceipt(resolver *TodoItem, runID string) error {
+	if resolver == nil {
+		return fmt.Errorf("task is missing")
+	}
+	if resolver.ResultContract == nil {
+		return nil
+	}
+	if !resolver.ResultContract.RequireStructured && (resolver.TypedResult == nil || resolver.TypedResult.StructuredPayload == nil) {
+		return nil
+	}
 	if resolver.TypedResult == nil || resolver.TypedResult.StructuredPayload == nil {
 		return fmt.Errorf("resolving task %s lacks its required structured payload", resolver.ID)
 	}

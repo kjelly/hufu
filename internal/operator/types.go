@@ -48,21 +48,22 @@ const (
 )
 
 type OperatorSnapshot struct {
-	SchemaVersion    int                `json:"schema_version"`
-	SnapshotID       string             `json:"snapshot_id"`
-	Scope            ResolvedScope      `json:"scope"`
-	Activity         ActivityView       `json:"activity"`
-	Outcome          OutcomeView        `json:"outcome"`
-	Integrity        IntegrityView      `json:"integrity"`
-	Freshness        FreshnessView      `json:"freshness"`
-	Attention        string             `json:"attention"`
-	Blockers         []DiagnosticView   `json:"blockers"`
-	LatestChanges    []ChangeView       `json:"latest_changes"`
-	RoleTargets      []RoleTargetView   `json:"role_targets"`
-	Learning         LearningView       `json:"learning"`
-	Cost             *cost.View         `json:"cost,omitempty"`
-	PrimaryAction    *ActionSuggestion  `json:"primary_action"`
-	SecondaryActions []ActionSuggestion `json:"secondary_actions"`
+	SchemaVersion    int                 `json:"schema_version"`
+	SnapshotID       string              `json:"snapshot_id"`
+	Scope            ResolvedScope       `json:"scope"`
+	Activity         ActivityView        `json:"activity"`
+	Outcome          OutcomeView         `json:"outcome"`
+	Integrity        IntegrityView       `json:"integrity"`
+	Freshness        FreshnessView       `json:"freshness"`
+	Attention        string              `json:"attention"`
+	Blockers         []DiagnosticView    `json:"blockers"`
+	LatestChanges    []ChangeView        `json:"latest_changes"`
+	RoleTargets      []RoleTargetView    `json:"role_targets"`
+	Learning         LearningView        `json:"learning"`
+	Cost             *cost.View          `json:"cost,omitempty"`
+	Observations     *ObservationSummary `json:"observations,omitempty"`
+	PrimaryAction    *ActionSuggestion   `json:"primary_action"`
+	SecondaryActions []ActionSuggestion  `json:"secondary_actions"`
 }
 
 type ResolvedScope struct {

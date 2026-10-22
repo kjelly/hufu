@@ -26,6 +26,8 @@ hufu inspect context <task-id> --run <run-id> --project <project-id>
                      [--agent <agent-id> | --all-agents] [--show-content]
 hufu inspect trace <run-id>
 hufu inspect cost [run-id] [--task <task-id>]
+hufu inspect routes <run-id> [--task <task-id>]
+hufu inspect economics <run-id>
 hufu inspect replay <run-id>
 hufu inspect semantic-retrieval [run-id] [--task <task-id>]
 hufu inspect storage
@@ -88,6 +90,109 @@ and subscription invocations are counted instead of being folded into zero.
 When the run ID is omitted, the command uses the same exact active/sole-run
 binding rules as `inspect overview` and fails on ambiguity.
 
+## Observed generation economics
+
+`hufu inspect overview --run <run-id>` also includes an optional `observations`
+summary in its operator snapshot. It contains route/target distribution,
+evidence-qualified task counts, the known usage subtotal, recorded-invocation
+coverage and data-gap reason codes. Its `source_head` must match the snapshot's
+event ID and hash; it uses the same bound lineage as the run outcome and cost
+projection. The summary never changes the canonical outcome or recommends a
+model.
+
+The CLI overview and the existing TUI operator panel share a plain summary
+renderer. In the TUI, open the panel with `L` and use `G` to reach the observations
+at the bottom; normal scrolling and resize remain available. Missing fields in
+older snapshots and failed projections display unavailable, while missing cost
+amounts remain unknown. A failed latest background query clears cached operator
+presentation; late older replies cannot restore it or change runtime tasks.
+Scope changes also clear details belonging to the previous scope.
+
+```sh
+hufu inspect economics run-123 --workspace ./workspace --branch main --output json
+```
+
+`economics` accepts workspace, session, branch and a required run ID. Task filters
+are rejected. It combines the routes projection and canonical cost ledger from
+one validated event head, without a provider call or verifier execution.
+`comparison_scope` is `single_run_observed`: these observations do not establish
+model quality, causal savings, or a preferred route.
+
+Amounts are integer USD micros estimated from recorded usage and prices, not
+payments. `usage_cost_micros` includes failed calls and retries and is a known
+subtotal. Open reservations, admission bounds, unknown prices, local execution
+and subscriptions remain distinct in `cost`; unknown amounts are not zero.
+`known_cost_coverage` measures usage-settled invocations divided by recorded
+reservations, not the completeness of historical recording.
+
+`cost_per_verified_task_micros` includes overhead and rounds upward. It is null
+unless the run is terminal, there is at least one evidence-qualified completed
+task, all invocations have usage-derived prices, and no cross-run task cost gap
+exists. Historical qualification requires a validated v5 frozen cost policy
+before execution, a matching admitted backend, and accounting for recorded
+provider-profile invocations and worker attempts. Missing or legacy invocation
+identities, unmatched profile invocations and missing attempt costs make this
+qualification unavailable, even when every existing reservation is settled.
+Explicit budget denial is a no-send path. This scope covers Hufu's admitted
+generation boundaries; it is not an accounting of arbitrary shell, tool or
+external service charges.
+
+Tasks created or changed during the selected run form the denominator;
+unchanged completed ancestors are `reused`. Missing evidence remains in the
+denominator and is reported separately. Route costs exclude coordinator,
+guard, judge and other shared overhead. Initial/retry/fallback amounts are
+mutually exclusive and require a unique execution match. Multiple executions
+within one occurrence cannot be distinguished by current cost events: their
+known occurrence subtotal and unassigned subtotal remain visible, while complete
+breakdowns are null with `attribution_unavailable`. This does not by itself
+invalidate a fully accounted run total.
+
+Latency uses nearest-rank p50/p95 over completed attempts with valid persisted
+start/end times, with sample and exclusion counts. Empty samples are null;
+running attempts never receive a live elapsed duration in this observation.
+
+## Recorded worker routes
+
+```sh
+hufu inspect routes run-123 --workspace ./workspace --branch main --output json
+```
+
+`routes` requires a run ID and accepts an optional task filter. It binds the
+exact workspace, session and branch using the existing inspector. It does not
+select a model or recommend a route.
+
+The version 1 data contains `source_head`, `tasks`, `attempts`, `attempt_count`,
+`groups`, `evidence_coverage`, and content-free diagnostics. `run_outcome` and
+`acceptance_state` retain their canonical meanings. Later runs do not change
+a historical projection. Source branch IDs identify inherited events separately
+from the queried branch.
+
+- Task identity retains the original creation event and origin run. Resetting
+  or resuming a task does not create another task occurrence. Unchanged completed
+  ancestor tasks are counted as `reused`, outside the selected run's evidence denominator.
+- `route_kind` is `named`, `unbound`, or `unavailable`. Named routes retain the
+  durable route digest. Actual targets come from receipts; a missing target is
+  empty, never silently replaced with the route's primary.
+- Each dispatch retains the existing `attempt_key` and start event ID.
+  Extra-model executions have separate `execution_key`, `model_execution_id`,
+  and `receipt_hash`. Dispatch and occurrence attempt numbers remain separate.
+- `attempt_class` is `initial`, `retry`, `fallback`, or `unavailable`.
+  Fallback takes precedence over retry. Latency uses persisted timestamps;
+  no clock-dependent duration is added for a running attempt.
+- Legacy receipts without a unique dispatch match remain visible. When several
+  already-counted dispatches could own a receipt, its row has `counted: false`
+  and adds no attempt or target completion credit. `attempt_count` and group
+  counts include only counted rows; attribution diagnostics mean coverage is
+  incomplete, not that additional executions are known to be absent.
+
+`completion_evidence` is `verified`, `not_verified`, or `unavailable`. A done
+task needs a uniquely evidence-bound successful receipt, persisted objective
+verification, and applicable offline evidence checks to be `verified`. Exit
+zero, model prose, or run completion alone is insufficient. An unavailable
+winner earns no target completion credit. Artifact or binding contradictions
+fail with an integrity error; missing historical evidence stays unavailable.
+Verifier commands and providers are never executed by the query.
+
 ## Output and exit status
 
 JSON output uses a versioned envelope with `schema_version`, `kind`, `query`,
@@ -145,3 +250,54 @@ specialized command when maintaining or deeply diagnosing that subsystem.
 For scripts, migrate ad-hoc parsing of reports, `runtime.sqlite` rows, or multiple
 command outputs to `hufu inspect ... --format json`. There is no separate
 `--json` mode for this command.
+## Fixed-scope MCP stdio service
+
+Run a local, read-only MCP server for one existing run:
+
+```sh
+hufu mcp serve --workspace /absolute/path/to/workspace \
+  --session session-123 --branch main --run run-123
+```
+
+All four flags are required. `--branch` must be the canonical branch ID, not
+a mutable name or label. Startup validates the existing workspace and identity;
+it does not create a workspace, connect to a model or launch another MCP server.
+The process runs as the current OS user. Its startup scope is the upper bound
+of what clients can read; this is not a multi-tenant authorization service.
+
+| Tool | Arguments | Result |
+|---|---|---|
+| `hufu_run_status` | `{}` | Existing run metadata projection |
+| `hufu_run_routes` | `{}` or `{"task_id":"task-123"}` | Route/attempt observations in the fixed scope |
+| `hufu_run_economics` | `{}` | Observed run costs and evidence coverage |
+| `hufu_capabilities` | `{}` | Server tool/input schemas and schema version; no team discovery |
+
+Arguments reject unknown properties and duplicate JSON keys. The client cannot
+override workspace, session, branch or run. Query responses contain `source_head`
+and `result` (the existing inspector envelope). Tool content is JSON text; error
+content is `{"code":"..."}` with MCP `isError: true`. Codes are
+`invalid_argument`, `not_found`, `scope_conflict`, `integrity_error`,
+`resource_limit`, `cancelled` and `internal_error`. Internal exception text is
+not returned.
+
+Each query validates fresh persisted data. Later calls may observe a newer
+head, but checkout of another active branch cannot redirect the server.
+The server also checks that its startup event anchor remains in the selected
+lineage. Compare responses only when their source heads agree.
+
+Limits apply at startup as well as during queries: 100,000 journal events and
+32 MiB of event payload, measured before payload loading in the same SQLite
+read transaction. Each query has a cumulative 32 MiB artifact read budget.
+Artifacts are read only for existing integrity checks, never returned as body
+content. A limit failure returns no partial statistics.
+
+There are at most four active tool handlers, with excess work rejected. Each
+handler has a 15-second deadline and accepts MCP cancellation notifications.
+Serialized responses, including JSON escaping and protocol overhead, are
+limited to 1 MiB. Input frames are limited to 64 KiB; an oversized input frame
+terminates the connection. EOF or SIGTERM cancels and drains active handlers.
+Stdout is reserved for SDK JSON-RPC frames; startup/transport errors use stderr.
+
+Validation uses generated offline fixtures and the existing SDK client. No
+external MCP host or real model trial is required. This service offers no
+content download, write tools, shell execution or HTTP transport.

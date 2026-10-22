@@ -231,6 +231,12 @@ func CompileTeam(teamDir string, vars map[string]string, forcedSkills []string, 
 // lint. Lint mode converts explicitly recoverable authoring failures into
 // diagnostics while preserving ordinary parse, template, and I/O errors.
 func InspectTeam(teamDir string, vars map[string]string, forcedSkills []string, registry *ProviderRegistry, mode TeamCompileMode) (*TeamInspection, error) {
+	return InspectTeamWithOptions(teamDir, vars, forcedSkills, registry, mode, TeamLoadOptions{})
+}
+
+// InspectTeamWithOptions applies explicit discovery boundaries while retaining
+// the same normalization, contract compilation and diagnostics as InspectTeam.
+func InspectTeamWithOptions(teamDir string, vars map[string]string, forcedSkills []string, registry *ProviderRegistry, mode TeamCompileMode, options TeamLoadOptions) (*TeamInspection, error) {
 	if mode != TeamCompileRuntime && mode != TeamCompileLint {
 		return nil, fmt.Errorf("unsupported team compile mode %q", mode)
 	}
@@ -244,9 +250,13 @@ func InspectTeam(teamDir string, vars map[string]string, forcedSkills []string, 
 	}
 	inspection := &TeamInspection{Sources: sources}
 	var diagnostics []ContractFinding
-	session, err := loadTeamWithMode(teamDir, vars, forcedSkills, registry, mode, &diagnostics)
+	session, err := loadTeamWithOptions(teamDir, vars, forcedSkills, registry, mode, &diagnostics, options)
 	if err != nil {
 		if mode == TeamCompileLint {
+			if compositionErr, ok := errors.AsType[*compositionError](err); ok {
+				inspection.Diagnostics = []ContractFinding{compositionErr.finding}
+				return inspection, nil
+			}
 			if schemaErr, ok := errors.AsType[*UnsupportedSchemaVersionError](err); ok {
 				inspection.Diagnostics = []ContractFinding{{
 					Severity: FindingSeverityError,
@@ -268,6 +278,7 @@ func InspectTeam(teamDir string, vars map[string]string, forcedSkills []string, 
 	if err != nil {
 		return nil, err
 	}
+	session.addCompositionSourceIndex(sources)
 	inspection.Spec = spec
 	inspection.Session = session
 	inspection.Diagnostics = diagnostics
@@ -409,6 +420,11 @@ func newEffectiveTeamSpec(absDir string, session *TeamSession) (*EffectiveTeamSp
 			agentSpec.ResultContract = ref.clone()
 		}
 
+		if source, exists := session.compositionSources[normalizedName(def.FileAlias)]; exists {
+			composed := source.effectiveAgent(def)
+			composed.ResultContract = agentSpec.ResultContract
+			agentSpec = composed
+		}
 		spec.Agents[key] = agentSpec
 	}
 

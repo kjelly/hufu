@@ -84,7 +84,7 @@ func lintDeclaredTools(def *agent.AgentDef, sources *TeamSourceIndex, known []st
 			continue
 		}
 		loc := agentFieldLocation(sources, def, "tools")
-		findings = append(findings, projectedLintFinding(FindingDeclaredToolMissing, FindingSeverityError, def.Name, "agents."+normalizedName(def.Name)+".tools", "", loc,
+		findings = append(findings, projectedLintFinding(FindingDeclaredToolMissing, FindingSeverityError, def.Name, agentFieldPath(sources, def, "tools"), "", loc,
 			fmt.Sprintf("declared tool %q is not present in any offline registry", name), "remove the declaration or register the tool"))
 	}
 	return findings
@@ -171,6 +171,15 @@ func agentFieldLocation(sources *TeamSourceIndex, def *agent.AgentDef, field str
 		return TeamSourceLocation{File: source.File, Status: LocationFieldOnly}
 	}
 	return TeamSourceLocation{Status: LocationFieldOnly}
+}
+
+func agentFieldPath(sources *TeamSourceIndex, def *agent.AgentDef, field string) string {
+	if sources != nil {
+		if source, ok := sources.Agents[def.FileAlias]; ok && source.FieldPath != "" {
+			return source.FieldPath + "." + field
+		}
+	}
+	return "agents." + normalizedName(def.Name) + "." + field
 }
 
 func projectedLintFinding(code, severity, agentName, field, resolution string, loc TeamSourceLocation, message, suggestion string) TeamLintFinding {

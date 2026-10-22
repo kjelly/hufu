@@ -26,6 +26,7 @@ func FinalizeSnapshot(snapshot OperatorSnapshot) (OperatorSnapshot, error) {
 }
 
 func NormalizeSnapshot(snapshot OperatorSnapshot) OperatorSnapshot {
+	snapshot.Observations = snapshot.Observations.Clone()
 	snapshot.Outcome.GoalSatisfied = clonePointer(snapshot.Outcome.GoalSatisfied)
 	snapshot.Learning.Exposures = clonePointer(snapshot.Learning.Exposures)
 	snapshot.Learning.Consulted = clonePointer(snapshot.Learning.Consulted)
@@ -199,7 +200,7 @@ func ValidateSnapshot(snapshot OperatorSnapshot) error {
 			return fmt.Errorf("operator snapshot cost run %q does not match scope %q", snapshot.Cost.RunID, snapshot.Scope.RunID)
 		}
 	}
-	return nil
+	return validateObservations(snapshot.Observations, snapshot.Freshness)
 }
 
 func validateAction(action ActionSuggestion) error {
@@ -261,18 +262,19 @@ func ComputeSnapshotID(snapshot OperatorSnapshot) (string, error) {
 		Ref      string `json:"ref"`
 	}
 	type snapshotHashInput struct {
-		SchemaVersion int              `json:"schema_version"`
-		Scope         ResolvedScope    `json:"scope"`
-		Activity      ActivityView     `json:"activity"`
-		Outcome       OutcomeView      `json:"outcome"`
-		Integrity     IntegrityView    `json:"integrity"`
-		Freshness     freshnessHash    `json:"freshness"`
-		Attention     string           `json:"attention"`
-		Blockers      []diagnosticHash `json:"blockers"`
-		LatestChanges []ChangeView     `json:"latest_changes"`
-		RoleTargets   []RoleTargetView `json:"role_targets"`
-		Learning      LearningView     `json:"learning"`
-		Cost          *cost.View       `json:"cost,omitempty"`
+		SchemaVersion int                 `json:"schema_version"`
+		Scope         ResolvedScope       `json:"scope"`
+		Activity      ActivityView        `json:"activity"`
+		Outcome       OutcomeView         `json:"outcome"`
+		Integrity     IntegrityView       `json:"integrity"`
+		Freshness     freshnessHash       `json:"freshness"`
+		Attention     string              `json:"attention"`
+		Blockers      []diagnosticHash    `json:"blockers"`
+		LatestChanges []ChangeView        `json:"latest_changes"`
+		RoleTargets   []RoleTargetView    `json:"role_targets"`
+		Learning      LearningView        `json:"learning"`
+		Cost          *cost.View          `json:"cost,omitempty"`
+		Observations  *ObservationSummary `json:"observations,omitempty"`
 	}
 	blockers := make([]diagnosticHash, 0, len(snapshot.Blockers))
 	for _, blocker := range snapshot.Blockers {
@@ -297,6 +299,7 @@ func ComputeSnapshotID(snapshot OperatorSnapshot) (string, error) {
 		RoleTargets:   snapshot.RoleTargets,
 		Learning:      snapshot.Learning,
 		Cost:          snapshot.Cost,
+		Observations:  snapshot.Observations,
 	}
 	encoded, err := json.Marshal(input)
 	if err != nil {

@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "scripts": [
+    {
+      "stage": "executor",
+      "case_id": "case_a",
+      "variant_slot_id": "baseline",
+      "attempt": 1,
+      "steps": [{
+        "tool_call": {
+          "name": "submit_result",
+          "arguments": "{\"status\":\"failed\",\"summary\":\"required classification was not produced\",\"structured_payload\":{\"category\":\"denied\"}}"
+        },
+        "usage": {"input_tokens": 100, "output_tokens": 20}
+      }]
+    },
+    {
+      "stage": "executor",
+      "case_id": "case_a",
+      "variant_slot_id": "candidate_1",
+      "attempt": 1,
+      "steps": [{
+        "tool_call": {
+          "name": "submit_result",
+          "arguments": "{\"status\":\"success\",\"summary\":\"fixture result\",\"structured_payload\":{\"category\":\"allowed\"}}"
+        },
+        "usage": {"input_tokens": 100, "output_tokens": 20}
+      }]
+    }
+  ]
+}

@@ -38,7 +38,9 @@ func loadLineageWithLimits(ctx context.Context, query InspectQuery, maxEvents, m
 	}
 	var global []team.RunEvent
 	payloadBytes := 0
-	if err := team.StreamValidatedRunEvents(ctx, workspace, func(event team.RunEvent) error {
+	if err := team.StreamValidatedRunEventsWithLimits(ctx, workspace, team.EventReadLimits{
+		MaxEvents: maxEvents, MaxPayloadBytes: int64(maxPayloadBytes),
+	}, func(event team.RunEvent) error {
 		payloadBytes += len(event.Payload)
 		if maxEvents > 0 && len(global) >= maxEvents || maxPayloadBytes > 0 && payloadBytes > maxPayloadBytes {
 			return fmt.Errorf("%w: historical event replay exceeds the read budget; no partial results were returned", ErrInvalidQuery)
@@ -46,13 +48,19 @@ func loadLineageWithLimits(ctx context.Context, query InspectQuery, maxEvents, m
 		global = append(global, event)
 		return nil
 	}); err != nil {
+		if errors.Is(err, team.ErrReadLimit) {
+			return Lineage{}, errors.Join(ErrInvalidQuery, err)
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return Lineage{}, err
+		}
 		if errors.Is(err, ErrInvalidQuery) {
 			return Lineage{}, err
 		}
 		return Lineage{}, fmt.Errorf("%w: %v", ErrIntegrity, err)
 	}
 
-	tree, err := team.LoadSessionTree(workspace)
+	tree, err := team.LoadSessionTreeContext(ctx, workspace)
 	if err != nil {
 		return Lineage{}, fmt.Errorf("%w: load session tree: %v", ErrIntegrity, err)
 	}

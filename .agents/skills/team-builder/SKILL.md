@@ -9,6 +9,70 @@ Design a runnable, contract-valid Hufu agent team under `.agent-teams/<team-name
 Optimize for the task's observable outcome and failure boundaries, not the
 largest possible collection of agents.
 
+## Single-file Team Presets
+
+`team.yaml` may contain just `preset: coding-reviewed`. The four Team Presets
+(`coding-single`, `coding-reviewed`, `research`, `safe-ops`) expand in memory
+through the ordinary compiler. `--single-file` defaults to `coding-single`,
+accepts `--model`, and refuses existing directories or combinations with
+`--force`, `--wizard`, `--expanded`, `--from`, or an explicit `--category`.
+Agent-only presets do not use this flag. Existing creation commands keep their
+original output defaults.
+
+Add different-name Markdown agents for advanced prompts or contracts. Any name
+or filename-alias collision with a manifest member is rejected, including
+`team add --force`; there is no same-name patch or inheritance. To customize a
+preset's member, author the full inline/Markdown roster without the team-level preset.
+Use `team explain` for effective sources, `team show` for authored YAML, and
+`hufu list` for the roster. Inline workers are supported as described below.
+A reviewed preset provides a reviewer, not an enforced ordering or objective
+review gate. Helper and runtime tool policy remain unchanged, and `safe-ops`
+still requires its existing reconciliation/recovery checks to pass lint.
+
+## Inline workers and mixed sources
+
+For a short custom roster, author `agents` in team.yaml (or `spec.agents` in
+v1alpha1) instead of creating one Markdown file per worker:
+
+```yaml
+agents:
+  architect: readonly
+  coder:
+    preset: coding
+    instructions: Implement the change, run tests, and report the result.
+  reviewer: review
+```
+
+Every worker requires one Agent Preset; scalar shorthand means `{preset: ...}`.
+The only mapping fields are `preset`, `description`, `instructions`, `model`,
+`reasoning-effort`, `tools`, `skills`, `allowed-paths`, `timeout`, `max-steps`,
+`max-retries`, and `no-net`. Null, wrong scalar types, unknown fields, duplicate
+or case-folded IDs fail closed. IDs must match `^[a-zA-Z][a-zA-Z0-9_-]*$`;
+`helper` and any ID containing `coordinat` or `orchestr` are reserved.
+Description defaults to ID; instructions default to
+`Perform the <id> role for this team.`. Explicit empty instructions are invalid.
+
+Preset and explicit tool grants merge, then deny wins. Empty lists do not
+remove preset grants; wildcard `all`, empty tool names and an empty final grant
+are rejected. `max-retries: 0` disables retries; omitted values inherit existing
+policy. `no-net: false` cannot undo team/global limits. All normal runtime
+permission gates and Helper behavior remain authoritative.
+
+Inline role is always worker. Use Markdown for a custom coordinator or
+per-agent `requires`, `result-contract`, `worker-workspace`, `execution-route`,
+`memory`, `mcp-tools` or `side_effect`. Team defaults, static contracts,
+delegation and action catalogs can still bind inline workers. Inline members,
+Team Preset members and Markdown members form a distinct-name union; no member
+order implies workflow. For example, `preset: coding-reviewed` may add inline
+`architect` and `security-reviewer.md`, but cannot redeclare `reviewer`.
+
+Inline instructions render once with manifest vars/caller overrides, before
+automatic `TEAM_NAME`, `AGENT_COUNT` and `AGENT_NAMES` exist. Supply explicit vars
+or use Markdown for those values; never assume a second template pass.
+Migration stays `team migrate --dry-run`; it preserves literal templates and
+explicit zero values, and may expand YAML aliases/merges without writing files.
+Validate, lint, explain and list the complete team after changing any source.
+
 ## Workflow
 
 Use progressive disclosure: ask only what the task's risk actually requires.
@@ -29,14 +93,18 @@ goal → risk classification → choose preset/topology → generate → compile
    actions, or a strict acceptance requirement (a false "success" would be
    worse than a blocked run). Everything else — most coding, writing, and
    research tasks — is **low-risk**.
-3. **Low-risk: choose a preset and generate immediately.** Prefer
-   `hufu team create <name> --preset <preset>` over hand-authoring files —
+3. **Low-risk: choose a preset and generate immediately.** For a built-in
+   Team Preset prefer `hufu team create <name> --preset <preset> --single-file`.
+   Agent-only presets continue to use `hufu team create <name> --preset <preset>`.
+   Prefer these commands over hand-authoring files —
    see [Presets](#presets) below for the six agent presets and four team
-   presets. This is the same mechanism the CLI itself uses, so the result
-   uses identical conventions (filename-inferred identity, `preset:`
-   frontmatter, no default-valued `team.yaml` fields) to what a user would
-   get by running the command directly. Only fall back to hand-authoring
-   individual agent files when no preset's topology fits (e.g. a genuinely
+   presets. Both formats use the same compiler and Agent Preset grants;
+   single-file mode declares a team-level preset, while the existing mode
+   writes filename-inferred Markdown agents with preset frontmatter.
+   Neither format needs redundant default-valued team fields.
+   For a custom topology, prefer inline workers when the supported fields suffice.
+   Fall back to individual Markdown agent files for advanced contracts or
+   prompts when no preset's topology fits (e.g. a genuinely
    novel pipeline shape) — even then, prefer `preset:` frontmatter per agent
    over a raw `tools:` allowlist. Do not ask about model, deliverable
    format, or parallelism unless the user's one-sentence goal left the

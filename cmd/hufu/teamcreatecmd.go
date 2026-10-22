@@ -17,13 +17,14 @@ import (
 )
 
 var (
-	teamCreatePreset   string
-	teamCreateFrom     string
-	teamCreateCategory string
-	teamCreateModel    string
-	teamCreateForce    bool
-	teamCreateExpanded bool
-	teamCreateWizard   bool
+	teamCreatePreset     string
+	teamCreateFrom       string
+	teamCreateCategory   string
+	teamCreateModel      string
+	teamCreateForce      bool
+	teamCreateExpanded   bool
+	teamCreateWizard     bool
+	teamCreateSingleFile bool
 )
 
 var teamCreateCmd = &cobra.Command{
@@ -45,6 +46,11 @@ pins the built-in defaults for users who prefer configuration pinning.
 The generated team is compiled and validated before anything is reported
 as ready. Existing directories are never overwritten without --force.
 
+--single-file writes only team.yaml using a Team Preset (default coding-single).
+It accepts --preset and --model, refuses existing directories, and cannot be
+combined with --force, --wizard, --expanded, --from, or an explicit --category.
+Preset members cannot be overridden by same-name Markdown files.
+
 --wizard is an explicit terminal-only authoring flow. It previews and
 statically validates a conservative definition before an exact write
 confirmation. The wizard never honors --force, runs the team, contacts a
@@ -53,6 +59,7 @@ provider, or enables active memory learning.
 Examples:
   hufu team create dev
   hufu team create dev --preset coding-reviewed
+  hufu team create compact --preset coding-reviewed --single-file
   hufu team create dev --wizard
   hufu team create dev --preset coding-reviewed --model ollama/qwen3.5:27b
   hufu team create oauth-fix --category bugfix --from "Fix OAuth callback bugs and add regression tests"`,
@@ -61,6 +68,7 @@ Examples:
 }
 
 func init() {
+	teamCreateCmd.Flags().BoolVar(&teamCreateSingleFile, "single-file", false, "Create only team.yaml using a Team Preset; never overwrite an existing directory")
 	teamCmd.AddCommand(teamCreateCmd)
 	teamCreateCmd.Flags().StringVar(&teamCreatePreset, "preset", "", "Team or agent preset name")
 	teamCreateCmd.Flags().StringVar(&teamCreateFrom, "from", "", "Generate a task-specific team from a natural-language description")
@@ -75,6 +83,9 @@ func runTeamCreate(cmd *cobra.Command, args []string) error {
 	name := strings.TrimSpace(args[0])
 	if name == "" {
 		return fmt.Errorf("team name required: hufu team create <name>")
+	}
+	if teamCreateSingleFile {
+		return runSingleFileTeamCreate(cmd, name)
 	}
 	if strings.TrimSpace(teamCreatePreset) != "" && strings.TrimSpace(teamCreateFrom) != "" {
 		return fmt.Errorf("--preset and --from cannot be used together")

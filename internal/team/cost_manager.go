@@ -28,7 +28,10 @@ type CostSettlementRequest struct {
 	RunID                string
 	ProviderInvocationID string
 	Usage                *cost.TokenUsage
-	Outcome              cost.Outcome
+	// UsageReported means a trusted transport observed explicit complete
+	// usage. It distinguishes an explicit zero from an SDK's zero defaults.
+	UsageReported bool
+	Outcome       cost.Outcome
 }
 
 type CostAdmissionError struct {
@@ -300,7 +303,8 @@ func (m *CostManager) opaquePriceUnbounded(request CostReservationRequest) bool 
 func (m *CostManager) buildSettlement(reservation cost.ReservationEvent, request CostSettlementRequest) cost.SettlementEvent {
 	estimate := cost.Estimate{Micros: cloneCostMicros(reservation.ReservedMicros), Source: reservation.EstimateSource, BillingMode: reservation.BillingMode}
 	var usage *cost.TokenUsage
-	if request.Usage != nil && completeCostUsage(*request.Usage) {
+	if request.Usage != nil && (completeCostUsage(*request.Usage) ||
+		request.UsageReported && *request.Usage == (cost.TokenUsage{})) {
 		if price, ok := m.projection.Price(reservation.RunID, reservation.PriceSnapshotID); ok {
 			if observed, err := cost.EstimateUsageCost(price, *request.Usage); err == nil {
 				estimate = observed

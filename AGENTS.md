@@ -39,6 +39,22 @@ The command must complete successfully with no errors before the task is conside
 - If material from `docs/tmp/` must be retained in version control, move it to the appropriate permanent `docs/` lifecycle directory (for example, `docs/archive/implementation-plans/`) before staging it.
 - The pre-commit configuration rejects staged additions, modifications, and renames into `docs/tmp/`; deletions and renames out of that directory remain allowed.
 
+### Short paths for Unix socket tests
+
+- Check the complete socket pathname in bytes, including the temporary root,
+  generated directory name, and socket suffix. Linux pathname Unix sockets allow
+  at most 107 bytes; `bind: invalid argument` can indicate an overlong path.
+- In Go 1.27, `t.TempDir()` uses `GOTMPDIR` when set and includes the test name.
+  Setting `TMPDIR` alone does not shorten those paths. Preserve configured
+  `GOTMPDIR` and build caches. For socket fixtures, use a short directory from
+  `os.MkdirTemp(os.TempDir(), "tb-")` under the private task `TMPDIR`, register
+  `t.Cleanup`, and close socket/process consumers before removing the directory.
+  Reuse `terminalBrokerTestWorkspace` for terminal broker tests.
+- Fix the fixture instead of renaming tests, skipping failures, or retrying the
+  same long path. Reviewing an immutable Git snapshot still runs that revision's
+  fixtures; record its test failure in the review evidence rather than changing
+  the snapshot or treating a working-tree fix as proof that it passed.
+
 ## Package Structure
 
 | Package | Path | Purpose |

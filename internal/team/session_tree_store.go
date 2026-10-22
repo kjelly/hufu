@@ -22,10 +22,18 @@ const storedLabelsKey = "\x00labels"
 // without creating it. A workspace without a saved tree gets a fresh
 // SessionTree with the default "main" branch.
 func LoadSessionTree(workspace string) (*SessionTree, error) {
+	return LoadSessionTreeContext(context.Background(), workspace)
+}
+
+// LoadSessionTreeContext is the cancellable read-only session-tree reader.
+func LoadSessionTreeContext(ctx context.Context, workspace string) (*SessionTree, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if workspace == "" {
 		return NewSessionTree(), nil
 	}
-	st, exists, err := loadStoredSessionTree(workspace)
+	st, exists, err := loadStoredSessionTreeContext(ctx, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +90,11 @@ func SaveSessionTree(workspace string, st *SessionTree) error {
 // LoadSessionTree's defaults, and reports false when none was saved. It never
 // creates runtime.sqlite.
 func loadStoredSessionTree(workspace string) (*SessionTree, bool, error) {
-	store, err := runtimestore.OpenRead(context.Background(), workspace)
+	return loadStoredSessionTreeContext(context.Background(), workspace)
+}
+
+func loadStoredSessionTreeContext(ctx context.Context, workspace string) (*SessionTree, bool, error) {
+	store, err := runtimestore.OpenRead(ctx, workspace)
 	if errors.Is(err, runtimestore.ErrNotFound) {
 		return nil, false, nil
 	}
@@ -90,7 +102,7 @@ func loadStoredSessionTree(workspace string) (*SessionTree, bool, error) {
 		return nil, false, fmt.Errorf("load session tree: %w", err)
 	}
 	defer func() { _ = store.Close() }()
-	st, exists, err := loadSessionTreeFrom(context.Background(), store.DB())
+	st, exists, err := loadSessionTreeFrom(ctx, store.DB())
 	if err != nil {
 		return nil, false, fmt.Errorf("load session tree: %w", err)
 	}

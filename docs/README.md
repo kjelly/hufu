@@ -115,6 +115,8 @@ to re-create an abstraction that already exists in the runtime.
   active, and auto (per-request script routing) Ollama embedding lane for
   canonical memory, per-item freshness, and the `hufu context semantic`
   commands.
+- [Team authoring baseline](reference/team-authoring-baseline.md) — pre-change
+  build, full-suite, vet, lint, and coordinator-fallback evidence.
 - [Context delivery baseline](reference/context-delivery-baseline.md) — pre-change
   full-suite results and the Unix socket temporary-path requirement.
 - [Context delivery evaluation](reference/context-delivery-evaluation.md) — provider
@@ -136,6 +138,7 @@ to re-create an abstraction that already exists in the runtime.
 - [Operator requirement traceability](reference/operator-requirement-traceability.md)
 - [Operator usability evaluation](reference/operator-usability-evaluation.md)
 - [Improvement artifact schemas](reference/improvement-artifact-schemas.md)
+- [Controlled harness probes](reference/controlled-harness-probes.md)
 - [Agent definition format](reference/agent-format.md)
 - [Skill discovery](reference/skill-discovery.md)
 - [Execution compatibility sunset](deprecations/execution-compatibility.md)
@@ -145,6 +148,10 @@ to re-create an abstraction that already exists in the runtime.
 - [Accepted runtime-integrity ADR](adr/0001-runtime-integrity-improvements.md)
 
 ### Planning
+
+- [Controlled harness improvement](implementation-plans/controlled-harness-improvement.md)
+  — paired structured-result probes, durable budgets, bounded proposals and
+  review bundles, with offline acceptance.
 
 - `implementation-plans/` contains active, versioned delivery plans. Plans are
   reference material subordinate to code, tests, and normative contracts;
@@ -158,6 +165,9 @@ to re-create an abstraction that already exists in the runtime.
 
 ## Archive
 
+- [Team YAML implementation record](implementation-plans/team-yaml-simplification.md)
+  — completed coordinator lint correction, single-file presets, and inline
+  workers; retained at the requested path with `Status: historical`.
 - `archive/superseded-specs/` contains replaced architecture and consumer
   specifications, including the former `SubagentProvider`-first model and the
   old coding-team implementation spec.

@@ -377,7 +377,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 		snapshot.ExecutionWorlds = append(snapshot.ExecutionWorlds, ExecutionWorldPolicySnapshot{
 			Backend:                    backend,
 			ExecutionWorld:             cfg.ExecutionWorld,
-			ProjectRootHash:            executionPolicyValueHash("codex_project_root", c.projectDir),
+			ProjectRootHash:            ExecutionPolicyProjectRootHash(c.projectDir),
 			CoordinatorNetworkDisabled: c.noNet,
 			AgentNetworkPolicies:       agentNetworkPolicies,
 			InheritEnv:                 variables,
@@ -587,6 +587,13 @@ func executionPolicyValueHash(name, value string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// ExecutionPolicyProjectRootHash identifies an execution-world project root
+// using the versioned policy's existing hash domain. Consumers that compare
+// explicitly owned roots must use this encoding rather than guessing hashes.
+func ExecutionPolicyProjectRootHash(root string) string {
+	return executionPolicyValueHash("codex_project_root", root)
+}
+
 func executionPolicyConfigurationHash(snapshot *ExecutionPolicySnapshot) (string, error) {
 	if snapshot == nil {
 		return "", fmt.Errorf("execution policy snapshot is nil")
@@ -630,6 +637,12 @@ func cloneExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) *ExecutionP
 		clone.ExecutionWorlds[i].InheritEnv = slices.Clone(snapshot.ExecutionWorlds[i].InheritEnv)
 	}
 	return &clone
+}
+
+// ValidateExecutionPolicySnapshot verifies the durable structure and its
+// original configuration hash without changing policy or initializing runtime.
+func ValidateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
+	return validateExecutionPolicySnapshot(snapshot)
 }
 
 func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {

@@ -69,6 +69,12 @@ func LintTeamWithOptions(teamDir string, options TeamLintOptions) (TeamLintResul
 	if err != nil {
 		return TeamLintResult{}, err
 	}
+	return lintTeamInspection(teamDir, options, inspection)
+}
+
+// lintTeamInspection lets metadata readers reuse the same offline findings
+// without loading a second, potentially different team definition.
+func lintTeamInspection(teamDir string, options TeamLintOptions, inspection *TeamInspection) (TeamLintResult, error) {
 	result := TeamLintResult{Team: filepath.Base(filepath.Clean(teamDir)), Complete: inspection.Complete, Findings: make([]TeamLintFinding, 0)}
 	if inspection.Session != nil {
 		policy, policyErr := resolveTeamLintPolicy(inspection.Session, options)
@@ -164,6 +170,14 @@ func ProjectContractFindings(findings []ContractFinding, sources *TeamSourceInde
 func findingSourceLocation(field string, sources *TeamSourceIndex, session *TeamSession) (TeamSourceLocation, string) {
 	if sources == nil {
 		return TeamSourceLocation{Status: LocationFieldOnly}, ""
+	}
+	if loc, exists := sources.Manifest[field]; exists {
+		path := strings.TrimPrefix(field, "spec.")
+		if rest, ok := strings.CutPrefix(path, "agents."); ok {
+			identity, _, _ := strings.Cut(rest, ".")
+			return loc, identity
+		}
+		return loc, ""
 	}
 	if rest, ok := strings.CutPrefix(field, "agents."); ok {
 		identity, agentField, found := strings.Cut(rest, ".")

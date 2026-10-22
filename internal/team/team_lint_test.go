@@ -38,9 +38,44 @@ func TestTeamLintDuplicateAgentIsStructuredFinding(t *testing.T) {
 }
 
 func TestTeamLintMissingCoordinator(t *testing.T) {
-	dir := t.TempDir()
-	writeLintTestFile(t, filepath.Join(dir, "worker.md"), lintAgent("worker", "worker"))
-	assertLintCode(t, dir, FindingMissingCoordinator)
+	for _, name := range []string{"worker", "orchestrator-helper"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeLintTestFile(t, filepath.Join(dir, name+".md"), "---\npreset: readonly\n---\nInspect the project.\n")
+			inspection, err := InspectTeam(dir, nil, nil, DefaultProviderRegistry, TeamCompileLint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !inspection.Complete {
+				t.Fatalf("fallback inspection incomplete: %#v", inspection.Diagnostics)
+			}
+			result, err := LintTeam(dir, nil, nil, DefaultProviderRegistry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Findings) != 1 || result.Findings[0].Code != FindingMissingCoordinator || result.Findings[0].Severity != FindingSeverityInfo {
+				t.Fatalf("findings = %#v, want one informational coordinator finding", result.Findings)
+			}
+			if TeamLintReachesThreshold(result.Findings, FindingSeverityError) || !TeamLintReachesThreshold(result.Findings, FindingSeverityInfo) {
+				t.Fatal("coordinator info did not respect severity thresholds")
+			}
+			spec, err := CompileTeam(dir, nil, nil, DefaultProviderRegistry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if hasErrorContractFinding(ValidateEffectiveTeam(spec)) {
+				t.Fatal("worker-only team failed validation")
+			}
+			coordinator := (&Coordinator{session: spec.RuntimeSession()}).GetOrchestratorDef()
+			want := "coordinator"
+			if name == "orchestrator-helper" {
+				want = name
+			}
+			if coordinator.Name != want {
+				t.Fatalf("coordinator = %q, want existing selection %q", coordinator.Name, want)
+			}
+		})
+	}
 }
 
 func TestTeamLintMultipleCoordinators(t *testing.T) {
