@@ -57,6 +57,9 @@ func compileWorkerPolicy(policy WorkerToolPolicy) (*jsonschema.Schema, error) {
 
 // ValidateWorkerToolPolicies performs offline validation without starting MCP.
 func ValidateWorkerToolPolicies(config MCPServerConfig) error {
+	if err := validateTemporaryDirectoryEnv(config); err != nil {
+		return err
+	}
 	for name, policy := range config.ToolPolicies {
 		if strings.TrimSpace(name) == "" || name != strings.TrimSpace(name) || !IsToolAllowed(name, config.AllowedTools, config.ExcludedTools) {
 			return fmt.Errorf("MCP worker policy tool %q is not admitted by allowedTools/excludedTools", name)

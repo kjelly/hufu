@@ -46,6 +46,42 @@ func (j eventStoreJournal) ReadEvents(ctx context.Context) ([]RunEvent, error) {
 	return j.store.ReadEvents()
 }
 
+func (j eventStoreJournal) QueryEvents(ctx context.Context, query EventQuery) ([]RunEvent, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if j.store == nil {
+		return nil, fmt.Errorf("event journal is unavailable")
+	}
+	return j.store.QueryEvents(query)
+}
+
+// Optional for injected/alternate journals: existing implementations retain
+// their ReadEvents boundary, while the durable store can answer bounded queries.
+func queryJournalEvents(ctx context.Context, journal EventJournal, query EventQuery) ([]RunEvent, error) {
+	if indexed, ok := journal.(interface {
+		QueryEvents(context.Context, EventQuery) ([]RunEvent, error)
+	}); ok {
+		return indexed.QueryEvents(ctx, query)
+	}
+	events, err := journal.ReadEvents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var selected []RunEvent
+	for _, event := range events {
+		if query.RunID != "" && event.RunID != query.RunID ||
+			query.TaskID != "" && event.TaskID != query.TaskID ||
+			query.Attempt != 0 && event.Attempt != query.Attempt ||
+			query.BranchID != "" && effectiveBranchID(event.BranchID) != effectiveBranchID(query.BranchID) ||
+			len(query.Types) > 0 && !slices.Contains(query.Types, event.Type) {
+			continue
+		}
+		selected = append(selected, cloneRunEvent(event))
+	}
+	return selected, nil
+}
+
 func (j eventStoreJournal) VerifyHashChain(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err

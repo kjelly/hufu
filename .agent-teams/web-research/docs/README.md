@@ -33,6 +33,14 @@ snapshot 的 `arguments` 必須是 `{}`；`url`、`filename` 等欄位均不接�
 減少非來源內容。metadata、搜尋摘要、snapshot 檔案連結與失敗回傳皆不能
 通過引文綁定。團隊禁止內建 fetch、download 與 shell 執行工具。
 
+這些旗標不會停用 browser console 日誌。本機 fixture 使用已安裝的
+`@playwright/mcp` 0.0.83 驗證：僅導覽帶有 console error 的頁面，仍產生
+`console-*.log`。三個 server 都以通用 `temporary-directory-env` 宣告
+`PLAYWRIGHT_MCP_OUTPUT_DIR`，由 Hufu 為各次 server 啟動配置獨立 `0700`
+目錄，關閉 server 後清理；不共用固定 `/tmp/hufu-playwright/<role>`。
+chat 的同一個 server instance 在多輪間保留目錄，直到 team context 關閉。
+server 內部日誌不是引用證據，也不開放 filename、export 等模型參數。
+
 ## 通用 runtime 支援
 
 `toolPolicies` 是團隊維護者對受信任 MCP server 的明確宣告，搭配 worker

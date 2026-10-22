@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: normative
-> Verified-Commit: `72c20a5`
+> Verified-Commit: —（本次工作樹，尚未提交）
 > Supersedes: `archive/superseded-specs/subagent-provider-runtime-spec.md`, `archive/superseded-specs/runtime-composability.md`
 > Superseded-By: —
 
@@ -599,8 +599,13 @@ A completed workflow is one execution cycle, not the end of its conversation.
 An additional user request through `run` or `chat` starts a new cycle in the
 same session and branch. Conversation history, prior reports, immutable policy,
 and historical results remain available; active tasks, phase results, retry
-state, continuation budgets, and criterion evidence start fresh. Old research
-can explain a follow-up, but cannot satisfy its required tasks or verification.
+state, continuation budgets, and criterion evidence start fresh. Prior-cycle
+results and verification receipts cannot satisfy the new cycle's required
+tasks or verification. A schema explicitly opting into historical tool evidence
+may use previously observed source text for a quotation in a new result; this
+does not reuse an old task completion or fulfill a requirement for a fresh
+source call. Teams requiring new independent verification keep a fresh-only
+result contract and verify the new source calls.
 
 The event-first `workflow_cycle_started` boundary includes the redacted request
 and the previous task ID high-water mark. Replay restores that request even if
@@ -676,7 +681,14 @@ Only exact text fragments actually read into the current runner-owned
 transcript can support quotations. Runtime assigns the provenance field and
 binds the citation to the current recall call while retaining the original
 producer reference; search previews and model-supplied provenance earn no
-evidence credit. A matching fresh observation takes precedence. Schemas without
+evidence credit. A matching fresh observation takes precedence. Among multiple matches of the
+same kind, the first successful matching observation in the current transcript
+wins; original source time does not implicitly select a newer observation.
+`evidence_text` is the recall response's `content_format` value, not an extension
+key or a result-schema property. The response's `content` contains the extracted
+fragment. The nullable provenance field's complete schema and pointer semantics
+are specified in [Agent format](../reference/agent-format.md#同一對話的歷史觀測結果).
+Schemas without
 this opt-in retain their current-attempt evidence requirements, including
 external-provider submissions without a local transcript.
 

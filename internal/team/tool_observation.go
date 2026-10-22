@@ -124,7 +124,10 @@ func (c *Coordinator) captureToolObservation(ctx context.Context, call fantasy.T
 	}
 	owner.observationCaptureMu.Lock()
 	defer owner.observationCaptureMu.Unlock()
-	events, err := c.EventJournal().ReadEvents(ctx)
+	events, err := queryJournalEvents(ctx, c.EventJournal(), EventQuery{
+		RunID: c.executionRunID, TaskID: item.ID, Attempt: attempt,
+		Types: []string{string(EventToolObservationRecorded)},
+	})
 	if err != nil {
 		return
 	}

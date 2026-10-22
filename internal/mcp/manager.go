@@ -83,6 +83,11 @@ type MCPToolManager struct {
 	clients      map[string]*client.Client
 	toolMap      map[string]MCPTool
 	agentServers map[string]*AgentMCPServer
+	localServers map[*client.Client]*localServerResources
+	closed       bool
+	loads        sync.WaitGroup
+	shutdown     context.Context
+	stopLoads    context.CancelFunc
 	// loadErrors keeps each server's LoadTools failure so a runtime binding
 	// can report why a tool it needs is missing.
 	loadErrors map[string]error
@@ -98,6 +103,7 @@ func NewMCPToolManager(globalShell, teamShell string) *MCPToolManager {
 		clients:      make(map[string]*client.Client),
 		toolMap:      make(map[string]MCPTool),
 		agentServers: make(map[string]*AgentMCPServer),
+		localServers: make(map[*client.Client]*localServerResources),
 		loadErrors:   make(map[string]error),
 		reserved:     make(map[string]bool),
 		globalShell:  globalShell,
@@ -105,7 +111,22 @@ func NewMCPToolManager(globalShell, teamShell string) *MCPToolManager {
 	}
 }
 
-func (m *MCPToolManager) LoadTools(ctx context.Context, servers map[string]MCPServerConfig) error {
+func (m *MCPToolManager) LoadTools(ctx context.Context, servers map[string]MCPServerConfig) (retErr error) {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return fmt.Errorf("MCP manager is closed")
+	}
+	if m.shutdown == nil {
+		m.shutdown, m.stopLoads = context.WithCancel(context.Background())
+	}
+	m.loads.Add(1)
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(m.shutdown, cancel)
+	m.mu.Unlock()
+	defer m.loads.Done()
+	defer cancel()
+	defer stop()
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var loadErrs []error
@@ -142,13 +163,18 @@ func (m *MCPToolManager) LoadTools(ctx context.Context, servers map[string]MCPSe
 	var rejected []*client.Client
 	defer func() {
 		for _, cli := range rejected {
-			_ = cli.Close()
+			retErr = errors.Join(retErr, m.closeRejectedClient(cli))
 		}
 	}()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	maps.Copy(m.loadErrors, serverErrs)
 	for _, r := range results {
+		if err := ctx.Err(); err != nil {
+			rejected = append(rejected, r.cli)
+			m.loadErrors[r.name] = err
+			continue
+		}
 		if err := m.registerServerLocked(r.name, r.cli, r.tools); err != nil {
 			rejected = append(rejected, r.cli)
 			loadErrs = append(loadErrs, fmt.Errorf("server %q: %w", r.name, err))
@@ -156,6 +182,9 @@ func (m *MCPToolManager) LoadTools(ctx context.Context, servers map[string]MCPSe
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(loadErrs) > 0 && len(m.tools) == 0 {
 		return fmt.Errorf("all MCP servers failed: %v", loadErrs)
 	}
@@ -168,6 +197,9 @@ func (m *MCPToolManager) LoadTools(ctx context.Context, servers map[string]MCPSe
 // registration clears any earlier load error for that server. m.mu must be
 // held for writing.
 func (m *MCPToolManager) registerServerLocked(name string, cli *client.Client, tools []MCPTool) error {
+	if m.closed {
+		return fmt.Errorf("MCP manager is closed")
+	}
 	if _, exists := m.clients[name]; exists {
 		return fmt.Errorf("MCP server %q is already loaded", name)
 	}
@@ -181,6 +213,12 @@ func (m *MCPToolManager) registerServerLocked(name string, cli *client.Client, t
 }
 
 func (m *MCPToolManager) loadServer(ctx context.Context, name string, cfg MCPServerConfig) ([]MCPTool, *client.Client, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if err := ValidateWorkerToolPolicies(cfg); err != nil {
+		return nil, nil, err
+	}
 	switch cfg.Type {
 	case "local", "":
 		return m.loadLocalServer(ctx, name, cfg)
@@ -204,21 +242,24 @@ func (m *MCPToolManager) loadLocalServer(ctx context.Context, name string, cfg M
 		return nil, nil, fmt.Errorf("local MCP server %q requires command", name)
 	}
 
-	env := []string{}
-	for k, v := range cfg.Environment {
-		if blockedEnvVars[strings.ToUpper(k)] {
-			continue
-		}
-		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	env, root, err := localServerEnvironment(cfg)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	cli, err := client.NewStdioMCPClientWithOptions(cfg.Command[0], env, cfg.Command[1:])
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create stdio client: %w", err)
+		return nil, nil, errors.Join(fmt.Errorf("failed to create stdio client: %w", err), removeTemporaryRoot(root))
 	}
+	m.mu.Lock()
+	if m.localServers == nil {
+		m.localServers = make(map[*client.Client]*localServerResources)
+	}
+	m.localServers[cli] = &localServerResources{root: root}
+	m.mu.Unlock()
 	tools, err := initializeServerTools(ctx, name, cfg, cli)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, errors.Join(err, m.closeRejectedClient(cli))
 	}
 	return tools, cli, nil
 }
@@ -234,16 +275,15 @@ func (m *MCPToolManager) loadRemoteServer(ctx context.Context, name string, cfg 
 	}
 	tools, err := initializeServerTools(ctx, name, cfg, cli)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, errors.Join(err, cli.Close())
 	}
 	return tools, cli, nil
 }
 
 // initializeServerTools initializes a connected client and lists the tools
-// the server's allowedTools/excludedTools admit. It closes cli on failure.
+// the server's allowedTools/excludedTools admit. The caller owns cleanup.
 func initializeServerTools(ctx context.Context, name string, cfg MCPServerConfig, cli *client.Client) ([]MCPTool, error) {
 	if err := ValidateWorkerToolPolicies(cfg); err != nil {
-		_ = cli.Close()
 		return nil, err
 	}
 	initReq := mcp.InitializeRequest{
@@ -257,13 +297,11 @@ func initializeServerTools(ctx context.Context, name string, cfg MCPServerConfig
 	}
 
 	if _, err := cli.Initialize(ctx, initReq); err != nil {
-		_ = cli.Close()
 		return nil, fmt.Errorf("failed to initialize: %w", err)
 	}
 
 	toolsResult, err := cli.ListTools(ctx, mcp.ListToolsRequest{})
 	if err != nil {
-		_ = cli.Close()
 		return nil, fmt.Errorf("failed to list tools: %w", err)
 	}
 
@@ -276,7 +314,6 @@ func initializeServerTools(ctx context.Context, name string, cfg MCPServerConfig
 		}
 		inputSchema, err := captureMCPInputSchema(t.RawInputSchema, t.InputSchema)
 		if err != nil {
-			_ = cli.Close()
 			return nil, fmt.Errorf("tool %q input schema: %w", prefixedName, err)
 		}
 		params := map[string]any{}
@@ -289,7 +326,6 @@ func initializeServerTools(ctx context.Context, name string, cfg MCPServerConfig
 			workerPolicy = cloneWorkerToolPolicy(&policy)
 			workerSchema, err = compileWorkerPolicy(*workerPolicy)
 			if err != nil {
-				_ = cli.Close()
 				return nil, err
 			}
 			seenPolicies[t.Name] = true
@@ -307,7 +343,6 @@ func initializeServerTools(ctx context.Context, name string, cfg MCPServerConfig
 	}
 	for native := range cfg.ToolPolicies {
 		if !seenPolicies[native] {
-			_ = cli.Close()
 			return nil, fmt.Errorf("MCP worker policy tool %q was not listed by server %q", native, name)
 		}
 	}
@@ -510,10 +545,26 @@ func decodeToolArguments(args string) (map[string]any, error) {
 
 func (m *MCPToolManager) Close() error {
 	m.mu.Lock()
+	m.closed = true
+	if m.stopLoads != nil {
+		m.stopLoads()
+	}
+	m.mu.Unlock()
+	// A failed or cancelled launch owns its client until cleanup finishes.
+	// No new load can enter after closed is set under the admission mutex.
+	m.loads.Wait()
+	m.mu.Lock()
 	defer m.mu.Unlock()
 	var errs []error
+	owned := make(map[*client.Client]bool, len(m.clients)+len(m.localServers))
 	for _, cli := range m.clients {
-		if err := cli.Close(); err != nil {
+		owned[cli] = true
+	}
+	for cli := range m.localServers {
+		owned[cli] = true
+	}
+	for cli := range owned {
+		if err := m.closeClientLocked(cli); err != nil {
 			errs = append(errs, err)
 		}
 	}

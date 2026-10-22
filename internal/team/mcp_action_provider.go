@@ -101,16 +101,19 @@ func mcpServerConfigHash(config mcp.MCPServerConfig) string {
 	slices.Sort(allowed)
 	excluded := slices.Clone(config.ExcludedTools)
 	slices.Sort(excluded)
+	temporaryDirectoryEnv := slices.Clone(config.TemporaryDirectoryEnv)
+	slices.Sort(temporaryDirectoryEnv)
 	encoded, err := json.Marshal(struct {
-		Type          string                          `json:"type"`
-		Command       []string                        `json:"command,omitempty"`
-		URL           string                          `json:"url,omitempty"`
-		AllowedTools  []string                        `json:"allowed_tools,omitempty"`
-		ExcludedTools []string                        `json:"excluded_tools,omitempty"`
-		NoOAuth       bool                            `json:"no_oauth,omitempty"`
-		Environment   []environmentValue              `json:"environment,omitempty"`
-		ToolPolicies  map[string]mcp.WorkerToolPolicy `json:"tool_policies,omitempty"`
-	}{serverType, config.Command, config.URL, allowed, excluded, config.NoOAuth, environment, config.ToolPolicies})
+		Type                  string                          `json:"type"`
+		Command               []string                        `json:"command,omitempty"`
+		URL                   string                          `json:"url,omitempty"`
+		AllowedTools          []string                        `json:"allowed_tools,omitempty"`
+		ExcludedTools         []string                        `json:"excluded_tools,omitempty"`
+		NoOAuth               bool                            `json:"no_oauth,omitempty"`
+		Environment           []environmentValue              `json:"environment,omitempty"`
+		ToolPolicies          map[string]mcp.WorkerToolPolicy `json:"tool_policies,omitempty"`
+		TemporaryDirectoryEnv []string                        `json:"temporary_directory_env,omitempty"`
+	}{serverType, config.Command, config.URL, allowed, excluded, config.NoOAuth, environment, config.ToolPolicies, temporaryDirectoryEnv})
 	if err != nil {
 		return ""
 	}

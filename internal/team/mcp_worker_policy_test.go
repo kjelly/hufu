@@ -230,15 +230,15 @@ func TestMCPWorkerPolicyBlocksResumeDrift(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())
 	workspace := t.TempDir()
-	start := func(policy mcp.WorkerToolPolicy, command string) *Coordinator {
+	start := func(policy mcp.WorkerToolPolicy, command string, temporaryDirectoryEnv []string) *Coordinator {
 		c := newExecutionPolicySnapshotCoordinator(t, workspace, 2, 3)
-		c.session.MCPServers = map[string]mcp.MCPServerConfig{"source": {Command: []string{command}, ToolPolicies: map[string]mcp.WorkerToolPolicy{"read_document": policy}}}
+		c.session.MCPServers = map[string]mcp.MCPServerConfig{"source": {Command: []string{command}, TemporaryDirectoryEnv: temporaryDirectoryEnv, ToolPolicies: map[string]mcp.WorkerToolPolicy{"read_document": policy}}}
 		if err := c.rebuildExecutionPolicyStateForTest(); err != nil {
 			t.Fatal(err)
 		}
 		return c
 	}
-	first := start(workerObservationPolicy(), "original")
+	first := start(workerObservationPolicy(), "original", nil)
 	first.initEventStore()
 	if err := first.checkRunAdmission(); err != nil {
 		t.Fatal(err)
@@ -248,7 +248,7 @@ func TestMCPWorkerPolicyBlocksResumeDrift(t *testing.T) {
 	if checkpoint == nil || len(checkpoint.ExecutionPolicySnapshot.MCPWorkerPolicies) != 1 {
 		t.Fatal("worker policy missing from checkpoint")
 	}
-	for _, name := range []string{"same", "schema", "command", "legacy"} {
+	for _, name := range []string{"same", "schema", "command", "temporary_directory", "legacy"} {
 		t.Run(name, func(t *testing.T) {
 			policy := workerObservationPolicy()
 			command := "original"
@@ -258,7 +258,11 @@ func TestMCPWorkerPolicyBlocksResumeDrift(t *testing.T) {
 			if name == "command" {
 				command = "different"
 			}
-			second := start(policy, command)
+			var temporaryDirectoryEnv []string
+			if name == "temporary_directory" {
+				temporaryDirectoryEnv = []string{"PRIVATE_OUTPUT"}
+			}
+			second := start(policy, command, temporaryDirectoryEnv)
 			if name == "legacy" {
 				legacy, err := newExecutionPolicyStateForVersion(second, executionPolicyLegacySnapshotVersion)
 				if err != nil {

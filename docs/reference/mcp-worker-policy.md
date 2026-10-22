@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `5ae90664`
+> Verified-Commit: —（本次工作樹，尚未提交）
 > Supersedes: —
 > Superseded-By: —
 
@@ -46,6 +46,40 @@ internal state or cache. Input restrictions must exclude path/export parameters
 or constrain them appropriately. The maintainer remains responsible for server
 implementation, network access, redirects and effects of admitted operations.
 No declaration permits unsupported filesystem access or external mutations.
+
+## Managed temporary output directories
+
+Local MCP servers can request private output directories through environment
+variables, without embedding a shared `/tmp` path in team configuration:
+
+```yaml
+mcp-servers:
+  documents:
+    type: local
+    command: [document-mcp]
+    temporary-directory-env: [DOCUMENT_OUTPUT_DIR]
+```
+
+For each server launch, Hufu creates a private `0700` root under `os.TempDir()`
+and a separate `0700` directory for each listed variable. A declared variable
+overrides an inherited parent value only in the child process. The declaration
+is pinned in policy; generated paths never replace it in configuration or its
+hash. Names must be distinct shell environment identifiers, at most 128 bytes
+each and 16 entries per server. Blocked loader variables, overlap with the
+server's explicit `environment`, and use on remote servers are rejected.
+
+The manager owns these directories. It closes the server before removing them,
+including initialization failure and duplicate-server rejection. An unconfirmed
+close retains the directory and reports its path instead of deleting a live
+consumer's output. Outputs needed after shutdown must be promoted to declared
+artifacts before closing the manager. A force-killed Hufu process cannot run
+this normal cleanup. A CLI invocation's loaded team has its own manager;
+interactive chat retains its server instances and directories across turns
+until that team context closes.
+
+This feature contains internal logs and cache files; it does not authorize
+model-controlled path/export arguments. Existing `filesystem: none` worker
+policies continue to apply.
 
 Authentic manager adapters alone receive the worker exception. Team denies,
 session decisions, phase/sequence gates, unattended permissions and `no-net`
