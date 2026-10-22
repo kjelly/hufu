@@ -9,6 +9,15 @@ import (
 	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
+// ErrReadLimit means a read-only inspection exhausted its resource budget.
+// Callers must discard any partial projection.
+var ErrReadLimit = errors.New("read-only inspection resource limit exceeded")
+
+type EventReadLimits struct {
+	MaxEvents       int
+	MaxPayloadBytes int64
+}
+
 // StreamValidatedRunEvents reads the durable event journal without
 // constructing an EventStore. It opens runtime.sqlite read-only, so it never
 // creates, appends to, repairs, or caches the canonical journal. Each
@@ -19,8 +28,18 @@ import (
 // A workspace without runtime.sqlite is an empty stream. A broken hash chain,
 // a non-contiguous journal, read errors, and callback errors are returned.
 func StreamValidatedRunEvents(ctx context.Context, workspace string, visit func(RunEvent) error) error {
+	return StreamValidatedRunEventsWithLimits(ctx, workspace, EventReadLimits{}, visit)
+}
+
+// StreamValidatedRunEventsWithLimits checks the journal's size before loading
+// payloads. The preflight and actual read share one immutable SQLite snapshot,
+// so concurrent appends cannot invalidate admission. Zero limits are unlimited.
+func StreamValidatedRunEventsWithLimits(ctx context.Context, workspace string, limits EventReadLimits, visit func(RunEvent) error) error {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if limits.MaxEvents < 0 || limits.MaxPayloadBytes < 0 {
+		return fmt.Errorf("stream event store: negative read limit")
 	}
 	if visit == nil {
 		return fmt.Errorf("stream event store: nil visitor")
@@ -33,6 +52,11 @@ func StreamValidatedRunEvents(ctx context.Context, workspace string, visit func(
 		return err
 	}
 	defer func() { _ = snapshot.Close() }()
+	if snapshot.store != nil && (limits.MaxEvents > 0 || limits.MaxPayloadBytes > 0) {
+		if err := preflightEventRead(ctx, snapshot.store.DB(), limits); err != nil {
+			return err
+		}
+	}
 	return snapshot.Visit(ctx, visit)
 }
 
@@ -120,6 +144,38 @@ func (s *RunEventSnapshot) Visit(ctx context.Context, visit func(RunEvent) error
 		return fmt.Errorf("read events: %w", err)
 	}
 	return nil
+}
+
+func preflightEventRead(ctx context.Context, query runtimestore.Queryer, limits EventReadLimits) error {
+	// Read lengths, not payload blobs. Iteration stops at the first excess row,
+	// without allocating a row-count-sized collection or overflowing a sum.
+	rows, err := query.QueryContext(ctx, `SELECT coalesce(length(CAST(payload AS BLOB)), 0) FROM events ORDER BY sequence`)
+	if err != nil {
+		return fmt.Errorf("measure event journal: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var count int
+	remaining := limits.MaxPayloadBytes
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if limits.MaxEvents > 0 && count >= limits.MaxEvents {
+			return ErrReadLimit
+		}
+		count++
+		var size int64
+		if err := rows.Scan(&size); err != nil {
+			return fmt.Errorf("measure event payload: %w", err)
+		}
+		if limits.MaxPayloadBytes > 0 {
+			if size > remaining {
+				return ErrReadLimit
+			}
+			remaining -= size
+		}
+	}
+	return rows.Err()
 }
 
 // readValidatedEventJournal strictly validates workspace's whole journal,

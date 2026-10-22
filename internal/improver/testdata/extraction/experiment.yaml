@@ -1,0 +1,29 @@
+schema_version: 1
+experiment_id: extraction_pair
+mode: manual
+execution_mode: fixture
+profile: structured_only
+baseline_dir: ./team
+candidate_dirs:
+  - id: candidate_1
+    path: ./candidate
+fixture: ./cases.yaml
+worker: extractor
+vars: {}
+allowed_surfaces:
+  - kind: inline_instructions
+    agent: extractor
+models:
+  executor: {backend: fixture, model: scripted}
+fixture_program: ./responses.json
+replicates: 1
+limits:
+  per_stage_tokens: 12000
+  per_stage_seconds: 60
+  pipeline_tokens: 60000
+  pipeline_seconds: 300
+  max_probe_runs: 4
+  stage_retries: 1
+objective:
+  kind: quality_gain
+  min_pass_gain: 1

@@ -7,6 +7,12 @@ import (
 	"text/template"
 )
 
+// RenderTemplateText exposes the loader's pure template evaluation for callers
+// that must validate rendered bytes before allowing referenced files to load.
+func RenderTemplateText(content, name string, vars map[string]string) (string, error) {
+	return applyTemplate(content, name, vars)
+}
+
 // applyTemplate applies Go template processing to content using the provided variables.
 // Template delimiters are {@ and @} to avoid conflicts with {{ }} syntaxes
 // found in GitHub Actions, Hugo, and other tools.

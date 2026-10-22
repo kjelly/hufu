@@ -5,7 +5,11 @@
 // never against model output quality.
 package evalharness
 
-import "time"
+import (
+	"time"
+
+	"github.com/kjelly/hufu/internal/scripted"
+)
 
 // SuiteFixture is one YAML file under evals/<suite>/ declaring a named group
 // of deterministic cases that share a team.
@@ -286,16 +290,7 @@ type ProviderFixture struct {
 // with a single tool call (finish_reason: tool_calls), e.g. the coordinator's
 // `agent` delegation call, a worker's `submit_result`, or the coordinator's
 // closing `finish`.
-type ProviderStep struct {
-	Match    *StepMatch    `json:"match,omitempty"`
-	Content  string        `json:"content,omitempty"`
-	ToolCall *ToolCallStep `json:"tool_call,omitempty"`
-	// Forbidden marks a matched step as a trap that asserts the matched
-	// content never reaches any prompt: the case fails if a request consumes
-	// it, and leaving it unconsumed is expected. Its reply only answers that
-	// request so the run can finish and report the finding.
-	Forbidden bool `json:"forbidden,omitempty"`
-}
+type ProviderStep = scripted.Step
 
 // ToolCallStep is one scripted tool call. Arguments is the exact JSON object
 // text the model would have emitted as the call's raw argument string (it is
@@ -304,16 +299,11 @@ type ProviderStep struct {
 // `{"tasks":[{"agent":"worker","goal":"..."}]}` for the coordinator's `agent`
 // tool, `{"status":"success","summary":"..."}` for a worker's
 // `submit_result`, or `{"response":"..."}` for the coordinator's `finish`.
-type ToolCallStep struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
+type ToolCallStep = scripted.ToolCall
 
 // StepMatch selects which incoming chat-completion request a ProviderStep
 // answers. Exactly one of its fields is set.
-type StepMatch struct {
-	Contains string `json:"contains,omitempty"`
-}
+type StepMatch = scripted.Match
 
 // EvalFinding is one failed assertion dimension for a case.
 type EvalFinding struct {

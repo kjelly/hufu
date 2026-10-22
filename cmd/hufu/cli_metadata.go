@@ -19,7 +19,7 @@ var commandGroups = []commandGroupMetadata{
 	{ID: "progress", Title: "Progress and recovery", Commands: []string{"explain", "session", "inspect", "results", "status", "resume", "retry", "reconcile", "history"}},
 	{ID: "experience", Title: "Context and skills", Commands: []string{"context", "skill", "install"}},
 	{ID: "environment", Title: "Environment", Commands: []string{"config", "models", "version"}},
-	{ID: "advanced", Title: "Advanced and diagnostics", Commands: []string{"audit", "decision", "improve", "eval", "debug", "terminal", "migrate", "completion", "__complete", "examples", "help-flags"}},
+	{ID: "advanced", Title: "Advanced and diagnostics", Commands: []string{"audit", "decision", "improve", "eval", "debug", "terminal", "migrate", "mcp", "completion", "__complete", "examples", "help-flags"}},
 }
 
 type exampleMetadata struct {
@@ -31,6 +31,7 @@ var canonicalExamples = []exampleMetadata{
 	{Section: "Quick start", Argv: "hufu doctor"},
 	{Section: "Quick start", Argv: "hufu team create dev-team --wizard"},
 	{Section: "Quick start", Argv: "hufu team check dev-team"},
+	{Section: "Quick start", Argv: "hufu team capabilities dev-team --output json"},
 	{Section: "Quick start", Argv: `hufu run --team dev-team -- "review this codebase"`},
 	{Section: "Quick start", Argv: `hufu run --profile coding -- "implement the feature"`},
 	{Section: "Model selection", Argv: `hufu run --team dev-team -m codex/gpt-6-luna --worker-model coder=codex/gpt-6-sol --worker-model reviewer=codex/gpt-6-sol -- "implement feature X"`},
@@ -38,6 +39,8 @@ var canonicalExamples = []exampleMetadata{
 	{Section: "Progress and recovery", Argv: "hufu inspect overview --workspace ./workspace/dev-team"},
 	{Section: "Progress and recovery", Argv: "hufu inspect control-decisions --workspace ./workspace/dev-team"},
 	{Section: "Progress and recovery", Argv: "hufu inspect semantic-retrieval --workspace ./workspace/dev-team"},
+	{Section: "Progress and recovery", Argv: "hufu inspect routes run-123 --workspace ./workspace/dev-team --output json"},
+	{Section: "Progress and recovery", Argv: "hufu inspect economics run-123 --workspace ./workspace/dev-team --output json"},
 	{Section: "Progress and recovery", Argv: "hufu explain --team dev-team"},
 	{Section: "Historical results", Argv: "hufu results list --team dev-team --all-branches"},
 	{Section: "Historical results", Argv: "hufu result --team dev-team"},
@@ -58,6 +61,7 @@ var canonicalExamples = []exampleMetadata{
 	{Section: "Learning and publication", Argv: "hufu context semantic verify --workspace ./workspace/dev-team --strict"},
 	{Section: "Automation", Argv: `hufu run --team dev-team --quiet --output json --event-format jsonl -- "run checks"`},
 	{Section: "Automation", Argv: `hufu run --team ops-team --unattended -- "check service health"`},
+	{Section: "Automation", Argv: "hufu mcp serve --workspace /path/to/workspace --session session-123 --branch main --run run-123"},
 	{Section: "Display", Argv: `hufu run --team dev-team --tui --theme light --display-preset epaper -- "monitor a long task"`},
 	{Section: "Display", Argv: "hufu chat --agent-team dev-team --ui chat"},
 }

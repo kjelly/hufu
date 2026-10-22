@@ -10,17 +10,9 @@ import (
 // ProjectCostView reduces canonical cost events and the frozen policy from one
 // already-validated lineage. It performs no I/O and never repairs state.
 func ProjectCostView(events []RunEvent, runID, taskID string) (cost.View, error) {
-	decoded, err := costEventsFromRunEvents(events)
+	projection, policy, err := ProjectCostLedger(events)
 	if err != nil {
 		return cost.View{}, err
-	}
-	projection, err := cost.Reduce(decoded)
-	if err != nil {
-		return cost.View{}, fmt.Errorf("reduce cost projection: %w", err)
-	}
-	policy, err := executionPolicySnapshotFromEvents(events)
-	if err != nil {
-		return cost.View{}, fmt.Errorf("project cost policy: %w", err)
 	}
 	var costPolicy *cost.PolicySnapshot
 	if policy != nil {
@@ -37,6 +29,25 @@ func ProjectCostView(events []RunEvent, runID, taskID string) (cost.View, error)
 		view.Freshness = cost.Freshness{EventID: event.ID, EventHash: event.Hash}
 	}
 	return view, nil
+}
+
+// ProjectCostLedger shares canonical decoding, envelope validation and policy
+// validation with read-only derived observations. Callers supply one validated
+// lineage; this function never opens or changes a store.
+func ProjectCostLedger(events []RunEvent) (cost.Projection, *ExecutionPolicySnapshot, error) {
+	decoded, err := costEventsFromRunEvents(events)
+	if err != nil {
+		return cost.Projection{}, nil, err
+	}
+	projection, err := cost.Reduce(decoded)
+	if err != nil {
+		return cost.Projection{}, nil, fmt.Errorf("reduce cost projection: %w", err)
+	}
+	policy, err := executionPolicySnapshotFromEvents(events)
+	if err != nil {
+		return cost.Projection{}, nil, fmt.Errorf("project cost policy: %w", err)
+	}
+	return projection, policy, nil
 }
 
 func (m *CostManager) View(runID, taskID string) (cost.View, error) {

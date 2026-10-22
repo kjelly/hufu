@@ -93,6 +93,39 @@ ollama serve
 
 ### 2. 建立團隊
 
+標準團隊可以只用一份 YAML：
+
+```bash
+hufu team create dev --preset coding-reviewed --single-file --model ollama/qwen3:8b
+hufu team validate .agent-teams/dev
+hufu list dev
+```
+
+`team.yaml` 只需 `preset: coding-reviewed` 及明示的 model；成員在記憶體展開，不產生 Agent Markdown。
+Team Preset 為 `coding-single`、`coding-reviewed`、`research`、`safe-ops`。
+需要進階契約時可加入不同名 `.md`；同名一律拒絕，`team add --force` 也不能取代 manifest 成員。
+`--single-file` 不覆寫既有目錄，也不與 `--force`、`--wizard`、`--expanded`、`--from`、明示的 `--category` 共用。
+既有未帶此旗標的建立流程不變。`coding-reviewed` 只提供 reviewer，不保證固定順序或客觀審查 gate；
+Helper 與工具權限維持既有行為，Preset 名稱不代表 OS sandbox。`safe-ops` 仍須滿足既有 reconciliation／recovery lint 規則。
+
+自訂成員時，也可直接撰寫以下 `team.yaml`：
+
+```yaml
+agents:
+  architect: readonly
+  coder:
+    preset: coding
+    instructions: 實作修改、執行測試並回報結果。
+  reviewer: review
+```
+
+每位 inline worker 必須指定 Agent Preset（`readonly`、`coding`、`review`、`research`、`writer`、`ops`）。
+Inline、Team Preset 與 Markdown 可用不同名成員組合；自訂 coordinator 或進階契約仍使用 Markdown。
+Inline tools 會加上 Preset grants，再套 deny；最後為空則拒絕，避免意外啟用全部工具。
+Inline 模板使用 manifest vars，此時尚無自動 roster 變數。詳見 [inline worker 規格](docs/reference/agent-format.md#inline-worker)。
+
+下列多檔格式仍可使用：
+
 在專案根目錄建立 `.agent-teams/` 資料夾，並加入團隊定義：
 
 ```bash
@@ -569,11 +602,11 @@ go run ./cmd/hufu
 
 ## 團隊配置
 
-團隊配置檔定義了團隊的整體行為和預設參數。以下是完整的配置參考：
+團隊配置檔可省略，此時以目錄名識別團隊並使用內建預設。下列 legacy flat 格式的 `name` 可省略；版本化 manifest 仍須提供 `metadata.name`。以下是配置參考：
 
 ```yaml
-# === 必要欄位 ===
-name: my-team                    # 團隊名稱（必要）
+# === 選填識別欄位 ===
+name: my-team                    # legacy flat 格式預設使用目錄名
 
 # === 選填欄位 ===
 description: "我的開發團隊"       # 團隊描述
@@ -690,11 +723,13 @@ provider-url: http://localhost:11434/v1
 
 ### Frontmatter 欄位說明
 
+Frontmatter 可省略：純文字 `worker.md` 以檔名作為名稱，整份內容作為 system prompt。自訂 coordinator 可省略，runtime 先保留既有 role／名稱選取，再使用內建 fallback。`team create --preset coding-reviewed` 產生 workers，不產生自訂 coordinator。
+
 | 欄位 | 必要 | 預設值 | 說明 |
 |------|------|--------|------|
-| `name` | ✅ | — | Agent 名稱，用於 `@<name>` 呼叫 |
+| `name` | ❌ | 檔名（不含副檔名） | Agent 名稱，用於 `@<name>` 呼叫 |
 | `description` | ❌ | — | Agent 描述 |
-| `role` | ❌ | `worker` | Agent 角色（`worker` 或 `coordinator`） |
+| `role` | ❌ | 檔名慣例 | `coordinator.md` 推導為 coordinator，其餘為 worker |
 | `tools` | ❌ | — | 可用工具列表（逗號分隔） |
 | `skills` | ❌ | — | 要載入的 skills（逗號分隔） |
 | `model` | ❌ | 團隊預設 | 使用的 LLM model |

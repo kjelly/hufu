@@ -27,6 +27,32 @@ true` or pass `--request-acceptance`. This supplements static contracts with a
 frozen, model-resolved request and an evidence-bound completion review. See
 [per-request runtime acceptance](request-acceptance.md).
 
+## 單檔 Team Preset
+
+標準團隊可只有 `.agent-teams/dev/team.yaml`：
+
+```yaml
+preset: coding-reviewed
+```
+
+也可在 `hufu.io/v1alpha1` manifest 的 `spec.preset` 宣告；版本化格式仍需 `metadata.name`。
+可用 Team Preset 為 `coding-single`、`coding-reviewed`、`research`、`safe-ops`，與 Agent frontmatter 的 `preset` 是不同 namespace。
+使用 `hufu team create dev --preset coding-reviewed --single-file` 可產生單檔；`--model` 為選填，沒有 `--preset` 時使用 `coding-single`。
+此模式不覆寫既有目錄，不與 `--force`、`--wizard`、`--expanded`、`--from`、明示的 `--category` 共用；省略新旗標時維持原輸出。
+
+Preset 成員與不同名 Markdown 成員可共存。跨來源相同 name／filename alias（含大小寫折疊）一律拒絕，不提供 patch、繼承或 replacement。
+自訂 Preset 成員時，使用不含 team-level preset 的 inline 或 Markdown 完整 roster。新欄位會隨 `team migrate --dry-run` 保留，migration 不展開模板。
+`team explain` 顯示展開後的來源與權限，`team show` 顯示 authored YAML，`hufu list` 可列出虛擬成員；不可解析的 manifest 會讓 list 回報錯誤，而非輸出不完整 JSON。
+
+`coding-reviewed` 不表示強制派工順序或 reviewer gate；需要客觀完成條件仍使用既有 workflow / contracts / verification。
+Helper、side effect、網路與 path policy 沿用現有 runtime。`review` 含 bash，Preset 名稱不是唯讀 sandbox；`safe-ops` 原有缺少 reconcile 的 lint error 仍保留。
+Flat `agents`／版本化 `spec.agents` 可宣告以 Agent Preset 為基礎的 inline worker，例如 `agents: {inspector: readonly}`。
+Team Preset、inline 與 Markdown 只允許不同名組合；同名不提供 patch 或 replacement。
+Static contracts、delegation、action catalog 與 team worker defaults 可引用這些 worker；per-agent 進階契約及 coordinator 仍以 Markdown 宣告。
+完整欄位、工具限制與模板時序見 [inline worker 規格](agent-format.md#inline-worker)。
+
+## Fixed batch contract graphs
+
 Static contracts can own a fixed batch graph using contract IDs:
 
 ```yaml

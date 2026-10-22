@@ -1,6 +1,6 @@
 //go:build !linux && !darwin && !windows
 
-package teampkg
+package fsutil
 
 import "errors"
 

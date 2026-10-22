@@ -1,0 +1,1 @@
+Inspect the supplied observations and candidate surfaces. Return keep_baseline, use_candidate, or compose under the result schema. A new composition must pass the same objective probes.

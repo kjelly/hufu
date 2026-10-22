@@ -11,6 +11,9 @@ import (
 // proxy process is the resource that can be killed when a provider ignores
 // cancellation.
 func (c *Coordinator) startProviderExecutionBoundary(ctx context.Context) error {
+	if err := requireInvocationBinding(ctx); err != nil {
+		return err
+	}
 	if c == nil || c.providerManager == nil {
 		return nil
 	}

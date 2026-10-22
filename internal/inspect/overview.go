@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/cost"
 	operatorpkg "github.com/kjelly/hufu/internal/operator"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -108,6 +109,8 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 	if costView.Available {
 		snapshot.Cost = &costView
 	}
+	snapshot.Observations = overviewObservations(ctx, resolvedQuery, bound.Lineage,
+		cost.Freshness{EventID: anchor.Event.ID, EventHash: anchor.Event.Hash})
 	recovery := RecoveryEligibilityForTasks(tasks, bound.Lineage.Events, bound.Scope.RunID, activity.State == operatorpkg.ActivityInterrupted)
 	if recovery != nil {
 		snapshot.Attention = operatorpkg.DeriveAttention(activity.State, runData.Outcome, "valid", recovery.ExternalEffectState)

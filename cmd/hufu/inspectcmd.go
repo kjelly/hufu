@@ -68,6 +68,8 @@ the detailed audit, context, or decision maintenance commands.`,
 		newInspectContextCommand(options),
 		newInspectTraceCommand(options),
 		newInspectCostCommand(options),
+		newInspectRoutesCommand(options),
+		newInspectEconomicsCommand(options),
 		newInspectBeliefsCommand(options),
 		newInspectControlDecisionsCommand(options),
 		newInspectSemanticRetrievalCommand(options),
@@ -414,38 +416,15 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 	}
 	switch data := envelope.Data.(type) {
 	case inspectpkg.OverviewData:
-		if data.Snapshot == nil {
-			return fmt.Errorf("overview snapshot is unavailable")
-		}
-		snapshot := data.Snapshot
-		summary := operatorpkg.BuildSummaryForShell(*snapshot, filepath.Base(os.Getenv("SHELL")))
-		if _, err := fmt.Fprintf(writer, "Workspace: %s\nTeam: %s\nRun: %s\nInvocation: %s\nBranch: %s\nState: %s\nWhat: %s\nNext: %s\nData: %s\nActivity: %s\nAttention: %s\nOutcome: %s\nAcceptance: %s\nCompletion: %s\nIntegrity: %s\n",
-			safeOverviewValue(snapshot.Scope.WorkspaceExact), safeOverviewValue(valueOrUnavailable(snapshot.Scope.TeamName)), safeOverviewValue(snapshot.Scope.RunID),
-			safeOverviewValue(valueOrUnavailable(snapshot.Scope.InvocationID)), safeOverviewValue(snapshot.Scope.BranchID), summary.State, summary.What, summary.Next, summary.Data,
-			snapshot.Activity.State, snapshot.Attention,
-			valueOrUnavailable(snapshot.Outcome.RunOutcome), snapshot.Outcome.AcceptanceState,
-			snapshot.Outcome.CompletionState, snapshot.Integrity.Status); err != nil {
-			return err
-		}
-		for _, change := range snapshot.LatestChanges {
-			if _, err := fmt.Fprintf(writer, "Change %d: %s status=%s reason=%s refs=%s\n",
-				change.EventOrdinal, safeOverviewValue(change.Kind), safeOverviewValue(valueOrUnavailable(change.Status)),
-				safeOverviewValue(valueOrUnavailable(change.ReasonCode)), safeOverviewValue(refsOrNone(change.Refs))); err != nil {
-				return err
-			}
-		}
-		if snapshot.Cost != nil && snapshot.Cost.Available {
-			if _, err := fmt.Fprintf(writer, "Cost: %s known · %d unknown · %d open (%s)\n",
-				formatCostMicros(snapshot.Cost.KnownMicros, snapshot.Cost.UnknownInvocations > 0),
-				snapshot.Cost.UnknownInvocations, snapshot.Cost.OpenReservationCount, snapshot.Cost.Coverage); err != nil {
-				return err
-			}
-		}
-		return nil
+		return renderInspectOverviewText(writer, data)
 	case inspectpkg.RunData:
 		return renderInspectRunText(writer, envelope.Query.BranchID, data)
 	case inspectpkg.CostData:
 		return renderInspectCostText(writer, data)
+	case inspectpkg.RoutesData:
+		return renderInspectRoutesText(writer, envelope.Query, data)
+	case inspectpkg.EconomicsData:
+		return renderInspectEconomicsText(writer, envelope.Query, data)
 	case inspectpkg.BeliefsData:
 		return renderInspectBeliefsText(writer, envelope.Query, data)
 	case inspectpkg.ControlDecisionsData:
@@ -723,4 +702,36 @@ func renderInspectRequestAcceptance(writer io.Writer, review *inspectpkg.Request
 		}
 	}
 	return nil
+}
+
+func renderInspectOverviewText(writer io.Writer, data inspectpkg.OverviewData) error {
+	if data.Snapshot == nil {
+		return fmt.Errorf("overview snapshot is unavailable")
+	}
+	snapshot := data.Snapshot
+	summary := operatorpkg.BuildSummaryForShell(*snapshot, filepath.Base(os.Getenv("SHELL")))
+	if _, err := fmt.Fprintf(writer, "Workspace: %s\nTeam: %s\nRun: %s\nInvocation: %s\nBranch: %s\nState: %s\nWhat: %s\nNext: %s\nData: %s\nActivity: %s\nAttention: %s\nOutcome: %s\nAcceptance: %s\nCompletion: %s\nIntegrity: %s\n",
+		safeOverviewValue(snapshot.Scope.WorkspaceExact), safeOverviewValue(valueOrUnavailable(snapshot.Scope.TeamName)), safeOverviewValue(snapshot.Scope.RunID),
+		safeOverviewValue(valueOrUnavailable(snapshot.Scope.InvocationID)), safeOverviewValue(snapshot.Scope.BranchID), summary.State, summary.What, summary.Next, summary.Data,
+		snapshot.Activity.State, snapshot.Attention,
+		valueOrUnavailable(snapshot.Outcome.RunOutcome), snapshot.Outcome.AcceptanceState,
+		snapshot.Outcome.CompletionState, snapshot.Integrity.Status); err != nil {
+		return err
+	}
+	for _, change := range snapshot.LatestChanges {
+		if _, err := fmt.Fprintf(writer, "Change %d: %s status=%s reason=%s refs=%s\n",
+			change.EventOrdinal, safeOverviewValue(change.Kind), safeOverviewValue(valueOrUnavailable(change.Status)),
+			safeOverviewValue(valueOrUnavailable(change.ReasonCode)), safeOverviewValue(refsOrNone(change.Refs))); err != nil {
+			return err
+		}
+	}
+	if snapshot.Cost != nil && snapshot.Cost.Available {
+		if _, err := fmt.Fprintf(writer, "Cost: %s known · %d unknown · %d open (%s)\n",
+			formatCostMicros(snapshot.Cost.KnownMicros, snapshot.Cost.UnknownInvocations > 0),
+			snapshot.Cost.UnknownInvocations, snapshot.Cost.OpenReservationCount, snapshot.Cost.Coverage); err != nil {
+			return err
+		}
+	}
+	_, err := io.WriteString(writer, operatorpkg.RenderObservationSummary(snapshot.Observations))
+	return err
 }

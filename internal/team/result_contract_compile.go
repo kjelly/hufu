@@ -68,6 +68,24 @@ func compileResultContractSchema(teamDir, schemaPath string) (*CompiledResultCon
 	if err != nil {
 		return nil, fmt.Errorf("read schema %q: %w", id, err)
 	}
+	return compileResultContractDocument(id, raw)
+}
+
+// CompileResultContractDocument compiles already captured schema bytes without
+// filesystem or network access, using the same contract restrictions as team
+// loading. References must already be local fragments.
+func CompileResultContractDocument(id string, raw []byte) (*CompiledResultContract, error) {
+	if id == "" || path.Clean(id) != id || id == "." || id == ".." ||
+		strings.HasPrefix(id, "/") || strings.HasPrefix(id, "../") || strings.ContainsAny(id, "\\:\x00") {
+		return nil, errors.New("schema id must be a normalized relative path")
+	}
+	if len(raw) > resultContractSchemaMaxBytes {
+		return nil, fmt.Errorf("schema %q exceeds %d bytes", id, resultContractSchemaMaxBytes)
+	}
+	return compileResultContractDocument(id, raw)
+}
+
+func compileResultContractDocument(id string, raw []byte) (*CompiledResultContract, error) {
 	doc, err := decodeResultContractJSON(raw)
 	if err != nil {
 		return nil, fmt.Errorf("decode schema %q: %w", id, err)

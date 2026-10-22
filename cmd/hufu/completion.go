@@ -370,6 +370,10 @@ export extern "hufu context semantic status" [--workspace(-w): string --project:
 export extern "hufu context semantic build" [--workspace(-w): string --project: string --team: string@'nu-complete hufu teams' --json --dry-run]
 export extern "hufu context semantic verify" [--workspace(-w): string --project: string --team: string@'nu-complete hufu teams' --json --strict --offline]
 
+export extern "hufu team capabilities" [team: string@'nu-complete hufu teams' --output: string@'nu-complete hufu inspect formats']
+
+export extern "hufu mcp serve" [--workspace: string --session: string --branch: string --run: string]
+
 export extern "hufu team create" [
   name: string
   --preset: string
@@ -422,6 +426,8 @@ export extern "hufu inspect evidence" [run_id: string@'nu-complete hufu runs' --
 export extern "hufu inspect context" [task_id: string@'nu-complete hufu tasks' --run: string@'nu-complete hufu runs' --attempt: int --project: string --team: string --agent: string --all-agents --show-content --workspace(-w): string --branch: string@'nu-complete hufu branches' --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
 export extern "hufu inspect trace" [run_id: string@'nu-complete hufu runs' --workspace(-w): string --branch: string@'nu-complete hufu branches' --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
 export extern "hufu inspect cost" [run_id?: string@'nu-complete hufu runs' --task: string@'nu-complete hufu tasks' --workspace(-w): string --branch: string@'nu-complete hufu branches' --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect routes" [run_id: string@'nu-complete hufu runs' --task: string@'nu-complete hufu tasks' --workspace(-w): string --branch: string@'nu-complete hufu branches' --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
+export extern "hufu inspect economics" [run_id: string@'nu-complete hufu runs' --workspace(-w): string --branch: string@'nu-complete hufu branches' --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
 export extern "hufu inspect replay" [run_id: string@'nu-complete hufu runs' --workspace(-w): string --branch: string@'nu-complete hufu branches' --session: string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
 export extern "hufu inspect semantic-retrieval" [run_id?: string@'nu-complete hufu runs' --task: string@'nu-complete hufu tasks' --workspace(-w): string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']
 export extern "hufu inspect storage" [--workspace(-w): string --format: string@'nu-complete hufu inspect formats' --output: string@'nu-complete hufu inspect formats']

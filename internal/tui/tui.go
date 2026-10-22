@@ -76,6 +76,12 @@ type OperatorSnapshotMsg struct {
 	Snapshot   operator.OperatorSnapshot
 }
 
+// OperatorSnapshotUnavailableMsg invalidates presentation from an unsuccessful
+// latest query without changing runtime task or outcome state.
+type OperatorSnapshotUnavailableMsg struct {
+	Generation uint64
+}
+
 type OperatorEvidenceDetail struct {
 	Available      bool
 	ManifestStatus string
@@ -537,14 +543,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.acceptOperatorGeneration(msg.Generation) {
 			break
 		}
+		if m.operatorScope != msg.Snapshot.Scope {
+			m.clearOperatorDetails()
+		}
 		m.operatorSummary = operator.BuildSummary(msg.Snapshot)
 		m.operatorScope = msg.Snapshot.Scope
-		m.operatorSnapshot = msg.Snapshot
+		m.operatorSnapshot = operator.NormalizeSnapshot(msg.Snapshot)
 		m.hasOperatorSummary = true
 		if m.inOperator && m.operatorReady {
 			offset := m.operatorVP.YOffset()
 			m.operatorVP.SetContent(m.buildOperatorContent())
 			m.operatorVP.SetYOffset(offset)
+		}
+
+	case OperatorSnapshotUnavailableMsg:
+		if !m.acceptOperatorGeneration(msg.Generation) {
+			break
+		}
+		m.hasOperatorSummary = false
+		m.operatorSummary = operator.OperatorSummary{}
+		m.operatorScope = operator.ResolvedScope{}
+		m.operatorSnapshot = operator.OperatorSnapshot{}
+		m.clearOperatorDetails()
+		if m.inOperator && m.operatorReady {
+			m.operatorVP.SetContent(m.buildOperatorContent())
 		}
 
 	case OperatorDetailsMsg:

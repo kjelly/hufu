@@ -92,6 +92,42 @@ go run ./cmd/hufu [prompt]
 
 ## Quick Start
 
+For a standard coding team, create one YAML file:
+
+```bash
+hufu team create dev --preset coding-reviewed --single-file --model ollama/qwen3:8b
+hufu team validate .agent-teams/dev
+hufu list dev
+```
+
+The generated `team.yaml` contains `preset: coding-reviewed` and the explicit
+model. Team Presets (`coding-single`, `coding-reviewed`, `research`, `safe-ops`)
+expand in memory; no agent Markdown files are generated in this mode. Add
+Markdown agents with different names for advanced contracts. All same-name
+collisions are errors; `--force` does not replace manifest members. Existing
+create defaults stay unchanged. A reviewed preset supplies a reviewer but does
+not impose execution order or an objective review gate. Helper and runtime
+permissions retain their existing behavior; a preset name is not an OS sandbox.
+`safe-ops` still needs its existing reconciliation/recovery constraints to pass lint.
+
+For a custom roster, author `team.yaml` with inline workers instead:
+
+```yaml
+agents:
+  architect: readonly
+  coder:
+    preset: coding
+    instructions: Implement the change, run tests, and report the result.
+  reviewer: review
+```
+
+Each worker needs an Agent Preset (`readonly`, `coding`, `review`, `research`,
+`writer`, or `ops`). You can combine inline workers, a Team Preset, and Markdown
+members when their names differ. Use Markdown for a custom coordinator or
+advanced contracts. Inline tools add to Preset grants; deny wins and an empty
+final grant is rejected. Inline templates use manifest vars, before automatic
+roster variables exist. See the [inline worker reference](docs/reference/agent-format.md#inline-worker).
+
 ### 0. Try it in 4 commands (no config)
 
 ```bash
@@ -903,11 +939,11 @@ go run ./cmd/hufu
 
 ## Team Configuration
 
-The team configuration file defines the team's overall behavior and default parameters. Complete configuration reference:
+The team configuration file is optional. Without it, the directory name identifies the team and built-in defaults apply. The legacy flat format below can omit `name`; versioned manifests still require `metadata.name`. Complete configuration reference:
 
 ```yaml
-# === Required Fields ===
-name: my-team                    # Team name (required)
+# === Optional identity ===
+name: my-team                    # Defaults to the directory name (legacy flat format)
 
 # === Optional Fields ===
 description: "My development team"  # Team description
@@ -1092,11 +1128,13 @@ Please follow best practices and ensure proper error handling.
 
 ### Frontmatter Fields
 
+Frontmatter is optional: a plain `worker.md` uses its filename as the name and its entire body as the system prompt. An authored coordinator is optional; runtime preserves legacy role/name selection before using its built-in fallback. `team create --preset coding-reviewed` generates workers, without an authored coordinator.
+
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `name` | ✅ | — | Agent name, used for `@<name>` invocation |
+| `name` | ❌ | Filename stem | Agent name, used for `@<name>` invocation |
 | `description` | ❌ | — | Agent description |
-| `role` | ❌ | `worker` | Agent role (`worker` or `coordinator`) |
+| `role` | ❌ | Filename convention | `coordinator.md` infers `coordinator`; other files infer `worker` |
 | `tools` | ❌ | — | Available tools list (comma-separated) |
 | `skills` | ❌ | — | Skills to load (comma-separated) |
 | `guard` | ❌ | — | Guard rules (YAML list) |

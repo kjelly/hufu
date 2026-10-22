@@ -15,7 +15,7 @@
 - **Progress and recovery:** `hufu explain`, `hufu session`, `hufu inspect`, `hufu results`, `hufu status`, `hufu resume`, `hufu retry`, `hufu reconcile`, `hufu history`
 - **Context and skills:** `hufu context`, `hufu skill`, `hufu install`
 - **Environment:** `hufu config`, `hufu models`, `hufu version`
-- **Advanced and diagnostics:** `hufu audit`, `hufu decision`, `hufu improve`, `hufu eval`, `hufu debug`, `hufu terminal`, `hufu migrate`, `hufu completion`, `hufu __complete`, `hufu examples`, `hufu help-flags`
+- **Advanced and diagnostics:** `hufu audit`, `hufu decision`, `hufu improve`, `hufu eval`, `hufu debug`, `hufu terminal`, `hufu migrate`, `hufu mcp`, `hufu completion`, `hufu __complete`, `hufu examples`, `hufu help-flags`
 
 ## Parse-checked examples
 
@@ -31,6 +31,10 @@ hufu team create dev-team --wizard
 
 ```sh
 hufu team check dev-team
+```
+
+```sh
+hufu team capabilities dev-team --output json
 ```
 
 ```sh
@@ -63,6 +67,14 @@ hufu inspect control-decisions --workspace ./workspace/dev-team
 
 ```sh
 hufu inspect semantic-retrieval --workspace ./workspace/dev-team
+```
+
+```sh
+hufu inspect routes run-123 --workspace ./workspace/dev-team --output json
+```
+
+```sh
+hufu inspect economics run-123 --workspace ./workspace/dev-team --output json
 ```
 
 ```sh
@@ -151,6 +163,10 @@ hufu run --team dev-team --quiet --output json --event-format jsonl -- "run chec
 
 ```sh
 hufu run --team ops-team --unattended -- "check service health"
+```
+
+```sh
+hufu mcp serve --workspace /path/to/workspace --session session-123 --branch main --run run-123
 ```
 
 ### Display

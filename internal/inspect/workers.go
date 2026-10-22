@@ -132,6 +132,11 @@ var taskLifecycleEvents = map[string]bool{
 // task_started events (re-commits of an in-progress task) belong to the
 // attempt already open. Its key derives from that event's durable ID.
 func ProjectWorkerAttempts(todos []*team.TodoItem, events []IndexedEvent, now time.Time) []WorkerAttemptView {
+	views, _ := projectWorkerAttemptsContext(context.Background(), todos, events, now)
+	return views
+}
+
+func projectWorkerAttemptsContext(ctx context.Context, todos []*team.TodoItem, events []IndexedEvent, now time.Time) ([]WorkerAttemptView, error) {
 	byTask := make(map[string]*team.TodoItem, len(todos))
 	for _, item := range todos {
 		if item != nil {
@@ -148,6 +153,9 @@ func ProjectWorkerAttempts(todos []*team.TodoItem, events []IndexedEvent, now ti
 	pending := make(map[string]pendingFallback)
 	var attempts []*attemptBuilder
 	for _, indexed := range ordered {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		event := indexed.Event
 		identity := event.ID
 		if identity == "" && event.IdempotencyKey != "" {
@@ -236,6 +244,9 @@ func ProjectWorkerAttempts(todos []*team.TodoItem, events []IndexedEvent, now ti
 
 	views := make([]WorkerAttemptView, 0, len(attempts))
 	for _, b := range attempts {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		views = append(views, b.finish(byTask[b.view.TaskID], current[b.view.TaskID] == b, now))
 	}
 	sort.SliceStable(views, func(i, j int) bool {
@@ -247,7 +258,7 @@ func ProjectWorkerAttempts(todos []*team.TodoItem, events []IndexedEvent, now ti
 		}
 		return false // keep event order for attempts of the same occurrence
 	})
-	return views
+	return views, nil
 }
 
 func (b *attemptBuilder) finish(todo *team.TodoItem, latest bool, now time.Time) WorkerAttemptView {

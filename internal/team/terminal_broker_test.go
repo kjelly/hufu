@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-// Unix socket paths include the workspace. Long test names in t.TempDir()
-// exceed sun_path when TMPDIR is a private task directory.
+// Unix socket paths include the workspace. Go 1.27 t.TempDir() includes long
+// test names under GOTMPDIR; use a short name under the task-owned TMPDIR.
 func terminalBrokerTestWorkspace(t *testing.T) string {
 	t.Helper()
 	workspace, err := os.MkdirTemp(os.TempDir(), "tb-")

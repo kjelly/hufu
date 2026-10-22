@@ -1,6 +1,6 @@
 //go:build windows
 
-package teampkg
+package fsutil
 
 import "golang.org/x/sys/windows"
 

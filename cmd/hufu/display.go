@@ -1313,6 +1313,9 @@ func newTUISnapshotReporter(program *tea.Program, workspace string) (func(), fun
 				queryCtx, queryCancel := context.WithTimeout(ctx, time.Second)
 				envelope, err := inspectpkg.InspectOverview(queryCtx, inspectpkg.InspectQuery{Workspace: workspace})
 				if err != nil || envelope == nil {
+					if generation == latestGeneration.Load() && ctx.Err() == nil {
+						program.Send(tuipkg.OperatorSnapshotUnavailableMsg{Generation: generation})
+					}
 					queryCancel()
 					continue
 				}
@@ -1324,6 +1327,8 @@ func newTUISnapshotReporter(program *tea.Program, workspace string) (func(), fun
 						details.Generation = generation
 						program.Send(details)
 					}
+				} else if generation == latestGeneration.Load() && ctx.Err() == nil {
+					program.Send(tuipkg.OperatorSnapshotUnavailableMsg{Generation: generation})
 				}
 				queryCancel()
 			}

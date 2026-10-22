@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "scripts": [
+    {
+      "stage": "executor", "case_id": "case_a", "variant_slot_id": "baseline", "attempt": 1,
+      "steps": [{
+        "tool_call": {"name": "submit_result", "arguments": "{\"status\":\"failed\",\"summary\":\"Synthetic baseline failure.\",\"structured_payload\":{\"category\":\"denied\"}}"},
+        "usage": {"input_tokens": 100, "output_tokens": 20}
+      }]
+    },
+    {
+      "stage": "procedure", "attempt": 1,
+      "steps": [{
+        "tool_call": {"name": "submit_result", "arguments": "{\"status\":\"success\",\"summary\":\"Synthetic procedural proposal.\",\"structured_payload\":{\"schema_version\":1,\"hypothesis\":\"An explicit procedure may avoid the baseline failure.\",\"observed_failure_refs\":[\"probe_0001\"],\"changes\":[{\"surface_id\":\"surface_001\",\"before_hash\":\"045c91de7f6a066d2e3cc50ce86168410df6ca19765348456c91f95274217b3e\",\"replacement_text\":\"Return the allowed category using a careful procedure.\\n\"}],\"expected_behavior\":\"Return the requested category in the structured result.\",\"applicability\":\"The frozen classification task.\"}}"},
+        "usage": {"input_tokens": 100, "output_tokens": 20}
+      }]
+    },
+    {
+      "stage": "executor", "case_id": "case_a", "variant_slot_id": "procedure", "attempt": 1,
+      "steps": [{
+        "tool_call": {"name": "submit_result", "arguments": "{\"status\":\"success\",\"summary\":\"Synthetic procedure result.\",\"structured_payload\":{\"category\":\"allowed\"}}"},
+        "usage": {"input_tokens": 80, "output_tokens": 20}
+      }]
+    },
+    {
+      "stage": "domain", "attempt": 1,
+      "steps": [{
+        "tool_call": {"name": "submit_result", "arguments": "{\"status\":\"success\",\"summary\":\"Synthetic domain proposal.\",\"structured_payload\":{\"schema_version\":1,\"hypothesis\":\"Domain guidance may avoid the baseline failure.\",\"observed_failure_refs\":[\"probe_0001\"],\"changes\":[{\"surface_id\":\"surface_001\",\"before_hash\":\"045c91de7f6a066d2e3cc50ce86168410df6ca19765348456c91f95274217b3e\",\"replacement_text\":\"Classify this domain as allowed.\\n\"}],\"expected_behavior\":\"Return the requested category in the structured result.\",\"applicability\":\"The frozen classification task.\"}}"},
+        "usage": {"input_tokens": 100, "output_tokens": 20}
+      }]
+    },
+    {
+      "stage": "executor", "case_id": "case_a", "variant_slot_id": "domain", "attempt": 1,
+      "steps": [{
+        "tool_call": {"name": "submit_result", "arguments": "{\"status\":\"success\",\"summary\":\"Synthetic domain result.\",\"structured_payload\":{\"category\":\"allowed\"}}"},
+        "usage": {"input_tokens": 60, "output_tokens": 20}
+      }]
+    },
+    {
+      "stage": "compose", "attempt": 1,
+      "steps": [{
+        "tool_call": {"name": "submit_result", "arguments": "{\"status\":\"success\",\"summary\":\"Synthetic combined proposal.\",\"structured_payload\":{\"schema_version\":1,\"action\":\"compose\",\"proposal\":{\"schema_version\":1,\"hypothesis\":\"Combine the two instruction approaches.\",\"observed_failure_refs\":[\"probe_0001\"],\"changes\":[{\"surface_id\":\"surface_001\",\"before_hash\":\"045c91de7f6a066d2e3cc50ce86168410df6ca19765348456c91f95274217b3e\",\"replacement_text\":\"Return a combined classification.\\n\"}],\"expected_behavior\":\"Preserve both candidates' successful behavior.\",\"applicability\":\"The frozen classification task.\"}}}"},
+        "usage": {"input_tokens": 100, "output_tokens": 20}
+      }]
+    },
+    {
+      "stage": "executor", "case_id": "case_a", "variant_slot_id": "composition", "attempt": 1,
+      "steps": [{
+        "tool_call": {"name": "submit_result", "arguments": "{\"status\":\"failed\",\"summary\":\"Synthetic composition regression.\",\"structured_payload\":{\"category\":\"denied\"}}"},
+        "usage": {"input_tokens": 30, "output_tokens": 20}
+      }]
+    },
+    {
+      "stage": "reflect", "attempt": 1,
+      "steps": [{
+        "tool_call": {"name": "submit_result", "arguments": "{\"status\":\"success\",\"summary\":\"No supported lesson from synthetic output.\",\"structured_payload\":{\"schema_version\":1,\"action\":\"no_entry\"}}"},
+        "usage": {"input_tokens": 100, "output_tokens": 20}
+      }]
+    }
+  ]
+}

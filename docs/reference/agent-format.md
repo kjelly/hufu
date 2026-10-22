@@ -2,9 +2,77 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: —（本次工作樹，尚未提交）
+> Verified-Commit: —（本次整合工作樹，尚未提交）
 > Supersedes: —
 > Superseded-By: —
+
+
+## 單檔 Team Preset
+
+標準團隊可只有 `.agent-teams/dev/team.yaml`：
+
+```yaml
+preset: coding-reviewed
+```
+
+也可在 `hufu.io/v1alpha1` manifest 的 `spec.preset` 宣告；版本化格式仍需 `metadata.name`。
+可用 Team Preset 為 `coding-single`、`coding-reviewed`、`research`、`safe-ops`，與 Agent frontmatter 的 `preset` 是不同 namespace。
+使用 `hufu team create dev --preset coding-reviewed --single-file` 可產生單檔；`--model` 為選填，沒有 `--preset` 時使用 `coding-single`。
+此模式不覆寫既有目錄，不與 `--force`、`--wizard`、`--expanded`、`--from`、明示的 `--category` 共用；省略新旗標時維持原輸出。
+
+Preset 成員與不同名 Markdown 成員可共存。跨來源相同 name／filename alias（含大小寫折疊）一律拒絕，不提供 patch、繼承或 replacement。
+自訂 Preset 成員時，使用不含 team-level preset 的 inline 或 Markdown 完整 roster。新欄位會隨 `team migrate --dry-run` 保留，migration 不展開模板。
+`team explain` 顯示展開後的來源與權限，`team show` 顯示 authored YAML，`hufu list` 可列出虛擬成員；不可解析的 manifest 會讓 list 回報錯誤，而非輸出不完整 JSON。
+
+`coding-reviewed` 不表示強制派工順序或 reviewer gate；需要客觀完成條件仍使用既有 workflow / contracts / verification。
+Helper、side effect、網路與 path policy 沿用現有 runtime。`review` 含 bash，Preset 名稱不是唯讀 sandbox；`safe-ops` 原有缺少 reconcile 的 lint error 仍保留。
+
+## Inline worker
+
+Flat manifest 的 `agents`（版本化格式為 `spec.agents`）宣告自訂 worker：
+
+```yaml
+agents:
+  architect: readonly
+  coder:
+    preset: coding
+    description: 實作與驗證修改
+    instructions: |
+      讀取相關程式、實作修改並執行測試。
+    tools:
+      allowed: [math]
+      denied: [bash]
+    max-retries: 0
+```
+
+Scalar 等價 `{preset: readonly}`。每位 worker 必須指定 Agent Preset；Team Preset 名稱不可用於此處。
+`agents: {}` 合法；null、未知欄位、重複 key 與大小寫折疊後相同的 id 均拒絕。
+Id 必須符合 `^[a-zA-Z][a-zA-Z0-9_-]*$`；顯示保留大小寫，查找不分大小寫。
+`helper` 與含 `coordinat`／`orchestr` 的 id 保留給 runtime；自訂 coordinator 使用 `coordinator.md`。
+
+| 欄位 | 型別與預設 |
+|---|---|
+| `preset` | 必填非空字串，使用六種 Agent Preset 之一。 |
+| `description` | 非空字串；省略時為 id。 |
+| `instructions` | 非空字串；省略時為 `Perform the <id> role for this team.`，首尾空白會 trim。 |
+| `model`、`reasoning-effort` | 字串；省略或空值沿用既有 generation fallback 與 CLI/profile precedence。 |
+| `tools` | 具名工具字串／字串 list，或只有 `allowed`／`denied` 的 mapping；子欄位亦接受字串／list。空 list 不撤銷 Preset grants；空名稱與 `all` 拒絕。 |
+| `skills`、`allowed-paths` | 字串／字串 list，依既有 skill/path 規則解析。 |
+| `timeout`、`max-steps` | 型別範圍內的非負 integer；省略或 0 沿用原預設／繼承。Timeout 單位為秒。 |
+| `max-retries` | 非負 integer；省略時繼承，明示 0 表示不重試。 |
+| `no-net` | Boolean；`false` 不撤銷 team/global 的限制。 |
+
+所有欄位拒絕 null，字串欄位不接受 number／boolean 隱式轉型。Preset grants 與 explicit tools 聯集，展開 implied tools 後套 deny；最終為空即拒絕，避免空清單在舊 selector 中表示全部工具。Runtime 的 always-included tools 及其餘權限 gate 保持原規則。
+
+Inline role 固定為 worker，不接受 `name`、`role`、`system` 或進階 Agent 欄位。
+需要 `requires`、`result-contract`、`worker-workspace`、`execution-route`、`memory`、`mcp-tools`、`side_effect` 等 per-agent 設定時使用 `.md`；team defaults、static contracts 與 delegation 仍可綁定 inline worker。
+
+三種來源只允許不同名成員：例如 `preset: coding-reviewed` 可加上 inline `architect` 與 `security-reviewer.md`；不可再定義 `developer`／`reviewer`。自訂這些成員時移除 team-level preset，改為完整 inline／Markdown roster。成員順序不定義 workflow。
+
+Inline instructions 隨 manifest **一次渲染**，可使用 `vars` 與 caller overrides；不自動取得載入後才產生的 `TEAM_NAME`、`AGENT_COUNT`、`AGENT_NAMES`。若需要這些值，明示提供同名 vars 或使用 Markdown。缺值、遞迴或殘留模板 delimiter 均拒絕；Markdown 原模板時序不變。
+
+`team validate`、`team lint`、`team explain`、`hufu list` 使用同一 roster；`team show` 保留 authored shape，不虛構 Markdown。Prompt lint 會掃描有效 instructions，finding 指向該 YAML scalar；folded／escaped 文字不保證 token 的逐字座標。`team add --force` 不能取代 inline 成員。
+`team migrate --dry-run` 保留 literal templates、scalar／mapping shape、明示零值與空 list；alias／merge 可展開成自足 declaration，不保留原排版或註解，亦不寫回原檔。
 
 ## Agent 結構
 
@@ -161,7 +229,11 @@ AgentDef.ProviderURL > TeamConfig.ProviderURL > CLI --ollama-url > 全域預設
 
 ## Agent 檔案格式
 
-Agent 定義檔案為 Markdown + YAML Frontmatter：
+Agent 定義檔案為 Markdown，YAML frontmatter 可省略；省略時以檔名（不含副檔名）推導 name，整份內容作為 system prompt。`coordinator.md` 推導 coordinator role，其餘推導 worker；明示的 name／role 優先。`team.yaml` 也可省略，legacy flat 的 team name 預設取目錄名；版本化 manifest 仍要求 `metadata.name`。
+
+未寫 `name` 時，檔名識別符須符合 `^[a-zA-Z][a-zA-Z0-9_-]*$`；不符合時需明示 `name`。明示名稱保留既有相容規則。
+
+不需要自訂 coordinator 時，runtime 沿用既有 role／名稱選取與內建 fallback。`team lint` 對缺少 authored coordinator 僅回報 info；`--fail-on error` 不因此失敗，但 lint 的其他 authoring／invocation-policy 規則仍獨立適用。
 
 ```markdown
 ---
@@ -183,12 +255,12 @@ max-retries: 3
 
 | 欄位 | 必要 | 預設 | 說明 |
 |------|------|------|------|
-| `name` | ✓ | - | Agent 名稱（唯一） |
-| `description` | ✓ | - | Agent 描述 |
+| `name` | ✗ | 檔名（不含副檔名） | Agent 名稱（唯一） |
+| `description` | ✗ | 空字串 | Agent 描述 |
 | `model` | ✗ | 團隊設定 | LLM 模型（執行期覆寫見下方） |
 | `max-tokens` | ✗ | 團隊設定 | 最大生成 token 數 |
 | `temperature` | ✗ | 團隊設定 | 生成溫度（0-1） |
-| `role` | ✗ | `worker` | Agent 角色 |
+| `role` | ✗ | 檔名慣例 | `coordinator.md` 為 coordinator，其餘為 worker |
 | `tools` | ✗ | - | 可用工具列表 |
 | `skills` | ✗ | - | 適用技能列表 |
 | `timeout` | ✗ | 團隊設定 | 執行逾時（秒） |

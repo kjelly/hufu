@@ -39,6 +39,48 @@ func ExportEventLog(ctx context.Context, workspace string, w io.Writer) error {
 // decision idempotency does not validate.
 var ErrEventLogInvalid = errors.New("event log is invalid")
 
+// DecodeEventLog validates an exported journal without opening a workspace.
+// It uses the same envelope, chain, and idempotency checks as ImportEventLog.
+// No valid prefix is returned when a later event is invalid.
+func DecodeEventLog(r io.Reader) ([]RunEvent, error) {
+	var events []RunEvent
+	_, err := decodeEventLog(r, func(_ int, event RunEvent) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+func decodeEventLog(r io.Reader, visit func(int, RunEvent) error) (int, error) {
+	state := eventStoreState{idempotencyKeys: make(map[eventIdempotencyIdentity]RunEvent)}
+	var verifier eventchain.Verifier
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), eventLogLineLimit)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		var event RunEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			return 0, fmt.Errorf("decode event %d: %w", state.sequence+1, err)
+		}
+		if err := acceptLoadedEvent(&state, &verifier, event); err != nil {
+			return 0, fmt.Errorf("%w: %w", ErrEventLogInvalid, err)
+		}
+		if err := visit(state.sequence, event); err != nil {
+			return 0, err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, fmt.Errorf("read event log: %w", err)
+	}
+	return state.sequence, nil
+}
+
 // ImportEventLog loads a JSONL event log into workspace's empty journal in one
 // transaction, creating runtime.sqlite when needed. Every event is validated
 // as the journal's readers validate it, then written verbatim: ids,
@@ -52,7 +94,7 @@ func ImportEventLog(ctx context.Context, workspace string, r io.Reader) (int, er
 		return 0, fmt.Errorf("import event log: %w", err)
 	}
 	defer func() { _ = store.Close() }()
-	state := eventStoreState{idempotencyKeys: make(map[eventIdempotencyIdentity]RunEvent)}
+	var count int
 	err = store.WithTx(ctx, func(tx *sql.Tx) error {
 		var existing int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM events`).Scan(&existing); err != nil {
@@ -61,34 +103,16 @@ func ImportEventLog(ctx context.Context, workspace string, r io.Reader) (int, er
 		if existing > 0 {
 			return fmt.Errorf("journal already has %d events", existing)
 		}
-		var verifier eventchain.Verifier
-		scanner := bufio.NewScanner(r)
-		scanner.Buffer(make([]byte, 0, 64*1024), eventLogLineLimit)
-		for scanner.Scan() {
-			line := bytes.TrimSpace(scanner.Bytes())
-			if len(line) == 0 {
-				continue
-			}
-			var event RunEvent
-			if err := json.Unmarshal(line, &event); err != nil {
-				return fmt.Errorf("decode event %d: %w", state.sequence+1, err)
-			}
-			if err := acceptLoadedEvent(&state, &verifier, event); err != nil {
-				return fmt.Errorf("%w: %w", ErrEventLogInvalid, err)
-			}
-			if err := insertEvent(ctx, tx, state.sequence, event); err != nil {
-				return err
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			return fmt.Errorf("read event log: %w", err)
-		}
-		return nil
+		var decodeErr error
+		count, decodeErr = decodeEventLog(r, func(sequence int, event RunEvent) error {
+			return insertEvent(ctx, tx, sequence, event)
+		})
+		return decodeErr
 	})
 	if err != nil {
 		return 0, fmt.Errorf("import event log: %w", err)
 	}
-	return state.sequence, nil
+	return count, nil
 }
 
 // ReadUnvalidatedRunEvents returns runID's events in journal order without

@@ -1366,6 +1366,28 @@ type ProviderManager struct {
 	invocationReleased         chan struct{}
 	startProcessBoundary       func(context.Context, string, providerproxy.Config) (providerproxy.Boundary, error)
 	startInProcessBoundary     func(context.Context, providerproxy.Config) (providerproxy.Boundary, error)
+	boundaryFactory            ProviderBoundaryFactory
+}
+
+// ProviderBoundaryFactory supplies a trusted, owned transport for one provider
+// in an invocation. An error is terminal: an injected transport never falls back
+// to a network proxy. It must implement synchronous Abort/Stop and return a
+// non-nil client whose transport cannot escape the owned boundary.
+type ProviderBoundaryFactory func(context.Context, string, providerproxy.Config) (providerproxy.Boundary, error)
+
+// NewProviderManagerWithBoundaryFactory installs a transport at construction,
+// before any provider can be used. The ordinary constructor retains its proxy
+// behavior. This is a code dependency, not a model-authored configuration field.
+func NewProviderManagerWithBoundaryFactory(defaultURL, defaultKey string, providerConfigs map[string]config.ProviderConfig, factory ProviderBoundaryFactory) (*ProviderManager, error) {
+	if factory == nil {
+		return nil, errors.New("provider boundary factory is required")
+	}
+	pm, err := NewProviderManager(defaultURL, defaultKey, providerConfigs)
+	if err != nil {
+		return nil, err
+	}
+	pm.boundaryFactory = factory
+	return pm, nil
 }
 
 type providerTarget struct {
@@ -1587,15 +1609,30 @@ func (pm *ProviderManager) StartInvocationProxy(ctx context.Context, executable 
 	created := make(map[string]providerproxy.Boundary)
 	start := func(name, rawURL, key string) error {
 		cfg := providerproxy.Config{UpstreamURL: rawURL, APIKey: key}
-		proxy, err := startProcessBoundary(ctx, executable, cfg)
-		if err != nil && errors.Is(err, providerproxy.ErrListenerUnavailable) {
+		var proxy providerproxy.Boundary
+		var err error
+		if pm.boundaryFactory != nil {
+			proxy, err = pm.boundaryFactory(ctx, name, cfg)
+		} else {
+			proxy, err = startProcessBoundary(ctx, executable, cfg)
+		}
+		if pm.boundaryFactory == nil && err != nil && errors.Is(err, providerproxy.ErrListenerUnavailable) {
 			proxy, err = startInProcessBoundary(ctx, cfg)
 			if err != nil {
 				return fmt.Errorf("provider %q hard-abort boundary fallback: %w", name, err)
 			}
 		}
 		if err != nil {
+			if proxy != nil {
+				_ = proxy.Abort()
+			}
 			return fmt.Errorf("provider %q hard-abort boundary: %w", name, err)
+		}
+		if pm.boundaryFactory != nil && (proxy == nil || proxy.URL() == "" || proxy.HTTPClient() == nil || proxy.HTTPClient().Transport == nil) {
+			if proxy != nil {
+				_ = proxy.Abort()
+			}
+			return fmt.Errorf("provider %q factory returned an incomplete owned boundary", name)
 		}
 		created[name] = proxy
 		return nil

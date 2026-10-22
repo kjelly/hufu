@@ -27,8 +27,10 @@ type TeamSourceLocation struct {
 // AgentSource preserves the authored prompt body and its line offset.
 type AgentSource struct {
 	File       string
+	FieldPath  string
 	Body       string
 	BodyLine   int
+	BodyField  string
 	BodyStatus string
 	Fields     map[string]TeamSourceLocation
 }

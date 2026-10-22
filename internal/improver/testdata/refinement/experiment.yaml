@@ -1,0 +1,34 @@
+schema_version: 1
+experiment_id: extraction_refinement
+mode: refine
+execution_mode: fixture
+profile: structured_only
+baseline_dir: ./team
+fixture: ./cases.yaml
+worker: extractor
+vars: {}
+allowed_surfaces:
+  - kind: inline_instructions
+    agent: extractor
+models:
+  executor: {backend: fixture, model: scripted}
+  proposer: {backend: fixture, model: scripted}
+  composer: {backend: fixture, model: scripted}
+  reflector: {backend: fixture, model: scripted}
+fixture_program: ./responses.json
+refinement:
+  procedure_prompt: ./procedure.txt
+  domain_prompt: ./domain.txt
+  composer_prompt: ./compose.txt
+  reflector_prompt: ./reflect.txt
+replicates: 1
+limits:
+  per_stage_tokens: 12000
+  per_stage_seconds: 60
+  pipeline_tokens: 120000
+  pipeline_seconds: 600
+  max_probe_runs: 4
+  stage_retries: 1
+objective:
+  kind: quality_gain
+  min_pass_gain: 1

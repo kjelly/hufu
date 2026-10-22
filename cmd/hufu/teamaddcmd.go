@@ -24,7 +24,9 @@ var teamAddCmd = &cobra.Command{
 (.agent-teams/<team>/<agent>.md), then compile and validate the full team.
 --preset selects a deterministic agent preset. The new file is rolled back
 (removed, or restored if it already existed and --force overwrote it) if
-validation fails; existing files are never overwritten without --force.`,
+validation fails; existing files are never overwritten without --force.
+Manifest members (Team Preset or inline workers) cannot be replaced, even
+with --force; choose a different agent name.`,
 	Args: cobra.ExactArgs(2),
 	RunE: runTeamAdd,
 }
@@ -45,6 +47,20 @@ func runTeamAdd(_ *cobra.Command, args []string) error {
 	teamDir := filepath.Join(".agent-teams", teamName)
 	if info, err := os.Stat(teamDir); err != nil || !info.IsDir() {
 		return fmt.Errorf("team directory %s does not exist; create it first with `hufu team create %s`", teamDir, teamName)
+	}
+
+	composed, err := internalteam.HasTeamComposition(teamDir, nil)
+	if err != nil {
+		return err
+	}
+	if composed {
+		spec, err := internalteam.CompileTeam(teamDir, nil, nil, internalteam.DefaultProviderRegistry)
+		if err != nil {
+			return err
+		}
+		if spec.RuntimeSession().IsComposedAgent(agentName) {
+			return fmt.Errorf("agent %q is defined by the manifest; choose a different name (--force does not replace manifest members)", agentName)
+		}
 	}
 
 	var content string

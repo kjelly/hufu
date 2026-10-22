@@ -8,6 +8,7 @@ import (
 )
 
 func resetTeamCreateFlags() {
+	teamCreateSingleFile = false
 	teamCreatePreset = ""
 	teamCreateFrom = ""
 	teamCreateCategory = "general"
