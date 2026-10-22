@@ -73,6 +73,8 @@ type runOptions struct {
 	stepsMode                             bool
 	dryRun                                bool
 	planMode                              bool
+	requestAcceptance                     bool
+	requestAcceptanceSet                  bool
 	autoSkills                            bool
 	forcedSkills                          []string
 	fixQuestion                           string

@@ -28,11 +28,12 @@ import (
 )
 
 type TeamSession struct {
-	Config            agent.TeamConfig
-	DecisionAuthoring DecisionAuthoringMetadata
-	Dir               string
-	Workspace         string
-	Scope             WorkspaceScope
+	requestAcceptanceInputInstalled bool
+	Config                          agent.TeamConfig
+	DecisionAuthoring               DecisionAuthoringMetadata
+	Dir                             string
+	Workspace                       string
+	Scope                           WorkspaceScope
 	// WorkspaceLease holds the managed runtime lock for the lifetime of the
 	// coordinator. It is process-local and is never serialized.
 	WorkspaceLease io.Closer
@@ -946,6 +947,7 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 			}
 		}
 	}
+	cfg.RequestAcceptance = yc.RequestAcceptance
 	if yc.NoNet {
 		cfg.NoNet = true
 	}
@@ -1056,7 +1058,7 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	if err != nil {
 		return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("invalid effective goal mode: %w", err)
 	}
-	if err := ValidateAcceptanceSpec(cfg.AcceptanceSpec, string(effectiveGoalMode)); err != nil {
+	if err := validateAcceptanceWithRequest(cfg.AcceptanceSpec, string(effectiveGoalMode), cfg.RequestAcceptance); err != nil {
 		return cfg, DecisionAuthoringMetadata{}, err
 	}
 	cfg.Reliability = agent.DefaultReliabilityConfig()
@@ -1459,7 +1461,7 @@ func loadTeamWithMode(teamDir string, vars map[string]string, forcedSkills []str
 	if err != nil {
 		return nil, fmt.Errorf("invalid effective goal mode: %w", err)
 	}
-	if err := ValidateAcceptanceSpec(cfg.AcceptanceSpec, string(effectiveGoalMode)); err != nil {
+	if err := validateAcceptanceWithRequest(cfg.AcceptanceSpec, string(effectiveGoalMode), cfg.RequestAcceptance); err != nil {
 		return nil, err
 	}
 	if cfg.Name == "" {

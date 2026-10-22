@@ -42,6 +42,7 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 			return err
 		}
 	}
+	opts.requestAcceptanceSet = cmd.Flags().Changed("request-acceptance")
 	if opts.eventFormat == "jsonl" {
 		cmd.Root().SilenceErrors = true
 		defer func() { emitJSONLCommandError(runErr) }()

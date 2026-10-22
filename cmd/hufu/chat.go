@@ -64,6 +64,7 @@ func init() {
 	f.StringArrayVar(&opts.varFiles, "var-file", nil, "Read template variables from a file (repeatable)")
 	f.StringArrayVar(&opts.inputFlags, "input", nil, "Set a typed run input (name=value; repeatable)")
 	f.StringArrayVar(&opts.inputFiles, "input-file", nil, "Read typed run inputs from JSON or YAML (repeatable)")
+	f.BoolVar(&opts.requestAcceptance, "request-acceptance", false, "Validate each request against frozen requirements")
 	f.BoolVar(&opts.planMode, "plan", false, "Force plan-first mode")
 	f.BoolVar(&opts.autoSkills, "auto-skills", false, "Enable automatic skill detection")
 	f.BoolVar(&opts.projectContext, "project-context", false, "Inject Git Status and Project Directory Structure into prompt context")
@@ -94,6 +95,7 @@ func runChat(cmd *cobra.Command, args []string) (runErr error) {
 	if err := applyProfile(cmd); err != nil {
 		return err
 	}
+	opts.requestAcceptanceSet = cmd.Flags().Changed("request-acceptance")
 	configureOutputRendering()
 	mode, err := selectChatUIMode(cmd.Flags().Changed("ui"))
 	if err != nil {

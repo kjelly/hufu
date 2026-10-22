@@ -483,6 +483,7 @@ type Coordinator struct {
 	compactionBranchID                string
 	compactionRecoveryErr             error
 	initialPrompt                     string
+	requestAcceptanceModel            RequestAcceptanceModel
 	requestContractMu                 sync.Mutex
 	requestContract                   *RequestContractEnvelope
 	requestContractRef                string
@@ -1023,7 +1024,7 @@ func (c *Coordinator) SetAcceptanceSpecWithReason(spec AcceptanceSpec, reason st
 	newState := AcceptanceContractStateOf(&spec)
 
 	goalModeStr := string(c.GoalMode())
-	if valErr := ValidateAcceptanceSpec(&spec, goalModeStr); valErr != nil {
+	if valErr := validateAcceptanceWithRequest(&spec, goalModeStr, c.requestAcceptanceEnabled()); valErr != nil {
 		rejectReason := fmt.Sprintf("%s (rejected: %v)", reason, valErr)
 		audit.LogAcceptanceRejected("coordinator", string(oldState), oldSpecJSON, string(newState), newSpecJSON, rejectReason)
 		c.persistAcceptanceAuditEvent("acceptance_contract_rejected", "rejected", oldState, oldSpecJSON, newState, newSpecJSON, rejectReason)
@@ -1235,7 +1236,7 @@ func (c *Coordinator) annotateRunCompletionSemantics(res *RunResult) {
 	if c == nil || res == nil {
 		return
 	}
-	res.AcceptanceAdvisory = c.ExecutionProfile().AcceptanceMode == AcceptanceAdvisory
+	res.AcceptanceAdvisory = c.ExecutionProfile().AcceptanceMode == AcceptanceAdvisory && !c.requestAcceptanceEnabled()
 	if c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return
 	}
@@ -1644,6 +1645,10 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 		if err := c.SetAcceptance(session.Config.Acceptance); err != nil {
 			return nil, err
 		}
+	} else if session.Config.RequestAcceptance {
+		if err := c.SetAcceptanceSpec(AcceptanceSpec{RequireNoUnresolvedTasks: true}); err != nil {
+			return nil, err
+		}
 	} else {
 		if err := ValidateAcceptanceSpec(nil, string(effectiveGoalMode)); err != nil {
 			return nil, err
@@ -1684,6 +1689,9 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 	// Routes and MCP action providers are bound before the policy snapshot,
 	// which pins them.
 	if err := c.bindPolicyTargets(); err != nil {
+		return nil, err
+	}
+	if err := installRequestAcceptanceInput(session); err != nil {
 		return nil, err
 	}
 	executionPolicy, err := newExecutionPolicyState(c)
@@ -3111,7 +3119,7 @@ func (c *Coordinator) SetGoalMode(mode GoalMode) error {
 			spec = &copy
 		}
 		c.mu.RUnlock()
-		if err := ValidateAcceptanceSpec(spec, string(GoalModeOutcome)); err != nil {
+		if err := validateAcceptanceWithRequest(spec, string(GoalModeOutcome), c.requestAcceptanceEnabled()); err != nil {
 			return err
 		}
 	}

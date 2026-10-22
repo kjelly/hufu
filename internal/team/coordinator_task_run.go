@@ -628,6 +628,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	workerInput.DisableCanonicalMemory = c.canonicalMemoryDisabled()
 	workerInput.ReportMemoryUses = memoryLearningEnabled(c.session.Config.MemoryLearning)
 	workerInput.OriginalRequest = c.originalRequestFor(agentName)
+	workerInput.RuntimeContext += c.requestAcceptancePrompt()
 	legacyPrompt := strings.Join([]string{task.Goal, task.Constraints, approvedPlan, instructions, verificationCriteria, runtimeContext}, "\n\n")
 
 	var conversationHistory []fantasy.Message
@@ -3646,7 +3647,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	sidecarCtx, cancel := context.WithTimeout(ctx, sidecarTimeout)
 	defer cancel()
 
-	result, err := s.Execute(sidecar.WithPurpose(sidecarCtx, "sidecar_task"), taskDesc)
+	result, err := s.Execute(sidecar.WithPurpose(sidecarCtx, "sidecar_task"), taskDesc+c.requestAcceptancePrompt())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: sidecar execute failed for agent %q: %v\n", task.Agent, err)
 		c.PersistFailureWithClass(task.Agent, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), RetryNone, FailureExecution)
@@ -3678,6 +3679,11 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 		c.report(c.newEvent("verify_done").withAgent(task.Agent).withMessage("objective verification passed").withTodoID(todoID))
 	}
 
+	if c.requestAcceptanceEnabled() {
+		if err := c.persistSuccessfulCoordinatorTaskReceipt(todoID, task.Agent, 1, time.Now().UTC(), result); err != nil {
+			return "", err
+		}
+	}
 	if err := c.commitTaskTransitionFromCurrent(ctx, todoID, TaskDone, utils.TruncateRunes(result, summaryMaxRunes), result, nil); err != nil {
 		return "", err
 	}

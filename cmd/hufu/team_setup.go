@@ -348,6 +348,9 @@ func applyCLIRuntimeOverrides(session *team.TeamSession) (ModelCLIOverrides, err
 	if err != nil {
 		return ModelCLIOverrides{}, err
 	}
+	if opts.requestAcceptanceSet || opts.requestAcceptance {
+		session.Config.RequestAcceptance = opts.requestAcceptance
+	}
 	applyCLIModelOverrides(&session.Config, cliModelOverrides)
 	applyCLITimeoutOverrides(session, currentTimeoutOverrides())
 	applyCLIVerifyTimeoutOverrides(session, currentVerifyTimeoutOverrides())

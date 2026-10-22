@@ -79,6 +79,12 @@ session 狀態由受信任 server 管理。HTTP(S) 格式驗證不會阻擋私�
 
 ## 驗證與執行
 
+團隊預設啟用 `request-acceptance: true`，依每次使用者任務產生並驗收動態要求，
+不必再加 `--request-acceptance`。動態要求會補充既有團隊驗收；明確要求取得原文時，
+替代摘要不能取代該要求。單次停用可用 `--request-acceptance=false`。
+此設定屬於 execution policy snapshot；既有 workspace 首次套用時需加 `--new`。
+詳見 [Request acceptance](../../../docs/reference/request-acceptance.md)。
+
 ```bash
 hufu team validate --team web-research
 hufu list web-research

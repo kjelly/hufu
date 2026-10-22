@@ -1,6 +1,7 @@
 name: web-research
 description: "Independently research factual claims online, verify source evidence, and report uncertainty"
 goal-mode: outcome
+request-acceptance: true
 max-rounds: 8
 max-concurrent: 2
 max-retries: 1

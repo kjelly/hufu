@@ -292,8 +292,10 @@ func DefaultMemoryLearningPolicy() MemoryLearningPolicy {
 }
 
 type TeamConfig struct {
-	Name        string
-	Description string
+	// RequestAcceptance freezes explicit invocation requirements and checks them at finish.
+	RequestAcceptance bool `yaml:"request-acceptance" json:"request_acceptance,omitzero"`
+	Name              string
+	Description       string
 	// MaxRounds bounds normal coordinator progress; it is not a task retry
 	// budget. Teams with a declared checkpoint workflow can set
 	// MinimumCoordinatorRounds so validation rejects an undersized limit.

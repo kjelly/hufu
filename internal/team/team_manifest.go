@@ -122,6 +122,7 @@ type NormalizedTeamConfig struct {
 // on the original authored YAML, and changes nothing about strict decode
 // (omitempty only affects marshaling).
 type teamManifestSpecFields struct {
+	RequestAcceptance        bool   `yaml:"request-acceptance,omitempty"`
 	Name                     string `yaml:"name,omitempty"`
 	Description              string `yaml:"description,omitempty"`
 	MaxRounds                int    `yaml:"max-rounds,omitempty"`

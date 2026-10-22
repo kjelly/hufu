@@ -118,8 +118,14 @@ func inspectRunInputCompatibility(report *executioncompat.InspectionReport, line
 		}
 		report.InputBoundTasks++
 		snapshot, ok := snapshots[item.RunInputSnapshotID]
-		if !ok || ValidateRunInputSnapshot(&snapshot) != nil || snapshot.SnapshotHash != item.RunInputSnapshotHash || item.MaterializedActionPayloadHash == "" || len(item.BoundInputs) == 0 {
+		if !ok || ValidateRunInputSnapshot(&snapshot) != nil || snapshot.SnapshotHash != item.RunInputSnapshotHash {
 			report.InputBindingConflicts++
+			continue
+		}
+		if item.MaterializedActionPayloadHash == "" || len(item.BoundInputs) == 0 {
+			if _, err := RequestAcceptanceContractFromSnapshot(&snapshot); err != nil || len(item.ActionInputBindings) > 0 || item.MaterializedActionPayloadHash != "" || len(item.BoundInputs) > 0 {
+				report.InputBindingConflicts++
+			}
 			continue
 		}
 		inputHashes := make(map[string]string, len(snapshot.Inputs))

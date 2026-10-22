@@ -228,14 +228,15 @@ func cloneAcceptanceSpec(spec AcceptanceSpec) AcceptanceSpec {
 }
 
 type AcceptanceResult struct {
-	State                AcceptanceState       `json:"state"`
-	Passed               bool                  `json:"passed"`
-	Errors               []string              `json:"errors,omitempty"`
-	Commands             []string              `json:"commands,omitempty"`
-	RequiredArtifacts    []string              `json:"required_artifacts,omitempty"`
-	RequiredWorkers      []string              `json:"required_workers,omitempty"`
-	VerificationEvidence []*VerificationResult `json:"verification_evidence,omitempty"`
-	CriterionResults     []CriterionResult     `json:"criterion_results,omitempty"`
+	RequestAcceptance    *RequestAcceptanceResult `json:"request_acceptance,omitempty"`
+	State                AcceptanceState          `json:"state"`
+	Passed               bool                     `json:"passed"`
+	Errors               []string                 `json:"errors,omitempty"`
+	Commands             []string                 `json:"commands,omitempty"`
+	RequiredArtifacts    []string                 `json:"required_artifacts,omitempty"`
+	RequiredWorkers      []string                 `json:"required_workers,omitempty"`
+	VerificationEvidence []*VerificationResult    `json:"verification_evidence,omitempty"`
+	CriterionResults     []CriterionResult        `json:"criterion_results,omitempty"`
 }
 
 // MarshalJSON canonicalizes the legacy Passed field from the tri-state value.
@@ -254,6 +255,9 @@ func (r AcceptanceResult) MarshalJSON() ([]byte, error) {
 // persisted before the tri-state field existed. New results always populate
 // State explicitly.
 func (r AcceptanceResult) EffectiveState() AcceptanceState {
+	if r.RequestAcceptance != nil && r.RequestAcceptance.Validate() != nil {
+		return AcceptanceFailed
+	}
 	if r.State != "" {
 		switch r.State {
 		case AcceptanceNotConfigured, AcceptancePassed, AcceptanceFailed:

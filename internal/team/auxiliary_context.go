@@ -12,8 +12,6 @@ import (
 	"github.com/kjelly/hufu/internal/utils"
 )
 
-const auxiliaryPromptMaxRunes = 24000
-
 func (c *Coordinator) prepareAuxiliaryPrompt(ctx context.Context, purpose, rawPrompt string) (string, error) {
 	return c.prepareAuxiliaryPromptWithPersistence(ctx, purpose, rawPrompt, true)
 }
@@ -182,11 +180,14 @@ func (c *Coordinator) newAuxiliaryContextRequest(todoID string, attempt int, age
 		agentName = purpose
 	}
 	request := ContextRequest{
-		SchemaVersion:    ContextRequestSchemaVersion,
-		RunID:            c.contextRunID(),
-		TaskID:           todoID,
-		Attempt:          attempt,
-		Goal:             utils.TruncateRunes(utils.RedactSecrets(rawPrompt), auxiliaryPromptMaxRunes),
+		SchemaVersion: ContextRequestSchemaVersion,
+		RunID:         c.contextRunID(),
+		TaskID:        todoID,
+		Attempt:       attempt,
+		// ExecuteProfile already enforces the caller's input envelope. This is
+		// required protocol data: truncating it can silently remove the final
+		// response, schema or evidence while leaving a seemingly valid review.
+		Goal:             utils.RedactSecrets(rawPrompt),
 		AgentName:        agentName,
 		AgentRole:        "auxiliary",
 		Phase:            phase,

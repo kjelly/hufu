@@ -25,6 +25,7 @@ type canonicalRunOptions struct {
 	noSpinner, noSummary, tuiCompact                      bool
 	unattended, plan, autoSkills, report, steps, tui      bool
 	rbash, direnv, noJournal, autoApprove, think          bool
+	requestAcceptance                                     bool
 	vars, varFiles, inputs, inputFiles, skills, allowPath []string
 	workerModels                                          []string
 	timeout, verifyTimeout, maxDuration, maxTotalTokens   int64
@@ -146,6 +147,7 @@ managed workspace for the discovered project and selected team.`,
 	flags.BoolVar(&options.unattended, "unattended", false, "Run without human interaction")
 	flags.Int64Var(&options.maxDuration, "max-duration", 0, "Maximum total wall-clock seconds")
 	flags.Int64Var(&options.maxTotalTokens, "max-total-tokens", 0, "Maximum cumulative LLM tokens")
+	flags.BoolVar(&options.requestAcceptance, "request-acceptance", false, "Freeze explicit request requirements and require evidence before successful completion")
 	flags.BoolVar(&options.plan, "plan", false, "Require plan-first execution")
 	flags.BoolVar(&options.autoSkills, "auto-skills", false, "Enable automatic skill matching")
 	flags.BoolVar(&options.report, "report", false, "Export the saved run report to workspace/report.md")
@@ -260,6 +262,8 @@ func resolveCanonicalRunOptionsForIntent(command *cobra.Command, options *canoni
 	resolved.autoApprove = options.autoApprove
 	resolved.unattended = options.unattended
 	resolved.planMode = options.plan
+	resolved.requestAcceptance = options.requestAcceptance
+	resolved.requestAcceptanceSet = command.Flags().Changed("request-acceptance")
 	resolved.autoSkills = options.autoSkills
 	resolved.reportMode = options.report
 	resolved.stepsMode = options.steps

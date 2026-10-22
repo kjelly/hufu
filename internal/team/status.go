@@ -1744,9 +1744,11 @@ func (tl *TodoList) SetExecutionReceipt(id string, receipt *ExecutionReceipt) er
 				} else if !ti.ExecutionTarget.IsZero() {
 					copyR.Backend = execution.CanonicalTargetBackendName(ti.ExecutionTarget.Backend)
 				}
-				if ti.MaterializedActionPayloadHash != "" {
+				if ti.RunInputSnapshotID != "" {
 					copyR.RunInputSnapshotID = ti.RunInputSnapshotID
 					copyR.RunInputSnapshotHash = ti.RunInputSnapshotHash
+				}
+				if ti.MaterializedActionPayloadHash != "" {
 					copyR.MaterializedActionPayloadHash = ti.MaterializedActionPayloadHash
 					copyR.BoundInputs = cloneStringMap(ti.BoundInputs)
 				}

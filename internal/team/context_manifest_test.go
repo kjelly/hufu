@@ -286,6 +286,59 @@ func TestAuxiliaryCompilerIsolatesHistoryAndPersistsPurpose(t *testing.T) {
 	}
 }
 
+func TestAuxiliaryCompilerPreservesCompleteStructuredReviewPrompt(t *testing.T) {
+	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
+	c.executionRunID = "run-large-review"
+	raw := `{"sources":"` + strings.Repeat("source evidence ", 2000) + `","candidate_response":"complete final answer at the end"}`
+	ctx := withTestAuxiliaryInvocationContext(t.Context())
+	bound, ok := providerBoundInvocationContextFromContext(ctx, "test-auxiliary-model")
+	if !ok {
+		t.Fatal("missing fixture invocation binding")
+	}
+	bound.ModelContext.ContextWindow = 32_768
+	bound.AdmissionContext.ContextWindow = 32_768
+	ctx = withProviderBoundInvocationContext(ctx, bound)
+	compiled, err := c.prepareAuxiliaryPrompt(ctx, "request_acceptance_review", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(compiled, raw) {
+		t.Fatal("structured review prompt was truncated before its final response")
+	}
+	first := c.newAuxiliaryContextRequest("", 1, "reviewer", PhaseVerify, "request_acceptance_review", raw)
+	changed := c.newAuxiliaryContextRequest("", 1, "reviewer", PhaseVerify, "request_acceptance_review", raw+"changed tail")
+	// ActionType contains a per-call sequence; compare the same attribution to
+	// ensure the input tail itself participates in the request fingerprint.
+	changed.ActionType = first.ActionType
+	changed.AssignRequestID()
+	if first.RequestID == changed.RequestID {
+		t.Fatal("review identity ignored changes beyond the old truncation limit")
+	}
+	if _, err := c.prepareAuxiliaryPrompt(withTestAuxiliaryInvocationContext(t.Context()), "request_acceptance_review", raw); err == nil {
+		t.Fatal("small context silently truncated required review data instead of failing closed")
+	}
+}
+
+func TestAuxiliaryAcceptanceReviewPreservesTerminalWorkflowPhase(t *testing.T) {
+	for _, phase := range []Phase{PhaseDone, PhaseFailed} {
+		for _, purpose := range []string{"request_acceptance_review", "request_acceptance_evidence"} {
+			t.Run(string(phase)+"/"+purpose, func(t *testing.T) {
+				c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
+				c.executionRunID = "run-terminal-acceptance"
+				c.phaseWorkflow = &runtimeWorkflow{enabled: true, state: phase}
+				_, err := c.prepareAuxiliaryPrompt(withTestAuxiliaryInvocationContext(t.Context()), purpose, "Review requested outcomes against supplied sources")
+				if err != nil {
+					t.Fatal(err)
+				}
+				manifests := c.sessionData.CoordinatorContextManifests
+				if len(manifests) != 1 || manifests[0].Phase != phase || manifests[0].Purpose != purpose || c.phaseWorkflow.State() != phase {
+					t.Fatalf("review lost or changed terminal workflow state: %#v", manifests)
+				}
+			})
+		}
+	}
+}
+
 func TestAuxiliaryCompilerUsesAlreadyBoundInvocationContext(t *testing.T) {
 	c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
 	compiler := &mockContextCompiler{}
