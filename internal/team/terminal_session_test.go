@@ -623,12 +623,13 @@ func TestTerminalSessionManager_ChildTimeoutIsIndependent(t *testing.T) {
 	}
 	ctx := WithTerminalTaskID(context.Background(), "task-timeout")
 	session, err := manager.Start(ctx, TerminalStartRequest{
-		RunID: "run-timeout", OwnerTaskID: "task-timeout", Command: []string{"sh", "-c", "sleep 1"}, ChildTimeout: 25 * time.Millisecond,
+		RunID: "run-timeout", OwnerTaskID: "task-timeout", Command: []string{"sh", "-c", "read value; exit 0"}, ChildTimeout: 25 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	completed := waitForTerminal(t, manager, session.ID, time.Second)
+	t.Cleanup(func() { _ = manager.Close(ctx, session.ID) })
+	completed := waitForTerminal(t, manager, session.ID, 30*time.Second)
 	if completed.State != TerminalSessionExited || completed.ExitCode == nil || *completed.ExitCode == 0 {
 		t.Fatalf("child timeout completion = %+v, want non-zero exited child", completed)
 	}
@@ -1205,7 +1206,7 @@ func TestTerminalTools_PolicyEnforcement(t *testing.T) {
 }
 
 func TestTerminalTools_LazilyEnablePTYOnStart(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := terminalBrokerTestWorkspace(t)
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
 		t.Fatal(err)

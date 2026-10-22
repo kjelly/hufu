@@ -24,7 +24,14 @@ type snapshotFile struct {
 // appending, checkpointing, closing, or replacing files invalidates the copy.
 // SQLite only opens the accepted private files, never the mutable source.
 func snapshotRuntimeStore(ctx context.Context, path string) (string, func() error, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	if err := ctx.Err(); err != nil {
+		return "", nil, err
+	}
+	files, err := runtimeSnapshotFiles(path)
+	if err != nil {
+		return "", nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, runtimeSnapshotTimeout(files))
 	defer cancel()
 	for attempt := range 3 {
 		if err := ctx.Err(); err != nil {
@@ -54,6 +61,29 @@ func snapshotRuntimeStore(ctx context.Context, path string) (string, func() erro
 	return "", nil, errSnapshotChanged
 }
 
+// runtimeSnapshotTimeout budgets both the copy and the verification read at
+// 8 MiB/s, plus startup time. Large histories get a bounded chance to finish;
+// a caller's earlier cancellation or deadline still takes precedence.
+func runtimeSnapshotTimeout(files []snapshotFile) time.Duration {
+	const bytesPerSecond = int64(4 << 20) // Two passes at 8 MiB/s.
+	const maximum = 2 * time.Minute
+	budget := 5 * time.Second
+	for _, file := range files {
+		if file.info == nil || file.info.Size() <= 0 {
+			continue
+		}
+		seconds := file.info.Size() / bytesPerSecond
+		if file.info.Size()%bytesPerSecond != 0 {
+			seconds++
+		}
+		if seconds >= int64((maximum-budget)/time.Second) {
+			return maximum
+		}
+		budget += time.Duration(seconds) * time.Second
+	}
+	return budget
+}
+
 type snapshotCopier func(context.Context, string, string, int64) ([sha256.Size]byte, error)
 
 func copyRuntimeSnapshot(ctx context.Context, path, dir string, copyFile snapshotCopier) error {
@@ -71,7 +101,7 @@ func copyRuntimeSnapshot(ctx context.Context, path, dir string, copyFile snapsho
 			if errors.Is(err, os.ErrNotExist) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
 				return errors.Join(errSnapshotChanged, err)
 			}
-			return err
+			return fmt.Errorf("copy %s: %w", filepath.Base(file.path), err)
 		}
 	}
 	if err := verifySnapshotFiles(files); err != nil {
@@ -85,7 +115,7 @@ func copyRuntimeSnapshot(ctx context.Context, path, dir string, copyFile snapsho
 		}
 		digest, err := hashSnapshotFile(ctx, file.path, file.info.Size(), io.Discard)
 		if err != nil {
-			return errors.Join(errSnapshotChanged, err)
+			return errors.Join(errSnapshotChanged, fmt.Errorf("verify %s: %w", filepath.Base(file.path), err))
 		}
 		if digest != digests[i] {
 			return errSnapshotChanged
@@ -150,10 +180,10 @@ func hashSnapshotFile(ctx context.Context, path string, size int64, target io.Wr
 	defer func() { _ = file.Close() }()
 	hash := sha256.New()
 	writer := io.MultiWriter(target, hash)
-	buffer := make([]byte, 128*1024)
+	buffer := make([]byte, 1<<20)
 	for remaining := size; remaining > 0; {
 		if err := ctx.Err(); err != nil {
-			return [sha256.Size]byte{}, err
+			return [sha256.Size]byte{}, fmt.Errorf("read stopped at byte %d of %d: %w", size-remaining, size, err)
 		}
 		n := min(remaining, int64(len(buffer)))
 		if _, err := io.ReadFull(file, buffer[:n]); err != nil {
@@ -165,7 +195,7 @@ func hashSnapshotFile(ctx context.Context, path string, size int64, target io.Wr
 		remaining -= n
 	}
 	if err := ctx.Err(); err != nil {
-		return [sha256.Size]byte{}, err
+		return [sha256.Size]byte{}, fmt.Errorf("read stopped after %d bytes: %w", size, err)
 	}
 	return [sha256.Size]byte(hash.Sum(nil)), nil
 }

@@ -28,16 +28,71 @@ func StreamValidatedRunEvents(ctx context.Context, workspace string, visit func(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	snapshot, err := OpenRunEventSnapshot(ctx, workspace)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = snapshot.Close() }()
+	return snapshot.Visit(ctx, visit)
+}
+
+// RunEventSnapshot supports bounded, repeated streaming over one private,
+// immutable read-only snapshot. Callers must Close it after all passes finish.
+// Streaming validates the entire chain, including events the visitor discards.
+type RunEventSnapshot struct {
+	store *runtimestore.Store
+}
+
+// OpenRunEventSnapshot never changes the source workspace. A missing store
+// produces an empty snapshot, matching StreamValidatedRunEvents.
+func OpenRunEventSnapshot(ctx context.Context, workspace string) (*RunEventSnapshot, error) {
 	store, err := runtimestore.OpenReadOnly(ctx, workspace)
 	if errors.Is(err, runtimestore.ErrNotFound) {
-		return nil
+		return &RunEventSnapshot{}, nil
 	}
 	if err != nil {
-		return fmt.Errorf("open event store: %w", err)
+		return nil, fmt.Errorf("open event store: %w", err)
 	}
-	defer func() { _ = store.Close() }()
+	return &RunEventSnapshot{store: store}, nil
+}
 
-	rows, err := store.DB().QueryContext(ctx, `SELECT `+eventColumns+` FROM events ORDER BY sequence`)
+// Close releases the snapshot and its private temporary files.
+func (s *RunEventSnapshot) Close() error {
+	if s.store == nil {
+		return nil
+	}
+	return s.store.Close()
+}
+
+// SessionTree reads branch metadata from the same immutable snapshot as Visit.
+func (s *RunEventSnapshot) SessionTree(ctx context.Context) (*SessionTree, error) {
+	if s.store == nil {
+		return NewSessionTree(), nil
+	}
+	tree, exists, err := loadSessionTreeFrom(ctx, s.store.DB())
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return NewSessionTree(), nil
+	}
+	return tree, nil
+}
+
+// Visit reads a validated journal in order. No payloads are retained by the
+// snapshot reader; visitors own any retention and must handle late errors.
+func (s *RunEventSnapshot) Visit(ctx context.Context, visit func(RunEvent) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if visit == nil {
+		return fmt.Errorf("stream event store: nil visitor")
+	}
+	if s.store == nil {
+		return nil
+	}
+
+	rows, err := s.store.DB().QueryContext(ctx, `SELECT `+eventColumns+` FROM events ORDER BY sequence`)
 	if err != nil {
 		return fmt.Errorf("read events: %w", err)
 	}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -14,8 +15,24 @@ import (
 	"time"
 )
 
+// Unix socket paths include the workspace. Long test names in t.TempDir()
+// exceed sun_path when TMPDIR is a private task directory.
+func terminalBrokerTestWorkspace(t *testing.T) string {
+	t.Helper()
+	workspace, err := os.MkdirTemp(os.TempDir(), "tb-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(workspace); err != nil {
+			t.Errorf("clean terminal broker workspace: %v", err)
+		}
+	})
+	return workspace
+}
+
 func TestTerminalBrokerAttachStreamsInputAndOutput(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := terminalBrokerTestWorkspace(t)
 	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
@@ -82,7 +99,7 @@ func TestTerminalBrokerAttachStreamsInputAndOutput(t *testing.T) {
 }
 
 func TestTerminalBrokerRejectsConcurrentAttach(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := terminalBrokerTestWorkspace(t)
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +147,7 @@ func TestTerminalBrokerRejectsConcurrentAttach(t *testing.T) {
 }
 
 func TestTerminalAttachmentClientTransfersInputAndDetaches(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := terminalBrokerTestWorkspace(t)
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +206,7 @@ func TestTerminalAttachmentClientTransfersInputAndDetaches(t *testing.T) {
 }
 
 func TestTerminalBrokerTransferRequiresExplicitOperatorHandoff(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := terminalBrokerTestWorkspace(t)
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -239,7 +256,7 @@ func TestTerminalBrokerTransferRequiresExplicitOperatorHandoff(t *testing.T) {
 }
 
 func TestTerminalBrokerDisconnectKeepsTaskPaused(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := terminalBrokerTestWorkspace(t)
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
 		t.Fatal(err)

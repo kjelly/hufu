@@ -56,7 +56,11 @@ func loadLineageWithLimits(ctx context.Context, query InspectQuery, maxEvents, m
 	if err != nil {
 		return Lineage{}, fmt.Errorf("%w: load session tree: %v", ErrIntegrity, err)
 	}
-	branchID, err := resolveBranch(tree, query.BranchID)
+	return indexLineage(global, tree, query.BranchID)
+}
+
+func indexLineage(global []team.RunEvent, tree *team.SessionTree, requestedBranch string) (Lineage, error) {
+	branchID, err := resolveBranch(tree, requestedBranch)
 	if err != nil {
 		return Lineage{}, err
 	}

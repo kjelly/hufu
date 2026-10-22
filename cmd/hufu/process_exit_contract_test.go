@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -28,23 +27,12 @@ import (
 // together rather than calling an in-process helper.
 func buildProcessContractBinary(t *testing.T) string {
 	t.Helper()
-	_, sourceFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	moduleRoot := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
-	binary := filepath.Join(t.TempDir(), "hufu-contract")
-	cmd := exec.Command("go", "build", "-o", binary, "./cmd/hufu")
-	cmd.Dir = moduleRoot
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build CLI binary: %v\n%s", err, output)
-	}
-	return binary
+	return buildTestBinary(t)
 }
 
 func runProcessContract(t *testing.T, binary string, args ...string) (int, []byte, []byte) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 
 	home := t.TempDir()
@@ -59,6 +47,8 @@ func runProcessContract(t *testing.T, binary string, args ...string) (int, []byt
 		"NO_COLOR=1",
 		"HUFU_AGENT_TEAM_SEARCH_PATH=" + filepath.Join(home, ".agent-teams"),
 		"PATH=" + os.Getenv("PATH"),
+		"TMPDIR=" + os.TempDir(),
+		"GOMAXPROCS=2",
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

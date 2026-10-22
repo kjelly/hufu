@@ -73,7 +73,7 @@ func LoadHistoricalResults(ctx context.Context, scope HistoricalResultScope) (Hi
 	if scope.AllBranches && scope.Branch != "" {
 		return HistoricalSnapshot{}, fmt.Errorf("%w: --branch and --all-branches are mutually exclusive", ErrInvalidQuery)
 	}
-	lineage, err := loadLineageWithLimits(ctx, InspectQuery{Workspace: scope.Workspace, BranchID: scope.Branch}, 1_000_000, 256<<20)
+	lineage, tree, knownTeams, err := historicalLineage(ctx, scope, 1_000_000, 256<<20)
 	if err != nil {
 		return HistoricalSnapshot{}, err
 	}
@@ -86,23 +86,12 @@ func LoadHistoricalResults(ctx context.Context, scope HistoricalResultScope) (Hi
 	}
 	lineages := map[string][]IndexedEvent{lineage.BranchID: lineage.Events}
 	if scope.AllBranches {
-		lineages, err = historicalBranchLineages(scope.Workspace, lineage.GlobalEvents)
+		lineages, err = historicalBranchLineages(tree, lineage.GlobalEvents)
 		if err != nil {
 			return HistoricalSnapshot{}, err
 		}
 	}
 	byID := make(map[string]int)
-	knownTeams := make(map[string]bool)
-	for _, indexed := range lineage.GlobalEvents {
-		var metadata struct {
-			Team string `json:"team"`
-		}
-		if indexed.Event.Type == string(team.EventRunStarted) || strings.HasPrefix(indexed.Event.Type, "task_") {
-			if err := json.Unmarshal(indexed.Event.Payload, &metadata); err == nil && metadata.Team != "" {
-				knownTeams[strings.ToLower(strings.TrimSpace(metadata.Team))] = true
-			}
-		}
-	}
 	for _, branch := range slices.Sorted(maps.Keys(lineages)) {
 		rows, teams, projectErr := projectHistoricalResults(ctx, lineages[branch], branch, scope)
 		if projectErr != nil {
@@ -141,11 +130,7 @@ func LoadHistoricalResults(ctx context.Context, scope HistoricalResultScope) (Hi
 	return snapshot, nil
 }
 
-func historicalBranchLineages(workspace string, indexed []IndexedEvent) (map[string][]IndexedEvent, error) {
-	tree, err := team.LoadSessionTree(workspace)
-	if err != nil {
-		return nil, fmt.Errorf("%w: load history branches: %v", ErrIntegrity, err)
-	}
+func historicalBranchLineages(tree *team.SessionTree, indexed []IndexedEvent) (map[string][]IndexedEvent, error) {
 	raw := make([]team.RunEvent, len(indexed))
 	ordinals := make(map[string]int64, len(indexed))
 	for i, event := range indexed {

@@ -3,7 +3,9 @@ package team
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -294,10 +296,26 @@ func TestDAGSchedulerBudgetAdmissionSkipsQueuedWorkers(t *testing.T) {
 	}
 }
 
+func dagSchedulerTestWorkspace(t *testing.T) string {
+	t.Helper()
+	// Keep scheduler I/O in the private TMPDIR rather than Go 1.27's
+	// potentially slow, shared GOTMPDIR used by t.TempDir.
+	workspace, err := os.MkdirTemp(os.TempDir(), "dag-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(workspace); err != nil {
+			t.Errorf("clean scheduler workspace: %v", err)
+		}
+	})
+	return workspace
+}
+
 func TestDAGSchedulerLaunchesOnlySlotOwnersInInputOrder(t *testing.T) {
 	c := &Coordinator{
 		session: &TeamSession{
-			Workspace: t.TempDir(),
+			Workspace: dagSchedulerTestWorkspace(t),
 			Config:    agent.TeamConfig{Name: "deterministic-serial-dispatch"},
 			Agents: map[string]*agent.AgentDef{
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
@@ -324,10 +342,29 @@ func TestDAGSchedulerLaunchesOnlySlotOwnersInInputOrder(t *testing.T) {
 	c.workerAgentOverride = holding
 	scheduler := mustNewDAGScheduler(t, c, tasks, items, nil)
 
-	scheduler.launchReady(t.Context())
+	ctx, cancel := context.WithCancel(t.Context())
+	release := sync.OnceFunc(func() { close(holding.release) })
+	launched, drained := 0, 0
+	t.Cleanup(func() {
+		cancel()
+		release()
+		deadline := time.NewTimer(30 * time.Second)
+		defer deadline.Stop()
+		for drained < launched {
+			select {
+			case <-scheduler.eventCh:
+				drained++
+			case <-deadline.C:
+				t.Error("launched tasks did not stop during cleanup")
+				return
+			}
+		}
+	})
+	scheduler.launchReady(ctx)
+	launched = scheduler.inProgress
 	select {
 	case <-holding.started:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("first task did not start")
 	}
 	if heldID != items[0].ID {
@@ -343,10 +380,14 @@ func TestDAGSchedulerLaunchesOnlySlotOwnersInInputOrder(t *testing.T) {
 		t.Fatalf("reserved team slots = %d, want 1", len(scheduler.sem))
 	}
 
-	close(holding.release)
+	release()
 	select {
-	case <-scheduler.eventCh:
-	case <-time.After(time.Second):
+	case result := <-scheduler.eventCh:
+		drained++
+		if result.idx != 0 || result.todoID != items[0].ID {
+			t.Fatalf("completed task = %d/%s, want first input task 0/%s", result.idx, result.todoID, items[0].ID)
+		}
+	case <-time.After(30 * time.Second):
 		t.Fatal("launched task did not stop")
 	}
 }
@@ -465,10 +506,10 @@ func (a *budgetHoldingAgent) Stream(ctx context.Context, _ fantasy.AgentStreamCa
 	return a.run(ctx)
 }
 
-func TestDAGSchedulerBudgetExpiryWhileQueuedTaskWaitsForPermit(t *testing.T) {
+func TestDAGSchedulerBudgetExhaustionWhileQueuedTaskWaitsForPermit(t *testing.T) {
 	c := &Coordinator{
 		session: &TeamSession{
-			Workspace: t.TempDir(),
+			Workspace: dagSchedulerTestWorkspace(t),
 			Config:    agent.TeamConfig{Name: "budget-queue-expiry"},
 			Agents: map[string]*agent.AgentDef{
 				"worker": {Name: "worker", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
@@ -478,7 +519,6 @@ func TestDAGSchedulerBudgetExpiryWhileQueuedTaskWaitsForPermit(t *testing.T) {
 		reportStatus:  func(StatusEvent) {},
 		maxConcurrent: 1,
 		sessionTime:   time.Now(),
-		budgetLedger:  budgetLedger{maxWallClock: 20 * time.Millisecond},
 		taskCache:     newDefaultTaskCache(taskCacheDependencies{}),
 	}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
@@ -495,20 +535,36 @@ func TestDAGSchedulerBudgetExpiryWhileQueuedTaskWaitsForPermit(t *testing.T) {
 	c.workerAgentOverride = holding
 	scheduler := mustNewDAGScheduler(t, c, tasks, items, nil)
 	resultsCh := make(chan []agentTaskResult, 1)
+	finished := make(chan struct{})
+	ctx, cancel := context.WithCancel(t.Context())
+	release := sync.OnceFunc(func() { close(holding.release) })
+	t.Cleanup(func() {
+		cancel()
+		release()
+		select {
+		case <-finished:
+		case <-time.After(30 * time.Second):
+			t.Error("scheduler did not stop during cleanup")
+		}
+	})
 	go func() {
-		results, _ := scheduler.run(context.Background())
+		defer close(finished)
+		results, _ := scheduler.run(ctx)
 		resultsCh <- results
 	}()
 	select {
 	case <-holding.started:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("first task did not acquire the permit")
 	}
-	time.Sleep(50 * time.Millisecond)
+	// Exhaust a token budget only after the holder has entered the provider.
+	// Startup I/O and scheduler speed must not decide whether it is admitted.
+	c.budgetLedger.setLimits(0, 1)
+	c.budgetLedger.addTokens(1)
 	if exceeded, _ := c.budgetExceeded(); !exceeded {
-		t.Fatal("run budget did not expire while first task held the permit")
+		t.Fatal("run budget was not exhausted while first task held the permit")
 	}
-	close(holding.release)
+	release()
 	select {
 	case results := <-resultsCh:
 		if len(results) != 2 {
@@ -535,7 +591,7 @@ func TestDAGSchedulerBudgetExpiryWhileQueuedTaskWaitsForPermit(t *testing.T) {
 		if items[queued].Status != TaskError || strings.TrimSpace(items[queued].Detail) == "" {
 			t.Fatalf("queued task status/detail = %s / %q, want terminal truthful error", items[queued].Status, items[queued].Detail)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("scheduler did not drain after permit release")
 	}
 }

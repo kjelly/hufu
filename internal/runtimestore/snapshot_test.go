@@ -11,7 +11,43 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 )
+
+type sizedSnapshotInfo struct {
+	os.FileInfo
+	size int64
+}
+
+func (i sizedSnapshotInfo) Size() int64 { return i.size }
+
+func TestRuntimeSnapshotTimeoutScalesWithBothPassesAndIsBounded(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		sizes []int64
+		want  time.Duration
+	}{
+		{name: "absent WAL and empty database", sizes: []int64{0, -1}, want: 5 * time.Second},
+		{name: "small database", sizes: []int64{1}, want: 6 * time.Second},
+		{name: "database copy and verification", sizes: []int64{64 << 20}, want: 21 * time.Second},
+		{name: "WAL also copied and verified", sizes: []int64{64 << 20, 32 << 20}, want: 29 * time.Second},
+		{name: "large stable history", sizes: []int64{256 << 20}, want: 69 * time.Second},
+		{name: "maximum budget", sizes: []int64{2 << 30}, want: 2 * time.Minute},
+		{name: "size cannot overflow duration", sizes: []int64{1<<63 - 1}, want: 2 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files := make([]snapshotFile, len(tc.sizes))
+			for i, size := range tc.sizes {
+				if size >= 0 {
+					files[i].info = sizedSnapshotInfo{size: size}
+				}
+			}
+			if got := runtimeSnapshotTimeout(files); got != tc.want {
+				t.Fatalf("snapshot budget = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
 
 func runtimeFileContents(t *testing.T, workspace string) map[string]string {
 	t.Helper()

@@ -119,3 +119,53 @@ func TestStreamValidatedRunEventsReportsLateFailureAfterPrefix(t *testing.T) {
 		})
 	}
 }
+
+func TestRunEventSnapshotKeepsEventsAndBranchesAcrossPasses(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "snapshot-run", "snapshot-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Append(RunEvent{ID: "before", Type: "run_started", Payload: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	tree := NewSessionTree()
+	if err := SaveSessionTree(workspace, tree); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := OpenRunEventSnapshot(t.Context(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = snapshot.Close() })
+	for pass := range 2 {
+		var ids []string
+		if err := snapshot.Visit(t.Context(), func(event RunEvent) error {
+			ids = append(ids, event.ID)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(ids, []string{"before"}) {
+			t.Fatalf("pass %d mixed event snapshots: %v", pass, ids)
+		}
+		captured, err := snapshot.SessionTree(t.Context())
+		if err != nil || captured.ActiveBranch != "main" {
+			t.Fatalf("pass %d mixed branch snapshots: %#v, %v", pass, captured, err)
+		}
+		if pass == 0 {
+			if err := store.Append(RunEvent{ID: "after", Type: "run_started", Payload: []byte(`{}`)}); err != nil {
+				t.Fatal(err)
+			}
+			branch, err := tree.CreateRootBranch("new-root")
+			if err != nil {
+				t.Fatal(err)
+			}
+			tree.ActiveBranch = branch.ID
+			if err := SaveSessionTree(workspace, tree); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
