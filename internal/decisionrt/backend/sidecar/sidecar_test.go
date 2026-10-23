@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"sync"
@@ -246,6 +247,23 @@ func TestGeneratorFailureAndCancellation(t *testing.T) {
 	}
 }
 
+func TestFullBoundedContextIsNotTruncated(t *testing.T) {
+	request := choiceRequest()
+	request.Spec.Question = strings.Repeat("q", 4096)
+	for index := range 12 {
+		request.Context[fmt.Sprintf("chunk_%02d", index)] = strings.Repeat("e", 4096)
+	}
+	generator := &fakeGenerator{modelID: "test-model", execute: func(_ context.Context, prompt string) (string, error) {
+		if strings.Count(prompt, strings.Repeat("e", 4096)) != 12 {
+			t.Fatal("context was truncated")
+		}
+		return `{"token":"A0"}`, nil
+	}}
+	if _, err := mustBackend(t, generator).Decide(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPromptLimitDoesNotInvokeGenerator(t *testing.T) {
 	var calls int
 	generator := &fakeGenerator{modelID: "test-model", execute: func(context.Context, string) (string, error) {
@@ -254,8 +272,8 @@ func TestPromptLimitDoesNotInvokeGenerator(t *testing.T) {
 	}}
 	request := choiceRequest()
 	request.Spec.Question = strings.Repeat("q", 4096)
-	for index := range 64 {
-		request.Context["key"+strings.Repeat("x", index)] = strings.Repeat("界", 60)
+	for index := range 15 {
+		request.Context[fmt.Sprintf("chunk_%02d", index)] = strings.Repeat("e", 4096)
 	}
 	backend := mustBackend(t, generator)
 	_, err := backend.Decide(t.Context(), request)

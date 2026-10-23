@@ -10,6 +10,7 @@ import (
 func cloneResultCollectionBindings(bindings []ResultCollectionBinding) []ResultCollectionBinding {
 	cloned := slices.Clone(bindings)
 	for i := range cloned {
+		cloned[i].Decisions = slices.Clone(cloned[i].Decisions)
 		cloned[i].Sources = slices.Clone(cloned[i].Sources)
 	}
 	return cloned
@@ -21,14 +22,16 @@ func resultFixedCollectionContext(plans []resultFixedCollectionPlan) (string, er
 	}
 	var b strings.Builder
 	b.WriteString("\n## Runtime Fixed Collections\nCall submit_result with the complete outer argument object, including status, summary and structured_payload. Each items_pointer below is relative to structured_payload; submission_pointer gives its path in the complete tool arguments. Put the collection at that path as an OBJECT keyed by the exact runtime-issued keys, with one decision object per key. Never put row keys or decision fields at the outer tool level. Supply only the decision fields inside each row; the runtime generates the final array, order, identities and copied values. Preserve all other payload fields required by the result schema. Do not submit arrays or runtime-owned fields. Interpret meaning using the supplied evidence and choose only schema enum values. Do not guess a choice when evidence is insufficient; use an explicitly declared uncertainty option or report blocked. Invalid submissions return corrective feedback within the current attempt.\n")
+	b.WriteString("For decision_groups, first read authorized artifact evidence and call decision_primitive with collection=items_pointer, row_key and group=id. Runtime injects group outputs from settled decisions. Never submit those output fields. Abstention/errors require blocked. Runtime-owned evidence input arrays must be omitted.\n")
 	for _, plan := range plans {
 		manifest := struct {
 			ItemsPointer      string                     `json:"items_pointer"`
 			SubmissionPointer string                     `json:"submission_pointer"`
 			Sources           []ResultCollectionSource   `json:"sources"`
 			Rows              []resultFixedCollectionRow `json:"rows"`
+			DecisionGroups    []resultDecisionGroup      `json:"decision_groups,omitempty"`
 			DecisionSchema    map[string]any             `json:"decision_schema"`
-		}{plan.spec.ItemsPointer, "/structured_payload" + plan.spec.ItemsPointer, plan.binding.Sources, plan.rows, plan.spec.decisionSchema}
+		}{plan.spec.ItemsPointer, "/structured_payload" + plan.spec.ItemsPointer, plan.binding.Sources, plan.rows, plan.spec.DecisionGroups, plan.spec.decisionSchema}
 		encoded, err := json.Marshal(manifest, json.Deterministic(true))
 		if err != nil {
 			return "", err

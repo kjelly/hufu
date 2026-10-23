@@ -89,6 +89,10 @@ func (input SubmitResultInput) taskResult() TaskResult {
 
 func decodeSubmitResultInput(raw []byte, contract taskResultSubmissionContract) (SubmitResultInput, error) {
 	var input SubmitResultInput
+	// Reject ambiguity before legacy shape normalization can merge object keys.
+	if _, err := decodeUniqueJSON(raw); err != nil {
+		return input, err
+	}
 	normalized, err := normalizeSubmitResultInput(raw)
 	if err != nil {
 		return SubmitResultInput{}, err
@@ -137,7 +141,22 @@ func (t *submitResultTool) ProviderOptions() fantasy.ProviderOptions {
 func (t *submitResultTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
 
 func (t *submitResultTool) Info() fantasy.ToolInfo {
-	return submitResultToolInfo(t.submissionContract())
+	info := submitResultToolInfo(t.submissionContract())
+	if t.coordinator != nil {
+		_, compiled, _ := t.coordinator.boundResultContract(t.todoID)
+		if compiled != nil {
+			schema, _ := info.Parameters["structured_payload"].(map[string]any)
+			advertiseResultEvidenceKeys(schema, compiled.evidenceKeys)
+			info.Parameters["structured_payload"] = providerResultIntegerStrings(schema, 0)
+			if hasResultDecisions(compiled) {
+				// A failed bound decision cannot provide a successful payload.
+				// Successful results still pass the full contract in Run/commit.
+				info.Required = []string{"status", "summary"}
+				info.Description += " For a bound-decision task that cannot settle its required decisions, submit status=blocked and summary, omitting structured_payload and any unavailable success-only fields. Success and completed_with_gaps still require the complete validated payload."
+			}
+		}
+	}
+	return info
 }
 
 func (t *submitResultTool) submissionContract() taskResultSubmissionContract {
@@ -337,10 +356,16 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 			},
 			"open_questions": map[string]any{
 				"type":        "array",
-				"description": "Unresolved questions or follow-ups. Each entry may be a string or a structured object with required question and optional context/detail strings.",
+				"description": "Unresolved questions or follow-ups. Prefer strings. Also accepts a structured question/context/detail object or exactly {\"$text\":\"nonempty text\"}; both normalize to canonical strings.",
 				"items": map[string]any{
 					"oneOf": []any{
 						map[string]any{"type": "string"},
+						map[string]any{
+							"type":                 "object",
+							"properties":           map[string]any{"$text": map[string]any{"type": "string", "minLength": 1}},
+							"required":             []string{"$text"},
+							"additionalProperties": false,
+						},
 						map[string]any{
 							"type":                 "object",
 							"properties":           map[string]any{"question": map[string]any{"type": "string"}, "context": map[string]any{"type": "string"}, "detail": map[string]any{"type": "string"}},
@@ -426,6 +451,13 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	}
 	call.Input = canonicalToolArgumentObjects(call.Input, t.Info())
 	call.Input, _ = tools.CanonicalToolArgumentCase(call.Input, t.Info())
+	if t.coordinator != nil {
+		normalized, err := t.coordinator.resolveResultEvidenceKeys(ctx, t.todoID, call.Input)
+		if err != nil {
+			return fantasy.NewTextErrorResponse("invalid evidence key: " + err.Error()), nil
+		}
+		call.Input = normalized
+	}
 	input, err := decodeSubmitResultInput([]byte(call.Input), contract)
 	if err != nil {
 		if strings.Contains(err.Error(), `unknown field "raw_output_ref"`) {
@@ -506,13 +538,15 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 				observations = transcript.evidenceRecords()
 			}
 		}
-		payload, rejection := t.coordinator.structuredPayloadForSubmission(t.todoID, input.StructuredPayload, observations)
-		if rejection != "" {
-			return fantasy.NewTextErrorResponse(rejection), nil
-		}
-		res.StructuredPayload = payload
-		if payload != nil && payload.EvidenceDowngrades > 0 {
-			res.Summary = "Result includes claims without matching successful tool evidence; consult the structured payload for downgraded findings."
+		if res.Status != TaskResultStatusBlocked || len(bytes.TrimSpace(input.StructuredPayload)) != 0 || !hasResultDecisions(compiled) {
+			payload, rejection := t.coordinator.structuredPayloadForSubmission(t.todoID, input.StructuredPayload, observations)
+			if rejection != "" {
+				return fantasy.NewTextErrorResponse(rejection), nil
+			}
+			res.StructuredPayload = payload
+			if payload != nil && payload.EvidenceDowngrades > 0 {
+				res.Summary = "Result includes claims without matching successful tool evidence; consult the structured payload for downgraded findings."
+			}
 		}
 	} else if len(bytes.TrimSpace(input.StructuredPayload)) > 0 {
 		return fantasy.NewTextErrorResponse("structured_payload is not accepted for this task because it has no result contract; omit the field"), nil

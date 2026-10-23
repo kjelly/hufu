@@ -169,7 +169,7 @@ func TestDecisionPrimitiveResumeAndConcurrentDuplicate(t *testing.T) {
 	}
 }
 
-func TestDecisionPrimitiveAbstainFailureRetryAndLimits(t *testing.T) {
+func TestDecisionPrimitiveAbstainSettledFailureAndLimits(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if calls.Add(1) == 1 {
@@ -189,13 +189,18 @@ func TestDecisionPrimitiveAbstainFailureRetryAndLimits(t *testing.T) {
 		t.Fatalf("backend failure: %v %#v", err, first)
 	}
 	second, err := tool.Run(ctx, primitiveTestCall("retry", "same"))
-	if err != nil || second.IsError || !strings.Contains(second.Content, `"status":"abstained"`) {
-		t.Fatalf("low-confidence retry: %v %#v", err, second)
+	if err != nil || !second.IsError || calls.Load() != 1 {
+		t.Fatalf("settled failure must not retry: %v %#v calls=%d", err, second, calls.Load())
 	}
-	third, err := tool.Run(ctx, primitiveTestCall("exhausted", "different"))
+	abstained, err := tool.Run(ctx, primitiveTestCall("new-input", "different"))
+	if err != nil || abstained.IsError || !strings.Contains(abstained.Content, `"status":"abstained"`) {
+		t.Fatalf("low confidence: %v %#v", err, abstained)
+	}
+	third, err := tool.Run(ctx, primitiveTestCall("exhausted", "third"))
 	if err != nil || !third.IsError || third.Content != "decision_call_limit" || calls.Load() != 2 {
 		t.Fatalf("call bound: %v %#v", err, third)
 	}
+
 }
 
 func TestDecisionPrimitiveRejectsBeforeInference(t *testing.T) {
@@ -219,10 +224,9 @@ func TestDecisionPrimitiveRejectsBeforeInference(t *testing.T) {
 			}
 		}, "helper", `{"name":"classify","context":null}`},
 		{"nested context", func(*Coordinator) {}, "helper", `{"name":"classify","context":{"summary":{"a":"b"}}}`},
-		{"no net", func(c *Coordinator) { c.noNet = true }, "helper", `{"name":"classify","context":{"summary":"text"}}`},
 		{"force mcp", func(c *Coordinator) { c.forceMCP = true }, "helper", `{"name":"classify","context":{"summary":"text"}}`},
-		{"coordinator no net", func(c *Coordinator) {
-			c.session.Agents["planner"] = &agent.AgentDef{Name: "planner", Role: "coordinator", NoNet: true}
+		{"coordinator force mcp", func(c *Coordinator) {
+			c.session.Agents["planner"] = &agent.AgentDef{Name: "planner", Role: "coordinator", ForceMCP: true}
 		}, "coordinator", `{"name":"classify","context":{"summary":"text"}}`},
 		{"denied", func(c *Coordinator) { c.session.Config.ToolsDenied = []string{decisionPrimitiveToolName} }, "helper", `{"name":"classify","context":{"summary":"text"}}`},
 		{"journal missing", func(c *Coordinator) { c.eventStore, c.eventJournal = nil, nil }, "helper", `{"name":"classify","context":{"summary":"text"}}`},
@@ -272,7 +276,7 @@ func TestDecisionPrimitiveStaticSurfaceAndPolicyGate(t *testing.T) {
 	if slices.Contains(agentToolNames(c.buildOrchestratorTools()), decisionPrimitiveToolName) {
 		t.Fatal("force-MCP coordinator received the helper decision tool")
 	}
-	for _, key := range []any{tools.AgentNetworkBlockKey, tools.AgentForceMCPKey} {
+	for _, key := range []any{tools.AgentForceMCPKey} {
 		ctx := context.WithValue(primitiveTestContext(t, "helper"), key, true)
 		response, err := c.coreTools[0].Run(ctx, primitiveTestCall("blocked-context", "text"))
 		if err != nil || !response.IsError || response.Content != "decision_policy_denied" {

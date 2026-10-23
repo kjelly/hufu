@@ -103,7 +103,7 @@ func startPTY(t *testing.T, binary string, args []string, rows, cols uint16) *pt
 		Ctty:    0, // slave fd in child
 	}
 	// Isolate environment
-	home := t.TempDir()
+	home := processContractTempDir(t)
 	cmd.Env = []string{
 		"HOME=" + home,
 		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
@@ -275,40 +275,6 @@ func stripPTYANSI(s string) string {
 
 func isFinalByte(c byte) bool {
 	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '~' || c == '@'
-}
-
-// buildTestBinary compiles the hufu binary once and returns its path.
-var testBinaryOnce sync.Once
-var testBinaryPath string
-
-func buildTestBinary(t *testing.T) string {
-	t.Helper()
-	testBinaryOnce.Do(func() {
-		// Use a stable path that persists across tests
-		path := filepath.Join(os.TempDir(), "hufu-e2e-test")
-		moduleRoot := "."
-		if fi, err := os.Stat("../../go.mod"); err == nil && !fi.IsDir() {
-			moduleRoot = "../.."
-		}
-		cmd := exec.Command("go", "build", "-o", path, "./cmd/hufu")
-		cmd.Dir = moduleRoot
-		combined, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("build test binary: %v\n%s", err, combined)
-		}
-		testBinaryPath = path
-	})
-	if testBinaryPath == "" {
-		t.Fatal("test binary build failed")
-	}
-	// Verify the binary exists
-	if _, err := os.Stat(testBinaryPath); err != nil {
-		// Rebuild if it was cleaned up
-		testBinaryOnce = sync.Once{}
-		testBinaryPath = ""
-		return buildTestBinary(t)
-	}
-	return testBinaryPath
 }
 
 // ── L4 Tests ────────────────────────────────────────────────────────────────
@@ -488,7 +454,7 @@ func TestE2E_StdinPipe(t *testing.T) {
 func TestE2E_IsolatedEnvironment(t *testing.T) {
 	binary := buildTestBinary(t)
 
-	home := t.TempDir()
+	home := processContractTempDir(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

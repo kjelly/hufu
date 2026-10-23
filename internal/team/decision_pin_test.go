@@ -108,6 +108,7 @@ func TestRevisionCapabilityRouting_ReusesPinnedOriginalBinding(t *testing.T) {
 	}
 
 	revisionReq := RevisionRequest{
+		Packet:     routingChoicePacket(),
 		DecisionID: "dec-1", JudgeID: "judge-1", Original: opinion,
 		Prompt: "You are judge judge-1 revising your own judgment once (round 2).", RoutingRole: role,
 	}

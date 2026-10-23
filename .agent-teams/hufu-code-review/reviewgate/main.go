@@ -490,7 +490,7 @@ func verifyCritique(item task, r record, tasks map[string]task, values map[strin
 	}
 	sourceID := r.InputReview[0].TaskID
 	source, ok := records[sourceID]
-	if !ok || source.Kind != "review" || len(source.Findings) == 0 || len(r.Decisions) != len(source.Findings) || critiqued[sourceID] {
+	if !ok || source.Kind != "review" || len(r.Decisions) != len(source.Findings) || critiqued[sourceID] {
 		return "", false, fmt.Errorf("critic %s has incomplete or duplicate finding coverage", item.ID)
 	}
 	seen := make(map[int]bool)

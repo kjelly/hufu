@@ -193,14 +193,16 @@ func buildSelectionSidecar(ctx context.Context) *preflightSidecarHandle {
 	// Team selection is an auxiliary LLM role. It must not silently inherit a
 	// worker or coordinator target, either of which may be an agent backend.
 	model := firstNonEmpty(opts.sidecarModelOverride, cfg.SidecarModel)
-	if model == "" {
+	if model == "" && cfg.DecisionRuntime.Backend != "systemone" {
 		return nil
 	}
 	url := config.ResolveProviderURL(opts.providerURL, "", "")
 	key := config.ResolveProviderAPIKey(opts.providerAPIKey, "")
-	session := &team.TeamSession{Config: agent.TeamConfig{Name: "preflight-team-selection", Providers: cfg.Providers}}
-	if err := preflightSidecarTarget(session, cfg, model, nil); err != nil {
-		return nil
+	session := &team.TeamSession{GlobalDecisionRuntime: cfg.DecisionRuntime.Clone(), GlobalControlDecisions: cfg.ControlDecisions.Clone(), Config: agent.TeamConfig{Name: "preflight-team-selection", Providers: cfg.Providers}}
+	if model != "" {
+		if err := preflightSidecarTarget(session, cfg, model, nil); err != nil {
+			return nil
+		}
 	}
 	session.Workspace = getWorkspace()
 	if session.Workspace == "" {
@@ -213,7 +215,7 @@ func buildSelectionSidecar(ctx context.Context) *preflightSidecarHandle {
 	if err != nil {
 		return nil
 	}
-	handle, err := preparePreflightSidecarContext(ctx, coordinator)
+	handle, err := preparePreflightSidecarContext(ctx, decisionPreflightCoordinator{coordinator})
 	if err != nil {
 		_ = coordinator.Close()
 		return nil
@@ -224,4 +226,10 @@ func buildSelectionSidecar(ctx context.Context) *preflightSidecarHandle {
 		_ = coordinator.Close()
 	}
 	return handle
+}
+
+type decisionPreflightCoordinator struct{ *team.Coordinator }
+
+func (c decisionPreflightCoordinator) Sidecar() *sidecar.Sidecar {
+	return c.DecisionSidecar()
 }

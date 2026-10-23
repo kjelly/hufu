@@ -226,7 +226,7 @@ func finalizationPrompt(kind string, decisionID string, packet DecisionEvidenceP
 	if err != nil {
 		return "", fmt.Errorf("encode %s finalization request: %w", kind, err)
 	}
-	return fmt.Sprintf("You are the %s finalizer. Select exactly one option from sealed evidence. Return exactly one JSON object with only option_id and reason. A reason is required only when diverging from the last aggregate preferred option. Do not include identity, evidence, scores, or conversation history. Request:\n%s", kind, data), nil
+	return fmt.Sprintf("You are the %s finalizer. Explain the runtime-selected option using sealed evidence. Return exactly one JSON object with only reason. Do not include identity, evidence, scores, or conversation history. Request:\n%s", kind, data), nil
 }
 
 func decodeFinalizationWireResult(response string) (FinalizationWireResult, error) {

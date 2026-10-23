@@ -176,3 +176,9 @@ func TestConflictsListOnUnmigratedReadOnlyStore(t *testing.T) {
 		t.Fatalf("list on schema 10 = %q err=%v", out, err)
 	}
 }
+
+func (g staticTextGenerator) DecidePair(_ context.Context, _, _ contextstore.ContextItem) (memoryconflict.Judgment, error) {
+	var judgment memoryconflict.Judgment
+	err := json.Unmarshal([]byte(g.reply), &judgment)
+	return judgment, err
+}

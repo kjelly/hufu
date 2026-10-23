@@ -82,7 +82,7 @@ func (g *lazyDecisionGenerator) Execute(ctx context.Context, prompt string) (str
 	if err != nil {
 		return "", err
 	}
-	return s.Execute(sidecar.WithPurpose(ctx, decisionPrimitivePurpose), prompt)
+	return s.ExecuteProfile(sidecar.WithPurpose(ctx, decisionPrimitivePurpose), prompt, sidecar.DecisionProfile)
 }
 
 // newModelSidecar builds a sidecar for model through the execution policy's

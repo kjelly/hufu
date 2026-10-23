@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/decisionrt"
+	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/sidecar"
 )
@@ -177,14 +180,38 @@ type judgeResponse struct {
 
 // RunJudge implements JudgeRunner.
 func (r *coordinatorDecisionRunners) RunJudge(ctx context.Context, req JudgeRequest) (DecisionOpinion, error) {
-	if req.RoutingRole != nil {
-		return r.runJudgeViaCapabilityRouting(ctx, req)
+	if err := validateSealedChoicePacket(req.Packet); err != nil {
+		return DecisionOpinion{}, err
 	}
-	response, err := r.ask(ctx, decisionPurposeJudge, req.Context.Prompt)
+	if decisionInferenceRepair(ctx) {
+		return DecisionOpinion{}, fmt.Errorf("decision_repair_inference_denied")
+	}
+	var opinion DecisionOpinion
+	restored, err := r.restorePrimaryGeneration(ctx, "runtime_primary_judge", req, &opinion)
 	if err != nil {
 		return DecisionOpinion{}, err
 	}
-	return decodeJudgeOpinion(response, req.JudgeID)
+	if !restored {
+		if req.RoutingRole != nil {
+			opinion, err = r.runJudgeViaCapabilityRouting(ctx, req)
+		} else {
+			var response string
+			response, err = r.ask(ctx, decisionPurposeJudge, req.Context.Prompt)
+			if err == nil {
+				opinion, err = decodeJudgeOpinion(response, req.JudgeID)
+			}
+		}
+		if err != nil {
+			return DecisionOpinion{}, err
+		}
+	}
+	opinion.PreferredOption = ""
+	choice, err := r.choosePacketOption(ctx, "runtime_primary_judge", "Choose the preferred option using the sealed evidence. Generated scores and explanations are non-authoritative.", req, opinion, req.Packet)
+	if err != nil {
+		return DecisionOpinion{}, err
+	}
+	opinion.PreferredOption = choice
+	return opinion, nil
 }
 
 // decodeJudgeOpinion decodes one judge's raw response into a DecisionOpinion.
@@ -300,14 +327,38 @@ type challengeResponse struct {
 
 // RunChallenge implements ChallengeRunner.
 func (r *coordinatorDecisionRunners) RunChallenge(ctx context.Context, req ChallengeRequest) (DecisionChallenge, error) {
-	if req.RoutingRole != nil {
-		return r.runChallengeViaCapabilityRouting(ctx, req)
+	if err := validateSealedChoicePacket(req.Packet); err != nil {
+		return DecisionChallenge{}, err
 	}
-	response, err := r.ask(ctx, decisionPurposeChallenge, req.Prompt)
+	if decisionInferenceRepair(ctx) {
+		return DecisionChallenge{}, fmt.Errorf("decision_repair_inference_denied")
+	}
+	var challenge DecisionChallenge
+	restored, err := r.restorePrimaryGeneration(ctx, "runtime_primary_challenge", req, &challenge)
 	if err != nil {
 		return DecisionChallenge{}, err
 	}
-	return decodeChallengeResponse(response, req.ChallengerID)
+	if !restored {
+		if req.RoutingRole != nil {
+			challenge, err = r.runChallengeViaCapabilityRouting(ctx, req)
+		} else {
+			var response string
+			response, err = r.ask(ctx, decisionPurposeChallenge, req.Prompt)
+			if err == nil {
+				challenge, err = decodeChallengeResponse(response, req.ChallengerID)
+			}
+		}
+		if err != nil {
+			return DecisionChallenge{}, err
+		}
+	}
+	challenge.TargetOption = ""
+	choice, err := r.choosePacketOption(ctx, "runtime_primary_challenge", "Choose the option targeted by the countercase, grounded in sealed evidence. Generated text is non-authoritative.", req, challenge, req.Packet)
+	if err != nil {
+		return DecisionChallenge{}, err
+	}
+	challenge.TargetOption = choice
+	return challenge, nil
 }
 
 // decodeChallengeResponse decodes one challenger's raw response into a
@@ -381,14 +432,44 @@ type revisionResponse struct {
 
 // RunRevision implements RevisionRunner.
 func (r *coordinatorDecisionRunners) RunRevision(ctx context.Context, req RevisionRequest) (DecisionRevision, error) {
-	if req.RoutingRole != nil {
-		return r.runRevisionViaCapabilityRouting(ctx, req)
+	if err := validateSealedChoicePacket(req.Packet); err != nil {
+		return DecisionRevision{}, err
 	}
-	response, err := r.ask(ctx, decisionPurposeRevision, req.Prompt)
+	if decisionInferenceRepair(ctx) {
+		return DecisionRevision{}, fmt.Errorf("decision_repair_inference_denied")
+	}
+	var revision DecisionRevision
+	restored, err := r.restorePrimaryGeneration(ctx, "runtime_primary_revision", req, &revision)
 	if err != nil {
 		return DecisionRevision{}, err
 	}
-	return decodeRevisionResult(response, req.JudgeID)
+	if !restored {
+		if req.RoutingRole != nil {
+			revision, err = r.runRevisionViaCapabilityRouting(ctx, req)
+		} else {
+			var response string
+			response, err = r.ask(ctx, decisionPurposeRevision, req.Prompt)
+			if err == nil {
+				revision, err = decodeRevisionResult(response, req.JudgeID)
+			}
+		}
+		if err != nil {
+			return DecisionRevision{}, err
+		}
+	}
+	revision.Changed = false
+	result, err := r.coordinator.runRuntimeChoice(r.choiceContext(ctx), r.coordinator.AgentPool().JudgeSidecar(), sidecar.DecisionInvocation{Name: "runtime_primary_revision", Question: "Does the sealed evidence and challenge justify changing the original judgment? Generated revision scores and reasons are non-authoritative.", Input: struct {
+		Request                   RevisionRequest
+		NonAuthoritativeGenerated DecisionRevision
+	}{req, revision}, Options: []catalog.Option{{ID: "changed"}, {ID: "unchanged"}}, MaxCalls: 1000})
+	if err != nil {
+		return DecisionRevision{}, err
+	}
+	if result.Status != decisionrt.StatusDecided {
+		return DecisionRevision{}, &runtimeDecisionFailure{fmt.Errorf("revision decision abstained")}
+	}
+	revision.Changed = result.Value.Choice == "changed"
+	return revision, nil
 }
 
 // decodeRevisionResult decodes one judge's raw revision response into a
@@ -415,25 +496,119 @@ func decodeRevisionResult(response, judgeID string) (DecisionRevision, error) {
 }
 
 func (r *coordinatorDecisionRunners) RunCoordinatorFinalization(ctx context.Context, req CoordinatorFinalizationRequest) (FinalizationWireResult, error) {
-	prompt, err := finalizationPrompt("coordinator", req.DecisionID, req.Packet, req.Aggregates, req.Challenges, req.Revisions, "")
+	choice, err := r.choosePacketOption(ctx, "runtime_primary_finalize_coordinator", "Choose the final option from the sealed evidence, aggregate judgments, challenges and revisions. Do not authorize execution.", req, nil, req.Packet)
 	if err != nil {
 		return FinalizationWireResult{}, err
 	}
-	response, err := r.ask(ctx, decisionPurposeFinalizationCoordinator, prompt)
-	if err != nil {
-		return FinalizationWireResult{}, err
-	}
-	return decodeFinalizationWireResult(response)
+	return r.explainFinalChoice(ctx, decisionPurposeFinalizationCoordinator, "coordinator", req.DecisionID, "", choice, req.Packet, req.Aggregates, req.Challenges, req.Revisions)
 }
 
 func (r *coordinatorDecisionRunners) RunJudgeFinalization(ctx context.Context, req JudgeFinalizationRequest) (FinalizationWireResult, error) {
-	prompt, err := finalizationPrompt("named judge", req.DecisionID, req.Packet, req.Aggregates, req.Challenges, req.Revisions, req.JudgeID)
+	choice, err := r.choosePacketOption(ctx, "runtime_primary_finalize_judge", "Choose the final option from the sealed evidence, aggregate judgments, challenges and revisions. Do not authorize execution.", req, nil, req.Packet)
 	if err != nil {
 		return FinalizationWireResult{}, err
 	}
-	response, err := r.ask(ctx, decisionPurposeFinalizationJudge, prompt)
-	if err != nil {
-		return FinalizationWireResult{}, err
+	return r.explainFinalChoice(ctx, decisionPurposeFinalizationJudge, "judge", req.DecisionID, req.JudgeID, choice, req.Packet, req.Aggregates, req.Challenges, req.Revisions)
+}
+
+func (r *coordinatorDecisionRunners) choosePacketOption(ctx context.Context, name, question string, request, generated any, packet DecisionEvidencePacket) (string, error) {
+	if err := validateSealedChoicePacket(packet); err != nil {
+		return "", err
 	}
-	return decodeFinalizationWireResult(response)
+	if len(packet.Options) < 1 || len(packet.Options) > 21 {
+		return "", fmt.Errorf("decision candidate capacity exceeded or empty")
+	}
+	if len(packet.Options) == 1 {
+		return packet.Options[0].ID, nil
+	}
+	options := make([]catalog.Option, len(packet.Options))
+	for i := range packet.Options {
+		options[i] = catalog.Option{ID: fmt.Sprintf("option_%d", i), Description: fmt.Sprintf("Sealed option at index %d", i)}
+	}
+	result, err := r.coordinator.runRuntimeChoice(r.choiceContext(ctx), r.coordinator.AgentPool().JudgeSidecar(), sidecar.DecisionInvocation{Name: name, Question: question, Input: struct {
+		Request                   any
+		NonAuthoritativeGenerated any
+		SealedPacket              DecisionEvidencePacket
+	}{request, generated, packet}, Options: options, MaxCalls: 1000})
+	if err != nil {
+		return "", err
+	}
+	if result.Status != decisionrt.StatusDecided {
+		return "", &runtimeDecisionFailure{fmt.Errorf("primary decision abstained")}
+	}
+	for i, option := range options {
+		if option.ID == result.Value.Choice {
+			return packet.Options[i].ID, nil
+		}
+	}
+	return "", fmt.Errorf("unknown primary decision option")
+}
+
+// A divergent selection requires a separately billed explanation, not a fabricated rationale.
+func (r *coordinatorDecisionRunners) explainFinalChoice(ctx context.Context, purpose, kind, id, judge, choice string, packet DecisionEvidencePacket, aggregates []DecisionAggregate, challenges []DecisionChallenge, revisions []DecisionRevision) (FinalizationWireResult, error) {
+	result := FinalizationWireResult{OptionID: choice}
+	if len(aggregates) > 0 && aggregates[len(aggregates)-1].PreferredOption == choice {
+		return result, nil
+	}
+	if decisionInferenceRepair(ctx) {
+		return result, fmt.Errorf("decision_repair_inference_denied")
+	}
+	prompt, err := finalizationPrompt(kind, id, packet, aggregates, challenges, revisions, judge)
+	if err != nil {
+		return result, err
+	}
+	prompt += "\nThe runtime has already selected option " + choice + ". Explain that selection using evidence; do not select or change the option. Return only a JSON object with a reason string."
+	if exceeded, _ := r.coordinator.budgetExceeded(); exceeded {
+		return result, fmt.Errorf("decision_budget_exceeded")
+	}
+	response, err := r.ask(ctx, purpose, prompt)
+	if err != nil {
+		return result, err
+	}
+	var explanation struct {
+		Reason string `json:"reason"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(response))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&explanation); err != nil {
+		return result, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return result, fmt.Errorf("finalization explanation contains trailing data")
+	}
+	if strings.TrimSpace(explanation.Reason) == "" {
+		return result, fmt.Errorf("finalization explanation is empty")
+	}
+	result.Reason = "Non-authoritative explanation: " + explanation.Reason
+	return result, nil
+}
+
+func (r *coordinatorDecisionRunners) choiceContext(ctx context.Context) context.Context {
+	metadata, _ := invocationMetadataFromContext(ctx)
+	metadata.TaskID = r.todoID
+	if metadata.RunID == "" {
+		metadata.RunID = r.coordinator.executionRunID
+	}
+	if metadata.AgentName == "" {
+		metadata.AgentName = "coordinator"
+	}
+	if metadata.Attempt < 1 {
+		metadata.Attempt = 1
+	}
+	return withInvocationMetadata(ctx, metadata)
+}
+
+func validateSealedChoicePacket(packet DecisionEvidencePacket) error {
+	if !packet.Sealed || packet.Hash == "" {
+		return fmt.Errorf("decision evidence is not sealed")
+	}
+	if err := packet.Validate(); err != nil {
+		return err
+	}
+	hash, err := packet.EvidenceHash()
+	if err != nil || hash != packet.Hash {
+		return fmt.Errorf("decision evidence hash mismatch")
+	}
+	return nil
 }

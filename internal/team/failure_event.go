@@ -260,6 +260,20 @@ func (c *Coordinator) failureEventForItem(item *TodoItem, class TaskFailureClass
 		event.Shell = ""
 		return RedactedFailureEvent(event)
 	}
+	if diagnostic, ok := protocolRepairValidationDiagnostic(item.ExecutionReceipt); class == FailureProtocol && ok {
+		// A rejected final submission is the current failure. An earlier
+		// recoverable read/verification error remains in its receipt, but must
+		// not replace the protocol rejection in operator or recovery evidence.
+		event.Phase = "protocol"
+		event.Command = submitResultToolName
+		event.WorkDir = ""
+		event.Shell = ""
+		event.ExitCode = nil
+		event.Stderr = diagnostic
+		event.FailureType = "validation"
+		event.Hint = "Correct submit_result using the recorded validation rejection: " + diagnostic
+		return RedactedFailureEvent(event)
+	}
 	if event.Command == "" && c != nil {
 		event.Command = c.GetCurrentTool()
 	}

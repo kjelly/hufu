@@ -25,7 +25,7 @@ func TestContextDeliveryExistingLifecycleSuites(t *testing.T) {
 			}
 			for index := range fixture.Cases {
 				fixture.Cases[index].Expect.ContextDelivery = []ContextDeliveryExpect{{
-					Agent: "coordinator", Include: []string{"current_task"},
+					Agent: "coordinator", Purpose: "coordinator_start", Include: []string{"current_task"},
 					RequiredFragments: map[string]string{"current_task": fixture.Cases[index].Prompt},
 				}}
 				var agents []string
@@ -82,10 +82,11 @@ func testExtraModelProviderDelivery(t *testing.T, mode string, retry bool) {
 		{ToolCall: &ToolCallStep{Name: "agent", Arguments: `{"tasks":[{"agent":"worker","goal":"inspect router","constraints":"migration sentinel"}]}`}},
 		{ToolCall: &ToolCallStep{Name: "submit_result", Arguments: `{"status":"success","summary":"complete"}`}},
 		{ToolCall: &ToolCallStep{Name: "submit_result", Arguments: `{"status":"success","summary":"complete"}`}},
-		{Match: &StepMatch{Contains: "strict judge comparing candidate outputs"}, Content: `{"best_index":0,"reason":"both complete","grafts":[]}`},
+		{Match: &StepMatch{Contains: "runtime_judge"}, Content: `{"token":"A0"}`},
+		{Match: &StepMatch{Contains: "grafts"}, Content: `{"reason":"both complete","grafts":[]}`},
 		{ToolCall: &ToolCallStep{Name: "finish", Arguments: `{"response":"done"}`}},
 	}})
-	c := CaseFixture{ID: "parallel-extra-provider-context", Prompt: "inspect router", Expect: ExpectSpec{RunOutcome: "unverified", TaskCount: new(1), Tasks: []TaskExpect{{Agent: "worker", Status: "done"}}, ProviderCallCount: new(5), ContextDelivery: []ContextDeliveryExpect{{Agent: "worker", Include: []string{"current_task"}, RequiredFragments: map[string]string{"current_task": "inspect router"}}}}}
+	c := CaseFixture{ID: "parallel-extra-provider-context", Prompt: "inspect router", Expect: ExpectSpec{RunOutcome: "unverified", TaskCount: new(1), Tasks: []TaskExpect{{Agent: "worker", Status: "done"}}, ProviderCallCount: new(6), ContextDelivery: []ContextDeliveryExpect{{Agent: "worker", Include: []string{"current_task"}, RequiredFragments: map[string]string{"current_task": "inspect router"}}}}}
 	c.ContextItems = []ContextItemFixture{{ID: "extra-target", Content: "migration sentinel useful background"}, {ID: "foreign", Content: "migration sentinel forbidden", Scope: "other_worker"}}
 	for index := range 8 {
 		c.ContextItems = append(c.ContextItems, ContextItemFixture{ID: fmt.Sprintf("noise-%d", index), Content: fmt.Sprintf("inspect router noise %d", index)})
@@ -145,9 +146,9 @@ func testExtraModelProviderDelivery(t *testing.T, mode string, retry bool) {
 		}
 		provider.ServeHTTP(w, r)
 	})
-	calls, workerCalls := 5, 2
+	calls, workerCalls := 6, 2
 	if retry {
-		calls, workerCalls = 6, 3
+		calls, workerCalls = 7, 3
 		c.Expect.ProviderCallCount = new(calls)
 	}
 	result, err := runCaseWithHandler(t.Context(), fixture, c, handler, provider.scriptFindings)

@@ -16,6 +16,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/decisionrt"
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/skill"
 )
@@ -456,6 +457,9 @@ func (c *Coordinator) observeSidecarUsage(result *fantasy.AgentResult) {
 
 func (c *Coordinator) attachSidecarUsageObserver(s *sidecar.Sidecar) *sidecar.Sidecar {
 	if s != nil {
+		s.SetDecisionExecutor(func(ctx context.Context, invocation sidecar.DecisionInvocation) (decisionrt.Result, error) {
+			return c.runRuntimeChoice(ctx, s, invocation)
+		})
 		s.SetUsageObserver(c.observeSidecarUsage)
 		s.SetErrorObserver(func(ctx context.Context, err error) {
 			if observeErr := c.observeSidecarError(ctx, s.ModelID(), err); observeErr != nil {
@@ -658,7 +662,7 @@ func (c *Coordinator) matchSkillsWithSidecar(ctx context.Context, prompt string)
 
 	var matched []*skill.SkillDef
 
-	s := c.AgentPool().Sidecar()
+	s := c.semanticSidecar(c.AgentPool().Sidecar())
 	if s != nil {
 		summaries := make([]sidecar.SkillSummary, len(allSkills))
 		for i, sk := range allSkills {

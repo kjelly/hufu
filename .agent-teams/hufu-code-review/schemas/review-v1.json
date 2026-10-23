@@ -217,7 +217,73 @@
                   "minLength": 1
                 }
               }
-            }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "status": {
+                      "const": "preserved"
+                    }
+                  }
+                },
+                "then": {
+                  "not": {
+                    "required": [
+                      "finding_index"
+                    ]
+                  },
+                  "properties": {
+                    "missing_evidence": {
+                      "maxItems": 0
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "status": {
+                      "const": "violated"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "finding_index"
+                  ],
+                  "properties": {
+                    "missing_evidence": {
+                      "maxItems": 0
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "status": {
+                      "const": "unknown"
+                    }
+                  }
+                },
+                "then": {
+                  "not": {
+                    "required": [
+                      "finding_index"
+                    ]
+                  },
+                  "required": [
+                    "missing_evidence"
+                  ],
+                  "properties": {
+                    "missing_evidence": {
+                      "minItems": 1
+                    }
+                  }
+                }
+              }
+            ]
           }
         },
         "reference_assessments": {
@@ -387,5 +453,11 @@
     "items_pointer": "/record/reference_assessments",
     "item_id_pointer": "/reference_id",
     "binding": "reference_candidate_ids"
+  },
+  "x-hufu-evidence-keys": {
+    "pointers": [
+      "/record/findings/*/evidence/*",
+      "/record/reference_assessments/*/evidence/*"
+    ]
   }
 }

@@ -43,7 +43,7 @@ func TestEmbeddedReviewDefinitionsMatchAuthoritativeSchema(t *testing.T) {
 	want := authoritative["$defs"].(map[string]any)["review"]
 	// Runtime contracts must be self-contained, so critique and report embed
 	// the review definition instead of referencing another schema file.
-	for _, filename := range []string{"critique-v1.json", "report-v1.json"} {
+	for _, filename := range []string{"critique-v1.json", "critique-v2.json", "report-v1.json"} {
 		t.Run(filename, func(t *testing.T) {
 			_, document := contractSchema(t, filename)
 			got := document["$defs"].(map[string]any)["review"]
@@ -301,7 +301,7 @@ func TestReportRequiresCompleteRuntimeAttestations(t *testing.T) {
 }
 
 func TestCompleteContractsFitRuntimePromptBudget(t *testing.T) {
-	for _, name := range []string{"review-v1.json", "critique-v1.json", "report-v1.json"} {
+	for _, name := range []string{"review-v1.json", "critique-v1.json", "critique-v2.json", "report-v1.json", "report-v2.json"} {
 		_, document := contractSchema(t, name)
 		canonical, err := json.Marshal(document)
 		if err != nil {
@@ -310,5 +310,164 @@ func TestCompleteContractsFitRuntimePromptBudget(t *testing.T) {
 		if len(canonical) > 32<<10 {
 			t.Fatalf("%s: %d canonical bytes exceed runtime full-schema prompt limit", name, len(canonical))
 		}
+	}
+}
+
+func TestCritiqueV2CanonicalCollectionsAndEvidence(t *testing.T) {
+	schema, _ := contractSchema(t, "critique-v2.json")
+	for _, count := range []int{0, 1, 32} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			review, critique, _ := schemaFixture()
+			finding := review["findings"].([]any)[0]
+			decision := critique["decisions"].([]any)[0].(map[string]any)
+			findings, decisions := []any{}, []any{}
+			for i := range count {
+				findings = append(findings, finding)
+				row := maps.Clone(decision)
+				row["finding_index"] = i
+				decisions = append(decisions, row)
+			}
+			review["findings"], critique["decisions"] = findings, decisions
+			payload := map[string]any{"audit_complete": true, "record": critique}
+			raw, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var value any
+			if err := json.Unmarshal(raw, &value); err != nil {
+				t.Fatal(err)
+			}
+			if err := schema.Validate(value); err != nil {
+				t.Fatal(err)
+			}
+			if count > 0 {
+				row := value.(map[string]any)["record"].(map[string]any)["decisions"].([]any)[0].(map[string]any)
+				row["verdict"] = "confirmed"
+				row["severity"] = "warning"
+				row["missing_evidence"] = ""
+				if err := schema.Validate(value); err == nil {
+					t.Fatal("confirmed without evidence accepted")
+				}
+			}
+		})
+	}
+}
+
+func TestReportV2AcceptsEmptyCritiqueAndPreservesCoverage(t *testing.T) {
+	schema, _ := contractSchema(t, "report-v2.json")
+	for _, count := range []int{0, 1, 32} {
+		_, report := critiqueCoverageFixture(count)
+		raw, err := json.Marshal(report)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var value any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			t.Fatal(err)
+		}
+		if err := schema.Validate(value); err != nil {
+			t.Fatalf("count %d: %v", count, err)
+		}
+	}
+	_, report := critiqueCoverageFixture(2)
+	critique := report["input_review"].([]any)[1].(map[string]any)["record"].(map[string]any)
+	critique["decisions"] = critique["decisions"].([]any)[:1]
+	raw, _ := json.Marshal(report)
+	var value any
+	_ = json.Unmarshal(raw, &value)
+	if err := schema.Validate(value); err == nil {
+		t.Fatal("missing coverage accepted")
+	}
+}
+
+func TestReportV2PreservesFailedTests(t *testing.T) {
+	schema, document := contractSchema(t, "report-v2.json")
+	for _, scenario := range []string{"failed", "claims_pass", "missing_diagnostic", "launch_error", "timeout", "truncated"} {
+		t.Run(scenario, func(t *testing.T) {
+			_, report := critiqueCoverageFixture(0)
+			tests := report["test_verification"].(map[string]any)
+			tests["passed"], tests["exit_code"], tests["diagnostic"] = false, 1, "--- FAIL: TestSocketPath: bind: invalid argument"
+			switch scenario {
+			case "claims_pass":
+				tests["passed"] = true
+			case "missing_diagnostic":
+				delete(tests, "diagnostic")
+			case "launch_error":
+				tests["exit_code"] = -1
+			case "timeout":
+				tests["timed_out"] = true
+			case "truncated":
+				tests["output_truncated"] = true
+			}
+			data, err := json.Marshal(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var value any
+			if err := json.Unmarshal(data, &value); err != nil {
+				t.Fatal(err)
+			}
+			err = schema.Validate(value)
+			if scenario != "failed" {
+				if err == nil {
+					t.Fatal("accepted invalid test evidence")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			renderer, err := template.New("report").Option("missingkey=error").Parse(document["x-hufu-final-report"].(string))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			if err := renderer.Execute(&output, value); err != nil {
+				t.Fatal(err)
+			}
+			for _, required := range []string{"passed=false", "測試未通過", "TestSocketPath: bind: invalid argument"} {
+				if !strings.Contains(output.String(), required) {
+					t.Fatalf("report concealed failed tests: %s", output.String())
+				}
+			}
+		})
+	}
+}
+
+func TestReviewSchemaInvariantStateEvidence(t *testing.T) {
+	for _, filename := range []string{"review-v1.json", "critique-v1.json", "critique-v2.json", "report-v1.json", "report-v2.json"} {
+		t.Run(filename, func(t *testing.T) {
+			_, document := contractSchema(t, filename)
+			item := document["$defs"].(map[string]any)["review"].(map[string]any)["properties"].(map[string]any)["invariant_assessments"].(map[string]any)["items"]
+			compiler := jsonschema.NewCompiler()
+			if err := compiler.AddResource("https://hufu.invalid/invariant", item); err != nil {
+				t.Fatal(err)
+			}
+			schema, err := compiler.Compile("https://hufu.invalid/invariant")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, scenario := range []struct {
+				status  string
+				index   bool
+				missing []any
+				valid   bool
+			}{
+				{"preserved", false, nil, true}, {"preserved", true, nil, false}, {"preserved", false, []any{"source"}, false},
+				{"violated", true, nil, true}, {"violated", false, nil, false}, {"violated", true, []any{"source"}, false},
+				{"unknown", false, []any{"source"}, true}, {"unknown", true, []any{"source"}, false}, {"unknown", false, nil, false},
+			} {
+				value := map[string]any{"invariant_id": "i", "status": scenario.status, "summary": "observed"}
+				if scenario.index {
+					value["finding_index"] = 0
+				}
+				if scenario.missing != nil {
+					value["missing_evidence"] = scenario.missing
+				}
+				if err := schema.Validate(value); (err == nil) != scenario.valid {
+					t.Fatalf("%+v: %v", scenario, err)
+				}
+			}
+		})
 	}
 }

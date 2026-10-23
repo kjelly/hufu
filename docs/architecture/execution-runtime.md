@@ -146,8 +146,16 @@ runtime generates the array, order, identities and copied values before schema
 validation and receipt hashing. Unknown, missing or duplicate keys and fixed
 field overrides are rejected within the attempt. Runtime-owned payload metadata
 pins source hashes for commit, dependency, replay and report validation. This
-uses the existing worker protocol and policy gates, with no additional inference
-tools, provider calls or semantic keyword parsing. See the
+uses the existing worker protocol and policy gates without semantic keyword parsing.
+Without `decision_groups`, workers continue submitting their enum values. With
+that opt-in extension, `decision_primitive` binds a finite choice to the durable
+source/row/field and the runtime injects the settled values; result-only repair
+does not infer missing choices. Runtime request/state choices use the same
+catalog and started/settled/reused journal, with bounded immutable input snapshots.
+`decision-runtime` supplies inference defaults independently of general sidecar
+generation. `no-net` restricts tools/subprocesses, not trusted model or System One
+inference; denied tools, phase policy, budgets and force-mcp still apply.
+See [control decisions](../reference/control-decisions.md) and the
 [fixed collection contract](../reference/agent-format.md#固定集合與有限選項決策).
 
 A task's explicit `on_failure` edge owns its failure routing before generic
@@ -552,9 +560,14 @@ Teams may declare an `equals_projection` task-result assertion to compare two
 ordered object arrays before a successful worker result is committed and again
 at objective verification. The assertion's `pointer` selects the first array;
 its configuration-owned `value` contains a reference `pointer`, 1–16 unique
-`fields`, and optional boolean `allow_missing`. Both arrays must have the same
+`fields`, optional `optional_fields`, and optional boolean `allow_missing`.
+Required and optional field names must be distinct, with at most 16 total. Both arrays must have the same
 length, and every selected field must exist and match at the same index.
-Additional fields are ignored; array order is significant. This supports an
+Fields listed in `optional_fields` may be absent from both objects; a value
+present on one side must match on the other. An empty array is equivalent to
+an omitted optional field because canonical DTOs may omit empty arrays. This
+does not equate omitted values with null, false, scalar zero, empty strings,
+or nonempty arrays. Additional fields are ignored; array order is significant. This supports an
 outer result summary paired with a richer schema-defined record without
 teaching the runtime domain-specific field names.
 
@@ -627,3 +640,33 @@ Interrupted and failed workflows keep their existing recovery behavior.
 not implicitly reopen completed workflows. Execution-policy compatibility is
 still enforced across the session. `--new` remains the explicit way to start a
 separate conversation or adopt incompatible execution settings.
+
+### Bounded artifact search
+
+The built-in view tool accepts search_text for authorized artifact_ref inputs.
+It searches exact literal UTF-8 text and returns absolute byte offsets plus
+small excerpts, enabling focused follow-up byte reads. max_matches defaults to
+1 (maximum 8), context_bytes defaults to 256 bytes on each side (maximum 1024),
+and max_scan_bytes bounds the scanned window (1024 to 4194304 bytes, default
+4194304). byte_offset chooses its start; search does not accept file_path,
+line offset/limit or byte_limit. Scans preserve overlap at continuation windows
+so literals crossing a boundary are not skipped. Excerpts preserve UTF-8, and
+the total response respects both an 8 KiB cap and the attempt's artifact read
+output budget. Incomplete scans explicitly identify unseen content.
+
+Authorization uses the same artifact opener, policy gate and trusted read
+metadata as ordinary view. Only returned excerpts enter decision observations;
+a search is navigation and evidence for those excerpts, never a claim that the
+model observed all scanned source. Denied, cancelled and invalid-text searches
+issue no successful-read evidence. The mechanism interprets no domain-specific
+snapshot format or task language.
+
+Bound-decision observation publication also admits the exact encoded context
+before exposing a new artifact response. The check uses every source row and
+its declared decision-group limit, including the finding, prior reads and
+JSON metadata. A capacity denial withholds the entire new response and its
+read authority, without publishing an observation or poisoning the earlier
+prefix. Parallel publications serialize this check and journal append; a
+durable idempotent read is not counted twice. Existing observed evidence is
+never silently removed or summarized, and historical context integrity errors
+still fail closed.

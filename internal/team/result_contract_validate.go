@@ -2,6 +2,7 @@ package team
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -79,9 +80,16 @@ func validateStructuredResultPayload(compiled *CompiledResultContract, ref Resul
 	if len(raw) > resultPayloadMaxBytes {
 		return nil, fmt.Errorf("%s: structured_payload is %d bytes, above the %d byte limit", structuredPayloadInvalidCode, len(raw), resultPayloadMaxBytes)
 	}
-	value, err := decodeResultContractJSON(raw)
+	value, err := decodeUniqueJSON(raw)
 	if err != nil {
 		return nil, fmt.Errorf("%s: structured_payload is not a single JSON value: %w", structuredPayloadInvalidCode, err)
+	}
+	// Only normalize fields/elements. A null payload itself means absence at
+	// the submission boundary and must not satisfy a required payload via a
+	// serialized spelling that bypasses that presence check.
+	switch value.(type) {
+	case map[string]any, []any:
+		value = canonicalResultScalars(value, compiled.schema, 0)
 	}
 	if err := compiled.schema.Validate(value); err != nil {
 		return nil, fmt.Errorf("%s: structured_payload does not satisfy result contract %q:\n%s", structuredPayloadInvalidCode, ref.ID, formatResultPayloadValidationError(err))
@@ -216,6 +224,17 @@ func (c *Coordinator) boundResultContract(todoID string) (*ResultContractRef, *C
 	return item.ResultContract.clone(), compiled, err
 }
 
+// A blocked bound-decision envelope claims no completed audit or payload. It
+// remains unsuccessful and cannot become evidence for a downstream consumer.
+// Drift and any supplied payload retain their ordinary validation paths.
+func (c *Coordinator) boundDecisionBlockedEnvelope(todoID string, result *TaskResult) bool {
+	if result == nil || result.Status != TaskResultStatusBlocked || result.StructuredPayload != nil {
+		return false
+	}
+	_, compiled, err := c.boundResultContract(todoID)
+	return err == nil && hasResultDecisions(compiled)
+}
+
 // structuredPayloadForSubmission validates a submit_result payload against
 // the Todo's contract. The returned message, when non-empty, is the
 // worker-facing rejection.
@@ -238,10 +257,30 @@ func (c *Coordinator) structuredPayloadForSubmission(todoID string, raw json.Raw
 		return nil, ""
 	}
 	plans, err := c.fixedCollectionPlans(todoID)
+	if err == nil {
+		item := c.todoItemByID(todoID)
+		results := c.dependencyResultsForTask(todoID)
+		if compiled.evidenceInputs != nil && compiled.evidenceInputs.RuntimeOwned {
+			err = c.validateDependencyPayloads(results)
+			if err == nil {
+				raw, err = assembleRuntimeEvidenceInputs(raw, compiled.evidenceInputs, item.EvidenceFrom, results)
+			}
+		}
+	}
+	if err == nil {
+		plans, err = c.resolveDecisionCollectionPlans(context.Background(), todoID, plans)
+	}
 	var bindings []ResultCollectionBinding
 	var assembled []byte
 	if err == nil {
 		assembled, bindings, err = assembleResultFixedCollections(raw, plans)
+	}
+	if err == nil {
+		var values map[string]any
+		values, err = c.resultRuntimeInputValues(compiled)
+		if err == nil {
+			assembled, err = assembleResultRuntimeInputs(assembled, compiled.runtimeInputs, values)
+		}
 	}
 	if err != nil {
 		err = fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
@@ -330,6 +369,8 @@ func providerVisibleResultPayloadSchema(ref ResultContractRef, compiled *Compile
 		if value, err := decodeResultContractJSON(compiled.CanonicalSchema); err == nil {
 			if schema, ok := value.(map[string]any); ok {
 				delete(schema, "$schema")
+				removeRuntimeEvidenceSchema(schema, compiled.evidenceInputs)
+				omitRuntimeResultInputs(schema, compiled.runtimeInputs)
 				if dynamicSchemaEligible(schema) {
 					if _, described := schema["description"]; !described {
 						schema["description"] = description
@@ -378,12 +419,32 @@ func resultContractPromptSection(ref *ResultContractRef, compiled *CompiledResul
 	} else {
 		fmt.Fprintf(b, " Include %s that satisfies the schema below when you can.\n", field)
 	}
-	b.WriteString("Do not put credentials, tokens, or keys in the payload; a payload containing them is rejected.\n")
+	b.WriteString("Do not put credentials, authentication tokens, or secret API keys in the payload; a payload containing them is rejected.\n")
+	if compiled != nil && compiled.evidenceKeys != nil && !external {
+		b.WriteString("Successful runtime view calls issue short ev_ evidence keys. Use these keys only in files_read.path (or string entries) and the x-hufu-evidence-keys pointers below. The runtime resolves them to full artifact IDs before all canonical validation and hashing. Keys are task/attempt/branch/model-execution scoped; never invent or borrow keys. They attest a successful bounded read, not full artifact coverage or support for a semantic claim.\n")
+	}
 	if compiled != nil && len(compiled.fixedCollections) > 0 {
 		b.WriteString("This schema describes the canonical STORED result. For fields declared in Runtime Fixed Collections, submit keyed decision objects according to that manifest instead of arrays. The runtime supplies the final array and its fixed fields before validating this schema.\n")
 	}
-	if compiled != nil && len(compiled.CanonicalSchema) <= resultContractPromptSchemaMaxBytes {
-		fmt.Fprintf(b, "\n```json\n%s\n```\n", compiled.CanonicalSchema)
+	if hasResultDecisions(compiled) && !external {
+		b.WriteString("If required bound decisions cannot settle, submit status=blocked with a summary and OMIT structured_payload. Do not fabricate a decision or keep resubmitting an incomplete decision collection. A blocked envelope is not a successful audit; successful results still require the full result contract.\n")
+	}
+	if compiled != nil {
+		schema := compiled.CanonicalSchema
+		runtimeOwned := len(compiled.runtimeInputs) > 0
+		for _, binding := range compiled.runtimeInputs {
+			fmt.Fprintf(b, "The runtime supplies `%s` from receipt-verified native task `%s` output `%s`. Omit this field entirely; never copy or summarize its value in the submission.\n", binding.Target, binding.SourceTask, binding.Output)
+		}
+		if spec := compiled.evidenceInputs; spec != nil && spec.RuntimeOwned {
+			fmt.Fprintf(b, "The runtime supplies `%s` from every accepted evidence_from source. Omit this field entirely; the stored result retains all complete source records and hashes.\n", spec.ItemsPointer)
+			runtimeOwned = true
+		}
+		if runtimeOwned {
+			schema, _ = json.Marshal(providerVisibleResultPayloadSchema(*ref, compiled))
+		}
+		if len(schema) <= resultContractPromptSchemaMaxBytes {
+			fmt.Fprintf(b, "\n```json\n%s\n```\n", schema)
+		}
 	}
 	return b.String()
 }
@@ -421,6 +482,9 @@ func (c *Coordinator) attemptResultContractSchema(task TaskDef) *CompiledResultC
 // canonicalExternalStructuredPayload applies the local submit_result payload
 // rules to an external provider's proposal, through the same validator.
 func canonicalExternalStructuredPayload(request AttemptRequest, proposal *WorkerResultProposal, filesRead []FileRef) (*ResultPayload, error) {
+	if hasResultDecisions(request.resultContractSchema) {
+		return nil, fmt.Errorf("bound decisions require the local runtime")
+	}
 	raw := ""
 	if proposal != nil && proposal.StructuredPayloadJSON != nil {
 		raw = strings.TrimSpace(*proposal.StructuredPayloadJSON)
@@ -449,6 +513,24 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
 	}
+	assembled, err = assembleRuntimeEvidenceInputs(assembled, request.resultContractSchema.evidenceInputs, request.Task.EvidenceFrom, request.resultEvidenceInputs)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
+	}
+	var runtimeInputs map[string]any
+	if len(request.resultContractSchema.runtimeInputs) > 0 {
+		if request.resultRuntimeInputs == nil {
+			return nil, fmt.Errorf("%s: runtime input lookup is unavailable", structuredPayloadInvalidCode)
+		}
+		runtimeInputs, err = request.resultRuntimeInputs()
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
+		}
+	}
+	assembled, err = assembleResultRuntimeInputs(assembled, request.resultContractSchema.runtimeInputs, runtimeInputs)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
+	}
 	payload, err := validateStructuredResultPayload(request.resultContractSchema, *ref, assembled)
 	if err != nil {
 		return nil, err
@@ -457,6 +539,9 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 	value, err := decodeResultContractJSON(payload.Value)
 	if err != nil {
 		return nil, err
+	}
+	if err := validateResultRuntimeInputs(value, request.resultContractSchema.runtimeInputs, runtimeInputs); err != nil {
+		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
 	}
 	if err := validateResultWorksetInputs(value, request.resultContractSchema.worksetInputs, request.Task.WorksetBinding); err != nil {
 		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)

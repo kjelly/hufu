@@ -31,6 +31,7 @@ const (
 	stageReference    fakeJudgeStage = "reference"
 	stageFinalization fakeJudgeStage = "finalization"
 	stageUnknown      fakeJudgeStage = "unknown"
+	stagePrimitive    fakeJudgeStage = "primitive"
 )
 
 // classifyDecisionStagePrompt maps a stage prompt to the stage that built it.
@@ -39,6 +40,8 @@ const (
 // wrong stage.
 func classifyDecisionStagePrompt(prompt string) fakeJudgeStage {
 	switch {
+	case strings.Contains(prompt, "Choose exactly one candidate token from this JSON input."):
+		return stagePrimitive
 	case strings.Contains(prompt, "ReferenceEvidenceDraft"):
 		return stageReference
 	case strings.Contains(prompt, "forming an independent judgment"):
@@ -134,6 +137,12 @@ func (f *fakeJudge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Unlock()
 
 	body := fakeJudgeStageResponse(stage, preferred, dispersion, seq, parsePromptOptionIDs(prompt.String()), overriding)
+	if stage == stagePrimitive {
+		body = f.primitiveResponse(prompt.String())
+	}
+	if stage == stageFinalization {
+		body = `{"reason":"Evidence supports this selected alternative."}`
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = fmt.Fprintf(w,
 		`{"id":"fake-judge","object":"chat.completion","created":1,"model":%q,"choices":[{"index":0,"message":{"role":"assistant","content":%q},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":10,"total_tokens":20}}`,
@@ -258,4 +267,52 @@ func fakeJudgeStageResponse(stage fakeJudgeStage, preferred string, dispersion f
 	default:
 		return `{}`
 	}
+}
+
+func (f *fakeJudge) primitiveResponse(prompt string) string {
+	_, input, ok := strings.Cut(prompt, "Input:\n")
+	if !ok {
+		return `{}`
+	}
+	input, _, _ = strings.Cut(input, "\n\nReturn only")
+	var envelope struct {
+		SpecID     string                          `json:"spec_id"`
+		Context    map[string]string               `json:"context"`
+		Candidates []struct{ Token, Value string } `json:"candidates"`
+	}
+	if json.Unmarshal([]byte(input), &envelope) != nil {
+		return `{}`
+	}
+	var raw strings.Builder
+	for i := range 12 {
+		raw.WriteString(envelope.Context[fmt.Sprintf("context_%02d", i)])
+	}
+	var snapshot struct {
+		Input struct{ SealedPacket DecisionEvidencePacket } `json:"input"`
+	}
+	if json.Unmarshal([]byte(raw.String()), &snapshot) != nil {
+		return `{}`
+	}
+	f.mu.Lock()
+	preferred := f.preferred
+	if strings.Contains(envelope.SpecID, "finalize") && f.finalizeAs != "" {
+		preferred = f.finalizeAs
+	}
+	f.mu.Unlock()
+	choice := "option_0"
+	for i, option := range snapshot.Input.SealedPacket.Options {
+		if option.ID == preferred {
+			choice = fmt.Sprintf("option_%d", i)
+		}
+	}
+	if envelope.SpecID == "runtime_primary_revision" {
+		choice = "unchanged"
+	}
+	for _, candidate := range envelope.Candidates {
+		if candidate.Value == choice {
+			b, _ := json.Marshal(map[string]string{"token": candidate.Token})
+			return string(b)
+		}
+	}
+	return `{}`
 }

@@ -93,10 +93,16 @@ Finish with exactly one structured result through the runtime-provided result
 protocol. Follow the active schema, cite every supplied opaque artifact you
 read, and use `completed_with_gaps` rather than guessing when evidence is
 insufficient.
-Use exact bare opaque artifact IDs in findings' evidence and files_read paths:
-`sha256-` followed by the original 64 lowercase hexadecimal characters. Never
-append descriptions, parentheses, or offsets to an ID. Put explanations in
-detail or in a files_read object's separate purpose field.
+A successful runtime `view` issues short `ev_` evidence keys. Use those
+keys in `files_read.path` and in the active schema's `x-hufu-evidence-keys`
+locations. Copy only keys issued to this task attempt; the runtime expands
+and verifies them before storing full artifact IDs. A key proves a successful
+bounded read, not complete coverage or support for a claim. Preserve existing
+source records verbatim; do not replace their references with your own keys.
+For `view.artifact_ref`, use the full opaque ID supplied by the runtime.
+Full evidence IDs remain accepted when copied exactly: `sha256-` plus the
+original 64 lowercase hexadecimal characters. Never abbreviate or repair an
+ID, or append annotations. Put explanations in detail/rationale or purpose.
 
 Read large opaque artifacts in bounded chunks with `byte_limit: 32768` and
 `byte_offset` advanced by the bytes returned. Do not retry an oversized artifact

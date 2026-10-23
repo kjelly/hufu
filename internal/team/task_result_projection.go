@@ -11,9 +11,10 @@ import (
 // worker claim. A missing left-hand array is allowed only when explicitly
 // requested and the right-hand array exists and is empty (omitempty results).
 type taskResultProjection struct {
-	Pointer      string   `json:"pointer"`
-	Fields       []string `json:"fields"`
-	AllowMissing bool     `json:"allow_missing,omitzero"`
+	Pointer        string   `json:"pointer"`
+	Fields         []string `json:"fields"`
+	OptionalFields []string `json:"optional_fields,omitempty"`
+	AllowMissing   bool     `json:"allow_missing,omitzero"`
 }
 
 func decodeTaskResultProjection(value any) (taskResultProjection, error) {
@@ -25,7 +26,7 @@ func decodeTaskResultProjection(value any) (taskResultProjection, error) {
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&projection); err != nil {
-		return projection, fmt.Errorf("equals_projection requires {pointer, fields, optional allow_missing}: %w", err)
+		return projection, fmt.Errorf("equals_projection requires {pointer, fields, optional optional_fields and allow_missing}: %w", err)
 	}
 	if len(projection.Pointer) > maxTaskResultPointerBytes {
 		return projection, fmt.Errorf("equals_projection pointer exceeds %d bytes", maxTaskResultPointerBytes)
@@ -36,15 +37,17 @@ func decodeTaskResultProjection(value any) (taskResultProjection, error) {
 	if err := validateJSONPointer(projection.Pointer); err != nil {
 		return projection, fmt.Errorf("equals_projection has invalid pointer: %w", err)
 	}
-	if len(projection.Fields) == 0 || len(projection.Fields) > 16 {
-		return projection, fmt.Errorf("equals_projection requires 1 to 16 fields")
+	if len(projection.Fields) == 0 || len(projection.Fields)+len(projection.OptionalFields) > 16 {
+		return projection, fmt.Errorf("equals_projection requires at least one required field and at most 16 total fields")
 	}
 	seen := make(map[string]bool, len(projection.Fields))
-	for _, field := range projection.Fields {
-		if field == "" || len(field) > 128 || seen[field] {
-			return projection, fmt.Errorf("equals_projection fields must be unique nonempty keys of at most 128 bytes")
+	for _, fields := range [][]string{projection.Fields, projection.OptionalFields} {
+		for _, field := range fields {
+			if field == "" || len(field) > 128 || seen[field] {
+				return projection, fmt.Errorf("equals_projection fields must be unique nonempty keys of at most 128 bytes")
+			}
+			seen[field] = true
 		}
-		seen[field] = true
 	}
 	return projection, nil
 }
@@ -84,6 +87,24 @@ func evaluateTaskResultProjection(document, value any, resolveErr error, policy 
 			if !leftExists || !rightExists || !equalJSONValues(leftValue, rightValue) {
 				// Do not echo worker-controlled field values (possibly secrets).
 				return fmt.Errorf("equals_projection item %d field %q must match %q at the same index", i, field, projection.Pointer)
+			}
+		}
+		for _, field := range projection.OptionalFields {
+			leftValue, leftExists := leftItem[field]
+			rightValue, rightExists := rightItem[field]
+			// Canonical DTOs omit empty arrays. This equivalence never drops a
+			// nonempty collection, scalar zero, false, null or other value.
+			if values, ok := leftValue.([]any); ok && len(values) == 0 {
+				leftExists = false
+			}
+			if values, ok := rightValue.([]any); ok && len(values) == 0 {
+				rightExists = false
+			}
+			if !leftExists && !rightExists {
+				continue
+			}
+			if leftExists != rightExists || !equalJSONValues(leftValue, rightValue) {
+				return fmt.Errorf("equals_projection item %d optional field %q must match %q at the same index", i, field, projection.Pointer)
 			}
 		}
 	}

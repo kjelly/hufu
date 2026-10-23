@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -14,8 +15,25 @@ import (
 	"time"
 )
 
+// Go's testing.TempDir uses GOTMPDIR, whose configured path plus a test name
+// can exceed the Unix socket pathname limit. Keep these workspaces short and
+// under TMPDIR without changing the configured Go build directories.
+func terminalBrokerTestWorkspace(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "hufu-sock-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Error(err)
+		}
+	})
+	return dir
+}
+
 func TestTerminalBrokerAttachStreamsInputAndOutput(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := terminalBrokerTestWorkspace(t)
 	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
@@ -82,7 +100,7 @@ func TestTerminalBrokerAttachStreamsInputAndOutput(t *testing.T) {
 }
 
 func TestTerminalBrokerRejectsConcurrentAttach(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := terminalBrokerTestWorkspace(t)
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +148,7 @@ func TestTerminalBrokerRejectsConcurrentAttach(t *testing.T) {
 }
 
 func TestTerminalAttachmentClientTransfersInputAndDetaches(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := terminalBrokerTestWorkspace(t)
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +207,7 @@ func TestTerminalAttachmentClientTransfersInputAndDetaches(t *testing.T) {
 }
 
 func TestTerminalBrokerTransferRequiresExplicitOperatorHandoff(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := terminalBrokerTestWorkspace(t)
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -239,7 +257,7 @@ func TestTerminalBrokerTransferRequiresExplicitOperatorHandoff(t *testing.T) {
 }
 
 func TestTerminalBrokerDisconnectKeepsTaskPaused(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := terminalBrokerTestWorkspace(t)
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
 		t.Fatal(err)

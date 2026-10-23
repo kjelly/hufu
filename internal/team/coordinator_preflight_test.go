@@ -287,3 +287,34 @@ func containsPreflightTool(tools []fantasy.AgentTool, name string) bool {
 	}
 	return false
 }
+
+func TestCoordinatorPreflightRefreshesWorkflowRoster(t *testing.T) {
+	session := workflowTestSession(t)
+	workflow, err := newRuntimeWorkflow(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workflow.Start(); err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{session: session, phaseWorkflow: workflow, taskTracker: NewTaskTracker(), sessionTime: time.Now()}
+	original := c.BuildOrchestratorPrompt() + "\n\n## Custom Policy\nKeep this instruction."
+	p := newCoordinatorRequestPreflight("test", "goal", original, nil)
+	p.window = 1000000
+	p.refreshSystem = c.refreshWorkflowPrompt
+	if err := workflow.observe([]*TodoItem{{Agent: "preparer", ContractID: "prepare", Phase: PhasePrepare, Status: TaskDone}}); err != nil {
+		t.Fatal(err)
+	}
+	refreshed, _, override, err := p.prepare(t.Context(), nil, "goal", 100, 0)
+	if err != nil || !override {
+		t.Fatalf("prepare = override %t err %v", override, err)
+	}
+	for _, prompt := range []string{refreshed, compactCoordinatorSystemPrompt(refreshed, true)} {
+		if !strings.Contains(prompt, "Valid names: auditor") || strings.Contains(prompt, "### preparer\n") || strings.Contains(prompt, "members: preparer") || !strings.Contains(prompt, "Keep this instruction.") {
+			t.Fatalf("phase refresh or compaction lost current roster/custom policy: %s", prompt)
+		}
+	}
+	if p.fullSystem != original {
+		t.Fatal("phase projection mutated frozen base prompt")
+	}
+}

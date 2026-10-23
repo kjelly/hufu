@@ -742,6 +742,9 @@ func TestClassifyTaskFailure_ExitCodeDoesNotOverrideEnvironment(t *testing.T) {
 func TestExecuteTask_ClearsStaleVerifyResultBetweenRetries(t *testing.T) {
 	worker := &staleVerifyWorkerAgent{}
 	c, _ := newWP05RetryTestCoordinator(t, worker)
+	// Exercise all evidence-classification attempts without reaching the
+	// separate hard anti-thrashing boundary.
+	c.session.Config.Reliability.MaxSameFailureFingerprint = 5
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "do work"}})
 	todoID := items[0].ID
 
@@ -872,6 +875,9 @@ func TestVerifyResultClearedAfterRetryClassification(t *testing.T) {
 func TestExecuteTask_RetainsVerificationEvidenceOnReceiptAfterClear(t *testing.T) {
 	worker := &staleVerifyWorkerAgent{}
 	c, _ := newWP05RetryTestCoordinator(t, worker)
+	// Exercise all evidence-classification attempts without reaching the
+	// separate hard anti-thrashing boundary.
+	c.session.Config.Reliability.MaxSameFailureFingerprint = 5
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "do work"}})
 	todoID := items[0].ID
 

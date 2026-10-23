@@ -369,6 +369,8 @@ Schema 可選用下列通用 runtime 擴充（都包含在 schema hash 中）：
   不會去引號或猜測；重複、未宣告 ID、hash 不符及來源 payload 變動皆拒絕。
   local/external 提交、commit、完成檢查及最終報告會檢查綁定；
   單純 JSON Schema 驗證不取代此有上下文的檢查。
+  可選 `runtime_owned: true` 會由 runtime 注入整個來源陣列；worker 必須省略，
+  即使提交相同值也拒絕。來源驗證與 canonical payload 驗證仍保留。
 - `x-hufu-evidence-references`：在根節點用 `items_pointer` 選擇引用清單，
   用 `task_id_pointer` 與 `references_pointer` 選擇各項的來源 task ID
   與非空 artifact ID 陣列。來源必須是 `evidence_from` 中已接受的 task，
@@ -550,6 +552,20 @@ key，因此上游在執行中被替換時，舊決策也不能套用到等長�
 舊決策當成目前有效的證據。列舉值正規化保留含重複 key 或多份 JSON 的原文，
 不能透過大小寫修正先合併掉無效輸入。
 
+結果 payload 另接受受限輸入正規化：原始契約在該位置明訂允許
+`null`、不允許 `string`，且不是 enum／const 時，精確字串 `"null"`
+可以轉為 JSON `null`。相同限制下明訂 `integer` 的欄位，可將精確合法的
+十進位整數字串轉為 JSON 整數，例如 `"0"` → `0`。整數按精確數值處理，
+不經 float64；原契約的 minimum／maximum 等限制仍須通過。
+此處使用原始編譯契約，並支援直接本地 `$ref`；
+不從條件分支、組合 schema 或未宣告的型別猜測。允許字串的欄位、hash、
+列舉值、空字串、浮點／指數字串、前導零、正號及空白變體均不轉換；
+只有 `number` 而沒有明訂 `integer` 也不轉換。完整 schema、跨欄位、
+來源及證據檢查仍須通過，成功後才對 canonical payload 計算 hash；
+runtime-owned 欄位的拒絕規則保持有效。
+這只適用於 payload 內的欄位與陣列元素；整份 payload 的 null／缺省仍依
+原有「未提交 payload」規則處理，不能用字串繞過必填檢查。
+
 每份 schema 最多 8 個互不重疊的集合，每個集合最多 2048 列；manifest
 最多 32 KiB，超過時須拆分任務，不能截斷。target path 只支援直接宣告的
 object properties，item 也須直接宣告；不猜測 `$ref`、分支或 array parent。
@@ -558,8 +574,17 @@ array 為空，與缺少來源不同，後者 fail closed。其餘 schema、payl
 evidence source 與 context budget 限制仍適用。
 固定值的型別、欄位限制與已知列數也在模型執行前檢查；矛盾的設定直接拒絕。
 
-這是既有 worker 的結構化決策契約，不會額外呼叫模型、加入推論工具，或
-改變 `no-net` 等授權。有限選項只約束答案集合；語意與證據仍須由模型判讀，
+未宣告 `decision_groups` 時，這是既有 worker 的結構化決策契約，不增加模型呼叫。
+集合可選 `decision_groups` 將 catalog 的組合選項映射至一或多個 enum 欄位。
+啟用後 worker 僅向 `decision_primitive` 提交 `collection`、`row_key`、`group`，
+runtime 從來源與已授權的 artifact-read observations 建立有界上下文，持久化決策，
+並在最終提交時注入群組欄位。worker 不重抄選項或 receipt，也不能覆寫這些欄位。
+未完成、棄權、錯誤或來源失效都阻止接受；空來源集合則不需要決策呼叫。
+完整 schema 形狀與限制見[固定列 binding 規格](../implementation-plans/fixed-collection-decisions.md#32-schema-配置形狀)。
+新 schema／policy 使用新 session，舊契約仍保留讀取與驗證。
+
+`no-net` 允許受信任模型／System One 推論，但仍限制工具／子程序網路；
+其他授權、force-mcp 與預算不放寬。有限選項只約束答案集合；語意與證據仍須由模型判讀，
 不可從關鍵字猜測或在無效輸出時默選答案。team 可宣告 uncertainty 選項或
 要求回報 `blocked`；處置仍受該 team 的完成與證據契約約束。
 
@@ -867,3 +892,89 @@ Result-only repair restores the admitted task goal, constraints, and complete ac
 Tool arguments whose schema explicitly requires an object may arrive as a JSON-encoded object string. Hufu losslessly unwraps a single object before the existing policy and schema checks. Free text, union types, duplicate keys, trailing values, and non-object values are not coerced. Result schema validation, canonical payload hashing, evidence binding, and acceptance still apply.
 
 Result-only repair also restores the admitted result contract instructions and full schema (within the same full-schema budget as normal execution) in required context, independent of truncated diagnostic evidence. Schema drift fails before the repair model call.
+
+`submit_result.open_questions` prefers strings. For compatibility, an item may
+also be exactly `{"$text":"nonempty text"}`; the runtime trims and immediately
+stores the canonical string. Only this field accepts that wrapper. Extra keys,
+blank text, non-string values and duplicate keys are rejected. Existing
+question/context/detail objects remain supported. This does not unwrap evidence,
+receipts, identifiers or `structured_payload`, or relax their validation.
+
+### 短 evidence key
+
+本機 runtime 的 `view` 可為成功讀取的 artifact 發出短 key，避免 worker
+在結果中重抄長 ID。由 owning result schema 明確啟用，例如：
+
+```json
+"x-hufu-evidence-keys": {
+  "pointers": ["/record/findings/*/evidence/*"]
+}
+```
+
+Pointer 相對於 `structured_payload`，以 `*` 選取陣列項目；固定集合提交時
+相同位置可為 runtime 已發出的 row-key map。每個 pointer 必須選取 schema
+明訂的字串，最多 16 個、每條最多 12 層。啟用後，`files_read` 的字串項目
+與 `files_read[].path` 也接受同一批 key；其他欄位與自由文字不改寫。
+
+僅限 artifact 的成功 `view` 回應提供 `ev_` 加 12 位十六進位字元的 key 與完整 artifact ID
+對照。Batch 只為成功且實際包含在回應中的項目發出 key；失敗、取消、
+略過或被 batch 輸出上限排除的項目不會獲得 key。首次 `view.artifact_ref`
+仍使用 runtime 提供的完整 ID，key 只用於上述提交欄位。
+
+單次觀察的持久化輸出上限為 1 MiB；decision context 仍使用各入口原有的
+較小上限，超過時明確失敗，不因 evidence key 而放寬。
+
+Runtime 從既有 hash-chained artifact observation 與 CAS 重建對照，綁定
+branch、run、task、attempt、model execution、task scope、schema hash 及
+artifact ID／內容 hash。未知或跨範圍 key、失效授權、內容變更及碰撞均拒絕。
+結果修復重用同一有效 scope 的持久化觀察，不重跑讀取或模型推論。
+
+Key 會先展開成完整 ID，再執行原有 schema、來源與跨欄位驗證，最後組裝並
+計算 canonical payload hash。持久化結果、CLI／JSON／report 與下游來源紀錄的證據參照欄位
+仍使用完整 ID。Key 只證明一次成功的 bounded read，不代表讀完整個
+artifact，亦不代表證據支持某項語意主張。不做模糊比對或猜補錯誤 hash。
+
+未啟用的契約維持原提交方式；完整 ID 仍可照既有規則提交。外部 agent
+provider 未經本機 runtime `view` 發出 key，維持完整 ID 提交方式。新增此
+宣告會改變 schema／execution-policy hash，既有 session 應保留原契約，
+以新 session 使用新功能。
+
+### Bound-decision failure envelopes
+
+For a result contract with fixed-collection decision_groups, a worker that
+cannot settle required decisions may submit status blocked and a summary,
+omitting structured_payload and unavailable success-only fields. This is an
+unsuccessful task envelope, not a schema-valid audit result. Successful and
+completed_with_gaps results still require the full payload, all settled rows,
+source bindings and evidence validation. Supplied payloads remain fully
+validated even with blocked status; schema drift and occurrence identity are
+never waived. Blocked envelopes cannot serve as accepted dependency evidence.
+
+For bound decisions, the runtime checks each new artifact response against
+every row's complete JSON-encoded context before returning it to the worker.
+This includes the finding, prior observations, metadata and JSON escaping.
+An overflowing response is withheld entirely with
+`decision_read_budget_exhausted`; it creates no observation or evidence key.
+Earlier evidence remains available for a decision, including the declared
+uncertainty choice. Parallel read publications share the same admission gate.
+The runtime never discards or truncates previously observed evidence to fit.
+
+### 收據驗證的 native 結果欄位
+
+`x-hufu-runtime-inputs` 可將完整 native action 輸出綁入儲存結果：
+
+```json
+"x-hufu-runtime-inputs": [
+  {"target":"/observation","source_task":"prepare-outputs","output":"observation"}
+]
+```
+
+`target` 必須指向直接宣告的物件屬性，且不能與其他 runtime binding、
+runtime-owned evidence input 或 fixed collection 重疊。`source_task` 必須是
+已宣告的 native action task。模型必須省略這些欄位；provider schema 與修復提示
+也會排除它們。本機及外部 worker 的提交皆由 runtime 核對當次 run 的成功 action
+收據及凍結的輸入 snapshot，再將完整值組裝、驗證、雜湊及儲存。
+
+來源缺失、過期、收據不符或輸出不符合 schema 時，提交會被拒絕。儲存結果的
+驗證會重新核對綁定值，不會以較新的輸出重建歷史資料；文字與 JSON 數值不經
+模型重建或型別猜測。

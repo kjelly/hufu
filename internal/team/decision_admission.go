@@ -329,6 +329,30 @@ func (c *Coordinator) canonicalizeTaskOccurrence(task TaskDef, def *agent.AgentD
 		return task, err
 	}
 	task.WorkerWorkspace = workspacePolicy
+	if task.ResultContract != nil {
+		compiled, err := c.compiledResultContract(task.ResultContract)
+		if err != nil {
+			return task, err
+		}
+		if hasResultDecisions(compiled) {
+			if err := validateResultDecisionCatalog(c.session, def, compiled); err != nil {
+				return task, err
+			}
+			targets := []execution.ExecutionTarget{target}
+			if task.ExecutionRoute != nil {
+				targets = append(targets, task.ExecutionRoute.Candidates...)
+			}
+			for _, candidate := range targets {
+				backend, err := c.ExecutionRegistry().ResolveBackend(candidate.Backend)
+				if err != nil {
+					return task, err
+				}
+				if backend.Kind() != execution.BackendKindLLM {
+					return task, fmt.Errorf("bound decisions require a direct language-model execution target")
+				}
+			}
+		}
+	}
 	return task, nil
 }
 

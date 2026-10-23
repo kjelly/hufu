@@ -18,6 +18,7 @@ import (
 	"github.com/kjelly/hufu/internal/decisionrt/backend"
 	"github.com/kjelly/hufu/internal/decisionrt/backend/systemone"
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
+	"github.com/kjelly/hufu/internal/decisionrt/settings"
 )
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -38,6 +39,11 @@ type ServiceOption func(*options)
 
 type options struct {
 	generator catalog.GeneratorFactory
+	defaults  settings.Config
+}
+
+func WithRuntimeConfig(config settings.Config) ServiceOption {
+	return func(o *options) { o.defaults = config.Clone() }
 }
 
 // WithSidecarGenerator supplies the language-model generator for backend
@@ -75,6 +81,12 @@ func New(config Config, redact func(string) string, opts ...ServiceOption) (*Ser
 	if len(service.points) == 0 {
 		return service, nil
 	}
+	transport, err := resolveTransport(config, settings.defaults)
+	if err != nil {
+		return nil, err
+	}
+	config.Backend, config.Model, config.Endpoint, config.APIKeyEnv, config.Timeout = transport.Backend, transport.Model, transport.Endpoint, transport.APIKeyEnv, transport.Timeout
+	backendName, service.backend = transport.Backend, transport.Backend
 	timeout, err := validateTimeout(config.Timeout)
 	if err != nil {
 		return nil, err

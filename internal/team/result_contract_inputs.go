@@ -2,6 +2,7 @@ package team
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 // This extension binds schema-declared review entries to accepted evidence_from
 // payloads. It interprets no prose and has no consumer-specific vocabulary.
 type resultEvidenceInputsSpec struct {
+	RuntimeOwned    bool              `json:"runtime_owned,omitempty"`
 	ItemsPointer    string            `json:"items_pointer"`
 	TaskIDPointer   string            `json:"task_id_pointer"`
 	HashPointer     string            `json:"hash_pointer"`
@@ -51,6 +53,11 @@ func compileResultEvidenceInputs(root map[string]any) (*resultEvidenceInputsSpec
 			return nil, err
 		}
 		if err := validateJSONPointer(source); err != nil {
+			return nil, err
+		}
+	}
+	if spec.RuntimeOwned {
+		if err := validateRuntimeEvidenceInputSchema(root, spec); err != nil {
 			return nil, err
 		}
 	}
@@ -120,7 +127,7 @@ func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *Re
 	if err != nil {
 		return err
 	}
-	if compiled.evidenceInputs == nil && compiled.evidenceReferences == nil && compiled.worksetInputs == nil && len(compiled.fixedCollections) == 0 {
+	if compiled.evidenceInputs == nil && compiled.evidenceReferences == nil && compiled.worksetInputs == nil && len(compiled.fixedCollections) == 0 && len(compiled.runtimeInputs) == 0 {
 		return nil
 	}
 	if payload == nil {
@@ -133,11 +140,22 @@ func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *Re
 	if err := validateResultWorksetInputs(value, compiled.worksetInputs, item.WorksetBinding); err != nil {
 		return err
 	}
+	runtimeInputs, err := c.resultRuntimeInputValues(compiled)
+	if err != nil {
+		return err
+	}
+	if err := validateResultRuntimeInputs(value, compiled.runtimeInputs, runtimeInputs); err != nil {
+		return err
+	}
 	results := c.dependencyResultsForTask(todoID)
 	if err := c.validateDependencyPayloads(results); err != nil {
 		return err
 	}
 	plans, err := buildResultFixedCollections(compiled.fixedCollections, item.EvidenceFrom, results)
+	if err != nil {
+		return err
+	}
+	plans, err = c.resolveDecisionCollectionPlans(context.Background(), todoID, plans)
 	if err != nil {
 		return err
 	}

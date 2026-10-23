@@ -53,11 +53,13 @@ func (j JSONJudge) Judge(ctx context.Context, a, b contextstore.ContextItem) (Ju
 	if j.Generator == nil {
 		return Judgment{}, errors.New("conflict judge is not configured")
 	}
-	raw, err := j.Generator.GenerateText(ctx, j.Prompt(a, b))
-	if err != nil {
-		return Judgment{}, err
+	typed, ok := j.Generator.(interface {
+		DecidePair(context.Context, contextstore.ContextItem, contextstore.ContextItem) (Judgment, error)
+	})
+	if !ok {
+		return Judgment{}, fmt.Errorf("%w: typed decision runtime required", ErrInvalidJudgment)
 	}
-	return parseJudgment(raw)
+	return typed.DecidePair(ctx, a, b)
 }
 
 // parseJudgment applies the same strict decoding as the promotion draft

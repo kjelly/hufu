@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -591,6 +592,9 @@ func (e *decisionEngine) runJudgeWithRepair(
 			RoutingRole: hintedJudgeRole(req.Policy.JudgeRole, req.RoutingHints, req.RoutingContractID),
 		})
 		if err != nil {
+			if _, terminal := errors.AsType[*runtimeDecisionFailure](err); terminal {
+				return DecisionOpinion{}, err
+			}
 			lastOperationalErr = err
 			continue
 		}

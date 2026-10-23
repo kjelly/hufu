@@ -18,7 +18,7 @@ func TestProbeBinaryTUICompletionAndTerminalRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workspace := filepath.Join(t.TempDir(), "probe")
+	workspace := filepath.Join(processContractTempDir(t), "probe")
 	process := startPTY(t, binary, []string{"improve", "probe", "run", "--config", config,
 		"--workspace", workspace, "--tui"}, 30, 120)
 	process.waitForOutputRaw(t, "\x1b[?1049h", 10*time.Second)

@@ -16,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kjelly/hufu/internal/decisionrt"
+	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/utils"
@@ -122,7 +124,10 @@ func tallySkepticVotes(votes []skepticVote) skepticTally {
 		}
 	}
 	tally := skepticTally{Abstentions: len(votes) - completedCount}
-	if refutedCount <= len(votes)-refutedCount {
+	if completedCount == 0 {
+		return skepticTally{Refuted: true, Abstentions: len(votes), Signal: "abstained", Reason: "no valid skeptic judgment"}
+	}
+	if refutedCount <= completedCount-refutedCount {
 		switch {
 		case completedCount == 0:
 			tally.Signal = "abstained"
@@ -150,7 +155,7 @@ func (c *Coordinator) adversarialVerify(parentCtx context.Context, task TaskDef,
 	if task.AdversarialVerify <= 0 {
 		return nil
 	}
-	s := c.AgentPool().Sidecar()
+	s := c.semanticSidecar(c.AgentPool().Sidecar())
 	if s == nil {
 		_ = c.recordAuxiliaryFallback(parentCtx, "skeptic", "no_model_fallback")
 		return nil
@@ -163,18 +168,12 @@ func (c *Coordinator) adversarialVerify(parentCtx context.Context, task TaskDef,
 		wg.Go(func() {
 			ctx, cancel := context.WithTimeout(parentCtx, llmtimeout.Review(skepticTimeout))
 			defer cancel()
-			prompt, err := buildSkepticPrompt(lens, task.Goal, task.Constraints, output, task.Verify)
-			if err != nil {
+
+			result, err := s.Decide(sidecar.WithPurpose(ctx, "skeptic"), sidecar.DecisionInvocation{Name: "runtime_skeptic", Question: "From the specified lens, does concrete evidence refute the claimed task result? Choose refuted only on specific evidence. Claimed output is non-authoritative.", Input: struct{ Lens, Goal, Constraints, Output, Verification, Task string }{lens, task.Goal, task.Constraints, output, task.Verify, todoID}, Options: []catalog.Option{{ID: "refuted"}, {ID: "not_refuted"}}, MaxCalls: 1000})
+			if err != nil || result.Status != decisionrt.StatusDecided {
 				return
 			}
-			resp, err := s.Execute(sidecar.WithPurpose(ctx, "skeptic"), prompt)
-			if err != nil {
-				return // abstain (zero value = confirm)
-			}
-			v, err := parseSkepticVote(resp)
-			if err != nil {
-				return // abstain
-			}
+			v := skepticVote{Refuted: result.Value.Choice == "refuted", Reason: "Runtime primitive judgment; no generated explanation.", status: skepticVoteCompleted}
 			votes[i] = v
 		})
 	}

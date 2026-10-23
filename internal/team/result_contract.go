@@ -45,9 +45,11 @@ type CompiledResultContract struct {
 	schema             *jsonschema.Schema
 	toolEvidence       *resultToolEvidenceSpec
 	evidenceInputs     *resultEvidenceInputsSpec
+	evidenceKeys       *resultEvidenceKeysSpec
 	evidenceReferences *resultEvidenceReferencesSpec
 	worksetInputs      *resultWorksetInputsSpec
 	fixedCollections   []resultFixedCollectionSpec
+	runtimeInputs      []resultRuntimeInputSpec
 	finalReport        *template.Template
 }
 

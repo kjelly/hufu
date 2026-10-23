@@ -61,7 +61,7 @@ func (a *scriptedReplyAgent) Stream(context.Context, fantasy.AgentStreamCall) (*
 	return nil, nil
 }
 
-func TestChooseAskUserResponseRetriesOnceWithTheProblem(t *testing.T) {
+func TestMixedAskUserResponseRetainsGenerationRepair(t *testing.T) {
 	opts := []tools.AskUserTUIOption{{Label: "Keep", Value: "keep"}, {Label: "Remove", Value: "remove"}}
 	tests := []struct {
 		name      string
@@ -78,7 +78,7 @@ func TestChooseAskUserResponseRetriesOnceWithTheProblem(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			s := &Sidecar{agent: test.agent}
-			resp, err := s.ChooseAskUserResponse(t.Context(), "keep it?", "single_choice", opts, false)
+			resp, err := s.ChooseAskUserResponse(t.Context(), "keep it?", "mixed", opts, false)
 			if len(test.agent.prompts) != test.wantCalls {
 				t.Fatalf("selector calls = %d, want %d", len(test.agent.prompts), test.wantCalls)
 			}

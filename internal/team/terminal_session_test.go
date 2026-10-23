@@ -1205,7 +1205,7 @@ func TestTerminalTools_PolicyEnforcement(t *testing.T) {
 }
 
 func TestTerminalTools_LazilyEnablePTYOnStart(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := terminalBrokerTestWorkspace(t)
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
 		t.Fatal(err)

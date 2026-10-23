@@ -117,6 +117,27 @@ func compileResultContractDocument(id string, raw []byte) (*CompiledResultContra
 	if err != nil {
 		return nil, fmt.Errorf("schema %q: %w", id, err)
 	}
+	runtimeInputs, err := compileResultRuntimeInputs(root)
+	if err != nil {
+		return nil, fmt.Errorf("schema %q: %w", id, err)
+	}
+	for _, binding := range runtimeInputs {
+		if inputs != nil && inputs.RuntimeOwned && resultPointersOverlap(binding.Target, inputs.ItemsPointer) {
+			return nil, fmt.Errorf("schema %q: runtime input and evidence input targets must not overlap", id)
+		}
+		for _, collection := range collections {
+			if resultPointersOverlap(binding.Target, collection.ItemsPointer) {
+				return nil, fmt.Errorf("schema %q: runtime input and fixed collection targets must not overlap", id)
+			}
+		}
+	}
+	if inputs != nil && inputs.RuntimeOwned {
+		for _, collection := range collections {
+			if resultPointersOverlap(collection.ItemsPointer, inputs.ItemsPointer) {
+				return nil, fmt.Errorf("schema %q: runtime_bind and fixed collection targets must not overlap", id)
+			}
+		}
+	}
 	canonical, err := json.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize schema %q: %w", id, err)
@@ -132,12 +153,17 @@ func compileResultContractDocument(id string, raw []byte) (*CompiledResultContra
 	if err != nil {
 		return nil, fmt.Errorf("compile schema %q: %w", id, err)
 	}
+	evidenceKeys, err := compileResultEvidenceKeys(root, schema)
+	if err != nil {
+		return nil, fmt.Errorf("schema %q: %w", id, err)
+	}
 	bindFixedCollectionSchemas(collections, schema)
+	bindRuntimeInputSchemas(runtimeInputs, schema)
 	sum := sha256.Sum256(canonical)
 	return &CompiledResultContract{
 		ID: id, SchemaSHA256: hex.EncodeToString(sum[:]), CanonicalSchema: canonical, schema: schema,
 		toolEvidence: evidence, finalReport: report, evidenceInputs: inputs, evidenceReferences: references, worksetInputs: worksetInputs,
-		fixedCollections: collections,
+		fixedCollections: collections, evidenceKeys: evidenceKeys, runtimeInputs: runtimeInputs,
 	}, nil
 }
 
@@ -274,6 +300,9 @@ func compileTeamResultContracts(session *TeamSession) error {
 		if def == nil {
 			return nil
 		}
+		if err := validateResultDecisionCatalog(session, def, compiled); err != nil {
+			return fmt.Errorf("%s: %w", owner, err)
+		}
 		if role := strings.ToLower(strings.TrimSpace(def.Role)); role == "coordinator" || role == "orchestrator" {
 			return fmt.Errorf("%s: %s: result contracts apply only to workers, not %s agents", resultContractUnsupportedCode, owner, role)
 		}
@@ -320,6 +349,9 @@ func compileTeamResultContracts(session *TeamSession) error {
 		task.ResultContract = &ref
 	}
 	if err := validateFixedCollectionSourceContracts(schemas); err != nil {
+		return fmt.Errorf("%s: %w", resultContractInvalidCode, err)
+	}
+	if err := validateRuntimeInputSources(session, schemas, agentRefs); err != nil {
 		return fmt.Errorf("%s: %w", resultContractInvalidCode, err)
 	}
 	session.ResultContracts = schemas

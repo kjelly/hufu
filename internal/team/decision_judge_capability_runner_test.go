@@ -95,7 +95,8 @@ func newJudgeRoutingHarness(t *testing.T) *judgeRoutingHarness {
 	t.Cleanup(func() { _ = store.Close() })
 
 	c := &Coordinator{
-		session: session, projectDir: dir, sessionTime: time.Now(),
+		decisionPrimitiveGate: make(chan struct{}, 1),
+		session:               session, projectDir: dir, sessionTime: time.Now(),
 		providerManager:         manager,
 		modelProfileRuntime:     NewModelProfileRuntime(manager, false),
 		taskTracker:             NewTaskTracker(),
@@ -176,7 +177,8 @@ func modelSharingJudgeRoutingHarness(t *testing.T) *judgeRoutingHarness {
 	t.Cleanup(func() { _ = store.Close() })
 
 	c := &Coordinator{
-		session: session, projectDir: dir, sessionTime: time.Now(),
+		decisionPrimitiveGate: make(chan struct{}, 1),
+		session:               session, projectDir: dir, sessionTime: time.Now(),
 		providerManager:         manager,
 		modelProfileRuntime:     NewModelProfileRuntime(manager, false),
 		taskTracker:             NewTaskTracker(),
@@ -287,6 +289,10 @@ func TestJudgeRoleCapabilityRouting_HardProviderFloorUsesCanonicalProvider(t *te
 func TestJudgeRoleCapabilityRouting_ProfileSyncFailurePrecedesProviderCall(t *testing.T) {
 	h := newJudgeRoutingHarness(t)
 	configureEventStoreSyncFailureForEventType(t, h.coordinator.eventStore, string(EventModelProfileResolved), 1, fmt.Errorf("injected decision profile sync failure"))
+	// Primitive recovery verifies the journal before generation. Verification
+	// reloads its cache and resets test-only commit hooks, so keep the injected
+	// persistence fault installed until the actual provider admission boundary.
+	h.coordinator.eventJournal = preserveCommitFaultJournal{EventJournal: h.coordinator.EventJournal(), store: h.coordinator.eventStore}
 	runners := newDecisionRunners(h.coordinator, "task-1")
 	role := &agent.JudgeRolePolicy{RequiredCapabilities: []string{"decision-analysis"}}
 	if _, err := runners.RunJudge(context.Background(), judgeRequestFor("judge-1", role)); err == nil {
@@ -295,6 +301,18 @@ func TestJudgeRoleCapabilityRouting_ProfileSyncFailurePrecedesProviderCall(t *te
 	if calls := h.candA.count() + h.candB.count() + h.candC.count(); calls != 0 {
 		t.Fatalf("provider calls after profile sync failure = %d, want 0", calls)
 	}
+}
+
+type preserveCommitFaultJournal struct {
+	EventJournal
+	store *EventStore
+}
+
+func (j preserveCommitFaultJournal) VerifyHashChain(ctx context.Context) error {
+	hook := j.store.commitHook
+	err := j.EventJournal.VerifyHashChain(ctx)
+	j.store.commitHook = hook
+	return err
 }
 
 func TestDecisionRoutingDurableIdentityMatchesModelProfileTelemetry(t *testing.T) {
@@ -314,6 +332,7 @@ func TestDecisionRoutingDurableIdentityMatchesModelProfileTelemetry(t *testing.T
 	revisions := make([]DecisionRevision, 0, len(opinions))
 	for _, opinion := range opinions {
 		revision, err := runners.RunRevision(context.Background(), RevisionRequest{
+			Packet:     routingChoicePacket(),
 			DecisionID: "dec-1", JudgeID: opinion.JudgeID, Original: opinion,
 			Prompt:      "You are judge " + opinion.JudgeID + " revising your own judgment once (round 2).",
 			RoutingRole: judgeRole,
@@ -351,8 +370,8 @@ func TestDecisionRoutingDurableIdentityMatchesModelProfileTelemetry(t *testing.T
 		}
 		profiles++
 	}
-	if profiles != 6 {
-		t.Fatalf("model profile events = %d, want 6 for JUDGE→CHALLENGE→REVISE", profiles)
+	if profiles != 12 {
+		t.Fatalf("model profile events = %d, want 12 for generation + primitive JUDGE→CHALLENGE→REVISE", profiles)
 	}
 }
 
@@ -418,8 +437,8 @@ func TestDecisionEngineRoutingDurableIdentityAndProfileOrder(t *testing.T) {
 	if gotOrderErr != nil {
 		t.Fatal(gotOrderErr)
 	}
-	if gotProfiles != gotRequests || gotRequests != 6 {
-		t.Fatalf("profile/request counts = %d/%d, want 6/6", gotProfiles, gotRequests)
+	if gotProfiles != gotRequests+h.legacyJudge.count(stagePrimitive) || gotRequests != 6 || h.legacyJudge.count(stagePrimitive) != 6 {
+		t.Fatalf("profile/request counts = %d/%d, want 12/6 plus 6 primitive requests", gotProfiles, gotRequests)
 	}
 
 	events, err := h.coordinator.eventStore.ReadEvents()
@@ -509,6 +528,7 @@ func judgeRequestFor(judgeID string, role *agent.JudgeRolePolicy) JudgeRequest {
 	// unrouted path.
 	return JudgeRequest{
 		DecisionID:  "dec-1",
+		Packet:      routingChoicePacket(),
 		Round:       1,
 		JudgeID:     judgeID,
 		Context:     JudgeContext{Prompt: "You are forming an independent judgment for " + judgeID + "."},
@@ -695,6 +715,7 @@ func TestJudgeRoleCapabilityRouting_HintsChangeBindingAndRevisionReusesIt(t *tes
 	// REVISE for judge-1, applying the identical hint independently, must
 	// land on the same candidate (cand-a) the hinted JUDGE round did.
 	revisionReq := RevisionRequest{
+		Packet:      routingChoicePacket(),
 		DecisionID:  "dec-1",
 		JudgeID:     "judge-1",
 		Original:    DecisionOpinion{JudgeID: "judge-1", PreferredOption: "execute"},
@@ -717,4 +738,12 @@ func TestJudgeRoleCapabilityRouting_HintsChangeBindingAndRevisionReusesIt(t *tes
 	if got := h.candC.count(); got != beforeC {
 		t.Fatalf("hinted judge/revision must not reach cand-c: before=%d after=%d", beforeC, got)
 	}
+}
+
+func routingChoicePacket() DecisionEvidencePacket {
+	packet, err := (DecisionEvidencePacket{Question: "Choose an action", Options: []DecisionOption{{ID: "execute", Kind: OptionExecute, Title: "Execute"}, {ID: "wait", Kind: OptionDefer, Title: "Wait"}}}).Seal()
+	if err != nil {
+		panic(err)
+	}
+	return packet
 }

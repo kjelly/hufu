@@ -189,3 +189,11 @@ func TestScanReportsSecretLikeMemories(t *testing.T) {
 		t.Fatalf("report = %+v", report)
 	}
 }
+
+func (g *scriptedGenerator) DecidePair(ctx context.Context, a, b contextstore.ContextItem) (Judgment, error) {
+	raw, err := g.GenerateText(ctx, "")
+	if err != nil {
+		return Judgment{}, err
+	}
+	return parseJudgment(raw)
+}

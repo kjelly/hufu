@@ -42,6 +42,12 @@ func (c *Coordinator) prepareAuxiliaryProjectionInvocation(ctx context.Context, 
 
 func (c *Coordinator) prepareAuxiliaryInvocationWithPersistence(ctx context.Context, purpose, rawPrompt string, persist bool) (context.Context, string, error) {
 	prompt, manifest, err := c.compileAuxiliaryPrompt(ctx, purpose, rawPrompt, persist)
+	if err == nil && purpose == decisionPrimitivePurpose && agent.ProviderTransportObserverEnabled(ctx) {
+		metadata, _ := invocationMetadataFromContext(ctx)
+		metadata.Purpose, metadata.Trigger = purpose, ContextTriggerSidecarTask
+		metadata.ParentRequestID, metadata.ParentManifestFingerprint = "", ""
+		ctx = context.WithValue(ctx, contextAuxiliaryDiagnosticInvocationKey{}, &metadata)
+	}
 	if err == nil && manifest != nil && agent.ProviderTransportObserverEnabled(ctx) {
 		metadata := &InvocationMetadata{
 			RunID: manifest.RunID, TaskID: manifest.TaskID, Attempt: manifest.Attempt,
@@ -208,7 +214,7 @@ func (c *Coordinator) newAuxiliaryContextRequest(todoID string, attempt int, age
 		request.Failure = &ContextFailure{ToolName: strings.TrimSuffix(purpose, "_reviewer"), ToolInputHash: hashContentKey(utils.RedactSecrets(rawPrompt))}
 	case "plan_reviewer":
 		request.VerificationCriteria = "review plan against task acceptance criteria"
-	case "judge":
+	case "judge", "judge_graft_generation":
 		request.CandidateIDs = []string{"bounded-candidate-set"}
 		request.SelectionContract = "select the best candidate under the provided contract"
 	case "skeptic":

@@ -93,7 +93,7 @@ func providerCostPurpose(purpose string) cost.Purpose {
 		return cost.PurposeCoordinator
 	case "direct_agent":
 		return cost.PurposeDirectAgent
-	case "judge":
+	case "judge", "judge_graft_generation":
 		return cost.PurposeJudge
 	case "skeptic":
 		return cost.PurposeSkeptic

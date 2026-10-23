@@ -54,8 +54,8 @@ func TestTallySkepticVotes(t *testing.T) {
 		{name: "1-2 confirmed", votes: []skepticVote{{Refuted: true, Reason: "a", status: skepticVoteCompleted}, {status: skepticVoteCompleted}, {status: skepticVoteCompleted}}, wantSignal: "confirmed"},
 		{name: "tie confirms", votes: []skepticVote{{Refuted: true, status: skepticVoteCompleted}, {status: skepticVoteCompleted}}, wantSignal: "confirmed"},
 		{name: "abstention is not confirmation", votes: []skepticVote{{status: skepticVoteCompleted}, {}}, wantSignal: "confirmed_with_abstentions", wantAbstentions: 1},
-		{name: "all abstain", votes: []skepticVote{{}, {}, {}}, wantSignal: "abstained", wantAbstentions: 3},
-		{name: "empty abstains", votes: nil, wantSignal: "abstained"},
+		{name: "all abstain", wantRefuted: true, votes: []skepticVote{{}, {}, {}}, wantSignal: "abstained", wantAbstentions: 3},
+		{name: "empty abstains", wantRefuted: true, votes: nil, wantSignal: "abstained"},
 	}
 
 	for _, tc := range cases {
@@ -135,13 +135,13 @@ func TestBuildSkepticPromptBoundsLargeResultWithoutDroppingContract(t *testing.T
 	}
 }
 
-func TestAdversarialVerifySkipsWithoutSidecar(t *testing.T) {
+func TestAdversarialVerifyFailsClosedWithoutDecisionRuntime(t *testing.T) {
 	c := &Coordinator{
 		session: &TeamSession{},
 	}
 	task := TaskDef{Agent: "a", Goal: "g", AdversarialVerify: 3}
-	if err := c.adversarialVerify(context.Background(), task, "task-1", "output"); err != nil {
-		t.Errorf("expected silent skip without sidecar, got %v", err)
+	if err := c.adversarialVerify(context.Background(), task, "task-1", "output"); err == nil {
+		t.Error("verification without a valid decision must fail closed")
 	}
 
 	// Disabled tasks are a no-op regardless of sidecar availability.

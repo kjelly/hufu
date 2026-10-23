@@ -13,6 +13,7 @@ func challengeRequestFor(challengerID string, role *agent.ChallengeRolePolicy) C
 	// correctly attributes a call to stageChallenge.
 	return ChallengeRequest{
 		DecisionID:   "dec-1",
+		Packet:       routingChoicePacket(),
 		ChallengerID: challengerID,
 		Prompt:       "You are challenging a candidate decision for " + challengerID + ".",
 		RoutingRole:  role,
@@ -180,6 +181,7 @@ func TestRevisionCapabilityRouting_ReusesOriginalJudgeBinding(t *testing.T) {
 	}
 
 	revisionReq := RevisionRequest{
+		Packet:      routingChoicePacket(),
 		DecisionID:  "dec-1",
 		JudgeID:     "judge-2",
 		Original:    opinion,
@@ -226,6 +228,7 @@ func TestRevisionCapabilityRouting_UsesOriginalAgentIDNotFreshRanking(t *testing
 	// recompute, drives the outcome.
 	original := DecisionOpinion{JudgeID: "judge-2", PreferredOption: "execute", AgentID: "judge-cand-a"}
 	revisionReq := RevisionRequest{
+		Packet:     routingChoicePacket(),
 		DecisionID: "dec-1", JudgeID: "judge-2", Original: original,
 		Prompt: "You are judge judge-2 revising your own judgment once (round 2).", RoutingRole: role,
 	}
@@ -254,6 +257,7 @@ func TestRevisionCapabilityRouting_FailsClosedWhenOriginalBindingCapabilityInval
 
 	original := DecisionOpinion{JudgeID: "judge-1", PreferredOption: "execute", AgentID: "judge-cand-a"}
 	revisionReq := RevisionRequest{
+		Packet:     routingChoicePacket(),
 		DecisionID: "dec-1", JudgeID: "judge-1", Original: original,
 		Prompt: "You are judge judge-1 revising your own judgment once (round 2).", RoutingRole: role,
 	}
@@ -275,6 +279,7 @@ func TestRevisionCapabilityRouting_FailsClosedWhenOriginalBindingNoLongerAuthori
 
 	original := DecisionOpinion{JudgeID: "judge-1", PreferredOption: "execute", AgentID: "judge-cand-a"}
 	revisionReq := RevisionRequest{
+		Packet:     routingChoicePacket(),
 		DecisionID: "dec-1", JudgeID: "judge-1", Original: original,
 		Prompt: "You are judge judge-1 revising your own judgment once (round 2).", RoutingRole: role,
 	}
@@ -296,6 +301,7 @@ func TestRevisionCapabilityRouting_FallsBackToResolutionWhenOriginalAgentIDEmpty
 
 	original := DecisionOpinion{JudgeID: "judge-1", PreferredOption: "execute"}
 	revisionReq := RevisionRequest{
+		Packet:     routingChoicePacket(),
 		DecisionID: "dec-1", JudgeID: "judge-1", Original: original,
 		Prompt: "You are judge judge-1 revising your own judgment once (round 2).", RoutingRole: role,
 	}
@@ -315,6 +321,7 @@ func TestRevisionCapabilityRouting_WithoutRoutingRoleStaysOnLegacySidecar(t *tes
 	runners := newDecisionRunners(h.coordinator, "task-1")
 
 	revisionReq := RevisionRequest{
+		Packet:     routingChoicePacket(),
 		DecisionID: "dec-1",
 		JudgeID:    "judge-1",
 		Original:   DecisionOpinion{JudgeID: "judge-1", PreferredOption: "execute"},

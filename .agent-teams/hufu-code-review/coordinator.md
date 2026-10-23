@@ -106,21 +106,18 @@ Dispatch the fixed contracts in this order:
    documentation escalation, and critic todo ID, including no-op children.
    Do not pass expansion-parent IDs or PREPARE action IDs. The runtime hands
    over full accepted structured payloads and authorized reviewed artifacts.
+   Report input_review is runtime-owned: the synthesizer omits that field;
+   the runtime copies every accepted source record and hash before validation.
    This static contract permits up to 64 evidence sources (32 review children
    plus at most one critic per child). Do not omit or summarize sources to fit
    the default eight-source limit of other contracts.
-   The static synthesis contract forwards the producer's exact
-   `runtime_outputs.scope` and Go verifier's exact
-   `runtime_outputs.targeted_go_tests` into constraints using receipt-verified
-   `fact_refs`. These values are resolved by the runtime; no manual copying or
-   metadata-file lookup is needed. The report audit compares them with the
-   canonical runtime action results.
-   The same mechanism forwards the native review handoff inventory. Do not
-   include the inventory action itself in evidence_from; its metadata arrives
-   through fact_refs. Use its source IDs plus the accepted critic IDs.
-   `scope` is the entire attestation object with `requested`, `resolved`, and
-   `satisfied`; it is not the bare `review.scope` request. Preserve every field
-   of that object. `targeted_go_tests` is the entire verifier output object.
+   Report-v2 declares scope and test_verification through x-hufu-runtime-inputs.
+   The runtime binds the producer's complete scope and verifier's complete
+   targeted_go_tests outputs after checking their current-run receipts and input
+   snapshot. The synthesizer must omit both fields. Constraints provide scope
+   context and compact targeted_go_test_status for semantic decisions only.
+   The native handoff inventory arrives through fact_refs; use its source IDs
+   plus accepted critic IDs in evidence_from, excluding the inventory action.
    The synthesizer inventories findings and local gaps across all sources,
    performs bounded sibling-evidence reconciliation before retaining a gap, and preserves every source
    record and original limitation in the report contract.

@@ -148,8 +148,23 @@ func TestRunVerifyReviewTestsReturnsFailedEvidenceWithoutActionFailure(t *testin
 	if err := json.Unmarshal(receiptJSON, &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Passed || receipt.ExitCode == 0 || receipt.Diagnostic == "" || receipt.ArtifactID == "" || len(result.Artifacts) != 1 {
+	if !receipt.Completed || receipt.Passed || receipt.ExitCode == 0 || receipt.Diagnostic == "" || receipt.ArtifactID == "" || len(result.Artifacts) != 1 {
 		t.Fatalf("failed verifier evidence = %#v, artifacts = %#v", receipt, result.Artifacts)
+	}
+	status, ok := result.Outputs["targeted_go_test_status"].(map[string]any)
+	if !ok || status["completed"] != true || status["passed"] != false || len(status) != 4 {
+		t.Fatalf("compact failed-test status = %#v", status)
+	}
+	sealed, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(result.Artifacts[0].Path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evidence goTestVerification
+	if err := json.Unmarshal(sealed, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Diagnostic != receipt.Diagnostic || sha256Hex([]byte(evidence.Diagnostic)) != evidence.OutputSHA256 {
+		t.Fatal("sealed test evidence lost its failure diagnostic")
 	}
 }
 
@@ -547,7 +562,7 @@ func TestReviewWorkerPromptsRequireArtifactOnlySourceEvidence(t *testing.T) {
 			}
 			text := string(prompt)
 			for _, required := range []string{
-				"tools: view\n",
+				"tools: view",
 				"reviewed-source snapshot",
 				"never use `file_path`",
 				"live checkout",

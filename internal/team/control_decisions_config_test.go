@@ -14,7 +14,7 @@ import (
 const controlDecisionsBlock = `control-decisions:
   model: nimble
   timeout: 4s
-  mode: shadow
+  mode: active
   points:
     path-reviewer: {mode: active, min-confidence: 0.95}
 `
@@ -34,7 +34,7 @@ func TestControlDecisionsParseInBothManifestForms(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := cfg.ControlDecisions
-			if got.Model != "nimble" || got.Timeout != 4*time.Second || got.Mode != control.ModeShadow ||
+			if got.Model != "nimble" || got.Timeout != 4*time.Second || got.Mode != control.ModeActive ||
 				got.Points[control.PathReviewer].Mode != control.ModeActive || *got.Points[control.PathReviewer].MinConfidence != 0.95 {
 				t.Fatalf("control-decisions = %#v", got)
 			}
@@ -45,7 +45,7 @@ func TestControlDecisionsParseInBothManifestForms(t *testing.T) {
 func TestControlDecisionsRejectInvalidTeamBlock(t *testing.T) {
 	tests := map[string]string{
 		"unknown mode":    "control-decisions:\n  mode: always\n",
-		"unknown point":   "control-decisions:\n  points:\n    similar-task: {mode: shadow}\n",
+		"unknown point":   "control-decisions:\n  points:\n    similar-task: {mode: active}\n",
 		"unknown field":   "control-decisions:\n  transport: http\n",
 		"unknown backend": "control-decisions:\n  backend: nimble\n",
 		"bad threshold":   "control-decisions:\n  min-confidence: 2\n",
@@ -117,7 +117,7 @@ func newControlDecisionCoordinator(t *testing.T, session *TeamSession) (*Coordin
 }
 
 func TestCoordinatorMergesHufuAndTeamControlDecisions(t *testing.T) {
-	global := control.Config{Endpoint: "http://gpu:11434/v1/systemone", Model: "nimble", Mode: control.ModeShadow,
+	global := control.Config{Endpoint: "http://gpu:11434/v1/systemone", Model: "nimble", Mode: control.ModeActive,
 		Points: map[control.Point]control.PointConfig{control.GuardReviewer: {Mode: control.ModeOff}}}
 	session := loadControlDecisionTeam(t, "control-decisions:\n  points:\n    path-reviewer: {mode: active}\n", global)
 	c, err := newControlDecisionCoordinator(t, session)
@@ -125,7 +125,7 @@ func TestCoordinatorMergesHufuAndTeamControlDecisions(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[control.Point]control.Mode{
-		control.AgentMatcher: control.ModeShadow, control.AskUser: control.ModeShadow,
+		control.AgentMatcher: control.ModeActive, control.AskUser: control.ModeActive,
 		control.PathReviewer: control.ModeActive, control.GuardReviewer: control.ModeOff,
 	}
 	for point, mode := range want {
@@ -143,7 +143,7 @@ func TestCoordinatorMergesHufuAndTeamControlDecisions(t *testing.T) {
 }
 
 func TestCoordinatorRejectsIncompleteMergedControlDecisions(t *testing.T) {
-	session := loadControlDecisionTeam(t, "control-decisions:\n  mode: shadow\n", control.Config{})
+	session := loadControlDecisionTeam(t, "control-decisions:\n  mode: active\n", control.Config{})
 	if _, err := newControlDecisionCoordinator(t, session); err == nil || !strings.Contains(err.Error(), "model") {
 		t.Fatalf("NewCoordinator error = %v, want a missing model error", err)
 	}
@@ -158,12 +158,12 @@ func TestCoordinatorRejectsIncompleteMergedControlDecisions(t *testing.T) {
 }
 
 func TestCloneSessionCopiesControlDecisions(t *testing.T) {
-	session := &TeamSession{GlobalControlDecisions: control.Config{Points: map[control.Point]control.PointConfig{control.AskUser: {Mode: control.ModeShadow}}}}
+	session := &TeamSession{GlobalControlDecisions: control.Config{Points: map[control.Point]control.PointConfig{control.AskUser: {Mode: control.ModeActive}}}}
 	session.Config.ControlDecisions = control.Config{Points: map[control.Point]control.PointConfig{control.PathReviewer: {Mode: control.ModeActive}}}
 	clone := cloneSession(session, "elsewhere")
 	clone.GlobalControlDecisions.Points[control.AskUser] = control.PointConfig{Mode: control.ModeOff}
 	clone.Config.ControlDecisions.Points[control.PathReviewer] = control.PointConfig{Mode: control.ModeOff}
-	if session.GlobalControlDecisions.Points[control.AskUser].Mode != control.ModeShadow || session.Config.ControlDecisions.Points[control.PathReviewer].Mode != control.ModeActive {
+	if session.GlobalControlDecisions.Points[control.AskUser].Mode != control.ModeActive || session.Config.ControlDecisions.Points[control.PathReviewer].Mode != control.ModeActive {
 		t.Fatal("cloneSession aliased control-decisions")
 	}
 }
@@ -184,9 +184,11 @@ func TestPolicySnapshotPinsActiveControlDecisionsOnly(t *testing.T) {
 		return state.snapshot.ConfigurationHash, state.snapshot.ControlDecisionHash
 	}
 	baseline, baselineControl := snapshotHash(control.Config{})
-	shadow, shadowControl := snapshotHash(control.Config{Model: "nimble", Mode: control.ModeShadow})
-	if baselineControl != "" || shadowControl != "" || shadow != baseline {
-		t.Fatalf("off or shadow changed the snapshot: %q %q %q %q", baseline, shadow, baselineControl, shadowControl)
+	if baselineControl != "" {
+		t.Fatal("unexpected baseline control hash")
+	}
+	if _, err := control.New(control.Config{Mode: control.ModeShadow}, utils.RedactSecrets); err == nil {
+		t.Fatal("shadow accepted")
 	}
 	active, activeControl := snapshotHash(control.Config{Model: "nimble", Points: map[control.Point]control.PointConfig{control.PathReviewer: {Mode: control.ModeActive}}})
 	if activeControl == "" || active == baseline {

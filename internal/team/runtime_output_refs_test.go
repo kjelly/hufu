@@ -158,7 +158,7 @@ func TestInitialStaticRuntimeContextSurvivesResolutionAndRebinding(t *testing.T)
 	}
 }
 
-func TestHufuCodeReviewSynthesisReceivesPrepareOutputsWithoutCoordinatorConstraints(t *testing.T) {
+func TestHufuCodeReviewSynthesisReceivesCompactPrepareStatusWithoutCoordinatorConstraints(t *testing.T) {
 	c, item := runtimeOutputRefFixture(t)
 	loaded := loadHufuCodeReviewTeam(t)
 	c.session.Config = loaded.Config
@@ -175,7 +175,10 @@ func TestHufuCodeReviewSynthesisReceivesPrepareOutputsWithoutCoordinatorConstrai
 	resultCopy, receiptCopy := *item.TypedResult, *item.ExecutionReceipt
 	verifier.TypedResult, verifier.ExecutionReceipt = &resultCopy, &receiptCopy
 	verifier.TypedResult.TaskID, verifier.ExecutionReceipt.TaskID = verifier.ID, verifier.ID
-	outputs, digest, err = CanonicalizeRuntimeOutputs(map[string]any{"targeted_go_tests": map[string]any{"passed": true, "exit_code": 0}})
+	outputs, digest, err = CanonicalizeRuntimeOutputs(map[string]any{
+		"targeted_go_tests":       map[string]any{"completed": true, "passed": false, "exit_code": 1, "diagnostic": "DIAGNOSTIC_MODEL_MUST_NOT_ECHO"},
+		"targeted_go_test_status": map[string]any{"completed": true, "passed": false, "timed_out": false, "output_truncated": false},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +208,10 @@ func TestHufuCodeReviewSynthesisReceivesPrepareOutputsWithoutCoordinatorConstrai
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`scope: {"requested":{"count":10},"satisfied":true}`, `targeted_go_tests: {"exit_code":0,"passed":true}`, `"required_critic_source_task_ids":["13"]`} {
+	if strings.Contains(final[0].Constraints, "DIAGNOSTIC_MODEL_MUST_NOT_ECHO") || !strings.Contains(final[0].Constraints, "Omit them from your submission") {
+		t.Fatal("model context still requires echoing complete receipts")
+	}
+	for _, want := range []string{`Scope context (for analysis only): {"requested":{"count":10},"satisfied":true}`, `Test status (for analysis only): {"completed":true,"output_truncated":false,"passed":false,"timed_out":false}`, `"required_critic_source_task_ids":["13"]`} {
 		if !strings.Contains(final[0].Constraints, want) {
 			t.Fatalf("static synthesis context omitted %s: %s", want, final[0].Constraints)
 		}

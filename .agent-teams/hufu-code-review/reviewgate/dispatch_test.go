@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,7 +42,7 @@ func testTeamAuditDispatch(t *testing.T, rejected bool) {
 		t.Fatal(err)
 	}
 	loaded.ExecutionRouteConfigs = map[string]config.ExecutionRouteConfig{"review": {Candidates: []string{"ollama/fixture"}}}
-	coordinator, err := team.NewCoordinator(loaded, "", "", nil, nil, team.RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
+	coordinator, err := team.NewCoordinator(loaded, "", "", nil, nil, team.RoleModels{Sidecar: "ollama/fixture"}, 0, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,6 +109,13 @@ func testTeamAuditDispatch(t *testing.T, rejected bool) {
 }
 
 func TestTeamPrepareDispatchExecutesImmutableWorksetAndGoVerifier(t *testing.T) {
+	for _, failing := range []bool{false, true} {
+		t.Run(fmt.Sprint(failing), func(t *testing.T) { testPrepareDispatch(t, failing) })
+	}
+}
+
+func testPrepareDispatch(t *testing.T, failing bool) {
+	t.Helper()
 	teamDir, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatal(err)
@@ -144,6 +152,9 @@ func TestTeamPrepareDispatchExecutesImmutableWorksetAndGoVerifier(t *testing.T) 
 	git("commit", "-m", "baseline")
 	write("calc/value.go", "package calc\n\nfunc Value() int { return 2 }\n")
 	write("calc/value_test.go", "package calc\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) { if Value() != 2 { t.Fatal(Value()) } }\n")
+	if failing {
+		write("calc/value_test.go", "package calc\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) { t.Fatal(\"committed failure\") }\n")
+	}
 	write(".gitignore", "docs/tmp\n")
 	write("docs/reference/belief-state-validation.md", "The residual local scratch proposal was compared with the integrated plan and\nremoved from `docs/tmp`; that directory contains no remaining proposal files\nand no path under it is tracked.\n")
 	git("add", ".")
@@ -155,7 +166,7 @@ func TestTeamPrepareDispatchExecutesImmutableWorksetAndGoVerifier(t *testing.T) 
 		t.Fatal(err)
 	}
 	loaded.ExecutionRouteConfigs = map[string]config.ExecutionRouteConfig{"review": {Candidates: []string{"ollama/fixture"}}}
-	coordinator, err := team.NewCoordinator(loaded, "", "", nil, nil, team.RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
+	coordinator, err := team.NewCoordinator(loaded, "", "", nil, nil, team.RoleModels{Sidecar: "ollama/fixture"}, 0, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,6 +195,17 @@ func TestTeamPrepareDispatchExecutesImmutableWorksetAndGoVerifier(t *testing.T) 
 	}
 	if items[1].TypedResult.RuntimeOutputs["targeted_go_tests"] == nil || len(items[0].TypedResult.Artifacts) < 3 {
 		t.Fatal("PREPARE omitted test receipt or routed workset artifacts")
+	}
+	var tests struct {
+		Passed     bool   `json:"passed"`
+		ExitCode   int    `json:"exit_code"`
+		Diagnostic string `json:"diagnostic"`
+	}
+	if err := json.Unmarshal(raw(t, items[1].TypedResult.RuntimeOutputs["targeted_go_tests"]), &tests); err != nil {
+		t.Fatal(err)
+	}
+	if tests.Passed == failing || (failing && (tests.ExitCode != 1 || !strings.Contains(tests.Diagnostic, "committed failure"))) {
+		t.Fatalf("PREPARE changed the reviewed revision's test outcome: %+v", tests)
 	}
 	var verification struct {
 		Passed     bool `json:"passed"`

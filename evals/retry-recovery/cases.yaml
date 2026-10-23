@@ -66,6 +66,15 @@ cases:
     provider-fixture: fixtures/replan-repeats-failed-strategy.json
     expect:
       task-count: 2
+      # The replacement is admitted in material-replan warn mode, but its
+      # first repeated failure reaches the hard anti-thrashing boundary.
+      # No additional provider step may revive that persisted block.
+      tasks:
+        - agent: worker
+          attempts: 2
+        - agent: worker
+          status: blocked
+          attempts: 1
       events:
         required: [loop_warning]
       durable-events:

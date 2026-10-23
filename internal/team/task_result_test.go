@@ -594,7 +594,7 @@ func TestSubmitResultToolAdvertisesStructuredOpenQuestions(t *testing.T) {
 		t.Fatalf("open_questions schema = %#v, want object", info.Parameters["open_questions"])
 	}
 	items, ok := questions["items"].(map[string]any)
-	if !ok || len(items["oneOf"].([]any)) != 2 {
+	if !ok || len(items["oneOf"].([]any)) != 3 {
 		t.Fatalf("open_questions schema must advertise string and structured entries: %#v", questions)
 	}
 }

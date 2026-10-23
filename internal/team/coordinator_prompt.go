@@ -88,35 +88,14 @@ func (c *Coordinator) appendCanonicalRunInputsPrompt(b *strings.Builder) {
 }
 
 func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) string {
-	// Use the same policy-filtered worker names exposed by the `agent` tool.
-	// LoadTeam always injects a built-in Helper, but teams can deliberately
-	// exclude it through delegation.allowed-workers. Listing that excluded
-	// worker here makes the prompt contradict the tool schema and causes an
-	// avoidable coordinator protocol repair.
-	workerNames := c.workerNameList()
-	initialPending := c.initialDelegationPending()
-	workerDefs := c.workerDefsForNames(workerNames)
-	workerNames, workerDefs, initialPending = c.runtimeWorkflowWorkers(workerNames, workerDefs, initialPending)
-	if initialPending {
-		// Do not present later-phase workers as selectable evidence to a fresh
-		// coordinator. The initial agent-tool schema is narrowed independently;
-		// this prompt-side projection keeps an LLM from treating the full team
-		// roster as permission to skip the canonical first batch.
-		byName := make(map[string]*agent.AgentDef, len(workerDefs))
-		for _, def := range workerDefs {
-			byName[strings.ToLower(def.Name)] = def
-		}
-		workerNames = append([]string(nil), c.session.Config.Delegation.InitialBatch...)
-		workerDefs = workerDefs[:0]
-		for _, name := range workerNames {
-			if def := byName[strings.ToLower(name)]; def != nil {
-				workerDefs = append(workerDefs, def)
-			}
-		}
-	}
+	workerNames, workerDefs, initialPending := c.coordinatorPromptWorkers()
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are the coordinator of team %q with %d members: %s.\n\n", c.session.Config.Name, len(workerNames), strings.Join(workerNames, ", "))
+	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+		fmt.Fprintf(&b, "You are the coordinator of team %q. Use the current Runtime Workflow and Available Agents sections for phase-specific delegation.\n\n", c.session.Config.Name)
+	} else {
+		fmt.Fprintf(&b, "You are the coordinator of team %q with %d members: %s.\n\n", c.session.Config.Name, len(workerNames), strings.Join(workerNames, ", "))
+	}
 	c.appendRuntimeWorkflowPrompt(&b)
 	c.appendActionCatalogPrompt(&b)
 	c.appendCanonicalRunInputsPrompt(&b)
@@ -172,28 +151,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	b.WriteString("## Task Status\n\n")
 	b.WriteString(c.buildTaskStatusContext())
 
-	b.WriteString("## Available Agents\n\n")
-	fmt.Fprintf(&b, "CRITICAL: You MUST use EXACTLY these names in the 'agent' field of the agent tool. Do NOT invent new names or use generic roles. Using an unknown name will result in an IMMEDIATE ERROR.\n\n")
-	fmt.Fprintf(&b, "Valid names: %s\n\n", strings.Join(workerNames, ", "))
-	for _, def := range workerDefs {
-		fmt.Fprintf(&b, "### %s\n", def.Name)
-		if def.Description != "" {
-			fmt.Fprintf(&b, "**Description:** %s\n", def.Description)
-		}
-		if instr := c.getWorkerSummary(def.Name); instr != "" {
-			fmt.Fprintf(&b, "**Instructions:** %s\n", instr)
-		}
-		if def.Tools != "" {
-			fmt.Fprintf(&b, "**Tools:** %s\n", def.Tools)
-		}
-		if caps := ExtractCapabilitiesFromSystem(def.System); caps != "" {
-			fmt.Fprintf(&b, "**Capabilities:**\n")
-			for _, line := range strings.Split(caps, "\n") {
-				fmt.Fprintf(&b, "- %s\n", line)
-			}
-		}
-		b.WriteString("\n")
-	}
+	c.appendAvailableAgentsPrompt(&b, workerNames, workerDefs)
 
 	b.WriteString("## Worker Tools\n\n")
 	b.WriteString("Workers have access to the following special tools in addition to their configured toolset:\n\n")
@@ -532,3 +490,83 @@ IMPORTANT INSTRUCTIONS:
 - Call the finish tool RIGHT NOW with your best summary of the work completed
 
 This is a wrap-up request. You MUST call finish immediately with whatever results are available.`
+
+// refreshWorkflowPrompt updates phase-owned prompt projections before each
+// coordinator request. Other instructions and the frozen execution policy
+// remain unchanged; authorization is still enforced by the tool gate.
+func (c *Coordinator) refreshWorkflowPrompt(system string) string {
+	var currentPrompt strings.Builder
+	workerNames, workerDefs, _ := c.coordinatorPromptWorkers()
+	c.appendAvailableAgentsPrompt(&currentPrompt, workerNames, workerDefs)
+	c.appendRuntimeWorkflowPrompt(&currentPrompt)
+	_, current := splitCoordinatorPromptSections(currentPrompt.String())
+	preamble, sections := splitCoordinatorPromptSections(system)
+	for i := range sections {
+		switch strings.ToLower(sections[i].heading) {
+		case "available agents", "runtime workflow":
+			for _, section := range current {
+				if strings.EqualFold(sections[i].heading, section.heading) {
+					sections[i].body = section.body
+					break
+				}
+			}
+		}
+	}
+	return renderCoordinatorPromptSections(preamble, sections)
+}
+
+func (c *Coordinator) coordinatorPromptWorkers() ([]string, []*agent.AgentDef, bool) {
+	// Use the same policy-filtered worker names exposed by the `agent` tool.
+	// LoadTeam always injects a built-in Helper, but teams can deliberately
+	// exclude it through delegation.allowed-workers. Listing that excluded
+	// worker here makes the prompt contradict the tool schema and causes an
+	// avoidable coordinator protocol repair.
+	workerNames := c.workerNameList()
+	initialPending := c.initialDelegationPending()
+	workerDefs := c.workerDefsForNames(workerNames)
+	workerNames, workerDefs, initialPending = c.runtimeWorkflowWorkers(workerNames, workerDefs, initialPending)
+	if initialPending {
+		// Do not present later-phase workers as selectable evidence to a fresh
+		// coordinator. The initial agent-tool schema is narrowed independently;
+		// this prompt-side projection keeps an LLM from treating the full team
+		// roster as permission to skip the canonical first batch.
+		byName := make(map[string]*agent.AgentDef, len(workerDefs))
+		for _, def := range workerDefs {
+			byName[strings.ToLower(def.Name)] = def
+		}
+		workerNames = append([]string(nil), c.session.Config.Delegation.InitialBatch...)
+		workerDefs = workerDefs[:0]
+		for _, name := range workerNames {
+			if def := byName[strings.ToLower(name)]; def != nil {
+				workerDefs = append(workerDefs, def)
+			}
+		}
+	}
+
+	return workerNames, workerDefs, initialPending
+}
+
+func (c *Coordinator) appendAvailableAgentsPrompt(b *strings.Builder, workerNames []string, workerDefs []*agent.AgentDef) {
+	b.WriteString("## Available Agents\n\n")
+	fmt.Fprintf(b, "CRITICAL: You MUST use EXACTLY these names in the 'agent' field of the agent tool. Do NOT invent new names or use generic roles. Using an unknown name will result in an IMMEDIATE ERROR.\n\n")
+	fmt.Fprintf(b, "Valid names: %s\n\n", strings.Join(workerNames, ", "))
+	for _, def := range workerDefs {
+		fmt.Fprintf(b, "### %s\n", def.Name)
+		if def.Description != "" {
+			fmt.Fprintf(b, "**Description:** %s\n", def.Description)
+		}
+		if instr := c.getWorkerSummary(def.Name); instr != "" {
+			fmt.Fprintf(b, "**Instructions:** %s\n", instr)
+		}
+		if def.Tools != "" {
+			fmt.Fprintf(b, "**Tools:** %s\n", def.Tools)
+		}
+		if caps := ExtractCapabilitiesFromSystem(def.System); caps != "" {
+			fmt.Fprintf(b, "**Capabilities:**\n")
+			for line := range strings.SplitSeq(caps, "\n") {
+				fmt.Fprintf(b, "- %s\n", line)
+			}
+		}
+		b.WriteString("\n")
+	}
+}

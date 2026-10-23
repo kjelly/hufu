@@ -14,6 +14,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/cost"
+	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/semantic"
 )
@@ -57,10 +58,11 @@ type ExecutionPolicySnapshot struct {
 	ActionCatalogHash string `json:"action_catalog_hash,omitempty"`
 	// DecisionPrimitiveHash pins decision contracts, grants, transport, and
 	// credential revisions without storing credentials or endpoint values.
+	DecisionRuntimeHash   string `json:"decision_runtime_hash,omitempty"`
 	DecisionPrimitiveHash string `json:"decision_primitive_hash,omitempty"`
 	// ControlDecisionHash pins the transport, credential revision, and
 	// thresholds of every active runtime control decision. It is omitted when
-	// no point is active, so off and shadow configuration never affect resume.
+	// no point is active, so inactive legacy transport configuration does not affect resume.
 	ControlDecisionHash string `json:"control_decision_hash,omitempty"`
 	// SemanticRetrievalHash pins the effective semantic-retrieval settings
 	// when the mode is active. Off and shadow never change selection, so
@@ -309,6 +311,11 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 		TeamMaxConcurrent: c.maxConcurrent,
 		DefaultLLMBackend: defaultBackend,
 	}
+	runtimeHash, runtimeErr := settings.Merge(c.session.GlobalDecisionRuntime, c.session.Config.DecisionRuntime).Fingerprint("sidecar")
+	if runtimeErr != nil {
+		return nil, runtimeErr
+	}
+	snapshot.DecisionRuntimeHash = runtimeHash
 	snapshot.DecisionPrimitiveHash = c.decisionPrimitives.Hash()
 	snapshot.ControlDecisionHash = c.controlDecisions.Hash()
 	snapshot.SemanticRetrievalHash = activeSemanticRetrievalHash(c.semanticSettings)
@@ -658,17 +665,8 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	if err := validateExecutionDiagnosticSnapshot(snapshot.DiagnosticLoop); err != nil {
 		return err
 	}
-	if snapshot.DecisionPrimitiveHash != "" && !decisionDigestPattern.MatchString(snapshot.DecisionPrimitiveHash) {
-		return fmt.Errorf("invalid decision primitive policy hash")
-	}
-	if snapshot.StaticWorkflowHash != "" && !decisionDigestPattern.MatchString(snapshot.StaticWorkflowHash) {
-		return fmt.Errorf("invalid static workflow policy hash")
-	}
-	if snapshot.ControlDecisionHash != "" && !decisionDigestPattern.MatchString(snapshot.ControlDecisionHash) {
-		return fmt.Errorf("invalid control decision policy hash")
-	}
-	if snapshot.SemanticRetrievalHash != "" && !decisionDigestPattern.MatchString(snapshot.SemanticRetrievalHash) {
-		return fmt.Errorf("invalid semantic retrieval policy hash")
+	if err := validateOptionalPolicyHashes(snapshot); err != nil {
+		return err
 	}
 	if len(snapshot.Backends) == 0 {
 		return fmt.Errorf("execution policy snapshot has no backends")
@@ -1017,4 +1015,23 @@ func activeSemanticRetrievalHash(settings semantic.Settings) string {
 		return ""
 	}
 	return settings.Hash()
+}
+
+func validateOptionalPolicyHashes(snapshot *ExecutionPolicySnapshot) error {
+	if snapshot.DecisionRuntimeHash != "" && !decisionDigestPattern.MatchString(snapshot.DecisionRuntimeHash) {
+		return fmt.Errorf("invalid decision runtime hash")
+	}
+	if snapshot.DecisionPrimitiveHash != "" && !decisionDigestPattern.MatchString(snapshot.DecisionPrimitiveHash) {
+		return fmt.Errorf("invalid decision primitive policy hash")
+	}
+	if snapshot.StaticWorkflowHash != "" && !decisionDigestPattern.MatchString(snapshot.StaticWorkflowHash) {
+		return fmt.Errorf("invalid static workflow policy hash")
+	}
+	if snapshot.ControlDecisionHash != "" && !decisionDigestPattern.MatchString(snapshot.ControlDecisionHash) {
+		return fmt.Errorf("invalid control decision policy hash")
+	}
+	if snapshot.SemanticRetrievalHash != "" && !decisionDigestPattern.MatchString(snapshot.SemanticRetrievalHash) {
+		return fmt.Errorf("invalid semantic retrieval policy hash")
+	}
+	return nil
 }

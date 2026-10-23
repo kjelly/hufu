@@ -406,3 +406,32 @@ func TestReviewGateActionIdentityFailsClosed(t *testing.T) {
 		t.Fatalf("error=%v", err)
 	}
 }
+
+func TestReviewGateAcceptsEmptyCritiqueCoverage(t *testing.T) {
+	review := record{Kind: "review", Findings: []finding{}}
+	source := fixtureTask(t, "3", "review-primary-workset", "success", payload{Record: raw(t, review)}, review, nil)
+	critique := record{Kind: "critique", InputReview: []inputReview{entry(source, review, t)}, Decisions: []decision{}}
+	critic := fixtureTask(t, "4", "critic-review", "success", payload{Record: raw(t, critique)}, critique, []string{"3"})
+	var sourcePayload payload
+	if err := json.Unmarshal(source.Result.Payload.Value, &sourcePayload); err != nil {
+		t.Fatal(err)
+	}
+	id, gaps, err := verifyCritique(critic, critique, map[string]task{"3": source}, map[string]payload{"3": sourcePayload}, map[string]record{"3": review}, map[string]bool{})
+	if err != nil || gaps || id != "3" {
+		t.Fatalf("id=%s gaps=%v error=%v", id, gaps, err)
+	}
+}
+
+func TestReviewGateRejectsRewritingFailedTestsAsPassed(t *testing.T) {
+	fixture := gateFixture(t)
+	failed := raw(t, map[string]any{"passed": false, "exit_code": 1, "diagnostic": "--- FAIL: TestSocketPath"})
+	fixture.Tasks[6].Result.RuntimeOutputs["targeted_go_tests"] = failed
+	replacePayload(t, &fixture.Tasks[4], func(p *payload) { p.Tests = failed })
+	if _, _, err := verify(fixture, "run-1"); err != nil {
+		t.Fatal(err)
+	}
+	replacePayload(t, &fixture.Tasks[4], func(p *payload) { p.Tests = raw(t, map[string]any{"passed": true, "exit_code": 0}) })
+	if _, _, err := verify(fixture, "run-1"); err == nil || !strings.Contains(err.Error(), "substituted verify-targeted-go-tests") {
+		t.Fatalf("accepted forged test success: %v", err)
+	}
+}

@@ -82,7 +82,8 @@ scope, produce the immutable manifests, and execute snapshot-pinned tests.
 VERIFY keeps repository invariant assessments on the primary children, then
 critiques and synthesizes accepted results. Each primary review's
 `verify-spec` checks that `record.invariant_assessments` repeats the attested
-claims (`invariant_id`, `status`, `summary`, in ascending ID order) while
+claims (`invariant_id`, `status`, `summary`, and optional `finding_index` /
+`missing_evidence`, in ascending ID order) while
 `submit_result` can still be corrected; the handoff inventory repeats the full
 comparison later, when reviewers can no longer be redispatched. The final report audit is a static
 `side_effect: none` VERIFY action, bound to that same scope snapshot. Its typed
@@ -192,7 +193,7 @@ golangci-lint run
 
 Result schemas must fit the runtime full-schema prompt budget (32 KiB canonical JSON). Ordered critic finding indices use one shared prefixItems rule; the per-count conditions only enforce exact coverage lengths. The team schema tests reject missing, duplicate, reordered, and out-of-range decisions and prevent schema growth from silently removing the full model-visible contract.
 
-The synthesizer reserves 65,536 output tokens for the full inventory envelope, which includes verbatim dependency records. Both normal synthesis and result-only repair receive the admitted schema; diagnostics and planning must not consume the inventory output allowance.
+The synthesizer reserves 65,536 output tokens for its semantic report fields. Report-v2 declares scope and test_verification through x-hufu-runtime-inputs, and input_review runtime-owned: the model omits all three fields, and generic runtime bindings copy complete receipt-verified native outputs and accepted source records and hashes before canonical validation. This avoids generating a large duplicate inventory over the provider stream. The stored inventory, render template, source coverage and final audit remain complete. Both normal synthesis and result-only repair receive the admitted submission shape.
 
 A bounded cross-workset gap resolution cites one artifact from one other
 accepted review. The schema rejects combined-artifact claims during submission,
@@ -320,3 +321,42 @@ For the 51-gap regression, a proposed 52nd decision is rejected at submission;
 the runtime always generates exactly the 51 original identities. This change
 uses the existing worker model's structured enum decisions and grants no new
 tools or network access. Changed schema hashes require a fresh `--new` run.
+
+### Runtime evidence keys
+
+Active source-review, typed-critique and report schemas opt into
+`x-hufu-evidence-keys` for worker-authored evidence arrays. After a successful
+runtime `view`, prefer its issued `ev_` keys in those arrays and `files_read.path`.
+Do not copy keys from another task or attempt. The runtime expands them to
+verified full artifact IDs before normal validation, hashing and persistence.
+Forwarded source records remain canonical and are never rewritten with local
+keys. Failed or omitted batch items issue no key; a key does not attest full
+coverage or semantic support. `view.artifact_ref` still takes the full issued ID.
+
+### Executed tests and failed tests
+
+The review requires snapshot-pinned test execution with a nonnegative exit code,
+no timeout, no truncated output, and a sealed evidence artifact. A failing test
+is evidence about the reviewed revision and does not prevent independent code
+review. The runtime binds the entire receipt into the final report, including passed=false,
+exit code and diagnostic. The audit rejects any substituted receipt; the schema
+rejects inconsistent passed/exit-code claims and missing failure diagnostics.
+The report renders failures explicitly. Launch errors, interruption, timeout and
+truncated evidence still block the workflow.
+
+### Bounded critique navigation and failure
+
+`critic-review` tasks use literal artifact search and targeted excerpts, at
+most six view calls / 12 KiB returned text per task. The static contract, not
+the source's documentation lens, selects this mode. Search results provide
+absolute offsets; only shown excerpts count as observed semantic evidence.
+The 48 KiB helper context still includes the finding and every successful
+observed read; it is never silently truncated. Before returning a new read,
+the runtime checks the complete encoded context for every bound decision row.
+A read that would overflow is withheld entirely with
+`decision_read_budget_exhausted`, issues no new evidence key, and leaves prior
+observations usable. Stop reading and ask the helper to assess that evidence.
+Missing evidence remains visible
+through unverified decisions. A failed or interrupted required helper requires
+a minimal blocked result with no structured_payload; an incomplete decision
+collection cannot claim a successful audit.

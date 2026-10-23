@@ -7,8 +7,6 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
-	"github.com/kjelly/hufu/internal/modelprofile"
-	"github.com/kjelly/hufu/internal/providerintrospection"
 )
 
 func TestPlanFirstTaskCloningAndErrorPropagation(t *testing.T) {
@@ -115,67 +113,30 @@ func TestPlanReviewerUsesConfiguredModel(t *testing.T) {
 	}
 }
 
-type planReviewerProfileIntrospector struct{}
-
-func (planReviewerProfileIntrospector) InspectModel(context.Context, providerintrospection.ProviderRef, string) (providerintrospection.RuntimeModelInfo, error) {
-	return providerintrospection.RuntimeModelInfo{ConfiguredContext: 4_096, MaxOutputTokens: 256}, nil
-}
-
-func TestPlanReviewerAuxiliaryCompilationUsesReviewerBoundProfile(t *testing.T) {
-	const reviewerModel = "distinct-plan-reviewer-model"
-	providerManager, err := agent.NewProviderManager("http://127.0.0.1:11434/v1", "", nil)
-	if err != nil {
-		t.Fatalf("NewProviderManager failed: %v", err)
-	}
-	profileRuntime := &ModelProfileRuntime{
-		manager: providerManager,
-		resolver: modelprofile.NewRuntimeResolver(func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
-			return planReviewerProfileIntrospector{}
-		}, modelprofile.ProfileCacheOptions{}),
-	}
-	workspace := t.TempDir()
-	compileErr := errors.New("stop before plan reviewer provider call")
-	compiler := &mockContextCompiler{compileWorkerErr: compileErr}
-	c := &Coordinator{
-		session: &TeamSession{
-			Dir:       workspace,
-			Workspace: workspace,
-			Agents:    map[string]*agent.AgentDef{"worker": {Name: "worker", Role: "worker"}},
-			Config:    agent.TeamConfig{Generation: agent.GenerationParams{MaxTokens: "2048"}},
-		},
-		providerManager:     providerManager,
-		modelProfileRuntime: profileRuntime,
-		planReviewerModel:   reviewerModel,
-		pendingPlans:        map[string]*PlanEntry{"todo-1": {TodoID: "todo-1", Agent: "worker", Goal: "review this plan"}},
-		taskTracker:         NewTaskTracker(),
-		sessionData:         NewSession(),
-		projectDir:          workspace,
-		reportStatus:        func(StatusEvent) {},
-		executionRunID:      "plan-reviewer-profile-test",
-	}
+func TestPlanReviewerPrimitivePromptIsNotRewrittenByCompiler(t *testing.T) {
+	const model = "plan-reviewer-primitive-profile"
+	c, _, capture := newWorkerProviderSurfaceCoordinator(t, model, "plan-reviewer")
+	c.planReviewerModel = model
+	c.providerBoundaryStarted = true
+	c.decisionPrimitiveGate = make(chan struct{}, 1)
+	c.pendingPlans = map[string]*PlanEntry{"plan-reviewer-todo": {TodoID: "plan-reviewer-todo", PlanRevisionID: "revision-1", Agent: "worker", Goal: "review the plan", PlanText: "inspect", Status: "submitted"}}
+	compiler := &mockContextCompiler{compileWorkerErr: errors.New("primitive must not rewrite its evidence")}
 	c.SetContextCompiler(compiler)
-
-	reviewer, err := c.getPlanReviewer(t.Context(), "todo-1")
+	reviewer, err := c.getPlanReviewer(t.Context(), "plan-reviewer-todo")
 	if err != nil {
-		t.Fatalf("getPlanReviewer failed: %v", err)
+		t.Fatal(err)
 	}
-	bound := reviewer.providerBoundInvocationContext
-	if !bound.AdmissionContext.IsBound() || bound.ModelID != reviewerModel {
-		t.Fatalf("reviewer invocation was not provider-bound: %#v", bound)
+	_, _, execErr, reviewErr := reviewer.review(t.Context(), "inspect")
+	if execErr != nil || reviewErr != nil {
+		t.Fatalf("execution=%v review=%v", execErr, reviewErr)
 	}
-	if bound.ModelContext.ContextWindow != 4_096 || bound.ModelContext.MaxOutputTokens != 2_048 {
-		t.Fatalf("reviewer model context = %#v, want distinct runtime profile", bound.ModelContext)
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	if len(capture.models) != 1 || capture.models[0] != model {
+		t.Fatalf("models=%v", capture.models)
 	}
-
-	_, _, execErr, reviewErr := reviewer.review(t.Context(), "1. inspect the change")
-	if execErr != nil || !errors.Is(reviewErr, compileErr) {
-		t.Fatalf("review errors = execution %v, review %v; want compiler error only", execErr, reviewErr)
-	}
-	if compiler.workerModelContext != bound.ModelContext {
-		t.Fatalf("auxiliary compiler model context = %#v, want reviewer-bound %#v", compiler.workerModelContext, bound.ModelContext)
-	}
-	if compiler.workerModelContext == GlobalModelSpecRegistry().GetSpec("") {
-		t.Fatalf("auxiliary compiler used the empty-model global profile: %#v", compiler.workerModelContext)
+	if !strings.Contains(capture.contexts[0], `"spec_id":"runtime_plan_review"`) {
+		t.Fatal("lost typed decision prompt")
 	}
 }
 

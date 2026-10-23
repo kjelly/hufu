@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/kjelly/hufu/internal/fsutil"
 )
 
 // PutArtifactRequest describes an immutable artifact to persist. Content is
@@ -211,22 +214,14 @@ func (s *FileArtifactStore) createMetadata(path string, encoded []byte, ref Arti
 	return createOrVerifyArtifactMetadata(path, encoded, ref, origin)
 }
 
-// createOrVerifyArtifactFile makes the O_EXCL result authoritative. A failed
-// create due to EEXIST is an existing shared object, not an error and never
-// grants ownership to this Put call.
+// Publish complete bytes atomically before exposing the shared CAS path. An
+// existing object never grants ownership to this Put call.
 func createOrVerifyArtifactFile(path string, data []byte) (bool, error) {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	err := fsutil.AtomicCreateFile(path, data, 0o644)
 	if err == nil {
-		if _, writeErr := f.Write(data); writeErr != nil {
-			_ = f.Close()
-			return true, fmt.Errorf("write artifact %q: %w", filepath.Base(path), writeErr)
-		}
-		if closeErr := f.Close(); closeErr != nil {
-			return true, fmt.Errorf("close artifact %q: %w", filepath.Base(path), closeErr)
-		}
 		return true, nil
 	}
-	if !os.IsExist(err) {
+	if !errors.Is(err, os.ErrExist) {
 		return false, fmt.Errorf("create artifact %q: %w", filepath.Base(path), err)
 	}
 	existing, readErr := os.ReadFile(path)
@@ -240,18 +235,11 @@ func createOrVerifyArtifactFile(path string, data []byte) (bool, error) {
 }
 
 func createOrVerifyArtifactMetadata(path string, encoded []byte, ref ArtifactRef, origin ArtifactOriginMetadata) (bool, error) {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	err := fsutil.AtomicCreateFile(path, encoded, 0o644)
 	if err == nil {
-		if _, writeErr := f.Write(encoded); writeErr != nil {
-			_ = f.Close()
-			return true, fmt.Errorf("write artifact metadata %q: %w", ref.ID, writeErr)
-		}
-		if closeErr := f.Close(); closeErr != nil {
-			return true, closeErr
-		}
 		return true, nil
 	}
-	if !os.IsExist(err) {
+	if !errors.Is(err, os.ErrExist) {
 		return false, fmt.Errorf("create artifact metadata %q: %w", ref.ID, err)
 	}
 	existing, readErr := os.ReadFile(path)

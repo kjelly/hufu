@@ -169,7 +169,7 @@ func TestNewContradictionInheritsDismissalAcrossJudgeVersions(t *testing.T) {
 		t.Fatalf("dismiss dismissed=%v err=%v", dismissed, err)
 	}
 	before := len(pendingEventTypes(t, repo))
-	rejudged := newTestJudgment(a, b, PairVerdictContradicts, "conflict-judge-v2")
+	rejudged := newTestJudgment(a, b, PairVerdictContradicts, "conflict-judge-future")
 	stored, written, err := repo.SavePairJudgment(ctx, rejudged, "operator", false)
 	if err != nil || !written {
 		t.Fatalf("rejudge written=%v err=%v", written, err)

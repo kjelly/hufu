@@ -849,6 +849,9 @@ func TestProtocolRepair_TwoInvalidSchemasRecoverProvisionallyAndBlock(t *testing
 	if len(prov.History) != 2 || prov.History[0].FailureReason != RepairFailureInvalidSchema || prov.History[1].FailureReason != RepairFailureInvalidSchema {
 		t.Fatalf("repair history = %#v, want two invalid_schema failures", prov.History)
 	}
+	if got.FailureEvent == nil || got.FailureEvent.Phase != "protocol" || got.FailureEvent.Command != submitResultToolName || got.FailureEvent.Stderr != "invalid result schema" {
+		t.Fatalf("terminal failure lost the submission rejection: %#v", got.FailureEvent)
+	}
 	if got.TypedResult == nil || got.TypedResult.Source != "recovered_protocol" || got.TypedResult.Confidence <= 0 || got.TypedResult.RawOutputRef == nil {
 		t.Fatalf("missing evidence-backed recovered_protocol result: %#v", got.TypedResult)
 	}
@@ -857,6 +860,59 @@ func TestProtocolRepair_TwoInvalidSchemasRecoverProvisionallyAndBlock(t *testing
 	}
 	if gotMetrics := c.Metrics().ProtocolRepairsAttempted; gotMetrics != 2 {
 		t.Fatalf("protocol repair attempts metric = %d, want 2 repair turns", gotMetrics)
+	}
+}
+
+func TestProtocolSchemaFailureRetryReceivesValidationRejection(t *testing.T) {
+	workspace := t.TempDir()
+	workerCalls, repairCalls := 0, 0
+	var prompts []string
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "schema-retry-diagnostic", Timeout: 30, MaxRetries: 1},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", MaxRetries: 1, Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime: time.Now(), taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {},
+		taskCache: newDefaultTaskCache(taskCacheDependencies{}), executionRunID: "run-schema-retry-diagnostic",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "inspect and report"}})[0]
+	c.workerAgentOverride = &scriptedRepairAgent{
+		calls: &workerCalls, prompts: &prompts,
+		steps: func(call int) []fantasy.StepResult {
+			if call != 1 {
+				return nil
+			}
+			return []fantasy.StepResult{{Response: fantasy.Response{Content: fantasy.ResponseContent{
+				fantasy.ToolCallContent{ToolCallID: "observed-read", ToolName: "view", Input: `{"file_path":"record.txt"}`},
+				fantasy.ToolResultContent{ToolCallID: "observed-read", ToolName: "view", Result: fantasy.ToolResultOutputContentText{Text: "observed execution facts"}},
+			}}}}
+		},
+		onCall: func(call int) {
+			if call == 2 {
+				c.storeSubmittedTaskResult(item.ID, &TaskResult{
+					TaskID: item.ID, Agent: "worker", Status: "success", Summary: "corrected result", Source: "submitted",
+				})
+			}
+		},
+	}
+	c.repairAgentOverride = &scriptedRepairAgent{
+		calls: &repairCalls, steps: func(int) []fantasy.StepResult { return invalidSchemaRepairSteps() },
+	}
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(t.Context()), TaskDef{
+		Agent: "worker", Goal: "inspect and report", Recovery: RecoveryRetry, SideEffect: SideEffectNone,
+		Execution: ExecutionContract{RequiresResult: true, RequiresGroundedResult: true},
+	}, item.ID)
+	if err != nil {
+		t.Fatalf("bounded retry failed: %v", err)
+	}
+	if workerCalls != 2 || repairCalls != 2 || len(prompts) != 2 {
+		t.Fatalf("worker/repair calls = %d/%d, prompts = %d; want 2/2/2", workerCalls, repairCalls, len(prompts))
+	}
+	if !strings.Contains(prompts[1], "invalid result schema") || !strings.Contains(prompts[1], "last tool call: submit_result") {
+		t.Fatalf("retry did not receive the terminal submission rejection: %s", prompts[1])
 	}
 }
 
@@ -1223,6 +1279,14 @@ func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
 	// We inject a mock repair agent that calls submit_result when invoked during repair.
 	c.repairAgentOverride = &mockRepairAgent{
 		onContext: func(ctx context.Context) {
+			scope, scoped := artifactAccessScopeFromContext(ctx)
+			if !scoped || scope.TaskID != todoID || scope.RunID != c.executionRunID || scope.Attempt != 1 {
+				t.Fatalf("repair lost the original artifact scope: %#v", scope)
+			}
+			metadata, ok := invocationMetadataFromContext(ctx)
+			if !ok || metadata.TaskID != todoID || metadata.Attempt != 1 || metadata.AgentName != "worker" || metadata.ModelExecutionID == "" {
+				t.Fatalf("repair lost the original worker identity: %#v", metadata)
+			}
 			response, runErr := (&submitResultTool{coordinator: c, todoID: todoID}).Run(ctx, fantasy.ToolCall{
 				Name:  submitResultToolName,
 				Input: `{"status":"success","summary":"repair","artifacts":[{"path":"repair-artifact.txt"}]}`,
@@ -2120,5 +2184,59 @@ func TestProtocolIncomplete_ConvergenceAndFinalization(t *testing.T) {
 	itemsAfter := c.taskTracker.TodoList().Items()
 	if itemsAfter[0].Status != TaskError {
 		t.Fatalf("finalizeRemainingTasks should transition TaskProtocolIncomplete to TaskError, got: %s", itemsAfter[0].Status)
+	}
+}
+
+func TestProtocolRetryHonorsPersistedAntiThrashingBlock(t *testing.T) {
+	workspace := t.TempDir()
+	workerCalls, repairCalls := 0, 0
+	var prompts []string
+	c := &Coordinator{
+		session: &TeamSession{
+			Workspace: workspace,
+			Config:    agent.TeamConfig{Name: "schema-retry-diagnostic", Timeout: 30, MaxRetries: 1, Reliability: agent.ReliabilityConfig{MaxSameFailureFingerprint: 1, HardEnforcement: true}},
+			Agents: map[string]*agent.AgentDef{
+				"worker": {Name: "worker", Role: "worker", MaxRetries: 1, Generation: agent.GenerationParams{Model: "test"}},
+			},
+		},
+		sessionTime: time.Now(), taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {},
+		taskCache: newDefaultTaskCache(taskCacheDependencies{}), executionRunID: "run-schema-retry-diagnostic",
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "inspect and report"}})[0]
+	c.workerAgentOverride = &scriptedRepairAgent{
+		calls: &workerCalls, prompts: &prompts,
+		steps: func(call int) []fantasy.StepResult {
+			if call != 1 {
+				return nil
+			}
+			return []fantasy.StepResult{{Response: fantasy.Response{Content: fantasy.ResponseContent{
+				fantasy.ToolCallContent{ToolCallID: "observed-read", ToolName: "view", Input: `{"file_path":"record.txt"}`},
+				fantasy.ToolResultContent{ToolCallID: "observed-read", ToolName: "view", Result: fantasy.ToolResultOutputContentText{Text: "observed execution facts"}},
+			}}}}
+		},
+		onCall: func(call int) {
+			if call == 2 {
+				c.storeSubmittedTaskResult(item.ID, &TaskResult{
+					TaskID: item.ID, Agent: "worker", Status: "success", Summary: "corrected result", Source: "submitted",
+				})
+			}
+		},
+	}
+	c.repairAgentOverride = &scriptedRepairAgent{
+		calls: &repairCalls, steps: func(int) []fantasy.StepResult { return invalidSchemaRepairSteps() },
+	}
+	_, err := c.executeTask(withTestProtocolRepairInvocationContext(t.Context()), TaskDef{
+		Agent: "worker", Goal: "inspect and report", Recovery: RecoveryRetry, SideEffect: SideEffectNone,
+		Execution: ExecutionContract{RequiresResult: true, RequiresGroundedResult: true},
+	}, item.ID)
+	if err == nil {
+		t.Fatal("hard anti-thrashing block returned success")
+	}
+	if workerCalls != 1 || repairCalls != 2 {
+		t.Fatalf("worker/repair calls = %d/%d, want no worker retry after persisted block", workerCalls, repairCalls)
+	}
+	got := c.todoItemByID(item.ID)
+	if got.Status != TaskBlocked || c.wrapUp.Load() == 0 {
+		t.Fatalf("blocked projection = status %s", got.Status)
 	}
 }

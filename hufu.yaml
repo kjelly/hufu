@@ -1,6 +1,11 @@
 timeouts:
   decision: 60s
 
+# This checkout uses the unified primitive path; legacy shadow mode inherited
+# from a global configuration is no longer accepted.
+control-decisions:
+  mode: active
+
 profiles:
   hufu-code-review-ci:
     agent-team: hufu-code-review

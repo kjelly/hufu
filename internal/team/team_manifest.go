@@ -15,6 +15,7 @@ import (
 	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/decisionrt/control"
+	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/semantic"
 	"github.com/kjelly/hufu/internal/yamlutil"
@@ -187,6 +188,7 @@ type teamManifestSpecFields struct {
 	Verification       agent.VerificationConfig              `yaml:"verification,omitempty"`
 	Retry              agent.RetryConfig                     `yaml:"retry,omitempty"`
 	Decision           DecisionAuthoringConfig               `yaml:"decision,omitempty"`
+	DecisionRuntime    settings.Config                       `yaml:"decision-runtime,omitempty"`
 	DecisionPrimitives map[string]catalog.Entry              `yaml:"decision-primitives,omitempty"`
 	ControlDecisions   control.Config                        `yaml:"control-decisions,omitempty"`
 	SemanticRetrieval  semantic.Config                       `yaml:"semantic-retrieval,omitempty"`

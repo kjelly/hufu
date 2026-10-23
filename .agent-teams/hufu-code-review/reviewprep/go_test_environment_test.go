@@ -27,9 +27,13 @@ func persistedGoTestPaths(t *testing.T) map[string]string {
 		"GOPATH":     filepath.Join(root, "operator go path"),
 		"GOMODCACHE": filepath.Join(root, "operator module cache"),
 		"GOCACHE":    strings.TrimSpace(string(cache)),
+		"GOTMPDIR":   filepath.Join(root, "operator build scratch"),
+	}
+	if err := os.MkdirAll(paths["GOTMPDIR"], 0o700); err != nil {
+		t.Fatal(err)
 	}
 	var config strings.Builder
-	for _, key := range []string{"GOPATH", "GOMODCACHE", "GOCACHE"} {
+	for _, key := range []string{"GOPATH", "GOMODCACHE", "GOCACHE", "GOTMPDIR"} {
 		t.Setenv(key, "")
 		config.WriteString(key + "=" + paths[key] + "\n")
 	}
@@ -44,6 +48,7 @@ func persistedGoTestPaths(t *testing.T) map[string]string {
 func TestSanitizedGoTestEnvironmentPreservesEffectiveCachePaths(t *testing.T) {
 	paths := persistedGoTestPaths(t)
 	t.Setenv("REVIEW_TEST_SECRET", "must-not-reach-tests")
+	t.Setenv("GOMAXPROCS", "2")
 	for _, test := range []struct {
 		name     string
 		explicit bool
@@ -53,6 +58,11 @@ func TestSanitizedGoTestEnvironmentPreservesEffectiveCachePaths(t *testing.T) {
 			for key, value := range paths {
 				if test.explicit {
 					value = filepath.Join(t.TempDir(), key)
+					if key == "GOTMPDIR" {
+						if err := os.MkdirAll(value, 0o700); err != nil {
+							t.Fatal(err)
+						}
+					}
 					t.Setenv(key, value)
 				}
 				want[key] = value
@@ -61,7 +71,7 @@ func TestSanitizedGoTestEnvironmentPreservesEffectiveCachePaths(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			probe := exec.CommandContext(t.Context(), "go", "env", "-json", "GOPATH", "GOMODCACHE", "GOCACHE", "GOENV", "GOPROXY", "GOFLAGS")
+			probe := exec.CommandContext(t.Context(), "go", "env", "-json", "GOPATH", "GOMODCACHE", "GOCACHE", "GOTMPDIR", "GOENV", "GOPROXY", "GOFLAGS")
 			probe.Env = env
 			output, err := probe.Output()
 			if err != nil {
@@ -82,6 +92,9 @@ func TestSanitizedGoTestEnvironmentPreservesEffectiveCachePaths(t *testing.T) {
 				if strings.HasPrefix(entry, "REVIEW_TEST_SECRET=") {
 					t.Fatal("test environment inherited an unrelated secret")
 				}
+			}
+			if !strings.Contains(strings.Join(env, "\n"), "GOMAXPROCS=2\n") {
+				t.Fatal("test environment dropped the operator concurrency limit")
 			}
 		})
 	}

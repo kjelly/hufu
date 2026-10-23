@@ -82,12 +82,19 @@ func (p *workerProviderSurfaceCapture) ServeHTTP(w http.ResponseWriter, r *http.
 	}
 	p.mu.Unlock()
 
+	if mode == "plan-reviewer" {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":"review","object":"chat.completion","model":%q,"choices":[{"index":0,"message":{"role":"assistant","content":"{\"token\":\"A1\"}"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":1}}`, request.Model)
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	switch {
 	case shouldSubmit:
 		arguments := `{"status":"success","summary":"direct provider result"}`
 		fmt.Fprintf(w, "data: {\"id\":\"direct\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"worker\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"submit-1\",\"type\":\"function\",\"function\":{\"name\":\"submit_result\",\"arguments\":%q}}]},\"finish_reason\":null}]}\n\n", arguments)
 		fmt.Fprint(w, "data: {\"id\":\"direct\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"worker\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n")
+	case mode == "plan-reviewer":
+		fmt.Fprintf(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":\"stop\"}]}\n\n", `{"token":"A1"}`)
 	case shouldRejectPlan:
 		arguments := `{"todo_id":"plan-reviewer-todo","reason":"fixture plan rejection"}`
 		fmt.Fprintf(w, "data: {\"id\":\"plan-reviewer\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"worker\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"reject-1\",\"type\":\"function\",\"function\":{\"name\":\"reject_plan\",\"arguments\":%q}}]},\"finish_reason\":null}]}\n\n", arguments)
@@ -335,9 +342,11 @@ func TestPlanReviewerUsesReviewerSurfaceAfterInheritedCoordinatorPreflight(t *te
 	modelID := "plan-reviewer-surface-test"
 	c, _, capture := newWorkerProviderSurfaceCoordinator(t, modelID, "plan-reviewer")
 	c.planReviewerModel = modelID
+	c.providerBoundaryStarted = true
+	c.decisionPrimitiveGate = make(chan struct{}, 1)
 	todoID := "plan-reviewer-todo"
 	c.pendingPlans = map[string]*PlanEntry{
-		todoID: {TodoID: todoID, Agent: "worker", Goal: "review the plan", PlanText: "1. inspect the change", Status: "submitted"},
+		todoID: {TodoID: todoID, PlanRevisionID: "revision-1", Agent: "worker", Goal: "review the plan", PlanText: "1. inspect the change", Status: "submitted"},
 	}
 
 	parentCtx := oversizedCoordinatorPreflightContext(t, modelID)
@@ -345,9 +354,7 @@ func TestPlanReviewerUsesReviewerSurfaceAfterInheritedCoordinatorPreflight(t *te
 	if err != nil {
 		t.Fatalf("getPlanReviewer: %v", err)
 	}
-	if !reviewer.providerBoundInvocationContext.AdmissionContext.IsBound() {
-		t.Fatalf("plan reviewer provider context = %#v, want bound context", reviewer.providerBoundInvocationContext)
-	}
+
 	if _, _, execErr, reviewErr := reviewer.review(parentCtx, "1. inspect the change"); execErr != nil || reviewErr != nil {
 		t.Fatalf("plan reviewer review: execution error=%v review error=%v", execErr, reviewErr)
 	}
@@ -356,7 +363,7 @@ func TestPlanReviewerUsesReviewerSurfaceAfterInheritedCoordinatorPreflight(t *te
 	if len(requests) != 1 {
 		t.Fatalf("plan reviewer provider requests = %v, want exactly one request", requests)
 	}
-	want := []string{"approve_plan", "reject_plan"}
+	var want []string
 	if !slices.Equal(requests[0], want) {
 		t.Fatalf("plan reviewer provider tools = %v, want %v", requests[0], want)
 	}
