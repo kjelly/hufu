@@ -142,6 +142,7 @@ func TestReviewGateCoverageAndRejectedHandoffs(t *testing.T) {
 		want string
 	}{
 		{"valid_with_resolved_local_gap", func(*session) {}, ""},
+		{"conservative_critic_with_source_gap", func(s *session) { s.Tasks[2].Result.Status = "completed_with_gaps" }, ""},
 		{"critic_missing_unit_1_evidence", func(s *session) { s.Tasks[3].EvidenceFrom = []string{"3"} }, "invalid input binding"},
 		{"critic_combines_sources", func(s *session) { s.Tasks[2].EvidenceFrom = []string{"3", "4"} }, "exactly one source"},
 		{"critic_skips_finding", func(s *session) {
@@ -388,6 +389,12 @@ func TestEmbeddedReviewGateAndTeamContracts(t *testing.T) {
 	if err := json.Unmarshal(data, &current); err != nil {
 		t.Fatal(err)
 	}
+	current.Tasks[2].Result.Status = "completed_with_gaps"
+	writeCheckpoint(t, root, raw(t, current))
+	result, err = provider.Execute(ctx, team.Action{Capability: "verify-review-report", Type: "verify_review_report", Payload: `{"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}}`})
+	if err != nil || !bytes.Contains(raw(t, result), []byte(`"passed":true`)) {
+		t.Fatalf("configured gate rejected inherited source gaps: result=%s error=%v", raw(t, result), err)
+	}
 	replacePayload(t, &current.Tasks[4], func(p *payload) { p.InputReview = p.InputReview[1:] })
 	writeCheckpoint(t, root, raw(t, current))
 	result, err = provider.Execute(ctx, team.Action{Capability: "verify-review-report", Type: "verify_review_report", Payload: `{"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}}`})
@@ -410,6 +417,45 @@ func TestReviewGateActionIdentityFailsClosed(t *testing.T) {
 	t.Setenv("HUFU_TASK_ID", "8")
 	if err := Run(t.Context(), bytes.NewReader(raw(t, team.Action{Type: "verify_review_report", Payload: `{"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}}`})), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "unsupported action workspace layout") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestReviewGateConservativeCriticStatusRequiresGroundedGaps(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		sourceGap bool
+		observed  bool
+		wantErr   string
+	}{
+		{name: "retains_bound_source_gap", sourceGap: true, observed: true},
+		{name: "rejects_unsupported_partial", observed: true, wantErr: "reported gaps without an unverified verdict or a source gap"},
+		{name: "partial_still_requires_observed_verdict_evidence", sourceGap: true, wantErr: "verdict lacks observed evidence"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			review := record{Kind: "review", Findings: []finding{{Summary: "Observed claim", Severity: "info", Evidence: []string{"snapshot-a"}}}}
+			sourceStatus := "success"
+			if test.sourceGap {
+				review.Gaps = []json.RawMessage{raw(t, map[string]string{"description": "Caller absent", "missing_evidence": "Caller body"})}
+				sourceStatus = "completed_with_gaps"
+			}
+			sourcePayload := payload{Record: raw(t, review)}
+			source := fixtureTask(t, "3", "review-primary-workset", sourceStatus, sourcePayload, review, nil)
+			critique := record{Kind: "critique", InputReview: []inputReview{entry(source, review, t)}, Decisions: []decision{{FindingIndex: 0, Verdict: "confirmed", Evidence: []string{"snapshot-a"}}}}
+			critic := fixtureTask(t, "4", "critic-review", "completed_with_gaps", payload{Record: raw(t, critique)}, critique, []string{"3"})
+			if !test.observed {
+				critic.Result.FilesRead = nil
+			}
+			id, limited, err := verifyCritique(critic, critique, map[string]task{"3": source}, map[string]payload{"3": sourcePayload}, map[string]record{"3": review}, map[string]bool{})
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("error=%v, want %s", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil || !limited || id != "3" {
+				t.Fatalf("id=%s limited=%v error=%v", id, limited, err)
+			}
+		})
 	}
 }
 

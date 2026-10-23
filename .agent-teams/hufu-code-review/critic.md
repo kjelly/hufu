@@ -180,7 +180,12 @@ The static contract determines the structured payload:
   Rationale must explain the observed scenario, and evidence contains only
   issued evidence keys or exact opaque IDs you read. For unverified, supply concrete nonempty
   missing_evidence; other verdicts require evidence and empty missing_evidence.
-  Use completed_with_gaps if any decided verdict is unverified, otherwise success.
+  Use completed_with_gaps if any decided verdict is unverified. If all verdicts
+  are settled, use success; completed_with_gaps is also valid when the bound
+  source review has nonempty record.gaps and your summary identifies those
+  inherited limitations. Keep those gaps owned by the source review; do not
+  invent gap rows or change a settled verdict merely to match the status.
+  Without an unverified verdict or a bound source gap, use success.
   Empty finding collections use an empty object and make no decision calls.
   If a decision abstains, fails, is interrupted, or the complete observed
   context exceeds its limit, immediately submit {"status":"blocked",

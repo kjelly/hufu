@@ -111,6 +111,15 @@ the missing evidence. The overall coverage label stays `completed_with_gaps`
 if any original gap or unverified critic decision exists. Code findings and
 review completion are separate: a complete review can report errors.
 
+A critic with an `unverified` verdict must use `completed_with_gaps`. When all
+verdicts are settled, `success` is valid; a conservative `completed_with_gaps`
+is also valid if the bound source review has nonempty `record.gaps`. The
+critic identifies those inherited limitations in its summary, while the
+original gap inventory and its report resolutions remain source-owned. The
+audit preserves that limited status, still requires observed evidence for
+settled verdicts, and rejects partial status without an unverified verdict or
+a source gap. A `success` envelope must never hide an `unverified` verdict.
+
 The audit checks typed identity and coverage, not the semantic truth of an
 LLM's analysis or whether an observed code fragment proves a safety property.
 Security/disagreement classification still belongs to the reviewer. No
