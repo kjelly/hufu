@@ -44,6 +44,39 @@ func TestBindReadTargetSelectionMatrix(t *testing.T) {
 	}
 }
 
+func TestBindReadTargetDuringInvocationStartup(t *testing.T) {
+	lineage := Lineage{BranchID: "current", ActiveBranchID: "current", Events: []IndexedEvent{
+		{Ordinal: 1, Event: team.RunEvent{RunID: "ancestor", BranchID: "parent", Type: string(team.EventRunStarted)}},
+		{Ordinal: 2, Event: team.RunEvent{RunID: "bootstrap", BranchID: "current", Type: "projection_rebuilt"}},
+		{Ordinal: 3, Event: team.RunEvent{RunID: "invocation", BranchID: "current", Type: string(team.EventRunStarted)}},
+	}}
+	session := team.NewSession()
+	runID, source, err := selectBindingRun(lineage, operatorpkg.BindingRequest{}, session)
+	if err != nil || runID != "invocation" || source != "single_candidate" {
+		t.Fatalf("startup selection = (%q, %q, %v)", runID, source, err)
+	}
+	if _, err := operatorpkg.FinalizeSnapshot(operatorpkg.OperatorSnapshot{
+		SchemaVersion: operatorpkg.SchemaVersion,
+		Scope:         operatorpkg.ResolvedScope{SelectionSource: source, RequestedSemantics: "exact", BindingStatus: "unknown"},
+		Activity:      operatorpkg.ActivityView{State: operatorpkg.ActivityUnknown},
+		Integrity:     operatorpkg.IntegrityView{Status: "unknown", EventChain: "unavailable", Projection: "unavailable"},
+		Freshness:     operatorpkg.FreshnessView{LiveState: "unknown"},
+		Learning:      operatorpkg.LearningView{Status: "unavailable"}, Attention: operatorpkg.AttentionNone,
+	}); err != nil {
+		t.Fatalf("startup selection cannot be projected: %v", err)
+	}
+	// Historical branches still require explicit scope when multiple runs exist.
+	lineage.ActiveBranchID = "elsewhere"
+	if _, _, err := selectBindingRun(lineage, operatorpkg.BindingRequest{}, session); !errors.Is(err, ErrAmbiguous) {
+		t.Fatalf("historical selection = %v, want ambiguous", err)
+	}
+	lineage.ActiveBranchID = "current"
+	lineage.Events = append(lineage.Events, IndexedEvent{Ordinal: 4, Event: team.RunEvent{RunID: "competing", BranchID: "current", Type: string(team.EventRunStarted)}})
+	if _, _, err := selectBindingRun(lineage, operatorpkg.BindingRequest{}, session); !errors.Is(err, ErrAmbiguous) {
+		t.Fatalf("competing starts = %v, want ambiguous", err)
+	}
+}
+
 func TestPersistedInvocationIDRequiresOneCanonicalParent(t *testing.T) {
 	lineage := Lineage{Events: []IndexedEvent{
 		{Event: team.RunEvent{RunID: "run-1"}},
