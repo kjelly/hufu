@@ -2152,6 +2152,9 @@ func formatDryRun(result *team.DryRunResult, roleSources []roleModelSource) stri
 	b.WriteString("\n\n")
 
 	fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Team:"), teamStyle.Render(result.TeamName))
+	if result.RequestAcceptancePending {
+		b.WriteString("  Request acceptance: enabled; requirement extraction is deferred until execution (no LLM calls in preview).\n")
+	}
 	if result.WorkspaceWouldCreate {
 		fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Subject:"), result.SubjectRoot)
 		fmt.Fprintf(&b, "  %s\n", dimStyle.Render("Managed workspace will be created during a real run."))

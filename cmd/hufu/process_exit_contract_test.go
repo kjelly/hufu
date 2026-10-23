@@ -12,10 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -32,51 +30,9 @@ func buildProcessContractBinary(t *testing.T) string {
 	return buildTestBinary(t)
 }
 
-var processBinaryOnce sync.Once
-var processBinaryDir, processBinaryPath string
-var processBinaryErr error
-
-func TestMain(m *testing.M) {
-	code := m.Run()
-	if processBinaryDir != "" {
-		if err := os.RemoveAll(processBinaryDir); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			code = 1
-		}
-	}
-	os.Exit(code)
-}
-
-// buildTestBinary compiles once per suite. TestMain owns cleanup so no test can
-// remove the executable while another test still needs it.
-func buildTestBinary(t *testing.T) string {
-	t.Helper()
-	processBinaryOnce.Do(func() {
-		_, sourceFile, _, ok := runtime.Caller(0)
-		if !ok {
-			processBinaryErr = fmt.Errorf("runtime.Caller failed")
-			return
-		}
-		processBinaryDir, processBinaryErr = os.MkdirTemp("", "hufu-testbin-")
-		if processBinaryErr != nil {
-			return
-		}
-		processBinaryPath = filepath.Join(processBinaryDir, "hufu")
-		cmd := exec.Command("go", "build", "-p", "2", "-o", processBinaryPath, "./cmd/hufu")
-		cmd.Dir = filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
-		if output, err := cmd.CombinedOutput(); err != nil {
-			processBinaryErr = fmt.Errorf("build CLI binary: %w\n%s", err, output)
-		}
-	})
-	if processBinaryErr != nil {
-		t.Fatal(processBinaryErr)
-	}
-	return processBinaryPath
-}
-
 func runProcessContract(t *testing.T, binary string, args ...string) (int, []byte, []byte) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 
 	home := processContractTempDir(t)

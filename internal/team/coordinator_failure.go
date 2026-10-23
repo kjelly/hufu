@@ -447,14 +447,24 @@ func (c *Coordinator) persistFailureRecord(agentName, taskDesc, todoID, detail s
 		// failed closed tool sequence may have already performed earlier steps;
 		// redispatching an auditor or repair worker without an explicit
 		// reconciliation boundary can duplicate side effects and invalidate the
-		// evidence.  Force the coordinator into wrap-up before another
-		// delegation can be accepted.  Explicit acceptance recovery remains the
-		// only path that may continue after the operator has acknowledged it.
+		// evidence. Stop new delegation while that occurrence or its reliability
+		// scope remains blocked. A successful original retry can release this
+		// task-derived stop; explicit wrap-up requests remain independent.
 		// Two blocks leave delegation open because nothing needs reconciling:
 		// a dependent that never started, and a task whose worker reported it
 		// blocked without having run a tool that can change state.
-		if status == TaskBlocked && blockedStopsDelegation {
-			c.wrapUp.Store(1)
+		// Publish the exact cause before its transition. Another completing
+		// worker cannot release this stop while this occurrence is still
+		// in progress or its blocked state is being persisted.
+		stopDelegation := status == TaskBlocked && blockedStopsDelegation
+		if stopDelegation {
+			c.wrapUpMu.Lock()
+			if c.blockedWrapUpTasks == nil {
+				c.blockedWrapUpTasks = make(map[string]struct{})
+			}
+			c.blockedWrapUpTasks[todoID] = struct{}{}
+			c.wrapUp.CompareAndSwap(0, wrapUpFromBlockedTask)
+			c.wrapUpMu.Unlock()
 		}
 		metadata := map[string]interface{}{}
 		if failureEvent != nil {
@@ -593,6 +603,7 @@ func (c *Coordinator) forgetRecoveredFailures(todoID string) {
 	if item := c.todoItemByID(todoID); item != nil && item.Status == TaskDone && len(item.FailureFingerprints) > 0 {
 		c.rebuildAntiThrashingState()
 	}
+	c.releaseRecoveredTaskWrapUp()
 }
 
 func (c *Coordinator) rebuildAntiThrashingState() {
@@ -604,6 +615,37 @@ func (c *Coordinator) rebuildAntiThrashingState() {
 	c.metricsMu.Lock()
 	c.antiThrashing.rebuild(items, limits)
 	c.metricsMu.Unlock()
+	c.releaseRecoveredTaskWrapUp()
+}
+
+const wrapUpFromBlockedTask int32 = 2
+
+// releaseRecoveredTaskWrapUp releases only stops whose blocked occurrences
+// have completed successfully and whose reliability scopes are no longer
+// blocked. Explicit wrap-up requests always take precedence.
+func (c *Coordinator) releaseRecoveredTaskWrapUp() {
+	if c == nil || c.taskTracker == nil {
+		return
+	}
+	c.wrapUpMu.Lock()
+	defer c.wrapUpMu.Unlock()
+	if c.wrapUp.Load() != wrapUpFromBlockedTask || c.blockedWrapUpTasks == nil {
+		return
+	}
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item.Status == TaskDone {
+			delete(c.blockedWrapUpTasks, item.ID)
+		}
+	}
+	if len(c.blockedWrapUpTasks) > 0 {
+		return
+	}
+	c.metricsMu.RLock()
+	blocked := c.antiThrashing.HardBlocked
+	c.metricsMu.RUnlock()
+	if !blocked {
+		c.wrapUp.CompareAndSwap(wrapUpFromBlockedTask, 0)
+	}
 }
 
 // recordDiagnosticCompletion applies the diagnostic circuit breaker to a

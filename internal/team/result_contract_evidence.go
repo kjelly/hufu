@@ -15,27 +15,29 @@ import (
 // Vocabulary and fallback values belong to the owning schema. Core only
 // matches declared JSON fields against successful, runner-owned observations.
 type resultToolEvidenceSpec struct {
-	GroupsPointer    string   `json:"groups_pointer"`
-	ItemsPointer     string   `json:"items_pointer"`
-	Tool             string   `json:"tool"`
-	Tools            []string `json:"tools,omitempty"`
-	OutputFormat     string   `json:"output_format,omitempty"`
-	TextPattern      string   `json:"text_pattern,omitempty"`
-	TargetPattern    string   `json:"target_pattern,omitempty"`
-	textPattern      *regexp.Regexp
-	targetPattern    *regexp.Regexp
-	InputPointer     string                       `json:"input_pointer"`
-	ValuePointer     string                       `json:"value_pointer"`
-	OutputPointer    string                       `json:"output_pointer"`
-	QuotePointer     string                       `json:"quote_pointer"`
-	StatusPointer    string                       `json:"status_pointer"`
-	VerifiedStatus   string                       `json:"verified_status"`
-	UnverifiedStatus string                       `json:"unverified_status"`
-	CallIDPointer    string                       `json:"call_id_pointer"`
-	GroupFallback    map[string]any               `json:"group_fallback"`
-	GroupAppend      map[string]string            `json:"group_append,omitempty"`
-	Diagnostics      *resultEvidenceDiagnostics   `json:"diagnostics,omitempty"`
-	Corroboration    *resultEvidenceCorroboration `json:"corroboration,omitempty"`
+	AllowHistorical   bool     `json:"allow_historical,omitzero"`
+	HistoricalPointer string   `json:"historical_pointer,omitempty"`
+	GroupsPointer     string   `json:"groups_pointer"`
+	ItemsPointer      string   `json:"items_pointer"`
+	Tool              string   `json:"tool"`
+	Tools             []string `json:"tools,omitempty"`
+	OutputFormat      string   `json:"output_format,omitempty"`
+	TextPattern       string   `json:"text_pattern,omitempty"`
+	TargetPattern     string   `json:"target_pattern,omitempty"`
+	textPattern       *regexp.Regexp
+	targetPattern     *regexp.Regexp
+	InputPointer      string                       `json:"input_pointer"`
+	ValuePointer      string                       `json:"value_pointer"`
+	OutputPointer     string                       `json:"output_pointer"`
+	QuotePointer      string                       `json:"quote_pointer"`
+	StatusPointer     string                       `json:"status_pointer"`
+	VerifiedStatus    string                       `json:"verified_status"`
+	UnverifiedStatus  string                       `json:"unverified_status"`
+	CallIDPointer     string                       `json:"call_id_pointer"`
+	GroupFallback     map[string]any               `json:"group_fallback"`
+	GroupAppend       map[string]string            `json:"group_append,omitempty"`
+	Diagnostics       *resultEvidenceDiagnostics   `json:"diagnostics,omitempty"`
+	Corroboration     *resultEvidenceCorroboration `json:"corroboration,omitempty"`
 }
 
 type resultEvidenceCorroboration struct {
@@ -121,6 +123,9 @@ func compileResultContractExtensions(root map[string]any) (*resultToolEvidenceSp
 		if err := spec.validateOutput(); err != nil {
 			return nil, nil, err
 		}
+		if err := spec.validateHistorical(); err != nil {
+			return nil, nil, err
+		}
 		if spec.VerifiedStatus == "" || spec.UnverifiedStatus == "" || spec.VerifiedStatus == spec.UnverifiedStatus || len(spec.GroupFallback) == 0 {
 			return nil, nil, fmt.Errorf("x-hufu-tool-evidence requires a tool, distinct statuses and a group fallback")
 		}
@@ -196,10 +201,29 @@ func evidenceString(value any, pointer string) string {
 	return s
 }
 
-type successfulToolObservation struct{ id, match, output string }
+type successfulToolObservation struct {
+	id, match, output string
+	historical        *ObservationReadPayload
+}
 
 func (spec *resultToolEvidenceSpec) matchesTool(name string) bool {
 	return name != "" && (name == spec.Tool || slices.Contains(spec.Tools, name))
+}
+
+func (spec *resultToolEvidenceSpec) validateHistorical() error {
+	if spec.AllowHistorical != (spec.HistoricalPointer != "") {
+		return fmt.Errorf("historical evidence requires allow_historical and historical_pointer together")
+	}
+	if spec.HistoricalPointer == "" {
+		return nil
+	}
+	if _, err := evidenceMember(spec.HistoricalPointer); err != nil {
+		return err
+	}
+	if slices.Contains([]string{spec.ValuePointer, spec.QuotePointer, spec.StatusPointer, spec.CallIDPointer}, spec.HistoricalPointer) || (spec.Diagnostics != nil && slices.Contains([]string{spec.Diagnostics.FetchPointer, spec.Diagnostics.CitationPointer}, spec.HistoricalPointer)) {
+		return fmt.Errorf("historical_pointer must not overwrite another evidence field")
+	}
+	return nil
 }
 
 func (spec *resultToolEvidenceSpec) validateOutput() error {
@@ -284,18 +308,32 @@ func (spec *resultToolEvidenceSpec) observedText(output string) string {
 func matchingToolObservations(spec *resultToolEvidenceSpec, records []taskTranscriptRecord) []successfulToolObservation {
 	type observationKey struct{ tool, id string }
 	calls := make(map[observationKey]taskTranscriptRecord)
+	recallCalls, recallResults := make(map[string]taskTranscriptRecord), make(map[string]taskTranscriptRecord)
 	callCounts, resultCounts := make(map[observationKey]int), make(map[observationKey]int)
 	for _, record := range records {
 		key := observationKey{record.Tool, record.ToolCallID}
 		switch record.Event {
 		case "tool_call":
 			callCounts[key]++
+			if record.Tool == recallObservationToolName {
+				recallCalls[record.ToolCallID] = record
+			}
 		case "tool_result":
 			resultCounts[key]++
+			if record.Tool == recallObservationToolName {
+				recallResults[record.ToolCallID] = record
+			}
 		}
 	}
-	var observations []successfulToolObservation
+	var observations, historical []successfulToolObservation
 	for _, record := range records {
+		if record.Event == "historical_observation" {
+			readKey := observationKey{recallObservationToolName, record.ToolCallID}
+			if spec.AllowHistorical && spec.matchesTool(record.Tool) && callCounts[readKey] == 1 && resultCounts[readKey] == 1 && successfulHistoricalRead(record, recallCalls[record.ToolCallID], recallResults[record.ToolCallID]) {
+				historical = append(historical, successfulToolObservation{id: record.ToolCallID, match: record.HistoricalTarget, output: record.Output, historical: record.Historical})
+			}
+			continue
+		}
 		key := observationKey{record.Tool, record.ToolCallID}
 		if !spec.matchesTool(record.Tool) || record.ToolCallID == "" || callCounts[key] != 1 || resultCounts[key] != 1 {
 			continue
@@ -315,10 +353,28 @@ func matchingToolObservations(spec *resultToolEvidenceSpec, records []taskTransc
 		match := spec.observedTarget(input, record.Output)
 		body := spec.observedText(record.Output)
 		if match != "" && strings.TrimSpace(body) != "" {
-			observations = append(observations, successfulToolObservation{record.ToolCallID, match, body})
+			observations = append(observations, successfulToolObservation{id: record.ToolCallID, match: match, output: body})
 		}
 	}
-	return observations
+	return append(observations, historical...)
+}
+
+func successfulHistoricalRead(record, call, result taskTranscriptRecord) bool {
+	p := record.Historical
+	if p == nil || p.ReadEventID == "" || p.Tool != record.Tool || p.ReadCallID != record.ToolCallID || p.ContentFormat != "evidence_text" || p.ContentSHA256 != observationContentHash(record.Output) || p.Bytes != len(record.Output) || record.HistoricalTarget == "" || record.Output == "" || result.Error {
+		return false
+	}
+	var request recallObservationArgs
+	if json.Unmarshal([]byte(call.Input), &request) != nil || !strings.EqualFold(request.Action, "read") || request.ObservationID != p.ObservationID {
+		return false
+	}
+	var delivered struct {
+		Historical bool                   `json:"historical"`
+		Content    string                 `json:"content"`
+		Target     string                 `json:"target"`
+		Provenance ObservationReadPayload `json:"provenance"`
+	}
+	return json.Unmarshal([]byte(result.Output), &delivered) == nil && delivered.Historical && delivered.Content == record.Output && delivered.Target == record.HistoricalTarget && delivered.Provenance == *p
 }
 
 func bindResultEvidenceDiagnostics(item map[string]any, spec *resultToolEvidenceSpec, observations []successfulToolObservation, records []taskTranscriptRecord, match, quote string, index int) bool {
@@ -426,6 +482,22 @@ func bindResultToolEvidence(value any, spec *resultToolEvidenceSpec, records []t
 			index := slices.IndexFunc(observations, func(o successfulToolObservation) bool {
 				return o.match == match && strings.TrimSpace(quote) != "" && strings.Contains(strings.Join(strings.Fields(o.output), " "), strings.Join(strings.Fields(quote), " "))
 			})
+			if spec.HistoricalPointer != "" {
+				key, _ := evidenceMember(spec.HistoricalPointer)
+				// Model-supplied provenance never earns historical credit.
+				item[key] = nil
+				if index >= 0 && observations[index].historical != nil {
+					encoded, err := json.Marshal(observations[index].historical)
+					if err != nil {
+						return 0, err
+					}
+					provenance, err := decodeResultContractJSON(encoded)
+					if err != nil {
+						return 0, err
+					}
+					item[key] = provenance
+				}
+			}
 			if spec.Diagnostics != nil {
 				if bindResultEvidenceDiagnostics(item, spec, observations, records, match, quote, index) {
 					verifiedItems = append(verifiedItems, item)

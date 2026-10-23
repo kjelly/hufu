@@ -2,7 +2,6 @@ package team
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 
@@ -33,7 +32,7 @@ func StreamValidatedRunEvents(ctx context.Context, workspace string, visit func(
 }
 
 // StreamValidatedRunEventsWithLimits checks the journal's size before loading
-// payloads. The preflight and actual read share one SQLite read transaction,
+// payloads. The preflight and actual read share one immutable SQLite snapshot,
 // so concurrent appends cannot invalidate admission. Zero limits are unlimited.
 func StreamValidatedRunEventsWithLimits(ctx context.Context, workspace string, limits EventReadLimits, visit func(RunEvent) error) error {
 	if ctx == nil {
@@ -48,28 +47,76 @@ func StreamValidatedRunEventsWithLimits(ctx context.Context, workspace string, l
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	store, err := runtimestore.OpenReadOnly(ctx, workspace)
-	if errors.Is(err, runtimestore.ErrNotFound) {
-		return nil
-	}
+	snapshot, err := OpenRunEventSnapshot(ctx, workspace)
 	if err != nil {
-		return fmt.Errorf("open event store: %w", err)
+		return err
 	}
-	defer func() { _ = store.Close() }()
-
-	var query runtimestore.Queryer = store.DB()
-	if limits.MaxEvents > 0 || limits.MaxPayloadBytes > 0 {
-		tx, err := store.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-		if err != nil {
-			return fmt.Errorf("begin bounded event read: %w", err)
-		}
-		defer func() { _ = tx.Rollback() }()
-		if err := preflightEventRead(ctx, tx, limits); err != nil {
+	defer func() { _ = snapshot.Close() }()
+	if snapshot.store != nil && (limits.MaxEvents > 0 || limits.MaxPayloadBytes > 0) {
+		if err := preflightEventRead(ctx, snapshot.store.DB(), limits); err != nil {
 			return err
 		}
-		query = tx
 	}
-	rows, err := query.QueryContext(ctx, `SELECT `+eventColumns+` FROM events ORDER BY sequence`)
+	return snapshot.Visit(ctx, visit)
+}
+
+// RunEventSnapshot supports bounded, repeated streaming over one private,
+// immutable read-only snapshot. Callers must Close it after all passes finish.
+// Streaming validates the entire chain, including events the visitor discards.
+type RunEventSnapshot struct {
+	store *runtimestore.Store
+}
+
+// OpenRunEventSnapshot never changes the source workspace. A missing store
+// produces an empty snapshot, matching StreamValidatedRunEvents.
+func OpenRunEventSnapshot(ctx context.Context, workspace string) (*RunEventSnapshot, error) {
+	store, err := runtimestore.OpenReadOnly(ctx, workspace)
+	if errors.Is(err, runtimestore.ErrNotFound) {
+		return &RunEventSnapshot{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open event store: %w", err)
+	}
+	return &RunEventSnapshot{store: store}, nil
+}
+
+// Close releases the snapshot and its private temporary files.
+func (s *RunEventSnapshot) Close() error {
+	if s.store == nil {
+		return nil
+	}
+	return s.store.Close()
+}
+
+// SessionTree reads branch metadata from the same immutable snapshot as Visit.
+func (s *RunEventSnapshot) SessionTree(ctx context.Context) (*SessionTree, error) {
+	if s.store == nil {
+		return NewSessionTree(), nil
+	}
+	tree, exists, err := loadSessionTreeFrom(ctx, s.store.DB())
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return NewSessionTree(), nil
+	}
+	return tree, nil
+}
+
+// Visit reads a validated journal in order. No payloads are retained by the
+// snapshot reader; visitors own any retention and must handle late errors.
+func (s *RunEventSnapshot) Visit(ctx context.Context, visit func(RunEvent) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if visit == nil {
+		return fmt.Errorf("stream event store: nil visitor")
+	}
+	if s.store == nil {
+		return nil
+	}
+
+	rows, err := s.store.DB().QueryContext(ctx, `SELECT `+eventColumns+` FROM events ORDER BY sequence`)
 	if err != nil {
 		return fmt.Errorf("read events: %w", err)
 	}

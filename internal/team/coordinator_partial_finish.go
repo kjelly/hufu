@@ -40,7 +40,7 @@ func (t *finishTool) finishFailedWorkflow(ctx context.Context) (fantasy.ToolResp
 	c.acceptanceRecovery.Store(false)
 	const reason = "workflow failed; ending with an acknowledged partial result"
 	response := c.summaryFromTodos(errors.New(reason))
-	acceptance, acceptanceErr := c.runAcceptance(ctx)
+	acceptance, acceptanceErr := c.runAcceptance(ctx, response)
 	if acceptanceErr != nil {
 		response += "\n\nAcceptance failed: " + acceptanceErr.Error()
 	}

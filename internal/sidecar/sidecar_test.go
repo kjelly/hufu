@@ -403,14 +403,15 @@ func TestGenerateRebindsCachedLanguageModelForInvocation(t *testing.T) {
 }
 
 type callCapturingAgent struct {
-	captured fantasy.AgentCall
-	response string
+	captured     fantasy.AgentCall
+	response     string
+	finishReason fantasy.FinishReason
 }
 
 func (a *callCapturingAgent) Generate(_ context.Context, call fantasy.AgentCall) (*fantasy.AgentResult, error) {
 	a.captured = call
 	return &fantasy.AgentResult{
-		Response: fantasy.Response{Content: fantasy.ResponseContent{fantasy.TextContent{Text: a.response}}},
+		Response: fantasy.Response{Content: fantasy.ResponseContent{fantasy.TextContent{Text: a.response}}, FinishReason: a.finishReason},
 	}, nil
 }
 
@@ -502,6 +503,26 @@ func TestDecisionProfilePreservesEvidenceAndBoundsInput(t *testing.T) {
 	}
 	if capture.captured.MaxOutputTokens != nil {
 		t.Fatal("oversized context reached provider")
+	}
+}
+
+func TestExecuteProfileRejectsTokenLimitedStructuredOutput(t *testing.T) {
+	for _, text := range []string{`{"checks":`, `{"checks":[]}`, ""} {
+		t.Run(text, func(t *testing.T) {
+			capture := &callCapturingAgent{response: text, finishReason: fantasy.FinishReasonLength}
+			s := &Sidecar{agent: capture}
+			calls := 0
+			s.SetUsageObserver(func(*fantasy.AgentResult) { calls++ })
+			output, err := s.ExecuteProfile(t.Context(), "Return structured JSON", Profile{MaxOutputTokens: 32, RequireCompleteOutput: true})
+			if err == nil || !strings.Contains(err.Error(), "truncated by provider token limit") || !strings.Contains(err.Error(), "reserved=32") || output != "" || calls != 1 {
+				t.Fatalf("partial structured output accepted, retried, or uncharged: output=%q err=%v calls=%d", output, err, calls)
+			}
+			capture.finishReason = fantasy.FinishReasonStop
+			output, err = s.ExecuteProfile(t.Context(), "Return structured JSON", Profile{MaxOutputTokens: 32, RequireCompleteOutput: true})
+			if err != nil || output != text {
+				t.Fatalf("normal stop altered: %q %v", output, err)
+			}
+		})
 	}
 }
 

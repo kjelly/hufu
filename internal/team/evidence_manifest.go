@@ -283,6 +283,9 @@ func bindEvidenceResult(runID string, item *TodoItem, receipt *ExecutionReceipt,
 	if receipt.RunID != runID || receipt.TaskID != item.ID || receipt.Attempt <= 0 || receipt.ModelExecutionID == "" || receipt.ProducerID == "" || strings.TrimSpace(receipt.TranscriptRef) == "" {
 		return fmt.Errorf("receipt is not fully bound to run, task, attempt, producer, and transcript")
 	}
+	if item.RunInputSnapshotID != "" && (receipt.RunInputSnapshotID != item.RunInputSnapshotID || receipt.RunInputSnapshotHash != item.RunInputSnapshotHash) {
+		return fmt.Errorf("receipt invocation input binding conflicts with task occurrence")
+	}
 	if item.MaterializedActionPayloadHash != "" && (receipt.RunInputSnapshotID != item.RunInputSnapshotID ||
 		receipt.RunInputSnapshotHash != item.RunInputSnapshotHash ||
 		receipt.MaterializedActionPayloadHash != item.MaterializedActionPayloadHash ||

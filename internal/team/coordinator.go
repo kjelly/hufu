@@ -425,6 +425,7 @@ type backendSemaphoreState struct {
 
 type Coordinator struct {
 	mu                    sync.RWMutex
+	observationCaptureMu  sync.Mutex
 	closeOnce             sync.Once
 	closeErr              error
 	session               *TeamSession
@@ -484,6 +485,7 @@ type Coordinator struct {
 	compactionBranchID                string
 	compactionRecoveryErr             error
 	initialPrompt                     string
+	requestAcceptanceModel            RequestAcceptanceModel
 	requestContractMu                 sync.Mutex
 	requestContract                   *RequestContractEnvelope
 	requestContractRef                string
@@ -527,12 +529,16 @@ type Coordinator struct {
 	// Context budget reporting (§5.4). Populated by buildSystemPrompt so the
 	// execution report can emit a token-usage breakdown without re-deriving the
 	// assembled prompt.
-	ctxReportMu                sync.RWMutex
-	lastCtxBreakdown           ContextUsageBreakdown
-	lastCtxBudget              ContextBudget
-	lastCtxModel               string
-	lastCtxReportReady         bool
-	wrapUp                     atomic.Int32
+	ctxReportMu        sync.RWMutex
+	lastCtxBreakdown   ContextUsageBreakdown
+	lastCtxBudget      ContextBudget
+	lastCtxModel       string
+	lastCtxReportReady bool
+	wrapUp             atomic.Int32
+	// blockedWrapUpTasks is guarded by wrapUpMu. A task-derived stop can be
+	// released after its exact occurrences recover, without clearing an
+	// operator, budget, or workflow stop stored as wrapUp=1.
+	blockedWrapUpTasks         map[string]struct{}
 	initialDelegationAttempted atomic.Bool
 	finishCalled               atomic.Bool // set when the finish tool completes; cleared per orchestrator run
 	continuationInterrupted    atomic.Bool // set when a continuation stops before a workflow can safely finish
@@ -1021,7 +1027,7 @@ func (c *Coordinator) SetAcceptanceSpecWithReason(spec AcceptanceSpec, reason st
 	newState := AcceptanceContractStateOf(&spec)
 
 	goalModeStr := string(c.GoalMode())
-	if valErr := ValidateAcceptanceSpec(&spec, goalModeStr); valErr != nil {
+	if valErr := validateAcceptanceWithRequest(&spec, goalModeStr, c.requestAcceptanceEnabled()); valErr != nil {
 		rejectReason := fmt.Sprintf("%s (rejected: %v)", reason, valErr)
 		audit.LogAcceptanceRejected("coordinator", string(oldState), oldSpecJSON, string(newState), newSpecJSON, rejectReason)
 		c.persistAcceptanceAuditEvent("acceptance_contract_rejected", "rejected", oldState, oldSpecJSON, newState, newSpecJSON, rejectReason)
@@ -1233,7 +1239,7 @@ func (c *Coordinator) annotateRunCompletionSemantics(res *RunResult) {
 	if c == nil || res == nil {
 		return
 	}
-	res.AcceptanceAdvisory = c.ExecutionProfile().AcceptanceMode == AcceptanceAdvisory
+	res.AcceptanceAdvisory = c.ExecutionProfile().AcceptanceMode == AcceptanceAdvisory && !c.requestAcceptanceEnabled()
 	if c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return
 	}
@@ -1645,7 +1651,7 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 	// Context lookup is coordinator-owned so it can use the canonical router.
 	// It still enters the exact same selection, policy, unattended, force-MCP,
 	// and closed-sequence gates as every other worker tool.
-	c.coreTools = append(c.coreTools, &contextQueryTool{coordinator: c}, &contextGetTool{coordinator: c})
+	c.coreTools = append(c.coreTools, &contextQueryTool{coordinator: c}, &contextGetTool{coordinator: c}, &recallObservationTool{coordinator: c})
 	phaseWorkflow, err := newRuntimeWorkflow(session)
 	if err != nil {
 		return nil, err
@@ -1674,6 +1680,10 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 		}
 	} else if session.Config.Acceptance != "" {
 		if err := c.SetAcceptance(session.Config.Acceptance); err != nil {
+			return nil, err
+		}
+	} else if session.Config.RequestAcceptance {
+		if err := c.SetAcceptanceSpec(AcceptanceSpec{RequireNoUnresolvedTasks: true}); err != nil {
 			return nil, err
 		}
 	} else {
@@ -1716,6 +1726,9 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 	// Routes and MCP action providers are bound before the policy snapshot,
 	// which pins them.
 	if err := c.bindPolicyTargets(); err != nil {
+		return nil, err
+	}
+	if err := installRequestAcceptanceInput(session); err != nil {
 		return nil, err
 	}
 	executionPolicy, err := newExecutionPolicyState(c)
@@ -1933,6 +1946,7 @@ func (c *Coordinator) resetRoundStateLocked(clearWrapUp bool) {
 	c.round = 0
 	if clearWrapUp {
 		c.wrapUp.Store(0)
+		c.blockedWrapUpTasks = nil
 	}
 	c.acceptanceRecovery.Store(false)
 	c.finishCalled.Store(false)
@@ -1975,7 +1989,7 @@ func (c *Coordinator) resetRoundStatePreservingWrapUp() {
 func (c *Coordinator) resetRoundStateConsumingWrapUp() bool {
 	c.wrapUpMu.Lock()
 	defer c.wrapUpMu.Unlock()
-	wasWrapUp := c.wrapUp.Load() == 1
+	wasWrapUp := c.IsWrapUp()
 	c.resetRoundStateLocked(true)
 	return wasWrapUp
 }
@@ -2114,7 +2128,7 @@ func (c *Coordinator) persistPendingWrapUp(reason string) {
 }
 
 func (c *Coordinator) IsWrapUp() bool {
-	return c.wrapUp.Load() == 1
+	return c.wrapUp.Load() != 0
 }
 
 func (c *Coordinator) TaskTracker() *TaskTracker {
@@ -3145,7 +3159,7 @@ func (c *Coordinator) SetGoalMode(mode GoalMode) error {
 			spec = &copy
 		}
 		c.mu.RUnlock()
-		if err := ValidateAcceptanceSpec(spec, string(GoalModeOutcome)); err != nil {
+		if err := validateAcceptanceWithRequest(spec, string(GoalModeOutcome), c.requestAcceptanceEnabled()); err != nil {
 			return err
 		}
 	}

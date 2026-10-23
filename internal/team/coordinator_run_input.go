@@ -55,9 +55,30 @@ func (c *Coordinator) resolveRunInputsForInvocation(ctx context.Context, prompt 
 	if runID == "" {
 		return fmt.Errorf("run input resolution requires an active run identity")
 	}
+	for _, assignment := range assignments {
+		if assignment.Name == requestAcceptanceInput {
+			return fmt.Errorf("run input %q is runtime-owned and cannot be assigned", requestAcceptanceInput)
+		}
+	}
+	if frozen, err := c.unfinishedRequestAcceptance(ctx); err != nil {
+		return fmt.Errorf("recover request acceptance: %w", err)
+	} else if frozen != nil {
+		if err := validateResumeRunInputAssignments(c.session.RunInputDefinitions, assignments, frozen, c.session.Config.Name); err != nil {
+			return err
+		}
+		return c.mutateSessionData(func(session *SessionData) error {
+			session.ActiveRunInputSnapshotID = frozen.ID
+			return nil
+		})
+	}
 	if frozen, interrupted := c.interruptedRunInputSnapshot(); interrupted {
 		if frozen == nil {
 			return errors.New("resume_input_conflict: interrupted typed-input run has no frozen input snapshot; start with --new")
+		}
+		if c.requestAcceptanceEnabled() {
+			if _, err := RequestAcceptanceContractFromSnapshot(frozen); err != nil {
+				return fmt.Errorf("resume request acceptance: %w", err)
+			}
 		}
 		if err := validateResumeRunInputAssignments(c.session.RunInputDefinitions, assignments, frozen, c.session.Config.Name); err != nil {
 			return err
@@ -77,6 +98,13 @@ func (c *Coordinator) resolveRunInputsForInvocation(ctx context.Context, prompt 
 		return err
 	}
 	assignments = append(assignments, resolverAssignments...)
+	if c.requestAcceptanceEnabled() {
+		assignment, resolveErr := c.resolveRequestAcceptance(ctx, prompt)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		assignments = append(assignments, assignment)
+	}
 	snapshot, err := ResolveRunInputSnapshot(c.session.RunInputDefinitions, assignments, runID, runID+":invocation", c.session.Config.Name)
 	if err != nil {
 		return err
@@ -392,7 +420,10 @@ func (c *Coordinator) previewRunInputs(ctx context.Context, prompt string) (*Run
 		return nil, err
 	}
 	assignments = append(assignments, resolverAssignments...)
-	return ResolveRunInputSnapshot(c.session.RunInputDefinitions, assignments, "dry-run", "dry-run:invocation", c.session.Config.Name)
+	definitions := slices.DeleteFunc(cloneRunInputDefinitions(c.session.RunInputDefinitions), func(definition RunInputDefinition) bool {
+		return definition.Name == requestAcceptanceInput
+	})
+	return ResolveRunInputSnapshot(definitions, assignments, "dry-run", "dry-run:invocation", c.session.Config.Name)
 }
 
 func cloneRunInputAssignments(src []RunInputAssignment) []RunInputAssignment {

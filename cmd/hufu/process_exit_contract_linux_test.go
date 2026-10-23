@@ -24,7 +24,7 @@ func TestDefaultExploratoryResponseInteractiveProcessExitContract(t *testing.T) 
 
 	interactiveArgs := append(args, "--workspace", filepath.Join(t.TempDir(), "interactive-workspace"), "--display-mode", "plain", "answer the question")
 	process := startPTY(t, binary, interactiveArgs, 30, 120)
-	if code := process.waitExit(t, 30*time.Second); code != 0 {
+	if code := process.waitExit(t, 90*time.Second); code != 0 {
 		t.Fatalf("interactive exit code = %d, want 0; output=%q", code, truncateContractOutput([]byte(process.output.String())))
 	}
 	terminalOutput := process.output.String()

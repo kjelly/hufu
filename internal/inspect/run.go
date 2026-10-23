@@ -24,16 +24,93 @@ type AttemptSummary struct {
 }
 
 type RunData struct {
-	RunID           string         `json:"run_id"`
-	TerminalEventID string         `json:"terminal_event_id,omitempty"`
-	Outcome         string         `json:"outcome,omitempty"`
-	GoalSatisfied   bool           `json:"goal_satisfied,omitzero"`
-	StopReason      string         `json:"stop_reason,omitempty"`
-	Acceptance      string         `json:"acceptance"`
-	Completion      string         `json:"completion"`
-	TaskSummary     TaskSummary    `json:"task_summary"`
-	AttemptSummary  AttemptSummary `json:"attempt_summary"`
-	EvidenceRefs    []string       `json:"evidence_refs"`
+	RequestAcceptance *RequestAcceptanceSummary `json:"request_acceptance,omitempty"`
+	RunID             string                    `json:"run_id"`
+	TerminalEventID   string                    `json:"terminal_event_id,omitempty"`
+	Outcome           string                    `json:"outcome,omitempty"`
+	GoalSatisfied     bool                      `json:"goal_satisfied,omitzero"`
+	StopReason        string                    `json:"stop_reason,omitempty"`
+	Acceptance        string                    `json:"acceptance"`
+	Completion        string                    `json:"completion"`
+	TaskSummary       TaskSummary               `json:"task_summary"`
+	AttemptSummary    AttemptSummary            `json:"attempt_summary"`
+	EvidenceRefs      []string                  `json:"evidence_refs"`
+}
+
+// Inspect projections expose statuses and opaque refs. Request text and quoted
+// tool output remain in the explicitly requested result/evidence views.
+type RequestAcceptanceSummary struct {
+	SnapshotID     string                          `json:"snapshot_id"`
+	SnapshotHash   string                          `json:"snapshot_hash"`
+	RequestCovered bool                            `json:"request_covered"`
+	Passed         bool                            `json:"passed"`
+	Checks         []RequestAcceptanceCheckSummary `json:"checks"`
+}
+
+type RequestAcceptanceCheckSummary struct {
+	ID                      string   `json:"id"`
+	Required                bool     `json:"required"`
+	Verification            string   `json:"verification"`
+	Status                  string   `json:"status"`
+	EvidenceRefs            []string `json:"evidence_refs"`
+	DeliveryMatch           string   `json:"delivery_match,omitempty"`
+	DeliveryExtent          string   `json:"delivery_extent,omitempty"`
+	DeliverySource          string   `json:"delivery_source,omitempty"`
+	DeliveryGapCount        int      `json:"delivery_gap_count,omitzero"`
+	DeliveryLimitationCount int      `json:"delivery_limitation_count,omitzero"`
+	MaterialForm            string   `json:"material_form,omitempty"`
+	MaterialAdequate        *bool    `json:"material_adequate,omitempty"`
+}
+
+func summarizeRequestAcceptance(review *team.RequestAcceptanceResult) *RequestAcceptanceSummary {
+	if review == nil {
+		return nil
+	}
+	result := &RequestAcceptanceSummary{SnapshotID: review.SnapshotID, SnapshotHash: review.SnapshotHash,
+		RequestCovered: review.RequestCovered, Passed: review.Validate() == nil}
+	for _, requirement := range review.Contract.Requirements {
+		check := RequestAcceptanceCheckSummary{ID: requirement.ID, Required: requirement.Required,
+			Verification: requirement.Verification, Status: "missing", EvidenceRefs: []string{}}
+		for _, reviewed := range review.Checks {
+			if reviewed.ID == requirement.ID {
+				check.Status = reviewed.Status
+				if delivery := reviewed.Delivery; delivery != nil {
+					check.DeliveryMatch = requestDeliveryDimension(delivery.Match, "requested", "allowed_substitute", "none", "unknown")
+					check.DeliveryExtent = requestDeliveryDimension(delivery.Extent, "full", "relevant_parts", "partial", "unknown", "not_applicable")
+					check.DeliverySource = requestDeliveryDimension(delivery.Source, "primary", "secondary", "unknown", "not_applicable")
+					check.DeliveryGapCount = len(delivery.Gaps)
+					check.DeliveryLimitationCount = len(delivery.Limitations)
+				}
+				for _, proof := range reviewed.Evidence {
+					reference := proof.ArtifactID
+					if reference == "" {
+						reference = proof.ArtifactHash
+					}
+					if reference != "" && !slices.Contains(check.EvidenceRefs, reference) {
+						check.EvidenceRefs = append(check.EvidenceRefs, reference)
+					}
+				}
+				break
+			}
+		}
+		if review.MaterialReview != nil {
+			for _, material := range review.MaterialReview.Checks {
+				if material.ID == requirement.ID {
+					check.MaterialForm = requestDeliveryDimension(material.Form, "direct", "faithful_copy", "authorized_substitute", "indirect", "unknown")
+					check.MaterialAdequate = new(material.Adequate)
+				}
+			}
+		}
+		result.Checks = append(result.Checks, check)
+	}
+	return result
+}
+
+func requestDeliveryDimension(value string, allowed ...string) string {
+	if slices.Contains(allowed, value) {
+		return value
+	}
+	return "unknown"
 }
 
 type AttemptData struct {
@@ -173,6 +250,7 @@ func projectRunData(ctx context.Context, query InspectQuery, lineage Lineage) (R
 		data.StopReason = string(result.StopReason)
 		if result.Acceptance != nil {
 			data.Acceptance = string(result.Acceptance.EffectiveState())
+			data.RequestAcceptance = summarizeRequestAcceptance(result.Acceptance.RequestAcceptance)
 		} else {
 			data.Acceptance = string(team.AcceptanceNotConfigured)
 		}

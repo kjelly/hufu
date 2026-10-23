@@ -47,11 +47,42 @@ mise run lint
 
 The command must complete successfully with no errors before the task is considered complete. If it reports errors, fix them and rerun the command; do not stop with known lint failures. Documentation-only changes do not require this code lint gate.
 
+- Serialize live agent-team runs with heavyweight Go validation. A team can
+  launch a native inventory or final audit while models are running; these may
+  copy `runtime.sqlite`. Wait for the team process to exit before full tests,
+  race, vet, or lint so I/O contention cannot exhaust action deadlines.
+- Before Go validation, check free space on the filesystems containing the
+  configured `GOTMPDIR`, `GOCACHE`, and `GOMODCACHE`, as well as `/tmp`.
+  Free space in `/tmp` does not protect a full build-cache volume. Preserve
+  configured paths and shared caches; resolve capacity before starting builds.
+- Before restarting a quiet, low-CPU validation job, check `/proc/pressure/io`
+  and the job's read-byte progress. A regular-file read can wait under I/O
+  pressure; keep one validation owner instead of repeatedly restarting it.
+
 ## Documentation and Temporary Files
 
 - Never commit files under `docs/tmp/`; it is gitignored scratch space and is not part of the documentation authority chain.
 - If material from `docs/tmp/` must be retained in version control, move it to the appropriate permanent `docs/` lifecycle directory (for example, `docs/archive/implementation-plans/`) before staging it.
 - The pre-commit configuration rejects staged additions, modifications, and renames into `docs/tmp/`; deletions and renames out of that directory remain allowed.
+
+### Short paths for Unix socket tests
+
+- Check the complete socket pathname in bytes, including the temporary root,
+  generated directory name, and socket suffix. Linux pathname Unix sockets allow
+  at most 107 bytes; `bind: invalid argument` can indicate an overlong path.
+- In Go 1.27, `t.TempDir()` uses `GOTMPDIR` when set and includes the test name.
+  Setting `TMPDIR` alone does not shorten those paths. Preserve configured
+  `GOTMPDIR` and build caches. For socket fixtures, use a short directory from
+  `os.MkdirTemp(os.TempDir(), "tb-")` under the private task `TMPDIR`, register
+  `t.Cleanup`, and close socket/process consumers before removing the directory.
+  Reuse `terminalBrokerTestWorkspace` for terminal broker tests.
+- For PTY fixture HOME and workspaces, reuse `ptyTestDir`; also isolate the
+  child process's working directory so project `hufu.yaml` cannot select real
+  providers. Wait for a local fixture's readiness instead of a startup sleep.
+- Fix the fixture instead of renaming tests, skipping failures, or retrying the
+  same long path. Reviewing an immutable Git snapshot still runs that revision's
+  fixtures; record its test failure in the review evidence rather than changing
+  the snapshot or treating a working-tree fix as proof that it passed.
 
 ## Package Structure
 
@@ -1190,7 +1221,7 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 
 11. **`idleWarningTimer`** — Tracks idle time and prints a warning to stderr after 30s of no activity. Resets on every status event.
 
-12. **Workspace flag is shared** — `--workspace` sets the workspace for all teams; each team's session uses this combined workspace path.
+12. **Workspace path semantics depend on the command** — Legacy root execution treats `--workspace` as a root and nests each team, including `default`, beneath it. Public `status` and `inspect` commands expect the exact team workspace, not that root; use the resolved workspace identity when diagnosing a run.
 
 13. **`teamStyle`** — New lipgloss style (color 13/magenta) added for displaying team names in CLI output, distinct from `agentStyle` (cyan).
 

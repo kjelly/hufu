@@ -29,7 +29,8 @@ import (
 )
 
 type TeamSession struct {
-	compositionSources map[string]compositionAgentSource // Process-local, never part of runtime policy.
+	requestAcceptanceInputInstalled bool
+	compositionSources              map[string]compositionAgentSource // Process-local, never part of runtime policy.
 
 	Config            agent.TeamConfig
 	DecisionAuthoring DecisionAuthoringMetadata
@@ -956,6 +957,7 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 			}
 		}
 	}
+	cfg.RequestAcceptance = yc.RequestAcceptance
 	if yc.NoNet {
 		cfg.NoNet = true
 	}
@@ -1066,7 +1068,7 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	if err != nil {
 		return cfg, DecisionAuthoringMetadata{}, fmt.Errorf("invalid effective goal mode: %w", err)
 	}
-	if err := ValidateAcceptanceSpec(cfg.AcceptanceSpec, string(effectiveGoalMode)); err != nil {
+	if err := validateAcceptanceWithRequest(cfg.AcceptanceSpec, string(effectiveGoalMode), cfg.RequestAcceptance); err != nil {
 		return cfg, DecisionAuthoringMetadata{}, err
 	}
 	cfg.Reliability = agent.DefaultReliabilityConfig()
@@ -1474,7 +1476,7 @@ func loadTeamWithOptions(teamDir string, vars map[string]string, forcedSkills []
 	if err != nil {
 		return nil, fmt.Errorf("invalid effective goal mode: %w", err)
 	}
-	if err := ValidateAcceptanceSpec(cfg.AcceptanceSpec, string(effectiveGoalMode)); err != nil {
+	if err := validateAcceptanceWithRequest(cfg.AcceptanceSpec, string(effectiveGoalMode), cfg.RequestAcceptance); err != nil {
 		return nil, err
 	}
 	if cfg.Name == "" {

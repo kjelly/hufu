@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: 2026-10-20
+> Verified-Commit: —（本次整合工作樹，尚未提交）
 > Supersedes: —
 > Superseded-By: —
 
@@ -369,7 +369,7 @@ Schema 可選用下列通用 runtime 擴充（都包含在 schema hash 中）：
   不會去引號或猜測；重複、未宣告 ID、hash 不符及來源 payload 變動皆拒絕。
   local/external 提交、commit、完成檢查及最終報告會檢查綁定；
   單純 JSON Schema 驗證不取代此有上下文的檢查。
-  可選 `runtime_owned: true` 會由 runtime 注入整個來源陣列；worker 必須省略，
+  可選 `runtime_owned: true`（相容 `runtime_bind: true`）會由 runtime 注入整個來源陣列；worker 必須省略，
   即使提交相同值也拒絕。來源驗證與 canonical payload 驗證仍保留。
 - `x-hufu-evidence-references`：在根節點用 `items_pointer` 選擇引用清單，
   用 `task_id_pointer` 與 `references_pointer` 選擇各項的來源 task ID
@@ -486,6 +486,46 @@ false 可交付空清單或部分輸入，但列出的每項仍須有效。hash 
 canonical payload bytes 重算，`value_bindings` 將 review 欄位與該輸入
 payload 的欄位逐值比較。完成稽核不要求每項事實皆已證實；
 未驗證結論可以交付，必須保留證據缺口與準確的原因。
+
+若要避免模型重抄來源，可在 `x-hufu-evidence-inputs` 設定
+`"runtime_bind": true`。worker 必須完全省略 `items_pointer` 欄位；runtime
+按 durable `evidence_from` 順序，自已接受的結果填入 task ID、重算比對過的
+payload hash 與 `value_bindings`。來源缺失、hash 不符、重複 ID 或 worker
+自行提供該欄位皆拒絕。此模式要求非空且有界的來源清單，僅支援直接宣告的
+object 路徑與 array；綁定欄位及其他 runtime 集合路徑不得重疊。
+canonical schema、儲存格式與來源比對規則不變；重播驗證已儲存的來源副本，
+不會重新填入較新的來源。可搭配 fixed collection，讓模型只提交逐項判斷。
+
+### Runtime output 結果綁定
+
+對於已由原生 action 產生的不可變資料，在結果 schema 宣告：
+
+```json
+"x-hufu-runtime-inputs": [
+  {"target": "/verification", "source_task": "verify", "output": "evidence"}
+]
+```
+
+`source_task` 必須是本 team 宣告的原生 action task。runtime 在 worker
+執行前檢查來源已完成、屬於目前 run、符合 frozen input snapshot，且 output
+digest 與 execution receipt 一致。worker 必須省略 `target`；runtime 填入完整
+原值後驗證 canonical schema，來源值不套用模型字串型別轉換。目標必須是直接
+宣告的 object property 路徑，不得與其他 runtime 綁定或 fixed collection 重疊。
+綁定宣告納入 schema/policy hash；缺失、舊 run、篡改、無效型別與模型覆寫均拒絕。
+本地、external provider 及 result-only repair 共用此邊界；重播檢查已儲存的值，
+不重寫成較新的來源。此綁定供模型提交的結果使用，原生 actions 僅作資料來源。
+
+### 輸入的簡易型別轉換
+
+工具參數、team action catalog 參數及結構化結果在驗證前，依 schema 明確
+宣告的型別轉換字串：`"true"`／`"false"` 轉 boolean，JSON 數字字串轉
+number，十進位整數字串轉 integer（保留精度）。可去除前後空白；不接受
+`yes`、`1` 作為 boolean，也不猜測 union 或只在條件分支宣告的型別。
+string 欄位、自由文字與來源識別碼保持原值；`const: true/false` 亦支援。
+巢狀直接宣告的 properties、array items 與單純 local `$ref` 可套用轉換。
+轉換後仍完整檢查 enum、const、範圍、required、證據與授權；持久化及 hash
+都使用驗證後的 canonical 值。此規則不改變 verifier 的嚴格 JSON 比對，
+也不將 `{"item": ...}` 猜成 array。
 
 ### 固定集合與有限選項決策
 
@@ -750,6 +790,100 @@ userinfo、`localhost` 或非公開 IP 字面值。一般 hostname 的遠端 DNS
 不要把秘密或不必要的工作區資料放進查詢或 URL。頁面內容是不可信資料；
 工具保留來源 URL 供引用，但不保證模型會產生正確引用。對 hosted service
 的請求也可能消耗其配額。
+
+### 同一對話的歷史觀測結果
+
+Worker 必須在 `tools` 明確列出 `recall_observation` 才能保存及查詢自己的
+歷史觀測；空白或 `all` 不會隱含啟用。可重用內容限目前分支可見的同一 team
+與同一 worker 名稱（agent identity，不是 `role: worker` 這個角色分類），仍須
+符合當前來源工具的授權與限制。coordinator 與綁定 bound workset 的任務不取得
+此能力；既有 artifact 授權不會因此變成歷史觀測授權。
+
+```jsonl
+{"action":"search","query":"https://example.com/source","limit":5}
+{"action":"read","observation_id":"<搜尋傳回的 observation_id>","offset":0,"limit":8192}
+```
+
+搜尋採用模型明確提供的字面文字，可省略 query 以列出最近觀測。搜尋與讀取都須
+依 `next_offset` 分頁，`-1` 代表結束；搜尋的 offset 是候選位置，讀取則是 UTF-8
+byte offset。搜尋預覽不是引用證據。讀取保留原始時間、來源呼叫、artifact 雜湊及
+本輪讀取片段雜湊，不會重新執行來源工具，也不代表完成了新的查證。
+
+結果契約若要允許歷史內容支持引文，須在 `x-hufu-tool-evidence` 同時設定
+`allow_historical: true` 與 `historical_pointer: /historical_observation`，並在
+source schema 宣告可為 null 的對應物件欄位。Runtime 沿用契約的來源與內文擷取
+規則；回應中的 `content_format: "evidence_text"` 表示 `content` 是擷取後的內文
+片段。`evidence_text` 不是擴充設定 key，也不是模型必須提交的 schema 欄位。
+沒有歷史證據 opt-in 時，讀取可能回傳 `tool_output`，但不能因此取得歷史引文信用。
+只有本輪實際讀入 runner transcript、工具呼叫成功且來源與引文相符的片段可通過
+綁定。符合的本輪新觀測優先；同類觀測有多筆匹配時，採目前 transcript 順序中的
+第一筆成功匹配，不以原始觀測時間自動選最新資料。provenance 由 runtime 填入，
+模型不得自填：
+`read_event_id`、`observation_id`、`source_run_id`、`source_task_id`、`source_call_id`、`observed_at`、
+`sha256`、`content_sha256`、`content_format`、`tool`、`read_call_id`、`offset`、
+`bytes`、`total_bytes`，多模型執行另含 `model_execution_id`。`sha256` 指原始觀測 artifact；`content_sha256` 指交付片段。
+沒有此契約設定的角色仍須取得本輪工具證據，尤其不能拿另一個研究角色的舊結果
+冒充自己的獨立驗證。新鮮度與需要補查的問題由 team 的模型指引決定。
+
+`historical_pointer` 與 `value_pointer`、`quote_pointer`、`status_pointer`、
+`call_id_pointer` 一樣，相對於 `items_pointer` 選出的每一個 source 物件，
+只指向其直接 property。模型省略 provenance；runtime 先清除模型聲稱的值，
+有符合的歷史引文時填入物件，其餘情形填 `null`。source schema 必須接受這兩種
+值；僅宣告字串或禁止新增該欄位會使結果驗證失敗。
+provenance 只記錄匹配的來源；引用的 status 與群組驗證仍獨立判定，不能把非空
+provenance 當成已通過驗證的證據。
+
+例如 source 的 `properties.historical_observation` 可使用以下 schema，並搭配
+`"historical_pointer": "/historical_observation"`：
+
+<!-- historical-observation-provenance-schema -->
+
+```json
+{
+  "type": ["object", "null"],
+  "additionalProperties": false,
+  "required": [
+    "read_event_id", "observation_id", "source_run_id", "source_task_id",
+    "source_call_id", "observed_at", "sha256", "content_sha256",
+    "content_format", "tool", "read_call_id", "offset", "bytes", "total_bytes"
+  ],
+  "properties": {
+    "read_event_id": {"type": "string", "minLength": 1},
+    "model_execution_id": {"type": "string", "minLength": 1},
+    "observation_id": {"type": "string", "minLength": 1},
+    "source_run_id": {"type": "string", "minLength": 1},
+    "source_task_id": {"type": "string", "minLength": 1},
+    "source_call_id": {"type": "string", "minLength": 1},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "content_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "content_format": {"type": "string", "enum": ["evidence_text"]},
+    "tool": {"type": "string", "minLength": 1},
+    "read_call_id": {"type": "string", "minLength": 1},
+    "offset": {"type": "integer", "minimum": 0, "maximum": 1048576},
+    "bytes": {"type": "integer", "minimum": 0, "maximum": 32768},
+    "total_bytes": {"type": "integer", "minimum": 0, "maximum": 1048576}
+  }
+}
+```
+
+`source_*` 與 `observed_at` 指原始產生者；`sha256` 是原始 CAS artifact
+（含 input/output）的 digest。`read_event_id`、`read_call_id` 和可選的
+`model_execution_id` 指目前消費者的讀取事件、工具呼叫及 model execution。
+`call_id_pointer` 所指欄位（例如 `tool_call_id`）綁定目前 `read_call_id`，
+不是舊的 `source_call_id`。
+`tool` 則是原始來源工具名稱。`content_sha256` 是本輪實際交付、重新遮罩後
+UTF-8 片段的 SHA-256；offset 與長度針對擷取並遮罩後的內文，且 runtime
+檢查 `offset + bytes <= total_bytes` 及 UTF-8 邊界。
+
+這個 opt-in 允許舊來源文字支持本輪新結果的引文，不代表舊 task 或舊 verification
+receipt 可完成本輪要求。若本輪要求重新抓取、查最新狀態或獨立驗證，team 必須
+保留 fresh-only evidence contract 與本輪來源工具驗證；呼叫 `recall_observation`
+不能代替新的來源呼叫。來源是否足夠新、是否回答目前問題，仍由 team 的任務與
+驗收契約判斷，runtime 不從來源時間或自然語言自行猜測。
+
+第一版不回填啟用前的工具逐字稿；工具與契約變更遵循既有 policy snapshot 相容性
+檢查，部署這些 team 變更後須以新的相容 session 開始累積。
 
 ### 工具命名
 

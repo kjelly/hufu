@@ -216,4 +216,7 @@ func TestHufuCodeReviewSynthesisReceivesCompactPrepareStatusWithoutCoordinatorCo
 			t.Fatalf("static synthesis context omitted %s: %s", want, final[0].Constraints)
 		}
 	}
+	if strings.Contains(final[0].Constraints, "should-not-reach-model") {
+		t.Fatal("synthesis context asks the model to transcribe a large diagnostic")
+	}
 }

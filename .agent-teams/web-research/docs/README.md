@@ -33,6 +33,14 @@ snapshot 的 `arguments` 必須是 `{}`；`url`、`filename` 等欄位均不接�
 減少非來源內容。metadata、搜尋摘要、snapshot 檔案連結與失敗回傳皆不能
 通過引文綁定。團隊禁止內建 fetch、download 與 shell 執行工具。
 
+這些旗標不會停用 browser console 日誌。本機 fixture 使用已安裝的
+`@playwright/mcp` 0.0.83 驗證：僅導覽帶有 console error 的頁面，仍產生
+`console-*.log`。三個 server 都以通用 `temporary-directory-env` 宣告
+`PLAYWRIGHT_MCP_OUTPUT_DIR`，由 Hufu 為各次 server 啟動配置獨立 `0700`
+目錄，關閉 server 後清理；不共用固定 `/tmp/hufu-playwright/<role>`。
+chat 的同一個 server instance 在多輪間保留目錄，直到 team context 關閉。
+server 內部日誌不是引用證據，也不開放 filename、export 等模型參數。
+
 ## 通用 runtime 支援
 
 `toolPolicies` 是團隊維護者對受信任 MCP server 的明確宣告，搭配 worker
@@ -70,6 +78,12 @@ session 狀態由受信任 server 管理。HTTP(S) 格式驗證不會阻擋私�
 通用設定參見 [MCP worker policy](../../../docs/reference/mcp-worker-policy.md)。
 
 ## 驗證與執行
+
+團隊預設啟用 `request-acceptance: true`，依每次使用者任務產生並驗收動態要求，
+不必再加 `--request-acceptance`。動態要求會補充既有團隊驗收；明確要求取得原文時，
+替代摘要不能取代該要求。單次停用可用 `--request-acceptance=false`。
+此設定屬於 execution policy snapshot；既有 workspace 首次套用時需加 `--new`。
+詳見 [Request acceptance](../../../docs/reference/request-acceptance.md)。
 
 ```bash
 hufu team validate --team web-research

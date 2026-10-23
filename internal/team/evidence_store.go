@@ -645,16 +645,8 @@ func verifyEvidenceBinding(manifest EvidenceManifest, result EvidenceResult) err
 	if strings.HasPrefix(b.TranscriptRef, "sha256-") && !slices.Contains(b.ArtifactIDs, b.TranscriptRef) {
 		return fmt.Errorf("evidence requirement %q transcript is outside artifact membership", result.RequirementID)
 	}
-	if b.RunInputSnapshotID != "" || b.RunInputSnapshotHash != "" || b.MaterializedActionPayloadHash != "" || len(b.BoundInputs) > 0 {
-		if b.RunInputSnapshotID == "" || !runInputHashPattern.MatchString(b.RunInputSnapshotHash) ||
-			!runInputHashPattern.MatchString(b.MaterializedActionPayloadHash) || len(b.BoundInputs) == 0 {
-			return fmt.Errorf("evidence requirement %q has incomplete action input binding", result.RequirementID)
-		}
-		for name, hash := range b.BoundInputs {
-			if strings.TrimSpace(name) == "" || !runInputHashPattern.MatchString(hash) {
-				return fmt.Errorf("evidence requirement %q has invalid bound input", result.RequirementID)
-			}
-		}
+	if err := verifyEvidenceInputBinding(result.RequirementID, b); err != nil {
+		return err
 	}
 	if b.ActionInvocationID != "" || b.RuntimeOutputsHash != "" {
 		if strings.TrimSpace(b.ActionInvocationID) == "" || !runInputHashPattern.MatchString(b.RuntimeOutputsHash) {
@@ -711,4 +703,22 @@ func (m EvidenceManifest) VerifiedTaskBinding(taskID string) (*EvidenceBinding, 
 		return &binding, true
 	}
 	return nil, false
+}
+
+func verifyEvidenceInputBinding(requirementID string, b *EvidenceBinding) error {
+	if b.RunInputSnapshotID != "" || b.RunInputSnapshotHash != "" || b.MaterializedActionPayloadHash != "" || len(b.BoundInputs) > 0 {
+		if b.RunInputSnapshotID == "" || !runInputHashPattern.MatchString(b.RunInputSnapshotHash) {
+			return fmt.Errorf("evidence requirement %q has incomplete invocation input binding", requirementID)
+		}
+		if (b.MaterializedActionPayloadHash != "" || len(b.BoundInputs) > 0) &&
+			(!runInputHashPattern.MatchString(b.MaterializedActionPayloadHash) || len(b.BoundInputs) == 0) {
+			return fmt.Errorf("evidence requirement %q has incomplete action input binding", requirementID)
+		}
+		for name, hash := range b.BoundInputs {
+			if strings.TrimSpace(name) == "" || !runInputHashPattern.MatchString(hash) {
+				return fmt.Errorf("evidence requirement %q has invalid bound input", requirementID)
+			}
+		}
+	}
+	return nil
 }

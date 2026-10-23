@@ -81,6 +81,9 @@ to re-create an abstraction that already exists in the runtime.
 
 ### Guides and references
 
+- [Test performance baseline](reference/test-performance-baseline.md) — cache-separated
+  Go test measurements, profiles and regression-contract inventory for issue #26.
+
 - [定性 belief 基礎](reference/qualitative-belief.md) — provenance-bearing claims,
   explicit support/counterevidence, gaps and retractions; standalone pure Go API
   without runtime, storage or CLI integration.

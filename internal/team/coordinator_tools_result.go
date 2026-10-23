@@ -450,7 +450,7 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		}
 	}
 	call.Input = canonicalToolArgumentObjects(call.Input, t.Info())
-	call.Input, _ = tools.CanonicalToolArgumentCase(call.Input, t.Info())
+	call.Input, _ = tools.CanonicalToolArguments(call.Input, t.Info())
 	if t.coordinator != nil {
 		normalized, err := t.coordinator.resolveResultEvidenceKeys(ctx, t.todoID, call.Input)
 		if err != nil {

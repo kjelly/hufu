@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: 2026-10-20
+> Verified-Commit: —（本次工作樹，尚未提交）
 > Supersedes: —
 > Superseded-By: —
 
@@ -21,6 +21,11 @@ Contracts also work without a workflow. The runtime binds the same
 revisions, task persistence and workflow behavior are unchanged. Coordinator
 dispatch continues to use the existing binding rules, including exact
 `contract_id` for task-goal binding. `when-goal-contains` remains unsupported.
+
+For requirements that vary with each invocation, enable `request-acceptance:
+true` or pass `--request-acceptance`. This supplements static contracts with a
+frozen, model-resolved request and an evidence-bound completion review. See
+[per-request runtime acceptance](request-acceptance.md).
 
 ## 單檔 Team Preset
 

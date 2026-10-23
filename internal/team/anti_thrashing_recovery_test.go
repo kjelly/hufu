@@ -95,6 +95,76 @@ func TestRecoveredFailuresReleaseTheirScope(t *testing.T) {
 	}
 }
 
+func TestRecoveredBlockedTaskReleasesOnlyItsWrapUp(t *testing.T) {
+	for _, mode := range []string{"recovered", "in_progress", "other_blocked", "explicit_before", "explicit_after", "reliability_scope"} {
+		t.Run(mode, func(t *testing.T) {
+			c := &Coordinator{
+				session:     &TeamSession{Config: agent.TeamConfig{Reliability: defaultReliabilityLimits()}},
+				taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {},
+			}
+			items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "recover source"}, {Agent: "critic", Desc: "another source"}})
+			if mode == "explicit_before" {
+				c.SetWrapUp()
+			}
+			c.PersistFailureWithClassAndStatus("reviewer", items[0].Desc, items[0].ID, "result finalization failed", ReconcileOnly, FailureProtocol, TaskBlocked)
+			if !c.IsWrapUp() {
+				t.Fatal("unresolved blocked task did not stop delegation")
+			}
+			if mode == "other_blocked" {
+				c.PersistFailureWithClassAndStatus("critic", items[1].Desc, items[1].ID, "another failure", NeedsHuman, FailurePolicy, TaskBlocked)
+			}
+			if mode == "explicit_after" {
+				c.SetWrapUp()
+			}
+			if err := c.commitTaskTransitionFromCurrent(t.Context(), items[0].ID, TaskInProgress, "retrying", "", nil); err != nil {
+				t.Fatal(err)
+			}
+			if mode != "in_progress" {
+				if err := c.commitTaskTransitionFromCurrent(t.Context(), items[0].ID, TaskDone, "recovered", "", nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			c.forgetRecoveredFailures(items[0].ID)
+			if mode == "in_progress" {
+				c.rebuildAntiThrashingState()
+			}
+			if mode == "reliability_scope" {
+				// A different failed criterion still owns a hard stop even
+				// after the task which originally requested wrap-up recovered.
+				c.wrapUp.Store(wrapUpFromBlockedTask)
+				c.metricsMu.Lock()
+				c.antiThrashing.HardBlocked = true
+				c.metricsMu.Unlock()
+				c.releaseRecoveredTaskWrapUp()
+			}
+			if want := mode != "recovered"; c.IsWrapUp() != want {
+				t.Fatalf("wrap-up = %v, want %v", c.IsWrapUp(), want)
+			}
+			if mode == "other_blocked" {
+				if err := c.commitTaskTransitionFromCurrent(t.Context(), items[1].ID, TaskInProgress, "retrying", "", nil); err != nil {
+					t.Fatal(err)
+				}
+				if err := c.commitTaskTransitionFromCurrent(t.Context(), items[1].ID, TaskDone, "recovered", "", nil); err != nil {
+					t.Fatal(err)
+				}
+				c.forgetRecoveredFailures(items[1].ID)
+				if c.IsWrapUp() {
+					t.Fatal("wrap-up remained after every blocked occurrence recovered")
+				}
+			}
+		})
+	}
+}
+
+func TestTaskDerivedWrapUpIsConsumedByRoundReset(t *testing.T) {
+	c := &Coordinator{}
+	c.wrapUp.Store(wrapUpFromBlockedTask)
+	c.blockedWrapUpTasks = map[string]struct{}{"1": {}}
+	if !c.resetRoundStateConsumingWrapUp() || c.IsWrapUp() || c.blockedWrapUpTasks != nil {
+		t.Fatal("round reset failed to consume the task-derived stop")
+	}
+}
+
 func TestSystemicDispatchBlockUsesTheScopeDisposition(t *testing.T) {
 	limits := defaultReliabilityLimits()
 	limits.MaxSameFailureFingerprint = 0 // isolate the systemic scope

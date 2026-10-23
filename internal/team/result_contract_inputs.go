@@ -9,17 +9,26 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // This extension binds schema-declared review entries to accepted evidence_from
 // payloads. It interprets no prose and has no consumer-specific vocabulary.
 type resultEvidenceInputsSpec struct {
 	RuntimeOwned    bool              `json:"runtime_owned,omitempty"`
+	RuntimeBind     bool              `json:"runtime_bind,omitzero"`
 	ItemsPointer    string            `json:"items_pointer"`
 	TaskIDPointer   string            `json:"task_id_pointer"`
 	HashPointer     string            `json:"hash_pointer"`
 	CompletePointer string            `json:"complete_pointer"`
 	ValueBindings   map[string]string `json:"value_bindings,omitempty"`
+	arraySchema     *jsonschema.Schema
+}
+
+// Both spellings exist in pinned contracts and select the same runtime owner.
+func (s *resultEvidenceInputsSpec) runtimeOwned() bool {
+	return s != nil && (s.RuntimeOwned || s.RuntimeBind)
 }
 
 func compileResultEvidenceInputs(root map[string]any) (*resultEvidenceInputsSpec, error) {
@@ -53,6 +62,11 @@ func compileResultEvidenceInputs(root map[string]any) (*resultEvidenceInputsSpec
 			return nil, err
 		}
 		if err := validateJSONPointer(source); err != nil {
+			return nil, err
+		}
+	}
+	if spec.runtimeOwned() {
+		if err := validateRuntimeEvidenceBinding(root, spec); err != nil {
 			return nil, err
 		}
 	}

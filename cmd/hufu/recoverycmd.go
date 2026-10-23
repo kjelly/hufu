@@ -27,7 +27,8 @@ var reconcileCmd = &cobra.Command{
 	Use:   "reconcile --task <task-id>",
 	Short: "Reconcile one task without replaying its worker",
 	Args:  cobra.NoArgs,
-	RunE: func(_ *cobra.Command, _ []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		opts.requestAcceptanceSet = cmd.Flags().Changed("request-acceptance")
 		return runTargetedRecoveryCommand(team.TargetedRecoveryReconcile)
 	},
 }
@@ -36,7 +37,8 @@ var retryCmd = &cobra.Command{
 	Use:   "retry --task <task-id>",
 	Short: "Retry one failed or blocked task when policy permits",
 	Args:  cobra.NoArgs,
-	RunE: func(_ *cobra.Command, _ []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		opts.requestAcceptanceSet = cmd.Flags().Changed("request-acceptance")
 		return runTargetedRecoveryCommand(team.TargetedRecoveryRetry)
 	},
 }
@@ -184,6 +186,7 @@ func init() {
 		cmd.Flags().StringVar(&targetedRecoveryTeamName, "agent-team", "", "Agent team name (inferred from --workspace when omitted)")
 		cmd.Flags().StringVar(&targetedRecoverySearch, "agent-team-search-path", "", "Comma-separated team search paths")
 		cmd.Flags().BoolVar(&targetedRecoveryJSON, "json", false, "Write machine-readable JSON to stdout")
+		cmd.Flags().BoolVar(&opts.requestAcceptance, "request-acceptance", false, "Preserve and enforce frozen request requirements")
 		_ = cmd.MarkFlagRequired("task")
 	}
 }

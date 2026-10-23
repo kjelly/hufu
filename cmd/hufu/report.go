@@ -771,6 +771,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		}
 		if data.RunResult.Acceptance != nil {
 			fmt.Fprintf(&b, "- **Acceptance:** `%s`\n", data.RunResult.Acceptance.EffectiveState())
+			b.WriteString(team.FormatRequestAcceptance(data.RunResult.Acceptance.RequestAcceptance))
 		}
 		if len(data.RunResult.Worksets) > 0 {
 			b.WriteString("\n### Workset Groups\n\n")

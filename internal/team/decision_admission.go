@@ -353,7 +353,7 @@ func (c *Coordinator) canonicalizeTaskOccurrence(task TaskDef, def *agent.AgentD
 			}
 		}
 	}
-	return task, nil
+	return c.bindRequestAcceptanceTask(task)
 }
 
 func (c *Coordinator) resolveCanonicalTaskTarget(model, legacyProvider string) (execution.ExecutionTarget, error) {

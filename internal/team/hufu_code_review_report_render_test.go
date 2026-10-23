@@ -14,7 +14,7 @@ const hufuCodeReviewReportFixture = `{
 			"requested_input_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			"resolved":{"base":"base","head":"head","selected_commit_count":10,"available_commit_count":10,"history_exhausted":false,"repository_shallow":false},
 			"observed_budget":{"changed_paths":1,"total_diff_bytes":1,"total_diff_lines":1,"workset_items":1},"satisfied":true},
-		"test_verification":{"passed":true,"reviewed_revision":"head","base_revision":"head","command":["go","test","./internal/team"],"packages":["./internal/team"],
+		"test_verification":{"completed":true,"passed":true,"reviewed_revision":"head","base_revision":"head","command":["go","test","./internal/team"],"packages":["./internal/team"],
 			"artifact_id":"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			"requested_input_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","exit_code":0,"timed_out":false,"output_truncated":false},
 		"input_review":[{"task_id":"3","payload_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

@@ -55,7 +55,7 @@ func TestResultContractIntegerNormalizationPreservesRestrictions(t *testing.T) {
 		{"below bound", `{"type":"integer","minimum":0}`, `"-1"`, false},
 		{"enum", `{"type":"integer","enum":[0,1]}`, `"0"`, false},
 		{"const", `{"type":"integer","const":0}`, `"0"`, false},
-		{"number is not integer declaration", `{"type":"number"}`, `"0"`, false},
+		{"number permits exact numeric strings", `{"type":"number"}`, `"0"`, true},
 		{"union branches not guessed", `{"anyOf":[{"type":"integer"},{"type":"null"}]}`, `"0"`, false},
 		{"ref sibling not guessed", `{"$ref":"#/$defs/index","type":"integer"}`, `"0"`, false},
 	} {

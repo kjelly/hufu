@@ -102,6 +102,11 @@ func (c *Coordinator) fixedCollectionPlans(todoID string) ([]resultFixedCollecti
 	if err != nil {
 		return nil, err
 	}
+	if spec := compiled.evidenceInputs; spec != nil && spec.runtimeOwned() {
+		if _, err := runtimeBoundEvidenceEntries(spec, item.EvidenceFrom, c.dependencyResultsForTask(todoID)); err != nil {
+			return nil, err
+		}
+	}
 	if len(compiled.fixedCollections) == 0 {
 		return nil, nil
 	}
@@ -115,7 +120,7 @@ func (c *Coordinator) validateFixedCollectionInputJSON(todoID, input string) err
 	if err != nil {
 		return err
 	}
-	if compiled == nil || len(compiled.fixedCollections) == 0 {
+	if compiled == nil || (len(compiled.fixedCollections) == 0 && (compiled.evidenceInputs == nil || !compiled.evidenceInputs.runtimeOwned())) {
 		return nil
 	}
 	if _, err := decodeUniqueJSON([]byte(input)); err != nil {

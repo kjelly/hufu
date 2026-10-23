@@ -32,6 +32,8 @@ hufu results runs --team <team> --all-branches
 
 `runs` 與個別任務列表都會顯示 `Original request`（原始提問）及 `Branches (visible in)`（可讀到這筆結果的 branch，包含繼承它的 branches）。`list` 另外以 `Agent task` 標示協調者交給 agent 的子任務，以 `Result (excerpt)` 顯示保存結果的摘要或文字摘錄，方便對照「原始提問 → 子任務 → 結果」。
 
+歷史讀取會驗證整個 workspace 的事件鏈，但 256 MiB 的內容保留預算只計入所選 branch 的可見 lineage（包含 fork 截止點以前繼承的內容）。舊 session 或其他 branch 的大型 payload 不會耗用這份預算；`--all-branches` 則計入所有事件內容。事件標頭仍受全域 100 萬筆限制，任一分支的事件鏈損壞或所選內容超出預算都會拒絕讀取，不回傳部分結果。分支投影與內容載入共用同一份唯讀 snapshot。
+
 原始提問來自該任務起始 run、相同 session 與選定 branch lineage 的第一筆 canonical user message，重試或跨 run 恢復不會改用新 run 的提問；run 最終回覆則使用自己的 run。這是保存的提問原文，不是模型產生的摘要，也不保證等於多 team invocation 的完整 CLI prompt。舊紀錄沒有保存提問時會明確標示缺少資料，不以 agent 描述猜測。列表最多預覽 300 字元；`show` 顯示完整提問與子任務描述。JSON 同時提供 `original_prompt` 與 `original_prompt_event_id` 供精確追溯。
 
 要查個別 agent 的結果或重試紀錄，使用 `hufu results list --team <team>`。JSON 預設查詢只回傳最新一筆保存的 run_response；`runs --output json` 回傳分頁列表，`list --output json` 保留 worker 查詢。沒有保存的最終回覆時，runs 列表會說明仍可查個別任務。

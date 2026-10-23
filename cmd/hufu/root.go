@@ -114,6 +114,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringArrayVar(&opts.inputFlags, "input", nil, "Set a typed run input (name=json-or-typed-scalar); repeatable")
 	rootCmd.Flags().StringArrayVar(&opts.inputFiles, "input-file", nil, "Read typed run inputs from a JSON or YAML mapping; repeatable")
 	rootCmd.Flags().StringArrayVar(&opts.forcedSkills, "skill", nil, "Force-load specific skills (repeatable, e.g. --skill code-review --skill tdd)")
+	rootCmd.Flags().BoolVar(&opts.requestAcceptance, "request-acceptance", false, "Freeze explicit request requirements and require evidence before successful completion")
 	rootCmd.Flags().BoolVar(&opts.planMode, "plan", false, "Force plan-first mode: agents must submit plans before executing")
 	rootCmd.Flags().BoolVar(&opts.autoSkills, "auto-skills", false, "Enable automatic skill detection via sidecar/LLM matching")
 	rootCmd.Flags().StringVar(&opts.fixQuestion, "fix", "", "Analyze previous execution data and suggest improvements for the given question")

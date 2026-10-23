@@ -88,7 +88,7 @@
     {
       "name": "countercheck",
       "role": "worker",
-      "tools": "web_search,playwright_countercheck__browser_navigate,playwright_countercheck__browser_snapshot",
+      "tools": "web_search,recall_observation,playwright_countercheck__browser_navigate,playwright_countercheck__browser_snapshot",
       "side_effect": "none",
       "recovery": "retry",
       "max_retries": -1
@@ -102,7 +102,7 @@
     {
       "name": "researcher",
       "role": "worker",
-      "tools": "web_search,playwright_researcher__browser_navigate,playwright_researcher__browser_snapshot",
+      "tools": "web_search,recall_observation,playwright_researcher__browser_navigate,playwright_researcher__browser_snapshot",
       "side_effect": "none",
       "recovery": "retry",
       "max_retries": -1

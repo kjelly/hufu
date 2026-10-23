@@ -392,6 +392,11 @@ func verify(current session, runID string) (string, string, error) {
 	if err := verifyActionEvidence(current, report, runID); err != nil {
 		return "", "", err
 	}
+	testLimited, err := verifyTestEvidence(report.Tests)
+	if err != nil {
+		return "", "", err
+	}
+	limited = limited || testLimited
 	if err := verifyHandoffInventory(current, runID); err != nil {
 		return "", "", err
 	}
@@ -417,6 +422,29 @@ func verify(current session, runID string) (string, string, error) {
 		return "", "", err
 	}
 	return reportID, tasks[reportID].Result.Payload.Hash, nil
+}
+
+// A completed review may expose failing target tests. Execution failures remain
+// blocking; negative or truncated test evidence must remain visible as a gap.
+func verifyTestEvidence(data json.RawMessage) (bool, error) {
+	var tests struct {
+		Completed       bool   `json:"completed"`
+		Passed          *bool  `json:"passed"`
+		ExitCode        *int   `json:"exit_code"`
+		TimedOut        bool   `json:"timed_out"`
+		OutputTruncated bool   `json:"output_truncated"`
+		Diagnostic      string `json:"diagnostic"`
+	}
+	if err := json.Unmarshal(data, &tests); err != nil {
+		return false, err
+	}
+	if !tests.Completed || tests.TimedOut || tests.Passed == nil || tests.ExitCode == nil || (*tests.ExitCode != 0 && *tests.ExitCode != 1) || *tests.Passed != (*tests.ExitCode == 0) {
+		return false, fmt.Errorf("targeted tests lack consistent completed execution evidence")
+	}
+	if !*tests.Passed && strings.TrimSpace(tests.Diagnostic) == "" {
+		return false, fmt.Errorf("failed targeted tests lack diagnostics")
+	}
+	return !*tests.Passed || tests.OutputTruncated, nil
 }
 
 func verifyReview(item task, r record) error {

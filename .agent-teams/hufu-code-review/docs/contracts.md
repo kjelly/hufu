@@ -147,12 +147,31 @@ item key, reviewed revision, and lens. The schema rejects Workset IDs in the
 item-key field, and the final audit requires equality with the durable binding.
 
 Dispatch critiques sequentially, with one `critic-review` task and one source
-per `agent` call. A non-fan-out workflow contract cannot appear twice in one
+per `agent` call. Before a primary review is accepted, its ordered invariant
+copies must match the attested ID, status, summary, finding index, and missing
+evidence. The projection explicitly defaults an omitted index to null and an
+omitted/empty evidence list to `[]`, matching the inventory gate. An invented
+zero index or discarded missing evidence is rejected during submission, while
+the original review occurrence can still be corrected.
+
+A non-fan-out workflow contract cannot appear twice in one
 batch. The synthesis contract declares `max-evidence-sources: 64`, covering the
 producer's 32-review budget plus one accepted critique per review. Its full
 source inventory must not be reduced to the default eight-source handoff.
 Select unique source review IDs, never individual finding IDs. A single
 accepted critic covers all findings in its source, including unflagged ones.
+The critique schema declares `x-hufu-evidence-inputs.runtime_bind: true`:
+the runtime copies the source ID, accepted payload hash, and exact source record
+into `record.input_review`. The critic omits this field. A fixed collection
+binds `record.decisions` to the accepted source's `/record/findings`. The model
+submits only decision fields under runtime-issued keys; runtime supplies finding
+indices, ascending order and the final array. Keys are bound to source identity
+and payload hash, so a replacement source cannot reuse previous decisions.
+The report schema uses the same runtime binding for `/input_review`: synthesis
+omits the complete source inventory from its submission. Runtime copies every
+accepted review and critique dependency, including each critique's nested source
+record. Synthesis still declares `audit_complete` and supplies every semantic
+gap-resolution decision; source-copy automation does not replace that review.
 The critique and report schemas use the existing 32-finding bound to require
 exactly that many decisions, in ascending finding-index order. Missing,
 duplicate, reordered, and out-of-range decisions fail at result submission;
@@ -238,6 +257,44 @@ remains the existing whole-run policy; it does not disable these guards.
 Changed task contracts and acceptance criteria require a fresh `--new` run;
 resuming an old frozen policy does not retrofit these milestones into its
 completed receipts.
+
+## Workset source and input budgets
+
+The producer first groups diff hunks by lens, then refines those groups using
+the immutable source bundle and per-item reference report. This second pass
+applies to primary, documentation, and documentation-escalation routes. It
+splits primary paths first, then diff hunks when only one path remains. Item
+keys, paths, route annotations, reference candidate bindings, and artifact
+hashes are generated from the final partitions. The existing total diff and
+32-item limits are checked again before publishing any manifests; additional
+splits never silently narrow the requested scope.
+
+The team's producer action explicitly sets `max_source_snapshot_bytes: 393216`
+(384 KiB) and `max_review_input_tokens: 200000`. The latter sums the planning
+estimate of each assigned diff, source snapshot, and reference report,
+including their headers. The estimate is one token per two UTF-8 bytes,
+rounded up per artifact; it is not provider-reported usage or a guarantee of
+the model's tokenizer. This leaves headroom under the unchanged 500,000-token
+attempt guard for instructions, reasoning, result submission, rereads, and
+repairs. Each manifest item records `source_snapshot_bytes` and
+`estimated_review_input_tokens` for comparison with the actual artifacts.
+
+Primary text files are complete; they are never truncated to satisfy these
+budgets. Related caller/test evidence has a separate shared 64 KiB content
+allowance, in deterministic priority order, plus section metadata. Every
+truncated related section retains its path, role, full byte count and hash,
+and explicit `content_truncated: true` and `omitted_bytes` fields. These are
+visible evidence limitations: reviewers must report relevant gaps and cannot
+infer absent behavior from an omitted suffix. Small callers and focused tests
+still appear in full. Binary, missing, and symlink observations retain their
+existing explicit status markers.
+
+If a single primary file and indivisible diff hunk still cannot fit,
+PREPARE returns `workset_item_too_large` with observed sizes, configured limits,
+and remediation before publishing worksets. Split that source file or choose
+an explicit input budget with sufficient attempt headroom. Increasing worker
+retries does not repair an oversized evidence unit. Adapter and payload changes
+require a fresh invocation; historical accepted artifacts remain immutable.
 
 ## Documentation reference contract
 
@@ -335,7 +392,7 @@ coverage or semantic support. `view.artifact_ref` still takes the full issued ID
 
 ### Executed tests and failed tests
 
-The review requires snapshot-pinned test execution with a nonnegative exit code,
+The review requires snapshot-pinned test execution with exit code 0 or 1,
 no timeout, no truncated output, and a sealed evidence artifact. A failing test
 is evidence about the reviewed revision and does not prevent independent code
 review. The runtime binds the entire receipt into the final report, including passed=false,

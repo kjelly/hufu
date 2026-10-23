@@ -17,6 +17,7 @@ func catalogTestInputSchema() RunInputSchema {
 		Properties: map[string]RunInputSchema{
 			"service": {Type: "string", MaxLength: &maxLength},
 			"count":   {Type: "integer"},
+			"enabled": {Type: "boolean"},
 			"tags":    {Type: "array", Items: &RunInputSchema{Type: "integer"}},
 		},
 	}
@@ -33,6 +34,9 @@ func TestCanonicalizeCatalogArguments(t *testing.T) {
 		{name: "canonical ordering", raw: `{"count":2,"service":"api"}`, want: `{"count":2,"service":"api"}`},
 		{name: "reordered keys hash the same", raw: `{"service":"api","count":2}`, want: `{"count":2,"service":"api"}`},
 		{name: "negative zero integer", raw: `{"service":"api","count":-0,"tags":[-0,3]}`, want: `{"count":0,"service":"api","tags":[0,3]}`},
+		{name: "string integers preserve precision", raw: `{"service":"api","count":"9007199254740993","tags":["-0","3"]}`, want: `{"count":9007199254740993,"service":"api","tags":[0,3]}`},
+		{name: "boolean strings", raw: `{"service":"true","enabled":"false"}`, want: `{"enabled":false,"service":"true"}`},
+		{name: "boolean synonyms rejected", raw: `{"service":"api","enabled":"yes"}`, wantErr: "expected boolean"},
 		{name: "duplicate key", raw: `{"service":"api","service":"db"}`, wantErr: "duplicate JSON object key"},
 		{name: "case-variant keys stay distinct and fail the closed schema", raw: `{"service":"api","Service":"db"}`, wantErr: "arguments"},
 		{name: "not an object", raw: `["api"]`, wantErr: "must be a JSON object"},

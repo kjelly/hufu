@@ -56,7 +56,9 @@ type AttemptRequest struct {
 	// Accepted dependency payloads supplied by the coordinator, never provider
 	// claims. Used by result-contract input bindings on external attempts.
 	resultEvidenceInputs []TaskResult
-	resultRuntimeInputs  func() (map[string]any, error)
+	// Hufu-owned lookup rechecks native receipts at proposal canonicalization,
+	// just like local submit_result. It never crosses the provider JSON boundary.
+	resultRuntimeInputs func() (map[string]any, error)
 	// Provider and ProviderBinding remain adapter-only compatibility fields for
 	// legacy SubagentProvider implementations. ExecutionRegistry adapters fill
 	// them from the canonical fields immediately before invoking that interface.

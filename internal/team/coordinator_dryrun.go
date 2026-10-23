@@ -27,26 +27,27 @@ type DryRunSkillInfo struct {
 }
 
 type DryRunResult struct {
-	UserPrompt           string
-	TeamName             string
-	Model                string
-	WorkerTarget         string
-	CoordinatorTarget    string
-	SidecarTarget        string
-	GuardTarget          string
-	JudgeTarget          string
-	PlanReviewerTarget   string
-	ResolvedProfile      ExecutionProfile
-	Agents               []DryRunAgentInfo
-	AllSkills            []DryRunSkillInfo
-	MatchedSkillNames    []string
-	OrchestratorPrompt   string
-	FirstRoundTasks      []TaskDef
-	ContractFindings     []ContractFinding
-	ResolvedRunInputs    *RunInputSnapshot
-	Error                string
-	SubjectRoot          string
-	WorkspaceWouldCreate bool
+	RequestAcceptancePending bool
+	UserPrompt               string
+	TeamName                 string
+	Model                    string
+	WorkerTarget             string
+	CoordinatorTarget        string
+	SidecarTarget            string
+	GuardTarget              string
+	JudgeTarget              string
+	PlanReviewerTarget       string
+	ResolvedProfile          ExecutionProfile
+	Agents                   []DryRunAgentInfo
+	AllSkills                []DryRunSkillInfo
+	MatchedSkillNames        []string
+	OrchestratorPrompt       string
+	FirstRoundTasks          []TaskDef
+	ContractFindings         []ContractFinding
+	ResolvedRunInputs        *RunInputSnapshot
+	Error                    string
+	SubjectRoot              string
+	WorkspaceWouldCreate     bool
 	// WorkerRoute and WorkerRouteCandidates describe the team execution
 	// route, the worker default when the team sets one.
 	WorkerRoute           string
@@ -101,6 +102,9 @@ func NewDryRunCoordinator(params DryRunCoordinatorParams) (*Coordinator, error) 
 	if err := c.bindExecutionRoutes(); err != nil {
 		return nil, err
 	}
+	if err := installRequestAcceptanceInput(session); err != nil {
+		return nil, err
+	}
 	executionPolicy, err := newExecutionPolicyState(c)
 	if err != nil {
 		return nil, fmt.Errorf("resolve execution policy snapshot: %w", err)
@@ -120,9 +124,10 @@ func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunRes
 	orchDef := c.GetOrchestratorDef()
 
 	result := &DryRunResult{
-		UserPrompt:        userPrompt,
-		ResolvedProfile:   c.ExecutionProfile(),
-		ResolvedRunInputs: resolvedInputs,
+		RequestAcceptancePending: c.requestAcceptanceEnabled(),
+		UserPrompt:               userPrompt,
+		ResolvedProfile:          c.ExecutionProfile(),
+		ResolvedRunInputs:        resolvedInputs,
 	}
 	if c.session != nil && c.session.Config.Name != "" {
 		result.TeamName = c.session.Config.Name

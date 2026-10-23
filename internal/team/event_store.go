@@ -81,25 +81,27 @@ type EventStore struct {
 	// mu is a one-token semaphore so emergency callers can cancel lock
 	// acquisition. Once an append holds the database connection it runs to
 	// completion.
-	mu              chan struct{}
-	store           *runtimestore.Store
-	path            string
-	runID           string
-	invocationID    string
-	sessionID       string
-	branchID        string
-	lastEventID     string
-	lastHash        string
-	sequence        int
-	degraded        bool
-	stateValid      bool
-	stateErr        error
-	closed          bool
-	readOnly        bool
-	scanCount       int
-	cacheHitCount   int
-	cachedEvents    []RunEvent
-	idempotencyKeys map[eventIdempotencyIdentity]RunEvent
+	mu                chan struct{}
+	store             *runtimestore.Store
+	path              string
+	runID             string
+	invocationID      string
+	sessionID         string
+	branchID          string
+	lastEventID       string
+	lastHash          string
+	sequence          int
+	degraded          bool
+	stateValid        bool
+	stateErr          error
+	closed            bool
+	readOnly          bool
+	scanCount         int
+	cacheHitCount     int
+	cachedEvents      []RunEvent
+	occurrenceIndex   map[eventOccurrenceKey][]int
+	occurrenceIndexed int
+	idempotencyKeys   map[eventIdempotencyIdentity]RunEvent
 	// rewrites is the journal's rewrite counter when it was validated.
 	rewrites int64
 	// commitHook runs after an append commits. Its failure leaves the
@@ -684,6 +686,8 @@ func (es *EventStore) publishState(state eventStoreState) {
 	es.runID = state.runID
 	es.sessionID = state.sessionID
 	es.cachedEvents = state.events
+	es.occurrenceIndex = nil
+	es.occurrenceIndexed = 0
 	es.idempotencyKeys = state.idempotencyKeys
 	es.rewrites = state.rewrites
 	es.commitHook = noCommitHook
@@ -701,6 +705,8 @@ func (es *EventStore) invalidateState(err error) {
 	es.lastHash = ""
 	es.sequence = 0
 	es.cachedEvents = nil
+	es.occurrenceIndex = nil
+	es.occurrenceIndexed = 0
 	es.idempotencyKeys = nil
 	es.stateErr = err
 	es.stateValid = false

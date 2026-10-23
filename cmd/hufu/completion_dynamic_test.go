@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -18,6 +21,7 @@ import (
 )
 
 func TestDynamicCompletionIsBoundedBranchAndRunScoped(t *testing.T) {
+	withoutCompletionQueryTimeout(t)
 	workspace := t.TempDir()
 	tree := team.NewSessionTree()
 	tree.Branches["feature"] = &team.SessionBranch{ID: "feature", Name: "feature", CreatedAt: "2026-09-14T00:00:00Z"}
@@ -70,9 +74,18 @@ func TestDynamicCompletionIsBoundedBranchAndRunScoped(t *testing.T) {
 	if !maps.EqualFunc(before, runtimeStoreFiles(t, workspace), bytes.Equal) || !slices.Equal(beforeNames, completionDirectoryNames(t, workspace)) {
 		t.Fatal("run/task completion mutated the event store")
 	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	command.SetContext(ctx)
+	for _, complete := range []func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective){completeRunIDs, completeTaskIDs, completeBranchIDs} {
+		if values, directive := complete(command, nil, ""); len(values) != 0 || directive != cobra.ShellCompDirectiveNoFileComp {
+			t.Fatalf("cancelled completion = %v, %v", values, directive)
+		}
+	}
 }
 
 func TestDynamicContextAndPromotionCompletionIsSharedScopeOnlyAndReadOnly(t *testing.T) {
+	withoutCompletionQueryTimeout(t)
 	workspace := t.TempDir()
 	database := filepath.Join(workspace, "context.sqlite")
 	repository, err := contextstore.OpenSQLite(database)
@@ -126,9 +139,18 @@ func TestDynamicContextAndPromotionCompletionIsSharedScopeOnlyAndReadOnly(t *tes
 			t.Fatalf("completion exposed content or path: %q", value)
 		}
 	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	command.SetContext(ctx)
+	for _, complete := range []func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective){completeContextIDs, completePromotionIDs} {
+		if values, directive := complete(command, nil, ""); len(values) != 0 || directive != cobra.ShellCompDirectiveNoFileComp {
+			t.Fatalf("cancelled completion = %v, %v", values, directive)
+		}
+	}
 }
 
 func TestDynamicCompletionMissingScopeOrStoreIsSilent(t *testing.T) {
+	withoutCompletionQueryTimeout(t)
 	workspace := filepath.Join(t.TempDir(), "absent")
 	command := completionTestCommand(workspace)
 	command.Flags().String("project", "", "")
@@ -142,6 +164,30 @@ func TestDynamicCompletionMissingScopeOrStoreIsSilent(t *testing.T) {
 	if _, err := os.Stat(workspace); !os.IsNotExist(err) {
 		t.Fatalf("completion created an absent workspace: %v", err)
 	}
+}
+
+func TestCompletionQueryContextDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := time.Now()
+		ctx, cancel := newCompletionQueryContext(t.Context())
+		defer cancel()
+		if deadline, ok := ctx.Deadline(); !ok || deadline.Sub(started) != completionQueryTimeout {
+			t.Fatalf("completion deadline = %v, %v; want %v", deadline, ok, started.Add(completionQueryTimeout))
+		}
+		time.Sleep(completionQueryTimeout)
+		synctest.Wait()
+		if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			t.Fatalf("completion context error = %v, want deadline exceeded", ctx.Err())
+		}
+	})
+}
+
+// Completion tests share package-level CLI state and must run serially.
+func withoutCompletionQueryTimeout(t *testing.T) {
+	t.Helper()
+	original := newCompletionQueryContext
+	newCompletionQueryContext = context.WithCancel
+	t.Cleanup(func() { newCompletionQueryContext = original })
 }
 
 func TestDynamicCompletionIsRegisteredOnCanonicalCommands(t *testing.T) {

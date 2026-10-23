@@ -72,7 +72,7 @@ func (c *Coordinator) runTargetedRecovery(ctx context.Context, taskID string, ac
 		c.finalizePublicInvocationFailure(err)
 		return TargetedRecoveryReport{Action: action, TaskID: taskID}, err
 	}
-	if err := c.resolveRunInputsForInvocation(invocationCtx, ""); err != nil {
+	if err := c.resolveRecoveryRunInputs(invocationCtx, taskID); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return TargetedRecoveryReport{Action: action, TaskID: taskID}, err
 	}
@@ -128,6 +128,46 @@ func (c *Coordinator) runTargetedRecovery(ctx context.Context, taskID string, ac
 		operationErr = c.retryTaskForOperator(invocationCtx, item)
 	}
 	return c.finishTargetedRecovery(invocationCtx, action, taskID, operationErr)
+}
+
+func (c *Coordinator) resolveRecoveryRunInputs(ctx context.Context, taskID string) error {
+	if !c.requestAcceptanceEnabled() {
+		return c.resolveRunInputsForInvocation(ctx, "")
+	}
+	item := c.todoItemByID(taskID)
+	if item == nil {
+		return fmt.Errorf("recovery task %s not found", taskID)
+	}
+	var frozen *RunInputSnapshot
+	c.viewSessionData(func(session *SessionData) {
+		for i := range session.RunInputSnapshots {
+			if session.RunInputSnapshots[i].ID == item.RunInputSnapshotID {
+				frozen = CloneRunInputSnapshot(&session.RunInputSnapshots[i])
+				break
+			}
+		}
+	})
+	if _, err := RequestAcceptanceContractFromSnapshot(frozen); err != nil {
+		return fmt.Errorf("recover frozen request acceptance: %w", err)
+	}
+	if frozen.SnapshotHash != item.RunInputSnapshotHash {
+		return fmt.Errorf("recovery task request acceptance snapshot drift")
+	}
+	c.mu.RLock()
+	assignments := cloneRunInputAssignments(c.runInputAssignments)
+	c.mu.RUnlock()
+	for _, assignment := range assignments {
+		if assignment.Name == requestAcceptanceInput {
+			return fmt.Errorf("request acceptance cannot be replaced during recovery")
+		}
+	}
+	if err := validateResumeRunInputAssignments(c.session.RunInputDefinitions, assignments, frozen, c.session.Config.Name); err != nil {
+		return err
+	}
+	return c.mutateSessionData(func(session *SessionData) error {
+		session.ActiveRunInputSnapshotID = frozen.ID
+		return nil
+	})
 }
 
 func (c *Coordinator) reconcileTaskForOperator(ctx context.Context, item *TodoItem) error {

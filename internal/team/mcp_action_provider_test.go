@@ -86,14 +86,22 @@ func TestMCPServerConfigHash(t *testing.T) {
 		t.Fatalf("equivalent configuration hash %q, want %q", got, hash)
 	}
 	for name, changed := range map[string]mcp.MCPServerConfig{
-		"environment value": {Command: base.Command, AllowedTools: base.AllowedTools, Environment: map[string]string{"TOKEN": "other", "REGION": "eu"}},
-		"command":           {Command: []string{"diagnostics-mcp"}, AllowedTools: base.AllowedTools, Environment: base.Environment},
-		"excluded tools":    {Command: base.Command, AllowedTools: base.AllowedTools, ExcludedTools: []string{"c"}, Environment: base.Environment},
-		"remote":            {Type: "remote", URL: "https://mcp.example.test", AllowedTools: base.AllowedTools, Environment: base.Environment},
+		"temporary directory": {Command: base.Command, AllowedTools: base.AllowedTools, Environment: base.Environment, TemporaryDirectoryEnv: []string{"OUTPUT"}},
+		"environment value":   {Command: base.Command, AllowedTools: base.AllowedTools, Environment: map[string]string{"TOKEN": "other", "REGION": "eu"}},
+		"command":             {Command: []string{"diagnostics-mcp"}, AllowedTools: base.AllowedTools, Environment: base.Environment},
+		"excluded tools":      {Command: base.Command, AllowedTools: base.AllowedTools, ExcludedTools: []string{"c"}, Environment: base.Environment},
+		"remote":              {Type: "remote", URL: "https://mcp.example.test", AllowedTools: base.AllowedTools, Environment: base.Environment},
 	} {
 		if mcpServerConfigHash(changed) == hash {
 			t.Fatalf("%s change kept hash %q", name, hash)
 		}
+	}
+	withDirectories := base
+	withDirectories.TemporaryDirectoryEnv = []string{"FIRST_OUTPUT", "SECOND_OUTPUT"}
+	reorderedDirectories := withDirectories
+	reorderedDirectories.TemporaryDirectoryEnv = []string{"SECOND_OUTPUT", "FIRST_OUTPUT"}
+	if mcpServerConfigHash(withDirectories) != mcpServerConfigHash(reorderedDirectories) {
+		t.Fatal("temporary environment ordering changed launch identity")
 	}
 }
 

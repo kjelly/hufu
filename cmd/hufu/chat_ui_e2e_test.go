@@ -72,7 +72,7 @@ func newChatFixtureServer(t *testing.T) *chatFixtureServer {
 			}
 			select {
 			case <-r.Context().Done():
-			case <-time.After(25 * time.Second):
+			case <-t.Context().Done():
 			}
 			return
 		}
@@ -159,7 +159,7 @@ func (f *chatFixtureServer) sawRequestWith(fragments ...string) bool {
 func TestE2E_ChatUI_TurnsCancelAndExit(t *testing.T) {
 	binary := buildTestBinary(t)
 	server := newChatFixtureServer(t)
-	workspace := filepath.Join(processContractTempDir(t), "workspace")
+	workspace := filepath.Join(ptyTestDir(t), "workspace")
 	proc := startPTY(t, binary, []string{
 		"chat", "--ui", "chat", "--default",
 		"--provider-url", server.URL + "/v1", "--model", "test", "--coordinator-model", "test",

@@ -191,11 +191,7 @@ func validateResultRuntimeInputs(value any, specs []resultRuntimeInputSpec, valu
 
 func omitRuntimeResultInputs(root map[string]any, specs []resultRuntimeInputSpec) {
 	for _, spec := range specs {
-		removeRuntimeEvidenceSchema(root, &resultEvidenceInputsSpec{RuntimeOwned: true, ItemsPointer: spec.Target})
+		omitRuntimeEvidenceInputs(root, &resultEvidenceInputsSpec{RuntimeBind: true, ItemsPointer: spec.Target})
 	}
 	delete(root, "x-hufu-runtime-inputs")
-}
-
-func resultPointersOverlap(a, b string) bool {
-	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
 }

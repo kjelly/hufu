@@ -98,6 +98,13 @@ record a coverage gap or open question; do not consult repository paths to fill
 it. Stop once the bounded evidence is sufficient and preserve enough budget for
 the final structured result.
 
+The producer budgets the diff, source snapshot, and reference report together.
+Primary text files are complete. Related caller/test sections share a 64 KiB
+content allowance and may declare `content_truncated: true` and `omitted_bytes`.
+Record a concrete gap when an omitted suffix prevents a conclusion; never
+claim that behavior or tests are absent from that suffix. Read relevant byte
+ranges once and reserve budget for the final structured result and any repair.
+
 An independent static verifier task owns executable Go-test evidence for the
 reviewed revision. Do not claim that tests ran from source inspection or from a
 previous agent's prose. Only its typed output, declared verification artifact,
@@ -149,8 +156,8 @@ do not choose or describe a transport yourself.
 
 Set `success` when the assigned evidence is complete, or
 `completed_with_gaps` when the bounded item has an explicit limitation.
-Include a concise summary, complete details for the coordinator, typed
-findings, invariant assessments, and open questions where appropriate. Cite
+Include a concise summary and brief details for the coordinator, typed
+findings, and invariant assessments. Cite
 every observed diff, source, test, or authorized opaque artifact reference in
 `files_read` using exactly the representation required by the active schema.
 This task forbids result artifacts, so keep the review body in `details`. For
@@ -173,7 +180,13 @@ with an unbounded read or assume the first chunk proves complete coverage.
 
 Submit the complete result envelope required by the injected runtime schema,
 including top-level `status` and `summary`. The schema-defined structured
-payload is one field, not the entire result. Top-level `findings` entries accept only `summary`, `detail`,
+payload is one field, not the entire result. Keep the outer envelope minimal:
+omit optional `open_questions`, `decisions`, `risks`, `suggested_next_tasks`,
+and `facts`. Put every limitation or unanswered question in `record.gaps`;
+do not duplicate it in optional outer arrays. Use actual JSON strings for
+text, never wrapper objects such as `{"$text":"..."}`. Keep `details` brief;
+the complete findings and gaps belong in the structured record.
+Top-level `findings` entries accept only `summary`, `detail`,
 `severity`, and optional `category`. Put `location`, `evidence`, and
 `requires_critique` only in `structured_payload.record.findings`. Keep the
 shared fields and order identical across both arrays. On rejection, correct
@@ -197,7 +210,10 @@ The static workset contract also requires `structured_payload.record`:
 - `invariant_assessments`: copy the submitted invariant claims exactly —
   identical `invariant_id`, `status`, `summary`, `finding_index`, and
   `missing_evidence`, never a shortened or reworded summary — ordered by
-  ascending `invariant_id` (the order the runtime attests them); use an
+  ascending `invariant_id` (the order the runtime attests them). Omit optional
+  fields in both copies when absent; never invent `finding_index: 0` as an
+  empty value, because zero identifies the first finding. Submission checks
+  these optional fields before accepting the review. Use an
   explicit empty array when none apply. An `unknown`
   invariant also requires a concrete entry in gaps and completed_with_gaps;
 - `gaps`: each local limitation or open question, with `description` and
@@ -205,7 +221,7 @@ The static workset contract also requires `structured_payload.record`:
   evidence is absent from every other workset.
 Use `success` only with an empty `gaps` array; use `completed_with_gaps` with
 at least one concrete gap. Keep limitations in this array even if also
-mentioned in details or open_questions. A no-op uses its injected bindings,
+mentioned in details. A no-op uses its injected bindings,
 empty findings and gaps, and `success`. Do not invent positive findings to
 fill the schema. The downstream synthesizer may resolve a local gap with
 sibling evidence while retaining the original gap and source record.

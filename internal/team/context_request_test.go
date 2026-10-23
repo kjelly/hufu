@@ -151,6 +151,31 @@ func TestCoordinatorContextRequestUsesExplicitPurpose(t *testing.T) {
 	}
 }
 
+func TestContextRequestTerminalPhaseOnlyAllowsAcceptanceReview(t *testing.T) {
+	c := &Coordinator{executionRunID: "run-terminal-review"}
+	for _, phase := range []Phase{PhaseDone, PhaseFailed} {
+		for _, purpose := range []string{"request_acceptance_review", "request_acceptance_evidence"} {
+			request := c.newAuxiliaryContextRequest("", 1, "", phase, purpose, "Review frozen requirements against observed evidence")
+			if err := request.Validate(); err != nil {
+				t.Fatalf("terminal acceptance review in %s: %v", phase, err)
+			}
+			for _, change := range []func(*ContextRequest){
+				func(r *ContextRequest) { r.AgentRole = "worker" },
+				func(r *ContextRequest) { r.Trigger = ContextTriggerAuxiliary },
+				func(r *ContextRequest) { r.Purpose = "request_acceptance_extract" },
+				func(r *ContextRequest) { r.Purpose = "sidecar_task" },
+			} {
+				invalid := request
+				change(&invalid)
+				invalid.AssignRequestID()
+				if err := invalid.Validate(); err == nil {
+					t.Fatalf("terminal workflow allowed a non-review invocation: %#v", invalid)
+				}
+			}
+		}
+	}
+}
+
 func TestContextRequestValidateQueryAndFingerprint(t *testing.T) {
 	r := validTestContextRequest()
 	if err := r.Validate(); err != nil {

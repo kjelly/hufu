@@ -418,11 +418,7 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 	case inspectpkg.OverviewData:
 		return renderInspectOverviewText(writer, data)
 	case inspectpkg.RunData:
-		_, err := fmt.Fprintf(writer, "Run: %s\nBranch: %s\nOutcome: %s\nAcceptance: %s\nCompletion: %s\nTasks: %d total, %d done, %d unresolved\nAttempts: %d total, %d failed\nEvidence refs: %s\n",
-			data.RunID, envelope.Query.BranchID, valueOrUnavailable(data.Outcome), data.Acceptance, data.Completion,
-			data.TaskSummary.Total, data.TaskSummary.Done, data.TaskSummary.Unresolved,
-			data.AttemptSummary.Total, data.AttemptSummary.Failed, refsOrNone(data.EvidenceRefs))
-		return err
+		return renderInspectRunText(writer, envelope.Query.BranchID, data)
 	case inspectpkg.CostData:
 		return renderInspectCostText(writer, data)
 	case inspectpkg.RoutesData:
@@ -681,6 +677,31 @@ func renderStorageText(writer io.Writer, data inspectpkg.StorageData) error {
 		runtime.SchemaVersion, runtime.JournalMode, runtime.PageCount, runtime.FreelistCount, runtime.DatabaseBytes, runtime.WALBytes,
 		runtime.Events, runtime.EventRewrites, runtime.Documents, runtime.SessionBranches, runtime.TaskJournalRows, runtime.DecisionIndexRows)
 	return err
+}
+
+func renderInspectRunText(writer io.Writer, branchID string, data inspectpkg.RunData) error {
+	_, err := fmt.Fprintf(writer, "Run: %s\nBranch: %s\nOutcome: %s\nAcceptance: %s\nCompletion: %s\nTasks: %d total, %d done, %d unresolved\nAttempts: %d total, %d failed\nEvidence refs: %s\n",
+		data.RunID, branchID, valueOrUnavailable(data.Outcome), data.Acceptance, data.Completion,
+		data.TaskSummary.Total, data.TaskSummary.Done, data.TaskSummary.Unresolved,
+		data.AttemptSummary.Total, data.AttemptSummary.Failed, refsOrNone(data.EvidenceRefs))
+	if err != nil {
+		return err
+	}
+	return renderInspectRequestAcceptance(writer, data.RequestAcceptance)
+}
+
+func renderInspectRequestAcceptance(writer io.Writer, review *inspectpkg.RequestAcceptanceSummary) error {
+	if review != nil {
+		if _, err := fmt.Fprintf(writer, "Request acceptance: passed=%t, request_covered=%t\n", review.Passed, review.RequestCovered); err != nil {
+			return err
+		}
+		for _, check := range review.Checks {
+			if _, err := fmt.Fprintf(writer, "  %s: %s (required=%t, verification=%s), evidence: %s\n", check.ID, check.Status, check.Required, check.Verification, refsOrNone(check.EvidenceRefs)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func renderInspectOverviewText(writer io.Writer, data inspectpkg.OverviewData) error {

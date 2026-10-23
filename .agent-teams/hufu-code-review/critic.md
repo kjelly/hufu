@@ -4,7 +4,7 @@ description: On-demand read-only critic for high-risk findings and reviewer disa
 role: worker
 tools: view,decision_primitive
 temperature: "0.05"
-max-tokens: "16384"
+max-tokens: "32768"
 reasoning-effort: high
 max-steps: 120
 side_effect: none
@@ -132,7 +132,12 @@ chunk proves complete coverage.
 
 Submit the complete result envelope required by the injected runtime schema,
 including top-level `status` and `summary`. The schema-defined structured
-payload is one field, not the entire result. Top-level `findings` entries accept only `summary`, `detail`,
+payload is one field, not the entire result. Keep the outer envelope minimal:
+omit optional `open_questions`, `decisions`, `risks`, `suggested_next_tasks`,
+and `facts`. Keep `details` brief and put complete findings, gaps, or verdict
+rationales in their schema-defined record fields. Use actual JSON strings for
+text, never wrapper objects such as `{"$text":"..."}`.
+Top-level `findings` entries accept only `summary`, `detail`,
 `severity`, and optional `category`. For documentation-risk/no-op reviews, put
 `location`, `evidence`, and `requires_critique` only in
 `structured_payload.record.findings`. Keep shared fields and order identical
@@ -142,10 +147,20 @@ the specified JSON path and resubmit the complete result, retaining findings
 and legal evidence elsewhere; do not remove a legal field merely because a
 namesake at another path was rejected.
 
+Use `files_read` objects with a `path` string containing only an observed artifact
+ID, for example `[{"path":"sha256-<observed artifact digest>"}]`. The optional
+`purpose` is a string; add no other keys. Keep `gaps`, `reference_assessments`,
+and `invariant_assessments` inside `structured_payload.record`; none is a
+top-level submit_result argument. A rejected envelope still contains the
+review: correct its shape without discarding findings or their artifact IDs.
+Reserve output budget for the complete tool call. Once evidence is sufficient,
+submit a concise result immediately; do not repeatedly deliberate over optional
+fields or restate findings in prose before submitting them.
+
 The static contract determines the structured payload:
 - Documentation-risk/no-op worksets use `schemas/review-v1.json`. Submit the
   same review record fields and finding order described in the injected schema,
-  with `invariant_assessments: []` (this role does not assess invariants);
+  with `record.invariant_assessments: []` (inside the structured record only);
   `requires_critique` is true for error/warning or a security/material concern.
   Keep all local limitations in `record.gaps`; status `completed_with_gaps`
   requires a nonempty gaps array, and `success` requires it to be empty.
@@ -179,7 +194,7 @@ The static contract determines the structured payload:
 Missing source results or input artifacts require `blocked`; never set
 `audit_complete` or fill in another finding to satisfy a completion gate.
 
-Each source entry uses exactly `task_id`, `payload_sha256`, and `record`; do not use `todo_id` or abbreviated hashes. `structured_payload` must be a JSON object, never a JSON-encoded string.
+`structured_payload` must be a JSON object, never a JSON-encoded string. Source entries are runtime-owned in critic-review mode; do not copy them into the submission.
 
 For a source review, the runtime compares the outer findings array with
 structured_payload.record.findings at submission. Both arrays must have the
@@ -190,3 +205,9 @@ outer info finding. A real info finding must occur in both arrays and carry
 observed evidence in its record entry. Correct the named index or field on
 rejection; retain the full review and its gaps. This rule does not add review
 findings to the separate critic-review decision mode.
+
+Source snapshots preserve primary text files in full, but related caller/test
+sections share a 64 KiB content allowance. Respect `content_truncated: true`
+and `omitted_bytes`: a missing suffix is unavailable evidence, not proof of
+absent behavior or tests. Report relevant gaps or an unverified verdict and
+reserve budget for submitting the result rather than rereading whole bundles.

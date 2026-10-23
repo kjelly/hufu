@@ -474,7 +474,7 @@ func (t *finishTool) run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		// Finish still gets a fresh acceptance/artifact observation so a second
 		// finish cannot silently reuse the first snapshot, but it must preserve
 		// the already-authoritative partial disposition.
-		acceptance, acceptanceErr := t.coordinator.runAcceptance(ctx)
+		acceptance, acceptanceErr := t.coordinator.runAcceptance(ctx, response)
 		if acceptanceErr != nil {
 			t.coordinator.report(t.coordinator.newEvent("error").withMessage("acceptance check after no-progress stop failed: " + acceptanceErr.Error()))
 		}
@@ -513,7 +513,8 @@ func (t *finishTool) run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 			t.coordinator.report(t.coordinator.newEvent("error").withMessage("evidence manifest generation failed: " + err.Error()))
 		}
 	}
-	accRes, accErr := t.coordinator.runAcceptance(ctx)
+	response += t.coordinator.runInputResolutionNotice()
+	accRes, accErr := t.coordinator.runAcceptance(ctx, response)
 	if manifestErr := t.coordinator.finalizeEvidenceManifest(ctx, accRes); manifestErr != nil {
 		if prof.RequireEvidenceManifest || prof.StrictPolicy {
 			return fantasy.NewTextErrorResponse("RequireEvidenceManifest policy violation: " + manifestErr.Error()), nil
@@ -528,7 +529,6 @@ func (t *finishTool) run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	}
 	// A successful finish ends any previously enabled bounded recovery window.
 	t.coordinator.acceptanceRecovery.Store(false)
-	response += t.coordinator.runInputResolutionNotice()
 
 	unresolvedPending := pendingTodoItems(todoList.Items())
 	allUnresolved := append(failedTasks, unresolvedPending...)
@@ -561,7 +561,7 @@ func (t *finishTool) run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 // call. It returns a refusal when finish must not proceed, and otherwise the
 // response to finish with, annotated with the failure.
 func (t *finishTool) handleAcceptanceFailure(ctx context.Context, prof ExecutionProfile, accErr error, response string) (string, *fantasy.ToolResponse) {
-	if prof.AcceptanceMode == AcceptanceBlocking || t.coordinator.IsUnattended() {
+	if prof.AcceptanceMode == AcceptanceBlocking || t.coordinator.IsUnattended() || t.coordinator.requestAcceptanceEnabled() {
 		repairUnavailable := t.coordinator.acceptanceRepairUnavailableReason()
 		if repairUnavailable == "" && t.coordinator.selfHealingAttempts < 2 {
 			t.coordinator.selfHealingAttempts++
@@ -589,7 +589,7 @@ func (t *finishTool) handleAcceptanceFailure(ctx context.Context, prof Execution
 				response += fmt.Sprintf("\n\n⚠️ ACCEPTANCE CHECK FAILED: %v\n✓ Workspace rolled back successfully.", accErr)
 			}
 		}
-		if prof.AcceptanceMode == AcceptanceBlocking {
+		if prof.AcceptanceMode == AcceptanceBlocking || t.coordinator.requestAcceptanceEnabled() {
 			t.coordinator.report(t.coordinator.newEvent("error").withMessage("acceptance check failed (blocking): " + accErr.Error()))
 			// Self-healing is over: either no more work can run, or the bounded
 			// repair turns are used up. A refused finish would only be retried
@@ -702,7 +702,7 @@ func formatPendingTasks(items []*TodoItem) string {
 }
 
 // runAcceptance runs the team's optional acceptance command / spec in the project dir.
-func (c *Coordinator) runAcceptance(parentCtx context.Context) (*AcceptanceResult, error) {
+func (c *Coordinator) runTeamAcceptance(parentCtx context.Context) (*AcceptanceResult, error) {
 	res := &AcceptanceResult{State: AcceptanceNotConfigured}
 	c.mu.RLock()
 	var spec *AcceptanceSpec

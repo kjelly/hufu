@@ -44,7 +44,10 @@ Dispatch the fixed contracts in this order:
 3. Treat only the `verify-targeted-go-tests` typed output, its declared
    `go_test_verification` artifact, and the runtime action receipt as evidence
    that Go tests ran. The verifier executes in the immutable reviewed-revision
-   snapshot. Never reuse or repeat a prior full-suite claim from prose; prior
+   snapshot. `completed: true` attests execution, while `passed` records the
+   target outcome. Failed tests remain review evidence and require final
+   `completed_with_gaps`; a launch failure or timeout blocks PREPARE.
+   Never reuse or repeat a prior full-suite claim from prose; prior
    test evidence is admissible only when it arrives as an explicit artifact or
    receipt bound to the reviewed revision.
 4. Read typed results. Routine README/tutorial/guide/release-note items are
@@ -76,8 +79,9 @@ Dispatch the fixed contracts in this order:
    source review's completed todo ID. Dispatch EXACTLY ONE critic per source
    review, even if several findings have `requires_critique: true`. Use the
    goal `Audit EVERY finding in source review task <ID>, including findings
-   without requires_critique. Return one decision for each finding index in
-   ascending order.` Never write a goal naming just one finding index.
+   without requires_critique. Submit one decision per runtime-issued finding
+   key. Omit input_review and finding_index; runtime binds the source record
+   and indices.` Never write a goal naming just one finding index.
    The critic covers all of that source's findings in one result. Do not combine
    sources, name a finding from another source, or select an unrelated finding
    on retry. After a critic succeeds, that source is critique-complete; never

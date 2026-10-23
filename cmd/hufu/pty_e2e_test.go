@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kjelly/hufu/internal/team"
 	"golang.org/x/sys/unix"
 )
 
@@ -42,20 +43,39 @@ func (b *safeBuffer) String() string {
 func (b *safeBuffer) Bytes() []byte {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.buf.Bytes()
+	return bytes.Clone(b.buf.Bytes())
 }
 
 // ptyProcess wraps a process running in a pseudo-terminal.
 type ptyProcess struct {
-	master *os.File
-	slave  *os.File
-	cmd    *exec.Cmd
-	output *safeBuffer
+	master    *os.File
+	slave     *os.File
+	cmd       *exec.Cmd
+	output    *safeBuffer
+	waitDone  chan struct{}
+	waitErr   error
+	readDone  chan struct{}
+	workspace string
+}
+
+func ptyTestDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp(os.TempDir(), "pty-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("clean PTY directory: %v", err)
+		}
+	})
+	return dir
 }
 
 // startPTY starts a command in a pseudo-terminal with the given window size.
 func startPTY(t *testing.T, binary string, args []string, rows, cols uint16) *ptyProcess {
 	t.Helper()
+	home := ptyTestDir(t)
 
 	// Open /dev/ptmx — the master side
 	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
@@ -92,7 +112,9 @@ func startPTY(t *testing.T, binary string, args []string, rows, cols uint16) *pt
 	}
 
 	// Build the command
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// This bounds the whole multi-turn process, independently of each assertion.
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	t.Cleanup(cancel)
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Stdin = slave
 	cmd.Stdout = slave
@@ -103,7 +125,7 @@ func startPTY(t *testing.T, binary string, args []string, rows, cols uint16) *pt
 		Ctty:    0, // slave fd in child
 	}
 	// Isolate environment
-	home := processContractTempDir(t)
+	cmd.Dir = home
 	cmd.Env = []string{
 		"HOME=" + home,
 		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
@@ -113,13 +135,18 @@ func startPTY(t *testing.T, binary string, args []string, rows, cols uint16) *pt
 		"NO_COLOR=1",
 		"LC_ALL=C",
 		"LANG=C",
+		"PATH=" + os.Getenv("PATH"),
+		"TMPDIR=" + os.TempDir(),
+		"GOMAXPROCS=2",
 	}
 
 	proc := &ptyProcess{
-		master: master,
-		slave:  slave,
-		cmd:    cmd,
-		output: &safeBuffer{},
+		master:   master,
+		slave:    slave,
+		cmd:      cmd,
+		output:   &safeBuffer{},
+		waitDone: make(chan struct{}),
+		readDone: make(chan struct{}),
 	}
 
 	// Start the process
@@ -134,6 +161,7 @@ func startPTY(t *testing.T, binary string, args []string, rows, cols uint16) *pt
 
 	// Read from master in background
 	go func() {
+		defer close(proc.readDone)
 		buf := make([]byte, 4096)
 		for {
 			n, err := master.Read(buf)
@@ -145,6 +173,11 @@ func startPTY(t *testing.T, binary string, args []string, rows, cols uint16) *pt
 			}
 		}
 	}()
+	// One waiter owns reaping; waitExit and cleanup observe the same result.
+	go func() {
+		proc.waitErr = cmd.Wait()
+		close(proc.waitDone)
+	}()
 
 	// Cleanup
 	t.Cleanup(func() {
@@ -153,7 +186,16 @@ func startPTY(t *testing.T, binary string, args []string, rows, cols uint16) *pt
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
-		_, _ = cmd.Process.Wait()
+		select {
+		case <-proc.waitDone:
+		case <-time.After(30 * time.Second):
+			t.Error("PTY process did not stop during cleanup")
+		}
+		select {
+		case <-proc.readDone:
+		case <-time.After(30 * time.Second):
+			t.Error("PTY output reader did not stop during cleanup")
+		}
 	})
 
 	return proc
@@ -209,12 +251,14 @@ func (p *ptyProcess) resizePTY(t *testing.T, rows, cols uint16) {
 // waitExit waits for the process to exit and returns the exit code.
 func (p *ptyProcess) waitExit(t *testing.T, timeout time.Duration) int {
 	t.Helper()
-	done := make(chan error, 1)
-	go func() {
-		done <- p.cmd.Wait()
-	}()
 	select {
-	case err := <-done:
+	case <-p.waitDone:
+		select {
+		case <-p.readDone:
+		case <-time.After(timeout):
+			t.Fatal("PTY output reader did not drain after process exit")
+		}
+		err := p.waitErr
 		if err == nil {
 			return 0
 		}
@@ -223,7 +267,11 @@ func (p *ptyProcess) waitExit(t *testing.T, timeout time.Duration) int {
 		}
 		t.Fatalf("wait: %v", err)
 	case <-time.After(timeout):
-		t.Fatalf("process did not exit after %s", timeout)
+		output := stripPTYANSI(p.output.String())
+		if len(output) > 4000 {
+			output = output[len(output)-4000:]
+		}
+		t.Fatalf("process did not exit after %s\noutput (last 4KB):\n%s", timeout, output)
 	}
 	return -1
 }
@@ -330,26 +378,66 @@ func TestE2E_ListCommand(t *testing.T) {
 	}
 }
 
-// TestE2E_Signal_SIGINT verifies that SIGINT causes the process to exit.
-func TestE2E_Signal_SIGINT(t *testing.T) {
-	binary := buildTestBinary(t)
-	// Start with --tui but no provider — it will wait for input
-	proc := startPTY(t, binary, []string{"--tui", "--default", "--model", "ollama/nonexistent", "test prompt"}, 30, 100)
+// startBlockedTUI waits for both a real provider request and terminal ownership.
+func startBlockedTUI(t *testing.T) *ptyProcess {
+	t.Helper()
+	server := newChatFixtureServer(t)
+	workspaceRoot := filepath.Join(ptyTestDir(t), "workspace")
+	proc := startPTY(t, buildTestBinary(t), []string{
+		"--tui", "--default", "--provider-url", server.URL + "/v1",
+		"--model", "test", "--coordinator-model", "test",
+		"--context-window", "131072", "--timeout", "60",
+		"--workspace", workspaceRoot, chatFixtureSlowToken,
+	}, 30, 100)
+	proc.workspace = filepath.Join(workspaceRoot, "default")
+	select {
+	case <-server.slow:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("TUI never reached the blocking provider; output=%q", truncateContractOutput(proc.output.Bytes()))
+	}
+	proc.waitForOutputRaw(t, "\x1b[?1049h", 30*time.Second)
+	return proc
+}
 
-	// Give it a moment to start
-	time.Sleep(500 * time.Millisecond)
-
-	// Send SIGINT
+func interruptBlockedTUI(t *testing.T, proc *ptyProcess) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	// Acknowledge the first stage before sending the second interrupt. Repeated
+	// signals can kill the process after its handler is removed during teardown.
 	if err := proc.sendSignal(os.Interrupt); err != nil {
-		t.Fatalf("send SIGINT: %v", err)
+		t.Fatalf("send first SIGINT: %v", err)
 	}
+	poll := time.NewTicker(10 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		session, _, err := team.LoadSessionReadOnly(proc.workspace)
+		if err != nil {
+			t.Fatalf("read wrap-up checkpoint: %v", err)
+		}
+		if session != nil && session.PendingWrapUp != nil && session.PendingWrapUp.EventDurable {
+			break
+		}
+		select {
+		case <-proc.waitDone:
+			t.Fatalf("TUI exited before acknowledging wrap-up; output=%q", truncateContractOutput(proc.output.Bytes()))
+		case <-ctx.Done():
+			t.Fatalf("SIGINT did not persist wrap-up; output=%q", truncateContractOutput(proc.output.Bytes()))
+		case <-poll.C:
+		}
+	}
+	if err := proc.sendSignal(os.Interrupt); err != nil {
+		t.Fatalf("send second SIGINT: %v", err)
+	}
+	deadline, _ := ctx.Deadline()
+	if code := proc.waitExit(t, time.Until(deadline)); code != 130 {
+		t.Fatalf("exit after SIGINT = %d, want 130; output=%q", code, truncateContractOutput(proc.output.Bytes()))
+	}
+}
 
-	// Process should exit
-	exitCode := proc.waitExit(t, 5*time.Second)
-	// SIGINT typically results in exit code 130 (128 + 2)
-	if exitCode != 0 && exitCode != 130 && exitCode != -1 {
-		t.Logf("exit code after SIGINT: %d (acceptable)", exitCode)
-	}
+// TestE2E_Signal_SIGINT verifies SIGINT cancels an active provider request.
+func TestE2E_Signal_SIGINT(t *testing.T) {
+	interruptBlockedTUI(t, startBlockedTUI(t))
 }
 
 // TestE2E_Resize_NoDeadlock verifies that resizing the terminal doesn't cause a crash.
@@ -383,31 +471,10 @@ func TestE2E_Resize_NoDeadlock(t *testing.T) {
 // TestE2E_TerminalRecovery verifies that the terminal is restored after exit.
 // We check for alternate screen exit sequence (ESC[?1049l) in the output.
 func TestE2E_TerminalRecovery(t *testing.T) {
-	binary := buildTestBinary(t)
-	proc := startPTY(t, binary, []string{"--tui", "--default", "--model", "ollama/nonexistent", "recovery test"}, 30, 100)
-
-	// Give it a moment to start and enter alt screen
-	time.Sleep(500 * time.Millisecond)
-
-	// Send SIGINT to force exit
-	if err := proc.sendSignal(os.Interrupt); err != nil {
-		t.Fatalf("send SIGINT: %v", err)
-	}
-
-	// Wait for exit
-	proc.waitExit(t, 5*time.Second)
-
-	// Check for alternate screen exit sequence in output
-	// Bubble Tea sends ESC[?1049l when exiting alt screen mode
-	output := proc.output.String()
-	if !strings.Contains(output, "\x1b[?1049l") {
-		// Some versions may not use alt screen if the program exits quickly
-		// Check for cursor restore at minimum
-		if !strings.Contains(output, "\x1b[?25h") && !strings.Contains(output, "\x1b[?25") {
-			// If neither sequence is present, the program may have crashed before entering TUI
-			// This is acceptable if the program couldn't connect to a provider
-			t.Logf("no terminal recovery sequence found — program may have exited before entering TUI mode (output length: %d)", len(output))
-		}
+	proc := startBlockedTUI(t)
+	interruptBlockedTUI(t, proc)
+	if !strings.Contains(proc.output.String(), "\x1b[?1049l") {
+		t.Fatal("terminal did not leave alternate screen after SIGINT")
 	}
 }
 
@@ -526,11 +593,13 @@ func TestE2E_AltScreenEntry(t *testing.T) {
 			found = true
 			break
 		}
-		// Check if process already exited
-		if proc.cmd.ProcessState != nil {
+		// The waiter owns Cmd state; observe its completion notification.
+		select {
+		case <-proc.waitDone:
 			// Process exited before entering TUI — acceptable if provider unreachable
 			t.Logf("process exited before entering TUI (provider unreachable) — output length: %d", len(proc.output.String()))
 			return
+		default:
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

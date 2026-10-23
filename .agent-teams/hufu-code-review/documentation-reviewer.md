@@ -110,7 +110,14 @@ with an unbounded read or assume the first chunk proves complete coverage.
 
 Submit the complete result envelope required by the injected runtime schema,
 including top-level `status` and `summary`. The schema-defined structured
-payload is one field, not the entire result. Top-level `findings` entries accept only `summary`, `detail`,
+payload is one field, not the entire result. Keep the outer envelope minimal:
+omit optional `open_questions`, `decisions`, `risks`, `suggested_next_tasks`,
+and `facts`. Put every limitation or unanswered question in `record.gaps`.
+Use the active runtime schema's representation for `files_read`.
+Use actual JSON strings for text, never wrapper objects such as
+`{"$text":"..."}`. Keep `details` brief; the complete findings and gaps
+belong in the structured record.
+Top-level `findings` entries accept only `summary`, `detail`,
 `severity`, and optional `category`. Put `location`, `evidence`, and
 `requires_critique` only in `structured_payload.record.findings`. Keep the
 shared fields and order identical across both arrays. On rejection, correct
@@ -139,7 +146,7 @@ The static workset contract also requires `structured_payload.record`:
   evidence is absent from every other workset.
 Use `success` only with an empty `gaps` array; use `completed_with_gaps` with
 at least one concrete gap. Keep limitations in this array even if also
-mentioned in details or open_questions. A no-op uses its injected bindings,
+mentioned in details. A no-op uses its injected bindings,
 empty findings and gaps, and `success`. Do not invent positive findings to
 fill the schema. The downstream synthesizer may resolve a local gap with
 sibling evidence while retaining the original gap and source record.

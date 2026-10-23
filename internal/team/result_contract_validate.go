@@ -17,8 +17,10 @@ import (
 )
 
 const (
-	// resultPayloadMaxBytes bounds one submitted structured payload.
-	resultPayloadMaxBytes = 256 << 10
+	// resultPayloadMaxBytes bounds a complete canonical structured payload,
+	// including accepted records copied by runtime evidence binding. Aggregate
+	// reports need room for those records as well as the worker's decisions.
+	resultPayloadMaxBytes = 2 << 20
 	// resultPayloadMaxErrors and resultPayloadErrorMaxRunes bound the
 	// validation feedback returned to a worker.
 	resultPayloadMaxErrors     = 20
@@ -260,7 +262,7 @@ func (c *Coordinator) structuredPayloadForSubmission(todoID string, raw json.Raw
 	if err == nil {
 		item := c.todoItemByID(todoID)
 		results := c.dependencyResultsForTask(todoID)
-		if compiled.evidenceInputs != nil && compiled.evidenceInputs.RuntimeOwned {
+		if compiled.evidenceInputs != nil && compiled.evidenceInputs.runtimeOwned() {
 			err = c.validateDependencyPayloads(results)
 			if err == nil {
 				raw, err = assembleRuntimeEvidenceInputs(raw, compiled.evidenceInputs, item.EvidenceFrom, results)
@@ -368,9 +370,9 @@ func providerVisibleResultPayloadSchema(ref ResultContractRef, compiled *Compile
 	if compiled != nil {
 		if value, err := decodeResultContractJSON(compiled.CanonicalSchema); err == nil {
 			if schema, ok := value.(map[string]any); ok {
-				delete(schema, "$schema")
-				removeRuntimeEvidenceSchema(schema, compiled.evidenceInputs)
+				omitRuntimeEvidenceInputs(schema, compiled.evidenceInputs)
 				omitRuntimeResultInputs(schema, compiled.runtimeInputs)
+				delete(schema, "$schema")
 				if dynamicSchemaEligible(schema) {
 					if _, described := schema["description"]; !described {
 						schema["description"] = description
@@ -435,7 +437,7 @@ func resultContractPromptSection(ref *ResultContractRef, compiled *CompiledResul
 		for _, binding := range compiled.runtimeInputs {
 			fmt.Fprintf(b, "The runtime supplies `%s` from receipt-verified native task `%s` output `%s`. Omit this field entirely; never copy or summarize its value in the submission.\n", binding.Target, binding.SourceTask, binding.Output)
 		}
-		if spec := compiled.evidenceInputs; spec != nil && spec.RuntimeOwned {
+		if spec := compiled.evidenceInputs; spec != nil && spec.runtimeOwned() {
 			fmt.Fprintf(b, "The runtime supplies `%s` from every accepted evidence_from source. Omit this field entirely; the stored result retains all complete source records and hashes.\n", spec.ItemsPointer)
 			runtimeOwned = true
 		}

@@ -2,7 +2,9 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +74,38 @@ func TestProtocolRepairRejectedSubmission(t *testing.T) {
 			}
 			if omitted := omitRejectedSubmission("prefix"+got+"suffix", got); strings.Contains(omitted, "No findings") || !strings.HasPrefix(omitted, "prefix") {
 				t.Fatalf("omitRejectedSubmission kept the arguments: %q", omitted)
+			}
+		})
+	}
+}
+
+func TestProtocolRepairRejectedSubmissionPreservesCompleteLargeJSON(t *testing.T) {
+	// The original 12,000-rune cutoff split a valid submission inside details,
+	// leaving the actual findings and gaps unavailable to result-only repair.
+	input := `{"details":"` + strings.Repeat("證據", 8000) + `","findings":[{"summary":"tail finding","severity":"warning"}],"structured_payload":{"record":{"gaps":[{"description":"tail gap","missing_evidence":"tail evidence"}]}}}`
+	for _, callbacks := range []bool{false, true} {
+		t.Run(fmt.Sprintf("callbacks=%t", callbacks), func(t *testing.T) {
+			var evidence *toolCallEvidence
+			var steps []fantasy.StepResult
+			if callbacks {
+				evidence = &toolCallEvidence{rejectedSubmitInput: input, rejectedSubmitError: "invalid schema"}
+			} else {
+				steps = []fantasy.StepResult{{Response: fantasy.Response{Content: fantasy.ResponseContent{
+					submitResultCall("large", input), submitResultOutcome("large", "invalid schema"),
+				}}}}
+			}
+			got := protocolRepairRejectedSubmission(evidence, steps)
+			_, body, ok := strings.Cut(got, "### Submitted arguments\n```json\n")
+			if !ok {
+				t.Fatal("missing fenced submission")
+			}
+			body, ok = strings.CutSuffix(body, "\n```\n")
+			if !ok || !json.Valid([]byte(body)) || body != input {
+				t.Fatal("repair did not receive the complete original JSON, including tail findings and gaps")
+			}
+			receipt := omitRejectedSubmission("prefix"+got+"suffix", got)
+			if strings.Contains(receipt, "tail finding") || strings.Contains(receipt, "證據") || !strings.Contains(receipt, "omitted from this record") {
+				t.Fatal("receipt prompt retained rejected submission data")
 			}
 		})
 	}
@@ -256,6 +290,50 @@ func TestProtocolRepairRestatesTheRejectedSubmission(t *testing.T) {
 	}
 }
 
+func TestDirectTaskRecoveryHonorsPersistedRetryLimits(t *testing.T) {
+	for _, limit := range []int{1, 2} {
+		t.Run(fmt.Sprintf("fingerprint_limit_%d", limit), func(t *testing.T) {
+			c, item := newEvidenceRepairCoordinator(t, "direct-recovery-wrap-up")
+			c.session.Config.Reliability = defaultReliabilityLimits()
+			c.session.Config.Reliability.MaxSameFailureFingerprint = limit
+			workerCalls := 0
+			c.workerAgentOverride = &mockAgent{streamFunc: func(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+				workerCalls++
+				if workerCalls == 1 {
+					return nil, errors.New("stream transport error: unexpected EOF")
+				}
+				c.storeSubmittedTaskResult(item.ID, &TaskResult{
+					TaskID: item.ID, Agent: "reviewer", Status: TaskResultStatusSuccess,
+					Summary: "Review completed on the permitted retry", Source: "submitted",
+				})
+				return &fantasy.AgentResult{}, nil
+			}}
+			_, err := c.executeTask(withTestProtocolRepairInvocationContext(t.Context()), TaskDef{
+				Agent: "reviewer", Goal: "review", SideEffect: SideEffectNone, Recovery: RecoveryRetry,
+				Execution: ExecutionContract{RequiresResult: true},
+			}, item.ID)
+			if limit == 1 {
+				if err == nil || workerCalls != 1 || c.todoItemByID(item.ID).Status != TaskBlocked || !c.IsWrapUp() {
+					t.Fatalf("hard block was bypassed: calls=%d status=%s wrap_up=%t err=%v", workerCalls, c.todoItemByID(item.ID).Status, c.IsWrapUp(), err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if workerCalls != 2 || c.todoItemByID(item.ID).Status != TaskDone {
+				t.Fatalf("calls/status = %d/%s, want 2/done", workerCalls, c.todoItemByID(item.ID).Status)
+			}
+			c.metricsMu.RLock()
+			failures := len(c.antiThrashing.Counts)
+			c.metricsMu.RUnlock()
+			if c.IsWrapUp() || failures != 0 {
+				t.Fatalf("recovered task retained a stop or failure count: wrap_up=%t failures=%d", c.IsWrapUp(), failures)
+			}
+		})
+	}
+}
+
 func TestStructuredPayloadRejectionLoopUsesResultOnlyRepair(t *testing.T) {
 	c, item := newEvidenceRepairCoordinator(t, "structured-payload-loop")
 	workerCalls, repairCalls := 0, 0
@@ -389,6 +467,75 @@ func TestSchemaRepairSeparatesWorkerAndRepairRejections(t *testing.T) {
 	for _, attempt := range got.ExecutionReceipt.RepairProvenance.History {
 		if strings.Contains(attempt.Prompt, "approve the security-tool unit") {
 			t.Fatalf("receipt attempt %d persisted rejected arguments: %q", attempt.Attempt, attempt.Prompt)
+		}
+	}
+}
+
+func TestSchemaRepairPreservesFirstRepairSubmissionWhenWorkerOnlyReportedProse(t *testing.T) {
+	const input = `{"status":"success","summary":"A material defect remains","findings":[{"summary":"Evidence must survive repair","detail":"Reachable failure","severity":"warning"}],"files_read":[{"artifact_ref":"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}`
+	const rejection = `Tool "submit_result" arguments are invalid at $.files_read[0]`
+	for _, resume := range []bool{false, true} {
+		for _, streamed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("resume=%v/streamed=%v", resume, streamed), func(t *testing.T) {
+				c, item := newEvidenceRepairCoordinator(t, "first-repair-submission")
+				workerCalls, repairCalls := 0, 0
+				c.workerAgentOverride = &countingTextAgent{calls: &workerCalls, text: "I have sufficient evidence. Submitting now."}
+				var prompts []string
+				c.repairAgentOverride = &mockAgent{streamFunc: func(_ context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+					repairCalls++
+					prompts = append(prompts, call.Prompt)
+					if repairCalls == 2 {
+						c.storeSubmittedTaskResult(item.ID, &TaskResult{
+							TaskID: item.ID, Agent: "reviewer", Status: TaskResultStatusSuccess,
+							Summary: "A material defect remains", Source: "submitted",
+						})
+						return &fantasy.AgentResult{}, nil
+					}
+					parts := fantasy.ResponseContent{submitResultCall("repair-1", input), submitResultOutcome("repair-1", rejection)}
+					if streamed {
+						if err := call.OnToolCall(submitResultCall("repair-1", input)); err != nil {
+							return nil, err
+						}
+						if err := call.OnToolResult(submitResultOutcome("repair-1", rejection)); err != nil {
+							return nil, err
+						}
+						// Keep the failure classification in steps, while only the
+						// streaming callback has the rejected argument object.
+						parts = fantasy.ResponseContent{submitResultOutcome("repair-1", rejection)}
+					}
+					return &fantasy.AgentResult{Steps: []fantasy.StepResult{{Response: fantasy.Response{Content: parts}}}}, nil
+				}}
+				task := TaskDef{Agent: "reviewer", Goal: "review", SideEffect: SideEffectNone, Execution: ExecutionContract{RequiresResult: true}}
+				var err error
+				if resume {
+					if err = c.taskTracker.TodoList().TryUpdateStatusAndOutput(item.ID, TaskProtocolIncomplete, "", "I have sufficient evidence. Submitting now."); err != nil {
+						t.Fatal(err)
+					}
+					_, err = c.resumeProtocolIncompleteTask(withTestProtocolRepairInvocationContext(t.Context()), task, item)
+				} else {
+					_, err = c.executeTask(withTestProtocolRepairInvocationContext(t.Context()), task, item.ID)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if repairCalls != 2 || len(prompts) != 2 || workerCalls != map[bool]int{false: 1, true: 0}[resume] {
+					t.Fatalf("worker/repair calls = %d/%d, resume=%v", workerCalls, repairCalls, resume)
+				}
+				for _, want := range []string{"Schema-only repair", input, rejection, "Do not drop findings"} {
+					if !strings.Contains(prompts[1], want) {
+						t.Fatalf("schema repair lost %q: %s", want, prompts[1])
+					}
+				}
+				got := c.todoItemByID(item.ID)
+				if got.Status != TaskDone || got.ExecutionReceipt == nil || got.ExecutionReceipt.RepairProvenance == nil {
+					t.Fatalf("repair projection = %#v", got)
+				}
+				for _, attempt := range got.ExecutionReceipt.RepairProvenance.History {
+					if strings.Contains(attempt.Prompt, "Evidence must survive repair") {
+						t.Fatalf("receipt persisted rejected arguments: %s", attempt.Prompt)
+					}
+				}
+			})
 		}
 	}
 }

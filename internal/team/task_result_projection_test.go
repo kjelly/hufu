@@ -100,6 +100,8 @@ func TestTaskResultProjectionPolicyValidation(t *testing.T) {
 		map[string]any{"pointer": "/facts/rows", "fields": make([]string, 17)},
 		map[string]any{"pointer": "/facts/rows", "fields": []string{"summary"}, "unknown": true},
 		map[string]any{"pointer": "/facts/rows", "fields": []string{"summary"}, "allow_missing": "true"},
+		map[string]any{"pointer": "/facts/rows", "fields": []string{"summary"}, "field_defaults": []any{}},
+		map[string]any{"pointer": "/facts/rows", "fields": []string{"summary"}, "field_defaults": map[string]any{"uncompared": nil}},
 		map[string]any{"pointer": "/" + strings.Repeat("x", 512), "fields": []string{"summary"}},
 	} {
 		assertion := projectionAssertion()
@@ -115,6 +117,52 @@ func TestTaskResultProjectionPolicyValidation(t *testing.T) {
 	delete(assertion.Value.(map[string]any), "allow_missing")
 	if failures := evaluateTaskResultAssertions(map[string]any{"facts": map[string]any{"rows": []any{}}}, []TaskResultAssertion{assertion}); len(failures) == 0 {
 		t.Fatal("missing left array accepted without allow_missing")
+	}
+}
+
+func TestTaskResultProjectionExplicitOptionalFieldDefaults(t *testing.T) {
+	policy := map[string]any{"pointer": "/right", "fields": []string{"id", "position", "missing"}, "field_defaults": map[string]any{"position": nil, "missing": []any{}}}
+	assertion := TaskResultAssertion{Pointer: "/left", Op: "equals_projection", Value: policy}
+	for _, tc := range []struct {
+		name, source string
+		valid        bool
+	}{
+		{"omitted on both sides", `{"left":[{"id":"a"}],"right":[{"id":"a"}]}`, true},
+		{"omitted versus empty", `{"left":[{"id":"a"}],"right":[{"id":"a","missing":[]}]}`, true},
+		{"null versus omitted", `{"left":[{"id":"a","position":null,"missing":null}],"right":[{"id":"a"}]}`, true},
+		{"zero remains a real index", `{"left":[{"id":"a"}],"right":[{"id":"a","position":0}]}`, false},
+		{"zero matches zero", `{"left":[{"id":"a","position":0}],"right":[{"id":"a","position":0}]}`, true},
+		{"numeric strings remain distinct", `{"left":[{"id":"a","position":"0"}],"right":[{"id":"a","position":0}]}`, false},
+		{"missing evidence cannot be discarded", `{"left":[{"id":"a","missing":["file"]}],"right":[{"id":"a","missing":[]}]}`, false},
+		{"evidence order still matches", `{"left":[{"id":"a","missing":["x","y"]}],"right":[{"id":"a","missing":["y","x"]}]}`, false},
+		{"required fields remain required", `{"left":[{}],"right":[{}]}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var document any
+			if err := json.Unmarshal([]byte(tc.source), &document); err != nil {
+				t.Fatal(err)
+			}
+			failures := evaluateTaskResultAssertions(document, []TaskResultAssertion{assertion})
+			if (len(failures) == 0) != tc.valid {
+				t.Fatalf("valid=%t failures=%v", tc.valid, failures)
+			}
+		})
+	}
+	encoded, err := json.Marshal(assertion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored TaskResultAssertion
+	if err := json.Unmarshal(encoded, &restored); err != nil {
+		t.Fatal(err)
+	}
+	document := map[string]any{"left": []any{map[string]any{"id": "a"}}, "right": []any{map[string]any{"id": "a", "missing": []any{}}}}
+	if failures := evaluateTaskResultAssertions(document, []TaskResultAssertion{restored}); len(failures) != 0 {
+		t.Fatal(failures)
+	}
+	delete(policy, "field_defaults")
+	if failures := evaluateTaskResultAssertions(document, []TaskResultAssertion{assertion}); len(failures) == 0 {
+		t.Fatal("optional fields became implicitly optional without configuration")
 	}
 }
 
@@ -149,6 +197,7 @@ task-result-assertions:
       fields: [summary, detail, severity]
       optional_fields: [link, notes]
       allow_missing: true
+      field_defaults: {detail: ""}
 `
 	var spec VerificationSpec
 	if err := yaml.Unmarshal([]byte(source), &spec); err != nil {
@@ -181,6 +230,11 @@ task-result-assertions:
 	clone.TaskResultAssertions[0].Value.(map[string]any)["optional_fields"].([]any)[0] = "changed"
 	if verificationSpecCacheKey(&spec) == verificationSpecCacheKey(&clone) || ComputeVerificationFingerprint(spec, nil, "") == ComputeVerificationFingerprint(clone, nil, "") {
 		t.Fatal("optional projection fields do not affect policy identity or clone aliases source")
+	}
+	defaultsClone := cloneVerificationSpec(spec)
+	defaultsClone.TaskResultAssertions[0].Value.(map[string]any)["field_defaults"].(map[string]any)["detail"] = "changed"
+	if verificationSpecCacheKey(&spec) == verificationSpecCacheKey(&defaultsClone) || ComputeVerificationFingerprint(spec, nil, "") == ComputeVerificationFingerprint(defaultsClone, nil, "") {
+		t.Fatal("projection defaults do not affect policy identity or clone aliases source")
 	}
 	assertion := projectionAssertion()
 	assertion.Value.(map[string]any)["pointer"] = "/outputs/rows"

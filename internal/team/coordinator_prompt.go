@@ -65,6 +65,9 @@ func (c *Coordinator) appendCanonicalRunInputsPrompt(b *strings.Builder) {
 	const maxRenderedInputBytes = 4096
 	var defaulted []string
 	for _, input := range snapshot.Inputs {
+		if input.Name == requestAcceptanceInput {
+			continue
+		}
 		value := input.CanonicalValue
 		if redacted, err := utils.RedactJSONCompact(value); err == nil {
 			value = redacted
@@ -99,6 +102,7 @@ func (c *Coordinator) BuildOrchestratorPrompt(autoSkills ...*skill.SkillDef) str
 	c.appendRuntimeWorkflowPrompt(&b)
 	c.appendActionCatalogPrompt(&b)
 	c.appendCanonicalRunInputsPrompt(&b)
+	b.WriteString(c.requestAcceptancePrompt())
 
 	b.WriteString("You MUST delegate ALL work to your team members. You do NOT have tools to do work yourself.\n\n")
 	if c.session.Config.Delegation.RequireExactInitialBatch {

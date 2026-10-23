@@ -188,6 +188,7 @@ func (c *Coordinator) revalidateRecoveryCriteria(ctx context.Context, item *Todo
 		c.noProgressStopTripped = false
 		c.reliabilityUsageByAttempt = make(map[string]int)
 		c.metricsMu.Unlock()
+		c.releaseRecoveredTaskWrapUp()
 		c.sessionMu.Lock()
 		c.sessionData.LastCriterionProgressAt = progressedAt
 		c.sessionMu.Unlock()

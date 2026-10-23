@@ -72,14 +72,16 @@ type taskTranscript struct {
 }
 
 type taskTranscriptRecord struct {
-	Timestamp  string `json:"timestamp"`
-	Event      string `json:"event"`
-	ToolCallID string `json:"tool_call_id"`
-	Tool       string `json:"tool"`
-	Input      string `json:"input,omitempty"`
-	Output     string `json:"output,omitempty"`
-	Error      bool   `json:"error,omitempty"`
-	ExitCode   *int   `json:"exit_code,omitempty"`
+	Historical       *ObservationReadPayload `json:"historical,omitempty"`
+	HistoricalTarget string                  `json:"historical_target,omitempty"`
+	Timestamp        string                  `json:"timestamp"`
+	Event            string                  `json:"event"`
+	ToolCallID       string                  `json:"tool_call_id"`
+	Tool             string                  `json:"tool"`
+	Input            string                  `json:"input,omitempty"`
+	Output           string                  `json:"output,omitempty"`
+	Error            bool                    `json:"error,omitempty"`
+	ExitCode         *int                    `json:"exit_code,omitempty"`
 }
 
 // evidenceRecords uses only observations held by this runner-owned attempt,

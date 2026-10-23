@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"charm.land/fantasy"
 )
 
 func TestHufuCodeReviewRuntimeOwnsAll51GapIdentities(t *testing.T) {
@@ -275,4 +277,124 @@ func bindHufuCodeReviewReceiptFixture(t *testing.T, c *Coordinator, report map[s
 		delete(report, field)
 	}
 	return expected
+}
+
+func TestHufuCodeReviewCriticSubmitsOnlyDecisionsForAllFindings(t *testing.T) {
+	for _, route := range []string{"local", "external"} {
+		t.Run(route, func(t *testing.T) {
+			session := loadHufuCodeReviewTeam(t)
+			c := newBudgetCoordinator(t)
+			c.session.ResultContracts = session.ResultContracts
+			sourceSchema := session.ResultContracts["schemas/review-v1.json"]
+			// The active team uses v2 bound decisions. Retain v1 submission
+			// compatibility coverage for both local and external workers.
+			criticSchema, err := compileResultContractSchema(hufuCodeReviewTeamDir(t), "schemas/critique-v1.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			session.ResultContracts[criticSchema.ID] = criticSchema
+			findings := make([]any, 6)
+			for i := range findings {
+				findings[i] = map[string]any{"summary": fmt.Sprintf("finding %d", i), "detail": "source detail", "severity": "info", "location": "file.go:1", "evidence": []any{"sha256-" + strings.Repeat("a", 64)}, "requires_critique": i%2 == 0}
+			}
+			record := map[string]any{"kind": "review", "review_revision": "head", "workset_key": "unit-0002", "lens": "documentation-risk", "findings": findings, "gaps": []any{}, "invariant_assessments": []any{}, "reference_assessments": []any{}}
+			raw, err := json.Marshal(map[string]any{"record": record})
+			if err != nil {
+				t.Fatal(err)
+			}
+			sourceRef := sourceSchema.ref(true)
+			source := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", ResultContract: &sourceRef, WorksetBinding: &WorksetBinding{Bindings: map[string]string{"reference_candidate_ids": "[]"}}}})[0]
+			sourcePayload, err := validateStructuredResultPayload(sourceSchema, sourceRef, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			source.Status, source.TypedResult = TaskDone, &TaskResult{TaskID: source.ID, Status: TaskResultStatusSuccess, StructuredPayload: sourcePayload}
+			ref := criticSchema.ref(true)
+			item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "critic", ResultContract: &ref, EvidenceFrom: []string{source.ID}}})[0]
+			plans, err := c.fixedCollectionPlans(item.ID)
+			if err != nil || len(plans) != 1 || len(plans[0].rows) != 6 {
+				t.Fatalf("wrong finding universe: plans=%d err=%v", len(plans), err)
+			}
+			decisions := make(map[string]any)
+			for _, row := range plans[0].rows {
+				decisions[row.Key] = map[string]any{"verdict": "unverified", "severity": "info", "rationale": "insufficient independent evidence", "evidence": []any{}, "missing_evidence": "caller behavior unavailable"}
+			}
+			body := map[string]any{"audit_complete": "true", "record": map[string]any{"kind": "critique", "decisions": decisions}}
+			submit := func() (*ResultPayload, string) {
+				raw, err := json.Marshal(body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if route == "external" {
+					request := AttemptRequest{Task: taskDefFromTodoItem(item), resultContractSchema: criticSchema, resultEvidenceInputs: c.dependencyResultsForTask(item.ID)}
+					payload, err := canonicalExternalStructuredPayload(request, &WorkerResultProposal{StructuredPayloadJSON: new(string(raw))}, nil)
+					if err != nil {
+						return nil, err.Error()
+					}
+					return payload, ""
+				}
+				response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(occurrenceTestContext(c, item.ID, 1), fantasy.ToolCall{Input: `{"status":"completed_with_gaps","summary":"audited all findings","structured_payload":` + string(raw) + `}`})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if response.IsError {
+					return nil, response.Content
+				}
+				return c.GetTaskResult(item.ID).StructuredPayload, ""
+			}
+			first := decisions[plans[0].rows[0].Key].(map[string]any)
+			first["finding_index"] = 5
+			if _, rejection := submit(); rejection == "" {
+				t.Fatal("model-supplied index accepted")
+			}
+			delete(first, "finding_index")
+			decisions["invented_key"] = first
+			if _, rejection := submit(); rejection == "" {
+				t.Fatal("invented membership accepted")
+			}
+			delete(decisions, "invented_key")
+			body["record"].(map[string]any)["input_review"] = []any{}
+			if _, rejection := submit(); rejection == "" {
+				t.Fatal("model-supplied source copy accepted")
+			}
+			delete(body["record"].(map[string]any), "input_review")
+			payload, rejection := submit()
+			if rejection != "" {
+				t.Fatal(rejection)
+			}
+			if err := c.validateSubmittedEvidenceInputs(item.ID, payload); err != nil {
+				t.Fatal(err)
+			}
+			value, err := decodeResultContractJSON(payload.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored := value.(map[string]any)["record"].(map[string]any)
+			inputs := stored["input_review"].([]any)
+			entry := inputs[0].(map[string]any)
+			if len(inputs) != 1 || entry["task_id"] != source.ID || entry["payload_sha256"] != sourcePayload.SHA256 {
+				t.Fatal("source identity or hash was lost")
+			}
+			for i, raw := range stored["decisions"].([]any) {
+				if fmt.Sprint(raw.(map[string]any)["finding_index"]) != fmt.Sprint(i) {
+					t.Fatal("runtime did not preserve ascending finding indices")
+				}
+			}
+			record["review_revision"] = "replacement"
+			raw, err = json.Marshal(map[string]any{"record": record})
+			if err != nil {
+				t.Fatal(err)
+			}
+			source.TypedResult.StructuredPayload, err = validateStructuredResultPayload(sourceSchema, sourceRef, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.validateSubmittedEvidenceInputs(item.ID, payload) == nil {
+				t.Fatal("old accepted result survived source replacement")
+			}
+			if _, rejection := submit(); rejection == "" {
+				t.Fatal("stale decision keys accepted")
+			}
+		})
+	}
 }

@@ -1,5 +1,11 @@
 # 唯讀 runtime observability 實作進度
 
+> Status: active
+> Authority: reference
+> Verified-Commit: `279e762e`
+> Supersedes: —
+> Superseded-By: —
+
 對應 [實作計畫](readonly-runtime-observability.md)。本次只使用本機 fixture；不進行真實模型試跑，不宣稱模型品質或節費效果。
 
 ## 基準與文件提交

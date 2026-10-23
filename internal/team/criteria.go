@@ -82,6 +82,9 @@ func (c *Coordinator) HasExecutableAcceptanceContract() bool {
 	if c == nil {
 		return false
 	}
+	if c.requestAcceptanceEnabled() {
+		return true
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.acceptanceSpec != nil {
@@ -110,6 +113,20 @@ func ValidateAcceptanceSpec(spec *AcceptanceSpec, goalMode string) error {
 		}
 	}
 	return nil
+}
+
+func validateAcceptanceWithRequest(spec *AcceptanceSpec, goalMode string, requestAcceptance bool) error {
+	if !requestAcceptance {
+		return ValidateAcceptanceSpec(spec, goalMode)
+	}
+	var effective AcceptanceSpec
+	if spec != nil {
+		effective = cloneAcceptanceSpec(*spec)
+	}
+	// The separately enforced frozen request is an executable run gate. Keep
+	// validating any declared static criteria while accepting that gate alone.
+	effective.RequireNoUnresolvedTasks = true
+	return ValidateAcceptanceSpec(&effective, goalMode)
 }
 
 func validateAcceptanceCriteria(criteria []AcceptanceCriterion) error {
@@ -309,6 +326,7 @@ func (c *Coordinator) reEvaluateAffectedCriteria(ctx context.Context, item *Todo
 		c.noProgressStopTripped = false
 		c.reliabilityUsageByAttempt = make(map[string]int)
 		c.metricsMu.Unlock()
+		c.releaseRecoveredTaskWrapUp()
 		if c.sessionData != nil {
 			progressedAt = time.Now().UTC().Format(time.RFC3339Nano)
 			c.sessionMu.Lock()

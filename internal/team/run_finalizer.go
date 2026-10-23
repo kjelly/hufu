@@ -240,6 +240,12 @@ func (c *Coordinator) prepareTerminalResult(result *RunResult) {
 	}
 	result.Worksets = c.WorksetGroupStates()
 	result.RunInputs = c.RunInputSnapshot()
+	if result.Acceptance != nil && result.Acceptance.RequestAcceptance != nil {
+		section := FormatRequestAcceptance(result.Acceptance.RequestAcceptance)
+		if !strings.HasSuffix(result.Response, section) {
+			result.Response += section
+		}
+	}
 	result.InputBoundAssertions = SummarizeInputBoundAssertions(result.Acceptance)
 	result.Metrics.TypedRunInputsResolved = 0
 	result.Metrics.InputBoundActions = 0

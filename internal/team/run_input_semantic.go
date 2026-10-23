@@ -80,6 +80,9 @@ func (c *Coordinator) startSemanticRunInputBoundary(ctx context.Context) error {
 	if c == nil || c.session == nil || c.sidecarModel == "" {
 		return nil
 	}
+	if c.requestAcceptanceEnabled() {
+		return c.startProviderExecutionBoundary(ctx)
+	}
 	for _, definition := range c.session.RunInputDefinitions {
 		if definition.Resolver != nil && definition.Resolver.Mode == runInputResolverModeSemanticJSON {
 			return c.startProviderExecutionBoundary(ctx)

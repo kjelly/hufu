@@ -80,6 +80,16 @@ func (c *Coordinator) filterLegacyMemoryMutationTools(def *agent.AgentDef, candi
 			continue
 		}
 		name := tool.Info().Name
+		if name == recallObservationToolName && (def == nil || !explicitlyDeclaresTool(def.Tools, name)) {
+			continue
+		}
+		if recall, ok := tool.(*recallObservationTool); ok {
+			// Isolated model leaves share the core registry, but historical
+			// reads must use that leaf's task projection and transcript.
+			copyTool := *recall
+			copyTool.coordinator = c
+			tool = &copyTool
+		}
 		if isLegacyMemoryMutationTool(name) && !c.legacyMemoryToolGranted(def, name) {
 			continue
 		}
@@ -378,6 +388,9 @@ func (c *Coordinator) filterDeniedCoordinatorTools(candidate []fantasy.AgentTool
 			continue
 		}
 		name := tool.Info().Name
+		if name == recallObservationToolName {
+			continue // Historical source access is worker-scoped.
+		}
 		if denied[name] {
 			continue
 		}

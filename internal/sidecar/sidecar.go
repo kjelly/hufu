@@ -43,6 +43,9 @@ func SystemPrompt() string { return sidecarSystemPrompt }
 // classification call whose entire output is a few words of JSON.
 type Profile struct {
 	MaxOutputTokens int64
+	// RequireCompleteOutput rejects a provider-reported token-limit stop even
+	// when the partial text happens to parse as a complete structured value.
+	RequireCompleteOutput bool
 	// MaxInputRunes is a fail-closed envelope for callers that use Execute.
 	// Execute never slices an oversized prompt because it may contain structured
 	// JSON whose suffix is semantically required.
@@ -453,6 +456,9 @@ func (s *Sidecar) generateWithOptions(ctx context.Context, prompt string, profil
 	}
 	if result == nil {
 		return "", fmt.Errorf("sidecar agent returned no result")
+	}
+	if profile.RequireCompleteOutput && result.Response.FinishReason == fantasy.FinishReasonLength {
+		return "", fmt.Errorf("sidecar output truncated by provider token limit (reserved=%d, output_tokens=%d, response_bytes=%d)", profile.MaxOutputTokens, result.TotalUsage.OutputTokens, len(result.Response.Content.Text()))
 	}
 	return result.Response.Content.Text(), nil
 }

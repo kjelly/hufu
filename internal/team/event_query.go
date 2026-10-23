@@ -1,16 +1,29 @@
 package team
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // EventQuery selects validated events from EventStore's in-memory cache.
 // Empty fields are wildcards. Matching is exact and preserves durable order.
 type EventQuery struct {
-	RunID string
-	Types []string
+	RunID    string
+	Types    []string
+	TaskID   string
+	Attempt  int
+	BranchID string
+}
+
+type eventOccurrenceKey struct {
+	run, task, kind string
+	attempt         int
 }
 
 // QueryEvents returns defensive copies of cached events matching query.
-// The query never rescans the durable log or creates a second event index.
+// Exact occurrence/type queries use a header-only index rebuilt from the
+// validated cache after a reload, then extended only over newly appended rows.
+// Neither path rescans the durable log or retains a second copy of payloads.
 func (es *EventStore) QueryEvents(query EventQuery) ([]RunEvent, error) {
 	types := make(map[string]struct{}, len(query.Types))
 	for _, eventType := range query.Types {
@@ -31,18 +44,55 @@ func (es *EventStore) QueryEvents(query EventQuery) ([]RunEvent, error) {
 	es.cacheHitCount++
 
 	var matches []RunEvent
-	for _, event := range es.cachedEvents {
+	visit := func(event RunEvent) {
 		if query.RunID != "" && event.RunID != query.RunID {
-			continue
+			return
+		}
+		if query.TaskID != "" && event.TaskID != query.TaskID || query.Attempt != 0 && event.Attempt != query.Attempt || query.BranchID != "" && effectiveBranchID(event.BranchID) != effectiveBranchID(query.BranchID) {
+			return
 		}
 		if len(types) > 0 {
 			if _, ok := types[event.Type]; !ok {
-				continue
+				return
 			}
 		}
 		matches = append(matches, cloneRunEvent(event))
 	}
+	if query.RunID != "" && query.TaskID != "" && query.Attempt > 0 && len(types) > 0 {
+		for _, position := range es.occurrencePositions(query, types) {
+			visit(es.cachedEvents[position])
+		}
+	} else {
+		for _, event := range es.cachedEvents {
+			visit(event)
+		}
+	}
 	return matches, nil
+}
+
+// Caller holds the store semaphore and has checked stateValid. All append,
+// refresh and rewrite paths publish through cachedEvents; resetting the index
+// with publishState/invalidateState preserves that same validation boundary.
+func (es *EventStore) occurrencePositions(query EventQuery, types map[string]struct{}) []int {
+	if es.occurrenceIndex == nil {
+		es.occurrenceIndex = make(map[eventOccurrenceKey][]int)
+	}
+	for es.occurrenceIndexed < len(es.cachedEvents) {
+		position := es.occurrenceIndexed
+		event := es.cachedEvents[position]
+		if event.TaskID != "" && event.Attempt > 0 {
+			key := eventOccurrenceKey{run: event.RunID, task: event.TaskID, attempt: event.Attempt, kind: event.Type}
+			es.occurrenceIndex[key] = append(es.occurrenceIndex[key], position)
+		}
+		es.occurrenceIndexed++
+	}
+	var positions []int
+	for kind := range types {
+		key := eventOccurrenceKey{run: query.RunID, task: query.TaskID, attempt: query.Attempt, kind: kind}
+		positions = append(positions, es.occurrenceIndex[key]...)
+	}
+	slices.Sort(positions)
+	return positions
 }
 
 // LookupEvent returns the branch (the implicit main lineage for an untagged

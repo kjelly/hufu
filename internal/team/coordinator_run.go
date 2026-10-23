@@ -448,22 +448,24 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	directTask.ExecutionTopology = []execution.ExecutionTarget{directTask.ResolvedExecutionTarget}
 	directModel = directTask.Model
 	directSpec := TodoSpec{
-		Agent:             directTask.Agent,
-		Desc:              directTask.Goal,
-		Goal:              directTask.Goal,
-		Model:             directTask.Model,
-		ModelTopology:     cloneModelTopology(directTask.ModelTopology),
-		ExecutionTarget:   directTask.ResolvedExecutionTarget,
-		ExecutionTopology: cloneExecutionTopology(directTask.ExecutionTopology),
-		ResultContract:    directTask.ResultContract.clone(),
-		WorkerWorkspace:   directTask.WorkerWorkspace.clone(),
-		ExecutionRoute:    directTask.ExecutionRoute.clone(),
-		Source:            TaskSourceCoordinator,
-		ParentID:          "",
-		Execution:         cloneExecutionContract(directTask.Execution),
-		SideEffect:        directTask.SideEffect,
-		Recovery:          directTask.Recovery,
-		ReconcileTool:     directTask.ReconcileTool,
+		RunInputSnapshotID:   directTask.RunInputSnapshotID,
+		RunInputSnapshotHash: directTask.RunInputSnapshotHash,
+		Agent:                directTask.Agent,
+		Desc:                 directTask.Goal,
+		Goal:                 directTask.Goal,
+		Model:                directTask.Model,
+		ModelTopology:        cloneModelTopology(directTask.ModelTopology),
+		ExecutionTarget:      directTask.ResolvedExecutionTarget,
+		ExecutionTopology:    cloneExecutionTopology(directTask.ExecutionTopology),
+		ResultContract:       directTask.ResultContract.clone(),
+		WorkerWorkspace:      directTask.WorkerWorkspace.clone(),
+		ExecutionRoute:       directTask.ExecutionRoute.clone(),
+		Source:               TaskSourceCoordinator,
+		ParentID:             "",
+		Execution:            cloneExecutionContract(directTask.Execution),
+		SideEffect:           directTask.SideEffect,
+		Recovery:             directTask.Recovery,
+		ReconcileTool:        directTask.ReconcileTool,
 	}
 	if err := c.freezeTodoSpecDynamicAuthorization(ctx, directTask, agentDef, &directSpec); err != nil {
 		c.finalizePublicInvocationFailure(err)
@@ -525,9 +527,19 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	// An isolated worker workspace needs executeTask's attempt world; the
 	// inline direct path below always runs in the canonical project.
 	// A multi-candidate execution route needs executeTask's fallback loop.
+	// Request acceptance also needs that path's complete tool transcript.
 	if _, directLLMErr := c.ExecutionRegistry().LanguageModelBackend(directTask.ResolvedExecutionTarget); directLLMErr != nil || directTask.WorkerWorkspace.isolated() ||
-		(directTask.ExecutionRoute != nil && len(directTask.ExecutionRoute.Candidates) > 1) {
+		(directTask.ExecutionRoute != nil && len(directTask.ExecutionRoute.Candidates) > 1) || c.requestAcceptanceEnabled() {
 		output, execErr := c.executeTask(ctx, directTask, todoID)
+		if c.requestAcceptanceEnabled() {
+			runResult := c.finalizeDirectRun(ctx, todoID, execErr == nil, output)
+			if execErr == nil && (runResult == nil || !IsRunOutcomeSuccess(runResult.Outcome) || !runResult.GoalSatisfied) {
+				return directRunNotAcceptedResult(resolvedName, output, runResult, 0), nil
+			}
+			if runResult != nil {
+				output = runResult.Response
+			}
+		}
 		return &DirectAgentResult{AgentName: resolvedName, Output: output, Error: execErr}, execErr
 	}
 
@@ -705,6 +717,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		rawSTM, rawLTM = LoadSTM(c.session.Workspace), LoadLTM(c.session.Workspace, c.session.Config.Name)
 	}
 	workerInput := buildWorkerContextInput(request, syntheticTask, agentDef, "", instructions, "", "", skillContext)
+	workerInput.RuntimeContext += c.requestAcceptancePrompt()
 	workerInput.RawSTM, workerInput.RawLTM, workerInput.CanonicalMemory = rawSTM, rawLTM, canonicalMemory
 	if directInvocation.AdmissionContext.IsBound() {
 		workerInput.ModelContext = directInvocation.ModelContext
@@ -1143,7 +1156,7 @@ func (c *Coordinator) finalizeDirectRun(ctx context.Context, todoID string, succ
 		})
 		return c.requestTerminalResult(ctx, TerminalEntryDirectAgent, "direct_agent_failed", false, &evaluated, nil)
 	}
-	accRes, accErr := c.runAcceptance(ctx)
+	accRes, accErr := c.runAcceptance(ctx, response)
 	if manifestErr := c.finalizeEvidenceManifest(ctx, accRes); manifestErr != nil {
 		c.report(c.newEvent("error").withMessage("evidence manifest finalization failed: " + manifestErr.Error()))
 	}
@@ -1508,7 +1521,7 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 	}
 
 	if c.LastRunResult() == nil {
-		accRes, accErr := c.runAcceptance(ctx)
+		accRes, accErr := c.runAcceptance(ctx, strings.TrimPrefix(result, "FINISHED:"))
 		if manifestErr := c.finalizeEvidenceManifest(ctx, accRes); manifestErr != nil {
 			c.report(c.newEvent("error").withMessage("evidence manifest finalization failed: " + manifestErr.Error()))
 		}

@@ -1,7 +1,6 @@
 package team
 
 import (
-	"encoding/json/v2"
 	"fmt"
 	"maps"
 	"slices"
@@ -158,70 +157,4 @@ func validateRuntimeEvidenceInputSchema(root map[string]any, spec *resultEvidenc
 		return fmt.Errorf("runtime evidence completeness overlaps entries")
 	}
 	return nil
-}
-
-func assembleRuntimeEvidenceInputs(raw []byte, spec *resultEvidenceInputsSpec, ids []string, results []TaskResult) ([]byte, error) {
-	if spec == nil || !spec.RuntimeOwned {
-		return raw, nil
-	}
-	value, err := decodeUniqueJSON(raw)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := resolveJSONPointer(value, spec.ItemsPointer); err == nil {
-		return nil, fmt.Errorf("omit runtime-owned evidence inputs %s", spec.ItemsPointer)
-	}
-	if len(ids) == 0 {
-		return nil, fmt.Errorf("runtime evidence inputs require accepted sources")
-	}
-	entries := make([]any, 0, len(ids))
-	seen := map[string]bool{}
-	for _, id := range ids {
-		index := slices.IndexFunc(results, func(r TaskResult) bool { return r.TaskID == id })
-		if seen[id] || index < 0 || !taskResultStatusIsSuccessful(results[index].Status) || results[index].StructuredPayload == nil {
-			return nil, fmt.Errorf("runtime evidence source unavailable")
-		}
-		seen[id] = true
-		payload := results[index].StructuredPayload
-		if decisionBytesHash(payload.Value) != payload.SHA256 {
-			return nil, fmt.Errorf("runtime evidence source hash mismatch")
-		}
-		source, err := decodeResultContractJSON(payload.Value)
-		if err != nil {
-			return nil, err
-		}
-		entry := map[string]any{fixedCollectionPointerTokens(spec.TaskIDPointer)[0]: id, fixedCollectionPointerTokens(spec.HashPointer)[0]: payload.SHA256}
-		for target, pointer := range spec.ValueBindings {
-			v, err := resolveJSONPointer(source, pointer)
-			if err != nil {
-				return nil, err
-			}
-			entry[fixedCollectionPointerTokens(target)[0]] = v
-		}
-		entries = append(entries, entry)
-	}
-	if err := setFixedCollectionValue(value, spec.ItemsPointer, entries); err != nil {
-		return nil, err
-	}
-	return json.Marshal(value, json.Deterministic(true))
-}
-
-func removeRuntimeEvidenceSchema(root map[string]any, spec *resultEvidenceInputsSpec) {
-	if spec == nil || !spec.RuntimeOwned {
-		return
-	}
-	tokens := fixedCollectionPointerTokens(spec.ItemsPointer)
-	parent := root
-	for _, name := range tokens[:len(tokens)-1] {
-		props, _ := parent["properties"].(map[string]any)
-		parent, _ = props[name].(map[string]any)
-		if parent == nil {
-			return
-		}
-	}
-	field := tokens[len(tokens)-1]
-	props, _ := parent["properties"].(map[string]any)
-	delete(props, field)
-	required, _ := parent["required"].([]any)
-	parent["required"] = slices.DeleteFunc(required, func(v any) bool { return v == field })
 }

@@ -1,18 +1,25 @@
 package team
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// canonicalResultScalars accepts exact serialized nulls and decimal integers
-// only where the original contract explicitly requires those types and excludes
-// strings. It never guesses types from conditional branches or rewrites enums
-// or constants. Full contract and evidence validation still follows.
+// canonicalResultScalars accepts schema-declared boolean and number strings
+// and exact serialized nulls without floating-point rounding. It never guesses
+// conditional types; integer/null conversions retain strict syntax and numeric
+// enum/constant restrictions. Full contract and evidence validation follows.
 func canonicalResultScalars(value any, schema *jsonschema.Schema, depth int) any {
-	if schema == nil || depth > maxDynamicSchemaDepth || schema.Enum != nil || schema.Const != nil {
+	if schema == nil || depth > maxDynamicSchemaDepth {
+		return value
+	}
+	if boolean, converted := canonicalResultBoolean(value, schema); converted {
+		return boolean
+	}
+	if schema.Enum != nil || schema.Const != nil {
 		return value
 	}
 	if schema.Ref != nil {
@@ -29,11 +36,13 @@ func canonicalResultScalars(value any, schema *jsonschema.Schema, depth int) any
 			if text == "null" && slices.Contains(types, "null") && schema.Validate(nil) == nil {
 				return nil
 			}
-			if slices.Contains(types, "integer") && canonicalResultInteger(text) {
+			if (slices.Contains(types, "integer") && canonicalResultInteger(text)) || slices.Contains(types, "number") {
 				// Reuse the exact-number decoder; float64 would round large IDs
 				// or indices before schema bounds and canonical hashing run.
 				if number, err := decodeUniqueJSON([]byte(text)); err == nil && schema.Validate(number) == nil {
-					return number
+					if _, numeric := number.(json.Number); numeric {
+						return number
+					}
 				}
 			}
 		}
@@ -41,7 +50,11 @@ func canonicalResultScalars(value any, schema *jsonschema.Schema, depth int) any
 	switch node := value.(type) {
 	case map[string]any:
 		for name, child := range node {
-			node[name] = canonicalResultScalars(child, schema.Properties[name], depth+1)
+			selected := schema.Properties[name]
+			if selected == nil && len(schema.PatternProperties) == 0 {
+				selected, _ = schema.AdditionalProperties.(*jsonschema.Schema)
+			}
+			node[name] = canonicalResultScalars(child, selected, depth+1)
 		}
 	case []any:
 		for index, child := range node {
@@ -53,6 +66,28 @@ func canonicalResultScalars(value any, schema *jsonschema.Schema, depth int) any
 		}
 	}
 	return value
+}
+
+// Boolean strings from providers may satisfy an explicitly boolean field or
+// constant; validate the converted value before accepting it.
+func canonicalResultBoolean(value any, schema *jsonschema.Schema) (any, bool) {
+	text, ok := value.(string)
+	if !ok {
+		return value, false
+	}
+	text = strings.TrimSpace(text)
+	booleanType := false
+	if schema.Types != nil {
+		types := schema.Types.ToStrings()
+		booleanType = slices.Contains(types, "boolean") && !slices.Contains(types, "string")
+	}
+	if (text == "true" || text == "false") && (booleanType || schema.Const != nil) {
+		boolean := text == "true"
+		if schema.Validate(boolean) == nil {
+			return boolean, true
+		}
+	}
+	return value, false
 }
 
 func canonicalResultInteger(text string) bool {

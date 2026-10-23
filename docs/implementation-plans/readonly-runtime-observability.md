@@ -1,5 +1,11 @@
 # Hufu 唯讀路由分析、成本統計與工具整合實作計畫
 
+> Status: active
+> Authority: reference
+> Verified-Commit: `279e762e`
+> Supersedes: —
+> Superseded-By: —
+
 > **狀態**：已完成；WP-00～WP-05 的完成與驗證紀錄見 [進度文件](readonly-runtime-observability-progress.md)。
 > **修訂日期**：2026-10-20
 > **核對基準**：`kjelly/hufu`，HEAD `3715d61001b9122a3828e3202487f7446598f894`。

@@ -178,6 +178,12 @@ runs retain a nonzero process exit until the goal is verified. Automation
 should use a team with an objective `acceptance:` contract rather than treating
 an exploratory answer as verified work.
 
+To make each task's explicit deliverables part of acceptance, use
+`hufu run --team my-team --request-acceptance -- "your task"`. The runtime
+freezes model-extracted requirements and checks actual execution evidence at
+completion. See [per-request runtime acceptance](docs/reference/request-acceptance.md)
+for configuration, evidence rules, and semantic-review limits.
+
 Other useful commands:
 ```bash
 hufu list              # show all discoverable teams and their agents

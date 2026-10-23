@@ -240,7 +240,7 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	// Fold enum letter case before any policy, guard, or schema check sees the
 	// arguments, so every tool accepts "BLOCKED" for "blocked" alike.
 	call.Input = canonicalToolArgumentObjects(call.Input, t.Info())
-	call.Input, _ = tools.CanonicalToolArgumentCase(call.Input, t.Info())
+	call.Input, _ = tools.CanonicalToolArguments(call.Input, t.Info())
 	_, dynamicGateway := t.inner.(*dynamicToolGateway)
 	if denial := t.coordinator.workerMCPArgumentDenial(t.Info().Name, call.Input); denial != "" {
 		tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
@@ -436,6 +436,9 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	if err == nil && !response.IsError {
 		if captureErr := t.coordinator.captureDecisionArtifactRead(ctx, t.inner, call, &response); captureErr != nil {
 			return fantasy.ToolResponse{}, captureErr
+		}
+		if !response.IsError {
+			t.coordinator.captureToolObservation(ctx, call, t.Info().Name, call.Input, response.Content)
 		}
 	}
 

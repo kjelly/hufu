@@ -1,0 +1,103 @@
+# Project tasks (Nushell / nur). Run `nur --list` to discover them.
+# Examples:
+#   nur run doctor
+#   nur dev my-team 'Describe the task' --model ollama/example --new
+#   nur test -run TestExample -count 1
+#   nur deploy user@example.com:~/bin/ --arch arm64
+# Use `nur --stdin run ...` / `nur --stdin dev ...` for interactive input.
+
+# Preserve live terminal output and stop the entire task on an external failure.
+def --wrapped checked [command: string, ...args: string] {
+    run-external $command ...$args
+    if $env.LAST_EXIT_CODE != 0 {
+        exit $env.LAST_EXIT_CODE
+    }
+}
+
+# Run Hufu from source, forwarding all arguments unchanged.
+def --wrapped "nur run" [...args: string] {
+    checked go run ./cmd/hufu ...$args
+}
+
+# Run a team with TUI and report output; --new explicitly starts a fresh session.
+def --wrapped "nur dev" [
+    team: string
+    prompt: string
+    --new                  # Archive the previous session and start fresh.
+    --model: string        # Override the team's model.
+    ...args: string        # Additional Hufu flags.
+] {
+    let model_args = if $model == null { [] } else { [--model $model] }
+    let new_args = if $new { [--new] } else { [] }
+    checked go run ./cmd/hufu --agent-team $team --tui --report ...$model_args ...$new_args ...$args -- $prompt
+}
+
+# Build snapshot binaries for every platform configured in .goreleaser.yml.
+def "nur snapshot" [] {
+    checked goreleaser build --snapshot --clean
+}
+
+# Build a snapshot and copy its Linux binary to a target (or HUFU_DEPLOY_TARGET).
+def "nur deploy" [
+    target?: string        # SCP destination, e.g. user@example.com:~/bin/.
+    --arch: string = amd64 # Destination architecture: amd64 or arm64.
+] {
+    let destination = ($target | default ($env.HUFU_DEPLOY_TARGET? | default '') | str trim)
+    if $destination == '' {
+        error make {msg: 'Provide a deployment target or set HUFU_DEPLOY_TARGET.'}
+    }
+    if $arch not-in [amd64 arm64] {
+        error make {msg: 'Deployment architecture must be amd64 or arm64.'}
+    }
+
+    nur snapshot
+    # Read the manifest instead of guessing GoReleaser's architecture suffix.
+    let artifacts = (open dist/artifacts.json | where {|artifact|
+        $artifact.type == 'Binary' and $artifact.name == 'hufu' and $artifact.goos? == 'linux' and $artifact.goarch? == $arch
+    })
+    if ($artifacts | length) != 1 {
+        error make {msg: $'Expected exactly one Linux ($arch) Hufu binary in dist/artifacts.json.'}
+    }
+    let binary = ($artifacts | get 0.path)
+    if not ($binary | path exists) {
+        error make {msg: $'Snapshot binary does not exist: ($binary)'}
+    }
+    checked scp -- $binary $destination
+}
+
+# Build for this machine and install to ~/bin (override with --dir).
+def "nur install" [--dir: path = '~/bin'] {
+    let result = (^go env -json GOHOSTOS GOHOSTARCH | complete)
+    if $result.exit_code != 0 {
+        print -e $result.stderr
+        exit $result.exit_code
+    }
+    let host = ($result.stdout | from json)
+    let directory = ($dir | path expand)
+    mkdir $directory
+    # Override cross-compilation settings so the installed binary runs locally.
+    with-env {GOOS: $host.GOHOSTOS, GOARCH: $host.GOHOSTARCH} {
+        checked go build -o ($directory | path join hufu) ./cmd/hufu
+    }
+}
+
+# Test all packages; forwards Go test flags, including -cover and -run.
+def --wrapped "nur test" [...args: string] {
+    checked go test ...$args ./...
+}
+
+# Run the required lint gate, vet, tests, and CLI build; stop at the first failure.
+def "nur check" [] {
+    checked golangci-lint run
+    checked go vet ./...
+    nur test
+    checked go build ./cmd/hufu
+}
+
+# Show working-tree status, change statistics (including staged), and recent commits.
+def "nur status" [] {
+    checked git status --short --branch
+    checked git diff --stat
+    checked git diff --cached --stat
+    checked git log -5 --oneline
+}

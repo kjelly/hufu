@@ -88,7 +88,7 @@ func TestVerifyReviewTestsRunsTargetedPackageInReviewedRevisionSnapshot(t *testi
 	if !ok {
 		t.Fatalf("targeted_go_tests output = %#v", result.Outputs["targeted_go_tests"])
 	}
-	if !receipt.Passed || receipt.ExitCode != 0 || !slices.Equal(receipt.Packages, []string{"./calc"}) {
+	if !receipt.Completed || !receipt.Passed || receipt.ExitCode != 0 || !slices.Equal(receipt.Packages, []string{"./calc"}) {
 		t.Fatalf("targeted Go test receipt = %#v", receipt)
 	}
 	if len(result.Artifacts) != 1 || result.Artifacts[0].ID != receipt.ArtifactID || result.Artifacts[0].SHA256 != receipt.ArtifactSHA256 {

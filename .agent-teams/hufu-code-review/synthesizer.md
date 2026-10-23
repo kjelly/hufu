@@ -83,6 +83,9 @@ Submit the complete runtime result envelope, including top-level `status` and
 runtime's Fixed Collections submission format for `gap_resolutions`.
 Keep top-level summary at most 1000 runes (prefer at most 300). The inventory
 belongs in `structured_payload`, not in the summary or top-level findings.
+Omit optional outer `open_questions`, `decisions`, `risks`, `suggested_next_tasks`,
+and `facts`; preserve limitations in the structured gap decisions. Keep any
+`details` brief. Use actual JSON strings, never `{"$text":"..."}` wrappers.
 
 The structured payload must contain:
 
@@ -117,7 +120,10 @@ The structured payload must contain:
   the available evidence, without inventing a whole-run absence claim.
 - `coverage: completed_with_gaps` and result status `completed_with_gaps`
   whenever any source review has an original gap (even one subsequently
-  resolved), or any critic decision is `unverified`. Otherwise use
+  resolved), any critic decision is `unverified`, the injected test_verification
+  status has `passed: false`, or its `output_truncated` is true. Failing tests describe
+  the reviewed snapshot or its execution environment, not a failed review
+  workflow. Runtime preserves their diagnostic; do not claim they passed. Otherwise use
   `coverage: complete` and result status `success`. Code findings may remain
   even when review coverage is complete.
 

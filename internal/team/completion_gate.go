@@ -6,20 +6,23 @@ import (
 	"strings"
 
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 // CompletionGateInput is the immutable evidence observed at the end of a run.
 // A worker response is deliberately not part of this contract: prose cannot
 // make a run accepted.
 type CompletionGateInput struct {
-	Result             *RunResult
-	Acceptance         *AcceptanceResult
-	Evidence           *EvidenceManifest
-	RequiredTasks      []TaskReference
-	UnresolvedRisks    []string
-	TerminalLeaks      []string
-	ArtifactStore      ArtifactStore
-	SemanticRegression SemanticRegressionDecision
+	Result                    *RunResult
+	Acceptance                *AcceptanceResult
+	Evidence                  *EvidenceManifest
+	RequiredTasks             []TaskReference
+	TaskItems                 []*TodoItem
+	RequestAcceptanceRequired bool
+	UnresolvedRisks           []string
+	TerminalLeaks             []string
+	ArtifactStore             ArtifactStore
+	SemanticRegression        SemanticRegressionDecision
 }
 
 type CompletionGateDecision struct {
@@ -39,6 +42,16 @@ func (CompletionGate) Evaluate(ctx context.Context, input CompletionGateInput) C
 
 	if input.Result == nil || input.Result.Outcome != RunOutcomeCompleted || !input.Result.GoalSatisfied {
 		reject("run result is not a satisfied completed result")
+	}
+	if input.RequestAcceptanceRequired {
+		if input.Result == nil {
+			reject("required invocation acceptance result is missing")
+		} else if _, err := RequestAcceptanceContractFromSnapshot(input.Result.RunInputs); err != nil {
+			reject("required invocation acceptance snapshot: " + err.Error())
+		}
+	}
+	if err := ValidateRequestAcceptanceBinding(ctx, input.Result, input.TaskItems, input.ArtifactStore); err != nil {
+		reject(err.Error())
 	}
 	acceptance := input.Acceptance
 	if acceptance == nil && input.Result != nil {
@@ -129,7 +142,13 @@ func (c *Coordinator) applyCompletionGate(ctx context.Context, result *RunResult
 	if c.session != nil {
 		store, _ = NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
 	}
+	if c.requestAcceptanceEnabled() && result != nil {
+		result.RunInputs = c.RunInputSnapshot()
+		result.RunID = c.executionRunID
+		result.Response = utils.RedactSecrets(result.Response)
+	}
 	decision := EvaluateCompletionGate(ctx, CompletionGateInput{
+		TaskItems: items, RequestAcceptanceRequired: c.requestAcceptanceEnabled(),
 		Result: result, Acceptance: acceptance, Evidence: manifest,
 		RequiredTasks: required, UnresolvedRisks: riskFindings,
 		TerminalLeaks: terminalLeaks, ArtifactStore: store,

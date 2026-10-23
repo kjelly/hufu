@@ -45,7 +45,7 @@ func (m *MCPToolManager) AttachClient(ctx context.Context, name string, cfg MCPS
 	}
 	tools, err := initializeServerTools(ctx, name, cfg, cli)
 	if err != nil {
-		return fmt.Errorf("attach MCP server %q: %w", name, err)
+		return fmt.Errorf("attach MCP server %q: %w", name, errors.Join(err, cli.Close()))
 	}
 	// The check above only avoids initializing a duplicate. Another attach or
 	// LoadTools may have registered the name while this one initialized.

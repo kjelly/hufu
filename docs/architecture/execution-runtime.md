@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: normative
-> Verified-Commit: `72c20a5`
+> Verified-Commit: —（本次工作樹，尚未提交）
 > Supersedes: `archive/superseded-specs/subagent-provider-runtime-spec.md`, `archive/superseded-specs/runtime-composability.md`
 > Superseded-By: —
 
@@ -108,6 +108,20 @@ step-budget finalization and resumed repair. Provider compliance is still
 checked: prose alone, an invalid payload or an incomplete result does not
 complete the task.
 
+Schema-only repair receives the complete rejected submission as fenced data,
+including its findings and evidence references. The JSON is never cut at a
+fixed character limit: model-context admission checks the complete repair
+request and fails closed if it cannot fit. When the worker only produced
+prose, the first result-repair turn's rejected submission supplies that data
+to the second turn, including during resumed repair. Stream callbacks preserve
+the arguments when returned steps omit them. Receipt prompt copies omit those
+model-controlled arguments; repair does not add tools or replay execution.
+
+Complete structured result payloads and their rendered final reports are bounded
+at 2 MiB, including records copied by runtime evidence binding. The same limit
+applies during assembly, validation, persistence replay, and evidence delivery;
+an oversized aggregate fails preflight without dropping a source record.
+
 Provider-facing result schemas retain portable fields, required properties and
 enum values even when the full schema uses local `$defs` references or
 unsupported conditional constraints. References are inlined within bounded
@@ -130,10 +144,21 @@ that proof. Reporting alone is insufficient: an actual observation must be
 recorded, and unknown or mutating tools still prevent replay. Failed repair
 history remains attached to the original attempt's execution receipt.
 
+A blocked task stops new delegation while its occurrence or reliability scope
+remains unresolved. If the original permitted retry later completes and its
+reliability scope clears, Hufu releases that task-derived stop. Other blocked
+occurrences and explicit operator, budget, or workflow wrap-up requests still
+prevent delegation. Successful recovery never erases the earlier failure
+receipt or bypasses the final acceptance checks.
+
 Argument errors retain the rejected field's full path. When a full tool
 example exceeds 2 KiB, feedback uses the rejected schema's allowed fields and
 a bounded local example instead of repeating an entire fixed collection.
 The local example is explicitly not a complete submission.
+For a union with exactly one branch matching the submitted JSON type, an
+invalid value reports that branch's rejected member (for example
+`files_read[0].path`), rather than only reporting an invalid object. This
+improves repair feedback without accepting an invalid union alternative.
 
 Schemas can declare `x-hufu-fixed-collections` to separate known membership
 from model judgment. The runtime builds source-hash-bound row keys from accepted
@@ -560,7 +585,7 @@ Teams may declare an `equals_projection` task-result assertion to compare two
 ordered object arrays before a successful worker result is committed and again
 at objective verification. The assertion's `pointer` selects the first array;
 its configuration-owned `value` contains a reference `pointer`, 1–16 unique
-`fields`, optional `optional_fields`, and optional boolean `allow_missing`.
+`fields`, optional `optional_fields`, `field_defaults`, and optional boolean `allow_missing`.
 Required and optional field names must be distinct, with at most 16 total. Both arrays must have the same
 length, and every selected field must exist and match at the same index.
 Fields listed in `optional_fields` may be absent from both objects; a value
@@ -570,6 +595,15 @@ does not equate omitted values with null, false, scalar zero, empty strings,
 or nonempty arrays. Additional fields are ignored; array order is significant. This supports an
 outer result summary paired with a richer schema-defined record without
 teaching the runtime domain-specific field names.
+
+`field_defaults` may declare a JSON fallback for a selected field. During
+comparison only, an omitted or null field uses that fallback on either side;
+the submitted and stored results remain unchanged. For optional references and
+evidence arrays, `{finding_index: null, missing_evidence: []}` treats omitted
+references as null and omitted/empty evidence lists alike. Zero remains a real
+index, nonempty evidence must still match in order, and numeric strings remain
+distinct from numbers. Defaults for unselected fields fail contract validation.
+Without this explicit policy, selected fields remain required on both sides.
 
 `allow_missing: true` permits an omitted first array only when the reference
 array exists and is empty, accommodating canonical `omitempty` fields. Null,
@@ -612,8 +646,13 @@ A completed workflow is one execution cycle, not the end of its conversation.
 An additional user request through `run` or `chat` starts a new cycle in the
 same session and branch. Conversation history, prior reports, immutable policy,
 and historical results remain available; active tasks, phase results, retry
-state, continuation budgets, and criterion evidence start fresh. Old research
-can explain a follow-up, but cannot satisfy its required tasks or verification.
+state, continuation budgets, and criterion evidence start fresh. Prior-cycle
+results and verification receipts cannot satisfy the new cycle's required
+tasks or verification. A schema explicitly opting into historical tool evidence
+may use previously observed source text for a quotation in a new result; this
+does not reuse an old task completion or fulfill a requirement for a fresh
+source call. Teams requiring new independent verification keep a fresh-only
+result contract and verify the new source calls.
 
 The event-first `workflow_cycle_started` boundary includes the redacted request
 and the previous task ID high-water mark. Replay restores that request even if
@@ -670,3 +709,71 @@ prefix. Parallel publications serialize this check and journal append; a
 durable idempotent read is not counted twice. Existing observed evidence is
 never silently removed or summarized, and historical context integrity errors
 still fail closed.
+
+### On-demand historical observations
+
+A worker can explicitly declare `recall_observation` to retain and retrieve
+successful observation tool results within the visible conversation branch.
+The runtime uses the existing immutable artifact store and records a
+`tool_observation_recorded` publication with its producer, tool call, timestamp,
+and artifact digest. No model-generated summary replaces the source bytes.
+Capture is bounded to 32 observations per task attempt, 1 MiB of output and
+64 KiB of arguments per observation. Oversized, failed, mutating, unknown, and
+protocol tool results are not retained. MCP sources require the existing
+maintainer-owned `sideEffect: none` and `filesystem: none` policy; gateway
+capture occurs after logical authorization and before output truncation.
+Dependency artifacts read through `view.artifact_ref` are excluded so their
+attempt-local grants do not become historical grants.
+
+The tool supports `action: search` and `action: read`. Search uses literal
+model-supplied text in stored arguments and output, returning bounded previews
+and opaque observation IDs. It inspects at most 64 authorized candidates or
+8 MiB of decoded source data per call. Follow `next_offset` even when a page
+has no matching rows; `-1` means the search is exhausted. A read delivers up to
+32 KiB of UTF-8 text, with byte offsets and `next_offset` for further fragments.
+The runtime validates the original artifact and records a
+`tool_observation_read` event before returning content. That event binds the
+original publication and digest, original observation time, current read call,
+range, content format, and the SHA-256 of the exact delivered fragment.
+`inspect trace` exposes the publication and read references without source
+content; task transcripts retain the delivered historical evidence.
+
+Access is restricted to the same team and worker identity and the active branch's
+visible ancestry. Current source-tool grants, team denials, session denials,
+MCP input policy, and network restrictions still apply. An explicit profile
+disabling historical memory withholds recall. Bound worksets, coordinators,
+and implicit `all` tool grants do not acquire this capability. Reads do not
+execute the original tool, become fresh observations, restore prior task cache
+entries, or satisfy an objective requirement to perform a new source call.
+Storage failure only makes an observation unavailable for reuse; it never
+replays a source call. Read integrity or attribution failures return no content.
+The current task/run's own observations remain in its normal tool history;
+recall excludes that occurrence rather than duplicating its live transcript.
+
+Result schemas can explicitly admit historical evidence with
+`x-hufu-tool-evidence.allow_historical: true` and a `historical_pointer` naming
+a nullable provenance field in each source object. Their existing extraction
+rules produce `evidence_text` and a source target from the immutable result.
+Only exact text fragments actually read into the current runner-owned
+transcript can support quotations. Runtime assigns the provenance field and
+binds the citation to the current recall call while retaining the original
+producer reference; search previews and model-supplied provenance earn no
+evidence credit. A matching fresh observation takes precedence. Among multiple matches of the
+same kind, the first successful matching observation in the current transcript
+wins; original source time does not implicitly select a newer observation.
+`evidence_text` is the recall response's `content_format` value, not an extension
+key or a result-schema property. The response's `content` contains the extracted
+fragment. The nullable provenance field's complete schema and pointer semantics
+are specified in [Agent format](../reference/agent-format.md#同一對話的歷史觀測結果).
+Schemas without
+this opt-in retain their current-attempt evidence requirements, including
+external-provider submissions without a local transcript.
+
+Teams decide freshness, relevance, and independent verification. For example,
+web-research lets each research track reuse its own historical snapshots when
+their observation time fits the question; the verifier still opens sources
+independently under a fresh-evidence contract. No webpage, URL interpretation,
+or team-specific freshness rule lives in the runtime. The first version uses
+literal lookup, not semantic ranking, and does not backfill old transcripts.
+Changing tool grants or result schemas still requires a new compatible session
+under the execution-policy snapshot rules.
