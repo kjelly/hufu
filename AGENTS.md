@@ -15,20 +15,34 @@
 
 ## Build & Run
 
+Use mise for all repository Go and golangci-lint commands, including scripts,
+non-interactive shells, targeted tests, race tests, and verification runs.
+Run `mise run <task>` or `mise exec -- <command>` from the repository root;
+do not rely on the shell's bare `go`/`golangci-lint`, hardcode installed tool
+paths or `GOROOT`, or fall back to a different toolchain. `.mise.toml` is the
+source of truth for tool versions; use `mise install` if they are missing.
+Keep its Go version aligned with `go.mod` when intentionally upgrading.
+`GOTOOLCHAIN=local` prevents Go from silently switching away from mise's version.
+Preserve the operator's Go/build/lint caches and `GOTMPDIR`.
+
 ```bash
-go build ./cmd/hufu          # Build binary
-go run ./cmd/hufu [prompt]  # Run directly
-go vet ./...                            # Static analysis
-go test ./...                           # Run tests
-golangci-lint run                        # Required lint gate for code changes
+mise run build                          # Build binary
+mise run run -- [prompt]                 # Run directly; CLI flags also pass through
+mise run vet                            # Static analysis
+mise run test                           # Run tests
+mise run lint                           # Required lint gate for code changes
+mise exec -- go test -p 2 ./internal/inspect -run TestBindReadTarget
 ```
+
+The project defaults to `GOMAXPROCS=2`; Go build/test/vet tasks also use `-p 2`.
+Run heavyweight validation tasks sequentially, not as parallel mise tasks.
 
 ## Required Validation
 
 Any task that modifies Go source code, tests, or other code must run:
 
 ```bash
-golangci-lint run
+mise run lint
 ```
 
 The command must complete successfully with no errors before the task is considered complete. If it reports errors, fix them and rerun the command; do not stop with known lint failures. Documentation-only changes do not require this code lint gate.
@@ -124,6 +138,15 @@ Results joined and printed to stdout
 - Keep domain-specific structured-input vocabulary and semantic guidance with the owning agent team, not in `cmd/hufu/` or `internal/**`.
 - Declare every fixed vocabulary in a tool parameter (statuses, actions, kinds, severities) as a lowercase or snake_case `enum`, with no two values differing only in case. `tools.CanonicalToolArgumentCase` then folds a model's letter case automatically (`"BLOCKED"` → `"blocked"`) before validation. Do not write a hand-rolled exact `switch` on a model string without an enum or an explicit `strings.ToLower`.
 - Team prompts must name the exact values the receiving tool accepts (for example `submit_result` status `blocked`, not `BLOCKED: <reason>`); case folding cannot map synonyms such as PASS→success or BLOCKER→error.
+
+### Runtime-Owned Deterministic Result Data
+
+- Bind data already determined by verified native actions or accepted task results in the runtime. Do not require a model to copy or reconstruct receipts, resolved scope, test diagnostics, source payloads, IDs, or hashes in `submit_result`; the model supplies semantic judgments and decisions.
+- Use `x-hufu-runtime-inputs` for receipt-verified native outputs and `x-hufu-evidence-inputs` with `runtime_owned: true` for accepted source arrays. Keep concrete field bindings in the team's schema. See [result contract extensions](docs/reference/agent-format.md#收據驗證的-native-結果欄位).
+- Omit runtime-owned fields from the model-facing submission schema, prompts, and repair examples. Reject model-supplied values for those fields even when identical; assemble them from authorized sources before validating, hashing, and storing the complete canonical payload.
+- Verify source identity, current run, frozen input snapshot, receipts, and schema at binding time. Reject missing, stale, or mismatched sources; replay must validate the stored binding rather than rebuild historical results from newer outputs.
+- Keep complete canonical receipts and diagnostics in storage. Compact model-facing summaries must not replace or truncate durable evidence. Track execution completion separately from outcome: a completed test command with `passed: false` remains valid review evidence, while acceptance follows the declared contract.
+- When changing these contracts, verify model submission without deterministic fields, rejection of overrides and invalid sources, and exact receipt preservation through persistence and replay for both local and external submission paths.
 
 ### Coordinator Features
 
