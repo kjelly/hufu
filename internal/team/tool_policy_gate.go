@@ -434,7 +434,12 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fanta
 	ctx = contextArtifactServiceFromContext(ctx).withToolOffloader(ctx, t.Info().Name, call.ID)
 	response, err := t.inner.Run(ctx, call)
 	if err == nil && !response.IsError {
-		t.coordinator.captureToolObservation(ctx, call, t.Info().Name, call.Input, response.Content)
+		if captureErr := t.coordinator.captureDecisionArtifactRead(ctx, t.inner, call, &response); captureErr != nil {
+			return fantasy.ToolResponse{}, captureErr
+		}
+		if !response.IsError {
+			t.coordinator.captureToolObservation(ctx, call, t.Info().Name, call.Input, response.Content)
+		}
 	}
 
 	// A checkpoint is evaluated after the call completes. Its non-continue

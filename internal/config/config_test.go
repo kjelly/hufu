@@ -867,3 +867,23 @@ func TestConfigMergesTimeoutCategoriesFieldByField(t *testing.T) {
 		t.Fatalf("timeouts = %+v, want %+v", cfg.Timeouts, want)
 	}
 }
+
+func TestDecisionRuntimeMergesFieldsAndSources(t *testing.T) {
+	home := isolateHome(t)
+	homeConfig := filepath.Join(home, ".config", "hufu", "hufu.yaml")
+	if err := os.MkdirAll(filepath.Dir(homeConfig), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(homeConfig, []byte("decision-runtime:\n  backend: systemone\n  systemone:\n    model: global-model\n    endpoint: http://localhost:11434/v1/systemone\n    timeout: 60s\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "hufu.yaml"), []byte("decision-runtime:\n  systemone:\n    model: project-model\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(project)
+	got := LoadConfig().DecisionRuntime
+	if got.Backend != "systemone" || got.SystemOne.Model != "project-model" || got.SystemOne.Timeout != time.Minute || got.Sources["systemone.model"] != "hufu.yaml" || got.Sources["systemone.endpoint"] != homeConfig {
+		t.Fatalf("decision-runtime = %#v", got)
+	}
+}

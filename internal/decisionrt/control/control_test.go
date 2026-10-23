@@ -65,7 +65,7 @@ endpoint: http://gpu:11434/v1/systemone
 model: nimble
 api-key-env: SYSTEMONE_KEY
 timeout: 7s
-mode: shadow
+mode: active
 min-confidence: 0.8
 points:
   path-reviewer: {mode: active, min-confidence: 0.95}
@@ -73,7 +73,7 @@ points:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Timeout != 7*time.Second || config.Mode != control.ModeShadow || *config.MinConfidence != 0.8 ||
+	if config.Timeout != 7*time.Second || config.Mode != control.ModeActive || *config.MinConfidence != 0.8 ||
 		config.Points[control.PathReviewer].Mode != control.ModeActive || *config.Points[control.PathReviewer].MinConfidence != 0.95 {
 		t.Fatalf("config = %#v", config)
 	}
@@ -82,7 +82,7 @@ points:
 func TestMergeResolvesEachFieldTeamFirst(t *testing.T) {
 	base := control.Config{
 		Endpoint: "http://home/v1/systemone", Model: "nimble", APIKeyEnv: "HOME_KEY", Timeout: 3 * time.Second,
-		Mode: control.ModeShadow, MinConfidence: threshold(0.7),
+		Mode: control.ModeActive, MinConfidence: threshold(0.7),
 		Points: map[control.Point]control.PointConfig{
 			control.PathReviewer:  {Mode: control.ModeActive, MinConfidence: threshold(0.99)},
 			control.GuardReviewer: {Mode: control.ModeOff},
@@ -116,7 +116,7 @@ func TestMergeResolvesEachFieldTeamFirst(t *testing.T) {
 func TestNewResolvesModesAndThresholds(t *testing.T) {
 	server := newSystemOneServer(t, http.StatusOK, noulBody("0.9"))
 	service, err := control.New(control.Config{
-		Endpoint: server.endpoint(), Model: "nimble", Mode: control.ModeShadow,
+		Endpoint: server.endpoint(), Model: "nimble", Mode: control.ModeActive,
 		Points: map[control.Point]control.PointConfig{
 			control.GuardReviewer: {Mode: control.ModeOff},
 			control.PathReviewer:  {Mode: control.ModeActive, MinConfidence: threshold(0.95)},
@@ -129,8 +129,8 @@ func TestNewResolvesModesAndThresholds(t *testing.T) {
 		mode      control.Mode
 		threshold float64
 	}{
-		control.AgentMatcher:  {control.ModeShadow, 0.60},
-		control.AskUser:       {control.ModeShadow, 0.60},
+		control.AgentMatcher:  {control.ModeActive, 0.60},
+		control.AskUser:       {control.ModeActive, 0.60},
 		control.PathReviewer:  {control.ModeActive, 0.95},
 		control.GuardReviewer: {control.ModeOff, 0.90},
 	}
@@ -151,15 +151,15 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		want   string
 	}{
 		{name: "unknown mode", config: control.Config{Mode: "on"}, want: "mode"},
-		{name: "unknown point", config: control.Config{Points: map[control.Point]control.PointConfig{"similar-task": {Mode: control.ModeShadow}}}, want: "unknown point"},
+		{name: "unknown point", config: control.Config{Points: map[control.Point]control.PointConfig{"similar-task": {Mode: control.ModeActive}}}, want: "unknown point"},
 		{name: "threshold above one", config: control.Config{MinConfidence: threshold(1.5)}, want: "min-confidence"},
 		{name: "point threshold below zero", config: control.Config{Points: map[control.Point]control.PointConfig{control.AskUser: {MinConfidence: threshold(-0.1)}}}, want: "min-confidence"},
-		{name: "missing model", config: control.Config{Mode: control.ModeShadow}, want: "model"},
-		{name: "timeout above maximum", config: control.Config{Mode: control.ModeShadow, Model: "nimble", Timeout: decisionrt.MaxTimeout + time.Second}, want: "timeout"},
-		{name: "negative timeout", config: control.Config{Mode: control.ModeShadow, Model: "nimble", Timeout: -time.Second}, want: "timeout"},
-		{name: "endpoint with query", config: control.Config{Mode: control.ModeShadow, Model: "nimble", Endpoint: "http://gpu/v1/systemone?x=1"}, want: "endpoint"},
-		{name: "invalid key variable", config: control.Config{Mode: control.ModeShadow, Model: "nimble", APIKeyEnv: "1BAD"}, want: "api-key-env"},
-		{name: "unset key variable", config: control.Config{Mode: control.ModeShadow, Model: "nimble", APIKeyEnv: "HUFU_CONTROL_TEST_UNSET_KEY"}, want: "api-key-env"},
+		{name: "missing model", config: control.Config{Mode: control.ModeActive}, want: "model"},
+		{name: "timeout above maximum", config: control.Config{Mode: control.ModeActive, Model: "nimble", Timeout: decisionrt.MaxTimeout + time.Second}, want: "timeout"},
+		{name: "negative timeout", config: control.Config{Mode: control.ModeActive, Model: "nimble", Timeout: -time.Second}, want: "timeout"},
+		{name: "endpoint with query", config: control.Config{Mode: control.ModeActive, Model: "nimble", Endpoint: "http://gpu/v1/systemone?x=1"}, want: "endpoint"},
+		{name: "invalid key variable", config: control.Config{Mode: control.ModeActive, Model: "nimble", APIKeyEnv: "1BAD"}, want: "api-key-env"},
+		{name: "unset key variable", config: control.Config{Mode: control.ModeActive, Model: "nimble", APIKeyEnv: "HUFU_CONTROL_TEST_UNSET_KEY"}, want: "api-key-env"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -198,17 +198,12 @@ func TestHashPinsActivePolicyOnly(t *testing.T) {
 		}
 		return service.Hash()
 	}
-	shadow := hash(t, control.Config{Mode: control.ModeShadow})
-	if shadow != "" {
-		t.Fatalf("shadow-only hash = %q, want empty", shadow)
+	if _, err := control.New(control.Config{Mode: control.ModeShadow}, identity); err == nil {
+		t.Fatal("shadow accepted")
 	}
 	active := hash(t, control.Config{Points: map[control.Point]control.PointConfig{control.PathReviewer: {Mode: control.ModeActive}}})
 	if len(active) != 64 {
-		t.Fatalf("active hash = %q", active)
-	}
-	plusShadow := hash(t, control.Config{Mode: control.ModeShadow, Points: map[control.Point]control.PointConfig{control.PathReviewer: {Mode: control.ModeActive}}})
-	if plusShadow != active {
-		t.Fatal("shadow points changed the active hash")
+		t.Fatalf("active hash=%q", active)
 	}
 	stricter := hash(t, control.Config{Points: map[control.Point]control.PointConfig{control.PathReviewer: {Mode: control.ModeActive, MinConfidence: threshold(0.99)}}})
 	if stricter == active {
@@ -385,7 +380,7 @@ func TestDecideMapsOutcomesAndAppliesThreshold(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			server := newSystemOneServer(t, test.status, test.body)
-			service, err := control.New(control.Config{Endpoint: server.endpoint(), Model: "nimble", Mode: control.ModeShadow}, identity)
+			service, err := control.New(control.Config{Endpoint: server.endpoint(), Model: "nimble", Mode: control.ModeActive}, identity)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -404,7 +399,7 @@ func TestDecideRedactsContextAndSkipsOffPoints(t *testing.T) {
 	server := newSystemOneServer(t, http.StatusOK, noulBody("0.9"))
 	service, err := control.New(control.Config{
 		Endpoint: server.endpoint(), Model: "nimble",
-		Points: map[control.Point]control.PointConfig{control.PathReviewer: {Mode: control.ModeShadow}},
+		Points: map[control.Point]control.PointConfig{control.PathReviewer: {Mode: control.ModeActive}},
 	}, func(text string) string { return strings.ReplaceAll(text, "sk-live-secret", "[REDACTED]") })
 	if err != nil {
 		t.Fatal(err)
@@ -454,7 +449,7 @@ func TestControlDependencyBoundary(t *testing.T) {
 }
 
 func TestValidateChecksOneBlockWithoutTransport(t *testing.T) {
-	if err := (control.Config{Mode: control.ModeShadow, APIKeyEnv: "HUFU_CONTROL_TEST_UNSET_KEY"}).Validate(); err != nil {
+	if err := (control.Config{Mode: control.ModeActive, APIKeyEnv: "HUFU_CONTROL_TEST_UNSET_KEY"}).Validate(); err != nil {
 		t.Fatalf("a block without a model or a set credential is valid on its own: %v", err)
 	}
 	for _, config := range []control.Config{

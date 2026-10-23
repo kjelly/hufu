@@ -966,9 +966,9 @@ Return only one JSON object. TOKEN must be replaced by exactly one candidate tok
 
 不要依賴自然語言 label 做 parser matching。
 
-送給 `Generator.Execute` 的完整 prompt 上限為 8000 Unicode runes。超過時不得
+送給 `Generator.Execute` 的完整 prompt 上限為 65536 Unicode runes。超過時不得
 截斷或呼叫 generator，adapter 回 `ErrorBackendFailure`；error text 只說
-`sidecar prompt exceeds 8000 runes`，不得包含 prompt。
+`sidecar prompt exceeds 65536 runes`，不得包含 prompt。
 
 ### 17.2 Mapping
 
@@ -1118,7 +1118,7 @@ Request mapping：
   integer range（`Min == Max`；Ollama 對只有一個 criterion 的 choice 回 HTTP
   400），以及 encoded request body 超過 64 KiB（hufu 自己的上限，非 provider
   文件規定）。不得在本地自行決定，也不得補假候選。錯誤類型與 sidecar 超過
-  prompt 上限（8000 runes）時相同；兩者的上限數值不同。因為這個錯誤類型會觸發
+  prompt 上限（65536 runes）時相同；兩者的上限數值不同。因為這個錯誤類型會觸發
   fallback，Go caller 自行設定的 fallback 仍可接手。
 
 Response：
@@ -1160,7 +1160,7 @@ CLI 的 flags、registry 與 fallback 規則見 §42.2、§46、§47、§52；CL
 
 > Phase 5（§58）與 Phase 6（§59）已取代本節的設定限制：team.yaml 的
 > `decision-primitives:`，以及 hufu.yaml／team.yaml 的 `control-decisions:` 與其
-> `off|shadow|active` 模式，都是允許的設定。本節其餘內容仍描述 standalone CLI
+> `off|active` 模式，都是允許的設定；`shadow` 已退役。本節其餘內容仍描述 standalone CLI
 > 與 Go caller。
 
 MVP 只有兩個明確的建構面：
@@ -2923,7 +2923,7 @@ contract 與 policy：
    與 per-entry call limit；agent 僅能提交 catalog name/context。
 2. worker 需 catalog agent grant **以及** frontmatter 明訂工具；`all` 不授權。
    coordinator 需 catalog 的 `coordinator` grant。中央 phase/allowlist/denylist
-   仍生效；no-net/force-mcp 禁止工具，result-only repair 不取得它。
+   仍生效；force-mcp 禁止此工具，result-only repair 不取得它。no-net 限制工具／子程序的網路能力，但允許受信任模型通道及 System One 推論。
 3. tool 提供 `decided` / `abstained` 與原有 receipt；technical error 分離。
    不自動 dispatch、approve、retry、finalize 或執行 action。
 4. team 版支援 systemone/sidecar/rule;rule 永遠 abstain,fallback 必須明訂。
@@ -2960,43 +2960,41 @@ contract 與 policy：
 
 §22 DecisionEngine 邊界、§26 pure decision surface 與 §34 anti-patterns 不變。
 
-決策點與語意（問題文字、選項對應、context key 與安全結果都是 Go 常數，
-spec ID 為 `hufu.<point>`、version `v1`；team 設定不能改變問題）：
+上述 control API 保留舊事件的解析及配置相容性。Production runtime 已遷移至
+共用 primitive catalog：agent、closed ask_user、path、guard 的問題仍由各 owning
+module 宣告，模型不能指定 catalog 或授權動作。模式、容量、失敗策略與新投影以
+[Runtime control decisions](../reference/control-decisions.md) 為準。
+舊 shadow／active 雙路徑的實作紀錄保留於
+[歷史計畫](../archive/implementation-plans/decision-primitive-control-decisions.md)，
+不再代表可執行的新配置。
 
-| Point | Kind | 低信心（abstained）時 |
-|---|---|---|
-| `agent-matcher` | choice（2–21 個 worker） | fail closed，要求明確指定 agent |
-| `ask-user` | choice（2–21 個選項，只限 `single_choice`） | 通知需要人類，請 agent 自行判斷；不猜第一個選項 |
-| `path-reviewer` | boolean（是否真的存取檔案） | 保留路徑，照常走 consent |
-| `guard-reviewer` | boolean（是否符合所有 guard rule） | deny |
+## 共用決策推論設定與 runtime 接入
 
-規則：
+`decision-runtime` 可設定於全域、專案 `hufu.yaml` 或 `team.yaml`：
 
-1. backend 預設為 `systemone`;2026-10-02 起可設 `backend: sidecar`,改用 run 的
-   sidecar model。sidecar 沒有信心值,active 時採用每個格式正確的回答，不套門檻。
-   沒有 `rule` control backend。
-2. 模式為 `off | shadow | active`，預設 `off`。`off` 時不送 request、不寫事件、
-   不改 policy snapshot，行為與先前完全相同。
-3. `shadow` 與既有 sidecar 路徑並行執行，回傳既有結果，只記錄兩者是否一致。
-4. `active` 時，decided 且達門檻才採用 systemone；技術錯誤（含 unavailable、
-   timeout、invalid output）一律退回既有路徑，只有成功的 abstention 才採用上表
-   的安全結果。因此 active 的可用性不低於 `off`。
-5. 每次 shadow/active 呼叫寫一筆 `control_decision_observed` durable event，
-   只含 point、mode、套用來源、status、編碼後的值（`true`/`false` 或 0-based
-   候選索引）、raw confidence、error code、duration 與既有結果；不得包含問題、
-   命令、路徑、tool arguments、選項文字、goal、endpoint 或 credential。
-6. 送出前每個 context 字串都經過 `utils.RedactSecrets`。
-7. 只有 active point 的 transport、timeout、credential revision 與門檻會寫入
-   `ExecutionPolicySnapshot.ControlDecisionHash`（omitempty）；active 設定漂移時
-   resume fail closed，shadow 漂移不影響 resume。
-8. `control-decisions:` 可寫在 hufu.yaml 與 team.yaml；每個欄位依 team → hufu.yaml
-   → 預設解析。
-9. confidence 維持 `raw`，不宣稱 calibration。
+```yaml
+decision-runtime:
+  backend: systemone
+  systemone:
+    model: ollama/clef:cloud
+    endpoint: http://127.0.0.1:11434/v1/systemone
+    timeout: 60s
+    # api-key-env: SYSTEMONE_API_KEY
+```
 
-分層：`internal/decisionrt/control` 持有設定、驗證、固定 spec 與 hash，不得依賴
-`internal/team`、`internal/agent`、`internal/sidecar` 或 `cmd/hufu`；mode、
-shadow 協調、事件、snapshot 與 report 屬 `internal/team`。
+按欄位合併，entry 明訂值 > team > project > global > 既有預設。
+System One 必須有模型且 endpoint 實際支援該協定；模型名稱不決定協定。
+缺少必要設定直接失敗，不改用 sidecar。選擇 sidecar 時不繼承 System One
+模型、端點、憑證及 timeout。一般文字生成的 sidecar-model 不受此區塊覆寫。
 
-設定、觀測與 `hufu inspect control-decisions` 見
-[Runtime control decisions](../reference/control-decisions.md)；實作計畫見
-[DecisionPrimitive control decisions implementation record](../archive/implementation-plans/decision-primitive-control-decisions.md)。
+Catalog entry 可省略推論欄位，仍須自行宣告 question、options、inputs、agents
+與 max-calls。共用設定不能改寫題目、授權或預算。
+Resolved transport、憑證 revision 與 policy hash 在推論前綁定；改變設定的
+session 必須通過既有 snapshot drift 檢查。診斷不輸出憑證值。
+
+Runtime 的封閉語意選擇統一使用 primitive；固定列由 runtime 注入決策欄位，
+其他入口直接消費 typed result。混合自由回答、摘要與開放結構抽取不屬此範圍。
+`control-decisions: off` 使用統一 sidecar primitive 路徑；`active` 使用有效
+backend 並在失敗時採原入口安全策略；`shadow` 已退役，配置載入會拒絕雙重推論。
+舊 control events 仍可讀。詳細入口、額外呼叫與相容性見
+[實作清單](../implementation-plans/fixed-collection-decisions.md)。

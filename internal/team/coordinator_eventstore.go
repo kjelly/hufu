@@ -732,6 +732,13 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) error {
 // Lifecycle snapshots and action observations share a lock through durable
 // append and live publication, so neither can overwrite the other's projection.
 func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, expected, next TaskStatus, detail, output string, metadata map[string]interface{}) error {
+	return c.commitTaskTransition(ctx, taskID, &expected, next, detail, output, metadata)
+}
+
+// A nil expected status selects the current state inside the projection lock.
+// Explicit callers retain compare-and-swap semantics; cancellation and worker
+// finalization using FromCurrent cannot race between reading and committing.
+func (c *Coordinator) commitTaskTransition(ctx context.Context, taskID string, expected *TaskStatus, next TaskStatus, detail, output string, metadata map[string]interface{}) error {
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return fmt.Errorf("commit task transition: task tracker is unavailable")
 	}
@@ -749,8 +756,8 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 	if current == nil {
 		return fmt.Errorf("commit task transition: task %s not found", taskID)
 	}
-	if current.Status != expected {
-		return fmt.Errorf("commit task transition: task %s expected %s, got %s", taskID, expected, current.Status)
+	if expected != nil && current.Status != *expected {
+		return fmt.Errorf("commit task transition: task %s expected %s, got %s", taskID, *expected, current.Status)
 	}
 	resetForResume, _ := metadata["reset_for_resume"].(bool)
 	if resetForResume && next != TaskPending {
@@ -1390,14 +1397,7 @@ func (c *Coordinator) hasDurableEventJournal() bool {
 }
 
 func (c *Coordinator) commitTaskTransitionFromCurrent(ctx context.Context, taskID string, next TaskStatus, detail, output string, metadata map[string]interface{}) error {
-	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
-		return fmt.Errorf("commit task transition: task tracker is unavailable")
-	}
-	item := todoItemByID(c.taskTracker.TodoList().Items(), taskID)
-	if item == nil {
-		return fmt.Errorf("commit task transition: task %s not found", taskID)
-	}
-	return c.CommitTaskTransition(ctx, taskID, item.Status, next, detail, output, metadata)
+	return c.commitTaskTransition(ctx, taskID, nil, next, detail, output, metadata)
 }
 
 func todoItemByID(items []*TodoItem, id string) *TodoItem {

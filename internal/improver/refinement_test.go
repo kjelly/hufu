@@ -2,6 +2,7 @@ package improver
 
 import (
 	json "encoding/json/v2"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -79,7 +80,13 @@ func testRefinementPrepared(t *testing.T, composition string, retry bool) Prepar
 
 func runRefinementTest(t *testing.T, prepared Prepared) (*Experiment, ExperimentReport) {
 	t.Helper()
-	workspace, err := OpenProbeWorkspace(filepath.Join(t.TempDir(), "refine"), false)
+	// Keep durable fixture I/O under TMPDIR, independently of Go build scratch.
+	root, err := os.MkdirTemp("", "hufu-refinement-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	workspace, err := OpenProbeWorkspace(filepath.Join(root, "refine"), false)
 	if err != nil {
 		t.Fatal(err)
 	}

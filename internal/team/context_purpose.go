@@ -32,6 +32,7 @@ var contextPurposeRegistry = map[string]ContextPurposePolicy{
 	"request_acceptance_evidence": {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false},
 	"run_input_resolver":          {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "deterministic_resolver"},
 	"plan_reviewer":               {Trigger: ContextTriggerPlanReview, FallbackAllowed: false, FallbackOutcome: "deny"},
+	"judge_graft_generation":      {Trigger: ContextTriggerJudge, FallbackAllowed: false, FallbackOutcome: "deny"},
 	"judge":                       {Trigger: ContextTriggerJudge, FallbackAllowed: true, FallbackOutcome: "deterministic_judge"},
 	"decision-reference-evidence": {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "deny"},
 	// Every decision stage runs on the judge sidecar and none of them may

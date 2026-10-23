@@ -207,15 +207,15 @@ func TestSubmitResultUnionReportsTheRejectedObjectMember(t *testing.T) {
 	}
 }
 
-func TestSubmitResultRepairShowsOptionalQuestionObjectExample(t *testing.T) {
+func TestSubmitResultRepairShowsOptionalQuestionEntryExample(t *testing.T) {
 	info := submitResultToolInfo(taskResultSubmissionContract{})
-	input := `{"status":"success","summary":"review","open_questions":[{"$text":"private question"}]}`
+	input := `{"status":"success","summary":"review","open_questions":[{"detail":"private question"}]}`
 	violation := validateToolArguments(input, info)
-	if violation == nil || violation.Path != "$.open_questions[0].question" {
-		t.Fatalf("violation = %v, want the missing question field", violation)
+	if violation == nil || violation.Path != "$.open_questions[0]" || violation.Expected != "exactly one declared schema" {
+		t.Fatalf("violation = %v, want a rejected question entry without guessing an object branch", violation)
 	}
 	feedback := buildToolSchemaValidationPrompt(submitResultToolName, violation, info)
-	for _, want := range []string{`Example at $.open_questions[0] ONLY: {"question":"value"}`, "Valid example:"} {
+	for _, want := range []string{`Example at $.open_questions[0] ONLY: "value"`, "Valid example:"} {
 		if !strings.Contains(feedback, want) {
 			t.Fatalf("repair feedback lacks %q: %s", want, feedback)
 		}

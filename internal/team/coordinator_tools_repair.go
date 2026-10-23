@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -490,6 +491,15 @@ func validateStringSchema(value string, schema map[string]any, path string) *too
 	}
 	if maximum, ok := schemaInt(schema["maxLength"]); ok && length > maximum {
 		return &toolArgumentSchemaError{Path: path, Expected: fmt.Sprintf("string with at most %d runes", maximum), Actual: fmt.Sprintf("string with %d runes", length)}
+	}
+	if pattern, ok := schema["pattern"].(string); ok {
+		matched, err := regexp.MatchString(pattern, value)
+		if err != nil {
+			return &toolArgumentSchemaError{Path: path, Expected: "valid schema pattern", Actual: "invalid schema", Detail: err.Error()}
+		}
+		if !matched {
+			return &toolArgumentSchemaError{Path: path, Expected: "string matching the declared pattern", Actual: "non-matching string"}
+		}
 	}
 	return nil
 }

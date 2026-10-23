@@ -13,10 +13,10 @@
       }
     },
     {
-      "tool_call": {
-        "name": "reject_plan",
-        "arguments": "{\"todo_id\": \"1\", \"reason\": \"the plan never reads the input\"}"
-      }
+      "match": {
+        "contains": "runtime_plan_review"
+      },
+      "content": "{\"token\":\"A1\"}"
     },
     {
       "match": {
@@ -28,7 +28,9 @@
       }
     },
     {
-      "match": {"contains": "FINISHED:"},
+      "match": {
+        "contains": "FINISHED:"
+      },
       "forbidden": true,
       "content": "unexpected provider call after finish"
     }

@@ -82,7 +82,7 @@ func (c *Coordinator) PrepareContextPreflightContext(parent context.Context) err
 	// remains read-only: defer freezing until Run admits the first task. When a
 	// sidecar is configured, however, its provider boundary must use the same
 	// durably frozen policy as worker execution.
-	if c.sidecarModel != "" {
+	if c.sidecarModel != "" || c.session.GlobalDecisionRuntime.Backend != "" || c.session.Config.DecisionRuntime.Backend != "" {
 		if err := c.checkRunAdmission(); err != nil {
 			return fmt.Errorf("context preflight execution policy admission failed: %w", err)
 		}
@@ -100,7 +100,7 @@ func (c *Coordinator) PrepareContextPreflightContext(parent context.Context) err
 	// scoped provider owner before callers can resolve the shared sidecar. Teams
 	// without a configured sidecar do not need to start a provider boundary and
 	// retain the deterministic fallback paths used by the CLI.
-	if c.sidecarModel != "" {
+	if c.sidecarModel != "" || c.session.GlobalDecisionRuntime.Backend != "" || c.session.Config.DecisionRuntime.Backend != "" {
 		invocationCtx := c.beginContextPreflight(parent, lease)
 		if err := c.startProviderExecutionBoundary(invocationCtx); err != nil {
 			c.CloseContextPreflight()

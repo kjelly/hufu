@@ -21,7 +21,7 @@ const hufuCodeReviewReportFixture = `{
 			"record":{"kind":"review","review_revision":"head","workset_key":"unit-0000","lens":"general","findings":[],"gaps":[],"invariant_assessments":[],"reference_assessments":[]}}]
 	}`
 
-func TestHufuCodeReviewReportRendersOptionalInvariantEvidence(t *testing.T) {
+func TestHufuCodeReviewReportRendersValidInvariantStateEvidence(t *testing.T) {
 	contract, err := compileResultContractSchema(hufuCodeReviewTeamDir(t), "schemas/report-v1.json")
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +34,9 @@ func TestHufuCodeReviewReportRendersOptionalInvariantEvidence(t *testing.T) {
 					t.Fatal(err)
 				}
 				assessment := map[string]any{"invariant_id": "retained-invariant", "status": status, "summary": "retained assessment"}
+				if status == "violated" {
+					assessment["finding_index"] = 0
+				}
 				switch evidence {
 				case "empty":
 					assessment["missing_evidence"] = []any{}
@@ -44,14 +47,15 @@ func TestHufuCodeReviewReportRendersOptionalInvariantEvidence(t *testing.T) {
 				}
 				source := value.(map[string]any)["input_review"].([]any)[0].(map[string]any)["record"].(map[string]any)
 				source["invariant_assessments"] = []any{assessment}
+				valid := evidence != "null" && ((status == "unknown") == (evidence == "present"))
 				if err := contract.schema.Validate(value); err != nil {
-					if evidence == "null" {
+					if !valid {
 						return
 					}
 					t.Fatal(err)
 				}
-				if evidence == "null" {
-					t.Fatal("null optional array unexpectedly passed the schema")
+				if !valid {
+					t.Fatal("invalid invariant state evidence passed the schema")
 				}
 				var report bytes.Buffer
 				if err := contract.finalReport.Execute(&report, value); err != nil {

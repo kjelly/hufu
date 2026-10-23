@@ -70,6 +70,7 @@ func newDecisionE2E(t *testing.T) *decisionE2E {
 
 	journal := &memoryJournal{}
 	c := &Coordinator{
+		decisionPrimitiveGate:   make(chan struct{}, 1),
 		session:                 session,
 		projectDir:              dir,
 		sessionTime:             time.Now(),

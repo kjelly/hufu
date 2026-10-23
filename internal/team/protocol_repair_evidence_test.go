@@ -290,33 +290,47 @@ func TestProtocolRepairRestatesTheRejectedSubmission(t *testing.T) {
 	}
 }
 
-func TestDirectTaskRecoveryReleasesTaskDerivedWrapUp(t *testing.T) {
-	c, item := newEvidenceRepairCoordinator(t, "direct-recovery-wrap-up")
-	c.session.Config.Reliability = defaultReliabilityLimits()
-	c.session.Config.Reliability.MaxSameFailureFingerprint = 1
-	workerCalls := 0
-	c.workerAgentOverride = &mockAgent{streamFunc: func(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
-		workerCalls++
-		if workerCalls == 1 {
-			return nil, errors.New("stream transport error: unexpected EOF")
-		}
-		c.storeSubmittedTaskResult(item.ID, &TaskResult{
-			TaskID: item.ID, Agent: "reviewer", Status: TaskResultStatusSuccess,
-			Summary: "Review completed on the permitted retry", Source: "submitted",
+func TestDirectTaskRecoveryHonorsPersistedRetryLimits(t *testing.T) {
+	for _, limit := range []int{1, 2} {
+		t.Run(fmt.Sprintf("fingerprint_limit_%d", limit), func(t *testing.T) {
+			c, item := newEvidenceRepairCoordinator(t, "direct-recovery-wrap-up")
+			c.session.Config.Reliability = defaultReliabilityLimits()
+			c.session.Config.Reliability.MaxSameFailureFingerprint = limit
+			workerCalls := 0
+			c.workerAgentOverride = &mockAgent{streamFunc: func(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+				workerCalls++
+				if workerCalls == 1 {
+					return nil, errors.New("stream transport error: unexpected EOF")
+				}
+				c.storeSubmittedTaskResult(item.ID, &TaskResult{
+					TaskID: item.ID, Agent: "reviewer", Status: TaskResultStatusSuccess,
+					Summary: "Review completed on the permitted retry", Source: "submitted",
+				})
+				return &fantasy.AgentResult{}, nil
+			}}
+			_, err := c.executeTask(withTestProtocolRepairInvocationContext(t.Context()), TaskDef{
+				Agent: "reviewer", Goal: "review", SideEffect: SideEffectNone, Recovery: RecoveryRetry,
+				Execution: ExecutionContract{RequiresResult: true},
+			}, item.ID)
+			if limit == 1 {
+				if err == nil || workerCalls != 1 || c.todoItemByID(item.ID).Status != TaskBlocked || !c.IsWrapUp() {
+					t.Fatalf("hard block was bypassed: calls=%d status=%s wrap_up=%t err=%v", workerCalls, c.todoItemByID(item.ID).Status, c.IsWrapUp(), err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if workerCalls != 2 || c.todoItemByID(item.ID).Status != TaskDone {
+				t.Fatalf("calls/status = %d/%s, want 2/done", workerCalls, c.todoItemByID(item.ID).Status)
+			}
+			c.metricsMu.RLock()
+			failures := len(c.antiThrashing.Counts)
+			c.metricsMu.RUnlock()
+			if c.IsWrapUp() || failures != 0 {
+				t.Fatalf("recovered task retained a stop or failure count: wrap_up=%t failures=%d", c.IsWrapUp(), failures)
+			}
 		})
-		return &fantasy.AgentResult{}, nil
-	}}
-	if _, err := c.executeTask(withTestProtocolRepairInvocationContext(t.Context()), TaskDef{
-		Agent: "reviewer", Goal: "review", SideEffect: SideEffectNone, Recovery: RecoveryRetry,
-		Execution: ExecutionContract{RequiresResult: true},
-	}, item.ID); err != nil {
-		t.Fatal(err)
-	}
-	if workerCalls != 2 || c.todoItemByID(item.ID).Status != TaskDone {
-		t.Fatalf("calls/status = %d/%s, want 2/done", workerCalls, c.todoItemByID(item.ID).Status)
-	}
-	if c.IsWrapUp() {
-		t.Fatal("recovered task left the coordinator refusing required follow-up work")
 	}
 }
 

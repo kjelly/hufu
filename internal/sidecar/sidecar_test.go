@@ -2,6 +2,7 @@ package sidecar
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/decisionrt"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
@@ -176,14 +178,14 @@ func TestDecodeTeamSelectionRequiresStrictSchema(t *testing.T) {
 	}
 }
 
-func TestMatchTeamDeclinesLowConfidenceSelection(t *testing.T) {
-	s := &Sidecar{agent: &callCapturingAgent{response: `{"team":"docs","confidence":0.59,"reason":"ambiguous"}`}}
-	teamName, err := s.MatchTeam(t.Context(), "write something", []TeamSummary{{Name: "docs"}, {Name: "infra"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if teamName != "" {
-		t.Fatalf("low-confidence team selection = %q, want unresolved", teamName)
+func TestMatchTeamDeclinesUnsupportedSelection(t *testing.T) {
+	s := &Sidecar{}
+	s.SetDecisionExecutor(func(context.Context, DecisionInvocation) (decisionrt.Result, error) {
+		return decisionrt.Result{Status: decisionrt.StatusDecided, Value: decisionrt.Value{Choice: "none"}}, nil
+	})
+	name, err := s.MatchTeam(t.Context(), "ambiguous", []TeamSummary{{Name: "docs"}, {Name: "infra"}})
+	if err != nil || name != "" {
+		t.Fatalf("selection=%q error=%v", name, err)
 	}
 }
 
@@ -485,6 +487,25 @@ func TestExecuteProfileOverridesDefault(t *testing.T) {
 	}
 }
 
+func TestDecisionProfilePreservesEvidenceAndBoundsInput(t *testing.T) {
+	capture := &callCapturingAgent{response: `{"token":"A0"}`}
+	s := &Sidecar{agent: capture}
+	prompt := strings.Repeat("e", DecisionProfile.InputRuneLimit())
+	if _, err := s.ExecuteProfile(t.Context(), prompt, DecisionProfile); err != nil {
+		t.Fatal(err)
+	}
+	if capture.captured.Prompt != prompt {
+		t.Fatal("decision evidence was changed")
+	}
+	capture.captured = fantasy.AgentCall{}
+	if _, err := s.ExecuteProfile(t.Context(), prompt+"x", DecisionProfile); err == nil {
+		t.Fatal("oversized decision context accepted")
+	}
+	if capture.captured.MaxOutputTokens != nil {
+		t.Fatal("oversized context reached provider")
+	}
+}
+
 func TestExecuteProfileRejectsTokenLimitedStructuredOutput(t *testing.T) {
 	for _, text := range []string{`{"checks":`, `{"checks":[]}`, ""} {
 		t.Run(text, func(t *testing.T) {
@@ -527,98 +548,48 @@ func (m *mockAgent) Generate(ctx context.Context, call interface{}) (interface{}
 	return m, m.err
 }
 
-func TestMatchSkillsJSON(t *testing.T) {
-	tests := []struct {
-		name     string
-		response string
-		want     []string
-		wantErr  bool
-	}{
-		{
-			name:     "valid structured selection",
-			response: `{"skills":["code-reviewer","git-commit"],"confidence":0.9,"reason":"both are required"}`,
-			want:     []string{"code-reviewer", "git-commit"},
-		},
-		{
-			name:     "JSON in markdown code block",
-			response: "```json\n{\"skills\":[\"code-reviewer\"],\"confidence\":0.8,\"reason\":\"review requested\"}\n```",
-			want:     []string{"code-reviewer"},
-		},
-		{
-			name:     "low confidence abstains",
-			response: `{"skills":["git-commit"],"confidence":0.4,"reason":"uncertain"}`,
-		},
-		{
-			name:     "empty structured selection",
-			response: `{"skills":[],"confidence":0.9,"reason":"none required"}`,
-		},
-		{
-			name:     "invalid JSON",
-			response: `not JSON`,
-			wantErr:  true,
-		},
-		{
-			name:     "unknown skill rejected",
-			response: `{"skills":["unknown-skill"],"confidence":0.9,"reason":"selected"}`,
-			wantErr:  true,
-		},
-		{
-			name:     "missing reason rejected",
-			response: `{"skills":["code-reviewer"],"confidence":0.9,"reason":""}`,
-			wantErr:  true,
-		},
+func TestMatchSkillsUsesOneTypedDecisionPerSkill(t *testing.T) {
+	skills := []SkillSummary{{Name: "review", Description: strings.Repeat("evidence", 100)}, {Name: "commit", Description: "Commit changes"}}
+	calls := 0
+	s := &Sidecar{}
+	s.SetDecisionExecutor(func(_ context.Context, in DecisionInvocation) (decisionrt.Result, error) {
+		calls++
+		raw, _ := json.Marshal(in.Input)
+		if !strings.Contains(string(raw), skills[0].Description) {
+			t.Fatal("candidate description truncated")
+		}
+		choice := "relevant"
+		if calls == 2 {
+			choice = "irrelevant"
+		}
+		return decisionrt.Result{Status: decisionrt.StatusDecided, Value: decisionrt.Value{Choice: choice}}, nil
+	})
+	names, err := s.MatchSkills(t.Context(), "review", skills)
+	if err != nil || calls != 2 || len(names) != 1 || names[0] != "review" {
+		t.Fatalf("names=%v calls=%d error=%v", names, calls, err)
 	}
-	skills := []SkillSummary{
-		{Name: "code-reviewer", Description: "Review code"},
-		{Name: "git-commit", Description: "Commit changes"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := &Sidecar{agent: &callCapturingAgent{response: tt.response}}
-			names, err := s.MatchSkills(t.Context(), "review and commit this change", skills)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("MatchSkills() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if len(names) != len(tt.want) {
-				t.Errorf("got %v, want %v", names, tt.want)
-				return
-			}
-			for i, name := range names {
-				if name != tt.want[i] {
-					t.Errorf("names[%d] = %q, want %q", i, name, tt.want[i])
-				}
-			}
-		})
+	s.SetDecisionExecutor(func(context.Context, DecisionInvocation) (decisionrt.Result, error) {
+		return decisionrt.Result{Status: decisionrt.StatusAbstained}, nil
+	})
+	if _, err := s.MatchSkills(t.Context(), "review", skills); err == nil {
+		t.Fatal("abstention accepted")
 	}
 }
 
-func TestSelectAgentRequiresAuthorizedHighConfidenceSelection(t *testing.T) {
-	candidates := []TeamSummary{{Name: "reviewer", Description: "review code"}, {Name: "writer", Description: "write docs"}}
-	tests := []struct {
-		name     string
-		response string
-		want     string
-		wantErr  bool
-	}{
-		{name: "authorized", response: `{"agent":"reviewer","confidence":0.9,"reason":"review task"}`, want: "reviewer"},
-		{name: "low confidence", response: `{"agent":"reviewer","confidence":0.4,"reason":"uncertain"}`},
-		{name: "explicit abstention", response: `{"agent":"","confidence":0.9,"reason":"insufficient evidence"}`},
-		{name: "unknown agent", response: `{"agent":"invented","confidence":0.9,"reason":"selected"}`, wantErr: true},
-		{name: "invalid schema", response: `{"agent":"reviewer","confidence":0.9,"reason":"selected","extra":true}`, wantErr: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := &Sidecar{agent: &callCapturingAgent{response: tt.response}}
-			selection, err := s.SelectAgent(t.Context(), "review this change", candidates)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("SelectAgent() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if selection.Agent != tt.want {
-				t.Fatalf("SelectAgent() agent = %q, want %q", selection.Agent, tt.want)
-			}
+func TestSelectAgentRequiresAuthorizedTypedSelection(t *testing.T) {
+	candidates := []TeamSummary{{Name: "reviewer"}, {Name: "writer"}}
+	for _, test := range []struct {
+		choice, want string
+		wantErr      bool
+	}{{"candidate_0", "reviewer", false}, {"none", "", false}, {"invented", "", true}} {
+		s := &Sidecar{}
+		s.SetDecisionExecutor(func(context.Context, DecisionInvocation) (decisionrt.Result, error) {
+			return decisionrt.Result{Status: decisionrt.StatusDecided, Value: decisionrt.Value{Choice: test.choice}}, nil
 		})
+		selection, err := s.SelectAgent(t.Context(), "review", candidates)
+		if (err != nil) != test.wantErr || selection.Agent != test.want {
+			t.Fatalf("selection=%#v error=%v", selection, err)
+		}
 	}
 }
 

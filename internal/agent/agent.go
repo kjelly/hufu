@@ -21,6 +21,7 @@ import (
 	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/decisionrt/control"
+	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/providerintrospection"
@@ -428,6 +429,7 @@ type TeamConfig struct {
 	Decision DecisionConfig
 	// DecisionPrimitives are explicitly granted, bounded helper decisions;
 	// they do not replace the higher-level DecisionEngine.
+	DecisionRuntime    settings.Config
 	DecisionPrimitives map[string]catalog.Entry
 	// ControlDecisions is the team's control-decisions block for hufu's own
 	// runtime decision points (docs/architecture/decision-primitive.md §59).

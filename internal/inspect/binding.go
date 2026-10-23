@@ -153,6 +153,23 @@ func selectBindingRun(lineage Lineage, request operatorpkg.BindingRequest, sessi
 		if active != "" && slices.Contains(runs, active) {
 			return active, "active_binding", nil
 		}
+		if active == "" && len(runs) > 1 {
+			// Startup housekeeping can emit a separate run identity before the
+			// invocation's input snapshot exists. A single run_started on this
+			// branch identifies the invocation without guessing from event order
+			// or treating an inherited ancestor as the active run.
+			var started []string
+			for _, indexed := range lineage.Events {
+				if indexed.Event.Type == string(team.EventRunStarted) && indexed.Event.BranchID == lineage.BranchID {
+					started = appendNonEmpty(started, indexed.Event.RunID)
+				}
+			}
+			slices.Sort(started)
+			started = slices.Compact(started)
+			if len(started) == 1 {
+				return started[0], "single_candidate", nil
+			}
+		}
 	}
 	switch len(runs) {
 	case 0:

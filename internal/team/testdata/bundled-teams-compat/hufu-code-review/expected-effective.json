@@ -80,9 +80,23 @@
           "type": "task_output_assert",
           "assertions": [
             {
-              "pointer": "/completed",
+              "pointer": "/exit_code",
+              "op": "minimum",
+              "value": 0
+            },
+            {
+              "pointer": "/timed_out",
               "op": "equals",
-              "value": true
+              "value": false
+            },
+            {
+              "pointer": "/output_truncated",
+              "op": "equals",
+              "value": false
+            },
+            {
+              "pointer": "/artifact_id",
+              "op": "non_empty"
             }
           ],
           "source_task": "verify-targeted-go-tests",
@@ -202,15 +216,29 @@
           }
         },
         {
-          "id": "targeted-go-tests-completed",
+          "id": "targeted-go-tests-executed",
           "required": true,
           "verify": {
             "type": "task_output_assert",
             "assertions": [
               {
-                "pointer": "/completed",
+                "pointer": "/exit_code",
+                "op": "minimum",
+                "value": 0
+              },
+              {
+                "pointer": "/timed_out",
                 "op": "equals",
-                "value": true
+                "value": false
+              },
+              {
+                "pointer": "/output_truncated",
+                "op": "equals",
+                "value": false
+              },
+              {
+                "pointer": "/artifact_id",
+                "op": "non_empty"
               }
             ],
             "source_task": "verify-targeted-go-tests",
@@ -239,7 +267,7 @@
           "depends_on": [
             "review-scope-attested",
             "test-scope-attested",
-            "targeted-go-tests-completed",
+            "targeted-go-tests-executed",
             "documentation-references-verified"
           ],
           "verify": {
@@ -314,7 +342,7 @@
           "depends_on": [
             "review-handoffs-inventoried",
             "test-scope-attested",
-            "targeted-go-tests-completed"
+            "targeted-go-tests-executed"
           ],
           "verify": {
             "type": "task_output_assert",
@@ -399,11 +427,11 @@
     {
       "name": "critic",
       "role": "worker",
-      "tools": "view",
+      "tools": "view,decision_primitive",
       "side_effect": "none",
       "recovery": "retry",
       "max_retries": 1,
-      "max_steps": 20
+      "max_steps": 120
     },
     {
       "name": "documentation-reviewer",

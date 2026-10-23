@@ -15,6 +15,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/decisionrt"
 	"github.com/kjelly/hufu/internal/sidecar"
 )
 
@@ -669,11 +670,8 @@ func TestExecuteTaskAdversarialVerifyUsesCanonicalSubmittedResult(t *testing.T) 
 			return
 		}
 		skepticRequest = string(body)
-		w.Header().Set("Content-Type", "text/event-stream")
-		vote := `{"refuted":false,"reason":"canonical typed result accepted"}`
-		fmt.Fprintf(w, "data: {\"id\":\"skeptic\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":%q,\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":null}]}\n\n", modelID, vote)
-		fmt.Fprint(w, "data: {\"id\":\"skeptic\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"skeptic\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
-		fmt.Fprint(w, "data: [DONE]\n\n")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":"skeptic","object":"chat.completion","model":%q,"choices":[{"index":0,"message":{"role":"assistant","content":"{\"token\":\"A1\"}"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":1}}`, modelID)
 	}))
 	defer server.Close()
 	provider, err := agent.NewOpenAICompatibleProvider(server.URL, "", "local")
@@ -703,7 +701,20 @@ func TestExecuteTaskAdversarialVerifyUsesCanonicalSubmittedResult(t *testing.T) 
 		sidecarInst:    skeptic,
 		sidecarInit:    true,
 	}
-	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "verify typed handoff"}})[0]
+	store, err := NewEventStore(workspace, c.executionRunID, "skeptic-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	c.eventStore = store
+	c.decisionPrimitiveGate = make(chan struct{}, 1)
+	skeptic.SetDecisionExecutor(func(ctx context.Context, invocation sidecar.DecisionInvocation) (decisionrt.Result, error) {
+		return c.runRuntimeChoice(ctx, skeptic, invocation)
+	})
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "verify typed handoff", Goal: "verify typed handoff", AdversarialVerify: 1, Execution: ExecutionContract{RequiresResult: true}}})[0]
+	if _, err := c.admitTaskOccurrence(t.Context(), item, item.ID, 1); err != nil {
+		t.Fatal(err)
+	}
 	const fallback = "Now let me continue with the remaining work."
 	const typedSummary = "typed summary is the authoritative skeptic claim"
 	c.workerAgentOverride = &submittingWorkerAgent{text: fallback, onSubmit: func() {

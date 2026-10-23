@@ -52,6 +52,7 @@ const (
 	EventModelProfileResolved                    EventType = "model_profile_resolved"
 	EventExecutionPolicySnapshot                 EventType = "execution_policy_snapshot"
 	EventRunInputsResolved                       EventType = "run_inputs_resolved"
+	EventDecisionPrimitiveReused                 EventType = "decision_primitive_reused"
 	EventDecisionPrimitiveStarted                EventType = "decision_primitive_started"
 	EventDecisionPrimitiveSettled                EventType = "decision_primitive_settled"
 	EventDecisionAdmitted                        EventType = "decision_admitted"
@@ -129,7 +130,7 @@ func (e EventType) String() string { return string(e) }
 func IsKnownEventType(eventType string) bool {
 	switch EventType(eventType) {
 	case EventRunStarted, EventRunFinished, EventWrapUpPhase, EventRunCancellationRequested,
-		EventDecisionPrimitiveStarted, EventDecisionPrimitiveSettled, EventControlDecisionObserved, EventRecoveryChangeObserved,
+		EventDecisionArtifactObserved, EventArtifactEvidenceObserved, EventDecisionPrimitiveStarted, EventDecisionPrimitiveSettled, EventDecisionPrimitiveReused, EventControlDecisionObserved, EventRecoveryChangeObserved,
 		EventStrategyChangeEvaluated, EventStrategyChangeRejected,
 		EventUserMessageAdded, EventAssistantMessageAdded,
 		EventTaskCreated, EventTaskPlanned, EventTaskStarted, EventTaskVerifying, EventTaskPaused, EventTaskCompleted,

@@ -35,7 +35,7 @@ func runProcessContract(t *testing.T, binary string, args ...string) (int, []byt
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 
-	home := t.TempDir()
+	home := processContractTempDir(t)
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = home
 	cmd.Env = []string{
@@ -259,7 +259,7 @@ func TestCLIProcessExitContract(t *testing.T) {
 			t.Fatalf("auxiliary fixture response = %#v, want one stop completion", auxiliaryCompletion)
 		}
 
-		teamRoot := t.TempDir()
+		teamRoot := processContractTempDir(t)
 		teamDir := filepath.Join(teamRoot, "acceptance-fixture")
 		if err := os.MkdirAll(teamDir, 0o755); err != nil {
 			t.Fatal(err)
@@ -283,7 +283,7 @@ func TestCLIProcessExitContract(t *testing.T) {
 		code, stdout, stderr := runProcessContract(t, binary,
 			"--agent-team", "acceptance-fixture",
 			"--agent-team-search-path", teamRoot,
-			"--workspace", filepath.Join(t.TempDir(), "workspace"),
+			"--workspace", filepath.Join(processContractTempDir(t), "workspace"),
 			"--provider-url", server.URL+"/v1", "--model", "test", "--output", "json",
 			"--max-rounds", "1", "--timeout", "10", "acceptance contract")
 		if code != 7 {
@@ -321,7 +321,7 @@ func TestDefaultExploratoryResponseProcessExitContract(t *testing.T) {
 		"--default", "--provider-url", server.URL + "/v1", "--model", "test", "--coordinator-model", "test",
 		"--context-window", "131072", "--max-rounds", "2", "--timeout", "10",
 	}
-	jsonArgs := append(slices.Clone(args), "--workspace", filepath.Join(t.TempDir(), "json-workspace"), "--output", "json", "answer the question")
+	jsonArgs := append(slices.Clone(args), "--workspace", filepath.Join(processContractTempDir(t), "json-workspace"), "--output", "json", "answer the question")
 	code, stdout, stderr := runProcessContract(t, binary, jsonArgs...)
 	if code != 7 {
 		t.Fatalf("JSON exit code = %d, want 7; stdout=%q stderr=%q", code, stdout, truncateContractOutput(stderr))
@@ -341,7 +341,7 @@ func TestCanonicalRunMatchesLegacyExecutionEffects(t *testing.T) {
 	server := newContractTextServer(t, &chatCalls)
 	defer server.Close()
 
-	teamRoot := t.TempDir()
+	teamRoot := processContractTempDir(t)
 	teamName := "equivalent-run"
 	teamDir := filepath.Join(teamRoot, teamName)
 	if err := os.MkdirAll(teamDir, 0o755); err != nil {
@@ -351,7 +351,7 @@ func TestCanonicalRunMatchesLegacyExecutionEffects(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(teamDir, "team.yaml"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	legacyRoot := t.TempDir()
+	legacyRoot := processContractTempDir(t)
 	legacyWorkspace := filepath.Join(legacyRoot, teamName)
 	legacyCode, legacyStdout, legacyStderr := runProcessContract(t, binary,
 		"--agent-team", teamName, "--agent-team-search-path", teamRoot,
@@ -359,7 +359,7 @@ func TestCanonicalRunMatchesLegacyExecutionEffects(t *testing.T) {
 		"--context-window", "32768", "--route", "fast", "--output", "json", "--timeout", "10", "calculate")
 	legacyCalls := chatCalls.Load()
 
-	canonicalWorkspace := filepath.Join(t.TempDir(), "exact-workspace")
+	canonicalWorkspace := filepath.Join(processContractTempDir(t), "exact-workspace")
 	canonicalCode, canonicalStdout, canonicalStderr := runProcessContract(t, binary,
 		"run", "--team", teamName, "--agent-team-search-path", teamRoot,
 		"--workspace", canonicalWorkspace, "--provider-url", server.URL+"/v1", "--model", "test",
@@ -399,7 +399,7 @@ func TestEventFormatJSONLStderrContainsOnlyStatusEvents(t *testing.T) {
 	server := newContractTextServer(t, &chatCalls)
 	defer server.Close()
 
-	teamRoot := t.TempDir()
+	teamRoot := processContractTempDir(t)
 	teamName := "jsonl-run"
 	teamDir := filepath.Join(teamRoot, teamName)
 	if err := os.MkdirAll(teamDir, 0o755); err != nil {
@@ -412,7 +412,7 @@ func TestEventFormatJSONLStderrContainsOnlyStatusEvents(t *testing.T) {
 
 	code, stdout, stderr := runProcessContract(t, binary,
 		"run", "--team", teamName, "--agent-team-search-path", teamRoot,
-		"--workspace", filepath.Join(t.TempDir(), "workspace"),
+		"--workspace", filepath.Join(processContractTempDir(t), "workspace"),
 		"--provider-url", server.URL+"/v1", "--model", "test",
 		"--context-window", "32768", "--route", "fast", "--output", "json",
 		"--event-format", "jsonl", "--timeout", "10", "--", "calculate")
@@ -572,4 +572,16 @@ func truncateContractOutput(data []byte) string {
 		return string(data)
 	}
 	return fmt.Sprintf("%s…", data[:max])
+}
+
+// processContractTempDir keeps subprocess workspaces under TMPDIR independently
+// of GOTMPDIR, which remains configured for Go compilation.
+func processContractTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "hufu-process-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }

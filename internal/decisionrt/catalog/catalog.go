@@ -16,9 +16,10 @@ import (
 
 	"github.com/kjelly/hufu/internal/decisionrt"
 	"github.com/kjelly/hufu/internal/decisionrt/backend"
+	"github.com/kjelly/hufu/internal/decisionrt/settings"
 )
 
-const DefaultEndpoint = "http://127.0.0.1:11434/v1/systemone"
+const DefaultEndpoint = settings.DefaultEndpoint
 
 // Entry defines one maintainer-owned decision. Inputs are required scalar
 // context fields; no undeclared fields or nested objects may be sent.
@@ -62,6 +63,7 @@ type boundEntry struct {
 }
 
 type Service struct {
+	transports  map[string]settings.Transport
 	entries     map[string]boundEntry
 	hash        string
 	description string
@@ -72,11 +74,14 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // New validates and freezes configuration without contacting a model. The
 // hash pins resolved credential revisions without storing the credentials.
 func New(entries map[string]Entry, opts ...ServiceOption) (*Service, error) {
-	settings := options{}
+	optsResolved := options{}
 	for _, opt := range opts {
-		opt(&settings)
+		opt(&optsResolved)
 	}
-	service := &Service{entries: make(map[string]boundEntry)}
+	if err := optsResolved.defaults.Validate(); err != nil {
+		return nil, err
+	}
+	service := &Service{entries: make(map[string]boundEntry), transports: make(map[string]settings.Transport)}
 	if len(entries) == 0 {
 		return service, nil
 	}
@@ -86,6 +91,11 @@ func New(entries map[string]Entry, opts ...ServiceOption) (*Service, error) {
 	identities := make(map[string]any, len(entries))
 	for _, name := range slices.Sorted(maps.Keys(entries)) {
 		entry := entries[name]
+		transport, err := resolveTransport(entry, optsResolved)
+		if err != nil {
+			return nil, fmt.Errorf("decision-primitives.%s: %w", name, err)
+		}
+		entry.Backend, entry.Model, entry.Endpoint, entry.APIKeyEnv, entry.Timeout = transport.Backend, transport.Model, transport.Endpoint, transport.APIKeyEnv, transport.Timeout
 		entry.Agents = slices.Clone(entry.Agents)
 		entry.Inputs = maps.Clone(entry.Inputs)
 		entry.Options = slices.Clone(entry.Options)
@@ -129,7 +139,7 @@ func New(entries map[string]Entry, opts ...ServiceOption) (*Service, error) {
 				return nil, fmt.Errorf("decision-primitives.%s: credential environment unavailable", name)
 			}
 		}
-		primary, err := settings.primary(&entry, key)
+		primary, err := optsResolved.primary(&entry, key)
 		if err != nil {
 			return nil, fmt.Errorf("decision-primitives.%s: %w", name, err)
 		}
@@ -149,6 +159,8 @@ func New(entries map[string]Entry, opts ...ServiceOption) (*Service, error) {
 			return nil, fmt.Errorf("decision-primitives.%s: %w", name, err)
 		}
 		service.entries[name] = bound
+		transport.Model = entry.Model
+		service.transports[name] = transport
 		credentialHash := sha256.Sum256([]byte(key))
 		identities[name] = struct {
 			Entry          Entry

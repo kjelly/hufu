@@ -17,7 +17,7 @@ import (
 
 const (
 	backendName        = "sidecar"
-	maximumPromptRunes = 8000
+	maximumPromptRunes = 64 << 10
 	maximumResponseLen = 4096
 )
 
@@ -71,7 +71,7 @@ func (b *backend) Decide(ctx context.Context, request decisionrt.Request) (decis
 		return decisionrt.BackendResult{}, err
 	}
 	if utf8.RuneCountInString(prompt) > maximumPromptRunes {
-		return decisionrt.BackendResult{}, backendFailure("sidecar prompt exceeds 8000 runes")
+		return decisionrt.BackendResult{}, backendFailure("sidecar prompt exceeds 65536 runes")
 	}
 
 	response, err := b.generator.Execute(ctx, prompt)

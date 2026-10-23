@@ -1,0 +1,693 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "audit_complete": {
+      "type": "boolean",
+      "const": true
+    },
+    "record": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "critique"
+        },
+        "input_review": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "payload_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "record": {
+                "$ref": "#/$defs/review"
+              }
+            },
+            "required": [
+              "task_id",
+              "payload_sha256",
+              "record"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 1
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "finding_index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 31
+              },
+              "verdict": {
+                "type": "string",
+                "enum": [
+                  "confirmed",
+                  "downgraded",
+                  "rejected",
+                  "unverified"
+                ]
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ]
+              },
+              "rationale": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192,
+                  "pattern": "^sha256-[0-9a-f]{64}$",
+                  "description": "Exact observed opaque artifact ID, without annotations; put descriptions in detail, rationale, or explanation."
+                },
+                "minItems": 0,
+                "maxItems": 32
+              },
+              "missing_evidence": {
+                "type": "string",
+                "maxLength": 8192
+              }
+            },
+            "required": [
+              "finding_index",
+              "verdict",
+              "severity",
+              "rationale",
+              "evidence",
+              "missing_evidence"
+            ],
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "verdict": {
+                      "const": "unverified"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "missing_evidence": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 8192
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "evidence": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 8192,
+                        "pattern": "^sha256-[0-9a-f]{64}$",
+                        "description": "Exact observed opaque artifact ID, without annotations; put descriptions in detail, rationale, or explanation."
+                      },
+                      "minItems": 1,
+                      "maxItems": 32
+                    },
+                    "missing_evidence": {
+                      "const": ""
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 32
+        }
+      },
+      "required": [
+        "kind",
+        "input_review",
+        "decisions"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "audit_complete",
+    "record"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "review": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "review"
+        },
+        "review_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "workset_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "pattern": "^unit-[0-9]{4}$",
+          "description": "Exact WorksetBinding.bindings.key / ItemKey (for example unit-0000), never the Workset ID.",
+          "enum": [
+            "unit-0000",
+            "unit-0001",
+            "unit-0002",
+            "unit-0003",
+            "unit-0004",
+            "unit-0005",
+            "unit-0006",
+            "unit-0007",
+            "unit-0008",
+            "unit-0009",
+            "unit-0010",
+            "unit-0011",
+            "unit-0012",
+            "unit-0013",
+            "unit-0014",
+            "unit-0015",
+            "unit-0016",
+            "unit-0017",
+            "unit-0018",
+            "unit-0019",
+            "unit-0020",
+            "unit-0021",
+            "unit-0022",
+            "unit-0023",
+            "unit-0024",
+            "unit-0025",
+            "unit-0026",
+            "unit-0027",
+            "unit-0028",
+            "unit-0029",
+            "unit-0030",
+            "unit-0031"
+          ]
+        },
+        "lens": {
+          "type": "string",
+          "enum": [
+            "noop",
+            "general",
+            "runtime-integrity",
+            "boundary-tui",
+            "security-tool",
+            "documentation-risk",
+            "documentation"
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ]
+              },
+              "location": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192,
+                  "pattern": "^sha256-[0-9a-f]{64}$",
+                  "description": "Exact observed opaque artifact ID, without annotations; put descriptions in detail, rationale, or explanation."
+                },
+                "minItems": 1,
+                "maxItems": 32
+              },
+              "requires_critique": {
+                "type": "boolean"
+              },
+              "detail": {
+                "type": "string",
+                "maxLength": 16384
+              }
+            },
+            "required": [
+              "summary",
+              "severity",
+              "location",
+              "evidence",
+              "requires_critique",
+              "detail"
+            ],
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "severity": {
+                      "enum": [
+                        "error",
+                        "warning"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "requires_critique": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 32
+        },
+        "gaps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "missing_evidence": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              }
+            },
+            "required": [
+              "description",
+              "missing_evidence"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "maxItems": 32
+        },
+        "invariant_assessments": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "required": [
+              "invariant_id",
+              "status",
+              "summary"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "invariant_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "preserved",
+                  "violated",
+                  "unknown"
+                ]
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1
+              },
+              "finding_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "missing_evidence": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "status": {
+                      "const": "preserved"
+                    }
+                  }
+                },
+                "then": {
+                  "not": {
+                    "required": [
+                      "finding_index"
+                    ]
+                  },
+                  "properties": {
+                    "missing_evidence": {
+                      "maxItems": 0
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "status": {
+                      "const": "violated"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "finding_index"
+                  ],
+                  "properties": {
+                    "missing_evidence": {
+                      "maxItems": 0
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "status": {
+                      "const": "unknown"
+                    }
+                  }
+                },
+                "then": {
+                  "not": {
+                    "required": [
+                      "finding_index"
+                    ]
+                  },
+                  "required": [
+                    "missing_evidence"
+                  ],
+                  "properties": {
+                    "missing_evidence": {
+                      "minItems": 1
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "reference_assessments": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "reference_id": {
+                "type": "string",
+                "pattern": "^ref-[0-9]{6}$"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "required",
+                  "historical",
+                  "deleted",
+                  "example",
+                  "uncertain"
+                ]
+              },
+              "rationale": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "evidence": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": {
+                  "type": "string",
+                  "pattern": "^sha256-[0-9a-f]{64}$"
+                }
+              },
+              "finding_index": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 31
+              },
+              "gap_index": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 31
+              }
+            },
+            "required": [
+              "reference_id",
+              "kind",
+              "rationale",
+              "evidence",
+              "finding_index",
+              "gap_index"
+            ],
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "const": "required"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "finding_index": {
+                      "type": "integer"
+                    },
+                    "gap_index": {
+                      "type": "null"
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "const": "uncertain"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "finding_index": {
+                      "type": "null"
+                    },
+                    "gap_index": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "historical",
+                        "deleted",
+                        "example"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "finding_index": {
+                      "type": "null"
+                    },
+                    "gap_index": {
+                      "type": "null"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "review_revision",
+        "workset_key",
+        "lens",
+        "findings",
+        "gaps",
+        "invariant_assessments",
+        "reference_assessments"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "lens": {
+                "const": "noop"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "findings": {
+                "maxItems": 0
+              },
+              "gaps": {
+                "maxItems": 0
+              },
+              "reference_assessments": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "x-hufu-evidence-inputs": {
+    "items_pointer": "/record/input_review",
+    "task_id_pointer": "/task_id",
+    "hash_pointer": "/payload_sha256",
+    "complete_pointer": "/audit_complete",
+    "value_bindings": {
+      "/record": "/record"
+    },
+    "runtime_owned": true
+  },
+  "x-hufu-fixed-collections": [
+    {
+      "items_pointer": "/record/decisions",
+      "source_contracts": [
+        "schemas/review-v1.json"
+      ],
+      "source_scope": "evidence_from",
+      "source_pointer": "/record/findings",
+      "index_field": "finding_index",
+      "choice_fields": [
+        "verdict",
+        "severity"
+      ],
+      "decision_groups": [
+        {
+          "id": "assessment",
+          "catalog_entry": "critique_assessment",
+          "outputs": [
+            "verdict",
+            "severity"
+          ],
+          "value_map": {
+            "confirmed_error": {
+              "verdict": "confirmed",
+              "severity": "error"
+            },
+            "confirmed_warning": {
+              "verdict": "confirmed",
+              "severity": "warning"
+            },
+            "confirmed_info": {
+              "verdict": "confirmed",
+              "severity": "info"
+            },
+            "downgraded_error": {
+              "verdict": "downgraded",
+              "severity": "error"
+            },
+            "downgraded_warning": {
+              "verdict": "downgraded",
+              "severity": "warning"
+            },
+            "downgraded_info": {
+              "verdict": "downgraded",
+              "severity": "info"
+            },
+            "rejected_error": {
+              "verdict": "rejected",
+              "severity": "error"
+            },
+            "rejected_warning": {
+              "verdict": "rejected",
+              "severity": "warning"
+            },
+            "rejected_info": {
+              "verdict": "rejected",
+              "severity": "info"
+            },
+            "unverified_error": {
+              "verdict": "unverified",
+              "severity": "error"
+            },
+            "unverified_warning": {
+              "verdict": "unverified",
+              "severity": "warning"
+            },
+            "unverified_info": {
+              "verdict": "unverified",
+              "severity": "info"
+            }
+          },
+          "context": {
+            "mode": "observed_artifact_reads",
+            "max_bytes": 49152
+          },
+          "on_abstained": "blocked",
+          "on_error": "blocked"
+        }
+      ]
+    }
+  ],
+  "x-hufu-evidence-keys": {
+    "pointers": [
+      "/record/decisions/*/evidence/*"
+    ]
+  }
+}

@@ -49,8 +49,49 @@ func TestTaskResultProjectionSemantics(t *testing.T) {
 	}
 }
 
+func TestTaskResultProjectionOptionalFields(t *testing.T) {
+	for _, tc := range []struct {
+		name, left, right string
+		valid             bool
+	}{
+		{"absent", `{}`, `{}`, true},
+		{"matching index zero", `{"link":0}`, `{"link":0}`, true},
+		{"index zero versus omitted", `{"link":0}`, `{}`, false},
+		{"omitted versus index zero", `{}`, `{"link":0}`, false},
+		{"different index", `{"link":0}`, `{"link":1}`, false},
+		{"empty array omitted", `{"notes":[]}`, `{}`, true},
+		{"omitted array empty", `{}`, `{"notes":[]}`, true},
+		{"matching evidence", `{"notes":["source"]}`, `{"notes":["source"]}`, true},
+		{"different evidence", `{"notes":["source"]}`, `{"notes":["other"]}`, false},
+		{"omitted evidence", `{}`, `{"notes":["source"]}`, false},
+		{"null is not omitted", `{"link":null}`, `{}`, false},
+		{"false is not omitted", `{"link":false}`, `{}`, false},
+		{"empty string is not omitted", `{"link":""}`, `{}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var left, right map[string]any
+			if err := json.Unmarshal([]byte(tc.left), &left); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal([]byte(tc.right), &right); err != nil {
+				t.Fatal(err)
+			}
+			left["label"], right["label"] = "a", "a"
+			policy := map[string]any{"pointer": "/rows", "fields": []string{"label"}, "optional_fields": []string{"link", "notes"}}
+			err := evaluateTaskResultProjection(map[string]any{"rows": []any{right}}, []any{left}, nil, policy)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%t, error=%v", tc.valid, err)
+			}
+		})
+	}
+}
+
 func TestTaskResultProjectionPolicyValidation(t *testing.T) {
 	for _, value := range []any{
+		map[string]any{"pointer": "/facts/rows", "fields": []string{"summary"}, "optional_fields": []string{"summary"}},
+		map[string]any{"pointer": "/facts/rows", "fields": []string{"summary"}, "optional_fields": []string{"index", "index"}},
+		map[string]any{"pointer": "/facts/rows", "fields": []string{"summary"}, "optional_fields": []string{""}},
+		map[string]any{"pointer": "/facts/rows", "fields": []string{"summary"}, "optional_fields": make([]string, 16)},
 		nil, "pointer", map[string]any{"pointer": "invalid", "fields": []string{"summary"}},
 		map[string]any{"pointer": "/facts/rows", "fields": []string{}},
 		map[string]any{"pointer": "/facts/rows", "fields": []string{"summary", "summary"}},
@@ -154,6 +195,7 @@ task-result-assertions:
     value:
       pointer: /facts/rows
       fields: [summary, detail, severity]
+      optional_fields: [link, notes]
       allow_missing: true
       field_defaults: {detail: ""}
 `
@@ -184,6 +226,11 @@ task-result-assertions:
 	if verificationSpecCacheKey(&spec) == verificationSpecCacheKey(&clone) || ComputeVerificationFingerprint(spec, nil, "") == ComputeVerificationFingerprint(clone, nil, "") {
 		t.Fatal("projection fields do not affect policy identity or clone aliases source")
 	}
+	clone = cloneVerificationSpec(spec)
+	clone.TaskResultAssertions[0].Value.(map[string]any)["optional_fields"].([]any)[0] = "changed"
+	if verificationSpecCacheKey(&spec) == verificationSpecCacheKey(&clone) || ComputeVerificationFingerprint(spec, nil, "") == ComputeVerificationFingerprint(clone, nil, "") {
+		t.Fatal("optional projection fields do not affect policy identity or clone aliases source")
+	}
 	defaultsClone := cloneVerificationSpec(spec)
 	defaultsClone.TaskResultAssertions[0].Value.(map[string]any)["field_defaults"].(map[string]any)["detail"] = "changed"
 	if verificationSpecCacheKey(&spec) == verificationSpecCacheKey(&defaultsClone) || ComputeVerificationFingerprint(spec, nil, "") == ComputeVerificationFingerprint(defaultsClone, nil, "") {
@@ -196,5 +243,26 @@ task-result-assertions:
 	}})
 	if len(late.SubmissionTaskResultAssertions) != 0 || len(late.TaskResultAssertions) != 1 {
 		t.Fatalf("runtime-owned reference not deferred: %#v", late)
+	}
+}
+
+func TestSubmitResultOptionalProjectionCanBeCorrected(t *testing.T) {
+	c := &Coordinator{taskTracker: NewTaskTracker(), executionRunID: "run-optional-projection"}
+	assertion := TaskResultAssertion{Pointer: "/facts/first", Op: "equals_projection", Value: map[string]any{
+		"pointer": "/facts/second", "fields": []string{"label"}, "optional_fields": []string{"link", "notes"},
+	}}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "match rows", VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: []TaskResultAssertion{assertion}}}})[0]
+	tool := &submitResultTool{coordinator: c, todoID: item.ID}
+	ctx := occurrenceTestContext(c, item.ID, 1)
+	response, err := tool.Run(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: `{"status":"success","summary":"matched","facts":{"first":[{"label":"a"}],"second":[{"label":"a","link":0}]}}`})
+	if err != nil || !response.IsError || !strings.Contains(response.Content, `optional field "link"`) {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if c.GetTaskResult(item.ID) != nil || item.TypedResult != nil {
+		t.Fatal("mismatched optional field committed")
+	}
+	response, err = tool.Run(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: `{"status":"success","summary":"matched","facts":{"first":[{"label":"a","link":0}],"second":[{"label":"a","link":0,"notes":[]}]}}`})
+	if err != nil || response.IsError || c.GetTaskResult(item.ID) == nil {
+		t.Fatalf("correction response=%#v err=%v", response, err)
 	}
 }

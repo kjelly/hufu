@@ -1560,6 +1560,10 @@ retryLoop:
 							runRepair := func(prompt string) ([]fantasy.StepResult, error) {
 								var repairAg fantasy.Agent
 								workerCtx := withoutCoordinatorRequestPreflight(parentCtx)
+								workerCtx = withInvocationMetadata(workerCtx, invocationMetadataFromRequest(request, contextManifest))
+								if attemptArtifactScope != nil {
+									workerCtx = context.WithValue(workerCtx, artifactAccessScopeKey, cloneArtifactAccessScope(attemptArtifactScope))
+								}
 								if task.InvariantVerification != "" {
 									instructions, metadata, invariantErr := c.invariantRepairInstructions(todoID, attempt, contextManifest.ModelExecutionID)
 									if invariantErr != nil {
@@ -2243,6 +2247,17 @@ retryLoop:
 		priorToolInput := attemptEvidence.toolInput
 		priorToolResult := attemptEvidence.resultText
 		priorToolResultErr := attemptEvidence.resultErr
+		if diagnostic, ok := protocolRepairValidationDiagnostic(&receipt); currentClass == FailureProtocol && ok {
+			priorVerifyCmd = ""
+			priorVerifyExit = -1
+			priorExitCode = nil
+			priorToolCall = submitResultToolName
+			// Repair input is not captured in the worker's tool observation.
+			// Do not associate a stale view/grep input with submit_result.
+			priorToolInput = ""
+			priorToolResult = diagnostic
+			priorToolResultErr = true
+		}
 		priorPartialOutput := retryPartialOutput(output, lastOutput)
 		priorSubmittedResult := receipt.SubmittedResult
 		if priorSubmittedResult != nil {
@@ -2383,6 +2398,13 @@ retryLoop:
 			}
 			c.report(c.newEvent("error").withAgent(agentName).withMessage(fmt.Sprintf("attempt %d failed: %v", attempt, err)).withModel(resolvedModel).withTodoID(todoID))
 			c.PersistFailureWithClassAndOutput(agentName, taskDesc, todoID, c.FailureDetail(err, ""), RetryWorker, currentClass, output)
+			// Failure persistence may strengthen the proposed retry to a hard
+			// anti-thrashing block. The committed task state owns that decision;
+			// a local RetryWorker proposal must not revive a blocked occurrence.
+			if persisted := c.todoItemByID(todoID); persisted != nil && persisted.Status == TaskBlocked {
+				closeTranscript()
+				break retryLoop
+			}
 			if parentCtx.Err() != nil {
 				closeTranscript()
 				break retryLoop
@@ -3216,7 +3238,20 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	workerCtx := withoutCoordinatorRequestPreflight(parentCtx)
 	var repairInvocation providerBoundInvocationContext
 	var bindErr error
-	if c.repairAgentOverride == nil {
+	if item.ExecutionReceipt != nil && item.ExecutionReceipt.ArtifactScope != nil {
+		workerCtx = context.WithValue(workerCtx, artifactAccessScopeKey, cloneArtifactAccessScope(item.ExecutionReceipt.ArtifactScope))
+		if _, contract, contractErr := c.boundResultContract(item.ID); contractErr != nil {
+			bindErr = contractErr
+		} else if contract != nil && contract.evidenceKeys != nil {
+			manifest, manifestErr := authoritativeTaskContextManifest(item, item.ExecutionReceipt.Attempt, item.ExecutionReceipt.ModelExecutionID)
+			if manifestErr != nil {
+				bindErr = manifestErr
+			} else {
+				workerCtx = withInvocationMetadata(workerCtx, invocationMetadataFromManifest(manifest))
+			}
+		}
+	}
+	if c.repairAgentOverride == nil && bindErr == nil {
 		if task.ResolvedExecutionTarget.IsZero() {
 			bindErr = fmt.Errorf("protocol repair requires an admitted execution target")
 		} else {
@@ -3307,8 +3342,12 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	var runErr error
 	var rejectedSubmission string
 	for attempt := priorAttempts + 1; attempt <= 2; attempt++ {
-		c.setCurrentTaskAttempt(item.ID, attempt)
-		attemptCtx := context.WithValue(repairCtx, executionAttemptKey{}, attempt)
+		workerAttempt := attempt
+		if scope, ok := artifactAccessScopeFromContext(repairCtx); ok {
+			workerAttempt = scope.Attempt
+		}
+		c.setCurrentTaskAttempt(item.ID, workerAttempt)
+		attemptCtx := context.WithValue(repairCtx, executionAttemptKey{}, workerAttempt)
 		if identity, ok := c.activeTaskResultOccurrence(item.ID); ok {
 			attemptCtx = withSubmitResultRuntimeIdentity(attemptCtx, identity)
 		}
@@ -3742,6 +3781,7 @@ func submitResultFailureFingerprint(toolName, result string) (string, bool) {
 		category string
 	}{
 		{prefix: "invalid submit_result arguments:", category: "invalid_arguments"},
+		{prefix: "invalid evidence key:", category: "invalid_evidence_key"},
 		{prefix: strings.ToLower(toolSchemaValidationPromptPrefix(submitResultToolName)), category: "invalid_arguments"},
 		{prefix: structuredPayloadInvalidCode + ":", category: structuredPayloadInvalidCode},
 		{prefix: structuredPayloadMissingCode + ":", category: structuredPayloadMissingCode},
@@ -4016,7 +4056,12 @@ func (c *Coordinator) taskFinalizationBinding(todoID string, freeText bool) stri
 	if item != nil && item.ResultContract != nil {
 		binding.WriteString("Put the schema-defined deliverable in `structured_payload` using the bound schema's exact fields, types, and enum values. Outer `details`, `facts`, `findings`, or `open_questions` do not satisfy payload requirements. If the task also requires matching outer fields, include them using their own tool schema; do not copy additional payload-only properties into those objects. Preserve all required fields, including those on every nested object and array item. Correct only invalid paths and keep valid evidence; shorten narrative rather than omitting required fields or sources. Never invent evidence to satisfy the schema.\n")
 		if item.ResultContract.RequireStructured {
-			binding.WriteString("A schema-valid `structured_payload` is required even when reporting `partial` or `blocked`.\n")
+			_, compiled, _ := c.boundResultContract(todoID)
+			if hasResultDecisions(compiled) {
+				binding.WriteString("Successful results require the complete schema-valid `structured_payload`. If required bound decisions cannot settle, submit only status=blocked and a summary; OMIT structured_payload instead of inventing or resubmitting incomplete decisions.\n")
+			} else {
+				binding.WriteString("A schema-valid `structured_payload` is required even when reporting `partial` or `blocked`.\n")
+			}
 		}
 	} else {
 		binding.WriteString("Put any complete textual plan, analysis, review, or report in outer `details`. For outer `open_questions`, use strings or objects with `question` and optional string `context`/`detail` fields.\n")
@@ -5754,10 +5799,19 @@ func buildRetryContextWithSubmittedResult(class TaskFailureClass, lastErr error,
 		b.WriteString(")")
 	} else if lastToolCall != "" {
 		exitStr := "unavailable"
+		if lastToolResultErr {
+			exitStr = "error"
+		} else if lastToolResult != "" {
+			exitStr = "ok"
+		}
 		if workerExitCode != nil {
 			exitStr = fmt.Sprintf("%d", *workerExitCode)
 		}
-		fmt.Fprintf(b, "last tool call: %s (exit: %s)", lastToolCall, exitStr)
+		fmt.Fprintf(b, "last tool call: %s (exit: %s", lastToolCall, exitStr)
+		if lastToolResult != "" {
+			fmt.Fprintf(b, ", result: %s", lastToolResult)
+		}
+		b.WriteString(")")
 	} else if workerExitCode != nil {
 		fmt.Fprintf(b, "agent execution (exit: %d)", *workerExitCode)
 	} else {

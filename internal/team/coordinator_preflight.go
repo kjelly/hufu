@@ -39,13 +39,14 @@ func withoutCoordinatorRequestPreflight(ctx context.Context) context.Context {
 }
 
 type coordinatorRequestPreflight struct {
-	mu         sync.RWMutex
-	modelID    string
-	userPrompt string
-	fullSystem string
-	fullTools  []fantasy.AgentTool
-	window     int
-	admission  agent.ProviderAdmissionContext
+	mu            sync.RWMutex
+	modelID       string
+	userPrompt    string
+	fullSystem    string
+	refreshSystem func(string) string
+	fullTools     []fantasy.AgentTool
+	window        int
+	admission     agent.ProviderAdmissionContext
 }
 
 func newCoordinatorRequestPreflight(modelID, userPrompt, system string, tools []fantasy.AgentTool) *coordinatorRequestPreflight {
@@ -167,11 +168,21 @@ func (p *coordinatorRequestPreflight) prepare(ctx context.Context, stepMessages 
 	modelID := p.modelID
 	userPrompt := p.userPrompt
 	fullSystem := p.fullSystem
+	refreshSystem := p.refreshSystem
 	fullTools := append([]fantasy.AgentTool(nil), p.fullTools...)
 	window := p.window
 	admission := p.admission
 	p.mu.RUnlock()
+	systemRefreshed := false
+	if refreshSystem != nil {
+		refreshed := refreshSystem(fullSystem)
+		systemRefreshed = refreshed != fullSystem
+		fullSystem = refreshed
+	}
 	if window <= 0 {
+		if systemRefreshed {
+			return fullSystem, fullTools, true, nil
+		}
 		return "", nil, false, nil
 	}
 	if prompt != "" {
@@ -202,7 +213,7 @@ func (p *coordinatorRequestPreflight) prepare(ctx context.Context, stepMessages 
 		// Fantasy keeps the last non-nil step tool set for the remainder of a
 		// stream. Explicitly restore the complete coordinator configuration on
 		// later steps after an earlier step used a projection.
-		if stepNumber > 0 {
+		if stepNumber > 0 || systemRefreshed {
 			return fullSystem, fullTools, true, nil
 		}
 		return "", nil, false, nil

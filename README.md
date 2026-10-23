@@ -80,12 +80,24 @@
 
 ## Installation & Build
 
+Install [mise](https://mise.jdx.dev/getting-started.html), then run these commands
+from the repository root. `.mise.toml` pins Go and golangci-lint; use
+`mise exec -- <command>` for other Go tooling, including non-interactive shells.
+
 ```bash
+# Install the pinned development tools
+mise install
+
 # Build binary
-go build ./cmd/hufu
+mise run build
 
 # Run directly
-go run ./cmd/hufu [prompt]
+mise run run -- [prompt]
+
+# Validation (run sequentially)
+mise run test
+mise run vet
+mise run lint
 ```
 
 ---

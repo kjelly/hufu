@@ -44,7 +44,7 @@ func resultPointersOverlap(a, b string) bool {
 // Replay validates the stored array through validateResultEvidenceInputs; it
 // never reassembles a historical payload from newer source records.
 func assembleRuntimeEvidenceInputs(raw []byte, spec *resultEvidenceInputsSpec, ids []string, results []TaskResult) ([]byte, error) {
-	if spec == nil || !spec.RuntimeBind {
+	if spec == nil || !spec.runtimeOwned() {
 		return raw, nil
 	}
 	if len(raw) > resultPayloadMaxBytes {
@@ -55,7 +55,7 @@ func assembleRuntimeEvidenceInputs(raw []byte, spec *resultEvidenceInputsSpec, i
 		return nil, err
 	}
 	if _, err := resolveJSONPointer(value, spec.ItemsPointer); err == nil {
-		return nil, fmt.Errorf("%s is runtime-owned; omit it and submit decisions only", spec.ItemsPointer)
+		return nil, fmt.Errorf("omit runtime-owned evidence inputs %s; submit decisions only", spec.ItemsPointer)
 	}
 	entries, err := runtimeBoundEvidenceEntries(spec, ids, results)
 	if err != nil {
@@ -135,7 +135,7 @@ func setRuntimeEvidenceField(root map[string]any, pointer string, value any) {
 // omitRuntimeEvidenceInputs changes only worker guidance. The canonical schema,
 // its policy hash, and all validation of the assembled result remain intact.
 func omitRuntimeEvidenceInputs(root map[string]any, spec *resultEvidenceInputsSpec) {
-	if spec == nil || !spec.RuntimeBind {
+	if spec == nil || !spec.runtimeOwned() {
 		return
 	}
 	tokens := fixedCollectionPointerTokens(spec.ItemsPointer)

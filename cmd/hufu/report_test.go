@@ -57,6 +57,19 @@ func TestBuildReportMDIncludesDecisionStateProjection(t *testing.T) {
 	}
 }
 
+func TestBuildReportMDTracesPrimitiveFailureAndReuse(t *testing.T) {
+	report := buildReportMD(&reportData{DecisionPrimitives: []team.DecisionPrimitiveRecord{{
+		Name: "runtime_route", Agent: "coordinator", TaskID: "1", Status: "error",
+		Backend: "systemone", Model: "fixture", EventID: "reuse-event", ReplayOf: "settled-event", Reused: true,
+		RequestDigest: "sha256:request", SnapshotHash: "source-hash", BindingDigest: "binding-hash", ErrorCode: "decision_timeout",
+	}}}, "demo", "")
+	for _, want := range []string{"runtime_route", "systemone", "fixture", "reuse-event", "settled-event", "sha256:request", "source-hash", "binding-hash", "decision_timeout"} {
+		if !strings.Contains(report, want) {
+			t.Errorf("report lacks decision trace %q", want)
+		}
+	}
+}
+
 func TestReportProjectsRecoveryDispositionAndNextAction(t *testing.T) {
 	result := &team.RunResult{
 		Outcome: team.RunOutcomePartial,

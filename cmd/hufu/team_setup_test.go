@@ -69,6 +69,7 @@ func TestWarmModelProfilesNoNetAllowsLoopbackAndRejectsRemote(t *testing.T) {
 }
 
 func TestLoadTeamCommonAdmitsExecutionPolicyBeforeProviderPreflight(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	originalOpts := opts
 	t.Cleanup(func() { opts = originalOpts })
 	opts = runOptions{}

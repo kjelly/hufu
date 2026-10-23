@@ -665,9 +665,26 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		fmt.Fprintf(&b, "- **Requested input hash:** `%s`\n\n", reportSafeMetadata(scope.RequestedInputHash, 160))
 	}
 	if len(data.DecisionPrimitives) > 0 {
-		b.WriteString("## Helper Decisions\n\n| Decision | Agent | Task | Status | Backend | Duration (ms) |\n| --- | --- | --- | --- | --- | --- |\n")
+		b.WriteString("## Helper Decisions\n\n| Decision | Agent | Task | Status | Backend | Model | Reused | Duration (ms) |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n")
 		for _, record := range data.DecisionPrimitives {
-			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %d |\n", reportSafeMetadata(record.Name, 120), reportSafeMetadata(record.Agent, 120), reportSafeMetadata(record.TaskID, 120), reportSafeMetadata(record.Status, 80), reportSafeMetadata(record.Backend, 80), record.DurationMS)
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %t | %d |\n", reportSafeMetadata(record.Name, 120), reportSafeMetadata(record.Agent, 120), reportSafeMetadata(record.TaskID, 120), reportSafeMetadata(record.Status, 80), reportSafeMetadata(record.Backend, 80), reportSafeMetadata(record.Model, 120), record.Reused, record.DurationMS)
+		}
+		b.WriteString("\n")
+		for _, record := range data.DecisionPrimitives {
+			fmt.Fprintf(&b, "- `%s`: event `%s`, request `%s`", reportSafeMetadata(record.Name, 120), reportSafeMetadata(record.EventID, 160), reportSafeMetadata(record.RequestDigest, 160))
+			if record.SnapshotHash != "" {
+				fmt.Fprintf(&b, ", snapshot `%s`", reportSafeMetadata(record.SnapshotHash, 160))
+			}
+			if record.BindingDigest != "" {
+				fmt.Fprintf(&b, ", binding `%s`", reportSafeMetadata(record.BindingDigest, 160))
+			}
+			if record.ReplayOf != "" {
+				fmt.Fprintf(&b, ", reused event `%s`", reportSafeMetadata(record.ReplayOf, 160))
+			}
+			if record.ErrorCode != "" {
+				fmt.Fprintf(&b, ", failure `%s`", reportSafeMetadata(record.ErrorCode, 160))
+			}
+			b.WriteString("\n")
 		}
 		b.WriteString("\n")
 	}

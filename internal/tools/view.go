@@ -30,10 +30,14 @@ const maxBatchViewItems = 16
 const maxBatchViewOutputSize = maxViewSize + 64*1024
 
 type viewItemArgs struct {
-	FilePath    string `json:"file_path,omitempty"`
-	ArtifactRef string `json:"artifact_ref,omitempty"`
-	Offset      int    `json:"offset,omitempty"`
-	Limit       int    `json:"limit,omitempty"`
+	SearchText   string `json:"search_text,omitempty"`
+	MaxMatches   int    `json:"max_matches,omitempty"`
+	ContextBytes int    `json:"context_bytes,omitempty"`
+	MaxScanBytes int    `json:"max_scan_bytes,omitempty"`
+	FilePath     string `json:"file_path,omitempty"`
+	ArtifactRef  string `json:"artifact_ref,omitempty"`
+	Offset       int    `json:"offset,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
 	// ByteOffset and ByteLimit select a byte range of an artifact. Pointers
 	// distinguish an omitted field from an explicit value.
 	ByteOffset *int `json:"byte_offset,omitempty"`
@@ -41,13 +45,17 @@ type viewItemArgs struct {
 }
 
 type viewArgs struct {
-	FilePath    string         `json:"file_path,omitempty"`
-	ArtifactRef string         `json:"artifact_ref,omitempty"`
-	Offset      int            `json:"offset,omitempty"`
-	Limit       int            `json:"limit,omitempty"`
-	ByteOffset  *int           `json:"byte_offset,omitempty"`
-	ByteLimit   *int           `json:"byte_limit,omitempty"`
-	Items       []viewItemArgs `json:"items,omitempty"`
+	SearchText   string         `json:"search_text,omitempty"`
+	MaxMatches   int            `json:"max_matches,omitempty"`
+	ContextBytes int            `json:"context_bytes,omitempty"`
+	MaxScanBytes int            `json:"max_scan_bytes,omitempty"`
+	FilePath     string         `json:"file_path,omitempty"`
+	ArtifactRef  string         `json:"artifact_ref,omitempty"`
+	Offset       int            `json:"offset,omitempty"`
+	Limit        int            `json:"limit,omitempty"`
+	ByteOffset   *int           `json:"byte_offset,omitempty"`
+	ByteLimit    *int           `json:"byte_limit,omitempty"`
+	Items        []viewItemArgs `json:"items,omitempty"`
 }
 
 func NewViewTool(opts ...ToolOption) fantasy.AgentTool {
@@ -60,6 +68,10 @@ func NewViewTool(opts ...ToolOption) fantasy.AgentTool {
 			Name:        "view",
 			Description: "Read one or more files or artifacts. For a single read, provide exactly one filesystem file_path or runtime-issued opaque artifact_ref. For a bounded batch, provide items instead; each item has the same source, offset, and limit fields and is independently authorized. Use artifact_ref for worker/task outputs; never copy their display path or opaque ID into file_path, including under runtime/artifacts.",
 			Parameters: map[string]any{
+				"search_text":    map[string]any{"type": "string", "minLength": 1, "maxLength": 256, "description": "For artifact_ref only: find exact literal text without returning the entire artifact. Returns absolute byte offsets and bounded excerpts; search output is observed evidence only for the shown excerpts. Use max_matches=1 and small context_bytes for focused evidence."},
+				"max_matches":    map[string]any{"type": "integer", "minimum": 1, "maximum": 8, "description": "Maximum non-overlapping search matches (default 1)."},
+				"context_bytes":  map[string]any{"type": "integer", "minimum": 1, "maximum": 1024, "description": "Bytes before and after each search match (default 256); UTF-8 boundaries are preserved."},
+				"max_scan_bytes": map[string]any{"type": "integer", "minimum": 1024, "maximum": 4194304, "description": "Maximum bytes searched from byte_offset (default 4194304). A limited scan returns an explicit continuation offset."},
 				"file_path": map[string]any{
 					"type":        "string",
 					"description": "Filesystem path to the file to read (relative or absolute). Do not put an opaque artifact ID here; use artifact_ref instead.",
@@ -92,6 +104,10 @@ func NewViewTool(opts ...ToolOption) fantasy.AgentTool {
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
+							"search_text":    map[string]any{"type": "string", "minLength": 1, "maxLength": 256, "description": "Exact literal text to locate inside this artifact."},
+							"max_matches":    map[string]any{"type": "integer", "minimum": 1, "maximum": 8},
+							"context_bytes":  map[string]any{"type": "integer", "minimum": 1, "maximum": 1024},
+							"max_scan_bytes": map[string]any{"type": "integer", "minimum": 1024, "maximum": 4194304},
 							"file_path": map[string]any{
 								"type":        "string",
 								"description": "Filesystem path to read. Exactly one of file_path or artifact_ref is required per item.",
@@ -135,7 +151,7 @@ func executeView(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 	}
 
 	if args.Items != nil {
-		if args.FilePath != "" || args.ArtifactRef != "" || args.Offset != 0 || args.Limit != 0 || args.ByteOffset != nil || args.ByteLimit != nil {
+		if args.FilePath != "" || args.ArtifactRef != "" || args.Offset != 0 || args.Limit != 0 || args.ByteOffset != nil || args.ByteLimit != nil || args.SearchText != "" || args.MaxMatches != 0 || args.ContextBytes != 0 || args.MaxScanBytes != 0 {
 			return fantasy.NewTextErrorResponse("items cannot be combined with top-level file_path, artifact_ref, offset, limit, byte_offset, or byte_limit"), nil
 		}
 		if len(args.Items) == 0 {
@@ -153,6 +169,7 @@ func executeView(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 	}
 
 	item := viewItemArgs{
+		SearchText: args.SearchText, MaxMatches: args.MaxMatches, ContextBytes: args.ContextBytes, MaxScanBytes: args.MaxScanBytes,
 		FilePath:    args.FilePath,
 		ArtifactRef: args.ArtifactRef,
 		Offset:      args.Offset,
@@ -169,6 +186,15 @@ func executeView(ctx context.Context, call fantasy.ToolCall, workDir string, cfg
 func validateViewItem(args viewItemArgs) error {
 	if (args.FilePath == "") == (args.ArtifactRef == "") {
 		return fmt.Errorf("exactly one of file_path or artifact_ref is required")
+	}
+	if args.SearchText != "" {
+		if args.ArtifactRef == "" || args.Offset != 0 || args.Limit != 0 || args.ByteLimit != nil {
+			return fmt.Errorf("search_text requires artifact_ref and cannot be combined with file_path, offset, limit or byte_limit")
+		}
+		return validateArtifactSearch(args)
+	}
+	if args.MaxMatches != 0 || args.ContextBytes != 0 || args.MaxScanBytes != 0 {
+		return fmt.Errorf("max_matches, context_bytes and max_scan_bytes require search_text")
 	}
 	if args.hasByteRange() {
 		if args.ArtifactRef == "" {
@@ -191,6 +217,13 @@ func executeBatchView(ctx context.Context, items []viewItemArgs, workDir string,
 	failed := 0
 	skipped := 0
 	successfulBytes := 0
+	var artifactReads []string
+	artifactOnly := true
+	for _, item := range items {
+		if item.FilePath != "" {
+			artifactOnly = false
+		}
+	}
 	outputLimitReached := false
 
 	for i, item := range items {
@@ -219,6 +252,7 @@ func executeBatchView(ctx context.Context, items []viewItemArgs, workDir string,
 			continue
 		}
 
+		artifactReads = append(artifactReads, ViewArtifactReads(response)...)
 		writeBatchViewItem(&body, i, "ok", response.Content)
 		successfulBytes += len(response.Content)
 		succeeded++
@@ -238,7 +272,9 @@ func executeBatchView(ctx context.Context, items []viewItemArgs, workDir string,
 	if succeeded == 0 {
 		return fantasy.NewTextErrorResponse(result.String()), nil
 	}
-	return fantasy.NewTextResponse(result.String()), nil
+	response := fantasy.NewTextResponse(result.String())
+	setViewArtifactReads(&response, artifactReads, artifactOnly)
+	return response, nil
 }
 
 func writeBatchViewItem(b *strings.Builder, index int, status, content string) {
@@ -256,6 +292,9 @@ func executeViewItem(ctx context.Context, args viewItemArgs, workDir string, cfg
 	}
 
 	if args.ArtifactRef != "" {
+		if args.SearchText != "" {
+			return executeViewArtifactSearch(ctx, args, cfg)
+		}
 		if args.hasByteRange() {
 			return executeViewArtifactRange(ctx, args, cfg)
 		}
@@ -359,7 +398,7 @@ func executeViewArtifact(ctx context.Context, args viewItemArgs, cfg ToolConfig)
 	if hasMore {
 		fmt.Fprintf(&b, "\n[showing lines %d-%d of %d total. Use offset=%d to continue reading]", offset, offset+limit-1, totalLines, offset+limit)
 	}
-	return fantasy.NewTextResponse(b.String()), nil
+	return artifactViewResponse(b.String(), args.ArtifactRef), nil
 }
 
 type lineScanner struct {

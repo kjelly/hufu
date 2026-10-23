@@ -1339,6 +1339,9 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 		return "", nil, fmt.Errorf("resolve coordinator execution backend: %w", backendErr)
 	}
 	preflight := newCoordinatorRequestPreflightWithAdmission(orchModelID, prompt, orchDef.System, orchTools, orchInvocation.AdmissionContext)
+	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+		preflight.refreshSystem = c.refreshWorkflowPrompt
+	}
 	orchCtx = withCoordinatorRequestPreflight(orchCtx, preflight)
 	orchCtx = c.withCoordinatorDiagnosticIdentity(orchCtx)
 	provider, providerErr := gatedBackend.AgentProvider(orchCtx, executionTarget)

@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/kjelly/hufu/internal/decisionrt/control"
+	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/semantic"
@@ -179,7 +180,8 @@ type Config struct {
 	// systemone decision model (docs/architecture/decision-primitive.md §59).
 	// Each field resolves ./hufu.yaml, then ~/.config/hufu/hufu.yaml; a team's
 	// own block overrides both, field by field.
-	ControlDecisions control.Config `yaml:"control-decisions"`
+	DecisionRuntime  settings.Config `yaml:"decision-runtime"`
+	ControlDecisions control.Config  `yaml:"control-decisions"`
 	// SemanticRetrieval controls canonical semantic memory retrieval
 	// (default off). It resolves like ControlDecisions: ./hufu.yaml over
 	// ~/.config/hufu/hufu.yaml, and a team's own block overrides both.
@@ -259,6 +261,7 @@ func (c *Config) mergeFromFile(path string) {
 	c.mergeScalarFields(&fileCfg)
 	c.recordSources(&fileCfg, path)
 	c.WorkspaceVersioning.merge(fileCfg.WorkspaceVersioning)
+	c.DecisionRuntime = settings.Merge(c.DecisionRuntime, fileCfg.DecisionRuntime.WithSource(path))
 	c.ControlDecisions = control.Merge(c.ControlDecisions, fileCfg.ControlDecisions)
 	c.SemanticRetrieval = semantic.Merge(c.SemanticRetrieval, fileCfg.SemanticRetrieval)
 	c.Timeouts = c.Timeouts.Merge(fileCfg.Timeouts)

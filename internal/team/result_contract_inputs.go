@@ -2,6 +2,7 @@ package team
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -15,6 +16,7 @@ import (
 // This extension binds schema-declared review entries to accepted evidence_from
 // payloads. It interprets no prose and has no consumer-specific vocabulary.
 type resultEvidenceInputsSpec struct {
+	RuntimeOwned    bool              `json:"runtime_owned,omitempty"`
 	RuntimeBind     bool              `json:"runtime_bind,omitzero"`
 	ItemsPointer    string            `json:"items_pointer"`
 	TaskIDPointer   string            `json:"task_id_pointer"`
@@ -22,6 +24,11 @@ type resultEvidenceInputsSpec struct {
 	CompletePointer string            `json:"complete_pointer"`
 	ValueBindings   map[string]string `json:"value_bindings,omitempty"`
 	arraySchema     *jsonschema.Schema
+}
+
+// Both spellings exist in pinned contracts and select the same runtime owner.
+func (s *resultEvidenceInputsSpec) runtimeOwned() bool {
+	return s != nil && (s.RuntimeOwned || s.RuntimeBind)
 }
 
 func compileResultEvidenceInputs(root map[string]any) (*resultEvidenceInputsSpec, error) {
@@ -58,8 +65,13 @@ func compileResultEvidenceInputs(root map[string]any) (*resultEvidenceInputsSpec
 			return nil, err
 		}
 	}
-	if spec.RuntimeBind {
+	if spec.runtimeOwned() {
 		if err := validateRuntimeEvidenceBinding(root, spec); err != nil {
+			return nil, err
+		}
+	}
+	if spec.RuntimeOwned {
+		if err := validateRuntimeEvidenceInputSchema(root, spec); err != nil {
 			return nil, err
 		}
 	}
@@ -139,6 +151,9 @@ func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *Re
 	if err != nil {
 		return err
 	}
+	if err := validateResultWorksetInputs(value, compiled.worksetInputs, item.WorksetBinding); err != nil {
+		return err
+	}
 	runtimeInputs, err := c.resultRuntimeInputValues(compiled)
 	if err != nil {
 		return err
@@ -146,14 +161,15 @@ func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *Re
 	if err := validateResultRuntimeInputs(value, compiled.runtimeInputs, runtimeInputs); err != nil {
 		return err
 	}
-	if err := validateResultWorksetInputs(value, compiled.worksetInputs, item.WorksetBinding); err != nil {
-		return err
-	}
 	results := c.dependencyResultsForTask(todoID)
 	if err := c.validateDependencyPayloads(results); err != nil {
 		return err
 	}
 	plans, err := buildResultFixedCollections(compiled.fixedCollections, item.EvidenceFrom, results)
+	if err != nil {
+		return err
+	}
+	plans, err = c.resolveDecisionCollectionPlans(context.Background(), todoID, plans)
 	if err != nil {
 		return err
 	}

@@ -97,3 +97,44 @@ func TestStructuredScalarConversionStillEnforcesSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestStructuredScalarConversionOfTypedAdditionalProperties(t *testing.T) {
+	compiled, err := CompileResultContractDocument("typed-maps.json", []byte(`{
+	 "type":"object","required":["counts","ratios","flags"],"properties":{
+	  "counts":{"type":"object","additionalProperties":{"type":"integer","minimum":0}},
+	  "ratios":{"type":"object","additionalProperties":{"type":"number","maximum":1}},
+	  "flags":{"type":"object","additionalProperties":{"type":"boolean"}}
+	 }} `))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := compiled.ref(true)
+	typed := `{"counts":{"entry":9007199254740993},"ratios":{"entry":0.5},"flags":{"entry":false}}`
+	canonical, err := validateStructuredResultPayload(compiled, ref, []byte(typed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoted := `{"counts":{"entry":"9007199254740993"},"ratios":{"entry":"0.5"},"flags":{"entry":"false"}}`
+	local, err := validateStructuredResultPayload(compiled, ref, []byte(quoted))
+	if err != nil {
+		t.Fatal(err)
+	}
+	external, err := canonicalExternalStructuredPayload(AttemptRequest{Task: TaskDef{ResultContract: &ref}, resultContractSchema: compiled}, &WorkerResultProposal{StructuredPayloadJSON: new(quoted)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, payload := range []*ResultPayload{local, external} {
+		if !bytes.Equal(payload.Value, canonical.Value) || payload.SHA256 != canonical.SHA256 {
+			t.Fatal("typed map conversion changed precision or canonical hash across submission routes")
+		}
+	}
+	for _, raw := range []string{
+		`{"counts":{"entry":"01"},"ratios":{},"flags":{}}`,
+		`{"counts":{},"ratios":{"entry":"1.5"},"flags":{}}`,
+		`{"counts":{},"ratios":{},"flags":{"entry":"yes"}}`,
+	} {
+		if _, err := validateStructuredResultPayload(compiled, ref, []byte(raw)); err == nil {
+			t.Fatal("typed map conversion bypassed syntax, bounds, or boolean validation")
+		}
+	}
+}

@@ -92,7 +92,7 @@ func taskCacheDependenciesFor(c *Coordinator) taskCacheDependencies {
 		},
 		Forbidden: c.IsCacheForbidden,
 		SimilarTask: func(ctx context.Context, task string, candidates []string, timeout time.Duration) (int, error) {
-			sidecar := c.AgentPool().Sidecar()
+			sidecar := c.semanticSidecar(c.AgentPool().Sidecar())
 			if sidecar == nil {
 				return -1, nil
 			}
@@ -730,7 +730,7 @@ func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, d
 		return nil
 	}
 
-	s := c.AgentPool().Sidecar()
+	s := c.semanticSidecar(c.AgentPool().Sidecar())
 	if s == nil {
 		return nil
 	}

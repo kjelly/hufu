@@ -13,10 +13,10 @@
       }
     },
     {
-      "tool_call": {
-        "name": "approve_plan",
-        "arguments": "{\"todo_id\": \"1\"}"
-      }
+      "match": {
+        "contains": "runtime_plan_review"
+      },
+      "content": "{\"token\":\"A0\"}"
     },
     {
       "tool_call": {
@@ -31,7 +31,9 @@
       }
     },
     {
-      "match": {"contains": "FINISHED:"},
+      "match": {
+        "contains": "FINISHED:"
+      },
       "forbidden": true,
       "content": "unexpected provider call after finish"
     }

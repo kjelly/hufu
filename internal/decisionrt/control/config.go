@@ -22,14 +22,11 @@ import (
 type Mode string
 
 const (
-	// ModeOff never calls the decision model. It is the default.
+	// ModeOff uses the unified runtime default; the legacy control service remains inactive.
 	ModeOff Mode = "off"
-	// ModeShadow runs the decision model next to the existing path and only
-	// records the comparison; the existing outcome is always applied.
+	// ModeShadow is retained for historical event decoding; new configuration rejects it.
 	ModeShadow Mode = "shadow"
-	// ModeActive applies an accepted decision, takes the point's safe
-	// outcome on a low-confidence answer, and runs the existing path when
-	// the decision model fails.
+	// ModeActive selects the configured backend. Failures use the point's safe outcome without a second inference.
 	ModeActive Mode = "active"
 )
 
@@ -232,10 +229,10 @@ func (c Config) resolvePoints() (map[Point]resolvedPoint, error) {
 
 func validateMode(mode Mode) error {
 	switch mode {
-	case "", ModeOff, ModeShadow, ModeActive:
+	case "", ModeOff, ModeActive:
 		return nil
 	default:
-		return fmt.Errorf("mode must be off, shadow, or active")
+		return fmt.Errorf("mode must be off or active; shadow is retired, use active (no duplicate inference)")
 	}
 }
 

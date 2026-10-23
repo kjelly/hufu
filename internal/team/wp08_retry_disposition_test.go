@@ -1065,6 +1065,9 @@ func (a *sameCoordinatorConcurrentAgent) run(ctx context.Context, prompt string,
 func TestWP08_ToolCallEvidencePerAttempt(t *testing.T) {
 	worker := newSameCoordinatorConcurrentAgent()
 	c, _ := newWP08TestCoordinator(t, worker, 3)
+	// Both independent tasks deliberately fail once with the same category;
+	// keep the unrelated shared fingerprint limit above these two failures.
+	c.session.Config.Reliability.MaxSameFailureFingerprint = 3
 	c.reportStatus = func(StatusEvent) {}
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "worker", Desc: "task-A"},

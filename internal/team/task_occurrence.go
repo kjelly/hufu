@@ -386,11 +386,13 @@ func (tx *taskResultOccurrenceTransaction) commit(result *TaskResult) error {
 	if result == nil {
 		return fmt.Errorf("task result is nil")
 	}
-	if err := tx.coordinator.validateSubmittedEvidenceInputs(tx.identity.TaskID, result.StructuredPayload); err != nil {
-		return err
-	}
-	if err := tx.coordinator.validateResultReferenceReads(tx.identity.TaskID, result); err != nil {
-		return err
+	if !tx.coordinator.boundDecisionBlockedEnvelope(tx.identity.TaskID, result) {
+		if err := tx.coordinator.validateSubmittedEvidenceInputs(tx.identity.TaskID, result.StructuredPayload); err != nil {
+			return err
+		}
+		if err := tx.coordinator.validateResultReferenceReads(tx.identity.TaskID, result); err != nil {
+			return err
+		}
 	}
 	if taskResultStatusIsSuccessful(result.Status) {
 		if err := tx.coordinator.validateRequiredEvidenceDelivery(tx.identity.TaskID, tx.identity.Attempt, tx.identity.RunID); err != nil {

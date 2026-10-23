@@ -212,6 +212,15 @@ func normalizeOpenQuestion(data json.RawMessage) (string, error) {
 	if err := json.Unmarshal(data, &object); err != nil || object == nil {
 		return "", fmt.Errorf("open_questions entries must be strings or objects with question, context?, and detail?")
 	}
+	// This compatibility form is confined to open_questions; it never unwraps
+	// evidence, authoritative identifiers, or structured result payloads.
+	if raw, ok := object["$text"]; ok && len(object) == 1 {
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil || strings.TrimSpace(value) == "" {
+			return "", fmt.Errorf("open_questions.$text must be a nonempty string")
+		}
+		return strings.TrimSpace(value), nil
+	}
 	for key := range object {
 		if key != "question" && key != "context" && key != "detail" {
 			return "", fmt.Errorf("open_questions object contains unsupported field %q", key)

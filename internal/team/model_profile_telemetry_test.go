@@ -353,7 +353,7 @@ func TestAuxiliarySidecarsReportOneProfilePerProviderInvocation(t *testing.T) {
 		statusMu.Unlock()
 
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(writer, `{"id":"auxiliary","object":"chat.completion","created":1,"model":%q,"choices":[{"index":0,"message":{"role":"assistant","content":"{\"approved\":true}"},"finish_reason":"stop"}]}`, body.Model)
+		_, _ = fmt.Fprintf(writer, `{"id":"auxiliary","object":"chat.completion","created":1,"model":%q,"choices":[{"index":0,"message":{"role":"assistant","content":"{\"token\":\"A0\"}"},"finish_reason":"stop"}]}`, body.Model)
 	}))
 	defer provider.Close()
 
@@ -379,6 +379,7 @@ func TestAuxiliarySidecarsReportOneProfilePerProviderInvocation(t *testing.T) {
 		session:                 &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Generation: agent.GenerationParams{MaxTokens: "4096"}}},
 		eventStore:              store,
 		executionRunID:          "run-auxiliary-profile",
+		decisionPrimitiveGate:   make(chan struct{}, 1),
 		providerBoundaryStarted: true,
 		sidecarModel:            "aux-sidecar-model",
 		guardModel:              "aux-guard-model",

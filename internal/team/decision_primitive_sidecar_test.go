@@ -14,7 +14,6 @@ import (
 	sidecarbackend "github.com/kjelly/hufu/internal/decisionrt/backend/sidecar"
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/decisionrt/control"
-	"github.com/kjelly/hufu/internal/utils"
 )
 
 // countingGenerator is an LLM generator that always picks candidate A1.
@@ -105,46 +104,9 @@ func TestDecisionPromptBypassesAuxiliaryContext(t *testing.T) {
 // the language model's answer has no confidence, so active mode applies it
 // without a threshold, and every observation names the backend.
 func TestControlPointOnSidecarBackend(t *testing.T) {
-	for _, test := range []struct {
-		mode        control.Mode
-		wantAccess  string
-		wantApplied string
-	}{
-		{mode: control.ModeActive, wantAccess: "false", wantApplied: controlAppliedPrimitive},
-		{mode: control.ModeShadow, wantAccess: "true", wantApplied: controlAppliedLegacy},
-	} {
-		t.Run(string(test.mode), func(t *testing.T) {
-			// The existing reviewer calls it a file access; the decision model,
-			// through candidate A0 (false), does not.
-			c, _ := newControlTestCoordinator(t, control.PathReviewer, control.ModeOff, "http://127.0.0.1:1/v1/systemone", `{"is_file_access": true, "reason": "reads a file"}`)
-			var calls atomic.Int32
-			service, err := control.New(control.Config{Backend: control.BackendSidecar, Points: map[control.Point]control.PointConfig{control.PathReviewer: {Mode: test.mode}}}, utils.RedactSecrets,
-				control.WithSidecarGenerator(func(string) (sidecarbackend.Generator, error) { return tokenZeroGenerator{calls: &calls}, nil }))
-			if err != nil {
-				t.Fatal(err)
-			}
-			c.controlDecisions = service
-			got, err := invokeControlPoint(t.Context(), c, control.PathReviewer, "")
-			if err != nil || got != test.wantAccess {
-				t.Fatalf("path review = %q, %v; want %q", got, err, test.wantAccess)
-			}
-			observations := controlObservations(t, c)
-			if len(observations) != 1 {
-				t.Fatalf("observations = %d, want 1", len(observations))
-			}
-			if o := observations[0]; o.Backend != control.BackendSidecar || !o.Accepted || o.Threshold != 0 || o.Applied != test.wantApplied || o.Model != "test-sidecar" {
-				t.Fatalf("observation = %+v, want an accepted sidecar decision applied as %s", o, test.wantApplied)
-			}
-		})
+	c, generator := newControlTestCoordinator(t, control.PathReviewer, control.ModeOff, "", `{"token":"A1"}`)
+	access, err := c.reviewPathAccess(t.Context(), "sed 's|/a|/b|' file", "/a")
+	if err != nil || access || generator.calls.Load() != 1 {
+		t.Fatalf("access=%v calls=%d error=%v", access, generator.calls.Load(), err)
 	}
 }
-
-// tokenZeroGenerator always picks candidate A0.
-type tokenZeroGenerator struct{ calls *atomic.Int32 }
-
-func (g tokenZeroGenerator) Execute(context.Context, string) (string, error) {
-	g.calls.Add(1)
-	return `{"token":"A0"}`, nil
-}
-
-func (g tokenZeroGenerator) ModelID() string { return "test-sidecar" }

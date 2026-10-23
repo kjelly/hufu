@@ -6,6 +6,7 @@ import (
 	"github.com/kjelly/hufu/internal/decisionrt"
 	"github.com/kjelly/hufu/internal/decisionrt/backend"
 	sidecarbackend "github.com/kjelly/hufu/internal/decisionrt/backend/sidecar"
+	"github.com/kjelly/hufu/internal/decisionrt/settings"
 )
 
 // GeneratorFactory returns the language-model generator for a decision entry
@@ -19,6 +20,18 @@ type ServiceOption func(*options)
 type options struct {
 	generator      GeneratorFactory
 	validationOnly bool
+	defaults       settings.Config
+	allowInherited bool
+}
+
+func WithRuntimeConfig(config settings.Config) ServiceOption {
+	return func(o *options) { o.defaults = config.Clone() }
+}
+
+// AllowInheritedTransport is only for parsing a team before hufu.yaml has
+// been supplied. Runtime construction must perform complete resolution.
+func AllowInheritedTransport() ServiceOption {
+	return func(o *options) { o.allowInherited = true }
 }
 
 // WithSidecarGenerator supplies the generators for backend: sidecar entries.

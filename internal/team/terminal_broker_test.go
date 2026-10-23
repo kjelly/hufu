@@ -15,20 +15,21 @@ import (
 	"time"
 )
 
-// Unix socket paths include the workspace. Go 1.27 t.TempDir() includes long
-// test names under GOTMPDIR; use a short name under the task-owned TMPDIR.
+// Go's testing.TempDir uses GOTMPDIR, whose configured path plus a test name
+// can exceed the Unix socket pathname limit. Keep these workspaces short and
+// under TMPDIR without changing the configured Go build directories.
 func terminalBrokerTestWorkspace(t *testing.T) string {
 	t.Helper()
-	workspace, err := os.MkdirTemp(os.TempDir(), "tb-")
+	dir, err := os.MkdirTemp("", "hufu-sock-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := os.RemoveAll(workspace); err != nil {
-			t.Errorf("clean terminal broker workspace: %v", err)
+		if err := os.RemoveAll(dir); err != nil {
+			t.Error(err)
 		}
 	})
-	return workspace
+	return dir
 }
 
 func TestTerminalBrokerAttachStreamsInputAndOutput(t *testing.T) {

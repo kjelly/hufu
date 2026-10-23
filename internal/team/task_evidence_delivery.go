@@ -1,6 +1,7 @@
 package team
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -59,6 +60,10 @@ func (c *Coordinator) validateAcceptedDependencyPayloadGraph(source *TodoItem, v
 		results = c.dependencyResultsForTask(source.ID)
 	}
 	plans, err := buildResultFixedCollections(compiled.fixedCollections, source.EvidenceFrom, results)
+	if err != nil {
+		return err
+	}
+	plans, err = c.resolveDecisionPlans(context.Background(), source.ID, plans, payload.CollectionBindings)
 	if err != nil {
 		return err
 	}

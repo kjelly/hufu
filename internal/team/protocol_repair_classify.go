@@ -153,3 +153,24 @@ func schemaRepairDiagnostic(message string) string {
 	}
 	return utils.TruncateRunes(utils.RedactSecrets(message), 2000)
 }
+
+// protocolRepairValidationDiagnostic identifies a terminal schema rejection
+// from the current receipt, rather than an earlier failed observation. Keep
+// field-specific diagnostics separate from the stable failure fingerprint.
+func protocolRepairValidationDiagnostic(receipt *ExecutionReceipt) (string, bool) {
+	if receipt == nil || receipt.RepairProvenance == nil {
+		return "", false
+	}
+	provenance := receipt.RepairProvenance
+	if !provenance.Attempted || provenance.Success || provenance.FailureReason != RepairFailureInvalidSchema {
+		return "", false
+	}
+	if len(provenance.History) == 0 {
+		return schemaRepairDiagnostic(""), true
+	}
+	last := provenance.History[len(provenance.History)-1]
+	if last.Success || last.FailureReason != RepairFailureInvalidSchema {
+		return "", false
+	}
+	return schemaRepairDiagnostic(last.Error), true
+}

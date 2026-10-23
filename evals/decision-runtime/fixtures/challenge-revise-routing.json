@@ -1,20 +1,46 @@
 {
   "steps": [
     {
-      "match": {"contains": "Propose the distinct courses of action"},
+      "match": {
+        "contains": "Propose the distinct courses of action"
+      },
       "content": "{\"options\":[{\"id\":\"opt-a\",\"kind\":\"primary\",\"title\":\"Option A\",\"description\":\"Do it directly.\"},{\"id\":\"opt-b\",\"kind\":\"alternative\",\"title\":\"Option B\",\"description\":\"Do it differently.\"}]}"
     },
     {
-      "match": {"contains": "forming an independent judgment"},
+      "match": {
+        "contains": "forming an independent judgment"
+      },
       "content": "{\"option_scores\":[{\"option_id\":\"opt-a\",\"criteria\":{},\"overall\":8},{\"option_id\":\"opt-b\",\"criteria\":{},\"overall\":5}],\"preferred_option\":\"opt-a\",\"success_probability\":0.7,\"key_assumptions\":[],\"disconfirming_evidence\":[],\"missing_information\":[],\"confidence\":0.8}"
     },
     {
-      "match": {"contains": "You are challenging a candidate decision"},
+      "match": {
+        "contains": "runtime_primary_judge"
+      },
+      "content": "{\"token\":\"A0\"}"
+    },
+    {
+      "match": {
+        "contains": "You are challenging a candidate decision"
+      },
       "content": "{\"target_option\":\"opt-a\",\"strongest_countercase\":\"Option B might be safer.\",\"fragile_assumptions\":[],\"missing_evidence\":[],\"falsification_tests\":[],\"severity\":0.6}"
     },
     {
-      "match": {"contains": "revising your own judgment once"},
+      "match": {
+        "contains": "runtime_primary_challenge"
+      },
+      "content": "{\"token\":\"A0\"}"
+    },
+    {
+      "match": {
+        "contains": "revising your own judgment once"
+      },
       "content": "{\"revised_scores\":[{\"option_id\":\"opt-a\",\"criteria\":{},\"overall\":8},{\"option_id\":\"opt-b\",\"criteria\":{},\"overall\":5}],\"revised_probability\":0.7,\"changed\":false,\"reason\":\"Challenge did not change the preferred option.\"}"
+    },
+    {
+      "match": {
+        "contains": "runtime_primary_revision"
+      },
+      "content": "{\"token\":\"A1\"}"
     },
     {
       "tool_call": {
@@ -34,8 +60,12 @@
         "arguments": "{\"response\":\"Decision made and task complete.\"}"
       }
     },
-    { "match": {"contains": "FINISHED:"},
+    {
+      "match": {
+        "contains": "FINISHED:"
+      },
       "forbidden": true,
-      "content": "unexpected provider call after finish" }
+      "content": "unexpected provider call after finish"
+    }
   ]
 }

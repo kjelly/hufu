@@ -101,7 +101,7 @@ func (r *ExecutionRouter) Route(ctx context.Context, prompt string, targetTeam s
 	selectionSidecar, selectionContext, closeSelectionSidecar := r.selectionSidecar(ctx)
 	defer closeSelectionSidecar()
 	if selectionSidecar != nil {
-		if classification, err := classifyRouteWithSelectionSidecar(sidecar.WithPurpose(selectionContext, "team_selection"), selectionSidecar, prompt); err == nil && classification.Confidence >= minimumStructuredRouteConfidence {
+		if classification, err := classifyRouteWithSelectionSidecar(sidecar.WithPurpose(selectionContext, "team_selection"), selectionSidecar, prompt); err == nil && (classification.Accepted || classification.Confidence >= minimumStructuredRouteConfidence) {
 			route := RouteFast
 			if classification.Route == "team" {
 				route = RouteTeam

@@ -8,10 +8,15 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kjelly/hufu/internal/decisionrt"
+	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
 func (s *Sidecar) ChooseAskUserResponse(ctx context.Context, question, qtype string, opts []tools.AskUserTUIOption, allowAny bool) (tools.AskUserResponse, error) {
+	if !allowAny && (qtype == "single_choice" || qtype == "multiple_choice") {
+		return s.chooseClosedQuestion(ctx, question, qtype, opts)
+	}
 	if s == nil || s.agent == nil {
 		return tools.AskUserResponse{}, fmt.Errorf("sidecar not initialized")
 	}
@@ -172,4 +177,54 @@ func normalizeAskUserSelection(resp tools.AskUserResponse, opts []tools.AskUserT
 	}
 
 	return tools.AskUserResponse{Answers: answers, Free: strings.TrimSpace(resp.Free)}, true
+}
+
+func (s *Sidecar) chooseClosedQuestion(ctx context.Context, question, qtype string, opts []tools.AskUserTUIOption) (tools.AskUserResponse, error) {
+	if len(opts) == 0 || len(opts) > 20 || qtype == "multiple_choice" && len(opts) > 4 {
+		return tools.AskUserResponse{}, fmt.Errorf("decision candidate capacity exceeded or no candidates")
+	}
+	options := []catalog.Option{{ID: "none", Description: "No supported answer"}}
+	subsets := [][]int{nil}
+	if qtype == "multiple_choice" {
+		for mask := 1; mask < 1<<len(opts); mask++ {
+			var indices []int
+			for i := range opts {
+				if mask&(1<<i) != 0 {
+					indices = append(indices, i)
+				}
+			}
+			subsets = append(subsets, indices)
+			options = append(options, catalog.Option{ID: fmt.Sprintf("subset_%d", mask), Description: fmt.Sprintf("Select option indices %v", indices)})
+		}
+	} else {
+		for i := range opts {
+			subsets = append(subsets, []int{i})
+			options = append(options, catalog.Option{ID: fmt.Sprintf("option_%d", i), Description: fmt.Sprintf("Select option index %d", i)})
+		}
+	}
+	result, err := s.Decide(ctx, DecisionInvocation{Name: "runtime_ask_user", Question: "Choose the safest supported answer to the closed question. The options and their indices are fixed. Choose none if insufficient evidence.", Input: struct {
+		Question, Type string
+		Options        []tools.AskUserTUIOption
+	}{question, qtype, opts}, Options: options, MaxCalls: 1000})
+	if err != nil {
+		return tools.AskUserResponse{}, err
+	}
+	if result.Status != decisionrt.StatusDecided || result.Value.Choice == "none" {
+		return tools.AskUserResponse{}, tools.ErrAskUserAbstained
+	}
+	for i, option := range options {
+		if result.Value.Choice != option.ID {
+			continue
+		}
+		response := tools.AskUserResponse{}
+		for _, idx := range subsets[i] {
+			value := strings.TrimSpace(opts[idx].Value)
+			if value == "" {
+				value = strings.TrimSpace(opts[idx].Label)
+			}
+			response.Answers = append(response.Answers, value)
+		}
+		return response, nil
+	}
+	return tools.AskUserResponse{}, fmt.Errorf("unknown closed-question decision")
 }

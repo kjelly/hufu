@@ -1,3 +1,29 @@
 [tools]
 go = "1.27.2"
 golangci-lint = "2.14.0"
+
+[env]
+# mise owns toolchain selection; Go must not download/select another version.
+GOTOOLCHAIN = "local"
+GOMAXPROCS = "2"
+
+[tasks.build]
+description = "Build hufu with the pinned Go toolchain"
+run = "go build -p 2 ./cmd/hufu"
+
+[tasks.run]
+description = "Run hufu; forward additional arguments to the CLI"
+run = "go run -p 2 ./cmd/hufu"
+raw = true
+
+[tasks.test]
+description = "Run the Go test suite"
+run = "go test -p 2 ./..."
+
+[tasks.vet]
+description = "Run Go static analysis"
+run = "go vet -p 2 ./..."
+
+[tasks.lint]
+description = "Run the pinned golangci-lint"
+run = "golangci-lint run"

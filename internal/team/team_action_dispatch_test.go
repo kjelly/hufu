@@ -306,8 +306,15 @@ func TestCatalogTasksSkipGoalContractsAndDuplicateSuppression(t *testing.T) {
 }
 
 func TestCatalogTasksSkipResultContractsAndRoutes(t *testing.T) {
+	dir := t.TempDir()
+	writeResultContractSchema(t, dir, "report.json", `{"type":"object"}`)
+	compiled, err := compileResultContractSchema(dir, "report.json")
+	if err != nil {
+		t.Fatal(err)
+	}
 	c, _ := dispatchTestCoordinator(t, "", func(session *TeamSession) {
-		session.AgentResultContracts = map[string]ResultContractRef{"runtime-engineer": {ID: "report"}}
+		session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
+		session.AgentResultContracts = map[string]ResultContractRef{"runtime-engineer": compiled.ref(false)}
 	})
 	def := c.session.Agents["runtime-engineer"]
 	ordinary, err := c.canonicalizeTaskOccurrence(TaskDef{Agent: "runtime-engineer", Goal: "g"}, def, "ollama/a")

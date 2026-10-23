@@ -146,7 +146,7 @@ type goTestVerification struct {
 	OutputSHA256     string   `json:"output_sha256"`
 	OutputBytes      int      `json:"output_bytes"`
 	OutputTruncated  bool     `json:"output_truncated"`
-	Diagnostic       string   `json:"-"`
+	Diagnostic       string   `json:"diagnostic,omitempty"`
 }
 
 type goTestReceipt struct {
@@ -722,7 +722,8 @@ func Prepare(ctx context.Context, config Config) (result actionResult, resultErr
 
 // VerifyReviewTests executes Go tests only inside an immutable snapshot of the
 // requested review scope. It returns a sealed artifact even when tests fail;
-// the team's blocking task_output_assert decides whether the run may pass.
+// the team's blocking gate requires completed execution, while a test failure
+// remains review evidence and must be preserved in the final report.
 func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error) {
 	outputWasEmpty := strings.TrimSpace(config.OutputDir) == ""
 	applyConfigDefaults(&config)
@@ -814,6 +815,7 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 		receipt.Diagnostic = verification.Diagnostic
 	}
 	return actionResult{Outputs: map[string]any{
+		"test_execution_completed": receipt.Completed,
 		"scope": scopeAttestation{
 			Requested: config.Scope, RequestedInputHash: receipt.RequestedInputHash,
 			Resolved: resolvedScope{
@@ -825,8 +827,8 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 		},
 		"targeted_go_tests": receipt,
 		"targeted_go_test_status": map[string]any{
-			"completed": receipt.Completed, "passed": receipt.Passed,
-			"timed_out": receipt.TimedOut, "output_truncated": receipt.OutputTruncated,
+			"completed": receipt.Completed,
+			"passed":    receipt.Passed, "timed_out": receipt.TimedOut, "output_truncated": receipt.OutputTruncated,
 		},
 	}, Artifacts: []artifact{reportArtifact}}, nil
 }
@@ -921,7 +923,7 @@ func sanitizedGoTestEnvironment(ctx context.Context) ([]string, error) {
 			continue
 		}
 		switch key {
-		case "HOME", "LANG", "PATH", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR":
+		case "HOME", "LANG", "PATH", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR", "GOMAXPROCS":
 			env = append(env, entry)
 		default:
 			if strings.HasPrefix(key, "LC_") {
@@ -935,10 +937,9 @@ func sanitizedGoTestEnvironment(ctx context.Context) ([]string, error) {
 		}
 		env = append(env, key+"="+paths[key])
 	}
-	// Preserve the operator's build scratch location independently of TMPDIR.
-	if paths["GOTMPDIR"] != "" {
-		env = append(env, "GOTMPDIR="+paths["GOTMPDIR"])
-	}
+	// An empty GOTMPDIR is a valid Go default. Preserve a configured build
+	// scratch path before GOENV=off would move compiler output into TMPDIR.
+	env = append(env, "GOTMPDIR="+paths["GOTMPDIR"])
 	// The snapshot has no .git, but Go stamps VCS information whenever any
 	// parent directory has one: an empty /tmp/.git made every go build under
 	// the snapshot run git status, fail with exit 128, and fail the tests

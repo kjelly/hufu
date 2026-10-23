@@ -77,7 +77,7 @@ func TestRuntimeResultInputsSubmissionAndReplay(t *testing.T) {
 					t.Fatalf("invalid model input accepted: %s", raw)
 				}
 			}
-			payload, rejection := submit(`{"decision":"true"}`)
+			payload, rejection := submit(`{"decision":true}`)
 			if rejection != "" {
 				t.Fatal(rejection)
 			}
@@ -89,14 +89,30 @@ func TestRuntimeResultInputsSubmissionAndReplay(t *testing.T) {
 			if err != nil || actual != literal || !bytes.Contains(payload.Value, []byte(`"count":9007199254740993`)) {
 				t.Fatal("runtime binding truncated text, expanded a token, or rounded a number")
 			}
-			encoded, err := json.Marshal(payload)
+			workspace := t.TempDir()
+			journal, err := openTaskJournal(workspace)
 			if err != nil {
 				t.Fatal(err)
 			}
-			var restored ResultPayload
-			if err := json.Unmarshal(encoded, &restored); err != nil {
+			t.Cleanup(func() { _ = journal.Close() })
+			if err := journal.append(journalRecord{Op: "result", TaskID: consumer.ID, RunID: c.executionRunID, TypedResult: &TaskResult{TaskID: consumer.ID, Status: TaskResultStatusSuccess, StructuredPayload: payload}}); err != nil {
 				t.Fatal(err)
 			}
+			if err := journal.Close(); err != nil {
+				t.Fatal(err)
+			}
+			var exported bytes.Buffer
+			if err := ExportTaskJournal(t.Context(), workspace, &exported); err != nil {
+				t.Fatal(err)
+			}
+			var record journalRecord
+			if err := json.Unmarshal(bytes.TrimSpace(exported.Bytes()), &record); err != nil {
+				t.Fatal(err)
+			}
+			if record.TypedResult == nil || record.TypedResult.StructuredPayload == nil {
+				t.Fatal("journal omitted bound payload")
+			}
+			restored := *record.TypedResult.StructuredPayload
 			if !bytes.Equal(payload.Value, restored.Value) || payload.SHA256 != restored.SHA256 || c.validateSubmittedEvidenceInputs(consumer.ID, &restored) != nil {
 				t.Fatal("canonical binding did not survive persistence/replay")
 			}

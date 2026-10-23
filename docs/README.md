@@ -152,6 +152,9 @@ to re-create an abstraction that already exists in the runtime.
 
 ### Planning
 
+- [Fixed collection decision binding](implementation-plans/fixed-collection-decisions.md)
+  — implementation-ready runtime assembly, durable decision slots, model inference
+  under no-net, and hufu-code-review adoption with offline validation.
 - [Controlled harness improvement](implementation-plans/controlled-harness-improvement.md)
   — paired structured-result probes, durable budgets, bounded proposals and
   review bundles, with offline acceptance.

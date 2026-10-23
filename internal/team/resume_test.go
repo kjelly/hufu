@@ -77,6 +77,13 @@ func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testin
 	if err := first.taskTracker.TodoList().SetContextManifest(item.ID, &manifest); err != nil {
 		t.Fatal(err)
 	}
+	if err := first.setAttemptReceipt(item.ID, &ExecutionReceipt{
+		RunID: first.executionRunID, TaskID: item.ID, Attempt: 1,
+		ArtifactScope: &ArtifactAccessScope{RunID: first.executionRunID, TaskID: item.ID, Attempt: 1,
+			AuthorizedRefs: []ArtifactRef{{ID: "scope-reference", SHA256: "scope-digest"}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	workerOutput := "checkpointed worker output"
 	if err := first.taskTracker.TodoList().SetFailureEventAndOutput(item.ID, &FailureEventPayload{
 		TaskID: item.ID, Phase: "protocol", FailureClass: FailureProtocol,
@@ -117,6 +124,14 @@ func TestResumeInterruptedTasks_ProtocolCheckpointUsesResultOnlyRepair(t *testin
 	second.repairAgentOverride = &scriptedRepairAgent{
 		calls: &repairCalls,
 		onContext: func(ctx context.Context) {
+			scope, scoped := artifactAccessScopeFromContext(ctx)
+			if !scoped || scope.RunID != first.executionRunID || scope.TaskID != item.ID || scope.Attempt != 1 || len(scope.AuthorizedRefs) != 1 || scope.AuthorizedRefs[0].ID != "scope-reference" {
+				t.Fatalf("resumed repair lost its frozen artifact scope: %#v", scope)
+			}
+			scope.AuthorizedRefs[0].ID = "mutated-local-clone"
+			if second.todoItemByID(item.ID).ExecutionReceipt.ArtifactScope.AuthorizedRefs[0].ID != "scope-reference" {
+				t.Fatal("repair mutated the durable artifact scope")
+			}
 			metadata, ok := invocationMetadataFromContext(ctx)
 			if !ok {
 				t.Fatal("resumed protocol repair context is missing invocation metadata")

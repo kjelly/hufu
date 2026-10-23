@@ -32,7 +32,7 @@ var policyFields = map[string]policyFieldClass{
 	"Backends": fixedPolicy, "ModelRoutes": fixedPolicy, "ExecutionWorlds": logicalWorld,
 	"RunInputSchemaHash": fixedPolicy, "RunInputPolicyHash": fixedPolicy, "ResultContracts": fixedPolicy,
 	"StaticWorkflowHash": fixedPolicy, "ExecutionRoutes": fixedPolicy, "ActionCatalogHash": fixedPolicy,
-	"DecisionPrimitiveHash": fixedPolicy, "ControlDecisionHash": fixedPolicy, "SemanticRetrievalHash": fixedPolicy,
+	"DecisionRuntimeHash": fixedPolicy, "DecisionPrimitiveHash": fixedPolicy, "ControlDecisionHash": fixedPolicy, "SemanticRetrievalHash": fixedPolicy,
 	"Belief": fixedPolicy, "DiagnosticLoop": fixedPolicy, "MCPActionProviders": fixedPolicy,
 	"MCPWorkerPolicies": fixedPolicy, "ContextArtifacts": fixedPolicy, "ContextQuery": fixedPolicy,
 	"Cost": fixedPolicy, "ConfigurationHash": derivedPolicyHash,

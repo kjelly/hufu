@@ -59,6 +59,12 @@ Every entry needs `reference_id`, exact lowercase `kind`, a contextual
 meanings in separate mentions: classify each candidate independently. Do not
 infer historical/deleted status merely from a missing or ignored path. An empty
 candidate binding requires `reference_assessments: []`, including no-op items.
+Use the JSON literal `null` for an absent index, never `""`, `"null"`, or an
+omitted property. Present indices are JSON integers such as `0`, never `"0"`.
+For example, an uncertain entry linked to the first gap contains
+`"kind":"uncertain","finding_index":null,"gap_index":0`.
+`open_questions` is an array of plain strings, for example `["What is missing?"]`;
+do not encode a question as an object key or a text wrapper.
 A required missing target is a review finding, not a failure to execute review.
 The runtime result-submission protocol validates the ordered IDs against the
 frozen binding and rejects
@@ -139,7 +145,9 @@ observed evidence supports it; use `violated` with a `finding_index` pointing
 to the corresponding typed finding; use `unknown` with concrete
 `missing_evidence`. An error-severity violation is a review finding, not a
 failure to complete this report-mode task: task status describes whether the
-review itself completed.
+review itself completed. A preserved or unknown claim must omit finding_index;
+only a violated claim may carry it. Preserved and violated claims omit
+missing_evidence or use []; unknown requires nonempty missing_evidence.
 
 Finish with exactly one structured result through the runtime-provided result
 protocol. The active runtime schema and task-specific contract injected with
@@ -155,11 +163,16 @@ every observed diff, source, test, or authorized opaque artifact reference in
 This task forbids result artifacts, so keep the review body in `details`. For
 artifact-backed input, cite the supplied opaque artifact identifier exactly;
 do not invent a filesystem path or claim evidence that you did not observe.
-Every evidence entry and every files_read path is the bare `sha256-` ID plus
-its 64 lowercase hexadecimal characters. Never append parentheses, source
-paths, offsets, or explanations to an ID. Put that text in detail/location,
-or use a files_read object with a separate purpose, for example
-`{"path":"sha256-<exact 64-hex digest>","purpose":"read source in chunks"}`.
+A successful runtime `view` issues short `ev_` evidence keys. Use those
+keys in `files_read.path` and in the active schema's `x-hufu-evidence-keys`
+locations. Copy only keys issued to this task attempt; the runtime expands
+and verifies them before storing full artifact IDs. A key proves a successful
+bounded read, not complete coverage or support for a claim. Preserve existing
+source records verbatim; do not replace their references with your own keys.
+For `view.artifact_ref`, use the full opaque ID supplied by the runtime.
+Full evidence IDs remain accepted when copied exactly: `sha256-` plus the
+original 64 lowercase hexadecimal characters. Never abbreviate or repair an
+ID, or append annotations. Put explanations in detail/rationale or purpose.
 
 Read large opaque artifacts in bounded chunks with `byte_limit: 32768` and
 `byte_offset` advanced by the bytes returned. Do not retry an oversized artifact

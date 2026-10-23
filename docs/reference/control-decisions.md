@@ -2,123 +2,74 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: — (working-tree implementation; tests are authoritative)
+> Verified-Commit: — (uncommitted working tree; offline test, vet and lint passed 2026-10-21)
 > Supersedes: —
 > Superseded-By: —
 
-Control decisions 讓 hufu runtime 自己的四個控制面決策點可以改問 `systemone`
-decision model（例如 Ollama 上的 `nimble`），而不是只靠 sidecar 回傳 JSON 文字。
-它和 agent 主動呼叫的 [`decision_primitive` tool](decision-primitives.md) 不同：
-問題由 hufu 固定，agent 看不到也無法呼叫；team 只能選擇模式、門檻與連線設定。
-正規契約見 [DecisionPrimitive](../architecture/decision-primitive.md) §59。
+Runtime 的封閉語意選擇使用共同 decision primitive，不再先跑舊 JSON 推論再補
+一次判斷。工具授權、預算、hash、coverage、狀態轉移與驗收仍由確定性程式處理。
+完整盤點見[實作清單](../implementation-plans/fixed-collection-decisions.md)。
 
-## 決策點
+## 共用推論設定
 
-| Point | 問題 | Kind | active 時低信心的結果 | 預設門檻 |
-|---|---|---|---|---|
-| `agent-matcher` | `request_agent` 沒指定 agent 時選哪個 worker | choice（2–21 個 worker） | fail closed，要求明確指定 agent | 0.60 |
-| `ask-user` | unattended 時 `ask_user` 選哪個選項（只限 `single_choice`） | choice（2–21 個選項） | 通知需要人類，請 agent 自行判斷；不猜第一個選項 | 0.60 |
-| `path-reviewer` | bash 指令中的範圍外路徑是否真的存取檔案 | boolean | 保留路徑，照常走 consent | 0.90 |
-| `guard-reviewer` | tool call 是否符合 agent 的所有 `guard` 規則 | boolean | deny | 0.90 |
-
-超出範圍時該次呼叫直接走既有路徑、不記錄事件：
-
-- 候選少於 2 個或多於 21 個；
-- `ask_user` 不是 `single_choice`；
-- guard rule 全文超過 4096 bytes。
-
-確定性 guard rule、read-only bash grammar、recovery 與 DecisionEngine 都不受影響。
-
-## 模式
-
-- `off`（預設）：完全不呼叫 decision model、不寫事件，行為與未設定時相同。
-- `shadow`：decision model 與既有 sidecar 路徑並行執行，**一律採用既有結果**，
-  只記錄兩者是否一致。多出的延遲是 `max(0, model − 既有路徑)`，上限為 timeout。
-- `active`：
-  - decision model 給出答案且信心 ≥ 門檻時採用；
-  - 信心不足時採用上表的安全結果；
-  - 技術錯誤（連線失敗、timeout、未知 model、回應格式錯誤）時一律退回既有路徑，
-    所以 active 的可用性不會低於 `off`。
-
-建議先用 `shadow` 累積資料，再以 `hufu inspect control-decisions` 檢查一致率與
-低信心比例後，逐點改成 `active`。
-
-## 設定
-
-`control-decisions:` 可以寫在使用者層級的 hufu.yaml（~/.config/hufu/hufu.yaml）、
-專案目錄的 hufu.yaml 與 team.yaml。每個欄位依 team.yaml → 專案 hufu.yaml → 使用者
-hufu.yaml → 預設值解析；
-`points` 下的欄位也逐點、逐欄位解析。因此可以在個人 hufu.yaml 讓所有 team 跑
-shadow，再由個別 team 固定自己的 active 設定。
+全域／專案 `hufu.yaml` 與 `team.yaml` 支援：
 
 ```yaml
-control-decisions:
-  backend: systemone         # systemone(預設)或 sidecar
-  endpoint: http://192.168.11.117:11434/v1/systemone  # 預設 http://127.0.0.1:11434/v1/systemone
-  model: nimble              # 任一點不是 off 時必填
-  api-key-env: SYSTEMONE_KEY # 可選；有設定時該環境變數必須存在且非空
-  timeout: 5s                # 每次呼叫；預設 5s，最大 60s(hufu.yaml timeouts.decision 可調高上限)
-  mode: shadow               # 所有點的預設模式：off | shadow | active
-  min-confidence: 0.8        # 可選；所有點的預設門檻
-  points:
-    path-reviewer: {mode: active, min-confidence: 0.95}
-    guard-reviewer: {mode: off}
+decision-runtime:
+  backend: systemone
+  systemone:
+    model: ollama/clef:cloud
+    endpoint: http://127.0.0.1:11434/v1/systemone
+    timeout: 60s
+    # api-key-env: SYSTEMONE_API_KEY
 ```
 
-驗證規則：
+按欄位解析：entry 明訂值 > team > project > global > 既有預設。System One
+模型不可省略；endpoint 必須支援 System One 協定。模型名稱不決定 API 協定。
+`backend: sidecar` 使用原有角色 sidecar 設定，不繼承 System One 欄位。
+一般生成、摘要與理由仍使用其原本模型設定。
 
-- 載入時不連線、不暖機。
-- 單一檔案只檢查模式、點名、門檻、timeout 範圍與環境變數名稱。
-- 合併後至少有一點不是 `off` 時，coordinator 建立前會檢查 `model`、`endpoint` 與
-  credential；不完整時 run 直接失敗。
-- 不接受 inline key。
+## 舊 control-decisions 相容性
 
-### backend: sidecar
+舊區塊仍可讀；明訂 backend/model/endpoint/credential/timeout 優先於共用預設。
 
-`backend: sidecar` 改用 run 的 sidecar model(`sidecar-model`)決策，走 team 的
-model provider、request admission 與成本計算,token 計入 run 的 budget。
+- `off`：進入共同 primitive 路徑，無新設定時使用原 sidecar。
+- `active`：使用解析後的 backend；沒有共用設定也沒明訂 backend 時保留舊
+  System One 預設。失敗不追加舊 sidecar 呼叫。
+- `shadow`：配置載入時拒絕，提示改 active；不再雙重推論。
 
-- `endpoint`、`model`、`api-key-env` 只對 systemone 有效，選 sidecar 時忽略。這樣個人
-  hufu.yaml 保留 systemone 設定時，個別 team 仍可以只寫 `backend: sidecar` 切換。
-- 語言模型只回一個答案、沒有信心值，所以門檻不適用。active 時，格式正確的回答一律採用;
-  只有技術錯誤(含無效輸出)才退回既有路徑。事件裡的 `threshold` 為 0。
-- 決策 prompt 原樣送給模型，不經過 auxiliary context compiler。
-- `hufu inspect control-decisions` 與 report 依 backend 分開統計，改成 active 前要看
-  sidecar 自己的資料。
-- active 點的 policy hash 包含 backend 與實際的 sidecar model。
+`points` 的 actor／semantic contract 不受共用模型設定改寫。System One 保留
+各 control point 的 confidence threshold；sidecar 無 confidence，不能將 enum
+合法性視為語意正確率。舊 `control_decision_observed` 事件與
+`hufu inspect control-decisions` 歷史資料仍可讀；新呼叫寫入 primitive journal，
+透過既有 decision-primitive 結果／JSON／report 投影檢查。
 
-## 安全與隱私
+## 安全結果與容量
 
-- 送給 decision model 的每個 context 字串都先經過 secret redaction，與寫入 log 和
-  session 的 redaction 相同。
-- 長文字依 sidecar 的上限截斷：command 3000、arguments 2000、描述 300 runes。
-- confidence 是被選候選的 raw probability，**不是校準過的正確率**。
-- active 會影響授權：`path-reviewer` 可以讓路徑略過 consent，`guard-reviewer` 會核准
-  或拒絕 tool call。因此只有 active 點的 transport、timeout、credential revision 與門檻
-  會寫入 execution policy snapshot；這些設定改變後 resume 會 fail closed，要還原設定
-  或用 `--new`。
-- `off` 與 `shadow` 設定不影響 snapshot，也不影響 resume。
-- systemone 呼叫不經 provider admission 或成本計算，只受 timeout 限制。Ollama 端的
-  並行數決定排隊延遲。
+| 入口 | 結果與失敗策略 |
+|---|---|
+| agent matcher | 完整 eligible workers 加 none；無選擇時要求明確 agent |
+| closed ask_user | 單選或完整多選子集加 none；未決回報未回答 |
+| path reviewer | access/not_access；失敗保留 path 交既有 policy/consent |
+| guard reviewer | compliant/violation；失敗拒絕 |
 
-## 觀測與報告
+單選最多 20 個業務候選加 none；封閉多選最多四項（完整子集加 none）。
+超容量明確失敗，不刪候選、不截斷證據、不切換舊路徑。
+`mixed`、`allowAny=true` 與自由文字回答依確認的範圍保留既有生成契約，不使用 primitive。
 
-每次 shadow／active 呼叫寫一筆 `control_decision_observed` durable event，內容不含
-問題、命令、路徑、tool arguments、選項文字、goal、endpoint 或 credential，只記錄：
+Request 最多 48 KiB；sidecar 額外限制完整 prompt 為 65536 runes。未經穩定
+secret redaction 的內容會拒絕持久化。決策不是工具授權；後續動作仍通過原有
+denied-tools、phase、transport、force-mcp 與驗收政策。
+`no-net` 不禁止受信任模型／System One 推論，仍限制工具及子程序網路能力。
 
-- point、mode 與套用來源（`primitive`、`safe_default`、`legacy`）；
-- status，以及編碼後的值：`true`／`false` 或 0-based 候選索引；
-- raw confidence、門檻與 error code；
-- 兩邊的耗時、既有路徑的結果，以及兩者是否一致。
+## 持久化與恢復
 
-事件寫入失敗只會警告，不改變決策。
+Runtime 建立不可變 request/state snapshot 或固定列 binding，將 catalog/spec、
+候選、來源、actor、branch、policy identity 與決策 receipt 綁定於原有 journal。
+有效 settled 決策可重用，不消耗新推論預算。started 未 settled 不得假設未送出，
+直接回報 interrupted；技術錯誤不轉為肯定答案，也不隱藏重試。
 
-- `hufu report` 的 **Control Decisions** 區段與 `--output json` 的 `control_decisions`
-  顯示本次 lineage 的統計。
-- `hufu inspect control-decisions [run-id] --workspace <dir>` 驗證 event chain 後彙整
-  目前 branch lineage（或單一 run）的統計。每次 `--new` 都會開新的 branch，所以要
-  累積多次執行的資料時請加 `--all-branches`，彙整該 workspace 的所有 branch。統計內容：
-  - calls 與一致數／可比較數；
-  - 低於門檻的次數，也就是 active 時會走安全結果的次數；
-  - 錯誤分類；
-  - 平均 confidence 與 p50／p95 延遲。
+模型、端點、憑證版本或來源快照漂移後不得套用不相容結果。Result-only repair
+不新增推論。診斷顯示 started/settled/reused、backend/model、設定來源、snapshot
+hash 與失敗碼，不輸出憑證值。固定列決策由 runtime 注入 canonical payload，
+Worker 不需重抄值或 receipt。

@@ -11,7 +11,12 @@ import (
 )
 
 func TestOpenWaitsForInitializationAndReleasesLock(t *testing.T) {
-	workspace := t.TempDir()
+	// This timed filesystem test follows TMPDIR, not Go compiler scratch.
+	workspace, err := os.MkdirTemp("", "hufu-store-init-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(workspace) })
 	lockPath := Path(workspace) + ".init.lock"
 	lock, err := fsutil.TryLockExclusive(lockPath)
 	if err != nil {

@@ -23,14 +23,15 @@ const (
 // model supplies only schema-declared decisions for runtime-issued row keys.
 // All domain vocabulary, including the finite choices, stays in the schema.
 type resultFixedCollectionSpec struct {
-	ItemsPointer    string            `json:"items_pointer"`
-	SourceContracts []string          `json:"source_contracts"`
-	SourceScope     string            `json:"source_scope,omitempty"`
-	SourcePointer   string            `json:"source_pointer"`
-	TaskIDField     string            `json:"task_id_field,omitempty"`
-	IndexField      string            `json:"index_field,omitempty"`
-	ValueBindings   map[string]string `json:"value_bindings,omitempty"`
-	ChoiceFields    []string          `json:"choice_fields"`
+	DecisionGroups  []resultDecisionGroup `json:"decision_groups,omitempty"`
+	ItemsPointer    string                `json:"items_pointer"`
+	SourceContracts []string              `json:"source_contracts"`
+	SourceScope     string                `json:"source_scope,omitempty"`
+	SourcePointer   string                `json:"source_pointer"`
+	TaskIDField     string                `json:"task_id_field,omitempty"`
+	IndexField      string                `json:"index_field,omitempty"`
+	ValueBindings   map[string]string     `json:"value_bindings,omitempty"`
+	ChoiceFields    []string              `json:"choice_fields"`
 	decisionSchema  map[string]any
 	arraySchema     *jsonschema.Schema
 }
@@ -39,8 +40,9 @@ type resultFixedCollectionSpec struct {
 // It is stored with the payload, so replay cannot apply old decisions to a new
 // source with the same row count and IDs.
 type ResultCollectionBinding struct {
-	ItemsPointer string                   `json:"items_pointer"`
-	Sources      []ResultCollectionSource `json:"sources"`
+	Decisions    []ResultDecisionProvenance `json:"decisions,omitempty"`
+	ItemsPointer string                     `json:"items_pointer"`
+	Sources      []ResultCollectionSource   `json:"sources"`
 }
 
 type ResultCollectionSource struct {
@@ -49,8 +51,12 @@ type ResultCollectionSource struct {
 }
 
 type resultFixedCollectionRow struct {
-	Key   string         `json:"key"`
-	Fixed map[string]any `json:"fixed"`
+	SourceTask  string         `json:"-"`
+	SourceHash  string         `json:"-"`
+	SourceIndex int            `json:"-"`
+	Finding     any            `json:"-"`
+	Key         string         `json:"key"`
+	Fixed       map[string]any `json:"fixed"`
 }
 
 type resultFixedCollectionPlan struct {
@@ -141,10 +147,23 @@ func (s *resultFixedCollectionSpec) compile(root map[string]any) error {
 	if err := s.compileChoices(properties, fixed, required); err != nil {
 		return err
 	}
+	if err := s.compileDecisionGroups(properties); err != nil {
+		return err
+	}
 	// Keep all conditionals for canonical validation after assembly. The
 	// submission projection removes only fields that the runtime owns.
 	s.decisionSchema = maps.Clone(item)
+	if len(s.DecisionGroups) > 0 {
+		for _, key := range []string{"allOf", "anyOf", "oneOf", "if", "then", "else", "dependentSchemas", "dependentRequired"} {
+			delete(s.decisionSchema, key)
+		}
+	}
 	decisionProperties := maps.Clone(properties)
+	for _, group := range s.DecisionGroups {
+		for _, name := range group.Outputs {
+			fixed[name] = true
+		}
+	}
 	for name := range fixed {
 		delete(decisionProperties, name)
 	}
@@ -343,7 +362,7 @@ func (p *resultFixedCollectionPlan) appendSource(id string, payload *ResultPaylo
 		// silently reinterpreted against another equally sized inventory.
 		digest := sha256.Sum256([]byte(id + "\x00" + payload.SHA256 + "\x00" + strconv.Itoa(i)))
 		key := "item_" + strconv.Itoa(len(p.rows)) + "_" + hex.EncodeToString(digest[:])
-		p.rows = append(p.rows, resultFixedCollectionRow{Key: key, Fixed: fixed})
+		p.rows = append(p.rows, resultFixedCollectionRow{Key: key, Fixed: fixed, SourceTask: id, SourceHash: payload.SHA256, SourceIndex: i, Finding: item})
 	}
 	return nil
 }

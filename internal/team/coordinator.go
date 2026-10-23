@@ -26,6 +26,7 @@ import (
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/decisionrt/control"
+	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/mcp"
@@ -632,6 +633,7 @@ type Coordinator struct {
 	emittedTaskTransitions map[string]bool // all durable event idempotency keys; legacy name retained for compatibility
 	eventOnceMu            sync.Mutex
 	decisionJournalMu      sync.Mutex
+	decisionObservationMu  sync.Mutex // serializes bound-context read admission and publication
 	scopedDecisionJournal  EventJournal
 	// decisionControlPlane is pinned by the parent coordinator before an
 	// isolated extra-model leaf starts. It keeps decision artifacts, the
@@ -1465,7 +1467,8 @@ func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordi
 		}
 	}
 	decisionSidecars := &decisionSidecarResolver{defaultModel: params.RoleModels.Sidecar}
-	primitiveService, err := catalog.New(params.Session.Config.DecisionPrimitives, catalog.WithSidecarGenerator(decisionSidecars.generator))
+	decisionConfig := settings.Merge(params.Session.GlobalDecisionRuntime, params.Session.Config.DecisionRuntime)
+	primitiveService, err := catalog.New(params.Session.Config.DecisionPrimitives, catalog.WithRuntimeConfig(decisionConfig), catalog.WithSidecarGenerator(decisionSidecars.generator))
 	if err != nil {
 		return nil, err
 	}
@@ -1473,7 +1476,7 @@ func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordi
 		return nil, err
 	}
 	params.DecisionPrimitives = primitiveService
-	controlService, err := control.New(control.Merge(params.Session.GlobalControlDecisions, params.Session.Config.ControlDecisions), utils.RedactSecrets, control.WithSidecarGenerator(decisionSidecars.generator))
+	controlService, err := control.New(control.Merge(params.Session.GlobalControlDecisions, params.Session.Config.ControlDecisions), utils.RedactSecrets, control.WithRuntimeConfig(decisionConfig), control.WithSidecarGenerator(decisionSidecars.generator))
 	if err != nil {
 		return nil, err
 	}
@@ -1878,6 +1881,9 @@ func registerProviderSecrets(registry *tools.SecretRegistry, session *TeamSessio
 			Source:     "team provider configuration",
 			ExactValue: provider.ProviderAPIKey,
 		})
+	}
+	if keyEnv := settings.Merge(session.GlobalDecisionRuntime, session.Config.DecisionRuntime).SystemOne.APIKeyEnv; keyEnv != "" {
+		_ = registry.Register(tools.SecretRef{Name: "decision_runtime.api_key", Source: "decision runtime credential environment", ExactValue: os.Getenv(keyEnv)})
 	}
 	for name, primitive := range session.Config.DecisionPrimitives {
 		if primitive.APIKeyEnv != "" {

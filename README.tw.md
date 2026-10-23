@@ -71,12 +71,24 @@
 
 ## 安裝與建置
 
+先安裝 [mise](https://mise.jdx.dev/getting-started.html)，再於專案根目錄執行下列指令。
+`.mise.toml` 統一鎖定 Go 與 golangci-lint 版本；其他 Go 工具指令（包含非互動 shell）
+也須透過 `mise exec -- <command>` 執行。
+
 ```bash
+# 安裝專案指定版本的開發工具
+mise install
+
 # 建置 binary
-go build ./cmd/hufu
+mise run build
 
 # 直接執行
-go run ./cmd/hufu [prompt]
+mise run run -- [prompt]
+
+# 依序執行驗證
+mise run test
+mise run vet
+mise run lint
 ```
 
 ---

@@ -374,11 +374,11 @@ func verify(current session, runID string) (string, string, error) {
 			limited = limited || len(r.Gaps) > 0
 			continue
 		}
-		sourceID, unverified, err := verifyCritique(item, r, tasks, values, records, critiqued)
+		sourceID, critiqueLimited, err := verifyCritique(item, r, tasks, values, records, critiqued)
 		if err != nil {
 			return "", "", err
 		}
-		limited = limited || unverified
+		limited = limited || critiqueLimited
 		critiqued[sourceID] = true
 	}
 	for id, r := range records {
@@ -518,7 +518,7 @@ func verifyCritique(item task, r record, tasks map[string]task, values map[strin
 	}
 	sourceID := r.InputReview[0].TaskID
 	source, ok := records[sourceID]
-	if !ok || source.Kind != "review" || len(source.Findings) == 0 || len(r.Decisions) != len(source.Findings) || critiqued[sourceID] {
+	if !ok || source.Kind != "review" || len(r.Decisions) != len(source.Findings) || critiqued[sourceID] {
 		return "", false, fmt.Errorf("critic %s has incomplete or duplicate finding coverage", item.ID)
 	}
 	seen := make(map[int]bool)
@@ -534,10 +534,17 @@ func verifyCritique(item task, r record, tasks map[string]task, values map[strin
 			return "", false, fmt.Errorf("critic %s verdict lacks observed evidence", item.ID)
 		}
 	}
-	if unverified != (item.Result.Status == "completed_with_gaps") {
+	reportedGaps := item.Result.Status == "completed_with_gaps"
+	if unverified && !reportedGaps {
 		return "", false, fmt.Errorf("critic %s concealed unverified verdicts", item.ID)
 	}
-	return sourceID, unverified, nil
+	// A critic may retain its bound source's coverage limitations even when
+	// every finding has a settled verdict. Those gaps remain in the report's
+	// source inventory; the conservative envelope must not erase them.
+	if reportedGaps && !unverified && len(source.Gaps) == 0 {
+		return "", false, fmt.Errorf("critic %s reported gaps without an unverified verdict or a source gap", item.ID)
+	}
+	return sourceID, reportedGaps, nil
 }
 
 func verifyInvariants(item task, r record) error {

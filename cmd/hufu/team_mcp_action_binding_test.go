@@ -28,6 +28,7 @@ action-providers:
 // not the ordinary MCP warning. The run does not start, and the manager the
 // loader built is closed exactly once.
 func TestLoadTeamCommonFailsWhenAnMCPActionProviderCannotBind(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	originalOpts := opts
 	t.Cleanup(func() { opts = originalOpts })
 	opts = runOptions{}

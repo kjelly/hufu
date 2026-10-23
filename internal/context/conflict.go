@@ -18,7 +18,7 @@ import (
 // CurrentConflictJudgePolicyVersion identifies the judge prompt and decision
 // rules. Bump it whenever either changes: judgments from older versions stop
 // counting as open conflicts, while human dismissals carry over.
-const CurrentConflictJudgePolicyVersion = "conflict-judge-v1"
+const CurrentConflictJudgePolicyVersion = "conflict-judge-v2"
 
 // ErrConflictsUnavailable reports a read-only store that predates the pair
 // judgment table (migration 11).
@@ -124,7 +124,11 @@ func NormalizePairJudgment(j *PairJudgment) {
 // PairJudgmentID is deterministic over scope, both items and their content
 // hashes, and the judge policy version. j must already be normalized.
 func PairJudgmentID(j PairJudgment) string {
-	sum := sha256.Sum256([]byte(strings.Join([]string{j.ProjectID, j.TeamID, j.AgentID, j.ItemAID, j.ItemAContentHash, j.ItemBID, j.ItemBContentHash, j.JudgePolicyVersion}, "\x00")))
+	parts := []string{j.ProjectID, j.TeamID, j.AgentID, j.ItemAID, j.ItemAContentHash, j.ItemBID, j.ItemBContentHash, j.JudgePolicyVersion}
+	if j.JudgePolicyVersion == CurrentConflictJudgePolicyVersion {
+		parts = append(parts, j.JudgeModel)
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return "conflict-" + hex.EncodeToString(sum[:12])
 }
 

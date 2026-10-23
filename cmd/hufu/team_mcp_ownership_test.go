@@ -76,6 +76,7 @@ func emptyMCPManager(context.Context, *team.TeamSession, *config.Config) *mcp.MC
 // mcpOwnershipSession returns a minimal team whose provider is a local test
 // server, so loadTeamCommon can finish without a real model backend.
 func mcpOwnershipSession(t *testing.T, name string) (*team.TeamSession, string) {
+	t.Setenv("HOME", t.TempDir())
 	t.Helper()
 	server := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(server.Close)

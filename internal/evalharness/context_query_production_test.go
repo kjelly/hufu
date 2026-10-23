@@ -83,7 +83,7 @@ func TestContextQueryProductionExistingLifecycleSuites(t *testing.T) {
 			}
 			activateFixtureContextQuery(t, fixture)
 			for index := range fixture.Cases {
-				fixture.Cases[index].Expect.ContextDelivery = []ContextDeliveryExpect{{Agent: "coordinator", Include: []string{"current_task"}, RequiredFragments: map[string]string{"current_task": fixture.Cases[index].Prompt}}}
+				fixture.Cases[index].Expect.ContextDelivery = []ContextDeliveryExpect{{Agent: "coordinator", Purpose: "coordinator_start", Include: []string{"current_task"}, RequiredFragments: map[string]string{"current_task": fixture.Cases[index].Prompt}}}
 			}
 			result, err := RunSuite(t.Context(), fixture, "")
 			if err != nil {

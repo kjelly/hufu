@@ -21,6 +21,7 @@ import (
 	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/decisionrt/control"
+	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/team/preset"
@@ -66,6 +67,7 @@ type TeamSession struct {
 	// GlobalControlDecisions is hufu.yaml's control-decisions block, supplied
 	// by the host before the coordinator is built. The team's own block
 	// (Config.ControlDecisions) overrides it field by field.
+	GlobalDecisionRuntime  settings.Config
 	GlobalControlDecisions control.Config
 	// GlobalSemanticRetrieval is hufu.yaml's semantic-retrieval block; the
 	// team's own block (Config.SemanticRetrieval) overrides it field by field.
@@ -1223,9 +1225,10 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	// authoring normalizer has already validated and materialized this config;
 	// an absent block leaves it at the reserved "off" profile.
 	cfg.Decision = decision
-	if _, err := catalog.New(yc.DecisionPrimitives, catalog.ValidationOnly()); err != nil {
+	if _, err := catalog.New(yc.DecisionPrimitives, catalog.ValidationOnly(), catalog.WithRuntimeConfig(yc.DecisionRuntime), catalog.AllowInheritedTransport()); err != nil {
 		return cfg, DecisionAuthoringMetadata{}, err
 	}
+	cfg.DecisionRuntime = yc.DecisionRuntime.WithSource("team")
 	cfg.DecisionPrimitives = yc.DecisionPrimitives
 	if err := yc.ControlDecisions.Validate(); err != nil {
 		return cfg, DecisionAuthoringMetadata{}, err
