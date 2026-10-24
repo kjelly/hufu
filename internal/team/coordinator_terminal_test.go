@@ -469,11 +469,6 @@ func (m *submittingWorkerAgent) Stream(context.Context, fantasy.AgentStreamCall)
 // replace the worker's honest report.
 func TestExecuteTaskRetainsPartialSubmittedResultWithoutConsultingTerminalEvidence(t *testing.T) {
 	workspace := t.TempDir()
-	// executeTask fires autoWriteSTMASync/persistReflexionLessonAsync as
-	// fire-and-forget goroutines that write into workspace; give them a beat
-	// to finish before TempDir cleanup removes it out from under them (see
-	// the identical guard in TestProtocolRepair_ProgressNotFinalIsExecutionFailure).
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -494,6 +489,7 @@ func TestExecuteTaskRetainsPartialSubmittedResultWithoutConsultingTerminalEviden
 		executionRunID:     "run-claim-gate",
 		terminalSessionMgr: manager,
 	}
+	cleanupTestCoordinator(t, c)
 	manager.SetActiveTaskRoundChecker(c.isTerminalRoundActive)
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "partial with stale terminal evidence"}})[0]
 
@@ -599,7 +595,6 @@ func TestExecuteTaskAcceptsCompletedWithGaps(t *testing.T) {
 
 func TestExecuteTaskUsesSubmittedResultWithEmptyDetailsForCompletionAndProjections(t *testing.T) {
 	workspace := t.TempDir()
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	c := &Coordinator{
 		session: &TeamSession{
 			Workspace: workspace,
@@ -615,6 +610,7 @@ func TestExecuteTaskUsesSubmittedResultWithEmptyDetailsForCompletionAndProjectio
 		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID: "run-typed-empty-details",
 	}
+	cleanupTestCoordinator(t, c)
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "complete typed handoff"}})[0]
 	const fallback = "Now let me continue with the remaining work."
 	c.workerAgentOverride = &submittingWorkerAgent{text: fallback, onSubmit: func() {
@@ -741,7 +737,6 @@ func TestExecuteTaskAdversarialVerifyUsesCanonicalSubmittedResult(t *testing.T) 
 
 func TestExecuteTaskVerbatimFinalizationUpdatesCanonicalResult(t *testing.T) {
 	workspace := t.TempDir()
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	c := &Coordinator{
 		session: &TeamSession{
 			Workspace: workspace,
@@ -756,6 +751,7 @@ func TestExecuteTaskVerbatimFinalizationUpdatesCanonicalResult(t *testing.T) {
 		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID: "run-verbatim-finalization",
 	}
+	cleanupTestCoordinator(t, c)
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "capture complete transcript"}})[0]
 	c.workerAgentOverride = &submittingWorkerAgent{onSubmit: func() {
 		c.storeSubmittedTaskResult(item.ID, &TaskResult{

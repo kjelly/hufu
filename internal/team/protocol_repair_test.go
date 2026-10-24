@@ -485,7 +485,6 @@ func TestProtocolRepairMetricsExcludeOnlyProgressTurn(t *testing.T) {
 
 func TestProtocolRepair_ProgressNotFinalIsExecutionFailure(t *testing.T) {
 	workspace := t.TempDir()
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	workerCalls := 0
 
 	c := &Coordinator{
@@ -502,6 +501,7 @@ func TestProtocolRepair_ProgressNotFinalIsExecutionFailure(t *testing.T) {
 		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID: "run-progress-repair",
 	}
+	cleanupTestCoordinator(t, c)
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "incomplete execution"}})[0]
 
 	c.workerAgentOverride = &countingTextAgent{calls: &workerCalls, text: "execution produced progress"}
@@ -624,7 +624,6 @@ func TestEffectiveWorkerMaxAttemptsAddsInitialAttempt(t *testing.T) {
 
 func TestProtocolRepair_ProgressNotFinalRetriesAndClearsAttemptResult(t *testing.T) {
 	workspace := t.TempDir()
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	workerCalls := 0
 	resultClearedBeforeRetry := false
 
@@ -642,6 +641,7 @@ func TestProtocolRepair_ProgressNotFinalRetriesAndClearsAttemptResult(t *testing
 		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID: "run-progress-retry",
 	}
+	cleanupTestCoordinator(t, c)
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "replay progress result"}})[0]
 
 	c.workerAgentOverride = &replayableWorkerAgent{
@@ -702,7 +702,6 @@ func TestProtocolRepair_ProgressNotFinalRetriesAndClearsAttemptResult(t *testing
 
 func TestProtocolRepair_InvalidSchemaGetsOneSchemaOnlyRetry(t *testing.T) {
 	workspace := t.TempDir()
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	workerCalls := 0
 	repairCalls := 0
 	var repairTouchedPaths [][]string
@@ -722,6 +721,7 @@ func TestProtocolRepair_InvalidSchemaGetsOneSchemaOnlyRetry(t *testing.T) {
 		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID: "run-schema-repair-success",
 	}
+	cleanupTestCoordinator(t, c)
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
 		Agent: "worker", Desc: "schema repair task",
 		InvariantVerification: InvariantVerificationReport,
@@ -803,7 +803,6 @@ func TestProtocolRepair_InvalidSchemaGetsOneSchemaOnlyRetry(t *testing.T) {
 
 func TestProtocolRepair_TwoInvalidSchemasRecoverProvisionallyAndBlock(t *testing.T) {
 	workspace := t.TempDir()
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	workerCalls := 0
 	repairCalls := 0
 
@@ -821,6 +820,7 @@ func TestProtocolRepair_TwoInvalidSchemasRecoverProvisionallyAndBlock(t *testing
 		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID: "run-schema-repair-failure",
 	}
+	cleanupTestCoordinator(t, c)
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "unrecoverable schema task"}})[0]
 	c.workerAgentOverride = &countingTextAgent{calls: &workerCalls, text: "original execution evidence"}
 	c.repairAgentOverride = &scriptedRepairAgent{
@@ -1246,7 +1246,6 @@ func (m *mockRepairAgent) Stream(ctx context.Context, call fantasy.AgentStreamCa
 
 func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
 	workspace := t.TempDir()
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 
 	c := &Coordinator{
 		session: &TeamSession{
@@ -1262,6 +1261,7 @@ func TestProtocolRepair_SuccessAndReceipt(t *testing.T) {
 		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID: "run-protocol-101",
 	}
+	cleanupTestCoordinator(t, c)
 
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
 		Agent: "worker",
@@ -1428,7 +1428,6 @@ func TestRecoveredProtocolCheckpointsDoNotEscalateSystemicScope(t *testing.T) {
 // accepting an unverifiable prose response as a completed result.
 func TestProtocolRepair_GroundedResultRejectsRepairAndRetriesInstead(t *testing.T) {
 	workspace := t.TempDir()
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 
 	c := &Coordinator{
 		session: &TeamSession{
@@ -1444,6 +1443,7 @@ func TestProtocolRepair_GroundedResultRejectsRepairAndRetriesInstead(t *testing.
 		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID: "run-protocol-grounded-101",
 	}
+	cleanupTestCoordinator(t, c)
 
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
 		Agent: "worker",
@@ -1668,7 +1668,6 @@ func TestReadOnlyFreeTextIncompleteHandoffIsRetryableNotDone(t *testing.T) {
 
 func TestProtocolRepair_StepBudgetExhaustionUsesResultOnlyFinalization(t *testing.T) {
 	workspace := t.TempDir()
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	workerCalls := 0
 	repairCalls := 0
 	var repairPrompts []string
@@ -1687,6 +1686,7 @@ func TestProtocolRepair_StepBudgetExhaustionUsesResultOnlyFinalization(t *testin
 		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID: "run-budget-finalization",
 	}
+	cleanupTestCoordinator(t, c)
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "long read-only task"}})[0]
 	c.workerAgentOverride = &exhaustedWorkerAgent{calls: &workerCalls}
 	c.repairAgentOverride = &scriptedRepairAgent{
@@ -1729,7 +1729,6 @@ func TestProtocolRepair_ReplayableTaskBlocksAfterRepairFailure(t *testing.T) {
 	//
 	// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §6.1, WP-08
 	workspace := t.TempDir()
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	workerCalls := 0
 
 	c := &Coordinator{
@@ -1746,6 +1745,7 @@ func TestProtocolRepair_ReplayableTaskBlocksAfterRepairFailure(t *testing.T) {
 		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID: "run-protocol-retry",
 	}
+	cleanupTestCoordinator(t, c)
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "replayable protocol task"}})[0]
 
 	c.workerAgentOverride = &replayableWorkerAgent{
@@ -1813,7 +1813,6 @@ func TestProtocolRepair_ReplayableTaskBlocksAfterRepairFailure(t *testing.T) {
 
 func TestProtocolRepair_NonReplayableTaskBlocksOnRepairFailure(t *testing.T) {
 	workspace := t.TempDir()
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	workerCalls := 0
 
 	c := &Coordinator{
@@ -1830,6 +1829,7 @@ func TestProtocolRepair_NonReplayableTaskBlocksOnRepairFailure(t *testing.T) {
 		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID: "run-protocol-102",
 	}
+	cleanupTestCoordinator(t, c)
 
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
 		Agent:      "worker",
@@ -1883,7 +1883,6 @@ func TestProtocolRepair_NonReplayableTaskBlocksOnRepairFailure(t *testing.T) {
 func TestProtocolRepair_FreeTextOutputCannotBypassRepairFailure(t *testing.T) {
 	// Finding 1 test: Non-empty worker output + repair fails + successful verifier ("true") MUST NOT turn task to done.
 	workspace := t.TempDir()
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 
 	c := &Coordinator{
 		session: &TeamSession{
@@ -1899,6 +1898,7 @@ func TestProtocolRepair_FreeTextOutputCannotBypassRepairFailure(t *testing.T) {
 		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID: "run-protocol-bypass",
 	}
+	cleanupTestCoordinator(t, c)
 
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
 		Agent:      "worker",
@@ -1938,7 +1938,6 @@ func TestProtocolRepair_FreeTextOutputCannotBypassRepairFailure(t *testing.T) {
 func TestProtocolRepair_AllowsReplayFalseBlocksWorkerReplay(t *testing.T) {
 	// Finding 2 test: SideEffectNone + explicit AllowsReplay = false MUST block retries and run worker exactly once.
 	workspace := t.TempDir()
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	workerCalls := 0
 
 	c := &Coordinator{
@@ -1955,6 +1954,7 @@ func TestProtocolRepair_AllowsReplayFalseBlocksWorkerReplay(t *testing.T) {
 		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID: "run-replay-false",
 	}
+	cleanupTestCoordinator(t, c)
 
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
 		Agent:      "worker",
@@ -1992,7 +1992,6 @@ func TestProtocolRepair_AllowsReplayFalseBlocksWorkerReplay(t *testing.T) {
 
 func TestProtocolRepair_RecoveryPolicyBlocksWorkerReplay(t *testing.T) {
 	workspace := t.TempDir()
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	workerCalls := 0
 
 	c := &Coordinator{
@@ -2009,6 +2008,7 @@ func TestProtocolRepair_RecoveryPolicyBlocksWorkerReplay(t *testing.T) {
 		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID: "run-protocol-policy",
 	}
+	cleanupTestCoordinator(t, c)
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "reconcile before retry"}})[0]
 	c.workerAgentOverride = &countingEmptyAgent{calls: &workerCalls}
 

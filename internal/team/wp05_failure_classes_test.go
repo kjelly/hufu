@@ -452,7 +452,6 @@ func (a *alwaysCancelWorkerAgent) Stream(ctx context.Context, call fantasy.Agent
 func newWP05RetryTestCoordinator(t *testing.T, worker fantasy.Agent) (*Coordinator, *[]string) {
 	t.Helper()
 	workspace := t.TempDir()
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	var events []string
 	c := &Coordinator{
 		session: &TeamSession{
@@ -472,6 +471,7 @@ func newWP05RetryTestCoordinator(t *testing.T, worker fantasy.Agent) (*Coordinat
 		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID: "run-wp05-retry",
 	}
+	cleanupTestCoordinator(t, c)
 	c.workerAgentOverride = worker
 	return c, &events
 }

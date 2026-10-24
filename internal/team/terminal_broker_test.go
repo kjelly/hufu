@@ -34,7 +34,6 @@ func terminalBrokerTestWorkspace(t *testing.T) string {
 
 func TestTerminalBrokerAttachStreamsInputAndOutput(t *testing.T) {
 	workspace := terminalBrokerTestWorkspace(t)
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
 		t.Fatal(err)

@@ -103,8 +103,6 @@ func newIsolatedTeamFixture(t *testing.T, worker func(*Coordinator) fantasy.Agen
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// executeTask's fire-and-forget memory writers target the workspace.
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	session := &TeamSession{
 		Workspace: workspace,
 		Scope:     WorkspaceScope{Managed: true, ControlRoot: control, SubjectRoot: subject},
@@ -121,14 +119,17 @@ func newIsolatedTeamFixture(t *testing.T, worker func(*Coordinator) fantasy.Agen
 	if err != nil {
 		t.Fatal(err)
 	}
+	cleanupTestCoordinator(t, c)
 	store, err := NewEventStore(workspace, "run-isolated", "session-isolated")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
 	c.eventStore = store
 	c.SetEventJournal(eventStoreJournal{store: store})
 	c.executionRunID = "run-isolated"
+	if err := c.closeContextRepository(); err != nil {
+		t.Fatal(err)
+	}
 	c.contextRepo = nil
 	if worker != nil {
 		c.workerAgentOverride = worker(c)

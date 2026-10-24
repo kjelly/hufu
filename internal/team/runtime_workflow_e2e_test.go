@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
@@ -27,7 +26,7 @@ func TestActionTelemetryAndContextPersistence_E2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 
 	if err := os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte("sample content"), 0644); err != nil {
 		t.Fatal(err)
@@ -84,7 +83,7 @@ func TestActionTelemetryAndContextPersistence_E2E(t *testing.T) {
 	ts := httptest.NewUnstartedServer(handler)
 	ts.Listener = listener
 	ts.Start()
-	defer ts.Close()
+	t.Cleanup(ts.Close)
 
 	session := &TeamSession{
 		Workspace: tmpDir,
@@ -138,6 +137,7 @@ func TestActionTelemetryAndContextPersistence_E2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.eventStore = es
+	cleanupTestCoordinator(t, c)
 
 	phaseWorkflow, err := newRuntimeWorkflow(session)
 	if err != nil {
@@ -204,8 +204,7 @@ func TestActionTelemetryAndContextPersistence_E2E(t *testing.T) {
 		t.Logf("todo_3 err: %v", err)
 	}
 
-	// Ensure we wait a moment
-	time.Sleep(100 * time.Millisecond)
+	// Run finalization drains the registered asynchronous writers.
 	finalizeRun()
 
 	// 1. Verify Context Persistence
