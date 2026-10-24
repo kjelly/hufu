@@ -48,6 +48,11 @@ func TestCoordinatorSubServices_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	})
 
 	if c.Planner() == nil {
 		t.Errorf("expected non-nil Planner interface")
@@ -76,15 +81,8 @@ func TestCoordinatorSubServices_Defaults(t *testing.T) {
 }
 
 func TestCoordinatorSubServices_Override(t *testing.T) {
-	session := &TeamSession{
-		Workspace: t.TempDir(),
-		Dir:       t.TempDir(),
-		Config:    agent.TeamConfig{Name: "test-team", GoalMode: "exploratory"},
-	}
-	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
-	if err != nil {
-		t.Fatalf("NewCoordinator failed: %v", err)
-	}
+	// Overrides exercise interface dispatch without constructing runtime services.
+	c := &Coordinator{}
 
 	// Test Planner override
 	mockP := &mockPlanner{}

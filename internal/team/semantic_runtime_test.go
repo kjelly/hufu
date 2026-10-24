@@ -148,11 +148,7 @@ func conceptSettings(t *testing.T, fake *conceptOllama, mode semantic.Mode, twea
 
 func openSemanticTestRepo(t *testing.T) *contextstore.SQLiteRepository {
 	t.Helper()
-	repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = repo.Close() })
+	repo := openMigratedContextTestDB(t, filepath.Join(t.TempDir(), "context.sqlite"))
 	return repo
 }
 

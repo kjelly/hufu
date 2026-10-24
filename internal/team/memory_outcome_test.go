@@ -245,10 +245,7 @@ func testRepeatedOutcomeDoesNotDoubleCount(t *testing.T) {
 func outcomeTestCoordinator(t *testing.T, ids ...string) (*Coordinator, *contextstore.SQLiteRepository) {
 	t.Helper()
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	repo := openMigratedContextTestDB(t, filepath.Join(workspace, "context.sqlite"))
 	for _, id := range ids {
 		fingerprint := sha256.Sum256([]byte("go test ./..."))
 		if err := repo.Append(context.Background(), contextstore.ContextItem{ID: id, Kind: contextstore.ContextPattern, Content: "procedure " + id, Scope: contextstore.Scope{ProjectID: "project"}, Lifecycle: contextstore.LifecycleConfirmed, Metadata: map[string]string{"action_fingerprint": hex.EncodeToString(fingerprint[:])}}); err != nil {
@@ -259,7 +256,7 @@ func outcomeTestCoordinator(t *testing.T, ids ...string) (*Coordinator, *context
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = es.Close(); _ = repo.Close() })
+	t.Cleanup(func() { _ = es.Close() })
 	policy := agent.DefaultMemoryLearningPolicy()
 	policy.Mode = agent.MemoryLearningObserve
 	c := &Coordinator{session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{MemoryLearning: policy}}, contextRepo: repo, eventStore: es}

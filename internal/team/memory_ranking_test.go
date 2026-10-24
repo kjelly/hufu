@@ -376,16 +376,12 @@ func TestLoadMemoryPolicyResolvesRequestedVersion(t *testing.T) {
 func rankingTestCoordinator(t *testing.T, mode agent.MemoryLearningMode) (*Coordinator, *contextstore.SQLiteRepository) {
 	t.Helper()
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	repo := openMigratedContextTestDB(t, filepath.Join(workspace, "context.sqlite"))
 	for _, item := range []contextstore.ContextItem{rankingItem("a", 10), rankingItem("b", 20), rankingItem("base-a", 10), rankingItem("base-b", 20)} {
 		if err := repo.Append(context.Background(), item); err != nil {
 			t.Fatal(err)
 		}
 	}
-	t.Cleanup(func() { _ = repo.Close() })
 	policy := agent.DefaultMemoryLearningPolicy()
 	policy.Mode = mode
 	return &Coordinator{session: &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "team", MemoryLearning: policy}}, contextRepo: repo, projectDir: "project"}, repo
