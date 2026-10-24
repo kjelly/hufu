@@ -27,3 +27,15 @@ run = "go vet -p 2 ./..."
 [tasks.lint]
 description = "Run the pinned golangci-lint"
 run = "golangci-lint run"
+
+[tasks.test-short]
+description = "Run short tests; heavier tests have a separate required integration gate"
+run = "go run ./scripts/testlayers -layer short"
+
+[tasks.test-integration]
+description = "Run every test guarded by testing.Short without short mode"
+run = "go run ./scripts/testlayers -layer integration"
+
+[tasks.test-inventory]
+description = "List the complete platform-active short/integration test partition"
+run = "go run ./scripts/testlayers -list"

@@ -32,6 +32,9 @@ func (c *resultsPickerCapture) Write(data []byte) (int, error) {
 }
 
 func TestResultsPickerBinaryPTYSelectionCancelAndRestore(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildProcessContractBinary(t)
 	workspace, _ := resultsTestFixture(t)
 	for _, scenario := range []string{"final", "report", "task", "cancel", "interrupt"} {

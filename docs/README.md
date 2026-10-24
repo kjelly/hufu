@@ -81,6 +81,8 @@ to re-create an abstraction that already exists in the runtime.
 
 ### Guides and references
 
+- [Test layers](reference/test-layers.md) — short/integration entry points, automatic
+  membership, moved-case inventory and conservative parallelization for issue #32.
 - [Test performance baseline](reference/test-performance-baseline.md) — cache-separated
   Go test measurements, profiles and regression-contract inventory for issue #26.
 

@@ -8,6 +8,9 @@ import (
 )
 
 func TestMigrateIsIdempotentAcrossReopen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	path := filepath.Join(t.TempDir(), "context.sqlite")
 	r, err := OpenSQLite(path)
 	if err != nil {
@@ -39,6 +42,9 @@ func TestMigrateIsIdempotentAcrossReopen(t *testing.T) {
 }
 
 func TestOpenSQLiteRejectsTamperedMigrationChecksum(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	path := filepath.Join(t.TempDir(), "context.sqlite")
 	r, err := OpenSQLite(path)
 	if err != nil {
@@ -61,6 +67,9 @@ func TestOpenSQLiteRejectsTamperedMigrationChecksum(t *testing.T) {
 }
 
 func TestMigrateBacksUpExistingStoreBeforeApplyingNewMigration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	path := filepath.Join(t.TempDir(), "context.sqlite")
 	r, err := OpenSQLite(path)
 	if err != nil {
@@ -109,6 +118,9 @@ func TestMigrateBacksUpExistingStoreBeforeApplyingNewMigration(t *testing.T) {
 }
 
 func TestMigrateSkipsBackupForBrandNewStore(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	path := filepath.Join(t.TempDir(), "context.sqlite")
 	r, err := OpenSQLite(path)
 	if err != nil {

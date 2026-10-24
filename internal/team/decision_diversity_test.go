@@ -15,6 +15,7 @@ func agentsFixture() map[string]*agent.AgentDef {
 }
 
 func TestResolveRoleCandidateOrder(t *testing.T) {
+	t.Parallel()
 	agents := agentsFixture()
 
 	t.Run("no preference flags returns the pool unchanged", func(t *testing.T) {
@@ -57,6 +58,7 @@ func TestResolveRoleCandidateOrder(t *testing.T) {
 }
 
 func TestDistinctModelAndProviderCount(t *testing.T) {
+	t.Parallel()
 	agents := agentsFixture()
 	if got := distinctModelCount([]string{"a", "b", "c"}, agents); got != 2 {
 		t.Fatalf("distinctModelCount = %d, want 2", got)
@@ -70,6 +72,7 @@ func TestDistinctModelAndProviderCount(t *testing.T) {
 }
 
 func TestComputeBindingDiversitySummary(t *testing.T) {
+	t.Parallel()
 	t.Run("all distinct", func(t *testing.T) {
 		got := computeBindingDiversitySummary([]bindingIdentity{
 			{AgentID: "a", Model: "m1", Provider: "p1"},
@@ -103,6 +106,7 @@ func TestComputeBindingDiversitySummary(t *testing.T) {
 }
 
 func TestJudgeAndChallengeDiversitySummary(t *testing.T) {
+	t.Parallel()
 	t.Run("legacy sidecar opinions (no AgentID) produce a nil summary", func(t *testing.T) {
 		opinions := []DecisionOpinion{{JudgeID: "judge-1"}, {JudgeID: "judge-2"}}
 		if got := judgeDiversitySummary(opinions); got != nil {

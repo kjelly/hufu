@@ -362,6 +362,9 @@ func isFinalByte(c byte) bool {
 
 // TestE2E_VersionOutput verifies the real binary prints version info.
 func TestE2E_VersionOutput(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildTestBinary(t)
 	proc := startPTY(t, binary, []string{"--version"}, 30, 100)
 	if code := proc.waitExit(t, 10*time.Second); code != 0 {
@@ -372,6 +375,9 @@ func TestE2E_VersionOutput(t *testing.T) {
 
 // TestE2E_HelpOutput verifies the real binary prints help text.
 func TestE2E_HelpOutput(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildTestBinary(t)
 	proc := startPTY(t, binary, []string{"--help"}, 30, 100)
 	proc.waitForOutput(t, "hufu discovers", 10*time.Second)
@@ -383,6 +389,9 @@ func TestE2E_HelpOutput(t *testing.T) {
 
 // TestE2E_DoctorCommand checks both successful and failed provider preflight.
 func TestE2E_DoctorCommand(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	for _, tc := range []struct {
 		name         string
 		status, exit int
@@ -429,6 +438,9 @@ func TestE2E_DoctorCommand(t *testing.T) {
 
 // TestE2E_ListCommand checks the empty, isolated discovery result.
 func TestE2E_ListCommand(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	proc := startPTY(t, buildTestBinary(t), []string{"list"}, 30, 100)
 	if code := proc.waitExit(t, 10*time.Second); code != 0 {
 		t.Fatalf("list exit = %d", code)
@@ -510,6 +522,9 @@ func (p *ptyProcess) assertRunning(t *testing.T) {
 // One real PTY lifecycle covers ready rendering, kernel SIGWINCH delivery,
 // rapid/narrow resize, SIGINT and alternate-screen restoration in order.
 func TestE2E_TUILifecycle(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	proc := startBlockedTUI(t)
 	offset := len(proc.output.String())
 	for i := range 20 {
@@ -534,6 +549,9 @@ func TestE2E_TUILifecycle(t *testing.T) {
 
 // Keep all three stdin transports: a PTY above, /dev/null here and a real pipe.
 func TestE2E_NonInteractiveVersion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildTestBinary(t)
 	for _, piped := range []bool{false, true} {
 		t.Run(fmt.Sprintf("pipe=%t", piped), func(t *testing.T) {
@@ -559,6 +577,9 @@ func TestE2E_NonInteractiveVersion(t *testing.T) {
 // Sentinels in a synthetic user config and project config prove both roots
 // are read in the positive control and absent from a fresh HOME/CWD.
 func TestE2E_IsolatedEnvironment(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildTestBinary(t)
 	home, project := ptyTestDir(t), ptyTestDir(t)
 	configDir := filepath.Join(home, ".config", "hufu")

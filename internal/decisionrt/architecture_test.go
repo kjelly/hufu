@@ -7,6 +7,9 @@ import (
 )
 
 func TestCoreDependencyBoundary(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	command := exec.CommandContext(t.Context(), "go", "list", "-deps", "-f", "{{.ImportPath}}", ".")
 	output, err := command.Output()
 	if err != nil {

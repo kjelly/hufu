@@ -17,6 +17,9 @@ import (
 )
 
 func TestResultsPresentationBinaryTTYAndPipe(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildTestBinary(t)
 	workspace, _ := resultsTestFixture(t)
 	for _, test := range []struct {
