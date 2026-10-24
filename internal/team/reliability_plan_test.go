@@ -93,9 +93,6 @@ func TestProtocolFailureRecoveryPolicyDoesNotReplayNonReplayableSideEffects(t *t
 
 func TestExecuteTaskProtocolOnlyEmptyOutputBlocksWithoutRetry(t *testing.T) {
 	workspace := t.TempDir()
-	// Failed tasks may persist a reflexion lesson asynchronously; let that
-	// optional background record finish before t.TempDir removes the workspace.
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	calls := 0
 	c := &Coordinator{
 		session: &TeamSession{
@@ -110,6 +107,7 @@ func TestExecuteTaskProtocolOnlyEmptyOutputBlocksWithoutRetry(t *testing.T) {
 		reportStatus: func(StatusEvent) {},
 		taskCache:    newDefaultTaskCache(taskCacheDependencies{}),
 	}
+	cleanupTestCoordinator(t, c)
 	// The override models a worker that performed one external side effect,
 	// then stopped without output or submit_result. executeTask must classify
 	// this as protocol-only and never invoke the worker a second time.

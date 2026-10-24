@@ -101,7 +101,6 @@ func (a *unfixableVerifyAgent) Stream(ctx context.Context, call fantasy.AgentStr
 func newWP08TestCoordinator(t *testing.T, worker fantasy.Agent, maxRetries int) (*Coordinator, *[]string) {
 	t.Helper()
 	workspace := t.TempDir()
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	var events []string
 	c := &Coordinator{
 		session: &TeamSession{
@@ -121,6 +120,7 @@ func newWP08TestCoordinator(t *testing.T, worker fantasy.Agent, maxRetries int) 
 		taskCache:      newDefaultTaskCache(taskCacheDependencies{}),
 		executionRunID: "run-wp08",
 	}
+	cleanupTestCoordinator(t, c)
 	c.workerAgentOverride = worker
 	return c, &events
 }

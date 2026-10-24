@@ -20,10 +20,6 @@ import (
 // state to its retrieval ID.
 func TestWorkerManifestQueryHashMatchesRetrievalQuery(t *testing.T) {
 	workspace := t.TempDir()
-	// executeTask fires autoWriteSTMASync/persistReflexionLessonAsync as
-	// fire-and-forget goroutines that write into workspace; give them a beat
-	// to finish before TempDir cleanup removes it out from under them.
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 
 	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
 	if err != nil {
@@ -59,6 +55,7 @@ func TestWorkerManifestQueryHashMatchesRetrievalQuery(t *testing.T) {
 		projectDir:     "project",
 		skills:         []*skill.SkillDef{{Name: "deploy", Description: "deploy the service", Content: "run the deploy steps", Path: "skills/deploy/SKILL.md"}},
 	}
+	cleanupTestCoordinator(t, c)
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "deploy the service"}})[0]
 	c.workerAgentOverride = &submittingWorkerAgent{onSubmit: func() {
 		c.storeSubmittedTaskResult(item.ID, &TaskResult{

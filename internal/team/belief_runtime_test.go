@@ -276,7 +276,6 @@ func TestBeliefRuntimeWorkerVerificationUsesFrozenEventBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.initEventStore()
-	t.Cleanup(func() { _ = c.eventStore.Close() })
 	c.refreshBeliefs(nil)
 	snapshot := bindBeliefTestRevision(t, c)
 	spec := TodoSpec{Agent: "worker", Desc: "do work", Verify: "true", RunInputSnapshotID: snapshot.ID, RunInputSnapshotHash: snapshot.SnapshotHash}

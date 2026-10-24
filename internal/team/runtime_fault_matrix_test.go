@@ -103,7 +103,6 @@ func TestRuntimeFaultMatrixRetryReopensSameOccurrenceAndPersistsProjections(t *t
 	if c.eventStore == nil {
 		t.Fatal("event store was not initialized")
 	}
-	t.Cleanup(func() { _ = c.eventStore.Close() })
 	c.initTaskJournal()
 	c.taskCache = newDefaultTaskCache(taskCacheDependenciesFor(c))
 
@@ -179,6 +178,8 @@ func TestRuntimeFaultMatrixRetryReopensSameOccurrenceAndPersistsProjections(t *t
 	if c.journal == nil {
 		t.Fatal("task journal was not initialized")
 	}
+	// Finish background writers before explicitly reopening the task journal.
+	c.drainAsyncTasks()
 	if err := c.journal.Close(); err != nil {
 		t.Fatalf("close task journal: %v", err)
 	}

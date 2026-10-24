@@ -40,6 +40,9 @@ type TerminalBroker struct {
 	ln      *net.UnixListener
 	once    sync.Once
 	done    chan struct{}
+	workers sync.WaitGroup
+	connMu  sync.Mutex
+	conns   map[*net.UnixConn]struct{}
 }
 
 // TerminalBrokerHooks bind a terminal handoff to coordinator task state.
@@ -82,22 +85,33 @@ func StartTerminalBrokerWithHooks(workspace string, manager *TerminalSessionMana
 		_ = ln.Close()
 		return nil, fmt.Errorf("set terminal broker permissions: %w", err)
 	}
-	b := &TerminalBroker{manager: manager, hooks: hooks, path: path, ln: ln, done: make(chan struct{})}
+	b := &TerminalBroker{manager: manager, hooks: hooks, path: path, ln: ln, done: make(chan struct{}), conns: make(map[*net.UnixConn]struct{})}
+	// Keep the accept loop registered until all admitted handlers are tracked.
+	b.workers.Add(1)
 	go b.serve()
 	return b, nil
 }
 
+// Close stops admission, interrupts connected clients, and waits for handlers
+// to release their terminal leases before callers tear down the workspace.
 func (b *TerminalBroker) Close() error {
 	var err error
 	b.once.Do(func() {
 		close(b.done)
 		err = b.ln.Close()
+		b.connMu.Lock()
+		for conn := range b.conns {
+			_ = conn.Close()
+		}
+		b.connMu.Unlock()
+		b.workers.Wait()
 		_ = os.Remove(b.path)
 	})
 	return err
 }
 
 func (b *TerminalBroker) serve() {
+	defer b.workers.Done()
 	for {
 		conn, err := b.ln.AcceptUnix()
 		if err != nil {
@@ -108,7 +122,26 @@ func (b *TerminalBroker) serve() {
 				continue
 			}
 		}
-		go b.handle(conn)
+		b.connMu.Lock()
+		select {
+		case <-b.done:
+			b.connMu.Unlock()
+			_ = conn.Close()
+			return
+		default:
+		}
+		b.conns[conn] = struct{}{}
+		b.workers.Add(1)
+		b.connMu.Unlock()
+		go func() {
+			defer b.workers.Done()
+			defer func() {
+				b.connMu.Lock()
+				delete(b.conns, conn)
+				b.connMu.Unlock()
+			}()
+			b.handle(conn)
+		}()
 	}
 }
 
