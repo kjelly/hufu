@@ -128,6 +128,9 @@ func TestDecodeCatalogTaskDefs(t *testing.T) {
 }
 
 func TestCompileCatalogActionTasksRejections(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	tests := []struct {
 		name    string
 		prepare func(*Coordinator)

@@ -44,6 +44,9 @@ func newSessionRaceCoordinator(t *testing.T) *Coordinator {
 // creates. Under -race this must report no data race, and the final persisted
 // session must reflect a coherent superset of the manifests and tasks written.
 func TestSessionDataConcurrentCheckpointNoRace(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	c := newSessionRaceCoordinator(t)
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
 		{Agent: "worker", Desc: "race-task-1"},
