@@ -128,6 +128,9 @@ short-mode skips are recorded rather than counted as covered contracts.
 
 The [2026-10-22 capture attempt](../archive/analyses/test-baseline-2026-10-22.md)
 records a failing original-revision run and the resulting baseline gaps.
+The [2026-10-24 fixture comparison](../archive/analyses/coordinator-sqlite-fixtures-2026-10-24.md)
+records the profile-backed scope, focused before/after measurements and retained
+contract coverage for issue #31. It does not establish a passing full-suite baseline.
 
 For each revision report commands, source commit, case-set changes, environment,
 sample count, median/range wall time, package timings, slowest tests, skips,

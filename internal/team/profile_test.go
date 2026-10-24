@@ -157,6 +157,11 @@ func TestProfile_FreshVerificationIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	})
 
 	freshProf, _ := GetBuiltinProfile(string(ProfileFreshVerification))
 	c.SetExecutionProfile(freshProf)
@@ -223,6 +228,11 @@ func TestProfile_AcceptanceModeBlocking(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	})
 
 	strictProf, _ := GetBuiltinProfile(string(ProfileStrictVerification))
 	strictProf.RequireEvidenceManifest = false // focus test on acceptance check
@@ -273,10 +283,7 @@ func TestProfile_TeamAcceptanceModeOverridesFreshSession(t *testing.T) {
 			AcceptanceMode: string(AcceptanceBlocking),
 		},
 	}
-	c, err := NewCoordinator(session, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
-	if err != nil {
-		t.Fatalf("NewCoordinator failed: %v", err)
-	}
+	c := &Coordinator{session: session}
 	fresh, _ := GetBuiltinProfile(string(ProfileFreshSession))
 	c.SetExecutionProfile(fresh)
 	if got := c.ExecutionProfile().AcceptanceMode; got != AcceptanceBlocking {
@@ -302,6 +309,11 @@ func TestProfile_RequireEvidenceManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	})
 
 	strictProf, _ := GetBuiltinProfile(string(ProfileStrictVerification))
 	c.SetExecutionProfile(strictProf)
@@ -333,6 +345,11 @@ func TestProfile_RequireClosedTerminals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	})
 
 	strictProf, _ := GetBuiltinProfile(string(ProfileStrictVerification))
 	c.SetExecutionProfile(strictProf)
@@ -378,6 +395,11 @@ func TestProfile_PolicyFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	})
 
 	strictProf, _ := GetBuiltinProfile(string(ProfileStrictVerification))
 	c.SetExecutionProfile(strictProf)
@@ -456,6 +478,8 @@ timeout: 300
 }
 
 func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
+	// Path policy needs only the session, project root and execution profile.
+	// Keep constructor/persistence coverage in the integration cases.
 	projDir := t.TempDir()
 	isolatedDir := t.TempDir()
 	strictProf, _ := GetBuiltinProfile(string(ProfileStrictVerification))
@@ -467,11 +491,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 		Dir:       teamDir,
 		Config:    agent.TeamConfig{Name: "team-a", GoalMode: "exploratory"},
 	}
-	c1, err := NewCoordinator(sessionProjRoot, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
-	if err != nil {
-		t.Fatalf("NewCoordinator failed: %v", err)
-	}
-	c1.projectDir = projDir
+	c1 := &Coordinator{session: sessionProjRoot, projectDir: projDir}
 	c1.SetExecutionProfile(strictProf)
 	if err := c1.ValidateWorkspaceIsolation(); err == nil {
 		t.Error("expected error when Workspace == project root for named team, got nil")
@@ -484,11 +504,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 		Dir:       teamDir,
 		Config:    agent.TeamConfig{Name: "team-a", GoalMode: "exploratory"},
 	}
-	c2, err := NewCoordinator(sessionSubdir, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
-	if err != nil {
-		t.Fatalf("NewCoordinator failed: %v", err)
-	}
-	c2.projectDir = projDir
+	c2 := &Coordinator{session: sessionSubdir, projectDir: projDir}
 	c2.SetExecutionProfile(strictProf)
 	if err := c2.ValidateWorkspaceIsolation(); err == nil {
 		t.Error("expected error when Workspace is inside project root (project subdir), got nil")
@@ -500,11 +516,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 		Dir:       teamDir,
 		Config:    agent.TeamConfig{Name: "team-a", GoalMode: "exploratory"},
 	}
-	c3, err := NewCoordinator(sessionControlDir, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
-	if err != nil {
-		t.Fatalf("NewCoordinator failed: %v", err)
-	}
-	c3.projectDir = projDir
+	c3 := &Coordinator{session: sessionControlDir, projectDir: projDir}
 	c3.SetExecutionProfile(strictProf)
 	if err := c3.ValidateWorkspaceIsolation(); err == nil {
 		t.Error("expected error when Workspace == team control dir, got nil")
@@ -516,11 +528,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 		Dir:       teamDir,
 		Config:    agent.TeamConfig{Name: "team-a", GoalMode: "exploratory"},
 	}
-	c4, err := NewCoordinator(sessionIsolated, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
-	if err != nil {
-		t.Fatalf("NewCoordinator failed: %v", err)
-	}
-	c4.projectDir = projDir
+	c4 := &Coordinator{session: sessionIsolated, projectDir: projDir}
 	c4.SetExecutionProfile(strictProf)
 	if err := c4.ValidateWorkspaceIsolation(); err != nil {
 		t.Errorf("expected success for completely isolated workspace directory outside project root, got: %v", err)
@@ -532,11 +540,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 		Dir:       projDir,
 		Config:    agent.TeamConfig{Name: "default", GoalMode: "exploratory"},
 	}
-	c5, err := NewCoordinator(sessionDefaultRoot, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
-	if err != nil {
-		t.Fatalf("NewCoordinator failed: %v", err)
-	}
-	c5.projectDir = projDir
+	c5 := &Coordinator{session: sessionDefaultRoot, projectDir: projDir}
 	c5.SetExecutionProfile(strictProf)
 	if err := c5.ValidateWorkspaceIsolation(); err == nil {
 		t.Error("expected error when default team Workspace == project root, got nil")
@@ -548,11 +552,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 		Dir:       subDir,
 		Config:    agent.TeamConfig{Name: "default", GoalMode: "exploratory"},
 	}
-	c6, err := NewCoordinator(sessionDefaultSubdir, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
-	if err != nil {
-		t.Fatalf("NewCoordinator failed: %v", err)
-	}
-	c6.projectDir = projDir
+	c6 := &Coordinator{session: sessionDefaultSubdir, projectDir: projDir}
 	c6.SetExecutionProfile(strictProf)
 	if err := c6.ValidateWorkspaceIsolation(); err == nil {
 		t.Error("expected error for default team with workspace inside project root, got nil")
@@ -564,11 +564,7 @@ func TestProfile_RequireWorkspaceIsolation(t *testing.T) {
 		Dir:       isolatedDir,
 		Config:    agent.TeamConfig{Name: "default", GoalMode: "exploratory"},
 	}
-	c7, err := NewCoordinator(sessionDefaultIsolated, "", "", nil, nil, RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
-	if err != nil {
-		t.Fatalf("NewCoordinator failed: %v", err)
-	}
-	c7.projectDir = projDir
+	c7 := &Coordinator{session: sessionDefaultIsolated, projectDir: projDir}
 	c7.SetExecutionProfile(strictProf)
 	if err := c7.ValidateWorkspaceIsolation(); err != nil {
 		t.Errorf("expected success for default team with isolated workspace directory, got: %v", err)
@@ -588,6 +584,11 @@ func TestProfile_RequireLockedResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	})
 
 	strictProf, _ := GetBuiltinProfile(string(ProfileStrictVerification))
 	c.SetExecutionProfile(strictProf)
@@ -649,6 +650,11 @@ func TestProfile_RequireEvidenceManifest_ManifestGateAndAcknowledge(t *testing.T
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	})
 
 	strictProf, _ := GetBuiltinProfile(string(ProfileStrictVerification))
 	c.SetExecutionProfile(strictProf)
@@ -694,6 +700,11 @@ func TestFreshProfile_DoesNotInheritRounds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	})
 
 	freshProf, _ := GetBuiltinProfile(string(ProfileFreshVerification))
 	c.SetExecutionProfile(freshProf)
@@ -748,6 +759,11 @@ func TestFreshProfile_ClearsPersistedConversationHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator failed: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("close coordinator: %v", err)
+		}
+	})
 
 	if len(c.conversationHistory) == 0 {
 		t.Fatal("expected conversationHistory to be pre-populated by NewCoordinator before applying fresh profile")
