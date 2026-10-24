@@ -281,6 +281,9 @@ func TestAppendHistorySequentialCompactionsPreserveProvenanceAcrossRestart(t *te
 }
 
 func TestRealPredecessorCompactionsUseIncrementalLineageValidation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	workspace := t.TempDir()
 	store, err := NewEventStore(workspace, "run-lineage", "session-lineage")
 	if err != nil {

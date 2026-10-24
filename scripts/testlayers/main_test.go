@@ -209,3 +209,25 @@ func TestLayerCommandsPreserveCoverageAndIsolation(t *testing.T) {
 		t.Fatal("empty integration selection passed")
 	}
 }
+
+func TestPackageTimeoutOverridePreservesRaceAndFreshExecution(t *testing.T) {
+	selected := []suite{{Package: "example/team", Integration: []string{"TestPersistence"}}}
+	for _, layer := range []string{"short", "integration"} {
+		commands, err := testCommands(layer, selected, []string{"-race", "-json", "-timeout", "30m"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Go uses the final value of a repeated flag. Check the effective
+		// deadline, as well as the flags protecting execution/coverage.
+		var timeout string
+		for i, arg := range commands[0] {
+			if arg == "-timeout" {
+				timeout = commands[0][i+1]
+			}
+		}
+		command := strings.Join(commands[0], " ")
+		if timeout != "30m" || !strings.Contains(command, "-count=1") || !strings.Contains(command, "-race -json") {
+			t.Fatalf("%s command = %v", layer, commands[0])
+		}
+	}
+}

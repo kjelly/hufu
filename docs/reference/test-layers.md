@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `276c8cd5b7e4397127023fc9e1f2350bedba2278` (implementation base)
+> Verified-Commit: `b3360c9a5804e83934204d8118c5c322e50a94e9` (implementation base)
 > Supersedes: undocumented short-mode membership
 > Superseded-By: —
 
@@ -59,12 +59,16 @@ existing `-p 2` budget when their names cannot select any short test in another
 participating package. If names collide, it falls back to per-package exact
 filters. This avoids a second full unit execution, repeated Go invocations in
 the common case, and unbounded database concurrency.
-Both offline runners use `-p 2`, `-count=1`, and the existing 20-minute package
-timeout. Additional Go test flags follow `--`, for example:
+Both offline runners use `-p 2`, `-count=1`, and a default 20-minute package
+timeout. The team short CI group overrides this to 30 minutes, with a 40-minute
+job limit including setup, compilation and evidence upload. Other short groups
+retain 20-minute package deadlines with 30-minute job limits; integration retains
+20-minute package deadlines with a 40-minute job limit across its packages.
+Additional Go test flags follow `--` (the final `-timeout` value wins), for example:
 
 ```bash
 mise exec -- go run ./scripts/testlayers -layer integration -- -race
-mise exec -- go run ./scripts/testlayers -layer short -scope team -- -race
+mise exec -- go run ./scripts/testlayers -layer short -scope team -- -race -timeout 30m
 mise exec -- go run ./scripts/testlayers -list > work/test-inventory.json
 ```
 
@@ -97,6 +101,29 @@ PTY transport, custody/lease transfer, SQLite checksum/backup/reopen, dependency
 boundaries and generator reproducibility retain their original assertions.
 Other process, SQLite, crash/resume and locking cases remain in short until
 reviewed; no broad file-name heuristic reclassifies them.
+
+## Team timeout follow-up: six reviewed cases (issue #42)
+
+These six cases were the >=10-second tail in the main `short-team` artifact
+on `b3360c9a`. Each now has the whole-test guard above; the required integration
+job discovers and executes it under race without `-short`. All original fixtures,
+iteration counts and assertions remain intact. Full CGO-free execution also
+continues to include them.
+
+| Source | Case moved to integration | Fixture/contract retained |
+| --- | --- | --- |
+| `internal/team/hufu_dev_workflow_integration_test.go` | `TestHufuDevWorkflowStructuredHandoffAndArtifacts` | Three-worker handoff, real shell output/artifact offload, verification, acceptance and durable replay across six outcomes |
+| `internal/team/memory_explain_test.go` | `TestExplainPersistentMemoryMatchesRuntimeSelection` | SQLite-backed adopted policy and runtime/explain ranking parity across four learning modes and five queries |
+| `internal/team/session_data_race_test.go` | `TestSessionDataConcurrentCheckpointNoRace` | Four concurrent writers, manifest/checkpoint persistence and final coherent session state; still executed with the race detector |
+| `internal/team/resource_order_test.go` | `TestSerializedMutationsDoNotInheritFailure` | Coordinator scheduler, serialized workspace writes, failure/dependency propagation and event-journal replay |
+| `internal/team/compaction_state_test.go` | `TestRealPredecessorCompactionsUseIncrementalLineageValidation` | 64 persisted predecessor generations and one lineage range query per generation |
+| `internal/team/team_action_dispatch_test.go` | `TestCompileCatalogActionTasksRejections` | Full Coordinator/event-store fixtures for 14 dispatch rejection scenarios; no provider may execute |
+
+This brings integration membership to 37 cases on this implementation base.
+The migration moves work between jobs; it does not claim to reduce total CPU.
+Small pure parsing, scheduler predicates and rejection tests remain in short.
+See the [timeout follow-up evidence](../archive/analyses/team-race-timeout-2026-10-24.md)
+for validation, cache changes and the outstanding main-push stability check.
 
 ## First parallel batch
 
@@ -135,6 +162,22 @@ Artifacts last 14 days. The additional integration runner restores its own Go
 cache and compiles/links its selected test packages, even when those packages
 also run in short. Cache size is a storage observation, not a cache-hit ratio,
 transfer duration, or CPU saving. setup-go logs supply cache restore/save timing.
+
+Each race job also publishes `package-budget.json` and a summary table of terminal
+Go package `Elapsed` divided by that job's actual package timeout. Test/subtest
+elapsed values and command wall time are not added into this ratio. Ratios above
+75% emit a workflow warning; missing terminal results or truncated JSONL are
+reported as unavailable/incomplete, including failed discovery. A warning does
+not replace the existing test exit status or mask failures.
+
+CI pins setup-go v5.6.0, which bundles the cache v4 client instead of v5.0.0's
+cache v3 client. Each short race scope and integration uses a distinct `GOCACHE`
+path: cache archive paths participate in the cache version, preventing a normal
+build job or another scope from populating the same immutable race cache.
+Module-cache paths stay unchanged. The summary/artifact records setup-go's
+`cache-hit`; a hit does not prove every compilation action was cached. The first
+run with the new client/paths may miss, and transfer results must be checked in
+the logs before claiming the historical HTTP 400 problem is resolved.
 
 For a completed CI comparison report both critical path (workflow wall time,
 including setup/queue where relevant) and total runner seconds (sum of all job

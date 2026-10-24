@@ -109,6 +109,9 @@ func hufuDevFixtureTool(ctx context.Context, call fantasy.AgentStreamCall, id st
 }
 
 func TestHufuDevWorkflowStructuredHandoffAndArtifacts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	for _, tc := range []struct {
 		name      string
 		artifacts bool

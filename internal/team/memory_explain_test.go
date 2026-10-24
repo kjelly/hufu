@@ -49,6 +49,9 @@ func explainInput(c *Coordinator, id, query string) MemoryExplainInput {
 }
 
 func TestExplainPersistentMemoryMatchesRuntimeSelection(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	queries := []string{"sqlite", "retry", "cache lint", "migration\nphase: implement", "duplicate guidance"}
 	for _, mode := range []agent.MemoryLearningMode{agent.MemoryLearningOff, agent.MemoryLearningObserve, agent.MemoryLearningShadow, agent.MemoryLearningActive} {
 		t.Run(string(mode), func(t *testing.T) {

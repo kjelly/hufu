@@ -95,6 +95,9 @@ const (
 // which three independent workspace writers were serialized on the whole
 // workspace and one blocked step blocked every later step.
 func TestSerializedMutationsDoNotInheritFailure(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	tests := []struct {
 		name        string
 		retries     int

@@ -34,7 +34,7 @@ jobs:
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Set up Go ${{ env.GO_VERSION }}
-        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
@@ -54,7 +54,7 @@ jobs:
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Set up Go ${{ env.GO_VERSION }}
-        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -84,22 +84,40 @@ jobs:
         run: go vet ./... ./.agent-teams/hufu-dev/diagnostic-pilot/...
 
   test:
-    name: test (${{ matrix.scope }}; race, short, timeout 20m)
+    name: test (${{ matrix.scope }}; race, short, timeout ${{ matrix.package-timeout }})
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.job-timeout }}
     strategy:
       # Report every group even when another fails. ci-success needs all four.
       fail-fast: false
       matrix:
-        scope: [cli, team, improver, other]
+        include:
+          - scope: cli
+            package-timeout: 20m
+            job-timeout: 30
+          - scope: team
+            package-timeout: 30m
+            job-timeout: 40
+          - scope: improver
+            package-timeout: 20m
+            job-timeout: 30
+          - scope: other
+            package-timeout: 20m
+            job-timeout: 30
     env:
       GOMAXPROCS: "2"
       GOTOOLCHAIN: local
+      PACKAGE_TIMEOUT: ${{ matrix.package-timeout }}
+      # Cache versions include the archived paths. Distinct race paths keep
+      # immutable non-race caches and other scopes from winning the save race.
+      GOCACHE: ${{ github.workspace }}/.cache/go-race-${{ matrix.scope }}
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Set up Go ${{ env.GO_VERSION }}
-        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        id: setup-go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -120,12 +138,13 @@ jobs:
           du -sk "$(go env GOCACHE)" > work/ci-tests/cache-before.txt
           /usr/bin/time -f 'wall_seconds=%e\nuser_seconds=%U\nsystem_seconds=%S' \
             -o work/ci-tests/time.txt \
-            go run ./scripts/testlayers -layer short -scope "$TEST_SCOPE" -- -race -json \
+            go run ./scripts/testlayers -layer short -scope "$TEST_SCOPE" -- -race -json -timeout "$PACKAGE_TIMEOUT" \
             | tee work/ci-tests/tests.jsonl
 
       - name: Record timing and cache cost
         if: always()
         run: |
+          mkdir -p work/ci-tests
           du -sk "$(go env GOCACHE)" > work/ci-tests/cache-after.txt
           printf '### Test command metrics\n\n```text\n' >> "$GITHUB_STEP_SUMMARY"
           if [[ -f work/ci-tests/time.txt ]]; then
@@ -140,6 +159,14 @@ jobs:
           fi
           printf 'cache_after_kib=%s\n' "$(cut -f1 work/ci-tests/cache-after.txt)" >> "$GITHUB_STEP_SUMMARY"
           printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report package timeout budget
+        if: always()
+        env:
+          GO_CACHE_HIT: ${{ steps.setup-go.outputs.cache-hit }}
+        run: |
+          python3 scripts/test-package-budget.py --timeout "$PACKAGE_TIMEOUT" \
+            --evidence work/ci-tests --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Upload test evidence
         if: always()
@@ -152,15 +179,19 @@ jobs:
   integration:
     name: integration (race, process/PTY, persistence, architecture)
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     env:
       GOMAXPROCS: "2"
       GOTOOLCHAIN: local
+      PACKAGE_TIMEOUT: 20m
+      GOCACHE: ${{ github.workspace }}/.cache/go-race-integration
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Set up Go ${{ env.GO_VERSION }}
-        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        id: setup-go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -173,12 +204,13 @@ jobs:
           du -sk "$(go env GOCACHE)" > work/ci-tests/cache-before.txt
           /usr/bin/time -f 'wall_seconds=%e\nuser_seconds=%U\nsystem_seconds=%S' \
             -o work/ci-tests/time.txt \
-            go run ./scripts/testlayers -layer integration -- -race -json \
+            go run ./scripts/testlayers -layer integration -- -race -json -timeout "$PACKAGE_TIMEOUT" \
             | tee work/ci-tests/tests.jsonl
 
       - name: Record timing and cache cost
         if: always()
         run: |
+          mkdir -p work/ci-tests
           du -sk "$(go env GOCACHE)" > work/ci-tests/cache-after.txt
           printf '### Test command metrics\n\n```text\n' >> "$GITHUB_STEP_SUMMARY"
           if [[ -f work/ci-tests/time.txt ]]; then
@@ -193,6 +225,14 @@ jobs:
           fi
           printf 'cache_after_kib=%s\n' "$(cut -f1 work/ci-tests/cache-after.txt)" >> "$GITHUB_STEP_SUMMARY"
           printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report package timeout budget
+        if: always()
+        env:
+          GO_CACHE_HIT: ${{ steps.setup-go.outputs.cache-hit }}
+        run: |
+          python3 scripts/test-package-budget.py --timeout "$PACKAGE_TIMEOUT" \
+            --evidence work/ci-tests --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Upload test evidence
         if: always()
@@ -210,7 +250,7 @@ jobs:
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Set up Go ${{ env.GO_VERSION }}
-        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -250,7 +290,7 @@ jobs:
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Set up Go ${{ env.GO_VERSION }}
-        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -273,7 +313,7 @@ jobs:
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Set up Go ${{ env.GO_VERSION }}
-        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
