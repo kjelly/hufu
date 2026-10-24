@@ -207,7 +207,7 @@ func TestTerminalCleanupForcedStatePersistenceFailureStopsEscalation(t *testing.
 	if err := <-cleanupDone; err == nil || !strings.Contains(err.Error(), "persist forced terminal cleanup state") {
 		t.Fatalf("forced persistence failure = %v", err)
 	}
-	if !isPIDAlive(session.PID) {
+	if !processAlive(session.PID) {
 		t.Fatal("cleanup escalated to SIGKILL despite forced-state persistence failure")
 	}
 	manager.mu.Lock()

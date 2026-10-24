@@ -4,12 +4,10 @@ package team
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -24,14 +22,6 @@ import (
 func requireUnixProcessSupervisor(t *testing.T) ProcessSupervisor {
 	t.Helper()
 	return NewProcessSupervisor()
-}
-
-func processAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	err := syscall.Kill(pid, 0)
-	return err == nil || !errors.Is(err, syscall.ESRCH)
 }
 
 func waitUntil(t *testing.T, timeout time.Duration, condition func() bool) bool {

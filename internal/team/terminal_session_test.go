@@ -721,7 +721,7 @@ func TestTerminalSession_ProcessGroupKillDescendants(t *testing.T) {
 		t.Fatalf("child PID file was not written in time")
 	}
 
-	if !isPIDAlive(childPID) {
+	if !processAlive(childPID) {
 		t.Fatalf("child process %d should be alive before Close", childPID)
 	}
 
@@ -733,7 +733,7 @@ func TestTerminalSession_ProcessGroupKillDescendants(t *testing.T) {
 	// Wait up to 500ms for OS to clean up process
 	dead := false
 	for i := 0; i < 25; i++ {
-		if !isPIDAlive(childPID) {
+		if !processAlive(childPID) {
 			dead = true
 			break
 		}
@@ -783,7 +783,7 @@ func TestTerminalSession_ProcessGroupKillDescendants_NetworkBlock(t *testing.T) 
 		t.Fatalf("child PID file was not written in time")
 	}
 
-	if !isPIDAlive(childPID) {
+	if !processAlive(childPID) {
 		t.Fatalf("child process %d should be alive before Close", childPID)
 	}
 
@@ -795,7 +795,7 @@ func TestTerminalSession_ProcessGroupKillDescendants_NetworkBlock(t *testing.T) 
 	// Wait up to 500ms for OS to clean up process
 	dead := false
 	for i := 0; i < 25; i++ {
-		if !isPIDAlive(childPID) {
+		if !processAlive(childPID) {
 			dead = true
 			break
 		}
@@ -855,7 +855,7 @@ func TestTerminalSession_ChildTimeout_ProcessGroupKillDescendants_NetworkBlock(t
 	// Wait up to 500ms for OS to clean up process
 	dead := false
 	for i := 0; i < 25; i++ {
-		if !isPIDAlive(childPID) {
+		if !processAlive(childPID) {
 			dead = true
 			break
 		}
@@ -902,7 +902,7 @@ func TestTerminalSession_RestoredUnknownCloseGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if reconciled.State != TerminalSessionUnknown && isPIDAlive(session.PID) {
+	if reconciled.State != TerminalSessionUnknown && processAlive(session.PID) {
 		t.Fatalf("restored session state = %s, want unknown while process alive", reconciled.State)
 	}
 
@@ -1609,7 +1609,7 @@ func TestPTYCloseWaitsForFinalizationAndPublishesClosedOnlyAfterRelease(t *testi
 	if string(artifact) != "close-marker" {
 		t.Fatalf("durable PTY marker = %q", artifact)
 	}
-	if final[0].ProcessIdentity != nil && terminalProcessGroupAlive(final[0].ProcessIdentity.PGID) {
+	if final[0].ProcessIdentity != nil && processGroupAlive(final[0].ProcessIdentity.PGID) {
 		t.Fatalf("process group %d remains alive after Close", final[0].ProcessIdentity.PGID)
 	}
 	eventsMu.Lock()
@@ -1714,7 +1714,7 @@ func TestPTYExitCleansDescendantHoldingSlaveBeforeRelease(t *testing.T) {
 	if childPID <= 0 {
 		t.Fatalf("PTY descendant PID was not written in time")
 	}
-	if !isPIDAlive(childPID) {
+	if !processAlive(childPID) {
 		t.Fatalf("PTY descendant process %d should be alive before parent finalization", childPID)
 	}
 	manager.mu.RLock()
@@ -1758,13 +1758,13 @@ func TestPTYExitCleansDescendantHoldingSlaveBeforeRelease(t *testing.T) {
 	if completed.ID == "" {
 		t.Fatal("PTY session did not complete after process-group escalation")
 	}
-	if isPIDAlive(childPID) {
+	if processAlive(childPID) {
 		t.Fatalf("PTY descendant process %d survived process-group finalization", childPID)
 	}
 	if completed.Running || completed.ReleasedAt.IsZero() || completed.Custodian == TerminalCustodianCoordinator || completed.CleanupState == TerminalCleanupManual || completed.CleanupError != "" {
 		t.Fatalf("completed PTY session retained cleanup custody: %+v", completed)
 	}
-	if completed.ProcessIdentity != nil && terminalProcessGroupAlive(completed.ProcessIdentity.PGID) {
+	if completed.ProcessIdentity != nil && processGroupAlive(completed.ProcessIdentity.PGID) {
 		t.Fatalf("PTY process group %d survived session finalization", completed.ProcessIdentity.PGID)
 	}
 	artifact, err := os.ReadFile(filepath.Join(workspace, completed.OutputRefs[0].Path))
@@ -1929,14 +1929,14 @@ func TestTerminalPipeNaturalExitContainsDescendantsBeforeReap(t *testing.T) {
 	if childPID <= 0 {
 		t.Fatal("pipe descendant PID was not written in time")
 	}
-	if !isPIDAlive(childPID) {
+	if !processAlive(childPID) {
 		t.Fatalf("pipe descendant process %d should be alive before parent finalization", childPID)
 	}
 	completed := waitForTerminal(t, manager, session.ID, 3*time.Second)
 	if completed.State != TerminalSessionExited || completed.Running {
 		t.Fatalf("pipe finalization = %+v, want released exited session", completed)
 	}
-	if isPIDAlive(childPID) {
+	if processAlive(childPID) {
 		t.Fatalf("pipe descendant process %d survived process-group containment", childPID)
 	}
 }
