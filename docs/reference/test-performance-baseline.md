@@ -31,6 +31,14 @@ team race measurement, add `--package ./internal/team`. Repeating `--package`
 replaces the default package set; `--run` also changes the measured cases and
 must be identical on both revisions. A focused run is not full-suite evidence.
 
+After the [short/integration split](test-layers.md), normal/race `-short`
+observations deliberately exclude the reviewed integration cases. Use `--full`
+on both revisions for an equal-case comparison across that boundary, or report
+short and integration separately and verify their combined inventory. A faster
+short observation alone is not a full-suite speedup. The opt-in baseline workflow
+still measures its documented short configuration; required race coverage also
+includes the independent integration job.
+
 The opt-in **Test performance baseline** GitHub Actions workflow runs these
 three configurations on separate Ubuntu runners and uploads artifacts for 14
 days, including on failure. Dispatch it on each comparison ref; rerun enough
@@ -116,7 +124,7 @@ package sets; the focused entries below are diagnostic entry points only.
 | SQLite migration, durable storage and private sidecars | `internal/context/migrations_test.go`, `internal/runtimestore/permissions_unix_test.go`, `internal/team/event_store_sqlite_test.go` | `go test -count=1 ./internal/context ./internal/runtimestore ./internal/team` |
 | Crash/resume and durable result repair | `internal/team/resume_test.go`, `internal/team/wp02_resume_test.go`, `internal/workspace/versionstore` | `go test -count=1 ./internal/team ./internal/workspace/versionstore` |
 | Cross-process leases, locking and terminal custody | `internal/team/terminal_broker_test.go`, `internal/context/sqlite_txlock_test.go`, `internal/workspace/lifecycle_test.go` | `go test -count=1 ./internal/team ./internal/context ./internal/workspace` |
-| Data races | All core and diagnostic-pilot packages under `-race -short` | Same packages as normal capture, `--mode race` |
+| Data races | All core and diagnostic-pilot packages under `-race -short`, plus guarded cases under race without short | `--mode race --full` for equal-case measurements; [layered CI](test-layers.md) for required coverage |
 | Release constraint | All core and diagnostic-pilot packages with CGO disabled, without race | `--mode cgo-free --full` (actual tests, not compile-only) |
 | Live integration (explicit opt-in) | `internal/team/codex_smoke_test.go` | `HUFU_CODEX_SMOKE=1 go test -count=1 ./internal/team -run CodexSmoke` with an installed, authenticated Codex |
 

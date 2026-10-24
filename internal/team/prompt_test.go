@@ -7,6 +7,7 @@ import (
 )
 
 func TestHasAtName(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input string
 		want  bool
@@ -35,6 +36,7 @@ func TestHasAtName(t *testing.T) {
 }
 
 func TestParsePromptWithLazyAgents(t *testing.T) {
+	t.Parallel()
 	registry := NewTeamRegistry([]string{".test-teams"})
 	// Manually add test teams
 	registry.teams = map[string]string{
@@ -143,6 +145,7 @@ func TestParsePromptWithLazyAgents(t *testing.T) {
 }
 
 func TestSplitSegmentByAgents(t *testing.T) {
+	t.Parallel()
 	registry := NewTeamRegistry([]string{".test-teams"})
 	registry.teams = map[string]string{
 		"delegate": "/path/to/delegate",
@@ -306,6 +309,7 @@ func TestSplitSegmentByAgents(t *testing.T) {
 }
 
 func TestIsAgentInList(t *testing.T) {
+	t.Parallel()
 	agents := []*agent.AgentDef{
 		{Name: "Researcher", Role: "worker", FileAlias: "researcher"},
 		{Name: "Writer", Role: "worker", FileAlias: "writer"},
@@ -339,6 +343,7 @@ func TestIsAgentInList(t *testing.T) {
 }
 
 func TestParsePromptEdgeCases(t *testing.T) {
+	t.Parallel()
 	registry := NewTeamRegistry([]string{".test-teams"})
 	registry.teams = map[string]string{
 		"a":  "/path/a",
@@ -371,6 +376,7 @@ func TestParsePromptEdgeCases(t *testing.T) {
 }
 
 func TestSplitSegmentByAgentsEdgeCases(t *testing.T) {
+	t.Parallel()
 	registry := NewTeamRegistry([]string{".test-teams"})
 	registry.teams = map[string]string{
 		"team1": "/path/team1",
@@ -436,6 +442,7 @@ func TestSplitSegmentByAgentsEdgeCases(t *testing.T) {
 }
 
 func TestSplitSegmentsByPipe(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		input []PromptSegment

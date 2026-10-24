@@ -9,6 +9,9 @@ import (
 // TestDependencyBoundary keeps the adapter on the standard library and the
 // provider-neutral decisionrt core.
 func TestDependencyBoundary(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	command := exec.CommandContext(t.Context(), "go", "list", "-f", `{{join .Imports "\n"}}`, ".")
 	output, err := command.Output()
 	if err != nil {

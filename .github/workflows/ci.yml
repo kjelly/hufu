@@ -22,7 +22,7 @@ env:
 
 jobs:
   # Parallel jobs: each gates independently, so a lint config bug no longer
-  # hides test or build results, and the merge gate is the aggregate of seven
+  # hides test or build results, and the merge gate is the aggregate of eight
   # independent required job groups.
   lint:
     # NOTE: jobs.<id>.name cannot reference the env context (workflow-level
@@ -104,33 +104,103 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
+      - name: Check measurement tooling
+        if: matrix.scope == 'other'
+        run: python3 -m unittest discover -s scripts -p '*_test.py'
+
       - name: Run tests
         env:
           TEST_SCOPE: ${{ matrix.scope }}
-        # Heavy race suites need separate runners: concurrent package processes
-        # exhausted the unchanged 20m package deadlines in team and improver.
-        # Discover the full original package set so new packages cannot be lost.
+        # Discovery preserves all four existing package groups. The integration
+        # job below runs every whole-test short guard without -short.
         run: |
-          all_packages=$(go list ./... ./.agent-teams/hufu-dev/diagnostic-pilot/...)
-          module=$(go list -m)
-          packages=()
-          while IFS= read -r package; do
-            case "$package" in
-              "$module/cmd/hufu") scope=cli ;;
-              "$module/internal/team") scope=team ;;
-              "$module/internal/improver") scope=improver ;;
-              *) scope=other ;;
-            esac
-            if [[ "$scope" == "$TEST_SCOPE" ]]; then
-              packages+=("$package")
-            fi
-          done <<< "$all_packages"
-          if (( ${#packages[@]} == 0 )); then
-            echo "No packages selected for $TEST_SCOPE" >&2
-            exit 1
+          set -o pipefail
+          mkdir -p work/ci-tests
+          go run ./scripts/testlayers -list > work/ci-tests/inventory.json
+          du -sk "$(go env GOCACHE)" > work/ci-tests/cache-before.txt
+          /usr/bin/time -f 'wall_seconds=%e\nuser_seconds=%U\nsystem_seconds=%S' \
+            -o work/ci-tests/time.txt \
+            go run ./scripts/testlayers -layer short -scope "$TEST_SCOPE" -- -race -json \
+            | tee work/ci-tests/tests.jsonl
+
+      - name: Record timing and cache cost
+        if: always()
+        run: |
+          du -sk "$(go env GOCACHE)" > work/ci-tests/cache-after.txt
+          printf '### Test command metrics\n\n```text\n' >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f work/ci-tests/time.txt ]]; then
+            cat work/ci-tests/time.txt >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'test_command_timing=unavailable (discovery did not complete)\n' >> "$GITHUB_STEP_SUMMARY"
           fi
-          printf 'Race group %s: %s packages\n' "$TEST_SCOPE" "${#packages[@]}"
-          go test -p 2 -race -short -timeout 20m "${packages[@]}"
+          if [[ -f work/ci-tests/cache-before.txt ]]; then
+            printf 'cache_before_kib=%s\n' "$(cut -f1 work/ci-tests/cache-before.txt)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'cache_before_kib=unavailable\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          printf 'cache_after_kib=%s\n' "$(cut -f1 work/ci-tests/cache-after.txt)" >> "$GITHUB_STEP_SUMMARY"
+          printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: short-${{ matrix.scope }}
+          path: work/ci-tests/
+          retention-days: 14
+
+  integration:
+    name: integration (race, process/PTY, persistence, architecture)
+    runs-on: ubuntu-latest
+    env:
+      GOMAXPROCS: "2"
+      GOTOOLCHAIN: local
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Set up Go ${{ env.GO_VERSION }}
+        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Run integration tests
+        run: |
+          set -o pipefail
+          mkdir -p work/ci-tests
+          go run ./scripts/testlayers -list > work/ci-tests/inventory.json
+          du -sk "$(go env GOCACHE)" > work/ci-tests/cache-before.txt
+          /usr/bin/time -f 'wall_seconds=%e\nuser_seconds=%U\nsystem_seconds=%S' \
+            -o work/ci-tests/time.txt \
+            go run ./scripts/testlayers -layer integration -- -race -json \
+            | tee work/ci-tests/tests.jsonl
+
+      - name: Record timing and cache cost
+        if: always()
+        run: |
+          du -sk "$(go env GOCACHE)" > work/ci-tests/cache-after.txt
+          printf '### Test command metrics\n\n```text\n' >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f work/ci-tests/time.txt ]]; then
+            cat work/ci-tests/time.txt >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'test_command_timing=unavailable (discovery did not complete)\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -f work/ci-tests/cache-before.txt ]]; then
+            printf 'cache_before_kib=%s\n' "$(cut -f1 work/ci-tests/cache-before.txt)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'cache_before_kib=unavailable\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          printf 'cache_after_kib=%s\n' "$(cut -f1 work/ci-tests/cache-after.txt)" >> "$GITHUB_STEP_SUMMARY"
+          printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: integration
+          path: work/ci-tests/
+          retention-days: 14
 
   build:
     name: build (go build ./cmd/hufu)
@@ -235,13 +305,24 @@ jobs:
           retention-days: 14
 
   # Aggregate gate. Required by branch protection so PRs cannot merge with
-  # any of the seven parallel checks red.
+  # any of the eight parallel checks red.
   ci-success:
     name: ci-success
+    permissions:
+      actions: read
+      contents: read
     runs-on: ubuntu-latest
-    needs: [lint, vet, test, build, cgo-free, docs, eval-core]
+    needs: [lint, vet, test, integration, build, cgo-free, docs, eval-core]
     if: always()
     steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Report workflow and runner cost
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci-test-cost.py
+
       - name: Fail if any required check failed
         run: |
           if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]] || \

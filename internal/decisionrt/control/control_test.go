@@ -429,6 +429,9 @@ func TestDecideRedactsContextAndSkipsOffPoints(t *testing.T) {
 }
 
 func TestControlDependencyBoundary(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	output, err := exec.CommandContext(t.Context(), "go", "list", "-deps", "-f", "{{.ImportPath}}", ".").Output()
 	if err != nil {
 		t.Fatalf("go list: %v", err)

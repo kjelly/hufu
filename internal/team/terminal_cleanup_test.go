@@ -13,6 +13,9 @@ import (
 )
 
 func TestTerminalCleanupLegacyDefaultsAndOwnershipGuard(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	workspace := t.TempDir()
 	data, err := json.Marshal([]TerminalSession{{ID: "legacy", OwnerTaskID: "task-a", State: TerminalSessionExited}})
 	if err != nil {
@@ -49,6 +52,9 @@ func TestTerminalCleanupLegacyDefaultsAndOwnershipGuard(t *testing.T) {
 }
 
 func TestTerminalCleanupGracefulCustodyTransferAndLeaseRevocation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	workspace := t.TempDir()
 	var events []string
 	var gracefulDurable bool
@@ -123,6 +129,9 @@ func TestTerminalCleanupGracefulCustodyTransferAndLeaseRevocation(t *testing.T) 
 }
 
 func TestTerminalCleanupEscalatesAndIsIdempotent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	workspace := t.TempDir()
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
@@ -153,6 +162,9 @@ func TestTerminalCleanupEscalatesAndIsIdempotent(t *testing.T) {
 }
 
 func TestTerminalCleanupForcedStatePersistenceFailureStopsEscalation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	workspace := t.TempDir()
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
@@ -211,6 +223,9 @@ func TestTerminalCleanupForcedStatePersistenceFailureStopsEscalation(t *testing.
 }
 
 func TestTerminalCleanupCustodyBlocksOwnerAndConcurrentCleanup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	workspace := t.TempDir()
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
@@ -259,6 +274,9 @@ func TestTerminalCleanupCustodyBlocksOwnerAndConcurrentCleanup(t *testing.T) {
 }
 
 func TestTerminalCleanupActiveRoundAndIdentityMismatchAreFailClosed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	workspace := t.TempDir()
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {

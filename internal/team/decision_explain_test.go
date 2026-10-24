@@ -3,6 +3,7 @@ package team
 import "testing"
 
 func TestExplainDecisionBindings(t *testing.T) {
+	t.Parallel()
 	record := DecisionRecord{
 		ReferenceEvidenceResultRef: &ArtifactRef{ID: "ref-1"},
 		Opinions: []DecisionOpinion{
@@ -41,6 +42,7 @@ func TestExplainDecisionBindings(t *testing.T) {
 // A decision with no reference stage and an unresolved reference result must
 // not fabricate a routed binding.
 func TestExplainDecisionBindings_NoReferenceStageOrUnresolvedResult(t *testing.T) {
+	t.Parallel()
 	record := DecisionRecord{Opinions: []DecisionOpinion{{JudgeID: "judge-1"}}}
 	got := ExplainDecisionBindings(record, nil)
 	want := []DecisionAgentBinding{{Stage: "judge", Ordinal: "judge-1", Routed: false}}
@@ -59,6 +61,7 @@ func TestExplainDecisionBindings_NoReferenceStageOrUnresolvedResult(t *testing.T
 // alongside AgentID, for every stage kind and for the reference stage's
 // producer-prefixed fields.
 func TestExplainDecisionBindings_SurfacesPinnedAndReason(t *testing.T) {
+	t.Parallel()
 	record := DecisionRecord{
 		ReferenceEvidenceResultRef: &ArtifactRef{ID: "ref-1"},
 		Opinions:                   []DecisionOpinion{{JudgeID: "judge-1", AgentID: "cand-a", Pinned: true, BindingReason: "regulatory requirement"}},

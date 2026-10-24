@@ -13,6 +13,9 @@ import (
 )
 
 func TestProbeBinaryTUICompletionAndTerminalRestore(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildTestBinary(t)
 	config, err := filepath.Abs("../../internal/improver/testdata/extraction/experiment.yaml")
 	if err != nil {
@@ -36,6 +39,9 @@ func TestProbeBinaryTUICompletionAndTerminalRestore(t *testing.T) {
 }
 
 func TestProbeBinaryTUICancelDrainsBeforeExit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildTestBinary(t)
 	root := t.TempDir()
 	source := filepath.Join(root, "source")

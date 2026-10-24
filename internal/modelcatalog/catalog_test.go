@@ -179,6 +179,9 @@ func TestEmbeddedSnapshotIsCompleteAndProvenanceBound(t *testing.T) {
 }
 
 func TestGeneratorReproducesCommittedEmbeddedSnapshot(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	root := repositoryRoot(t)
 	temporary := t.TempDir()
 	inputPath := filepath.Join(temporary, "source.json")

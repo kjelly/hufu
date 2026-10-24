@@ -33,6 +33,9 @@ func terminalBrokerTestWorkspace(t *testing.T) string {
 }
 
 func TestTerminalBrokerAttachStreamsInputAndOutput(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	workspace := terminalBrokerTestWorkspace(t)
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
@@ -99,6 +102,9 @@ func TestTerminalBrokerAttachStreamsInputAndOutput(t *testing.T) {
 }
 
 func TestTerminalBrokerRejectsConcurrentAttach(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	workspace := terminalBrokerTestWorkspace(t)
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
@@ -147,6 +153,9 @@ func TestTerminalBrokerRejectsConcurrentAttach(t *testing.T) {
 }
 
 func TestTerminalAttachmentClientTransfersInputAndDetaches(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	workspace := terminalBrokerTestWorkspace(t)
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
@@ -206,6 +215,9 @@ func TestTerminalAttachmentClientTransfersInputAndDetaches(t *testing.T) {
 }
 
 func TestTerminalBrokerTransferRequiresExplicitOperatorHandoff(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	workspace := terminalBrokerTestWorkspace(t)
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {
@@ -256,6 +268,9 @@ func TestTerminalBrokerTransferRequiresExplicitOperatorHandoff(t *testing.T) {
 }
 
 func TestTerminalBrokerDisconnectKeepsTaskPaused(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	workspace := terminalBrokerTestWorkspace(t)
 	manager, err := NewTerminalSessionManager(workspace, nil)
 	if err != nil {

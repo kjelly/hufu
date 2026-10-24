@@ -157,6 +157,9 @@ func (f *chatFixtureServer) sawRequestWith(fragments ...string) bool {
 // turns keep one conversation, Ctrl+C cancels only the running turn, and
 // /exit leaves cleanly.
 func TestE2E_ChatUI_TurnsCancelAndExit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildTestBinary(t)
 	server := newChatFixtureServer(t)
 	workspace := filepath.Join(ptyTestDir(t), "workspace")
