@@ -23,7 +23,7 @@ env:
 jobs:
   # Parallel jobs: each gates independently, so a lint config bug no longer
   # hides test or build results, and the merge gate is the aggregate of seven
-  # independent required checks.
+  # independent required job groups.
   lint:
     # NOTE: jobs.<id>.name cannot reference the env context (workflow-level
     # parse error); the pinned version lives in env.GOLANGCI_LINT_VERSION.
@@ -84,8 +84,16 @@ jobs:
         run: go vet ./... ./.agent-teams/hufu-dev/diagnostic-pilot/...
 
   test:
-    name: test (go test ./... -race -short -timeout 20m)
+    name: test (${{ matrix.scope }}; race, short, timeout 20m)
     runs-on: ubuntu-latest
+    strategy:
+      # Report every group even when another fails. ci-success needs all four.
+      fail-fast: false
+      matrix:
+        scope: [cli, team, improver, other]
+    env:
+      GOMAXPROCS: "2"
+      GOTOOLCHAIN: local
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
@@ -97,9 +105,32 @@ jobs:
           cache: true
 
       - name: Run tests
-        # internal/team takes about 11 minutes under the race detector on the
-        # release toolchain, beyond go test's default 10-minute package limit.
-        run: go test -race -short -timeout 20m ./... ./.agent-teams/hufu-dev/diagnostic-pilot/...
+        env:
+          TEST_SCOPE: ${{ matrix.scope }}
+        # Heavy race suites need separate runners: concurrent package processes
+        # exhausted the unchanged 20m package deadlines in team and improver.
+        # Discover the full original package set so new packages cannot be lost.
+        run: |
+          all_packages=$(go list ./... ./.agent-teams/hufu-dev/diagnostic-pilot/...)
+          module=$(go list -m)
+          packages=()
+          while IFS= read -r package; do
+            case "$package" in
+              "$module/cmd/hufu") scope=cli ;;
+              "$module/internal/team") scope=team ;;
+              "$module/internal/improver") scope=improver ;;
+              *) scope=other ;;
+            esac
+            if [[ "$scope" == "$TEST_SCOPE" ]]; then
+              packages+=("$package")
+            fi
+          done <<< "$all_packages"
+          if (( ${#packages[@]} == 0 )); then
+            echo "No packages selected for $TEST_SCOPE" >&2
+            exit 1
+          fi
+          printf 'Race group %s: %s packages\n' "$TEST_SCOPE" "${#packages[@]}"
+          go test -p 2 -race -short -timeout 20m "${packages[@]}"
 
   build:
     name: build (go build ./cmd/hufu)

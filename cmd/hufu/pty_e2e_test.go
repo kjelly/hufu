@@ -3,10 +3,11 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/team"
+	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 	"golang.org/x/sys/unix"
 )
 
@@ -72,10 +74,33 @@ func ptyTestDir(t *testing.T) string {
 	return dir
 }
 
+// ptyTestEnv excludes inherited provider credentials and user configuration.
+func ptyTestEnv(home string) []string {
+	return []string{
+		"HOME=" + home,
+		"HUFU_STATE_HOME=" + filepath.Join(home, "state"),
+		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
+		"XDG_CACHE_HOME=" + filepath.Join(home, ".cache"),
+		"XDG_DATA_HOME=" + filepath.Join(home, ".local", "share"),
+		"TERM=xterm-256color",
+		"NO_COLOR=1",
+		"LC_ALL=C",
+		"LANG=C",
+		"PATH=" + os.Getenv("PATH"),
+		"TMPDIR=" + os.TempDir(),
+		"GOMAXPROCS=2",
+	}
+}
+
 // startPTY starts a command in a pseudo-terminal with the given window size.
 func startPTY(t *testing.T, binary string, args []string, rows, cols uint16) *ptyProcess {
 	t.Helper()
 	home := ptyTestDir(t)
+	return startPTYInDir(t, binary, args, rows, cols, home, home)
+}
+
+func startPTYInDir(t *testing.T, binary string, args []string, rows, cols uint16, home, dir string) *ptyProcess {
+	t.Helper()
 
 	// Open /dev/ptmx — the master side
 	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
@@ -125,20 +150,8 @@ func startPTY(t *testing.T, binary string, args []string, rows, cols uint16) *pt
 		Ctty:    0, // slave fd in child
 	}
 	// Isolate environment
-	cmd.Dir = home
-	cmd.Env = []string{
-		"HOME=" + home,
-		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
-		"XDG_CACHE_HOME=" + filepath.Join(home, ".cache"),
-		"XDG_DATA_HOME=" + filepath.Join(home, ".local", "share"),
-		"TERM=xterm-256color",
-		"NO_COLOR=1",
-		"LC_ALL=C",
-		"LANG=C",
-		"PATH=" + os.Getenv("PATH"),
-		"TMPDIR=" + os.TempDir(),
-		"GOMAXPROCS=2",
-	}
+	cmd.Dir = dir
+	cmd.Env = ptyTestEnv(home)
 
 	proc := &ptyProcess{
 		master:   master,
@@ -209,34 +222,54 @@ func (p *ptyProcess) writeInput(t *testing.T, input string) {
 	}
 }
 
-// waitForOutput polls until the output contains the wanted substring or times out.
+// Output polling is bounded and fails as soon as the drained stream closes.
 func (p *ptyProcess) waitForOutput(t *testing.T, want string, timeout time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if strings.Contains(stripPTYANSI(p.output.String()), want) {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	last := p.output.String()
-	if len(last) > 4000 {
-		last = last[len(last)-4000:]
-	}
-	t.Fatalf("waitForOutput: %q not found after %s\noutput (last 4KB):\n%s", want, timeout, stripPTYANSI(last))
+	p.waitForOutputAfter(t, want, 0, timeout)
 }
 
-// waitForOutputRaw is like waitForOutput but checks the raw bytes (no ANSI stripping).
+func (p *ptyProcess) waitForOutputAfter(t *testing.T, want string, offset int, timeout time.Duration) {
+	t.Helper()
+	p.waitForPTYOutput(t, want, offset, false, timeout)
+}
+
 func (p *ptyProcess) waitForOutputRaw(t *testing.T, want string, timeout time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if bytes.Contains(p.output.Bytes(), []byte(want)) {
+	p.waitForPTYOutput(t, want, 0, true, timeout)
+}
+
+func (p *ptyProcess) waitForPTYOutput(t *testing.T, want string, offset int, raw bool, timeout time.Duration) {
+	t.Helper()
+	if want == "" {
+		t.Fatal("empty PTY output assertion")
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	poll := time.NewTicker(10 * time.Millisecond)
+	defer poll.Stop()
+	matches := func() bool {
+		output := p.output.String()[offset:]
+		if !raw {
+			output = stripPTYANSI(output)
+		}
+		return strings.Contains(output, want)
+	}
+	for {
+		if matches() {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-p.readDone:
+			// Read the final snapshot after observing reader completion.
+			if matches() {
+				return
+			}
+			t.Fatalf("PTY output closed before %q; output=%q", want, truncateContractOutput(p.output.Bytes()))
+		case <-timer.C:
+			t.Fatalf("PTY output missing %q after %s; output=%q", want, timeout, truncateContractOutput(p.output.Bytes()))
+		case <-poll.C:
+		}
 	}
-	t.Fatalf("waitForOutputRaw: %q not found after %s", want, timeout)
 }
 
 // resizePTY changes the PTY window size.
@@ -327,23 +360,14 @@ func isFinalByte(c byte) bool {
 
 // ── L4 Tests ────────────────────────────────────────────────────────────────
 
-// TestE2E_BuildBinary verifies the real binary compiles successfully.
-func TestE2E_BuildBinary(t *testing.T) {
-	binary := buildTestBinary(t)
-	info, err := os.Stat(binary)
-	if err != nil {
-		t.Fatalf("binary not found: %v", err)
-	}
-	if info.Size() < 1000 {
-		t.Fatalf("binary too small: %d bytes", info.Size())
-	}
-}
-
 // TestE2E_VersionOutput verifies the real binary prints version info.
 func TestE2E_VersionOutput(t *testing.T) {
 	binary := buildTestBinary(t)
 	proc := startPTY(t, binary, []string{"--version"}, 30, 100)
-	proc.waitForOutput(t, "hufu version", 10*time.Second)
+	if code := proc.waitExit(t, 10*time.Second); code != 0 {
+		t.Fatalf("version exit = %d", code)
+	}
+	proc.waitForOutput(t, "hufu version", time.Second)
 }
 
 // TestE2E_HelpOutput verifies the real binary prints help text.
@@ -352,30 +376,64 @@ func TestE2E_HelpOutput(t *testing.T) {
 	proc := startPTY(t, binary, []string{"--help"}, 30, 100)
 	proc.waitForOutput(t, "hufu discovers", 10*time.Second)
 	proc.waitForOutput(t, "agent-team", 5*time.Second)
-}
-
-// TestE2E_DoctorCommand verifies the doctor subcommand runs and exits.
-func TestE2E_DoctorCommand(t *testing.T) {
-	binary := buildTestBinary(t)
-	proc := startPTY(t, binary, []string{"doctor"}, 30, 100)
-	// doctor should produce some output (even on error) and exit
-	proc.waitForOutputRaw(t, "", 1*time.Second) // give it a moment to start
-	exitCode := proc.waitExit(t, 15*time.Second)
-	// doctor exits non-zero when provider is unreachable, which is expected
-	_ = exitCode
-}
-
-// TestE2E_ListCommand verifies the list subcommand shows team information.
-func TestE2E_ListCommand(t *testing.T) {
-	binary := buildTestBinary(t)
-	proc := startPTY(t, binary, []string{"list"}, 30, 100)
-	// List should show available teams (or "no teams" message)
-	// Give it some time to produce output, then check exit
-	proc.waitForOutputRaw(t, "", 1*time.Second)
-	exitCode := proc.waitExit(t, 10*time.Second)
-	if exitCode != 0 {
-		t.Errorf("list command exit code = %d, want 0", exitCode)
+	if code := proc.waitExit(t, 10*time.Second); code != 0 {
+		t.Fatalf("help exit = %d", code)
 	}
+}
+
+// TestE2E_DoctorCommand checks both successful and failed provider preflight.
+func TestE2E_DoctorCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		status, exit int
+		want         string
+	}{
+		{"ready", http.StatusOK, 0, "Ready with warnings."},
+		{"unavailable", http.StatusServiceUnavailable, 1, "provider returned HTTP 503"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/models" {
+					t.Errorf("unexpected provider request: %s", r.URL.Path)
+				}
+				w.WriteHeader(tc.status)
+				fmt.Fprint(w, `{"data":[{"id":"test"}]}`)
+			}))
+			t.Cleanup(server.Close)
+			home := ptyTestDir(t)
+			project := filepath.Join(home, "project")
+			if err := os.MkdirAll(filepath.Join(project, ".git"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			manager, err := workspacepkg.NewManager(filepath.Join(home, "state"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := manager.Resolve(t.Context(), workspacepkg.ResolveRequest{StartDir: project, TeamName: "default", Mode: workspacepkg.ResolveEnsure}); err != nil {
+				t.Fatal(err)
+			}
+			// doctor has no root-local model/provider flags; configure its isolated CWD.
+			cfg := fmt.Sprintf("provider-url: %s/v1\nmodel: test\n", server.URL)
+			if err := os.WriteFile(filepath.Join(project, "hufu.yaml"), []byte(cfg), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			proc := startPTYInDir(t, buildTestBinary(t), []string{"doctor"}, 30, 100, home, project)
+			if code := proc.waitExit(t, 15*time.Second); code != tc.exit {
+				t.Fatalf("doctor exit = %d, want %d; output=%s", code, tc.exit, proc.output.String())
+			}
+			proc.waitForOutput(t, "hufu doctor", time.Second)
+			proc.waitForOutput(t, tc.want, time.Second)
+		})
+	}
+}
+
+// TestE2E_ListCommand checks the empty, isolated discovery result.
+func TestE2E_ListCommand(t *testing.T) {
+	proc := startPTY(t, buildTestBinary(t), []string{"list"}, 30, 100)
+	if code := proc.waitExit(t, 10*time.Second); code != 0 {
+		t.Fatalf("list exit = %d", code)
+	}
+	proc.waitForOutput(t, "No teams found", time.Second)
 }
 
 // startBlockedTUI waits for both a real provider request and terminal ownership.
@@ -392,10 +450,14 @@ func startBlockedTUI(t *testing.T) *ptyProcess {
 	proc.workspace = filepath.Join(workspaceRoot, "default")
 	select {
 	case <-server.slow:
+	case <-proc.waitDone:
+		t.Fatalf("TUI exited before provider readiness; output=%q", truncateContractOutput(proc.output.Bytes()))
 	case <-time.After(30 * time.Second):
 		t.Fatalf("TUI never reached the blocking provider; output=%q", truncateContractOutput(proc.output.Bytes()))
 	}
 	proc.waitForOutputRaw(t, "\x1b[?1049h", 30*time.Second)
+	proc.waitForOutput(t, chatFixtureSlowToken, 30*time.Second)
+	proc.assertRunning(t)
 	return proc
 }
 
@@ -435,226 +497,101 @@ func interruptBlockedTUI(t *testing.T, proc *ptyProcess) {
 	}
 }
 
-// TestE2E_Signal_SIGINT verifies SIGINT cancels an active provider request.
-func TestE2E_Signal_SIGINT(t *testing.T) {
-	interruptBlockedTUI(t, startBlockedTUI(t))
-}
-
-// TestE2E_Resize_NoDeadlock verifies that resizing the terminal doesn't cause a crash.
-func TestE2E_Resize_NoDeadlock(t *testing.T) {
-	binary := buildTestBinary(t)
-	proc := startPTY(t, binary, []string{"--tui", "--default", "--model", "ollama/nonexistent", "resize test"}, 30, 100)
-
-	// Give it a moment to start
-	time.Sleep(500 * time.Millisecond)
-
-	// Resize to various sizes
-	sizes := []struct{ rows, cols uint16 }{
-		{24, 80},
-		{50, 200},
-		{10, 40},
-		{30, 120},
-		{20, 60},
-	}
-	for _, sz := range sizes {
-		proc.resizePTY(t, sz.rows, sz.cols)
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	// Process should still be alive — send 'q' won't work since not finished,
-	// so kill it and verify it was running
-	if proc.cmd.Process == nil {
-		t.Fatal("process should still be alive after resizes")
+// assertRunning observes the single Wait owner's synchronized completion signal.
+func (p *ptyProcess) assertRunning(t *testing.T) {
+	t.Helper()
+	select {
+	case <-p.waitDone:
+		t.Fatalf("PTY process exited unexpectedly: %v; output=%q", p.waitErr, truncateContractOutput(p.output.Bytes()))
+	default:
 	}
 }
 
-// TestE2E_TerminalRecovery verifies that the terminal is restored after exit.
-// We check for alternate screen exit sequence (ESC[?1049l) in the output.
-func TestE2E_TerminalRecovery(t *testing.T) {
+// One real PTY lifecycle covers ready rendering, kernel SIGWINCH delivery,
+// rapid/narrow resize, SIGINT and alternate-screen restoration in order.
+func TestE2E_TUILifecycle(t *testing.T) {
 	proc := startBlockedTUI(t)
+	offset := len(proc.output.String())
+	for i := range 20 {
+		proc.resizePTY(t, uint16(20+i), uint16(80+i*5))
+	}
+	proc.resizePTY(t, 20, 40)
+	proc.waitForOutputAfter(t, "Terminal too narrow", offset, 10*time.Second)
+	proc.assertRunning(t)
+	offset = len(proc.output.String())
+	proc.resizePTY(t, 30, 100)
+	proc.waitForOutputAfter(t, chatFixtureSlowToken, offset, 10*time.Second)
+	proc.assertRunning(t)
 	interruptBlockedTUI(t, proc)
-	if !strings.Contains(proc.output.String(), "\x1b[?1049l") {
+	output := proc.output.String()
+	enter := strings.Index(output, "\x1b[?1049h")
+	leave := strings.LastIndex(output, "\x1b[?1049l")
+	if enter < 0 || leave <= enter {
 		t.Fatal("terminal did not leave alternate screen after SIGINT")
 	}
 }
 
-// TestE2E_NoHangOnExit verifies the process exits within a reasonable time
-// when given a non-interactive command.
-func TestE2E_NoHangOnExit(t *testing.T) {
+// Keep all three stdin transports: a PTY above, /dev/null here and a real pipe.
+func TestE2E_NonInteractiveVersion(t *testing.T) {
 	binary := buildTestBinary(t)
-
-	// Run --version which should exit immediately
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, binary, "--version")
-	cmd.Env = []string{"HOME=" + t.TempDir(), "TERM=dumb", "NO_COLOR=1"}
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("--version failed: %v\n%s", err, output)
-	}
-	if !strings.Contains(string(output), "hufu version") {
-		t.Errorf("version output unexpected: %q", output)
+	for _, piped := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pipe=%t", piped), func(t *testing.T) {
+			home := ptyTestDir(t)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, binary, "--version")
+			cmd.Dir, cmd.Env = home, ptyTestEnv(home)
+			if piped {
+				cmd.Stdin = strings.NewReader("some input\n")
+			}
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("--version failed: %v\n%s", err, output)
+			}
+			if !strings.Contains(string(output), "hufu version") {
+				t.Fatalf("unexpected version: %q", output)
+			}
+		})
 	}
 }
 
-// TestE2E_StdinPipe verifies the binary handles piped stdin gracefully.
-func TestE2E_StdinPipe(t *testing.T) {
-	binary := buildTestBinary(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, binary, "--version")
-	cmd.Env = []string{"HOME=" + t.TempDir(), "TERM=dumb", "NO_COLOR=1"}
-	cmd.Stdin = strings.NewReader("some input\n")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("--version with piped stdin failed: %v\n%s", err, output)
-	}
-	if !strings.Contains(string(output), "hufu version") {
-		t.Errorf("version output unexpected: %q", output)
-	}
-}
-
-// TestE2E_IsolatedEnvironment verifies the binary doesn't read real user config.
+// Sentinels in a synthetic user config and project config prove both roots
+// are read in the positive control and absent from a fresh HOME/CWD.
 func TestE2E_IsolatedEnvironment(t *testing.T) {
 	binary := buildTestBinary(t)
-
-	home := processContractTempDir(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, binary, "list")
-	cmd.Env = []string{
-		"HOME=" + home,
-		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
-		"XDG_CACHE_HOME=" + filepath.Join(home, ".cache"),
-		"XDG_DATA_HOME=" + filepath.Join(home, ".local", "share"),
-		"TERM=dumb",
-		"NO_COLOR=1",
-		"HUFU_AGENT_TEAM_SEARCH_PATH=" + filepath.Join(home, ".agent-teams"),
+	home, project := ptyTestDir(t), ptyTestDir(t)
+	configDir := filepath.Join(home, ".config", "hufu")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	output, err := cmd.CombinedOutput()
-	// list should work even with empty config — it just shows no teams or global teams
-	_ = err
-	_ = output
-}
-
-// TestE2E_NarrowTerminal_NoCrash verifies the TUI handles a narrow terminal.
-func TestE2E_NarrowTerminal_NoCrash(t *testing.T) {
-	binary := buildTestBinary(t)
-	proc := startPTY(t, binary, []string{"--tui", "--default", "--model", "ollama/nonexistent", "narrow"}, 20, 40)
-
-	// Give it a moment to start
-	time.Sleep(500 * time.Millisecond)
-
-	// Resize even narrower
-	proc.resizePTY(t, 10, 30)
-	time.Sleep(200 * time.Millisecond)
-
-	// Process should still be alive
-	if proc.cmd.Process == nil {
-		t.Error("process should survive narrow terminal")
-	}
-}
-
-// TestE2E_RapidResize verifies rapid resize events don't cause a panic.
-func TestE2E_RapidResize(t *testing.T) {
-	binary := buildTestBinary(t)
-	proc := startPTY(t, binary, []string{"--tui", "--default", "--model", "ollama/nonexistent", "rapid resize"}, 30, 100)
-
-	time.Sleep(300 * time.Millisecond)
-
-	// Fire many resize events rapidly
-	for i := 0; i < 20; i++ {
-		proc.resizePTY(t, uint16(20+i), uint16(80+i*5))
-	}
-
-	time.Sleep(200 * time.Millisecond)
-
-	// Process should still be alive
-	if proc.cmd.Process == nil {
-		t.Error("process should survive rapid resize")
-	}
-}
-
-// TestE2E_AltScreenEntry verifies the TUI enters alternate screen mode when it starts.
-// If the provider is unreachable, the program may exit before entering the TUI, which is acceptable.
-func TestE2E_AltScreenEntry(t *testing.T) {
-	binary := buildTestBinary(t)
-	proc := startPTY(t, binary, []string{"--tui", "--default", "--model", "ollama/nonexistent", "alt screen test"}, 30, 100)
-
-	// Wait for alt screen enter sequence (ESC[?1049h) or program exit
-	deadline := time.Now().Add(5 * time.Second)
-	found := false
-	for time.Now().Before(deadline) {
-		if bytes.Contains(proc.output.Bytes(), []byte("\x1b[?1049h")) {
-			found = true
-			break
-		}
-		// The waiter owns Cmd state; observe its completion notification.
-		select {
-		case <-proc.waitDone:
-			// Process exited before entering TUI — acceptable if provider unreachable
-			t.Logf("process exited before entering TUI (provider unreachable) — output length: %d", len(proc.output.String()))
-			return
-		default:
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	if found {
-		// Send SIGINT to exit
-		if err := proc.sendSignal(os.Interrupt); err != nil {
-			t.Fatalf("send SIGINT: %v", err)
-		}
-		proc.waitExit(t, 5*time.Second)
-	} else {
-		// Process is still running but didn't enter alt screen — may use different rendering
-		t.Logf("alt screen sequence not found, but process is still running — may use inline rendering")
-		if proc.cmd.Process != nil {
-			_ = proc.cmd.Process.Kill()
+	for path, name := range map[string]string{
+		filepath.Join(configDir, "hufu.yaml"): "user-isolation-sentinel",
+		filepath.Join(project, "hufu.yaml"):   "project-isolation-sentinel",
+	} {
+		cfg := fmt.Sprintf("profiles:\n  %s:\n    model: test\n", name)
+		if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
 		}
 	}
-}
-
-// TestE2E_TranscriptSample captures a sample of the TUI output for inspection.
-func TestE2E_TranscriptSample(t *testing.T) {
-	binary := buildTestBinary(t)
-	proc := startPTY(t, binary, []string{"--tui", "--default", "--model", "ollama/nonexistent", "sample prompt"}, 30, 100)
-
-	time.Sleep(1 * time.Second)
-
-	// Capture output
-	output := proc.output.String()
-	if len(output) == 0 {
-		t.Fatal("expected some output from TUI startup")
-	}
-
-	// Check for key elements (stripped of ANSI)
-	plain := stripPTYANSI(output)
-	for _, want := range []string{"sample prompt"} {
-		if !strings.Contains(plain, want) {
-			// The TUI may not have fully rendered if the provider is unreachable
-			// Just log and continue
-			t.Logf("output does not contain %q (may be expected if provider unreachable)", want)
-		}
-	}
-
-	// Log a sample of the output for debugging
-	scanner := bufio.NewScanner(strings.NewReader(plain))
-	lineCount := 0
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line != "" {
-			lineCount++
-		}
-		if lineCount > 5 {
-			break
-		}
-	}
-	if lineCount == 0 {
-		t.Log("TUI produced output but no visible text lines (ANSI control sequences only)")
+	for _, isolated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("isolated=%t", isolated), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, binary, "config", "list-profiles", "--json")
+			cmd.Dir, cmd.Env = project, ptyTestEnv(home)
+			want := `["project-isolation-sentinel","user-isolation-sentinel"]`
+			if isolated {
+				clean := ptyTestDir(t)
+				cmd.Dir, cmd.Env = clean, ptyTestEnv(clean)
+				want = `[]`
+			}
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("config list-profiles failed: %v\n%s", err, output)
+			}
+			if strings.TrimSpace(string(output)) != want {
+				t.Fatalf("profiles = %s, want %s", output, want)
+			}
+		})
 	}
 }

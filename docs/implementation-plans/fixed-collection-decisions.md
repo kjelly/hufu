@@ -1,5 +1,11 @@
 # Runtime 有限語意判斷統一決策實作計畫
 
+> Status: active
+> Authority: reference
+> Verified-Commit: `134ad9546fb7efde7d69328167b73f04e2ddfbc8`
+> Supersedes: —
+> Superseded-By: —
+
 > 狀態：已實作並通過離線驗收；固定集合、統一入口與共用設定均已交付。
 > 日期：2026-10-21。
 > 核對基準：`kjelly/hufu`，`279e762e02d8037ee12624385a4c1379acbaa279`；保留既有工作樹修改，未重做已完成能力。

@@ -3,6 +3,8 @@
 > Status: active
 > Authority: reference
 > Verified-Commit: — (uncommitted working tree; offline test, vet and lint passed 2026-10-21)
+> Supersedes: —
+> Superseded-By: —
 
 Runtime 的封閉語意選擇使用共同 decision primitive，不再先跑舊 JSON 推論再補
 一次判斷。工具授權、預算、hash、coverage、狀態轉移與驗收仍由確定性程式處理。
