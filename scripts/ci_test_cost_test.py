@@ -1,6 +1,11 @@
 import datetime
 import importlib.util
+import os
 from pathlib import Path
+import re
+import subprocess
+import tempfile
+import textwrap
 import unittest
 
 spec = importlib.util.spec_from_file_location('ci_cost', Path(__file__).with_name('ci-test-cost.py'))
@@ -9,6 +14,43 @@ spec.loader.exec_module(cost)
 
 
 class CostTests(unittest.TestCase):
+    def test_workflow_summary_handles_discovery_failure(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/ci.yml').read_text()
+        blocks = re.findall(
+            r'      - name: Record timing and cache cost\n        if: always\(\)\n        run: \|\n((?:          [^\n]*\n)+)',
+            workflow)
+        self.assertEqual(len(blocks), 2)
+        self.assertEqual(blocks[0], blocks[1])
+        for has_timing in (False, True):
+            with self.subTest(has_timing=has_timing), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                artifacts = root / 'work/ci-tests'
+                artifacts.mkdir(parents=True)
+                cache = root / 'cache'
+                cache.mkdir()
+                executable = root / 'bin/go'
+                executable.parent.mkdir()
+                executable.write_text('#!/bin/sh\nprintf "%s\\n" "$TEST_CACHE_DIR"\n')
+                executable.chmod(0o700)
+                summary = root / 'summary'
+                if has_timing:
+                    (artifacts / 'time.txt').write_text('wall_seconds=1.25\n')
+                    (artifacts / 'cache-before.txt').write_text('123\t/cache\n')
+                result = subprocess.run(
+                    ['bash', '-e', '-c', textwrap.dedent(blocks[0])], cwd=root,
+                    env={**os.environ, 'PATH': str(executable.parent) + os.pathsep + os.environ.get('PATH', ''),
+                         'TEST_CACHE_DIR': str(cache), 'GITHUB_STEP_SUMMARY': str(summary)},
+                    capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                contents = summary.read_text()
+                if has_timing:
+                    self.assertIn('wall_seconds=1.25', contents)
+                    self.assertIn('cache_before_kib=123', contents)
+                    self.assertNotIn('unavailable', contents)
+                else:
+                    self.assertIn('test_command_timing=unavailable', contents)
+                    self.assertIn('cache_before_kib=unavailable', contents)
+
     def test_overlapping_jobs_sum_runner_time_without_summing_wall(self):
         run = {'created_at': '2026-10-24T10:00:00Z', 'run_attempt': 2}
         first = {'id': 1, 'started_at': '2026-10-24T10:00:10Z',

@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -51,11 +52,7 @@ func run(layer, scope string, list bool, extra []string) error {
 		!slices.Contains([]string{"all", "cli", "team", "improver", "other"}, scope) {
 		return fmt.Errorf("invalid layer %q or scope %q", layer, scope)
 	}
-	output, err := exec.Command("go", "list", "-json", "./...", "./.agent-teams/hufu-dev/diagnostic-pilot/...").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("discover packages: %w\n%s", err, output)
-	}
-	inventory, err := discover(strings.NewReader(string(output)))
+	inventory, err := discoverCommand(exec.Command("go", "list", "-json", "./...", "./.agent-teams/hufu-dev/diagnostic-pilot/..."), os.Stderr)
 	if err != nil {
 		return err
 	}
@@ -81,6 +78,18 @@ func run(layer, scope string, list bool, extra []string) error {
 		}
 	}
 	return nil
+}
+
+// Go writes module downloads and other diagnostics to stderr, including on
+// successful cold-cache discovery. Only stdout is the package JSON stream.
+func discoverCommand(command *exec.Cmd, diagnostics io.Writer) ([]suite, error) {
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = diagnostics
+	if err := command.Run(); err != nil {
+		return nil, fmt.Errorf("discover packages: %w", err)
+	}
+	return discover(&output)
 }
 
 func testCommands(layer string, selected []suite, extra []string) ([][]string, error) {

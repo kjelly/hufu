@@ -225,3 +225,28 @@ job durations, including the additional runner and unchanged gates, along with
 cache restore/save duration and size. Moving work alone does not save CPU.
 The local original run still identifies team as the largest package; this small
 batch does not justify extracting services or introducing test shards.
+
+## CI follow-up: cold module-cache discovery
+
+[CI 40094929630](https://github.com/kjelly/hufu/actions/runs/40094929630)
+failed all four short groups and integration **before test execution**.
+`go list -json` succeeded but emitted dependency download diagnostics to stderr.
+The runner used `CombinedOutput`, so its JSON decoder instead saw a leading
+`go: downloading ...` line and reported `invalid character 'g' looking for
+beginning of value`. The successful local runs had a populated module cache
+and did not expose this bug. Build, vet, lint, docs, eval-core and full native
+CGO-free CI passed; these do not excuse the broken race entry points.
+
+Discovery now parses stdout only and forwards stderr independently, retaining
+both download diagnostics and nonzero command failures. The existing discovery
+unit test launches a subprocess that emits valid package JSON on stdout plus
+download messages on stderr, then verifies a failing command keeps its diagnostic
+and returns failure. Both race and CGO-free tool tests pass. The real integration
+entry also passes all 31 top-level cases under race after the fix.
+
+Timing/cache summaries now explicitly report unavailable pre-test measurements
+when discovery fails, rather than failing again because `time.txt` or the initial
+cache snapshot is absent. A seventh Python tooling test executes the actual
+workflow summary block with missing and complete files; all seven tests pass.
+`mise run lint` again reports 0 issues. Complete hosted race coverage is checked
+by the follow-up CI run on this PR.

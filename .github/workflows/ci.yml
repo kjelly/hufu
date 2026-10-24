@@ -128,8 +128,16 @@ jobs:
         run: |
           du -sk "$(go env GOCACHE)" > work/ci-tests/cache-after.txt
           printf '### Test command metrics\n\n```text\n' >> "$GITHUB_STEP_SUMMARY"
-          cat work/ci-tests/time.txt >> "$GITHUB_STEP_SUMMARY"
-          printf 'cache_before_kib=%s\n' "$(cut -f1 work/ci-tests/cache-before.txt)" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f work/ci-tests/time.txt ]]; then
+            cat work/ci-tests/time.txt >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'test_command_timing=unavailable (discovery did not complete)\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -f work/ci-tests/cache-before.txt ]]; then
+            printf 'cache_before_kib=%s\n' "$(cut -f1 work/ci-tests/cache-before.txt)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'cache_before_kib=unavailable\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
           printf 'cache_after_kib=%s\n' "$(cut -f1 work/ci-tests/cache-after.txt)" >> "$GITHUB_STEP_SUMMARY"
           printf '```\n' >> "$GITHUB_STEP_SUMMARY"
 
@@ -173,8 +181,16 @@ jobs:
         run: |
           du -sk "$(go env GOCACHE)" > work/ci-tests/cache-after.txt
           printf '### Test command metrics\n\n```text\n' >> "$GITHUB_STEP_SUMMARY"
-          cat work/ci-tests/time.txt >> "$GITHUB_STEP_SUMMARY"
-          printf 'cache_before_kib=%s\n' "$(cut -f1 work/ci-tests/cache-before.txt)" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f work/ci-tests/time.txt ]]; then
+            cat work/ci-tests/time.txt >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'test_command_timing=unavailable (discovery did not complete)\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -f work/ci-tests/cache-before.txt ]]; then
+            printf 'cache_before_kib=%s\n' "$(cut -f1 work/ci-tests/cache-before.txt)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'cache_before_kib=unavailable\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
           printf 'cache_after_kib=%s\n' "$(cut -f1 work/ci-tests/cache-after.txt)" >> "$GITHUB_STEP_SUMMARY"
           printf '```\n' >> "$GITHUB_STEP_SUMMARY"
 

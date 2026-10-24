@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -77,6 +80,15 @@ func TestLive(t *testing.T) { if disabled() { t.Skip("opt in") } }
 }
 
 func TestDiscoverUsesOnlyActiveGoListFilesIncludingExternalTests(t *testing.T) {
+	if fixture := os.Getenv("HUFU_TESTLAYERS_LIST_FIXTURE"); fixture != "" {
+		fmt.Fprintln(os.Stderr, "go: downloading example/dependency v1.0.0")
+		if fixture == "failure" {
+			fmt.Fprintln(os.Stderr, "module discovery failed")
+			os.Exit(7)
+		}
+		fmt.Fprintln(os.Stdout, fixture)
+		os.Exit(0)
+	}
 	dir := t.TempDir()
 	for name, contents := range map[string]string{
 		"unit_test.go":             "package p; import \"testing\"; func TestUnit(t *testing.T) {}",
@@ -99,6 +111,26 @@ func TestDiscoverUsesOnlyActiveGoListFilesIncludingExternalTests(t *testing.T) {
 	want := []suite{{Package: "example/p", Short: []string{"TestUnit"}, Integration: []string{"TestProcess"}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("inventory=%+v", got)
+	}
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range []string{string(data), "failure"} {
+		command := exec.CommandContext(t.Context(), testBinary, "-test.run=^TestDiscoverUsesOnlyActiveGoListFilesIncludingExternalTests$")
+		command.Env = append(os.Environ(), "HUFU_TESTLAYERS_LIST_FIXTURE="+fixture)
+		var diagnostics bytes.Buffer
+		got, err := discoverCommand(command, &diagnostics)
+		if !strings.Contains(diagnostics.String(), "go: downloading example/dependency") {
+			t.Fatalf("module download diagnostic lost: %q", diagnostics.String())
+		}
+		if fixture == "failure" {
+			if err == nil || !strings.Contains(diagnostics.String(), "module discovery failed") {
+				t.Fatalf("failed command was not reported: %v, %q", err, diagnostics.String())
+			}
+		} else if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("stderr contaminated package JSON: %v, inventory=%+v", err, got)
+		}
 	}
 	if _, err := discover(strings.NewReader("{invalid")); err == nil {
 		t.Fatal("accepted broken package inventory")
