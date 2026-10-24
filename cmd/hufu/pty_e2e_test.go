@@ -522,6 +522,7 @@ func TestE2E_TUILifecycle(t *testing.T) {
 	proc.resizePTY(t, 30, 100)
 	proc.waitForOutputAfter(t, chatFixtureSlowToken, offset, 10*time.Second)
 	proc.assertRunning(t)
+	// interruptBlockedTUI asserts the durable wrap-up checkpoint and exit 130.
 	interruptBlockedTUI(t, proc)
 	output := proc.output.String()
 	enter := strings.Index(output, "\x1b[?1049h")
