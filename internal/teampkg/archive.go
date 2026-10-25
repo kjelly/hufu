@@ -12,7 +12,7 @@ import (
 	"os"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // Archive is a fully bounded, hash-verified V1 team package held in memory.

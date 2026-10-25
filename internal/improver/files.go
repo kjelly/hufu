@@ -19,7 +19,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/improve/paired"
 	"github.com/kjelly/hufu/internal/utils"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 type File struct {

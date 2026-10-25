@@ -10,7 +10,7 @@ import (
 	"github.com/mark3labs/mcp-go/client"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 func observationTestPolicy() WorkerToolPolicy {

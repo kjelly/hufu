@@ -14,7 +14,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/decisionrt"
 	"github.com/kjelly/hufu/internal/decisionrt/control"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 func identity(text string) string { return text }

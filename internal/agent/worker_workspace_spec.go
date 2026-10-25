@@ -3,7 +3,7 @@ package agent
 import (
 	"fmt"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // WorkerWorkspaceMode selects where a worker's attempts write project files.
