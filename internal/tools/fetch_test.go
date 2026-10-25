@@ -4,9 +4,11 @@ package tools
 
 import (
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -49,7 +51,7 @@ func TestConvertHTMLToMarkdown(t *testing.T) {
 }
 
 func TestConvertHTMLToMarkdownRelativeLinks(t *testing.T) {
-	const input = `<p><a href="/guide">Guide</a> <a href="sub.html">Sub</a> <a href="#top">Top</a></p>`
+	const input = `<p><a href="/guide">Guide</a> <a href="sub.html">Sub</a> <a href="#top">Top</a></p><img src="../img.png" alt="Image">`
 	for _, tt := range []struct {
 		name, pageURL string
 		want          []string
@@ -64,6 +66,16 @@ func TestConvertHTMLToMarkdownRelativeLinks(t *testing.T) {
 			pageURL: "http://example.com/docs/index.html?x=1",
 			want:    []string{"[Guide](http://example.com/guide)", "[Sub](http://example.com/docs/sub.html)", "[Top](http://example.com/docs/index.html?x=1#top)"},
 		},
+		{
+			name:    "page_url_credentials_do_not_propagate",
+			pageURL: "http://fetch-user:p%40ssword@example.com/docs/index.html?x=1",
+			want:    []string{"[Guide](http://example.com/guide)", "[Sub](http://example.com/docs/sub.html)", "[Top](http://example.com/docs/index.html?x=1#top)", "![Image](http://example.com/img.png)"},
+		},
+		{
+			name:    "page_url_username_does_not_propagate",
+			pageURL: "http://fetch-token@example.com/docs/index.html?x=1",
+			want:    []string{"[Guide](http://example.com/guide)", "[Sub](http://example.com/docs/sub.html)", "[Top](http://example.com/docs/index.html?x=1#top)", "![Image](http://example.com/img.png)"},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := convertHTMLToMarkdown(input, tt.pageURL)
@@ -74,6 +86,112 @@ func TestConvertHTMLToMarkdownRelativeLinks(t *testing.T) {
 				if !strings.Contains(got, want) {
 					t.Errorf("markdown missing %q: %q", want, got)
 				}
+			}
+		})
+	}
+}
+
+func TestFetchOutputURL(t *testing.T) {
+	for _, tt := range []struct {
+		name, input, want string
+	}{
+		{name: "empty"},
+		{name: "unchanged", input: "https://example.com/docs?q=1#top", want: "https://example.com/docs?q=1#top"},
+		{name: "password", input: "https://user:secret@example.com/docs?q=1#top", want: "https://example.com/docs?q=1#top"},
+		{name: "username_only", input: "https://token@example.com/docs", want: "https://example.com/docs"},
+		{name: "encoded_credentials", input: "https://user%40name:p%40ss@example.com/docs", want: "https://example.com/docs"},
+		{name: "invalid", input: "https://user:secret@example.com/%zz"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := fetchOutputURL(tt.input); got != tt.want {
+				t.Fatalf("fetchOutputURL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFetchCredentialsStayOutOfOutput(t *testing.T) {
+	const username, password = "fetch-user", "fetch-secret"
+	const body = `<a href="next.html">Next</a><img src="pic.png" alt="Pic">`
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != username || pass != password {
+			t.Error("fetch lost HTTP Basic Auth credentials")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path == "/error" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, body)
+	}))
+	defer target.Close()
+	credentialURL, err := url.Parse(target.URL + "/docs/page.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialURL.User = url.UserPassword(username, password)
+	errorURL := credentialURL.Clone()
+	errorURL.Path = "/error"
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, credentialURL.String(), http.StatusFound)
+	}))
+	defer origin.Close()
+
+	for _, tt := range []struct {
+		name, requestURL, displayURL string
+		wantError                    bool
+	}{
+		{name: "request_credentials", requestURL: credentialURL.String(), displayURL: target.URL + "/docs/page.html"},
+		{name: "redirect_credentials", requestURL: origin.URL + "/entry", displayURL: origin.URL + "/entry"},
+		{name: "http_error", requestURL: errorURL.String(), displayURL: target.URL + "/error", wantError: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			check := func(t *testing.T, response fantasy.ToolResponse) {
+				t.Helper()
+				if response.IsError != tt.wantError {
+					t.Fatalf("IsError = %t, want %t: %s", response.IsError, tt.wantError, response.Content)
+				}
+				for _, credential := range []string{username, password} {
+					if strings.Contains(response.Content, credential) {
+						t.Error("URL credentials appeared in tool output")
+					}
+				}
+				if !strings.Contains(response.Content, tt.displayURL) {
+					t.Errorf("output omitted display URL %q", tt.displayURL)
+				}
+			}
+			for _, format := range []string{"markdown", "text", "html", "agentic"} {
+				t.Run(format, func(t *testing.T) {
+					var args any = fetchArgs{URL: tt.requestURL, Format: format}
+					if format == "agentic" {
+						args = agenticFetchArgs{URL: tt.requestURL, Prompt: "summarize"}
+					}
+					input, err := jsonv2.Marshal(args)
+					if err != nil {
+						t.Fatal(err)
+					}
+					call := fantasy.ToolCall{Input: string(input)}
+					var response fantasy.ToolResponse
+					if format == "agentic" {
+						response, err = executeAgenticFetch(t.Context(), call, "")
+					} else {
+						response, err = executeFetch(t.Context(), call, "")
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					check(t, response)
+					if !tt.wantError && format != "html" {
+						for _, want := range []string{"[Next](" + target.URL + "/docs/next.html)", "![Pic](" + target.URL + "/docs/pic.png)"} {
+							if !strings.Contains(response.Content, want) {
+								t.Errorf("output missing %q", want)
+							}
+						}
+					}
+				})
 			}
 		})
 	}

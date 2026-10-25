@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -94,7 +95,7 @@ func executeFetch(ctx context.Context, call fantasy.ToolCall, workDir string) (f
 
 	page, err := fetchURL(fetchCtx, args.URL)
 	if err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to fetch %s: %v", args.URL, err)), nil
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to fetch %s: %v", fetchOutputURL(args.URL), err)), nil
 	}
 
 	var result string
@@ -127,7 +128,19 @@ func executeFetch(ctx context.Context, call fantasy.ToolCall, workDir string) (f
 		result = safeTruncateHeadBytes(result, maxFetchSize) + fmt.Sprintf("\n\n[Content truncated to %d bytes]", maxFetchSize)
 	}
 
-	return fantasy.NewTextResponse(fmt.Sprintf("Fetched content from %s:\n\n%s", args.URL, result)), nil
+	return fantasy.NewTextResponse(fmt.Sprintf("Fetched content from %s:\n\n%s", fetchOutputURL(args.URL), result)), nil
+}
+
+// fetchOutputURL removes request credentials from display and link-resolution
+// URLs. Keep the original URL for HTTP authentication. Invalid URLs cannot
+// provide a safe base and must not be echoed verbatim.
+func fetchOutputURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	parsed.User = nil
+	return parsed.String()
 }
 
 // fetchedPage is the body of a successful GET together with what the callers
@@ -199,7 +212,7 @@ func extractTextFromHTML(htmlContent, pageURL string) string {
 // resolves relative links and image sources against the page they came from,
 // so the model can fetch them without reconstructing the origin itself.
 func convertHTMLToMarkdown(htmlContent, pageURL string) (string, error) {
-	markdown, err := htmlToMarkdown.ConvertString(htmlContent, converter.WithDomain(pageURL))
+	markdown, err := htmlToMarkdown.ConvertString(htmlContent, converter.WithDomain(fetchOutputURL(pageURL)))
 	if err != nil {
 		return "", fmt.Errorf("converting HTML to Markdown: %w", err)
 	}

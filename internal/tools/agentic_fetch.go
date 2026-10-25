@@ -60,11 +60,11 @@ func executeAgenticFetch(ctx context.Context, call fantasy.ToolCall, workDir str
 
 	fetchResult, err := executeFetchByURL(ctx, args.URL)
 	if err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to fetch %s: %v", args.URL, err)), nil
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to fetch %s: %v", fetchOutputURL(args.URL), err)), nil
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Fetched content from %s:\n\n", args.URL)
+	fmt.Fprintf(&b, "Fetched content from %s:\n\n", fetchOutputURL(args.URL))
 	b.WriteString(fetchResult)
 	fmt.Fprintf(&b, "\n\n---\n\nInstruction: %s", args.Prompt)
 
