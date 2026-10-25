@@ -259,3 +259,30 @@ func TestResolveAgentName_ExactMatchPriority(t *testing.T) {
 		t.Errorf("expected key 'dev', got %q", key)
 	}
 }
+
+// A grounded task never completes from prose: free-text promotion is off for
+// it, while an ordinary read-only task can still be promoted.
+func TestGroundedTaskIsNeverPromotedFromFreeText(t *testing.T) {
+	output := "## Review\nThe module looks correct."
+	for _, grounded := range []bool{true, false} {
+		task := TaskDef{Agent: "worker", Goal: "review", Execution: ExecutionContract{RequiresResult: true, RequiresGroundedResult: grounded}}
+		promoted := promoteValidatedReadOnlyHandoff(task, "1", "worker", output)
+		if (promoted == nil) != grounded {
+			t.Errorf("grounded=%v: promoted = %#v", grounded, promoted)
+		}
+	}
+}
+
+// ParseFreeTextResult labels its output parsed_free_text; production callers
+// always overwrite the Source, so the final values are recovered_protocol or
+// promoted_free_text.
+func TestFreeTextResultSourcesAreOverwritten(t *testing.T) {
+	parsed := ParseFreeTextResult("Finished the review.")
+	if parsed == nil || parsed.Source != "parsed_free_text" {
+		t.Fatalf("ParseFreeTextResult source = %#v, want parsed_free_text", parsed)
+	}
+	promoted := promoteValidatedReadOnlyHandoff(TaskDef{Agent: "worker"}, "1", "worker", "## Review\nDone.")
+	if promoted == nil || promoted.Source != "promoted_free_text" || isSubmittedResultSource(promoted.Source) {
+		t.Fatalf("promoted source = %#v, want promoted_free_text outside the submitted sources", promoted)
+	}
+}

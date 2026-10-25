@@ -12,22 +12,22 @@ import (
 	"testing"
 )
 
-// ArtifactRef is deliberately safe to use as a comparable protocol value.
-// In particular, origin metadata belongs in immutableArtifactMetadata rather
-// than being added as a slice-bearing field to the public reference.
-func TestArtifactRefRemainsComparable(t *testing.T) {
-	refs := map[ArtifactRef]struct{}{{ID: "artifact", SHA256: "digest"}: {}}
-	if _, ok := refs[ArtifactRef{ID: "artifact", SHA256: "digest"}]; !ok {
-		t.Fatal("equivalent ArtifactRef was not comparable as a map key")
-	}
-}
+// ArtifactRef must stay a comparable protocol value: origin metadata lives in
+// immutableArtifactMetadata, never in a slice-bearing field on the reference.
+var _ = map[ArtifactRef]struct{}{}
 
-func TestArtifactOriginMetadataRoundTripLegacyAndConflict(t *testing.T) {
+func evidenceOriginBaseStore(t *testing.T) *FileArtifactStore {
+	t.Helper()
 	workspace := t.TempDir()
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return store
+}
+
+func TestArtifactOriginMetadataRoundTripLegacyAndConflict(t *testing.T) {
+	store := evidenceOriginBaseStore(t)
 
 	put, err := store.Put(context.Background(), PutArtifactRequest{
 		ID: "origin-roundtrip", Kind: "evidence", Path: "evidence.json", Content: []byte("evidence"),
@@ -45,6 +45,7 @@ func TestArtifactOriginMetadataRoundTripLegacyAndConflict(t *testing.T) {
 		t.Fatalf("origin = %#v, want %#v", origin, wantOrigin)
 	}
 
+	// Metadata written before origin fields existed reads as no origin.
 	legacyPut, err := store.Put(context.Background(), PutArtifactRequest{
 		ID: "origin-legacy", Kind: "evidence", Path: "legacy.json", Content: []byte("legacy"),
 	})
@@ -66,6 +67,7 @@ func TestArtifactOriginMetadataRoundTripLegacyAndConflict(t *testing.T) {
 		t.Fatalf("legacy origin = %#v, want unavailable origin", legacyOrigin)
 	}
 
+	// Origin metadata is immutable once written.
 	_, err = store.Put(context.Background(), PutArtifactRequest{
 		ID: "origin-roundtrip", Kind: "evidence", Path: "evidence.json", Content: []byte("evidence"),
 		RetrievalURL: "https://different.example.test/evidence", ParentSourceIDs: []string{"parent-a", "parent-b"},
@@ -75,7 +77,9 @@ func TestArtifactOriginMetadataRoundTripLegacyAndConflict(t *testing.T) {
 	}
 }
 
-type trustedOriginTestStore struct {
+// evidenceOriginStore answers TrustedArtifactMetadata from a fixed map and
+// records every lookup.
+type evidenceOriginStore struct {
 	ArtifactStore
 	mu      sync.Mutex
 	origins map[string]ArtifactOriginMetadata
@@ -83,7 +87,7 @@ type trustedOriginTestStore struct {
 	err     error
 }
 
-func (s *trustedOriginTestStore) TrustedArtifactMetadata(_ context.Context, ref ArtifactRef) (ArtifactOriginMetadata, error) {
+func (s *evidenceOriginStore) TrustedArtifactMetadata(_ context.Context, ref ArtifactRef) (ArtifactOriginMetadata, error) {
 	s.mu.Lock()
 	s.calls = append(s.calls, ref)
 	s.mu.Unlock()
@@ -93,18 +97,14 @@ func (s *trustedOriginTestStore) TrustedArtifactMetadata(_ context.Context, ref 
 	return s.origins[ref.ID], nil
 }
 
-func (s *trustedOriginTestStore) resolverCalls() []ArtifactRef {
+func (s *evidenceOriginStore) resolverCalls() []ArtifactRef {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]ArtifactRef(nil), s.calls...)
 }
 
 func TestResolveDecisionEvidenceUsesTrustedOriginForEveryEvidenceClass(t *testing.T) {
-	workspace := t.TempDir()
-	base, err := NewFileArtifactStore(workspace, workspace)
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := evidenceOriginBaseStore(t)
 	refs := make([]ArtifactRef, 3)
 	for i, id := range []string{"direct", "base-rate", "assumption"} {
 		put, putErr := base.Put(context.Background(), PutArtifactRequest{ID: id, Kind: "evidence", Path: id + ".json", Content: []byte(id)})
@@ -113,7 +113,7 @@ func TestResolveDecisionEvidenceUsesTrustedOriginForEveryEvidenceClass(t *testin
 		}
 		refs[i] = put.ArtifactRef
 	}
-	store := &trustedOriginTestStore{
+	store := &evidenceOriginStore{
 		ArtifactStore: base,
 		origins: map[string]ArtifactOriginMetadata{
 			"direct":     {RetrievalURL: "https://publisher.example.test/final/direct", ParentSourceIDs: []string{"root-direct"}},
@@ -155,16 +155,12 @@ func TestResolveDecisionEvidenceUsesTrustedOriginForEveryEvidenceClass(t *testin
 }
 
 func TestResolveDecisionEvidenceFailsClosedOnTrustedOriginResolverError(t *testing.T) {
-	workspace := t.TempDir()
-	base, err := NewFileArtifactStore(workspace, workspace)
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := evidenceOriginBaseStore(t)
 	put, err := base.Put(context.Background(), PutArtifactRequest{ID: "resolver-error", Kind: "evidence", Path: "evidence.json", Content: []byte("evidence")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &trustedOriginTestStore{ArtifactStore: base, err: errors.New("origin metadata unavailable")}
+	store := &evidenceOriginStore{ArtifactStore: base, err: errors.New("origin metadata unavailable")}
 	req := engineRequest(enginePolicy(1))
 	req.Artifacts = []ArtifactRef{put.ArtifactRef}
 	err = (&decisionEngine{services: DecisionServices{Store: store}}).resolveDecisionEvidence(context.Background(), &req)
@@ -199,13 +195,15 @@ func TestTrustedGroupingSurvivesReplayWithoutAdvisoryParentPromotion(t *testing.
 	}
 }
 
-type recordingArtifactPutStore struct {
+// evidenceOriginPutRecorder captures every PutArtifactRequest a publisher
+// sends to the store.
+type evidenceOriginPutRecorder struct {
 	ArtifactStore
 	mu       sync.Mutex
 	requests []PutArtifactRequest
 }
 
-func (s *recordingArtifactPutStore) Put(ctx context.Context, request PutArtifactRequest) (ArtifactPutResult, error) {
+func (s *evidenceOriginPutRecorder) Put(ctx context.Context, request PutArtifactRequest) (ArtifactPutResult, error) {
 	s.mu.Lock()
 	request.ParentSourceIDs = append([]string(nil), request.ParentSourceIDs...)
 	s.requests = append(s.requests, request)
@@ -213,19 +211,14 @@ func (s *recordingArtifactPutStore) Put(ctx context.Context, request PutArtifact
 	return s.ArtifactStore.Put(ctx, request)
 }
 
-func (s *recordingArtifactPutStore) putRequests() []PutArtifactRequest {
+func (s *evidenceOriginPutRecorder) putRequests() []PutArtifactRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]PutArtifactRequest(nil), s.requests...)
 }
 
 func TestReferenceEvidencePublisherDoesNotPromoteAdvisorySourceToArtifactOrigin(t *testing.T) {
-	workspace := t.TempDir()
-	base, err := NewFileArtifactStore(workspace, workspace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	store := &recordingArtifactPutStore{ArtifactStore: base}
+	store := &evidenceOriginPutRecorder{ArtifactStore: evidenceOriginBaseStore(t)}
 	draft := validReferenceDraft()
 	draft.Entries[0].Source.URL = "https://model-declared.example/source"
 	draft.Entries[0].Source.DeclaredParentSourceIDs = []string{"model-parent"}

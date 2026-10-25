@@ -677,3 +677,94 @@ func TestVerificationResult_EventStoreAppendAndReplayIntegration(t *testing.T) {
 		t.Errorf("TimedOut = %v, want %v", vr.TimedOut, expectedResult.TimedOut)
 	}
 }
+
+// A receipt without its own target takes the Todo's frozen backend; a
+// receipt that records the target its attempt ran on keeps that backend, so a
+// fallback attempt is not recorded under the primary.
+func TestReceiptBackendFollowsAttemptTarget(t *testing.T) {
+	tests := []struct {
+		name    string
+		receipt ExecutionReceipt
+		want    string
+	}{
+		{name: "legacy receipt derives the Todo backend", receipt: ExecutionReceipt{Backend: "openai"}, want: "ollama"},
+		{name: "attempt target wins", receipt: ExecutionReceipt{ExecutionTarget: execution.ExecutionTarget{Backend: "openai", Model: "candidate"}}, want: "openai"},
+		{name: "attempt target backend is canonicalized", receipt: ExecutionReceipt{ExecutionTarget: execution.ExecutionTarget{Backend: "local", Model: "candidate"}}, want: "ollama"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			list := NewTaskTracker().TodoList()
+			item := list.AddBatch([]TodoSpec{{
+				Agent: "worker", Desc: "receipt backend",
+				ExecutionTarget: execution.ExecutionTarget{Backend: "ollama", Model: "primary"},
+			}})[0]
+			receipt := tt.receipt
+			receipt.RunID, receipt.TaskID, receipt.Attempt = "run-1", item.ID, 1
+			if err := list.SetExecutionReceipt(item.ID, &receipt); err != nil {
+				t.Fatal(err)
+			}
+			got := list.Items()[0].ExecutionReceipt
+			if got == nil || got.Backend != tt.want {
+				t.Fatalf("receipt backend = %#v, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReceiptUsageAndTargetHelpers(t *testing.T) {
+	if got := receiptUsage(ExecutionUsage{}); got != nil {
+		t.Fatalf("receiptUsage(zero) = %#v, want nil (unknown)", got)
+	}
+	if got := receiptUsage(ExecutionUsage{InputTokens: 3, TotalTokens: 5}); got == nil || got.TotalTokens != 5 {
+		t.Fatalf("receiptUsage = %#v, want the recorded usage", got)
+	}
+	if got := receiptExecutionTarget(execution.ExecutionTarget{}); !got.IsZero() {
+		t.Fatalf("receiptExecutionTarget(zero) = %#v, want zero", got)
+	}
+	receipt := ExecutionReceipt{RunID: "run-1", TaskID: "1", Attempt: 2, OccurrenceAttempt: 3,
+		ExecutionTarget: execution.ExecutionTarget{Backend: "ollama", Model: "m"}, Usage: &ExecutionUsage{TotalTokens: 7}}
+	clone := cloneExecutionReceipt(&receipt)
+	clone.Usage.TotalTokens = 99
+	if receipt.Usage.TotalTokens != 7 {
+		t.Fatal("cloneExecutionReceipt shares the Usage pointer")
+	}
+	encoded, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded ExecutionReceipt
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.OccurrenceAttempt != 3 || decoded.ExecutionTarget != receipt.ExecutionTarget || decoded.Usage == nil || decoded.Usage.TotalTokens != 7 {
+		t.Fatalf("receipt round trip = %#v", decoded)
+	}
+	legacy, err := json.Marshal(ExecutionReceipt{RunID: "run-1", TaskID: "1", Attempt: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"occurrence_attempt", "execution_target", "usage"} {
+		if strings.Contains(string(legacy), key) {
+			t.Fatalf("receipt without the new fields serialized %q: %s", key, legacy)
+		}
+	}
+}
+
+// A worker attempt's durable receipt records its occurrence attempt and the
+// target it ran on.
+func TestWorkerReceiptRecordsAttemptIdentity(t *testing.T) {
+	c := newTestCoordinator(t, withMaxRetries(0))
+	todoID := addTodo(t, c, "inspect")
+	c.workerAgentOverride = &submittingWorkerAgent{onSubmit: func() {
+		c.storeSubmittedTaskResult(todoID, &TaskResult{
+			TaskID: todoID, Agent: "worker", Status: TaskResultStatusSuccess, Source: "submitted", Summary: "inspected",
+		})
+	}}
+	if _, err := c.executeTask(context.Background(), TaskDef{Agent: "worker", Goal: "inspect", Recovery: RecoveryRetry}, todoID); err != nil {
+		t.Fatal(err)
+	}
+	receipt := todoByID(t, c, todoID).ExecutionReceipt
+	if receipt == nil || receipt.Attempt != 1 || receipt.OccurrenceAttempt != 1 {
+		t.Fatalf("receipt attempt identity = %#v, want attempt 1 of occurrence attempt 1", receipt)
+	}
+}

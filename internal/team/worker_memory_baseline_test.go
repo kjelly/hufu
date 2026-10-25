@@ -328,16 +328,6 @@ func TestBaseline_ShadowContextAppendWritesSharedScope(t *testing.T) {
 	}
 }
 
-// --- Contract tests for WP-1+ (skipped today) ---
-
-// TestBaselineContract_PerWorkerRecallNotImplemented is the WP-3 target
-// contract: buildMemorySuffix should be replaceable by a per-worker recall
-// that includes the worker's own private memory. Today there is no such
-// mechanism. Skipped until WP-3.
-func TestBaselineContract_PerWorkerRecallNotImplemented(t *testing.T) {
-	t.Skip("WP-3 contract: per-worker recall not yet implemented; today all memory is shared")
-}
-
 // TestBaselineContract_PerWorkerIngestionImplemented verifies that WP-4
 // enables per-worker private ingestion via SaveSessionMemory. The canonical
 // store now supports writing private items with a non-empty AgentID.

@@ -1,6 +1,7 @@
 package yamlutil
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -167,7 +168,7 @@ func TestFlattenYAML(t *testing.T) {
 					t.Errorf("FlattenYAML() expected error, got nil")
 					return
 				}
-				if tt.errMsg != "" && !contains(err.Error(), tt.errMsg) {
+				if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
 					t.Errorf("FlattenYAML() error = %v, want contains %q", err, tt.errMsg)
 				}
 				return
@@ -299,7 +300,7 @@ negative: -100
 					t.Errorf("FlattenYAMLBytes() expected error, got nil")
 					return
 				}
-				if tt.errMsg != "" && !contains(err.Error(), tt.errMsg) {
+				if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
 					t.Errorf("FlattenYAMLBytes() error = %v, want contains %q", err, tt.errMsg)
 				}
 				return
@@ -329,21 +330,7 @@ func TestFlattenYAMLBytesWithPath(t *testing.T) {
 	if err == nil {
 		t.Errorf("FlattenYAMLBytes() expected error for invalid YAML")
 	}
-	if !contains(err.Error(), "/test/path/config.yaml") {
+	if !strings.Contains(err.Error(), "/test/path/config.yaml") {
 		t.Errorf("FlattenYAMLBytes() error should contain path, got %v", err)
 	}
-}
-
-// Helper function to check if a string contains a substring
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && findSubstring(s, substr))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

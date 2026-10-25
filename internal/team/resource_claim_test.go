@@ -2,6 +2,7 @@ package team
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -136,5 +137,46 @@ func TestValidateResourceClaimsRejectsMalformedClaim(t *testing.T) {
 		if err := validateResourceClaims([]TaskDef{task}); err == nil {
 			t.Fatalf("validateResourceClaims(%#v) accepted malformed claim", task.Resources)
 		}
+	}
+}
+
+// Without a bounded workset scope, every task with a side effect holds an
+// exclusive whole-root claim and read-only tasks hold a read claim. This is
+// why DAG-scheduled writers never run concurrently.
+func TestWholeRootClaimsSerializeWriters(t *testing.T) {
+	tests := []struct {
+		effect SideEffectClass
+		mode   ResourceClaimMode
+	}{
+		{effect: SideEffectNone, mode: ResourceRead},
+		{effect: SideEffectWorkspaceWrite, mode: ResourceExclusive},
+		{effect: SideEffectExternalWrite, mode: ResourceExclusive},
+		{effect: SideEffectInfraMutation, mode: ResourceExclusive},
+	}
+	snapshots := make(map[SideEffectClass]*TaskResourceScopeSnapshot, len(tests))
+	for _, tt := range tests {
+		t.Run(string(tt.effect), func(t *testing.T) {
+			snapshot, err := wholeRootTaskResourceScope(nil, tt.effect)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, _ := NewWorkspacePathResourceClaim(".", tt.mode)
+			if !slices.Contains(snapshot.Claims, want) {
+				t.Fatalf("claims = %#v, want %#v", snapshot.Claims, want)
+			}
+			if snapshot.Version != 1 || snapshot.Digest != taskResourceScopeDigest(snapshot) {
+				t.Fatalf("snapshot version/digest = %d/%q", snapshot.Version, snapshot.Digest)
+			}
+			snapshots[tt.effect] = snapshot
+		})
+	}
+	writerSnapshot, readerSnapshot := snapshots[SideEffectWorkspaceWrite], snapshots[SideEffectNone]
+	if writerSnapshot == nil || readerSnapshot == nil {
+		t.Fatal("whole-root snapshots were not built")
+	}
+	writer, reader := writerSnapshot.Claims, readerSnapshot.Claims
+	if !claimsConflict(writer, writer) || !claimsConflict(writer, reader) || claimsConflict(reader, reader) {
+		t.Fatalf("whole-root claim conflicts: writer/writer=%v writer/reader=%v reader/reader=%v",
+			claimsConflict(writer, writer), claimsConflict(writer, reader), claimsConflict(reader, reader))
 	}
 }

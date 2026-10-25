@@ -3,11 +3,13 @@ package team
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/execution"
 )
 
@@ -107,5 +109,72 @@ func TestModelFanoutCreditSharesOccurrenceCap(t *testing.T) {
 	}
 	if recorded, err := parent.memoryOutcomeWeightForSignal(owned, "verification_passed", "positive"); err != nil || recorded != 1 {
 		t.Fatalf("replay credit=%v err=%v", recorded, err)
+	}
+}
+
+func TestCloneCoordinatorRoutesUsageToParentNoProgressBudget(t *testing.T) {
+	parent := newTestCoordinator(t, withTeamConfig(func(cfg *agent.TeamConfig) {
+		cfg.Reliability = agent.ReliabilityConfig{
+			MaxTokensWithoutProgress:    10,
+			MaxTokensWithoutProgressSet: true,
+			MaxTurnsWithoutProgressSet:  true,
+			MaxTasksWithoutProgressSet:  true,
+			HardEnforcement:             true,
+		}
+	}))
+	clone := cloneCoordinator(parent, parent.session)
+	clone.recordReliabilityUsage("todo-1", 1, 17)
+	clone.recordReliabilityUsage("todo-1", 1, 17) // a cumulative receipt deduplicates within the clone
+	clone.recordNoProgressTokens(5)               // auxiliary/sidecar usage also lands on the parent
+
+	if got := parent.noProgressCounters().Tokens; got != 22 {
+		t.Fatalf("parent no-progress tokens = %d, want 22 from clone worker + auxiliary usage", got)
+	}
+	if got := clone.noProgressCounters().Tokens; got != 0 {
+		t.Fatalf("clone-local no-progress tokens = %d, want accounting owned by parent", got)
+	}
+	if stopped, reason := parent.enforceNoProgressBudget(); !stopped || reason == "" {
+		t.Fatalf("parent budget enforcement = (%v, %q), want terminal stop from clone usage", stopped, reason)
+	}
+	if result := parent.LastRunResult(); result == nil || result.Outcome != RunOutcomePartial || result.Continuation == nil {
+		t.Fatalf("parent result = %#v, want partial continuation after clone usage threshold", result)
+	}
+}
+
+// ExecutionTopology/ModelTopology mean parallel fan-out, not an ordered
+// fallback list: every leaf beyond the first runs concurrently. Execution
+// routes must therefore store fallback candidates in a separate field.
+func TestModelTopologyIsFanout(t *testing.T) {
+	def := &agent.AgentDef{Name: "worker", ExtraModels: []string{" ollama/b ", "ollama/c"}}
+	topology := initialTaskModelTopology(def, " ollama/a ")
+	if want := []string{"ollama/a", "ollama/b", "ollama/c"}; !slices.Equal(topology, want) {
+		t.Fatalf("initialTaskModelTopology = %q, want %q", topology, want)
+	}
+
+	c := &Coordinator{taskTracker: NewTaskTracker()}
+	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{
+		{Agent: "worker", Desc: "fanout", ModelTopology: topology},
+		{Agent: "worker", Desc: "singleton", ModelTopology: []string{"ollama/a"}},
+	})
+	if !c.shouldExecuteWithExtraModels(def, items[0].ID) {
+		t.Error("multi-leaf topology did not fan out")
+	}
+	if c.shouldExecuteWithExtraModels(def, items[1].ID) {
+		t.Error("singleton topology fanned out")
+	}
+}
+
+// An extra-model leaf gets a private control workspace but keeps the parent
+// subject root, so state-changing leaves write the same project files
+// concurrently.
+func TestExtraModelLeafSharesSubjectRoot(t *testing.T) {
+	c := newDirectTypedCoordinator(t, "view,write", nil, nil)
+	leafWorkspace := t.TempDir()
+	leaf := cloneCoordinator(c, cloneSession(c.session, leafWorkspace))
+	if leaf.projectDir != c.projectDir {
+		t.Fatalf("leaf projectDir = %q, want the shared parent subject root %q", leaf.projectDir, c.projectDir)
+	}
+	if leaf.session.Workspace != leafWorkspace || c.session.Workspace == leafWorkspace {
+		t.Fatalf("leaf control workspace = %q (parent %q), want a private leaf workspace", leaf.session.Workspace, c.session.Workspace)
 	}
 }

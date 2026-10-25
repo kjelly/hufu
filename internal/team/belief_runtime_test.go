@@ -267,8 +267,8 @@ func TestBeliefRuntimeMissingArtifactNeverReloadsTeamModel(t *testing.T) {
 }
 
 func TestBeliefRuntimeWorkerVerificationUsesFrozenEventBinding(t *testing.T) {
-	worker := &staleVerifyWorkerAgent{}
-	c, _ := newWP05RetryTestCoordinator(t, worker)
+	worker := scriptWorker(textTurn("attempt 1 output"))
+	c := newTestCoordinator(t, withWorker(worker))
 	c.session.Dir = t.TempDir()
 	writeBeliefModel(t, c.session.Dir)
 	c.session.Config.Belief = &agent.BeliefConfig{ModelFile: "model.json", Experiment: "comparison"}
@@ -291,13 +291,13 @@ func TestBeliefRuntimeWorkerVerificationUsesFrozenEventBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	views := c.BeliefStates()
-	if len(views) != 1 || len(views[0].Epochs) != 1 || views[0].Epochs[0].State == nil || views[0].Epochs[0].State.Status != belief.Estimated || worker.calls != 1 {
-		t.Fatalf("worker verification did not enter belief state: %+v calls=%d", views, worker.calls)
+	if len(views) != 1 || len(views[0].Epochs) != 1 || views[0].Epochs[0].State == nil || views[0].Epochs[0].State.Status != belief.Estimated || worker.Calls() != 1 {
+		t.Fatalf("worker verification did not enter belief state: %+v calls=%d", views, worker.Calls())
 	}
 	digest := views[0].Epochs[0].State.Digest
 	c.beliefRuntime = nil
 	c.refreshBeliefs(nil)
-	if c.BeliefStates()[0].Epochs[0].State.Digest != digest || worker.calls != 1 {
+	if c.BeliefStates()[0].Epochs[0].State.Digest != digest || worker.Calls() != 1 {
 		t.Fatal("worker replay changed the posterior or ran the worker again")
 	}
 }

@@ -95,8 +95,8 @@ func TestRuntimeFaultMatrixCancellationDrainsBufferedCompletionWithoutLaunchingD
 }
 
 func TestRuntimeFaultMatrixRetryReopensSameOccurrenceAndPersistsProjections(t *testing.T) {
-	worker := &succeedOnSecondAgent{}
-	c, _ := newWP08TestCoordinator(t, worker, 2)
+	worker := scriptFailThenSucceed()
+	c := newTestCoordinator(t, withWorker(worker), withMaxRetries(2))
 	c.executionRunID = "run-fault-matrix-retry"
 	c.SetSessionData(NewSession())
 	c.initEventStore()
@@ -134,8 +134,8 @@ func TestRuntimeFaultMatrixRetryReopensSameOccurrenceAndPersistsProjections(t *t
 		t.Fatalf("scheduler retry: %v", err)
 	}
 	out := results[0].output
-	if out != "succeeded on retry" || worker.calls != 2 {
-		t.Fatalf("retry result = %q after %d calls, want success after 2 calls", out, worker.calls)
+	if out != "succeeded on retry" || worker.Calls() != 2 {
+		t.Fatalf("retry result = %q after %d calls, want success after 2 calls", out, worker.Calls())
 	}
 	current := todoItemByID(c.taskTracker.TodoList().Items(), ids[0])
 	if current == nil || current.Status != TaskDone || current.OccurrenceRevision != 2 {

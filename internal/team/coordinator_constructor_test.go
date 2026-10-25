@@ -130,7 +130,7 @@ func TestCoordinatorCloseReleasesActiveContextPreflight(t *testing.T) {
 }
 
 func TestCoordinatorCloseDoesNotReleaseAnotherCoordinatorResources(t *testing.T) {
-	newTestCoordinator := func(name string) *Coordinator {
+	newNamedCoordinator := func(name string) *Coordinator {
 		t.Helper()
 		c, err := newCoordinator(coordinatorParams{Session: &TeamSession{
 			Workspace: t.TempDir(),
@@ -142,8 +142,8 @@ func TestCoordinatorCloseDoesNotReleaseAnotherCoordinatorResources(t *testing.T)
 		}
 		return c
 	}
-	first := newTestCoordinator("close-owner-first")
-	second := newTestCoordinator("close-owner-second")
+	first := newNamedCoordinator("close-owner-first")
+	second := newNamedCoordinator("close-owner-second")
 	if got := audit.GetDefault(); got != second.auditLogger {
 		t.Fatal("second coordinator audit logger is not the process default")
 	}

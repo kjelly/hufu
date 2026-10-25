@@ -12,14 +12,10 @@ import (
 // effective-state verification §14.1/§14.2 require, against a real fake
 // app-server subprocess.
 
-// fakeCodexSandboxPolicy builds the response-side sandbox policy object the
-// real app-server actually returns (a discriminated union), from Hufu's
-// plain request-side mode string — see codexSandboxPolicyMode's doc comment
-// for why the response shape differs from the request shape.
-func fakeCodexSandboxPolicy(mode string) map[string]any {
-	return fakeCodexSandboxPolicyWithNetwork(mode, false)
-}
-
+// fakeCodexSandboxPolicyWithNetwork builds the response-side sandbox policy
+// object the real app-server actually returns (a discriminated union), from
+// Hufu's plain request-side mode string — see codexSandboxPolicyMode's doc
+// comment for why the response shape differs from the request shape.
 func fakeCodexSandboxPolicyWithNetwork(mode string, networkAccess bool) map[string]any {
 	switch mode {
 	case "read-only":

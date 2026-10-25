@@ -811,18 +811,3 @@ func TestValidateExecutionContract_RejectsNonAssertingVerifier(t *testing.T) {
 		})
 	}
 }
-
-func TestValidateExecutionContract_ObservationExempt(t *testing.T) {
-	task := TaskDef{
-		Agent:      "worker",
-		Goal:       "observe work",
-		Verify:     "test -f artifact || echo FAIL",
-		VerifyMode: "observation",
-		Execution: ExecutionContract{
-			Kind: ExecutionKindInline,
-		},
-	}
-	if err := ValidateExecutionContract(task); err != nil {
-		t.Fatalf("observation mode verifier should be exempt from anti-pattern rejection, got: %v", err)
-	}
-}

@@ -203,28 +203,6 @@ func TestEventStoreAppendFailsSafelyWhenSyncFunctionIsAbsent(t *testing.T) {
 	}
 }
 
-func configureEventStoreSyncFailure(t *testing.T, store *EventStore, occurrence int, failure error) {
-	t.Helper()
-	if store == nil || store.path == "" {
-		t.Fatal("event store is unavailable")
-	}
-	if occurrence < 1 {
-		t.Fatalf("event occurrence = %d, want positive occurrence", occurrence)
-	}
-	previousSync := store.commitHook
-	if previousSync == nil {
-		t.Fatal("event store sync seam is unavailable")
-	}
-	syncCount := 0
-	store.commitHook = func() error {
-		syncCount++
-		if syncCount == occurrence {
-			return failure
-		}
-		return previousSync()
-	}
-}
-
 func configureEventStoreSyncFailureForEventType(t *testing.T, store *EventStore, eventType string, occurrence int, failure error) {
 	t.Helper()
 	if store == nil || store.path == "" {

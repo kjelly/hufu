@@ -11,12 +11,17 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 )
 
-func newRCA20ExecutionCoordinator(t *testing.T) (*Coordinator, *EventStore, *int) {
+// An admitted task occurrence is immutable: every execution-relevant field
+// is bound by the admission digest, so a mutation between admission and
+// dispatch fails closed, while lifecycle-only fields (PlanID, retries,
+// status) change without touching the digest.
+
+func newOccurrenceExecutionCoordinator(t *testing.T) (*Coordinator, *EventStore, *int) {
 	t.Helper()
 	session := &TeamSession{
 		Workspace: t.TempDir(),
 		Config: agent.TeamConfig{
-			Name:                 "rca20-execution",
+			Name:                 "occurrence-execution",
 			AllowFreeTextResults: true,
 			MaxRetries:           0,
 		},
@@ -33,13 +38,13 @@ func newRCA20ExecutionCoordinator(t *testing.T) (*Coordinator, *EventStore, *int
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewEventStore(session.Workspace, "run-rca20", "session-rca20")
+	store, err := NewEventStore(session.Workspace, "run-occurrence", "session-occurrence")
 	if err != nil {
 		t.Fatal(err)
 	}
 	c.eventStore = store
 	c.SetEventJournal(eventStoreJournal{store: store})
-	c.executionRunID = "run-rca20"
+	c.executionRunID = "run-occurrence"
 	c.SetSessionData(NewSession())
 	c.phaseWorkflow = nil
 	calls := 0
@@ -48,7 +53,7 @@ func newRCA20ExecutionCoordinator(t *testing.T) (*Coordinator, *EventStore, *int
 	return c, store, &calls
 }
 
-func rca20MutationBase() TaskDef {
+func occurrenceMutationBase() TaskDef {
 	return TaskDef{
 		ID:            "occurrence",
 		Agent:         "worker",
@@ -62,81 +67,40 @@ func rca20MutationBase() TaskDef {
 	}
 }
 
-func TestRCA20PostCreationMutationFailsClosedBeforeWorkerOrAction(t *testing.T) {
+func TestTaskOccurrenceMutationAfterAdmissionFailsClosed(t *testing.T) {
 	step := ExecutionStep{ID: "read", Tool: "view", Effect: ExecutionEffectRead}
 	action := &Action{Capability: "structured-actions", Type: "apply", Payload: "{}"}
+	withAction := func() TaskDef {
+		task := occurrenceMutationBase()
+		task.Action = cloneActionPtr(action)
+		return task
+	}
+	withSteps := func() TaskDef {
+		task := occurrenceMutationBase()
+		task.Execution.Steps = []ExecutionStep{step}
+		return task
+	}
 	cases := []struct {
 		name   string
 		base   func() TaskDef
 		mutate func(*TaskDef)
 	}{
-		{
-			name:   "action added",
-			base:   rca20MutationBase,
-			mutate: func(task *TaskDef) { task.Action = cloneActionPtr(action) },
-		},
-		{
-			name: "action cleared",
-			base: func() TaskDef {
-				task := rca20MutationBase()
-				task.Action = cloneActionPtr(action)
-				return task
-			},
-			mutate: func(task *TaskDef) { task.Action = nil },
-		},
-		{
-			name: "execution steps changed",
-			base: func() TaskDef {
-				task := rca20MutationBase()
-				task.Execution.Steps = []ExecutionStep{step}
-				return task
-			},
-			mutate: func(task *TaskDef) { task.Execution.Steps[0].Tool = "bash" },
-		},
-		{
-			name: "execution steps cleared",
-			base: func() TaskDef {
-				task := rca20MutationBase()
-				task.Execution.Steps = []ExecutionStep{step}
-				return task
-			},
-			mutate: func(task *TaskDef) { task.Execution.Steps = nil },
-		},
-		{
-			name:   "plan first changed",
-			base:   rca20MutationBase,
-			mutate: func(task *TaskDef) { task.PlanFirst = true },
-		},
-		{
-			name:   "verify spec changed",
-			base:   rca20MutationBase,
-			mutate: func(task *TaskDef) { task.VerifySpec = &VerificationSpec{Type: VerifyFileExists, Path: "forged"} },
-		},
-		{
-			name:   "max retries changed",
-			base:   rca20MutationBase,
-			mutate: func(task *TaskDef) { task.MaxRetries = 9 },
-		},
-		{
-			name:   "side effect changed",
-			base:   rca20MutationBase,
-			mutate: func(task *TaskDef) { task.SideEffect = SideEffectExternalWrite },
-		},
-		{
-			name:   "recovery changed",
-			base:   rca20MutationBase,
-			mutate: func(task *TaskDef) { task.Recovery = RecoveryManual },
-		},
-		{
-			name:   "reconcile tool changed",
-			base:   rca20MutationBase,
-			mutate: func(task *TaskDef) { task.ReconcileTool = "forged-probe" },
-		},
+		{"action added", occurrenceMutationBase, func(task *TaskDef) { task.Action = cloneActionPtr(action) }},
+		{"action cleared", withAction, func(task *TaskDef) { task.Action = nil }},
+		{"execution steps changed", withSteps, func(task *TaskDef) { task.Execution.Steps[0].Tool = "bash" }},
+		{"execution steps cleared", withSteps, func(task *TaskDef) { task.Execution.Steps = nil }},
+		{"plan first changed", occurrenceMutationBase, func(task *TaskDef) { task.PlanFirst = true }},
+		{"verify spec changed", occurrenceMutationBase, func(task *TaskDef) {
+			task.VerifySpec = &VerificationSpec{Type: VerifyFileExists, Path: "forged"}
+		}},
+		{"max retries changed", occurrenceMutationBase, func(task *TaskDef) { task.MaxRetries = 9 }},
+		{"side effect changed", occurrenceMutationBase, func(task *TaskDef) { task.SideEffect = SideEffectExternalWrite }},
+		{"recovery changed", occurrenceMutationBase, func(task *TaskDef) { task.Recovery = RecoveryManual }},
+		{"reconcile tool changed", occurrenceMutationBase, func(task *TaskDef) { task.ReconcileTool = "forged-probe" }},
 	}
-
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			c, _, calls := newRCA20ExecutionCoordinator(t)
+			c, _, calls := newOccurrenceExecutionCoordinator(t)
 			base := testCase.base()
 			c.SetStepConfirmFn(func(_ context.Context, tasks []TaskDef) (bool, error) {
 				if len(tasks) != 1 {
@@ -152,8 +116,8 @@ func TestRCA20PostCreationMutationFailsClosedBeforeWorkerOrAction(t *testing.T) 
 			if *calls != 0 {
 				t.Fatalf("worker/provider calls = %d, want 0", *calls)
 			}
-			// The occurrence never started, so the failed batch withdraws it
-			// instead of leaving it pending to block a corrected dispatch.
+			// The occurrence never started, so the failed batch withdraws
+			// it instead of leaving it pending to block a corrected dispatch.
 			if items := c.taskTracker.TodoList().Items(); len(items) != 0 {
 				t.Fatalf("durable occurrence after rejected mutation = %#v, want it withdrawn", items)
 			}
@@ -161,9 +125,8 @@ func TestRCA20PostCreationMutationFailsClosedBeforeWorkerOrAction(t *testing.T) 
 	}
 }
 
-func TestRCA20PlanIDMutationCannotChangeAdmittedExecution(t *testing.T) {
-	c, _, calls := newRCA20ExecutionCoordinator(t)
-	base := rca20MutationBase()
+func TestTaskOccurrencePlanIDMutationIsLifecycleOnly(t *testing.T) {
+	c, _, calls := newOccurrenceExecutionCoordinator(t)
 	c.SetStepConfirmFn(func(_ context.Context, tasks []TaskDef) (bool, error) {
 		if len(tasks) != 1 {
 			t.Fatalf("step confirmation tasks = %d, want 1", len(tasks))
@@ -171,7 +134,7 @@ func TestRCA20PlanIDMutationCannotChangeAdmittedExecution(t *testing.T) {
 		tasks[0].PlanID = "forged-plan"
 		return true, nil
 	})
-	if _, err := c.ExecuteTasks(context.Background(), []TaskDef{base}); err != nil {
+	if _, err := c.ExecuteTasks(context.Background(), []TaskDef{occurrenceMutationBase()}); err != nil {
 		t.Fatalf("ExecuteTasks with lifecycle-only PlanID mutation: %v", err)
 	}
 	if *calls != 1 {
@@ -183,7 +146,7 @@ func TestRCA20PlanIDMutationCannotChangeAdmittedExecution(t *testing.T) {
 	}
 }
 
-func rca20DigestProjection() TaskOccurrenceProjection {
+func occurrenceDigestProjection() TaskOccurrenceProjection {
 	return TaskOccurrenceProjection{
 		ID: "todo-1", PlanTaskID: "plan-1", PlanFirst: true, PlanID: "lifecycle-plan", Phase: PhaseExecute,
 		Action: &Action{Capability: "capability", Type: "apply", Payload: "{}"}, ContractID: "contract", ContractHash: "hash", ContractRevision: 3,
@@ -203,8 +166,8 @@ func rca20DigestProjection() TaskOccurrenceProjection {
 	}
 }
 
-func TestRCA20DigestBindsEveryImmutableProjectionFieldExceptPlanID(t *testing.T) {
-	base := rca20DigestProjection()
+func TestTaskOccurrenceDigestBindsEveryImmutableField(t *testing.T) {
+	base := occurrenceDigestProjection()
 	baseDigest, err := decisionTaskInputDigest(base)
 	if err != nil {
 		t.Fatal(err)
@@ -299,9 +262,9 @@ func TestRCA20DigestBindsEveryImmutableProjectionFieldExceptPlanID(t *testing.T)
 	}
 }
 
-func TestRCA20RetryReplayPreservesDurableExecutionContract(t *testing.T) {
-	c, store, _ := newRCA20ExecutionCoordinator(t)
-	task := rca20MutationBase()
+func TestTaskOccurrenceRetryReplayPreservesContract(t *testing.T) {
+	c, store, _ := newOccurrenceExecutionCoordinator(t)
+	task := occurrenceMutationBase()
 	task.Goal = "retry and replay immutable execution"
 	task.Sidecar = true
 	task.Summarize = true
@@ -333,8 +296,7 @@ func TestRCA20RetryReplayPreservesDurableExecutionContract(t *testing.T) {
 	if len(replayed) != 1 {
 		t.Fatalf("replayed tasks = %d, want 1", len(replayed))
 	}
-	replayedProjection := taskOccurrenceProjectionForTest(t, replayed[0])
-	if !reflect.DeepEqual(after, replayedProjection) {
+	if replayedProjection := taskOccurrenceProjectionForTest(t, replayed[0]); !reflect.DeepEqual(after, replayedProjection) {
 		t.Fatalf("replay changed immutable projection:\nlive=%#v\nreplayed=%#v", after, replayedProjection)
 	}
 	if replayed[0].Retries != 1 || replayed[0].Status != TaskPending {
@@ -345,9 +307,9 @@ func TestRCA20RetryReplayPreservesDurableExecutionContract(t *testing.T) {
 	}
 }
 
-func TestRCA20PlanApprovalLifecyclePreservesAdmissionDigest(t *testing.T) {
-	c, store, _ := newRCA20ExecutionCoordinator(t)
-	task := rca20MutationBase()
+func TestTaskOccurrencePlanApprovalPreservesDigest(t *testing.T) {
+	c, store, _ := newOccurrenceExecutionCoordinator(t)
+	task := occurrenceMutationBase()
 	task.PlanFirst = true
 	_, item := createAdmittedTestTask(t, c, task)
 	before, err := decisionTaskInputDigest(taskOccurrenceProjectionForTest(t, item))

@@ -288,3 +288,26 @@ func TestWrapLine(t *testing.T) {
 		})
 	}
 }
+
+func TestTruncateString(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		maxLen int
+		want   string
+	}{
+		{"shorter than maxLen", "hello", 10, "hello"},
+		{"equal to maxLen", "hello", 5, "hello"},
+		{"longer than maxLen", "hello world this is a long string", 10, "hello wor…"},
+		{"empty string", "", 10, ""},
+		{"maxLen zero", "hello", 0, "…"},
+		{"maxLen negative", "hello", -1, "…"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := TruncateString(tt.input, tt.maxLen); got != tt.want {
+				t.Errorf("TruncateString(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
+			}
+		})
+	}
+}

@@ -44,6 +44,9 @@ func TestCanonicalizeRuntimeOutputsIsDeterministicBoundedAndDetached(t *testing.
 	}
 }
 
+// A runtime output that happens to collide with a secret learned later must
+// stay valid through session save/load and event replay: redaction applies
+// to presentation, never to the canonical digest-bound payload.
 func TestRuntimeOutputsRemainValidWhenLearnedSecretsGrow(t *testing.T) {
 	const collision = "runtime-output-secret-collision-7f2c9b1e"
 	outputs, digest, err := CanonicalizeRuntimeOutputs(map[string]any{
@@ -55,9 +58,7 @@ func TestRuntimeOutputsRemainValidWhenLearnedSecretsGrow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonicalVerification := outputs["documentation_verification"].(map[string]any)
-	canonicalFiles := canonicalVerification["checked_files"].([]any)
-	canonicalFile := canonicalFiles[0]
+	canonicalFile := outputs["documentation_verification"].(map[string]any)["checked_files"].([]any)[0]
 	result := &TaskResult{
 		TaskID: "1", Status: TaskResultStatusSuccess, Source: "runtime",
 		RuntimeOutputs: outputs, RuntimeOutputsHash: digest,
@@ -82,15 +83,12 @@ func TestRuntimeOutputsRemainValidWhenLearnedSecretsGrow(t *testing.T) {
 	if err := validateRuntimeTaskResult(reloaded.Tasks[0].TypedResult); err != nil {
 		t.Fatalf("persisted runtime result became invalid after session redaction: %v", err)
 	}
-	verification := reloaded.Tasks[0].TypedResult.RuntimeOutputs["documentation_verification"].(map[string]any)
-	files := verification["checked_files"].([]any)
+	files := reloaded.Tasks[0].TypedResult.RuntimeOutputs["documentation_verification"].(map[string]any)["checked_files"].([]any)
 	if len(files) != 1 || files[0] != canonicalFile {
 		t.Fatalf("persisted canonical runtime outputs = %#v", reloaded.Tasks[0].TypedResult.RuntimeOutputs)
 	}
 
-	payload, err := json.Marshal(map[string]any{
-		"id": "1", "status": TaskDone, "typed_result": result,
-	})
+	payload, err := json.Marshal(map[string]any{"id": "1", "status": TaskDone, "typed_result": result})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,9 +114,10 @@ func TestTaskOutputAssertUsesRuntimeOccurrenceAndFrozenInput(t *testing.T) {
 	snapshot := mustRunInputSnapshot(t, definitions, []RunInputAssignment{{
 		Name: "review.scope", RawValue: []byte(`{"kind":"last_n","count":10}`), Source: RunInputSourceCLI,
 	}})
+	valueHash := snapshot.Inputs[0].ValueHash
 	scope := map[string]any{
 		"requested":            map[string]any{"kind": "last_n", "count": 10},
-		"requested_input_hash": snapshot.Inputs[0].ValueHash,
+		"requested_input_hash": valueHash,
 		"satisfied":            true,
 		"resolved":             map[string]any{"selected_commit_count": 10},
 	}
@@ -126,34 +125,35 @@ func TestTaskOutputAssertUsesRuntimeOccurrenceAndFrozenInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	zero := 0
-	tracker := NewTaskTracker()
-	item := tracker.TodoList().AddBatch([]TodoSpec{{
+
+	c := newTestCoordinator(t)
+	c.session.RunInputDefinitions = definitions
+	c.sessionData = &SessionData{RunInputSnapshots: []RunInputSnapshot{*snapshot}, ActiveRunInputSnapshotID: snapshot.ID}
+	boundInputs := map[string]string{"review.scope": valueHash}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{
 		PlanTaskID: "produce-workset", ContractID: "produce-workset", Agent: "runtime", Desc: "produce",
 		RunInputSnapshotID: snapshot.ID, RunInputSnapshotHash: snapshot.SnapshotHash,
-		MaterializedActionPayloadHash: "sha256:payload", BoundInputs: map[string]string{"review.scope": snapshot.Inputs[0].ValueHash},
+		MaterializedActionPayloadHash: "sha256:payload", BoundInputs: boundInputs,
 	}})[0]
+	zero := 0
 	item.Status = TaskDone
 	item.OccurrenceRevision = 7
 	item.TypedResult = &TaskResult{
 		TaskID: item.ID, Attempt: 1, Status: TaskResultStatusSuccess, Summary: "produced", Source: "runtime",
 		RuntimeOutputs: outputs, RuntimeOutputsHash: digest,
 		RunInputSnapshotID: snapshot.ID, RunInputSnapshotHash: snapshot.SnapshotHash,
-		MaterializedActionPayloadHash: "sha256:payload", BoundInputs: map[string]string{"review.scope": snapshot.Inputs[0].ValueHash},
+		MaterializedActionPayloadHash: "sha256:payload", BoundInputs: boundInputs,
 	}
 	item.ExecutionReceipt = &ExecutionReceipt{
-		RunID: "run-wp06", TaskID: item.ID, Attempt: 1, StartedAt: time.Now(), FinishedAt: time.Now(), ExitCode: &zero,
+		RunID: c.executionRunID, TaskID: item.ID, Attempt: 1, StartedAt: time.Now(), FinishedAt: time.Now(), ExitCode: &zero,
 		ProducerID: "runtime", ModelExecutionID: "runtime-1", TranscriptRef: "sha256-transcript",
 		ActionInvocationID: "action-1", RuntimeOutputsHash: digest,
 		RunInputSnapshotID: snapshot.ID, RunInputSnapshotHash: snapshot.SnapshotHash,
-		MaterializedActionPayloadHash: "sha256:payload", BoundInputs: map[string]string{"review.scope": snapshot.Inputs[0].ValueHash},
+		MaterializedActionPayloadHash: "sha256:payload", BoundInputs: boundInputs,
 	}
 	item.ExecutionReceipts = []ExecutionReceipt{*item.ExecutionReceipt}
-	tracker.TodoList().Restore([]*TodoItem{item})
-	c := &Coordinator{
-		session: &TeamSession{RunInputDefinitions: definitions}, taskTracker: tracker, executionRunID: "run-wp06",
-		sessionData: &SessionData{RunInputSnapshots: []RunInputSnapshot{*snapshot}, ActiveRunInputSnapshotID: snapshot.ID},
-	}
+	c.taskTracker.TodoList().Restore([]*TodoItem{item})
+
 	spec := VerificationSpec{
 		Type: VerifyTaskOutputAssert, WorksetSourceTask: "produce-workset", TaskOutputName: "scope",
 		Assertions: []JSONAssertion{
@@ -179,7 +179,7 @@ func TestTaskOutputAssertUsesRuntimeOccurrenceAndFrozenInput(t *testing.T) {
 	}
 
 	item.TypedResult.RuntimeOutputsHash = "sha256:tampered"
-	tracker.TodoList().Restore([]*TodoItem{item})
+	c.taskTracker.TodoList().Restore([]*TodoItem{item})
 	if _, err := c.executeTaskOutputAssertVerification(context.Background(), spec); err == nil || !strings.Contains(err.Error(), "digest") {
 		t.Fatalf("tampered digest error = %v", err)
 	}
@@ -247,6 +247,7 @@ assertions:
 	if codes := findingCodes(ValidateTeamPolicyContracts(session)); codes[FindingWorksetScopeAssertion] {
 		t.Fatalf("valid scope assertion linted: %#v", codes)
 	}
+	// Dropping the /satisfied assertion leaves the workset scope unasserted.
 	session.Config.AcceptanceSpec.Verifications[0].Assertions = session.Config.AcceptanceSpec.Verifications[0].Assertions[:2]
 	if codes := findingCodes(ValidateTeamPolicyContracts(session)); !codes[FindingWorksetScopeAssertion] {
 		t.Fatalf("missing satisfied assertion was not linted: %#v", codes)
