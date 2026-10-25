@@ -302,16 +302,23 @@ func TestCriterionRetryRoutingHonorsTaskRetriesAndBudget(t *testing.T) {
 	s := mustNewDAGScheduler(t, coord, tasks, items, nil)
 	s.states[0], s.states[1] = TaskDone, TaskDone
 	s.criterionRetryBudget = 1
+	t.Cleanup(func() {
+		s.dispatchStopped = true
+		s.drainInProgress()
+	})
 
-	if !s.routeCriterionRetry(context.Background(), 0, []string{"build"}) {
+	if !s.routeCriterionRetry(t.Context(), 0, []string{"build"}) {
 		t.Fatal("first matching remediation should be routed")
 	}
+	// Routing admits a real task goroutine, even for this minimal coordinator.
+	// Its final projection must finish before inspecting or reusing the target.
+	s.drainInProgress()
 	if s.criterionRetryUsed != 1 || s.criterionRetryCounts[1] != 1 || s.retries[1] != 1 {
 		t.Fatalf("retry accounting mismatch: used=%d counts=%v retries=%v", s.criterionRetryUsed, s.criterionRetryCounts, s.retries)
 	}
-	// The global budget prevents a second route even though the target is now
-	// pending; this is the cycle breaker for mutually matching tasks.
-	if s.routeCriterionRetry(context.Background(), 0, []string{"build"}) {
+	// The global budget prevents a second route after the admitted task drains;
+	// this is the cycle breaker for mutually matching tasks.
+	if s.routeCriterionRetry(t.Context(), 0, []string{"build"}) {
 		t.Fatal("criterion retry budget should prevent an unbounded second route")
 	}
 }
@@ -334,12 +341,19 @@ func TestCriterionRetryRoutingHonorsMaxRetriesAfterBudgetReset(t *testing.T) {
 	s := mustNewDAGScheduler(t, coord, tasks, items, nil)
 	s.states[0], s.states[1] = TaskDone, TaskDone
 	s.criterionRetryBudget = 3
-	if !s.routeCriterionRetry(context.Background(), 0, []string{"build"}) {
+	t.Cleanup(func() {
+		s.dispatchStopped = true
+		s.drainInProgress()
+	})
+	if !s.routeCriterionRetry(t.Context(), 0, []string{"build"}) {
 		t.Fatal("first remediation route should succeed")
 	}
-	// Simulate the target completing and failing to advance again.
+	// Wait for the admitted worker's final projection before simulating another
+	// completion. Otherwise it can overwrite the same Todo while the second
+	// route reads its persisted retry count.
+	s.drainInProgress()
 	s.states[1] = TaskDone
-	if s.routeCriterionRetry(context.Background(), 0, []string{"build"}) {
+	if s.routeCriterionRetry(t.Context(), 0, []string{"build"}) {
 		t.Fatal("target MaxRetries=1 should prevent a second reset")
 	}
 }
@@ -369,14 +383,19 @@ func TestDAGSchedulerRoutesSuccessfulNoProgressWithBoundedBudget(t *testing.T) {
 	s := mustNewDAGScheduler(t, coord, tasks, items, nil)
 	s.states[0], s.states[1], s.inProgress = TaskInProgress, TaskDone, 1
 	s.criterionRetryBudget = 1
-	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		s.dispatchStopped = true
+		s.drainInProgress()
+	})
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // prevent the newly routed task from doing external work
 	s.handleEvent(ctx, agentTaskResult{idx: 0, agentName: "worker"})
 	if s.criterionRetryUsed != 1 || s.criterionRetryCounts[1] != 1 {
 		t.Fatalf("successful no-progress event did not consume bounded route: used=%d counts=%v", s.criterionRetryUsed, s.criterionRetryCounts)
 	}
 	select {
-	case <-s.eventCh:
+	case result := <-s.eventCh:
+		s.consumeCancelledResult(result)
 	case <-time.After(time.Second):
 		t.Fatal("routed task did not terminate after canceled context")
 	}

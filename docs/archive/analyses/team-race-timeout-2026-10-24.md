@@ -70,20 +70,55 @@ is excluded from the aggregate measurements.
 
 | Metric | Before: main b3360c9a | After |
 | --- | ---: | --- |
-| Observed workflow wall seconds, including queue | 1,104.418 | Pending completed PR workflow |
-| Observed total runner seconds, all attempts | 4,698.418 | Pending completed PR workflow |
-| Team package elapsed seconds | 941.5 | Pending `short-team` artifact |
-| Team command wall seconds | 1,056.9 | Pending `short-team` artifact |
-| Team cache KiB before → after | 60,076 → 888,376 | Pending `short-team` artifact |
-| Team package timeout usage | 78.5% of 20m | Reported against 30m in summary/artifact |
+| Observed workflow wall seconds, including queue | 1,104.418 | 1,188.503 |
+| Observed total runner seconds, all attempts | 4,698.418 | 4,677.503 |
+| Team package elapsed seconds | 941.5 | 997.757 |
+| Team command wall seconds | 1,056.9 | 1,142.61 |
+| Team cache KiB before → after | 60,076 → 888,376 | 60,076 → 888,392 |
+| Team package timeout usage | 78.5% of 20m | 55.4% of 30m |
 
 The baseline package/command/cache observations are from the issue's artifact
 analysis; aggregate numbers were independently read from its ci-success log.
-No post-change hosted speedup or cache hit is claimed before completed evidence
-exists. Sum both short and integration costs when comparing case coverage and
-runner time; relocation can increase repeated compilation or setup costs.
+The after column is [PR #45 run 40104002522](https://github.com/kjelly/hufu/actions/runs/40104002522),
+head `b062304c`, with all 12 jobs passing on attempt 1. Workflow wall time is
+longer and total runner time is approximately unchanged; this single comparison
+establishes deadline headroom, not a speedup. Sum both short and integration
+costs when comparing case coverage and runner time.
 
 Several consecutive **main push** runs after merge must pass without manual
 reruns, with the team ratio below the 75% target. A successful PR workflow is
 necessary review evidence but does not establish that acceptance condition.
 Do not manufacture main pushes or close the observation gap with retries.
+
+
+## Main push follow-up: retry fixture lifetime
+
+After #45 merged, [main push 40107449483](https://github.com/kjelly/hufu/actions/runs/40107449483)
+on `b10f57a9` failed on attempt 1. Team elapsed was 997.715s / 1800s (55.4%),
+command wall 1143.14s, and build cache 60,076 → 888,484 KiB. The failure was a
+race between `routeCriterionRetry` reading a target's `Retries` and
+`TryApplyProjectedItem` copying the worker's final projection. It was attributed
+to `TestDAGSchedulerRoutesSuccessfulNoProgressWithBoundedBudget`, but the two
+racing goroutines originated in the preceding
+`TestCriterionRetryRoutingHonorsMaxRetriesAfterBudgetReset` fixture.
+
+The routing unit fixtures admit real task goroutines. They previously returned
+without draining those tasks; one fixture also marked its target done and
+attempted another route before the admitted worker's final projection finished.
+The fix waits for that completion before simulating the next routing decision,
+registers stop-and-drain cleanup even when an assertion exits early, and releases
+the cancelled fixture's scheduler bookkeeping when receiving its final event.
+Retry budgets, per-task retry assertions, worker execution and race detection
+remain covered. Production scheduling and Todo projection code are unchanged.
+The unmodified main reproduces the race in the focused 100-repeat run. The three
+fixed fixtures pass 1,000 shuffled race repetitions each, with no skips.
+
+The same failed main run reports `setup_go_cache_hit=false`. This is not evidence
+of another HTTP 400: [cache scope](https://github.com/actions/cache#cache-scopes)
+includes the branch, so a cache written by a PR is not a default-branch seed.
+The pinned [setup-go action](https://github.com/actions/setup-go/blob/40f1582b2485089dde7abd97c1529aa768e1baff/action.yml)
+saves only under `post-if: success()`; this run's team post step was skipped after
+the test failure. Its integration job succeeded and saved the main race cache.
+The next successful main team run can seed its own cache; a later main push
+must verify a restore hit. No cache-hit or consecutive-main-success claim is
+made from the focused fixture tests.
