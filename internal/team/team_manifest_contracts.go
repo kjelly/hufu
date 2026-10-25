@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // manifestMapping resolves YAML merge keys with yaml.v3 precedence: explicit

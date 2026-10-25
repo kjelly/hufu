@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"charm.land/fantasy"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 func TestRecoveryStrategyFoldsCaseWhenDecoded(t *testing.T) {

@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `b3360c9a5804e83934204d8118c5c322e50a94e9` (implementation base)
+> Verified-Commit: `300041b84e45e7c53549bd53c753b6b0ac6ad860` (implementation base)
 > Supersedes: undocumented short-mode membership
 > Superseded-By: —
 
@@ -60,9 +60,9 @@ participating package. If names collide, it falls back to per-package exact
 filters. This avoids a second full unit execution, repeated Go invocations in
 the common case, and unbounded database concurrency.
 Both offline runners use `-p 2`, `-count=1`, and a default 20-minute package
-timeout. The team short CI group overrides this to 30 minutes, with a 40-minute
-job limit including setup, compilation and evidence upload. Other short groups
-retain 20-minute package deadlines with 30-minute job limits; integration retains
+timeout. The team and improver short CI groups override this to 30 minutes, with
+40-minute job limits including setup, compilation and evidence upload. The cli
+and other groups retain 20-minute package deadlines with 30-minute job limits; integration retains
 20-minute package deadlines with a 40-minute job limit across its packages.
 Additional Go test flags follow `--` (the final `-timeout` value wins), for example:
 

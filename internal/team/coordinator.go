@@ -35,7 +35,7 @@ import (
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // CoordTodoID is the special TodoItem ID used for the coordinator/orchestrator
