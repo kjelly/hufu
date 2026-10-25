@@ -164,7 +164,7 @@ func (w *scriptedWorker) Stream(_ context.Context, call fantasy.AgentStreamCall)
 	w.prompts = append(w.prompts, call.Prompt)
 	turn := w.turns[min(w.calls, len(w.turns))-1]
 	w.mu.Unlock()
-	if turn.text == "" {
+	if turn.text == "" && turn.err != nil {
 		return nil, turn.err
 	}
 	return textAgentResult(turn.text), turn.err

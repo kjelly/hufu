@@ -386,18 +386,7 @@ func TestRecordRetrySkipsCancelledClass(t *testing.T) {
 }
 
 func TestPersistFailureExcludesCancelledFromFingerprint(t *testing.T) {
-	workspace := t.TempDir()
-	c := &Coordinator{
-		session:     &TeamSession{Workspace: workspace, Config: agent.TeamConfig{Name: "test"}},
-		sessionData: NewSession(),
-		taskTracker: NewTaskTracker(),
-	}
-	c.taskTracker.TodoList().onChange = func() { c.saveCheckpoint() }
-	store, err := NewEventStore(workspace, "run-test", "sess-test")
-	if err != nil {
-		t.Fatalf("NewEventStore: %v", err)
-	}
-	c.eventStore = store
+	c, store := systemicCoordinator(t, nil)
 	todoID := addTodo(t, c, "do work")
 
 	cancelled := func() {

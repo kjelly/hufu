@@ -39,8 +39,8 @@ func writeTaskTranscript(t *testing.T, workspace, name, body string) string {
 	return transcript
 }
 
-// evidenceCoordinator builds a coordinator for the given run with one
-// completed, verified task that carries a successful execution receipt.
+// evidenceCoordinator builds a fixture coordinator bound to runID. Each test
+// adds the task and receipt it needs.
 func evidenceCoordinator(t *testing.T, runID string) *Coordinator {
 	t.Helper()
 	c := newTestCoordinator(t)

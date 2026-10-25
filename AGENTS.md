@@ -97,7 +97,10 @@ The command must complete successfully with no errors before the task is conside
   refactor lands and the behaviour has a behaviour-named test.
 - Prefer one table-driven test per function over one test per case; assert on
   classes, statuses, and sentinel errors rather than exact message text.
-- Keep test files under 800 lines, like source files.
+- Keep test files under 800 lines, like source files. `terminal_session_test.go`,
+  `runtime_workflow_test.go`, `worker_memory_ingestion_test.go` and
+  `execution_contract_test.go` predate this rule: split them when they are next
+  changed substantially, and do not add new files over the limit.
 
 ## Package Structure
 

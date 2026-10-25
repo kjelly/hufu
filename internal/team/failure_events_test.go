@@ -93,8 +93,9 @@ func failureEventPayloads(t *testing.T, store *EventStore, eventType, taskID str
 // projection, a task artifact and the task journal all carry the failure event
 // and that none of them leaks secret. evidence lists further substrings one
 // task artifact must carry alongside the failure event, such as the worker
-// output a protocol failure has to keep.
-func assertFailureEventSurfacesRedacted(t *testing.T, c *Coordinator, secret string, evidence ...string) {
+// output a protocol failure has to keep. The task artifact paths are returned
+// so a caller can assert on how many were written.
+func assertFailureEventSurfacesRedacted(t *testing.T, c *Coordinator, secret string, evidence ...string) []string {
 	t.Helper()
 	wantEvidence := append([]string{"Failure Event"}, evidence...)
 	workspace := c.session.Workspace
@@ -136,6 +137,7 @@ func assertFailureEventSurfacesRedacted(t *testing.T, c *Coordinator, secret str
 	if !strings.Contains(string(journalData), `"failure_event"`) || !strings.Contains(string(journalData), `"task_id":"1"`) || strings.Contains(string(journalData), secret) {
 		t.Fatalf("journal failure record = %s", journalData)
 	}
+	return taskFiles
 }
 
 func TestBlockedRecoveryFailureEventReachesEverySurface(t *testing.T) {
@@ -192,7 +194,9 @@ func TestBlockedRecoveryFailureEventReachesEverySurface(t *testing.T) {
 			t.Fatalf("blocked event-store payload leaked task secret: %s", raw)
 		}
 	}
-	assertFailureEventSurfacesRedacted(t, c, "task-secret")
+	if taskFiles := assertFailureEventSurfacesRedacted(t, c, "task-secret"); len(taskFiles) != 1 {
+		t.Fatalf("blocked task artifacts = %v, want exactly one", taskFiles)
+	}
 }
 
 func TestDAGAntiThrashingBlockPersistsStructuredFailureEvent(t *testing.T) {
@@ -317,14 +321,14 @@ func TestProtocolIncompleteFailureEventReachesEverySurface(t *testing.T) {
 
 func TestFailureEventReducerSupportsLegacyFullAndSparsePayloads(t *testing.T) {
 	tests := []struct {
-		name       string
-		eventType  string
-		status     TaskStatus
-		full       FailureEventPayload
-		sparse     string
-		legacy     string
-		wantClass  TaskFailureClass
-		wantSummry string
+		name        string
+		eventType   string
+		status      TaskStatus
+		full        FailureEventPayload
+		sparse      string
+		legacy      string
+		wantClass   TaskFailureClass
+		wantSummary string
 	}{
 		{
 			name:      "task_failed",
@@ -335,10 +339,10 @@ func TestFailureEventReducerSupportsLegacyFullAndSparsePayloads(t *testing.T) {
 				Command: "go test ./...", WorkDir: "/workspace", Shell: "sh", Stdout: "partial output",
 				Fingerprint: "fp-1", Hint: "fix the failing test", Summary: "first failure",
 			},
-			sparse:     `{"id":"new","task_id":"new","status":"error","summary":"updated failure","failure_event":{"failure_class":"environment","summary":"updated failure"}}`,
-			legacy:     `{"id":"legacy","desc":"legacy task description","status":"error","output":"legacy output"}`,
-			wantClass:  FailureEnvironment,
-			wantSummry: "updated failure",
+			sparse:      `{"id":"new","task_id":"new","status":"error","summary":"updated failure","failure_event":{"failure_class":"environment","summary":"updated failure"}}`,
+			legacy:      `{"id":"legacy","desc":"legacy task description","status":"error","output":"legacy output"}`,
+			wantClass:   FailureEnvironment,
+			wantSummary: "updated failure",
 		},
 		{
 			name:      "task_protocol_incomplete",
@@ -349,10 +353,10 @@ func TestFailureEventReducerSupportsLegacyFullAndSparsePayloads(t *testing.T) {
 				Command: "submit_result", WorkDir: "/workspace", Shell: "sh", Stdout: "partial output",
 				Fingerprint: "fp-protocol", Hint: "submit the required result", Summary: "missing submit_result",
 			},
-			sparse:     `{"id":"new","status":"protocol_incomplete","failure_event":{"summary":"updated protocol summary"}}`,
-			legacy:     `{"id":"legacy","desc":"legacy task description","status":"protocol_incomplete","output":"legacy output"}`,
-			wantClass:  FailureProtocol,
-			wantSummry: "updated protocol summary",
+			sparse:      `{"id":"new","status":"protocol_incomplete","failure_event":{"summary":"updated protocol summary"}}`,
+			legacy:      `{"id":"legacy","desc":"legacy task description","status":"protocol_incomplete","output":"legacy output"}`,
+			wantClass:   FailureProtocol,
+			wantSummary: "updated protocol summary",
 		},
 	}
 	for _, tt := range tests {
@@ -384,7 +388,7 @@ func TestFailureEventReducerSupportsLegacyFullAndSparsePayloads(t *testing.T) {
 			if got.Status != tt.status || got.Desc != "new task description" || got.FailureEvent == nil {
 				t.Fatalf("new task replay lost identity or event: %#v", got)
 			}
-			if got.FailureEvent.FailureClass != tt.wantClass || got.FailureEvent.Summary != tt.wantSummry {
+			if got.FailureEvent.FailureClass != tt.wantClass || got.FailureEvent.Summary != tt.wantSummary {
 				t.Fatalf("sparse fields did not update: %#v", got.FailureEvent)
 			}
 			if got.FailureEvent.Command != tt.full.Command || got.FailureEvent.Stdout != tt.full.Stdout || got.FailureEvent.Fingerprint != tt.full.Fingerprint {

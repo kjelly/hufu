@@ -60,8 +60,14 @@ func TestNewAuditLogger(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "logs", "audit")); err != nil {
 		t.Errorf("audit directory was not created: %v", err)
 	}
-	if _, err := NewAuditLogger("/root/nonexistent", "test-team"); err == nil {
-		t.Error("NewAuditLogger() in an unwritable location returned no error")
+	// A regular file in the path makes directory creation fail for every
+	// user, root included.
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewAuditLogger(filepath.Join(blocker, "audit"), "test-team"); err == nil {
+		t.Error("NewAuditLogger() below a regular file returned no error")
 	}
 }
 
@@ -143,6 +149,8 @@ func TestLogEntryObservability(t *testing.T) {
 }
 
 func TestGlobalFunctionsUseTheDefaultLogger(t *testing.T) {
+	previous := GetDefault()
+	t.Cleanup(func() { SetDefault(previous) })
 	logger, dir := newTestLogger(t)
 	SetDefault(logger)
 	if GetDefault() != logger {
