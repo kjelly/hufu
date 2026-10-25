@@ -1,5 +1,9 @@
 import datetime
+import http.client
 import importlib.util
+import contextlib
+import io
+import json
 import os
 from pathlib import Path
 import re
@@ -7,6 +11,8 @@ import subprocess
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
+import urllib.error
 
 spec = importlib.util.spec_from_file_location('ci_cost', Path(__file__).with_name('ci-test-cost.py'))
 cost = importlib.util.module_from_spec(spec)
@@ -14,6 +20,104 @@ spec.loader.exec_module(cost)
 
 
 class CostTests(unittest.TestCase):
+    def test_api_retry_policy(self):
+        cases = [
+            ('5xx recovery', [urllib.error.HTTPError('url', 503, 'busy', {}, None),
+                              io.BytesIO(b'{"ok": true}')], None, 2),
+            ('5xx exhausted', [urllib.error.HTTPError('url', 502, 'busy', {}, None)] * 2,
+             urllib.error.HTTPError, 2),
+            ('connection', [urllib.error.URLError('offline')] * 2, urllib.error.URLError, 2),
+            ('timeout', [TimeoutError('slow')] * 2, TimeoutError, 2),
+            ('reset', [ConnectionResetError('reset')] * 2, ConnectionResetError, 2),
+            ('truncated response', [http.client.IncompleteRead(b'partial', 1)] * 2,
+             http.client.IncompleteRead, 2),
+            ('rate limit', [urllib.error.HTTPError('url', 429, 'limited', {}, None)],
+             urllib.error.HTTPError, 1),
+            ('forbidden', [urllib.error.HTTPError('url', 403, 'limited', {}, None)],
+             urllib.error.HTTPError, 1),
+            ('invalid JSON', [io.BytesIO(b'not json')], ValueError, 1),
+        ]
+        for name, responses, error, calls in cases:
+            with self.subTest(name=name), \
+                    mock.patch.object(cost.urllib.request, 'urlopen', side_effect=responses) as api, \
+                    mock.patch.object(cost.time, 'sleep') as sleep:
+                if error:
+                    with self.assertRaises(error):
+                        cost.get_json('https://api.github.com', 'secret', '/run')
+                else:
+                    self.assertEqual(cost.get_json('https://api.github.com', 'secret', '/run'), {'ok': True})
+                self.assertEqual(api.call_count, calls)
+                self.assertEqual(sleep.call_count, calls - 1)
+                for call in api.call_args_list:
+                    self.assertEqual(call.kwargs['timeout'], 10)
+
+    def test_main_reports_success_or_unavailable(self):
+        run = {'created_at': '2026-10-24T10:00:00Z', 'run_attempt': 1}
+        cases = [
+            ('normal', [run, {'jobs': []}], 0, 'Total runner time so far:'),
+            ('server', [urllib.error.HTTPError('private-url', 503, 'secret', {}, None)] * 2,
+             1, 'HTTP 503'),
+            ('rate limit', [urllib.error.HTTPError('private-url', 403, 'secret', {}, None)],
+             1, 'HTTP 403'),
+            ('timeout', [TimeoutError('secret')] * 2, 1, 'network error or timeout'),
+            ('connection', [urllib.error.URLError('secret')] * 2, 1, 'network error or timeout'),
+            ('truncated response', [http.client.IncompleteRead(b'secret', 1)] * 2,
+             1, 'network error or timeout'),
+            ('json', [b'not JSON'], 1, 'JSONDecodeError'),
+            ('run shape', [[]], 1, 'TypeError'),
+            ('attempt', [{**run, 'run_attempt': 0}], 1, 'ValueError'),
+            ('jobs shape', [run, {'jobs': None}], 1, 'ValueError'),
+            ('job shape', [run, {'jobs': [None]}], 1, 'TypeError'),
+            ('timestamp', [{**run, 'created_at': 'invalid'}, {'jobs': []}], 1, 'ValueError'),
+            ('missing jobs', [run, {}], 1, 'KeyError'),
+        ]
+        for name, payloads, status, expected in cases:
+            responses = [item if isinstance(item, Exception) else
+                         io.BytesIO(item if isinstance(item, bytes) else json.dumps(item).encode())
+                         for item in payloads]
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                summary = Path(directory) / 'summary'
+                summary.write_text('existing summary\n')
+                env = {'GITHUB_API_URL': 'https://api.github.com', 'GH_TOKEN': 'secret',
+                       'GITHUB_REPOSITORY': 'kjelly/hufu', 'GITHUB_RUN_ID': '123',
+                       'GITHUB_STEP_SUMMARY': str(summary)}
+                with mock.patch.dict(os.environ, env), \
+                        mock.patch.object(cost.urllib.request, 'urlopen', side_effect=responses), \
+                        mock.patch.object(cost.time, 'sleep'), \
+                        contextlib.redirect_stdout(io.StringIO()), \
+                        contextlib.redirect_stderr(io.StringIO()) as stderr:
+                    self.assertEqual(cost.main() or 0, status)
+                contents = summary.read_text()
+                self.assertTrue(contents.startswith('existing summary\n'))
+                self.assertIn(expected, contents)
+                self.assertEqual('ci_cost=unavailable' in contents, status == 1)
+                self.assertNotIn('secret', contents + stderr.getvalue())
+                self.assertNotIn('private-url', contents + stderr.getvalue())
+                self.assertNotIn('Traceback', stderr.getvalue())
+
+    def test_workflow_isolates_reporting_and_preserves_required_gate(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/ci.yml').read_text()
+        aggregate = workflow.split('  ci-success:\n', 1)[1]
+        self.assertIn('needs: [lint, vet, test, integration, build, cgo-free, docs, eval-core]', aggregate)
+        self.assertIn('permissions:\n      actions: read\n      contents: read', aggregate)
+        self.assertIn('    if: always()', aggregate)
+        gate, report = aggregate.split('      - name: Report workflow and runner cost\n')
+        self.assertIn('      - name: Fail if any required check failed', gate)
+        self.assertIn('        if: always()\n', report)
+        self.assertIn('        continue-on-error: true\n', report)
+        self.assertIn('        timeout-minutes: 1\n', report)
+        self.assertIn('        run: python3 scripts/ci-test-cost.py', report)
+        self.assertNotIn('continue-on-error:', gate)
+        script = textwrap.dedent(gate.split('        run: |\n', 1)[1])
+        # Execute the actual gate shell with the two GitHub expressions rendered.
+        # A failed/cancelled dependency must remain red even when reporting fails.
+        for failed, cancelled, expected in [(False, False, 0), (True, False, 1),
+                                            (False, True, 1), (True, True, 1)]:
+            rendered = script.replace("${{ contains(needs.*.result, 'failure') }}", str(failed).lower())
+            rendered = rendered.replace("${{ contains(needs.*.result, 'cancelled') }}", str(cancelled).lower())
+            result = subprocess.run(['bash', '-e', '-c', rendered], capture_output=True, text=True)
+            self.assertEqual(result.returncode, expected, result.stderr)
+
     def test_workflow_summary_handles_discovery_failure(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/ci.yml').read_text()
         blocks = re.findall(

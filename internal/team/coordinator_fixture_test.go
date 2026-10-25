@@ -3,6 +3,11 @@ package team
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,21 +34,44 @@ type coordinatorFixture struct {
 	runID  string
 }
 
-type coordinatorOption func(*coordinatorFixture)
+type coordinatorOption func(*coordinatorFixture) error
+
+var errInvalidFixtureWorker = errors.New("withWorker requires a non-nil worker")
 
 // withWorker routes every worker dispatch to the given agent.
+// Explicit nil and typed-nil workers are configuration errors; omit the option
+// to leave the coordinator's worker override unset.
 func withWorker(worker fantasy.Agent) coordinatorOption {
-	return func(f *coordinatorFixture) { f.worker = worker }
+	return func(f *coordinatorFixture) error {
+		if worker == nil {
+			return errInvalidFixtureWorker
+		}
+		value := reflect.ValueOf(worker)
+		switch value.Kind() {
+		case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+			if value.IsNil() {
+				return fmt.Errorf("%w: got nil %T", errInvalidFixtureWorker, worker)
+			}
+		}
+		f.worker = worker
+		return nil
+	}
 }
 
 // withMaxRetries sets the team-level retry budget.
 func withMaxRetries(n int) coordinatorOption {
-	return func(f *coordinatorFixture) { f.config.MaxRetries = n }
+	return func(f *coordinatorFixture) error {
+		f.config.MaxRetries = n
+		return nil
+	}
 }
 
 // withTeamConfig edits the team configuration before the session is built.
 func withTeamConfig(edit func(*agent.TeamConfig)) coordinatorOption {
-	return func(f *coordinatorFixture) { edit(&f.config) }
+	return func(f *coordinatorFixture) error {
+		edit(&f.config)
+		return nil
+	}
 }
 
 // testWorkerDef is the default "worker" agent: a worker role whose own retry
@@ -59,7 +87,8 @@ func testWorkerDef() *agent.AgentDef {
 
 // newTestCoordinator builds a minimal Coordinator around a temporary
 // workspace. The default team has one "worker" agent, a 30 second timeout and
-// three retries. The coordinator is closed during test cleanup.
+// three retries. Invalid options fail the test before allocating the workspace
+// or coordinator. The coordinator is closed during test cleanup.
 func newTestCoordinator(t *testing.T, opts ...coordinatorOption) *Coordinator {
 	t.Helper()
 	f := coordinatorFixture{
@@ -68,8 +97,10 @@ func newTestCoordinator(t *testing.T, opts ...coordinatorOption) *Coordinator {
 		status: func(StatusEvent) {},
 		runID:  "run-test",
 	}
-	for _, opt := range opts {
-		opt(&f)
+	for i, opt := range opts {
+		if err := opt(&f); err != nil {
+			t.Fatalf("newTestCoordinator: option %d: %v", i+1, err)
+		}
 	}
 	c := &Coordinator{
 		session: &TeamSession{
@@ -193,4 +224,100 @@ func textAgentResult(text string) *fantasy.AgentResult {
 	return &fantasy.AgentResult{Response: fantasy.Response{Content: fantasy.ResponseContent{
 		fantasy.TextContent{Text: text},
 	}}}
+}
+
+func TestWithWorkerValidation(t *testing.T) {
+	worker := scriptWorker(textTurn("done"))
+	for _, tt := range []struct {
+		name    string
+		worker  fantasy.Agent
+		wantErr bool
+	}{
+		{name: "nil", wantErr: true},
+		{name: "typed nil", worker: (*scriptedWorker)(nil), wantErr: true},
+		{name: "typed nil alternate worker", worker: (*struct{ fantasy.Agent })(nil), wantErr: true},
+		{name: "scripted worker", worker: worker},
+		{name: "value worker", worker: struct{ fantasy.Agent }{worker}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			// A rejected option must not overwrite a previously valid worker.
+			f := coordinatorFixture{worker: worker}
+			err := withWorker(tt.worker)(&f)
+			if tt.wantErr {
+				if !errors.Is(err, errInvalidFixtureWorker) {
+					t.Fatalf("withWorker error = %v, want %v", err, errInvalidFixtureWorker)
+				}
+				if f.worker != worker {
+					t.Fatal("invalid option replaced the existing worker")
+				}
+				return
+			}
+			if err != nil || f.worker != tt.worker {
+				t.Fatalf("withWorker = (%T, %v), want supplied worker without error", f.worker, err)
+			}
+		})
+	}
+	if worker.Calls() != 0 {
+		t.Fatal("worker was dispatched during option validation")
+	}
+}
+
+func TestNewTestCoordinatorWorkerDispatch(t *testing.T) {
+	for _, name := range []string{"omitted", "scripted", "value"} {
+		t.Run(name, func(t *testing.T) {
+			worker := scriptWorker(textTurn("fixture dispatch succeeded"))
+			var opts []coordinatorOption
+			switch name {
+			case "scripted":
+				opts = append(opts, withWorker(worker))
+			case "value":
+				opts = append(opts, withWorker(struct{ fantasy.Agent }{worker}))
+			}
+			c := newTestCoordinator(t, opts...)
+			if worker.Calls() != 0 {
+				t.Fatal("worker was dispatched during fixture construction")
+			}
+			if name == "omitted" {
+				if c.workerAgentOverride != nil {
+					t.Fatal("omitting withWorker must leave the override unset")
+				}
+				return
+			}
+			todoID := addTodo(t, c, "fixture dispatch")
+			output, err := c.executeTask(t.Context(), TaskDef{Agent: "worker", Goal: "fixture dispatch"}, todoID)
+			if err != nil || output != "fixture dispatch succeeded" || worker.Calls() != 1 {
+				t.Fatalf("dispatch = (%q, %v), calls = %d", output, err, worker.Calls())
+			}
+		})
+	}
+}
+
+func TestNewTestCoordinatorRejectsInvalidWorker(t *testing.T) {
+	const envKey = "HUFU_TEST_INVALID_FIXTURE_WORKER"
+	if invalid := os.Getenv(envKey); invalid != "" {
+		var worker fantasy.Agent
+		if invalid == "typed-nil" {
+			worker = (*scriptedWorker)(nil)
+		}
+		// An invalid option must fail immediately, even if a later option
+		// would replace it. No dispatch is needed to diagnose the error.
+		newTestCoordinator(t, withWorker(worker), withWorker(scriptWorker()))
+		t.Fatal("invalid worker accepted")
+	}
+	for _, name := range []string{"nil", "typed-nil"} {
+		t.Run(name, func(t *testing.T) {
+			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestNewTestCoordinatorRejectsInvalidWorker$")
+			cmd.Env = append(os.Environ(), envKey+"="+name)
+			output, err := cmd.CombinedOutput()
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+				t.Fatalf("fixture subprocess = %v, want test failure; output:\n%s", err, output)
+			}
+			text := string(output)
+			if !strings.Contains(text, errInvalidFixtureWorker.Error()) ||
+				strings.Contains(text, "panic:") || strings.Contains(text, "invalid worker accepted") {
+				t.Fatalf("want fixture validation failure before construction returns; output:\n%s", output)
+			}
+		})
+	}
 }
