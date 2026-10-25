@@ -107,7 +107,7 @@ func TestLoadDefaultTeamSkillDiscovery(t *testing.T) {
 			if err != nil {
 				t.Fatalf("LoadDefaultTeam returned error: %v", err)
 			}
-			if got := defaultTeamSkillNames(session); !slices.Equal(got, tt.wantSkills) && !(len(got) == 0 && len(tt.wantSkills) == 0) {
+			if got := defaultTeamSkillNames(session); !slices.Equal(got, tt.wantSkills) {
 				t.Fatalf("skills = %v, want %v", got, tt.wantSkills)
 			}
 			if tt.wantDesc != "" && session.Skills[0].Description != tt.wantDesc {

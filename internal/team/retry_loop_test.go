@@ -400,7 +400,9 @@ func TestPersistFailureExcludesCancelledFromFingerprint(t *testing.T) {
 	c.eventStore = store
 	todoID := addTodo(t, c, "do work")
 
-	cancelled := func() { c.PersistFailure("worker", "do work", todoID, c.FailureDetail(context.Canceled, FailureSourceSigint)) }
+	cancelled := func() {
+		c.PersistFailure("worker", "do work", todoID, c.FailureDetail(context.Canceled, FailureSourceSigint))
+	}
 	cancelled()
 	events, _ := store.ReadEvents()
 	counts := map[string]int{}

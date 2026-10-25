@@ -51,6 +51,24 @@ func failureEventSurfaces(t *testing.T, c *Coordinator) *[]StatusEvent {
 	return &reported
 }
 
+// TestFailureJournalRecordFallsBackToTodoListRunID covers a coordinator that
+// runs without an execution run ID: the journal record takes the run ID the
+// todo list carries instead of leaving the field empty.
+func TestFailureJournalRecordFallsBackToTodoListRunID(t *testing.T) {
+	c, _ := failureEventCoordinator(t, "fallback", "")
+	failureEventSurfaces(t, c)
+	c.executionRunID = ""
+	c.taskTracker.TodoList().SetRunID("run-from-todo-list")
+	c.recordTaskFailureWithEventAndOutput("worker", "do work", "worker failed", nil, "")
+	journalData, err := readTaskJournalLog(c.session.Workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(journalData), `"run_id":"run-from-todo-list"`) {
+		t.Fatalf("journal failure record did not take the todo list run ID: %s", journalData)
+	}
+}
+
 func failureEventPayloads(t *testing.T, store *EventStore, eventType, taskID string) []map[string]any {
 	t.Helper()
 	events, err := store.ReadEvents()
@@ -71,8 +89,14 @@ func failureEventPayloads(t *testing.T, store *EventStore, eventType, taskID str
 	return payloads
 }
 
-func assertFailureEventSurfacesRedacted(t *testing.T, c *Coordinator, secret string) {
+// assertFailureEventSurfacesRedacted checks that the workspace status
+// projection, a task artifact and the task journal all carry the failure event
+// and that none of them leaks secret. evidence lists further substrings one
+// task artifact must carry alongside the failure event, such as the worker
+// output a protocol failure has to keep.
+func assertFailureEventSurfacesRedacted(t *testing.T, c *Coordinator, secret string, evidence ...string) {
 	t.Helper()
+	wantEvidence := append([]string{"Failure Event"}, evidence...)
 	workspace := c.session.Workspace
 	statusData, err := os.ReadFile(filepath.Join(workspace, statusDir, "worker.yml"))
 	if err != nil {
@@ -94,12 +118,16 @@ func assertFailureEventSurfacesRedacted(t *testing.T, c *Coordinator, secret str
 		if strings.Contains(string(taskData), secret) {
 			t.Fatalf("workspace task artifact leaked secret: %s", taskData)
 		}
-		if strings.Contains(string(taskData), "Failure Event") {
+		carries := true
+		for _, want := range wantEvidence {
+			carries = carries && strings.Contains(string(taskData), want)
+		}
+		if carries {
 			foundEvent = true
 		}
 	}
 	if !foundEvent {
-		t.Fatalf("workspace task artifacts carry no failure event: %v", taskFiles)
+		t.Fatalf("no workspace task artifact carries %q: %v", wantEvidence, taskFiles)
 	}
 	journalData, err := readTaskJournalLog(workspace)
 	if err != nil {
@@ -277,7 +305,7 @@ func TestProtocolIncompleteFailureEventReachesEverySurface(t *testing.T) {
 	if !strings.Contains(reduced[0].Output, "worker output") || strings.Contains(reduced[0].Output, "protocol-secret") {
 		t.Fatalf("protocol replay output = %q", reduced[0].Output)
 	}
-	assertFailureEventSurfacesRedacted(t, c, "protocol-secret")
+	assertFailureEventSurfacesRedacted(t, c, "protocol-secret", "worker output")
 	journalData, err := readTaskJournalLog(c.session.Workspace)
 	if err != nil {
 		t.Fatal(err)

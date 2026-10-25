@@ -154,6 +154,12 @@ func TestGlobalFunctionsUseTheDefaultLogger(t *testing.T) {
 	if len(entries) != 2 || entries[0].Event != "tool_call" || entries[1].Event != "tool_result" {
 		t.Fatalf("entries = %+v, want one tool_call followed by one tool_result", entries)
 	}
+	if entries[0].Agent != "agent-a" || entries[0].Tool != "bash" || entries[0].Input != "echo hello" || entries[0].CallID != "call-1" {
+		t.Errorf("tool_call entry = %+v, want the arguments passed to LogToolCall", entries[0])
+	}
+	if entries[1].Agent != "agent-a" || entries[1].Tool != "bash" || entries[1].Result != "hello world" || entries[1].CallID != "call-1" {
+		t.Errorf("tool_result entry = %+v, want the arguments passed to LogToolResult", entries[1])
+	}
 
 	replacement, _ := newTestLogger(t)
 	SetDefault(replacement)

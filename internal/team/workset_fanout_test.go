@@ -178,7 +178,7 @@ func TestStructuredFanOutResolvesOpaqueSourceArtifactAndInputIntegrity(t *testin
 		TaskID: producer.ID, Attempt: 1, Agent: "producer", Status: TaskResultStatusSuccess,
 		Artifacts: append([]ArtifactRef{manifestRef.ArtifactRef}, inputs...),
 	}}
-	tasks, err := c.expandFanOutTasks([]TaskDef{{Agent: "worker", FanOut: &FanOutSpec{
+	tasks, err := c.expandFanOutTasks([]TaskDef{{ID: "producer", Agent: "worker", FanOut: &FanOutSpec{
 		SourceArtifact: FactRef{TaskID: "producer", Artifact: manifestRef.ID}, GoalTemplate: "process {name}",
 	}}})
 	if err != nil || len(tasks) != len(keys) {
@@ -191,6 +191,36 @@ func TestStructuredFanOutResolvesOpaqueSourceArtifactAndInputIntegrity(t *testin
 		if len(task.WorksetBinding.Inputs) != 1 || task.WorksetBinding.Inputs[0].ID != inputs[i].ID {
 			t.Fatalf("child %d lost its opaque input binding: %#v", i, task.WorksetBinding)
 		}
+	}
+
+	// The receipts built from this expansion feed the group gate: one partial
+	// child among otherwise verified children fails workset_complete.
+	specs := make([]TodoSpec, 0, len(tasks))
+	for _, task := range tasks {
+		specs = append(specs, TodoSpec{PlanTaskID: task.ID, Agent: task.Agent, Desc: task.Goal, WorksetBinding: cloneWorksetBinding(task.WorksetBinding)})
+	}
+	children := c.taskTracker.TodoList().AddBatch(specs)
+	ids := make([]string, len(children))
+	for i, child := range children {
+		ids[i] = child.ID
+		child.Status = TaskDone
+		child.VerifyResult = &VerificationResult{ExitCode: 0}
+		status := TaskResultStatusSuccess
+		if i == 1 {
+			status = TaskResultStatusPartial
+		}
+		child.TypedResult = &TaskResult{TaskID: child.ID, Status: status, Summary: "processed", Source: "submitted"}
+	}
+	receipts, err := buildWorksetReceipts(tasks, ids, c.executionRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	children[0].WorksetReceipt = receipts[tasks[0].WorksetBinding.WorksetID]
+	result, err := c.executeWorksetCompleteVerification(context.Background(), VerificationSpec{
+		Type: VerifyWorksetComplete, WorksetSourceTask: "producer", WorksetRequireTerminal: true, WorksetRequireVerified: true,
+	})
+	if err == nil || result == nil || result.ExitCode == 0 {
+		t.Fatalf("workset_complete accepted a partial child: result=%#v err=%v", result, err)
 	}
 }
 

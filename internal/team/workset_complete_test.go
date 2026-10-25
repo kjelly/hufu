@@ -86,6 +86,20 @@ func TestWorksetCompleteVerificationPassesAllVerifiedChildren(t *testing.T) {
 	}
 }
 
+// TestWorksetCompleteAcceptanceDefaultsAcceptedStatuses runs the acceptance
+// gate with a spec that names no accepted statuses: the verifier has to fill
+// in the defaults, which admit the completed_with_gaps child.
+func TestWorksetCompleteAcceptanceDefaultsAcceptedStatuses(t *testing.T) {
+	c, _ := newWorksetCompleteCoordinator(t)
+	c.acceptanceSpec = &AcceptanceSpec{Verifications: []VerificationSpec{{
+		Type: VerifyWorksetComplete, WorksetSourceTask: "prepare", WorksetRequireTerminal: true, WorksetRequireVerified: true,
+	}}}
+	acceptance, err := c.runAcceptance(context.Background())
+	if err != nil || acceptance == nil || !acceptance.IsPassed() || len(acceptance.VerificationEvidence) != 1 || acceptance.VerificationEvidence[0].ExitCode != 0 {
+		t.Fatalf("acceptance result=%#v err=%v", acceptance, err)
+	}
+}
+
 func TestWorksetGroupStatesDistinguishesUnfinishedAndFailedChildren(t *testing.T) {
 	tests := []struct {
 		name      string

@@ -114,9 +114,12 @@ func TestDiagnosisPolicyDecisionTable(t *testing.T) {
 
 func TestDiagnosticPacketRedactsEveryEvidenceField(t *testing.T) {
 	const secret = "Authorization: Bearer nested-secret-123"
+	// keyValueSecret only matches the key=value redactor, so the detail line
+	// exercises that path on its own as well as the bearer-token path.
+	const keyValueSecret = "supersecret-value"
 	packet, err := (DiagnosisPolicy{}).Diagnose(DiagnosisInput{
 		TaskID: "nested-task", RunID: "run-1", Attempt: 2, FailureClass: FailureVerify,
-		Detail:       "verify failed with api_key=" + secret,
+		Detail:       "verify failed with api_key=" + keyValueSecret + " " + secret,
 		EvidenceRefs: []EvidenceRef{{Type: "tool", Description: secret, Value: secret}},
 		VerifyResult: &VerificationResult{
 			Command: secret, WorkDir: secret, Stdout: secret, Stderr: secret,
@@ -134,7 +137,7 @@ func TestDiagnosticPacketRedactsEveryEvidenceField(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "nested-secret-123") {
+	if strings.Contains(string(data), "nested-secret-123") || strings.Contains(string(data), keyValueSecret) {
 		t.Fatalf("diagnostic packet leaked evidence: %s", data)
 	}
 	if packet.Attempt != 2 || packet.RunID != "run-1" || packet.TaskID != "nested-task" {

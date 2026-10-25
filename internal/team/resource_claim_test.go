@@ -170,7 +170,11 @@ func TestWholeRootClaimsSerializeWriters(t *testing.T) {
 			snapshots[tt.effect] = snapshot
 		})
 	}
-	writer, reader := snapshots[SideEffectWorkspaceWrite].Claims, snapshots[SideEffectNone].Claims
+	writerSnapshot, readerSnapshot := snapshots[SideEffectWorkspaceWrite], snapshots[SideEffectNone]
+	if writerSnapshot == nil || readerSnapshot == nil {
+		t.Fatal("whole-root snapshots were not built")
+	}
+	writer, reader := writerSnapshot.Claims, readerSnapshot.Claims
 	if !claimsConflict(writer, writer) || !claimsConflict(writer, reader) || claimsConflict(reader, reader) {
 		t.Fatalf("whole-root claim conflicts: writer/writer=%v writer/reader=%v reader/reader=%v",
 			claimsConflict(writer, writer), claimsConflict(writer, reader), claimsConflict(reader, reader))

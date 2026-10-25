@@ -203,7 +203,10 @@ func TestFinalizationReplayRejectsArtifactIntegrityFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err = finalizationResume(journal, store, record.ID)
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+			if err == nil {
+				t.Fatal("replay accepted the corrupted artifact store")
+			}
+			if tt.wantErr != "" && !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("replay error = %v, want failure containing %q", err, tt.wantErr)
 			}
 		})
