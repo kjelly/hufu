@@ -2,6 +2,7 @@
 """Report observed workflow wall time and runner time across all run attempts."""
 
 import datetime
+import http.client
 import json
 import os
 import sys
@@ -68,7 +69,7 @@ def get_json(base, token, path):
         except urllib.error.HTTPError as error:
             if attempt or not 500 <= error.code < 600:
                 raise
-        except (urllib.error.URLError, TimeoutError):
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException):
             if attempt:
                 raise
         time.sleep(1)
@@ -81,11 +82,13 @@ def main():
         run_path = f"/repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
         run, jobs = collect(lambda path: get_json(base, token, path), run_path)
         result = summarize(run, jobs, datetime.datetime.now(datetime.timezone.utc))
-    except (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError) as error:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError,
+            http.client.HTTPException) as error:
         # Do not include request URLs, response bodies or credentials in diagnostics.
         if isinstance(error, urllib.error.HTTPError):
             reason = f'HTTP {error.code}'
-        elif isinstance(error, (urllib.error.URLError, TimeoutError)):
+        elif isinstance(error, (urllib.error.URLError, TimeoutError, ConnectionError,
+                                http.client.HTTPException)):
             reason = 'network error or timeout'
         else:
             reason = f'invalid or missing cost data ({type(error).__name__})'

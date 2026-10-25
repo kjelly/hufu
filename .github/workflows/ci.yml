@@ -372,5 +372,4 @@ jobs:
         timeout-minutes: 1
         env:
           GH_TOKEN: ${{ github.token }}
-          GITHUB_API_URL: http://127.0.0.1:9 # Temporary failure injection; remove after CI proof.
         run: python3 scripts/ci-test-cost.py

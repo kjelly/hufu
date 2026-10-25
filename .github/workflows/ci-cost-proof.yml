@@ -1,0 +1,102 @@
+name: Temporary CI cost isolation proof
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  required-pass:
+    runs-on: ubuntu-latest
+    steps:
+      - run: exit 0
+  cost-gate-proof:
+    name: cost gate failure isolation proof
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-latest
+    needs: required-pass
+    if: always()
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Fail if any required check failed
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]] || \
+             [[ "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "One or more required checks failed."
+            exit 1
+          fi
+
+      - name: Report workflow and runner cost
+        id: cost
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          status=0
+          GITHUB_API_URL=http://127.0.0.1:9 python3 scripts/ci-test-cost.py || status=$?
+          cat "$GITHUB_STEP_SUMMARY"
+          grep -q 'ci_cost=unavailable (network error or timeout)' "$GITHUB_STEP_SUMMARY" || exit 2
+          [[ "$status" == 1 ]] || exit 2
+          exit "$status"
+
+      - name: Assert reporter failed without failing the gate
+        if: always()
+        run: test "${{ steps.cost.outcome }}" = failure
+
+  required-fail:
+    runs-on: ubuntu-latest
+    steps:
+      - run: exit 1
+  cost-gate-failure-proof:
+    name: required failure preservation proof
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-latest
+    needs: required-fail
+    if: always()
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Fail if any required check failed
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]] || \
+             [[ "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "One or more required checks failed."
+            exit 1
+          fi
+
+      - name: Report workflow and runner cost
+        id: cost
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          status=0
+          GITHUB_API_URL=http://127.0.0.1:9 python3 scripts/ci-test-cost.py || status=$?
+          cat "$GITHUB_STEP_SUMMARY"
+          grep -q 'ci_cost=unavailable (network error or timeout)' "$GITHUB_STEP_SUMMARY" || exit 2
+          [[ "$status" == 1 ]] || exit 2
+          exit "$status"
+
+      - name: Assert reporter failed without failing the gate
+        if: always()
+        run: test "${{ steps.cost.outcome }}" = failure
+
+  verify:
+    runs-on: ubuntu-latest
+    needs: [cost-gate-proof, cost-gate-failure-proof]
+    if: always()
+    steps:
+      - name: Assert both aggregate conclusions
+        run: |
+          test "${{ needs.cost-gate-proof.result }}" = success
+          test "${{ needs.cost-gate-failure-proof.result }}" = failure

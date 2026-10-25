@@ -1,4 +1,5 @@
 import datetime
+import http.client
 import importlib.util
 import contextlib
 import io
@@ -27,6 +28,9 @@ class CostTests(unittest.TestCase):
              urllib.error.HTTPError, 2),
             ('connection', [urllib.error.URLError('offline')] * 2, urllib.error.URLError, 2),
             ('timeout', [TimeoutError('slow')] * 2, TimeoutError, 2),
+            ('reset', [ConnectionResetError('reset')] * 2, ConnectionResetError, 2),
+            ('truncated response', [http.client.IncompleteRead(b'partial', 1)] * 2,
+             http.client.IncompleteRead, 2),
             ('rate limit', [urllib.error.HTTPError('url', 429, 'limited', {}, None)],
              urllib.error.HTTPError, 1),
             ('forbidden', [urllib.error.HTTPError('url', 403, 'limited', {}, None)],
@@ -57,6 +61,8 @@ class CostTests(unittest.TestCase):
              1, 'HTTP 403'),
             ('timeout', [TimeoutError('secret')] * 2, 1, 'network error or timeout'),
             ('connection', [urllib.error.URLError('secret')] * 2, 1, 'network error or timeout'),
+            ('truncated response', [http.client.IncompleteRead(b'secret', 1)] * 2,
+             1, 'network error or timeout'),
             ('json', [b'not JSON'], 1, 'JSONDecodeError'),
             ('run shape', [[]], 1, 'TypeError'),
             ('attempt', [{**run, 'run_attempt': 0}], 1, 'ValueError'),
