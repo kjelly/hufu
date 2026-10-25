@@ -13,7 +13,10 @@ import (
 	"time"
 
 	"charm.land/fantasy"
-	md "github.com/JohannesKaufmann/html-to-markdown/v2"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/table"
 )
 
 const maxFetchSize = 100 * 1024
@@ -100,14 +103,14 @@ func executeFetch(ctx context.Context, call fantasy.ToolCall, workDir string) (f
 	switch format {
 	case "text":
 		if isHTML {
-			text := extractTextFromHTML(content)
+			text := extractTextFromHTML(content, args.URL)
 			result = text
 		} else {
 			result = content
 		}
 	case "markdown":
 		if isHTML {
-			markdown, err := convertHTMLToMarkdown(content)
+			markdown, err := convertHTMLToMarkdown(content, args.URL)
 			if err != nil {
 				result = content
 			} else {
@@ -156,16 +159,35 @@ func fetchURL(ctx context.Context, url string) (string, string, error) {
 	return string(body), contentType, nil
 }
 
-func extractTextFromHTML(htmlContent string) string {
-	markdown, err := convertHTMLToMarkdown(htmlContent)
+// htmlToMarkdown serves every fetch call: the converter locks internally, so
+// one instance is safe for the tool's parallel calls. The table plugin keeps
+// <table> content as a Markdown table instead of flattening the cells into
+// prose.
+var htmlToMarkdown = converter.NewConverter(
+	converter.WithPlugins(
+		base.NewBasePlugin(),
+		commonmark.NewCommonmarkPlugin(),
+		table.NewTablePlugin(),
+	),
+)
+
+func extractTextFromHTML(htmlContent, pageURL string) string {
+	markdown, err := convertHTMLToMarkdown(htmlContent, pageURL)
 	if err != nil {
 		return htmlContent
 	}
 	return markdown
 }
 
-func convertHTMLToMarkdown(htmlContent string) (string, error) {
-	return md.ConvertString(htmlContent)
+// convertHTMLToMarkdown converts fetched HTML to Markdown. A non-empty pageURL
+// resolves relative links and image sources against the page they came from,
+// so the model can fetch them without reconstructing the origin itself.
+func convertHTMLToMarkdown(htmlContent, pageURL string) (string, error) {
+	markdown, err := htmlToMarkdown.ConvertString(htmlContent, converter.WithDomain(pageURL))
+	if err != nil {
+		return "", fmt.Errorf("converting HTML to Markdown: %w", err)
+	}
+	return markdown, nil
 }
 
 func cleanupContent(content string) string {

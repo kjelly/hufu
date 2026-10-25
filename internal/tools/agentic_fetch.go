@@ -80,7 +80,7 @@ func executeFetchByURL(ctx context.Context, url string) (string, error) {
 	isHTML := strings.HasPrefix(contentType, "text/html") || strings.Contains(contentType, "html")
 
 	if isHTML {
-		markdown, err := convertHTMLToMarkdown(content)
+		markdown, err := convertHTMLToMarkdown(content, url)
 		if err != nil {
 			return cleanupContent(content), nil
 		}
