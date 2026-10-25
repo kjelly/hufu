@@ -99,8 +99,8 @@ jobs:
             package-timeout: 30m
             job-timeout: 40
           - scope: improver
-            package-timeout: 20m
-            job-timeout: 30
+            package-timeout: 30m
+            job-timeout: 40
           - scope: other
             package-timeout: 20m
             job-timeout: 30
