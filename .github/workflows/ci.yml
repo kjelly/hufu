@@ -358,11 +358,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
-      - name: Report workflow and runner cost
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/ci-test-cost.py
-
       - name: Fail if any required check failed
         run: |
           if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]] || \
@@ -370,3 +365,12 @@ jobs:
             echo "One or more required checks failed."
             exit 1
           fi
+
+      - name: Report workflow and runner cost
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_API_URL: http://127.0.0.1:9 # Temporary failure injection; remove after CI proof.
+        run: python3 scripts/ci-test-cost.py
