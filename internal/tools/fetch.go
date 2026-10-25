@@ -5,8 +5,10 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -158,17 +160,40 @@ func (p fetchedPage) isHTML() bool {
 	return strings.HasPrefix(p.contentType, "text/html") || strings.Contains(p.contentType, "html")
 }
 
+// fetchError keeps URL-bearing causes available to errors.Is/As without
+// rendering them into tool output. Even a nested parse or redirect error can
+// contain credentials, so only fixed messages and failure classes are displayed.
+type fetchError struct {
+	message string
+	cause   error
+}
+
+func (e *fetchError) Error() string {
+	switch {
+	case errors.Is(e.cause, context.Canceled):
+		return e.message + ": request canceled"
+	case errors.Is(e.cause, context.DeadlineExceeded):
+		return e.message + ": deadline exceeded"
+	}
+	if err, ok := errors.AsType[net.Error](e.cause); ok && err.Timeout() {
+		return e.message + ": timeout"
+	}
+	return e.message
+}
+
+func (e *fetchError) Unwrap() error { return e.cause }
+
 func fetchURL(ctx context.Context, url string) (fetchedPage, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return fetchedPage{}, err
+		return fetchedPage{}, &fetchError{message: "invalid request URL", cause: err}
 	}
 	req.Header.Set("User-Agent", "hufu/1.0")
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fetchedPage{}, err
+		return fetchedPage{}, &fetchError{message: "HTTP request failed", cause: err}
 	}
 	defer resp.Body.Close()
 
@@ -178,7 +203,7 @@ func fetchURL(ctx context.Context, url string) (fetchedPage, error) {
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchSize+1))
 	if err != nil {
-		return fetchedPage{}, err
+		return fetchedPage{}, &fetchError{message: "reading response body failed", cause: err}
 	}
 
 	page := fetchedPage{content: string(body), contentType: resp.Header.Get("Content-Type"), finalURL: url}
