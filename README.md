@@ -167,7 +167,8 @@ profiles:
 Then use `hufu run --profile coding -- "implement the feature"`. A run with a
 TTY can open the team picker when no team is named; scripts should pass
 `--team` or a profile that names the team. The root `hufu [prompt]` invocation
-and its `--agent-team` flag are compatibility syntax.
+is compatibility syntax. Every command that accepts `--agent-team` also accepts
+`--team`, including the root command, `chat`, `resume`, `retry`, and `reconcile`.
 
 An interactive exploratory run can deliver an answer without an acceptance
 contract. In a terminal, Hufu prints an explicit unverified warning and exits
@@ -535,7 +536,7 @@ Semantic Retrieval Runtime section. See
 | `--new` | `-n` | `bool` | `false` | Archive old session and start fresh |
 | `--temp` | `-t` | `bool` | `false` | Use a temporary directory as workspace |
 | `--steps` | `-s` | `bool` | `false` | Pause for user confirmation before each batch of worker tasks |
-| `--agent-team` | — | `string` | `""` | Agent team name to load |
+| `--team`, `--agent-team` | — | `string` | `""` | Agent team name to load (equivalent spellings) |
 | `--agent-team-search-path` | — | `string` | `""` | Team search paths (comma-separated), defaults to `.agent-teams/,~/.agent-teams/` |
 | `--memory` | — | `bool` | `false` | Deprecated, no effect: runs always use canonical memory ([record](docs/deprecations/legacy-memory-store.md)) |
 | `--memory-model` | — | `string` | `""` | Deprecated, no effect: configure the encoder in the `semantic-retrieval` block |

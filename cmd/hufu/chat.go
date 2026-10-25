@@ -25,15 +25,15 @@ var replCmd = &cobra.Command{
 and memory are loaded once and reused for every prompt, so iterating is fast and
 the coordinator keeps full conversation context between turns.
 
-Pick the team with --agent-team, --default, or interactively. Commands inside the
+Pick the team with --team (also --agent-team), --default, or interactively. Commands inside the
 REPL: /exit (or /quit) to leave, /reset to clear conversation context.
 
 Choose the interface with --ui: plain (default line REPL), dashboard (the
 task dashboard, also --tui), or chat (full-screen chat-first TUI).
 
 Examples:
-  hufu chat --agent-team dev-team
-  hufu chat --agent-team dev-team --ui chat
+  hufu chat --team dev-team
+  hufu chat --team dev-team --ui chat
   hufu chat --default --helper-tools bash`,
 	RunE: runChat,
 }
@@ -42,7 +42,7 @@ func init() {
 	// Bind the subset of root flags that make sense for an interactive chat
 	// session to the same global vars the root command uses.
 	f := replCmd.Flags()
-	f.StringVar(&opts.agentTeamName, "agent-team", "", "Agent team name to chat with")
+	registerTeamSelectionFlags(f, &opts.agentTeamName, "Agent team name to chat with")
 	f.StringVar(&opts.agentTeamSearchPath, "agent-team-search-path", "", "Comma-separated paths to search for teams")
 	f.BoolVar(&opts.defaultTeam, "default", false, "Use the built-in default team (coordinator + Helper)")
 	f.StringVar(&opts.helperTools, "helper-tools", "", "Extra tools for the default Helper (e.g. bash,sudo)")

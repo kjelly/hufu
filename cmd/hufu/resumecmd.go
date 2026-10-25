@@ -27,7 +27,7 @@ not create a new session or replay completed tasks automatically.
 
 Examples:
   hufu resume --workspace ./workspace/my-team
-  hufu resume --agent-team my-team`,
+  hufu resume --team my-team`,
 	Args: cobra.NoArgs,
 	RunE: runResumeCommand,
 }
@@ -150,7 +150,7 @@ func validateResumeProfile(teamName string, registry *team.TeamRegistry, vars ma
 
 func init() {
 	f := resumeCmd.Flags()
-	f.StringVar(&resumeTeamName, "agent-team", "", "Agent team name (inferred from --workspace when omitted)")
+	registerTeamSelectionFlags(f, &resumeTeamName, "Agent team name (inferred from --workspace when omitted)")
 	f.StringVar(&resumeSearch, "agent-team-search-path", "", "Comma-separated team search paths")
 	f.StringVar(&opts.providerURL, "provider-url", "", "Provider API base URL")
 	f.StringVar(&opts.providerAPIKey, "provider-api-key", "", "Provider API key")

@@ -183,7 +183,7 @@ func printTargetedRecoveryReport(report team.TargetedRecoveryReport) {
 func init() {
 	for _, cmd := range []*cobra.Command{reconcileCmd, retryCmd} {
 		cmd.Flags().StringVar(&targetedRecoveryTaskID, "task", "", "Runtime task ID to reconcile or retry")
-		cmd.Flags().StringVar(&targetedRecoveryTeamName, "agent-team", "", "Agent team name (inferred from --workspace when omitted)")
+		registerTeamSelectionFlags(cmd.Flags(), &targetedRecoveryTeamName, "Agent team name (inferred from --workspace when omitted)")
 		cmd.Flags().StringVar(&targetedRecoverySearch, "agent-team-search-path", "", "Comma-separated team search paths")
 		cmd.Flags().BoolVar(&targetedRecoveryJSON, "json", false, "Write machine-readable JSON to stdout")
 		cmd.Flags().BoolVar(&opts.requestAcceptance, "request-acceptance", false, "Preserve and enforce frozen request requirements")

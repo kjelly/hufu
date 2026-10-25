@@ -20,6 +20,8 @@ func TestNushellCompletionIncludesInspectCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
+		`--team: string@'nu-complete hufu teams'`,
+		`--agent-team: string@'nu-complete hufu teams'`,
 		`def "nu-complete hufu inspect formats"`,
 		`export extern "hufu inspect overview"`,
 		`export extern "hufu inspect run"`,

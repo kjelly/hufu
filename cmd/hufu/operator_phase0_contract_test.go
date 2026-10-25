@@ -121,13 +121,15 @@ func TestOperatorPhase0HelpAndCompletionCreateNothing(t *testing.T) {
 	}
 
 	command := newRootCommand()
-	complete, ok := command.GetFlagCompletionFunc("agent-team")
-	if !ok {
-		t.Fatal("agent-team completion is not registered")
-	}
-	_, directive := complete(command, nil, "")
-	if directive != cobra.ShellCompDirectiveNoFileComp {
-		t.Fatalf("agent-team completion directive = %v, want NoFileComp", directive)
+	for _, name := range []string{"team", "agent-team"} {
+		complete, ok := command.GetFlagCompletionFunc(name)
+		if !ok {
+			t.Fatalf("%s completion is not registered", name)
+		}
+		_, directive := complete(command, nil, "")
+		if directive != cobra.ShellCompDirectiveNoFileComp {
+			t.Fatalf("%s completion directive = %v, want NoFileComp", name, directive)
+		}
 	}
 	for _, path := range []string{missingWorkspace, missingTeams} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {

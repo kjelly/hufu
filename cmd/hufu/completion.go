@@ -227,7 +227,8 @@ export extern "hufu" [
   --workspace(-w): string # Workspace directory
   --new(-n) # Archive old session and start fresh
   --temp(-t) # Use a temporary directory for workspace
-  --agent-team: string@'nu-complete hufu teams' # Agent team name to load
+  --team: string@'nu-complete hufu teams' # Agent team name to load
+  --agent-team: string@'nu-complete hufu teams' # Alias for --team
   --agent-team-search-path: string # Comma-separated paths to search for teams
   --memory # Enable long-term memory
   --memory-model: string # Embedding model for memory

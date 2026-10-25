@@ -25,12 +25,12 @@ Quick start:
   hufu run --team my-team -- "explain this codebase"
   hufu run --profile coding -- "implement the feature"
   hufu run --default --model local-model -- "hello"
-  hufu chat --agent-team my-team             # interactive REPL
+  hufu chat --team my-team                   # interactive REPL
   hufu resume --workspace ./workspace/my-team # resume a durable session
   hufu list                                  # show all teams
 
 The root hufu [prompt] command is compatibility syntax. It accepts
---agent-team <name> or @<team-name> in the prompt, and @<agent-name> within a team.
+--team <name> (also --agent-team) or @<team-name> in the prompt, and @<agent-name> within a team.
 For hufu run, use --team <name>; a TTY can show a picker when no team is named.
 For scripts, pass --team or a profile that names a team.
 
@@ -91,7 +91,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.PersistentFlags().StringVar(&opts.decisionProfile, "decision-profile", "", "Decision rigor profile for this run: a team profile, exact builtin/<name>@<version>, or 'off' (default: the team's decision.default-profile)")
 	rootCmd.Flags().BoolVarP(&opts.newSession, "new", "n", false, "Archive old session and start fresh")
 	rootCmd.Flags().BoolVarP(&opts.tempWorkspace, "temp", "t", false, "Use a temporary directory for workspace")
-	rootCmd.Flags().StringVar(&opts.agentTeamName, "agent-team", "", "Agent team name to load")
+	registerTeamSelectionFlags(rootCmd.Flags(), &opts.agentTeamName, "Agent team name to load")
 	rootCmd.Flags().StringVar(&opts.agentTeamSearchPath, "agent-team-search-path", "", "Comma-separated paths to search for teams (default: .agent-teams/,~/.agent-teams/)")
 	rootCmd.Flags().BoolVar(&opts.memoryEnabled, "memory", false, "Deprecated: no effect; runs always use canonical context memory")
 	rootCmd.Flags().StringVar(&opts.memoryModel, "memory-model", "", "Deprecated: no effect; semantic memory retrieval uses the semantic-retrieval settings")
@@ -187,7 +187,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 		improveCmd.Flags().IntVar(&improveRuns, "runs", 1, "Number of most recent runs for the selected team to analyze")
 	}
 
-	_ = rootCmd.RegisterFlagCompletionFunc("agent-team", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	completeTeamName := func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		registry := team.NewTeamRegistry(resolveSearchPaths())
 		if err := registry.Discover(); err != nil {
 			return nil, cobra.ShellCompDirectiveNoFileComp
@@ -202,7 +202,10 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 			}
 		}
 		return matches, cobra.ShellCompDirectiveNoFileComp
-	})
+	}
+	for _, name := range []string{"team", "agent-team"} {
+		_ = rootCmd.RegisterFlagCompletionFunc(name, completeTeamName)
+	}
 	registerStaticFlagCompletion(rootCmd, "output", []string{"text", "json"})
 	registerStaticFlagCompletion(rootCmd, "display-mode", []string{"auto", "terminal", "plain"})
 	registerStaticFlagCompletion(rootCmd, "theme", []string{"auto", "light", "dark", "mono"})
