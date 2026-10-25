@@ -92,35 +92,33 @@ func executeFetch(ctx context.Context, call fantasy.ToolCall, workDir string) (f
 	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	content, contentType, err := fetchURL(fetchCtx, args.URL)
+	page, err := fetchURL(fetchCtx, args.URL)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to fetch %s: %v", args.URL, err)), nil
 	}
 
-	isHTML := strings.HasPrefix(contentType, "text/html") || strings.Contains(contentType, "html")
-
 	var result string
 	switch format {
 	case "text":
-		if isHTML {
-			text := extractTextFromHTML(content, args.URL)
+		if page.isHTML() {
+			text := extractTextFromHTML(page.content, page.finalURL)
 			result = text
 		} else {
-			result = content
+			result = page.content
 		}
 	case "markdown":
-		if isHTML {
-			markdown, err := convertHTMLToMarkdown(content, args.URL)
+		if page.isHTML() {
+			markdown, err := convertHTMLToMarkdown(page.content, page.finalURL)
 			if err != nil {
-				result = content
+				result = page.content
 			} else {
 				result = markdown
 			}
 		} else {
-			result = content
+			result = page.content
 		}
 	case "html":
-		result = content
+		result = page.content
 	}
 
 	result = cleanupContent(result)
@@ -132,31 +130,49 @@ func executeFetch(ctx context.Context, call fantasy.ToolCall, workDir string) (f
 	return fantasy.NewTextResponse(fmt.Sprintf("Fetched content from %s:\n\n%s", args.URL, result)), nil
 }
 
-func fetchURL(ctx context.Context, url string) (string, string, error) {
+// fetchedPage is the body of a successful GET together with what the callers
+// need to interpret it.
+type fetchedPage struct {
+	content     string
+	contentType string
+	// finalURL is the URL that served the body. The client follows
+	// redirects, so it can differ from the requested URL and is the base
+	// relative links in the body must resolve against.
+	finalURL string
+}
+
+func (p fetchedPage) isHTML() bool {
+	return strings.HasPrefix(p.contentType, "text/html") || strings.Contains(p.contentType, "html")
+}
+
+func fetchURL(ctx context.Context, url string) (fetchedPage, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return "", "", err
+		return fetchedPage{}, err
 	}
 	req.Header.Set("User-Agent", "hufu/1.0")
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", "", err
+		return fetchedPage{}, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("HTTP %d", resp.StatusCode)
+		return fetchedPage{}, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchSize+1))
 	if err != nil {
-		return "", "", err
+		return fetchedPage{}, err
 	}
 
-	contentType := resp.Header.Get("Content-Type")
-	return string(body), contentType, nil
+	page := fetchedPage{content: string(body), contentType: resp.Header.Get("Content-Type"), finalURL: url}
+	if resp.Request != nil && resp.Request.URL != nil {
+		page.finalURL = resp.Request.URL.String()
+	}
+	return page, nil
 }
 
 // htmlToMarkdown serves every fetch call: the converter locks internally, so

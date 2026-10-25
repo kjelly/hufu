@@ -97,6 +97,91 @@ func TestExecuteFetchByURLResolvesLinks(t *testing.T) {
 	}
 }
 
+// TestFetchResolvesLinksAgainstRedirectTarget covers the client following a
+// redirect: links must resolve against the URL that served the body, not the
+// one that was requested.
+func TestFetchResolvesLinksAgainstRedirectTarget(t *testing.T) {
+	const body = `<p><a href="next.html">Next</a> <a href="#top">Top</a> <a href="/root.html">Root</a></p><img src="pic.png" alt="Pic">`
+	serve := func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, body)
+	}
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { serve(w) }))
+	defer target.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/docs":
+			http.Redirect(w, r, "/docs/", http.StatusMovedPermanently)
+		case "/old":
+			http.Redirect(w, r, "/new/page.html", http.StatusFound)
+		case "/away":
+			http.Redirect(w, r, target.URL+"/b/index.html", http.StatusTemporaryRedirect)
+		default:
+			serve(w)
+		}
+	}))
+	defer origin.Close()
+
+	for _, tt := range []struct {
+		name, path, finalURL, dir string
+	}{
+		{name: "trailing_slash", path: "/docs", finalURL: origin.URL + "/docs/", dir: origin.URL + "/docs/"},
+		{name: "path_change", path: "/old", finalURL: origin.URL + "/new/page.html", dir: origin.URL + "/new/"},
+		{name: "host_change", path: "/away", finalURL: target.URL + "/b/index.html", dir: target.URL + "/b/"},
+		{name: "no_redirect", path: "/plain/page.html", finalURL: origin.URL + "/plain/page.html", dir: origin.URL + "/plain/"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			want := []string{
+				"[Next](" + tt.dir + "next.html)",
+				"[Top](" + tt.finalURL + "#top)",
+				"![Pic](" + tt.dir + "pic.png)",
+			}
+			if tt.name == "host_change" {
+				want = append(want, "[Root]("+target.URL+"/root.html)")
+			} else {
+				want = append(want, "[Root]("+origin.URL+"/root.html)")
+			}
+
+			page, err := fetchURL(t.Context(), origin.URL+tt.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if page.finalURL != tt.finalURL {
+				t.Fatalf("finalURL = %q, want %q", page.finalURL, tt.finalURL)
+			}
+
+			for _, format := range []string{"markdown", "text"} {
+				input, err := json.Marshal(fetchArgs{URL: origin.URL + tt.path, Format: format})
+				if err != nil {
+					t.Fatal(err)
+				}
+				response, err := executeFetch(t.Context(), fantasy.ToolCall{Input: string(input)}, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if response.IsError {
+					t.Fatalf("%s: unexpected error response: %+v", format, response)
+				}
+				for _, w := range want {
+					if !strings.Contains(response.Content, w) {
+						t.Errorf("%s response missing %q: %q", format, w, response.Content)
+					}
+				}
+			}
+
+			agentic, err := executeFetchByURL(t.Context(), origin.URL+tt.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, w := range want {
+				if !strings.Contains(agentic, w) {
+					t.Errorf("agentic fetch missing %q: %q", w, agentic)
+				}
+			}
+		})
+	}
+}
+
 func TestFetchContentFormats(t *testing.T) {
 	const html = `<h1>文件</h1><p>Hello &amp; <strong>world</strong>. <a href="/guide">Guide</a></p>` +
 		`<table><tr><th>Name</th><th>Qty</th></tr><tr><td>Apple</td><td>3</td></tr></table>` +

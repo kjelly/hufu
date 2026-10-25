@@ -72,20 +72,18 @@ func executeAgenticFetch(ctx context.Context, call fantasy.ToolCall, workDir str
 }
 
 func executeFetchByURL(ctx context.Context, url string) (string, error) {
-	content, contentType, err := fetchURL(ctx, url)
+	page, err := fetchURL(ctx, url)
 	if err != nil {
 		return "", err
 	}
 
-	isHTML := strings.HasPrefix(contentType, "text/html") || strings.Contains(contentType, "html")
-
-	if isHTML {
-		markdown, err := convertHTMLToMarkdown(content, url)
+	if page.isHTML() {
+		markdown, err := convertHTMLToMarkdown(page.content, page.finalURL)
 		if err != nil {
-			return cleanupContent(content), nil
+			return cleanupContent(page.content), nil
 		}
 		return cleanupContent(markdown), nil
 	}
 
-	return cleanupContent(content), nil
+	return cleanupContent(page.content), nil
 }
