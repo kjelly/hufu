@@ -151,6 +151,15 @@ occurrences and explicit operator, budget, or workflow wrap-up requests still
 prevent delegation. Successful recovery never erases the earlier failure
 receipt or bypasses the final acceptance checks.
 
+An explicit graceful wrap-up request lets active workers finish their result,
+receipt, and verification steps. Once they are terminal, an unfinished phase
+is recorded as `CANCELLED` and the workflow enters `FAILED`; the run preserves
+completed task evidence and ends as `cancelled` without another coordinator
+model turn or an acceptance command for the incomplete workflow. A completed
+VERIFY phase still follows the normal finish and acceptance gates. Budget and
+task-derived stops retain their own dispositions. A cancelled workflow remains
+terminal when its checkpoint is resumed; it cannot silently restart work.
+
 Argument errors retain the rejected field's full path. When a full tool
 example exceeds 2 KiB, feedback uses the rejected schema's allowed fields and
 a bounded local example instead of repeating an entire fixed collection.

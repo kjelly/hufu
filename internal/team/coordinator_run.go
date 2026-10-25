@@ -1136,6 +1136,9 @@ func (c *Coordinator) finalizeDirectRun(ctx context.Context, todoID string, succ
 	if c == nil || c.session == nil {
 		return nil
 	}
+	if _, finished := c.finalizeWorkflowWrapUp(ctx); finished {
+		return c.LastRunResult()
+	}
 	if errors.Is(context.Cause(ctx), ErrInvocationStalled) {
 		success = false
 		response = ErrInvocationStalled.Error()
@@ -1277,6 +1280,9 @@ func (c *Coordinator) buildOrchestratorToolsFor(orchDef *agent.AgentDef) []fanta
 }
 
 func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentDef, prompt string) (string, []fantasy.StepResult, error) {
+	if summary, finished := c.finalizeWorkflowWrapUp(ctx); finished {
+		return summary, nil, nil
+	}
 	// A coordinator turn is one orchestrator model invocation. Count it here
 	// rather than in ExecuteTasks: one turn may delegate multiple batches, or
 	// may spend its whole budget reasoning without delegating any task.
@@ -1368,6 +1374,9 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 // persisted counters must not be allowed to overshoot once more before the
 // normal ensureFinished boundary gets a chance to enforce them.
 func (c *Coordinator) runOrchestratorWithNoProgressGuard(ctx context.Context, orchDef *agent.AgentDef, prompt string) (string, []fantasy.StepResult, error) {
+	if summary, finished := c.finalizeWorkflowWrapUp(ctx); finished {
+		return summary, nil, nil
+	}
 	if stopped, reason := c.enforceNoProgressBudget(); stopped {
 		if summary := c.summaryFromTodos(fmt.Errorf("%s", reason)); summary != "" {
 			return summary, nil, nil
@@ -1391,6 +1400,9 @@ func (c *Coordinator) runOrchestratorWithNoProgressGuard(ctx context.Context, or
 // them; on success only the wrap-up steps are returned so the caller's
 // saveHistoryAndSession does not append the originals twice.
 func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDef, result string, steps []fantasy.StepResult) (string, []fantasy.StepResult) {
+	if summary, finished := c.finalizeWorkflowWrapUp(ctx); finished {
+		return summary, steps
+	}
 	if c.finishCalled.Load() || ctx.Err() != nil {
 		return result, steps
 	}
@@ -1411,7 +1423,12 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 		}
 		return result, steps
 	}
+	return c.continueCoordinatorUntilFinished(ctx, orchDef, result, steps)
+}
 
+// continueCoordinatorUntilFinished owns the bounded continuation and final
+// summary turns after ensureFinished has checked the initial stop conditions.
+func (c *Coordinator) continueCoordinatorUntilFinished(ctx context.Context, orchDef *agent.AgentDef, result string, steps []fantasy.StepResult) (string, []fantasy.StepResult) {
 	maxContinuationTurns := 5
 	if c.session != nil && c.session.Config.MaxCoordinatorTurns > 0 {
 		maxContinuationTurns = c.session.Config.MaxCoordinatorTurns
@@ -1422,6 +1439,9 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 	noProgressStopped := false
 	continuationInterrupted := false
 	for turn := 1; turn <= maxContinuationTurns; turn++ {
+		if summary, finished := c.finalizeWorkflowWrapUp(ctx); finished {
+			return summary, steps
+		}
 		if c.finishCalled.Load() || ctx.Err() != nil {
 			break
 		}
@@ -1453,6 +1473,9 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 
 		contPrompt := "The step limit for the previous turn was reached. Please continue coordinating and executing the tasks required to satisfy the user's request. When complete, call finish."
 		wrapResult, wrapSteps, err := c.runOrchestrator(ctx, orchDef, contPrompt)
+		if summary, finished := c.finalizeWorkflowWrapUp(ctx); finished {
+			return summary, wrapSteps
+		}
 		if err != nil || strings.TrimSpace(wrapResult) == "" {
 			continuationReason = "continuation turn returned no result"
 			if err != nil {
@@ -1494,6 +1517,9 @@ func (c *Coordinator) ensureFinished(ctx context.Context, orchDef *agent.AgentDe
 		c.report(c.newEvent("wrap_up_phase").withMessage("coordinator stopped without calling finish after continuation turns; forcing final summary").withTodoID(CoordTodoID))
 		c.saveHistoryAndSession(ctx, steps)
 		wrapResult, wrapSteps, err := c.runOrchestrator(ctx, orchDef, stepLimitWrapUpPrompt)
+		if summary, finished := c.finalizeWorkflowWrapUp(ctx); finished {
+			return summary, wrapSteps
+		}
 		if err == nil && strings.TrimSpace(wrapResult) != "" {
 			result = wrapResult
 			steps = wrapSteps
@@ -1603,7 +1629,10 @@ func (c *Coordinator) allTasksCompletedSuccessfully() bool {
 // proves successful completion. It deliberately excludes failures, blocks,
 // and in-flight work so those cases retain the normal fail-closed outcome.
 func (c *Coordinator) canDeterministicallyFinishCompletedTasks(ctx context.Context) bool {
-	return c != nil && !c.finishCalled.Load() && ctx.Err() == nil && c.allTasksCompletedSuccessfully()
+	if c == nil || c.finishCalled.Load() || ctx.Err() != nil || !c.allTasksCompletedSuccessfully() {
+		return false
+	}
+	return c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || c.phaseWorkflow.verificationSatisfied()
 }
 
 func (c *Coordinator) completedTasksSummary(rejection finishRejection) string {
@@ -1683,6 +1712,9 @@ func (c *Coordinator) recordInterruptedContinuation(turn, maxTurns int, reason, 
 // constrained summary turn, and if even that fails, assembles a deterministic
 // summary from completed task outputs so the run never ends empty-handed.
 func (c *Coordinator) attemptWrapUpRecovery(ctx context.Context, orchDef *agent.AgentDef, runErr error) (string, []fantasy.StepResult, bool) {
+	if summary, finished := c.finalizeWorkflowWrapUp(ctx); finished {
+		return summary, nil, true
+	}
 	if !c.IsWrapUp() || ctx.Err() != nil {
 		return "", nil, false
 	}
@@ -2438,7 +2470,10 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	}
 
 	var continuationPrompt string
-	if wasWrapUp {
+	if wasWrapUp != 0 {
+		if wasWrapUp == wrapUpFromGracefulRequest {
+			c.SetWrapUp()
+		}
 		continuationPrompt = wrapUpPromptTemplate
 		additionalPrompt = "wrap up now"
 		c.report(c.newEvent("wrap_up_phase").withMessage("coordinator summarizing").withTodoID(CoordTodoID))

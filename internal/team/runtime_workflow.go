@@ -766,6 +766,12 @@ func (w *runtimeWorkflow) cancel(component, source, message string) error {
 	return w.failLocked("", component, source, CategoryCancelled, message, false, PhaseStatusCancelled)
 }
 
+func (w *runtimeWorkflow) verificationSatisfied() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return (w.state == PhaseVerify || w.state == PhaseDone) && w.results[PhaseVerify].Status == PhaseStatusSuccess
+}
+
 func (w *runtimeWorkflow) requireFinished() error {
 	if !w.Enabled() {
 		return nil

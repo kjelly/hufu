@@ -4195,7 +4195,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	stopWhen = append(stopWhen, func([]fantasy.StepResult) bool {
 		// finish seals both successful and failed coordinator outcomes. Stop
 		// before another model turn can reinterpret that terminal tool result.
-		return (todoID == CoordTodoID && c.finishCalled.Load()) ||
+		return (todoID == CoordTodoID && (c.finishCalled.Load() || c.workflowWrapUpReady())) ||
 			submitResultLoopFailure() != nil || acceptedTerminalResult.isAcceptedFor(c, todoID)
 	})
 	var toolChoice *fantasy.ToolChoice

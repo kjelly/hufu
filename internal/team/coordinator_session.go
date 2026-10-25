@@ -320,6 +320,16 @@ func (c *Coordinator) buildTransientCompactionProjection(ctx context.Context, me
 }
 
 func (c *Coordinator) buildCompactionProjection(ctx context.Context, messages []fantasy.Message, sourceOffset int, sourceCounts []int, predecessor *StructuredSummary, compacter SidecarCompacter) compactionProjection {
+	if err := ctx.Err(); err != nil {
+		return compactionProjection{messages: messages, err: err}
+	}
+	// Graceful cancellation can seal the run while its context is still live.
+	// Persist the history without starting more model work during teardown.
+	if c.finishCalled.Load() {
+		if result := c.LastRunResult(); result != nil && result.RunID == c.executionRunID && result.Outcome == RunOutcomeCancelled {
+			return compactionProjection{messages: messages, err: context.Canceled}
+		}
+	}
 	if len(messages) < 1 {
 		return compactionProjection{messages: messages}
 	}

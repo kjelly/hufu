@@ -9,6 +9,9 @@ import (
 )
 
 func (t *finishTool) finishWorkflow(ctx context.Context, acknowledged bool) (fantasy.ToolResponse, bool, error) {
+	if summary, finished := t.coordinator.finalizeWorkflowWrapUp(ctx); finished {
+		return fantasy.NewTextResponse("FINISHED:" + summary), true, nil
+	}
 	w := t.coordinator.phaseWorkflow
 	if w == nil {
 		return fantasy.ToolResponse{}, false, nil

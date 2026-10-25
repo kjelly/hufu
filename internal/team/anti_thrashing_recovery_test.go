@@ -160,7 +160,7 @@ func TestTaskDerivedWrapUpIsConsumedByRoundReset(t *testing.T) {
 	c := &Coordinator{}
 	c.wrapUp.Store(wrapUpFromBlockedTask)
 	c.blockedWrapUpTasks = map[string]struct{}{"1": {}}
-	if !c.resetRoundStateConsumingWrapUp() || c.IsWrapUp() || c.blockedWrapUpTasks != nil {
+	if c.resetRoundStateConsumingWrapUp() != wrapUpFromBlockedTask || c.IsWrapUp() || c.blockedWrapUpTasks != nil {
 		t.Fatal("round reset failed to consume the task-derived stop")
 	}
 }

@@ -1,6 +1,9 @@
 package team
 
 import (
+	"context"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -8,6 +11,42 @@ import (
 
 	"github.com/kjelly/hufu/internal/runtimestore"
 )
+
+func TestCancelledHistoryCompactionPreservesInputWithoutProviderWork(t *testing.T) {
+	for _, name := range []string{"cancelled_context", "sealed_run"} {
+		t.Run(name, func(t *testing.T) {
+			c := newTestCoordinator(t)
+			messages := []fantasy.Message{
+				fantasy.NewUserMessage("original user request"),
+				fantasy.NewUserMessage("required verification evidence"),
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if name == "cancelled_context" {
+				cancel()
+			} else {
+				c.SetLastRunResult(&RunResult{RunID: c.executionRunID, Outcome: RunOutcomeCancelled})
+				c.finishCalled.Store(true)
+			}
+			projection := c.buildCompactionProjection(ctx, messages, 0, []int{1, 1}, nil, &mockCompacter{err: errors.New("provider work must not start after cancellation")})
+			if !errors.Is(projection.err, context.Canceled) || projection.summary != nil || projection.tokensBefore != 0 || !reflect.DeepEqual(projection.messages, messages) {
+				t.Fatalf("cancelled compaction performed work or replaced evidence: %#v", projection)
+			}
+		})
+	}
+}
+
+func TestPriorCancelledRunDoesNotSuppressCompaction(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.SetLastRunResult(&RunResult{RunID: "previous-run", Outcome: RunOutcomeCancelled})
+	c.finishCalled.Store(true)
+	c.executionRunID = "new-run"
+	messages := []fantasy.Message{fantasy.NewUserMessage("new request")}
+	projection := c.buildCompactionProjection(t.Context(), messages, 0, []int{1}, nil, &mockCompacter{})
+	if errors.Is(projection.err, context.Canceled) || projection.tokensBefore == 0 {
+		t.Fatal("a prior run's cancellation suppressed new-run compaction")
+	}
+}
 
 func TestSaveAndLoadConversationHistory(t *testing.T) {
 	dir := t.TempDir()

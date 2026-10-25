@@ -1986,10 +1986,10 @@ func (c *Coordinator) resetRoundStatePreservingWrapUp() {
 	c.resetRoundStateLocked(false)
 }
 
-func (c *Coordinator) resetRoundStateConsumingWrapUp() bool {
+func (c *Coordinator) resetRoundStateConsumingWrapUp() int32 {
 	c.wrapUpMu.Lock()
 	defer c.wrapUpMu.Unlock()
-	wasWrapUp := c.IsWrapUp()
+	wasWrapUp := c.wrapUp.Load()
 	c.resetRoundStateLocked(true)
 	return wasWrapUp
 }
@@ -2067,7 +2067,7 @@ func (c *Coordinator) updateTodoTiming(todoID string, modelTime, toolTime time.D
 func (c *Coordinator) SetWrapUp() {
 	c.wrapUpMu.Lock()
 	defer c.wrapUpMu.Unlock()
-	c.wrapUp.Store(1)
+	c.wrapUp.Store(wrapUpFromGracefulRequest)
 	c.SetCurrentStage("wrapping_up")
 	c.persistPendingWrapUp("graceful wrap-up requested")
 	c.report(c.newEvent("wrap_up_phase").withMessage("finishing active tasks"))
