@@ -122,3 +122,23 @@ the test failure. Its integration job succeeded and saved the main race cache.
 The next successful main team run can seed its own cache; a later main push
 must verify a restore hit. No cache-hit or consecutive-main-success claim is
 made from the focused fixture tests.
+
+
+## Remaining critical-path budget: improver
+
+[PR #46 run 40147180581](https://github.com/kjelly/hufu/actions/runs/40147180581)
+passes all 12 jobs on attempt 1. The team package is 640.348s / 1800s (35.6%).
+The last test job is now improver: 65 top-level cases pass, package 953.19s /
+1200s (79.4%), command wall 956.66s, and cache-hit is true. The existing package
+budget reporter therefore warns above 75% even with a warm improver cache.
+Its largest workflow cases take 349.19s, 157.62s, 113.16s and 104.44s; compilation
+is not the dominant cost in this observation.
+
+The improver short group receives the same 30m package deadline / 40m job limit
+as team. At this observed runtime that provides 53.0% timeout usage. This is a
+deadline-headroom change, not an execution-time improvement: the full case set,
+race detector, count=1, short flag and p=2 concurrency remain unchanged. The
+75% summary warning and raw artifacts still expose future elapsed growth.
+No tests are moved, skipped or retried by this change. cli/other retain 20m/30m;
+integration retains 20m package deadlines and its 40m job limit. Main-push
+stability remains an observed acceptance condition after the fixes merge.

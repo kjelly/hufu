@@ -21,7 +21,8 @@ class PackageBudgetTests(unittest.TestCase):
         test_job = workflow.split('\n  test:\n', 1)[1].split('\n  integration:\n', 1)[0]
         integration = workflow.split('\n  integration:\n', 1)[1].split('\n  build:\n', 1)[0]
         self.assertIn('scope: team\n            package-timeout: 30m\n            job-timeout: 40', test_job)
-        self.assertEqual(test_job.count('package-timeout: 20m'), 3)
+        self.assertIn('scope: improver\n            package-timeout: 30m\n            job-timeout: 40', test_job)
+        self.assertEqual(test_job.count('package-timeout: 20m'), 2)
         self.assertIn('timeout-minutes: ${{ matrix.job-timeout }}', test_job)
         self.assertIn('-layer short -scope "$TEST_SCOPE" -- -race -json -timeout "$PACKAGE_TIMEOUT"', test_job)
         self.assertIn('-layer integration -- -race -json -timeout "$PACKAGE_TIMEOUT"', integration)
