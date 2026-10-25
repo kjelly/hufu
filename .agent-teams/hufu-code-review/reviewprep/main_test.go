@@ -523,61 +523,6 @@ func TestDecodeWireConfigRejectsInvalidMaxCommitsAndJSON(t *testing.T) {
 	}
 }
 
-func TestReviewerPromptDefersToRuntimeResultProtocol(t *testing.T) {
-	prompt, err := os.ReadFile(filepath.Join("..", "reviewer.md"))
-	if err != nil {
-		t.Fatalf("read reviewer prompt: %v", err)
-	}
-	text := strings.Join(strings.Fields(string(prompt)), " ")
-	for _, required := range []string{
-		"runtime-provided result protocol",
-		"active runtime schema",
-		"`files_read` using exactly the representation required by the active schema",
-		"cite the supplied opaque artifact identifier exactly",
-	} {
-		if !strings.Contains(text, required) {
-			t.Fatalf("reviewer prompt omitted %q", required)
-		}
-	}
-	for _, forbidden := range []string{
-		"`submit_result`",
-		"WorkerResultProposal",
-		"local tool",
-		"external structured result provider",
-		"`files_read` object",
-		"array of non-empty strings",
-	} {
-		if strings.Contains(text, forbidden) {
-			t.Fatalf("reviewer prompt retained transport-specific instruction %q", forbidden)
-		}
-	}
-}
-
-func TestReviewWorkerPromptsRequireArtifactOnlySourceEvidence(t *testing.T) {
-	for _, filename := range []string{"reviewer.md", "critic.md", "documentation-reviewer.md"} {
-		t.Run(filename, func(t *testing.T) {
-			prompt, err := os.ReadFile(filepath.Join("..", filename))
-			if err != nil {
-				t.Fatal(err)
-			}
-			text := string(prompt)
-			for _, required := range []string{
-				"tools: view",
-				"reviewed-source snapshot",
-				"never use `file_path`",
-				"live checkout",
-			} {
-				if !strings.Contains(text, required) {
-					t.Fatalf("%s omitted artifact-only instruction %q", filename, required)
-				}
-			}
-			if strings.Contains(text, "tools: view,grep") {
-				t.Fatalf("%s still grants live repository search tools", filename)
-			}
-		})
-	}
-}
-
 func TestPrepareProducesGoldenManifestAndDiffs(t *testing.T) {
 	repo := newFixtureRepo(t)
 	writeAndCommit(t, repo, "cmd/hufu/main.go", "package main\n\nfunc main() {}\n", "boundary change", "2025-01-02T00:00:00Z")

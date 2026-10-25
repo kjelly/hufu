@@ -124,6 +124,11 @@ func (w *invocationWatchdog) run() {
 		case <-w.ctx.Done():
 			return
 		case <-ticker.C:
+			if w.coordinator.providerManager.ProviderQuotaWaiting() {
+				w.touch()
+				w.lastDumpAt.Store(0)
+				continue
+			}
 			now := time.Now()
 			idle := now.Sub(time.Unix(0, w.activityAt.Load()))
 			if idle < w.threshold {

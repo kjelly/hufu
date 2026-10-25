@@ -9,6 +9,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/execution"
+	"github.com/kjelly/hufu/internal/waitbudget"
 )
 
 // HufuLocalSubagentProvider adapts the existing Fantasy agent runtime. It is
@@ -157,7 +158,7 @@ func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request Atte
 	}
 	if request.Timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, request.Timeout)
+		ctx, cancel = waitbudget.WithTimeout(ctx, request.Timeout)
 		defer cancel()
 	}
 	timing := request.timing

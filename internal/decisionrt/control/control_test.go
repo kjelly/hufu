@@ -310,9 +310,7 @@ func TestPointsOutsideTheirDomainAreNotApplicable(t *testing.T) {
 		ok   bool
 	}{
 		{name: "one worker", ok: second(control.AgentMatcherRequest("task", many(1)))},
-		{name: "twenty-two workers", ok: second(control.AgentMatcherRequest("task", many(22)))},
 		{name: "one option", ok: second(control.AskUserRequest("q", options(1)))},
-		{name: "twenty-two options", ok: second(control.AskUserRequest("q", options(22)))},
 		{name: "empty path", ok: second(control.PathReviewerRequest("ls", " "))},
 		{name: "no guard rules", ok: second(control.GuardReviewerRequest("a", "bash", "{}", nil))},
 		{name: "guard rules over budget", ok: second(control.GuardReviewerRequest("a", "bash", "{}", []string{strings.Repeat("r", 4000)}))},
@@ -322,8 +320,15 @@ func TestPointsOutsideTheirDomainAreNotApplicable(t *testing.T) {
 			t.Errorf("%s: point applied, want not applicable", test.name)
 		}
 	}
-	if !second(control.AgentMatcherRequest("task", many(21))) || !second(control.AskUserRequest("q", options(21))) {
-		t.Fatal("21 candidates must apply")
+	for _, count := range []int{2, 21, 22, 100} {
+		workers, ok := control.AgentMatcherRequest("task", many(count))
+		if !ok || len(workers.Spec.Options) != count {
+			t.Fatalf("%d workers did not preserve the complete domain", count)
+		}
+		choices, ok := control.AskUserRequest("q", options(count))
+		if !ok || len(choices.Spec.Options) != count {
+			t.Fatalf("%d options did not preserve the complete domain", count)
+		}
 	}
 }
 

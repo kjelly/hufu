@@ -3,6 +3,7 @@ package systemone_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -96,6 +97,9 @@ func choiceRequest(optionCount int) decisionrt.Request {
 	options := make([]decisionrt.Option, 0, optionCount)
 	for index := range optionCount {
 		option := decisionrt.Option{ID: "opt-" + string(rune('a'+index))}
+		if index >= 26 {
+			option.ID = fmt.Sprintf("opt-%d", index)
+		}
 		if index%2 == 0 {
 			option.Description = "Option " + option.ID
 		}
@@ -152,7 +156,7 @@ func noulResponse(probability string) string {
 func opaqueKeys(prefix string, count int) []string {
 	keys := make([]string, 0, count)
 	for index := range count {
-		keys = append(keys, prefix+twoDigits(index))
+		keys = append(keys, fmt.Sprintf("%s%0*d", prefix, max(2, len(fmt.Sprint(count-1))), index))
 	}
 	return keys
 }

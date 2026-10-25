@@ -29,6 +29,7 @@ import (
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/waitbudget"
 )
 
 // errCoordinatorToolFailure marks a direct coordinator tool error as a hard
@@ -3683,7 +3684,7 @@ func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todo
 	if sidecarTimeout <= 0 {
 		sidecarTimeout = 120 * time.Second
 	}
-	sidecarCtx, cancel := context.WithTimeout(ctx, sidecarTimeout)
+	sidecarCtx, cancel := waitbudget.WithTimeout(ctx, sidecarTimeout)
 	defer cancel()
 
 	result, err := s.Execute(sidecar.WithPurpose(sidecarCtx, "sidecar_task"), taskDesc+c.requestAcceptancePrompt())
@@ -5472,7 +5473,7 @@ func (c *Coordinator) reflectOnFailure(ctx context.Context, agentName, goal, las
 	s := c.AgentPool().Sidecar()
 	if s != nil {
 		// Use a shorter timeout for reflection to avoid holding up retries
-		reflectCtx, cancel := context.WithTimeout(ctx, llmtimeout.Sidecar(30*time.Second))
+		reflectCtx, cancel := waitbudget.WithTimeout(ctx, llmtimeout.Sidecar(30*time.Second))
 		defer cancel()
 
 		prompt := buildFailureReflectionPrompt(agentName, goal, lastErr)

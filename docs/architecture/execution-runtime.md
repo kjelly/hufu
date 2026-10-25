@@ -511,6 +511,53 @@ receipt records the target it ran on, its `candidate_index`, and on a fallback
 attempt `fallback_from` and `fallback_failure_class`; an attempt whose
 provider failure did not fall back records `fallback_denied_reason`.
 
+## Ollama Cloud quota waits
+
+Coordinator-managed model calls automatically wait after an Ollama Cloud HTTP
+429 that rejected the request before any response was observed. This covers
+coordinator, worker, direct-agent, extra-model and sidecar calls through the
+shared provider admission boundary. Other providers retain their existing
+retry/fallback behavior. Standalone native System One decision transports and
+commands that do not use coordinator admission retain their own error policy.
+
+Hufu queries the official [balance API](https://docs.ollama.com/api/balance).
+For legacy plans it waits for the latest `resets_at` among exhausted session
+and weekly limits. Monthly credit plans use `included.period.until` when both
+included and purchased credits are exhausted. Hufu checks the balance again
+at that deadline before continuing. Direct `https://ollama.com` providers use
+their configured API key. A loopback Ollama daemon forwarding a `:cloud` model
+uses `OLLAMA_API_KEY` for the balance query; this key must belong to the same
+account as the daemon's cloud sign-in. Local-provider credentials are never
+forwarded to the cloud balance endpoint.
+
+Without a usable key or reset time, Hufu permits one generation probe every
+**10 minutes**, shared across models using the same account. A longer
+`Retry-After` delays the next probe further. Concurrent agents share the
+cooldown and cannot issue simultaneous fallback probes. Balance requests have
+a short independent timeout, a bounded response size, and never follow redirects.
+
+Each rejected generation settles its provider invocation and releases its
+provider slot before waiting. A resend gets a new invocation ID, passes
+admission again, and retains the exact step input and previous tool results.
+It does not replay tools, restart the agent, consume a task retry, or move to
+a route fallback while that Ollama request is waiting. A partial response or
+midstream failure is never automatically replayed by this policy.
+
+Quota waits pause model working-time budgets, including enclosing coordinator
+budgets, and are recognized by the silent-stall watchdog. Explicit parent
+deadlines, the run's total duration/cost/token budgets and cancellation remain
+authoritative; absent those limits, waiting continues until service recovers
+or the operator cancels. Existing conservative cost settlement still applies
+when a rejected invocation reports no usage.
+
+The branch-scoped `provider_quota_cooldown` journal event stores only an opaque
+account digest and the next check time. Restarted execution restores that
+deadline; credential changes get a different identity. Journal failures stop
+recovery before another request is sent. This restores the cooldown for work
+the normal recovery policy resumes; it does not reopen an already failed run
+or replay completed tasks. CLI/TUI status shows the next check time, and
+runtime event exports preserve the wait history.
+
 ## Interrupted-task reconciliation evidence
 
 Normal crash resume and operator-requested `hufu reconcile --task` use the

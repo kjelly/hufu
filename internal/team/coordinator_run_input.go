@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/waitbudget"
 )
 
 func (c *Coordinator) SetRunInputAssignments(assignments []RunInputAssignment) {
@@ -234,7 +235,7 @@ func (c *Coordinator) callRunInputResolver(ctx context.Context, prompt string, e
 	resolverCtx := ctx
 	var cancel context.CancelFunc
 	if resolver.Timeout > 0 {
-		resolverCtx, cancel = context.WithTimeout(ctx, time.Duration(resolver.Timeout)*time.Second)
+		resolverCtx, cancel = waitbudget.WithTimeout(ctx, time.Duration(resolver.Timeout)*time.Second)
 	}
 	if cancel != nil {
 		defer cancel()
@@ -398,7 +399,7 @@ func resolveSemanticRunInputOnce(ctx context.Context, semanticResolver SemanticR
 	resolverCtx := ctx
 	if resolver.Timeout > 0 {
 		var cancel context.CancelFunc
-		resolverCtx, cancel = context.WithTimeout(ctx, time.Duration(resolver.Timeout*max(request.Attempt, 1))*time.Second)
+		resolverCtx, cancel = waitbudget.WithTimeout(ctx, time.Duration(resolver.Timeout*max(request.Attempt, 1))*time.Second)
 		defer cancel()
 	}
 	return semanticResolver.Resolve(resolverCtx, request)

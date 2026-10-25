@@ -334,7 +334,7 @@ type Spec struct {
 
 `choice`：
 
-- 2 到 21 個 option。
+- 至少 2 個 option；不設固定數量上限，仍受 backend 請求大小、模型能力與 context 限制。
 - option ID 必須符合相同 machine-ID grammar。
 - option ID 必須 unique。
 - option description 長度不得超過 1024 UTF-8 bytes。
@@ -1108,7 +1108,8 @@ Request mapping：
 - `state` 是 §7.3 `CanonicalContextValues` 的結果（空 Context 為 `{}`）；不送
   `Purpose`、spec ID/version、digest、fallback 或 receipt metadata。
 - `Spec.Question` 成為 `instructions`。
-- `choice`：native `choice`；options 依宣告順序對應 opaque key `o00`…`o20`，
+- `choice`：native `choice`；options 依宣告順序對應 opaque key `o00`、`o01`…，
+  index 至少補齊兩位，超過 100 個 options 時依最大 index 的位數統一補零，保持字典順序與宣告順序一致；
   criterion description 為 option ID，description 非空時再接 `: ` 與
   description。
 - `boolean`：native `noul`，沒有 criteria。
@@ -1441,7 +1442,7 @@ changed context -> different digest
 
 以 `httptest.Server` 與依 wire shape 建立的 fixture 測試，不連 live model：
 
-- choice 2／21 options、opaque key 與宣告順序、criterion description、
+- choice 2／21／22／101／255 options、opaque key 與宣告順序、criterion description、
   provider confidence 與選中機率不同
 - boolean `noul` 0、0.1、0.5、0.9、1 的 candidate 順序與 0.5 tie
 - integer range（含 `-2..2`、21 values、`int64` 下界）一律 native `choice`
@@ -2028,7 +2029,7 @@ medium
 ```
 
 `--id`、`--version`、`--purpose`、`--question` 都是 required；不得提供空字串。
-`--option` 必須出現 2 到 21 次，以第一個 `=` 分隔 ID 與 description；ID
+`--option` 必須出現至少 2 次，沒有固定次數上限；以第一個 `=` 分隔 ID 與 description；ID
 不可空，description 可空，沒有 `=` 是 usage error。
 
 若：

@@ -54,6 +54,8 @@ func TestTallySkepticVotes(t *testing.T) {
 		{name: "1-2 confirmed", votes: []skepticVote{{Refuted: true, Reason: "a", status: skepticVoteCompleted}, {status: skepticVoteCompleted}, {status: skepticVoteCompleted}}, wantSignal: "confirmed"},
 		{name: "tie confirms", votes: []skepticVote{{Refuted: true, status: skepticVoteCompleted}, {status: skepticVoteCompleted}}, wantSignal: "confirmed"},
 		{name: "abstention is not confirmation", votes: []skepticVote{{status: skepticVoteCompleted}, {}}, wantSignal: "confirmed_with_abstentions", wantAbstentions: 1},
+		{name: "abstentions do not dilute refutation", votes: []skepticVote{{Refuted: true, status: skepticVoteCompleted}, {}, {}}, wantRefuted: true, wantSignal: "refuted", wantAbstentions: 2},
+		{name: "completed tie with abstention confirms", votes: []skepticVote{{Refuted: true, status: skepticVoteCompleted}, {status: skepticVoteCompleted}, {}}, wantSignal: "confirmed_with_abstentions", wantAbstentions: 1},
 		{name: "all abstain", wantRefuted: true, votes: []skepticVote{{}, {}, {}}, wantSignal: "abstained", wantAbstentions: 3},
 		{name: "empty abstains", wantRefuted: true, votes: nil, wantSignal: "abstained"},
 	}

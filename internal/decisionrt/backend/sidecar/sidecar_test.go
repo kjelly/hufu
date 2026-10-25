@@ -34,17 +34,28 @@ func (g *fakeGenerator) Execute(ctx context.Context, prompt string) (string, err
 func (g *fakeGenerator) ModelID() string { return g.modelID }
 
 func TestChoiceTokenMapsToTypedValue(t *testing.T) {
-	generator := &fakeGenerator{modelID: "test-model", response: `{"token":"A1"}`}
-	backend := mustBackend(t, generator)
-	result, err := backend.Decide(t.Context(), choiceRequest())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != decisionrt.StatusDecided || result.Value.Choice != "large" || result.Model != "test-model" {
-		t.Fatalf("result = %#v", result)
-	}
-	if result.Confidence != 0 || result.ConfidenceSemantics != decisionrt.ConfidenceNone || len(result.Candidates) != 0 {
-		t.Fatalf("unexpected confidence data: %#v", result)
+	for _, count := range []int{2, 22, 256} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			request := choiceRequest()
+			if count > 2 {
+				request.Spec.Options = make([]decisionrt.Option, count)
+				for i := range request.Spec.Options {
+					request.Spec.Options[i].ID = fmt.Sprintf("option_%d", i)
+				}
+			}
+			generator := &fakeGenerator{modelID: "test-model", response: fmt.Sprintf(`{"token":"A%d"}`, count-1)}
+			backend := mustBackend(t, generator)
+			result, err := backend.Decide(t.Context(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Status != decisionrt.StatusDecided || result.Value.Choice != request.Spec.Options[count-1].ID || result.Model != "test-model" {
+				t.Fatalf("result = %#v", result)
+			}
+			if result.Confidence != 0 || result.ConfidenceSemantics != decisionrt.ConfidenceNone || len(result.Candidates) != 0 {
+				t.Fatalf("unexpected confidence data: %#v", result)
+			}
+		})
 	}
 }
 
@@ -265,21 +276,32 @@ func TestFullBoundedContextIsNotTruncated(t *testing.T) {
 }
 
 func TestPromptLimitDoesNotInvokeGenerator(t *testing.T) {
-	var calls int
-	generator := &fakeGenerator{modelID: "test-model", execute: func(context.Context, string) (string, error) {
-		calls++
-		return `{"token":"A0"}`, nil
-	}}
-	request := choiceRequest()
-	request.Spec.Question = strings.Repeat("q", 4096)
-	for index := range 15 {
-		request.Context[fmt.Sprintf("chunk_%02d", index)] = strings.Repeat("e", 4096)
-	}
-	backend := mustBackend(t, generator)
-	_, err := backend.Decide(t.Context(), request)
-	assertErrorKind(t, err, decisionrt.ErrorBackendFailure)
-	if calls != 0 {
-		t.Fatalf("generator calls = %d", calls)
+	for _, domainSize := range []int{2, 100} {
+		t.Run(fmt.Sprint(domainSize), func(t *testing.T) {
+			var calls int
+			generator := &fakeGenerator{modelID: "test-model", execute: func(context.Context, string) (string, error) {
+				calls++
+				return `{"token":"A0"}`, nil
+			}}
+			request := choiceRequest()
+			if domainSize == 2 {
+				request.Spec.Question = strings.Repeat("q", 4096)
+				for index := range 15 {
+					request.Context[fmt.Sprintf("chunk_%02d", index)] = strings.Repeat("e", 4096)
+				}
+			} else {
+				request.Spec.Options = make([]decisionrt.Option, domainSize)
+				for i := range request.Spec.Options {
+					request.Spec.Options[i] = decisionrt.Option{ID: fmt.Sprintf("option_%d", i), Description: strings.Repeat("d", 1024)}
+				}
+			}
+			backend := mustBackend(t, generator)
+			_, err := backend.Decide(t.Context(), request)
+			assertErrorKind(t, err, decisionrt.ErrorBackendFailure)
+			if calls != 0 {
+				t.Fatalf("generator calls = %d", calls)
+			}
+		})
 	}
 }
 

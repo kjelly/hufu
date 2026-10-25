@@ -3,13 +3,33 @@ package sidecar
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"charm.land/fantasy"
 
+	"github.com/kjelly/hufu/internal/decisionrt"
 	"github.com/kjelly/hufu/internal/tools"
 )
+
+func TestClosedQuestionPreservesLargeSingleChoiceDomain(t *testing.T) {
+	opts := make([]tools.AskUserTUIOption, 100)
+	for i := range opts {
+		opts[i] = tools.AskUserTUIOption{Label: fmt.Sprintf("Option %d", i), Value: fmt.Sprintf("value-%d", i)}
+	}
+	s := &Sidecar{}
+	s.SetDecisionExecutor(func(_ context.Context, in DecisionInvocation) (decisionrt.Result, error) {
+		if len(in.Options) != 101 || in.Options[0].ID != "none" {
+			t.Fatal("closed-question domain omitted an option")
+		}
+		return decisionrt.Result{Status: decisionrt.StatusDecided, Value: decisionrt.Value{Choice: "option_99"}}, nil
+	})
+	response, err := s.ChooseAskUserResponse(t.Context(), "Choose", "single_choice", opts, false)
+	if err != nil || len(response.Answers) != 1 || response.Answers[0] != opts[99].Value {
+		t.Fatalf("response=%#v error=%v", response, err)
+	}
+}
 
 func TestNormalizeAskUserSelectionNumberedEcho(t *testing.T) {
 	opts := []tools.AskUserTUIOption{{Label: "List the files"}, {Label: "Count only"}}

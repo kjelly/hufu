@@ -17,6 +17,7 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/decisionrt"
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
+	"github.com/kjelly/hufu/internal/waitbudget"
 )
 
 const (
@@ -473,7 +474,7 @@ func (s *Sidecar) Summarize(ctx context.Context, text string, maxChars int) (str
 	if utf8.RuneCountInString(text) <= maxChars/2 {
 		return text, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, auxiliarySummaryTimeout)
+	ctx, cancel := waitbudget.WithTimeout(ctx, auxiliarySummaryTimeout)
 	defer cancel()
 	prompt := fmt.Sprintf(`Summarize the following text in under %d characters. Preserve all key information, facts, and conclusions. Output ONLY the summary, no meta-commentary.
 
@@ -495,7 +496,7 @@ func (s *Sidecar) Compact(ctx context.Context, text string, instruction string) 
 	if s == nil || s.agent == nil {
 		return text, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, auxiliarySummaryTimeout)
+	ctx, cancel := waitbudget.WithTimeout(ctx, auxiliarySummaryTimeout)
 	defer cancel()
 	if instruction == "" {
 		instruction = "Condense the following text while preserving all key information."

@@ -2,6 +2,7 @@ package systemone_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"reflect"
@@ -13,13 +14,17 @@ import (
 )
 
 func TestChoiceRequestMapsOptionsToOpaqueKeys(t *testing.T) {
-	for _, count := range []int{2, 21} {
-		t.Run(twoDigits(count), func(t *testing.T) {
+	for _, count := range []int{2, 21, 22, 100, 101, 255} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			keys := opaqueKeys("o", count)
-			server := newRecordingServer(t, http.StatusOK, choiceResponse(keys, keys[0], 0.6, 0.2))
+			server := newRecordingServer(t, http.StatusOK, choiceResponse(keys, keys[count-1], 0.6, 0.2))
 			request := choiceRequest(count)
-			if _, err := mustNew(t, systemone.Config{Endpoint: server.endpoint()}).Decide(t.Context(), request); err != nil {
+			result, err := mustNew(t, systemone.Config{Endpoint: server.endpoint()}).Decide(t.Context(), request)
+			if err != nil {
 				t.Fatal(err)
+			}
+			if result.Value.Choice != request.Spec.Options[count-1].ID || len(result.Candidates) != count {
+				t.Fatalf("result did not preserve the complete domain: %#v", result)
 			}
 			body := server.onlyRequestBody(t)
 			question := body["questions"].(map[string]any)["decision"].(map[string]any)

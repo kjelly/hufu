@@ -22,6 +22,7 @@ func TestRuntimeAcceptsMappedResults(t *testing.T) {
 		reason  string
 	}{
 		{name: "choice", request: choiceRequest(21), body: choiceResponse(opaqueKeys("o", 21), "o00", 0.8, 0.1), status: decisionrt.StatusDecided},
+		{name: "large choice domain", request: choiceRequest(101), body: choiceResponse(opaqueKeys("o", 101), "o100", 0.8, 0.1), status: decisionrt.StatusDecided},
 		{name: "integer", request: integerRequest(-10, 10), body: choiceResponse(opaqueKeys("i", 21), "i00", 0.4, 0.1), status: decisionrt.StatusDecided},
 		{name: "boolean certain false", request: booleanRequest(), body: noulResponse("0"), status: decisionrt.StatusDecided},
 		{name: "boolean certain true", request: booleanRequest(), body: noulResponse("1"), status: decisionrt.StatusDecided},

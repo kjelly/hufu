@@ -13,14 +13,17 @@ import (
 
 func TestSpecValidate(t *testing.T) {
 	tests := map[string]func(*decisionrt.Spec){
-		"empty id":              func(spec *decisionrt.Spec) { spec.ID = "" },
-		"empty version":         func(spec *decisionrt.Spec) { spec.Version = "" },
-		"empty question":        func(spec *decisionrt.Spec) { spec.Question = " " },
-		"unknown kind":          func(spec *decisionrt.Spec) { spec.Kind = "other" },
-		"one option":            func(spec *decisionrt.Spec) { spec.Options = spec.Options[:1] },
-		"duplicate option":      func(spec *decisionrt.Spec) { spec.Options[1].ID = spec.Options[0].ID },
-		"choice range":          func(spec *decisionrt.Spec) { spec.Range = &decisionrt.IntegerRange{} },
-		"too many options":      func(spec *decisionrt.Spec) { spec.Options = makeOptions(22) },
+		"empty id":         func(spec *decisionrt.Spec) { spec.ID = "" },
+		"empty version":    func(spec *decisionrt.Spec) { spec.Version = "" },
+		"empty question":   func(spec *decisionrt.Spec) { spec.Question = " " },
+		"unknown kind":     func(spec *decisionrt.Spec) { spec.Kind = "other" },
+		"one option":       func(spec *decisionrt.Spec) { spec.Options = spec.Options[:1] },
+		"duplicate option": func(spec *decisionrt.Spec) { spec.Options[1].ID = spec.Options[0].ID },
+		"choice range":     func(spec *decisionrt.Spec) { spec.Range = &decisionrt.IntegerRange{} },
+		"duplicate in large domain": func(spec *decisionrt.Spec) {
+			spec.Options = makeOptions(100)
+			spec.Options[99].ID = spec.Options[0].ID
+		},
 		"invalid option id":     func(spec *decisionrt.Spec) { spec.Options[0].ID = "not valid" },
 		"oversized description": func(spec *decisionrt.Spec) { spec.Options[0].Description = strings.Repeat("x", 1025) },
 	}
@@ -29,6 +32,16 @@ func TestSpecValidate(t *testing.T) {
 			spec := validChoiceSpec()
 			mutate(&spec)
 			assertErrorKind(t, spec.Validate(), decisionrt.ErrorInvalidRequest)
+		})
+	}
+
+	for _, count := range []int{2, 21, 22, 100, 256} {
+		t.Run(fmt.Sprintf("%d options", count), func(t *testing.T) {
+			spec := validChoiceSpec()
+			spec.Options = makeOptions(count)
+			if err := spec.Validate(); err != nil {
+				t.Fatalf("valid choice domain: %v", err)
+			}
 		})
 	}
 
@@ -108,7 +121,7 @@ func TestRequestValidateCanonicalContextSize(t *testing.T) {
 func makeOptions(count int) []decisionrt.Option {
 	options := make([]decisionrt.Option, count)
 	for i := range count {
-		options[i] = decisionrt.Option{ID: "option-" + string(rune('A'+i))}
+		options[i] = decisionrt.Option{ID: fmt.Sprintf("option-%d", i)}
 	}
 	return options
 }

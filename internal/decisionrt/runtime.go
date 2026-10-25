@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/llmtimeout"
+	"github.com/kjelly/hufu/internal/waitbudget"
 )
 
 const (
@@ -144,7 +145,7 @@ func (r *runtimeImpl) attempt(ctx context.Context, request Request, backend name
 
 	r.metrics.IncCalls(request.Purpose, backend.name)
 	started := time.Now()
-	attemptCtx, cancel := context.WithTimeout(ctx, r.timeout)
+	attemptCtx, cancel := waitbudget.WithTimeout(ctx, r.timeout)
 	if err := attemptCtx.Err(); err != nil {
 		cancel()
 		r.metrics.ObserveDurationMS(request.Purpose, backend.name, elapsedMilliseconds(started))

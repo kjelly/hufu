@@ -328,7 +328,7 @@ endpoint 必須實際支援 System One 協定；模型名稱不推導 API 協定
 ## 12. 已確認的範圍修正與離線驗證紀錄
 
 - `ask_user` 的 mixed 或 allowAny=true 問題不屬於封閉選擇題，依使用者確認保留既有生成及格式修復路徑。不得在這條路徑再追加 primitive。
-- 封閉多選使用完整非空子集加 none，不逐項增加推論；超過 21 個候選直接失敗。現行實作最多四個多選項目；單選最多二十個項目加 none。
+- 封閉多選使用完整非空子集加 none，不逐項增加推論；現行實作最多四個多選項目。單選保留全部項目加 none，沒有固定候選數量上限；請求大小、模型 context、backend 能力與既有預算仍限制可執行的決策。
 - memory conflict 實際合法關係為 contradicts、duplicate、refines、compatible；undetermined 是失敗後的保留狀態，不可猜成 compatible。判斷政策更新為 conflict-judge-v2，舊判斷保留讀取但不可充當新政策快取。
 - 內建 request/state 決策使用既有 primitive journal 的 v3 payload，記錄不可變 request artifact；固定列使用 v2 payload，legacy payload v1 保留驗證。三者沒有平行資料庫。
 - Runtime 選擇的直接結果不提供模型自稱的 confidence／rationale；相關 public 欄位保留，另以 accepted 或明確 runtime 說明表達來源。

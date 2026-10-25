@@ -23,6 +23,15 @@ type testStatusWriter struct {
 	b strings.Builder
 }
 
+func TestDispatchStatusEventShowsProviderQuotaWait(t *testing.T) {
+	w := &testStatusWriter{}
+	message := "Ollama quota limited; next check at 2026-10-25T12:00:00Z"
+	dispatchStatusEvent(w, &reporterState{}, team.StatusEvent{Type: "provider_quota", Message: message})
+	if !strings.Contains(w.b.String(), message) {
+		t.Fatalf("missing quota status: %q", w.b.String())
+	}
+}
+
 func (w *testStatusWriter) write(s string) {
 	w.b.WriteString(s)
 }

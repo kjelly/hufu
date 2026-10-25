@@ -86,7 +86,7 @@ func nativeCandidates(spec decisionrt.Spec) ([]candidate, error) {
 				label += ": " + option.Description
 			}
 			candidates = append(candidates, candidate{
-				key: opaqueKey('o', index), value: decisionrt.Value{Choice: option.ID}, canonical: option.ID, label: label,
+				key: opaqueKey('o', index, len(spec.Options)), value: decisionrt.Value{Choice: option.ID}, canonical: option.ID, label: label,
 			})
 		}
 		return candidates, nil
@@ -105,7 +105,7 @@ func nativeCandidates(spec decisionrt.Spec) ([]candidate, error) {
 			value := spec.Range.Min + int64(offset)
 			canonical := strconv.FormatInt(value, 10)
 			candidates = append(candidates, candidate{
-				key: opaqueKey('i', int(offset)), value: decisionrt.Value{Integer: new(value)}, canonical: canonical, label: canonical,
+				key: opaqueKey('i', int(offset), int(width+1)), value: decisionrt.Value{Integer: new(value)}, canonical: canonical, label: canonical,
 			})
 		}
 		return candidates, nil
@@ -114,6 +114,9 @@ func nativeCandidates(spec decisionrt.Spec) ([]candidate, error) {
 	}
 }
 
-func opaqueKey(prefix byte, index int) string {
-	return fmt.Sprintf("%c%02d", prefix, index)
+func opaqueKey(prefix byte, index, count int) string {
+	// Keep existing keys for small domains and preserve lexical declaration
+	// order when the domain needs more than two digits.
+	width := max(2, len(strconv.Itoa(count-1)))
+	return fmt.Sprintf("%c%0*d", prefix, width, index)
 }

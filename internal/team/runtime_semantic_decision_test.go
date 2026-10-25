@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,27 @@ import (
 	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/sidecar"
 )
+
+func TestRuntimeAgentSelectionReplaysLargeCandidateDomain(t *testing.T) {
+	c, generator := newControlTestCoordinator(t, control.PathReviewer, control.ModeOff, "", `{"token":"A22"}`)
+	candidates := make([]sidecar.TeamSummary, 22)
+	for i := range candidates {
+		candidates[i] = sidecar.TeamSummary{Name: fmt.Sprintf("worker-%d", i), Description: "Authorized candidate"}
+	}
+	for range 2 {
+		selection, err := c.AgentPool().Sidecar().SelectAgent(t.Context(), "Select a worker", candidates)
+		if err != nil || !selection.Accepted || selection.Agent != candidates[21].Name {
+			t.Fatalf("selection=%#v error=%v", selection, err)
+		}
+	}
+	records, err := c.DecisionPrimitiveResults(t.Context())
+	if err != nil || len(records) != 2 || !records[1].Reused {
+		t.Fatalf("records=%#v error=%v", records, err)
+	}
+	if generator.calls.Load() != 1 {
+		t.Fatalf("provider calls=%d, want one", generator.calls.Load())
+	}
+}
 
 func TestRuntimeDecisionSharedDefaultsAndConfigurationDrift(t *testing.T) {
 	server := newControlModelServer(t, 200, controlChoice("o", 0, .99))

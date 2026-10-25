@@ -16,6 +16,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/execution"
+	"github.com/kjelly/hufu/internal/waitbudget"
 )
 
 // resolveAgentName resolves an agent name (exact, case-insensitive, or fuzzy match)
@@ -282,7 +283,7 @@ const auxiliarySummaryTimeout = 30 * time.Second
 func (c *Coordinator) computeWorkerSummaries(ctx context.Context) {
 	c.workerSummariesOnce.Do(func() {
 		// One bounded batch, not a fresh timeout for each optional role summary.
-		ctx, cancel := context.WithTimeout(ctx, auxiliarySummaryTimeout)
+		ctx, cancel := waitbudget.WithTimeout(ctx, auxiliarySummaryTimeout)
 		defer cancel()
 		c.workerSummariesMu.Lock()
 		c.workerSummaries = make(map[string]string)

@@ -12,6 +12,7 @@ import (
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/sidecar"
+	"github.com/kjelly/hufu/internal/waitbudget"
 )
 
 // Production stage runners for the decision engine
@@ -88,7 +89,7 @@ func (r *coordinatorDecisionRunners) ask(ctx context.Context, purpose, prompt st
 	}
 	s := r.coordinator.AgentPool().JudgeSidecar()
 
-	stageCtx, cancel := context.WithTimeout(ctx, llmtimeout.Review(decisionStageTimeout))
+	stageCtx, cancel := waitbudget.WithTimeout(ctx, llmtimeout.Review(decisionStageTimeout))
 	defer cancel()
 	r.coordinator.report(r.coordinator.newEvent("sidecar_call").withMessage("decision:" + purpose))
 

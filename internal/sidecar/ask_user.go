@@ -180,7 +180,7 @@ func normalizeAskUserSelection(resp tools.AskUserResponse, opts []tools.AskUserT
 }
 
 func (s *Sidecar) chooseClosedQuestion(ctx context.Context, question, qtype string, opts []tools.AskUserTUIOption) (tools.AskUserResponse, error) {
-	if len(opts) == 0 || len(opts) > 20 || qtype == "multiple_choice" && len(opts) > 4 {
+	if len(opts) == 0 || qtype == "multiple_choice" && len(opts) > 4 {
 		return tools.AskUserResponse{}, fmt.Errorf("decision candidate capacity exceeded or no candidates")
 	}
 	options := []catalog.Option{{ID: "none", Description: "No supported answer"}}

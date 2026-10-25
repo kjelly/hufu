@@ -6,10 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -48,7 +50,6 @@ func persistedGoTestPaths(t *testing.T) map[string]string {
 func TestSanitizedGoTestEnvironmentPreservesEffectiveCachePaths(t *testing.T) {
 	paths := persistedGoTestPaths(t)
 	t.Setenv("REVIEW_TEST_SECRET", "must-not-reach-tests")
-	t.Setenv("GOMAXPROCS", "2")
 	for _, test := range []struct {
 		name     string
 		explicit bool
@@ -93,11 +94,57 @@ func TestSanitizedGoTestEnvironmentPreservesEffectiveCachePaths(t *testing.T) {
 					t.Fatal("test environment inherited an unrelated secret")
 				}
 			}
-			if !strings.Contains(strings.Join(env, "\n"), "GOMAXPROCS=2\n") {
-				t.Fatal("test environment dropped the operator concurrency limit")
+		})
+	}
+}
+
+func TestSanitizedGoTestEnvironmentPreservesConcurrencyLimit(t *testing.T) {
+	for _, test := range []struct {
+		name, value, want string
+		unset             bool
+	}{
+		{name: "unset", unset: true, want: "2"},
+		{name: "empty", want: "2"},
+		{name: "one", value: "1", want: "1"},
+		{name: "two", value: "2", want: "2"},
+		{name: "four", value: "4", want: "4"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("GOMAXPROCS", test.value)
+			if test.unset {
+				if err := os.Unsetenv("GOMAXPROCS"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			env, err := sanitizedGoTestEnvironment(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var settings []string
+			for _, entry := range env {
+				if strings.HasPrefix(entry, "GOMAXPROCS=") {
+					settings = append(settings, entry)
+				}
+			}
+			if len(settings) != 1 || settings[0] != "GOMAXPROCS="+test.want {
+				t.Fatalf("concurrency settings = %v, want one GOMAXPROCS=%s", settings, test.want)
+			}
+			probe := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestGoTestEnvironmentConcurrencyChild$")
+			probe.Env = append(env, "HUFU_REVIEW_TEST_CONCURRENCY_CHILD=1")
+			output, err := probe.Output()
+			if err != nil || string(output) != test.want {
+				t.Fatalf("child GOMAXPROCS = %q, error=%v, want %s", output, err, test.want)
 			}
 		})
 	}
+}
+
+func TestGoTestEnvironmentConcurrencyChild(t *testing.T) {
+	if os.Getenv("HUFU_REVIEW_TEST_CONCURRENCY_CHILD") != "1" {
+		return
+	}
+	fmt.Print(runtime.GOMAXPROCS(0))
+	os.Exit(0)
 }
 
 func TestSanitizedGoTestEnvironmentFailsClosedOnResolutionError(t *testing.T) {
@@ -111,10 +158,11 @@ func TestSanitizedGoTestEnvironmentFailsClosedOnResolutionError(t *testing.T) {
 
 func TestVerifyReviewTestsUsesPersistentlyConfiguredModuleCache(t *testing.T) {
 	persistedGoTestPaths(t)
+	t.Setenv("GOMAXPROCS", "1")
 	repo := newFixtureRepo(t)
 	writeFile(t, filepath.Join(repo, "go.mod"), "module example.com/review\n\ngo 1.26.0\n\nrequire example.com/cached v1.0.0\n")
 	writeFile(t, filepath.Join(repo, "calc", "calc.go"), "package calc\n\nimport \"example.com/cached\"\n\nfunc Value() int { return cached.Value }\n")
-	writeFile(t, filepath.Join(repo, "calc", "calc_test.go"), "package calc\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) { if Value() != 7 { t.Fatal(Value()) } }\n")
+	writeFile(t, filepath.Join(repo, "calc", "calc_test.go"), "package calc\n\nimport (\"runtime\"; \"testing\")\n\nfunc TestValue(t *testing.T) { if Value() != 7 { t.Fatal(Value()) }; if got := runtime.GOMAXPROCS(0); got != 1 { t.Fatalf(\"GOMAXPROCS = %d, want 1\", got) } }\n")
 	seedCachedGoTestDependency(t, repo)
 	commit(t, repo, "feat: use cached dependency", "2025-01-02T00:00:00Z")
 

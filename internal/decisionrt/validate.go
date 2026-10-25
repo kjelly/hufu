@@ -15,7 +15,6 @@ import (
 )
 
 const (
-	maxChoiceOptions       = 21
 	maxQuestionBytes       = 4096
 	maxDescriptionBytes    = 1024
 	maxContextEntries      = 64
@@ -51,7 +50,7 @@ func (s Spec) Validate() error {
 
 	switch s.Kind {
 	case KindChoice:
-		if len(s.Options) < 2 || len(s.Options) > maxChoiceOptions || s.Range != nil {
+		if len(s.Options) < 2 || s.Range != nil {
 			return runtimeError(ErrorInvalidRequest, "", fmt.Errorf("invalid choice domain"))
 		}
 		seen := make(map[string]struct{}, len(s.Options))

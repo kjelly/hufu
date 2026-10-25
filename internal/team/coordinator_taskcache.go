@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kjelly/hufu/internal/llmtimeout"
+	"github.com/kjelly/hufu/internal/waitbudget"
 )
 
 // errAllWorkerTasksFailed is a task-outcome sentinel, not an agent-tool
@@ -96,7 +97,7 @@ func taskCacheDependenciesFor(c *Coordinator) taskCacheDependencies {
 			if sidecar == nil {
 				return -1, nil
 			}
-			sidecarCtx, cancel := context.WithTimeout(ctx, timeout)
+			sidecarCtx, cancel := waitbudget.WithTimeout(ctx, timeout)
 			defer cancel()
 			return sidecar.SimilarTask(sidecarCtx, task, candidates)
 		},
@@ -740,7 +741,7 @@ func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, d
 		pastDescs[i] = taskCacheIdentityWithSpec(item.Desc, item.VerifySpec, item.Verify, item.VerifyMode)
 	}
 
-	sidecarCtx, cancel := context.WithTimeout(ctx, llmtimeout.Sidecar(5*time.Second))
+	sidecarCtx, cancel := waitbudget.WithTimeout(ctx, llmtimeout.Sidecar(5*time.Second))
 	defer cancel()
 
 	if c.think {
@@ -857,7 +858,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 				desc += "\nconstraints: " + t.Constraints
 			}
 			agentKey := strings.ToLower(t.Agent)
-			dupCtx, dupCancel := context.WithTimeout(ctx, llmtimeout.Sidecar(5*time.Second))
+			dupCtx, dupCancel := waitbudget.WithTimeout(ctx, llmtimeout.Sidecar(5*time.Second))
 			cachedOutput, cachedDesc, cacheOK := c.lookupTaskCacheCurrentRunWithTypedVerification(dupCtx, agentKey, desc, t.VerifySpec, t.Verify, t.VerifyMode)
 			dupCancel()
 			if cacheOK {

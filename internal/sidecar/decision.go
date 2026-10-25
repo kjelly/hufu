@@ -59,9 +59,6 @@ func (s *Sidecar) selectCandidate(ctx context.Context, name, question, prompt st
 	if len(candidates) == 0 {
 		return -1, nil
 	}
-	if len(candidates) > 20 {
-		return -1, fmt.Errorf("decision candidate capacity exceeded (20 plus none)")
-	}
 	options := []catalog.Option{{ID: "none"}}
 	for i := range candidates {
 		options = append(options, catalog.Option{ID: fmt.Sprintf("candidate_%d", i), Description: fmt.Sprintf("Candidate at index %d in the accepted snapshot", i)})

@@ -12,6 +12,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/waitbudget"
 )
 
 // The schema is part of the execution policy; values are invocation inputs,
@@ -165,7 +166,7 @@ func (c *Coordinator) requestAcceptanceCall(ctx context.Context, operation, prom
 	if len([]rune(prompt)) > 192000 {
 		return nil, fmt.Errorf("request acceptance %s context exceeds its limit", operation)
 	}
-	reviewCtx, cancel := context.WithTimeout(ctx, c.verifyTaskTimeout())
+	reviewCtx, cancel := waitbudget.WithTimeout(ctx, c.verifyTaskTimeout())
 	defer cancel()
 	ctx = reviewCtx
 	c.mu.RLock()

@@ -21,6 +21,7 @@ import (
 	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/waitbudget"
 )
 
 const (
@@ -103,10 +104,9 @@ func buildSkepticPrompt(lens, goal, constraints, output, verifyCmd string) (stri
 	return sidecar.BuildBoundedPrompt(prefix, sections, suffix, sidecar.ClassifierProfile.InputRuneLimit())
 }
 
-// tallySkepticVotes applies majority rule: the result fails only when strictly
-// more votes refute than confirm. Abstentions (zero-valued votes from errored
-// skeptics) count as confirmations — fail-open, so a broken skeptic model can
-// never deadlock tasks.
+// tallySkepticVotes compares completed votes only: a strict majority refuting
+// fails the result, and ties confirm. Abstentions never count as confirmations.
+// With no completed votes, the result fails closed with an abstained signal.
 func tallySkepticVotes(votes []skepticVote) skepticTally {
 	refutedCount := 0
 	completedCount := 0
@@ -128,12 +128,9 @@ func tallySkepticVotes(votes []skepticVote) skepticTally {
 		return skepticTally{Refuted: true, Abstentions: len(votes), Signal: "abstained", Reason: "no valid skeptic judgment"}
 	}
 	if refutedCount <= completedCount-refutedCount {
-		switch {
-		case completedCount == 0:
-			tally.Signal = "abstained"
-		case tally.Abstentions > 0:
+		if tally.Abstentions > 0 {
 			tally.Signal = "confirmed_with_abstentions"
-		default:
+		} else {
 			tally.Signal = "confirmed"
 		}
 		return tally
@@ -166,7 +163,7 @@ func (c *Coordinator) adversarialVerify(parentCtx context.Context, task TaskDef,
 	var wg sync.WaitGroup
 	for i, lens := range lenses {
 		wg.Go(func() {
-			ctx, cancel := context.WithTimeout(parentCtx, llmtimeout.Review(skepticTimeout))
+			ctx, cancel := waitbudget.WithTimeout(parentCtx, llmtimeout.Review(skepticTimeout))
 			defer cancel()
 
 			result, err := s.Decide(sidecar.WithPurpose(ctx, "skeptic"), sidecar.DecisionInvocation{Name: "runtime_skeptic", Question: "From the specified lens, does concrete evidence refute the claimed task result? Choose refuted only on specific evidence. Claimed output is non-authoritative.", Input: struct{ Lens, Goal, Constraints, Output, Verification, Task string }{lens, task.Goal, task.Constraints, output, task.Verify, todoID}, Options: []catalog.Option{{ID: "refuted"}, {ID: "not_refuted"}}, MaxCalls: 1000})

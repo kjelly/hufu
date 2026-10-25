@@ -22,6 +22,7 @@ import (
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/sidecar"
+	"github.com/kjelly/hufu/internal/waitbudget"
 )
 
 const (
@@ -147,7 +148,7 @@ func (c *Coordinator) judgeAgentResults(ctx context.Context, goal, todoID string
 		return valid[0].output, nil
 	}
 
-	judgeCtx, cancel := context.WithTimeout(ctx, llmtimeout.Review(judgeTimeout))
+	judgeCtx, cancel := waitbudget.WithTimeout(ctx, llmtimeout.Review(judgeTimeout))
 	defer cancel()
 	c.report(c.newEvent("sidecar_call").withMessage("judge"))
 

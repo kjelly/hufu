@@ -940,12 +940,17 @@ func sanitizedGoTestEnvironment(ctx context.Context) ([]string, error) {
 	// An empty GOTMPDIR is a valid Go default. Preserve a configured build
 	// scratch path before GOENV=off would move compiler output into TMPDIR.
 	env = append(env, "GOTMPDIR="+paths["GOTMPDIR"])
+	// Keep the operator's concurrency limit; only an absent or empty value
+	// needs the project default. Emit one entry so exec cannot override it.
+	if os.Getenv("GOMAXPROCS") == "" {
+		env = replaceEnvironmentValue(env, "GOMAXPROCS", "2")
+	}
 	// The snapshot has no .git, but Go stamps VCS information whenever any
 	// parent directory has one: an empty /tmp/.git made every go build under
 	// the snapshot run git status, fail with exit 128, and fail the tests
 	// that build the CLI. Snapshot tests must not depend on what encloses
 	// the temporary directory.
-	return append(env, "GOENV=off", "GONOSUMDB=*", "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local", "GOFLAGS=-buildvcs=false", "GOMAXPROCS=2"), nil
+	return append(env, "GOENV=off", "GONOSUMDB=*", "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local", "GOFLAGS=-buildvcs=false"), nil
 }
 
 func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir string, paths []string, resolution rangeResolution, diffPlan selectedCommitDiffPlan, snapshot *reviewSourceSnapshot, config Config) (actionResult, error) {

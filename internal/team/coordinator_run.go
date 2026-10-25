@@ -25,6 +25,7 @@ import (
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
+	"github.com/kjelly/hufu/internal/waitbudget"
 )
 
 var directAgentPattern = regexp.MustCompile(`^@(\w[\w-]*)\s+(.+)$`)
@@ -2206,7 +2207,7 @@ func compactProjectContext(ctx context.Context, compacter textCompacter, project
 	if compacter == nil || len(projectContext) <= 4000 {
 		return projectContext
 	}
-	ctx, cancel := context.WithTimeout(ctx, auxiliarySummaryTimeout)
+	ctx, cancel := waitbudget.WithTimeout(ctx, auxiliarySummaryTimeout)
 	defer cancel()
 	compacted, err := compacter.Compact(ctx, projectContext, "Compress this project context while preserving all key facts, patterns, conventions, and instructions.")
 	if err != nil || compacted == "" {

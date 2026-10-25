@@ -179,6 +179,8 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 		if identity := resultStatusIdentity(event); identity != nil {
 			w.write(fmt.Sprintf("  Result ID: %s (team: %s, task: %s)\n  View: %s\n", identity.ResultID, safeResultsText(event.TeamName), identity.TaskID, team.HistoricalResultCommand(identity.ResultID, event.TeamName)))
 		}
+	case "provider_quota":
+		w.write(dimStyle.Render(event.Message) + "\n")
 	case "model_profile_resolved":
 		if event.ModelProfile != nil {
 			profile := event.ModelProfile
@@ -1669,7 +1671,7 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 				p.Send(tuipkg.StatusBarMsg{Text: doneStyle.Render("✓ " + event.Message)})
 			}
 
-		case "memory_learning":
+		case "memory_learning", "provider_quota":
 			if event.Message != "" {
 				p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render(event.Message)})
 			}

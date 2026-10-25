@@ -24,6 +24,7 @@ import (
 	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/notify"
+	"github.com/kjelly/hufu/internal/ollamaquota"
 	"github.com/kjelly/hufu/internal/providerintrospection"
 	"github.com/kjelly/hufu/internal/providerproxy"
 	"github.com/kjelly/hufu/internal/semantic"
@@ -1357,6 +1358,7 @@ func ParseModelProvider(modelID string) (provider, modelName string) {
 // provider prefix.
 // It lazy-initializes providers on first use based on the model ID prefix.
 type ProviderManager struct {
+	quota                      *ollamaquota.Engine
 	defaultProvider            *OpenAICompatibleProvider
 	fallbackURL                string
 	fallbackAPIKey             string

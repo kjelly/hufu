@@ -10,8 +10,6 @@ import (
 
 const (
 	specVersion = "v1"
-	// maxChoiceCandidates is the DecisionPrimitive choice-domain limit.
-	maxChoiceCandidates = 21
 	// contextBudgetBytes keeps each context string under the 4096-byte
 	// DecisionPrimitive limit with headroom for redaction markers.
 	contextBudgetBytes = 3584
@@ -53,7 +51,7 @@ type Option struct {
 // the order of workers, so an index outcome maps back to workers[index]. It
 // returns false when the point does not apply to this call.
 func AgentMatcherRequest(task string, workers []Worker) (decisionrt.Request, bool) {
-	if len(workers) < 2 || len(workers) > maxChoiceCandidates {
+	if len(workers) < 2 {
 		return decisionrt.Request{}, false
 	}
 	options := make([]decisionrt.Option, 0, len(workers))
@@ -72,7 +70,7 @@ func AgentMatcherRequest(task string, workers []Worker) (decisionrt.Request, boo
 // AskUserRequest asks which option an unattended run should answer with.
 // Options keep their order, so an index outcome maps back to options[index].
 func AskUserRequest(question string, options []Option) (decisionrt.Request, bool) {
-	if len(options) < 2 || len(options) > maxChoiceCandidates {
+	if len(options) < 2 {
 		return decisionrt.Request{}, false
 	}
 	specOptions := make([]decisionrt.Option, 0, len(options))

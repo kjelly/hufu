@@ -37,6 +37,9 @@ type toolCallIndexTransport struct {
 func (t toolCallIndexTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	observeProviderTransport(req)
 	resp, err := t.base.RoundTrip(req)
+	if err == nil {
+		observeProviderRejection(req.Context(), resp)
+	}
 	if err != nil || resp == nil || resp.Body == nil || !isEventStream(resp.Header) {
 		return resp, err
 	}

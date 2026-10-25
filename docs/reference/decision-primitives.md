@@ -93,7 +93,7 @@ team prompt 應明訂遇到 `abstained` 或 technical error 時請求澄清、�
 | `api-key-env` | 可選環境變數名稱；有宣告但值缺失時載入失敗，不允許 inline key |
 | `version`, `question` | 必填；遵循 core Spec 的 ID、長度與 UTF-8 驗證 |
 | `kind` | `choice`、`boolean`、`integer_range` |
-| `options` | 僅 choice，2–21 個唯一機器 ID；description 可選 |
+| `options` | 僅 choice，至少 2 個唯一機器 ID，無固定數量上限；仍受 backend 請求大小、模型能力與 context 限制；description 可選 |
 | `range` | 僅 integer_range，`{min: 0, max: 4}`；最多 21 個值；systemone 至少 2 個 |
 | `inputs` | 必要 context 欄位名稱 → `string`、`boolean`、`number`；最多 64 個 |
 | `agents` | 精確 agent 名稱列表，最多 64 個；未知 worker 載入失敗 |

@@ -53,7 +53,8 @@ decision-runtime:
 | path reviewer | access/not_access；失敗保留 path 交既有 policy/consent |
 | guard reviewer | compliant/violation；失敗拒絕 |
 
-單選最多 20 個業務候選加 none；封閉多選最多四項（完整子集加 none）。
+單選保留完整業務候選加 none，沒有固定候選數量上限；封閉多選最多四項（完整子集加 none）。
+請求大小、模型 context、backend 能力、timeout 與呼叫預算仍限制可執行的決策。
 超容量明確失敗，不刪候選、不截斷證據、不切換舊路徑。
 `mixed`、`allowAny=true` 與自由文字回答依確認的範圍保留既有生成契約，不使用 primitive。
 
