@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 func TestTaskDefContractSafetyFieldsDecodeFromYAML(t *testing.T) {

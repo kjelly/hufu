@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/kjelly/hufu/internal/improve"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 const workflowRegressionCategory = "workflow-regression"

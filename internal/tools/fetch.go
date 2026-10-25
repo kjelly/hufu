@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
-	md "github.com/JohannesKaufmann/html-to-markdown"
+	md "github.com/JohannesKaufmann/html-to-markdown/v2"
 )
 
 const maxFetchSize = 100 * 1024
@@ -157,8 +157,7 @@ func fetchURL(ctx context.Context, url string) (string, string, error) {
 }
 
 func extractTextFromHTML(htmlContent string) string {
-	converter := md.NewConverter("", true, nil)
-	markdown, err := converter.ConvertString(htmlContent)
+	markdown, err := convertHTMLToMarkdown(htmlContent)
 	if err != nil {
 		return htmlContent
 	}
@@ -166,8 +165,7 @@ func extractTextFromHTML(htmlContent string) string {
 }
 
 func convertHTMLToMarkdown(htmlContent string) (string, error) {
-	converter := md.NewConverter("", true, nil)
-	return converter.ConvertString(htmlContent)
+	return md.ConvertString(htmlContent)
 }
 
 func cleanupContent(content string) string {

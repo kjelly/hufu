@@ -3,7 +3,7 @@ package config
 import (
 	"fmt"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // ExecutionRouteConfig is one hufu.yaml execution route: an ordered list of
