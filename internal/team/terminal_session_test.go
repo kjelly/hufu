@@ -598,24 +598,6 @@ func TestTerminalSessionManager_CloseRestoredSessionRetainsManualCustodyWithoutW
 	}
 }
 
-func assertTerminalEventOrder(t *testing.T, events, want []string) {
-	t.Helper()
-	last := -1
-	for _, event := range want {
-		index := -1
-		for i, got := range events {
-			if got == event {
-				index = i
-				break
-			}
-		}
-		if index <= last {
-			t.Fatalf("lifecycle event %q missing or out of order in %v", event, events)
-		}
-		last = index
-	}
-}
-
 func TestTerminalSessionManager_ChildTimeoutIsIndependent(t *testing.T) {
 	manager, err := NewTerminalSessionManager(t.TempDir(), nil)
 	if err != nil {

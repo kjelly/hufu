@@ -84,6 +84,21 @@ The command must complete successfully with no errors before the task is conside
   fixtures; record its test failure in the review evidence rather than changing
   the snapshot or treating a working-tree fix as proof that it passed.
 
+### Test conventions (internal/team)
+
+- Name test files and functions after the behaviour under test, never after a
+  ticket, work package, phase, or RCA number. Put a test next to the existing
+  file for its subject instead of opening a scenario file per change.
+- Build coordinators with `newTestCoordinator` and script workers with
+  `scriptWorker` (`coordinator_fixture_test.go`). Do not add `&Coordinator{...}`
+  literals or one-off `fantasy.Agent` fakes when the fixture is sufficient; set
+  extra fields on the returned coordinator instead.
+- Characterization tests written to guard a refactor are removed once the
+  refactor lands and the behaviour has a behaviour-named test.
+- Prefer one table-driven test per function over one test per case; assert on
+  classes, statuses, and sentinel errors rather than exact message text.
+- Keep test files under 800 lines, like source files.
+
 ## Package Structure
 
 | Package | Path | Purpose |

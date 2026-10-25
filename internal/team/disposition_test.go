@@ -1,97 +1,53 @@
 package team
 
-import (
-	"testing"
-)
+import "testing"
 
-// TestDecideRecovery_FiveEarlyBreakPaths verifies the five pre-refactoring
-// early-break paths produce the same dispositions they originally did as
-// separate if-statements in the retry loop. These are the characterization
-// tests required by WP-08 ("確保重構前後行為等價").
-//
-// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §6.1, WP-07, WP-08
-func TestDecideRecovery_FiveEarlyBreakPaths(t *testing.T) {
+// DecideRecovery maps one attempt's failure evidence to a retry disposition.
+// The early-break paths are checked in order (terminal block, protocol
+// failure, replayability, unfixable verify, repeated failure) before the
+// class-based mapping; see disposition.go. The retry loop that consumes these
+// dispositions is covered by retry_loop_test.go.
+
+func TestDecideRecoveryEarlyBreakPaths(t *testing.T) {
 	tests := []struct {
 		name string
 		in   RecoveryDecisionInput
 		want RetryDisposition
 	}{
-		// Path 1: terminalBlocked → NeedsHuman
-		{
-			name: "terminal blocked → needs human",
-			in:   RecoveryDecisionInput{TerminalBlocked: true, Replayable: true, FailureClass: FailureExecution, Attempt: 1, MaxRetries: 3},
-			want: NeedsHuman,
-		},
-		{
-			name: "terminal blocked overrides everything",
-			in:   RecoveryDecisionInput{TerminalBlocked: true, ProtocolFailure: true, Replayable: false, UnfixableVerify: true, SameFailureRepeated: true, FailureClass: FailureContract, Attempt: 1, MaxRetries: 3},
-			want: NeedsHuman,
-		},
+		// Path 1: a blocked terminal needs a human, ahead of every later path.
+		{"terminal blocked", RecoveryDecisionInput{TerminalBlocked: true, Replayable: true, FailureClass: FailureExecution, Attempt: 1, MaxRetries: 3}, NeedsHuman},
+		{"terminal blocked overrides every later path", RecoveryDecisionInput{TerminalBlocked: true, ProtocolFailure: true, Replayable: false, UnfixableVerify: true, SameFailureRepeated: true, FailureClass: FailureContract, Attempt: 1, MaxRetries: 3}, NeedsHuman},
 
-		// Path 2: protocolFailure && (!Replayable || !ProtocolRepairRetry) → ReconcileOnly
-		{
-			name: "protocol failure non-replayable → reconcile",
-			in:   RecoveryDecisionInput{ProtocolFailure: true, Replayable: false, FailureClass: FailureProtocol, Attempt: 1, MaxRetries: 3},
-			want: ReconcileOnly,
-		},
-		{
-			name: "protocol failure replayable but repair retry disallowed → reconcile",
-			in:   RecoveryDecisionInput{ProtocolFailure: true, Replayable: true, ProtocolRepairRetry: false, FailureClass: FailureProtocol, Attempt: 1, MaxRetries: 3},
-			want: ReconcileOnly,
-		},
-		{
-			name: "protocol failure replayable and repair retry allowed → class-based (reconcile)",
-			in:   RecoveryDecisionInput{ProtocolFailure: true, Replayable: true, ProtocolRepairRetry: true, FailureClass: FailureProtocol, Attempt: 1, MaxRetries: 3},
-			want: ReconcileOnly,
-		},
+		// Path 2: a protocol failure without a safe repair retry reconciles.
+		{"protocol failure non-replayable", RecoveryDecisionInput{ProtocolFailure: true, Replayable: false, FailureClass: FailureProtocol, Attempt: 1, MaxRetries: 3}, ReconcileOnly},
+		{"protocol failure replayable but repair retry disallowed", RecoveryDecisionInput{ProtocolFailure: true, Replayable: true, ProtocolRepairRetry: false, FailureClass: FailureProtocol, Attempt: 1, MaxRetries: 3}, ReconcileOnly},
+		{"protocol failure replayable with repair retry allowed", RecoveryDecisionInput{ProtocolFailure: true, Replayable: true, ProtocolRepairRetry: true, FailureClass: FailureProtocol, Attempt: 1, MaxRetries: 3}, ReconcileOnly},
+		{"protocol failure beats unfixable verify", RecoveryDecisionInput{ProtocolFailure: true, Replayable: false, UnfixableVerify: true, FailureClass: FailureProtocol, Attempt: 1, MaxRetries: 3}, ReconcileOnly},
 
-		// Path 3: !Replayable → ReconcileOnly
-		{
-			name: "non-replayable execution failure → reconcile",
-			in:   RecoveryDecisionInput{Replayable: false, FailureClass: FailureExecution, Attempt: 1, MaxRetries: 3},
-			want: ReconcileOnly,
-		},
-		{
-			name: "non-replayable verify failure → reconcile",
-			in:   RecoveryDecisionInput{Replayable: false, FailureClass: FailureVerify, Attempt: 1, MaxRetries: 3},
-			want: ReconcileOnly,
-		},
+		// Path 3: a non-replayable task reconciles.
+		{"non-replayable execution failure", RecoveryDecisionInput{Replayable: false, FailureClass: FailureExecution, Attempt: 1, MaxRetries: 3}, ReconcileOnly},
+		{"non-replayable verify failure", RecoveryDecisionInput{Replayable: false, FailureClass: FailureVerify, Attempt: 1, MaxRetries: 3}, ReconcileOnly},
+		{"non-replayable beats unfixable verify", RecoveryDecisionInput{Replayable: false, UnfixableVerify: true, FailureClass: FailureExecution, Attempt: 1, MaxRetries: 3}, ReconcileOnly},
 
-		// Path 4: UnfixableVerify && attempt < maxRetries → ReplanRequired
-		{
-			name: "unfixable verify with remaining attempts → replan",
-			in:   RecoveryDecisionInput{Replayable: true, UnfixableVerify: true, FailureClass: FailureVerify, Attempt: 1, MaxRetries: 3},
-			want: ReplanRequired,
-		},
-		{
-			name: "unfixable verify on last attempt → budget exhausted (not replan)",
-			in:   RecoveryDecisionInput{Replayable: true, UnfixableVerify: true, FailureClass: FailureVerify, Attempt: 3, MaxRetries: 3},
-			want: RetryNone,
-		},
+		// Path 4: an unfixable verify command replans while attempts remain.
+		{"unfixable verify with remaining attempts", RecoveryDecisionInput{Replayable: true, UnfixableVerify: true, FailureClass: FailureVerify, Attempt: 1, MaxRetries: 3}, ReplanRequired},
+		{"unfixable verify on last attempt is budget exhausted", RecoveryDecisionInput{Replayable: true, UnfixableVerify: true, FailureClass: FailureVerify, Attempt: 3, MaxRetries: 3}, RetryNone},
+		{"unfixable verify beats repeated failure", RecoveryDecisionInput{Replayable: true, UnfixableVerify: true, SameFailureRepeated: true, FailureClass: FailureVerify, Attempt: 2, MaxRetries: 3}, ReplanRequired},
 
-		// Path 5: SameFailureRepeated && attempt < maxRetries → ReplanRequired
-		{
-			name: "same failure repeated with remaining attempts → replan",
-			in:   RecoveryDecisionInput{Replayable: true, SameFailureRepeated: true, FailureClass: FailureExecution, Attempt: 2, MaxRetries: 3},
-			want: ReplanRequired,
-		},
-		{
-			name: "same failure repeated on last attempt → budget exhausted",
-			in:   RecoveryDecisionInput{Replayable: true, SameFailureRepeated: true, FailureClass: FailureExecution, Attempt: 3, MaxRetries: 3},
-			want: RetryNone,
-		},
+		// Path 5: the same failure twice replans while attempts remain.
+		{"same failure repeated with remaining attempts", RecoveryDecisionInput{Replayable: true, SameFailureRepeated: true, FailureClass: FailureExecution, Attempt: 2, MaxRetries: 3}, ReplanRequired},
+		{"same failure repeated on last attempt is budget exhausted", RecoveryDecisionInput{Replayable: true, SameFailureRepeated: true, FailureClass: FailureExecution, Attempt: 3, MaxRetries: 3}, RetryNone},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, _ := DecideRecovery(tt.in)
-			if got != tt.want {
+			if got, _ := DecideRecovery(tt.in); got != tt.want {
 				t.Errorf("DecideRecovery() = %q, want %q", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestDecideRecovery_AllowsBoundedReplayAfterProvenReadOnlyProtocolFailure(t *testing.T) {
+func TestDecideRecoveryAllowsBoundedReplayAfterProvenReadOnlyProtocolFailure(t *testing.T) {
 	in := RecoveryDecisionInput{
 		FailureClass:        FailureProtocol,
 		ProtocolFailure:     true,
@@ -106,45 +62,44 @@ func TestDecideRecovery_AllowsBoundedReplayAfterProvenReadOnlyProtocolFailure(t 
 	if got, reason := DecideRecovery(in); got != RetryWorker || reason == "" {
 		t.Fatalf("safe protocol recovery = (%q, %q), want RetryWorker with reason", got, reason)
 	}
-
 	in.ProtocolRetrySafe = false
 	if got, _ := DecideRecovery(in); got != ReconcileOnly {
 		t.Fatalf("unproven protocol recovery = %q, want ReconcileOnly", got)
 	}
 }
 
-// TestDecideRecovery_ClassBasedDisposition verifies the §5 failure-class →
-// disposition mapping for replayable tasks where none of the five early-break
-// paths trigger.
-//
-// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §6.1, WP-07
-func TestDecideRecovery_ClassBasedDisposition(t *testing.T) {
+// TestDecideRecoveryClassBasedDisposition covers the failure-class mapping for
+// replayable tasks when no early-break path triggers, including the resolved
+// recovery policy and the evidence gate.
+func TestDecideRecoveryClassBasedDisposition(t *testing.T) {
 	tests := []struct {
-		name       string
-		class      TaskFailureClass
-		sideEffect SideEffectClass
-		policy     RecoveryPolicy
-		want       RetryDisposition
+		name               string
+		class              TaskFailureClass
+		sideEffect         SideEffectClass
+		policy             RecoveryPolicy
+		evidenceIncomplete bool
+		want               RetryDisposition
 	}{
-		{"execution → retry", FailureExecution, SideEffectNone, RecoveryRetry, RetryWorker},
-		{"execution workspace_write → retry", FailureExecution, SideEffectWorkspaceWrite, RecoveryRetry, RetryWorker},
-		{"verify → retry", FailureVerify, SideEffectNone, RecoveryRetry, RetryWorker},
-		{"timeout replayable → retry", FailureTimeout, SideEffectNone, RecoveryRetry, RetryWorker},
-		{"timeout workspace_write → retry", FailureTimeout, SideEffectWorkspaceWrite, RecoveryRetry, RetryWorker},
-		{"timeout external_write → reconcile", FailureTimeout, SideEffectExternalWrite, RecoveryRetry, ReconcileOnly},
-		{"timeout infra_mutation → reconcile", FailureTimeout, SideEffectInfraMutation, RecoveryRetry, ReconcileOnly},
-		{"timeout credential → reconcile", FailureTimeout, SideEffectCredential, RecoveryRetry, ReconcileOnly},
-		{"contract → replan", FailureContract, SideEffectNone, RecoveryRetry, ReplanRequired},
-		{"environment → replan", FailureEnvironment, SideEffectNone, RecoveryRetry, ReplanRequired},
-		{"policy → replan", FailurePolicy, SideEffectNone, RecoveryRetry, ReplanRequired},
-		{"protocol → reconcile", FailureProtocol, SideEffectNone, RecoveryRetry, ReconcileOnly},
-		{"cancelled (worker self-cancel) → none", FailureCancelled, SideEffectNone, RecoveryRetry, RetryNone},
-		{"execution under reconcile policy → reconcile", FailureExecution, SideEffectNone, RecoveryReconcile, ReconcileOnly},
-		{"execution under manual policy → needs human", FailureExecution, SideEffectNone, RecoveryManual, NeedsHuman},
-		{"execution under never policy → none", FailureExecution, SideEffectNone, RecoveryNever, RetryNone},
-		{"verify under reconcile policy → reconcile", FailureVerify, SideEffectNone, RecoveryReconcile, ReconcileOnly},
-		{"timeout under manual policy → needs human", FailureTimeout, SideEffectNone, RecoveryManual, NeedsHuman},
-		{"evidence incomplete → replan", FailureExecution, SideEffectNone, RecoveryRetry, ReplanRequired},
+		{name: "execution → retry", class: FailureExecution, policy: RecoveryRetry, want: RetryWorker},
+		{name: "execution workspace_write → retry", class: FailureExecution, sideEffect: SideEffectWorkspaceWrite, policy: RecoveryRetry, want: RetryWorker},
+		{name: "verify → retry", class: FailureVerify, policy: RecoveryRetry, want: RetryWorker},
+		{name: "timeout replayable → retry", class: FailureTimeout, policy: RecoveryRetry, want: RetryWorker},
+		{name: "timeout workspace_write → retry", class: FailureTimeout, sideEffect: SideEffectWorkspaceWrite, policy: RecoveryRetry, want: RetryWorker},
+		{name: "timeout external_write → reconcile", class: FailureTimeout, sideEffect: SideEffectExternalWrite, policy: RecoveryRetry, want: ReconcileOnly},
+		{name: "timeout infra_mutation → reconcile", class: FailureTimeout, sideEffect: SideEffectInfraMutation, policy: RecoveryRetry, want: ReconcileOnly},
+		{name: "timeout credential → reconcile", class: FailureTimeout, sideEffect: SideEffectCredential, policy: RecoveryRetry, want: ReconcileOnly},
+		{name: "contract → replan", class: FailureContract, policy: RecoveryRetry, want: ReplanRequired},
+		{name: "environment → replan", class: FailureEnvironment, policy: RecoveryRetry, want: ReplanRequired},
+		{name: "policy → replan", class: FailurePolicy, policy: RecoveryRetry, want: ReplanRequired},
+		{name: "protocol → reconcile", class: FailureProtocol, policy: RecoveryRetry, want: ReconcileOnly},
+		{name: "cancelled (worker self-cancel) → none", class: FailureCancelled, policy: RecoveryRetry, want: RetryNone},
+		{name: "empty policy allows retry (backward compat)", class: FailureExecution, want: RetryWorker},
+		{name: "execution under reconcile policy → reconcile", class: FailureExecution, policy: RecoveryReconcile, want: ReconcileOnly},
+		{name: "execution under manual policy → needs human", class: FailureExecution, policy: RecoveryManual, want: NeedsHuman},
+		{name: "execution under never policy → none", class: FailureExecution, policy: RecoveryNever, want: RetryNone},
+		{name: "verify under reconcile policy → reconcile", class: FailureVerify, policy: RecoveryReconcile, want: ReconcileOnly},
+		{name: "timeout under manual policy → needs human", class: FailureTimeout, policy: RecoveryManual, want: NeedsHuman},
+		{name: "evidence incomplete → replan", class: FailureExecution, policy: RecoveryRetry, evidenceIncomplete: true, want: ReplanRequired},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -155,89 +110,46 @@ func TestDecideRecovery_ClassBasedDisposition(t *testing.T) {
 				Replayable:       true,
 				Attempt:          1,
 				MaxRetries:       3,
-				EvidenceComplete: tt.name != "evidence incomplete → replan",
+				EvidenceComplete: !tt.evidenceIncomplete,
 			}
-			got, _ := DecideRecovery(in)
-			if got != tt.want {
-				t.Errorf("DecideRecovery(class=%s, sideEffect=%s) = %q, want %q",
-					tt.class, tt.sideEffect, got, tt.want)
+			if got, _ := DecideRecovery(in); got != tt.want {
+				t.Errorf("DecideRecovery(class=%s, sideEffect=%s, policy=%q) = %q, want %q", tt.class, tt.sideEffect, tt.policy, got, tt.want)
 			}
 		})
 	}
 }
 
-// TestDecideRecovery_CancelledPrecedence verifies §5.3: cancelled failures
-// (context cancellation or FailureCancelled class) are separated from
-// execution failures and produce RetryNone, not a retry.
-//
-// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5.3, WP-07
-func TestDecideRecovery_CancelledPrecedence(t *testing.T) {
+// TestDecideRecoveryCancelledPrecedence: cancellation, whether from the parent
+// context or the FailureCancelled class, is never retried.
+func TestDecideRecoveryCancelledPrecedence(t *testing.T) {
 	tests := []struct {
 		name string
 		in   RecoveryDecisionInput
-		want RetryDisposition
 	}{
-		{
-			name: "context cancelled on replayable execution failure",
-			in:   RecoveryDecisionInput{ContextCancelled: true, Replayable: true, FailureClass: FailureExecution, Attempt: 1, MaxRetries: 3},
-			want: RetryNone,
-		},
-		{
-			name: "FailureCancelled class on replayable task without parent cancel → none",
-			in:   RecoveryDecisionInput{Replayable: true, FailureClass: FailureCancelled, EvidenceComplete: true, Attempt: 1, MaxRetries: 3},
-			want: RetryNone,
-		},
-		{
-			name: "FailureCancelled class with parent cancel → none",
-			in:   RecoveryDecisionInput{Replayable: true, FailureClass: FailureCancelled, ContextCancelled: true, Attempt: 1, MaxRetries: 3},
-			want: RetryNone,
-		},
-		{
-			name: "context cancelled beats class-based retry",
-			in:   RecoveryDecisionInput{ContextCancelled: true, Replayable: true, FailureClass: FailureVerify, Attempt: 1, MaxRetries: 3},
-			want: RetryNone,
-		},
-		{
-			name: "cancelled beats non-replayable reconciliation",
-			in:   RecoveryDecisionInput{ContextCancelled: true, Replayable: false, FailureClass: FailureTimeout, SideEffect: SideEffectExternalWrite, Attempt: 1, MaxRetries: 3},
-			want: RetryNone,
-		},
+		{"context cancelled on replayable execution failure", RecoveryDecisionInput{ContextCancelled: true, Replayable: true, FailureClass: FailureExecution, Attempt: 1, MaxRetries: 3}},
+		{"FailureCancelled class without parent cancel", RecoveryDecisionInput{Replayable: true, FailureClass: FailureCancelled, EvidenceComplete: true, Attempt: 1, MaxRetries: 3}},
+		{"FailureCancelled class with parent cancel", RecoveryDecisionInput{Replayable: true, FailureClass: FailureCancelled, ContextCancelled: true, Attempt: 1, MaxRetries: 3}},
+		{"context cancelled beats class-based retry", RecoveryDecisionInput{ContextCancelled: true, Replayable: true, FailureClass: FailureVerify, Attempt: 1, MaxRetries: 3}},
+		{"cancelled beats non-replayable reconciliation", RecoveryDecisionInput{ContextCancelled: true, Replayable: false, FailureClass: FailureTimeout, SideEffect: SideEffectExternalWrite, Attempt: 1, MaxRetries: 3}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, _ := DecideRecovery(tt.in)
-			if got != tt.want {
-				t.Errorf("DecideRecovery() = %q, want %q", got, tt.want)
+			if got, _ := DecideRecovery(tt.in); got != RetryNone {
+				t.Errorf("DecideRecovery() = %q, want %q", got, RetryNone)
 			}
 		})
 	}
 }
 
-// TestDecideRecovery_BudgetExhausted verifies that the retry budget check
-// returns RetryNone when attempt >= maxRetries and none of the five paths
-// trigger.
-//
-// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-07
-func TestDecideRecovery_BudgetExhausted(t *testing.T) {
-	in := RecoveryDecisionInput{
-		Replayable:       true,
-		FailureClass:     FailureExecution,
-		EvidenceComplete: true,
-		Attempt:          3,
-		MaxRetries:       3,
-	}
-	got, _ := DecideRecovery(in)
-	if got != RetryNone {
-		t.Errorf("DecideRecovery() = %q, want RetryNone (budget exhausted)", got)
-	}
-}
-
-func TestDecideRecovery_NonRetryClassesPreserveDispositionAfterBudget(t *testing.T) {
+// TestDecideRecoveryBudgetExhausted: once attempt >= maxRetries a retryable
+// failure stops, while non-retry classes keep their own disposition.
+func TestDecideRecoveryBudgetExhausted(t *testing.T) {
 	tests := []struct {
 		name string
 		in   RecoveryDecisionInput
 		want RetryDisposition
 	}{
+		{"execution", RecoveryDecisionInput{Replayable: true, FailureClass: FailureExecution, EvidenceComplete: true, Attempt: 3, MaxRetries: 3}, RetryNone},
 		{"contract", RecoveryDecisionInput{Replayable: true, FailureClass: FailureContract, Attempt: 3, MaxRetries: 3}, ReplanRequired},
 		{"environment", RecoveryDecisionInput{Replayable: false, FailureClass: FailureEnvironment, Attempt: 3, MaxRetries: 3}, ReplanRequired},
 		{"policy", RecoveryDecisionInput{Replayable: true, FailureClass: FailurePolicy, Attempt: 3, MaxRetries: 3}, ReplanRequired},
@@ -246,20 +158,16 @@ func TestDecideRecovery_NonRetryClassesPreserveDispositionAfterBudget(t *testing
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, _ := DecideRecovery(tt.in)
-			if got != tt.want {
+			if got, _ := DecideRecovery(tt.in); got != tt.want {
 				t.Fatalf("DecideRecovery() = %q, want %q", got, tt.want)
 			}
 		})
 	}
 }
 
-// TestDecideRecovery_ReasonNonEmpty verifies that the reason string is always
-// non-empty for every disposition, so the retry loop can use it in report
-// messages.
-//
-// Refs: docs/archive/implementation-plans/generic-task-reliability.md §9, WP-07
-func TestDecideRecovery_ReasonNonEmpty(t *testing.T) {
+// TestDecideRecoveryReasonNonEmpty: every disposition carries a reason the
+// retry loop can report.
+func TestDecideRecoveryReasonNonEmpty(t *testing.T) {
 	inputs := []RecoveryDecisionInput{
 		{TerminalBlocked: true, Replayable: true, Attempt: 1, MaxRetries: 3},
 		{ProtocolFailure: true, Replayable: false, Attempt: 1, MaxRetries: 3},
@@ -283,443 +191,109 @@ func TestDecideRecovery_ReasonNonEmpty(t *testing.T) {
 		{Replayable: true, FailureClass: FailureExecution, RecoveryPolicy: RecoveryNever, EvidenceComplete: true, Attempt: 1, MaxRetries: 3},
 	}
 	for i, in := range inputs {
-		_, reason := DecideRecovery(in)
-		if reason == "" {
+		if _, reason := DecideRecovery(in); reason == "" {
 			t.Errorf("input[%d]: reason is empty", i)
 		}
 	}
 }
 
-// TestDecideRecovery_PathOrdering verifies that the five early-break paths are
-// checked in the correct order — terminalBlocked before protocolFailure,
-// protocolFailure before replayable, etc. — matching the pre-refactoring
-// loop's if-statement order.
-//
-// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08
-func TestDecideRecovery_PathOrdering(t *testing.T) {
-	// terminalBlocked takes precedence over protocolFailure + non-replayable.
-	in := RecoveryDecisionInput{
-		TerminalBlocked:     true,
-		ProtocolFailure:     true,
-		Replayable:          false,
-		UnfixableVerify:     true,
-		SameFailureRepeated: true,
-		FailureClass:        FailureContract,
-		Attempt:             1,
-		MaxRetries:          3,
-	}
-	got, _ := DecideRecovery(in)
-	if got != NeedsHuman {
-		t.Errorf("terminalBlocked should take precedence; got %q, want %q", got, NeedsHuman)
+// TestDecideRecoveryFingerprintRepeatDetection: repeats are detected from the
+// normalized failure fingerprints, falling back to SameFailureRepeated only
+// when no fingerprints are available.
+func TestDecideRecoveryFingerprintRepeatDetection(t *testing.T) {
+	// "attempt N" is volatile and normalized away, so differently formatted
+	// errors share one digest.
+	first := NewFailureFingerprint("task-1", "worker", "verify:test", FailureExecution, "attempt 1 failed: timeout").Digest
+	second := NewFailureFingerprint("task-1", "worker", "verify:test", FailureExecution, "attempt 2 failed: timeout").Digest
+	if first != second {
+		t.Fatalf("differently formatted errors produced different fingerprints: %q vs %q", first, second)
 	}
 
-	// protocolFailure non-replayable takes precedence over unfixable.
-	in = RecoveryDecisionInput{
-		ProtocolFailure: true,
-		Replayable:      false,
-		UnfixableVerify: true,
-		FailureClass:    FailureProtocol,
-		Attempt:         1,
-		MaxRetries:      3,
-	}
-	got, _ = DecideRecovery(in)
-	if got != ReconcileOnly {
-		t.Errorf("protocolFailure non-replayable should take precedence over unfixable; got %q, want %q", got, ReconcileOnly)
-	}
-
-	// !Replayable takes precedence over unfixable (path 3 before path 4).
-	in = RecoveryDecisionInput{
-		Replayable:      false,
-		UnfixableVerify: true,
-		FailureClass:    FailureExecution,
-		Attempt:         1,
-		MaxRetries:      3,
-	}
-	got, _ = DecideRecovery(in)
-	if got != ReconcileOnly {
-		t.Errorf("!Replayable should take precedence over unfixable; got %q, want %q", got, ReconcileOnly)
-	}
-
-	// Unfixable takes precedence over sameFailure (path 4 before path 5).
-	in = RecoveryDecisionInput{
-		Replayable:          true,
-		UnfixableVerify:     true,
-		SameFailureRepeated: true,
-		FailureClass:        FailureVerify,
-		Attempt:             2,
-		MaxRetries:          3,
-	}
-	got, _ = DecideRecovery(in)
-	if got != ReplanRequired {
-		t.Errorf("unfixable should take precedence over sameFailure; got %q, want %q", got, ReplanRequired)
-	}
-}
-
-// TestIsRetryDisposition verifies the helper predicates.
-func TestIsRetryDisposition(t *testing.T) {
-	if !IsRetryDisposition(RetryWorker) {
-		t.Error("IsRetryDisposition(RetryWorker) should be true")
-	}
-	if IsRetryDisposition(RetryNone) {
-		t.Error("IsRetryDisposition(RetryNone) should be false")
-	}
-	if IsRetryDisposition(ReconcileOnly) {
-		t.Error("IsRetryDisposition(ReconcileOnly) should be false")
-	}
-	if IsRetryDisposition(ReplanRequired) {
-		t.Error("IsRetryDisposition(ReplanRequired) should be false")
-	}
-	if IsRetryDisposition(NeedsHuman) {
-		t.Error("IsRetryDisposition(NeedsHuman) should be false")
-	}
-}
-
-// TestIsStopDisposition verifies the helper predicates.
-func TestIsStopDisposition(t *testing.T) {
-	for _, d := range []RetryDisposition{RetryNone, ReconcileOnly, ReplanRequired, NeedsHuman} {
-		if !IsStopDisposition(d) {
-			t.Errorf("IsStopDisposition(%q) should be true", d)
-		}
-	}
-	if IsStopDisposition(RetryWorker) {
-		t.Error("IsStopDisposition(RetryWorker) should be false")
-	}
-}
-
-// TestShouldBlockTask verifies the helper predicate.
-func TestShouldBlockTask(t *testing.T) {
-	if !ShouldBlockTask(ReconcileOnly) {
-		t.Error("ShouldBlockTask(ReconcileOnly) should be true")
-	}
-	for _, d := range []RetryDisposition{RetryNone, ReplanRequired, NeedsHuman, RetryWorker} {
-		if ShouldBlockTask(d) {
-			t.Errorf("ShouldBlockTask(%q) should be false", d)
-		}
-	}
-}
-
-// TestDecideRecovery_S11AcceptanceMatrix runs the §11 acceptance test matrix
-// cases that are relevant to DecideRecovery. Each case maps a scenario to the
-// expected RetryDisposition.
-//
-// Refs: docs/archive/implementation-plans/generic-task-reliability.md §11, WP-07
-func TestDecideRecovery_S11AcceptanceMatrix(t *testing.T) {
 	tests := []struct {
-		name string
-		in   RecoveryDecisionInput
-		want RetryDisposition
+		name         string
+		current      string
+		previous     string
+		sameRepeated bool
+		want         RetryDisposition
 	}{
-		{
-			name: "bare executable not in PATH, workdir has same file → environment replan",
-			in:   RecoveryDecisionInput{Replayable: true, FailureClass: FailureEnvironment, Attempt: 1, MaxRetries: 3},
-			want: ReplanRequired,
-		},
-		{
-			name: "pipeline upstream command not found → environment replan",
-			in:   RecoveryDecisionInput{Replayable: true, FailureClass: FailureEnvironment, Attempt: 1, MaxRetries: 3},
-			want: ReplanRequired,
-		},
-		{
-			name: "malformed typed verifier → contract replan",
-			in:   RecoveryDecisionInput{Replayable: true, FailureClass: FailureContract, Attempt: 1, MaxRetries: 3},
-			want: ReplanRequired,
-		},
-		{
-			name: "worker succeeded but omitted submit_result (replayable) → reconcile",
-			in:   RecoveryDecisionInput{ProtocolFailure: true, Replayable: true, ProtocolRepairRetry: true, FailureClass: FailureProtocol, Attempt: 1, MaxRetries: 3},
-			want: ReconcileOnly,
-		},
-		{
-			name: "non-replayable task timeout → reconcile",
-			in:   RecoveryDecisionInput{Replayable: false, FailureClass: FailureTimeout, SideEffect: SideEffectExternalWrite, Attempt: 1, MaxRetries: 3},
-			want: ReconcileOnly,
-		},
-		{
-			name: "read-only task timeout (replayable) → retry",
-			in:   RecoveryDecisionInput{Replayable: true, FailureClass: FailureTimeout, SideEffect: SideEffectNone, EvidenceComplete: true, Attempt: 1, MaxRetries: 3},
-			want: RetryWorker,
-		},
-		{
-			name: "same fingerprint second failure → replan",
-			in:   RecoveryDecisionInput{Replayable: true, SameFailureRepeated: true, FailureClass: FailureExecution, Attempt: 2, MaxRetries: 3},
-			want: ReplanRequired,
-		},
-		{
-			name: "verifier tail || echo → contract replan",
-			in:   RecoveryDecisionInput{Replayable: true, FailureClass: FailureContract, Attempt: 1, MaxRetries: 3},
-			want: ReplanRequired,
-		},
-		{
-			name: "verifier exit 0 but self-reported failure → verification retry",
-			in:   RecoveryDecisionInput{Replayable: true, FailureClass: FailureVerify, EvidenceComplete: true, Attempt: 1, MaxRetries: 3},
-			want: RetryWorker,
-		},
-		{
-			name: "user SIGINT → cancelled none",
-			in:   RecoveryDecisionInput{ContextCancelled: true, Replayable: true, FailureClass: FailureCancelled, Attempt: 1, MaxRetries: 3},
-			want: RetryNone,
-		},
-		{
-			name: "worker self-cancel with live parent → none",
-			in:   RecoveryDecisionInput{ContextCancelled: false, Replayable: true, FailureClass: FailureCancelled, EvidenceComplete: true, Attempt: 1, MaxRetries: 3},
-			want: RetryNone,
-		},
-		{
-			name: "repair submitted progress not final → execution retry (after reclassification)",
-			in:   RecoveryDecisionInput{Replayable: true, FailureClass: FailureExecution, EvidenceComplete: true, Attempt: 1, MaxRetries: 3},
-			want: RetryWorker,
-		},
+		{name: "matching fingerprints are a repeat", current: "ffp_same", previous: "ffp_same", want: ReplanRequired},
+		{name: "differently formatted errors with one digest are a repeat", current: second, previous: first, want: ReplanRequired},
+		{name: "different fingerprints retry", current: "ffp_a", previous: "ffp_b", want: RetryWorker},
+		{name: "different fingerprints override the raw-text flag", current: "ffp_a", previous: "ffp_b", sameRepeated: true, want: RetryWorker},
+		{name: "empty fingerprints fall back to the raw-text flag", sameRepeated: true, want: ReplanRequired},
+		{name: "empty fingerprints without repeat retry", want: RetryWorker},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, _ := DecideRecovery(tt.in)
-			if got != tt.want {
+			in := RecoveryDecisionInput{
+				Replayable:          true,
+				FailureClass:        FailureExecution,
+				EvidenceComplete:    true,
+				FailureFingerprint:  tt.current,
+				PreviousFingerprint: tt.previous,
+				SameFailureRepeated: tt.sameRepeated,
+				Attempt:             2,
+				MaxRetries:          3,
+			}
+			if got, _ := DecideRecovery(in); got != tt.want {
 				t.Errorf("DecideRecovery() = %q, want %q", got, tt.want)
 			}
 		})
 	}
 }
 
-// TestDecideRecovery_FingerprintRepeatDetection verifies that DecideRecovery
-// derives repeat detection from the FailureFingerprint/PreviousFingerprint
-// inputs (§6.1), not from raw err.Error() comparison. Two differently
-// formatted errors that normalize to the same fingerprint must be detected
-// as a repeat.
-//
-// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-07 (reviewer P1)
-func TestDecideRecovery_FingerprintRepeatDetection(t *testing.T) {
-	// Two errors with different formatting but the same normalized
-	// fingerprint (the "attempt N" part is volatile and normalized away).
-	fp := "ffp_same_digest"
-
-	// With matching fingerprints → ReplanRequired (repeat detected)
-	in := RecoveryDecisionInput{
-		Replayable:          true,
-		FailureClass:        FailureExecution,
-		EvidenceComplete:    true,
-		FailureFingerprint:  fp,
-		PreviousFingerprint: fp,
-		Attempt:             2,
-		MaxRetries:          3,
-	}
-	got, _ := DecideRecovery(in)
-	if got != ReplanRequired {
-		t.Errorf("matching fingerprints → %q, want ReplanRequired (repeat detected via fingerprint, §6.1)", got)
-	}
-
-	// With different fingerprints → RetryWorker (not a repeat)
-	in = RecoveryDecisionInput{
-		Replayable:          true,
-		FailureClass:        FailureExecution,
-		EvidenceComplete:    true,
-		FailureFingerprint:  "ffp_digest_a",
-		PreviousFingerprint: "ffp_digest_b",
-		Attempt:             2,
-		MaxRetries:          3,
-	}
-	got, _ = DecideRecovery(in)
-	if got != RetryWorker {
-		t.Errorf("different fingerprints → %q, want RetryWorker (not a repeat)", got)
-	}
-
-	// With empty fingerprints → fallback to SameFailureRepeated
-	in = RecoveryDecisionInput{
-		Replayable:          true,
-		FailureClass:        FailureExecution,
-		EvidenceComplete:    true,
-		SameFailureRepeated: true,
-		Attempt:             2,
-		MaxRetries:          3,
-	}
-	got, _ = DecideRecovery(in)
-	if got != ReplanRequired {
-		t.Errorf("empty fingerprints + SameFailureRepeated → %q, want ReplanRequired (fallback)", got)
-	}
-
-	// With empty fingerprints and no SameFailureRepeated → RetryWorker
-	in = RecoveryDecisionInput{
-		Replayable:       true,
-		FailureClass:     FailureExecution,
-		EvidenceComplete: true,
-		Attempt:          2,
-		MaxRetries:       3,
-	}
-	got, _ = DecideRecovery(in)
-	if got != RetryWorker {
-		t.Errorf("empty fingerprints + no repeat → %q, want RetryWorker", got)
-	}
-}
-
-// TestDecideRecovery_DifferentlyFormattedErrorsSameFingerprint verifies that
-// two errors with different raw text but the same normalized fingerprint
-// (e.g. "attempt 1 failed: timeout" and "attempt 2 failed: timeout") are
-// detected as a repeat. This is the reviewer's specific request: "add direct
-// unit tests that fail if each required input is ignored, including
-// differently formatted errors with the same normalized fingerprint."
-//
-// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-07 (reviewer P1)
-func TestDecideRecovery_DifferentlyFormattedErrorsSameFingerprint(t *testing.T) {
-	// Simulate the actual normalization: "attempt 1 failed: timeout" and
-	// "attempt 2 failed: timeout" both normalize to "attempt=<volatile>
-	// failed: timeout".
-	err1 := "attempt 1 failed: timeout"
-	err2 := "attempt 2 failed: timeout"
-	fp1 := NewFailureFingerprint("task-1", "worker", "verify:test", FailureExecution, err1).Digest
-	fp2 := NewFailureFingerprint("task-1", "worker", "verify:test", FailureExecution, err2).Digest
-
-	if fp1 != fp2 {
-		t.Fatalf("expected same fingerprint for differently formatted errors, got %q vs %q", fp1, fp2)
-	}
-
-	// DecideRecovery with matching fingerprints should detect a repeat.
-	in := RecoveryDecisionInput{
-		Replayable:          true,
-		FailureClass:        FailureExecution,
-		EvidenceComplete:    true,
-		FailureFingerprint:  fp2,
-		PreviousFingerprint: fp1,
-		Attempt:             2,
-		MaxRetries:          3,
-	}
-	got, _ := DecideRecovery(in)
-	if got != ReplanRequired {
-		t.Errorf("differently formatted errors with same fingerprint → %q, want ReplanRequired (repeat detected, §6.1)", got)
-	}
-
-	// The old SameFailureRepeated based on raw err.Error() would NOT detect
-	// this as a repeat (the strings differ). Verify the fingerprint path
-	// is actually used by checking that SameFailureRepeated=false still
-	// triggers ReplanRequired via fingerprints.
-	in.SameFailureRepeated = false
-	got, _ = DecideRecovery(in)
-	if got != ReplanRequired {
-		t.Errorf("fingerprint match with SameFailureRepeated=false → %q, want ReplanRequired (fingerprint must be used, not SameFailureRepeated)", got)
-	}
-}
-
-// TestDecideRecovery_RecoveryPolicyGatesRetry verifies that the resolved
-// RecoveryPolicy gates RetryWorker so a profile that resolves to
-// reconcile/manual/never cannot be bypassed by the raw task.Recovery field
-// (§6.1). This is the reviewer's P1 finding about profile recovery policy
-// bypass.
-//
-// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08 (reviewer P1)
-func TestDecideRecovery_RecoveryPolicyGatesRetry(t *testing.T) {
+// TestDecideRecoveryAcceptanceMatrix maps the §11 acceptance scenarios of the
+// generic task reliability design to dispositions.
+func TestDecideRecoveryAcceptanceMatrix(t *testing.T) {
 	tests := []struct {
-		name   string
-		policy RecoveryPolicy
-		want   RetryDisposition
+		name string
+		in   RecoveryDecisionInput
+		want RetryDisposition
 	}{
-		{"retry policy allows retry", RecoveryRetry, RetryWorker},
-		{"reconcile policy blocks retry", RecoveryReconcile, ReconcileOnly},
-		{"manual policy needs human", RecoveryManual, NeedsHuman},
-		{"never policy stops", RecoveryNever, RetryNone},
-		{"empty policy allows retry (backward compat)", "", RetryWorker},
+		{"executable missing from PATH or pipeline → environment replan", RecoveryDecisionInput{Replayable: true, FailureClass: FailureEnvironment, Attempt: 1, MaxRetries: 3}, ReplanRequired},
+		{"malformed or non-asserting verifier → contract replan", RecoveryDecisionInput{Replayable: true, FailureClass: FailureContract, Attempt: 1, MaxRetries: 3}, ReplanRequired},
+		{"worker succeeded but omitted submit_result → reconcile", RecoveryDecisionInput{ProtocolFailure: true, Replayable: true, ProtocolRepairRetry: true, FailureClass: FailureProtocol, Attempt: 1, MaxRetries: 3}, ReconcileOnly},
+		{"non-replayable task timeout → reconcile", RecoveryDecisionInput{Replayable: false, FailureClass: FailureTimeout, SideEffect: SideEffectExternalWrite, Attempt: 1, MaxRetries: 3}, ReconcileOnly},
+		{"read-only task timeout → retry", RecoveryDecisionInput{Replayable: true, FailureClass: FailureTimeout, SideEffect: SideEffectNone, EvidenceComplete: true, Attempt: 1, MaxRetries: 3}, RetryWorker},
+		{"same fingerprint second failure → replan", RecoveryDecisionInput{Replayable: true, SameFailureRepeated: true, FailureClass: FailureExecution, Attempt: 2, MaxRetries: 3}, ReplanRequired},
+		{"verifier exit 0 but self-reported failure → verification retry", RecoveryDecisionInput{Replayable: true, FailureClass: FailureVerify, EvidenceComplete: true, Attempt: 1, MaxRetries: 3}, RetryWorker},
+		{"user SIGINT → none", RecoveryDecisionInput{ContextCancelled: true, Replayable: true, FailureClass: FailureCancelled, Attempt: 1, MaxRetries: 3}, RetryNone},
+		{"worker self-cancel with live parent → none", RecoveryDecisionInput{Replayable: true, FailureClass: FailureCancelled, EvidenceComplete: true, Attempt: 1, MaxRetries: 3}, RetryNone},
+		{"repair submitted progress not final → execution retry", RecoveryDecisionInput{Replayable: true, FailureClass: FailureExecution, EvidenceComplete: true, Attempt: 1, MaxRetries: 3}, RetryWorker},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			in := RecoveryDecisionInput{
-				Replayable:       true,
-				FailureClass:     FailureExecution,
-				RecoveryPolicy:   tt.policy,
-				EvidenceComplete: true,
-				Attempt:          1,
-				MaxRetries:       3,
-			}
-			got, _ := DecideRecovery(in)
-			if got != tt.want {
-				t.Errorf("RecoveryPolicy=%q → %q, want %q", tt.policy, got, tt.want)
+			if got, _ := DecideRecovery(tt.in); got != tt.want {
+				t.Errorf("DecideRecovery() = %q, want %q", got, tt.want)
 			}
 		})
 	}
 }
 
-// TestDecideRecovery_EvidenceCompleteGatesRetry verifies that when
-// EvidenceComplete is false, DecideRecovery does not prescribe RetryWorker
-// (§6.1: retry prompt must include class, evidence, last command/exit).
-//
-// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-08 (reviewer P1)
-func TestDecideRecovery_EvidenceCompleteGatesRetry(t *testing.T) {
-	in := RecoveryDecisionInput{
-		Replayable:       true,
-		FailureClass:     FailureExecution,
-		RecoveryPolicy:   RecoveryRetry,
-		EvidenceComplete: false,
-		Attempt:          1,
-		MaxRetries:       3,
+func TestDispositionPredicates(t *testing.T) {
+	tests := []struct {
+		disposition RetryDisposition
+		isRetry     bool
+		isStop      bool
+		shouldBlock bool
+	}{
+		{RetryWorker, true, false, false},
+		{RetryNone, false, true, false},
+		{ReconcileOnly, false, true, true},
+		{ReplanRequired, false, true, false},
+		{NeedsHuman, false, true, false},
 	}
-	got, _ := DecideRecovery(in)
-	if got != ReplanRequired {
-		t.Errorf("EvidenceComplete=false → %q, want ReplanRequired (cannot retry without complete evidence, §6.1)", got)
-	}
-}
-
-// TestDecideRecovery_AllRequiredInputsUsed verifies that every field
-// specified by §6.1 is actually read by DecideRecovery. Each sub-test changes
-// one input and verifies the disposition changes accordingly.
-//
-// Refs: docs/archive/implementation-plans/generic-task-reliability.md §6.1, WP-07 (reviewer P1)
-func TestDecideRecovery_AllRequiredInputsUsed(t *testing.T) {
-	base := RecoveryDecisionInput{
-		Replayable:       true,
-		FailureClass:     FailureExecution,
-		RecoveryPolicy:   RecoveryRetry,
-		EvidenceComplete: true,
-		Attempt:          1,
-		MaxRetries:       3,
-	}
-
-	// FailureClass: execution → retry, contract → replan
-	if got, _ := DecideRecovery(base); got != RetryWorker {
-		t.Errorf("base → %q, want RetryWorker", got)
-	}
-	contractIn := base
-	contractIn.FailureClass = FailureContract
-	if got, _ := DecideRecovery(contractIn); got != ReplanRequired {
-		t.Errorf("FailureClass=contract → %q, want ReplanRequired", got)
-	}
-
-	// SideEffect: none → retry (timeout), external_write → reconcile (timeout)
-	timeoutNone := base
-	timeoutNone.FailureClass = FailureTimeout
-	timeoutNone.SideEffect = SideEffectNone
-	if got, _ := DecideRecovery(timeoutNone); got != RetryWorker {
-		t.Errorf("timeout+none → %q, want RetryWorker", got)
-	}
-	timeoutExt := timeoutNone
-	timeoutExt.SideEffect = SideEffectExternalWrite
-	if got, _ := DecideRecovery(timeoutExt); got != ReconcileOnly {
-		t.Errorf("timeout+external → %q, want ReconcileOnly", got)
-	}
-
-	// RecoveryPolicy: retry → retry, reconcile → reconcile
-	reconIn := base
-	reconIn.RecoveryPolicy = RecoveryReconcile
-	if got, _ := DecideRecovery(reconIn); got != ReconcileOnly {
-		t.Errorf("RecoveryPolicy=reconcile → %q, want ReconcileOnly", got)
-	}
-
-	// Attempt/MaxRetries: budget exhausted → none
-	budgetIn := base
-	budgetIn.Attempt = 3
-	budgetIn.MaxRetries = 3
-	if got, _ := DecideRecovery(budgetIn); got != RetryNone {
-		t.Errorf("budget exhausted → %q, want RetryNone", got)
-	}
-
-	// EvidenceComplete: true → retry, false → replan
-	noEvidence := base
-	noEvidence.EvidenceComplete = false
-	if got, _ := DecideRecovery(noEvidence); got != ReplanRequired {
-		t.Errorf("EvidenceComplete=false → %q, want ReplanRequired", got)
-	}
-
-	// FailureFingerprint/PreviousFingerprint: match → replan (repeat)
-	repeatIn := base
-	repeatIn.FailureFingerprint = "fp_match"
-	repeatIn.PreviousFingerprint = "fp_match"
-	repeatIn.Attempt = 2
-	if got, _ := DecideRecovery(repeatIn); got != ReplanRequired {
-		t.Errorf("matching fingerprints → %q, want ReplanRequired", got)
+	for _, tt := range tests {
+		t.Run(string(tt.disposition), func(t *testing.T) {
+			if got := IsRetryDisposition(tt.disposition); got != tt.isRetry {
+				t.Errorf("IsRetryDisposition = %v, want %v", got, tt.isRetry)
+			}
+			if got := IsStopDisposition(tt.disposition); got != tt.isStop {
+				t.Errorf("IsStopDisposition = %v, want %v", got, tt.isStop)
+			}
+			if got := ShouldBlockTask(tt.disposition); got != tt.shouldBlock {
+				t.Errorf("ShouldBlockTask = %v, want %v", got, tt.shouldBlock)
+			}
+		})
 	}
 }

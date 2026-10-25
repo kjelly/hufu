@@ -162,3 +162,16 @@ func TestStatusToolArgsRedactSecrets(t *testing.T) {
 		})
 	}
 }
+
+// Status tool-argument projections are redacted and bounded before any
+// reporter (including the TUI status bar preview) sees them.
+func TestStatusToolArgsAreRedactedAndBounded(t *testing.T) {
+	event := StatusEvent{}.withTool("bash", `{"command":"curl -H 'Authorization: Bearer sk-live-123456'"}`)
+	if strings.Contains(event.ToolArgs, "sk-live-123456") {
+		t.Fatalf("ToolArgs = %q, want the bearer token redacted", event.ToolArgs)
+	}
+	long := StatusEvent{}.withTool("write", strings.Repeat("界", statusToolArgsMaxRunes*2))
+	if runes := []rune(long.ToolArgs); len(runes) > statusToolArgsMaxRunes+len("...") {
+		t.Fatalf("ToolArgs has %d runes, want at most %d plus the ellipsis", len(runes), statusToolArgsMaxRunes)
+	}
+}

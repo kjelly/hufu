@@ -37,7 +37,7 @@ func (a *repairWiringCaptureAgent) Stream(ctx context.Context, call fantasy.Agen
 // compiler or test signal — this test is that signal.
 func TestCoordinatorWiresRepairToolCallOntoStreamingCall(t *testing.T) {
 	worker := &repairWiringCaptureAgent{}
-	c, _ := newWP08TestCoordinator(t, worker, 0)
+	c := newTestCoordinator(t, withWorker(worker), withMaxRetries(0))
 	items := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "repair wiring task"}})
 	todoID := items[0].ID
 

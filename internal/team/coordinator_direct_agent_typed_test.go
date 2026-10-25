@@ -489,18 +489,6 @@ func TestDirectAgentTypedSubmitReducesContextItems(t *testing.T) {
 	}
 }
 
-func mustResolveNames(t *testing.T, c *Coordinator) []string {
-	t.Helper()
-	todoID := resolverTodoID(t, c, "resolver-names")
-	names, err := c.ToolResolver().ResolveTaskTools(context.Background(), workerAgentDef(), WorkerToolResolutionRequest{
-		Task: TaskDef{Agent: "worker", Execution: ExecutionContract{RequiresResult: true}}, TodoID: todoID, Mode: WorkerToolResolutionNormal,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return names.Names
-}
-
 func resolveWithExtras(t *testing.T, c *Coordinator, todoID string) ResolvedWorkerTools {
 	t.Helper()
 	todoID = resolverTodoID(t, c, todoID)

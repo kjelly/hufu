@@ -112,7 +112,7 @@ func TestFreshTodoOccurrenceRetainsExtraModelsFanout(t *testing.T) {
 }
 
 func TestEphemeralTodoExecutionPreservesSuppliedTaskDef(t *testing.T) {
-	c, store, calls := newRCA20ExecutionCoordinator(t)
+	c, store, calls := newOccurrenceExecutionCoordinator(t)
 	// Keep the Todo ephemeral even though the shared helper normally wires a
 	// durable store for its other occurrence tests.
 	c.SetEventJournal(nil)

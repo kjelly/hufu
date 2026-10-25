@@ -21,7 +21,7 @@ import (
 // counterpart to compare against — see
 // docs/tmp/now/05-workset-legacy-tsv-removal.md §5. General task-level
 // retry/resume/cancel is exercised independently of fan-out kind by
-// wp02_resume_test.go and wp08_retry_disposition_test.go.
+// retry_loop_test.go and contract_enforcement_test.go.
 type worksetComparison struct {
 	LegacyKeys    []string
 	ArtifactKeys  []string

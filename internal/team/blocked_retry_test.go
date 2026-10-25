@@ -133,7 +133,7 @@ func TestOnlyABlockedWorkerStopsDelegation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			c, _, _ := newRCA20ExecutionCoordinator(t)
+			c, _, _ := newOccurrenceExecutionCoordinator(t)
 			c.workerAgentOverride = statusSubmittingAgent{c: c, input: test.input}
 			c.session.Config.MaxRetries = test.retries
 			c.session.Agents["worker"].MaxRetries = test.retries

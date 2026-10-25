@@ -12,7 +12,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func wp01TaskResult(status string) *TaskResult {
+// taskResultAssertSubject is the canonical task result the task_result_assert
+// verifier is evaluated against.
+func taskResultAssertSubject(status string) *TaskResult {
 	return &TaskResult{
 		TaskID:  "task-1",
 		Agent:   "worker",
@@ -29,7 +31,7 @@ func wp01TaskResult(status string) *TaskResult {
 }
 
 func TestTaskResultAssertOperators(t *testing.T) {
-	result := wp01TaskResult(TaskResultStatusSuccess)
+	result := taskResultAssertSubject(TaskResultStatusSuccess)
 	tests := []struct {
 		name      string
 		assertion TaskResultAssertion
@@ -75,7 +77,7 @@ func TestTaskResultAssertValidationBounds(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := ExecuteVerificationSpecWithTaskResult(context.Background(), "sh", t.TempDir(), tt.spec, wp01TaskResult(TaskResultStatusSuccess))
+			result, err := ExecuteVerificationSpecWithTaskResult(context.Background(), "sh", t.TempDir(), tt.spec, taskResultAssertSubject(TaskResultStatusSuccess))
 			if err == nil || result == nil || result.ExitCode != -1 || !strings.Contains(err.Error(), "malformed verification spec") {
 				t.Fatalf("malformed spec result=%#v err=%v", result, err)
 			}
@@ -91,7 +93,7 @@ func TestTaskResultAssertPartialAndBlockedAreResultSemantics(t *testing.T) {
 				TaskResultAssertions: []TaskResultAssertion{{
 					Pointer: "/status", Op: "equals", Value: status,
 				}},
-			}, wp01TaskResult(status))
+			}, taskResultAssertSubject(status))
 			if err != nil || result == nil || result.ExitCode != 0 {
 				t.Fatalf("status %q was treated as schema failure: result=%#v err=%v", status, result, err)
 			}
@@ -121,8 +123,8 @@ func TestTaskResultAssertFingerprintIsOrderIndependent(t *testing.T) {
 		{Pointer: "/summary", Op: "non_empty"},
 	}}
 	dir := t.TempDir()
-	firstResult, firstErr := ExecuteVerificationSpecWithTaskResult(context.Background(), "sh", dir, first, wp01TaskResult(TaskResultStatusSuccess))
-	secondResult, secondErr := ExecuteVerificationSpecWithTaskResult(context.Background(), "sh", dir, second, wp01TaskResult(TaskResultStatusSuccess))
+	firstResult, firstErr := ExecuteVerificationSpecWithTaskResult(context.Background(), "sh", dir, first, taskResultAssertSubject(TaskResultStatusSuccess))
+	secondResult, secondErr := ExecuteVerificationSpecWithTaskResult(context.Background(), "sh", dir, second, taskResultAssertSubject(TaskResultStatusSuccess))
 	if firstErr != nil || secondErr != nil || firstResult.Fingerprint != secondResult.Fingerprint {
 		t.Fatalf("assertion order changed fingerprint: first=%#v/%v second=%#v/%v", firstResult, firstErr, secondResult, secondErr)
 	}
@@ -182,7 +184,7 @@ func TestTaskResultAssertCoordinatorPassesCanonicalResult(t *testing.T) {
 				Pointer: "/status", Op: "equals", Value: TaskResultStatusSuccess,
 			}},
 		},
-	}, nil, wp01TaskResult(TaskResultStatusSuccess))
+	}, nil, taskResultAssertSubject(TaskResultStatusSuccess))
 	if err != nil || result == nil || result.ExitCode != 0 {
 		t.Fatalf("coordinator did not pass canonical task result: result=%#v err=%v", result, err)
 	}

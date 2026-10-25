@@ -48,15 +48,6 @@ func wp4QueryAll(t *testing.T, repo contextstore.Repository, scope contextstore.
 	return items
 }
 
-func wp4FindItemByID(items []contextstore.ContextItem, id string) *contextstore.ContextItem {
-	for i := range items {
-		if items[i].ID == id {
-			return &items[i]
-		}
-	}
-	return nil
-}
-
 func TestWP4_VerifiedSuccessProducesConfirmedSessionMemory(t *testing.T) {
 	repo := wp4SetupRepo(t)
 	svc := NewWorkerMemoryService(repo, nil)
