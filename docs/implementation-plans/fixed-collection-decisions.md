@@ -291,7 +291,7 @@ golangci-lint run
 - 只抽取實際使用的 request／state binding。輸入由 owning module 建立，包含完整 canonical request/state、候選順序及內容、版本、actor／phase、model/catalog policy identity；worker 不接受權威 ID、catalog name 或 receipt。
 - 三種 binding 都使用既有 decision primitive started／settled journal 與 artifact store。建立共用執行／查詢 helper，保留固定列驗證，不能讓一般請求冒充 row settlement。
 - Runtime semantic catalog 由 owning module 的明確決策宣告建立，動態候選從 runtime 快照注入並 hash；catalog 權限不得只信任模型輸入的 point 名。
-- context 分段與總容量沿用第一階段有界實作；候選多於 21（包含業務 none 選項）就明確未決。逐 skill 判斷的每一列有獨立槽位，明確計入呼叫上限。
+- context 分段與總容量沿用第一階段有界實作；單選保留全部候選（包含業務 none 選項），沒有固定候選數量上限，仍受請求大小、模型 context、backend 能力與既有預算限制；超容量時明確未決，不截斷候選。逐 skill 判斷的每一列有獨立槽位，明確計入呼叫上限。
 - 已結算且有效的 binding 可直接讀取，先 replay 再判斷新 inference 預算。started 未 settled 一律禁止隱藏重試；輸入／候選／政策／狀態改變使用新 binding，不套舊結果。
 - Reason／graft 等生成內容明確標記為非權威；保留 public result 形狀。使用者核准的額外生成／有限判斷呼叫須逐一計費並在測試斷言次數。
 - Result-only repair 不得呼叫 semantic executor；移除已遷移入口的舊 parser 推論 fallback。舊 parser 可保留用於讀取 legacy 結果及相容性測試。
