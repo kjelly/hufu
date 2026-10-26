@@ -354,7 +354,7 @@ spec:
         capability: produce-workset
         type: prepare_review_workset
         payload: >-
-          {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"},"routing":"documentation","max_total_diff_bytes":2097152,"max_total_diff_lines":30000,"max_changed_paths":256,"max_workset_items":32,"max_diff_bytes":96000,"max_diff_lines":2000,"max_paths":32,"max_source_snapshot_bytes":393216,"max_review_input_tokens":200000}
+          {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"},"routing":"documentation","max_total_diff_bytes":2097152,"max_total_diff_lines":30000,"max_changed_paths":256,"max_workset_items":64,"max_diff_bytes":96000,"max_diff_lines":2000,"max_paths":32,"max_source_snapshot_bytes":393216,"max_review_input_tokens":200000}
         input-bindings:
           - input: review.scope
             target: /scope
