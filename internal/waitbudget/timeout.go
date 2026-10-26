@@ -15,13 +15,16 @@ type clockKey struct{}
 // merely wrapping a paused context with context.WithDeadline can elide the
 // hard timer and inadvertently make an operational deadline movable too.
 func WithWallDeadline(parent context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
-	bounded, cancel := context.WithDeadline(context.WithoutCancel(parent), deadline)
-	stop := context.AfterFunc(parent, cancel)
-	if parent.Err() != nil {
-		cancel()
-	}
-	return bounded, func() { stop(); cancel() }
+	return context.WithDeadline(deadlineHiddenContext{parent}, deadline)
 }
+
+// Hide only Deadline so WithDeadline always owns a timer. Retaining Done, Err
+// and Value lets context propagate the parent's error and cause normally.
+type deadlineHiddenContext struct {
+	context.Context
+}
+
+func (deadlineHiddenContext) Deadline() (time.Time, bool) { return time.Time{}, false }
 
 type clock struct {
 	mu     sync.Mutex

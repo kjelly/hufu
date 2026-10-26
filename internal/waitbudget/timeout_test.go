@@ -25,15 +25,69 @@ func TestTimeoutAlreadyExpired(t *testing.T) {
 	}
 }
 
-func TestWallDeadlineForwardsParentCancellation(t *testing.T) {
+func TestWallDeadlinePreservesParentErrorAndCause(t *testing.T) {
+	customCause := errors.New("parent completion cause")
+	for _, tt := range []struct {
+		name               string
+		timeout, completed bool
+		cause              error
+	}{
+		{name: "cancelled"},
+		{name: "cancelled with cause", cause: customCause},
+		{name: "already cancelled", completed: true, cause: customCause},
+		{name: "timed out", timeout: true},
+		{name: "timed out with cause", timeout: true, cause: customCause},
+		{name: "already timed out", timeout: true, completed: true, cause: customCause},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				parent, cancel := context.WithCancelCause(t.Context())
+				defer cancel(nil)
+				var parentCtx context.Context = parent
+				complete := func() { cancel(tt.cause) }
+				if tt.timeout {
+					timed, stop := context.WithTimeoutCause(parent, time.Minute, tt.cause)
+					defer stop()
+					parentCtx = timed
+					complete = func() { time.Sleep(time.Minute); synctest.Wait() }
+				}
+				if tt.completed {
+					complete()
+				}
+				ctx, stop := WithWallDeadline(parentCtx, time.Now().Add(time.Hour))
+				defer stop()
+				child, stopChild := context.WithCancel(ctx)
+				defer stopChild()
+				if !tt.completed {
+					complete()
+				}
+				synctest.Wait()
+				for _, got := range []context.Context{ctx, child} {
+					if !errors.Is(got.Err(), parentCtx.Err()) || !errors.Is(context.Cause(got), context.Cause(parentCtx)) {
+						t.Fatalf("completion=(%v, %v), want parent (%v, %v)", got.Err(), context.Cause(got), parentCtx.Err(), context.Cause(parentCtx))
+					}
+				}
+			})
+		})
+	}
+}
+
+func TestWallDeadlineRemainsFixedDuringProviderWait(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		parent, cancel := context.WithCancel(t.Context())
-		ctx, stop := WithWallDeadline(parent, time.Now().Add(time.Hour))
+		parent, cancel := WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		deadline := time.Now().Add(time.Minute)
+		ctx, stop := WithWallDeadline(parent, deadline)
 		defer stop()
-		cancel()
+		resume := Pause(ctx)
+		defer resume()
+		time.Sleep(time.Minute)
 		synctest.Wait()
-		if !errors.Is(ctx.Err(), context.Canceled) {
-			t.Fatalf("wall deadline lost parent cancellation: %v", ctx.Err())
+		if !errors.Is(ctx.Err(), context.DeadlineExceeded) || !errors.Is(context.Cause(ctx), context.DeadlineExceeded) || parent.Err() != nil {
+			t.Fatalf("wall deadline=%v cause=%v paused parent=%v", ctx.Err(), context.Cause(ctx), parent.Err())
+		}
+		if got, ok := ctx.Deadline(); !ok || !got.Equal(deadline) {
+			t.Fatalf("wall deadline moved: %v", got)
 		}
 	})
 }
