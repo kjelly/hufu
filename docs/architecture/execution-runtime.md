@@ -984,3 +984,27 @@ No candidate is used as a dependency result or as acceptance evidence.
 count, without the raw rejected report. Replay comparison includes candidate
 identity. Candidate capture and local repair do not introduce another retry
 budget or authorize any execution tools.
+
+A schema-valid local patch is also saved as a new candidate version with
+`prepared: true` **before** result submission. This state means only that the
+model-facing schema passed, never that evidence or acceptance passed. Recovery
+rehydrates its CAS bytes, branch/contract/input/source bindings and original
+sealed transcript, checks the static result-only tool policy and the central
+execution gate, then runs the original full submission transaction. It requires
+no provider access or new model turn. A candidate left in an interrupted worker
+state is routed to result finalization, never worker replay. A committed result
+whose lifecycle checkpoint was interrupted is finalized using the same result.
+An explicit result-only continuation of a blocked, prepared submission uses the
+existing operator grant with `additional_attempts: 0` and no replacement model.
+It never extends the model budget. The repair receipt records
+`prepared_candidate_sha256`; local completion retains
+the original run, transcript, repair history and consumed model-turn count.
+
+Submission tool responses carry runtime-authored client metadata distinguishing
+`invalid_schema`, `source_invalid`, `contract_rejected`, and `commit_failed`.
+Only the first permits another formatting repair. The other reasons stop with
+an actionable diagnostic; they do not request another model turn or authorize
+worker replay. Legacy responses without this metadata retain their historical
+classification. Candidate storage failures are explicit `commit_failed` tool
+responses, so the provider adapter cannot discard their classification as an
+untyped execution error. External worker proposal protocols are unchanged.

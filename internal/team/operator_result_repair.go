@@ -13,7 +13,8 @@ func WithResultOnlyRepair(ctx context.Context, taskID string) context.Context {
 	return context.WithValue(WithSessionResume(ctx), resultOnlyRepairKey{}, taskID)
 }
 
-// ResultRepairGrant extends submission repair, preserving every previous turn.
+// ResultRepairGrant authorizes submission repair, preserving every previous turn.
+// Prepared candidates receive zero additional model turns for local completion.
 // The grant is committed in the task transition before a repair lease opens.
 type ResultRepairGrant struct {
 	RunID              string `json:"run_id"`
@@ -38,7 +39,8 @@ func validateResultRepairTarget(item *TodoItem) error {
 		return fmt.Errorf("result-only repair requires a frozen result contract and original transcript")
 	}
 	reason := item.ExecutionReceipt.RepairProvenance.FailureReason
-	if reason != RepairFailureNoToolCall && reason != RepairFailureInvalidSchema && reason != repairFailurePreparation {
+	if reason != RepairFailureNoToolCall && reason != RepairFailureInvalidSchema && reason != repairFailurePreparation &&
+		(reason != RepairFailureCommit || item.ResultCandidate == nil || !item.ResultCandidate.Prepared) {
 		return fmt.Errorf("result-only repair cannot repair execution failure %q", reason)
 	}
 	return nil
@@ -66,20 +68,31 @@ func (c *Coordinator) authorizeOperatorResultRepair(ctx context.Context) error {
 		AfterAttempts:      item.ExecutionReceipt.RepairProvenance.RepairAttempts,
 		AdditionalAttempts: 2, TranscriptRef: item.ExecutionReceipt.TranscriptRef,
 	}
-	if model, _ := ctx.Value(resultRepairModelKey{}).(string); model != "" {
+	if item.ResultCandidate != nil && item.ResultCandidate.Prepared {
+		if _, err := c.loadResultCandidate(ctx, item, item.ResultCandidate); err != nil {
+			return err
+		}
+		grant.AdditionalAttempts = 0
+	} else if model, _ := ctx.Value(resultRepairModelKey{}).(string); model != "" {
 		if _, err := c.resultRepairTarget(model); err != nil {
 			return err
 		}
 		grant.Model = model
 	}
 	return c.CommitTaskTransition(ctx, taskID, item.Status, TaskProtocolIncomplete,
-		"operator authorized bounded result-only repair; worker replay forbidden", "",
+		"operator authorized result-only continuation; worker replay forbidden", "",
 		map[string]any{"result_repair_grant": grant})
 }
 
 func (c *Coordinator) validResultRepairGrant(item *TodoItem, next TaskStatus, grant *ResultRepairGrant) bool {
-	return grant != nil && validateResultRepairTarget(item) == nil && next == TaskProtocolIncomplete &&
-		grant.RunID != "" && grant.RunID == c.executionRunID && grant.BranchID == c.activeBranchID() &&
-		grant.AdditionalAttempts == 2 && grant.AfterAttempts == item.ExecutionReceipt.RepairProvenance.RepairAttempts &&
-		grant.TranscriptRef == item.ExecutionReceipt.TranscriptRef
+	if grant == nil || validateResultRepairTarget(item) != nil || next != TaskProtocolIncomplete {
+		return false
+	}
+	if grant.RunID == "" || grant.RunID != c.executionRunID || grant.BranchID != c.activeBranchID() || grant.AfterAttempts != item.ExecutionReceipt.RepairProvenance.RepairAttempts || grant.TranscriptRef != item.ExecutionReceipt.TranscriptRef {
+		return false
+	}
+	if item.ResultCandidate != nil && item.ResultCandidate.Prepared {
+		return grant.AdditionalAttempts == 0 && grant.Model == ""
+	}
+	return grant.AdditionalAttempts == 2
 }

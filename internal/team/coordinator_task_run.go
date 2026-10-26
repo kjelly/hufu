@@ -327,7 +327,13 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// worker agent or replay its tools from this status.
 	if c != nil && c.taskTracker != nil && todoID != "" {
 		for _, item := range c.taskTracker.TodoList().Items() {
-			if item != nil && item.ID == todoID && item.Status == TaskProtocolIncomplete {
+			if item != nil && item.ID == todoID && (item.Status == TaskProtocolIncomplete || item.ResultCandidate != nil && isInterruptedStatus(item.Status)) {
+				if item.Status != TaskProtocolIncomplete {
+					if err := c.commitTaskTransitionFromCurrent(parentCtx, item.ID, TaskProtocolIncomplete, "resuming preserved result candidate", item.Output, map[string]any{"protocol_checkpoint": true}); err != nil {
+						return "", err
+					}
+					item = c.todoItemByID(item.ID)
+				}
 				if _, _, err := c.validateTaskOccurrenceAdmission(parentCtx, task, todoID, c.taskAttempt(todoID)); err != nil {
 					detail := c.FailureDetail(err, FailureSourceError)
 					c.PersistFailureWithClassAndStatusAndOutput(item.Agent, task.Goal, item.ID, detail, NeedsHuman, FailureProtocol, TaskBlocked, item.Output)
@@ -1474,6 +1480,12 @@ retryLoop:
 			}
 			if typedRes == nil {
 				if task.Execution.RequiresResult {
+					if reason := submissionFailureFromSteps(steps); reason != "" && reason != RepairFailureInvalidSchema {
+						err = fmt.Errorf("result submission stopped (%s): %s", reason, repairValidationError(steps))
+						c.PersistFailureWithClassAndStatusAndOutput(agentName, task.Goal, todoID, c.FailureDetail(err, FailureSourceError), NeedsHuman, FailureProtocol, TaskBlocked, output)
+						closeTranscript()
+						return "", err
+					}
 					budgetExhausted := receipt.StepBudget != nil && receipt.StepBudget.Exhausted
 					safePolicyDenial := !budgetExhausted && attemptDispositions.onlyPolicyDeniedToolCalls(steps) && parentCtx.Err() == nil
 					if safePolicyDenial {
@@ -3154,6 +3166,10 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	}
 	output := item.Output
 
+	if (item.TypedResult == nil || item.TypedResult.Source != "submitted") && item.ResultCandidate != nil && item.ResultCandidate.Prepared {
+		return c.resumePreparedResultCandidate(parentCtx, task, item)
+	}
+
 	// submit_result checkpoints TypedResult before the caller can persist the
 	// repair receipt and terminal status. A crash in that interval leaves a
 	// protocol_incomplete task with a valid result but no provenance. Treat
@@ -3168,7 +3184,13 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 			agentName = "worker"
 		}
 		resolvedModel := task.Model
-		if err := c.materializeCheckpointedProtocolRepair(item, agentName, item.TypedResult); err != nil {
+		materialize := c.materializeCheckpointedProtocolRepair
+		if item.ResultCandidate != nil && item.ResultCandidate.Prepared {
+			materialize = func(item *TodoItem, _ string, result *TaskResult) error {
+				return c.materializePreparedCandidateReceipt(item, result)
+			}
+		}
+		if err := materialize(item, agentName, item.TypedResult); err != nil {
 			return "", err
 		}
 		c.storeSubmittedTaskResult(item.ID, item.TypedResult)

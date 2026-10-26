@@ -41,6 +41,9 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	if err != nil || !response.IsError || t.coordinator == nil {
 		return response, err
 	}
+	if reason := submissionFailureMetadata(response.Metadata); reason != "" && reason != RepairFailureInvalidSchema {
+		return response, nil
+	}
 	item := t.coordinator.todoItemByID(t.todoID)
 	if item == nil || item.ResultContract == nil || t.coordinator.artifactStoreRootPath() == "" || len(call.Input) > resultCandidateMaxBytes {
 		return response, nil
@@ -64,28 +67,32 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	if _, identityErr := submitResultRuntimeIdentityFromContext(ctx, t.coordinator, t.todoID); identityErr != nil {
 		return response, nil
 	}
-	if saveErr := t.coordinator.saveResultCandidate(ctx, t.todoID, call.Input, issues, truncated, nil); saveErr != nil {
-		return fantasy.NewTextErrorResponse("result_candidate_persistence_failed: " + saveErr.Error()), saveErr
+	if _, saveErr := t.coordinator.saveResultCandidate(ctx, t.todoID, call.Input, issues, truncated, nil); saveErr != nil {
+		return resultPersistenceFailure(fmt.Errorf("result_candidate_persistence_failed: %w", saveErr)), nil
 	}
 	return response, nil
 }
 
-func (t *submitResultTool) runPatch(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+func (t *submitResultTool) runPatch(ctx context.Context, call fantasy.ToolCall) (response fantasy.ToolResponse, runErr error) {
+	defer func() { response = tagSubmissionFailure(response, RepairFailureInvalidSchema) }()
 	c := t.coordinator
 	if c == nil {
-		return fantasy.NewTextErrorResponse("candidate_unavailable"), nil
+		return submissionFailureResponse(RepairFailureSource, "candidate_unavailable"), nil
 	}
 	identity, err := submitResultRuntimeIdentityFromContext(ctx, c, t.todoID)
 	if err != nil || identity.Attempt != t.candidate.Attempt {
-		return fantasy.NewTextErrorResponse("candidate_stale"), nil
+		return submissionFailureResponse(RepairFailureSource, "candidate_stale"), nil
 	}
 	item := c.todoItemByID(t.todoID)
 	value, err := c.loadResultCandidate(ctx, item, t.candidate)
 	if err != nil {
-		return fantasy.NewTextErrorResponse("candidate_stale: " + err.Error()), nil
+		return submissionFailureResponse(RepairFailureSource, "candidate_stale: "+err.Error()), nil
+	}
+	if t.candidate.Prepared {
+		return submissionFailureResponse(RepairFailureContract, "candidate already prepared; resume its local submission"), nil
 	}
 	if t.candidate.Truncated {
-		return fantasy.NewTextErrorResponse("candidate_requires_review: diagnostic limit exceeded"), nil
+		return submissionFailureResponse(RepairFailureContract, "candidate_requires_review: diagnostic limit exceeded"), nil
 	}
 	if issue := validateToolArguments(call.Input, t.Info()); issue != nil {
 		return fantasy.NewTextErrorResponse(buildToolSchemaValidationPrompt(submitResultToolName, issue, t.Info())), nil
@@ -115,17 +122,18 @@ func (t *submitResultTool) runPatch(ctx context.Context, call fantasy.ToolCall) 
 	if err != nil {
 		return fantasy.ToolResponse{}, err
 	}
+	prepared, err := c.saveResultCandidate(ctx, t.todoID, string(data), issues, truncated, t.candidate)
+	if err != nil {
+		return resultPersistenceFailure(fmt.Errorf("persist candidate: %w", err)), nil
+	}
 	if len(issues) > 0 {
-		if err := c.saveResultCandidate(ctx, t.todoID, string(data), issues, truncated, t.candidate); err != nil {
-			return fantasy.NewTextErrorResponse("candidate_stale: " + err.Error()), err
-		}
 		encoded, _ := json.Marshal(issues)
 		return fantasy.NewTextErrorResponse("invalid_schema: candidate preserved; remaining issues: " + string(encoded)), nil
 	}
 	call.Input = string(data)
 	// This is the same complete validation/receipt/evidence/transaction path
 	// used by ordinary submissions. A patch is never a success shortcut.
-	return t.runFull(context.WithValue(ctx, resultPatchBaseKey{}, t.candidate.SHA256), call)
+	return t.runFull(context.WithValue(ctx, resultPatchBaseKey{}, prepared.SHA256), call)
 }
 
 func applyResultCandidateEdit(document map[string]any, edit resultCandidateEdit, issues []ResultSubmissionIssue, schema map[string]any) error {

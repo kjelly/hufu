@@ -172,8 +172,8 @@ func TestResultCandidateRejectsStaleBindings(t *testing.T) {
 func TestResultCandidateAppendFailureLeavesProjectionUntouched(t *testing.T) {
 	c, item, ctx, _ := resultCandidateFixture(t)
 	c.SetEventJournal(failingJournal{err: errors.New("disk unavailable")})
-	_, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: candidateMisplaced})
-	if err == nil || c.todoItemByID(item.ID).ResultCandidate != nil || c.GetTaskResult(item.ID) != nil {
+	response, err := (&submitResultTool{coordinator: c, todoID: item.ID}).Run(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: candidateMisplaced})
+	if err != nil || !response.IsError || c.todoItemByID(item.ID).ResultCandidate != nil || c.GetTaskResult(item.ID) != nil {
 		t.Fatal("failed append published a candidate/result")
 	}
 	if c.occurrenceController(item.ID).snapshot().reserved {
@@ -354,5 +354,18 @@ func TestCandidateMoveRejectsAliasedArrayPointers(t *testing.T) {
 				t.Fatal("rejected move changed content")
 			}
 		})
+	}
+}
+
+func TestPreparedCandidateAppendFailureCannotCommit(t *testing.T) {
+	c, item, ctx, _ := resultCandidateFixture(t)
+	candidate := rejectCandidate(t, c, item, ctx, candidateMisplaced)
+	c.SetEventJournal(failingJournal{err: errors.New("storage unavailable")})
+	response, err := (&submitResultTool{coordinator: c, todoID: item.ID, candidate: candidate}).Run(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: candidateMove})
+	if err != nil || !response.IsError || submissionFailureMetadata(response.Metadata) != RepairFailureCommit {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+	if c.GetTaskResult(item.ID) != nil || c.todoItemByID(item.ID).ResultCandidate.SHA256 != candidate.SHA256 || c.occurrenceController(item.ID).snapshot().reserved {
+		t.Fatal("failed prepared append published a result or leaked reservation")
 	}
 }

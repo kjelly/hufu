@@ -217,9 +217,14 @@ go test ./.agent-teams/web-research/tests
 `evidence_from` 綁定 `input_review`。模型只提交語意判斷，不重建來源 task ID
 或 payload hash。這是供新契約採用的版本；目前 verifier 的 v1 引用保留，
 避免改變 `recover-verifier-20261026` 等既有 session 的 frozen contract。
-需要採用 v2 時，應為新的工作流程明確將 result-contract 指向 v2，並同步移除
-verifier 提示中要求模型填寫 `input_review` 的 v1 說明，以工具 schema 為準。不要將
-既有分支的 v1 就地覆寫，也不需要為了局部修復執行 `--new`。
+新工作流程可使用 `--var report_contract=v2` 明確選用 v2。同一變數會同步選擇
+schema 與 verifier 提示：v2 不要求模型填寫 `input_review`，修復時依當前工具
+schema 提交局部 edits。未指定變數（或指定 v1）時，渲染內容與原 v1 完全一致；
+不支援的版本會在載入契約時失敗，不能靜默回到 v1。
+
+請在另行指定的新工作區啟用 v2；不要對既有 v1 恢復來源加上此變數，也不要
+將其 frozen contract 就地覆寫。已有 v2 工作流程接續時仍須帶同一變數。
+舊分支使用候選局部修復不需要 `--new`，兩邊研究成果皆可保留。
 
 候選保存與局部修復是通用 runtime 能力，v1 也可使用。錯置欄位由 runtime
 搬移完整內容，修復回合不重跑 researcher、countercheck 或瀏覽；原有收據

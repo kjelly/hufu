@@ -1015,6 +1015,14 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 			count++
 			return nil, false
 		}
+		// A durable submission proves execution reached finalization. Never
+		// send that occurrence back to a worker after an interrupted commit.
+		if it.ResultCandidate != nil && it.Status != TaskProtocolIncomplete {
+			if err := c.commitTaskTransitionFromCurrent(ctx, it.ID, TaskProtocolIncomplete, "resuming preserved result candidate", it.Output, map[string]any{"protocol_checkpoint": true}); err != nil {
+				return count, err
+			}
+			it = c.todoItemByID(it.ID)
+		}
 		if it.Status == TaskProtocolIncomplete {
 			if err := c.ensureExecutionPolicySnapshot(); err != nil {
 				detail := fmt.Sprintf("task recovery blocked by execution policy admission: %v", err)

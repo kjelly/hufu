@@ -68,7 +68,10 @@ func classifyRepairFailure(steps []fantasy.StepResult, typedRes *TaskResult) (re
 		// When we have no step evidence of an error either, fall back to
 		// invalid_schema as the safer classification (the tool was called but
 		// did not produce an acceptable schema).
-		_ = toolReturnedError // used only for forensics; classification is the same
+		_ = toolReturnedError // Legacy responses have no structured classification.
+		if reason := submissionFailureFromSteps(steps); reason != "" {
+			return reason, false
+		}
 		return RepairFailureInvalidSchema, false
 	}
 

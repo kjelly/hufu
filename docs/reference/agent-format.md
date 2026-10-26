@@ -1155,3 +1155,10 @@ schema、證據、收據、驗證與提交交易；候選存在不代表驗收�
 回合預算，只授權 `submit_result`，不重跑 worker 或瀏覽。超過診斷上限、
 來源缺失、契約不相容、候選過期或修正語意不明時停止，不能自行填入假資料。
 此介面用於本機 LLM 的 `submit_result`；external worker proposal 協定不變。
+
+通過模型提交 schema 的修補也會先保存為 `prepared: true` 候選，才進入完整
+提交交易。它仍不是已接受結果。若此時中斷，resume 使用原候選及原工具收據
+重新驗證並在本機提交，不增加模型回合，也不派發 worker。`inspect` 會顯示
+候選的 prepared 狀態；修復收據以 `prepared_candidate_sha256` 記錄本機完成
+的來源。證據、契約或提交失敗分別顯示 `source_invalid`、`contract_rejected`、
+`commit_failed`，不再當成 schema 錯誤反覆要求模型改寫。

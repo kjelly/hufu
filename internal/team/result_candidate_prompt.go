@@ -19,6 +19,9 @@ func (c *Coordinator) resultCandidateRepairPrompt(ctx context.Context, original 
 	if err != nil {
 		return "", err
 	}
+	if item.ResultCandidate.Prepared {
+		return "", fmt.Errorf("prepared candidate requires local submission recovery")
+	}
 	if item.ResultCandidate.Truncated {
 		return "", fmt.Errorf("candidate_requires_review: too many schema errors for bounded local repair")
 	}

@@ -37,5 +37,8 @@ func (c *Coordinator) newResultSubmissionTool(ctx context.Context, taskID string
 	if _, err := c.loadResultCandidate(ctx, item, submit.candidate); err != nil {
 		return nil, fmt.Errorf("prepare result candidate: %w", err)
 	}
+	if submit.candidate.Prepared {
+		return nil, fmt.Errorf("prepared candidate requires local submission recovery, not another model turn")
+	}
 	return submit, nil
 }

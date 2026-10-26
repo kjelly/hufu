@@ -17,9 +17,10 @@ import (
 const EventTaskResultCandidate EventType = "task_result_candidate"
 const resultCandidateMaxBytes = 256 << 10
 
-// ResultCandidate is rejected submission evidence, never a TaskResult. Its
+// ResultCandidate is unaccepted submission evidence, never a TaskResult. Its
 // immutable bytes live in CAS; this descriptor is carried by canonical events.
 type ResultCandidate struct {
+	Prepared     bool                    `json:"prepared,omitzero"`
 	Version      int                     `json:"version"`
 	BranchID     string                  `json:"branch_id"`
 	SourceRunID  string                  `json:"source_run_id"`
@@ -72,10 +73,10 @@ func (c *Coordinator) resultCandidateEvidenceHash(item *TodoItem) (string, error
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func (c *Coordinator) saveResultCandidate(ctx context.Context, taskID, raw string, issues []ResultSubmissionIssue, truncated bool, base *ResultCandidate) error {
+func (c *Coordinator) saveResultCandidate(ctx context.Context, taskID, raw string, issues []ResultSubmissionIssue, truncated bool, base *ResultCandidate) (*ResultCandidate, error) {
 	identity, err := submitResultRuntimeIdentityFromContext(ctx, c, taskID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	c.taskProjectionMu.Lock()
 	defer c.taskProjectionMu.Unlock()
@@ -85,37 +86,37 @@ func (c *Coordinator) saveResultCandidate(ctx context.Context, taskID, raw strin
 	snapshot := controller.snapshot()
 	item := c.todoItemByID(taskID)
 	if item == nil || item.ResultContract == nil || !snapshot.opened || snapshot.result != nil || snapshot.reserved || !sameTaskResultOccurrence(snapshot.identity, identity) || item.OccurrenceRevision != identity.OccurrenceRevision || item.DispatchID != identity.DispatchID {
-		return errTaskResultStale
+		return nil, errTaskResultStale
 	}
 	tx, err := c.beginTaskResultSubmission(identity)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = tx.rollback() }()
 	if base != nil && (item.ResultCandidate == nil || item.ResultCandidate.SHA256 != base.SHA256 || item.ResultCandidate.Version != base.Version) {
-		return errTaskResultStale
+		return nil, errTaskResultStale
 	}
 	if len(raw) > resultCandidateMaxBytes {
-		return fmt.Errorf("result candidate exceeds %d bytes", resultCandidateMaxBytes)
+		return nil, fmt.Errorf("result candidate exceeds %d bytes", resultCandidateMaxBytes)
 	}
 	// Redact JSON once before hashing and storing. Event payloads carry only
 	// the reference; subsequent event redaction cannot rewrite these bytes.
 	redacted, err := utils.RedactJSON([]byte(raw))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := decodeUniqueJSON(redacted); err != nil {
-		return err
+		return nil, err
 	}
 	evidenceHash, err := c.resultCandidateEvidenceHash(item)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("candidate evidence unavailable: %w", errors.Join(err, errTaskResultStale))
 	}
 	sourceRun := identity.RunID
 	if item.ExecutionReceipt != nil && item.ExecutionReceipt.RunID != "" {
 		sourceRun = item.ExecutionReceipt.RunID
 	}
-	candidate := &ResultCandidate{Version: 1, BranchID: c.activeBranchID(), SourceRunID: sourceRun, TaskID: taskID, Agent: item.Agent, Attempt: identity.Attempt, ContractID: item.ResultContract.ID, ContractHash: item.ResultContract.SchemaSHA256, InputsID: item.RunInputSnapshotID, InputsHash: item.RunInputSnapshotHash, EvidenceHash: evidenceHash, Issues: issues, Truncated: truncated}
+	candidate := &ResultCandidate{Prepared: len(issues) == 0 && !truncated, Version: 1, BranchID: c.activeBranchID(), SourceRunID: sourceRun, TaskID: taskID, Agent: item.Agent, Attempt: identity.Attempt, ContractID: item.ResultContract.ID, ContractHash: item.ResultContract.SchemaSHA256, InputsID: item.RunInputSnapshotID, InputsHash: item.RunInputSnapshotHash, EvidenceHash: evidenceHash, Issues: issues, Truncated: truncated}
 	if item.ResultCandidate != nil {
 		candidate.Version = item.ResultCandidate.Version + 1
 		candidate.ParentSHA256 = item.ResultCandidate.SHA256
@@ -125,32 +126,35 @@ func (c *Coordinator) saveResultCandidate(ctx context.Context, taskID, raw strin
 		Arguments jsontext.Value   `json:"arguments"`
 	}{candidate, redacted}, json.Deterministic(true))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(body) > resultCandidateMaxBytes*2 {
-		return fmt.Errorf("candidate envelope exceeds byte limit")
+		return nil, fmt.Errorf("candidate envelope exceeds byte limit")
 	}
 	store, err := NewFileArtifactStore(c.artifactStoreRootPath(), c.artifactStoreRootPath())
 	if err != nil {
-		return err
+		return nil, err
 	}
 	put, err := store.Put(ctx, PutArtifactRequest{Content: body, Path: "result-candidate.json", Kind: "result_candidate", MediaType: "application/json", RunID: sourceRun, TaskID: taskID, Agent: item.Agent, Attempt: identity.Attempt})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	candidate.ArtifactID, candidate.SHA256 = put.ID, put.SHA256
 	data, err := json.Marshal(candidate)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if c.hasDurableEventJournal() {
 		_, err = c.EventJournal().Append(ctx, RunEvent{Type: string(EventTaskResultCandidate), RunID: c.executionRunID, BranchID: c.activeBranchID(), Actor: item.Agent, TaskID: taskID, IdempotencyKey: "result-candidate:" + c.activeBranchID() + ":" + taskID + ":" + candidate.SHA256, Payload: data})
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	item.ResultCandidate = candidate
-	return c.taskTracker.TodoList().TryApplyProjectedItem(item)
+	if err := c.taskTracker.TodoList().TryApplyProjectedItem(item); err != nil {
+		return nil, err
+	}
+	return cloneResultCandidate(candidate), nil
 }
 
 func (c *Coordinator) loadResultCandidate(ctx context.Context, item *TodoItem, candidate *ResultCandidate) (map[string]any, error) {

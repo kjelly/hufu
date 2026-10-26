@@ -2,6 +2,7 @@ package team
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -76,13 +77,18 @@ func TestWebResearchReportRetainsSourcesAndPreciseGaps(t *testing.T) {
 
 func TestWebResearchPromptJSONExamplesSatisfyContracts(t *testing.T) {
 	dir := filepath.Join("..", "..", ".agent-teams", "web-research")
-	for _, name := range []string{"researcher", "countercheck", "verifier"} {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct{ name, version string }{{"researcher", "v1"}, {"countercheck", "v1"}, {"verifier", "v1"}, {"verifier", "v2"}} {
+		t.Run(tc.name+"_"+tc.version, func(t *testing.T) {
+			name := tc.name
 			content, err := os.ReadFile(filepath.Join(dir, name+".md"))
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, example, ok := strings.Cut(string(content), "```json\n")
+			rendered, err := RenderTemplateText(string(content), name+".md", map[string]string{"TEAM_NAME": "web-research", "report_contract": tc.version})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, example, ok := strings.Cut(rendered, "```json\n")
 			if !ok {
 				t.Fatal("prompt has no JSON example")
 			}
@@ -96,7 +102,7 @@ func TestWebResearchPromptJSONExamplesSatisfyContracts(t *testing.T) {
 			}
 			schema := "schemas/research-v1.json"
 			if name == "verifier" {
-				schema = "schemas/report-v1.json"
+				schema = "schemas/report-" + tc.version + ".json"
 			}
 			compiled, err := compileResultContractSchema(dir, schema)
 			if err != nil {
@@ -112,6 +118,20 @@ func TestWebResearchPromptJSONExamplesSatisfyContracts(t *testing.T) {
 				}
 				value["claim_assessments"] = []any{}
 				submission.StructuredPayload, err = json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if compiled.evidenceInputs != nil && compiled.evidenceInputs.runtimeOwned() {
+				if _, missingErr := assembleRuntimeEvidenceInputs(submission.StructuredPayload, compiled.evidenceInputs, nil, nil); missingErr == nil {
+					t.Fatal("missing sources accepted")
+				}
+				var sources []TaskResult
+				for i, lens := range []string{"primary_search", "countercheck"} {
+					raw := []byte(fmt.Sprintf(`{"lens":%q}`, lens))
+					sources = append(sources, TaskResult{TaskID: fmt.Sprint(i + 1), Status: TaskResultStatusSuccess, StructuredPayload: &ResultPayload{Value: raw, SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))}})
+				}
+				submission.StructuredPayload, err = assembleRuntimeEvidenceInputs(submission.StructuredPayload, compiled.evidenceInputs, []string{"1", "2"}, sources)
 				if err != nil {
 					t.Fatal(err)
 				}

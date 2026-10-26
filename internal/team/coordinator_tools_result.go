@@ -451,9 +451,14 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 }
 
 //nolint:gocyclo // submitResultTool.Run handles the full lifecycle of a worker result submission.
-func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (response fantasy.ToolResponse, runErr error) {
+	reason := RepairFailureInvalidSchema
+	defer func() { response = tagSubmissionFailure(response, reason) }()
 	contract := t.submissionContract()
 	if t.coordinator != nil {
+		if _, _, err := t.coordinator.boundResultContract(t.todoID); err != nil {
+			return submissionFailureResponse(RepairFailureContract, err.Error()), nil
+		}
 		if err := t.coordinator.validateFixedCollectionInputJSON(t.todoID, call.Input); err != nil {
 			return fantasy.NewTextErrorResponse(err.Error()), nil
 		}
@@ -468,7 +473,7 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 	if t.coordinator != nil {
 		normalized, err := t.coordinator.resolveResultEvidenceKeys(ctx, t.todoID, call.Input)
 		if err != nil {
-			return fantasy.NewTextErrorResponse("invalid evidence key: " + err.Error()), nil
+			return submissionFailureResponse(RepairFailureSource, "invalid evidence key: "+err.Error()), nil
 		}
 		call.Input = normalized
 	}
@@ -525,6 +530,7 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 	default:
 		return fantasy.NewTextErrorResponse("status must be success, completed_with_gaps, partial, failed, or blocked"), nil
 	}
+	reason = RepairFailureContract
 	if decision, blocked := t.coordinator.decisionBlock(ctx); blocked && res.Status != TaskResultStatusBlocked {
 		return fantasy.NewTextErrorResponse(decisionBlockResultDenial(decision, res.Status)), nil
 	}
@@ -541,19 +547,19 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 		var observations []taskTranscriptRecord
 		_, compiled, contractErr := t.coordinator.boundResultContract(t.todoID)
 		if contractErr != nil {
-			return fantasy.NewTextErrorResponse(contractErr.Error()), nil
+			return submissionFailureResponse(RepairFailureContract, contractErr.Error()), nil
 		}
 		if compiled != nil && compiled.toolEvidence != nil {
 			var evidenceErr error
 			observations, evidenceErr = submissionToolEvidence(ctx, t.coordinator, t.todoID)
 			if evidenceErr != nil {
-				return fantasy.NewTextErrorResponse(evidenceErr.Error()), nil
+				return submissionFailureResponse(RepairFailureSource, evidenceErr.Error()), nil
 			}
 		}
 		if res.Status != TaskResultStatusBlocked || len(bytes.TrimSpace(input.StructuredPayload)) != 0 || !hasResultDecisions(compiled) {
 			payload, rejection := t.coordinator.structuredPayloadForSubmission(t.todoID, input.StructuredPayload, observations)
 			if rejection != "" {
-				return fantasy.NewTextErrorResponse(rejection), nil
+				return submissionFailureResponse(t.payloadRejectionReason(call.Input), rejection), nil
 			}
 			res.StructuredPayload = payload
 			if payload != nil && payload.EvidenceDowngrades > 0 {
@@ -607,7 +613,7 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 	if t.coordinator != nil {
 		identity, err = submitResultRuntimeIdentityFromContext(ctx, t.coordinator, t.todoID)
 		if err != nil {
-			return fantasy.NewTextErrorResponse("invalid submit_result runtime identity: " + err.Error()), nil
+			return submissionFailureResponse(RepairFailureSource, "invalid submit_result runtime identity: "+err.Error()), nil
 		}
 		// Receipt admission still needs the active occurrence, but it must run
 		// before the transaction mutex is held because that validator reads the
@@ -616,7 +622,7 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 		receiptCandidate := res
 		receiptCandidate.Attempt = identity.Attempt
 		if err := t.coordinator.validateTaskResultReceiptClaims(t.todoID, &receiptCandidate); err != nil {
-			return fantasy.NewTextErrorResponse(err.Error()), nil
+			return submissionFailureResponse(RepairFailureSource, err.Error()), nil
 		}
 		metadata, _ := invocationMetadataFromContext(ctx)
 		if err := t.coordinator.attestInvariantClaims(t.todoID, identity.Attempt, metadata.ModelExecutionID, input.InvariantAssessments, &res); err != nil {
@@ -625,13 +631,13 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 		t.coordinator.attachTaskKnowledgeCoverage(t.todoID, identity.Attempt, metadata.ModelExecutionID, &res)
 		tx, txErr := t.coordinator.beginTaskResultSubmission(identity)
 		if txErr != nil {
-			return fantasy.NewTextErrorResponse("store submitted result: " + txErr.Error()), nil
+			return resultPersistenceFailure(fmt.Errorf("store submitted result: %w", txErr)), nil
 		}
 		if base, ok := ctx.Value(resultPatchBaseKey{}).(string); ok {
 			current := t.coordinator.todoItemByID(t.todoID)
 			if current == nil || current.ResultCandidate == nil || current.ResultCandidate.SHA256 != base {
 				_ = tx.rollback()
-				return fantasy.NewTextErrorResponse("candidate_stale"), nil
+				return submissionFailureResponse(RepairFailureSource, "candidate_stale"), nil
 			}
 		}
 		// Runtime ownership begins only after the occurrence is reserved. The
@@ -686,11 +692,11 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 			// again would attempt a second reservation while this gate is held.
 		} else if sink != nil {
 			if err := sink.Submit(ctx, t.todoID, res); err != nil {
-				return rollback("store submitted result: " + err.Error()), nil
+				return tagSubmissionFailure(rollback("store submitted result: "+err.Error()), RepairFailureCommit), nil
 			}
 		}
 		if err := tx.commit(&res); err != nil {
-			return rollback("store submitted result: " + err.Error()), nil
+			return tagSubmissionFailure(rollback("store submitted result: "+err.Error()), RepairFailureCommit), nil
 		}
 		if stop, ok := ctx.Value(acceptedTerminalResultStopKey{}).(*acceptedTerminalResultStop); ok {
 			stop.markAccepted(identity)
@@ -707,7 +713,7 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 			return fantasy.NewTextErrorResponse("submit_result contract violation: " + err.Error()), nil
 		}
 		if err := sink.Submit(ctx, t.todoID, res); err != nil {
-			return fantasy.NewTextErrorResponse("store submitted result: " + err.Error()), nil
+			return submissionFailureResponse(RepairFailureCommit, "store submitted result: "+err.Error()), nil
 		}
 	}
 	return fantasy.NewTextResponse("Task result submitted successfully."), nil

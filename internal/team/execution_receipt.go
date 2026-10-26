@@ -36,6 +36,10 @@ const (
 	RepairFailureInvalidSchema    RepairFailureReason = "invalid_schema"
 	RepairFailureProgressNotFinal RepairFailureReason = "progress_not_final"
 	RepairFailureNoEvidence       RepairFailureReason = "no_evidence"
+	// These rejections stop formatting retries; they never authorize worker replay.
+	RepairFailureSource   RepairFailureReason = "source_invalid"
+	RepairFailureContract RepairFailureReason = "contract_rejected"
+	RepairFailureCommit   RepairFailureReason = "commit_failed"
 )
 
 // ReclassifiesAsExecution reports whether the reason turns the protocol
@@ -50,7 +54,7 @@ func (r RepairFailureReason) ReclassifiesAsExecution() bool {
 // reclassified as FailureExecution and must not count toward protocol repair
 // statistics (§7).
 func (r RepairFailureReason) IsProtocolRepairFailure() bool {
-	return r == RepairFailureNoToolCall || r == RepairFailureInvalidSchema
+	return r == RepairFailureNoToolCall || r == RepairFailureInvalidSchema || r == RepairFailureSource || r == RepairFailureContract || r == RepairFailureCommit
 }
 
 // RepairAttemptProvenance records one result-only repair turn. Keeping each
@@ -77,15 +81,17 @@ type RepairAttemptProvenance struct {
 
 // RepairProvenance records details of protocol repair attempts.
 type RepairProvenance struct {
-	Attempted       bool                      `json:"attempted"`
-	Success         bool                      `json:"success"`
-	Prompt          string                    `json:"prompt,omitempty"`
-	SubmittedResult *TaskResult               `json:"submitted_result,omitempty"`
-	Error           string                    `json:"error,omitempty"`
-	FailureReason   RepairFailureReason       `json:"failure_reason,omitempty"`
-	RepairAttempts  int                       `json:"repair_attempts,omitempty"`
-	History         []RepairAttemptProvenance `json:"history,omitempty"`
-	OperatorGrants  []ResultRepairGrant       `json:"operator_grants,omitempty"`
+	// Local completion of persisted bytes does not consume another model turn.
+	PreparedCandidateSHA256 string                    `json:"prepared_candidate_sha256,omitempty"`
+	Attempted               bool                      `json:"attempted"`
+	Success                 bool                      `json:"success"`
+	Prompt                  string                    `json:"prompt,omitempty"`
+	SubmittedResult         *TaskResult               `json:"submitted_result,omitempty"`
+	Error                   string                    `json:"error,omitempty"`
+	FailureReason           RepairFailureReason       `json:"failure_reason,omitempty"`
+	RepairAttempts          int                       `json:"repair_attempts,omitempty"`
+	History                 []RepairAttemptProvenance `json:"history,omitempty"`
+	OperatorGrants          []ResultRepairGrant       `json:"operator_grants,omitempty"`
 }
 
 // StepBudgetUsage records how much of an attempt's step budget was consumed and
