@@ -447,11 +447,16 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (respo
 	// checkpoint, and commit-gate check has admitted this exact call.
 	ctx = contextArtifactServiceFromContext(ctx).withToolOffloader(ctx, t.Info().Name, call.ID)
 	response, err := t.inner.Run(ctx, call)
+	var captureErr error
 	if err == nil && !response.IsError {
-		if captureErr := t.coordinator.captureDecisionArtifactRead(ctx, t.inner, call, &response); captureErr != nil {
-			return fantasy.ToolResponse{}, captureErr
-		}
-		if !response.IsError {
+		captureErr = t.coordinator.captureDecisionArtifactRead(ctx, t.inner, call, &response)
+		if captureErr != nil {
+			// The read ran, but its result must not escape without the required
+			// evidence. Account for the failed call before ending this dispatch.
+			err = captureErr
+			response = fantasy.ToolResponse{}
+			sequence.markFailedAt(reservedSlot, t.Info().Name, captureErr.Error())
+		} else if !response.IsError {
 			t.coordinator.captureToolObservation(ctx, call, t.Info().Name, call.Input, response.Content)
 		}
 	}
@@ -464,6 +469,11 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (respo
 		return fantasy.NewTextErrorResponse(outcome.Detail), checkpointPersistenceError{cause: outcome.Detail}
 	} else if outcome.Action != CheckpointContinue {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("%s; this dispatch has stopped", outcome.Detail)), checkpointControlError{outcome: outcome}
+	}
+	if captureErr != nil {
+		// A storage/integrity failure stays a hard error, including for the
+		// coordinator: it cannot be repaired by issuing another read.
+		return response, captureErr
 	}
 	if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID == CoordTodoID {
 		// This is the coordinator's only stream boundary: Fantasy discards the
