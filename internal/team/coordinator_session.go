@@ -932,14 +932,26 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 	if prof.DisableHistoricalTaskReuse || prof.DisableJournalRestore {
 		return 0, nil
 	}
+	if err := c.authorizeOperatorResultRepair(ctx); err != nil {
+		return 0, err
+	}
 	for _, item := range c.taskTracker.TodoList().Items() {
 		if err := validatePrimaryOccurrenceForExecution(item); err != nil {
 			return 0, err
 		}
 	}
 	interrupted := c.getInterruptedTasks()
+	if taskID, _ := ctx.Value(resultOnlyRepairKey{}).(string); taskID != "" {
+		selected := interrupted[:0]
+		for _, item := range interrupted {
+			if item.ID == taskID {
+				selected = append(selected, item)
+			}
+		}
+		interrupted = selected
+	}
 	if len(interrupted) == 0 {
-		return 0, nil
+		return 0, c.reconcileRecoveredWorkflow(ctx)
 	}
 	isUnattended := (c.session != nil && c.session.Config.Unattended) || c.unattended
 	c.report(c.newEvent("step").withMessage(fmt.Sprintf("resuming %d interrupted task(s) from checkpoint", len(interrupted))))
@@ -1215,6 +1227,9 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 	}
 	// A resumed task that completed no longer counts as failing.
 	c.rebuildAntiThrashingState()
+	if err := c.reconcileRecoveredWorkflow(ctx); firstErr == nil {
+		firstErr = err
+	}
 	return count, firstErr
 }
 

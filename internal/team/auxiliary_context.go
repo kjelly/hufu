@@ -13,6 +13,13 @@ import (
 )
 
 func (c *Coordinator) prepareAuxiliaryPrompt(ctx context.Context, purpose, rawPrompt string) (string, error) {
+	if purpose == "result_repair" {
+		var err error
+		rawPrompt, err = c.resultCandidateRepairPrompt(ctx, rawPrompt)
+		if err != nil {
+			return "", err
+		}
+	}
 	return c.prepareAuxiliaryPromptWithPersistence(ctx, purpose, rawPrompt, true)
 }
 
@@ -135,7 +142,9 @@ func (c *Coordinator) compileAuxiliaryPrompt(ctx context.Context, purpose, rawPr
 			if err != nil {
 				return "", nil, err
 			}
-			input.RuntimeContext += resultContractPromptSection(ref, compiledContract, false)
+			if item.ResultCandidate == nil {
+				input.RuntimeContext += resultContractPromptSection(ref, compiledContract, false)
+			}
 			input.DependencyResults = c.dependencyResultsForTask(todoID)
 			if len(input.DependencyResults) != len(resultDependencyIDs(item)) {
 				return "", nil, fmt.Errorf("result repair for task %s lacks completed dependency results", todoID)
@@ -151,7 +160,9 @@ func (c *Coordinator) compileAuxiliaryPrompt(ctx context.Context, purpose, rawPr
 			if err != nil {
 				return "", nil, err
 			}
-			input.RuntimeContext += collectionContext
+			if item.ResultCandidate == nil {
+				input.RuntimeContext += collectionContext
+			}
 		}
 	}
 	compiled, err := c.ContextCompiler().CompileWorkerContext(ctx, input)

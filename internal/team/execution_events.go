@@ -146,6 +146,7 @@ type LifecycleEventPayload struct {
 	Telemetry                     *RunTelemetry                `json:"telemetry,omitempty"`
 	EvidenceManifest              *EvidenceManifest            `json:"evidence_manifest,omitempty"`
 	RunInputs                     *RunInputSnapshot            `json:"run_inputs,omitempty"`
+	RunInputOriginRunID           string                       `json:"run_input_origin_run_id,omitempty"`
 	InputBoundAssertions          []InputBoundAssertionSummary `json:"input_bound_assertions,omitempty"`
 	ReliabilityMetrics            *ReliabilityEvalMetrics      `json:"reliability_metrics,omitempty"`
 	ProductionObservation         *ReliabilityObservation      `json:"production_observation,omitempty"`

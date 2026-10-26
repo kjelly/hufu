@@ -153,6 +153,7 @@ type ReplanData struct {
 }
 
 type TaskData struct {
+	ResultCandidate   *ResultCandidateData      `json:"result_candidate,omitempty"`
 	RunID             string                    `json:"run_id"`
 	TaskID            string                    `json:"task_id"`
 	Status            string                    `json:"status"`
@@ -419,6 +420,7 @@ func projectTaskWithEvents(item *team.TodoItem, query InspectQuery, events []Ind
 		MemoryRefs:        []string{},
 		SideEffect:        string(item.SideEffect),
 	}
+	data.ResultCandidate = projectResultCandidate(item.ResultCandidate, query.Attempt)
 	if data.RecoveryState != "" {
 		attempt := recoveryAttempt(item)
 		if query.Attempt > 0 && query.Attempt != attempt {

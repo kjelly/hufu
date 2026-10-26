@@ -133,7 +133,7 @@ func TestSubmitResultSchemaPreflightStopsLoopWithoutWorkerReplay(t *testing.T) {
 				if provenance == nil || provenance.Success != (name != "repair_exhausted") || provenance.RepairAttempts != wantRepairs {
 					t.Fatalf("schema-only repair lost its provenance: %#v", provenance)
 				}
-				if len(prompts) != wantRepairs || !strings.Contains(prompts[0], "$.structured_payload.findings[0].summary") {
+				if len(prompts) != wantRepairs || !strings.Contains(prompts[0], "/structured_payload/findings/0/summary") || !strings.Contains(prompts[0], "invalid_type") || strings.Contains(prompts[0], "Call submit_result with the complete argument object") {
 					t.Fatalf("repair lost the actual preflight diagnostic: %q", prompts)
 				}
 			}

@@ -393,7 +393,7 @@ func currentRunReportDiagnostics(todos []*team.TodoItem, manifest *team.Evidence
 			continue
 		}
 		binding, ok := manifest.VerifiedTaskBinding(item.ID)
-		if !ok || binding.RunID != runID {
+		if !ok {
 			continue
 		}
 		// Extra-model candidates can share one Todo attempt. Completion order
@@ -407,7 +407,7 @@ func currentRunReportDiagnostics(todos []*team.TodoItem, manifest *team.Evidence
 				continue
 			}
 		}
-		if itemHasAmbiguousCurrentRunReceipts(producer, runID) {
+		if itemHasAmbiguousCurrentRunReceipts(producer, binding.RunID) {
 			continue
 		}
 		var b strings.Builder

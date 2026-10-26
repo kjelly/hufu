@@ -410,7 +410,14 @@ func FilterEventsForBranch(events []RunEvent, st *SessionTree, targetBranchID st
 // must not turn malformed tree metadata into a partial report should use this
 // checked form instead of FilterEventsForBranch.
 func ProjectValidatedEventsForBranch(events []RunEvent, st *SessionTree, targetBranchID string) ([]RunEvent, error) {
-	return projectEventsForBranch(events, st, targetBranchID)
+	lineage, err := projectEventsForBranch(events, st, targetBranchID)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateTerminalInputOrigins(lineage); err != nil {
+		return nil, err
+	}
+	return lineage, nil
 }
 
 func isVerifySuccess(vr *VerificationResult) bool {
@@ -773,7 +780,7 @@ func snapshotBranchState(docs runtimeDocs, workspace string, st *SessionTree, br
 	if err != nil {
 		sd = nil
 	}
-	if sd != nil && len(sd.Tasks) > 0 {
+	if sd != nil {
 		plan := make([]*TodoItem, len(sd.Tasks))
 		for i, t := range sd.Tasks {
 			plan[i] = cloneTodoItem(t)

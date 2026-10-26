@@ -50,6 +50,7 @@ type CompiledResultContract struct {
 	worksetInputs      *resultWorksetInputsSpec
 	fixedCollections   []resultFixedCollectionSpec
 	runtimeInputs      []resultRuntimeInputSpec
+	submissionFields   []string
 	finalReport        *template.Template
 }
 

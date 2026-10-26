@@ -97,6 +97,10 @@ func compileResultContractDocument(id string, raw []byte) (*CompiledResultContra
 	if err := validateResultContractSchemaNode(root, ""); err != nil {
 		return nil, fmt.Errorf("schema %q: %w", id, err)
 	}
+	fields, err := compileResultSubmissionFields(root)
+	if err != nil {
+		return nil, fmt.Errorf("schema %q: %w", id, err)
+	}
 	evidence, report, err := compileResultContractExtensions(root)
 	if err != nil {
 		return nil, fmt.Errorf("schema %q: %w", id, err)
@@ -169,7 +173,7 @@ func compileResultContractDocument(id string, raw []byte) (*CompiledResultContra
 	return &CompiledResultContract{
 		ID: id, SchemaSHA256: hex.EncodeToString(sum[:]), CanonicalSchema: canonical, schema: schema,
 		toolEvidence: evidence, finalReport: report, evidenceInputs: inputs, evidenceReferences: references, worksetInputs: worksetInputs,
-		fixedCollections: collections, evidenceKeys: evidenceKeys, runtimeInputs: runtimeInputs,
+		fixedCollections: collections, evidenceKeys: evidenceKeys, runtimeInputs: runtimeInputs, submissionFields: fields,
 	}, nil
 }
 

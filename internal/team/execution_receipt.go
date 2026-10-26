@@ -61,11 +61,13 @@ type RepairAttemptProvenance struct {
 	// InvocationRunID identifies the public invocation that performed this
 	// repair. Receipt.RunID intentionally remains the original task occurrence
 	// identity, which may belong to an earlier run during resume.
-	InvocationRunID string              `json:"invocation_run_id,omitempty"`
-	Success         bool                `json:"success"`
-	Prompt          string              `json:"prompt,omitempty"`
-	SubmittedResult *TaskResult         `json:"submitted_result,omitempty"`
-	FailureReason   RepairFailureReason `json:"failure_reason,omitempty"`
+	InvocationRunID string                     `json:"invocation_run_id,omitempty"`
+	Model           string                     `json:"model,omitempty"`
+	Success         bool                       `json:"success"`
+	Prompt          string                     `json:"prompt,omitempty"`
+	SubmittedResult *TaskResult                `json:"submitted_result,omitempty"`
+	FailureReason   RepairFailureReason        `json:"failure_reason,omitempty"`
+	Generation      RepairGenerationDiagnostic `json:"generation,omitzero"`
 	// Error preserves the bounded validation/preparation diagnostic that
 	// caused this repair turn to fail. Schema-only retries consume this exact
 	// runtime-owned message instead of asking the model to guess which field
@@ -83,6 +85,7 @@ type RepairProvenance struct {
 	FailureReason   RepairFailureReason       `json:"failure_reason,omitempty"`
 	RepairAttempts  int                       `json:"repair_attempts,omitempty"`
 	History         []RepairAttemptProvenance `json:"history,omitempty"`
+	OperatorGrants  []ResultRepairGrant       `json:"operator_grants,omitempty"`
 }
 
 // StepBudgetUsage records how much of an attempt's step budget was consumed and

@@ -906,6 +906,7 @@ type RunResult struct {
 	EvidenceManifest     *EvidenceManifest            `json:"evidence_manifest,omitempty"`
 	Telemetry            *RunTelemetry                `json:"telemetry,omitempty"`
 	RunInputs            *RunInputSnapshot            `json:"run_inputs,omitempty"`
+	RunInputOriginRunID  string                       `json:"run_input_origin_run_id,omitempty"`
 	InputBoundAssertions []InputBoundAssertionSummary `json:"input_bound_assertions,omitempty"`
 	// Review completion is intentionally separate from an implementation
 	// outcome: a completed exploratory review may surface findings but never

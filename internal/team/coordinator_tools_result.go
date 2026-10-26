@@ -47,7 +47,7 @@ type SubmitResultInput struct {
 	AssumptionChecks     []AssumptionCheck           `json:"assumption_checks,omitempty"`
 	InvariantAssessments *[]InvariantAssessmentClaim `json:"invariant_assessments,omitempty"`
 	Facts                map[string]any              `json:"facts,omitempty"`
-	Confidence           float64                     `json:"confidence"`
+	Confidence           float64                     `json:"confidence,omitempty"`
 	// StructuredPayload is validated against the task's result contract by
 	// the runtime; it never becomes part of the TaskResult unvalidated.
 	StructuredPayload json.RawMessage `json:"structured_payload,omitempty"`
@@ -129,6 +129,7 @@ type submitResultTool struct {
 	coordinator *Coordinator
 	todoID      string
 	sink        TaskResultSink
+	candidate   *ResultCandidate
 }
 
 func (*submitResultTool) DescribeWorkspaceScope() tools.ToolWorkspaceScopeDescriptor {
@@ -141,10 +142,18 @@ func (t *submitResultTool) ProviderOptions() fantasy.ProviderOptions {
 func (t *submitResultTool) SetProviderOptions(opts fantasy.ProviderOptions) {}
 
 func (t *submitResultTool) Info() fantasy.ToolInfo {
+	if t.candidate != nil {
+		return resultPatchToolInfo(t.candidate)
+	}
+	return t.fullInfo()
+}
+
+func (t *submitResultTool) fullInfo() fantasy.ToolInfo {
 	info := submitResultToolInfo(t.submissionContract())
 	if t.coordinator != nil {
 		_, compiled, _ := t.coordinator.boundResultContract(t.todoID)
 		if compiled != nil {
+			info = projectResultSubmissionFields(info, compiled.submissionFields)
 			schema, _ := info.Parameters["structured_payload"].(map[string]any)
 			advertiseResultEvidenceKeys(schema, compiled.evidenceKeys)
 			info.Parameters["structured_payload"] = providerResultIntegerStrings(schema, 0)
@@ -442,15 +451,20 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 }
 
 //nolint:gocyclo // submitResultTool.Run handles the full lifecycle of a worker result submission.
-func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	contract := t.submissionContract()
 	if t.coordinator != nil {
 		if err := t.coordinator.validateFixedCollectionInputJSON(t.todoID, call.Input); err != nil {
 			return fantasy.NewTextErrorResponse(err.Error()), nil
 		}
 	}
-	call.Input = canonicalToolArgumentObjects(call.Input, t.Info())
-	call.Input, _ = tools.CanonicalToolArguments(call.Input, t.Info())
+	call.Input = canonicalToolArgumentObjects(call.Input, t.fullInfo())
+	call.Input, _ = tools.CanonicalToolArguments(call.Input, t.fullInfo())
+	if t.usesSubmissionProjection() {
+		if violation := validateSubmissionFieldPresence(call.Input, t.fullInfo()); violation != nil {
+			return fantasy.NewTextErrorResponse(buildToolSchemaValidationPrompt(submitResultToolName, violation, t.fullInfo())), nil
+		}
+	}
 	if t.coordinator != nil {
 		normalized, err := t.coordinator.resolveResultEvidenceKeys(ctx, t.todoID, call.Input)
 		if err != nil {
@@ -471,14 +485,14 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		// the rejected object without removing a legal namesake elsewhere.
 		if strings.HasPrefix(err.Error(), "json: unknown field ") {
 			if normalized, normalizeErr := normalizeSubmitResultInput([]byte(call.Input)); normalizeErr == nil {
-				validationInfo := t.Info()
+				validationInfo := t.fullInfo()
 				validationInfo.Required = nil
 				if validationErr := validateToolArguments(string(normalized), validationInfo); validationErr != nil {
-					return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid submit_result arguments: %v. %s", err, buildToolSchemaValidationPrompt(submitResultToolName, validationErr, t.Info()))), nil
+					return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid submit_result arguments: %v. %s", err, buildToolSchemaValidationPrompt(submitResultToolName, validationErr, t.fullInfo()))), nil
 				}
 			}
 		}
-		info := t.Info()
+		info := t.fullInfo()
 		violation := validateToolArguments(call.Input, info)
 		if violation == nil {
 			violation = &toolArgumentSchemaError{Path: "$", Expected: "complete tool argument object", Actual: "invalid arguments"}
@@ -488,7 +502,7 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		}
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid submit_result arguments: %v. %s", err, buildToolSchemaValidationPrompt(submitResultToolName, violation, info))), nil
 	}
-	validationInfo := t.Info()
+	validationInfo := t.fullInfo()
 	// Top-level presence has task-specific semantic handling below (including
 	// stable result-contract error codes and runtime defaults). Validate the
 	// decoder's canonical DTO here so losslessly normalized shorthand remains
@@ -499,7 +513,7 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		return fantasy.NewTextErrorResponse("invalid submit_result arguments: canonicalize decoded input"), nil
 	}
 	if validationErr := validateToolArguments(string(canonicalInput), validationInfo); validationErr != nil {
-		return fantasy.NewTextErrorResponse(buildToolSchemaValidationPrompt(submitResultToolName, validationErr, t.Info())), nil
+		return fantasy.NewTextErrorResponse(buildToolSchemaValidationPrompt(submitResultToolName, validationErr, t.fullInfo())), nil
 	}
 	res := input.taskResult()
 	if res.Summary == "" {
@@ -529,13 +543,11 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		if contractErr != nil {
 			return fantasy.NewTextErrorResponse(contractErr.Error()), nil
 		}
-		if transcript, _ := ctx.Value(taskTranscriptKey{}).(*taskTranscript); compiled != nil && compiled.toolEvidence != nil && transcript != nil && transcript.todoID == t.todoID {
-			identity, identityErr := submitResultRuntimeIdentityFromContext(ctx, t.coordinator, t.todoID)
-			if identityErr != nil {
-				return fantasy.NewTextErrorResponse(identityErr.Error()), nil
-			}
-			if transcript.runID == identity.RunID && transcript.attempt == identity.Attempt && transcript.agent == identity.Agent {
-				observations = transcript.evidenceRecords()
+		if compiled != nil && compiled.toolEvidence != nil {
+			var evidenceErr error
+			observations, evidenceErr = submissionToolEvidence(ctx, t.coordinator, t.todoID)
+			if evidenceErr != nil {
+				return fantasy.NewTextErrorResponse(evidenceErr.Error()), nil
 			}
 		}
 		if res.Status != TaskResultStatusBlocked || len(bytes.TrimSpace(input.StructuredPayload)) != 0 || !hasResultDecisions(compiled) {
@@ -614,6 +626,13 @@ func (t *submitResultTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		tx, txErr := t.coordinator.beginTaskResultSubmission(identity)
 		if txErr != nil {
 			return fantasy.NewTextErrorResponse("store submitted result: " + txErr.Error()), nil
+		}
+		if base, ok := ctx.Value(resultPatchBaseKey{}).(string); ok {
+			current := t.coordinator.todoItemByID(t.todoID)
+			if current == nil || current.ResultCandidate == nil || current.ResultCandidate.SHA256 != base {
+				_ = tx.rollback()
+				return fantasy.NewTextErrorResponse("candidate_stale"), nil
+			}
 		}
 		// Runtime ownership begins only after the occurrence is reserved. The
 		// candidate now contains the values that worker-independent assertions

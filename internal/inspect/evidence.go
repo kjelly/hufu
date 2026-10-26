@@ -36,8 +36,10 @@ type EvidenceRequirementData struct {
 }
 
 type EvidenceManifestData struct {
-	Hash   string `json:"hash,omitempty"`
-	Status string `json:"status"`
+	Hash                 string `json:"hash,omitempty"`
+	Status               string `json:"status"`
+	RecoverySnapshotID   string `json:"recovery_snapshot_id,omitempty"`
+	RecoverySnapshotHash string `json:"recovery_snapshot_hash,omitempty"`
 }
 
 type EvidenceVerificationData struct {
@@ -152,7 +154,8 @@ func selectedRunResult(selected selectedRun, runID string) (*team.RunResult, err
 }
 
 func projectEvidenceManifest(data *EvidenceData, manifest *team.EvidenceManifest) {
-	data.Manifest = EvidenceManifestData{Hash: manifest.ManifestHash, Status: manifest.Status}
+	data.Manifest = EvidenceManifestData{Hash: manifest.ManifestHash, Status: manifest.Status,
+		RecoverySnapshotID: manifest.RecoverySnapshotID, RecoverySnapshotHash: manifest.RecoverySnapshotHash}
 	for _, ref := range manifest.ArtifactRefs {
 		data.ArtifactRefs = append(data.ArtifactRefs, safeArtifactMetadata(ref))
 	}

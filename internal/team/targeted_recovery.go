@@ -164,10 +164,7 @@ func (c *Coordinator) resolveRecoveryRunInputs(ctx context.Context, taskID strin
 	if err := validateResumeRunInputAssignments(c.session.RunInputDefinitions, assignments, frozen, c.session.Config.Name); err != nil {
 		return err
 	}
-	return c.mutateSessionData(func(session *SessionData) error {
-		session.ActiveRunInputSnapshotID = frozen.ID
-		return nil
-	})
+	return c.selectRecoveryRunInputSnapshot(frozen)
 }
 
 func (c *Coordinator) reconcileTaskForOperator(ctx context.Context, item *TodoItem) error {

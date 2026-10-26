@@ -91,8 +91,8 @@ func validateRequestAcceptanceProof(ctx context.Context, result *RunResult, item
 		return fmt.Errorf("proof is not from a completed task bound to this invocation")
 	}
 	receipt := latestSuccessfulExecutionReceipt(item, result.RunID)
-	if receipt == nil && result.RunInputs.RunID != result.RunID {
-		receipt = latestSuccessfulExecutionReceipt(item, result.RunInputs.RunID)
+	if receipt == nil {
+		receipt = recoveredEvidenceReceipt(item, result.RunInputs)
 	}
 	if receipt == nil || receipt.TranscriptRef != proof.ArtifactID || receipt.RunInputSnapshotID != result.RunInputs.ID || receipt.RunInputSnapshotHash != result.RunInputs.SnapshotHash || store == nil {
 		return fmt.Errorf("proof does not reference the winning task transcript")

@@ -174,6 +174,8 @@ func manifestStatus(result *team.RunResult) string {
 }
 
 type replayTaskProjection struct {
+	CandidateSHA256 string
+
 	Status            team.TaskStatus
 	Phase             team.Phase
 	Agent             string
@@ -196,6 +198,7 @@ func compareTaskProjections(expected, actual []*team.TodoItem) []string {
 			diffs = append(diffs, prefix)
 			continue
 		}
+		compareField(&diffs, prefix+".result_candidate.sha256", left.CandidateSHA256, right.CandidateSHA256)
 		compareField(&diffs, prefix+".status", left.Status, right.Status)
 		compareField(&diffs, prefix+".phase", left.Phase, right.Phase)
 		compareField(&diffs, prefix+".agent", left.Agent, right.Agent)
@@ -231,7 +234,11 @@ func replayTasksByID(items []*team.TodoItem) (map[string]replayTaskProjection, [
 			receipts = append(receipts, fmt.Sprintf("%d:%s:%s:%s:%s:%s", receipt.Attempt, safeOpaqueRef(receipt.ModelExecutionID), safeOpaqueRef(receipt.ProducerID), boundedCode(receipt.Backend), exitCode, verification))
 		}
 		slices.Sort(receipts)
-		byID[item.ID] = replayTaskProjection{Status: item.Status, Phase: item.Phase, Agent: item.Agent, ExecutionTarget: item.ExecutionTarget.String(), ExecutionTopology: topology, RecoveryState: item.RecoveryState, Receipts: receipts}
+		candidateHash := ""
+		if item.ResultCandidate != nil {
+			candidateHash = item.ResultCandidate.SHA256
+		}
+		byID[item.ID] = replayTaskProjection{CandidateSHA256: candidateHash, Status: item.Status, Phase: item.Phase, Agent: item.Agent, ExecutionTarget: item.ExecutionTarget.String(), ExecutionTopology: topology, RecoveryState: item.RecoveryState, Receipts: receipts}
 		ids = append(ids, item.ID)
 	}
 	return byID, ids

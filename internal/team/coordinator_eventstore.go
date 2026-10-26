@@ -199,7 +199,9 @@ func (c *Coordinator) hydrateDecisionPrimitiveResults(events []RunEvent) {
 // reconcilePendingTerminalCommit is the only restart repair for an uncertain
 // terminal append. It accepts exactly one matching run_finished event from the
 // active branch lineage, reduces that lineage, and then advances projections.
-// It never appends or replays the terminal side effect.
+// A canonically aborted, zero-turn preflight can instead be settled as failed;
+// all other missing terminal events retain the admission barrier. It never
+// replays a terminal side effect.
 func (c *Coordinator) reconcilePendingTerminalCommit(st *SessionTree, activeBranch string) (present, reconciled bool) {
 	if c == nil || c.eventStore == nil {
 		return false, false
@@ -237,7 +239,15 @@ func (c *Coordinator) reconcilePendingTerminalCommit(st *SessionTree, activeBran
 		matchIndex = index
 	}
 	if matchIndex == -1 {
-		return invalid("pending terminal commit has no matching run_finished event")
+		event, recovered, err := c.recoverAbortedPreflightTerminal(lineage, pending)
+		if err != nil {
+			return invalid("aborted preflight terminal recovery failed: " + utils.RedactSecrets(err.Error()))
+		}
+		if !recovered {
+			return invalid("pending terminal commit has no matching run_finished event")
+		}
+		matchIndex = len(lineage)
+		lineage = append(lineage, event)
 	}
 	projected := ReduceToSessionData(lineage[:matchIndex+1])
 	if projected == nil || projected.RunResult == nil || projected.RunResult.RunID != pending.RunID {
@@ -759,12 +769,9 @@ func (c *Coordinator) commitTaskTransition(ctx context.Context, taskID string, e
 	if expected != nil && current.Status != *expected {
 		return fmt.Errorf("commit task transition: task %s expected %s, got %s", taskID, *expected, current.Status)
 	}
-	resetForResume, _ := metadata["reset_for_resume"].(bool)
-	if resetForResume && next != TaskPending {
-		return fmt.Errorf("commit task transition: task %s resume reset must target pending", taskID)
-	}
-	if !resetForResume && !CanTransition(current.Status, next) {
-		return fmt.Errorf("commit task transition: invalid %s -> %s for task %s", current.Status, next, taskID)
+	resetForResume, repairGrant, modeErr := c.validateTaskTransitionMode(current, next, metadata)
+	if modeErr != nil {
+		return modeErr
 	}
 	if next == TaskDone {
 		attempt := c.currentTaskAttempt(taskID)
@@ -784,6 +791,15 @@ func (c *Coordinator) commitTaskTransition(ctx context.Context, taskID string, e
 		}
 	}
 	projected := *current
+	if repairGrant != nil {
+		receipt := cloneExecutionReceipt(current.ExecutionReceipt)
+		receipt.RepairProvenance.OperatorGrants = append(receipt.RepairProvenance.OperatorGrants, *repairGrant)
+		projected.ExecutionReceipt = &receipt
+		// The previous blocked transition remains in the journal. This grant
+		// reopens only its submission; it is no longer an active human stop.
+		projected.FailureEvent = nil
+		projected.RuntimeError = nil
+	}
 	// Every lifecycle projection invalidates the prior worker lease. A retry,
 	// checkpoint pause, or terminal decision must not be overwritten by a late
 	// result from the worker that observed the old projection.
@@ -1010,6 +1026,7 @@ func (c *Coordinator) commitTaskResetForRetry(ctx context.Context, taskID string
 	projected.ModelTime = 0
 	projected.ToolTime = 0
 	projected.TypedResult = nil
+	projected.ResultCandidate = nil
 	projected.CheckpointPause = false
 	projected.Retries = current.Retries + 1
 	if len(modelOverride) == 1 && modelOverride[0] != "" {
@@ -1106,6 +1123,7 @@ func (c *Coordinator) CommitStaleGateVerifierReset(ctx context.Context, taskID s
 	projected.ModelTime = 0
 	projected.ToolTime = 0
 	projected.TypedResult = nil
+	projected.ResultCandidate = nil
 	projected.CheckpointPause = false
 
 	if !c.hasDurableEventJournal() {
@@ -1629,6 +1647,9 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 	}
 	if item.VerifyResult != nil {
 		payload["verify_result"] = item.VerifyResult
+	}
+	if item.ResultCandidate != nil {
+		payload["result_candidate"] = item.ResultCandidate
 	}
 	if item.TypedResult != nil {
 		payload["typed_result"] = item.TypedResult

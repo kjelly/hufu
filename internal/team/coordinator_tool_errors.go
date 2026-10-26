@@ -1,12 +1,50 @@
 package team
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"charm.land/fantasy"
 )
+
+type coordinatorStreamFailureKey struct{}
+
+// coordinatorStreamFailure carries the first hard tool error across Fantasy's
+// local-tool executor, which renders Go errors as tool results and ignores
+// OnToolResult errors. Each stream owns its boundary; workers mask inherited
+// coordinator boundaries so their recoverable tool errors remain local.
+type coordinatorStreamFailure struct {
+	mu  sync.Mutex
+	err error
+}
+
+func (b *coordinatorStreamFailure) failure() error {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.err
+}
+
+func (b *coordinatorStreamFailure) record(err error) {
+	if b == nil || err == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.err == nil {
+		b.err = err
+	}
+}
+
+func coordinatorStreamBoundary(ctx context.Context) *coordinatorStreamFailure {
+	boundary, _ := ctx.Value(coordinatorStreamFailureKey{}).(*coordinatorStreamFailure)
+	return boundary
+}
 
 // maxConsecutiveCoordinatorToolErrors bounds how many coordinator tool error
 // responses in a row the model may try to correct before the run stops. A

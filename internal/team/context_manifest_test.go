@@ -321,7 +321,7 @@ func TestAuxiliaryCompilerPreservesCompleteStructuredReviewPrompt(t *testing.T) 
 
 func TestAuxiliaryAcceptanceReviewPreservesTerminalWorkflowPhase(t *testing.T) {
 	for _, phase := range []Phase{PhaseDone, PhaseFailed} {
-		for _, purpose := range []string{"request_acceptance_review", "request_acceptance_evidence"} {
+		for _, purpose := range []string{"request_acceptance_review", "request_acceptance_evidence", "compactor", "final_summary_repair"} {
 			t.Run(string(phase)+"/"+purpose, func(t *testing.T) {
 				c := newDirectTerminationCoordinator(t, &contextManifestCountingAgent{})
 				c.executionRunID = "run-terminal-acceptance"

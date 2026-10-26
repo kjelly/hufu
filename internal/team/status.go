@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -347,6 +348,7 @@ type TodoItem struct {
 	ReconcileTool       string               `json:"reconcile_tool,omitempty"`
 	RecoveryState       string               `json:"recovery_state,omitempty"`
 	TypedResult         *TaskResult          `json:"typed_result,omitempty"`
+	ResultCandidate     *ResultCandidate     `json:"result_candidate,omitempty"`
 	Resolution          *TaskResolution      `json:"resolution,omitempty"`
 	Kind                TaskKind             `json:"kind,omitempty"`
 	Advances            []string             `json:"advances,omitempty"`
@@ -1419,6 +1421,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		ReconcileTool:                 item.ReconcileTool,
 		RecoveryState:                 item.RecoveryState,
 		TypedResult:                   typedResult,
+		ResultCandidate:               cloneResultCandidate(item.ResultCandidate),
 		Resolution:                    resolution,
 		Kind:                          item.Kind,
 		Advances:                      append([]string(nil), item.Advances...),
@@ -1859,6 +1862,7 @@ func cloneExecutionReceipt(receipt *ExecutionReceipt) ExecutionReceipt {
 	}
 	if receipt.RepairProvenance != nil {
 		copyRP := *receipt.RepairProvenance
+		copyRP.OperatorGrants = slices.Clone(receipt.RepairProvenance.OperatorGrants)
 		if receipt.RepairProvenance.SubmittedResult != nil {
 			copyRP.SubmittedResult = cloneTaskResult(receipt.RepairProvenance.SubmittedResult)
 		}

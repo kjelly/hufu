@@ -264,7 +264,7 @@ func buildDecisionWitness(runID string, runResult *team.RunResult, tasks []*team
 			}
 			producer := tasksByID[binding.TaskID]
 			if producer != nil {
-				if receipt := team.LatestSuccessfulExecutionReceipt(producer, runID); receipt != nil {
+				if receipt := team.LatestSuccessfulExecutionReceipt(producer, binding.RunID); receipt != nil {
 					if hash, err := HashExecutionReceipt(*receipt); err == nil {
 						tw.WinningAttempt.ReceiptHash = hash
 					}

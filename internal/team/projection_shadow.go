@@ -21,6 +21,9 @@ func CompareCanonicalProjection(live *SessionData, events []RunEvent) error {
 	if err := validateWorkflowCycleLineage(events); err != nil {
 		return err
 	}
+	if err := validateTerminalInputOrigins(events); err != nil {
+		return err
+	}
 	if _, err := executionPolicySnapshotFromEvents(events); err != nil {
 		return err
 	}
@@ -377,6 +380,7 @@ type canonicalTaskShadow struct {
 	RecoveryHypothesis            *RecoveryHypothesis         `json:"recovery_hypothesis,omitempty"`
 	RecoveryState                 string                      `json:"recovery_state,omitempty"`
 	TypedResult                   *TaskResult                 `json:"typed_result,omitempty"`
+	ResultCandidate               *ResultCandidate            `json:"result_candidate,omitempty"`
 	Resolution                    *TaskResolution             `json:"resolution,omitempty"`
 	Kind                          string                      `json:"kind,omitempty"`
 	Advances                      []string                    `json:"advances,omitempty"`
@@ -492,6 +496,7 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		RecoveryHypothesis:            cloneRecoveryHypothesis(item.RecoveryHypothesis),
 		RecoveryState:                 item.RecoveryState,
 		TypedResult:                   item.TypedResult,
+		ResultCandidate:               cloneResultCandidate(item.ResultCandidate),
 		Resolution:                    item.Resolution,
 		Kind:                          string(item.Kind),
 		Advances:                      normalizeStringSlice(item.Advances),

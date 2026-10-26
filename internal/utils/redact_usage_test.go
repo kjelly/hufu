@@ -14,12 +14,12 @@ func TestRedactJSONLDataPreservesUsageCounters(t *testing.T) {
 	}{
 		{
 			name: "numeric usage counters survive",
-			line: `{"usage":{"input_tokens":10,"output_tokens":20,"total_tokens":30,"progress_tokens":5,"cache_read_tokens":7,"cache_creation_tokens":3}}`,
-			want: []string{`"input_tokens":10`, `"output_tokens":20`, `"total_tokens":30`, `"progress_tokens":5`, `"cache_read_tokens":7`, `"cache_creation_tokens":3`},
+			line: `{"usage":{"input_tokens":10,"output_tokens":20,"reasoning_tokens":15,"total_tokens":30,"progress_tokens":5,"cache_read_tokens":7,"cache_creation_tokens":3}}`,
+			want: []string{`"input_tokens":10`, `"output_tokens":20`, `"reasoning_tokens":15`, `"total_tokens":30`, `"progress_tokens":5`, `"cache_read_tokens":7`, `"cache_creation_tokens":3`},
 		},
 		{
 			name:    "string values under usage keys stay redacted",
-			line:    `{"usage":{"input_tokens":"sk-live-abcdefghijklmnop"}}`,
+			line:    `{"usage":{"input_tokens":"sk-live-abcdefghijklmnop","reasoning_tokens":"sk-live-abcdefghijklmnop"}}`,
 			notWant: []string{"sk-live-abcdefghijklmnop"},
 		},
 	}

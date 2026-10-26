@@ -58,6 +58,12 @@ session 狀態由受信任 server 管理。HTTP(S) 格式驗證不會阻擋私�
 
 ## 執行環境
 
+- 三個 worker 設定 `reasoning-effort: none`，並保留 65,536 token 的單輪
+  輸出預算。長證據的結果修復曾用滿 24,576 token，未產生 `submit_result`；
+  即使 reasoning 計數為零，部分模型仍把思考文字放進一般文字欄位，因此
+  不能只靠 thinking 控制保障提交空間。此預算不放寬引文、schema、證據綁定
+  或驗收。Ollama OpenAI 相容端點以 `none` 請求關閉 thinking，實際模型行為
+  仍需驗證（[官方說明](https://docs.ollama.com/api/openai-compatibility)）。
 - 設定 `OLLAMA_API_KEY`，供內建 `web_search` 使用。
 - 記憶檢索使用語意排序（`semantic-retrieval: {mode: active, fusion: score_normalized}`）：
   研究 goal 多為中文，lexical 檢索讀不到中文。需要本機 Ollama 已有 `embeddinggemma:latest`；
@@ -92,8 +98,21 @@ hufu --agent-team web-research --dry-run '查核一項公開事實並列出來�
 hufu --agent-team web-research --new '查核一項公開事實並列出來源'
 ```
 
-使用包含新 runtime 支援的 Hufu binary，並以 `--new` 開啟 session。
-舊 session 的工具政策、schema 或 server 設定不同，resume 會 fail closed。
+使用包含新 runtime 支援的 Hufu binary。既有相容 session 使用
+`resume --team web-research --branch <來源分支> --model <原 worker model>`
+接續；先透過 `session list`、`inspect task --branch` 核對來源。已完成的
+researcher、countercheck 結果保留原 task ID、run ID 與 payload hash，後續
+透過 `evidence_from` 引用，只派發尚未完成的工作。
+
+若 verifier 已有瀏覽證據但提交停在 blocked protocol，使用同一 resume
+命令加上 `--repair-result <原 verifier task ID>`，明確授權有限的結果提交
+修復。runtime 只提供 `submit_result`，承接原工具收據與觀察，不重新瀏覽；
+舊修復歷史與原分支成果仍保留。模型耗盡輸出卻未提交時，應檢查修復診斷。
+此命令不能以更弱的契約取代缺失證據。
+
+工具政策、schema 或 server 設定不同，resume 會 fail closed，並列出可供
+核對的分支；不會自動改用 main 或啟動全新研究。只有刻意換用不同契約時，
+才另行建立新工作流程。
 缺失的 policy 工具會在 coordinator 初始化時報錯；dry-run 不會檢查實際
 browser 啟動、網站可達性或供應商 API。
 
@@ -190,3 +209,18 @@ go test ./.agent-teams/web-research/tests
 它驗證最終判定改變時不會呈現舊的處理理由，並保留原始輸入與來源缺口。
 原子性及人物歸屬仍由模型比對語意；schema 與模板不能自行證明內容正確。
 更新不會改寫已保存的歷史報告；以 `--new` 重新研究才能套用新契約。
+
+
+## 提交契約 v2 與既有 session
+
+`schemas/report-v2.json` 提供收窄的外層提交欄位，並由 runtime 從有效
+`evidence_from` 綁定 `input_review`。模型只提交語意判斷，不重建來源 task ID
+或 payload hash。這是供新契約採用的版本；目前 verifier 的 v1 引用保留，
+避免改變 `recover-verifier-20261026` 等既有 session 的 frozen contract。
+需要採用 v2 時，應為新的工作流程明確將 result-contract 指向 v2，並同步移除
+verifier 提示中要求模型填寫 `input_review` 的 v1 說明，以工具 schema 為準。不要將
+既有分支的 v1 就地覆寫，也不需要為了局部修復執行 `--new`。
+
+候選保存與局部修復是通用 runtime 能力，v1 也可使用。錯置欄位由 runtime
+搬移完整內容，修復回合不重跑 researcher、countercheck 或瀏覽；原有收據
+與已接受來源仍須完整通過驗證。v2 的啟用本身不會修復任何歷史任務。

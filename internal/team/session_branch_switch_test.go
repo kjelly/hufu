@@ -200,6 +200,124 @@ func TestBranchStateWritesTouchOnlyTheirRows(t *testing.T) {
 	}
 }
 
+func TestForkSessionBranchUsesSelectedTaskHistory(t *testing.T) {
+	for _, target := range []string{"empty", "before_task", "active_head"} {
+		t.Run(target, func(t *testing.T) {
+			workspace := t.TempDir()
+			es, err := NewEventStore(workspace, "run-fork", "session-fork")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = es.Close() })
+			st := NewSessionTree()
+			active, err := st.CreateRootBranch("work")
+			if err != nil {
+				t.Fatal(err)
+			}
+			st.ActiveBranch = active.ID
+			es.SetBranchID(active.ID)
+			before, err := es.AppendPersisted(RunEvent{Type: string(EventUserMessageAdded), Actor: "user", Payload: []byte(`{"role":"user","content":"start"}`)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			appendBranchEvent(t, es, RunEvent{Type: string(EventTaskCompleted), TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","agent":"worker","desc":"accepted work","status":"done"}`)})
+			live := ReduceToSessionData(FilterEventsForBranch(mustReadEvents(t, es), st, active.ID))
+			if err := SaveSession(workspace, live); err != nil {
+				t.Fatal(err)
+			}
+			if err := SaveSessionTree(workspace, st); err != nil {
+				t.Fatal(err)
+			}
+			forkTarget := map[string]string{"empty": "main", "before_task": before.ID, "active_head": active.ID}[target]
+			branch, err := ForkSessionBranch(t.Context(), workspace, st, es, "child", forkTarget)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := LoadSession(workspace)
+			want := 0
+			if target == "active_head" {
+				want = 1
+			}
+			if got == nil || len(got.Tasks) != want {
+				t.Fatalf("forked checkpoint = %+v, want %d tasks", got, want)
+			}
+			if len(branch.State.TaskPlan) != want {
+				t.Fatalf("forked branch snapshot retained %d tasks, want %d", len(branch.State.TaskPlan), want)
+			}
+			canonical, err := ReplayTodoList(FilterEventsForBranch(mustReadEvents(t, es), st, branch.ID))
+			if err != nil || len(canonical) != len(got.Tasks) {
+				t.Fatalf("fork disagrees with replay: tasks=%d replay=%d err=%v", len(got.Tasks), len(canonical), err)
+			}
+			c := newTestCoordinator(t)
+			c.session.Workspace = workspace
+			c.SetSessionData(got)
+			c.initEventStore()
+			if c.sessionData.RecoveryRequired {
+				t.Fatalf("fork cannot resume: %s", c.sessionData.RecoveryReason)
+			}
+			if len(st.Branches[active.ID].State.TaskPlan) != 1 {
+				t.Fatal("fork lost the outgoing branch's work")
+			}
+			if _, _, err := CheckoutSessionBranch(t.Context(), workspace, st, es, active.ID); err != nil {
+				t.Fatal(err)
+			}
+			if restored := LoadSession(workspace); len(restored.Tasks) != 1 || restored.Tasks[0].Status != TaskDone {
+				t.Fatalf("returning to original branch lost accepted work: %+v", restored.Tasks)
+			}
+		})
+	}
+}
+
+func TestForkBeforeCompactionClearsFutureSummary(t *testing.T) {
+	workspace := t.TempDir()
+	es, err := NewEventStore(workspace, "run-fork", "session-fork")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = es.Close() })
+	before, err := es.AppendPersisted(RunEvent{Type: string(EventUserMessageAdded), Actor: "user", Payload: []byte(`{"role":"user","content":"before compaction"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := testCompactionState(t, workspace)
+	checkpoint := state.Branches["main"]
+	generation := state.Generations[checkpoint.GenerationID]
+	generationEvent, err := compactionGenerationAttestationEvent(generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendBranchEvent(t, es, generationEvent)
+	checkpointEvent, err := compactionCheckpointAttestationEvent(checkpoint, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendBranchEvent(t, es, checkpointEvent)
+	st := NewSessionTree()
+	if err := SaveSession(workspace, NewSession()); err != nil {
+		t.Fatal(err)
+	}
+	branch, err := ForkSessionBranch(t.Context(), workspace, st, es, "before-summary", before.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if branch.State.Compaction != nil || st.Branches["main"].State.Compaction == nil {
+		t.Fatal("fork must clear the future summary while preserving the parent's summary")
+	}
+}
+
+func TestSnapshotBranchStateClearsEmptyTaskPlan(t *testing.T) {
+	workspace := t.TempDir()
+	st := NewSessionTree()
+	st.Branches["main"].State.TaskPlan = []*TodoItem{{ID: "stale", Status: TaskDone}}
+	if err := SaveSession(workspace, NewSession()); err != nil {
+		t.Fatal(err)
+	}
+	SnapshotBranchState(workspace, st, "main")
+	if len(st.Branches["main"].State.TaskPlan) != 0 {
+		t.Fatal("empty checkpoint retained stale tasks in its branch snapshot")
+	}
+}
+
 // TestSessionTreeRoundTripsAndDropsRemovedBranches pins the table form of the
 // tree: labels and branch fields survive a reload, a branch removed from a
 // loaded tree is deleted, and a tree built in memory replaces the stored one.

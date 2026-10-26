@@ -433,7 +433,10 @@ Schema 可選用下列通用 runtime 擴充（都包含在 schema hash 中）：
 一個 object member；`group_append` 保留原有文字並追加限制。任何來源缺證據
 都會使其群組採用 fallback，避免部分來源仍未查核卻宣稱整項已證實。
 比對使用原始工具輸入值與引文（僅摺疊空白），不猜測 URL 等價或語意。
-沒有本機工具紀錄的 external backend/result-only repair 會依同一規則降級；
+result-only repair 沿用原始執行的工具證據，且不會將修復回合追加到原始
+transcript。中斷後恢復時，runtime 先核對收據所綁定 transcript 的內容雜湊、
+輸入快照及 result schema；無法驗證時拒絕修復，不得改用其他任務或 attempt
+的紀錄。沒有本機工具紀錄的 external backend 仍依同一規則降級；
 這證明來源被讀取及引文存在，不代表 runtime 判定了主張的語意真偽。
 
 宣告 diagnostics 後，runtime 會覆寫抓取與引用狀態；完整 schema 須允許
@@ -1112,3 +1115,43 @@ runtime-owned evidence input 或 fixed collection 重疊。`source_task` 必須�
 來源缺失、過期、收據不符或輸出不符合 schema 時，提交會被拒絕。儲存結果的
 驗證會重新核對綁定值，不會以較新的輸出重建歷史資料；文字與 JSON 數值不經
 模型重建或型別猜測。
+
+
+### 收窄提交介面與候選結果修復
+
+結果 schema 可用 `x-hufu-submission-fields` 選擇模型可提交的外層欄位：
+
+```json
+"x-hufu-submission-fields": ["status", "summary", "structured_payload", "memory_uses"]
+```
+
+必須包含 `status`、`summary`、`structured_payload`；其他項目必須是既有
+`submit_result` 欄位，不能重複。任務契約要求的 assertion 欄位仍保留。
+模型提示與工具 schema 使用相同欄位清單；未列出的欄位即使是 null 或空值
+也會被拒絕。未宣告此擴充的契約保持原介面。來源 ID、hash 與完整來源陣列
+應使用 `x-hufu-evidence-inputs` 的 `runtime_owned: true` 綁定，native 輸出
+使用 `x-hufu-runtime-inputs`；不可要求模型重抄，也不可由模型覆寫。
+
+結構錯誤會附上 `code`、`pointer`、`expected` 診斷。Pointer 相對於完整
+`submit_result` 參數，例如 `/structured_payload/findings/0/verdict`。
+有效 JSON object、具備綁定契約及工作區且不超過 256 KiB 的拒絕提交，可保存為
+獨立候選：它不是已接受結果，不會解除後續任務的依賴。候選以 CAS 保存經遮蔽
+後的完整參數，綁定分支、原 run/task/attempt、契約、frozen inputs 及有效來源。
+
+下一個 result-only 修復回合的 `submit_result` 只接受 `edits`：
+
+```json
+{"edits":[{"operation":"move","from":"/findings","path":"/structured_payload/findings"}]}
+```
+
+- `move` 只搬移診斷指出的錯置欄位，保留欄名與完整值；不得覆寫不同值。
+  缺少的目的 object 容器只可依 schema 與缺欄位診斷建立，不生成任何語意值。
+- `add` 只補診斷指出的缺少欄位；`replace` 只修正型別或 enum 錯誤的 scalar。
+- 每回合最多 16 個互不重疊的修改。禁止刪除、重排陣列、重命名集合 key、
+  修改有效判定、寫入 runtime-owned 欄位或重交整份報告。
+
+仍有結構錯誤時保存下一版候選及 parent hash。修補完成後走原本的完整
+schema、證據、收據、驗證與提交交易；候選存在不代表驗收成功。修復使用既有
+回合預算，只授權 `submit_result`，不重跑 worker 或瀏覽。超過診斷上限、
+來源缺失、契約不相容、候選過期或修正語意不明時停止，不能自行填入假資料。
+此介面用於本機 LLM 的 `submit_result`；external worker proposal 協定不變。

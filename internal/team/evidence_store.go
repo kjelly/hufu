@@ -547,16 +547,18 @@ type EvidenceBinding struct {
 }
 
 type EvidenceManifest struct {
-	SchemaVersion      int              `json:"schema_version"`
-	RunID              string           `json:"run_id"`
-	TaskID             string           `json:"task_id,omitempty"`
-	Attempt            int              `json:"attempt,omitempty"`
-	PolicyDecisionRefs []string         `json:"policy_decision_refs,omitempty"`
-	ArtifactRefs       []ArtifactRef    `json:"artifact_refs,omitempty"`
-	EvidenceResults    []EvidenceResult `json:"evidence_results,omitempty"`
-	PreviousHash       string           `json:"previous_hash,omitempty"`
-	ManifestHash       string           `json:"manifest_hash"`
-	Status             string           `json:"status"`
+	SchemaVersion        int              `json:"schema_version"`
+	RunID                string           `json:"run_id"`
+	TaskID               string           `json:"task_id,omitempty"`
+	Attempt              int              `json:"attempt,omitempty"`
+	PolicyDecisionRefs   []string         `json:"policy_decision_refs,omitempty"`
+	ArtifactRefs         []ArtifactRef    `json:"artifact_refs,omitempty"`
+	EvidenceResults      []EvidenceResult `json:"evidence_results,omitempty"`
+	PreviousHash         string           `json:"previous_hash,omitempty"`
+	ManifestHash         string           `json:"manifest_hash"`
+	Status               string           `json:"status"`
+	RecoverySnapshotID   string           `json:"recovery_snapshot_id,omitempty"`
+	RecoverySnapshotHash string           `json:"recovery_snapshot_hash,omitempty"`
 }
 
 func (m *EvidenceManifest) Seal() error {
@@ -639,7 +641,7 @@ func verifyEvidenceBinding(manifest EvidenceManifest, result EvidenceResult) err
 	if err != nil {
 		return err
 	}
-	if b.RunID != manifest.RunID || b.TaskID == "" || b.TaskID != wantTask || b.Attempt <= 0 || b.ModelExecutionID == "" || b.ProducerID == "" || b.TranscriptRef == "" {
+	if (b.RunID != manifest.RunID && !manifest.recoveryBindingMatches(b)) || b.TaskID == "" || b.TaskID != wantTask || b.Attempt <= 0 || b.ModelExecutionID == "" || b.ProducerID == "" || b.TranscriptRef == "" {
 		return fmt.Errorf("evidence requirement %q has conflicting execution binding", result.RequirementID)
 	}
 	if strings.HasPrefix(b.TranscriptRef, "sha256-") && !slices.Contains(b.ArtifactIDs, b.TranscriptRef) {

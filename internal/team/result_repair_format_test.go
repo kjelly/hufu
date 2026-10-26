@@ -34,7 +34,7 @@ func TestResultOnlyRepairRequiresProviderToolCall(t *testing.T) {
 			}
 			want := fantasy.ToolChoiceAuto
 			if repair {
-				want = fantasy.ToolChoiceRequired
+				want = fantasy.SpecificToolChoice(submitResultToolName)
 			}
 			if model.calls != 1 || toolCalls != 1 || len(model.choices) != 1 || model.choices[0] != want {
 				t.Fatalf("provider/tool/choices = %d/%d/%v, want 1/1/[%s]", model.calls, toolCalls, model.choices, want)

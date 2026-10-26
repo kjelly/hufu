@@ -19,11 +19,15 @@ const (
 // assistant message for an unreadable input. Tool output is untrusted data,
 // never repair instructions; mutating and unknown tool results are omitted.
 func protocolRepairObservationEvidence(steps []fantasy.StepResult, readOnly readOnlyToolCallFunc) (string, bool) {
+	return protocolRepairObservationEvidenceWithinBudget(steps, readOnly, maxRepairObservationRunes)
+}
+
+func protocolRepairObservationEvidenceWithinBudget(steps []fantasy.StepResult, readOnly readOnlyToolCallFunc, budget int) (string, bool) {
 	readOnlyCalls := make(map[string]string)
 	seen := make(map[string]bool)
 	var observations []string
 	hasSuccessfulObservation := false
-	remaining := maxRepairObservationRunes
+	remaining := budget
 	for _, step := range steps {
 		for _, part := range step.Content {
 			if call, ok := fantasy.AsContentType[fantasy.ToolCallContent](part); ok {
@@ -175,5 +179,23 @@ func omitRejectedSubmission(prompt, rejectedSubmission string) string {
 	if rejectedSubmission == "" {
 		return prompt
 	}
-	return strings.Replace(prompt, rejectedSubmission, rejectedSubmissionOmitted, 1)
+	// A schema correction can contain both the worker's rejected submission
+	// and a later repair's rejection. Omit every such data section from the
+	// receipt; the sealed transcript, not this diagnostic, owns arguments.
+	const heading = "## Last rejected submit_result\n"
+	var out strings.Builder
+	for {
+		before, rest, found := strings.Cut(prompt, heading)
+		if !found {
+			out.WriteString(prompt)
+			return out.String()
+		}
+		out.WriteString(before)
+		out.WriteString(rejectedSubmissionOmitted)
+		_, after, hasNext := strings.Cut(rest, "\n## ")
+		if !hasNext {
+			return out.String()
+		}
+		prompt = "\n## " + after
+	}
 }

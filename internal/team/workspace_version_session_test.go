@@ -211,6 +211,30 @@ func TestWorkspaceHistoricalForkUsesSnapshotAtEvent(t *testing.T) {
 	}
 }
 
+func TestWorkspaceHistoricalForkDoesNotImportLaterTasks(t *testing.T) {
+	f := newVersionFixture(t)
+	if _, _, err := f.ops().SnapshotNow(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	before := f.event("main", "test_marker")
+	appendBranchEvent(t, f.events, RunEvent{BranchID: "main", Type: string(EventTaskCompleted), TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","agent":"worker","desc":"later work","status":"done"}`)})
+	live := ReduceToSessionData(FilterEventsForBranch(mustReadEvents(t, f.events), f.tree, "main"))
+	if err := SaveSession(f.control, live); err != nil {
+		t.Fatal(err)
+	}
+	fork := mustFork(t, f, "before-work", before)
+	if got := LoadSession(f.control); got == nil || len(got.Tasks) != 0 {
+		t.Fatalf("historical fork imported later tasks: %+v", got)
+	}
+	if f.tree.ActiveBranch != fork.Branch.ID {
+		t.Fatalf("active branch = %q", f.tree.ActiveBranch)
+	}
+	mustCheckout(t, f, "main")
+	if got := LoadSession(f.control); len(got.Tasks) != 1 || got.Tasks[0].Status != TaskDone {
+		t.Fatalf("parent work was lost: %+v", got.Tasks)
+	}
+}
+
 // TestWorkspaceForkLegacyEventFailsClosed covers IT4: an event without any
 // workspace snapshot before it cannot be forked with workspace state.
 func TestWorkspaceForkLegacyEventFailsClosed(t *testing.T) {

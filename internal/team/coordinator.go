@@ -785,10 +785,11 @@ type Coordinator struct {
 	// coordinator instance, including a run whose terminal projection later
 	// fails. CLI callers snapshot the length before dispatch and publish the
 	// newly allocated IDs so operators can inspect every attempted invocation.
-	executionRunHistoryMu sync.RWMutex
-	executionRunHistory   []string
-	wrapUpMu              sync.Mutex
-	runInputAssignments   []RunInputAssignment
+	executionRunHistoryMu  sync.RWMutex
+	executionRunHistory    []string
+	wrapUpMu               sync.Mutex
+	runInputAssignments    []RunInputAssignment
+	runInputSelectionRunID string
 	// executionCompatibilityObserver contains only a read-only, content-free
 	// preflight summary. It is flushed after a public invocation has allocated
 	// its durable run/branch identities; failures are telemetry gaps only.

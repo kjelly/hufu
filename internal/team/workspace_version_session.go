@@ -282,10 +282,10 @@ func (o *WorkspaceSessionOps) finishFork(ctx context.Context, op versionstore.Op
 		if err := materializeCompactionBranch(batch, o.Workspace, o.Events, branch.ParentID, branch.ID, branch.ForkEventID); err != nil {
 			return fmt.Errorf("failed to materialize compaction state for branch %q: %w", branch.ID, err)
 		}
-		snapshotBranchState(batch, o.Workspace, o.Tree, branch.ID)
 		if err := rebuildSessionForBranch(batch, o.Tree, o.Events, branch.ID); err != nil {
 			return fmt.Errorf("failed to rebuild session for new branch: %w", err)
 		}
+		snapshotBranchState(batch, o.Workspace, o.Tree, branch.ID)
 		o.Tree.ActiveBranch = branch.ID
 		return nil
 	})

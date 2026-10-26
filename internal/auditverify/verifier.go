@@ -85,7 +85,7 @@ func VerifyLineageRun(ctx context.Context, workspace, runID string, lineage []te
 func runLineageAudit(ctx context.Context, workspace, runID string, lineage []team.RunEvent, opts VerifyOptions) (*AuditVerificationResult, *runProjection, error) {
 	result := &AuditVerificationResult{SchemaVersion: AuditSchemaVersion, RunID: runID}
 
-	chain := VerifyEventChain(lineage)
+	chain := verifyScopedEventChain(ctx, workspace, lineage)
 	if !chain.Valid {
 		reason := strings.Join(chain.Findings, "; ")
 		result.Integrity = AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
@@ -230,7 +230,7 @@ func verifyRunInputBindingDimension(runID string, runResult *team.RunResult, tas
 		return AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "run has no typed input binding"}
 	}
 	snapshot := runResult.RunInputs
-	if err := validateAuditRunInputSnapshot(runID, snapshot, snapshots); err != nil {
+	if err := validateAuditRunInputSnapshot(runID, runResult.RunInputOriginRunID, snapshot, snapshots); err != nil {
 		return failRunInputBinding(audit, "", err.Error())
 	}
 	inputHashes := make(map[string]string, len(snapshot.Inputs))
@@ -249,7 +249,13 @@ func verifyRunInputBindingDimension(runID string, runResult *team.RunResult, tas
 			}
 		}
 		boundActions++
-		if err := verifyInputBoundTask(runID, item, snapshot, inputHashes); err != nil {
+		taskRun := runID
+		if runResult.EvidenceManifest != nil {
+			if binding, ok := runResult.EvidenceManifest.VerifiedTaskBinding(item.ID); ok {
+				taskRun = binding.RunID
+			}
+		}
+		if err := verifyInputBoundTask(taskRun, item, snapshot, inputHashes); err != nil {
 			return failRunInputBinding(audit, item.ID, err.Error())
 		}
 	}
@@ -264,9 +270,9 @@ func verifyRunInputBindingDimension(runID string, runResult *team.RunResult, tas
 	return AuditDimensionResult{Status: AuditDimensionPass, Reason: string(reason)}
 }
 
-func validateAuditRunInputSnapshot(runID string, snapshot *team.RunInputSnapshot, snapshots []team.RunInputSnapshot) error {
+func validateAuditRunInputSnapshot(runID, originRunID string, snapshot *team.RunInputSnapshot, snapshots []team.RunInputSnapshot) error {
 	_, requestErr := team.RequestAcceptanceContractFromSnapshot(snapshot)
-	if err := team.ValidateRunInputSnapshot(snapshot); err != nil || (snapshot.RunID != runID && requestErr != nil) {
+	if err := team.ValidateRunInputSnapshot(snapshot); err != nil || (snapshot.RunID != runID && snapshot.RunID != originRunID && requestErr != nil) {
 		reason := "terminal run input snapshot is invalid or belongs to another run"
 		if err != nil {
 			reason += ": " + err.Error()
@@ -472,6 +478,10 @@ func verifyEvidenceDimension(ctx context.Context, workspace string, runResult *t
 		result.addFinding(CodeManifestHashMismatch, FindingSeverityCritical, reason, "", 0, manifest.ManifestHash)
 		return false, AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
 	}
+	if err := team.ValidateEvidenceRecoveryInputs(manifest, runResult.RunInputs); err != nil {
+		result.addFinding(CodeBindingConflict, FindingSeverityCritical, err.Error(), "", 0, manifest.ManifestHash)
+		return false, AuditDimensionResult{Status: AuditDimensionFail, Reason: err.Error()}
+	}
 	if strings.TrimSpace(manifest.ManifestHash) == "" {
 		reason := "evidence manifest has no digest"
 		result.addFinding(CodeManifestHashMismatch, FindingSeverityCritical, reason, "", 0, "")
@@ -504,6 +514,10 @@ func verifyProvenanceDimension(runID string, runResult *team.RunResult, tasks []
 	manifest := runResult.EvidenceManifest
 	if manifest == nil {
 		return AuditDimensionResult{Status: AuditDimensionSkipped, Reason: "no evidence manifest to bind provenance to"}
+	}
+	if err := team.ValidateEvidenceRecoveryInputs(manifest, runResult.RunInputs); err != nil {
+		result.addFinding(CodeBindingConflict, FindingSeverityCritical, err.Error(), "", 0, manifest.ManifestHash)
+		return AuditDimensionResult{Status: AuditDimensionFail, Reason: err.Error()}
 	}
 	tasksByID := make(map[string]*team.TodoItem, len(tasks))
 	for _, item := range tasks {
@@ -540,19 +554,27 @@ func verifyProvenanceDimension(runID string, runResult *team.RunResult, tasks []
 		}
 		checked++
 
-		if ambiguous, identities := ambiguousSuccessfulReceipts(item, runID); ambiguous {
+		if binding.RunID != runID && (item.Status != team.TaskDone || item.RunInputSnapshotID != manifest.RecoverySnapshotID || item.RunInputSnapshotHash != manifest.RecoverySnapshotHash || manifest.RecoverySnapshotID == "") {
+			reason := fmt.Sprintf("task %q recovery binding does not match its canonical input-bound source", taskID)
+			result.addFinding(CodeBindingConflict, FindingSeverityCritical, reason, taskID, binding.Attempt, "")
+			return AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
+		}
+		if ambiguous, identities := ambiguousSuccessfulReceipts(item, binding.RunID); ambiguous {
 			reason := fmt.Sprintf("task %q has %d distinct successful producer identities; the evidence binding cannot uniquely justify a winner", taskID, identities)
 			result.addFinding(CodeReceiptAmbiguous, FindingSeverityCritical, reason, taskID, binding.Attempt, "")
 			return AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
 		}
 
-		winner := team.LatestSuccessfulExecutionReceipt(item, runID)
+		winner := team.LatestSuccessfulExecutionReceipt(item, binding.RunID)
 		if winner == nil {
 			reason := fmt.Sprintf("task %q evidence binding has no matching successful execution receipt", taskID)
 			result.addFinding(CodeReceiptMissing, FindingSeverityCritical, reason, taskID, binding.Attempt, "")
 			return AuditDimensionResult{Status: AuditDimensionFail, Reason: reason}
 		}
-		if winner.Attempt != binding.Attempt || winner.ModelExecutionID != binding.ModelExecutionID || winner.ProducerID != binding.ProducerID {
+		if winner.TaskID != binding.TaskID || winner.Attempt != binding.Attempt || winner.ModelExecutionID != binding.ModelExecutionID || winner.ProducerID != binding.ProducerID ||
+			winner.TranscriptRef != binding.TranscriptRef || winner.RunInputSnapshotID != binding.RunInputSnapshotID || winner.RunInputSnapshotHash != binding.RunInputSnapshotHash ||
+			winner.MaterializedActionPayloadHash != binding.MaterializedActionPayloadHash || !sameHashes(winner.BoundInputs, binding.BoundInputs) ||
+			winner.ActionInvocationID != binding.ActionInvocationID || winner.RuntimeOutputsHash != binding.RuntimeOutputsHash {
 			reason := fmt.Sprintf("task %q evidence binding (attempt %d, producer %s) does not match the winning execution receipt (attempt %d, producer %s)",
 				taskID, binding.Attempt, binding.ProducerID, winner.Attempt, winner.ProducerID)
 			result.addFinding(CodeBindingConflict, FindingSeverityCritical, reason, taskID, binding.Attempt, "")

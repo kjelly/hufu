@@ -19,10 +19,14 @@ func (c *Coordinator) buildEvidenceManifest(ctx context.Context, strict bool) (*
 	if runID == "" {
 		runID = "run-unknown"
 	}
-	manifest, err := c.EvidenceService().BuildRunManifest(ctx, EvidenceBuildRequest{
+	req := EvidenceBuildRequest{
 		RunID: runID, Workspace: c.session.Workspace,
 		Items: c.taskTracker.TodoList().Items(), Strict: strict,
-	})
+	}
+	if err := c.bindRecoveredEvidence(&req); err != nil {
+		return nil, err
+	}
+	manifest, err := c.EvidenceService().BuildRunManifest(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +46,7 @@ func (*defaultEvidenceService) BuildRunManifest(ctx context.Context, req Evidenc
 	if err != nil {
 		return nil, err
 	}
-	manifest := &EvidenceManifest{RunID: req.RunID, Status: "accepted"}
+	manifest := &EvidenceManifest{RunID: req.RunID, Status: "accepted", RecoverySnapshotID: req.RecoverySnapshotID, RecoverySnapshotHash: req.RecoverySnapshotHash}
 	completedCount := 0
 	supportingCount := 0
 	primaryCount := 0
@@ -68,7 +72,14 @@ func (*defaultEvidenceService) BuildRunManifest(ctx context.Context, req Evidenc
 			continue
 		}
 		supportingCount++
-		result, refs, failed, err := buildTaskEvidence(ctx, store, req.RunID, item, req.Strict)
+		evidenceRun := req.RunID
+		if sourceRun := req.RecoveredTaskRuns[item.ID]; sourceRun != "" {
+			if item.Status != TaskDone || item.RunInputSnapshotID != req.RecoverySnapshotID || item.RunInputSnapshotHash != req.RecoverySnapshotHash || !runInputHashPattern.MatchString(req.RecoverySnapshotHash) {
+				return nil, fmt.Errorf("task %q recovery evidence has a mismatched input snapshot", item.ID)
+			}
+			evidenceRun = sourceRun
+		}
+		result, refs, failed, err := buildTaskEvidence(ctx, store, evidenceRun, item, req.Strict)
 		if err != nil {
 			return nil, err
 		}

@@ -542,8 +542,8 @@ func addRedactedFileToTar(tw *tar.Writer, path, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !isDebugText(data) {
-		return "omitted (binary/unknown content)", nil
+	if reason := debugTextOmissionReason(data); reason != "" {
+		return "omitted (binary/unknown content: " + reason + ")", nil
 	}
 	redacted := redactDebugFileData(data, filepath.Ext(name))
 	if err := addBytesToTar(tw, redacted, filepath.ToSlash(name)); err != nil {
@@ -569,22 +569,25 @@ func redactDebugFileData(data []byte, ext string) []byte {
 	}
 }
 
-// isDebugText is deliberately conservative. Valid UTF-8 is not sufficient to
-// identify text because arbitrary binary data can avoid NUL bytes; reject
-// control characters other than the whitespace used by ordinary logs/files.
-func isDebugText(data []byte) bool {
+// debugTextOmissionReason conservatively rejects binary/control content and
+// reports only its encoding/category and code point, never file text. Valid
+// UTF-8 alone cannot distinguish text from binary data without NUL bytes.
+func debugTextOmissionReason(data []byte) string {
 	if !utf8.Valid(data) {
-		return false
+		return "invalid UTF-8"
 	}
 	for _, r := range string(data) {
 		if r == '\n' || r == '\r' || r == '\t' {
 			continue
 		}
-		if unicode.IsControl(r) || !unicode.IsPrint(r) {
-			return false
+		if unicode.IsControl(r) {
+			return fmt.Sprintf("control character U+%04X", r)
+		}
+		if !unicode.IsPrint(r) {
+			return fmt.Sprintf("non-printable character U+%04X", r)
 		}
 	}
-	return true
+	return ""
 }
 
 func isDebugSensitivePath(rel string) bool {

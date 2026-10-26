@@ -31,8 +31,17 @@ func routeEvidence(todo *team.TodoItem, result *team.RunResult, explanation *aud
 	}
 	var successful []team.ExecutionReceipt
 	hasVerification := false
+	evidenceRun := ""
+	if result != nil {
+		evidenceRun = result.RunID
+		if result.EvidenceManifest != nil {
+			if binding, ok := result.EvidenceManifest.VerifiedTaskBinding(todo.ID); ok {
+				evidenceRun = binding.RunID
+			}
+		}
+	}
 	for _, receipt := range todo.ExecutionReceipts {
-		if receipt.TaskID != todo.ID || result != nil && receipt.RunID != result.RunID {
+		if receipt.TaskID != todo.ID || result != nil && receipt.RunID != evidenceRun {
 			continue
 		}
 		if receipt.VerifyResult != nil {

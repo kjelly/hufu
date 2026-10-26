@@ -39,6 +39,8 @@ type RunFinishedEventPayload struct {
 	Stats                *RunStats                    `json:"stats,omitempty"`
 	Metrics              *RunMetrics                  `json:"metrics,omitempty"`
 	RunInputs            *RunInputSnapshot            `json:"run_inputs,omitempty"`
+	RunInputOriginRunID  string                       `json:"run_input_origin_run_id,omitempty"`
+	EvidenceManifest     *EvidenceManifest            `json:"evidence_manifest,omitempty"`
 	InputBoundAssertions []InputBoundAssertionSummary `json:"input_bound_assertions,omitempty"`
 }
 
@@ -114,6 +116,8 @@ func validateCurrentEventPayload(event RunEvent) error {
 		if strings.TrimSpace(payload.Content) == "" {
 			return fmt.Errorf("%s payload has empty content", event.Type)
 		}
+	case EventTaskResultCandidate:
+		return validateResultCandidateEvent(event)
 	case EventTaskCreated, EventTaskPlanned, EventTaskStarted, EventTaskVerifying, EventTaskPaused, EventTaskCompleted, EventTaskFailed, EventTaskBlocked, EventTaskSkipped, EventTaskProtocolIncomplete, EventTaskCancelled, EventTaskRemoved, EventTaskResolution:
 		if strings.TrimSpace(event.TaskID) == "" {
 			return fmt.Errorf("%s event has empty task id", event.Type)
@@ -224,9 +228,15 @@ func validateRunFinishedEventPayload(event RunEvent) error {
 		if err := ValidateRunInputSnapshot(payload.RunInputs); err != nil {
 			return fmt.Errorf("run_finished payload has invalid run inputs: %w", err)
 		}
-		if payload.RunInputs.RunID != event.RunID {
-			return fmt.Errorf("run_finished run input snapshot does not match event run")
+		if payload.RunInputs.RunID != event.RunID && payload.RunInputOriginRunID != payload.RunInputs.RunID {
+			return fmt.Errorf("run_finished run input snapshot does not match event run or declared recovery origin")
 		}
+	}
+	if payload.RunInputOriginRunID != "" && (payload.RunInputs == nil || payload.RunInputOriginRunID != payload.RunInputs.RunID || payload.RunInputOriginRunID == event.RunID) {
+		return fmt.Errorf("run_finished recovery input origin is invalid")
+	}
+	if err := ValidateEvidenceRecoveryInputs(payload.EvidenceManifest, payload.RunInputs); err != nil {
+		return err
 	}
 	if len(payload.InputBoundAssertions) > maxRunInputEvidenceItems {
 		return fmt.Errorf("run_finished payload has too many input-bound assertions")

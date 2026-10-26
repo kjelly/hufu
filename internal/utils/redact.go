@@ -199,6 +199,7 @@ var numericTelemetryKeys = map[string]struct{}{
 	// "[REDACTED]" and cost analysis from a bundle was impossible.
 	"input_tokens":          {},
 	"output_tokens":         {},
+	"reasoning_tokens":      {},
 	"total_tokens":          {},
 	"progress_tokens":       {},
 	"cache_read_tokens":     {},

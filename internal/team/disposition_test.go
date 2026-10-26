@@ -23,6 +23,9 @@ func TestDecideRecoveryEarlyBreakPaths(t *testing.T) {
 		{"protocol failure replayable but repair retry disallowed", RecoveryDecisionInput{ProtocolFailure: true, Replayable: true, ProtocolRepairRetry: false, FailureClass: FailureProtocol, Attempt: 1, MaxRetries: 3}, ReconcileOnly},
 		{"protocol failure replayable with repair retry allowed", RecoveryDecisionInput{ProtocolFailure: true, Replayable: true, ProtocolRepairRetry: true, FailureClass: FailureProtocol, Attempt: 1, MaxRetries: 3}, ReconcileOnly},
 		{"protocol failure beats unfixable verify", RecoveryDecisionInput{ProtocolFailure: true, Replayable: false, UnfixableVerify: true, FailureClass: FailureProtocol, Attempt: 1, MaxRetries: 3}, ReconcileOnly},
+		{"exhausted result repair preserves read-only evidence", RecoveryDecisionInput{ResultRepairExhausted: true, ProtocolRetrySafe: true, ProtocolRepairRetry: true, Replayable: true, FailureClass: FailureProtocol, Attempt: 1, MaxRetries: 3}, ReconcileOnly},
+		{"exhausted result repair retains disposition after budget", RecoveryDecisionInput{ResultRepairExhausted: true, Replayable: true, FailureClass: FailureProtocol, Attempt: 3, MaxRetries: 3}, ReconcileOnly},
+		{"cancellation precedes exhausted repair", RecoveryDecisionInput{ResultRepairExhausted: true, ContextCancelled: true, FailureClass: FailureProtocol}, RetryNone},
 
 		// Path 3: a non-replayable task reconciles.
 		{"non-replayable execution failure", RecoveryDecisionInput{Replayable: false, FailureClass: FailureExecution, Attempt: 1, MaxRetries: 3}, ReconcileOnly},

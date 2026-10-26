@@ -244,6 +244,7 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 				Telemetry            *RunTelemetry                `json:"telemetry"`
 				EvidenceManifest     *EvidenceManifest            `json:"evidence_manifest"`
 				RunInputs            *RunInputSnapshot            `json:"run_inputs,omitempty"`
+				RunInputOriginRunID  string                       `json:"run_input_origin_run_id,omitempty"`
 				InputBoundAssertions []InputBoundAssertionSummary `json:"input_bound_assertions,omitempty"`
 			}
 			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.Outcome != "" {
@@ -264,7 +265,7 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 					FixedAndVerified: payload.FixedAndVerified, AcceptanceAdvisory: payload.AcceptanceAdvisory,
 					Acceptance: payload.Acceptance, Stats: payload.Stats, Worksets: payload.Worksets,
 					Metrics: payload.Metrics, Telemetry: payload.Telemetry, EvidenceManifest: payload.EvidenceManifest,
-					RunInputs: CloneRunInputSnapshot(payload.RunInputs), InputBoundAssertions: slices.Clone(payload.InputBoundAssertions),
+					RunInputs: CloneRunInputSnapshot(payload.RunInputs), RunInputOriginRunID: payload.RunInputOriginRunID, InputBoundAssertions: slices.Clone(payload.InputBoundAssertions),
 				}
 				session.WorksetStates = append([]WorksetGroupState(nil), payload.Worksets...)
 			}
@@ -421,6 +422,15 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 	frozenContracts := make(map[string]bool)
 
 	for _, e := range events {
+		if e.Type == string(EventTaskResultCandidate) {
+			var candidate ResultCandidate
+			if json.Unmarshal(e.Payload, &candidate) == nil && candidate.TaskID == e.TaskID {
+				if item := taskMap[e.TaskID]; item != nil {
+					item.ResultCandidate = cloneResultCandidate(&candidate)
+				}
+			}
+			continue
+		}
 		if e.Type == "recovery_decision" && e.TaskID != "" {
 			var payload struct {
 				Decision   string             `json:"decision"`
@@ -722,6 +732,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			WorksetBinding                *WorksetBinding             `json:"workset_binding"`
 			WorksetReceipt                *WorksetExpansionReceipt    `json:"workset_receipt"`
 			TypedResult                   *TaskResult                 `json:"typed_result"`
+			ResultCandidate               *ResultCandidate            `json:"result_candidate"`
 			ExecutionReceipt              *ExecutionReceipt           `json:"execution_receipt"`
 			ExecutionReceipts             []ExecutionReceipt          `json:"execution_receipts"`
 			Kind                          TaskKind                    `json:"kind"`
@@ -1135,6 +1146,9 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		if payload.VerifyResult != nil {
 			item.VerifyResult = payload.VerifyResult
 		}
+		if payload.ResultCandidate != nil {
+			item.ResultCandidate = cloneResultCandidate(payload.ResultCandidate)
+		}
 		if payload.TypedResult != nil {
 			item.TypedResult = cloneTaskResult(payload.TypedResult)
 		}
@@ -1181,6 +1195,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			if (!isReducerTerminalTaskStatus(item.Status) || payload.ResetForRetry) && payload.Status != "" {
 				item.Status = TaskStatus(payload.Status)
 				if payload.ResetForRetry {
+					item.ResultCandidate = nil
 					item.Output = ""
 					item.VerifyResult = nil
 					item.RuntimeError = nil

@@ -239,7 +239,7 @@ func (c *Coordinator) prepareTerminalResult(result *RunResult) {
 		result.RunID = result.EvidenceManifest.RunID
 	}
 	result.Worksets = c.WorksetGroupStates()
-	result.RunInputs = c.RunInputSnapshot()
+	result.RunInputs, result.RunInputOriginRunID = c.terminalRunInputs(result.RunID)
 	if result.Acceptance != nil && result.Acceptance.RequestAcceptance != nil {
 		section := FormatRequestAcceptance(result.Acceptance.RequestAcceptance)
 		if !strings.HasSuffix(result.Response, section) {
@@ -352,6 +352,7 @@ func terminalLifecyclePayload(c *Coordinator, result *RunResult) LifecycleEventP
 	payload.Metrics = &result.Metrics
 	payload.Telemetry = result.Telemetry
 	payload.RunInputs = CloneRunInputSnapshot(result.RunInputs)
+	payload.RunInputOriginRunID = result.RunInputOriginRunID
 	payload.InputBoundAssertions = slices.Clone(result.InputBoundAssertions)
 	if result.EvidenceManifest != nil {
 		payload.EvidenceManifest = result.EvidenceManifest
@@ -525,10 +526,16 @@ func (c *Coordinator) appendTerminalCandidate(ctx context.Context, candidate *Ru
 			if c.eventStore == nil {
 				err = errors.New("canonical event store is unavailable")
 			} else {
-				_, err = c.eventStore.AppendPersistedBoundedContext(ctx, RunEvent{
+				event := RunEvent{
 					Type: "run_finished", Actor: "coordinator", RunID: candidate.RunID, BranchID: branchID,
 					IdempotencyKey: idempotencyKey, Payload: payload,
-				})
+				}
+				if snapshot.RunInputOriginRunID != "" {
+					err = c.validateTerminalInputOriginForAppend(event)
+				}
+				if err == nil {
+					_, err = c.eventStore.AppendPersistedBoundedContext(ctx, event)
+				}
 			}
 		}
 	}

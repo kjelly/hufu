@@ -99,12 +99,13 @@ func (r ContextRequest) Validate() error {
 	if !validContextTrigger(r.Trigger) {
 		return fmt.Errorf("invalid context trigger %q", r.Trigger)
 	}
-	// Whole-run acceptance reviews observe a terminal workflow; they do not
-	// reopen it. Preserve its actual state in the manifest while keeping
-	// terminal phases unavailable to worker execution and other auxiliaries.
-	terminalAcceptanceReview := (r.Phase == PhaseDone || r.Phase == PhaseFailed) &&
-		r.AgentRole == "auxiliary" && (r.Purpose == "request_acceptance_review" || r.Purpose == "request_acceptance_evidence") && r.Trigger == ContextTriggerSidecarTask
-	if !validContextRequestPhase(r.Phase) && !terminalAcceptanceReview {
+	// Delivery and observation still need context after workflow completion.
+	// The closed purpose registry pins both role and trigger; this cannot
+	// authorize worker dispatch or reopen a terminal phase.
+	policy, knownPurpose := contextPurposeRegistry[r.Purpose]
+	terminalContext := (r.Phase == PhaseDone || r.Phase == PhaseFailed) && knownPurpose &&
+		policy.TerminalContextRole != "" && r.AgentRole == policy.TerminalContextRole && r.Trigger == policy.Trigger
+	if !validContextRequestPhase(r.Phase) && !terminalContext {
 		return fmt.Errorf("invalid context phase %q", r.Phase)
 	}
 	return r.validateTriggerFields()

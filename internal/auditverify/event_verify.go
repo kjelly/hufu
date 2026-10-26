@@ -1,10 +1,54 @@
 package auditverify
 
 import (
+	"context"
 	"fmt"
+	"reflect"
 
 	"github.com/kjelly/hufu/internal/team"
 )
+
+// verifyScopedEventChain handles a projected branch whose neighboring visible
+// events need not be neighbors in the physical journal. A gap is accepted only
+// after revalidating the complete journal and reproducing this exact lineage;
+// deleting an event from a supplied slice still fails closed.
+func verifyScopedEventChain(ctx context.Context, workspace string, events []team.RunEvent) EventChainVerification {
+	result := VerifyEventChain(events)
+	if result.Valid || len(events) == 0 {
+		return result
+	}
+	var global []team.RunEvent
+	if err := team.StreamValidatedRunEvents(ctx, workspace, func(event team.RunEvent) error {
+		global = append(global, event)
+		return nil
+	}); err != nil {
+		return result
+	}
+	tree, err := team.LoadSessionTree(workspace)
+	if err != nil {
+		return result
+	}
+	branch := events[len(events)-1].BranchID
+	if branch == "" {
+		branch = "main"
+	}
+	projected, err := team.ProjectValidatedEventsForBranch(global, tree, branch)
+	if err != nil {
+		return result
+	}
+	// The caller's verified snapshot may precede a later append. Require its
+	// complete canonical prefix through the supplied head, not a newer head.
+	for i, event := range projected {
+		if event.ID == result.HeadID {
+			if reflect.DeepEqual(projected[:i+1], events) {
+				result.Valid = true
+				result.Findings = nil
+			}
+			return result
+		}
+	}
+	return result
+}
 
 // EventChainVerification is the result of independently re-deriving the hash
 // chain over a slice of events (spec.md §11). It never re-implements the hash

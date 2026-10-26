@@ -117,6 +117,9 @@ func (c *Coordinator) initialContextWithheld() bool {
 // points, after admission and before any auxiliary/model preparation. Interrupted
 // and failed workflows keep their existing recovery semantics.
 func (c *Coordinator) beginFollowUpWorkflow(ctx context.Context, prompt string) (bool, error) {
+	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() && c.phaseWorkflow.State() == PhaseFailed {
+		return false, fmt.Errorf("workflow is failed; preserve this session and use targeted reconciliation or fork an earlier checkpoint before resuming")
+	}
 	if c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || c.phaseWorkflow.State() != PhaseDone {
 		return false, nil
 	}

@@ -147,6 +147,9 @@ func todoByID(t *testing.T, c *Coordinator, id string) *TodoItem {
 type scriptedTurn struct {
 	text string
 	err  error
+	// stream scripts tool callbacks or a real submit_result boundary when a
+	// scenario needs more than a text response. It runs outside the fixture lock.
+	stream func(context.Context, fantasy.AgentStreamCall) (*fantasy.AgentResult, error)
 }
 
 // textTurn is a successful worker response.
@@ -189,12 +192,15 @@ func (w *scriptedWorker) Generate(ctx context.Context, call fantasy.AgentCall) (
 	return w.Stream(ctx, fantasy.AgentStreamCall{Prompt: call.Prompt, Messages: call.Messages})
 }
 
-func (w *scriptedWorker) Stream(_ context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+func (w *scriptedWorker) Stream(ctx context.Context, call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
 	w.mu.Lock()
 	w.calls++
 	w.prompts = append(w.prompts, call.Prompt)
 	turn := w.turns[min(w.calls, len(w.turns))-1]
 	w.mu.Unlock()
+	if turn.stream != nil {
+		return turn.stream(ctx, call)
+	}
 	if turn.text == "" && turn.err != nil {
 		return nil, turn.err
 	}

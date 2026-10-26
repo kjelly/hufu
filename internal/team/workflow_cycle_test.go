@@ -244,7 +244,7 @@ func TestWorkflowCycleDoesNotRestartRecoveryOrReplayFailedWork(t *testing.T) {
 				t.Fatal(err)
 			}
 			started, err := c.beginFollowUpWorkflow(t.Context(), "continue")
-			if err != nil || started || c.phaseWorkflow.State() != phase || len(c.taskTracker.TodoList().Items()) != 2 {
+			if (err != nil) != (phase == PhaseFailed) || started || c.phaseWorkflow.State() != phase || len(c.taskTracker.TodoList().Items()) != 2 {
 				t.Fatalf("recovery workflow changed: started=%t err=%v state=%s", started, err, c.phaseWorkflow.State())
 			}
 		})

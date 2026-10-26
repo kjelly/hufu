@@ -89,6 +89,10 @@ type RecoveryDecisionInput struct {
 	// ProtocolFailure is true when the agent finished execution but
 	// omitted submit_result (path 2 prerequisite).
 	ProtocolFailure bool
+	// ResultRepairExhausted preserves the original execution occurrence once
+	// its bounded result-only repairs are exhausted. A new worker attempt must
+	// not turn old observations in conversation history into fresh evidence.
+	ResultRepairExhausted bool
 	// UnfixableVerify is true when the failure is a wrong-polarity verify
 	// command that the worker cannot fix by retrying (path 4).
 	UnfixableVerify bool
@@ -176,6 +180,9 @@ func DecideRecovery(in RecoveryDecisionInput) (RetryDisposition, string) {
 	// or in an unknown state. Retrying is unsafe; escalate to human.
 	if in.TerminalBlocked {
 		return NeedsHuman, "an owned terminal session remains active or unknown"
+	}
+	if in.ResultRepairExhausted {
+		return ReconcileOnly, "result-only repair exhausted; reconcile the preserved execution evidence instead of starting a new worker attempt"
 	}
 
 	// These classes never permit worker replay, regardless of retry budget or

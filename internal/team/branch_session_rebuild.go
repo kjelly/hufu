@@ -10,8 +10,9 @@ import "fmt"
 
 // RebuildSessionForBranch rewrites the session checkpoint as branchID's
 // replayed session, so the next run resumes the branch's own state. When the
-// lineage has no task events, tasks fall back to the branch's TaskPlan
-// snapshot. A branch with no lineage yields a fresh session. A terminal
+// lineage is empty, legacy tasks fall back to the branch's TaskPlan
+// snapshot. Once events exist, their replay is authoritative, including an
+// empty task list before the first task. A terminal
 // commit awaiting confirmation is recorded only in the session checkpoint: it stays
 // with a rebuild of its own branch and blocks a switch to any other.
 func RebuildSessionForBranch(workspace string, st *SessionTree, es *EventStore, branchID string) error {
@@ -128,14 +129,21 @@ func branchReplayInputs(st *SessionTree, es *EventStore, branchID string) (*Sess
 	}
 	var events []RunEvent
 	if es != nil {
-		events, _ = es.ReadEvents()
+		var err error
+		events, err = es.ReadEvents()
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("rebuild session: read events: %w", err)
+		}
 	}
-	lineage := FilterEventsForBranch(events, st, b.ID)
+	lineage, err := ProjectValidatedEventsForBranch(events, st, b.ID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("rebuild session: project branch: %w", err)
+	}
 	tasks, err := ReplayTodoList(lineage)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("rebuild session: replay execution identity: %w", err)
 	}
-	if len(tasks) == 0 && len(b.State.TaskPlan) > 0 {
+	if len(lineage) == 0 && len(b.State.TaskPlan) > 0 {
 		tasks = make([]*TodoItem, len(b.State.TaskPlan))
 		for i, t := range b.State.TaskPlan {
 			tasks[i] = cloneTodoItem(t)

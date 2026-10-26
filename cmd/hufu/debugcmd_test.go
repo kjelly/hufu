@@ -90,6 +90,9 @@ func TestDebugCmd_BundleContents(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspaceDir, "runtime", "artifacts", "invalid-binary-output"), []byte{0xff, 0xfe, 0xfd, 'P', 'R', 'I', 'V', 'A', 'T', 'E'}, 0644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(workspaceDir, "logs", "task-output", "format.log"), []byte("diagnostic-private-text\u200b"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	// 2. Test directory argument
 	originalWD, _ := os.Getwd()
@@ -170,6 +173,14 @@ func TestDebugCmd_BundleContents(t *testing.T) {
 	}
 	if !strings.Contains(string(manifest), "runtime/artifacts/binary-output") || !strings.Contains(string(manifest), "runtime/artifacts/invalid-binary-output") || !strings.Contains(string(manifest), "binary/unknown content") {
 		t.Fatalf("manifest did not record binary omission: %s", manifest)
+	}
+	if foundFiles["logs/task-output/format.log"] || strings.Contains(string(manifest), "diagnostic-private-text") {
+		t.Fatal("omission diagnostics exposed rejected file content")
+	}
+	for _, reason := range []string{"control character U+0000", "invalid UTF-8", "non-printable character U+200B"} {
+		if !strings.Contains(string(manifest), reason) {
+			t.Fatalf("manifest omitted rejection category %q", reason)
+		}
 	}
 }
 

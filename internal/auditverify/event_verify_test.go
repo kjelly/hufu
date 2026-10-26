@@ -74,3 +74,61 @@ func TestVerifyEventChainHeadIdentity(t *testing.T) {
 		t.Fatalf("head = (%s, %s), want (%s, %s)", chain.HeadID, chain.HeadHash, last.ID, last.Hash)
 	}
 }
+
+func TestScopedEventChainRequiresExactCanonicalBranch(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := team.NewEventStore(workspace, "run-branch", "branch-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	store.SetBranchID("main")
+	first, err := store.AppendPersisted(team.RunEvent{Type: "run_started", Actor: "coordinator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := team.NewSessionTree()
+	child, err := tree.CreateBranch("child", first.ID, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := team.SaveSessionTree(workspace, tree); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(team.RunEvent{Type: "side_event", Actor: "coordinator"}); err != nil {
+		t.Fatal(err)
+	}
+	store.SetBranchID(child.ID)
+	for range 2 {
+		if err := store.Append(team.RunEvent{Type: "child_event", Actor: "coordinator"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lineage, err := team.ProjectValidatedEventsForBranch(events, tree, child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if VerifyEventChain(lineage).Valid {
+		t.Fatal("fixture has no physical gap at its fork")
+	}
+	if err := store.Append(team.RunEvent{Type: "later_child_event", Actor: "coordinator"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"valid", "deleted", "mutated"} {
+		t.Run(mode, func(t *testing.T) {
+			selected := append([]team.RunEvent(nil), lineage...)
+			if mode == "deleted" {
+				selected = append(selected[:1], selected[2:]...)
+			} else if mode == "mutated" {
+				selected[len(selected)-1].Payload = []byte(`{"changed":true}`)
+			}
+			if result := verifyScopedEventChain(t.Context(), workspace, selected); result.Valid != (mode == "valid") {
+				t.Fatalf("scoped chain validity=%v findings=%v", result.Valid, result.Findings)
+			}
+		})
+	}
+}

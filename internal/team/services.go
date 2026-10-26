@@ -225,10 +225,13 @@ type TaskCache interface {
 }
 
 type EvidenceBuildRequest struct {
-	RunID     string
-	Workspace string
-	Items     []*TodoItem
-	Strict    bool
+	RunID                string
+	Workspace            string
+	Items                []*TodoItem
+	Strict               bool
+	RecoverySnapshotID   string
+	RecoverySnapshotHash string
+	RecoveredTaskRuns    map[string]string
 }
 
 type EvidenceFinalizeRequest struct {
@@ -854,12 +857,9 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 	if err := r.c.teamActionToolCollision(concrete); err != nil {
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %w", err)
 	}
-	concrete = removeToolNames(concrete, submitResultToolName, "submit_plan")
-	if static.ResultRequired {
-		concrete = append(concrete, &submitResultTool{coordinator: r.c, todoID: req.TodoID})
-	}
-	if static.PlanRequired {
-		concrete = append(concrete, &submitPlanTool{coordinator: r.c, todoID: req.TodoID})
+	concrete, err = r.c.appendTaskProtocolTools(ctx, concrete, req.TodoID, static)
+	if err != nil {
+		return ResolvedWorkerTools{}, err
 	}
 	concrete = append(concrete, r.c.workerTeamActionTools(ctx, def, static.Names, req)...)
 	concrete = filterConcreteToolsByNames(concrete, static.Names)

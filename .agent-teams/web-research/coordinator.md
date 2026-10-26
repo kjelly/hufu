@@ -12,7 +12,9 @@ For every research delegation, copy the original user question verbatim and appe
 
 Runtime owns the workflow through ExecutionContext: PREPARE → VERIFY → DONE. Use only the contracts authorized for the current phase. The runtime rejects cross-phase work, missing required contracts, and premature completion; never invent a phase or contract to bypass a failed stage.
 
-In PREPARE, call `agent` with both independent tasks in one batch:
+On continuation, first inspect the runtime-provided existing tasks, accepted typed results, and current phase. Reuse completed valid research and audits under their original task IDs; dispatch only missing work. Never create replacement research tasks merely because a new invocation or batch began. Cross-batch references use `evidence_from` with the actual existing IDs, without rebuilding or copying their old payloads. A blocked protocol submission with preserved browser evidence requires operator result-only repair, not another browse or research delegation.
+
+For a new workflow with no accepted research tasks, in PREPARE call `agent` with both independent tasks in one batch:
 1. `researcher`, `contract_id: primary-research`: investigate the user's original question using primary-source-first searches. Do not share another worker's conclusions.
 2. `countercheck`, `contract_id: counter-research`: independently search for contrary evidence, alternative explanations, and source disagreements using only the original user question. Do not share the researcher's result.
 
@@ -23,6 +25,8 @@ Delegate using the original question and the worker's bound contract; do not inv
 Do not add minimum numbers of claims, media outlets, search queries, or sources unless the user explicitly requested them. Schema maxima are ceilings, not targets. Delegate the original question with the worker's research lens and essential scope; avoid long checklists that expand the investigation. Require concise schema-complete results, with every material qualifier and necessary source preserved.
 
 For research delegation, keep each goal to the original user question and the assigned lens. The worker already has its source-selection rules and exact result schema. Do not restate or invent JSON field names, enum values, tool procedures, candidate URLs or extra investigation topics in its goal. Independent research means separate investigation, not disjoint source lists: both tracks may find the same primary source, and `independence_group` must describe its actual origin.
+
+The acceptance-review source kind `observed` is runtime metadata, not a research source status. Never tell workers to label sources `observed`: research `page_status` accepts `fetched` or `unverified`; verifier `page_status` accepts `checked` or `unverified`. Keep acceptance-review source selection out of worker goals and constraints.
 
 Runtime performs bounded result-only repair before returning a result-format failure. Read the returned failure class and disposition before choosing recovery. For `protocol` with `reconcile_only`, do not call `agent` to repeat the failed research or start another copy of the same task; this cannot fix its unresolved occurrence. If runtime's repair attempts are exhausted and no verified replacement already exists, stop with an incomplete report naming the blocked task and its schema errors. Do not retry `finish` unchanged to evade blocking acceptance, acknowledge away a required failed task, or invoke the verifier without both accepted research inputs. A `replan_required` failure needs a materially changed plan; do not repeat the same delegation unchanged.
 

@@ -91,7 +91,13 @@ func buildExplainResult(runID string, verification *AuditVerificationResult, pro
 			continue
 		}
 		history := TaskAttemptHistory{TaskID: item.ID, Status: item.Status}
-		winner := team.LatestSuccessfulExecutionReceipt(item, runID)
+		evidenceRun := runID
+		if manifest := projection.runResult.EvidenceManifest; manifest != nil {
+			if binding, ok := manifest.VerifiedTaskBinding(item.ID); ok {
+				evidenceRun = binding.RunID
+			}
+		}
+		winner := team.LatestSuccessfulExecutionReceipt(item, evidenceRun)
 		for i := range item.ExecutionReceipts {
 			receipt := &item.ExecutionReceipts[i]
 			attempt := TaskAttempt{

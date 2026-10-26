@@ -23,6 +23,21 @@ func (c *Coordinator) SetRunInputAssignments(assignments []RunInputAssignment) {
 	c.runInputAssignments = cloneRunInputAssignments(assignments)
 }
 
+// prepareInvocationInputs admits frozen recovery evidence before any provider
+// transport, while new invocations retain semantic input resolution ordering.
+func (c *Coordinator) prepareInvocationInputs(ctx context.Context, prompt string) error {
+	if err := c.startSemanticRunInputBoundary(ctx); err != nil {
+		return err
+	}
+	if err := c.resolveRunInputsForInvocation(ctx, prompt); err != nil {
+		return err
+	}
+	if err := c.validateResumeSources(ctx); err != nil {
+		return err
+	}
+	return c.startProviderExecutionBoundary(ctx)
+}
+
 func (c *Coordinator) RunInputSnapshot() *RunInputSnapshot {
 	if c == nil {
 		return nil
@@ -61,16 +76,28 @@ func (c *Coordinator) resolveRunInputsForInvocation(ctx context.Context, prompt 
 			return fmt.Errorf("run input %q is runtime-owned and cannot be assigned", requestAcceptanceInput)
 		}
 	}
+	if resume, _ := ctx.Value(sessionResumeKey{}).(bool); resume {
+		frozen := c.RunInputSnapshot()
+		if frozen == nil || ValidateRunInputSnapshot(frozen) != nil {
+			return ResumeSourceError(c.session.Workspace, errors.New("selected resume branch has no valid frozen input snapshot"))
+		}
+		if err := validateResumeRunInputAssignments(c.session.RunInputDefinitions, assignments, frozen, c.session.Config.Name); err != nil {
+			return ResumeSourceError(c.session.Workspace, err)
+		}
+		if c.requestAcceptanceEnabled() {
+			if _, err := RequestAcceptanceContractFromSnapshot(frozen); err != nil {
+				return ResumeSourceError(c.session.Workspace, err)
+			}
+		}
+		return c.selectRecoveryRunInputSnapshot(frozen)
+	}
 	if frozen, err := c.unfinishedRequestAcceptance(ctx); err != nil {
 		return fmt.Errorf("recover request acceptance: %w", err)
 	} else if frozen != nil {
 		if err := validateResumeRunInputAssignments(c.session.RunInputDefinitions, assignments, frozen, c.session.Config.Name); err != nil {
 			return err
 		}
-		return c.mutateSessionData(func(session *SessionData) error {
-			session.ActiveRunInputSnapshotID = frozen.ID
-			return nil
-		})
+		return c.selectRecoveryRunInputSnapshot(frozen)
 	}
 	if frozen, interrupted := c.interruptedRunInputSnapshot(); interrupted {
 		if frozen == nil {
@@ -84,10 +111,7 @@ func (c *Coordinator) resolveRunInputsForInvocation(ctx context.Context, prompt 
 		if err := validateResumeRunInputAssignments(c.session.RunInputDefinitions, assignments, frozen, c.session.Config.Name); err != nil {
 			return err
 		}
-		return c.mutateSessionData(func(session *SessionData) error {
-			session.ActiveRunInputSnapshotID = frozen.ID
-			return nil
-		})
+		return c.selectRecoveryRunInputSnapshot(frozen)
 	}
 	explicit, err := resolveExplicitRunInputValues(c.session.RunInputDefinitions, assignments, c.session.Config.Name)
 	if err != nil {

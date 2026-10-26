@@ -9,6 +9,9 @@ type ContextPurposePolicy struct {
 	Trigger         ContextTrigger
 	FallbackAllowed bool
 	FallbackOutcome string
+	// TerminalContextRole allows read-only context for delivery/observation
+	// after the workflow ends. It grants no task or tool execution authority.
+	TerminalContextRole string
 }
 
 var contextPurposeRegistry = map[string]ContextPurposePolicy{
@@ -16,8 +19,8 @@ var contextPurposeRegistry = map[string]ContextPurposePolicy{
 	// purpose explicit rather than relying on the trigger alone, so manifests
 	// from a replay can distinguish a normal task turn, a retry, and a
 	// coordinator orchestration turn without consulting prompt content.
-	"coordinator_start":           {Trigger: ContextTriggerCoordinatorStart, FallbackAllowed: false},
-	"coordinator_continuation":    {Trigger: ContextTriggerContinuation, FallbackAllowed: false},
+	"coordinator_start":           {Trigger: ContextTriggerCoordinatorStart, FallbackAllowed: false, TerminalContextRole: "coordinator"},
+	"coordinator_continuation":    {Trigger: ContextTriggerContinuation, FallbackAllowed: false, TerminalContextRole: "coordinator"},
 	"task_execution":              {Trigger: ContextTriggerTaskDispatch, FallbackAllowed: false},
 	"task_retry":                  {Trigger: ContextTriggerRetry, FallbackAllowed: false},
 	"tool_failure_recovery":       {Trigger: ContextTriggerToolFailure, FallbackAllowed: false},
@@ -28,8 +31,8 @@ var contextPurposeRegistry = map[string]ContextPurposePolicy{
 	"path_reviewer":               {Trigger: ContextTriggerGuardReview, FallbackAllowed: false, FallbackOutcome: "deny"},
 	"request_acceptance_extract":  {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false},
 	"request_acceptance_contract": {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false},
-	"request_acceptance_review":   {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false},
-	"request_acceptance_evidence": {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false},
+	"request_acceptance_review":   {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, TerminalContextRole: "auxiliary"},
+	"request_acceptance_evidence": {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, TerminalContextRole: "auxiliary"},
 	"run_input_resolver":          {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "deterministic_resolver"},
 	"plan_reviewer":               {Trigger: ContextTriggerPlanReview, FallbackAllowed: false, FallbackOutcome: "deny"},
 	"judge_graft_generation":      {Trigger: ContextTriggerJudge, FallbackAllowed: false, FallbackOutcome: "deny"},
@@ -52,10 +55,10 @@ var contextPurposeRegistry = map[string]ContextPurposePolicy{
 	"skeptic":                           {Trigger: ContextTriggerSkeptic, FallbackAllowed: true, FallbackOutcome: "deterministic_skeptic"},
 	"reflection":                        {Trigger: ContextTriggerRepair, FallbackAllowed: true, FallbackOutcome: "no_reflection"},
 	"result_repair":                     {Trigger: ContextTriggerRepair, FallbackAllowed: false, FallbackOutcome: "repair_unavailable"},
-	"final_summary_repair":              {Trigger: ContextTriggerRepair, FallbackAllowed: true, FallbackOutcome: "unrepaired_summary"},
+	"final_summary_repair":              {Trigger: ContextTriggerRepair, FallbackAllowed: true, FallbackOutcome: "unrepaired_summary", TerminalContextRole: "auxiliary"},
 	"protocol_repair":                   {Trigger: ContextTriggerRepair, FallbackAllowed: false, FallbackOutcome: "repair_unavailable"},
 	"sidecar_task":                      {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "sidecar_unavailable"},
-	"compactor":                         {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "uncompacted"},
+	"compactor":                         {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "uncompacted", TerminalContextRole: "auxiliary"},
 	"team_selection":                    {Trigger: ContextTriggerCoordinatorStart, FallbackAllowed: true, FallbackOutcome: "safe_team_or_no_selection"},
 	"fix_analysis":                      {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "deterministic_analysis"},
 	"explain_analysis":                  {Trigger: ContextTriggerSidecarTask, FallbackAllowed: false, FallbackOutcome: "analysis_unavailable"},

@@ -151,10 +151,10 @@ func TestCoordinatorContextRequestUsesExplicitPurpose(t *testing.T) {
 	}
 }
 
-func TestContextRequestTerminalPhaseOnlyAllowsAcceptanceReview(t *testing.T) {
-	c := &Coordinator{executionRunID: "run-terminal-review"}
+func TestContextRequestTerminalPhaseAllowsOnlyDeliveryContext(t *testing.T) {
+	c := newTestCoordinator(t)
 	for _, phase := range []Phase{PhaseDone, PhaseFailed} {
-		for _, purpose := range []string{"request_acceptance_review", "request_acceptance_evidence"} {
+		for _, purpose := range []string{"request_acceptance_review", "request_acceptance_evidence", "compactor", "final_summary_repair"} {
 			request := c.newAuxiliaryContextRequest("", 1, "", phase, purpose, "Review frozen requirements against observed evidence")
 			if err := request.Validate(); err != nil {
 				t.Fatalf("terminal acceptance review in %s: %v", phase, err)
@@ -171,6 +171,18 @@ func TestContextRequestTerminalPhaseOnlyAllowsAcceptanceReview(t *testing.T) {
 				if err := invalid.Validate(); err == nil {
 					t.Fatalf("terminal workflow allowed a non-review invocation: %#v", invalid)
 				}
+			}
+		}
+		for _, continuation := range []bool{false, true} {
+			c.phaseWorkflow = &runtimeWorkflow{enabled: true, state: phase}
+			request := c.newCoordinatorContextRequest("deliver the accepted result", continuation, 1)
+			if err := request.Validate(); err != nil || request.Phase != phase || c.phaseWorkflow.State() != phase {
+				t.Fatalf("terminal coordinator context changed phase or failed: phase=%s error=%v", phase, err)
+			}
+			request.AgentRole = "worker"
+			request.AssignRequestID()
+			if request.Validate() == nil {
+				t.Fatal("worker acquired terminal coordinator context")
 			}
 		}
 	}

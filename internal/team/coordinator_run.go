@@ -2224,6 +2224,9 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	defer endExecutionRun()
 	defer func() { c.continuationResume = nil }()
 	if err := c.checkRunAdmission(); err != nil {
+		if resume, _ := ctx.Value(sessionResumeKey{}).(bool); resume {
+			err = ResumeSourceError(c.session.Workspace, err)
+		}
 		return "", c.finalizePublicInvocationFailureError(err)
 	}
 	if err := c.admitWorkspaceVersion(ctx); err != nil {
@@ -2243,18 +2246,13 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	}
 	newWorkflowCycle, err := c.beginFollowUpWorkflow(ctx, userPrompt)
 	if err != nil {
+		if resume, _ := ctx.Value(sessionResumeKey{}).(bool); resume {
+			err = ResumeSourceError(c.session.Workspace, err)
+		}
 		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}
-	if err := c.startSemanticRunInputBoundary(ctx); err != nil {
-		c.finalizePublicInvocationFailure(err)
-		return "", err
-	}
-	if err := c.resolveRunInputsForInvocation(ctx, userPrompt); err != nil {
-		c.finalizePublicInvocationFailure(err)
-		return "", err
-	}
-	if err := c.startProviderExecutionBoundary(ctx); err != nil {
+	if err := c.prepareInvocationInputs(ctx, userPrompt); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}
@@ -2329,12 +2327,9 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	// Crash-resume: before delegating new work, re-drive any worker tasks that a
 	// previous interrupted run left in-flight (restored from the checkpoint).
 	// No-op on a fresh run (empty todo list) or with --new (fresh session).
-	if n, err := c.ResumeInterruptedTasks(ctx); err != nil {
-		c.report(c.newEvent("step").withMessage(fmt.Sprintf("resume: re-drove %d interrupted task(s), with errors: %v", n, err)))
-	} else if n > 0 {
-		c.report(c.newEvent("step").withMessage(fmt.Sprintf("resume: re-drove %d interrupted task(s) from checkpoint", n)))
+	if response, stopped, resumeErr := c.resumeInvocationTasks(ctx, userPrompt, newWorkflowCycle); stopped || resumeErr != nil {
+		return response, resumeErr
 	}
-	c.continuationResume = nil
 
 	if !newWorkflowCycle {
 		c.addSessionUserMessage(userPrompt)

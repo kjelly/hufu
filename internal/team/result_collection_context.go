@@ -47,6 +47,10 @@ func resultFixedCollectionContext(plans []resultFixedCollectionPlan) (string, er
 }
 
 func providerFixedCollectionPayloadSchema(ref ResultContractRef, compiled *CompiledResultContract, plans []resultFixedCollectionPlan) map[string]any {
+	return resultFixedCollectionPayloadSchema(ref, compiled, plans, true)
+}
+
+func resultFixedCollectionPayloadSchema(ref ResultContractRef, compiled *CompiledResultContract, plans []resultFixedCollectionPlan, portable bool) map[string]any {
 	base := providerVisibleResultPayloadSchema(ref, compiled)
 	for _, plan := range plans {
 		// Canonical provider guidance advertises arrays; submission accepts
@@ -84,7 +88,7 @@ func providerFixedCollectionPayloadSchema(ref ResultContractRef, compiled *Compi
 			parent["properties"] = props
 		}
 		props[tokens[len(tokens)-1]] = shape
-		if !dynamicSchemaEligible(base) {
+		if portable && !dynamicSchemaEligible(base) {
 			// The full manifest and canonical validator remain authoritative
 			// when a large collection exceeds portable provider schema limits.
 			props[tokens[len(tokens)-1]] = map[string]any{"type": "object", "description": shape["description"]}

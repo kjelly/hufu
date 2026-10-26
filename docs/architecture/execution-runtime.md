@@ -136,13 +136,41 @@ rejections, the worker stream stops and enters the existing bounded result-only
 repair path. Changing JSON paths or call IDs cannot bypass that limit, and
 result-only repair does not replay worker tools.
 
-If result-only repair is exhausted, a task with `side_effect: none` and an
-explicit retry policy may use its remaining normal retry budget only when
-every recorded work tool was an independently classified observation. Rejected
-`submit_result` calls are reporting, not side effects, and do not invalidate
-that proof. Reporting alone is insufficient: an actual observation must be
-recorded, and unknown or mutating tools still prevent replay. Failed repair
-history remains attached to the original attempt's execution receipt.
+Result-only repair validates tool-backed citations against the original
+attempt's observations through a read-only context, without appending repair
+activity to its transcript. Resumed repair reads only the content-addressed
+transcript pinned by the original receipt, verifies its digest, frozen input
+snapshot and result schema, and retains the original execution attempt number.
+Tool-evidence repair receives the complete retained read-only observations
+(bounded by the transcript's 16 MiB evidence limit), including later pages and
+quotes past a page's navigation. Context admission fails closed if this source
+text cannot fit; it is not silently clipped to a prefix. Other repairs retain
+bounded excerpts. Citation binding uses the full verified evidence, and stored
+receipts and payloads retain their exact hashes. A checkpoint with authenticated
+observations can be repaired even when its last assistant message is empty.
+
+A tool-evidence contract with `side_effect: none` may use one final result-only
+turn if its first repair stream fails or returns no `submit_result` call after
+successful read-only observations. Live and resumed repairs normally share a
+two-turn limit. If the first turn produced no submission or failed preparation
+and the second first reaches a schema rejection, exactly one additional
+schema-only correction is permitted. Two missing calls, repeated schema errors,
+and a failed third turn cannot extend that budget. Resumed repairs checkpoint
+each generation's diagnostic and used budget before the next call, and restore
+the last rejection when continuing a schema correction. Exhausted repair requires
+reconciliation with the original receipt, rather than a new worker attempt
+submitting from history without its original evidence. The separate bounded
+capability fallback for tasks without a tool-evidence contract still requires
+proof that all recorded work tools were observations and starts a clean worker
+context. Tool-evidence contracts, unknown tools and mutating tools never
+authorize that fallback.
+
+Request acceptance provides requirement-specific eligible source IDs. Observed
+requirements accept only observed sources; response requirements must cite the
+delivered candidate response. A mixed-kind proof is rejected even if it also
+contains valid observations. One proof-repair turn may remove ineligible sources
+or select existing quotations, but cannot change the frozen requirements or
+upgrade a negative verdict. A still-invalid repair persists its validation error.
 
 A blocked task stops new delegation while its occurrence or reliability scope
 remains unresolved. If the original permitted retry later completes and its
@@ -423,6 +451,17 @@ subsequent verification/completion or terminal failed/blocked/cancelled outcome.
 A successfully repaired submission therefore does not acquire a terminal error
 in the compatibility stream.
 
+Each completed result-repair generation also records its provider finish reason,
+token usage, text/reasoning byte counts and tool-call count in the attempt's
+`repair_provenance.history[].generation`. The diagnostic contains no generated
+reasoning or duplicate source content. Legacy receipts and failures before a
+completed generation omit it; an observed generation with no provider finish
+reason records `unknown`. A `no_tool_call` classification alone therefore does
+not imply that the model returned prose or exhausted its output allowance.
+Numeric reasoning-token usage survives redaction. Readers accept the historical
+`"[REDACTED]"` reasoning-token marker as unavailable/zero telemetry while
+preserving the remaining diagnostic; other invalid string counts are rejected.
+
 ## Backend identity
 
 `ollama` is the canonical built-in LLM backend name. `local` is accepted only
@@ -439,6 +478,35 @@ written durable events must use `ollama`; old workspaces may still contain
 `local` or legacy provider fields while compatibility is retained.
 
 ## Admission, resume, and replay invariants
+
+`hufu resume --branch <existing-branch> [--run <source-run>]` selects the exact
+canonical event lineage before loading the coordinator. It refuses missing or
+empty sources, never falls back to main, and atomically retains the outgoing
+branch when activating the selected source. Before any model execution, it
+checks the restored results against replay, their frozen inputs, pinned result
+contracts, original receipts and content-addressed transcript bytes. A refusal
+names available branches for read-only inspection; it does not start a fresh
+workflow or regenerate accepted payloads.
+
+For a blocked protocol submission, `resume --branch <source> --repair-result
+<task-id>` explicitly grants two additional result-only turns. The grant and
+previous repair history are durable, the original execution run/attempt,
+transcript and input hashes stay unchanged, and only `submit_result` is exposed.
+It cannot replay the worker or recover an isolated workspace. Completed
+dependencies are handed off through their existing `evidence_from` IDs.
+An optional `--repair-model <backend/model>` selects an auxiliary submitter
+already present in both the original and current frozen LLM routes. The grant
+and repair turns record that model separately; the original worker target and
+execution receipt identity are retained. Unknown, bare and agent-backend repair
+targets fail before generation. This lets an operator repair a submission with
+an already admitted model when the worker model repeatedly exhausts its output
+budget without a tool call.
+
+An unused external agent backend's inherited environment does not block an LLM
+continuation. This compatibility applies only when neither frozen nor current
+model routes name that backend, and all other policy fields still match. The
+runtime denies dispatch and execution-world access to such an unrouted backend;
+environment changes for an active backend still fail admission.
 
 1. Resolve and validate the target before `task_created`; a missing backend or
    target is an admission failure.
@@ -736,6 +804,64 @@ not implicitly reopen completed workflows. Execution-policy compatibility is
 still enforced across the session. `--new` remains the explicit way to start a
 separate conversation or adopt incompatible execution settings.
 
+A failed workflow refuses a new request before input extraction. To retain a
+read-only attempt's completed research and sealed tool evidence, fork the session
+at its `protocol_incomplete` checkpoint before finalization failed, then resume
+that branch with compatible execution settings. The original failed branch and
+its history remain available; a metadata-only fork leaves project files alone.
+Forking another branch never copies the outgoing branch's live tasks into the
+child. Once the selected lineage contains events, replay determines its tasks,
+including an empty task list at a point before any task was created. Only an
+eventless legacy branch may use its own stored task-plan snapshot.
+Recovered terminal results retain the original frozen input snapshot and record
+its `run_input_origin_run_id`, verified against the selected branch lineage.
+A new request that fails before input admission does not inherit old inputs.
+If such a request left an unconfirmed terminal append, restart may record it as
+failed only when its canonical history contains an aborted zero-turn checkpoint
+and no model, tool, task or unknown activity. Other uncertain commits remain
+blocked until their actual terminal event can be confirmed.
+
+Recovery settles completed phase contracts through the same workflow observer
+as normal execution before building the coordinator's phase-scoped tools. This
+also covers a checkpoint taken after task completion but before phase settlement,
+even when no task needs replay. The resulting workflow snapshot is persisted as
+a canonical event and checkpoint; pending or operator-blocked tasks do not
+advance, and objective VERIFY evidence and phase order remain required.
+The closed context-purpose registry permits terminal-phase context only for
+coordinator delivery, compaction, final-summary repair and acceptance review,
+with the exact declared role and trigger. Context manifests keep `DONE` or
+`FAILED`; this does not reopen dispatch or admit a new failed-workflow request.
+
+The evidence manifest can retain completed executions from earlier runs in the
+selected branch when their canonical task, successful receipt, result and frozen
+input snapshot match the admitted recovery request. Its recovery snapshot ID
+and hash bind that reuse; each execution binding retains the original run,
+producer, attempt and transcript. Artifact occurrences remain attached to that
+execution, and immutable artifact metadata and receipts are not rewritten.
+Terminal validation and independent audit compare the recovery snapshot with
+the admitted inputs and re-derive the original winning receipt. A loaded session
+without input admission, another branch, changed result or mismatched receipt
+cannot authorize reuse.
+
+Independent audit validates a projected branch against the complete physical
+event journal when visible neighbors are separated by events from other
+branches. It requires the exact canonical branch projection, preserving deletion
+and tampering detection without treating legitimate branch gaps as broken links.
+
+After interrupted-task recovery, if every unresolved task is blocked with
+`needs_human`, resume seals the existing unresolved result without starting the
+coordinator model. Completed results, failed-task evidence and the required
+operator action remain in the canonical result. Pending work, worker retries,
+replanning and reconciliation retain their existing continuation behavior.
+
+Coordinator streams retain the first hard tool failure independently of the
+provider library's tool-result handling. A fatal error or exhausted policy
+repair stops later tool dispatches and model requests, even when Fantasy turns
+the error into a tool result and ignores the result callback's error. The failed
+tool observation remains in history and the original runtime sentinel reaches
+terminal finalization. Recoverable tool-error responses retain their bounded
+correction path; worker streams do not inherit a coordinator's hard-stop state.
+
 ### Bounded artifact search
 
 The built-in view tool accepts search_text for authorized artifact_ref inputs.
@@ -833,3 +959,28 @@ or team-specific freshness rule lives in the runtime. The first version uses
 literal lookup, not semantic ranking, and does not backfill old transcripts.
 Changing tool grants or result schemas still requires a new compatible session
 under the execution-policy snapshot rules.
+
+
+### Rejected result candidates
+
+A schema-rejected `submit_result` may produce a `task_result_candidate` event.
+The event points to an immutable CAS envelope containing the redacted submission
+and its branch, original run/task/attempt, contract, frozen input and accepted
+source bindings. The event is appended before the Todo projection is updated;
+an append failure publishes neither a candidate nor an accepted result. Task
+transition snapshots and replay carry the candidate reference. A new worker
+attempt clears it; a result-only continuation retains it.
+
+Repair tools pin one candidate version before provider execution. Changes to the
+selected branch, schema, inputs, source results or candidate bytes fail closed.
+The runtime applies bounded local edits to a fresh decoded copy, validates the
+whole submission, and uses the original occurrence reservation and result commit
+path. It rechecks the pinned candidate under the reservation to prevent a stale
+repair from winning a race. Rejected intermediate versions are durable; the final
+accepted result still depends on the existing result commit and lifecycle gates.
+No candidate is used as a dependency result or as acceptance evidence.
+
+`inspect` task JSON exposes candidate version, opaque artifact ID, hash and issue
+count, without the raw rejected report. Replay comparison includes candidate
+identity. Candidate capture and local repair do not introduce another retry
+budget or authorize any execution tools.

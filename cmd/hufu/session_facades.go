@@ -64,18 +64,20 @@ func newSessionResumeCommand() *cobra.Command {
 		Args:              cobra.NoArgs,
 		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, _ []string) error {
-			target, err := bindActiveMutationTarget(command.Context(), getSessionWorkspaceForTeam(options.team), options, false)
-			if err != nil {
+			if options.team == "" || options.run == "" || options.branch == "" {
+				return fmt.Errorf("--team, --run, and --branch are required for session resume")
+			}
+			workspace := getSessionWorkspaceForTeam(options.team)
+			if _, err := team.ReadResumeSource(workspace, options.branch, options.run); err != nil {
 				return err
 			}
-			if !sessionHasResumableWork(target.bound.Session) {
-				return fmt.Errorf("session target is stale: the active run has no resumable work")
-			}
-			previousOpts, previousTeam := opts, resumeTeamName
-			defer func() { opts, resumeTeamName = previousOpts, previousTeam }()
-			opts.workspace = target.bound.Scope.WorkspaceExact
+			previousOpts, previousTeam, previousBranch, previousRun := opts, resumeTeamName, resumeBranch, resumeRun
+			defer func() {
+				opts, resumeTeamName, resumeBranch, resumeRun = previousOpts, previousTeam, previousBranch, previousRun
+			}()
+			opts.workspace = workspace
 			opts.workspaceMode = "exact"
-			resumeTeamName = target.bound.Scope.TeamName
+			resumeTeamName, resumeBranch, resumeRun = options.team, options.branch, options.run
 			return runResumeCommand(command, nil)
 		},
 	}

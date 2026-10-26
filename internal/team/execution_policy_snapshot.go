@@ -805,6 +805,9 @@ func (s *executionPolicyState) backendPolicy(target execution.ExecutionTarget) (
 		return ExecutionBackendPolicySnapshot{}, false
 	}
 	policy, ok := s.backendByName[execution.CanonicalTargetBackendName(target.Backend)]
+	if policy.Kind == string(execution.BackendKindAgent) && !policySnapshotUsesBackend(s.snapshot, policy.Backend) {
+		return ExecutionBackendPolicySnapshot{}, false
+	}
 	return policy, ok
 }
 
@@ -818,6 +821,9 @@ func (s *executionPolicyState) environmentForBackend(backend string) []string {
 func (s *executionPolicyState) codexExecutionWorld(backend string, agentDef *agent.AgentDef) (string, bool, error) {
 	if s == nil {
 		return "", false, fmt.Errorf("execution policy snapshot is unavailable")
+	}
+	if !policySnapshotUsesBackend(s.snapshot, execution.CanonicalTargetBackendName(backend)) {
+		return "", false, fmt.Errorf("agent backend %q has no frozen model route", backend)
 	}
 	world, ok := s.codexWorldByBackend[execution.CanonicalTargetBackendName(backend)]
 	if !ok || strings.TrimSpace(world.projectRoot) == "" {
@@ -980,7 +986,10 @@ func (c *Coordinator) executionPolicySnapshotMatchesCurrent(snapshot *ExecutionP
 	if err != nil {
 		return false, fmt.Errorf("resolve execution policy snapshot compatibility: %w", err)
 	}
-	return current.snapshot.ConfigurationHash == snapshot.ConfigurationHash, nil
+	if current.snapshot.ConfigurationHash == snapshot.ConfigurationHash {
+		return true, nil
+	}
+	return compatibleUnusedExecutionEnvironment(snapshot, current.snapshot)
 }
 
 // canonicalExecutionPolicySnapshot reads the active branch's event-first

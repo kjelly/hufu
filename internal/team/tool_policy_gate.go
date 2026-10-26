@@ -213,9 +213,23 @@ func (c *Coordinator) validateBoundWorkerToolPolicy(resolved ResolvedWorkerTools
 }
 
 //nolint:gocyclo // this is the single ordered policy/sequence/receipt gate.
-func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (response fantasy.ToolResponse, runErr error) {
 	if err := ctx.Err(); err != nil {
 		return fantasy.ToolResponse{}, err
+	}
+	if todoID, _ := ctx.Value(todoIDKey{}).(string); todoID == CoordTodoID {
+		boundary := coordinatorStreamBoundary(ctx)
+		if err := boundary.failure(); err != nil {
+			tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{
+				Kind: "policy_denied", ReasonCode: "coordinator_stream_stopped",
+				ToolName: t.Info().Name, ToolCallID: call.ID, Executed: false,
+			})
+			if t.coordinator != nil {
+				t.coordinator.setToolPolicyVerdict(call.ID, "denied")
+			}
+			return fantasy.ToolResponse{}, err
+		}
+		defer func() { boundary.record(runErr) }()
 	}
 	// Reject ambiguous raw arguments before enum normalization could re-encode
 	// them and discard duplicate keys.

@@ -12,8 +12,12 @@ import (
 )
 
 var (
-	resumeTeamName string
-	resumeSearch   string
+	resumeTeamName     string
+	resumeSearch       string
+	resumeBranch       string
+	resumeRun          string
+	resumeRepairResult string
+	resumeRepairModel  string
 )
 
 var resumeCmd = &cobra.Command{
@@ -40,6 +44,9 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	opts.requestAcceptanceSet = cmd.Flags().Changed("request-acceptance")
 	if err := validateRunFlags(); err != nil {
 		return err
+	}
+	if resumeRepairModel != "" && resumeRepairResult == "" {
+		return fmt.Errorf("--repair-model requires --repair-result")
 	}
 	if err := captureRuntimeRoots(); err != nil {
 		return err
@@ -79,9 +86,27 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	if err := validateResumeProfile(teamName, registry, vars); err != nil {
 		return err
 	}
+	source, err := team.ReadResumeSource(workspace, resumeBranch, resumeRun)
+	if err != nil {
+		return err
+	}
+	if resumeRepairResult != "" {
+		found := false
+		for _, item := range source.Session.Tasks {
+			if item != nil && item.ID == resumeRepairResult && item.Status == team.TaskBlocked && item.FailureEvent != nil && item.FailureEvent.FailureClass == team.FailureProtocol {
+				found = true
+			}
+		}
+		if !found {
+			return team.ResumeSourceError(workspace, fmt.Errorf("branch %q has no blocked protocol task %q", source.BranchID, resumeRepairResult))
+		}
+	}
+	if err := team.ActivateResumeSource(context.Background(), workspace, source); err != nil {
+		return team.ResumeSourceError(workspace, err)
+	}
 	tc, err := loadTeamByNameWithWorkspaceBinding(context.Background(), teamName, binding, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
 	if err != nil {
-		return fmt.Errorf("failed to load team %q: %w", teamName, err)
+		return team.ResumeSourceError(workspace, fmt.Errorf("failed to load team %q: %w", teamName, err))
 	}
 	if tc == nil || tc.coordinator == nil || tc.sessionData == nil {
 		_ = tc.Close()
@@ -94,6 +119,10 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ctx = team.WithSessionResume(ctx)
+	if resumeRepairResult != "" {
+		ctx = team.WithResultOnlyRepair(ctx, resumeRepairResult)
+		ctx = team.WithResultRepairModel(ctx, resumeRepairModel)
+	}
 	injector := newPromptInjector(nil)
 	activeCoord := new(activeCoordinator)
 	var loadedTeams map[string]*teamContext
@@ -150,6 +179,10 @@ func validateResumeProfile(teamName string, registry *team.TeamRegistry, vars ma
 
 func init() {
 	f := resumeCmd.Flags()
+	f.StringVar(&resumeBranch, "branch", "", "Exact existing branch ID, name, or label to resume (defaults to active)")
+	f.StringVar(&resumeRun, "run", "", "Require the source run to belong to the selected branch")
+	f.StringVar(&resumeRepairResult, "repair-result", "", "Authorize two result-only repair turns for one blocked protocol task; never replay worker tools")
+	f.StringVar(&resumeRepairModel, "repair-model", "", "Auxiliary result submission model (must already be frozen in the source policy); preserves the original worker target")
 	registerTeamSelectionFlags(f, &resumeTeamName, "Agent team name (inferred from --workspace when omitted)")
 	f.StringVar(&resumeSearch, "agent-team-search-path", "", "Comma-separated team search paths")
 	f.StringVar(&opts.providerURL, "provider-url", "", "Provider API base URL")

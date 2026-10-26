@@ -77,6 +77,11 @@ func (c *Coordinator) semanticRunInputResolver() SemanticRunInputResolver {
 }
 
 func (c *Coordinator) startSemanticRunInputBoundary(ctx context.Context) error {
+	if resume, _ := ctx.Value(sessionResumeKey{}).(bool); resume {
+		// Resume consumes already resolved canonical inputs. Admit their
+		// results and receipts before starting any provider transport.
+		return nil
+	}
 	if c == nil || c.session == nil || c.sidecarModel == "" {
 		return nil
 	}

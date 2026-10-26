@@ -26,13 +26,13 @@ func ForkSessionBranch(ctx context.Context, workspace string, st *SessionTree, e
 		if err := materializeCompactionBranch(batch, workspace, es, branch.ParentID, branch.ID, branch.ForkEventID); err != nil {
 			return fmt.Errorf("failed to materialize compaction state for branch %q: %w", branch.ID, err)
 		}
-		// Snapshot the live session into the new branch so the fork starts
-		// from the current state rather than a potentially stale parent
-		// snapshot, then rebuild the session as the new branch's lineage.
-		snapshotBranchState(batch, workspace, st, branch.ID)
+		// CreateBranch inherits the selected parent's snapshot. The live
+		// session belongs to the outgoing branch, which may not be that parent.
 		if err := rebuildSessionForBranch(batch, st, es, branch.ID); err != nil {
 			return fmt.Errorf("failed to rebuild session for new branch: %w", err)
 		}
+		// Snapshot only after the checkpoint belongs to the selected lineage.
+		snapshotBranchState(batch, workspace, st, branch.ID)
 		st.ActiveBranch = branch.ID
 		return nil
 	})

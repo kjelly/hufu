@@ -154,6 +154,78 @@ func TestMarkCoordinatorFatalKeepsWrappedSentinels(t *testing.T) {
 	}
 }
 
+func TestCoordinatorHardToolFailureStopsRealFantasyExecutor(t *testing.T) {
+	for _, name := range []string{"fatal", "policy_exhausted", "recoverable", "worker"} {
+		t.Run(name, func(t *testing.T) {
+			c := newTestCoordinator(t)
+			toolCalls := 0
+			cause := markCoordinatorFatal(errors.New("terminal worker outcome"))
+			wantError := errCoordinatorFatal
+			if name == "policy_exhausted" {
+				cause = errCoordinatorPolicyRepairExhausted
+				wantError = errCoordinatorPolicyRepairExhausted
+			}
+			inner := fantasy.NewAgentTool("agent", "Exercise the runtime tool boundary", func(context.Context, map[string]any, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+				toolCalls++
+				if name == "recoverable" {
+					return fantasy.NewTextErrorResponse("correct the task arguments"), nil
+				}
+				return fantasy.NewTextErrorResponse("runtime stopped"), cause
+			})
+			model := &rejectedResultStreamModel{
+				toolName: "agent", finish: fantasy.FinishReasonToolCalls, pauseAt: 3,
+				input: func(int) string { return `{}` },
+			}
+			ag := fantasy.NewAgent(model, fantasy.WithTools(c.gatePolicyTools([]fantasy.AgentTool{inner})...), fantasy.WithMaxRetries(0))
+			todoID := CoordTodoID
+			if name == "worker" {
+				todoID = "worker-1"
+			}
+			ctx := tools.SetToolsAllowed(withTestAuxiliaryInvocationContext(t.Context()), []string{"agent"})
+			ctx = context.WithValue(ctx, todoIDKey{}, todoID)
+			// A worker stream must mask the parent's already-failed boundary.
+			parent := &coordinatorStreamFailure{}
+			parent.record(errors.New("parent failure"))
+			ctx = context.WithValue(ctx, coordinatorStreamFailureKey{}, parent)
+			_, steps, err := c.runAgentWithStatusAndHistory(ctx, ag, "coordinator", "exercise tool boundary", nil, &taskTiming{}, fantasy.StepCountIs(3))
+			wantCalls, wantSteps := 1, 1
+			if name == "recoverable" || name == "worker" {
+				wantCalls, wantSteps = 2, 3
+				if err != nil {
+					t.Fatalf("recoverable stream stopped: %v", err)
+				}
+			} else if !errors.Is(err, errCoordinatorToolFailure) || !errors.Is(err, wantError) {
+				t.Fatalf("hard boundary lost error identity: %v", err)
+			}
+			if toolCalls != wantCalls || model.calls != wantSteps || len(steps) != wantSteps {
+				t.Fatalf("tool/model/steps = %d/%d/%d, want %d/%d/%d", toolCalls, model.calls, len(steps), wantCalls, wantSteps, wantSteps)
+			}
+			if wantCalls == 1 && len(steps[0].Content.ToolResults()) != 1 {
+				t.Fatal("hard stop discarded the failed tool observation")
+			}
+		})
+	}
+}
+
+func TestCoordinatorFailedStreamRejectsRemainingToolDispatch(t *testing.T) {
+	c := newTestCoordinator(t)
+	inner := &scriptedCoordinatorTool{name: "agent", results: []scriptedToolResult{okResponse()}}
+	boundary := &coordinatorStreamFailure{}
+	cause := markCoordinatorFatal(errors.New("terminal worker outcome"))
+	boundary.record(cause)
+	ctx := context.WithValue(t.Context(), todoIDKey{}, CoordTodoID)
+	ctx = context.WithValue(ctx, coordinatorStreamFailureKey{}, boundary)
+	var disposition tools.ToolExecutionDisposition
+	ctx = context.WithValue(ctx, tools.ToolExecutionDispositionReporterKey, tools.ToolExecutionDispositionReporter(func(d tools.ToolExecutionDisposition) { disposition = d }))
+	_, err := c.gatePolicyTools([]fantasy.AgentTool{inner})[0].Run(ctx, fantasy.ToolCall{ID: "later-call", Name: "agent", Input: `{}`})
+	if !errors.Is(err, cause) || inner.calls != 0 {
+		t.Fatalf("remaining dispatch ran after a hard stop: calls=%d err=%v", inner.calls, err)
+	}
+	if disposition.Kind != "policy_denied" || disposition.Executed || disposition.ToolCallID != "later-call" {
+		t.Fatalf("remaining dispatch lacks non-execution evidence: %+v", disposition)
+	}
+}
+
 func TestValidateToolArgumentsLetsAgentDecoderOwnUndeclaredKeys(t *testing.T) {
 	task := map[string]any{
 		"type": "object",
