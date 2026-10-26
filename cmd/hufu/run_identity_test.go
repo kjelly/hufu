@@ -6,7 +6,9 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -88,7 +90,7 @@ func TestInvocationIdentityHeartbeatEmitsOnlyOnStartAndTicks(t *testing.T) {
 
 	writer := &synchronizedBuffer{writes: make(chan struct{}, 2)}
 	ticks := make(chan time.Time)
-	stop := startInvocationIdentityHeartbeatWithTicks(writer, "inv-heartbeat", ticks, func() {})
+	stop := startInvocationIdentityHeartbeatWithTicks(writer, "inv-heartbeat", ticks, func() {}, nil)
 	<-writer.writes
 	ticks <- time.Now()
 	<-writer.writes
@@ -96,6 +98,51 @@ func TestInvocationIdentityHeartbeatEmitsOnlyOnStartAndTicks(t *testing.T) {
 
 	if got := strings.Count(writer.String(), "Invocation ID: inv-heartbeat"); got != 2 {
 		t.Fatalf("heartbeat identity count = %d, want start plus one tick; output=%q", got, writer.String())
+	}
+}
+
+func TestInvocationIdentityHeartbeatSkipsQuotaWait(t *testing.T) {
+	previous := opts
+	t.Cleanup(func() { opts = previous })
+	for _, format := range []string{"text", "jsonl"} {
+		t.Run(format, func(t *testing.T) {
+			opts.eventFormat = format
+			synctest.Test(t, func(t *testing.T) {
+				var output bytes.Buffer
+				var waiting atomic.Bool
+				waiting.Store(true)
+				stop := startInvocationIdentityHeartbeat(&output, "inv-quota", invocationIdentityHeartbeatInterval, waiting.Load)
+				defer stop()
+				initial := output.String()
+				if strings.Count(initial, "inv-quota") != 1 {
+					t.Fatalf("initial identity = %q", initial)
+				}
+				time.Sleep(2 * invocationIdentityHeartbeatInterval)
+				synctest.Wait()
+				if output.String() != initial {
+					t.Fatalf("quota wait emitted a heartbeat: %q", output.String())
+				}
+				waiting.Store(false)
+				time.Sleep(invocationIdentityHeartbeatInterval)
+				synctest.Wait()
+				if strings.Count(output.String(), "inv-quota") != 2 {
+					t.Fatalf("heartbeat did not resume: %q", output.String())
+				}
+				waiting.Store(true)
+				stop()
+				time.Sleep(invocationIdentityHeartbeatInterval)
+				emitExecutionIdentity(&output, "inv-quota", []cliRunIdentity{{Team: "review", RunID: "run-quota"}})
+				// The final identity remains available even if a wait was active
+				// when execution stopped, and stopping drains the heartbeat.
+				wantCount := 3
+				if format == "jsonl" {
+					wantCount++ // The final run event also carries the invocation ID.
+				}
+				if strings.Count(output.String(), "inv-quota") != wantCount || !strings.Contains(output.String(), "run-quota") {
+					t.Fatalf("final identity output = %q", output.String())
+				}
+			})
+		})
 	}
 }
 
@@ -114,7 +161,7 @@ func TestInvocationIdentityHeartbeatDoesNotWriteThroughActiveTUI(t *testing.T) {
 
 	var identityOutput bytes.Buffer
 	ticks := make(chan time.Time)
-	stop := startInvocationIdentityHeartbeatWithTicks(&identityOutput, "inv-tui", ticks, func() {})
+	stop := startInvocationIdentityHeartbeatWithTicks(&identityOutput, "inv-tui", ticks, func() {}, nil)
 	ticks <- time.Now()
 	stop()
 	if identityOutput.Len() != 0 {

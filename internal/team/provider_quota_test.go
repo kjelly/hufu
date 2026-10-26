@@ -121,12 +121,15 @@ func TestInvocationWatchdogAllowsKnownQuotaWait(t *testing.T) {
 		synctest.Wait()
 		time.Sleep(6 * time.Minute)
 		synctest.Wait()
-		if ctx.Err() != nil || w.stalled.Load() || !pm.ProviderQuotaWaiting() {
+		if ctx.Err() != nil || w.stalled.Load() || !c.ProviderQuotaWaiting() {
 			t.Fatal("known quota wait treated as silent stall")
 		}
 		cancel(context.Canceled)
 		if err := <-done; !errors.Is(err, context.Canceled) {
 			t.Fatalf("wait cancel=%v", err)
+		}
+		if c.ProviderQuotaWaiting() {
+			t.Fatal("cancelled quota wait remains active")
 		}
 	})
 }

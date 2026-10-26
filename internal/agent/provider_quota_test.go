@@ -17,12 +17,18 @@ func TestProviderQuotaTargetBindsOnlyOllamaCloud(t *testing.T) {
 		eligible                       bool
 	}{
 		{"cloud", "https://ollama.com/v1", "provider-key", "ollama/glm-5.3", "provider-key", true},
+		{"cloud default port", "https://ollama.com:443/v1", "provider-key", "ollama/glm-5.3", "provider-key", true},
+		{"cloud case insensitive host", "https://OLLAMA.COM:443/v1", "provider-key", "ollama/glm-5.3", "provider-key", true},
+		{"cloud other port", "https://ollama.com:8443/v1", "other-key", "ollama/glm-5.3", "", false},
+		{"cloud userinfo", "https://user@ollama.com:443/v1", "other-key", "ollama/glm-5.3", "", false},
 		{"local relay", "http://localhost:11434/v1", "local-only-key", "ollama/glm-5.3:cloud", "cloud-key", true},
 		{"ipv6 relay", "http://[::1]:11434/v1", "", "minimax-m3:cloud", "cloud-key", true},
 		{"local model", "http://localhost:11434/v1", "", "qwen3:8b", "", false},
 		{"other provider", "https://example.com/v1", "other-key", "glm-5.3:cloud", "", false},
 		{"spoofed host", "https://ollama.com.example.com/v1", "other-key", "glm-5.3:cloud", "", false},
+		{"spoofed host default port", "https://ollama.com.example.com:443/v1", "other-key", "glm-5.3:cloud", "", false},
 		{"insecure cloud", "http://ollama.com/v1", "secret", "glm-5.3:cloud", "", false},
+		{"insecure cloud default port", "http://ollama.com:443/v1", "secret", "glm-5.3:cloud", "", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			pm, err := NewProviderManager(tt.url, tt.key, nil)

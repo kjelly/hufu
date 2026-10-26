@@ -58,7 +58,10 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	// default or resolved absolute path.
 	compatibilityWarnings := newExecutionCompatibilityWarningState(opts.workspace)
 	configureOutputRendering()
-	stopIdentityHeartbeat := startInvocationIdentityHeartbeat(os.Stderr, opts.invocationID, invocationIdentityHeartbeatInterval)
+	activeCoord := new(atomic.Pointer[team.Coordinator])
+	stopIdentityHeartbeat := startInvocationIdentityHeartbeat(os.Stderr, opts.invocationID, invocationIdentityHeartbeatInterval, func() bool {
+		return activeCoord.Load().ProviderQuotaWaiting()
+	})
 	defer stopIdentityHeartbeat()
 
 	pr, err := readline.NewPromptReader(defaultHistoryPath())
@@ -111,7 +114,6 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	defer cancel()
 
 	injector := newPromptInjector(pr)
-	activeCoord := new(atomic.Pointer[team.Coordinator])
 	defer setupPromptSignals(injector)()
 
 	// loadedTeams is assigned below; the SIGINT handler reads it via

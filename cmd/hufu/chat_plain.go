@@ -106,7 +106,7 @@ func (s *chatSession) switchPlainTeam(name string, turns *chatTurnSequencer) {
 
 func (s *chatSession) runPlainTurn(line string, turns *chatTurnSequencer) {
 	turnInvocationID := team.NewInvocationID()
-	stopIdentityHeartbeat := startInvocationIdentityHeartbeat(os.Stderr, turnInvocationID, invocationIdentityHeartbeatInterval)
+	stopIdentityHeartbeat := startInvocationIdentityHeartbeat(os.Stderr, turnInvocationID, invocationIdentityHeartbeatInterval, s.tc.coordinator.ProviderQuotaWaiting)
 	turnCtx, cancel := signal.NotifyContext(s.rootCtx, os.Interrupt)
 	disp := newCoordDisplay(s.tc)
 	outcome := runChatTurn(turnCtx, newChatTurnDeps(s.tc, s.teamName), turns, turnInvocationID, line)

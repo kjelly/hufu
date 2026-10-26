@@ -48,7 +48,7 @@ func (pm *ProviderManager) quotaTarget(modelID string) (string, string, bool) {
 		return "", "", false
 	}
 	host := endpoint.Hostname()
-	cloud := endpoint.Scheme == "https" && endpoint.Host == "ollama.com"
+	cloud := endpoint.Scheme == "https" && strings.EqualFold(host, "ollama.com") && (endpoint.Port() == "" || endpoint.Port() == "443")
 	addr, _ := netip.ParseAddr(host)
 	loopback := host == "localhost" || addr.IsLoopback()
 	// The local daemon forwards :cloud models using its own sign-in. Never

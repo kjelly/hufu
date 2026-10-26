@@ -110,18 +110,19 @@ func emitExecutionIdentity(w io.Writer, invocationID string, identities []cliRun
 }
 
 // startInvocationIdentityHeartbeat emits immediately and then periodically
-// until stopped. The synchronous stop waits for the goroutine so the terminal
-// identity block cannot race a late heartbeat.
-func startInvocationIdentityHeartbeat(w io.Writer, invocationID string, interval time.Duration) func() {
+// until stopped, skipping periodic output during a known quota wait. The
+// synchronous stop waits for the goroutine so the terminal identity block
+// cannot race a late heartbeat.
+func startInvocationIdentityHeartbeat(w io.Writer, invocationID string, interval time.Duration, quotaWaiting func() bool) func() {
 	if interval <= 0 || strings.TrimSpace(invocationID) == "" {
 		emitInvocationIdentity(w, invocationID)
 		return func() {}
 	}
 	ticker := time.NewTicker(interval)
-	return startInvocationIdentityHeartbeatWithTicks(w, invocationID, ticker.C, ticker.Stop)
+	return startInvocationIdentityHeartbeatWithTicks(w, invocationID, ticker.C, ticker.Stop, quotaWaiting)
 }
 
-func startInvocationIdentityHeartbeatWithTicks(w io.Writer, invocationID string, ticks <-chan time.Time, stopTicks func()) func() {
+func startInvocationIdentityHeartbeatWithTicks(w io.Writer, invocationID string, ticks <-chan time.Time, stopTicks func(), quotaWaiting func() bool) func() {
 	emitInvocationIdentity(w, invocationID)
 	done := make(chan struct{})
 	stopped := make(chan struct{})
@@ -134,7 +135,9 @@ func startInvocationIdentityHeartbeatWithTicks(w io.Writer, invocationID string,
 				if !ok {
 					return
 				}
-				emitInvocationIdentity(w, invocationID)
+				if quotaWaiting == nil || !quotaWaiting() {
+					emitInvocationIdentity(w, invocationID)
+				}
 			case <-done:
 				return
 			}

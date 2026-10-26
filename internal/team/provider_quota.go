@@ -12,6 +12,12 @@ import (
 
 var _ agent.ProviderRequestRecovery = providerRequestAdmission{}
 
+// ProviderQuotaWaiting reports a known quota wait for this coordinator and its
+// workers, sidecars, and extra models sharing the provider manager.
+func (c *Coordinator) ProviderQuotaWaiting() bool {
+	return c != nil && c.providerManager.ProviderQuotaWaiting()
+}
+
 func (a providerRequestAdmission) CanRecoverProviderRequest(request agent.ProviderRequest) bool {
 	return a.c != nil && a.c.providerManager.SupportsProviderQuota(request.ModelID)
 }
