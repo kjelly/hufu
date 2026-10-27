@@ -11,7 +11,93 @@ import (
 	"testing"
 
 	"charm.land/fantasy"
+	"github.com/kjelly/hufu/internal/tools"
 )
+
+func TestResultCollectionCompletesBoundWorksetWithResultContract(t *testing.T) {
+	var workCalls, collectionCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			_, _ = fmt.Fprint(w, `{"model":"test","parameters":"num_ctx 131072","model_info":{"general.architecture":"qwen2","qwen2.context_length":131072},"capabilities":["completion","tools"]}`)
+			return
+		}
+		var request map[string]any
+		if err := json.UnmarshalRead(r.Body, &request); err != nil {
+			t.Error(err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		body := "Review complete; there are no assigned rows."
+		if strings.Contains(fmt.Sprint(request["messages"]), resultCollectorSystem) {
+			collectionCalls.Add(1)
+			if exposed, _ := request["tools"].([]any); len(exposed) != 0 {
+				t.Error("collector exposed execution tools")
+			}
+			body = `{"status":"success","summary":"review complete","structured_payload":{"rows":[]}}`
+		} else {
+			workCalls.Add(1)
+			if exposed, _ := request["tools"].([]any); len(exposed) != 1 || !strings.Contains(fmt.Sprint(exposed), "view") || strings.Contains(fmt.Sprint(exposed), submitResultToolName) {
+				t.Errorf("bound work tools=%v, want only view", exposed)
+			}
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "data: {\"id\":\"review\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", body)
+	}))
+	t.Cleanup(server.Close)
+	compiled, err := CompileResultContractDocument("rows.json", []byte(worksetRowsSchema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _, _, _ := resultCollectionProviderFixture(t, server.URL+"/v1", true, func(c *Coordinator) {
+		c.session.Agents["worker"].ResultTransport = ""
+		c.session.Agents["worker"].Tools = "view"
+		c.coreTools = []fantasy.AgentTool{tools.NewViewTool(tools.WithArtifactOpener(c.openArtifactRef))}
+		c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
+		c.session.AgentResultContracts = map[string]ResultContractRef{"worker": compiled.ref(true)}
+	})
+	c.providerBoundaryStart = func(context.Context, string) error { return nil }
+	c.delegatedTasks = make(map[string]int)
+	testTaskCache(c).entries = make(map[string][]cachedTaskEntry)
+	writeWorksetManifest(t, c.session.Workspace, `{"schema_version":1,"items":[{"key":"one","bindings":{"name":"one","target_ids":"[]"}},{"key":"two","bindings":{"name":"two","target_ids":"[]"}}]}`)
+	_, err = c.ExecuteTasks(t.Context(), []TaskDef{{ID: "reviews", Agent: "worker", Model: "ollama/test", SideEffect: SideEffectNone,
+		Execution: ExecutionContract{RequiresResult: true},
+		FanOut:    &FanOutSpec{Source: "manifest.json", GoalTemplate: "Review {name}; there are no assigned rows."}}})
+	if err != nil {
+		for _, item := range c.taskTracker.TodoList().Items()[1:] {
+			t.Logf("child %s: status=%s detail=%s output=%s", item.ID, item.Status, item.Detail, item.Output)
+		}
+		t.Fatal(err)
+	}
+	items := c.taskTracker.TodoList().Items()[1:]
+	if len(items) != 2 {
+		t.Fatalf("workset children=%d, want 2", len(items))
+	}
+	receipt := items[0].WorksetReceipt
+	if receipt == nil {
+		t.Fatal("workset expansion receipt is missing")
+	}
+	for _, item := range items {
+		if item.Status != TaskDone || item.TypedResult == nil || item.TypedResult.Source != "collected" || item.WorksetBinding == nil || item.ExecutionReceipt.ResultValidation != ResultValidationValid || receipt.Children[item.WorksetBinding.ItemKey] != item.ID {
+			t.Fatalf("bound review incomplete: status=%s detail=%s", item.Status, item.Detail)
+		}
+	}
+	if workCalls.Load() != 2 || collectionCalls.Load() != 2 {
+		t.Fatalf("work=%d collection=%d, want one of each per item", workCalls.Load(), collectionCalls.Load())
+	}
+	events, err := c.EventJournal().ReadEvents(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed := ReduceToTodoList(events)[1:]
+	if replayed[0].WorksetReceipt == nil || !equivalentWorksetReceipts(receipt, replayed[0].WorksetReceipt) {
+		t.Fatal("replay lost the workset expansion receipt")
+	}
+	for _, item := range replayed {
+		if item.Status != TaskDone || item.TypedResult == nil || item.TypedResult.StructuredPayload == nil || item.WorksetBinding == nil || receipt.Children[item.WorksetBinding.ItemKey] != item.ID || item.ExecutionReceipt.ResultPayloadSHA256 != item.TypedResult.StructuredPayload.SHA256 {
+			t.Fatal("replay lost the accepted workset result or receipt")
+		}
+	}
+}
 
 func TestResultCollectionHandsValidatedPayloadsToDependentWorkers(t *testing.T) {
 	for _, names := range [][]string{{"coder", "reviewer", "verifier"}, {"researcher", "evidence_consumer"}} {

@@ -396,9 +396,9 @@ func TestBoundArtifactPolicyPreflightRejectsIncompatibleRequiredProtocolTool(t *
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer"}})[0]
 	item.WorksetBinding = &WorksetBinding{WorksetID: "workset-1", ItemKey: "one"}
 	scope := &ArtifactAccessScope{TaskID: item.ID, Attempt: 1}
-	err := c.validateBoundWorkerToolPolicy(ResolvedWorkerTools{
+	err := c.validateBoundWorkerToolPolicy(t.Context(), ResolvedWorkerTools{
 		Tools: []fantasy.AgentTool{&recordingTool{name: submitResultToolName}},
-	}, TaskDef{Execution: ExecutionContract{RequiresResult: true}}, item.ID, scope)
+	}, testWorkerDef(), TaskDef{Execution: ExecutionContract{RequiresResult: true}}, item.ID, scope)
 	if err == nil || !strings.Contains(err.Error(), "incompatible with the bound artifact policy") {
 		t.Fatalf("incompatible required protocol tool error=%v", err)
 	}
@@ -411,12 +411,12 @@ func TestBoundArtifactPolicyPreflightAllowsRuntimeOwnedLoadSkill(t *testing.T) {
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer"}})[0]
 	item.WorksetBinding = &WorksetBinding{WorksetID: "workset-1", ItemKey: "one"}
 	scope := &ArtifactAccessScope{TaskID: item.ID, Attempt: 1}
-	err := c.validateBoundWorkerToolPolicy(ResolvedWorkerTools{
+	err := c.validateBoundWorkerToolPolicy(t.Context(), ResolvedWorkerTools{
 		Tools: []fantasy.AgentTool{
 			&loadSkillTool{coordinator: c},
 			&submitResultTool{coordinator: c, todoID: item.ID},
 		},
-	}, TaskDef{Execution: ExecutionContract{RequiresResult: true}}, item.ID, scope)
+	}, testWorkerDef(), TaskDef{Execution: ExecutionContract{RequiresResult: true}}, item.ID, scope)
 	if err != nil {
 		t.Fatalf("runtime-owned load_skill rejected by bound artifact policy: %v", err)
 	}
@@ -445,7 +445,7 @@ func TestBoundWorksetToolResolutionFiltersOnlyImplicitIncompatibleTools(t *testi
 	if !slices.Contains(resolved.Names, submitResultToolName) {
 		t.Fatalf("bound reviewer surface lost authentic submit_result: %v", resolved.Names)
 	}
-	if err := c.validateBoundWorkerToolPolicy(resolved, task, item.ID, &ArtifactAccessScope{TaskID: item.ID, Attempt: 1}); err != nil {
+	if err := c.validateBoundWorkerToolPolicy(t.Context(), resolved, def, task, item.ID, &ArtifactAccessScope{TaskID: item.ID, Attempt: 1}); err != nil {
 		t.Fatalf("bound reviewer surface failed preflight: %v", err)
 	}
 
@@ -459,7 +459,7 @@ func TestBoundWorksetToolResolutionFiltersOnlyImplicitIncompatibleTools(t *testi
 	if !slices.Contains(explicit.Names, "random") {
 		t.Fatalf("explicit random was silently removed: %v", explicit.Names)
 	}
-	if err := c.validateBoundWorkerToolPolicy(explicit, task, item.ID, &ArtifactAccessScope{TaskID: item.ID, Attempt: 1}); err == nil || !strings.Contains(err.Error(), `resolved tool "random" is incompatible`) {
+	if err := c.validateBoundWorkerToolPolicy(t.Context(), explicit, def, task, item.ID, &ArtifactAccessScope{TaskID: item.ID, Attempt: 1}); err == nil || !strings.Contains(err.Error(), `resolved tool "random" is incompatible`) {
 		t.Fatalf("explicit random preflight error = %v, want fail-closed diagnostic", err)
 	}
 

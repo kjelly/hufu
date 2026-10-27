@@ -957,7 +957,7 @@ retryLoop:
 			return "", fmt.Errorf("artifact scope preflight failed: %w", scopeErr)
 		}
 		if c.workerAgentOverride == nil {
-			if err := c.validateBoundWorkerToolPolicy(resolvedTools, task, todoID, attemptArtifactScope); err != nil {
+			if err := c.validateBoundWorkerToolPolicy(attemptModeCtx, resolvedTools, agentDef, task, todoID, attemptArtifactScope); err != nil {
 				closeTranscript()
 				return "", fmt.Errorf("worker tool policy preflight failed: %w", err)
 			}

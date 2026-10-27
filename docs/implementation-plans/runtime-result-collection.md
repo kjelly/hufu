@@ -351,3 +351,30 @@ mise run lint
 | `mise run vet` | exit 0 |
 | `mise run lint` | exit 0，0 issues；所有最終程式碼與 eval fixture 變更已納入 |
 | `bin/check-docs` | exit 0；86 active files、542 relative links、38 Go anchors |
+
+### 工作集審查執行前檢查回歸（2026-10-27）
+
+- 公開診斷介面確認 `inv-20261027T072734.661364780Z-6c2ebab33ae1`／`run-20261027T072820.732889700Z-db9bf1600cb4` 在 branch `session-1793086073145497063` 的結果為 partial：18 個任務中 2 個完成、16 個未解決。5 個審查任務因 `required protocol tool "submit_result" is missing from the final resolved worker surface` 失敗，其餘 11 個被後續 anti-thrashing 保護阻擋。這是 runtime 回歸，不能透過放寬審查接受條件解決。
+- `validateBoundWorkerToolPolicy` 仍將 `requires_result` 等同於必須具有 `submit_result`，與新的 runtime transport 矛盾。改為從已凍結政策與實際 attempt target 解出 transport，重用 static resolver 的 lifecycle requirements；runtime collection 不要求結果工具，tool transport／closed sequence 與初始規劃仍要求相符的 authentic protocol handler。既有 artifact policy 檢查保留。
+- 原先交接測試使用 scripted worker，且未綁定 workset，未覆蓋這層執行前檢查。新增真實本機 HTTP 假 provider、兩個 fan-out 子任務、workset binding／expansion receipt、schema 與 ordered workset-input contract 的整合測試；修正前重現相同缺工具錯誤，修正後要求每個子任務各一次工作／收集呼叫，並檢查完成與事件 replay 的 validated result／receipt。
+- 補充預設 runtime、明確 tool、closed sequence、initial／approved plan 的邊界測試，確認 custom resolver 無法省略必要的 authentic handler。實際失敗 session 保留原貌；修正程式不會清除 breaker、重寫歷史結果或自動重跑任務。
+
+驗證修正後，可從本 checkout 以新 session 重新審查原來的三個 commit。固定 head，避免新增修正 commit 改變「最近三個」的範圍；這是建議命令，本次修正未執行真實 provider／team 重跑：
+
+```bash
+mise run run -- --new --agent-team hufu-code-review --report \
+  --input 'review.scope={"kind":"last_n","count":3,"history":"first_parent","head":"6edf35637a19d53b6d07bf7031e23ce48cdf9b38"}' \
+  'review 指定範圍的三個 git commit，告訴我這些修改有無潛在問題'
+```
+
+修正後驗證結果：
+
+| Gate | 結果 |
+|---|---|
+| 修正前工作集 HTTP 回歸測試 | exit 1；兩個子任務重現相同 `submit_result` preflight 錯誤，未派發審查模型 |
+| collector／transport／bound artifact／workset focused tests | exit 0；`internal/team` 30.821s |
+| `mise run test` | exit 0；`internal/team` 549.519s、`cmd/hufu` 133.444s、`internal/improver` 150.285s；其餘套件均通過 |
+| targeted race tests | exit 0；`internal/team` 74.036s；涵蓋 collector／transport／bound artifact／workset |
+| `mise run vet` | exit 0 |
+| `mise run lint` | exit 0，0 issues |
+| `bin/check-docs` | exit 0；86 active files、175 total files、542 relative links、38 Go anchors |

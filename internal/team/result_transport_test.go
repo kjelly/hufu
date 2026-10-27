@@ -107,3 +107,55 @@ func TestRuntimeResultTransportPreservesPlanSubmissionSurface(t *testing.T) {
 		}
 	}
 }
+
+func TestBoundArtifactPolicyPreflightUsesResultTransportAndLifecycle(t *testing.T) {
+	for _, transport := range []agent.ResultTransport{"", agent.ResultTransportTool} {
+		for _, phase := range []string{"work", "initial_plan", "approved_plan", "closed_sequence"} {
+			t.Run(string(transport)+"/"+phase, func(t *testing.T) {
+				c, item, _, _ := resultCollectionProviderFixture(t, "http://127.0.0.1:1/v1", true, func(c *Coordinator) {
+					c.session.Config.ResultTransport = transport
+					c.session.Agents["worker"].ResultTransport = ""
+				})
+				item.WorksetBinding = &WorksetBinding{WorksetID: "workset-1", ItemKey: "one"}
+				c.taskTracker.TodoList().Restore([]*TodoItem{item})
+				def := c.session.Agents["worker"]
+				task := taskDefFromTodoItem(item)
+				if phase == "initial_plan" || phase == "approved_plan" {
+					task.PlanFirst = true
+					if phase == "approved_plan" {
+						task.PlanID = item.ID
+					}
+				}
+				if phase == "closed_sequence" {
+					task.Execution.ToolSequence = []string{submitResultToolName}
+				}
+				resolved, err := c.ToolResolver().ResolveTaskTools(t.Context(), def, WorkerToolResolutionRequest{
+					Task: task, TodoID: item.ID, Mode: workerToolResolutionModeForTask(task),
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				scope := &ArtifactAccessScope{TaskID: item.ID, Attempt: 1}
+				if err := c.validateBoundWorkerToolPolicy(t.Context(), resolved, def, task, item.ID, scope); err != nil {
+					t.Fatal(err)
+				}
+				required := ""
+				switch {
+				case phase == "initial_plan":
+					required = "submit_plan"
+				case transport == agent.ResultTransportTool || phase == "closed_sequence":
+					required = submitResultToolName
+				}
+				if required == "" && slices.Contains(resolved.Names, submitResultToolName) {
+					t.Fatal("runtime collection granted submit_result")
+				}
+				// A custom resolver cannot omit a required authentic protocol
+				// handler. Runtime collection legitimately needs no such handler.
+				err = c.validateBoundWorkerToolPolicy(t.Context(), ResolvedWorkerTools{}, def, task, item.ID, scope)
+				if (err != nil) != (required != "") {
+					t.Fatalf("required=%s missing handler error=%v", required, err)
+				}
+			})
+		}
+	}
+}
