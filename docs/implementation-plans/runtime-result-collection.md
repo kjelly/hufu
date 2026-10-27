@@ -253,3 +253,18 @@ mise run lint
 - 每個 PR 回報具體行為差異、檔案、fixture、通過／失敗命令、event／schema／receipt 差異與回復限制。不要把架構重構本身當成已減少結果工具呼叫的證據。
 
 **Definition of Done**：新一般 local task 預設由 runtime 發起無工具的結果收集；正常與修復皆無 `submit_result` 呼叫；工作證據先於收集持久化；收集及恢復不重播工作；只有完整 admission、verification、apply 與 acceptance 通過才完成任務。相容工具協定的使用範圍有明確邊界，無真實服務或人工操作前置條件。
+
+## 9. Baseline 驗證與實作進度
+
+2026-10-27，在修改任何 Go 程式之前完成驗證。程式碼為本文件 baseline `c8c52d30`；執行完整測試時 HEAD 為只加入本計畫與文件索引的 `51148852`，Go 程式與 baseline 相同。
+
+| Gate | 結果 |
+|---|---|
+| `mise run test` | exit 0；完整套件通過，部分沿用 Go test cache；`internal/team` 實跑 512.063s，`cmd/hufu` 112.157s |
+| `mise run vet` | exit 0 |
+| `mise run lint` | exit 0，0 issues |
+| `bin/check-docs` | exit 0，生命週期標頭、相對連結與 Go function anchors 有效 |
+
+所有 Go gates 使用 `GOMAXPROCS=2`、repository mise toolchain 與原設定 caches／`GOTMPDIR`；subprocess `TMPDIR` 使用本任務 private directory。第一次 sandbox 測試因禁止 local socket，導致 `httptest` 等 fixtures 失敗；完整重跑允許本地 HTTP／Unix socket fixtures 後全數通過。此環境失敗不列為程式 baseline 缺陷，後續需要 fixtures 的驗證須使用同等執行權限。
+
+實作階段尚未完成；每個 PR 完成後於本節補上具體變更與驗證結果，再建立獨立 commit。
