@@ -186,6 +186,8 @@ type AgentDef struct {
 	// this agent. A static contract task may override it; a coordinator
 	// payload never can.
 	ResultContract *ResultContractSpec
+	// ResultTransport is static execution policy; dynamic task JSON cannot set it.
+	ResultTransport ResultTransport `json:"-" yaml:"-"`
 	// WorkerWorkspace overrides the team's worker-workspace default for this
 	// agent.
 	WorkerWorkspace *WorkerWorkspaceSpec
@@ -413,9 +415,10 @@ type TeamConfig struct {
 	WorkerWorkspace *WorkerWorkspaceSpec
 	// ExecutionRoute is the team-level default execution route for workers
 	// that set neither their own route nor their own model.
-	ExecutionRoute string
-	MemoryLearning MemoryLearningPolicy
-	ContextRouting ContextRoutingPolicy
+	ExecutionRoute  string
+	ResultTransport ResultTransport `json:"-" yaml:"-"`
+	MemoryLearning  MemoryLearningPolicy
+	ContextRouting  ContextRoutingPolicy
 	// Compaction controls coordinator history retention and deterministic
 	// normalization of verified tool evidence. It is team-scoped; agent
 	// frontmatter cannot override these safety limits.

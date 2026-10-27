@@ -291,6 +291,7 @@ func TestProviderCostIdentityClassifiesRuntimePurposes(t *testing.T) {
 		wantRole    string
 	}{
 		{name: "worker", ctx: withInvocationMetadata(t.Context(), InvocationMetadata{TaskID: "task-1", Attempt: 1, AgentName: "worker", AgentRole: "reviewer", Purpose: "task_execution"}), wantPurpose: cost.PurposeWorker, wantAgent: "worker", wantRole: "reviewer"},
+		{name: "result collection", ctx: withInvocationMetadata(t.Context(), InvocationMetadata{TaskID: "task-1", Attempt: 1, AgentName: "worker", AgentRole: "reviewer", Purpose: "result_collection"}), wantPurpose: cost.PurposeWorker, wantAgent: "worker", wantRole: "reviewer"},
 		{name: "direct", ctx: withProviderCostContext(t.Context(), providerCostContext{Agent: "worker", Role: "reviewer", Purpose: cost.PurposeDirectAgent}), wantPurpose: cost.PurposeDirectAgent, wantAgent: "worker", wantRole: "reviewer"},
 		{name: "judge", ctx: withProviderCostContext(t.Context(), providerCostContext{Agent: "judge", Role: "auxiliary", Purpose: providerCostPurpose("judge")}), wantPurpose: cost.PurposeJudge, wantAgent: "judge", wantRole: "auxiliary"},
 		{name: "repair overrides worker", ctx: context.WithValue(withInvocationMetadata(t.Context(), InvocationMetadata{TaskID: "task-1", Attempt: 3, AgentName: "worker", AgentRole: "reviewer"}), protocolRepairExecutionKey{}, true), wantPurpose: cost.PurposeRepair, wantAgent: "worker", wantRole: "reviewer"},

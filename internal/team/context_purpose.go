@@ -55,6 +55,7 @@ var contextPurposeRegistry = map[string]ContextPurposePolicy{
 	"skeptic":                           {Trigger: ContextTriggerSkeptic, FallbackAllowed: true, FallbackOutcome: "deterministic_skeptic"},
 	"reflection":                        {Trigger: ContextTriggerRepair, FallbackAllowed: true, FallbackOutcome: "no_reflection"},
 	"result_repair":                     {Trigger: ContextTriggerRepair, FallbackAllowed: false, FallbackOutcome: "repair_unavailable"},
+	"result_collection":                 {Trigger: ContextTriggerAuxiliary, FallbackAllowed: false, FallbackOutcome: "collection_unavailable"},
 	"final_summary_repair":              {Trigger: ContextTriggerRepair, FallbackAllowed: true, FallbackOutcome: "unrepaired_summary", TerminalContextRole: "auxiliary"},
 	"protocol_repair":                   {Trigger: ContextTriggerRepair, FallbackAllowed: false, FallbackOutcome: "repair_unavailable"},
 	"sidecar_task":                      {Trigger: ContextTriggerSidecarTask, FallbackAllowed: true, FallbackOutcome: "sidecar_unavailable"},

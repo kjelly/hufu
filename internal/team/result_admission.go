@@ -191,6 +191,9 @@ func (a *localResultAdmission) commit(ctx context.Context, input SubmitResultInp
 		res.Attempt = identity.Attempt
 		res.Agent = identity.Agent
 		res.Source = "submitted"
+		if _, collecting := ctx.Value(resultCollectionAdmissionKey{}).(*ResultCollectionCheckpoint); collecting {
+			res.Source = "collected"
+		}
 		if res.Confidence == 0 {
 			res.Confidence = 1.0
 		}
@@ -295,7 +298,13 @@ func (a *localResultAdmission) materializeSubmittedArtifacts(ctx context.Context
 		return fmt.Errorf("artifact submission requires a workspace")
 	}
 	workspace := a.coordinator.session.Workspace
-	store, err := NewFileArtifactStore(workspace, workspace)
+	storeRoot := workspace
+	if checkpoint, _ := ctx.Value(resultCollectionAdmissionKey{}).(*ResultCollectionCheckpoint); checkpoint != nil && checkpoint.FanoutLeaf {
+		// The source directory belongs to this leaf, while accepted bytes
+		// must outlive its disposable workspace in the parent's durable CAS.
+		storeRoot = a.coordinator.artifactStoreRootPath()
+	}
+	store, err := NewFileArtifactStore(storeRoot, workspace)
 	if err != nil {
 		return err
 	}

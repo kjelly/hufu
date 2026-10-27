@@ -117,6 +117,12 @@ func (c *Coordinator) reconcileAttemptWorld(ctx context.Context, worldDir string
 		}
 		c.finishRecoveredAttempt(ctx, worldDir, owner, record, item)
 	case attemptWorldStatePrepared:
+		if item != nil && item.Status == TaskBlocked && item.ExecutionReceipt != nil && item.ExecutionReceipt.ExecutionWorldID == record.WorldID {
+			return
+		}
+		if checkpoint := currentResultCollection(item); checkpoint != nil && item.Status != TaskDone && checkpoint.Attempt == record.Attempt && checkpoint.SourceRunID == record.RunID {
+			return
+		}
 		if item != nil && item.Status == TaskProtocolIncomplete && latestOfTask && record.OccurrenceAttempt == item.Retries+1 {
 			return // its result-only repair applies it on resume
 		}

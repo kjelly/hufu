@@ -33,6 +33,7 @@ type RepairFailureReason string
 
 const (
 	RepairFailureNoToolCall       RepairFailureReason = "no_tool_call"
+	RepairFailureResultMissing    RepairFailureReason = "result_missing"
 	RepairFailureInvalidSchema    RepairFailureReason = "invalid_schema"
 	RepairFailureProgressNotFinal RepairFailureReason = "progress_not_final"
 	RepairFailureNoEvidence       RepairFailureReason = "no_evidence"
@@ -54,7 +55,7 @@ func (r RepairFailureReason) ReclassifiesAsExecution() bool {
 // reclassified as FailureExecution and must not count toward protocol repair
 // statistics (§7).
 func (r RepairFailureReason) IsProtocolRepairFailure() bool {
-	return r == RepairFailureNoToolCall || r == RepairFailureInvalidSchema || r == RepairFailureSource || r == RepairFailureContract || r == RepairFailureCommit
+	return r == RepairFailureNoToolCall || r == RepairFailureResultMissing || r == RepairFailureInvalidSchema || r == RepairFailureSource || r == RepairFailureContract || r == RepairFailureCommit
 }
 
 // RepairAttemptProvenance records one result-only repair turn. Keeping each

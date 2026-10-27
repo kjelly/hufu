@@ -320,6 +320,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	if leafExecution && c.workerAgentOverride != nil {
 		task.Execution.RequiresResult = false
 	}
+	if item := c.todoItemByID(todoID); currentResultCollection(item) != nil {
+		return c.resumeCollectedTask(parentCtx, task, item)
+	}
 	// The scheduler may hand us its mutable in-memory TaskDef (including a DAG
 	// escalation attempt), but the occurrence was re-resolved above.
 	// A checkpointed protocol-incomplete task has already run its worker. It
@@ -441,8 +444,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	maxAttempts := c.effectiveWorkerMaxAttempts(agentDef)
 
 	expectedStatus := TaskPending
-	if item := c.todoItemByID(todoID); item != nil && item.Status == TaskPlanned {
-		expectedStatus = TaskPlanned
+	if item := c.todoItemByID(todoID); item != nil && (item.Status == TaskPlanned || item.Source == TaskSourceSubagent && item.Status == TaskInProgress) {
+		expectedStatus = item.Status
 	}
 	if err := c.CommitTaskTransition(parentCtx, todoID, expectedStatus, TaskInProgress, "", "", attemptStartMetadata(1)); err != nil {
 		return "", fmt.Errorf("mark task started: %w", err)
@@ -550,6 +553,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		instructions = "You are a domain expert. Determine your own implementation approach based on the goal above.\n" + c.sharedKnowledgeInstructions(granted)
 	}
 	verificationCriteria := ""
+	protocolPrefix := instructions
+	protocolInstructions := ""
 	if task.Verify != "" && (!task.PlanFirst || task.PlanID != "") {
 		runsFrom := c.projectDir
 		if task.WorkerWorkspace.isolated() {
@@ -562,7 +567,8 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// be stated. A worker that ends its turn with prose fails the contract, and
 	// the failure is indistinguishable from real non-completion.
 	if !task.PlanFirst || task.PlanID != "" {
-		instructions += c.resultProtocolInstructions(task, granted)
+		protocolInstructions = c.resultProtocolInstructions(task, granted)
+		instructions += protocolInstructions
 	}
 	if taskUsesVerbatimTranscript(task) {
 		instructions += "\n\n## Verbatim Output Contract\n\nhufu captures every tool call and tool result into a complete transcript artifact. Do not reproduce raw command output in your final response. Submit a concise structured result; the runner will attach the authoritative transcript manifest."
@@ -607,7 +613,11 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	if err != nil {
 		return "", fmt.Errorf("worker fixed collection preflight failed: %w", err)
 	}
-	collectionContext, err := resultFixedCollectionContext(collectionPlans)
+	collectionTransport, err := c.resultTransportForTask(agentDef, task)
+	if err != nil {
+		return "", err
+	}
+	collectionContext, err := resultFixedCollectionContextForTransport(collectionPlans, collectionTransport == agent.ResultTransportRuntime)
 	if err != nil {
 		return "", err
 	}
@@ -624,6 +634,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		rawSTM, rawLTM = LoadSTM(c.session.Workspace), LoadLTM(c.session.Workspace, c.session.Config.Name)
 	}
 	workerInput := buildWorkerContextInput(request, task, agentDef, approvedPlan, instructions, verificationCriteria, runtimeContext, skillContext)
+	protocolSuffix := instructions[len(protocolPrefix)+len(protocolInstructions):]
 	workerInput.RawSTM = rawSTM
 	workerInput.RawLTM = rawLTM
 	workerInput.ContextFiles = contextFiles
@@ -709,6 +720,13 @@ retryLoop:
 		// A fallback attempt starts the new candidate from scratch, like a
 		// first attempt: no retry statistics, reflection, or retry context.
 		fallbackRound := fallback.beginAttempt(attempt)
+		attemptTarget := fallback.target(task.ResolvedExecutionTarget)
+		attemptModeCtx := context.WithValue(parentCtx, workerResultTargetKey{}, attemptTarget)
+		transport, transportErr := c.resultTransportForTaskContext(attemptModeCtx, agentDef, task)
+		if transportErr != nil {
+			return "", transportErr
+		}
+		runtimeCollection := transport == agent.ResultTransportRuntime && task.Execution.RequiresResult && (!task.PlanFirst || task.PlanID != "")
 		c.setCurrentTaskAttempt(todoID, attempt)
 		attemptIdentity, attemptIdentityOK := c.activeTaskResultOccurrence(todoID)
 		if attemptIdentityOK {
@@ -719,8 +737,14 @@ retryLoop:
 		// attempt to prevent stale data from a prior attempt or task.
 		attemptEvidence := &toolCallEvidence{}
 		var attemptSequence *taskToolSequence
+		var collectionCtx context.Context
+		var cancelCollection context.CancelFunc
 		transcript = nil
 		closeTranscript := func() {
+			if cancelCollection != nil {
+				cancelCollection()
+				cancelCollection = nil
+			}
 			if transcript != nil {
 				if closeErr := transcript.Close(); closeErr != nil {
 					log.Printf("warning: close task transcript: %v", closeErr)
@@ -738,6 +762,11 @@ retryLoop:
 			transcript, err = newTaskTranscriptForAttempt(c.session.Workspace, todoID, c.executionRunID, attempt, agentName)
 			if err != nil {
 				return "", err
+			}
+			// Fanout diagnostic files stay private; their sealed CAS evidence is
+			// owned by the durable parent control plane.
+			if c.isModelFanoutLeaf(todoID) {
+				transcript.workspace = c.artifactStoreRootPath()
 			}
 		}
 		if attempt > 1 {
@@ -875,8 +904,7 @@ retryLoop:
 		// frozen dynamic authorization remains the ceiling for every rebind.
 		// attemptTarget is the target this attempt runs on: the frozen primary,
 		// or the route candidate a fallback moved to.
-		attemptTarget := fallback.target(task.ResolvedExecutionTarget)
-		attemptTools, resolveToolsErr := c.resolveAttemptWorkerTools(parentCtx, task, todoID, agentDef)
+		attemptTools, resolveToolsErr := c.resolveAttemptWorkerTools(attemptModeCtx, task, todoID, agentDef)
 		if resolveToolsErr != nil {
 			closeTranscript()
 			return "", fmt.Errorf("resolve worker tools for attempt %d: %w", attempt, resolveToolsErr)
@@ -937,6 +965,11 @@ retryLoop:
 		retrievalQuery := request.RetrievalQuery()
 		workerInput.ModelContext = invocation.ModelContext
 		attemptInput := workerInput
+		if !task.PlanFirst || task.PlanID != "" {
+			protocolTask := task
+			protocolTask.ResolvedExecutionTarget = attemptTarget
+			attemptInput.AgentInstructions = protocolPrefix + c.resultProtocolInstructions(protocolTask, toolNameSet(resolvedTools.Names)) + protocolSuffix
+		}
 		attemptInput.Request = request
 		if attempt > 1 && lastErr != nil && !fallbackRound {
 			if len(lastPolicyDeniedDispositions) > 0 {
@@ -1077,7 +1110,11 @@ retryLoop:
 			// worker must derive its context without that state so its own final
 			// ResolvedWorkerTools remain authoritative at the provider boundary.
 			taskCtx, cancel := tools.WithInteractiveAwareTimeout(withoutCoordinatorRequestPreflight(attemptCtx), agentTimeout)
-			defer cancel()
+			if runtimeCollection {
+				collectionCtx, cancelCollection = taskCtx, cancel
+			} else {
+				defer cancel()
+			}
 			taskCtx, roundCancel := context.WithCancel(taskCtx)
 			defer roundCancel()
 			defer func() { attemptContextErr = taskCtx.Err() }()
@@ -1087,6 +1124,7 @@ retryLoop:
 			taskCtx = context.WithValue(taskCtx, executionAttemptKey{}, attempt)
 			taskCtx = context.WithValue(taskCtx, modelKey{}, resolvedModel)
 			taskCtx = context.WithValue(taskCtx, taskRequiresResultKey{}, task.Execution.RequiresResult)
+			taskCtx = context.WithValue(taskCtx, workerRuntimeResultKey{}, runtimeCollection)
 			taskCtx = withInvocationMetadata(taskCtx, invocationMetadataFromRequest(request, contextManifest))
 			if identity, ok := c.activeTaskResultOccurrence(todoID); ok {
 				taskCtx = withSubmitResultRuntimeIdentity(taskCtx, identity)
@@ -1108,7 +1146,7 @@ retryLoop:
 			// has no submit_result tool, so the terminal step below closes every
 			// tool and asks for Markdown rather than exposing an impossible
 			// submit_result-only interface.
-			if c.allowsFreeTextWorkerResult(task) {
+			if c.allowsFreeTextWorkerResult(task) || runtimeCollection {
 				taskCtx = context.WithValue(taskCtx, workerFreeTextFinalizationKey{}, true)
 			}
 			taskCtx = context.WithValue(taskCtx, tools.ToolExecutionDispositionReporterKey, newToolDispositionReporter(attemptDispositions, resolvedSideEffect, runID, todoID, attempt))
@@ -1321,17 +1359,28 @@ retryLoop:
 			changedState = true
 		}
 		transcriptRef := ""
+		var collectionSealErr error
 		var transcriptArtifact *ArtifactRef
 		if transcript != nil {
 			// Capture the worker's original final response before any repair
 			// agent is started. The repair context intentionally does not carry
 			// this recorder, so its output cannot mutate the original evidence.
 			if recordErr := transcript.RecordAssistantOutput(output); recordErr != nil && err == nil {
-				err = fmt.Errorf("record original task transcript: %w", recordErr)
+				failure := fmt.Errorf("record original task transcript: %w", recordErr)
+				if runtimeCollection {
+					collectionSealErr = failure
+				} else {
+					err = failure
+				}
 			}
 			if ref, manifestErr := transcript.Manifest(); manifestErr != nil {
 				if err == nil {
-					err = fmt.Errorf("create original task transcript manifest: %w", manifestErr)
+					failure := fmt.Errorf("create original task transcript manifest: %w", manifestErr)
+					if runtimeCollection {
+						collectionSealErr = errors.Join(collectionSealErr, failure)
+					} else {
+						err = failure
+					}
 				}
 			} else {
 				transcriptArtifact = ref
@@ -1412,7 +1461,54 @@ retryLoop:
 			closeTranscript()
 			continue
 		}
+		if isolated != nil {
+			receipt.ExecutionWorldID = isolated.worldID()
+		}
+		deprecatedReport := runtimeCollection && errors.Is(err, errDeprecatedResultTransport) && parentCtx.Err() == nil
+		if deprecatedReport {
+			err = nil
+			receipt.ExitCode = new(0)
+		}
 		err, terminalBlocked := c.finalizeTaskTerminalResources(parentCtx, todoID, err)
+		if runtimeCollection && err == nil && !terminalBlocked {
+			workUsageBudget := attemptTokens.snapshotForUsage()
+			c.recordAttemptUsage(todoID, attempt, usageWithProgressTokens(steps, workUsageBudget))
+			if collectionSealErr != nil {
+				err = &resultCollectionFailure{Reason: RepairFailureCommit, Cause: collectionSealErr}
+			} else if _, sealErr := sealVerbatimTaskTranscript(transcript); sealErr != nil {
+				err = &resultCollectionFailure{Reason: RepairFailureCommit, Cause: sealErr}
+			} else {
+				if identity, ok := c.activeTaskResultOccurrence(todoID); ok {
+					collectionCtx = withSubmitResultRuntimeIdentity(collectionCtx, identity)
+				}
+				collectionCtx = context.WithValue(collectionCtx, attemptBudgetKey{}, attemptTokens)
+				stopReason := "work_returned"
+				if receipt.StepBudget.Exhausted {
+					stopReason = "step_budget"
+				}
+				if deprecatedReport {
+					stopReason = "deprecated_result_transport"
+				}
+				collectionCtx = context.WithValue(collectionCtx, resultCollectionStopKey{}, stopReason)
+				err = c.collectReturnedWork(collectionCtx, agentDef, receipt, output, currentPrompt)
+				// Collector usage has its own admission/accounting. Later
+				// work receipt projections must retain the original total.
+				attemptTokens = workUsageBudget
+				if err == nil && c.GetTaskResult(todoID) == nil {
+					err = &resultCollectionFailure{Reason: RepairFailureCommit, Cause: errors.New("accepted collection result was not published")}
+				}
+			}
+			if err != nil {
+				if isolated != nil {
+					isolated.state = isolatedAttemptRetained
+				}
+				c.recordCollectionStopReceipt(todoID, err)
+				_ = c.setAttemptReceipt(todoID, &receipt)
+				c.PersistFailureWithClassAndStatusAndOutput(agentName, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), NeedsHuman, FailureProtocol, TaskBlocked, output)
+				closeTranscript()
+				return "", err
+			}
+		}
 		// A repeated rejected submit_result call means execution evidence was
 		// produced but finalization is malformed. Route that structured protocol
 		// failure through the existing result-only repair path instead of
@@ -1679,7 +1775,7 @@ retryLoop:
 							}
 
 							repairSteps, repairErr := runRepair(repairPrompt)
-							repairSuccess := typedRes != nil && typedRes.Source == "submitted" && validateCompletedTaskResult(typedRes) == nil
+							repairSuccess := typedRes != nil && isLocalSubmittedResultSource(typedRes.Source) && validateCompletedTaskResult(typedRes) == nil
 							repairDiagnostic := repairValidationError(repairSteps)
 							// §7: classify the repair failure sub-reason so the next-step
 							// disposition is driven by evidence rather than a generic
@@ -1737,7 +1833,7 @@ retryLoop:
 									}
 								}
 								schemaRepairSteps, schemaRepairErr := runRepair(schemaRepairPrompt)
-								repairSuccess = typedRes != nil && typedRes.Source == "submitted" && validateCompletedTaskResult(typedRes) == nil
+								repairSuccess = typedRes != nil && isLocalSubmittedResultSource(typedRes.Source) && validateCompletedTaskResult(typedRes) == nil
 								if schemaRepairErr != nil {
 									repairErr = schemaRepairErr
 									repairReason = repairFailurePreparation
@@ -3166,7 +3262,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	}
 	output := item.Output
 
-	if (item.TypedResult == nil || item.TypedResult.Source != "submitted") && item.ResultCandidate != nil && item.ResultCandidate.Prepared {
+	if (item.TypedResult == nil || !isLocalSubmittedResultSource(item.TypedResult.Source)) && item.ResultCandidate != nil && item.ResultCandidate.Prepared {
 		return c.resumePreparedResultCandidate(parentCtx, task, item)
 	}
 
@@ -3175,7 +3271,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 	// protocol_incomplete task with a valid result but no provenance. Treat
 	// that result as the durable repair boundary: record the missing receipt and
 	// finish locally, without clearing it or making another repair-agent call.
-	if item.TypedResult != nil && item.TypedResult.Source == "submitted" && validateCompletedTaskResult(item.TypedResult) == nil {
+	if item.TypedResult != nil && isLocalSubmittedResultSource(item.TypedResult.Source) && validateCompletedTaskResult(item.TypedResult) == nil {
 		agentName := strings.ToLower(strings.TrimSpace(item.Agent))
 		if agentName == "" {
 			agentName = strings.ToLower(strings.TrimSpace(task.Agent))
@@ -3467,7 +3563,7 @@ func (c *Coordinator) resumeProtocolIncompleteTask(parentCtx context.Context, ta
 			repairReason, _ = classifyRepairFailure(steps, typedRes)
 		}
 		repairDiagnostic := repairValidationError(steps)
-		repairSuccess = typedRes != nil && typedRes.Source == "submitted" && validateCompletedTaskResult(typedRes) == nil
+		repairSuccess = typedRes != nil && isLocalSubmittedResultSource(typedRes.Source) && validateCompletedTaskResult(typedRes) == nil
 		repairHistory = append(repairHistory, RepairAttemptProvenance{
 			Attempt:         attempt,
 			InvocationRunID: c.executionRunID,
@@ -4568,6 +4664,13 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			reportFn(c.newEvent("tool_call").withAgent(agentName).withTodoID(todoID).withTool(tc.ToolName, argsPreview))
 			llmLogStreamEvent(logWrite, "tool_call", formatToolCallContent(tc))
 			audit.LogToolCall(agentName, tc.ToolName, tc.Input, tc.ToolCallID)
+			if collectorID, _ := ctx.Value(resultCollectionInvocationKey{}).(string); collectorID != "" {
+				tools.ReportToolExecutionDisposition(ctx, tools.ToolExecutionDisposition{Kind: "policy_denied", ReasonCode: "collector_tool_call", ToolName: tc.ToolName, ToolCallID: tc.ToolCallID, Executed: false})
+				return errCollectionToolCall
+			}
+			if err := c.stopDeprecatedResultReport(ctx, tc); err != nil {
+				return err
+			}
 
 			if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 				phase := c.phaseWorkflow.State()
@@ -5063,7 +5166,8 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	// stalled, and must never be nudged. Neither is a planning worker that has
 	// submitted its plan: the nudge would have it execute before review.
 	requiresResult, _ := ctx.Value(taskRequiresResultKey{}).(bool)
-	if err == nil && result != nil && todoID != "" && requiresResult && c.GetTaskResult(todoID) == nil && !c.planSubmittedFor(todoID) && stalledWithoutToolCall(result.Steps) {
+	runtimeResult, _ := ctx.Value(workerRuntimeResultKey{}).(bool)
+	if err == nil && result != nil && todoID != "" && requiresResult && !runtimeResult && c.GetTaskResult(todoID) == nil && !c.planSubmittedFor(todoID) && stalledWithoutToolCall(result.Steps) {
 		// A worker that already exhausted its step budget is handled by the
 		// existing wrap-up/finalization path (PrepareStep's stepBudgetCheckpoint
 		// above); nudging here would just add steps beyond the budget it was
@@ -5403,6 +5507,13 @@ func (c *Coordinator) resultProtocolInstructions(task TaskDef, granted map[strin
 		compiled, _ = c.compiledResultContract(task.ResultContract)
 		if compiled != nil {
 			fields = compiled.submissionFields
+		}
+	}
+	if c != nil && task.Execution.RequiresResult && backendKind == execution.BackendKindLLM {
+		if def, _, err := c.AgentPool().ResolveAgentName(task.Agent); err == nil {
+			if mode, modeErr := c.resultTransportForTask(def, task); modeErr == nil && mode == agent.ResultTransportRuntime {
+				return runtimeWorkerResultInstructions + resultContractPromptSection(task.ResultContract, compiled, false)
+			}
 		}
 	}
 	instructions := resultProtocolInstructionsForSubmission(task, granted, backendKind, fields)

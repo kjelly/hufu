@@ -8,7 +8,7 @@
 
 > **用途**：交給 coding agent 依序實作；本文件本身不授權操作真實服務或更動部署。
 > **Baseline**：`kjelly/hufu` @ `c8c52d30a1932caddc3ad0d7ecc0ad0ad15882cb`（2026-10-27 本地核對）。
-> **狀態**：設計已定稿，可開始實作；下列新功能尚未實作。
+> **狀態**：PR-1、PR-2、PR-3 已完成；PR-4 的公開設定與新預設尚未啟用。
 > **產品決策**：使用者已選擇「相容的新任務預設使用 runtime 主動收集結果」，接受可能增加一次模型呼叫及受限格式修復。
 > **文件位置**：依使用者後續指示，自 `docs/tmp/spec.md` 移入版本控制；本計畫為 reference，實作時同步正式架構與參考文件。
 
@@ -304,3 +304,26 @@ mise run lint
 | `mise run vet` | exit 0 |
 | `mise run lint` | exit 0，0 issues；已修正一次 whitespace finding |
 | `bin/check-docs` | exit 0 |
+
+
+### PR-3：無工具 collector 與各入口恢復（完成）
+
+- 新增 `result_collection` invocation purpose，以實際工作 target 的普通文字生成取得 strict JSON；使用原 worker 的 generation／timeout、backend semaphore、provider admission、成本、token 與取消邊界。collector 的 HTTP request 沒有工具；模型幻覺工具呼叫在 handler 前拒絕，僅使用原來的格式修復額度。
+- 透過封存的 internal typed policy seam 選用 runtime，分開「需要 typed result」與「授權 submit_result」。新來源為 `collected`；共用 admission、驗證、terminal 與 workspace apply 仍決定完成。公開 YAML 與新 session 預設留到 PR-4。
+- 一般 worker、direct-agent、subagent 與 fanout leaf 接入同一套收集／恢復。工作回合返回後的 transcript／CAS／事件故障走停止與結果恢復，不回到 worker retry；過時的 submit_result 嘗試保留拒絕證據，handler 執行數為零。
+- received／prepared／committed 優先使用 durable bytes。fanout 以凍結 topology slot 恢復該 leaf，保留其 workspace 直到 parent 完成；隔離 world 依原始世界身份重開，缺失時停止，不能改選新 world 或重跑工作。
+- fanout leaf 的 artifact 從原工作區讀取並存入 parent CAS；測試在 leaf 清除後重新開啟已接受的 artifact 並比對完整內容。新增 policy 欄位明列為 improver 固定政策，避免自動探測改變結果傳輸契約。
+- verbatim 結果在 collection commit 前附上原生 transcript；重複封存沿用 CAS canonical metadata，完成流程不再改變時間戳或重複 signed evidence。收集用量保存 cache counters；工作統計在 collector 前固定，避免進度 token 重複記帳。
+- 取消或 collection event append 故障可保留較早的 checkpoint，由原生 failure receipt 支援既有 result-only continuation；storage continuation 的 grant 增額為零，沿用剩餘原額度。已 committed 的 grant 保留 accepted 狀態，只續行完成檢查。來源／契約拒絕及隔離 workspace 的既有 grant 限制不放寬。
+- 本地 HTTP／scripted fixtures 覆蓋無工作工具、正常／一次修復／耗盡、collector 幻覺工具、過時報告工具、真實 bash 副作用計數、封存 writer 故障、direct／subagent／fanout／isolated／verbatim、durable response／prepared／accepted 恢復、operator grant 與取消／token budget。plan-first、unattended、dry-run 及公開新預設的整合驗收仍屬 PR-4。
+
+2026-10-27 驗證結果：
+
+| Gate | 結果 |
+|---|---|
+| focused collector／checkpoint／transport／transcript／provider admission tests | exit 0，最後修正後 19.599s；涵蓋 fanout artifact 保存，先前已通過 model-call inventory 與 gated constructor checks |
+| `mise run test` | exit 0；最後修正後完整套件通過，`internal/team` 529.525s、`cmd/hufu` 113.734s、`internal/improver` 154.931s |
+| targeted race tests | exit 0；`internal/team` 57.794s、`internal/inspect` 1.091s |
+| `mise run vet` | exit 0 |
+| `mise run lint` | exit 0，0 issues；以 protocol collision helper 分解複雜度，未放寬 lint 規則 |
+| `bin/check-docs` | exit 0；86 active files、540 relative links、38 Go anchors |

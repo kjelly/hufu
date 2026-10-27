@@ -47,7 +47,8 @@ type ExecutionPolicySnapshot struct {
 	RunInputPolicyHash string                           `json:"run_input_policy_hash,omitempty"`
 	// ResultContracts pins every bound result contract schema. It is omitted
 	// when a team declares none, so their ConfigurationHash is unchanged.
-	ResultContracts []ExecutionResultContractPolicySnapshot `json:"result_contracts,omitempty"`
+	ResultContracts  []ExecutionResultContractPolicySnapshot  `json:"result_contracts,omitempty"`
+	ResultCollection *ExecutionResultCollectionPolicySnapshot `json:"result_collection,omitempty"`
 	// StaticWorkflowHash pins opt-in named contract edges and their contracts.
 	StaticWorkflowHash string `json:"static_workflow_hash,omitempty"`
 	// ExecutionRoutes pins every worker's bound execution route by digest.
@@ -323,6 +324,11 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 	snapshot.DiagnosticLoop = executionPolicyDiagnostic(c.session)
 	if err := populateRunContractPolicySnapshot(snapshot, c.session); err != nil {
 		return nil, err
+	}
+	var collectionErr error
+	snapshot.ResultCollection, collectionErr = executionPolicyResultCollection(c.session, version)
+	if collectionErr != nil {
+		return nil, collectionErr
 	}
 	if version >= executionPolicyPreviousSnapshotVersion {
 		snapshot.ResultContracts = executionPolicyResultContracts(c.session)
@@ -623,6 +629,7 @@ func cloneExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) *ExecutionP
 	clone.Backends = slices.Clone(snapshot.Backends)
 	clone.ModelRoutes = slices.Clone(snapshot.ModelRoutes)
 	clone.ResultContracts = slices.Clone(snapshot.ResultContracts)
+	clone.ResultCollection = cloneExecutionResultCollectionPolicy(snapshot.ResultCollection)
 	clone.ExecutionRoutes = slices.Clone(snapshot.ExecutionRoutes)
 	clone.MCPActionProviders = slices.Clone(snapshot.MCPActionProviders)
 	clone.MCPWorkerPolicies = slices.Clone(snapshot.MCPWorkerPolicies)
@@ -658,6 +665,12 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	}
 	if !supportedExecutionPolicySnapshotVersion(snapshot.Version) {
 		return fmt.Errorf("execution policy snapshot version %d is unsupported", snapshot.Version)
+	}
+	if snapshot.ResultCollection != nil && snapshot.Version < executionPolicySnapshotVersion {
+		return fmt.Errorf("legacy execution policy cannot contain result collection")
+	}
+	if err := validateExecutionResultCollectionPolicy(snapshot.ResultCollection); err != nil {
+		return err
 	}
 	if err := validateExecutionBeliefSnapshot(snapshot.Belief); err != nil {
 		return err

@@ -11,7 +11,7 @@ import (
 // been checked. Candidate validation precedes any repair provider execution.
 func (c *Coordinator) appendTaskProtocolTools(ctx context.Context, concrete []fantasy.AgentTool, taskID string, static StaticToolResolution) ([]fantasy.AgentTool, error) {
 	concrete = removeToolNames(concrete, submitResultToolName, "submit_plan")
-	if static.ResultRequired {
+	if static.ResultToolRequired {
 		submit, err := c.newResultSubmissionTool(ctx, taskID, static.ResultOnly)
 		if err != nil {
 			return nil, err

@@ -66,6 +66,7 @@ type taskTranscript struct {
 	f               *os.File
 	toolResults     int
 	assistantOutput bool
+	sealed          *ArtifactRef
 	evidence        []taskTranscriptRecord
 	evidenceBytes   int
 	evidenceInvalid bool
@@ -340,7 +341,15 @@ func (t *taskTranscript) Manifest() (*ArtifactRef, error) {
 	if err != nil {
 		return nil, fmt.Errorf("snapshot task transcript: %w", err)
 	}
-	return &putResult.ArtifactRef, nil
+	// Repeated snapshots of unchanged bytes share immutable CAS metadata.
+	// Put can return this call's timestamp even when an earlier metadata
+	// object already exists; use the stored canonical reference throughout
+	// receipt, collection commit, and terminal finalization.
+	ref, err := store.Get(context.Background(), putResult.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read canonical task transcript metadata: %w", err)
+	}
+	return &ref, nil
 }
 
 func (t *taskTranscript) Close() error {
@@ -371,6 +380,12 @@ func sealVerbatimTaskTranscript(transcript *taskTranscript) (*ArtifactRef, error
 	if transcript == nil {
 		return nil, fmt.Errorf("verbatim task transcript was not initialized")
 	}
+	transcript.mu.Lock()
+	sealed := transcript.sealed
+	transcript.mu.Unlock()
+	if sealed != nil {
+		return new(*sealed), nil
+	}
 	ref, err := transcript.Manifest()
 	if err != nil {
 		return nil, err
@@ -382,6 +397,9 @@ func sealVerbatimTaskTranscript(transcript *taskTranscript) (*ArtifactRef, error
 	if err := transcript.Close(); err != nil {
 		return nil, fmt.Errorf("seal task transcript: %w", err)
 	}
+	transcript.mu.Lock()
+	transcript.sealed = new(*ref)
+	transcript.mu.Unlock()
 	return ref, nil
 }
 
@@ -407,6 +425,11 @@ func attachVerbatimTaskResult(ref *ArtifactRef, transcript *taskTranscript, resu
 		Type:        "task_transcript",
 		Description: "Complete runner-captured tool transcript",
 		Value:       ref.ID,
+	}
+	for _, existing := range result.Evidence {
+		if existing.Type == ev.Type && existing.Value == ev.Value && existing.TaskID == ev.TaskID && existing.RunID == ev.RunID && VerifyEvidenceSignature(existing, sec, ev.TaskID, ev.RunID) {
+			return nil
+		}
 	}
 	result.Evidence = append(result.Evidence, SignEvidence(ev, sec))
 	return nil

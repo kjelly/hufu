@@ -356,7 +356,7 @@ func isSubmittedResultSource(source string) bool {
 }
 
 func isLocalSubmittedResultSource(source string) bool {
-	return source == "submitted"
+	return source == "submitted" || source == "collected"
 }
 
 const (

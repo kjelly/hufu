@@ -13,6 +13,9 @@ type resultCollectionAdmissionKey struct{}
 // Unlike the legacy tool adapter it does not normalize shorthand or unwrap text.
 func (c *Coordinator) decodeCollectionClaims(taskID string, raw []byte) (SubmitResultInput, error) {
 	var input SubmitResultInput
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return input, rejectLocalResult(RepairFailureResultMissing, fmt.Errorf("collector returned no result"))
+	}
 	if len(raw) > resultCollectionResponseMaxBytes || len(bytes.TrimSpace(raw)) == 0 || bytes.TrimSpace(raw)[0] != '{' {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("collection response must be one bounded JSON object"))
 	}
@@ -21,6 +24,9 @@ func (c *Coordinator) decodeCollectionClaims(taskID string, raw []byte) (SubmitR
 	}
 	if err := json.Unmarshal(raw, &input, json.RejectUnknownMembers(true)); err != nil {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
+	}
+	if input.Summary == "" {
+		return input, rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("summary is required"))
 	}
 	if err := validateToolArguments(string(raw), localResultSubmissionInfo(c, taskID)); err != nil {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
@@ -139,6 +145,9 @@ func (tx *taskResultOccurrenceTransaction) commitCollection(ctx context.Context,
 	}
 	canonical := cloneTaskResult(result)
 	canonical.TaskID, canonical.Attempt, canonical.Agent = tx.identity.TaskID, tx.identity.Attempt, tx.identity.Agent
+	if err := c.attachCollectedTranscript(ctx, item, expected, canonical); err != nil {
+		return err
+	}
 	body, err := json.Marshal(canonical, json.Deterministic(true))
 	if err != nil {
 		return err

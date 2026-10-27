@@ -54,7 +54,13 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	// occurrence once before any leaf starts; isolated leaves below receive
 	// private Todo state and therefore cannot race this transition or arm a
 	// second decision for the same occurrence.
-	if item := c.todoItemByID(todoID); item != nil {
+	resumingCollection := currentResultCollection(c.todoItemByID(todoID)) != nil
+	defer func() {
+		if returnErr == nil {
+			c.releaseFanoutCollectionWorkspaces(parentCtx, todoID)
+		}
+	}()
+	if item := c.todoItemByID(todoID); item != nil && !resumingCollection {
 		expected := TaskPending
 		if item.Status == TaskPlanned {
 			expected = TaskPlanned
@@ -122,7 +128,17 @@ func (c *Coordinator) executeTaskWithExtraModels(
 	}
 	if len(leafErrors) > 0 {
 		err := fmt.Errorf("fanout leaf execution failed: %s", strings.Join(leafErrors, "; "))
-		c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), RetryNone, FailureExecution)
+		collectionFailed := resumingCollection
+		for _, leaf := range allResults {
+			if _, ok := errors.AsType[*resultCollectionFailure](leaf.err); ok {
+				collectionFailed = true
+			}
+		}
+		if collectionFailed {
+			c.PersistFailureWithClassAndStatusAndOutput(agentName, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), NeedsHuman, FailureProtocol, TaskBlocked, "")
+		} else {
+			c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), RetryNone, FailureExecution)
+		}
 		return "", err
 	}
 
@@ -307,15 +323,27 @@ func (c *Coordinator) executeSingleAgentWithModel(
 		return "", err
 	}
 
+	resumeCheckpoint, resumeWork, err := c.fanoutCollectionResume(parentCtx, todoID, topologyIndex, leafTarget)
+	if err != nil {
+		return "", err
+	}
+
 	// Create isolated workspace for this model to prevent concurrent file conflicts.
 	// Use unique token (timestamp + agentName) to prevent collision when multiple
 	// agents use the same model simultaneously.
 	token := fmt.Sprintf("%d-%d-%s", time.Now().UnixNano(), extraWSSeq.Add(1), sanitizeModel(agentName))
 	subWS := filepath.Join(c.session.Workspace, "extra-models", sanitizeModel(agentDef.Generation.Model)+"-"+token)
+	if resumeWork != nil {
+		subWS = resumeWork.Workspace
+	}
 	if err := os.MkdirAll(subWS, 0o755); err != nil {
 		return "", fmt.Errorf("failed to create isolated workspace: %w", err)
 	}
+	keepCollectionWorkspace := resumeWork != nil
 	defer func() {
+		if keepCollectionWorkspace {
+			return
+		}
 		if rmErr := os.RemoveAll(subWS); rmErr != nil {
 			log.Printf("warning: failed to remove isolated workspace %s: %v", subWS, rmErr)
 		}
@@ -349,6 +377,13 @@ func (c *Coordinator) executeSingleAgentWithModel(
 		leafItem.TypedResult = nil
 		leafItem.ExecutionReceipt = nil
 		leafItem.ExecutionReceipts = nil
+		if resumeCheckpoint != nil {
+			leafItem.Status = TaskInProgress
+			leafItem.OccurrenceRevision, leafItem.DispatchID = resumeCheckpoint.SubmissionRevision, resumeCheckpoint.SubmissionDispatchID
+			receipt := cloneExecutionReceipt(collectionReceipt(parentItem, resumeCheckpoint))
+			leafItem.ExecutionReceipt = &receipt
+			leafItem.ExecutionReceipts = []ExecutionReceipt{receipt}
+		}
 		leafTracker := NewTaskTracker()
 		leafTracker.TodoList().SetRunID(c.contextRunID())
 		leafTracker.TodoList().AddReserved([]*TodoItem{leafItem})
@@ -362,10 +397,16 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	task.ExecutionTopology = []execution.ExecutionTarget{leafTarget}
 	isolationIdentity := strings.Join([]string{c.contextRunID(), todoID, agentName, agentDef.Generation.Model, slot}, "\x00")
 	isolatedCoord.modelExecutionID = "model-execution-" + hashContentKey(isolationIdentity)
+	if resumeCheckpoint != nil {
+		isolatedCoord.modelExecutionID = resumeCheckpoint.ModelExecutionID
+	}
 
 	leafCtx := context.WithValue(parentCtx, leafExecutionKey{}, true)
 	result, err := isolatedCoord.executeTask(leafCtx, task, todoID)
 	if leafItem := isolatedCoord.todoItemByID(todoID); leafItem != nil && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		if currentResultCollection(leafItem) != nil {
+			keepCollectionWorkspace = true
+		}
 		for i := range leafItem.ExecutionReceipts {
 			receipt := leafItem.ExecutionReceipts[i]
 			if mergeErr := c.setAttemptReceipt(todoID, &receipt); mergeErr != nil {

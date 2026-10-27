@@ -815,7 +815,7 @@ func (c *Coordinator) commitTaskTransition(ctx context.Context, taskID string, e
 		checkpoint.SubmissionRevision = projected.OccurrenceRevision
 		checkpoint.SubmissionDispatchID = newTaskDispatchID()
 		checkpoint.TurnLimit = max(checkpoint.TurnLimit, repairGrant.AfterAttempts+repairGrant.AdditionalAttempts)
-		if checkpoint.Prepared != nil {
+		if checkpoint.Prepared != nil && checkpoint.State != ResultCollectionCommitted {
 			checkpoint.State, checkpoint.FailureReason = ResultCollectionPrepared, ""
 		}
 		receipt.ResultCollection = checkpoint

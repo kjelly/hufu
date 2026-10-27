@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -87,13 +88,20 @@ func (c *Coordinator) beginResultCollection(ctx context.Context, taskID string, 
 		InputsID: item.RunInputSnapshotID, InputsSHA256: item.RunInputSnapshotHash, EvidenceSHA256: evidenceHash,
 		WorkspaceIdentitySHA256: workspaceHash, CollectorSchemaRevision: resultCollectionVersion, TurnLimit: resultCollectionDefaultTurns,
 	}
+	if checkpoint.FanoutLeaf {
+		checkpoint.FanoutIndex = c.modelFanout.index
+	}
 	bindingHash, err := collectionBindingDigest(checkpoint)
 	if err != nil {
 		return nil, err
 	}
 	original := cloneExecutionReceipt(&receipt)
 	original.ResultCollection = nil
-	body, err := json.Marshal(resultCollectionWork{Version: resultCollectionVersion, BindingSHA256: bindingHash, Receipt: original, Workspace: workspace, Report: []byte(utils.RedactSecrets(report))}, json.Deterministic(true))
+	input, _ := ctx.Value(resultCollectionWorkInputKey{}).(string)
+	generation, captured := ctx.Value(resultCollectionGenerationKey{}).(agent.GenerationParams)
+	stopReason, _ := ctx.Value(resultCollectionStopKey{}).(string)
+	timeout, _ := ctx.Value(resultCollectionTimeoutKey{}).(int64)
+	body, err := json.Marshal(resultCollectionWork{StopReason: stopReason, Version: resultCollectionVersion, BindingSHA256: bindingHash, Receipt: original, Workspace: workspace, Report: []byte(utils.RedactSecrets(report)), Input: []byte(utils.RedactSecrets(input)), Generation: generation, TeamGeneration: c.session.Config.Generation, GenerationCaptured: captured, TimeoutSeconds: timeout}, json.Deterministic(true))
 	if err != nil {
 		return nil, err
 	}

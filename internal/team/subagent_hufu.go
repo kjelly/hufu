@@ -103,7 +103,10 @@ func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request Atte
 		return AttemptResult{}, err
 	}
 	if len(verified.Tools) == 0 {
-		return AttemptResult{}, fmt.Errorf("hufu-local attempt has no authorized tools")
+		transport, err := p.coordinator.resultTransportForTaskContext(ctx, canonical.Agent, canonical.Task)
+		if err != nil || transport != agent.ResultTransportRuntime {
+			return AttemptResult{}, fmt.Errorf("hufu-local attempt has no authorized tools")
+		}
 	}
 	def := canonical.Agent
 	def = p.coordinator.injectWorkerContext(ctx, def)

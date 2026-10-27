@@ -780,6 +780,10 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 	if !validWorkerToolResolutionMode(mode) {
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: unsupported worker lifecycle mode %q", mode)
 	}
+	transport, err := r.c.resultTransportForTaskContext(ctx, def, task)
+	if err != nil {
+		return ResolvedWorkerTools{}, err
+	}
 
 	resultRequired := task.Execution.RequiresResult || mode == WorkerToolResolutionApprovedPlan || mode == WorkerToolResolutionResultRepair || mode == WorkerToolResolutionResume
 	planRequired := mode == WorkerToolResolutionInitialPlan
@@ -832,8 +836,9 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 	}
 	static, err := ResolveStaticWorkerTools(StaticToolResolutionInput{
 		Session: r.c.session, Agent: def, Task: task, LifecycleMode: mode,
-		Policy:    EffectiveTeamContractContext{NoNet: r.c.noNet || def.NoNet, ForceMCP: r.c.forceMCP || def.ForceMCP},
-		BaseTools: agentToolNames(baseTools), SupplementalTools: agentToolNames(supplementalTools),
+		ResultTransport: transport,
+		Policy:          EffectiveTeamContractContext{NoNet: r.c.noNet || def.NoNet, ForceMCP: r.c.forceMCP || def.ForceMCP},
+		BaseTools:       agentToolNames(baseTools), SupplementalTools: agentToolNames(supplementalTools),
 		TrustedTaskGrants: r.c.taskToolGrants(def, task), WorkflowEnabled: workflowEnabled, WorkflowPhase: phase,
 	})
 	if err != nil {
@@ -846,14 +851,10 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 	if err := validateUniqueConcreteToolNames(concrete); err != nil {
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %w", err)
 	}
-	for _, reserved := range []struct {
-		name     string
-		required bool
-	}{{name: submitResultToolName, required: static.ResultRequired}, {name: "submit_plan", required: static.PlanRequired}} {
-		if reserved.required && slices.Contains(agentToolNames(concrete), reserved.name) {
-			return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: protocol tool name %q collides with a concrete handler", reserved.name)
-		}
+	if err := validateProtocolToolCollisions(concrete, static); err != nil {
+		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %w", err)
 	}
+
 	if err := r.c.teamActionToolCollision(concrete); err != nil {
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %w", err)
 	}
@@ -867,7 +868,7 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 	if err != nil {
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: %w", err)
 	}
-	return r.finalizeTaskTools(ctx, def, task, req.TodoID, mode, phase, concrete, dynamicTargets, dynamicAuthorization, static.ResultOnly, static.ResultRequired, static.PlanRequired, static.EffectiveSequence)
+	return r.finalizeTaskTools(ctx, def, task, req.TodoID, mode, phase, concrete, dynamicTargets, dynamicAuthorization, static.ResultOnly && static.ResultToolRequired, static.ResultToolRequired, static.PlanRequired, static.EffectiveSequence)
 }
 
 func taskToolResolutionTodo(c *Coordinator, req WorkerToolResolutionRequest) *TodoItem {
@@ -878,6 +879,18 @@ func taskToolResolutionTodo(c *Coordinator, req WorkerToolResolutionRequest) *To
 		return nil
 	}
 	return c.todoItemByID(req.TodoID)
+}
+
+func validateProtocolToolCollisions(concrete []fantasy.AgentTool, static StaticToolResolution) error {
+	for _, reserved := range []struct {
+		name     string
+		required bool
+	}{{name: submitResultToolName, required: static.ResultToolRequired}, {name: "submit_plan", required: static.PlanRequired}} {
+		if reserved.required && slices.Contains(agentToolNames(concrete), reserved.name) {
+			return fmt.Errorf("protocol tool name %q collides with a concrete handler", reserved.name)
+		}
+	}
+	return nil
 }
 
 func validateUniqueConcreteToolNames(candidate []fantasy.AgentTool) error {

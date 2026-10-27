@@ -33,6 +33,7 @@ type StaticToolResolutionInput struct {
 	TrustedTaskGrants map[string]bool
 	WorkflowEnabled   bool
 	WorkflowPhase     Phase
+	ResultTransport   agent.ResultTransport
 }
 
 // StaticToolResolution is ordered so runtime can project the decision back to
@@ -41,42 +42,19 @@ type StaticToolResolution struct {
 	Names []string
 	Tools map[string]ToolAvailability
 	// EffectiveSequence is the literal closed sequence for this lifecycle.
-	EffectiveSequence []string
-	ResultRequired    bool
-	PlanRequired      bool
-	ResultOnly        bool
+	EffectiveSequence  []string
+	ResultRequired     bool
+	ResultToolRequired bool
+	PlanRequired       bool
+	ResultOnly         bool
 }
 
 // ResolveStaticWorkerTools resolves worker exposure without constructing a
 // provider, fantasy tool, MCP client, workspace, or command process.
 func ResolveStaticWorkerTools(input StaticToolResolutionInput) (StaticToolResolution, error) {
-	if input.Agent == nil {
-		return StaticToolResolution{}, fmt.Errorf("resolve static task tools: agent definition is required")
-	}
-	mode := input.LifecycleMode
-	if mode == "" {
-		mode = WorkerToolResolutionNormal
-	}
-	if !validWorkerToolResolutionMode(mode) {
-		return StaticToolResolution{}, fmt.Errorf("resolve static task tools: unsupported worker lifecycle mode %q", mode)
-	}
-
-	result := StaticToolResolution{
-		Tools: make(map[string]ToolAvailability),
-	}
-	result.ResultRequired = input.Task.Execution.RequiresResult
-	switch mode {
-	case WorkerToolResolutionInitialPlan:
-		result.PlanRequired = true
-		result.ResultRequired = false
-	case WorkerToolResolutionApprovedPlan:
-		result.ResultRequired = true
-	case WorkerToolResolutionResultRepair, WorkerToolResolutionResume:
-		result.ResultRequired = true
-		result.ResultOnly = true
-	}
-	if mode == WorkerToolResolutionInitialPlan && len(input.Task.Execution.ToolSequence) > 0 {
-		return StaticToolResolution{}, fmt.Errorf("resolve static task tools: initial-plan mode is incompatible with closed execution tool_sequence; remove tool_sequence or disable plan-first")
+	result, transport, err := staticResultRequirements(input)
+	if err != nil {
+		return StaticToolResolution{}, err
 	}
 
 	candidates := make([]string, 0, len(input.BaseTools)+len(input.SupplementalTools)+2)
@@ -89,6 +67,8 @@ func ResolveStaticWorkerTools(input StaticToolResolutionInput) (StaticToolResolu
 	for _, name := range candidates {
 		status := ToolAvailable
 		switch {
+		case transport == agent.ResultTransportRuntime && name == submitResultToolName:
+			status = ToolDenied
 		case name == decisionPrimitiveToolName && !staticDecisionPrimitiveGrant(input.Session, input.Agent, input.Policy):
 			status = ToolDenied
 		case isCoordinatorOnlyWorkerTool(name):
@@ -108,7 +88,7 @@ func ResolveStaticWorkerTools(input StaticToolResolutionInput) (StaticToolResolu
 		}
 	}
 
-	if result.ResultRequired {
+	if result.ResultToolRequired {
 		if denied[submitResultToolName] {
 			return StaticToolResolution{}, fmt.Errorf("resolve static task tools: required protocol tool %q is denied by team policy", submitResultToolName)
 		}
@@ -132,7 +112,7 @@ func ResolveStaticWorkerTools(input StaticToolResolutionInput) (StaticToolResolu
 	}
 	result.Names = dedupeToolNames(result.Names)
 	result.EffectiveSequence = slices.Clone(input.Task.Execution.ToolSequence)
-	if result.ResultOnly {
+	if result.ResultOnly && result.ResultToolRequired {
 		result.EffectiveSequence = []string{submitResultToolName}
 	}
 	if missing := missingToolNames(result.Names, result.EffectiveSequence); len(missing) > 0 {
@@ -141,10 +121,56 @@ func ResolveStaticWorkerTools(input StaticToolResolutionInput) (StaticToolResolu
 	if len(result.EffectiveSequence) > 0 {
 		result.Names = filterToolNamesForSequence(result.Names, result.EffectiveSequence)
 	}
-	if result.ResultOnly && !slices.Equal(result.Names, []string{submitResultToolName}) {
+	if result.ResultOnly && result.ResultToolRequired && !slices.Equal(result.Names, []string{submitResultToolName}) {
 		return StaticToolResolution{}, fmt.Errorf("resolve static task tools: result-only repair surface must contain exactly %q", submitResultToolName)
 	}
 	return result, nil
+}
+
+// Static completion requirements precede tool selection. Keeping this pure
+// preserves the distinction between requiring a result and granting a tool.
+func staticResultRequirements(input StaticToolResolutionInput) (StaticToolResolution, agent.ResultTransport, error) {
+	if input.Agent == nil {
+		return StaticToolResolution{}, "", fmt.Errorf("resolve static task tools: agent definition is required")
+	}
+	mode := input.LifecycleMode
+	if mode == "" {
+		mode = WorkerToolResolutionNormal
+	}
+	if !validWorkerToolResolutionMode(mode) {
+		return StaticToolResolution{}, "", fmt.Errorf("resolve static task tools: unsupported worker lifecycle mode %q", mode)
+	}
+
+	result := StaticToolResolution{
+		Tools: make(map[string]ToolAvailability),
+	}
+	transport := input.ResultTransport
+	if transport == "" {
+		transport = agent.ResultTransportTool
+	}
+	if !transport.Valid() {
+		return result, "", fmt.Errorf("invalid worker result transport %q", transport)
+	}
+	if transport == agent.ResultTransportRuntime && slices.Contains(input.Task.Execution.ToolSequence, submitResultToolName) {
+		return result, "", fmt.Errorf("runtime result transport conflicts with closed submit_result sequence")
+	}
+	result.ResultRequired = input.Task.Execution.RequiresResult
+	switch mode {
+	case WorkerToolResolutionInitialPlan:
+		result.PlanRequired = true
+		result.ResultRequired = false
+	case WorkerToolResolutionApprovedPlan:
+		result.ResultRequired = true
+	case WorkerToolResolutionResultRepair, WorkerToolResolutionResume:
+		result.ResultRequired = true
+		result.ResultOnly = true
+	}
+	result.ResultToolRequired = result.ResultRequired && transport == agent.ResultTransportTool
+	if mode == WorkerToolResolutionInitialPlan && len(input.Task.Execution.ToolSequence) > 0 {
+		return StaticToolResolution{}, "", fmt.Errorf("resolve static task tools: initial-plan mode is incompatible with closed execution tool_sequence; remove tool_sequence or disable plan-first")
+	}
+
+	return result, transport, nil
 }
 
 func validWorkerToolResolutionMode(mode WorkerToolResolutionMode) bool {

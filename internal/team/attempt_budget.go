@@ -125,3 +125,13 @@ func isAttemptBudgetExceeded(err error) bool {
 	var target *attemptBudgetExceededError
 	return errors.As(err, &target)
 }
+
+// snapshotForUsage freezes the returned work's cumulative accounting before a
+// collector consumes the shared attempt budget. It must never authorize work.
+func (b *attemptBudget) snapshotForUsage() *attemptBudget {
+	if b == nil {
+		return nil
+	}
+	used, limit := b.snapshot()
+	return &attemptBudget{used: used, limit: limit}
+}

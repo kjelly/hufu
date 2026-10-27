@@ -39,16 +39,24 @@ func validateResultRepairTarget(item *TodoItem) error {
 		if err := validateResultCollectionCheckpoint(checkpoint); err != nil {
 			return err
 		}
-		if checkpoint.State != ResultCollectionBlocked || !validArtifactID(item.ExecutionReceipt.TranscriptRef) {
+		if !validArtifactID(item.ExecutionReceipt.TranscriptRef) {
 			return errResultCollectionStale
 		}
-		switch checkpoint.FailureReason {
-		case RepairFailureInvalidSchema, repairFailurePreparation, repairFailureCollectionUnavailable, repairFailureCollectionBudget:
+		reason := checkpoint.FailureReason
+		if checkpoint.State != ResultCollectionBlocked {
+			// Cancellation or a failed collection-event append can leave an
+			// earlier durable state. Only the independently persisted native
+			// failure receipt may authorize continuation of those bytes.
+			reason = item.ExecutionReceipt.RepairProvenance.FailureReason
+			if reason != repairFailureCollectionUnavailable && reason != RepairFailureCommit {
+				return errResultCollectionStale
+			}
+		}
+		switch reason {
+		case RepairFailureInvalidSchema, RepairFailureResultMissing, repairFailurePreparation, repairFailureCollectionUnavailable, repairFailureCollectionBudget:
 			return nil
 		case RepairFailureCommit:
-			if checkpoint.Prepared != nil {
-				return nil
-			}
+			return nil
 		}
 		return fmt.Errorf("result-only repair cannot bypass collection failure %q", checkpoint.FailureReason)
 	}
@@ -84,10 +92,7 @@ func (c *Coordinator) authorizeOperatorResultRepair(ctx context.Context) error {
 		if model, _ := ctx.Value(resultRepairModelKey{}).(string); model != "" {
 			return fmt.Errorf("collection repair must retain its original target")
 		}
-		grant := &ResultRepairGrant{RunID: c.executionRunID, BranchID: c.activeBranchID(), AfterAttempts: checkpoint.TurnsUsed, AdditionalAttempts: 2, TranscriptRef: item.ExecutionReceipt.TranscriptRef}
-		if checkpoint.Prepared != nil {
-			grant.AdditionalAttempts = 0
-		}
+		grant := &ResultRepairGrant{RunID: c.executionRunID, BranchID: c.activeBranchID(), AfterAttempts: checkpoint.TurnsUsed, AdditionalAttempts: collectionGrantAttempts(item.ExecutionReceipt), TranscriptRef: item.ExecutionReceipt.TranscriptRef}
 		return c.CommitTaskTransition(ctx, taskID, item.Status, TaskProtocolIncomplete,
 			"operator authorized collection continuation; worker replay forbidden", "", map[string]any{"result_repair_grant": grant})
 	}
@@ -123,14 +128,22 @@ func (c *Coordinator) validResultRepairGrant(item *TodoItem, next TaskStatus, gr
 		return false
 	}
 	if checkpoint := item.ExecutionReceipt.ResultCollection; checkpoint != nil {
-		additional := 2
-		if checkpoint.Prepared != nil {
-			additional = 0
-		}
+		additional := collectionGrantAttempts(item.ExecutionReceipt)
 		return grant.AfterAttempts == checkpoint.TurnsUsed && grant.AdditionalAttempts == additional && grant.Model == ""
 	}
 	if item.ResultCandidate != nil && item.ResultCandidate.Prepared {
 		return grant.AdditionalAttempts == 0 && grant.Model == ""
 	}
 	return grant.AdditionalAttempts == 2
+}
+
+// Storage continuation cannot create model budget. It can use only turns
+// already reserved by the frozen policy; durable prepared/accepted bytes
+// likewise require no additional model allowance.
+func collectionGrantAttempts(receipt *ExecutionReceipt) int {
+	checkpoint := receipt.ResultCollection
+	if checkpoint.Prepared != nil || checkpoint.State == ResultCollectionCommitted || checkpoint.FailureReason == RepairFailureCommit || receipt.RepairProvenance != nil && receipt.RepairProvenance.FailureReason == RepairFailureCommit {
+		return 0
+	}
+	return 2
 }

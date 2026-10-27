@@ -105,7 +105,7 @@ func providerCostPurpose(purpose string) cost.Purpose {
 		return cost.PurposeRepair
 	case "external_agent":
 		return cost.PurposeExternal
-	case "", "task_execution", "task_retry", "recovery":
+	case "", "task_execution", "task_retry", "recovery", "result_collection":
 		return cost.PurposeWorker
 	default:
 		return cost.PurposeSidecar

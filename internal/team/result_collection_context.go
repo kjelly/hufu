@@ -17,12 +17,31 @@ func cloneResultCollectionBindings(bindings []ResultCollectionBinding) []ResultC
 }
 
 func resultFixedCollectionContext(plans []resultFixedCollectionPlan) (string, error) {
+	return resultFixedCollectionContextForTransport(plans, false)
+}
+
+func resultFixedCollectionContextForTransport(plans []resultFixedCollectionPlan, runtime bool) (string, error) {
+	return resultFixedCollectionContextForStage(plans, runtime, false)
+}
+
+func resultFixedCollectionContextForStage(plans []resultFixedCollectionPlan, runtime, collector bool) (string, error) {
 	if len(plans) == 0 {
 		return "", nil
 	}
 	var b strings.Builder
-	b.WriteString("\n## Runtime Fixed Collections\nCall submit_result with the complete outer argument object, including status, summary and structured_payload. Each items_pointer below is relative to structured_payload; submission_pointer gives its path in the complete tool arguments. Put the collection at that path as an OBJECT keyed by the exact runtime-issued keys, with one decision object per key. Never put row keys or decision fields at the outer tool level. Supply only the decision fields inside each row; the runtime generates the final array, order, identities and copied values. Preserve all other payload fields required by the result schema. Do not submit arrays or runtime-owned fields. Interpret meaning using the supplied evidence and choose only schema enum values. Do not guess a choice when evidence is insufficient; use an explicitly declared uncertainty option or report blocked. Invalid submissions return corrective feedback within the current attempt.\n")
-	b.WriteString("For decision_groups, first read authorized artifact evidence and call decision_primitive with collection=items_pointer, row_key and group=id. Runtime injects group outputs from settled decisions. Never submit those output fields. Abstention/errors require blocked. Runtime-owned evidence input arrays must be omitted.\n")
+	if collector {
+		b.WriteString("\n## Runtime Fixed Collections\nReturn one complete JSON claims object, including status, summary and structured_payload, using only frozen work evidence and already settled decisions. ")
+	} else if runtime {
+		b.WriteString("\n## Runtime Fixed Collections\nThe runtime collects one complete JSON claims object after work. Return the work report and all semantic decisions; the collector supplies status, summary and structured_payload according to the following schema. ")
+	} else {
+		b.WriteString("\n## Runtime Fixed Collections\nCall submit_result with the complete outer argument object, including status, summary and structured_payload. ")
+	}
+	b.WriteString("Each items_pointer below is relative to structured_payload; submission_pointer gives its path in the complete tool arguments. Put the collection at that path as an OBJECT keyed by the exact runtime-issued keys, with one decision object per key. Never put row keys or decision fields at the outer tool level. Supply only the decision fields inside each row; the runtime generates the final array, order, identities and copied values. Preserve all other payload fields required by the result schema. Do not submit arrays or runtime-owned fields. Interpret meaning using the supplied evidence and choose only schema enum values. Do not guess a choice when evidence is insufficient; use an explicitly declared uncertainty option or report blocked. Invalid submissions return corrective feedback within the current attempt.\n")
+	if collector {
+		b.WriteString("For decision_groups, the runtime injects outputs only from the original work's settled decisions. Never call tools or supply those output fields. Abstention/errors require blocked. Omit runtime-owned evidence input arrays.\n")
+	} else {
+		b.WriteString("For decision_groups, first read authorized artifact evidence and call decision_primitive with collection=items_pointer, row_key and group=id. Runtime injects group outputs from settled decisions. Never submit those output fields. Abstention/errors require blocked. Runtime-owned evidence input arrays must be omitted.\n")
+	}
 	for _, plan := range plans {
 		manifest := struct {
 			ItemsPointer      string                     `json:"items_pointer"`

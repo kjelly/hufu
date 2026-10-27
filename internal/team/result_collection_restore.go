@@ -3,6 +3,8 @@ package team
 import (
 	"context"
 	"path/filepath"
+
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 type resultCollectionEvidenceKey struct{}
@@ -54,15 +56,23 @@ func (c *Coordinator) restoreCollectionContext(ctx context.Context, expected *Re
 		return nil, err
 	}
 	ctx = withSubmitResultRuntimeIdentity(ctx, identity)
+	ctx = context.WithValue(ctx, todoIDKey{}, expected.TaskID)
+	ctx = context.WithValue(ctx, executionAttemptKey{}, expected.Attempt)
+	ctx = context.WithValue(ctx, tools.AgentNameKey, expected.Agent)
+	ctx = withInvocationMetadata(ctx, InvocationMetadata{RunID: expected.SourceRunID, TaskID: expected.TaskID, Attempt: expected.Attempt,
+		AgentName: expected.Agent, AgentRole: "worker", ModelExecutionID: expected.ModelExecutionID})
 	ctx = context.WithValue(ctx, taskTranscriptKey{}, (*taskTranscript)(nil))
 	ctx = context.WithValue(ctx, resultCollectionEvidenceKey{}, evidence)
 	if work.Receipt.ArtifactScope != nil {
 		ctx = context.WithValue(ctx, artifactAccessScopeKey, cloneArtifactAccessScope(work.Receipt.ArtifactScope))
 	}
-	if len(item.ContextManifests) > 0 {
+	if work.Receipt.ContextManifest != nil {
 		manifest, err := authoritativeTaskContextManifest(item, expected.Attempt, expected.ModelExecutionID)
 		if err != nil {
 			return nil, err
+		}
+		if manifest.Fingerprint != work.Receipt.ContextManifest.Fingerprint {
+			return nil, errResultCollectionStale
 		}
 		ctx = withInvocationMetadata(ctx, invocationMetadataFromManifest(manifest))
 	}

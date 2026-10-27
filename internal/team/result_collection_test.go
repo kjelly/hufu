@@ -17,24 +17,36 @@ import (
 )
 
 func resultCollectionFixture(t *testing.T) (*Coordinator, *TodoItem, context.Context, ExecutionReceipt) {
+	return resultCollectionProviderFixture(t, "http://127.0.0.1:1/v1", false)
+}
+
+func resultCollectionProviderFixture(t *testing.T, endpoint string, runtime bool, options ...func(*Coordinator)) (*Coordinator, *TodoItem, context.Context, ExecutionReceipt) {
 	t.Helper()
 	c := newTestCoordinator(t)
 	c.maxConcurrent = 1
 	c.session.Config.DefaultLLMBackend = execution.OllamaBackendName
 	c.session.Agents["worker"].Generation.Model = "ollama/test"
-	manager, err := agent.NewProviderManager("http://127.0.0.1:1/v1", "", nil)
+	if runtime {
+		c.session.Agents["worker"].ResultTransport = agent.ResultTransportRuntime
+	}
+	manager, err := agent.NewProviderManager(endpoint, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	c.providerManager = manager
-	project := filepath.Join(c.session.Workspace, "project")
-	if err := os.Mkdir(project, 0o700); err != nil {
-		t.Fatal(err)
+	if runtime {
+		c.modelProfileRuntime = NewModelProfileRuntime(manager, false)
+		// This fixture starts after the original work's provider boundary.
+		c.providerBoundaryStarted = true
 	}
+	project := t.TempDir()
 	if err := c.session.SetCompatibilityWorkspaceScope(project); err != nil {
 		t.Fatal(err)
 	}
 	c.projectDir = project
+	for _, option := range options {
+		option(c)
+	}
 	c.executionPolicy, err = newExecutionPolicyState(c)
 	if err != nil {
 		t.Fatal(err)

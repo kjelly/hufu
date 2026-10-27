@@ -30,7 +30,7 @@ const (
 var policyFields = map[string]policyFieldClass{
 	"Version": fixedPolicy, "TeamMaxConcurrent": fixedPolicy, "DefaultLLMBackend": fixedPolicy,
 	"Backends": fixedPolicy, "ModelRoutes": fixedPolicy, "ExecutionWorlds": logicalWorld,
-	"RunInputSchemaHash": fixedPolicy, "RunInputPolicyHash": fixedPolicy, "ResultContracts": fixedPolicy,
+	"RunInputSchemaHash": fixedPolicy, "RunInputPolicyHash": fixedPolicy, "ResultContracts": fixedPolicy, "ResultCollection": fixedPolicy,
 	"StaticWorkflowHash": fixedPolicy, "ExecutionRoutes": fixedPolicy, "ActionCatalogHash": fixedPolicy,
 	"DecisionRuntimeHash": fixedPolicy, "DecisionPrimitiveHash": fixedPolicy, "ControlDecisionHash": fixedPolicy, "SemanticRetrievalHash": fixedPolicy,
 	"Belief": fixedPolicy, "DiagnosticLoop": fixedPolicy, "MCPActionProviders": fixedPolicy,
@@ -46,7 +46,7 @@ var agentFields = map[string]policyFieldClass{
 	"Shell": fixedPolicy, "MCPTools": fixedPolicy, "Requirements": fixedPolicy, "ProviderURL": fixedPolicy,
 	"SideEffect": fixedPolicy, "Recovery": fixedPolicy, "ReconcileTool": fixedPolicy, "ToolRecovery": fixedPolicy,
 	"MemoryID": fixedPolicy, "Memory": fixedPolicy, "Generation": fixedPolicy, "ExtraModels": fixedPolicy,
-	"SubagentProvider": fixedPolicy, "ResultContract": fixedPolicy, "WorkerWorkspace": fixedPolicy, "ExecutionRoute": fixedPolicy,
+	"SubagentProvider": fixedPolicy, "ResultContract": fixedPolicy, "WorkerWorkspace": fixedPolicy, "ExecutionRoute": fixedPolicy, "ResultTransport": fixedPolicy,
 }
 
 func checkClassifiedFields(typ reflect.Type, classes map[string]policyFieldClass) error {

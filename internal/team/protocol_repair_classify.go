@@ -36,7 +36,7 @@ const submitResultToolName = "submit_result"
 //
 // The function is a pure, side-effect-free classification of evidence; it
 // does not inspect business semantics, only structural signals:
-//  1. Was submit_result called at all? (steps or typedRes.Source == "submitted")
+//  1. Was submit_result called at all? (steps or isLocalSubmittedResultSource(typedRes.Source))
 //  2. If called, did it return an error? (tool result is_error, or no stored result)
 //  3. If it stored a result, is the status completion-capable ("success" or
 //     "completed_with_gaps") or a
@@ -45,7 +45,7 @@ const submitResultToolName = "submit_result"
 // Refs: docs/archive/implementation-plans/generic-task-reliability.md §7
 func classifyRepairFailure(steps []fantasy.StepResult, typedRes *TaskResult) (reason RepairFailureReason, reclassifyExecution bool) {
 	// A successful repair produces a valid submitted result; nothing to classify.
-	if typedRes != nil && typedRes.Source == "submitted" && validateCompletedTaskResult(typedRes) == nil {
+	if typedRes != nil && isLocalSubmittedResultSource(typedRes.Source) && validateCompletedTaskResult(typedRes) == nil {
 		return "", false
 	}
 
@@ -54,7 +54,7 @@ func classifyRepairFailure(steps []fantasy.StepResult, typedRes *TaskResult) (re
 	// Determine whether submit_result was invoked, combining the step scan
 	// (authoritative in the production path) with the stored-result signal
 	// (fallback for test seams that bypass tool execution).
-	submitCalled := calledSubmitResult || (typedRes != nil && typedRes.Source == "submitted")
+	submitCalled := calledSubmitResult || (typedRes != nil && isLocalSubmittedResultSource(typedRes.Source))
 
 	if !submitCalled {
 		// The repair turn did not invoke submit_result at all.
@@ -62,7 +62,7 @@ func classifyRepairFailure(steps []fantasy.StepResult, typedRes *TaskResult) (re
 	}
 
 	// submit_result was invoked but did not yield a valid stored result.
-	if typedRes == nil || typedRes.Source != "submitted" {
+	if typedRes == nil || !isLocalSubmittedResultSource(typedRes.Source) {
 		// The tool ran but returned an error (invalid JSON, missing summary,
 		// invalid status) so storeSubmittedTaskResult was never called.
 		// When we have no step evidence of an error either, fall back to

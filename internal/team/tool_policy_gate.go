@@ -605,6 +605,9 @@ func protocolRequiredForAgent(ctx context.Context, cfg agent.AgentConfig) bool {
 		}
 	}
 	if ctx != nil {
+		if runtime, _ := ctx.Value(workerRuntimeResultKey{}).(bool); runtime {
+			return false
+		}
 		if requiresResult, ok := ctx.Value(taskRequiresResultKey{}).(bool); ok && requiresResult {
 			return true
 		}
@@ -689,6 +692,9 @@ func (c *Coordinator) createGatedAgent(ctx context.Context, provider *agent.Open
 // error only when the failure is not something the model can work around (a
 // cancelled context, for instance).
 func (c *Coordinator) authorizeToolInvocation(ctx context.Context, agentName, toolName string) (string, error) {
+	if runtime, _ := ctx.Value(workerRuntimeResultKey{}).(bool); runtime && toolName == submitResultToolName {
+		return "deprecated_result_transport: the runtime collects this task's result; this tool was not executed", nil
+	}
 	if denial := c.workerMemoryToolDenial(ctx, toolName); denial != "" {
 		return denial, nil
 	}

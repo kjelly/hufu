@@ -6,6 +6,7 @@ package team
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -243,7 +244,9 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	execCtx = context.WithValue(execCtx, delegationChainKey{}, subLabel)
 	output, err := c.ExecuteSubAgent(execCtx, selected, args.Goal, args.Constraints)
 	if err != nil {
-		c.PersistFailureWithClass(subLabel, taskDesc, subTodoID, c.FailureDetail(err, FailureSourceError), RetryNone, FailureExecution)
+		if _, collecting := errors.AsType[*resultCollectionFailure](err); !collecting {
+			c.PersistFailureWithClass(subLabel, taskDesc, subTodoID, c.FailureDetail(err, FailureSourceError), RetryNone, FailureExecution)
+		}
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 
@@ -254,8 +257,10 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 			return fantasy.NewTextErrorResponse(err.Error()), nil
 		}
 	}
-	if err := c.commitTaskTransitionFromCurrent(ctx, subTodoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output, nil); err != nil {
-		return fantasy.NewTextErrorResponse(err.Error()), nil
+	if child := c.todoItemByID(subTodoID); child == nil || child.Status != TaskDone {
+		if err := c.commitTaskTransitionFromCurrent(ctx, subTodoID, TaskDone, utils.TruncateRunes(output, summaryMaxRunes), output, nil); err != nil {
+			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
 	}
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
@@ -284,6 +289,16 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	}
 	if !strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(canonical.Agent.Name)) {
 		return "", fmt.Errorf("cannot create sub-agent: requested agent %q does not match canonical agent %q for Todo %q", name, canonical.Agent.Name, todoID)
+	}
+
+	transport, err := c.resultTransportForTask(canonical.Agent, canonical.Task)
+	if err != nil {
+		return "", err
+	}
+	if transport == agent.ResultTransportRuntime {
+		childTask := canonical.Task
+		childTask.Goal, childTask.Constraints = task, constraints
+		return c.executeTask(ctx, childTask, todoID)
 	}
 
 	resolvedTools, err := c.ToolResolver().ResolveTaskTools(ctx, canonical.Agent, WorkerToolResolutionRequest{
@@ -416,7 +431,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		return "", err
 	}
 	result := c.GetTaskResult(todoID)
-	if result == nil || result.Source != "submitted" {
+	if result == nil || !isLocalSubmittedResultSource(result.Source) {
 		return "", fmt.Errorf("sub-agent %q finished without submitting the required result for Todo %q", name, todoID)
 	}
 	if err := validateCompletedTaskResult(result); err != nil {

@@ -529,7 +529,11 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	// inline direct path below always runs in the canonical project.
 	// A multi-candidate execution route needs executeTask's fallback loop.
 	// Request acceptance also needs that path's complete tool transcript.
-	if _, directLLMErr := c.ExecutionRegistry().LanguageModelBackend(directTask.ResolvedExecutionTarget); directLLMErr != nil || directTask.WorkerWorkspace.isolated() ||
+	directTransport, transportErr := c.resultTransportForTask(agentDef, directTask)
+	if transportErr != nil {
+		return nil, transportErr
+	}
+	if _, directLLMErr := c.ExecutionRegistry().LanguageModelBackend(directTask.ResolvedExecutionTarget); directLLMErr != nil || directTransport == agent.ResultTransportRuntime || directTask.WorkerWorkspace.isolated() ||
 		(directTask.ExecutionRoute != nil && len(directTask.ExecutionRoute.Candidates) > 1) || c.requestAcceptanceEnabled() {
 		output, execErr := c.executeTask(ctx, directTask, todoID)
 		if c.requestAcceptanceEnabled() {
@@ -841,7 +845,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		typedRes = c.GetTaskResult(todoID)
 		if typedRes == nil {
 			err = withFailureClassOverride(errors.New("direct-agent protocol failure: missing submitted task result"), FailureProtocol)
-		} else if typedRes.Source != "submitted" {
+		} else if !isLocalSubmittedResultSource(typedRes.Source) {
 			err = withFailureClassOverride(fmt.Errorf("direct-agent protocol failure: task result source %q is not submitted", typedRes.Source), FailureProtocol)
 		} else if resultErr := validateSubmittedTaskResult(typedRes); resultErr != nil {
 			err = withFailureClassOverride(resultErr, FailureProtocol)

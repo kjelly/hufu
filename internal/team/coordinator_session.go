@@ -1015,6 +1015,13 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 			count++
 			return nil, false
 		}
+		if currentResultCollection(it) != nil {
+			if _, err := c.resumeCollectedTask(ctx, task, it); err != nil && firstErr == nil {
+				firstErr = err
+			}
+			count++
+			continue
+		}
 		// A durable submission proves execution reached finalization. Never
 		// send that occurrence back to a worker after an interrupted commit.
 		if it.ResultCandidate != nil && it.Status != TaskProtocolIncomplete {

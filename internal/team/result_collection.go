@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/execution"
 )
 
 const (
 	EventTaskResultCollectionCheckpointed EventType           = "task_result_collection_checkpointed"
 	resultCollectionVersion                                   = 1
+	resultCollectionAcceptedMaxBytes                          = 32 << 20
 	resultCollectionDefaultTurns                              = 2
 	resultCollectionResponseMaxBytes                          = 2 << 20
 	resultCollectionWorkMaxBytes                              = 32 << 20
@@ -59,6 +61,7 @@ type ResultCollectionCheckpoint struct {
 	Agent                   string                    `json:"agent"`
 	Attempt                 int                       `json:"attempt"`
 	ModelExecutionID        string                    `json:"model_execution_id"`
+	FanoutIndex             int                       `json:"fanout_index,omitzero"`
 	FanoutLeaf              bool                      `json:"fanout_leaf,omitzero"`
 	ExecutionTarget         execution.ExecutionTarget `json:"execution_target"`
 	WorkOccurrenceRevision  int                       `json:"work_occurrence_revision"`
@@ -82,14 +85,21 @@ type ResultCollectionCheckpoint struct {
 	Prepared                *ResultCollectionRef      `json:"prepared,omitempty"`
 	Accepted                *ResultCollectionRef      `json:"accepted,omitempty"`
 	FailureReason           RepairFailureReason       `json:"failure_reason,omitempty"`
+	ObservedUsage           *ExecutionUsage           `json:"observed_usage,omitempty"`
 }
 
 type resultCollectionWork struct {
-	Version       int              `json:"version"`
-	BindingSHA256 string           `json:"binding_sha256"`
-	Receipt       ExecutionReceipt `json:"execution_receipt"`
-	Workspace     string           `json:"workspace"`
-	Report        []byte           `json:"report"`
+	Version            int                    `json:"version"`
+	BindingSHA256      string                 `json:"binding_sha256"`
+	Receipt            ExecutionReceipt       `json:"execution_receipt"`
+	Workspace          string                 `json:"workspace"`
+	StopReason         string                 `json:"stop_reason,omitempty"`
+	Report             []byte                 `json:"report"`
+	Input              []byte                 `json:"input,omitempty"`
+	Generation         agent.GenerationParams `json:"generation,omitzero"`
+	TeamGeneration     agent.GenerationParams `json:"team_generation,omitzero"`
+	TimeoutSeconds     int64                  `json:"timeout_seconds,omitzero"`
+	GenerationCaptured bool                   `json:"generation_captured,omitzero"`
 }
 
 type resultCollectionBlob struct {
@@ -111,6 +121,9 @@ func cloneResultCollectionCheckpoint(value *ResultCollectionCheckpoint) *ResultC
 		return nil
 	}
 	clone := *value
+	if value.ObservedUsage != nil {
+		clone.ObservedUsage = new(*value.ObservedUsage)
+	}
 	for _, ref := range []struct {
 		source *ResultCollectionRef
 		target **ResultCollectionRef
@@ -163,17 +176,30 @@ func validateResultCollectionBinding(value *ResultCollectionCheckpoint) error {
 		value.BranchID == "" || value.SourceRunID == "" || value.TaskID == "" || value.Agent == "" || value.Attempt < 1 || value.ModelExecutionID == "" ||
 		value.WorkOccurrenceRevision < 1 || value.WorkDispatchID == "" || value.SubmissionRevision < value.WorkOccurrenceRevision || value.SubmissionDispatchID == "" ||
 		!validCollectionDigest(value.PolicySHA256) || !validCollectionDigest(value.TaskContractSHA256) || !validCollectionDigest(value.EvidenceSHA256) || !validCollectionDigest(value.WorkspaceIdentitySHA256) ||
-		!validCollectionRef(&value.Work) || value.Work.Bytes > resultCollectionWorkMaxBytes || value.ExecutionTarget.Validate() != nil ||
+		value.ExecutionTarget.Validate() != nil ||
 		value.TurnLimit < resultCollectionDefaultTurns || value.TurnsUsed < 0 || value.TurnsUsed > value.TurnLimit {
 		return fmt.Errorf("invalid result collection binding")
 	}
 	if (value.InputsID == "") != (value.InputsSHA256 == "") || (value.InputsSHA256 != "" && !validCollectionDigest(value.InputsSHA256)) {
 		return fmt.Errorf("invalid result collection frozen inputs")
 	}
+	return validateCollectionReferences(value)
+}
+
+func validateCollectionReferences(value *ResultCollectionCheckpoint) error {
+	if !validCollectionRef(&value.Work) || value.Work.Bytes > resultCollectionWorkMaxBytes {
+		return fmt.Errorf("invalid result collection work reference")
+	}
+	if value.FanoutIndex < 0 || (!value.FanoutLeaf && value.FanoutIndex != 0) {
+		return fmt.Errorf("invalid result collection leaf identity")
+	}
 	if value.Request != nil && (!validCollectionRef(value.Request) || value.Request.Bytes > resultCollectionWorkMaxBytes*2) {
 		return fmt.Errorf("invalid result collection request reference")
 	}
-	for _, ref := range []*ResultCollectionRef{value.Response, value.Prepared, value.Accepted} {
+	if value.Accepted != nil && (!validCollectionRef(value.Accepted) || value.Accepted.Bytes > resultCollectionAcceptedMaxBytes*2) {
+		return fmt.Errorf("invalid result collection accepted reference")
+	}
+	for _, ref := range []*ResultCollectionRef{value.Response, value.Prepared} {
 		if ref != nil && (!validCollectionRef(ref) || ref.Bytes > resultCollectionResponseMaxBytes*2) {
 			return fmt.Errorf("invalid result collection evidence reference")
 		}

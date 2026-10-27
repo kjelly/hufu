@@ -24,6 +24,7 @@ func collectionBindingDigest(checkpoint *ResultCollectionCheckpoint) (string, er
 		Agent           string                    `json:"agent"`
 		Attempt         int                       `json:"attempt"`
 		ModelExecution  string                    `json:"model_execution"`
+		FanoutIndex     int                       `json:"fanout_index,omitzero"`
 		FanoutLeaf      bool                      `json:"fanout_leaf"`
 		Target          execution.ExecutionTarget `json:"target"`
 		Revision        int                       `json:"revision"`
@@ -36,7 +37,7 @@ func collectionBindingDigest(checkpoint *ResultCollectionCheckpoint) (string, er
 		Workspace       string                    `json:"workspace"`
 		CollectorSchema int                       `json:"collector_schema"`
 	}{checkpoint.Version, checkpoint.BranchID, checkpoint.SourceRunID, checkpoint.TaskID, checkpoint.Agent,
-		checkpoint.Attempt, checkpoint.ModelExecutionID, checkpoint.FanoutLeaf, checkpoint.ExecutionTarget, checkpoint.WorkOccurrenceRevision,
+		checkpoint.Attempt, checkpoint.ModelExecutionID, checkpoint.FanoutIndex, checkpoint.FanoutLeaf, checkpoint.ExecutionTarget, checkpoint.WorkOccurrenceRevision,
 		checkpoint.WorkDispatchID, checkpoint.PolicySHA256, checkpoint.TaskContractSHA256, checkpoint.InputsID,
 		checkpoint.InputsSHA256, checkpoint.EvidenceSHA256, checkpoint.WorkspaceIdentitySHA256, checkpoint.CollectorSchemaRevision})
 }
@@ -135,6 +136,9 @@ func (c *Coordinator) putCollectionBlob(ctx context.Context, checkpoint *ResultC
 	if kind == "request" {
 		limit = resultCollectionWorkMaxBytes
 	}
+	if kind == "accepted" {
+		limit = resultCollectionAcceptedMaxBytes
+	}
 	if len(data) > limit {
 		return nil, fmt.Errorf("result collection %s exceeds %d bytes", kind, limit)
 	}
@@ -169,6 +173,9 @@ func (c *Coordinator) readCollectionBlob(ctx context.Context, checkpoint *Result
 	limit := resultCollectionResponseMaxBytes
 	if kind == "request" {
 		limit = resultCollectionWorkMaxBytes
+	}
+	if kind == "accepted" {
+		limit = resultCollectionAcceptedMaxBytes
 	}
 	body, err := c.readCollectionBytes(ctx, *ref, limit*2)
 	if err != nil {

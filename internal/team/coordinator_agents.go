@@ -384,6 +384,9 @@ func (c *Coordinator) injectWorkerContext(ctx context.Context, def *agent.AgentD
 	if reminder := c.buildCoreReminder(def); reminder != "" {
 		injectedDef.System += "\n\n" + reminder
 	}
+	if runtime, _ := ctx.Value(workerRuntimeResultKey{}).(bool); runtime {
+		injectedDef.System += runtimeWorkerResultInstructions
+	}
 
 	return &injectedDef
 }

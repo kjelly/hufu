@@ -113,6 +113,9 @@ func (c *Coordinator) compileAuxiliaryPrompt(ctx context.Context, purpose, rawPr
 		request.EnvironmentFingerprint = parent.EnvironmentFingerprint
 		request.ModelExecutionID = contextModelExecutionID(request.TaskID, parent.ModelExecutionID, purpose)
 	}
+	if id, _ := ctx.Value(resultCollectionInvocationKey{}).(string); purpose == "result_collection" && id != "" {
+		request.ModelExecutionID = id
+	}
 	request.AssignRequestID()
 	// Auxiliary reviewers are intentionally isolated: they receive only their
 	// purpose contract/candidate evidence, never the worker's STM/LTM or raw

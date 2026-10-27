@@ -192,11 +192,16 @@ func (c *Coordinator) resolveNewTaskToolAuthorization(ctx context.Context, task 
 	if workflowEnabled {
 		phase = c.phaseWorkflow.State()
 	}
+	transport, err := c.resultTransportForTask(def, task)
+	if err != nil {
+		return nil, err
+	}
 	for _, mode := range modes {
 		resolved, err := ResolveStaticWorkerTools(StaticToolResolutionInput{
 			Session: c.session, Agent: def, Task: task, LifecycleMode: mode,
-			Policy:    EffectiveTeamContractContext{NoNet: c.noNet || def.NoNet, ForceMCP: c.forceMCP || def.ForceMCP},
-			BaseTools: baseNames, SupplementalTools: names, TrustedTaskGrants: c.taskToolGrants(def, task),
+			ResultTransport: transport,
+			Policy:          EffectiveTeamContractContext{NoNet: c.noNet || def.NoNet, ForceMCP: c.forceMCP || def.ForceMCP},
+			BaseTools:       baseNames, SupplementalTools: names, TrustedTaskGrants: c.taskToolGrants(def, task),
 			WorkflowEnabled: workflowEnabled, WorkflowPhase: phase,
 		})
 		if err != nil {
