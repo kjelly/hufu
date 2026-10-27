@@ -1,3 +1,5 @@
+# Scripted fixtures exercise the legacy reporting protocol.
+result-transport: tool
 name: eval-policy-repair-exhaustion
 description: Coordinator that may not redispatch a worker after it succeeds, for the policy-repair-exhaustion eval suite
 delegation:

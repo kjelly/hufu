@@ -10,6 +10,12 @@ A workset is a provider-neutral, artifact-backed fan-out contract. The
 runtime owns identity, freshness, expansion, replay, and whole-group
 verification; a consumer owns the meaning of each item.
 
+Local workers in new compatible sessions hand off typed results through
+[runtime collection](execution-runtime.md), without calling `submit_result`.
+This changes result transport only: workset source identity, receipt binding,
+whole-group verification and accepted-result requirements remain authoritative.
+A failed collector retains completed child work instead of expanding it again.
+
 ## Canonical flow
 
 ```text

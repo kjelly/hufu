@@ -265,6 +265,7 @@ max-retries: 3
 | `skills` | ✗ | - | 適用技能列表 |
 | `timeout` | ✗ | 團隊設定 | 執行逾時（秒） |
 | `max-retries` | ✗ | 團隊設定 | 最大重試次數 |
+| `result-transport` | ✗ | agent > team > 新 session 的 `runtime` | 本機結果傳輸：只接受 `runtime`、`tool`；封存在 execution policy，動態 task 不可覆寫 |
 | `result-contract` | ✗ | - | 結果合約：`schema`（相對於團隊目錄的 JSON Schema 檔）與 `require-structured`（見下方） |
 | `worker-workspace` | ✗ | team 設定，否則 `shared` | worker 的寫入位置：`mode: shared`，或 `mode: isolated` 搭配 `integrate: on-verified`（見下方） |
 | `execution-route` | ✗ | team 設定 | 引用 hufu.yaml `execution-routes` 中的 route 名稱；不能與 `model` 同時設定（見下方） |
@@ -286,6 +287,35 @@ snapshot，因此 resume 必須沿用原 run 的相同覆寫（或相同 profile
 工作，因此 admission 會以 `plan_first_external_backend` 拒絕，extra-model 的
 leaf 也一樣。
 
+### 結果傳輸（result-transport）
+
+相容的新 session 預設使用 `runtime`。一般 local worker 執行工作並留下完整報告，
+不需要呼叫 `submit_result`；runtime 先保存工作輸出與 transcript，再以同一個已核准
+模型 target 的普通文字生成收集 strict JSON。收集 request 不提供工具，不依賴 provider
+的原生 structured-output／tool-calling 功能。通常增加一次模型呼叫；格式或 schema
+不合法時最多再修復一次，共兩回合，包含中斷時已派發的回合。
+
+team.yaml 的平面設定或 versioned manifest 的 `spec`，以及 agent `.md` frontmatter
+都可設定：
+
+```yaml
+result-transport: runtime
+```
+
+agent 明確設定優先於 team；只接受小寫 `runtime`、`tool`。`tool` 保留既有
+`submit_result` 協定，可供**新 session** 明確選用。既有 session 的 frozen policy
+不隨新預設改變；要改設定須建立新 session。歷史 snapshot 缺少此欄位表示 `tool`，
+其序列化與 hash 不因新預設重寫。明定包含 `submit_result` 的 closed tool sequence
+在未明確選模式時維持 `tool`；明確 `runtime` 與該序列衝突會在執行前拒絕。
+external agent backend、native action、sidecar 與計畫提交維持各自協定。
+
+runtime 收集的 envelope 使用相同的 `status`、`summary`、`structured_payload` 等
+欄位與 admission／驗收規則，來源記為 `collected`。runtime-owned 欄位仍由 runtime
+綁定，模型不可提供。收集失敗會保留工作與交付物，停止在結果階段；不會為了補交
+結果重跑原工作。JSON、schema、證據、預算或 verifier 失敗仍會如實阻擋完成。
+`--output json`、report 與 inspect 可看到收集狀態、已用／上限回合及失敗分類；完整
+內容保存在 durable artifact store。
+
 ### 結果合約（result-contract）
 
 ```yaml
@@ -294,9 +324,9 @@ result-contract:
   require-structured: true
 ```
 
-宣告後，worker 以 `submit_result` 的 `structured_payload` 欄位（external
-agent backend 則為 `structured_payload_json`，內容是 JSON 字串）提交符合 schema
-的 payload。runtime 會驗證並計算雜湊，驗證通過的 payload 會以
+宣告後，本機 runtime collector 以 `structured_payload` 收集符合 schema 的 payload；
+`result-transport: tool` 的 worker 使用 `submit_result.structured_payload`，external
+agent backend 使用 `structured_payload_json`（JSON 字串）。runtime 會驗證並計算雜湊，驗證通過的 payload 會以
 `structured_payload` 保存在 typed result，並附在交給 coordinator 與下游 task 的
 結果中。team.yaml 的 static contract task 也可以宣告 `result-contract`，它會覆寫
 該 contract 的 agent 預設值；coordinator 的 task payload 不能設定或覆寫它。
@@ -579,7 +609,7 @@ portable 大小限制內列出精確 key 與選項；較大的 schema 保留 obj
 
 manifest 的 `items_pointer` 相對於 `structured_payload`；
 `submission_pointer` 則是完整工具參數中的路徑，例如
-`/structured_payload/claim_assessments`。呼叫 `submit_result` 時仍須提供外層
+`/structured_payload/claim_assessments`。收集 envelope（tool 模式為 `submit_result` 參數）仍須提供外層
 `status`、`summary` 與完整 `structured_payload`，不可把 row key 或決策欄位
 放到工具參數最外層。大型契約遭拒時，回饋會提供錯誤物件的欄位與局部範例；
 局部範例不能取代完整提交，其餘有效欄位與已發出的 key 都必須保留。
@@ -1154,7 +1184,7 @@ runtime-owned evidence input 或 fixed collection 重疊。`source_task` 必須�
 schema、證據、收據、驗證與提交交易；候選存在不代表驗收成功。修復使用既有
 回合預算，只授權 `submit_result`，不重跑 worker 或瀏覽。超過診斷上限、
 來源缺失、契約不相容、候選過期或修正語意不明時停止，不能自行填入假資料。
-此介面用於本機 LLM 的 `submit_result`；external worker proposal 協定不變。
+此工具修復介面限於 `result-transport: tool`；runtime collector 使用獨立的兩回合額度，external worker proposal 協定不變。
 
 通過模型提交 schema 的修補也會先保存為 `prepared: true` 候選，才進入完整
 提交交易。它仍不是已接受結果。若此時中斷，resume 使用原候選及原工具收據

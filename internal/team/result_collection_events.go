@@ -30,6 +30,12 @@ func validateResultCollectionEvent(event RunEvent) error {
 	if payload.Result != nil && (payload.Result.TaskID != checkpoint.TaskID || payload.Result.Attempt != checkpoint.Attempt || payload.Result.Agent != checkpoint.Agent || !isLocalSubmittedResultSource(payload.Result.Source)) {
 		return fmt.Errorf("result collection event has invalid canonical result identity")
 	}
+	if payload.Result != nil && payload.Result.StructuredPayload != nil {
+		resultPayload := payload.Result.StructuredPayload
+		if payload.Receipt.ResultValidation != ResultValidationValid || payload.Receipt.ResultPayloadSHA256 != resultPayload.SHA256 || payload.Receipt.ResultContractID != resultPayload.Contract.ID || payload.Receipt.ResultContractSHA256 != resultPayload.Contract.SchemaSHA256 {
+			return fmt.Errorf("result collection event has invalid result contract receipt binding")
+		}
+	}
 	return nil
 }
 
@@ -61,6 +67,9 @@ func (c *Coordinator) appendCollectionCheckpointLocked(ctx context.Context, item
 	}
 	receipt := cloneExecutionReceipt(original)
 	receipt.ResultCollection = cloneResultCollectionCheckpoint(checkpoint)
+	if result != nil {
+		c.applyResultContractReceipt(checkpoint.TaskID, result, &receipt)
+	}
 	payload := resultCollectionEvent{Receipt: receipt, Result: cloneTaskResult(result)}
 	body, err := json.Marshal(payload, json.Deterministic(true))
 	if err != nil {

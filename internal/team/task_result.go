@@ -329,7 +329,8 @@ type TaskResult struct {
 
 	Confidence float64 `json:"confidence"`
 	// Source is "submitted" (the local provider's own submit_result tool
-	// call), ExternalProviderProposalSource ("external_provider_proposal",
+	// call), "collected" (runtime tool-free collection after sealed local work),
+	// ExternalProviderProposalSource ("external_provider_proposal",
 	// an external provider's proposal after canonicalization, §9.3),
 	// "promoted_free_text", "parsed_free_text", or "recovered_protocol".
 	// isSubmittedResultSource below is the single place that decides which

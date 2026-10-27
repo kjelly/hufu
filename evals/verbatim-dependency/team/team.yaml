@@ -1,2 +1,4 @@
+# Scripted fixtures exercise the legacy reporting protocol.
+result-transport: tool
 name: eval-verbatim-dependency
 description: Coordinator plus a verbatim producer and a dependent consumer, for the verbatim-dependency eval suite

@@ -129,6 +129,7 @@ type agentFrontmatter struct {
 	ResultContract   *agent.ResultContractSpec         `yaml:"result-contract"`
 	WorkerWorkspace  *agent.WorkerWorkspaceSpec        `yaml:"worker-workspace"`
 	ExecutionRoute   string                            `yaml:"execution-route"`
+	ResultTransport  agent.ResultTransport             `yaml:"result-transport"`
 }
 
 // teamConfigYAML is the legacy flat team.yaml/team.yml shape: every
@@ -564,7 +565,7 @@ func inferAgentNameFromFilename(path string) (string, error) {
 // silent loss would weaken enforcement or change the worker's target (a
 // result contract, an isolated worker workspace, an execution route), so a
 // parse failure there is an error, not a fallback.
-var resultContractFrontmatterKey = regexp.MustCompile(`(?m)^(result-contract|worker-workspace|execution-route)[ \t]*:`)
+var resultContractFrontmatterKey = regexp.MustCompile(`(?m)^[ \t]*["']?(result-contract|worker-workspace|execution-route|result-transport)["']?[ \t]*:`)
 
 func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.AgentDef, error) {
 	text := string(raw)
@@ -584,6 +585,11 @@ func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.
 		idx := strings.Index(rest, "\n---\n")
 		if idx < 0 {
 			return nil, fmt.Errorf("agent file %s has malformed frontmatter (missing closing '---')", path)
+		}
+		if resultContractFrontmatterKey.MatchString(rest[:idx]) {
+			if err := validateResultTransportAuthoring([]byte(rest[:idx]), false); err != nil {
+				return nil, fmt.Errorf("agent file %s: %w", path, err)
+			}
 		}
 		if err := yaml.Unmarshal([]byte(rest[:idx]), &fm); err != nil {
 			// The lenient fallback cannot represent a result contract, and
@@ -689,6 +695,7 @@ func normalizeAgentDefinition(fm agentFrontmatter, body, path, inferredRole stri
 		ToolRecovery:     fm.ToolRecovery,
 		MemoryID:         fm.MemoryID,
 		ResultContract:   fm.ResultContract.Clone(),
+		ResultTransport:  fm.ResultTransport,
 		WorkerWorkspace:  fm.WorkerWorkspace.Clone(),
 		ExecutionRoute:   strings.TrimSpace(fm.ExecutionRoute),
 	}
@@ -1051,6 +1058,7 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	} else {
 		cfg.WorkerMemory = agent.DefaultWorkerMemoryPolicy()
 	}
+	cfg.ResultTransport = yc.ResultTransport
 	cfg.WorkerWorkspace = yc.WorkerWorkspace.Clone()
 	cfg.ExecutionRoute = strings.TrimSpace(yc.ExecutionRoute)
 	cfg.ContextRouting = yc.ContextRouting

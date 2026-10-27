@@ -1,3 +1,5 @@
+# Scripted fixtures exercise the legacy reporting protocol.
+result-transport: tool
 name: eval-workset
 description: Minimal coordinator + one worker fixture team for the workset eval suite
 delegation:

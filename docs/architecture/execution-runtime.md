@@ -102,7 +102,44 @@ contract can be attached to an upstream resolver worker through
 schema-validated successful result. The schema is pinned in the execution
 policy snapshot and cannot be changed by a coordinator task payload.
 
-Result-only repair exposes only `submit_result` and requests a required tool
+New compatible local sessions use runtime result collection by default. Static
+`result-transport: runtime|tool` in team configuration or agent frontmatter is
+pinned in the execution policy; an agent override takes precedence over the
+team default. Dynamic task JSON cannot change it. Historical policies without
+the optional collection block retain tool transport and their original hash.
+An implicit default preserves a closed sequence containing `submit_result`;
+explicit runtime mode conflicts with that sequence and fails preflight.
+External workers, native actions, auxiliary tasks and plan submission retain
+their existing protocols.
+
+The work phase has no `submit_result` authority in runtime mode. After work
+returns, the runtime seals its complete report, transcript, source inputs and
+original attempt identity before starting a separate `result_collection`
+invocation on the admitted work target. It uses ordinary text generation with
+zero tools, then strictly decodes JSON and calls shared result admission.
+The accepted source is `collected`, with the same contract, evidence, verifier,
+terminal and workspace integration gates as a tool submission. Runtime-owned
+fields are still assembled from verified sources; the model cannot override them.
+
+Each attempt has one collection call and at most one JSON/schema repair. A
+turn is reserved durably before dispatch, so a lost in-flight call counts
+against the two-turn limit. Provider failure, cancellation, source mismatch,
+storage failure or exhausted repair budget stops result collection, retaining
+work and isolated/fanout delivery artifacts. Resume uses received, prepared or
+accepted durable bytes before considering another permitted model call. It
+never redispatches completed work to repair a report. A storage continuation
+adds no model turns. Collection usage, including cache counters, is accounted
+separately from the frozen work usage.
+
+Inspect derives content-free collection state, turns and failure reason from
+receipts and checkpoint events. CLI JSON and reports expose these fields;
+TUI step updates identify collection of the saved result. None of these
+projections converts a blocked collection into task success. To select legacy
+behavior, start a new session with `result-transport: tool`. Keep the newer
+binary for sessions containing collection events; downgrading a binary or
+editing the database is not a rollback procedure.
+
+With `result-transport: tool`, result-only repair exposes only `submit_result` and requests a required tool
 call from the LLM provider. This applies to initial repair, schema-only repair,
 step-budget finalization and resumed repair. Provider compliance is still
 checked: prose alone, an invalid payload or an incomplete result does not

@@ -147,7 +147,7 @@ func TestContextQueryPairedProviderDeliveryUsesAuthorizedSignals(t *testing.T) {
 func pairedQueryFixture(t *testing.T, signal, hint string) (*SuiteFixture, CaseFixture, []ProviderStep) {
 	t.Helper()
 	dir := t.TempDir()
-	config := "name: paired-context-query\nmodel: eval-harness-model\nmemory-learning:\n  mode: observe\n"
+	config := "name: paired-context-query\nresult-transport: tool\nmodel: eval-harness-model\nmemory-learning:\n  mode: observe\n"
 	task := map[string]any{"agent": "worker", "goal": "inspect router"}
 	workspace := map[string]string{}
 	index := 0

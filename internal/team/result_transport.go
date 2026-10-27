@@ -41,7 +41,7 @@ func executionPolicyResultCollection(session *TeamSession, version int) (*Execut
 	if session == nil {
 		return nil, nil
 	}
-	policy := &ExecutionResultCollectionPolicySnapshot{Version: 1, Default: agent.ResultTransportTool,
+	policy := &ExecutionResultCollectionPolicySnapshot{Version: 1, Default: agent.ResultTransportRuntime,
 		CollectorSchemaRevision: resultCollectionVersion, TurnLimit: resultCollectionDefaultTurns}
 	configured := false
 	if mode := session.Config.ResultTransport; mode != "" {
@@ -60,7 +60,7 @@ func executionPolicyResultCollection(session *TeamSession, version int) (*Execut
 		policy.Agents = append(policy.Agents, ExecutionResultTransportAgentPolicy{Agent: strings.ToLower(strings.TrimSpace(name)), Transport: def.ResultTransport})
 		configured = true
 	}
-	if !configured {
+	if !configured && version < executionPolicySnapshotVersion {
 		return nil, nil
 	}
 	type collectorGeneration struct {
@@ -171,4 +171,19 @@ func (c *Coordinator) resultTransportForTaskContext(ctx context.Context, def *ag
 		return agent.ResultTransportTool, nil
 	}
 	return resultTransportFromPolicy(frozen.ResultCollection, def.Name, task)
+}
+
+func hasExplicitResultTransportSettings(session *TeamSession) bool {
+	if session == nil {
+		return false
+	}
+	if session.Config.ResultTransport != "" {
+		return true
+	}
+	for _, def := range session.Agents {
+		if def != nil && def.ResultTransport != "" {
+			return true
+		}
+	}
+	return false
 }

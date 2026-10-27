@@ -62,6 +62,7 @@ type jsonRunInputs struct {
 }
 
 type jsonRunTask struct {
+	ResultCollection    []jsonResultCollection          `json:"result_collection,omitempty"`
 	ID                  string                          `json:"id"`
 	Agent               string                          `json:"agent"`
 	Desc                string                          `json:"desc"`
@@ -161,7 +162,8 @@ func printResultJSONForInvocation(result string, loadedTeams map[string]*teamCon
 				nextAction = team.RecoveryNextAction(retryDisposition)
 			}
 			jt.Tasks = append(jt.Tasks, jsonRunTask{
-				ID: it.ID, Agent: it.Agent, Desc: it.Desc, Status: string(it.Status),
+				ResultCollection: resultCollectionSummaries(it),
+				ID:               it.ID, Agent: it.Agent, Desc: it.Desc, Status: string(it.Status),
 				NoObjectiveVerifier: it.Status == team.TaskDone && it.Verify == "" && it.VerifySpec == nil,
 				CompletedReview:     it.Kind == team.TaskKindDiagnostic && it.Status == team.TaskDone,
 				FindingsPresent:     it.TypedResult != nil && len(it.TypedResult.Findings) > 0,

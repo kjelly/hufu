@@ -1,2 +1,4 @@
+# Scripted fixtures exercise the legacy reporting protocol.
+result-transport: tool
 name: eval-context-routing
 description: Minimal coordinator + one worker fixture team for the context-routing eval suite

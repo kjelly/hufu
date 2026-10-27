@@ -999,6 +999,16 @@ func (c *Coordinator) executionPolicySnapshotMatchesCurrent(snapshot *ExecutionP
 	if err != nil {
 		return false, fmt.Errorf("resolve execution policy snapshot compatibility: %w", err)
 	}
+	// The absence of this field is itself historical tool policy. Compare
+	// the original serialization shape only when no authored transport change
+	// exists; the current new-session default cannot migrate a live session.
+	if snapshot.ResultCollection == nil && !hasExplicitResultTransportSettings(c.session) {
+		current.snapshot.ResultCollection = nil
+		current.snapshot.ConfigurationHash, err = executionPolicyConfigurationHash(current.snapshot)
+		if err != nil {
+			return false, err
+		}
+	}
 	if current.snapshot.ConfigurationHash == snapshot.ConfigurationHash {
 		return true, nil
 	}

@@ -147,6 +147,15 @@ func preserveResultCollection(incoming, existing *ExecutionReceipt) {
 		// receipt cannot retain the checkpoint while erasing its grant history.
 		preserved := cloneExecutionReceipt(existing)
 		incoming.RepairProvenance = preserved.RepairProvenance
+		if existing.ResultCollection.State == ResultCollectionCommitted {
+			// Work completion can still hold its pre-collection receipt.
+			// The accepted event owns these canonical result bindings too.
+			incoming.ResultContractID = existing.ResultContractID
+			incoming.ResultContractSHA256 = existing.ResultContractSHA256
+			incoming.ResultPayloadSHA256 = existing.ResultPayloadSHA256
+			incoming.ResultValidation = existing.ResultValidation
+			incoming.ResultValidationFailures = existing.ResultValidationFailures
+		}
 	}
 }
 

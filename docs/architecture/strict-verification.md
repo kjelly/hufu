@@ -27,6 +27,11 @@
 
 ---
 
+> 結果傳輸現況：相容的新 local session 預設由 runtime 以無工具請求收集結果。
+> 本文歷史 `submit_result` 工具修復案例適用於明確 `result-transport: tool`、舊 session
+> 或宣告該工具的 closed sequence。runtime 模式保留相同驗收門檻，收集失敗只恢復
+> 結果階段，不重播已完成工作；詳見 [execution runtime](execution-runtime.md)。
+
 ## 1. 執行摘要
 
 hufu 現在已具備優秀的多代理工作流骨架：

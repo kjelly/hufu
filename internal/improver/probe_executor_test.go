@@ -262,6 +262,7 @@ func TestProbeClassificationRequiresCanonicalVerification(t *testing.T) {
 		want string
 	}{
 		{"verified", func(*childObservation, *team.TodoItem) {}, "passed"},
+		{"collected_verified", func(_ *childObservation, task *team.TodoItem) { task.TypedResult.Source = "collected" }, "passed"},
 		{"missing_verifier", func(_ *childObservation, task *team.TodoItem) {
 			task.VerifyResult = nil
 		}, "unknown"},

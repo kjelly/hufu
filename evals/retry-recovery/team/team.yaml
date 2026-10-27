@@ -1,2 +1,4 @@
+# Scripted fixtures exercise the legacy reporting protocol.
+result-transport: tool
 name: eval-retry-recovery
 description: Minimal coordinator + one worker fixture team for the retry-recovery eval suite

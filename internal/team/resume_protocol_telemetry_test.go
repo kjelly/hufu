@@ -119,7 +119,7 @@ func newResumedProtocolTelemetryCoordinator(t *testing.T) (*Coordinator, *TodoIt
 	c := &Coordinator{
 		session: &TeamSession{
 			Dir: workspace, Workspace: workspace,
-			Config: agent.TeamConfig{Name: "resumed-protocol-telemetry"},
+			Config: agent.TeamConfig{ResultTransport: agent.ResultTransportTool, Name: "resumed-protocol-telemetry"},
 			Agents: map[string]*agent.AgentDef{"worker": worker},
 		},
 		projectDir:              workspace,

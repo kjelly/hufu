@@ -8,7 +8,7 @@
 
 > **用途**：交給 coding agent 依序實作；本文件本身不授權操作真實服務或更動部署。
 > **Baseline**：`kjelly/hufu` @ `c8c52d30a1932caddc3ad0d7ecc0ad0ad15882cb`（2026-10-27 本地核對）。
-> **狀態**：PR-1、PR-2、PR-3 已完成；PR-4 的公開設定與新預設尚未啟用。
+> **狀態**：PR-1、PR-2、PR-3、PR-4 已完成並通過驗證。
 > **產品決策**：使用者已選擇「相容的新任務預設使用 runtime 主動收集結果」，接受可能增加一次模型呼叫及受限格式修復。
 > **文件位置**：依使用者後續指示，自 `docs/tmp/spec.md` 移入版本控制；本計畫為 reference，實作時同步正式架構與參考文件。
 
@@ -327,3 +327,27 @@ mise run lint
 | `mise run vet` | exit 0 |
 | `mise run lint` | exit 0，0 issues；以 protocol collision helper 分解複雜度，未放寬 lint 規則 |
 | `bin/check-docs` | exit 0；86 active files、540 relative links、38 Go anchors |
+
+
+### PR-4：新任務預設與公開驗收（完成）
+
+- team.yaml 平面／versioned spec 與 agent Markdown 支援靜態 `result-transport`，只接受小寫 `runtime`、`tool`；空值、null、錯誤型別與未知值均拒絕。agent 明確設定優先於 team。相容的新 session 預設 runtime，動態 task 不新增切換參數。
+- 保留功能加入前的完整 v5 golden 作為歷史 fixture；以原序列化形狀比較政策，缺少 collection block 的 session 維持 tool、hash 與 bytes 不變；測試經實際 journal admission 後確認只保留原 policy event。任何明確的 authored transport 變更都要求新 session。
+- 新預設的 HTTP fixtures 不設定 transport override，涵蓋 direct、subagent、fanout、approved plan 與 unattended。另加入初始 submit_plan 授權、dry-run 零呼叫，以及 coder→reviewer→verifier、researcher→evidence consumer 的完整 validated payload 交接。
+- inspect 可以從 collection event 重建進度，較舊的 session receipt 不覆蓋新事件；CLI JSON 與 report 顯示 content-free 的狀態、回合與失敗分類，TUI 沿用收集 step 更新。projection 不產生成功結果。
+- 收集 commit 同步保存 canonical payload hash 與驗證 receipt，較晚返回的工作 receipt 不得覆寫；交接測試同時核對完成與事件 replay 的 receipt。
+- 改善探測接受具有同等 canonical 驗證的 collected source。既有 scripted eval fixtures 明列 tool 模式以保留其工具呼叫腳本；CLI process 等價性案例則更新假 provider 以支援新預設，驗證 durable receipt 與 JSON committed 狀態。
+- 正式 agent-format、execution-runtime、strict-verification 與 workset 文件同步說明額外呼叫、限制、舊 session、closed sequence、external/native 協定及新 session 的 tool 回復選項。最終驗證使用本機 fake／scripted fixtures，未執行真實團隊任務或部署。
+
+2026-10-27 最終驗證結果：
+
+| Gate | 結果 |
+|---|---|
+| collector／transport／historical journal admission focused tests | exit 0；`internal/team` 14.630s |
+| quoted／indented enum、null／unknown 與 parser regression | exit 0；`internal/team` 0.231s |
+| 完整 evalharness 套件 | exit 0；40.618s；含動態產生的 legacy fixtures |
+| `mise run test` | exit 0；最終完整 gate 通過，`internal/team` 554.200s、`cmd/hufu` 111.057s、`internal/improver` 144.181s；其他套件與已通過結果一併確認 |
+| targeted race tests | exit 0；`internal/team` 60.850s、`internal/inspect` 1.091s |
+| `mise run vet` | exit 0 |
+| `mise run lint` | exit 0，0 issues；所有最終程式碼與 eval fixture 變更已納入 |
+| `bin/check-docs` | exit 0；86 active files、542 relative links、38 Go anchors |

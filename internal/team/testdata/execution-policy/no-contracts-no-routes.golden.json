@@ -106,5 +106,12 @@
       ]
     }
   ],
+  "result_collection": {
+    "version": 1,
+    "default": "runtime",
+    "collector_schema_revision": 1,
+    "turn_limit": 2,
+    "generation_sha256": "58d34420ed8d1488ed019e8375b5260c1873a47c502b02d7607ed294404df0ba"
+  },
   "configuration_hash": "\u003cconfiguration-hash\u003e"
 }

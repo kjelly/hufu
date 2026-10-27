@@ -1,3 +1,5 @@
+# Scripted fixtures exercise the legacy reporting protocol.
+result-transport: tool
 name: eval-memory-fresh-session
 description: Minimal coordinator and worker for fresh-session memory learning evals
 memory-learning:

@@ -221,6 +221,7 @@ type teamManifestSpecFields struct {
 	WorkerMemory     rawWorkerMemoryPolicy      `yaml:"worker-memory,omitempty"`
 	WorkerWorkspace  *agent.WorkerWorkspaceSpec `yaml:"worker-workspace,omitempty"`
 	ExecutionRoute   string                     `yaml:"execution-route,omitempty"`
+	ResultTransport  agent.ResultTransport      `yaml:"result-transport,omitempty"`
 	MemoryLearning   rawMemoryLearningPolicy    `yaml:"memory-learning,omitempty"`
 	ContextRouting   agent.ContextRoutingPolicy `yaml:"context-routing,omitempty"`
 	Compaction       rawCompactionPolicy        `yaml:"compaction,omitempty"`
@@ -404,6 +405,11 @@ func DetectTeamSchemaVersion(teamDir string, vars map[string]string) (string, er
 // TestLegacyAndV1Alpha1NormalizeIdentically hold by construction rather
 // than by two independently maintained code paths agreeing by luck.
 func decodeTeamManifestYAML(file string, data []byte) (teamConfigYAML, string, error) {
+	if bytes.Contains(data, []byte("result-transport")) {
+		if err := validateResultTransportAuthoring(data, true); err != nil {
+			return teamConfigYAML{}, "", fmt.Errorf("team manifest %s: %w", file, err)
+		}
+	}
 	var envelope manifestEnvelope
 	if err := yaml.Unmarshal(data, &envelope); err != nil {
 		return teamConfigYAML{}, "", fmt.Errorf("detect team manifest envelope: %w", err)

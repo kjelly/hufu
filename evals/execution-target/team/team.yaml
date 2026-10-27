@@ -1,2 +1,4 @@
+# Scripted fixtures exercise the legacy reporting protocol.
+result-transport: tool
 name: eval-execution-target
 description: Minimal coordinator + one worker fixture team for the execution-target eval suite

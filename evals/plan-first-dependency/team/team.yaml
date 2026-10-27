@@ -1,2 +1,4 @@
+# Scripted fixtures exercise the legacy reporting protocol.
+result-transport: tool
 name: eval-plan-first-dependency
 description: Coordinator plus two plan-first workers where the second depends on the first, for the plan-first-dependency eval suite

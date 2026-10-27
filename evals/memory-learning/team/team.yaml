@@ -1,3 +1,5 @@
+# Scripted fixtures exercise the legacy reporting protocol.
+result-transport: tool
 name: eval-memory-learning
 description: Minimal coordinator and worker for memory learning evals
 memory-learning:

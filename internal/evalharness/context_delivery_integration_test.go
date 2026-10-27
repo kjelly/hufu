@@ -70,7 +70,7 @@ func TestContextDeliveryExtraModelsUseAdmittedTargetsAndParentManifests(t *testi
 func testExtraModelProviderDelivery(t *testing.T, mode string, retry bool) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: eval-extra-context\nmodel: eval-harness-model\nmemory-learning:\n  mode: observe\ncontext-routing:\n  query-mode: "+mode+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte("name: eval-extra-context\nresult-transport: tool\nmodel: eval-harness-model\nmemory-learning:\n  mode: observe\ncontext-routing:\n  query-mode: "+mode+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	worker := "---\nname: worker\nrole: worker\ntools: view\nmodel: qwen3:8b\nextra-models: [qwen3:14b]\nmax-retries: 1\nrecovery: retry\n---\nComplete the assigned task and submit_result.\n"

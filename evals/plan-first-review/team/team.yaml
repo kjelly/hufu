@@ -1,2 +1,4 @@
+# Scripted fixtures exercise the legacy reporting protocol.
+result-transport: tool
 name: eval-plan-first-review
 description: Minimal coordinator + one worker fixture team for the plan-first-review eval suite

@@ -382,6 +382,11 @@ func TestCanonicalRunMatchesLegacyExecutionEffects(t *testing.T) {
 	if legacyOutput.Outcome != canonicalOutput.Outcome || legacyOutput.GoalSatisfied != canonicalOutput.GoalSatisfied || legacyOutput.Result != canonicalOutput.Result || legacyOutput.ExitCode != canonicalOutput.ExitCode {
 		t.Fatalf("run results differ: legacy=%#v canonical=%#v", legacyOutput, canonicalOutput)
 	}
+	for _, output := range []jsonRunOutput{legacyOutput, canonicalOutput} {
+		if len(output.Teams) != 1 || len(output.Teams[0].Tasks) != 1 || len(output.Teams[0].Tasks[0].ResultCollection) != 1 || output.Teams[0].Tasks[0].ResultCollection[0].State != team.ResultCollectionCommitted {
+			t.Fatalf("CLI default did not preserve committed collection in JSON: %+v", output.Teams)
+		}
+	}
 
 	legacyEffects := contractExecutionEffects(t, legacyWorkspace)
 	canonicalEffects := contractExecutionEffects(t, canonicalWorkspace)
@@ -499,19 +504,25 @@ func newContractTextServer(t *testing.T, calls *atomic.Int64) *httptest.Server {
 			}
 		}
 		arguments := `{"status":"success","summary":"fixture verified result"}`
+		content := "fixture verified result"
+		for _, message := range chat.Messages {
+			if bytes.Contains(message.Content, []byte("supplied model-authored claims schema")) {
+				content = arguments
+			}
+		}
 		if chat.Stream {
 			writer.Header().Set("Content-Type", "text/event-stream")
 			if useSubmitResult {
 				_, _ = fmt.Fprintf(writer, "data: {\"id\":\"fixture\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"submit-%d\",\"type\":\"function\",\"function\":{\"name\":\"submit_result\",\"arguments\":%q}}]},\"finish_reason\":null}]}\n\n", call, arguments)
 				_, _ = fmt.Fprint(writer, "data: {\"id\":\"fixture\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n")
 			} else {
-				_, _ = fmt.Fprint(writer, "data: {\"id\":\"fixture\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"fixture verified result\"},\"finish_reason\":null}]}\n\n")
+				_, _ = fmt.Fprintf(writer, "data: {\"id\":\"fixture\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":null}]}\n\n", content)
 				_, _ = fmt.Fprint(writer, "data: {\"id\":\"fixture\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
 			}
 			_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
 			return
 		}
-		message := map[string]any{"role": "assistant", "content": "fixture verified result"}
+		message := map[string]any{"role": "assistant", "content": content}
 		finishReason := "stop"
 		if useSubmitResult {
 			message = map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{

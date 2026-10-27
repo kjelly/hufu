@@ -1,3 +1,5 @@
+# Scripted fixtures exercise the legacy reporting protocol.
+result-transport: tool
 name: eval-terminal-leak
 description: Minimal coordinator + one worker fixture team for the terminal-leak eval suite
 execution-profile: strict-verification

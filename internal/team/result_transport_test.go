@@ -66,3 +66,44 @@ func TestResultTransportUsesFrozenStaticPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestResultTransportDefaultsAndAgentPrecedence(t *testing.T) {
+	for _, scenario := range []struct {
+		team, worker agent.ResultTransport
+		want         agent.ResultTransport
+	}{
+		{want: agent.ResultTransportRuntime},
+		{team: agent.ResultTransportTool, want: agent.ResultTransportTool},
+		{team: agent.ResultTransportRuntime, worker: agent.ResultTransportTool, want: agent.ResultTransportTool},
+		{team: agent.ResultTransportTool, worker: agent.ResultTransportRuntime, want: agent.ResultTransportRuntime},
+	} {
+		c := newTestCoordinator(t, withTeamConfig(func(config *agent.TeamConfig) { config.ResultTransport = scenario.team }))
+		c.session.Agents["worker"].ResultTransport = scenario.worker
+		policy, err := executionPolicyResultCollection(c.session, executionPolicySnapshotVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := resultTransportFromPolicy(policy, "worker", TaskDef{Agent: "worker"})
+		if err != nil || got != scenario.want {
+			t.Fatalf("team=%s agent=%s got=%s err=%v", scenario.team, scenario.worker, got, err)
+		}
+	}
+}
+
+func TestRuntimeResultTransportPreservesPlanSubmissionSurface(t *testing.T) {
+	c, item, _, _ := resultCollectionProviderFixture(t, "http://127.0.0.1:1/v1", true, func(c *Coordinator) { c.session.Agents["worker"].ResultTransport = "" })
+	def := c.session.Agents["worker"]
+	for _, mode := range []WorkerToolResolutionMode{WorkerToolResolutionInitialPlan, WorkerToolResolutionApprovedPlan} {
+		task := TaskDef{Agent: "worker", PlanFirst: true, ResolvedExecutionTarget: item.ExecutionTarget, Execution: ExecutionContract{RequiresResult: true}}
+		if mode == WorkerToolResolutionApprovedPlan {
+			task.PlanID = item.ID
+		}
+		resolved, err := c.ToolResolver().ResolveTaskTools(t.Context(), def, WorkerToolResolutionRequest{Task: task, TodoID: item.ID, Mode: mode})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(resolved.Names, submitResultToolName) || slices.Contains(resolved.Names, "submit_plan") != (mode == WorkerToolResolutionInitialPlan) {
+			t.Fatalf("mode=%s tools=%v", mode, resolved.Names)
+		}
+	}
+}

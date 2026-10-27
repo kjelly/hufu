@@ -325,7 +325,7 @@ func loadRouteTeam(t *testing.T, workspace string, routes map[string]config.Exec
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte("name: routed-team\nexecution-route: coding\nmax-retries: 0\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "team.yml"), []byte("name: routed-team\nresult-transport: tool\nexecution-route: coding\nmax-retries: 0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	writeAgentFile(t, dir, "coder.md", "name: coder\ndescription: Codes.\ntools: view", "Code.")

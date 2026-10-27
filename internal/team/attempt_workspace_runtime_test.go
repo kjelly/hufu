@@ -106,7 +106,7 @@ func newIsolatedTeamFixture(t *testing.T, worker func(*Coordinator) fantasy.Agen
 	session := &TeamSession{
 		Workspace: workspace,
 		Scope:     WorkspaceScope{Managed: true, ControlRoot: control, SubjectRoot: subject},
-		Config:    agent.TeamConfig{Name: "isolated-runtime", Timeout: 30, MaxRetries: 2, WorkerWorkspace: isolatedSpec()},
+		Config:    agent.TeamConfig{ResultTransport: agent.ResultTransportTool, Name: "isolated-runtime", Timeout: 30, MaxRetries: 2, WorkerWorkspace: isolatedSpec()},
 		Agents: map[string]*agent.AgentDef{
 			"worker": {
 				Name: "worker", Role: "worker", Tools: "view,write,edit,bash,grep,glob,ls",

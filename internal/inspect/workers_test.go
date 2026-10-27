@@ -78,6 +78,23 @@ func TestProjectWorkerAttemptsIsPureAndDeterministic(t *testing.T) {
 	}
 }
 
+func TestProjectWorkerAttemptsReadsCollectionEventsWithoutCheckpoint(t *testing.T) {
+	var events workerEvents
+	events.start("run-1", "1", 1, 1, 0)
+	checkpoint := &team.ResultCollectionCheckpoint{State: team.ResultCollectionInFlight, Revision: 2, TurnsUsed: 1, TurnLimit: 2}
+	receipt := team.ExecutionReceipt{RunID: "run-1", TaskID: "1", Attempt: 1, ResultCollection: checkpoint}
+	events.add("run-1", "1", string(team.EventTaskResultCollectionCheckpointed), 1, 1, map[string]any{"execution_receipt": receipt})
+	// A stale session checkpoint must not hide newer journal progress.
+	stale := receipt
+	stale.ResultCollection = nil
+	for _, todos := range [][]*team.TodoItem{nil, {{ID: "1", Status: team.TaskInProgress, ExecutionReceipts: []team.ExecutionReceipt{stale}}}} {
+		views := ProjectWorkerAttempts(todos, events.events, workerEpoch.Add(time.Minute))
+		if len(views) != 1 || views[0].Activity != WorkerActivityResultCollection || views[0].ResultCollectionState != "in_flight" || views[0].ResultCollectionTurns != 1 || views[0].ResultCollectionLimit != 2 {
+			t.Fatalf("journal collection projection=%+v", views)
+		}
+	}
+}
+
 func TestProjectWorkerAttemptsIdentityAcrossResumeAndDuplicates(t *testing.T) {
 	var w workerEvents
 	w.add("run-1", "1", string(team.EventTaskCreated), 1, 0, nil)

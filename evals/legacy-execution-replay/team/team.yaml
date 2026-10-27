@@ -1,2 +1,4 @@
+# Scripted fixtures exercise the legacy reporting protocol.
+result-transport: tool
 name: eval-legacy-execution-replay
 description: Minimal coordinator and worker for legacy checkpoint replay

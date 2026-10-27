@@ -187,7 +187,7 @@ type AgentDef struct {
 	// payload never can.
 	ResultContract *ResultContractSpec
 	// ResultTransport is static execution policy; dynamic task JSON cannot set it.
-	ResultTransport ResultTransport `json:"-" yaml:"-"`
+	ResultTransport ResultTransport `json:"result_transport,omitempty" yaml:"result-transport,omitempty"`
 	// WorkerWorkspace overrides the team's worker-workspace default for this
 	// agent.
 	WorkerWorkspace *WorkerWorkspaceSpec
@@ -416,7 +416,7 @@ type TeamConfig struct {
 	// ExecutionRoute is the team-level default execution route for workers
 	// that set neither their own route nor their own model.
 	ExecutionRoute  string
-	ResultTransport ResultTransport `json:"-" yaml:"-"`
+	ResultTransport ResultTransport `json:"result_transport,omitempty" yaml:"result-transport,omitempty"`
 	MemoryLearning  MemoryLearningPolicy
 	ContextRouting  ContextRoutingPolicy
 	// Compaction controls coordinator history retention and deterministic

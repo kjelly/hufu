@@ -139,7 +139,7 @@ func newWorkerProviderSurfaceCoordinator(t *testing.T, modelID, mode string) (*C
 	t.Cleanup(provider.Close)
 	workspace := t.TempDir()
 	def := &agent.AgentDef{Name: "worker", Role: "worker", Tools: "view,grep,glob,ls", MaxRetries: 0, Timeout: 10, Generation: agent.GenerationParams{Model: modelID, MaxTokens: "128"}}
-	session := &TeamSession{Dir: workspace, Workspace: workspace, Config: agent.TeamConfig{Name: "surface", Timeout: 10, MaxRetries: 0, Generation: agent.GenerationParams{Model: modelID, MaxTokens: "128"}}, Agents: map[string]*agent.AgentDef{"worker": def}}
+	session := &TeamSession{Dir: workspace, Workspace: workspace, Config: agent.TeamConfig{ResultTransport: agent.ResultTransportTool, Name: "surface", Timeout: 10, MaxRetries: 0, Generation: agent.GenerationParams{Model: modelID, MaxTokens: "128"}}, Agents: map[string]*agent.AgentDef{"worker": def}}
 	providerManager, err := agent.NewProviderManager(provider.URL, "", map[string]config.ProviderConfig{"ollama": {ProviderURL: provider.URL}})
 	if err != nil {
 		t.Fatal(err)

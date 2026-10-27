@@ -907,6 +907,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		}
 		b.WriteString("\n")
 		writeTaskResourceScopeReport(&b, data.Todos)
+		writeResultCollectionReport(&b, data.Todos)
 		writeSemanticRetrievalRuntimeReport(&b, data.SemanticRetrieval)
 		writeSemanticRetrievalReport(&b, data.Todos)
 		var runMetrics *team.RunMetrics

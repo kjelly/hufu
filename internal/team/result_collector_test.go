@@ -29,6 +29,8 @@ func TestResultCollectorUsesToolFreeRequestsAndBoundedFormatRepair(t *testing.T)
 		{replies: []string{`invalid JSON`, `still invalid JSON`}},
 		{entry: "collector_tool", replies: []string{"call_tool", `{"status":"success","summary":"analysis complete"}`}},
 		{worker: true, replies: []string{`complete work report`, `{"status":"success","summary":"analysis complete"}`}},
+		{worker: true, entry: "unattended", replies: []string{`complete work report`, `{"status":"success","summary":"analysis complete"}`}},
+		{worker: true, entry: "approved_plan", replies: []string{`complete work report`, `{"status":"success","summary":"analysis complete"}`}},
 		{worker: true, replies: []string{`complete work report`, `invalid JSON`, `{"status":"success","summary":"analysis complete"}`}},
 		{worker: true, replies: []string{`complete work report`, `invalid JSON`, `still invalid JSON`}},
 		{worker: true, entry: "direct", replies: []string{`complete work report`, `{"status":"success","summary":"analysis complete"}`}},
@@ -88,6 +90,13 @@ func TestResultCollectorUsesToolFreeRequestsAndBoundedFormatRepair(t *testing.T)
 			}))
 			t.Cleanup(server.Close)
 			c, item, ctx, receipt := resultCollectionProviderFixture(t, server.URL+"/v1", true, func(c *Coordinator) {
+				// Exercise the admitted new-session default through real HTTP,
+				// without an explicit per-agent transport override.
+				c.session.Agents["worker"].ResultTransport = ""
+				c.unattended = scenario.entry == "unattended"
+				if scenario.entry == "approved_plan" {
+					c.pendingPlans = map[string]*PlanEntry{"approved-1": {TodoID: "approved-1", PlanText: "analyze the evidence", Status: "approved"}}
+				}
 				if scenario.entry == "isolated" {
 					c.session.Config.WorkerWorkspace = isolatedSpec()
 					c.session.Scope.Managed = true
@@ -150,7 +159,12 @@ func TestResultCollectorUsesToolFreeRequestsAndBoundedFormatRepair(t *testing.T)
 					}
 
 				default:
-					_, err = c.ExecuteTasks(t.Context(), []TaskDef{{ID: "analysis", Agent: "worker", Model: "ollama/test", Goal: "prepare a complete analysis report for this invocation", OutputMode: func() string {
+					_, err = c.ExecuteTasks(t.Context(), []TaskDef{{ID: "analysis", Agent: "worker", Model: "ollama/test", Goal: "prepare a complete analysis report for this invocation", PlanFirst: scenario.entry == "approved_plan", PlanID: func() string {
+						if scenario.entry == "approved_plan" {
+							return "approved-1"
+						}
+						return ""
+					}(), OutputMode: func() string {
 						if scenario.entry == "verbatim" {
 							return TaskOutputModeVerbatim
 						}

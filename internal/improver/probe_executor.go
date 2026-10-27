@@ -416,7 +416,7 @@ func classifyProbe(observation childObservation, worker, input string, verifier 
 	}
 	if typed != nil && typed.StructuredPayload != nil {
 		payload := typed.StructuredPayload
-		if typed.TaskID != task.ID || typed.Agent != task.Agent || typed.Source != "submitted" ||
+		if typed.TaskID != task.ID || typed.Agent != task.Agent || (typed.Source != "submitted" && typed.Source != "collected") ||
 			payload.Contract.SchemaSHA256 != schemaHash || payload.SHA256 != paired.BytesDigest(payload.Value) ||
 			receipt.ResultPayloadSHA256 != payload.SHA256 || receipt.ResultValidation != team.ResultValidationValid {
 			return "", errors.New("canonical result payload or receipt binding mismatch")

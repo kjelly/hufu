@@ -23,6 +23,8 @@ func prepareHufuDevIntegrationSession(t *testing.T, session *TeamSession, projec
 	if err := session.SetCompatibilityWorkspaceScope(project); err != nil {
 		t.Fatal(err)
 	}
+	// The scripted workers in this fixture call the legacy reporting tool.
+	session.Config.ResultTransport = agent.ResultTransportTool
 	session.Config.Generation.Model = "ollama/test"
 	session.Config.Generation.ContextWindow = 32768
 	session.Config.ProviderURL = endpoint

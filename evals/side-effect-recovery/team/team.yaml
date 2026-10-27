@@ -1,3 +1,5 @@
+# Scripted fixtures exercise the legacy reporting protocol.
+result-transport: tool
 name: eval-side-effect-recovery
 description: Static unknown-side-effect contract used to verify reconcile-only recovery
 delegation:

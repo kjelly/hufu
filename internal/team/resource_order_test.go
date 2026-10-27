@@ -64,7 +64,7 @@ func newResourceOrderCoordinator(t *testing.T, maxConcurrent, retries int) *Coor
 	t.Helper()
 	session := &TeamSession{
 		Workspace: t.TempDir(),
-		Config:    agent.TeamConfig{Name: "resource-order", AllowFreeTextResults: true, MaxRetries: retries},
+		Config:    agent.TeamConfig{ResultTransport: agent.ResultTransportTool, Name: "resource-order", AllowFreeTextResults: true, MaxRetries: retries},
 		Agents: map[string]*agent.AgentDef{
 			"worker": {Name: "worker", Role: "worker", MaxRetries: retries, Generation: agent.GenerationParams{Model: "test-model"}},
 		},

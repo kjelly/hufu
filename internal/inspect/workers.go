@@ -244,6 +244,8 @@ func projectWorkerAttemptsContext(ctx context.Context, todos []*team.TodoItem, e
 			}
 			dispatchFallbacks[event.TaskID]++
 			pending[event.TaskID] = pendingFallback{fromAttempt: payload.FromAttempt, to: payload.ToTarget, index: payload.CandidateIndex}
+		case event.Type == string(team.EventTaskResultCollectionCheckpointed):
+			projectCollectionEvent(current[event.TaskID], event)
 		}
 	}
 
@@ -264,6 +266,24 @@ func projectWorkerAttemptsContext(ctx context.Context, todos []*team.TodoItem, e
 		return false // keep event order for attempts of the same occurrence
 	})
 	return views, nil
+}
+
+func projectCollectionEvent(builder *attemptBuilder, event team.RunEvent) {
+	var payload struct {
+		Receipt team.ExecutionReceipt `json:"execution_receipt"`
+	}
+	if builder == nil || json.Unmarshal(event.Payload, &payload) != nil {
+		return
+	}
+	receipt := payload.Receipt
+	checkpoint := receipt.ResultCollection
+	if checkpoint == nil || checkpoint.FanoutLeaf || receipt.Attempt != builder.view.Attempt || receipt.TaskID != event.TaskID || receipt.RunID != builder.view.InvocationRunID {
+		return
+	}
+	if prior := builder.eventReceipt; prior != nil && prior.ResultCollection != nil && prior.ResultCollection.Revision >= checkpoint.Revision {
+		return
+	}
+	builder.eventReceipt = &receipt
 }
 
 func (b *attemptBuilder) finish(todo *team.TodoItem, latest bool, now time.Time) WorkerAttemptView {
@@ -362,6 +382,9 @@ func (b *attemptBuilder) receiptFrom(todo *team.TodoItem) *team.ExecutionReceipt
 				continue
 			}
 			if receipt.RunID == b.view.InvocationRunID {
+				if eventReceipt := b.eventReceipt; eventReceipt != nil && eventReceipt.ResultCollection != nil && (receipt.ResultCollection == nil || eventReceipt.ResultCollection.Revision > receipt.ResultCollection.Revision) {
+					return eventReceipt
+				}
 				return receipt
 			}
 			candidates = append(candidates, receipt)
