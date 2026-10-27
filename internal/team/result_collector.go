@@ -127,10 +127,18 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 			_, err := c.acceptedCollectionResult(ctx, c.todoItemByID(checkpoint.TaskID), checkpoint)
 			return err
 		case ResultCollectionPrepared:
-			if err := c.commitPreparedCollection(ctx, checkpoint); err != nil {
+			err = c.commitPreparedCollection(ctx, checkpoint)
+			if err == nil {
+				return nil
+			}
+			if localResultRejectionReason(err) != RepairFailureInvalidSchema || checkpoint.TurnsUsed >= checkpoint.TurnLimit {
 				return c.collectionFailure(ctx, checkpoint, localResultRejectionReason(err), err)
 			}
-			return nil
+			diagnostic = err.Error()
+			checkpoint, err = c.recordCollectionFormatFailure(ctx, checkpoint)
+			if err != nil {
+				return &resultCollectionFailure{Reason: RepairFailureCommit, Cause: err}
+			}
 		case ResultCollectionReceived:
 			prepared, err := c.prepareCollectionClaims(ctx, checkpoint)
 			if err == nil {

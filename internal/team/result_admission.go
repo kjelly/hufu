@@ -218,6 +218,12 @@ func (a *localResultAdmission) commit(ctx context.Context, input SubmitResultInp
 			return rollback("invalid artifact declaration: " + err.Error())
 		}
 		if err := contract.validateFinalizableResult(res); err != nil {
+			if _, collecting := ctx.Value(resultCollectionAdmissionKey{}).(*ResultCollectionCheckpoint); collecting && collectionProjectionFormatFailure(contract, res) {
+				if rollbackErr := tx.rollback(); rollbackErr != nil {
+					return rejectLocalResultPersistence(rollbackErr)
+				}
+				return rejectLocalResult(RepairFailureInvalidSchema, err)
+			}
 			return rollback("submit_result contract violation: " + err.Error())
 		}
 		// A reported assumption check is one of the three sources allowed to

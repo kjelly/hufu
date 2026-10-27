@@ -135,6 +135,10 @@ func validateCollectionTransition(prior, next *ResultCollectionCheckpoint) error
 			return errResultCollectionStale
 		}
 	case ResultCollectionReceived:
+		if prior.State == ResultCollectionPrepared && next.FailureReason == RepairFailureInvalidSchema && next.Prepared == nil &&
+			next.Response != nil && prior.Response != nil && *next.Response == *prior.Response {
+			break
+		}
 		if prior.State != ResultCollectionInFlight && prior.State != ResultCollectionReceived {
 			return errResultCollectionStale
 		}

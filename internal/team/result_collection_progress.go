@@ -145,13 +145,22 @@ func (c *Coordinator) recordCollectionSchemaFailure(ctx context.Context, expecte
 	if err != nil {
 		return nil, err
 	}
-	if _, err := c.decodeCollectionClaims(expected.TaskID, raw); err == nil || localResultRejectionReason(err) != RepairFailureInvalidSchema {
+	_, rejection := c.decodeCollectionClaims(expected.TaskID, raw)
+	if reason := localResultRejectionReason(rejection); rejection == nil || (reason != RepairFailureInvalidSchema && reason != RepairFailureResultMissing) {
 		return nil, errResultCollectionStale
 	}
+	return c.recordCollectionFormatFailure(ctx, expected)
+}
+
+// Called only after decoding or canonical admission rejects model formatting.
+// The original response remains durable; a new invocation consumes the same
+// bounded budget and never reopens worker execution.
+func (c *Coordinator) recordCollectionFormatFailure(ctx context.Context, expected *ResultCollectionCheckpoint) (*ResultCollectionCheckpoint, error) {
 	return c.updateResultCollection(ctx, expected, func(next *ResultCollectionCheckpoint, _ *ExecutionReceipt) error {
-		if next.State != ResultCollectionReceived {
+		if next.State != ResultCollectionReceived && next.State != ResultCollectionPrepared {
 			return errResultCollectionStale
 		}
+		next.State, next.Prepared = ResultCollectionReceived, nil
 		next.FailureReason = RepairFailureInvalidSchema
 		return nil
 	})

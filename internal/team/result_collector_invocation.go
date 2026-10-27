@@ -41,7 +41,7 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 	if err != nil {
 		return "", nil, err
 	}
-	info := localResultSubmissionInfo(c, checkpoint.TaskID)
+	info := collectionSubmissionInfo(c, checkpoint.TaskID)
 	var previous []byte
 	if checkpoint.Response != nil {
 		previous, err = c.readCollectionBlob(ctx, checkpoint, "response", checkpoint.Response)
@@ -50,18 +50,20 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 		}
 	}
 	data, err := json.Marshal(struct {
-		Schema           map[string]any `json:"claims_schema"`
-		WorkInput        string         `json:"work_input"`
-		WorkReport       string         `json:"work_report"`
-		Transcript       string         `json:"work_transcript"`
-		PreviousResponse string         `json:"previous_response,omitempty"`
-		Diagnostic       string         `json:"format_diagnostic,omitempty"`
+		Schema           map[string]any        `json:"claims_schema"`
+		Assertions       []TaskResultAssertion `json:"result_assertions,omitempty"`
+		WorkInput        string                `json:"work_input"`
+		WorkReport       string                `json:"work_report"`
+		Transcript       string                `json:"work_transcript"`
+		PreviousResponse string                `json:"previous_response,omitempty"`
+		Diagnostic       string                `json:"format_diagnostic,omitempty"`
 	}{map[string]any{"type": "object", "properties": info.Parameters, "required": info.Required, "additionalProperties": false},
+		localResultSubmissionContract(c, checkpoint.TaskID).SubmissionTaskResultAssertions,
 		string(work.Input), string(work.Report), string(transcript), string(previous), schemaRepairDiagnostic(diagnostic)}, json.Deterministic(true))
 	if err != nil {
 		return "", nil, err
 	}
-	return collectionContext + "Collect the result of the already returned work. Do not repeat work, explore sources, or change its outcome to satisfy a format requirement. Use only these frozen authorized inputs.\n" + fenceUntrusted("json", string(data)), work, nil
+	return collectionContext + "Collect the result of the already returned work. Do not repeat work, explore sources, or change its outcome to satisfy a format requirement. Use only these frozen authorized inputs. Result assertions use canonical stored paths: /structured_payload/value refers to your structured_payload, and /invariant_verification/assessments is attested from your invariant_assessments when the schema permits them. For equals_projection, preserve identical claims in both representations; do not independently paraphrase or omit findings.\n" + fenceUntrusted("json", string(data)), work, nil
 }
 
 func (c *Coordinator) prepareCollectionInvocation(ctx context.Context, def *agent.AgentDef, checkpoint *ResultCollectionCheckpoint, id, diagnostic string) (context.Context, []byte, error) {

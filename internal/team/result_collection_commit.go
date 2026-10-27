@@ -5,9 +5,21 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+
+	"charm.land/fantasy"
 )
 
 type resultCollectionAdmissionKey struct{}
+
+// Collection publishes only fields that the durable task can accept. Keep the
+// legacy tool schema separate so persisted tool sessions retain compatibility.
+func collectionSubmissionInfo(c *Coordinator, taskID string) fantasy.ToolInfo {
+	info := localResultSubmissionInfo(c, taskID)
+	if localResultSubmissionContract(c, taskID).InvariantVerification == "" {
+		delete(info.Parameters, "invariant_assessments")
+	}
+	return info
+}
 
 // decodeCollectionClaims accepts exactly the published model claims schema.
 // Unlike the legacy tool adapter it does not normalize shorthand or unwrap text.
@@ -28,7 +40,11 @@ func (c *Coordinator) decodeCollectionClaims(taskID string, raw []byte) (SubmitR
 	if input.Summary == "" {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("summary is required"))
 	}
-	if err := validateToolArguments(string(raw), localResultSubmissionInfo(c, taskID)); err != nil {
+	info := collectionSubmissionInfo(c, taskID)
+	if err := validateSubmissionFieldPresence(string(raw), info); err != nil {
+		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
+	}
+	if err := validateToolArguments(string(raw), info); err != nil {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
 	}
 	if err := c.validateFixedCollectionInputJSON(taskID, string(raw)); err != nil {
@@ -81,9 +97,24 @@ func (c *Coordinator) commitPreparedCollection(ctx context.Context, expected *Re
 	if err != nil {
 		return err
 	}
+	// Resolve only keys issued by successful authorized views in the original
+	// work occurrence. Canonical validation and storage still require full IDs.
+	resolved, err := c.resolveResultEvidenceKeys(ctx, item.ID, string(raw))
+	if err != nil {
+		return rejectLocalResult(RepairFailureSource, err)
+	}
+	if err := json.Unmarshal([]byte(resolved), &input, json.RejectUnknownMembers(true)); err != nil {
+		return rejectLocalResult(RepairFailureInvalidSchema, err)
+	}
 	ctx = context.WithValue(ctx, resultCollectionAdmissionKey{}, expected)
 	admission := localResultAdmission{coordinator: c, todoID: item.ID}
-	return admission.admit(ctx, input, localResultSubmissionContract(c, item.ID), nil)
+	return admission.admit(ctx, input, localResultSubmissionContract(c, item.ID), func() RepairFailureReason {
+		issues, _, err := resultSubmissionIssues(resolved, localResultCandidateValidationInfo(c, item.ID))
+		if err == nil && len(issues) > 0 {
+			return RepairFailureInvalidSchema
+		}
+		return RepairFailureSource
+	})
 }
 
 func (c *Coordinator) acceptedCollectionResult(ctx context.Context, item *TodoItem, checkpoint *ResultCollectionCheckpoint) (*TaskResult, error) {

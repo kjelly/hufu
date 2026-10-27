@@ -378,3 +378,34 @@ mise run run -- --new --agent-team hufu-code-review --report \
 | `mise run vet` | exit 0 |
 | `mise run lint` | exit 0，0 issues |
 | `bin/check-docs` | exit 0；86 active files、175 total files、542 relative links、38 Go anchors |
+
+### 收集結果的證據解析與格式修復回歸（2026-10-27）
+
+- 公開診斷確認 `inv-20261027T082432.227691424Z-e94d215f48ab`／`run-20261027T082513.649081069Z-1bcddfdc3593` 已正確解析最近三個 commit；16 個任務中 5 個完成、11 個未解決。六個收集結果使用合法 `ev_` 證據短碼卻未轉成完整 artifact ID；三個結果的重複欄位不一致；另有未知欄位與普通任務提交外層 invariant assessments 的錯誤。
+- Collector 在 canonical admission 前重用工具 transport 的證據短碼解析器，以原工作 occurrence、model execution、branch、授權來源與 CAS 完整性驗證短碼。保存的結果與 receipt 仍使用完整 ID 及 canonical hash；未知、越權與損毀來源直接拒絕。
+- Collector schema 排除普通任務不適用的外層 `invariant_assessments`，不改變內層 payload 的 schema 或舊工具 transport。提示包含 durable task 的結果 assertions，說明重複 findings／invariant claims 必須一致。
+- 最終 admission 發現模型 schema 錯誤，或 findings／invariant assessments 與 payload 的 `equals_projection` 不一致時，可以使用原本剩餘的一次格式修復。只有這些表示方式錯誤可修復；其他 assertion、來源、權限、驗收、持久化失敗仍阻擋。已 materialize artifact 的結果不進入此修復路徑。
+- 格式修復透過 checkpoint event 將 prepared claims 退回 received，保留原 response、work、receipt 與已消耗回合；重播及 crash-resume 不派發 worker、不重跑工具，也不增加預算。空回覆同樣可使用剩餘格式修復回合。
+- 回歸測試涵蓋 native producer → bound workset → 真實本機 HTTP worker `view` → collector → canonical receipt／event replay；另涵蓋未知與損毀證據拒絕、欄位投影、格式修復、預算耗盡、驗收失敗以及 prepared／received 中斷恢復。測試使用本機假 provider，未重跑或改寫使用者的失敗 session。
+
+修正後建議以新 session 執行檢閱。`--input review.scope=...` 並非必要；可用自然語言指定範圍。若要重現本次失敗的範圍，需固定當時的 head，避免修正 commit 改變「最近三個」：
+
+```bash
+mise run run -- --new --agent-team hufu-code-review --report \
+  'review 以 dfc6a6ca 為 head、沿 first-parent 的最近三個 git commit，告訴我有無潛在問題'
+```
+
+驗收以公開 `status`／`inspect`／`results` 的 canonical outcome、未解決任務數與驗證結果為準；collector committed 僅表示結果已接納，不能取代任務與整體 acceptance。此修正不保證任意模型輸出或真實檢閱必然成功。
+
+本輪最終驗證結果：
+
+| Gate | 結果 |
+|---|---|
+| collector／projection／transport／evidence keys／bound artifact／workset focused tests | exit 0；`internal/team` 26.570s |
+| `bin/check-docs` | exit 0；86 active files、175 total files、542 relative links、38 Go anchors |
+| `mise run test` | exit 0；`internal/team` 583.004s、`cmd/hufu` 122.391s、`internal/improver` 150.975s；其餘套件均通過 |
+| targeted race tests | exit 0；`internal/team` 99.787s；涵蓋 collector／projection／transport／evidence keys／bound artifact／workset |
+| `mise run vet` | exit 0 |
+| `mise run lint` | exit 0，0 issues |
+
+先前阻擋驗證的 Hufu 程序已退出；上述重型驗證依序執行，未與 live team 並行。最終程式碼通過上述所有 gate，使用者原有的失敗 session 保留原貌。

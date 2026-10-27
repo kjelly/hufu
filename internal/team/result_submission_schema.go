@@ -66,15 +66,19 @@ func projectResultSubmissionFields(info fantasy.ToolInfo, fields []string) fanta
 // Candidate validation retains all issued collection keys even when a provider's
 // portable tool schema must omit them because of its schema-size limit.
 func (t *submitResultTool) candidateValidationInfo() fantasy.ToolInfo {
-	info := t.fullInfo()
-	if t.coordinator == nil {
+	return localResultCandidateValidationInfo(t.coordinator, t.todoID)
+}
+
+func localResultCandidateValidationInfo(c *Coordinator, taskID string) fantasy.ToolInfo {
+	info := localResultSubmissionInfo(c, taskID)
+	if c == nil {
 		return info
 	}
-	ref, compiled, err := t.coordinator.boundResultContract(t.todoID)
+	ref, compiled, err := c.boundResultContract(taskID)
 	if err != nil || compiled == nil || len(compiled.fixedCollections) == 0 {
 		return info
 	}
-	plans, err := t.coordinator.fixedCollectionPlans(t.todoID)
+	plans, err := c.fixedCollectionPlans(taskID)
 	if err != nil {
 		return info
 	}

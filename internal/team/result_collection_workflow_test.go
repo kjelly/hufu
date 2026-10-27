@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -204,5 +207,121 @@ func TestResultCollectionDefaultDryRunMakesNoProviderOrWorkerCalls(t *testing.T)
 	}
 	if calls.Load() != 0 || worker.Calls() != 0 || c.todoItemByID(item.ID).ExecutionReceipt != nil {
 		t.Fatal("dry run dispatched work or collection")
+	}
+}
+
+func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
+	for _, scenario := range []string{"valid", "unknown", "corrupt"} {
+		t.Run(scenario, func(t *testing.T) {
+			var workCalls, collectionCalls atomic.Int32
+			var source ArtifactRef
+			var store *FileArtifactStore
+			var issued string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/chat/completions" {
+					_, _ = fmt.Fprint(w, `{"model":"test","parameters":"num_ctx 131072","model_info":{"general.architecture":"qwen2","qwen2.context_length":131072},"capabilities":["completion","tools"]}`)
+					return
+				}
+				var request map[string]any
+				if err := json.UnmarshalRead(r.Body, &request); err != nil {
+					t.Error(err)
+					return
+				}
+				messages := fmt.Sprint(request["messages"])
+				w.Header().Set("Content-Type", "text/event-stream")
+				body := ""
+				if strings.Contains(messages, resultCollectorSystem) {
+					collectionCalls.Add(1)
+					if issued == "" {
+						t.Error("work did not receive an evidence key")
+					}
+					key := issued
+					if scenario == "unknown" {
+						key = "ev_000000000000"
+					}
+					if scenario == "corrupt" {
+						if err := os.WriteFile(filepath.Join(store.root, "data", source.ID), []byte("tampered"), 0600); err != nil {
+							t.Error(err)
+						}
+					}
+					body = fmt.Sprintf(`{"status":"success","summary":"reviewed","files_read":[{"path":%q}],"structured_payload":{"claims":[{"evidence":[%q]}]}}`, key, key)
+				} else if workCalls.Add(1) == 1 {
+					args, _ := json.Marshal(map[string]any{"artifact_ref": source.ID, "byte_limit": 128})
+					_, _ = fmt.Fprintf(w, "data: {\"id\":\"read\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"read-source\",\"type\":\"function\",\"function\":{\"name\":\"view\",\"arguments\":%q}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"read\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n", string(args))
+					return
+				} else {
+					issued = regexp.MustCompile(`ev_[0-9a-f]{12}`).FindString(messages)
+					body = "Reviewed source using evidence " + issued
+				}
+				_, _ = fmt.Fprintf(w, "data: {\"id\":\"review\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", body)
+			}))
+			t.Cleanup(server.Close)
+			compiled, err := CompileResultContractDocument("keys.json", []byte(artifactKeysTestSchema))
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, _, _, _ := resultCollectionProviderFixture(t, server.URL+"/v1", true, func(c *Coordinator) {
+				c.session.Agents["worker"].Tools = "view"
+				c.coreTools = []fantasy.AgentTool{tools.NewViewTool(tools.WithArtifactOpener(c.openArtifactRef))}
+				c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
+				c.session.AgentResultContracts = map[string]ResultContractRef{"worker": compiled.ref(true)}
+			})
+			c.providerBoundaryStart = func(context.Context, string) error { return nil }
+			c.delegatedTasks = make(map[string]int)
+			testTaskCache(c).entries = make(map[string][]cachedTaskEntry)
+			store, err = NewFileArtifactStore(c.session.Workspace, c.projectDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.SetStructuredStepRunner(StructuredStepRunnerFunc(func(ctx context.Context, request StructuredStepRequest) (ExecutionStepResult, error) {
+				artifact, err := store.Put(ctx, PutArtifactRequest{Content: []byte("review source evidence"), Path: "source.txt", Kind: "input", RunID: c.executionRunID, TaskID: request.TaskID, Attempt: request.Attempt, Agent: "worker"})
+				if err != nil {
+					return ExecutionStepResult{}, err
+				}
+				source = artifact.ArtifactRef
+				manifest, err := json.Marshal(WorksetManifest{SchemaVersion: 1, Items: []WorksetItem{{Key: "one", Bindings: map[string]string{"name": "one"}, Inputs: []ArtifactRef{source}}}})
+				if err != nil {
+					return ExecutionStepResult{}, err
+				}
+				manifestRef, err := store.Put(ctx, PutArtifactRequest{Content: manifest, Path: "manifest.json", Kind: "workset_manifest", RunID: c.executionRunID, TaskID: request.TaskID, Attempt: request.Attempt, Agent: "worker"})
+				if err != nil {
+					return ExecutionStepResult{}, err
+				}
+				return ExecutionStepResult{Artifacts: map[string]ArtifactRef{"manifest": manifestRef.ArtifactRef, "source": source}}, nil
+			}))
+			_, err = c.ExecuteTasks(t.Context(), []TaskDef{{ID: "produce", Agent: "worker", Goal: "produce review evidence", Execution: ExecutionContract{Steps: []ExecutionStep{{ID: "produce", Tool: "producer", Effect: ExecutionEffectProduce, Outputs: []ExecutionStepOutput{{Name: "manifest", Kind: ExecutionOutputArtifact}, {Name: "source", Kind: ExecutionOutputArtifact}}}}}}})
+			if err != nil {
+				t.Fatalf("producer: %v; items=%+v", err, c.taskTracker.TodoList().Items())
+			}
+			_, err = c.ExecuteTasks(t.Context(), []TaskDef{{ID: "review", Agent: "worker", Model: "ollama/test", SideEffect: SideEffectNone, Execution: ExecutionContract{RequiresResult: true, ForbidArtifacts: true}, FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "produce", Artifact: "manifest"}, GoalTemplate: "Read and review {name}"}}})
+			items := c.taskTracker.TodoList().Items()
+			item := items[len(items)-1]
+			if workCalls.Load() != 2 || collectionCalls.Load() != 1 {
+				t.Fatalf("work=%d collector=%d status=%s detail=%s err=%v", workCalls.Load(), collectionCalls.Load(), item.Status, item.Detail, err)
+			}
+			if scenario != "valid" {
+				checkpoint := currentResultCollection(item)
+				if err == nil || item.TypedResult != nil || checkpoint == nil || checkpoint.FailureReason != RepairFailureSource {
+					t.Fatalf("invalid source accepted: status=%s err=%v checkpoint=%+v", item.Status, err, checkpoint)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("status=%s detail=%s: %v", item.Status, item.Detail, err)
+			}
+			result := item.TypedResult
+			if result == nil || result.StructuredPayload == nil || len(result.FilesRead) != 1 || result.FilesRead[0].Path != source.ID || !strings.Contains(string(result.StructuredPayload.Value), source.ID) || strings.Contains(string(result.StructuredPayload.Value), issued) {
+				t.Fatalf("noncanonical result: %+v", result)
+			}
+			events, err := c.EventJournal().ReadEvents(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			replayed := ReduceToTodoList(events)
+			restored := replayed[len(replayed)-1]
+			if restored.Status != TaskDone || restored.TypedResult.StructuredPayload.SHA256 != result.StructuredPayload.SHA256 || restored.ExecutionReceipt.ResultPayloadSHA256 != result.StructuredPayload.SHA256 {
+				t.Fatal("replay lost canonical result or receipt")
+			}
+		})
 	}
 }
