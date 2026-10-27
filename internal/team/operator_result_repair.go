@@ -35,6 +35,23 @@ func validateResultRepairTarget(item *TodoItem) error {
 	if item.ExecutionReceipt == nil || item.ExecutionReceipt.RepairProvenance == nil || !item.ExecutionReceipt.RepairProvenance.Attempted || item.ExecutionReceipt.RepairProvenance.Success {
 		return fmt.Errorf("result-only repair requires the original failed submission receipt")
 	}
+	if checkpoint := item.ExecutionReceipt.ResultCollection; checkpoint != nil {
+		if err := validateResultCollectionCheckpoint(checkpoint); err != nil {
+			return err
+		}
+		if checkpoint.State != ResultCollectionBlocked || !validArtifactID(item.ExecutionReceipt.TranscriptRef) {
+			return errResultCollectionStale
+		}
+		switch checkpoint.FailureReason {
+		case RepairFailureInvalidSchema, repairFailurePreparation, repairFailureCollectionUnavailable, repairFailureCollectionBudget:
+			return nil
+		case RepairFailureCommit:
+			if checkpoint.Prepared != nil {
+				return nil
+			}
+		}
+		return fmt.Errorf("result-only repair cannot bypass collection failure %q", checkpoint.FailureReason)
+	}
 	if item.ResultContract == nil || !validArtifactID(item.ExecutionReceipt.TranscriptRef) {
 		return fmt.Errorf("result-only repair requires a frozen result contract and original transcript")
 	}
@@ -59,6 +76,20 @@ func (c *Coordinator) authorizeOperatorResultRepair(ctx context.Context) error {
 		if prior.RunID == c.executionRunID {
 			return fmt.Errorf("task %q already consumed this invocation's operator repair grant", taskID)
 		}
+	}
+	if checkpoint := item.ExecutionReceipt.ResultCollection; checkpoint != nil {
+		if _, err := c.loadCollectionWork(ctx, item, checkpoint); err != nil {
+			return err
+		}
+		if model, _ := ctx.Value(resultRepairModelKey{}).(string); model != "" {
+			return fmt.Errorf("collection repair must retain its original target")
+		}
+		grant := &ResultRepairGrant{RunID: c.executionRunID, BranchID: c.activeBranchID(), AfterAttempts: checkpoint.TurnsUsed, AdditionalAttempts: 2, TranscriptRef: item.ExecutionReceipt.TranscriptRef}
+		if checkpoint.Prepared != nil {
+			grant.AdditionalAttempts = 0
+		}
+		return c.CommitTaskTransition(ctx, taskID, item.Status, TaskProtocolIncomplete,
+			"operator authorized collection continuation; worker replay forbidden", "", map[string]any{"result_repair_grant": grant})
 	}
 	if _, err := c.restoreProtocolRepairToolEvidence(ctx, item); err != nil {
 		return fmt.Errorf("task %q evidence: %w", taskID, err)
@@ -90,6 +121,13 @@ func (c *Coordinator) validResultRepairGrant(item *TodoItem, next TaskStatus, gr
 	}
 	if grant.RunID == "" || grant.RunID != c.executionRunID || grant.BranchID != c.activeBranchID() || grant.AfterAttempts != item.ExecutionReceipt.RepairProvenance.RepairAttempts || grant.TranscriptRef != item.ExecutionReceipt.TranscriptRef {
 		return false
+	}
+	if checkpoint := item.ExecutionReceipt.ResultCollection; checkpoint != nil {
+		additional := 2
+		if checkpoint.Prepared != nil {
+			additional = 0
+		}
+		return grant.AfterAttempts == checkpoint.TurnsUsed && grant.AdditionalAttempts == additional && grant.Model == ""
 	}
 	if item.ResultCandidate != nil && item.ResultCandidate.Prepared {
 		return grant.AdditionalAttempts == 0 && grant.Model == ""

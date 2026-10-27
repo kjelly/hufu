@@ -73,6 +73,9 @@ func submissionToolEvidence(ctx context.Context, c *Coordinator, todoID string) 
 	if repairing, _ := ctx.Value(protocolRepairExecutionKey{}).(bool); repairing {
 		transcript, _ = ctx.Value(protocolRepairToolEvidenceKey{}).(*taskTranscript)
 	}
+	if evidence, ok := ctx.Value(resultCollectionEvidenceKey{}).(*taskTranscript); ok {
+		transcript = evidence
+	}
 	if transcript == nil || transcript.todoID != todoID {
 		return nil, nil
 	}
@@ -124,7 +127,10 @@ func (c *Coordinator) restoreProtocolRepairToolEvidence(ctx context.Context, ite
 	if err := c.validateProtocolRepairEvidenceReceipt(item, ref); err != nil {
 		return nil, err
 	}
-	receipt := item.ExecutionReceipt
+	return c.restoreTranscriptEvidence(ctx, item.ExecutionReceipt, c.executionRunID)
+}
+
+func (c *Coordinator) restoreTranscriptEvidence(ctx context.Context, receipt *ExecutionReceipt, runID string) (*taskTranscript, error) {
 	store, err := OpenFileArtifactStoreReadOnly(c.artifactStoreRootPath(), c.artifactStoreRootPath())
 	if err != nil {
 		return nil, err
@@ -151,7 +157,7 @@ func (c *Coordinator) restoreProtocolRepairToolEvidence(ctx context.Context, ite
 	}
 	// The receipt retains the original execution identity. Validation is
 	// authorized for this resumed invocation only after the checks above.
-	transcript := &taskTranscript{todoID: item.ID, runID: c.executionRunID, attempt: receipt.Attempt, agent: strings.ToLower(item.Agent)}
+	transcript := &taskTranscript{todoID: receipt.TaskID, runID: runID, attempt: receipt.Attempt, agent: strings.ToLower(receipt.ProducerID)}
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	scanner.Buffer(make([]byte, 4096), (1<<20)+1)
 	for scanner.Scan() {

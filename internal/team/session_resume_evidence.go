@@ -62,6 +62,18 @@ func (c *Coordinator) validateResumeSources(ctx context.Context) error {
 			return fail(fmt.Errorf("task %s frozen inputs differ from the selected recovery snapshot", item.ID))
 		}
 		if item.Status != TaskDone {
+			for index := range item.ExecutionReceipts {
+				if checkpoint := item.ExecutionReceipts[index].ResultCollection; checkpoint != nil {
+					if _, err := c.loadCollectionWork(ctx, item, checkpoint); err != nil {
+						return fail(fmt.Errorf("task %s collection evidence: %w", item.ID, err))
+					}
+					if checkpoint.State == ResultCollectionCommitted {
+						if _, err := c.acceptedCollectionResult(ctx, item, checkpoint); err != nil {
+							return fail(fmt.Errorf("task %s accepted collection: %w", item.ID, err))
+						}
+					}
+				}
+			}
 			if item.ResultCandidate != nil {
 				if _, err := c.loadResultCandidate(ctx, item, item.ResultCandidate); err != nil {
 					return fail(fmt.Errorf("task %s candidate: %w", item.ID, err))

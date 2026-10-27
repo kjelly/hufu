@@ -149,9 +149,13 @@ func (t *submitResultTool) Info() fantasy.ToolInfo {
 }
 
 func (t *submitResultTool) fullInfo() fantasy.ToolInfo {
-	info := submitResultToolInfo(t.submissionContract())
-	if t.coordinator != nil {
-		_, compiled, _ := t.coordinator.boundResultContract(t.todoID)
+	return localResultSubmissionInfo(t.coordinator, t.todoID)
+}
+
+func localResultSubmissionInfo(coordinator *Coordinator, todoID string) fantasy.ToolInfo {
+	info := submitResultToolInfo(localResultSubmissionContract(coordinator, todoID))
+	if coordinator != nil {
+		_, compiled, _ := coordinator.boundResultContract(todoID)
 		if compiled != nil {
 			info = projectResultSubmissionFields(info, compiled.submissionFields)
 			schema, _ := info.Parameters["structured_payload"].(map[string]any)
@@ -169,10 +173,17 @@ func (t *submitResultTool) fullInfo() fantasy.ToolInfo {
 }
 
 func (t *submitResultTool) submissionContract() taskResultSubmissionContract {
-	if t == nil || t.coordinator == nil {
+	if t == nil {
+		return localResultSubmissionContract(nil, "")
+	}
+	return localResultSubmissionContract(t.coordinator, t.todoID)
+}
+
+func localResultSubmissionContract(coordinator *Coordinator, todoID string) taskResultSubmissionContract {
+	if coordinator == nil {
 		return taskResultSubmissionContract{AllowEvidence: true, AllowArtifacts: true}
 	}
-	item := t.coordinator.todoItemByID(t.todoID)
+	item := coordinator.todoItemByID(todoID)
 	if item == nil {
 		return taskResultSubmissionContract{AllowEvidence: true, AllowArtifacts: true}
 	}
@@ -187,9 +198,9 @@ func (t *submitResultTool) submissionContract() taskResultSubmissionContract {
 	if item.ResultContract != nil {
 		// A drifted contract still advertises the property; the submission
 		// itself is then rejected by structuredPayloadForSubmission.
-		compiled, _ := t.coordinator.compiledResultContract(item.ResultContract)
+		compiled, _ := coordinator.compiledResultContract(item.ResultContract)
 		contract.ResultContract = item.ResultContract.clone()
-		contract.resultPayloadSchema = t.coordinator.fixedCollectionSubmissionSchema(t.todoID, *item.ResultContract, compiled)
+		contract.resultPayloadSchema = coordinator.fixedCollectionSubmissionSchema(todoID, *item.ResultContract, compiled)
 	}
 	return contract
 }

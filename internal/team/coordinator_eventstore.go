@@ -808,6 +808,20 @@ func (c *Coordinator) commitTaskTransition(ctx context.Context, taskID string, e
 		projected.OccurrenceRevision = 1
 	}
 	projected.DispatchID = ""
+	if repairGrant != nil && projected.ExecutionReceipt.ResultCollection != nil {
+		receipt := projected.ExecutionReceipt
+		checkpoint := cloneResultCollectionCheckpoint(receipt.ResultCollection)
+		checkpoint.Revision++
+		checkpoint.SubmissionRevision = projected.OccurrenceRevision
+		checkpoint.SubmissionDispatchID = newTaskDispatchID()
+		checkpoint.TurnLimit = max(checkpoint.TurnLimit, repairGrant.AfterAttempts+repairGrant.AdditionalAttempts)
+		if checkpoint.Prepared != nil {
+			checkpoint.State, checkpoint.FailureReason = ResultCollectionPrepared, ""
+		}
+		receipt.ResultCollection = checkpoint
+		projected.DispatchID = checkpoint.SubmissionDispatchID
+		projected.ExecutionReceipts = appendExecutionReceipt(append([]ExecutionReceipt(nil), current.ExecutionReceipts...), cloneExecutionReceipt(receipt))
+	}
 	if resetForResume {
 		projected.Status = TaskPending
 		projected.Detail = detail

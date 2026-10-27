@@ -1755,6 +1755,10 @@ func (tl *TodoList) SetExecutionReceipt(id string, receipt *ExecutionReceipt) er
 					copyR.MaterializedActionPayloadHash = ti.MaterializedActionPayloadHash
 					copyR.BoundInputs = cloneStringMap(ti.BoundInputs)
 				}
+				for index := range ti.ExecutionReceipts {
+					preserveResultCollection(&copyR, &ti.ExecutionReceipts[index])
+				}
+				preserveResultCollection(&copyR, ti.ExecutionReceipt)
 				ti.ExecutionReceipt = &copyR
 
 				// A repair updates the durable record for the same execution
@@ -1829,6 +1833,7 @@ func (tl *TodoList) UpdateReceiptVerifyResult(runID, taskID string, attempt int,
 
 func cloneExecutionReceipt(receipt *ExecutionReceipt) ExecutionReceipt {
 	copyR := *receipt
+	copyR.ResultCollection = cloneResultCollectionCheckpoint(receipt.ResultCollection)
 	copyR.BoundInputs = cloneStringMap(receipt.BoundInputs)
 	if receipt.ExitCode != nil {
 		exitCode := *receipt.ExitCode

@@ -118,6 +118,8 @@ func validateCurrentEventPayload(event RunEvent) error {
 		}
 	case EventTaskResultCandidate:
 		return validateResultCandidateEvent(event)
+	case EventTaskResultCollectionCheckpointed:
+		return validateResultCollectionEvent(event)
 	case EventTaskCreated, EventTaskPlanned, EventTaskStarted, EventTaskVerifying, EventTaskPaused, EventTaskCompleted, EventTaskFailed, EventTaskBlocked, EventTaskSkipped, EventTaskProtocolIncomplete, EventTaskCancelled, EventTaskRemoved, EventTaskResolution:
 		if strings.TrimSpace(event.TaskID) == "" {
 			return fmt.Errorf("%s event has empty task id", event.Type)

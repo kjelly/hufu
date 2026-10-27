@@ -352,7 +352,11 @@ type TaskResult struct {
 // Source ever exists in memory, so schema validation and completion
 // semantics do not need to distinguish which one produced it.
 func isSubmittedResultSource(source string) bool {
-	return source == "submitted" || source == ExternalProviderProposalSource
+	return isLocalSubmittedResultSource(source) || source == ExternalProviderProposalSource
+}
+
+func isLocalSubmittedResultSource(source string) bool {
+	return source == "submitted"
 }
 
 const (

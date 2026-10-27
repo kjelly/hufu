@@ -167,6 +167,7 @@ func TestProjectWorkerAttemptsStatesAndValidation(t *testing.T) {
 		{name: "in progress with a receipt is unknown", status: team.TaskInProgress, receipt: &team.ExecutionReceipt{RunID: "run-1", Attempt: 1, OccurrenceAttempt: 1}, wantActivity: WorkerActivityUnknown},
 		{name: "verifying", status: team.TaskVerifying, wantActivity: WorkerActivityVerifying},
 		{name: "result repair", status: team.TaskProtocolIncomplete, wantActivity: WorkerActivityResultRepair},
+		{name: "result collection", status: team.TaskInProgress, receipt: &team.ExecutionReceipt{RunID: "run-1", Attempt: 1, OccurrenceAttempt: 1, ResultCollection: &team.ResultCollectionCheckpoint{State: team.ResultCollectionReceived, TurnsUsed: 1, TurnLimit: 2}}, wantActivity: WorkerActivityResultCollection},
 		{name: "blocked", status: team.TaskBlocked, failureClass: team.FailureEnvironment, wantActivity: WorkerActivityTerminal},
 		{name: "error", status: team.TaskError, failureClass: team.FailureWorkspaceConflict, wantActivity: WorkerActivityTerminal},
 		{name: "paused", status: team.TaskPaused, wantActivity: WorkerActivityTerminal},
@@ -197,6 +198,9 @@ func TestProjectWorkerAttemptsStatesAndValidation(t *testing.T) {
 			}
 			if tt.receipt != nil && tt.receipt.ResultValidation != "" && (view.ResultValidation != string(tt.receipt.ResultValidation) || view.ResultContractID != tt.receipt.ResultContractID) {
 				t.Fatalf("result validation = %q %q", view.ResultContractID, view.ResultValidation)
+			}
+			if tt.receipt != nil && tt.receipt.ResultCollection != nil && (view.ResultCollectionState != "received" || view.ResultCollectionTurns != 1 || view.ResultCollectionLimit != 2) {
+				t.Fatalf("missing collection progress: %+v", view)
 			}
 			if view.ExecutionTarget != "" {
 				t.Fatalf("a missing target was guessed as %q", view.ExecutionTarget)

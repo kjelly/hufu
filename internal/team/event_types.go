@@ -130,7 +130,7 @@ func (e EventType) String() string { return string(e) }
 // reducers intentionally ignore what they do not understand.
 func IsKnownEventType(eventType string) bool {
 	switch EventType(eventType) {
-	case EventTaskResultCandidate, EventProviderQuotaCooldown, EventRunStarted, EventRunFinished, EventWrapUpPhase, EventRunCancellationRequested,
+	case EventTaskResultCandidate, EventTaskResultCollectionCheckpointed, EventProviderQuotaCooldown, EventRunStarted, EventRunFinished, EventWrapUpPhase, EventRunCancellationRequested,
 		EventDecisionArtifactObserved, EventArtifactEvidenceObserved, EventDecisionPrimitiveStarted, EventDecisionPrimitiveSettled, EventDecisionPrimitiveReused, EventControlDecisionObserved, EventRecoveryChangeObserved,
 		EventStrategyChangeEvaluated, EventStrategyChangeRejected,
 		EventUserMessageAdded, EventAssistantMessageAdded,

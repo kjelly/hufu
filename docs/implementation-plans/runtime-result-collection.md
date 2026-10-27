@@ -283,4 +283,24 @@ mise run lint
 | `mise run vet` | exit 0 |
 | `mise run lint` | exit 0，0 issues |
 
-新預設與 collector 尚未啟用。PR-2 至 PR-4 仍待實作，不能將本階段視為已達成零工具結果收集。
+新預設與 collector 尚未啟用，不能將本階段視為已達成零工具結果收集。
+
+### PR-2：收集 checkpoint 與本地恢復
+
+- 在既有 receipt／CAS／Event Store 增加有版本的收集 metadata，保存完整原工作 receipt、報告、transcript 身份、政策、不可變 occurrence contract、輸入、來源與 workspace 綁定；不要求任務具有 result contract。
+- 以事件先行、單調 revision 與 idempotency payload 比對更新進度；模型回合在派發前持久化保留，兩個競爭者只有一個取得回合。中斷重發仍計入原本的兩回合上限，同一個執行中的 invocation 不可重發。
+- 收到的原始回覆、prepared claims 與已提交 canonical result 都有獨立 CAS 綁定。prepared claims 經共用 admission 本地提交，不建立 provider 或假造工具呼叫；提交事件成功前不發布結果，也不設定 TaskDone。
+- Reducer 還原原提交 lease，prepared fixture 從事件重建全新的 Todo projection 後直接提交；晚到的工作 receipt 不會清除收集進度或 operator grant 歷史。新增 inspect 的收集狀態、回合上限與固定失敗原因欄位，不輸出原始內容。
+- 延伸既有 result-only grant，支援無 result contract 的 collection failure，綁定原 target 與新的提交 lease；不允許 replacement model，保留隔離 workspace 的既有禁止條件。來源或契約拒絕不能藉 grant 繞過。
+- 本階段建立供 collector 使用的設施，尚未接入 worker／一般 resume 調度，也未啟用新預設；PR-3 與 PR-4 仍待完成。
+
+2026-10-27 驗證結果：
+
+| Gate | 結果 |
+|---|---|
+| targeted checkpoint／admission／inspect tests | exit 0；`internal/team` 1.834s、`internal/inspect` 0.026s |
+| targeted race tests | exit 0；涵蓋競爭 reservation、事件重建後的 prepared commit、crash budget 與 operator grant |
+| `mise run test` | exit 0；最終完整套件通過，`internal/team` 533.805s、`cmd/hufu` 109.330s |
+| `mise run vet` | exit 0 |
+| `mise run lint` | exit 0，0 issues；已修正一次 whitespace finding |
+| `bin/check-docs` | exit 0 |

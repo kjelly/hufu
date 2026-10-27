@@ -247,6 +247,9 @@ type ExecutionReceipt struct {
 	// must never satisfy the next attempt's requires-result contract.
 	SubmittedResult  *TaskResult       `json:"submitted_result,omitempty"`
 	RepairProvenance *RepairProvenance `json:"repair_provenance,omitempty"`
+	// ResultCollection preserves work and collection progress independently of
+	// terminal outcome. Its absence retains the historical tool protocol.
+	ResultCollection *ResultCollectionCheckpoint `json:"result_collection,omitempty"`
 	// VerifyResult holds the deliverable verification result for this attempt,
 	// when one ran. Retained per-attempt so forensics can inspect the verify
 	// command, exit code, stdout and stderr of each attempt even after the

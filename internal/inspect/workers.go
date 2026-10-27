@@ -18,14 +18,15 @@ import (
 
 // Worker attempt activities, derived only from lifecycle state.
 const (
-	WorkerActivityQueued       = "queued"
-	WorkerActivityFallback     = "fallback"
-	WorkerActivityIntegrating  = "integrating"
-	WorkerActivityResultRepair = "result_repair"
-	WorkerActivityVerifying    = "verifying"
-	WorkerActivityRunning      = "running"
-	WorkerActivityTerminal     = "terminal"
-	WorkerActivityUnknown      = "unknown"
+	WorkerActivityQueued           = "queued"
+	WorkerActivityFallback         = "fallback"
+	WorkerActivityIntegrating      = "integrating"
+	WorkerActivityResultRepair     = "result_repair"
+	WorkerActivityResultCollection = "result_collection"
+	WorkerActivityVerifying        = "verifying"
+	WorkerActivityRunning          = "running"
+	WorkerActivityTerminal         = "terminal"
+	WorkerActivityUnknown          = "unknown"
 )
 
 // WorkerAttemptView is one worker attempt as recorded by canonical runtime
@@ -59,8 +60,12 @@ type WorkerAttemptView struct {
 	// Usage is nil when unknown (a running attempt has no receipt yet).
 	Usage *team.ExecutionUsage `json:"usage,omitempty"`
 
-	ResultContractID string `json:"result_contract_id,omitempty"`
-	ResultValidation string `json:"result_validation,omitempty"`
+	ResultContractID        string `json:"result_contract_id,omitempty"`
+	ResultValidation        string `json:"result_validation,omitempty"`
+	ResultCollectionState   string `json:"result_collection_state,omitempty"`
+	ResultCollectionTurns   int    `json:"result_collection_turns,omitempty"`
+	ResultCollectionLimit   int    `json:"result_collection_limit,omitempty"`
+	ResultCollectionFailure string `json:"result_collection_failure,omitempty"`
 
 	FailureClass  string `json:"failure_class,omitempty"`
 	RetryCount    int    `json:"retry_count"`
@@ -328,7 +333,22 @@ func (b *attemptBuilder) finish(todo *team.TodoItem, latest bool, now time.Time)
 		view.FailureClass = string(todo.FailureEvent.FailureClass)
 	}
 	view.Activity = b.activity(status, latest, receipt != nil)
+	projectResultCollection(&view, receipt, latest, status)
 	return view
+}
+
+func projectResultCollection(view *WorkerAttemptView, receipt *team.ExecutionReceipt, latest bool, status team.TaskStatus) {
+	if receipt == nil || receipt.ResultCollection == nil {
+		return
+	}
+	checkpoint := receipt.ResultCollection
+	view.ResultCollectionState = string(checkpoint.State)
+	view.ResultCollectionTurns = checkpoint.TurnsUsed
+	view.ResultCollectionLimit = checkpoint.TurnLimit
+	view.ResultCollectionFailure = string(checkpoint.FailureReason)
+	if latest && !isTerminalWorkerStatus(status) && checkpoint.State != team.ResultCollectionCommitted {
+		view.Activity = WorkerActivityResultCollection
+	}
 }
 
 // receiptFrom finds the attempt's receipt on the current todo, matched by

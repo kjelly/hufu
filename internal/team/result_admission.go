@@ -239,7 +239,13 @@ func (a *localResultAdmission) commit(ctx context.Context, input SubmitResultInp
 				return rejectLocalResult(RepairFailureCommit, rollback("store submitted result: "+err.Error()))
 			}
 		}
-		if err := tx.commit(res); err != nil {
+		var commitErr error
+		if checkpoint, ok := ctx.Value(resultCollectionAdmissionKey{}).(*ResultCollectionCheckpoint); ok {
+			commitErr = tx.commitCollection(ctx, res, checkpoint)
+		} else {
+			commitErr = tx.commit(res)
+		}
+		if err := commitErr; err != nil {
 			return rejectLocalResult(RepairFailureCommit, rollback("store submitted result: "+err.Error()))
 		}
 		if stop, ok := ctx.Value(acceptedTerminalResultStopKey{}).(*acceptedTerminalResultStop); ok {

@@ -422,6 +422,13 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 	frozenContracts := make(map[string]bool)
 
 	for _, e := range events {
+		if e.Type == string(EventTaskResultCollectionCheckpointed) {
+			var payload resultCollectionEvent
+			if validateResultCollectionEvent(e) == nil && json.Unmarshal(e.Payload, &payload) == nil {
+				applyResultCollectionEvent(taskMap[e.TaskID], payload)
+			}
+			continue
+		}
 		if e.Type == string(EventTaskResultCandidate) {
 			var candidate ResultCandidate
 			if json.Unmarshal(e.Payload, &candidate) == nil && candidate.TaskID == e.TaskID {
@@ -1362,6 +1369,7 @@ func appendExecutionReceipt(receipts []ExecutionReceipt, receipt ExecutionReceip
 			// as ExitCode, verification, handoff state, and repair provenance.
 			// Keeping the first snapshot made replay disagree with the session checkpoint
 			// and could make audit count a rejected attempt as successful.
+			preserveResultCollection(&receipt, &existing)
 			receipts[i] = receipt
 			return receipts
 		}
