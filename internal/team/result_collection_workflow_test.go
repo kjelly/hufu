@@ -211,7 +211,7 @@ func TestResultCollectionDefaultDryRunMakesNoProviderOrWorkerCalls(t *testing.T)
 }
 
 func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
-	for _, scenario := range []string{"valid", "unknown", "corrupt"} {
+	for _, scenario := range []string{"valid", "string_refs", "unknown", "corrupt"} {
 		t.Run(scenario, func(t *testing.T) {
 			var workCalls, collectionCalls atomic.Int32
 			var source ArtifactRef
@@ -245,6 +245,9 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 						}
 					}
 					body = fmt.Sprintf(`{"status":"success","summary":"reviewed","files_read":[{"path":%q}],"structured_payload":{"claims":[{"evidence":[%q]}]}}`, key, key)
+					if scenario == "string_refs" {
+						body = fmt.Sprintf(`{"status":"success","summary":"reviewed","files_read":[%q],"structured_payload":{"claims":[{"evidence":[%q]}]}}`, key, key)
+					}
 				} else if workCalls.Add(1) == 1 {
 					args, _ := json.Marshal(map[string]any{"artifact_ref": source.ID, "byte_limit": 128})
 					_, _ = fmt.Fprintf(w, "data: {\"id\":\"read\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"read-source\",\"type\":\"function\",\"function\":{\"name\":\"view\",\"arguments\":%q}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"read\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n", string(args))
@@ -299,7 +302,7 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 			if workCalls.Load() != 2 || collectionCalls.Load() != 1 {
 				t.Fatalf("work=%d collector=%d status=%s detail=%s err=%v", workCalls.Load(), collectionCalls.Load(), item.Status, item.Detail, err)
 			}
-			if scenario != "valid" {
+			if scenario == "unknown" || scenario == "corrupt" {
 				checkpoint := currentResultCollection(item)
 				if err == nil || item.TypedResult != nil || checkpoint == nil || checkpoint.FailureReason != RepairFailureSource {
 					t.Fatalf("invalid source accepted: status=%s err=%v checkpoint=%+v", item.Status, err, checkpoint)

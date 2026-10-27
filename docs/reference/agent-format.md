@@ -295,6 +295,14 @@ leaf 也一樣。
 的原生 structured-output／tool-calling 功能。通常增加一次模型呼叫；格式或 schema
 不合法時最多再修復一次，共兩回合，包含中斷時已派發的回合。
 
+Collector 接受 schema 已宣告的 `files_read`／`files_modified` 字串項目，
+以不改變路徑的方式轉成 `{path: ...}`；未知欄位、重複鍵與未宣告的縮寫仍拒絕。
+它從原工作經驗證的 context 取得 invariant ID 與定義嚴重度；`violated` claim
+引用的 finding 必須使用相同嚴重度。這類表示方式錯誤可使用同一額度內剩餘的
+格式修復回合，結果仍須通過完整 attestation 與 gate，不能降低定義嚴重度。
+每個 invariant 摘要上限仍為 1000 字元（runes）；詳細說明放入 `details`，
+runtime 不會自行截短 claim。額度耗盡後仍不合法的結果維持 blocked。
+
 team.yaml 的平面設定或 versioned manifest 的 `spec`，以及 agent `.md` frontmatter
 都可設定：
 

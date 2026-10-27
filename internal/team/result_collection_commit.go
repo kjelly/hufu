@@ -22,7 +22,8 @@ func collectionSubmissionInfo(c *Coordinator, taskID string) fantasy.ToolInfo {
 }
 
 // decodeCollectionClaims accepts exactly the published model claims schema.
-// Unlike the legacy tool adapter it does not normalize shorthand or unwrap text.
+// Only the schema's declared file-entry shorthand is normalized; text is never
+// unwrapped and unsupported shorthand remains invalid.
 func (c *Coordinator) decodeCollectionClaims(taskID string, raw []byte) (SubmitResultInput, error) {
 	var input SubmitResultInput
 	if len(bytes.TrimSpace(raw)) == 0 {
@@ -34,12 +35,6 @@ func (c *Coordinator) decodeCollectionClaims(taskID string, raw []byte) (SubmitR
 	if _, err := decodeUniqueJSON(raw); err != nil {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
 	}
-	if err := json.Unmarshal(raw, &input, json.RejectUnknownMembers(true)); err != nil {
-		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
-	}
-	if input.Summary == "" {
-		return input, rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("summary is required"))
-	}
 	info := collectionSubmissionInfo(c, taskID)
 	if err := validateSubmissionFieldPresence(string(raw), info); err != nil {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
@@ -49,6 +44,16 @@ func (c *Coordinator) decodeCollectionClaims(taskID string, raw []byte) (SubmitR
 	}
 	if err := c.validateFixedCollectionInputJSON(taskID, string(raw)); err != nil {
 		return input, rejectLocalResult(RepairFailureContract, err)
+	}
+	normalized, err := normalizeCollectionFileRefs(raw)
+	if err != nil {
+		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
+	}
+	if err := json.Unmarshal(normalized, &input, json.RejectUnknownMembers(true)); err != nil {
+		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
+	}
+	if input.Summary == "" {
+		return input, rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("summary is required"))
 	}
 	return input, nil
 }
@@ -93,8 +98,7 @@ func (c *Coordinator) commitPreparedCollection(ctx context.Context, expected *Re
 	if err != nil {
 		return rejectLocalResult(RepairFailureSource, err)
 	}
-	input, err := c.decodeCollectionClaims(item.ID, raw)
-	if err != nil {
+	if _, err := c.decodeCollectionClaims(item.ID, raw); err != nil {
 		return err
 	}
 	// Resolve only keys issued by successful authorized views in the original
@@ -103,8 +107,9 @@ func (c *Coordinator) commitPreparedCollection(ctx context.Context, expected *Re
 	if err != nil {
 		return rejectLocalResult(RepairFailureSource, err)
 	}
-	if err := json.Unmarshal([]byte(resolved), &input, json.RejectUnknownMembers(true)); err != nil {
-		return rejectLocalResult(RepairFailureInvalidSchema, err)
+	input, err := c.decodeCollectionClaims(item.ID, []byte(resolved))
+	if err != nil {
+		return err
 	}
 	ctx = context.WithValue(ctx, resultCollectionAdmissionKey{}, expected)
 	admission := localResultAdmission{coordinator: c, todoID: item.ID}

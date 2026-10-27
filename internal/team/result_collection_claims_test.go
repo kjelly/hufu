@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -228,6 +229,77 @@ func TestCollectionProjectionFormatFailureKeepsContractBoundaries(t *testing.T) 
 			contract := taskResultSubmissionContract{SubmissionTaskResultAssertions: assertions}
 			if got := collectionProjectionFormatFailure(contract, result); got != tc.want {
 				t.Fatalf("repairable=%t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResultCollectionDecodesAdvertisedFileEntries(t *testing.T) {
+	c, item, _, _ := resultCollectionFixture(t)
+	for _, tc := range []struct {
+		name   string
+		fields string
+		valid  bool
+	}{
+		{name: "strings", fields: `"files_read":["source.go"],"files_modified":["result.go"]`, valid: true},
+		{name: "mixed", fields: `"files_read":["source.go",{"path":"other.go","purpose":"verified"}]`, valid: true},
+		{name: "literal_path", fields: `"files_read":["[source].go"]`, valid: true},
+		{name: "scalar", fields: `"files_read":"source.go"`},
+		{name: "number", fields: `"files_read":[42]`},
+		{name: "unknown_member", fields: `"files_read":[{"path":"source.go","unexpected":true}]`},
+		{name: "duplicate_member", fields: `"files_read":[{"path":"source.go","path":"other.go"}]`},
+		{name: "runtime_override", fields: `"files_read":["source.go"],"outputs":{"accepted":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := `{"status":"success","summary":"reviewed",` + tc.fields + `}`
+			info := collectionSubmissionInfo(c, item.ID)
+			if tc.valid && validateToolArguments(raw, info) != nil {
+				t.Fatal("schema did not advertise fixture")
+			}
+			input, err := c.decodeCollectionClaims(item.ID, []byte(raw))
+			if (err == nil) != tc.valid {
+				t.Fatalf("input=%+v err=%v", input, err)
+			}
+			if tc.valid && (len(input.FilesRead) == 0 || input.FilesRead[0].Path == "") {
+				t.Fatal("file path lost")
+			}
+			if tc.name == "strings" && (input.FilesRead[0].Path != "source.go" || input.FilesModified[0].Path != "result.go") {
+				t.Fatal("string paths changed")
+			}
+			if tc.name == "mixed" && (len(input.FilesRead) != 2 || input.FilesRead[1].Purpose != "verified") {
+				t.Fatal("object fields changed")
+			}
+		})
+	}
+}
+
+func TestResultCollectionFailureProjectsCollectorDiagnostic(t *testing.T) {
+	for _, reason := range []RepairFailureReason{RepairFailureInvalidSchema, RepairFailureContract, RepairFailureSource} {
+		t.Run(string(reason), func(t *testing.T) {
+			c, item, ctx, checkpoint := beginCollectionFixture(t)
+			cause := errors.New("/files_read/0: expected path; api_token=collector-secret")
+			failure := c.collectionFailure(ctx, checkpoint, reason, cause)
+			c.recordCollectionStopReceipt(item.ID, failure)
+			current := todoByID(t, c, item.ID)
+			current.LastOperation = "view"
+			event := c.failureEventForItem(current, FailureProtocol, NeedsHuman, "result collection failed", FailureFingerprint{Digest: "stable"}, item.ID)
+			if event.Command != "result_collection" || !strings.Contains(event.Stderr, "/files_read/0") || strings.Contains(event.Hint, submitResultToolName) || strings.Contains(event.Stderr, "collector-secret") {
+				t.Fatalf("wrong collector failure: %+v", event)
+			}
+			if event.Fingerprint != "stable" {
+				t.Fatal("diagnostic changed failure fingerprint")
+			}
+			if current.ExecutionReceipt.RepairProvenance.Error == "" {
+				t.Fatal("terminal diagnostic was not retained")
+			}
+			c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "collection stopped", NeedsHuman, FailureProtocol, TaskBlocked, "original report")
+			events, err := c.EventJournal().ReadEvents(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			replayed := ReduceToTodoList(events)[0]
+			if replayed.FailureEvent == nil || replayed.FailureEvent.Command != "result_collection" || replayed.ExecutionReceipt.RepairProvenance.Error != current.ExecutionReceipt.RepairProvenance.Error {
+				t.Fatal("replay lost the collector failure and exact diagnostic")
 			}
 		})
 	}

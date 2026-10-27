@@ -8,7 +8,7 @@
 
 > **用途**：交給 coding agent 依序實作；本文件本身不授權操作真實服務或更動部署。
 > **Baseline**：`kjelly/hufu` @ `c8c52d30a1932caddc3ad0d7ecc0ad0ad15882cb`（2026-10-27 本地核對）。
-> **狀態**：PR-1、PR-2、PR-3、PR-4 已完成並通過驗證。
+> **狀態**：PR-1、PR-2、PR-3、PR-4 已實作；本機驗證與後續真實執行的回歸修正紀錄見末節。真實團隊完成狀態以各 run 的 canonical outcome 與驗收結果為準。
 > **產品決策**：使用者已選擇「相容的新任務預設使用 runtime 主動收集結果」，接受可能增加一次模型呼叫及受限格式修復。
 > **文件位置**：依使用者後續指示，自 `docs/tmp/spec.md` 移入版本控制；本計畫為 reference，實作時同步正式架構與參考文件。
 
@@ -409,3 +409,26 @@ mise run run -- --new --agent-team hufu-code-review --report \
 | `mise run lint` | exit 0，0 issues |
 
 先前阻擋驗證的 Hufu 程序已退出；上述重型驗證依序執行，未與 live team 並行。最終程式碼通過上述所有 gate，使用者原有的失敗 session 保留原貌。
+
+### Collector 宣告格式與 invariant 修復回歸（2026-10-27）
+
+- 公開 `status`／`inspect` 確認 `inv-20261027T134629.468992092Z-77d461f83180`／`run-20261027T134712.927967234Z-388d6424a217` 在 branch `session-1793108807131174103` 為 blocked：14 個任務中 11 個完成、3 個未解決。task 3 在 1／2 回合因 invariant 定義要求 `error`、關聯 finding 卻是 `warning` 而停止；task 5 在 2／2 回合無法解碼 `files_read` 字串；task 7 在 2／2 回合仍提交 1002 runes 的摘要，超過 1000 上限。
+- 原 collector 共用的 submission schema 宣告 `files_read`／`files_modified` 項目可為字串或物件，strict DTO 卻只接受 `FileRef` 物件。現在先拒絕 raw duplicate／unknown fields，驗證原始 model-facing 格式，再只轉換已宣告的檔案字串；其他 shorthand、runtime-owned override 與不合法 nested fields 仍拒絕。相同正規化也用於證據短碼解析後的 admission。
+- Collector 重用原工作 invariant context 的驗證與提示，提供精確 ID、定義嚴重度與內容。以 typed attestation error 辨識「已驗證 invariant 的關聯 finding 嚴重度不一致」，僅在 collector 路徑使用原本剩餘的一次格式修復；tool transport、未知 invariant、過期來源及真正 gate failure 的語意維持原契約。runtime 不自動改寫嚴重度或刪除 violation。
+- 摘要維持 1000 runes 上限，提示要求簡短摘要與保留完整 `details`。超長摘要使用既有格式修復額度；兩次仍不合法就保留 blocked，沒有新增回合、截短內容或放寬限制。
+- 終止 receipt 保存經遮蔽、有限長度的 collector 診斷。FailureEvent 從 blocked collection 及其相符 provenance 投影 `result_collection`，不再將先前 `view` 或未實際呼叫的 `submit_result` 誤列為此次失敗來源。已 committed 的結果若後續 gate 失敗，仍由原驗證路徑呈現。
+- 測試涵蓋 schema 宣告的檔案字串／物件與非法輸入、字串證據短碼的 bound-workset 完整 admission／replay、invariant 嚴重度修復與耗盡、1000／1002 runes 邊界、修復後 gate 仍阻擋、未知 invariant 拒絕，以及 collector 診斷與遮蔽。測試只使用本機假 provider；本次不重跑或改寫使用者的失敗 session。
+
+本輪最終驗證結果：
+
+| Gate | 結果 |
+|---|---|
+| collector／invariant／schema／診斷 focused tests | exit 0；最終交叉案例、Unicode 長度與恢復案例合計 `internal/team` 9.389s |
+| collector／transport／evidence keys／workset／legacy attestation／gate related tests | exit 0；`internal/team` 43.881s；後續完整 gate 一併覆蓋最終補充案例 |
+| `mise run test -- -timeout=20m` | exit 0；`internal/team` 574.148s、`cmd/hufu` 121.952s、`internal/improver` 149.889s；所有套件均通過，保留所有測試，單套件時間上限設為 20 分鐘 |
+| targeted race tests | exit 0；`internal/team` 143.044s；涵蓋 collector／projection／transport／evidence keys／workset／attestation／gate／診斷 |
+| `mise run vet` | exit 0 |
+| `mise run lint` | exit 0，0 issues；初次指出的重複解碼未使用變數已修正，沒有新增排除規則 |
+| `bin/check-docs` | exit 0；86 active files、175 total files、542 relative links、38 Go anchors |
+
+重型驗證依序執行，開始前確認沒有 live Hufu 團隊程序。上述結果證明本機回歸與相容性檢查通過，不代表原本 blocked 的真實 run 已完成；本輪未重跑真實 provider／team，也未更改其 session。

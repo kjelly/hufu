@@ -239,5 +239,8 @@ func (c *Coordinator) recordCollectionStopReceipt(taskID string, cause error) {
 		reason = failure.Reason
 	}
 	provenance.Attempted, provenance.RepairAttempts, provenance.FailureReason = true, checkpoint.TurnsUsed, reason
+	if cause != nil {
+		provenance.Error = schemaRepairDiagnostic(cause.Error())
+	}
 	_ = c.setAttemptReceipt(taskID, &receipt)
 }

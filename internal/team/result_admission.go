@@ -170,6 +170,11 @@ func (a *localResultAdmission) commit(ctx context.Context, input SubmitResultInp
 		}
 		metadata, _ := invocationMetadataFromContext(ctx)
 		if err := a.coordinator.attestInvariantClaims(a.todoID, identity.Attempt, metadata.ModelExecutionID, input.InvariantAssessments, res); err != nil {
+			if _, collecting := ctx.Value(resultCollectionAdmissionKey{}).(*ResultCollectionCheckpoint); collecting {
+				if _, mismatch := errors.AsType[*invariantFindingSeverityMismatch](err); mismatch {
+					return rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("invalid invariant assessment: %w", err))
+				}
+			}
 			return errors.New("invalid invariant assessment: " + err.Error())
 		}
 		a.coordinator.attachTaskKnowledgeCoverage(a.todoID, identity.Attempt, metadata.ModelExecutionID, res)

@@ -42,6 +42,10 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 		return "", nil, err
 	}
 	info := collectionSubmissionInfo(c, checkpoint.TaskID)
+	invariants, _, err := c.invariantRepairInstructions(checkpoint.TaskID, checkpoint.Attempt, checkpoint.ModelExecutionID)
+	if err != nil {
+		return "", nil, err
+	}
 	var previous []byte
 	if checkpoint.Response != nil {
 		previous, err = c.readCollectionBlob(ctx, checkpoint, "response", checkpoint.Response)
@@ -63,7 +67,7 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 	if err != nil {
 		return "", nil, err
 	}
-	return collectionContext + "Collect the result of the already returned work. Do not repeat work, explore sources, or change its outcome to satisfy a format requirement. Use only these frozen authorized inputs. Result assertions use canonical stored paths: /structured_payload/value refers to your structured_payload, and /invariant_verification/assessments is attested from your invariant_assessments when the schema permits them. For equals_projection, preserve identical claims in both representations; do not independently paraphrase or omit findings.\n" + fenceUntrusted("json", string(data)), work, nil
+	return collectionContext + invariants + "Collect the result of the already returned work. Do not repeat work, explore sources, or change its outcome to satisfy a format requirement. Use only these frozen authorized inputs. Result assertions use canonical stored paths: /structured_payload/value refers to your structured_payload, and /invariant_verification/assessments is attested from your invariant_assessments when the schema permits them. For equals_projection, preserve identical claims in both representations; do not independently paraphrase or omit findings. For a violated invariant, finding_index must name a finding with the invariant definition's exact severity. Keep each invariant summary concise, well below its schema maxLength; put extended explanations in details. Preserve the original judgments, findings and evidence when fixing representation.\n" + fenceUntrusted("json", string(data)), work, nil
 }
 
 func (c *Coordinator) prepareCollectionInvocation(ctx context.Context, def *agent.AgentDef, checkpoint *ResultCollectionCheckpoint, id, diagnostic string) (context.Context, []byte, error) {
