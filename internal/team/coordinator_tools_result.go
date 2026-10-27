@@ -450,7 +450,6 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 	return info
 }
 
-//nolint:gocyclo // submitResultTool.Run handles the full lifecycle of a worker result submission.
 func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (response fantasy.ToolResponse, runErr error) {
 	reason := RepairFailureInvalidSchema
 	defer func() { response = tagSubmissionFailure(response, reason) }()
@@ -520,215 +519,14 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 	if validationErr := validateToolArguments(string(canonicalInput), validationInfo); validationErr != nil {
 		return fantasy.NewTextErrorResponse(buildToolSchemaValidationPrompt(submitResultToolName, validationErr, t.fullInfo())), nil
 	}
-	res := input.taskResult()
-	if res.Summary == "" {
-		return fantasy.NewTextErrorResponse("summary is required"), nil
-	}
-	switch strings.ToLower(strings.TrimSpace(res.Status)) {
-	case TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps, TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked:
-		res.Status = strings.ToLower(strings.TrimSpace(res.Status))
-	default:
-		return fantasy.NewTextErrorResponse("status must be success, completed_with_gaps, partial, failed, or blocked"), nil
-	}
-	reason = RepairFailureContract
-	if decision, blocked := t.coordinator.decisionBlock(ctx); blocked && res.Status != TaskResultStatusBlocked {
-		return fantasy.NewTextErrorResponse(decisionBlockResultDenial(decision, res.Status)), nil
-	}
-	if err := contract.validateWorkerClaims(&res); err != nil {
-		return fantasy.NewTextErrorResponse("submit_result contract violation: " + err.Error()), nil
-	}
-	if err := validateFindingSeverities(res.Findings); err != nil {
-		return fantasy.NewTextErrorResponse("submit_result contract violation: " + err.Error()), nil
-	}
-	if contract.InvariantVerification == "" && input.InvariantAssessments != nil {
-		return fantasy.NewTextErrorResponse("submit_result contract violation: ordinary task must omit invariant_assessments or submit null"), nil
-	}
-	if t.coordinator != nil {
-		var observations []taskTranscriptRecord
-		_, compiled, contractErr := t.coordinator.boundResultContract(t.todoID)
-		if contractErr != nil {
-			return submissionFailureResponse(RepairFailureContract, contractErr.Error()), nil
-		}
-		if compiled != nil && compiled.toolEvidence != nil {
-			var evidenceErr error
-			observations, evidenceErr = submissionToolEvidence(ctx, t.coordinator, t.todoID)
-			if evidenceErr != nil {
-				return submissionFailureResponse(RepairFailureSource, evidenceErr.Error()), nil
-			}
-		}
-		if res.Status != TaskResultStatusBlocked || len(bytes.TrimSpace(input.StructuredPayload)) != 0 || !hasResultDecisions(compiled) {
-			payload, rejection := t.coordinator.structuredPayloadForSubmission(t.todoID, input.StructuredPayload, observations)
-			if rejection != "" {
-				return submissionFailureResponse(t.payloadRejectionReason(call.Input), rejection), nil
-			}
-			res.StructuredPayload = payload
-			if payload != nil && payload.EvidenceDowngrades > 0 {
-				res.Summary = "Result includes claims without matching successful tool evidence; consult the structured payload for downgraded findings."
-			}
-		}
-	} else if len(bytes.TrimSpace(input.StructuredPayload)) > 0 {
-		return fantasy.NewTextErrorResponse("structured_payload is not accepted for this task because it has no result contract; omit the field"), nil
-	}
-
-	var identity submitResultRuntimeIdentity
-	if protocolRepairExecution(ctx) && len(res.Artifacts) > 0 {
-		return fantasy.NewTextErrorResponse("protocol repair cannot add artifact evidence; submit the corrected result without artifacts"), nil
-	}
-	if len(res.Outputs) > 0 {
-		return fantasy.NewTextErrorResponse("outputs are runtime-owned; cite execution receipt_ids instead of declaring task outputs"), nil
-	}
-	if res.RawOutputRef != nil {
-		return fantasy.NewTextErrorResponse("raw_output_ref is runtime-owned; workers cannot declare or copy transcript references"), nil
-	}
-	if t.forbidsArtifacts() && len(res.Artifacts) > 0 {
-		return fantasy.NewTextErrorResponse("artifacts are forbidden by this task's execution contract; omit the artifacts field and submit the result again"), nil
-	}
-	// A model-authored failure summary is useful context, but it is not the
-	// canonical execution record. Prefix non-success results with the first
-	// runtime-observed closed-sequence failure so downstream errors cannot
-	// misidentify which slot or exit status actually failed.
-	if !taskResultStatusIsSuccessful(res.Status) {
-		if fact := taskToolSequenceFromContext(ctx).failureSummary(); fact != "" {
-			workerSummary := strings.TrimSpace(res.Summary)
-			res.Summary = fact
-			if workerSummary != "" {
-				res.Summary += ". Worker report: " + workerSummary
-			}
-			res.Findings = append(res.Findings, Finding{
-				Category: "runtime_execution",
-				Summary:  fact,
-				Detail:   "Runtime-owned closed-sequence evidence; consult the sealed transcript for tool output.",
-			})
-		}
-	}
-	// Security: strip model-injected HMAC signatures from submit_result tool input
-	for i := range res.Evidence {
-		res.Evidence[i].SystemHMAC = ""
-	}
-
-	sink := t.sink
-	if sink == nil && t.coordinator != nil {
-		sink = coordinatorTaskResultSink{coordinator: t.coordinator}
-	}
-	if t.coordinator != nil {
-		identity, err = submitResultRuntimeIdentityFromContext(ctx, t.coordinator, t.todoID)
-		if err != nil {
-			return submissionFailureResponse(RepairFailureSource, "invalid submit_result runtime identity: "+err.Error()), nil
-		}
-		// Receipt admission still needs the active occurrence, but it must run
-		// before the transaction mutex is held because that validator reads the
-		// occurrence through the public snapshot helper. The attempt is runtime
-		// supplied here, never worker-authored.
-		receiptCandidate := res
-		receiptCandidate.Attempt = identity.Attempt
-		if err := t.coordinator.validateTaskResultReceiptClaims(t.todoID, &receiptCandidate); err != nil {
-			return submissionFailureResponse(RepairFailureSource, err.Error()), nil
-		}
-		metadata, _ := invocationMetadataFromContext(ctx)
-		if err := t.coordinator.attestInvariantClaims(t.todoID, identity.Attempt, metadata.ModelExecutionID, input.InvariantAssessments, &res); err != nil {
-			return fantasy.NewTextErrorResponse("invalid invariant assessment: " + err.Error()), nil
-		}
-		t.coordinator.attachTaskKnowledgeCoverage(t.todoID, identity.Attempt, metadata.ModelExecutionID, &res)
-		tx, txErr := t.coordinator.beginTaskResultSubmission(identity)
-		if txErr != nil {
-			return resultPersistenceFailure(fmt.Errorf("store submitted result: %w", txErr)), nil
-		}
-		if base, ok := ctx.Value(resultPatchBaseKey{}).(string); ok {
-			current := t.coordinator.todoItemByID(t.todoID)
-			if current == nil || current.ResultCandidate == nil || current.ResultCandidate.SHA256 != base {
-				_ = tx.rollback()
-				return submissionFailureResponse(RepairFailureSource, "candidate_stale"), nil
-			}
-		}
-		// Runtime ownership begins only after the occurrence is reserved. The
-		// candidate now contains the values that worker-independent assertions
-		// are allowed to inspect.
-		res.TaskID = identity.TaskID
-		res.Attempt = identity.Attempt
-		res.Agent = identity.Agent
-		res.Source = "submitted"
-		if res.Confidence == 0 {
-			res.Confidence = 1.0
-		}
-		rollback := func(prefix string) fantasy.ToolResponse {
-			if rollbackErr := tx.rollback(); rollbackErr != nil {
-				prefix += "; rollback: " + rollbackErr.Error()
-			}
-			return fantasy.NewTextErrorResponse(prefix)
-		}
-		if err := t.coordinator.validateMemoryUseClaims(ctx, t.todoID, &res); err != nil {
-			return rollback(err.Error()), nil
-		}
-		// Only a success claim can be mechanically contradicted by terminal
-		// evidence. Check it while the occurrence is reserved so no projection
-		// can be published before the result is accepted.
-		if res.Status == "success" {
-			if err := t.coordinator.terminalTaskFailure(ctx, t.todoID); err != nil {
-				return rollback("success rejected: " + err.Error()), nil
-			}
-		}
-		if err := t.materializeSubmittedArtifacts(ctx, &res, tx); err != nil {
-			return rollback("invalid artifact declaration: " + err.Error()), nil
-		}
-		if err := contract.validateFinalizableResult(&res); err != nil {
-			return rollback("submit_result contract violation: " + err.Error()), nil
-		}
-		// A reported assumption check is one of the three sources allowed to
-		// change an assumption's status (spec §18.1). Validate it while the
-		// occurrence is reserved: a check naming an assumption the decision
-		// never declared is a contract violation, not a warning.
-		if _, err := t.coordinator.ApplyAssumptionChecks(ctx, t.todoID, res.AssumptionChecks, AssumptionSourceTaskResult); err != nil {
-			return rollback("invalid assumption check: " + err.Error()), nil
-		}
-		// A reported check can invalidate the governing decision.  That is a
-		// lifecycle outcome, not merely a later tool denial: reject this same
-		// submit_result while its occurrence is still reserved so no result cache,
-		// TaskDone projection, or success event can be published.
-		if denial := t.coordinator.checkpointDenial(t.todoID); denial != "" {
-			return rollback("submit_result rejected by checkpoint: " + denial), nil
-		}
-		if _, isCoordinatorSink := sink.(coordinatorTaskResultSink); isCoordinatorSink {
-			// The coordinator sink is represented by this transaction; invoking it
-			// again would attempt a second reservation while this gate is held.
-		} else if sink != nil {
-			if err := sink.Submit(ctx, t.todoID, res); err != nil {
-				return tagSubmissionFailure(rollback("store submitted result: "+err.Error()), RepairFailureCommit), nil
-			}
-		}
-		if err := tx.commit(&res); err != nil {
-			return tagSubmissionFailure(rollback("store submitted result: "+err.Error()), RepairFailureCommit), nil
-		}
-		if stop, ok := ctx.Value(acceptedTerminalResultStopKey{}).(*acceptedTerminalResultStop); ok {
-			stop.markAccepted(identity)
-		}
-		t.coordinator.emitMemoryUsageEvents(&res)
-		tx.finish()
-	} else if sink != nil {
-		res.TaskID = t.todoID
-		res.Source = "submitted"
-		if res.Confidence == 0 {
-			res.Confidence = 1.0
-		}
-		if err := contract.validateFinalizableResult(&res); err != nil {
-			return fantasy.NewTextErrorResponse("submit_result contract violation: " + err.Error()), nil
-		}
-		if err := sink.Submit(ctx, t.todoID, res); err != nil {
-			return submissionFailureResponse(RepairFailureCommit, "store submitted result: "+err.Error()), nil
-		}
+	admission := localResultAdmission{coordinator: t.coordinator, todoID: t.todoID, sink: t.sink}
+	err = admission.admit(ctx, input, contract, func() RepairFailureReason {
+		return t.payloadRejectionReason(call.Input)
+	})
+	if err != nil {
+		return submissionFailureResponse(localResultRejectionReason(err), err.Error()), nil
 	}
 	return fantasy.NewTextResponse("Task result submitted successfully."), nil
-}
-
-func (t *submitResultTool) forbidsArtifacts() bool {
-	if t == nil || t.coordinator == nil || t.coordinator.taskTracker == nil || t.coordinator.taskTracker.TodoList() == nil {
-		return false
-	}
-	for _, item := range t.coordinator.taskTracker.TodoList().Items() {
-		if item != nil && item.ID == t.todoID {
-			return item.Execution.ForbidArtifacts
-		}
-	}
-	return false
 }
 
 // normalizeSubmitResultInput preserves the typed result contract while being
@@ -900,50 +698,6 @@ func (c *Coordinator) stageSubmittedArtifacts(identity submitResultRuntimeIdenti
 		controller.pending = append([]ArtifactRef(nil), refs...)
 	}
 	controller.mu.Unlock()
-}
-
-// materializeSubmittedArtifacts makes a worker's artifact claim durable before
-// accepting its terminal result. Previously a model could declare a missing
-// path, receive a successful submit_result response, and leave the evidence
-// manifest to fail only at run finalization. Artifacts are workspace-contained
-// evidence, so snapshot them here or reject the result while the worker can
-// still correct its claim.
-func (t *submitResultTool) materializeSubmittedArtifacts(ctx context.Context, res *TaskResult, tx *taskResultOccurrenceTransaction) error {
-	if res == nil || len(res.Artifacts) == 0 {
-		return nil
-	}
-	if t.coordinator == nil || t.coordinator.session == nil || strings.TrimSpace(t.coordinator.session.Workspace) == "" {
-		return fmt.Errorf("artifact submission requires a workspace")
-	}
-	workspace := t.coordinator.session.Workspace
-	store, err := NewFileArtifactStore(workspace, workspace)
-	if err != nil {
-		return err
-	}
-	identity, err := submitResultRuntimeIdentityFromContext(ctx, t.coordinator, t.todoID)
-	if err != nil {
-		return err
-	}
-	if res.TaskID != identity.TaskID || res.Attempt != identity.Attempt || res.Agent != identity.Agent {
-		return fmt.Errorf("result provenance does not match runtime occurrence")
-	}
-	if err := validateSubmittedArtifactClaims(ctx, workspace, res.Artifacts); err != nil {
-		return err
-	}
-	for i, artifact := range res.Artifacts {
-		ref, err := putSubmittedArtifact(ctx, store, identity, artifact)
-		if err != nil {
-			if tx != nil {
-				tx.addMaterialized(nil)
-			}
-			return fmt.Errorf("artifacts[%d] %q: %w", i, artifact.Path, err)
-		}
-		res.Artifacts[i] = ref
-	}
-	if tx != nil {
-		tx.addMaterialized(res.Artifacts)
-	}
-	return nil
 }
 
 func validateSubmittedArtifactClaims(ctx context.Context, workspace string, artifacts []ArtifactRef) error {

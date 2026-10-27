@@ -267,4 +267,20 @@ mise run lint
 
 所有 Go gates 使用 `GOMAXPROCS=2`、repository mise toolchain 與原設定 caches／`GOTMPDIR`；subprocess `TMPDIR` 使用本任務 private directory。第一次 sandbox 測試因禁止 local socket，導致 `httptest` 等 fixtures 失敗；完整重跑允許本地 HTTP／Unix socket fixtures 後全數通過。此環境失敗不列為程式 baseline 缺陷，後續需要 fixtures 的驗證須使用同等執行權限。
 
-實作階段尚未完成；每個 PR 完成後於本節補上具體變更與驗證結果，再建立獨立 commit。
+### PR-1：完成 local admission 抽取
+
+- [Go function: admit](../../internal/team/result_admission.go) 接收已解碼 claims 與 adapter 從 durable task 取得的契約，以 typed rejection 回報結果，不依賴 Fantasy tool call／response。既有工具 adapter 繼續負責 schema guidance、解碼、相容 normalization 與錯誤映射。
+- 保留原 schema／receipt／HMAC／invariant／artifact／occurrence validation 與 commit 順序；不新增配置、事件、receipt 欄位、result source 或公開 API，不改 default，也不接管 lifecycle。
+- 原工具檔由 990 行縮至 744 行，移除已不需要的 complexity suppression；新 admission 核心 320 行。
+- 新增工具／直接入口的 12 類案例對照：成功、gaps、partial／failed／blocked、缺摘要、非法狀態、缺 artifact、偽造 receipt、stale occurrence、materialization 後 assertion failure、sink failure。驗證 canonical handoff 等價、artifact 精確 hash／bytes、拒絕不發布結果或遺留 reservation，提交不直接完成任務。
+
+2026-10-27 驗證結果：
+
+| Gate | 結果 |
+|---|---|
+| `mise exec -- go test -p 2 ./internal/team -run 'Test(LocalResultAdmission\|SubmitResult\|SubmissionGate\|SubmissionFailure\|ResultCandidate\|PreparedCandidate\|OccurrenceTransition\|StaleSubmitResult)' -count=1` | exit 0，10.996s |
+| `mise run test` | exit 0，完整套件通過；`internal/team` 540.875s |
+| `mise run vet` | exit 0 |
+| `mise run lint` | exit 0，0 issues |
+
+新預設與 collector 尚未啟用。PR-2 至 PR-4 仍待實作，不能將本階段視為已達成零工具結果收集。
