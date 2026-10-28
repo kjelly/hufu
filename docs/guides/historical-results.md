@@ -217,3 +217,26 @@ Markdown 由版本化結構快照渲染；未保存 Markdown 的舊版排版副�
 或舊 `report.md` 補成歷史報告，也不會在查詢時寫入／遷移 DB。
 每份快照上限 8 MiB；超限或無法投影時記錄 unavailable，保留原本 run outcome。
 真正的 SQLite 寫入失敗會使整筆 transaction 回滾，沿用 terminal persistence 的恢復流程。
+
+## Worker 的 canonical 歷史讀取
+
+`team_info` 的 `task_history` 與 `task_result(agent)` fallback 只讀取
+目前 runtime 綁定的 control workspace、team 與 branch lineage。它們不再
+掃描 `tasks/<team>/<agent>/*.md`；只有 Markdown 的資料標成
+`legacy_unverified`，不能作為 Worker 的可信成果。
+
+`task_result(task_id)` 仍查當前 active cycle 的 typed result。歷史精確查詢
+使用完整 `result_id`，不得與其他 selector 混用，也不接受 ID prefix。
+歷史 description selector 有多個命中時會列出可見 Result IDs，要求明確選取。
+模型不能指定另一個 workspace、team、branch 或 all-branches scope。
+
+歷史內容以 fenced JSON 標成 reference/untrusted data；explicit ID 可閱讀
+已失效結果，但會保留 validity，不能當成 fresh verification。一般 agent
+fallback 只選仍有效的 accepted/done 結果。超過 1 MiB 的單一回應會拒絕，
+不回傳裁切的結果。禁用 historical task reuse 的 profile 同時限制歷史 ID
+與 restored task selector；本次建立的 task lookup 保留。Extra-model clone
+沿用父層 canonical control root 與 branch journal，不把 disposable leaf
+workspace 當成歷史來源。
+
+Operator results JSON 新增 `source_branch_id`，指出 source event 的原始
+branch；`branches` 仍代表結果在哪些查詢 lineage 中可見，兩者用途不同。

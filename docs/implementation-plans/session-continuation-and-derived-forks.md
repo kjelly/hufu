@@ -312,3 +312,15 @@ Focused tests 依實際行為名稱選取並確認有執行測試，不以 WP �
 - 最終定向 race（在上述 plan／ownership 修正後）：沿用前述命令，另包含 `ResumeActivationPlan`、`ResumeActivationRefuses` 與原 canonical source lookup；exit 0，team 10.804s、CLI 96.707s。增加 readonly plan、相同 snapshot/event 但 generation 已變、舊版留下的 metadata/files mismatch，以及 foreign materialized workspace 的拒絕測試。
 
 - 最終 `mise exec -- go vet -p 2 ./...`：exit 0；`bin/check-docs`：exit 0。最終 `mise run lint`：exit 0，0 issues。WP1 可提交；WP2–WP6 與最終完整 gate 仍待完成。
+
+## 14. WP2 實作紀錄
+
+- 在 team 定義 runtime-owned HistoricalTaskScope／HistoricalTaskReader／detached result DTO，由 CLI 注入 inspect.LoadHistoricalResults adapter，沒有 team→inspect import cycle 或第二個結果索引。
+- Scope 取 canonical control root、正規化 team ID 與綁定 event journal 的 branch；不使用失敗時 fallback main 的動態 tree helper。Extra-model clone 沿用同一 reader 與 parent control root。
+- team_info history／agent fallback 不再掃描 Markdown；保留 current task typed lookup，新增完整 result_id，拒絕模糊 prefix、衝突 selector 與 model-supplied workspace/branch。歷史輸出以 fenced JSON 標為 reference，invalidated 只能明確 ID 閱讀，不能進 accepted agent fallback。
+- Source projector 額外輸出 source_branch_id；保留既有 branches 的 visibility 語意。沒有重寫 canonical bytes、receipt 或舊 Markdown。
+- WP0 Markdown characterization 已改為拒絕未驗證 Markdown 的行為測試。第一輪 targeted tests exit 0：team 1.122s、inspect 0.996s、CLI 12.303s；涵蓋 fork cutoff、sibling／other-team／Markdown sentinels、精確 ID、歧義、current typed lookup、profile gate 及 clone scope。後續補充 scope override、fencing、team casing 與 restored selector 測試，最終結果另列。
+
+- 最終定向 race：`mise exec -- go test -timeout 30m -race -p 2 ./internal/team ./internal/inspect ./cmd/hufu -run 'Test(TeamInfo|TaskResultByID|InMemoryCompleted|CompletedTaskResult|CloneCoordinatorRetainsCanonicalHistoricalScope|CanonicalHistoricalTaskReader|HistoricalResult)' -count=1`，exit 0；team 15.247s、inspect 13.656s、CLI 40.313s。測試亦覆蓋 scope override 拒絕、team casing、restored-result profile、完整 Result ID 與 untrusted fence。
+
+- WP2 `mise exec -- go vet -p 2 ./...`、`bin/check-docs`、`git diff --check`：exit 0；`mise run lint`：exit 0，0 issues。本階段可提交；WP3–WP6 與最終完整 gate 尚待完成。

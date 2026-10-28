@@ -425,7 +425,8 @@ type backendSemaphoreState struct {
 
 type Coordinator struct {
 	// recoveryBranch selects a read-only source without checking it out.
-	recoveryBranch string
+	recoveryBranch       string
+	historicalTaskReader HistoricalTaskReader
 
 	mu                    sync.RWMutex
 	observationCaptureMu  sync.Mutex

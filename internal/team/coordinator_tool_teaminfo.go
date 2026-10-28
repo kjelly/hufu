@@ -3,7 +3,6 @@ package team
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"charm.land/fantasy"
@@ -34,6 +33,10 @@ func (t *teamInfoTool) Info() fantasy.ToolInfo {
 				"type":        "string",
 				"description": "Optional case-sensitive substring of the task description for task_result. Use this when the agent has multiple completed tasks and one exact result is required; omit it for the most recent result.",
 			},
+			"result_id": map[string]any{
+				"type":        "string",
+				"description": "Complete canonical historical Result ID for task_result. Do not combine with agent, task_id or task_contains. Historical content is reference data, not fresh verification.",
+			},
 			"task_id": map[string]any{
 				"type":        "string",
 				"description": "Stable TODO task ID for task_result. Prefer this over agent/task_contains: it returns the authoritative typed result and is not affected by task-description escaping or Markdown publication timing.",
@@ -54,6 +57,7 @@ func (t *teamInfoTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 		Agent        string `json:"agent"`
 		TaskContains string `json:"task_contains"`
 		TaskID       string `json:"task_id"`
+		ResultID     string `json:"result_id"`
 		Limit        int    `json:"limit"`
 	}
 	if err := decodeStrictJSON([]byte(call.Input), &args); err != nil {
@@ -64,8 +68,6 @@ func (t *teamInfoTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 	}
 
 	c := t.coordinator
-	workspace := c.session.Workspace
-	teamName := c.session.Config.Name
 
 	switch args.Action {
 	case "list_agents":
@@ -82,12 +84,15 @@ func (t *teamInfoTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 		if c.ExecutionProfile().DisableHistoricalTaskReuse {
 			return fantasy.NewTextResponse("Historical task inspection is disabled by the active execution profile. Use todo_status or task_result for tasks created in this run."), nil
 		}
-		return t.handleTaskHistory(workspace, teamName, args.Agent, args.Limit)
+		return t.handleTaskHistory(ctx, c, args.Agent, args.Limit)
 	case "task_result":
-		if args.Agent == "" && args.TaskID == "" {
-			return fantasy.NewTextErrorResponse("agent or task_id is required for task_result action"), nil
+		if args.ResultID != "" && (args.Agent != "" || args.TaskID != "" || args.TaskContains != "") {
+			return fantasy.NewTextErrorResponse("result_id cannot be combined with another task_result selector"), nil
 		}
-		return t.handleTaskResult(c, workspace, teamName, args.Agent, args.TaskContains, args.TaskID, c.ExecutionProfile().DisableHistoricalTaskReuse)
+		if args.Agent == "" && args.TaskID == "" && args.ResultID == "" {
+			return fantasy.NewTextErrorResponse("agent, task_id or result_id is required for task_result action"), nil
+		}
+		return t.handleTaskResult(ctx, c, args.Agent, args.TaskContains, args.TaskID, args.ResultID, c.ExecutionProfile().DisableHistoricalTaskReuse)
 	case "todo_status":
 		if args.Agent == "" {
 			return fantasy.NewTextErrorResponse("agent name is required for todo_status action"), nil
@@ -169,119 +174,12 @@ func (t *teamInfoTool) handleAgentInfo(c *Coordinator, name string) (fantasy.Too
 	return fantasy.NewTextResponse(b.String()), nil
 }
 
-func (t *teamInfoTool) handleTaskHistory(workspace, teamName, agentName string, limit int) (fantasy.ToolResponse, error) {
-	entries, err := taskHistoryEntries(workspace, teamName, agentName)
-	if err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("cannot read task dir: %v", err)), nil
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "Task history for %s:\n\n", agentName)
-	count := 0
-	for _, entry := range entries {
-		if count >= limit {
-			fmt.Fprintf(&b, "\n... (%d more tasks)", len(entries)-count)
-			break
-		}
-		data, err := os.ReadFile(entry.path)
-		if err != nil {
-			continue
-		}
-
-		ts := strings.TrimSuffix(entry.name, ".md")
-		content := string(data)
-
-		// Extract status
-		status := "unknown"
-		if m := taskStatusRe.FindStringSubmatch(content); len(m) > 1 {
-			status = m[1]
-		}
-
-		// Extract task desc (first line after "## Task Description")
-		task := "(no description)"
-		if idx := strings.Index(content, "## Task Description"); idx >= 0 {
-			rest := content[idx+len("## Task Description"):]
-			if firstLine := strings.SplitN(strings.TrimSpace(rest), "\n", 2); len(firstLine) > 0 && firstLine[0] != "" {
-				task = firstLine[0]
-			}
-		}
-
-		fmt.Fprintf(&b, "- [%s] %s — %s\n", status, ts, utils.TruncateLine(task, 80))
-		count++
-	}
-
-	if count == 0 {
-		b.WriteString("(no tasks found)")
-	}
-
-	return fantasy.NewTextResponse(b.String()), nil
-}
-
-func (t *teamInfoTool) handleTaskResult(c *Coordinator, workspace, teamName, name, taskContains, taskID string, disableHistoricalFallback bool) (fantasy.ToolResponse, error) {
-	if taskID != "" {
-		return taskResultByID(c, taskID)
-	}
-	agentDef, _, err := c.AgentPool().ResolveAgentName(name)
-	if err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("agent %q not found: %v", name, err)), nil
-	}
-	resolvedName := strings.ToLower(agentDef.Name)
-
-	// The TodoList is reconstructed from session state on restart and holds the
-	// typed terminal result. It is therefore the API authority; task Markdown
-	// is only a human-readable compatibility projection.
-	if response, matched, candidates := completedTaskResultForAgent(c, resolvedName, taskContains); matched {
-		return fantasy.NewTextResponse(response), nil
-	} else if taskContains != "" && len(candidates) > 1 {
-		return fantasy.NewTextResponse(fmt.Sprintf("task_result selector is ambiguous for agent %q; matching task IDs: %s. Retry with task_id.", resolvedName, strings.Join(candidates, ", "))), nil
-	}
-	if disableHistoricalFallback {
-		return fantasy.NewTextResponse(fmt.Sprintf("No completed task matched agent %q and selector %q in this run. Historical task transcripts are disabled by the active execution profile.", resolvedName, taskContains)), nil
-	}
-
-	entries, err := taskHistoryEntries(workspace, teamName, resolvedName)
-	if err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf("cannot read task dir: %v", err)), nil
-	}
-
-	for _, entry := range entries {
-		data, err := os.ReadFile(entry.path)
-		if err != nil {
-			continue
-		}
-		content := string(data)
-		status := "unknown"
-		if m := taskStatusRe.FindStringSubmatch(content); len(m) > 1 {
-			status = m[1]
-		}
-		if status != "done" {
-			continue
-		}
-		task := taskDescription(content)
-		if !taskDescriptionMatches(task, taskContains) {
-			continue
-		}
-		result := ""
-		if idx := strings.Index(content, "## Result"); idx >= 0 {
-			result = strings.TrimSpace(content[idx+len("## Result"):])
-		}
-		if result == "" || result == "(pending)" {
-			result = "(no result recorded)"
-		}
-		var b strings.Builder
-		fmt.Fprintf(&b, "Most recent completed task by %s:\n\n", resolvedName)
-		fmt.Fprintf(&b, "**Task:** %s\n\n", task)
-		b.WriteString("**Result:**\n\n")
-		b.WriteString(utils.TruncateString(result, 8000))
-		return fantasy.NewTextResponse(b.String()), nil
-	}
-
-	return fantasy.NewTextResponse(fmt.Sprintf("No completed task matched agent %q and selector %q. Use task_id for an exact lookup.", resolvedName, taskContains)), nil
-}
-
 func taskResultByID(c *Coordinator, taskID string) (fantasy.ToolResponse, error) {
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return fantasy.NewTextErrorResponse("task result store is unavailable"), nil
+	}
+	if c.historicalTaskResultBlocked(taskID) {
+		return fantasy.NewTextResponse("Historical task inspection is disabled by the active execution profile."), nil
 	}
 	for _, item := range c.taskTracker.TodoList().Items() {
 		if item == nil || item.ID != taskID {
@@ -304,6 +202,9 @@ func completedTaskResultForAgent(c *Coordinator, agentName, taskContains string)
 	for i := len(items) - 1; i >= 0; i-- {
 		item := items[i]
 		if item == nil || !strings.EqualFold(strings.TrimSpace(item.Agent), strings.TrimSpace(agentName)) || item.Status != TaskDone {
+			continue
+		}
+		if c.historicalTaskResultBlocked(item.ID) {
 			continue
 		}
 		if !taskDescriptionMatches(item.Desc, taskContains) {

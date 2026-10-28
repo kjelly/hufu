@@ -327,6 +327,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
+	coordinator.SetHistoricalTaskReader(canonicalHistoricalTaskReader{})
 	if err := startTeamCoordinator(ctx, coordinator, session, cfg, execProfile, startsFresh, sessionData, models); err != nil {
 		return nil, errors.Join(err, coordinator.Close())
 	}

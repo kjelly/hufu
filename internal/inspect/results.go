@@ -37,6 +37,7 @@ type HistoricalResult struct {
 	Summary               string           `json:"summary,omitempty"`
 	Output                string           `json:"output,omitempty"`
 	TypedResult           *team.TaskResult `json:"typed_result,omitempty"`
+	SourceBranchID        string           `json:"source_branch_id"`
 	SourceEventID         string           `json:"source_event_id"`
 	SourceHash            string           `json:"source_hash"`
 	Branches              []string         `json:"branches"`
@@ -310,7 +311,7 @@ func historicalRunResponse(indexed IndexedEvent, branch, workspace, teamName str
 		RunID: event.RunID, OriginRunID: event.RunID, InvocationID: event.InvocationID,
 		SessionID: event.SessionID, Status: string(payload.Outcome), CurrentStatus: string(payload.Outcome), Validity: "accepted",
 		CompletedAt: completed, Output: utils.RedactSecrets(payload.Response), Summary: utils.RedactSecrets(payload.Reason),
-		SourceEventID: event.ID, SourceHash: event.Hash, Branches: []string{branch}, Workspace: workspace, Ordinal: indexed.Ordinal,
+		SourceBranchID: cmp.Or(event.BranchID, "main"), SourceEventID: event.ID, SourceHash: event.Hash, Branches: []string{branch}, Workspace: workspace, Ordinal: indexed.Ordinal,
 	}, nil
 }
 
@@ -324,7 +325,7 @@ func historicalResultFromItem(indexed IndexedEvent, item *team.TodoItem, branch,
 		Attempt: max(event.Attempt, item.Retries+1), Status: string(item.Status), CurrentStatus: string(item.Status),
 		Validity: "accepted", CompletedAt: completed, Description: utils.RedactSecrets(item.Desc),
 		Summary: utils.RedactSecrets(item.Detail), Output: utils.RedactSecrets(item.Output),
-		SourceEventID: event.ID, SourceHash: event.Hash, Branches: []string{branch}, Workspace: workspace, Ordinal: indexed.Ordinal,
+		SourceBranchID: cmp.Or(event.BranchID, "main"), SourceEventID: event.ID, SourceHash: event.Hash, Branches: []string{branch}, Workspace: workspace, Ordinal: indexed.Ordinal,
 	}
 	var content struct {
 		TypedResult *team.TaskResult `json:"typed_result"`

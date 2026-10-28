@@ -692,6 +692,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		providerManager:                    orig.providerManager,
 		mcpManager:                         orig.mcpManager,
 		coreTools:                          coreToolsClone,
+		historicalTaskReader:               orig.HistoricalTaskReader(),
 		ollamaWebKeyPresent:                orig.ollamaWebKeyPresent,
 		secretRegistry:                     orig.secretRegistry,
 		decisionPrimitives:                 orig.decisionPrimitives,

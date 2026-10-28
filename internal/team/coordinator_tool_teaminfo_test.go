@@ -182,8 +182,7 @@ func TestCompletedTaskResultForAgentRequiresTaskIDForAmbiguousSelector(t *testin
 	}
 }
 
-// Replaced by branch-aware reader tests when the Markdown fallback is removed.
-func TestTeamInfoHistoricalMarkdownIsNotBoundToBranch(t *testing.T) {
+func TestTeamInfoRejectsUnverifiedMarkdownHistory(t *testing.T) {
 	c := newTestCoordinator(t)
 	dir := filepath.Join(c.session.Workspace, "tasks", c.session.Config.Name, "worker")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -197,8 +196,8 @@ func TestTeamInfoHistoricalMarkdownIsNotBoundToBranch(t *testing.T) {
 	tool := &teamInfoTool{coordinator: c}
 	for _, action := range []string{"task_history", "task_result"} {
 		response, err := tool.Run(t.Context(), fantasy.ToolCall{Input: `{"action":"` + action + `","agent":"worker"}`})
-		if err != nil || response.IsError || !strings.Contains(response.Content, sentinel) {
-			t.Fatalf("%s Markdown characterization: response=%+v err=%v", action, response, err)
+		if err != nil || response.IsError || strings.Contains(response.Content, sentinel) || !strings.Contains(response.Content, "legacy_unverified") {
+			t.Fatalf("%s unverified Markdown exposed: response=%+v err=%v", action, response, err)
 		}
 	}
 }
