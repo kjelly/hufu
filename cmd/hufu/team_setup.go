@@ -254,6 +254,9 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if err := bindRunWorkspaceVersioning(ctx, session, cfg); err != nil {
 		return nil, err
 	}
+	if err := activateResumeSession(ctx, session); err != nil {
+		return nil, err
+	}
 	// Read the durable checkpoint before any lifecycle mutation. A resumed
 	// occurrence owns its frozen canonical target, so a changed CLI/config
 	// worker target must never bypass executable/kind preflight for that work.

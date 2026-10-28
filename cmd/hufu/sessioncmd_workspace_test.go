@@ -101,7 +101,7 @@ func TestCLISessionWorkspaceVersioningEndToEnd(t *testing.T) {
 	if err = json.Unmarshal([]byte(out), &fork); err != nil {
 		t.Fatalf("fork output %q: %v", out, err)
 	}
-	if fork.BranchID != "exp" || fork.WorkspaceSnapshotID == "" || fork.MetadataOnly || fork.WorkspaceState != "available" {
+	if fork.BranchID != "exp" || fork.WorkspaceSnapshotID == "" || fork.MetadataOnly || fork.WorkspaceState != "available" || fork.SnapshotEventID == "" || fork.SnapshotReason != string(versionstore.SnapshotFork) || fork.CaptureState != "known" || fork.CaptureEventID == "" {
 		t.Fatalf("fork = %#v", fork)
 	}
 

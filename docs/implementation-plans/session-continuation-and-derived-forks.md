@@ -293,3 +293,22 @@ Focused tests 依實際行為名稱選取並確認有執行測試，不以 WP �
 由於 baseline 的 team suite 已接近預設 10 分鐘，後續完整 test 使用 `-timeout 30m`，race 使用 `-timeout 60m`；單項協定 deadline、fixture readiness 與失敗斷言維持不變。
 
 - WP0 `mise run lint`：exit 0，0 issues；`bin/check-docs`：exit 0（88 active files／561 relative links）；`git diff --check`：exit 0。
+
+## 13. WP1 實作紀錄
+
+- `resume` 明確指定已註冊 control root 時，恢復 managed scope 與 team lease。靜態 startup gate 後取得 project lock，再做 version-aware activation；lock 交由原 team context 持有到 Close。required mode floor 寫入也移入 project lock。
+- ResumeSource 凍結 workspace、active branch、event head ID/hash。activation 前重新驗證；required 跨 branch 走現有 WorkspaceSessionOps.Checkout，同 branch 保留 live checkpoint，off/observe 保留 metadata-only。
+- materialization 後 crash 由原 operation journal forward complete；若 recovery 改變原 selection，回報 stale_activation_plan，重新選取後再接續，不重複 capture 或 worker。缺目標 snapshot 與取消均拒絕。
+- fork/checkout 輸出區分 snapshot publication 與 capture origin；沿 fork parent 找原 capture，restore v1 缺 source identity 時明確 unavailable。未新增快照時機或歷史資料回填。
+- WP0 Resume 特徵測試已替換成行為測試；歷史 Markdown 特徵仍保留至 WP2。
+- 定向測試第二輪 exit 0：team 13.934s、CLI 29.619s，覆蓋新 activation、snapshot provenance、公開 fork/checkout、static gate、existing repair preview/execute。後續新增取消與 event-hash 檢查，驗證結果於下列補錄。
+
+- WP1 工作樹完整 CLI：`mise exec -- go test -timeout 30m -p 2 ./cmd/hufu -count=1`，exit 0，130.781s；包含 baseline 原失敗的 recovery case。目前工作樹仍包含本任務以外的既有未提交修改，因此不將此結果稱為 immutable commit 全綠證據。
+- 公開 CLI fake-provider E2E：`TestResumeCommandActivatesVersionedBranchBeforeProvider`，exit 0，2.405s。先實際產生 accepted worker／frozen inputs／receipt，再切到 B；resume A 的每次 provider request 均確認 canonical branch、live files、materialized head 為 A，未重跑原 worker。fixture 必須提供原始輸入、runtime collector JSON 與明確 acceptance，不弱化 admission gate。
+- 定向 race：`mise exec -- go test -timeout 30m -race -p 2 ./internal/team ./cmd/hufu -run 'Test(VersionedResumeActivation|ManagedResumeBindingAndActivation|WorkspaceSnapshotProvenance|ResumeCommandActivatesVersionedBranchBeforeProvider|CLISessionWorkspaceVersioningEndToEnd|LoadTeamCommonStaticFailureRunsBeforeWorkspaceVersioning|ResumeRecoveryPreview)' -count=1`，exit 0；team 9.280s、CLI 104.385s，無 race 報告。
+- `bin/check-docs`、`git diff --check` 通過；另驗證 baseline archive 3,247 個 tracked blobs 與原 SHA 完全相同。所有 WP1 驗證均使用本地 fixtures。全 repository test／完整受影響 package race 的最終 gate 保留到整體實作完成，不以本定向結果宣稱全計畫完成。
+
+- 最終 activation plan：在 project lock 前唯讀記錄目標 snapshot ID/tree hash、公佈／capture event、branch-head generation 與 materialized subject identity；鎖內及 forward recovery 後重驗，不信任舊 preview。缺 snapshot 只記為不可用，不 fallback live files。已有跨 workspace 或 active branch/materialized branch 不一致而無可恢復 journal 時回報 recovery_required，不將別人的檔案 capture 成目前分支。metadata helper 已改為私有，只供非 required 的共同 activation controller 呼叫。
+- 最終定向 race（在上述 plan／ownership 修正後）：沿用前述命令，另包含 `ResumeActivationPlan`、`ResumeActivationRefuses` 與原 canonical source lookup；exit 0，team 10.804s、CLI 96.707s。增加 readonly plan、相同 snapshot/event 但 generation 已變、舊版留下的 metadata/files mismatch，以及 foreign materialized workspace 的拒絕測試。
+
+- 最終 `mise exec -- go vet -p 2 ./...`：exit 0；`bin/check-docs`：exit 0。最終 `mise run lint`：exit 0，0 issues。WP1 可提交；WP2–WP6 與最終完整 gate 仍待完成。

@@ -126,9 +126,23 @@ func bindRunWorkspaceVersioning(ctx context.Context, session *team.TeamSession, 
 	if err != nil {
 		return fmt.Errorf("read workspace %s: %w", lease.workspaceID, err)
 	}
-	version, err := buildWorkspaceVersionContext(ctx, registry, managed, cfg)
+	version, err := resolveWorkspaceVersionContext(ctx, registry, managed, cfg)
 	if err != nil {
 		return err
+	}
+	request, resuming := ctx.Value(resumeActivationKey{}).(*resumeActivationRequest)
+	if resuming {
+		request.plan, err = team.PlanResumeActivation(ctx, session.Workspace, request.source, version)
+		if err != nil {
+			return err
+		}
+	}
+	// Required-mode floor binding can write metadata, so it belongs under
+	// the project lock as well as the team lease. Off mode only reads it.
+	if !version.Required() {
+		if err := enforceModeFloor(ctx, version); err != nil {
+			return err
+		}
 	}
 	if version.Required() {
 		lock, lockErr := versionstore.TryLockProject(version.StateDir, versionstore.LockOwner{WorkspaceID: version.WorkspaceID, Operation: "run"})
@@ -137,7 +151,11 @@ func bindRunWorkspaceVersioning(ctx context.Context, session *team.TeamSession, 
 		}
 		lease.versionLock = lock
 		version.HoldsProjectLock = true
-		if err = recoverRunWorkspace(ctx, session.Workspace, version); err != nil {
+		err = enforceModeFloor(ctx, version)
+		if err == nil && !resuming {
+			err = recoverRunWorkspace(ctx, session.Workspace, version)
+		}
+		if err != nil {
 			lease.versionLock = nil
 			return errors.Join(err, lock.Close())
 		}

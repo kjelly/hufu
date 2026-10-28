@@ -202,3 +202,36 @@ GC and doctor never run `VACUUM`, `PRAGMA optimize`, or checkpoints
 7. Automatic recovery never appends events.
 8. In required mode only one coordinator runs per project, and file-changing
    version operations only run under the project lock.
+
+## Resume activation and snapshot provenance
+
+`resume --branch <target>` recognizes a registered managed control root even
+when selected with `--workspace`. After static startup validation it retains
+the team lease and required-mode project lock through the coordinator lifetime.
+Cross-branch activation uses the same workspace checkout and forward recovery
+as `session checkout`; it cannot activate only the session while leaving the
+other branch's files materialized. A changed source head/hash or active branch
+refuses the stale selection before providers start. Same-branch activation
+preserves live checkpoints and leaves external-drift handling to admission.
+Off/observe mode keeps metadata-only resume semantics.
+
+`resume --run` is a lineage membership constraint, not a rewind to that run.
+Use `session fork <event-id>` to select an event boundary.
+
+Fork/checkout JSON additionally includes `workspace_snapshot_event_id`,
+`workspace_snapshot_reason`, and `workspace_capture_origin`. When the capture
+is known, `workspace_capture_snapshot_id` and `workspace_capture_event_id`
+identify it. Fork publication is a new event even when it reuses an older
+captured tree. A selected event's files reflect the nearest reachable committed
+snapshot, not all edits at that event. Versioning v1 restore nodes do not retain
+their original source snapshot, so their capture origin is `unavailable` rather
+than inferred from their parent; their publication identity remains available.
+Metadata-only operations emit none of these provenance fields.
+
+The read-only activation plan pins the target snapshot/tree, publication/capture
+events, branch-head generation, and materialized subject identity before taking
+the project lock. Activation verifies them under that lock and again after
+forward recovery. Existing inconsistent session/materialized ownership with no
+recoverable operation is refused with `recovery_required`; it is never captured
+as fresh drift on the wrong branch. A plan does not grant access or replace
+current canonical checks.

@@ -32,6 +32,11 @@ The command restores session state, re-drives only interrupted tasks according
 to their recovery policy, and then returns control to the coordinator. It does
 not create a new session or replay completed tasks automatically.
 
+--run checks membership in the selected branch lineage; it does not rewind to
+that run. To start from a saved event, use session fork <event-id>.
+Required workspace versioning switches the managed files and checkpoint together.
+Off/observe mode restores session metadata only, without rewinding project files.
+
 Examples:
   hufu resume --workspace ./workspace/my-team
   hufu resume --team my-team`,
@@ -65,6 +70,14 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 			runErr = errors.Join(runErr, binding.Lease.Close())
 		}
 	}()
+	promoted, registeredTeam, err := bindManagedResumeWorkspace(commandContext(cmd), binding, cmp.Or(resumeTeamName, opts.agentTeamName), opts.dryRun)
+	if err != nil {
+		return err
+	}
+	binding = promoted
+	if registeredTeam != "" {
+		teamName = registeredTeam
+	}
 	workspace := binding.Resolution.ControlRoot
 	if !team.HasSession(workspace) {
 		return fmt.Errorf("no session found in %s; resume requires an existing session checkpoint", workspace)
@@ -116,10 +129,8 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 		}
 		return printResultRecoveryAssessment(cmd, assessment)
 	}
-	if err := team.ActivateResumeSource(context.Background(), workspace, source); err != nil {
-		return team.ResumeSourceError(workspace, err)
-	}
-	tc, err := loadTeamByNameWithWorkspaceBinding(context.Background(), teamName, binding, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
+	activationCtx := withResumeActivation(commandContext(cmd), source)
+	tc, err := loadTeamByNameWithWorkspaceBinding(activationCtx, teamName, binding, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
 	if err != nil {
 		return team.ResumeSourceError(workspace, fmt.Errorf("failed to load team %q: %w", teamName, err))
 	}

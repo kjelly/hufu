@@ -17,6 +17,7 @@ var sessionMetadataOnly bool
 
 // sessionForkOutput is the --json output of `session fork`.
 type sessionForkOutput struct {
+	team.WorkspaceSnapshotProvenance
 	BranchID              string `json:"branch_id"`
 	ParentBranchID        string `json:"parent_branch_id"`
 	ForkEventID           string `json:"fork_event_id,omitempty"`
@@ -29,6 +30,7 @@ type sessionForkOutput struct {
 
 // sessionCheckoutOutput is the --json output of `session checkout`.
 type sessionCheckoutOutput struct {
+	team.WorkspaceSnapshotProvenance
 	BranchID               string `json:"branch_id"`
 	PreviousBranchID       string `json:"previous_branch_id"`
 	CheckoutSaveSnapshotID string `json:"checkout_save_snapshot_id,omitempty"`
@@ -122,8 +124,13 @@ func runSessionFork(cmd *cobra.Command, args []string) error {
 		if forkErr != nil {
 			return forkErr
 		}
+		provenance, err := ops.SnapshotProvenance(ctx, result.Snapshot)
+		if err != nil {
+			return err
+		}
 		output := sessionForkOutput{
-			BranchID: result.Branch.ID, ParentBranchID: result.Branch.ParentID, ForkEventID: result.Branch.ForkEventID,
+			WorkspaceSnapshotProvenance: provenance,
+			BranchID:                    result.Branch.ID, ParentBranchID: result.Branch.ParentID, ForkEventID: result.Branch.ForkEventID,
 			WorkspaceSnapshotID: string(result.Snapshot.ID), WorkspaceRootTreeHash: result.Snapshot.RootTreeHash,
 			WorkspaceState: "available", Materialized: result.Materialized,
 		}
@@ -132,6 +139,7 @@ func runSessionFork(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Printf("✓ Forked new branch %q (ID: %s) from %q and checked out.\n", result.Branch.Name, result.Branch.ID, result.Branch.ParentID)
 		fmt.Printf("  workspace: %s (tree %s)\n", result.Snapshot.ID, shortHash(result.Snapshot.RootTreeHash))
+		printSnapshotProvenance(provenance)
 		return nil
 	}
 	return forkMetadataOnly(vs, st, es, name, target)
@@ -193,8 +201,13 @@ func runSessionCheckout(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	provenance, err := ops.SnapshotProvenance(ctx, result.Head)
+	if err != nil {
+		return err
+	}
 	output := sessionCheckoutOutput{
-		BranchID: result.Branch.ID, PreviousBranchID: result.PreviousID,
+		WorkspaceSnapshotProvenance: provenance,
+		BranchID:                    result.Branch.ID, PreviousBranchID: result.PreviousID,
 		WorkspaceSnapshotID: string(result.Head.ID), WorkspaceRootTreeHash: result.Head.RootTreeHash,
 		FilesWritten: result.Materialized.FilesWritten, FilesDeleted: result.Materialized.FilesDeleted,
 	}
@@ -206,6 +219,7 @@ func runSessionCheckout(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("✓ Checked out branch %q (%s).\n", result.Branch.Name, result.Branch.ID)
 	fmt.Printf("  workspace: %s (%d written, %d deleted)\n", result.Head.ID, result.Materialized.FilesWritten, result.Materialized.FilesDeleted)
+	printSnapshotProvenance(provenance)
 	return nil
 }
 
@@ -305,4 +319,11 @@ func shortHash(hash string) string {
 		return hash[:12]
 	}
 	return hash
+}
+
+func printSnapshotProvenance(source team.WorkspaceSnapshotProvenance) {
+	fmt.Printf("  snapshot event: %s (reason: %s); capture origin: %s\n", source.SnapshotEventID, source.SnapshotReason, source.CaptureState)
+	if source.CaptureState == "known" {
+		fmt.Printf("  captured tree: %s at %s; files reflect this snapshot boundary\n", source.CaptureSnapshot, source.CaptureEventID)
+	}
 }

@@ -38,7 +38,7 @@ func TestResumeSourceSelectsCanonicalBranchWithoutFallback(t *testing.T) {
 	if !before.equal(snapshotRuntimeState(t, workspace)) {
 		t.Fatal("reading original branch changed active results")
 	}
-	if err := ActivateResumeSource(t.Context(), workspace, source); err != nil {
+	if err := ActivateVersionedResumeSource(t.Context(), workspace, source, WorkspaceVersionContext{}); err != nil {
 		t.Fatal(err)
 	}
 	loaded, _, err := LoadSessionReadOnly(workspace)
@@ -48,34 +48,5 @@ func TestResumeSourceSelectsCanonicalBranchWithoutFallback(t *testing.T) {
 	tree, err = LoadSessionTree(workspace)
 	if err != nil || tree.GetBranch("sibling") == nil || tree.ActiveBranch != "main" {
 		t.Fatal("activation lost the outgoing branch")
-	}
-}
-
-// Characterizes the metadata activation gap before the version-aware adapter
-// replaces it. The behavior assertion is replaced by the activation contract
-// test when the command path is fixed.
-func TestResumeActivationMetadataLeavesMaterializedBranchUnchanged(t *testing.T) {
-	f := newVersionFixture(t)
-	f.write("version.txt", "A")
-	appendBranchEvent(t, f.events, RunEvent{BranchID: "main", Type: string(EventTaskCompleted), TaskID: "1", Actor: "worker", Payload: []byte(`{"id":"1","agent":"worker","desc":"accepted work","status":"done"}`)})
-	mustFork(t, f, "b", "")
-	f.write("version.txt", "B")
-	if _, _, err := f.ops().SnapshotNow(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	source, err := ReadResumeSource(f.control, "main", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := ActivateResumeSource(t.Context(), f.control, source); err != nil {
-		t.Fatal(err)
-	}
-	tree, err := LoadSessionTree(f.control)
-	if err != nil || tree.ActiveBranch != "main" {
-		t.Fatalf("active branch: tree=%+v err=%v", tree, err)
-	}
-	state, ok, err := f.store.GetSubjectState(t.Context(), f.subject)
-	if err != nil || !ok || state.MaterializedBranchID != "b" || f.read("version.txt") != "B" {
-		t.Fatalf("metadata activation characterization changed: state=%+v exists=%v err=%v", state, ok, err)
 	}
 }
