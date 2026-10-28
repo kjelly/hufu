@@ -5,6 +5,45 @@
 researcher、countercheck、verifier 各使用獨立 headless Chromium context，
 各 worker 僅獲授權存取自己的兩個 browser 工具。
 
+## 研究、查核與綜合
+
+預設流程為「兩路獨立研究 → verifier 查核 → synthesizer 綜合」：
+
+| Runtime 階段 | Worker／契約 | 交接與完成條件 |
+| --- | --- | --- |
+| `prepare` | researcher／`primary-research`、countercheck／`counter-research` | 同批獨立研究，兩份 typed result 都完成才前進 |
+| `audit` | verifier／`evidence-audit` | `evidence_from` 引用兩份研究；自行開頁查核，提交 `audit-v1.json` |
+| `verify` | synthesizer／`research-synthesis` | `evidence_from` 只引用已完成 verifier；提交 `synthesis-v1.json` |
+
+階段順序、四個必需 worker、typed result 與客觀 verifier 皆由 runtime
+強制執行；coordinator 不能在 verifier 完成後直接結束。研究或查核若已完成
+但證據有缺口，可交接 `completed_with_gaps`；`partial`、`blocked` 或失敗
+不能當作已完成輸入。總結本身未完成也不能通過最終驗收。
+
+synthesizer 只可呼叫 `submit_result`，不再搜尋、瀏覽或重做查核。
+它先直接回答原問題，再整合適用條件、重要區分、例外與未決問題，
+不能把每項 finding 各縮成一句就當作綜合。每段回答選擇對應的
+`finding_indices`；schema 依實際已接受 finding 數量拒絕越界引用。
+這只驗證引用存在，文字是否正確理解證據、保留限定語仍是模型的語意責任。
+
+runtime 以 `x-hufu-evidence-inputs` 的 `runtime_owned: true` 綁定完整查核
+結果及原 task ID、payload hash；模型不得提交或覆寫 `input_review`。
+來源必須是已完成且包含 `kind: evidence_audit` 的查核，不能以原始研究、
+未完成 audit 或 coordinator 的摘要代替。模型只提交 `synthesis_complete`、
+`answer`、`sections`、`unresolved`。所有來源、引文、診斷、限制及原始主張
+處理紀錄都從已接受的 audit 保留在最終附錄，不要求模型重新複製。
+
+最終回覆依序呈現綜合回答、主題說明、尚待釐清、查核限制與詳細查核來源。
+只有 synthesizer 宣告 `x-hufu-final-report`，避免兩份最終報告衝突。
+總結只能依經 runtime 證據綁定及降級後的判定撰寫；未驗證、相反證據、
+發言歸屬與事實成立的差別，不得在總結中被改成確定結論。
+
+此流程變更需要新 session。歷史 `report-v1.json`、`report-v2.json` 保持
+原內容以供核對舊結果，但不再由目前 verifier 選用；
+`--var report_contract=v2` 不是新流程的切換方式。已保存的報告不會重寫。
+恢復舊流程必須使用當時完整的 team 定義與原 frozen policy；保留 schema
+本身不足以讓新版 team 相容舊 session。新流程請加 `--new` 或另用新工作區。
+
 ## 工具與證據流程
 
 1. `web_search` 搜尋公開來源；搜尋摘要只作為線索。
@@ -203,7 +242,7 @@ gateway 的通用 `arguments` 介面允許任意欄位，各 target 的限制須
 team 內的模板回歸測試：
 
 ```bash
-go test ./.agent-teams/web-research/tests
+GOMAXPROCS=2 mise exec -- go test -p 2 ./.agent-teams/web-research/tests
 ```
 
 它驗證最終判定改變時不會呈現舊的處理理由，並保留原始輸入與來源缺口。
@@ -211,21 +250,12 @@ go test ./.agent-teams/web-research/tests
 更新不會改寫已保存的歷史報告；以 `--new` 重新研究才能套用新契約。
 
 
-## 提交契約 v2 與既有 session
+## 提交契約與既有 session
 
-`schemas/report-v2.json` 提供收窄的外層提交欄位，並由 runtime 從有效
-`evidence_from` 綁定 `input_review`。模型只提交語意判斷，不重建來源 task ID
-或 payload hash。這是供新契約採用的版本；目前 verifier 的 v1 引用保留，
-避免改變 `recover-verifier-20261026` 等既有 session 的 frozen contract。
-新工作流程可使用 `--var report_contract=v2` 明確選用 v2。同一變數會同步選擇
-schema 與 verifier 提示：v2 不要求模型填寫 `input_review`，修復時依當前工具
-schema 提交局部 edits。未指定變數（或指定 v1）時，渲染內容與原 v1 完全一致；
-不支援的版本會在載入契約時失敗，不能靜默回到 v1。
+`audit-v1.json` 延續舊 report v2 的外層提交欄位限制、runtime-owned 研究
+輸入、引文綁定與原始主張涵蓋檢查，但把最終呈現交給後續綜合契約。
+另外要求兩份研究輸入分別具有 `primary_search` 與 `countercheck` lens。
 
-請在另行指定的新工作區啟用 v2；不要對既有 v1 恢復來源加上此變數，也不要
-將其 frozen contract 就地覆寫。已有 v2 工作流程接續時仍須帶同一變數。
-舊分支使用候選局部修復不需要 `--new`，兩邊研究成果皆可保留。
-
-候選保存與局部修復是通用 runtime 能力，v1 也可使用。錯置欄位由 runtime
-搬移完整內容，修復回合不重跑 researcher、countercheck 或瀏覽；原有收據
-與已接受來源仍須完整通過驗證。v2 的啟用本身不會修復任何歷史任務。
+候選保存與局部修復仍使用通用 runtime 能力。修復承接原收據與已接受
+來源，不重跑研究或瀏覽；修復時依當前工具 schema 修改被拒絕欄位。
+新增綜合階段不會修復歷史失敗任務，也不會改寫已保存的證據。

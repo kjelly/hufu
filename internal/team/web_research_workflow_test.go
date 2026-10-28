@@ -26,6 +26,7 @@ func webResearchWorkflow(t *testing.T) (*TeamSession, *runtimeWorkflow, []TaskDe
 		{Agent: "researcher", ContractID: "primary-research"},
 		{Agent: "countercheck", ContractID: "counter-research"},
 		{Agent: "verifier", ContractID: "evidence-audit", EvidenceFrom: []string{"1", "2"}},
+		{Agent: "synthesizer", ContractID: "research-synthesis", EvidenceFrom: []string{"3"}},
 	}
 	bound, _, err := CompileTaskGoalContracts(session, requests)
 	if err != nil {
@@ -55,8 +56,8 @@ func TestWebResearchWorkflowRetainsSearchAndIsolatedBrowserTools(t *testing.T) {
 		})
 		attachMCPActionFake(t, c.mcpManager, name, cfg, fake)
 	}
-	for _, task := range bound {
-		if task.Phase == PhaseVerify {
+	for _, task := range bound[:3] {
+		if task.Phase == PhaseAudit {
 			if err := w.observe([]*TodoItem{
 				{ContractID: bound[0].ContractID, Phase: PhasePrepare, Status: TaskDone},
 				{ContractID: bound[1].ContractID, Phase: PhasePrepare, Status: TaskDone},
@@ -120,8 +121,11 @@ func TestWebResearchWorkflowRequiresBothIndependentSearchesAndRestoresAudit(t *t
 	if err := validateCompletedTaskResult(items[1].TypedResult); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.observe(items); err != nil || w.State() != PhaseVerify {
+	if err := w.observe(items); err != nil || w.State() != PhaseAudit {
 		t.Fatalf("completed search with gaps did not advance: phase=%s, err=%v", w.State(), err)
+	}
+	if err := w.validateTasks(bound[3:]); err == nil {
+		t.Fatal("synthesis admitted before the evidence audit")
 	}
 
 	state, results, root, retries := w.snapshot()
@@ -138,7 +142,7 @@ func TestWebResearchWorkflowRequiresBothIndependentSearchesAndRestoresAudit(t *t
 	if err := restored.validateTasks(bound[:2]); err == nil {
 		t.Fatal("resumed audit admitted repeated independent searches")
 	}
-	if err := restored.validateTasks(bound[2:]); err != nil {
+	if err := restored.validateTasks(bound[2:3]); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(bound[2].EvidenceFrom, []string{"1", "2"}) {
@@ -152,10 +156,43 @@ func TestWebResearchWorkflowRequiresBothIndependentSearchesAndRestoresAudit(t *t
 		TypedResult:  &TaskResult{Status: TaskResultStatusCompletedWithGaps, Source: "submitted"},
 		VerifyResult: &VerificationResult{ExitCode: 0},
 	})
-	if err := restored.observe(items); err != nil || restored.State() != PhaseDone {
-		t.Fatalf("verified audit did not finish: phase=%s, err=%v", restored.State(), err)
+	if err := restored.observe(items); err != nil || restored.State() != PhaseVerify {
+		t.Fatalf("verified audit did not advance to synthesis: phase=%s, err=%v", restored.State(), err)
 	}
-	if err := restored.requireFinished(); err != nil {
+	if err := restored.requireFinished(); err == nil {
+		t.Fatal("audit alone satisfied the final gate without synthesis")
+	}
+	// A resumed VERIFY stage must expose only synthesis and retain the audit
+	// handoff, without repeating either research or source verification.
+	state, results, root, retries = restored.snapshot()
+	resumed, err := newRuntimeWorkflow(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resumed.restore(state, results, root, retries); err != nil {
+		t.Fatal(err)
+	}
+	if got := resumed.activeWorkerNames(); !slices.Equal(got, []string{"synthesizer"}) {
+		t.Fatalf("resumed synthesis workers = %v", got)
+	}
+	if err := resumed.validateTasks(bound[2:3]); err == nil {
+		t.Fatal("synthesis phase admitted another audit")
+	}
+	if err := resumed.validateTasks(bound[3:]); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(bound[3].EvidenceFrom, []string{"3"}) {
+		t.Fatal("static binding lost the accepted audit reference")
+	}
+	items = append(items, &TodoItem{
+		ID: "4", Agent: "synthesizer", ContractID: bound[3].ContractID, Phase: bound[3].Phase, Status: TaskDone,
+		TypedResult:  &TaskResult{Status: TaskResultStatusCompletedWithGaps, Source: "submitted"},
+		VerifyResult: &VerificationResult{ExitCode: 0},
+	})
+	if err := resumed.observe(items); err != nil || resumed.State() != PhaseDone {
+		t.Fatalf("verified synthesis did not finish: phase=%s, err=%v", resumed.State(), err)
+	}
+	if err := resumed.requireFinished(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -213,15 +250,55 @@ func TestWebResearchWorkflowRequiresObjectiveAuditVerification(t *testing.T) {
 				if wantPass := name == "complete_with_gaps"; isVerifySuccess(audit.VerifyResult) != wantPass || (err == nil) != wantPass {
 					t.Fatalf("audit verification = %#v, err=%v", audit.VerifyResult, err)
 				}
+				// The task runner publishes TaskDone only after its bound
+				// verifier passes, independently of the workflow phase.
+				if err != nil {
+					audit.Status, audit.Detail = TaskError, err.Error()
+				}
+			} else {
+				audit.Status = TaskVerifying
 			}
 			err := w.observe(append(items, audit))
 			if name == "complete_with_gaps" {
-				if err != nil || w.State() != PhaseDone {
+				if err != nil || w.State() != PhaseVerify {
 					t.Fatalf("complete inconclusive audit rejected: phase=%s, err=%v", w.State(), err)
+				}
+			} else if name == "missing_verification" {
+				if err != nil || w.State() != PhaseAudit || w.requireFinished() == nil {
+					t.Fatalf("unfinished audit verification advanced: phase=%s, err=%v", w.State(), err)
 				}
 			} else if err == nil || w.State() != PhaseFailed {
 				t.Fatalf("unverified audit finished: phase=%s, err=%v", w.State(), err)
 			}
 		})
+	}
+}
+
+func TestWebResearchSynthesisRequiresObjectiveVerification(t *testing.T) {
+	for _, verification := range []*VerificationResult{nil, {ExitCode: 1}, {ExitCode: 0}} {
+		_, w, bound := webResearchWorkflow(t)
+		items := []*TodoItem{
+			{ID: "1", ContractID: bound[0].ContractID, Phase: PhasePrepare, Status: TaskDone},
+			{ID: "2", ContractID: bound[1].ContractID, Phase: PhasePrepare, Status: TaskDone},
+		}
+		if err := w.observe(items); err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, &TodoItem{
+			ID: "3", ContractID: bound[2].ContractID, Phase: PhaseAudit, Status: TaskDone,
+			VerifyResult: &VerificationResult{ExitCode: 0},
+		})
+		if err := w.observe(items); err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, &TodoItem{
+			ID: "4", ContractID: bound[3].ContractID, Phase: PhaseVerify, Status: TaskDone,
+			VerifyResult: verification,
+		})
+		err := w.observe(items)
+		wantSuccess := isVerifySuccess(verification)
+		if (err == nil) != wantSuccess || (w.requireFinished() == nil) != wantSuccess {
+			t.Fatalf("verification=%+v, phase=%s, err=%v", verification, w.State(), err)
+		}
 	}
 }

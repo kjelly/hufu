@@ -1,0 +1,561 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Evidence-bound research synthesis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "synthesis_complete",
+    "answer",
+    "sections",
+    "unresolved",
+    "input_review"
+  ],
+  "properties": {
+    "synthesis_complete": {
+      "type": "boolean"
+    },
+    "answer": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "$ref": "#/$defs/paragraph"
+      },
+      "description": "Directly answer the original question by connecting the audited findings, including decisive conditions and uncertainty."
+    },
+    "sections": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "$ref": "#/$defs/section"
+      },
+      "description": "Explain material distinctions, conditions, exceptions, and disagreements. Do not repeat each finding as a separate section."
+    },
+    "unresolved": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "maxLength": 2500,
+      "description": "Explain what remains unknown and its effect on the answer; preserve every material qualification from the accepted audit."
+    },
+    "input_review": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "audit_complete",
+          "input_review",
+          "question",
+          "summary",
+          "findings",
+          "overall_limitations",
+          "claim_assessments",
+          "kind",
+          "task_id",
+          "payload_sha256"
+        ],
+        "properties": {
+          "audit_complete": {
+            "type": "boolean",
+            "const": true
+          },
+          "input_review": {
+            "type": "array",
+            "maxItems": 2,
+            "uniqueItems": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "task_id",
+                "payload_sha256",
+                "lens"
+              ],
+              "properties": {
+                "task_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "payload_sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "lens": {
+                  "type": "string",
+                  "enum": [
+                    "primary_search",
+                    "countercheck"
+                  ]
+                }
+              }
+            },
+            "minItems": 2,
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "lens": {
+                      "const": "primary_search"
+                    }
+                  },
+                  "required": [
+                    "lens"
+                  ]
+                }
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "lens": {
+                      "const": "countercheck"
+                    }
+                  },
+                  "required": [
+                    "lens"
+                  ]
+                }
+              }
+            ]
+          },
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 3000,
+            "description": "Procedural audit summary only; factual verdicts belong exclusively to findings[].verdict after runtime evidence binding."
+          },
+          "findings": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 24,
+            "items": {
+              "$ref": "#/$defs/finding"
+            }
+          },
+          "overall_limitations": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2500
+          },
+          "claim_assessments": {
+            "type": "array",
+            "maxItems": 24,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "source_task_id",
+                "source_index",
+                "claim",
+                "handling",
+                "reason"
+              ],
+              "properties": {
+                "source_task_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "maxLength": 200
+                },
+                "source_index": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "claim": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "maxLength": 1000
+                },
+                "handling": {
+                  "type": "string",
+                  "enum": [
+                    "addressed",
+                    "duplicate",
+                    "out_of_scope",
+                    "unverified"
+                  ]
+                },
+                "reason": {
+                  "description": "Input-accounting explanation only: split, merge, exclusion or unresolved coverage. Do not restate factual verdicts or quotation-validation success; runtime can downgrade findings after submission. Not rendered in the final report.",
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "maxLength": 1500
+                }
+              }
+            }
+          },
+          "kind": {
+            "type": "string",
+            "const": "evidence_audit"
+          },
+          "task_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "payload_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim",
+        "verdict",
+        "researcher_agreement",
+        "evidence_basis",
+        "analysis",
+        "sources",
+        "dissent",
+        "limitations"
+      ],
+      "properties": {
+        "claim": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "One independently adjudicable proposition, preserving speaker, cited person/document and event/time context. Split claims about different speakers or independently verifiable numbers. Support for a subset or a different speaker never establishes the whole claim; do not qualify a compound supported claim with only one part verified."
+        },
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "supported",
+            "contradicted",
+            "mixed",
+            "unverified"
+          ]
+        },
+        "researcher_agreement": {
+          "type": "string",
+          "enum": [
+            "agree",
+            "disagree",
+            "partial",
+            "not_applicable"
+          ]
+        },
+        "evidence_basis": {
+          "type": "string",
+          "enum": [
+            "official_primary_checked",
+            "primary_source_checked",
+            "independent_corroboration",
+            "single_source",
+            "conflicting_sources",
+            "insufficient_evidence"
+          ]
+        },
+        "analysis": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2500
+        },
+        "sources": {
+          "type": "array",
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "dissent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500
+        },
+        "limitations": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "verdict": {
+                "enum": [
+                  "supported",
+                  "contradicted",
+                  "mixed"
+                ]
+              }
+            },
+            "required": [
+              "verdict"
+            ]
+          },
+          "then": {
+            "properties": {
+              "sources": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "evidence_basis": {
+                "const": "independent_corroboration"
+              }
+            },
+            "required": [
+              "evidence_basis"
+            ]
+          },
+          "then": {
+            "properties": {
+              "sources": {
+                "minItems": 2
+              }
+            }
+          }
+        }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "publisher",
+        "publication_date",
+        "url",
+        "source_type",
+        "page_status",
+        "quote",
+        "relation",
+        "independence_group"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "publisher": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "publication_date": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https?://[^\\s]+$",
+          "maxLength": 4096
+        },
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "official_primary",
+            "primary",
+            "secondary",
+            "reference",
+            "unknown"
+          ]
+        },
+        "page_status": {
+          "type": "string",
+          "enum": [
+            "checked",
+            "unverified"
+          ]
+        },
+        "fetch_status": {
+          "type": "string",
+          "enum": [
+            "fetched",
+            "failed",
+            "unusable_response",
+            "not_attempted",
+            "pending"
+          ],
+          "description": "Runtime-owned observation status; omit on submission."
+        },
+        "citation_status": {
+          "type": "string",
+          "enum": [
+            "matched",
+            "mismatch",
+            "missing_quote",
+            "unavailable"
+          ],
+          "description": "Runtime-owned exact quote matching status; omit on submission."
+        },
+        "tool_call_id": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "quote": {
+          "type": "string",
+          "maxLength": 800,
+          "description": "One contiguous exact substring of this worker's successful fetch; no added ellipsis, splicing or paraphrase."
+        },
+        "relation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "independence_group": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "page_status": {
+                "const": "checked"
+              }
+            },
+            "required": [
+              "page_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "quote": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "paragraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "finding_indices"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "maxLength": 1800
+        },
+        "finding_indices": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 24,
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 23
+          },
+          "description": "Select the zero-based positions of accepted audit findings supporting this paragraph. Do not copy or change their verdicts."
+        }
+      }
+    },
+    "section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "finding_indices",
+        "title"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "maxLength": 1800
+        },
+        "finding_indices": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 24,
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 23
+          },
+          "description": "Select the zero-based positions of accepted audit findings supporting this paragraph. Do not copy or change their verdicts."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "maxLength": 120
+        }
+      }
+    }
+  },
+  "x-hufu-evidence-inputs": {
+    "runtime_owned": true,
+    "items_pointer": "/input_review",
+    "task_id_pointer": "/task_id",
+    "hash_pointer": "/payload_sha256",
+    "complete_pointer": "/synthesis_complete",
+    "value_bindings": {
+      "/audit_complete": "/audit_complete",
+      "/input_review": "/input_review",
+      "/question": "/question",
+      "/summary": "/summary",
+      "/findings": "/findings",
+      "/overall_limitations": "/overall_limitations",
+      "/claim_assessments": "/claim_assessments",
+      "/kind": "/kind"
+    }
+  },
+  "x-hufu-submission-fields": [
+    "status",
+    "summary",
+    "structured_payload",
+    "memory_uses"
+  ],
+  "x-hufu-final-report": "# 研究總結\n\n{{$audit := index .input_review 0}}問題：{{$audit.question}}\n\n## 綜合回答\n\n{{range .answer}}{{.text}}\n\n依據：{{range .finding_indices}}{{$f := index $audit.findings .}}[查核 {{.}}](#查核-{{.}})（{{$f.verdict}}） {{end}}\n\n{{end}}{{range .sections}}## {{.title}}\n\n{{.text}}\n\n依據：{{range .finding_indices}}{{$f := index $audit.findings .}}[查核 {{.}}](#查核-{{.}})（{{$f.verdict}}） {{end}}\n\n{{end}}## 尚待釐清\n\n{{.unresolved}}\n\n## 查核限制\n\n{{$audit.overall_limitations}}\n\n## 詳細查核與來源\n\n查核結果：task {{$audit.task_id}}；payload SHA-256 {{$audit.payload_sha256}}\n\n查核完成：{{$audit.audit_complete}}\n\n{{with $audit}}## 比較的研究輸入\n{{range .input_review}}\n- task {{.task_id}}｜{{.lens}}｜payload sha256 {{.payload_sha256}}\n{{end}}{{range $i, $finding := .findings}}\n### 查核 {{$i}}\n\n**{{.claim}}**\n\n判定：{{.verdict}}\n\n{{.analysis}}\n\n研究員一致性：{{.researcher_agreement}}\n\n不同意見：{{.dissent}}\n\n限制：{{.limitations}}\n{{range .sources}}\n- {{.title}}｜{{.publisher}}｜{{.publication_date}}\n  來源：{{.url}}\n  證據：{{.page_status}}；抓取：{{.fetch_status}}；引用驗證：{{.citation_status}}{{if .tool_call_id}}；工具紀錄：{{.tool_call_id}}{{end}}{{if .quote}}\n  提交引文（僅 matched 可作證據）：{{.quote}}{{end}}\n{{end}}{{end}}\n## 整體限制\n\n{{.overall_limitations}}\n\n## 原始主張處理紀錄\n\n以下為研究輸入，並非已確認事實。處理狀態僅表示輸入涵蓋情形；addressed 不代表已證實，最終判定與證據缺口以上方查核結果為準。\n{{range .claim_assessments}}\n- task {{.source_task_id}} / {{.source_index}}：{{.claim}}\n  處理：{{.handling}}\n{{end}}{{end}}\n",
+  "allOf": [
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":1}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":0}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":0}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":2}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":1}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":1}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":3}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":2}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":2}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":4}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":3}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":3}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":5}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":4}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":4}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":6}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":5}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":5}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":7}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":6}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":6}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":8}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":7}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":7}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":9}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":8}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":8}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":10}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":9}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":9}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":11}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":10}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":10}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":12}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":11}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":11}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":13}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":12}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":12}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":14}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":13}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":13}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":15}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":14}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":14}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":16}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":15}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":15}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":17}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":16}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":16}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":18}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":17}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":17}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":19}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":18}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":18}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":20}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":19}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":19}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":21}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":20}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":20}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":22}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":21}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":21}}}}}}}},
+    {"if":{"required":["input_review"],"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":23}}}}}},"then":{"properties":{"answer":{"items":{"properties":{"finding_indices":{"items":{"maximum":22}}}}},"sections":{"items":{"properties":{"finding_indices":{"items":{"maximum":22}}}}}}}}
+  ]
+}
