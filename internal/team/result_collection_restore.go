@@ -67,14 +67,27 @@ func (c *Coordinator) restoreCollectionContext(ctx context.Context, expected *Re
 		ctx = context.WithValue(ctx, artifactAccessScopeKey, cloneArtifactAccessScope(work.Receipt.ArtifactScope))
 	}
 	if work.Receipt.ContextManifest != nil {
-		manifest, err := authoritativeTaskContextManifest(item, expected.Attempt, expected.ModelExecutionID)
+		manifest, err := collectionContextManifest(item, expected, &work.Receipt)
 		if err != nil {
 			return nil, err
-		}
-		if manifest.Fingerprint != work.Receipt.ContextManifest.Fingerprint {
-			return nil, errResultCollectionStale
 		}
 		ctx = withInvocationMetadata(ctx, invocationMetadataFromManifest(manifest))
 	}
 	return ctx, nil
+}
+
+// Shared read-only provenance check used before either preview or lease-backed
+// submission can consume the original context injection manifest.
+func collectionContextManifest(item *TodoItem, cp *ResultCollectionCheckpoint, receipt *ExecutionReceipt) (*ContextInjectionManifest, error) {
+	if receipt.ContextManifest == nil {
+		return nil, nil
+	}
+	manifest, err := authoritativeTaskContextManifest(item, cp.Attempt, cp.ModelExecutionID)
+	if err != nil {
+		return nil, err
+	}
+	if manifest.Fingerprint != receipt.ContextManifest.Fingerprint {
+		return nil, errResultCollectionStale
+	}
+	return manifest, nil
 }

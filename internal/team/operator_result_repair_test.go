@@ -20,7 +20,8 @@ func resumeEvidenceFixture(t *testing.T, includeInputEvent bool) (*Coordinator, 
 	c.taskTracker.TodoList().Restore([]*TodoItem{audit})
 	task = taskDefFromTodoItem(audit)
 	audit = interruptedToolEvidenceFixture(t, c, audit.ID, task, 2)
-	snapshot, err := ResolveRunInputSnapshot([]RunInputDefinition{{Name: "count", Schema: RunInputSchema{Type: "integer"}, Required: true}},
+	c.session.RunInputDefinitions = []RunInputDefinition{{Name: "count", Schema: RunInputSchema{Type: "integer"}, Required: true}}
+	snapshot, err := ResolveRunInputSnapshot(c.session.RunInputDefinitions,
 		[]RunInputAssignment{{Name: "count", RawValue: []byte("3"), Source: RunInputSourceCLI}}, c.executionRunID, "request", c.session.Config.Name)
 	if err != nil {
 		t.Fatal(err)

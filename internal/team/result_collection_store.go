@@ -79,7 +79,7 @@ func (c *Coordinator) collectionPolicy(target execution.ExecutionTarget) (*Execu
 		return nil, fmt.Errorf("result collection requires a durable execution policy: %w", errors.Join(err, errResultCollectionStale))
 	}
 	if current := c.ExecutionPolicySnapshot(); current != nil && current.ConfigurationHash != policy.ConfigurationHash {
-		return nil, fmt.Errorf("result collection execution policy drift: %w", errResultCollectionStale)
+		return nil, fmt.Errorf("result collection execution policy drift (original=%s current=%s); restore the original team/model/runtime configuration before repair: %w", policy.ConfigurationHash, current.ConfigurationHash, errResultCollectionStale)
 	}
 	if !slices.ContainsFunc(policy.Backends, func(backend ExecutionBackendPolicySnapshot) bool {
 		return backend.Backend == target.Backend && backend.Kind == string(execution.BackendKindLLM)

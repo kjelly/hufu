@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/providerproxy"
 )
 
 // cliBinaryCache owns one build for the whole test process, including failures.
@@ -23,6 +25,11 @@ type cliBinaryCache struct {
 var cliTestBinary cliBinaryCache
 
 func TestMain(m *testing.M) {
+	// In-process CLI fixtures use the same invocation-owned provider proxy
+	// as production. Dispatch its child mode before test flag parsing.
+	if len(os.Args) == 2 && os.Args[1] == providerproxy.ChildArg {
+		os.Exit(providerproxy.RunChild(os.Stdin, os.Stdout))
+	}
 	code := m.Run()
 	// Every consumer has finished, including parallel tests and their cleanups.
 	if cliTestBinary.root != "" {

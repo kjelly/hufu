@@ -53,6 +53,8 @@ var canonicalExamples = []exampleMetadata{
 	{Section: "Progress and recovery", Argv: "hufu session status --workspace ./workspace/dev-team --team dev-team"},
 	{Section: "Progress and recovery", Argv: "hufu status --workers --verbose --workspace ./workspace/dev-team"},
 	{Section: "Progress and recovery", Argv: "hufu session resume --workspace ./workspace/dev-team --team dev-team --run run-123 --branch main"},
+	{Section: "Progress and recovery", Argv: "hufu resume --workspace ./workspace/dev-team --branch main --run run-123 --repair-result 7 --dry-run --output json"},
+	{Section: "Progress and recovery", Argv: "hufu resume --workspace ./workspace/dev-team --branch main --run run-123 --repair-result 7 --model ollama/original-model --report"},
 	{Section: "Learning and publication", Argv: "hufu context learning --workspace ./workspace/dev-team --project project-id --team dev-team"},
 	{Section: "Learning and publication", Argv: "hufu context promotion review --workspace ./workspace/dev-team --project project-id --team dev-team"},
 	{Section: "Learning and publication", Argv: "hufu context conflicts list --workspace ./workspace/dev-team --project project-id --team dev-team"},

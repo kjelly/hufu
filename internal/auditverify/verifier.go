@@ -223,7 +223,7 @@ func runLineageAudit(ctx context.Context, workspace, runID string, lineage []tea
 func verifyRunInputBindingDimension(runID string, runResult *team.RunResult, tasks []*team.TodoItem, snapshots []team.RunInputSnapshot, audit *AuditVerificationResult) AuditDimensionResult {
 	if runResult.RunInputs == nil {
 		for _, item := range tasks {
-			if item != nil && (len(item.BoundInputs) > 0 || item.RunInputSnapshotID != "" || item.MaterializedActionPayloadHash != "") {
+			if item != nil && (len(item.BoundInputs) > 0 || item.RunInputSnapshotID != "" || item.RunInputSnapshotHash != "" || item.MaterializedActionPayloadHash != "") {
 				return failRunInputBinding(audit, item.ID, "input-bound task exists but the terminal run input snapshot is missing")
 			}
 		}
@@ -237,9 +237,9 @@ func verifyRunInputBindingDimension(runID string, runResult *team.RunResult, tas
 	for _, input := range snapshot.Inputs {
 		inputHashes[input.Name] = input.ValueHash
 	}
-	boundActions := 0
+	boundTasks, boundActions := 0, 0
 	for _, item := range tasks {
-		if item == nil || (len(item.BoundInputs) == 0 && item.RunInputSnapshotID == "" && item.MaterializedActionPayloadHash == "") {
+		if item == nil || (len(item.BoundInputs) == 0 && item.RunInputSnapshotID == "" && item.RunInputSnapshotHash == "" && item.MaterializedActionPayloadHash == "" && len(item.ActionInputBindings) == 0) {
 			continue
 		}
 		// Earlier chat invocations keep their own frozen task identities.
@@ -248,7 +248,10 @@ func verifyRunInputBindingDimension(runID string, runResult *team.RunResult, tas
 				continue
 			}
 		}
-		boundActions++
+		boundTasks++
+		if item.MaterializedActionPayloadHash != "" || len(item.ActionInputBindings) > 0 {
+			boundActions++
+		}
 		taskRun := runID
 		if runResult.EvidenceManifest != nil {
 			if binding, ok := runResult.EvidenceManifest.VerifiedTaskBinding(item.ID); ok {
@@ -263,7 +266,7 @@ func verifyRunInputBindingDimension(runID string, runResult *team.RunResult, tas
 	if err != nil {
 		return failRunInputBinding(audit, taskID, err.Error())
 	}
-	reason, err := json.Marshal(map[string]int{"inputs": len(snapshot.Inputs), "bound_actions": boundActions, "assertions": assertions})
+	reason, err := json.Marshal(map[string]int{"inputs": len(snapshot.Inputs), "bound_tasks": boundTasks, "bound_actions": boundActions, "assertions": assertions})
 	if err != nil {
 		return failRunInputBinding(audit, "", "encode run input binding summary")
 	}
@@ -298,7 +301,7 @@ func validateAuditRunInputSnapshot(runID, originRunID string, snapshot *team.Run
 
 func verifyInputBoundTask(runID string, item *team.TodoItem, snapshot *team.RunInputSnapshot, inputHashes map[string]string) error {
 	if item.MaterializedActionPayloadHash == "" && len(item.ActionInputBindings) == 0 && len(item.BoundInputs) == 0 {
-		return verifyRequestBoundTask(runID, item, snapshot)
+		return verifyInvocationBoundTask(runID, item, snapshot)
 	}
 	if item.RunInputSnapshotID != snapshot.ID || item.RunInputSnapshotHash != snapshot.SnapshotHash || item.MaterializedActionPayloadHash == "" || len(item.BoundInputs) == 0 {
 		return errors.New("task materialization identity does not match the terminal run input snapshot")
@@ -341,12 +344,9 @@ func verifyInputBoundTask(runID string, item *team.TodoItem, snapshot *team.RunI
 	return nil
 }
 
-func verifyRequestBoundTask(runID string, item *team.TodoItem, snapshot *team.RunInputSnapshot) error {
-	if _, err := team.RequestAcceptanceContractFromSnapshot(snapshot); err != nil {
-		return errors.New("task has no materialization or request acceptance binding")
-	}
+func verifyInvocationBoundTask(runID string, item *team.TodoItem, snapshot *team.RunInputSnapshot) error {
 	if item.RunInputSnapshotID != snapshot.ID || item.RunInputSnapshotHash != snapshot.SnapshotHash {
-		return errors.New("task request acceptance identity differs from its frozen snapshot")
+		return errors.New("task invocation identity differs from its frozen snapshot")
 	}
 	receipt := latestRunInputReceipt(item, runID)
 	if receipt == nil {
@@ -357,7 +357,7 @@ func verifyRequestBoundTask(runID string, item *team.TodoItem, snapshot *team.Ru
 	}
 	if receipt == nil || receipt.RunInputSnapshotID != snapshot.ID || receipt.RunInputSnapshotHash != snapshot.SnapshotHash ||
 		(item.Status == team.TaskDone && !receipt.Succeeded()) {
-		return errors.New("task receipt does not match its request acceptance snapshot")
+		return errors.New("task receipt does not match its frozen invocation snapshot")
 	}
 	return nil
 }

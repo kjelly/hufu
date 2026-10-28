@@ -10,6 +10,7 @@ import (
 
 func TestResultCollectionOutputPreservesBlockedStateAndOmitsContent(t *testing.T) {
 	item := &team.TodoItem{ID: "task-1", Status: team.TaskBlocked, Output: "private work report", ExecutionReceipt: &team.ExecutionReceipt{
+		RepairProvenance: &team.RepairProvenance{OperatorGrants: []team.ResultRepairGrant{{Recovery: &team.ResultCollectionRecoveryAssessment{Disposition: team.RecoveryRepairClaims, OriginalReason: team.RepairFailureSource, Fingerprint: "assessment-fingerprint"}}}},
 		ResultCollection: &team.ResultCollectionCheckpoint{State: team.ResultCollectionBlocked, TurnsUsed: 2, TurnLimit: 2, FailureReason: team.RepairFailureInvalidSchema, Work: team.ResultCollectionRef{ArtifactID: "private-artifact"}},
 	}}
 	projection := jsonRunTask{ID: item.ID, Status: string(item.Status), ResultCollection: resultCollectionSummaries(item)}
@@ -20,7 +21,7 @@ func TestResultCollectionOutputPreservesBlockedStateAndOmitsContent(t *testing.T
 	var report strings.Builder
 	writeResultCollectionReport(&report, []*team.TodoItem{item})
 	for _, output := range []string{string(data), report.String()} {
-		if !strings.Contains(output, "blocked") || !strings.Contains(output, "invalid_schema") || strings.Contains(output, "private") {
+		if !strings.Contains(output, "blocked") || !strings.Contains(output, "invalid_schema") || !strings.Contains(output, "repair_claims") || !strings.Contains(output, "source_invalid") || strings.Contains(output, "private") {
 			t.Fatalf("unsafe/incomplete output: %s", output)
 		}
 	}

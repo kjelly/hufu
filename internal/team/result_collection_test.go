@@ -423,3 +423,36 @@ func TestResultCollectionOperatorGrantBindsSubmissionLease(t *testing.T) {
 		t.Fatal("operator grant reused")
 	}
 }
+
+func TestResultCollectionFrozenInputHashCompatibility(t *testing.T) {
+	_, _, _, original := beginCollectionFixture(t)
+	for _, tc := range []struct {
+		name, hash string
+		valid      bool
+	}{
+		{"canonical", "sha256:" + strings.Repeat("a", 64), true},
+		{"legacy bare", strings.Repeat("b", 64), true},
+		{"truncated", "sha256:abc", false},
+		{"unknown algorithm", "sha512:" + strings.Repeat("c", 64), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cp := cloneResultCollectionCheckpoint(original)
+			cp.InputsID = "run-inputs-test"
+			cp.InputsSHA256 = tc.hash
+			err := validateResultCollectionBinding(cp)
+			if (err == nil) != tc.valid {
+				t.Fatalf("binding validation=%v", err)
+			}
+			if tc.valid {
+				body, err := json.Marshal(cp, collectionDurationFormat)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var replayed ResultCollectionCheckpoint
+				if err := json.Unmarshal(body, &replayed, collectionDurationFormat); err != nil || replayed.InputsSHA256 != tc.hash {
+					t.Fatal("snapshot hash representation changed on replay", err)
+				}
+			}
+		})
+	}
+}

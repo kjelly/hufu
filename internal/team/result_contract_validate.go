@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -241,22 +243,33 @@ func (c *Coordinator) boundDecisionBlockedEnvelope(todoID string, result *TaskRe
 // the Todo's contract. The returned message, when non-empty, is the
 // worker-facing rejection.
 func (c *Coordinator) structuredPayloadForSubmission(todoID string, raw json.RawMessage, observations ...[]taskTranscriptRecord) (*ResultPayload, string) {
+	payload, message, _ := c.structuredPayloadForAdmission(todoID, raw, observations...)
+	return payload, message
+}
+
+func (c *Coordinator) structuredPayloadForAdmission(todoID string, raw json.RawMessage, observations ...[]taskTranscriptRecord) (*ResultPayload, string, bool) {
+	return c.validateStructuredPayloadClaims(todoID, raw, true, observations...)
+}
+
+// validateStructuredPayloadClaims shares canonical validation without recording
+// rejected submissions during read-only recovery assessment.
+func (c *Coordinator) validateStructuredPayloadClaims(todoID string, raw json.RawMessage, recordFailure bool, observations ...[]taskTranscriptRecord) (*ResultPayload, string, bool) {
 	present := len(bytes.TrimSpace(raw)) > 0 && !bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 	ref, compiled, err := c.boundResultContract(todoID)
 	if err != nil {
-		return nil, "submit_result rejected: " + err.Error()
+		return nil, "submit_result rejected: " + err.Error(), false
 	}
 	if ref == nil {
 		if present {
-			return nil, fmt.Sprintf("%s: structured_payload is not accepted for this task because it has no result contract; omit the field", structuredPayloadInvalidCode)
+			return nil, fmt.Sprintf("%s: structured_payload is not accepted for this task because it has no result contract; omit the field", structuredPayloadInvalidCode), false
 		}
-		return nil, ""
+		return nil, "", false
 	}
 	if !present {
 		if ref.RequireStructured {
-			return nil, fmt.Sprintf("%s: structured_payload is required by result contract %q; submit the result again with a structured_payload that satisfies its schema", structuredPayloadMissingCode, ref.ID)
+			return nil, fmt.Sprintf("%s: structured_payload is required by result contract %q; submit the result again with a structured_payload that satisfies its schema", structuredPayloadMissingCode, ref.ID), false
 		}
-		return nil, ""
+		return nil, "", false
 	}
 	plans, err := c.fixedCollectionPlans(todoID)
 	if err == nil {
@@ -287,9 +300,21 @@ func (c *Coordinator) structuredPayloadForSubmission(todoID string, raw json.Raw
 	if err != nil {
 		err = fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
 	}
+	// Source checks are independent of model formatting. Run them even when
+	// canonical schema validation would fail first, so a format error cannot
+	// conceal an invalid receipt, source reference, or settled decision.
+	if err == nil {
+		if bindingErr := c.validateAssembledEvidenceInputs(todoID, compiled, assembled, bindings); bindingErr != nil {
+			err = fmt.Errorf("%s: bind evidence inputs: %w", structuredPayloadInvalidCode, bindingErr)
+		}
+	}
+	repairable := false
 	var payload *ResultPayload
 	if err == nil {
 		payload, err = validateStructuredResultPayload(compiled, *ref, assembled, observations...)
+		if err != nil {
+			repairable = collectionDecisionSchemaFailure(compiled, assembled, plans)
+		}
 	}
 	if err == nil {
 		payload.CollectionBindings = bindings
@@ -300,10 +325,12 @@ func (c *Coordinator) structuredPayloadForSubmission(todoID string, raw json.Raw
 		}
 	}
 	if err != nil {
-		c.recordResultValidationFailure(todoID)
-		return nil, err.Error()
+		if recordFailure {
+			c.recordResultValidationFailure(todoID)
+		}
+		return nil, err.Error(), repairable
 	}
-	return payload, ""
+	return payload, "", false
 }
 
 func (c *Coordinator) recordResultValidationFailure(todoID string) {
@@ -555,4 +582,72 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
 	}
 	return payload, nil
+}
+
+// collectionDecisionSchemaFailure identifies canonical schema errors confined
+// to model-authored fields of bound decision rows. Trusted source, identity,
+// and runtime-owned fields must never be repaired by another model turn.
+func collectionDecisionSchemaFailure(compiled *CompiledResultContract, assembled []byte, plans []resultFixedCollectionPlan) bool {
+	if compiled == nil || len(plans) == 0 {
+		return false
+	}
+	value, err := decodeUniqueJSON(assembled)
+	if err != nil {
+		return false
+	}
+	value = canonicalResultScalars(value, compiled.schema, 0)
+	validation, ok := errors.AsType[*jsonschema.ValidationError](compiled.schema.Validate(value))
+	if !ok {
+		return false
+	}
+	var visit func(*jsonschema.ValidationError) bool
+	visit = func(node *jsonschema.ValidationError) bool {
+		if len(node.Causes) > 0 {
+			for _, cause := range node.Causes {
+				if !visit(cause) {
+					return false
+				}
+			}
+			return true
+		}
+		for _, plan := range plans {
+			if len(plan.spec.DecisionGroups) == 0 {
+				continue
+			}
+			prefix := fixedCollectionPointerTokens(plan.spec.ItemsPointer)
+			location := node.InstanceLocation
+			if len(location) < len(prefix)+2 || !slices.Equal(location[:len(prefix)], prefix) {
+				continue
+			}
+			index, err := strconv.Atoi(location[len(prefix)])
+			if err != nil || index < 0 || index >= len(plan.rows) {
+				continue
+			}
+			properties, _ := plan.spec.decisionSchema["properties"].(map[string]any)
+			if _, exists := properties[location[len(prefix)+1]]; exists {
+				return true
+			}
+		}
+		return false
+	}
+	return visit(validation)
+}
+
+// Source checks must see the same scalar normalization as canonical admission
+// (for example a schema-declared boolean submitted as "true"). This does not
+// perform schema repair or change any runtime-owned binding.
+func (c *Coordinator) validateAssembledEvidenceInputs(todoID string, compiled *CompiledResultContract, raw []byte, bindings []ResultCollectionBinding) error {
+	value, err := decodeUniqueJSON(raw)
+	if err != nil {
+		return err
+	}
+	switch value.(type) {
+	case map[string]any, []any:
+		value = canonicalResultScalars(value, compiled.schema, 0)
+	}
+	normalized, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return c.validateSubmittedEvidenceInputs(todoID, &ResultPayload{Value: normalized, CollectionBindings: bindings})
 }

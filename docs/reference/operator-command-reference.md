@@ -129,6 +129,14 @@ hufu status --workers --verbose --workspace ./workspace/dev-team
 hufu session resume --workspace ./workspace/dev-team --team dev-team --run run-123 --branch main
 ```
 
+```sh
+hufu resume --workspace ./workspace/dev-team --branch main --run run-123 --repair-result 7 --dry-run --output json
+```
+
+```sh
+hufu resume --workspace ./workspace/dev-team --branch main --run run-123 --repair-result 7 --model ollama/original-model --report
+```
+
 ### Learning and publication
 
 ```sh

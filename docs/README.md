@@ -155,6 +155,7 @@ to re-create an abstraction that already exists in the runtime.
 ### Planning
 
 - [Runtime result collection](implementation-plans/runtime-result-collection.md)
+- [Failed result collection recovery](implementation-plans/failed-result-collection-recovery.md)
   — remove ordinary workers' submit_result dependency through tool-free result
   collection, durable work evidence, bounded repair and compatible replay.
 - [Fixed collection decision binding](implementation-plans/fixed-collection-decisions.md)

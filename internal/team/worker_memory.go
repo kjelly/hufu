@@ -1163,6 +1163,9 @@ func (c *Coordinator) recallWorkerMemory(ctx context.Context, agentDef *agent.Ag
 // (that is WP-6). The method exists so WP-6 can wire it to the session tree
 // without changing call sites.
 func (c *Coordinator) activeBranchID() string {
+	if c != nil && c.recoveryBranch != "" {
+		return c.recoveryBranch
+	}
 	if c == nil || c.session == nil || c.session.Workspace == "" {
 		return "main"
 	}

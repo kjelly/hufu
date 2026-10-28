@@ -124,11 +124,11 @@ func TestActionInputBindingsAreExcludedFromJSON(t *testing.T) {
 func TestCoordinatorMaterializesActionBeforeOccurrenceAdmissionAndDetectsDrift(t *testing.T) {
 	definitions := []RunInputDefinition{{Name: "scope", Schema: RunInputSchema{Type: "object"}, Required: true}}
 	snapshot := mustRunInputSnapshot(t, definitions, []RunInputAssignment{{Name: "scope", RawValue: []byte(`{"count":10}`), Source: RunInputSourceCLI}})
-	c := &Coordinator{
-		session:         &TeamSession{RunInputDefinitions: definitions},
-		sessionData:     &SessionData{RunInputSnapshots: []RunInputSnapshot{*snapshot}, ActiveRunInputSnapshotID: snapshot.ID},
-		executionPolicy: &executionPolicyState{snapshot: &ExecutionPolicySnapshot{RunInputPolicyHash: runInputHash([]byte("policy"))}},
-	}
+	c := newTestCoordinator(t)
+	c.session.Config.Name = snapshot.Team
+	c.session.RunInputDefinitions = definitions
+	c.SetSessionData(&SessionData{RunInputSnapshots: []RunInputSnapshot{*snapshot}, ActiveRunInputSnapshotID: snapshot.ID})
+	c.executionPolicy = &executionPolicyState{snapshot: &ExecutionPolicySnapshot{RunInputPolicyHash: runInputHash([]byte("policy"))}}
 	static := TaskDef{ID: "review", ContractHash: runInputHash([]byte("static")), Action: &Action{
 		Capability: "review", Type: "prepare", Payload: `{"scope":{"count":1}}`,
 		InputBindings: []ActionInputBinding{{Input: "scope", Target: "/scope"}},

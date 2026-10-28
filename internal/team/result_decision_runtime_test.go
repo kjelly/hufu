@@ -445,3 +445,41 @@ func TestBoundDecisionBlockedActualWorkerStopsWithoutProtocolRepair(t *testing.T
 		t.Fatal("wrap-up guidance demands an impossible payload")
 	}
 }
+
+func TestBoundDecisionConditionalClaimsAreRepairable(t *testing.T) {
+	f := newBoundDecisionFixture(t, 1, func(root map[string]any) {
+		item := root["properties"].(map[string]any)["decisions"].(map[string]any)["items"].(map[string]any)
+		item["properties"].(map[string]any)["reason"] = map[string]any{"type": "string"}
+		item["allOf"] = []any{map[string]any{
+			"if":   map[string]any{"properties": map[string]any{"state": map[string]any{"const": "reject"}}},
+			"then": map[string]any{"properties": map[string]any{"reason": map[string]any{"const": ""}}},
+		}}
+	})
+	if response := f.call(t, 0, "decision"); response.IsError {
+		t.Fatal(response.Content)
+	}
+	settled, err := f.c.resolveDecisionCollectionPlans(f.ctx, f.item.ID, f.plans)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := resultFixedCollectionContextForStage(settled, true, true)
+	if err != nil || !strings.Contains(manifest, `"state":"reject"`) || !strings.Contains(manifest, `"canonical_item_schema"`) || !strings.Contains(manifest, `"const":""`) {
+		t.Fatalf("collector lacks settled value or conditional contract: %v %s", err, manifest)
+	}
+	payload, message, repairable := f.c.structuredPayloadForAdmission(f.item.ID, f.submission(t, nil))
+	if payload != nil || !repairable || !strings.Contains(message, "/decisions/0/reason") {
+		t.Fatalf("payload=%v repairable=%v diagnostic=%s", payload, repairable, message)
+	}
+	valid := f.submission(t, func(rows map[string]any) {
+		rows[f.plans[0].rows[0].Key] = map[string]any{"reason": ""}
+	})
+	payload, message, repairable = f.c.structuredPayloadForAdmission(f.item.ID, valid)
+	if payload == nil || message != "" || repairable || !strings.Contains(string(payload.Value), `"state":"reject"`) {
+		t.Fatalf("payload=%v repairable=%v diagnostic=%s", payload, repairable, message)
+	}
+	compiled := f.c.session.ResultContracts["decisions.json"]
+	invalidSource := []byte(`{"decisions":[{"origin":5,"position":0,"asset":"a","state":"reject","reason":""}]}`)
+	if collectionDecisionSchemaFailure(compiled, invalidSource, f.plans) {
+		t.Fatal("trusted source error must not trigger model repair")
+	}
+}

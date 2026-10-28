@@ -2,6 +2,7 @@ package auditverify
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -72,5 +73,47 @@ func TestVerifyRunInputBindingDimensionReplaysAssertionsAndDetectsTampering(t *t
 	if dimension.Status != AuditDimensionFail || len(audit.Findings) != 1 || audit.Findings[0].Code != CodeRunInputBindingInvalid {
 		encoded, _ := json.Marshal(audit)
 		t.Fatalf("tampered audit dimension = %#v audit=%s", dimension, encoded)
+	}
+}
+
+func TestVerifyRunInputBindingDimensionAcceptsInvocationBoundWorkers(t *testing.T) {
+	for _, typed := range []bool{false, true} {
+		for _, mutation := range []string{"none", "task_id", "task_hash", "receipt_hash", "missing_receipt", "failed_receipt"} {
+			t.Run(fmt.Sprintf("typed_%t/%s", typed, mutation), func(t *testing.T) {
+				var definitions []team.RunInputDefinition
+				if typed {
+					definitions = []team.RunInputDefinition{{Name: "scope", Schema: team.RunInputSchema{Type: "string"}, Default: []byte(`"original"`)}}
+				}
+				snapshot, err := team.ResolveRunInputSnapshot(definitions, nil, "run", "invocation", "generic")
+				if err != nil {
+					t.Fatal(err)
+				}
+				item := &team.TodoItem{ID: "1", Status: team.TaskDone, RunInputSnapshotID: snapshot.ID, RunInputSnapshotHash: snapshot.SnapshotHash,
+					ExecutionReceipt: &team.ExecutionReceipt{RunID: "run", TaskID: "1", Attempt: 1, ExitCode: new(0),
+						RunInputSnapshotID: snapshot.ID, RunInputSnapshotHash: snapshot.SnapshotHash}}
+				switch mutation {
+				case "task_id":
+					item.RunInputSnapshotID = ""
+				case "task_hash":
+					item.RunInputSnapshotHash = "foreign"
+				case "receipt_hash":
+					item.ExecutionReceipt.RunInputSnapshotHash = "foreign"
+				case "missing_receipt":
+					item.ExecutionReceipt = nil
+				case "failed_receipt":
+					item.ExecutionReceipt.ExitCode = new(1)
+				}
+				run := &team.RunResult{RunID: "run", RunInputs: snapshot}
+				audit := &AuditVerificationResult{RunID: run.RunID}
+				got := verifyRunInputBindingDimension(run.RunID, run, []*team.TodoItem{item}, []team.RunInputSnapshot{*snapshot}, audit)
+				want := AuditDimensionFail
+				if mutation == "none" {
+					want = AuditDimensionPass
+				}
+				if got.Status != want {
+					t.Fatalf("binding=%+v findings=%+v", got, audit.Findings)
+				}
+			})
+		}
 	}
 }

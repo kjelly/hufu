@@ -1123,6 +1123,7 @@ func (t *todoTool) handleCreate(ctx context.Context, callerName string, items []
 		}
 		occurrences[i] = occurrence
 		batch[i] = TodoSpec{
+			RunInputSnapshotID: occurrence.RunInputSnapshotID, RunInputSnapshotHash: occurrence.RunInputSnapshotHash,
 			Agent: occurrence.Agent, Desc: desc, Goal: occurrence.Goal,
 			Model: occurrence.Model, ModelTopology: cloneModelTopology(occurrence.ModelTopology),
 			ExecutionTarget: occurrence.ResolvedExecutionTarget, ExecutionTopology: cloneExecutionTopology(occurrence.ExecutionTopology),

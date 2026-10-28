@@ -533,6 +533,28 @@ written durable events must use `ollama`; old workspaces may still contain
 
 ## Admission, resume, and replay invariants
 
+New public invocations bind a canonical run-input snapshot. A fresh input
+context persists an empty snapshot even for teams that declare no inputs;
+later no-input turns retain that exact snapshot and record its original run,
+so completed sources keep their identity. Task canonicalization binds
+that snapshot before decision admission for ordinary workers, actions (with or
+without payload input bindings), sidecars, direct invocations, delegated
+subagents and agent-created TODOs. Task creation and execution admission reject
+missing, partial or different bindings rather than silently replacing them.
+The same identity propagates into execution receipts and collection checkpoints
+through the ordinary occurrence projection.
+Offline audit validates ordinary invocation-bound worker receipts independently
+of action materialization and optional request-acceptance contracts. Ordinary
+replay and follow-up turns of legacy no-input contexts retain their existing unbound form; they do not
+create a snapshot for historical work or authorize result-collection recovery.
+
+Historical checkpoints missing this binding remain readable but cannot be
+automatically rebound for recovery. Even when the run has a valid snapshot,
+that snapshot alone does not authenticate an unbound task's sealed work or
+accepted source receipts. Recovery diagnostics distinguish a missing task
+binding from a missing snapshot; passing new inputs cannot supply historical
+proof. No snapshot or receipt is synthesized from present-day task prose.
+
 `hufu resume --branch <existing-branch> [--run <source-run>]` selects the exact
 canonical event lineage before loading the coordinator. It refuses missing or
 empty sources, never falls back to main, and atomically retains the outgoing
@@ -548,6 +570,47 @@ previous repair history are durable, the original execution run/attempt,
 transcript and input hashes stay unchanged, and only `submit_result` is exposed.
 It cannot replay the worker or recover an isolated workspace. Completed
 dependencies are handed off through their existing `evidence_from` IDs.
+For runtime result collection on shared local workspaces, the same explicit
+repair command first reassesses the sealed work and original claims. The old
+failure reason, including a historical `source_invalid` misclassification, is
+not sufficient authority by itself. The evaluator verifies the canonical task,
+input snapshot, policy, source payloads, transcript, CAS bytes and settled
+decisions before classifying `commit_local`, `repair_claims`,
+`resume_collection`, or `blocked`. Source checks precede model-format checks;
+a simultaneous source failure cannot be repaired as formatting.
+
+`resume --branch <source> --run <source-run> --repair-result <task-id>
+--dry-run --output json` provides a read-only assessment before branch
+activation. It does not open a provider transport, invoke tools, infer decisions,
+write diagnostics or alter active session state. It reports the original reason,
+checks, task/branch/source-run identity, checkpoint references, fingerprint,
+consumed/remaining turns, proposed additional allowance and accepted-task count.
+Unknown counts and turns are omitted from JSON and shown as unknown in text. Preview cannot be combined with
+`--repair-model`, `--report`, `--tui`, or new input assignments. A blocked preview
+is a successful inspection with `disposition: blocked`; no grant is created.
+
+Execution recomputes the assessment and atomically appends it with the grant and
+submission-only transition, fenced against the journal head. A competing writer
+must reassess rather than use stale authority. Valid durable claims receive no
+new model allowance; invalid Prepared claims can receive up to two collector
+turns. Consumed turns never decrease, and duplicate grants do not accumulate
+allowance. Historical failure events and old prepared/response CAS references
+remain available through the saved assessment and event lineage. Replay validates
+the saved grant binding, not a new decision from current sources. Collector
+repairs retain the original target, settled verdicts and complete source payloads;
+source limitations remain in their source records and result summary.
+
+This recovery path excludes isolated and fanout work, and cannot change policy,
+contracts or execution targets. Source-dependent payloads with unverifiable shape,
+missing frozen evidence, any nonempty assumption checks or memory-attribution
+claims, active decision disciplines, paused checkpoints, and uncertain side effects
+remain blocked with diagnostics. Unsettled terminal processes and the latest failed
+terminal command in the original run require reconciliation before recovery.
+Preview binds sidecar decision model identities without creating a provider or
+rerunning settled decisions. A local result commit still
+passes ordinary verification and workflow acceptance; repairing one task can
+unlock undispatched downstream work and does not complete the entire run.
+
 An optional `--repair-model <backend/model>` selects an auxiliary submitter
 already present in both the original and current frozen LLM routes. The grant
 and repair turns record that model separately; the original worker target and

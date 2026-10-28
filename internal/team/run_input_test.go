@@ -330,10 +330,14 @@ func TestRunInputSchemasEnforceSupportedScalarArrayAndSizeBounds(t *testing.T) {
 	}
 }
 
-func TestResolveRunInputSnapshotNoInputTeamHasZeroBehaviorChange(t *testing.T) {
+func TestResolveRunInputSnapshotFreezesEmptyInputs(t *testing.T) {
 	snapshot, err := ResolveRunInputSnapshot(nil, nil, "run", "invocation", "legacy")
-	if err != nil || snapshot != nil {
+	if err != nil || snapshot == nil || len(snapshot.Inputs) != 0 || ValidateRunInputSnapshot(snapshot) != nil {
 		t.Fatalf("no-input resolution = %#v, err=%v", snapshot, err)
+	}
+	next, err := ResolveRunInputSnapshot(nil, nil, "next-run", "next-invocation", "legacy")
+	if err != nil || next == nil || next.ID == snapshot.ID {
+		t.Fatalf("empty input snapshot lost invocation identity: %#v, err=%v", next, err)
 	}
 	if _, err := ResolveRunInputSnapshot(nil, []RunInputAssignment{{Name: "unexpected", RawValue: []byte("1"), Source: RunInputSourceCLI}}, "run", "invocation", "legacy"); err == nil || !strings.Contains(err.Error(), "input_unknown") {
 		t.Fatalf("undeclared explicit input error = %v", err)

@@ -271,3 +271,12 @@ func TestSummarizeWorkerAttemptsProjectsRunMetrics(t *testing.T) {
 		t.Fatalf("summary without metrics = %+v", got)
 	}
 }
+
+func TestWorkerRecoveryProjectionPreservesOriginalFailure(t *testing.T) {
+	receipt := &team.ExecutionReceipt{ResultCollection: &team.ResultCollectionCheckpoint{State: team.ResultCollectionReceived, TurnsUsed: 2, TurnLimit: 4}, RepairProvenance: &team.RepairProvenance{OperatorGrants: []team.ResultRepairGrant{{Recovery: &team.ResultCollectionRecoveryAssessment{Disposition: team.RecoveryRepairClaims, OriginalReason: team.RepairFailureSource, Fingerprint: "assessment"}}}}}
+	var view WorkerAttemptView
+	projectResultCollection(&view, receipt, true, team.TaskProtocolIncomplete)
+	if view.ResultRecovery != "repair_claims" || view.ResultRecoveryOriginalReason != "source_invalid" || view.ResultRecoveryFingerprint != "assessment" || view.Activity != WorkerActivityResultCollection || view.ResultCollectionTurns != 2 || view.ResultCollectionLimit != 4 {
+		t.Fatalf("view=%+v", view)
+	}
+}

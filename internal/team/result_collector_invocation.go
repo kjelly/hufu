@@ -37,6 +37,12 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 	if err != nil {
 		return "", nil, err
 	}
+	// Expose verified settled values as runtime-owned row data so the collector
+	// can satisfy conditional schema rules. An unsettled decision still permits
+	// a blocked envelope; admission remains the authority.
+	if settled, resolveErr := c.resolveDecisionCollectionPlans(ctx, checkpoint.TaskID, plans); resolveErr == nil {
+		plans = settled
+	}
 	collectionContext, err := resultFixedCollectionContextForStage(plans, true, true)
 	if err != nil {
 		return "", nil, err

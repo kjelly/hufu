@@ -28,6 +28,9 @@ func (c *Coordinator) validateTaskCreationAdmission(ctx context.Context, item *T
 	if !c.requiresTaskCreationAdmission() {
 		return nil
 	}
+	if err := c.validateTaskRunInputs(item); err != nil {
+		return fmt.Errorf("validate task %s frozen inputs: %w", item.ID, err)
+	}
 	journal, err := c.decisionJournalFor()
 	if err != nil {
 		return fmt.Errorf("validate task %s admission: %w", item.ID, err)

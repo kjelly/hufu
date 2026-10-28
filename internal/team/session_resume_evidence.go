@@ -91,29 +91,11 @@ func (c *Coordinator) validateResumeSources(ctx context.Context) error {
 		}
 	}
 	if taskID, _ := ctx.Value(resultOnlyRepairKey{}).(string); taskID != "" {
-		if model, _ := ctx.Value(resultRepairModelKey{}).(string); model != "" {
-			if _, err := c.resultRepairTarget(model); err != nil {
-				return fail(err)
-			}
-		}
-		item := c.todoItemByID(taskID)
-		if err := validateResultRepairTarget(item); err != nil {
-			return fail(fmt.Errorf("task %s: %w", taskID, err))
-		}
-		if err := c.validateResumeTranscript(ctx, item.ExecutionReceipt); err != nil {
-			return fail(fmt.Errorf("task %s: %w", taskID, err))
-		}
-		if _, err := c.restoreProtocolRepairToolEvidence(ctx, item); err != nil {
-			return fail(fmt.Errorf("task %s tool evidence: %w", taskID, err))
-		}
-		results := c.dependencyResultsForTask(taskID)
-		if len(results) != len(resultDependencyIDs(item)) {
-			return fail(fmt.Errorf("task %s lacks accepted evidence_from results", taskID))
-		}
-		if err := c.validateDependencyPayloads(results); err != nil {
+		if err := c.validateResumeRepairSources(ctx, taskID); err != nil {
 			return fail(err)
 		}
 	}
+
 	return nil
 }
 
@@ -180,6 +162,45 @@ func (c *Coordinator) validateResumeTranscript(ctx context.Context, receipt *Exe
 	}
 	if n != ref.Bytes || hex.EncodeToString(hash.Sum(nil)) != ref.SHA256 {
 		return fmt.Errorf("original transcript bytes do not match receipt")
+	}
+	return nil
+}
+
+func (c *Coordinator) validateResumeRepairSources(ctx context.Context, taskID string) error {
+	if model, _ := ctx.Value(resultRepairModelKey{}).(string); model != "" {
+		if _, err := c.resultRepairTarget(model); err != nil {
+			return err
+		}
+	}
+	item := c.todoItemByID(taskID)
+	if currentResultCollection(item) != nil {
+		if model, _ := ctx.Value(resultRepairModelKey{}).(string); model != "" {
+			return fmt.Errorf("collection repair must retain its original target")
+		}
+		assessment, err := c.AssessResultCollectionRecovery(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		if err := validateRecoveryAssessment(assessment); err != nil {
+			return fmt.Errorf("task %s recovery blocked: %v: %w", taskID, assessment.Checks, err)
+		}
+		return nil
+	}
+	if err := validateResultRepairTarget(item); err != nil {
+		return fmt.Errorf("task %s: %w", taskID, err)
+	}
+	if err := c.validateResumeTranscript(ctx, item.ExecutionReceipt); err != nil {
+		return fmt.Errorf("task %s: %w", taskID, err)
+	}
+	if _, err := c.restoreProtocolRepairToolEvidence(ctx, item); err != nil {
+		return fmt.Errorf("task %s tool evidence: %w", taskID, err)
+	}
+	results := c.dependencyResultsForTask(taskID)
+	if len(results) != len(resultDependencyIDs(item)) {
+		return fmt.Errorf("task %s lacks accepted evidence_from results", taskID)
+	}
+	if err := c.validateDependencyPayloads(results); err != nil {
+		return err
 	}
 	return nil
 }

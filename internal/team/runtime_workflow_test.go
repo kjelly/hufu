@@ -375,6 +375,7 @@ func TestCoordinatorRuntimeActionEmitsProviderLifecycleAndReceipt(t *testing.T) 
 	definitions := []RunInputDefinition{{Name: "scope", Schema: RunInputSchema{Type: "object"}, Required: true}}
 	snapshot := mustRunInputSnapshot(t, definitions, []RunInputAssignment{{Name: "scope", RawValue: []byte(`{"count":10}`), Source: RunInputSourceCLI}})
 	c.session.RunInputDefinitions = definitions
+	c.session.Config.Name = snapshot.Team
 	c.sessionData = &SessionData{RunInputSnapshots: []RunInputSnapshot{*snapshot}, ActiveRunInputSnapshotID: snapshot.ID}
 	materialized, err := c.materializeTaskActions([]TaskDef{{ID: "execute", Agent: "executor", Goal: "apply", Phase: PhaseExecute, Action: &Action{
 		Capability: "structured-actions", Type: "apply", Payload: `{"scope":{"count":1}}`, InputBindings: []ActionInputBinding{{Input: "scope", Target: "/scope"}},

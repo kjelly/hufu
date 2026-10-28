@@ -18,6 +18,7 @@ type commandWorkspaceRequest struct {
 	ExplicitRoot  string
 	TemporaryRoot string
 	Mode          workspacepkg.ResolveMode
+	ReadOnly      bool
 	NewSession    bool
 }
 
@@ -108,7 +109,7 @@ func resolveCommandWorkspace(ctx context.Context, request commandWorkspaceReques
 	if err != nil {
 		return workspacepkg.Resolution{}, nil, err
 	}
-	if !resolution.Managed || request.Mode == workspacepkg.ResolvePreview || resolution.WouldCreate {
+	if !resolution.Managed || request.ReadOnly || request.Mode == workspacepkg.ResolvePreview || resolution.WouldCreate {
 		return resolution, nil, nil
 	}
 	locks, err := workspacepkg.AcquireWorkspaceLocks(stateRoot, []string{resolution.WorkspaceID})
