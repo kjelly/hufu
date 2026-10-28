@@ -6,7 +6,7 @@
 > Supersedes: —
 > Superseded-By: —
 
-> **Implementation status**：WP0–WP2 已提交；WP6 本階段完成驗證；WP3–WP5 與目標結束時的完整整合／race gate 尚未完成。階段證據見第 12–16 節。
+> **Implementation status**：WP0–WP2 已提交；WP6 已提交；WP3 儲存層已驗證，WP3–WP5 與目標結束時的完整整合／race gate 尚未完成。階段證據見第 12–16 節。
 > **Repository**：`kjelly/hufu`
 > **Reviewed baseline**：`4e13abfb91a1328ccc1c58d0fd4a7861b17d6d43`
 > **Revised**：2026-10-28
@@ -344,3 +344,25 @@ WP6 是第 8 節允許的獨立工作包，將以獨立階段提交；WP3–WP5 
 - 最終完整 working-tree `go test -p 2 ./... -timeout 30m` exit 0：CLI 158.332s、context 72.495s、team 656.382s；其他 packages 通過或無測試。這包含保留的無關本地修改，不冒充 immutable 新 HEAD 的證據。
 - 最終定向 race exit 0：context 308.485s、team 1018.747s、CLI 12.875s；命令／實際涵蓋的行為名稱見機器報告。`mise run vet`、`mise run lint` exit 0，lint 0 issues；cache 寫入的 sandbox 警告未停用分析或改動 cache 設定。
 - `bin/check-docs` 與 `git diff --check` 通過。本階段獨立提交；WP3–WP5、另一份 dependency projection 計畫，以及全部功能完成後的整合與完整受影響 race 仍未完成。
+
+## 17. WP3 儲存層基礎階段
+
+Migration 5 新增 branch/cycle → canonical grant event 的索引，沒有另存結果內容。
+低階 helper 驗證來源 event type、branch、cycle/run、ID 與 hash，保留第一次 admission，
+相同來源 replay 為冪等、不同來源拒絕替換。事件與索引的原子寫入須由後續 EventStore
+整合提供；目前尚未開放 CLI grant、recipient 授權或 Worker context delivery。
+
+[格式相容性與本機實測](../reference/runtime-grant-storage.md) 記錄新版唯讀支援
+schema 3/4、舊 verifier 拒絕 schema 5、rollback 與來源驗證測試。
+真正 baseline binary 的初始化 managed fixture 實測通過；未初始化 version-store 的
+布局仍有舊 fork 建立空版本資料庫／lock 的限制，已提請使用者決定支援前提。
+在決定前不宣稱第 6.3 節所有布局均已達成零檔案副作用，也不把儲存層視為 WP3 完成。
+
+本階段 working-tree 完整 `mise exec -- go test -p 2 ./... -timeout 30m` 通過：
+CLI 149.681s、runtimestore 3.634s、team 653.881s；其餘 packages 通過或無測試。
+這包含保留的無關本地修改，不稱為 immutable 新 HEAD 全測證據。
+定向 `-race` 覆蓋 HistoricalGrant、PreReportReadOnly、unknown-schema rejection、
+RunReportPreCapture，通過：runtimestore 5.390s、team 1.374s。
+`mise run vet`、`mise run lint` 均通過，lint 0 issues；`bin/check-docs`、
+`git diff --check` 通過。此儲存層可獨立提交；WP3 其餘功能、相容性決定與最終
+integration／完整受影響 race gate 仍未完成。

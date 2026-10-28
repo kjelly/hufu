@@ -90,6 +90,14 @@ CREATE TABLE run_reports (
   reason TEXT NOT NULL DEFAULT '',
   snapshot BLOB
 );`},
+	{Version: 5, Name: "historical result grant cycle references", SQL: `
+CREATE TABLE historical_grant_cycles (
+  branch_id TEXT NOT NULL,
+  cycle_id TEXT NOT NULL,
+  source_event_id TEXT NOT NULL UNIQUE REFERENCES events(id),
+  source_hash TEXT NOT NULL,
+  PRIMARY KEY (branch_id, cycle_id)
+);`},
 }
 
 func verifyReadOnlySchema(ctx context.Context, db *sql.DB) error {
@@ -98,11 +106,11 @@ func verifyReadOnlySchema(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("read runtime store schema version: %w", err)
 	}
 	required := migrations
-	if version == 3 {
-		// Version 4 adds only optional report snapshots. Preserve reads of
-		// pre-capture histories without migrating the source database, while
-		// still verifying every existing migration's name and checksum.
-		required = migrations[:3]
+	if version == 3 || version == 4 {
+		// Preserve the previously supported read-only formats. Missing new
+		// grant references mean no grant, never an inferred authorization.
+		// Every existing migration still needs its original checksum/name.
+		required = migrations[:version]
 	}
 	return sqlmigrate.Verify(ctx, db, "runtime store", required)
 }

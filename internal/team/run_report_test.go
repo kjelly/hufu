@@ -222,7 +222,7 @@ func TestRunReportPreCaptureSchemaKeepsHistoryReadable(t *testing.T) {
 	finish := appendReportEvent(t, store, RunEvent{Type: "run_finished"}, map[string]any{"outcome": "completed", "response": "historical response"})
 	// Reproduce a workspace created before report capture, including its
 	// actual migration registry rather than only removing the optional table.
-	if _, err := store.store.DB().Exec(`DROP TABLE run_reports; DELETE FROM schema_migrations WHERE version=4`); err != nil {
+	if _, err := store.store.DB().Exec(`DROP TABLE historical_grant_cycles; DROP TABLE run_reports; DELETE FROM schema_migrations WHERE version>=4`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
