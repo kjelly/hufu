@@ -287,15 +287,9 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 		if branch.BranchID == "" {
 			continue
 		}
-		sessionScope := req.Scope
-		sessionScope.BranchID = branch.BranchID
-		// Lineage filtering happens after every HybridRetrieve source has been
-		// scope-authorized (exact, FTS, and vector). Fetching all eligible
-		// branch records prevents post-fork matches from crowding out a valid
-		// pre-fork parent record before the provenance filter is applied.
-		sessionResults, _, retrievedSemantic, err := s.retrieve(ctx, options, contextstore.SearchRequest{
-			Query: query, SemanticQuery: req.SemanticQuery, Scope: sessionScope, Limit: 100000,
-		})
+		search := workerMemorySessionSearch(req, branch, query)
+		sessionScope := search.Scope
+		sessionResults, _, retrievedSemantic, err := s.retrieve(ctx, options, search)
 		if err != nil {
 			if isContextCancellation(err) {
 				return WorkerMemoryBundle{}, fmt.Errorf("recall worker session memory: %w", err)

@@ -794,7 +794,7 @@ func (r *SQLiteRepository) Query(ctx context.Context, q RepositoryQuery) ([]Cont
 		limit = 100
 	}
 	args = append(args, limit)
-	rows, err := r.db.QueryContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE "+strings.Join(where, " AND ")+" ORDER BY priority DESC, created_at DESC, id ASC LIMIT ?", args...)
+	rows, err := r.db.QueryContext(ctx, "SELECT "+itemColumns+" FROM "+contextItemsTableForIDs(q.IDs)+" WHERE "+strings.Join(where, " AND ")+" ORDER BY priority DESC, created_at DESC, id ASC LIMIT ?", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -894,7 +894,9 @@ func compileRepositoryPredicates(q RepositoryQuery, now int64) ([]string, []any,
 		where = append(where, "confidence>=?")
 		args = append(args, *q.MinConfidence)
 	}
-	appendAllowedItemIDPredicate("", &where, &args, normalizeAllowedItemIDs(q.IDs))
+	if err := appendAllowedItemIDPredicate("", &where, &args, q.IDs); err != nil {
+		return nil, nil, err
+	}
 	if q.OriginRunID != "" {
 		where = append(where, "json_extract(metadata_json, '$.run_id') = ?")
 		args = append(args, q.OriginRunID)
@@ -940,7 +942,7 @@ func (r *SQLiteRepository) Iterate(ctx context.Context, q RepositoryQuery, visit
 	if err != nil {
 		return err
 	}
-	rows, err := r.db.QueryContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE "+strings.Join(where, " AND ")+" ORDER BY priority DESC, created_at DESC, id ASC", args...)
+	rows, err := r.db.QueryContext(ctx, "SELECT "+itemColumns+" FROM "+contextItemsTableForIDs(q.IDs)+" WHERE "+strings.Join(where, " AND ")+" ORDER BY priority DESC, created_at DESC, id ASC", args...)
 	if err != nil {
 		return fmt.Errorf("iterate context items: query: %w", err)
 	}
@@ -1258,7 +1260,9 @@ func (r *SQLiteRepository) AddEdges(ctx context.Context, edges ...ContextEdge) e
 	return tx.Commit()
 }
 func (r *SQLiteRepository) SearchExact(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
-	req.AllowedItemIDs = normalizeAllowedItemIDs(req.AllowedItemIDs)
+	if err := validateAllowedItemIDs(req.AllowedItemIDs); err != nil {
+		return nil, err
+	}
 	if req.Scope.ProjectID == "" {
 		return nil, errors.New("project scope is required")
 	}
@@ -1278,9 +1282,11 @@ func (r *SQLiteRepository) SearchExact(ctx context.Context, req SearchRequest) (
 		where = append(where, "lifecycle='confirmed'")
 	}
 	args = append(args, now, now, now)
-	appendSearchFilters("", &where, &args, req)
+	if err := appendSearchFilters("", &where, &args, req); err != nil {
+		return nil, err
+	}
 	args = append(args, limit)
-	rows, e := r.db.QueryContext(ctx, "SELECT "+itemColumns+" FROM context_items WHERE instr(lower(content), ?) > 0 AND "+strings.Join(where, " AND ")+" ORDER BY priority DESC, created_at DESC, id ASC LIMIT ?", args...)
+	rows, e := r.db.QueryContext(ctx, "SELECT "+itemColumns+" FROM "+contextItemsTableForIDs(req.AllowedItemIDs)+" WHERE instr(lower(content), ?) > 0 AND "+strings.Join(where, " AND ")+" ORDER BY priority DESC, created_at DESC, id ASC LIMIT ?", args...)
 	if e != nil {
 		return nil, e
 	}
@@ -1296,14 +1302,14 @@ func (r *SQLiteRepository) SearchExact(ctx context.Context, req SearchRequest) (
 	return out, rows.Err()
 }
 func (r *SQLiteRepository) SearchLexical(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
-	return r.searchLexical(ctx, req, false)
+	return r.searchLexical(ctx, req, req.AllowedItemIDs != nil)
 }
 
 // SearchSupplementalLexical uses the FTS cursor as the outer loop and looks up
 // each canonical row through its primary key. This avoids enumerating scope
 // OR-index alternatives when preparing a bounded supplemental query.
 // It retains the same SQL authorization, BM25 score, ordering and row limit.
-// Legacy SearchLexical lets SQLite choose its original join order.
+// Unrestricted SearchLexical retains SQLite's original join-order choice.
 func (r *SQLiteRepository) SearchSupplementalLexical(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
 	if req.Limit <= 0 || req.Limit > SupplementalMaxSourceRows || req.AllowedItemIDs == nil {
 		return nil, errors.New("supplemental lexical search requires a bounded limit and explicit allow-set")
@@ -1312,7 +1318,9 @@ func (r *SQLiteRepository) SearchSupplementalLexical(ctx context.Context, req Se
 }
 
 func (r *SQLiteRepository) searchLexical(ctx context.Context, req SearchRequest, fixedJoin bool) ([]SearchResult, error) {
-	req.AllowedItemIDs = normalizeAllowedItemIDs(req.AllowedItemIDs)
+	if err := validateAllowedItemIDs(req.AllowedItemIDs); err != nil {
+		return nil, err
+	}
 	if req.Scope.ProjectID == "" {
 		return nil, errors.New("project scope is required")
 	}
@@ -1342,13 +1350,22 @@ func (r *SQLiteRepository) searchLexical(ctx context.Context, req SearchRequest,
 		where = append(where, "c.lifecycle='confirmed'")
 	}
 	args = append(args, now, now, now)
-	appendSearchFilters("c.", &where, &args, req)
+	filters := req
+	filters.AllowedItemIDs = nil
+	if err := appendSearchFilters("c.", &where, &args, filters); err != nil {
+		return nil, err
+	}
+	// The equijoin binds both IDs. Filter the FTS ID at the outer cursor so
+	// out-of-lineage matches do not need a canonical primary-key lookup.
+	if err := appendAllowedItemIDPredicate("context_items_fts.", &where, &args, req.AllowedItemIDs); err != nil {
+		return nil, err
+	}
 	args = append(args, limit)
 	join := "JOIN"
 	canonicalTable := "context_items c"
 	if fixedJoin {
 		join = "CROSS JOIN"
-		canonicalTable += " INDEXED BY sqlite_autoindex_context_items_1"
+		canonicalTable += " INDEXED BY " + contextItemPrimaryKeyIndex
 	}
 	rows, e := r.db.QueryContext(ctx, "SELECT "+columns+", bm25(context_items_fts) FROM context_items_fts "+join+" "+canonicalTable+" ON c.id=context_items_fts.id WHERE context_items_fts MATCH ? AND "+strings.Join(where, " AND ")+" ORDER BY bm25(context_items_fts) LIMIT ?", args...)
 	if e != nil {
@@ -1368,7 +1385,7 @@ func (r *SQLiteRepository) searchLexical(ctx context.Context, req SearchRequest,
 	return out, rows.Err()
 }
 
-func appendSearchFilters(prefix string, where *[]string, args *[]any, req SearchRequest) {
+func appendSearchFilters(prefix string, where *[]string, args *[]any, req SearchRequest) error {
 	if len(req.Kinds) > 0 {
 		placeholders := make([]string, 0, len(req.Kinds))
 		for _, kind := range req.Kinds {
@@ -1381,23 +1398,7 @@ func appendSearchFilters(prefix string, where *[]string, args *[]any, req Search
 		*where = append(*where, prefix+"confidence>=?")
 		*args = append(*args, *req.MinConfidence)
 	}
-	appendAllowedItemIDPredicate(prefix, where, args, req.AllowedItemIDs)
-}
-
-func appendAllowedItemIDPredicate(prefix string, where *[]string, args *[]any, allowed []string) {
-	if allowed == nil {
-		return
-	}
-	if len(allowed) == 0 {
-		*where = append(*where, "1=0")
-		return
-	}
-	placeholders := make([]string, len(allowed))
-	for i, id := range allowed {
-		placeholders[i] = "?"
-		*args = append(*args, id)
-	}
-	*where = append(*where, prefix+"id IN ("+strings.Join(placeholders, ",")+")")
+	return appendAllowedItemIDPredicate(prefix, where, args, req.AllowedItemIDs)
 }
 
 // RebuildLexical recreates the FTS5 projection from canonical rows. It is

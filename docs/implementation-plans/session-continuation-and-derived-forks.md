@@ -6,7 +6,7 @@
 > Supersedes: —
 > Superseded-By: —
 
-> **Implementation status**：WP0–WP2 已提交；WP3–WP6 與最終全套驗證尚未完成，階段證據見第 12–14 節。
+> **Implementation status**：WP0–WP2 已提交；WP6 本階段完成驗證；WP3–WP5 與目標結束時的完整整合／race gate 尚未完成。階段證據見第 12–16 節。
 > **Repository**：`kjelly/hufu`
 > **Reviewed baseline**：`4e13abfb91a1328ccc1c58d0fd4a7861b17d6d43`
 > **Revised**：2026-10-28
@@ -333,3 +333,14 @@ help 旗標污染 CLI fixture；原版本已用獨立回歸測試重現，workin
 修正與原 versioned-resume 測試均已通過 targeted／完整 CLI 及定向 race 驗證。
 本工作樹完整測試、vet 與 lint 均已通過（lint 0 issues）；immutable baseline 的失敗紀錄不改寫。
 WP6 是第 8 節允許的獨立工作包，將以獨立階段提交；WP3–WP5 未完成。
+
+## 16. WP6 實作與驗證
+
+- 重用 `SearchRequest.AllowedItemIDs`，保留 nil／restricted-empty、opaque ID 的大小寫與空白；拒絕空 ID，不新增第二種 constraint 或 history store。
+- Exact／FTS／canonical iterator 以一個 JSON array parameter 在 limit 前授權。明確 ID 的 canonical 查詢使用既有 PK，FTS 在 outer cursor 先過濾 ID，仍保留所有 scope／lifecycle／validity／kind／confidence 檢查。
+- Hybrid 為每個 source 複製凍結清單，融合前再檢查，並沿用可取消的 MMR。Worker 保留最終授權 guard，restricted ancestor 的候選上限由完整合法集合大小決定；active branch 的既有 allowance 不變。
+- 100,010 筆全部 matching 的 Worker fixture 與完整授權 oracle 順序一致；另驗證 40,000-ID set、空集合、跨 scope、來源 mutation、stale vector、cancellation 與兩種 fusion。沒有透過 skip／改名避開大型案例。
+- [效能報告](../reference/ancestor-memory-retrieval-evaluation.md) 與 [完整 samples／source hashes](../reference/ancestor-memory-retrieval-evaluation.json) 保留 16 組比較。全部 ordered IDs 相同，1K／10K 的延遲與配置量 median gate 全數通過；100K vector canonical hydration 100,000 → 4 筆。大型 FTS 的成本變化與合法集合極大時既有 MMR 限制如實揭露。
+- 最終完整 working-tree `go test -p 2 ./... -timeout 30m` exit 0：CLI 158.332s、context 72.495s、team 656.382s；其他 packages 通過或無測試。這包含保留的無關本地修改，不冒充 immutable 新 HEAD 的證據。
+- 最終定向 race exit 0：context 308.485s、team 1018.747s、CLI 12.875s；命令／實際涵蓋的行為名稱見機器報告。`mise run vet`、`mise run lint` exit 0，lint 0 issues；cache 寫入的 sandbox 警告未停用分析或改動 cache 設定。
+- `bin/check-docs` 與 `git diff --check` 通過。本階段獨立提交；WP3–WP5、另一份 dependency projection 計畫，以及全部功能完成後的整合與完整受影響 race 仍未完成。

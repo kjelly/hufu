@@ -116,6 +116,9 @@ type coveredCandidate struct {
 }
 
 func (s *SemanticIndex) SearchVector(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
+	if err := validateAllowedItemIDs(req.AllowedItemIDs); err != nil {
+		return nil, err
+	}
 	if req.Scope.ProjectID == "" {
 		return nil, errors.New("project scope is required")
 	}
@@ -147,6 +150,9 @@ func (s *SemanticIndex) SearchVector(ctx context.Context, req SearchRequest) ([]
 // excluded. An item without a vector for its current content hash is
 // ErrVectorItemNotIndexed.
 func (s *SemanticIndex) SearchSimilarTo(ctx context.Context, itemID string, req SearchRequest) ([]SearchResult, error) {
+	if err := validateAllowedItemIDs(req.AllowedItemIDs); err != nil {
+		return nil, err
+	}
 	if req.Scope.ProjectID == "" {
 		return nil, errors.New("project scope is required")
 	}
@@ -412,25 +418,11 @@ func (r *SQLiteRepository) IterateRetrievable(ctx context.Context, req SearchReq
 	if visit == nil {
 		return errors.New("retrieval iteration requires a visitor")
 	}
-	req.AllowedItemIDs = normalizeAllowedItemIDs(req.AllowedItemIDs)
-	var allowed map[string]struct{}
-	if req.AllowedItemIDs != nil {
-		allowed = make(map[string]struct{}, len(req.AllowedItemIDs))
-		for _, id := range req.AllowedItemIDs {
-			allowed[id] = struct{}{}
-		}
-	}
 	return r.Iterate(ctx, RepositoryQuery{
 		Scope: req.Scope, Visibility: req.Visibility, Kinds: req.Kinds,
 		IncludeCandidates: req.IncludeCandidates, MinConfidence: req.MinConfidence,
-	}, func(item ContextItem) error {
-		if allowed != nil {
-			if _, ok := allowed[item.ID]; !ok {
-				return nil
-			}
-		}
-		return visit(item)
-	})
+		IDs: req.AllowedItemIDs,
+	}, visit)
 }
 
 // SemanticTraceIdentity reports the encoder and the generation of the last

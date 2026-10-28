@@ -1,60 +1,103 @@
 # Hybrid retrieval lineage scope
 
-> Status: draft
+> Status: active
 > Authority: normative
-> Verified-Commit: 2026-09-14
+> Verified-Commit: 825ff686
 > Supersedes: —
 > Superseded-By: —
 
-## Decision status
+## Scope and authorization
 
-This is the WP-8C discovery deliverable. It is not accepted and does not authorize a runtime change. `internal/team/worker_memory.go` therefore retains its explicit `Limit: 100000` workaround and post-retrieval allowed-ID check. That ceiling remains a known correctness risk for restricted ancestor branches with more than 100,000 otherwise eligible newer results.
+The [session continuation plan](../implementation-plans/session-continuation-and-derived-forks.md#8-wp6ancestor-memory-檢索完整性獨立工作包)
+provides the product requirement for pre-limit ancestor authorization. This
+replaces the former discovery-only design. The runtime reuses
+`SearchRequest.AllowedItemIDs`; there is no parallel constraint type, index,
+result store, or lineage authority.
 
-## Existing constraint flow
+Worker memory derives each ancestor's allowed IDs from verified event lineage
+at its fork cutoff. A result ID is a lookup key, not an authorization grant.
+Canonical scope, lifecycle, supersession, validity, kind, and confidence still
+apply even when an ID is explicitly allowed.
 
-For each session-lineage branch, worker memory constructs the branch scope and calls `HybridRetrieve`. Active branches are scope-authorized without an additional item set. Restricted ancestor branches also carry an exact `AllowedItemIDs` set derived from the validated event lineage, but that set is currently applied only after retrieval.
+## Constraint representation
 
-The retrieval paths behave as follows:
+- `AllowedItemIDs == nil` adds no lineage restriction.
+- A non-nil empty list authorizes no items.
+- `WithAllowedItemIDs` copies, bytewise sorts, and deduplicates exact IDs. It
+  does not trim whitespace or change case. Retrieval rejects an empty ID with
+  `ErrInvalidAllowedItemID`; normalization cannot silently discard it.
+- Hybrid retrieval freezes the input and gives each source a separate copy.
+  A source cannot mutate a slice to change another source's authorization or
+  the final common guard.
 
-- `SearchExact` applies content matching, canonical scope visibility, supersession, expiry, validity, lifecycle, kind, and confidence in SQLite, orders by priority/creation/ID, then applies `Limit`.
-- `SearchLexical` ranks FTS5 matches, joins canonical rows, applies the same authorization and lifecycle constraints, then applies `Limit`. Query terms are alternatives (joined with `OR`, each quoted once), so a record that shares any term matches and BM25 ranks records sharing more rare terms first; requiring every term made a paragraph-long task goal match nothing.
-- `SemanticIndex.SearchVector` iterates the canonically authorized candidates (scope, lifecycle, validity, kind, confidence, and `AllowedItemIDs`) and scores only those against the active generation's vectors before taking `Limit`. The canonical row—not vector metadata—is the authorization source. (The chromem `VectorStore` this section originally described has been removed.)
-- `HybridRetrieve` runs all exact terms, lexical search, and optional vector search; filters kinds/confidence; fuses lexical/vector ranks with RRF; applies scope ranking, content deduplication/MMR, exact-result prefixing, file-path boosts, deterministic tie breakers, and only then the final limit.
-- Worker memory finally rechecks canonical scope, applies the restricted ancestor allowed-ID set, ranks memory tiers, deduplicates content, and applies item/token limits. A shared record that the canonical session or persistent lists already carry keeps only its canonical copy in the worker prompt.
+## Source and fusion boundaries
 
-Because every source limits before the allowed-ID filter, unrelated post-fork matches can crowd out an authorized ancestor. Lowering the current ceiling makes that failure more likely; `RepositoryQuery` and `Iterate` cannot fix ranked retrieval.
+`SearchExact` and `SearchLexical` apply allowed-ID membership together with
+canonical authorization, before ordering and `LIMIT`. The predicate binds a
+JSON string array as one SQL parameter:
 
-## Proposed representation
-
-Add one typed, immutable lineage constraint to `SearchRequest`:
-
-```go
-type AllowedContextIDs struct {
-    Restricted bool
-    IDs        []string
-}
+```sql
+id IN (SELECT value FROM json_each(?))
 ```
 
-`Restricted=false` means no additional lineage predicate. `Restricted=true` with an empty set means no item is eligible. Construction must trim nothing—the context ID is an opaque canonical key—reject empty IDs, deduplicate exact values, and freeze a lookup map before any source runs.
+The JSON encoder produces the parameter; IDs never enter SQL syntax. Duplicate
+IDs cannot multiply rows, and large sets do not consume one bound variable per
+ID. An explicit empty set uses a false predicate. Explicit-ID canonical
+queries use the existing primary-key index: a bound JSON array otherwise lets
+SQLite choose a whole-scope scan when it cannot estimate the set size. Restricted
+FTS uses the existing fixed join order and checks the FTS ID before looking up
+the canonical row; all canonical scope and validity predicates remain required.
 
-For SQLite exact and lexical searches, bind the normalized IDs as one JSON array parameter and join `json_each(?)` by value. This avoids caller-generated SQL, identifiers, and variable-count expansion, so sets larger than SQLite's bound-variable limit retain identical behavior. The JSON payload must be produced by `encoding/json`, never string concatenation.
+`SemanticIndex` continues to score only covered, canonically authorized rows
+before top-K. Its canonical iterator now sends IDs into the SQLite predicate,
+so unauthorized ancestors are excluded before hydration as well as scoring.
+Deleted, stale, or unauthorized vector references do not acquire authority
+from vector metadata.
 
-For vector retrieval, the same normalized set must be applied before final neighbor truncation. `SemanticIndex` already does: it filters by `AllowedItemIDs` while iterating authorized candidates and ranks only the remainder, so no over-fetch ceiling exists. Staged over-fetch is not acceptable for any future backend because it reintroduces a silent ceiling.
+`HybridRetrieve` passes the same restriction to exact, lexical, and semantic
+requests and rechecks it before fusion. It retains exact-prefix selection,
+RRF, scope ranking, MMR/content deduplication, file-path boosts, and existing
+tie breakers. Cancellation before or during MMR returns an error without
+publishing partial selected results.
 
-`HybridRetrieve` must pass the identical immutable constraint to every exact, lexical, and vector request and retain a final common allowed-ID assertion before fusion. Worker memory may then remove its 100,000 workaround only after parity tests pass.
+Worker memory retains its final scope and lineage guards after retrieval.
+This protects the output if an alternate vector backend returns out-of-scope
+or stale entries despite its input restriction.
 
-## Required acceptance evidence
+## Ancestor recall completeness
 
-Before implementation is accepted, tests must cover:
+A restricted ancestor request retrieves up to the entire allowed set's size,
+with a minimum positive query limit for an empty set. Exact and FTS cannot
+spend this allowance on post-fork records. Worker tier ranking, deduplication,
+and item/token budgets then operate on the authorized candidates.
 
-- active branch with no lineage restriction;
-- restricted parent at and before its fork point, excluding post-fork parent and sibling items;
-- restricted empty set;
-- duplicate IDs and an invalid empty ID;
-- an allowed set larger than SQLite's `MAX_VARIABLE_NUMBER`;
-- equal ordered `ContextItem` results for exact, lexical, and vector-only fixtures;
-- equal fused order after RRF, MMR/content deduplication, file boosts, and final limit;
-- stale/deleted vector IDs and canonical hydration authorization;
-- cancellation and bounded diagnostic output.
+The old fixed 100,000 overfetch ceiling no longer limits restricted ancestors.
+The active branch's existing 100,000 retrieval allowance is unchanged; this
+work does not claim global unbounded recall. Persistent cross-session recall
+also retains its existing limits and policy.
 
-Benchmarks must report exact/FTS/vector latency, candidates considered, canonical rows hydrated, allocation volume, and end-to-end worker-memory latency at representative lineage sizes. Until the vector path has an accepted bounded-cost implementation, this design remains draft and the existing risk stays explicit.
+A large authorized matching set can still make existing fusion/MMR expensive.
+Pre-limit authorization eliminates unauthorized candidate pressure; it does
+not replace MMR or promise constant cost for arbitrarily large allowed sets.
+
+## Verification and cost evidence
+
+Behavior tests cover nil versus empty restrictions, opaque identities, empty-ID
+rejection, a 40,000-ID set, canonical scope enforcement, backend mutation,
+vector sentinels, cancellation, and complete authorized-oracle ordering.
+The end-to-end worker fixture has 100,010 matching records, including more
+than 100,000 post-fork records; all eight allowed ancestor records must match
+the exhaustive oracle in order. Only those authorized rows reach fusion.
+
+`BenchmarkLineageRetrieval` covers exact, FTS, and the real semantic index;
+`BenchmarkWorkerAncestorRecall` covers the worker service. Both use fixed
+fixtures at 1K, 10K, 100K, and 100,002 rows, with five warm serial samples.
+The SQLite benchmark's driver wrapper counts actual canonical content rows,
+including rows filtered after hydration in the baseline iterator. Projection
+and metadata rows are excluded from that metric. Each benchmark logs ordered
+IDs; neither result counts nor timings alone prove authorization correctness.
+
+Benchmarks use local synthetic data and a fake embedder. They do not measure
+real provider latency, production SLOs, or user-task success. The plan's small
+fixture latency/allocation gate and final repository validation must pass
+before this implementation is declared complete.

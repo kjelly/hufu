@@ -167,6 +167,13 @@ func HybridRetrieveWithOptions(
 	req SearchRequest,
 	options HybridRetrievalOptions,
 ) ([]SearchResult, RetrievalTrace, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, RetrievalTrace{}, err
+	}
+	if err := validateAllowedItemIDs(req.AllowedItemIDs); err != nil {
+		return nil, RetrievalTrace{}, err
+	}
+	req = req.WithAllowedItemIDs(req.AllowedItemIDs)
 	work := QueryWork{}
 	if QueryWorkObserverEnabled(ctx) {
 		started := time.Now()
@@ -187,7 +194,7 @@ func HybridRetrieveWithOptions(
 		exactTerms = append(exactTerms, group...)
 	}
 	for _, exact := range exactTerms {
-		exactReq := req
+		exactReq := req.WithAllowedItemIDs(req.AllowedItemIDs)
 		exactReq.Query = exact
 		work.ExactCalls++
 		found, err := repo.SearchExact(ctx, exactReq)
@@ -199,7 +206,7 @@ func HybridRetrieveWithOptions(
 	}
 	obs.recordPath("exact", len(exactTerms) > 0, "", trace.ExactResults)
 	work.LexicalCalls++
-	lexical, err := repo.SearchLexical(ctx, req)
+	lexical, err := repo.SearchLexical(ctx, req.WithAllowedItemIDs(req.AllowedItemIDs))
 	work.CandidateRows += len(lexical)
 	if err != nil {
 		return nil, trace, err
@@ -219,7 +226,7 @@ func HybridRetrieveWithOptions(
 		case options.Vector == nil:
 			fallbackReason = options.UnavailableReason
 		default:
-			semanticRequest := req
+			semanticRequest := req.WithAllowedItemIDs(req.AllowedItemIDs)
 			semanticRequest.Query = remainder
 			work.VectorCalls++
 			vectorCtx := ctx
@@ -253,7 +260,10 @@ func HybridRetrieveWithOptions(
 	}
 	obs.recordPath("vector", vectorFused, vectorReason, trace.VectorResults)
 	fused := rrfObserved(obs, []string{"lexical", "vector"}, fusionConfig{mode: options.Fusion, carriedWeight: options.FusionCarriedWeight}, trace.LexicalResults, trace.VectorResults)
-	fused = applyMMRObserved(obs, rankForScope(fused, req.Scope), 0.75)
+	fused, err = applyMMRObservedContext(ctx, obs, rankForScope(fused, req.Scope), 0.75)
+	if err != nil {
+		return nil, trace, err
+	}
 	obs.recordExactPrefix(trace.ExactResults)
 	// Exact matches are a deterministic prefix, not a short-circuit: lexical
 	// and vector retrieval can still contribute relevant context for the rest
@@ -321,8 +331,12 @@ func buildSemanticRetrievalTrace(
 }
 
 func filterSearchResults(results []SearchResult, req SearchRequest) []SearchResult {
-	if len(req.Kinds) == 0 && req.MinConfidence == nil {
+	if len(req.Kinds) == 0 && req.MinConfidence == nil && req.AllowedItemIDs == nil {
 		return results
+	}
+	allowed := make(map[string]bool, len(req.AllowedItemIDs))
+	for _, id := range req.AllowedItemIDs {
+		allowed[id] = true
 	}
 	kinds := make(map[ContextKind]bool, len(req.Kinds))
 	for _, kind := range req.Kinds {
@@ -330,6 +344,9 @@ func filterSearchResults(results []SearchResult, req SearchRequest) []SearchResu
 	}
 	out := make([]SearchResult, 0, len(results))
 	for _, result := range results {
+		if req.AllowedItemIDs != nil && !allowed[result.Item.ID] {
+			continue
+		}
 		if len(kinds) > 0 && !kinds[result.Item.Kind] {
 			continue
 		}
