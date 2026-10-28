@@ -276,3 +276,9 @@ mise run lint
 必要證據不能被裁切；投影政策與交付可持久化及復原核驗；三條既有結果路徑具有契約回歸；
 需要的程式 gates 全部通過。沒有 native transport、Task Signal、真實環境操作或人工決策
 藏在驗收條件中。實作者不需要替使用者選擇 provider、取得憑證或安排外部操作。
+
+## 8. Baseline 實測紀錄
+
+正式文件提交 `825ff686` 的完整隔離測試已執行，結果及 CLI fixture 問題見
+[baseline 報告](../reference/runtime-continuation-baseline.md)。本計畫 PR-1–PR-3
+尚未實作；baseline 失敗不當成產品功能已驗收，也不以工作樹測試代替 immutable baseline。

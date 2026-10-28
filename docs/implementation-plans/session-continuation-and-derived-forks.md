@@ -324,3 +324,12 @@ Focused tests 依實際行為名稱選取並確認有執行測試，不以 WP �
 - 最終定向 race：`mise exec -- go test -timeout 30m -race -p 2 ./internal/team ./internal/inspect ./cmd/hufu -run 'Test(TeamInfo|TaskResultByID|InMemoryCompleted|CompletedTaskResult|CloneCoordinatorRetainsCanonicalHistoricalScope|CanonicalHistoricalTaskReader|HistoricalResult)' -count=1`，exit 0；team 15.247s、inspect 13.656s、CLI 40.313s。測試亦覆蓋 scope override 拒絕、team casing、restored-result profile、完整 Result ID 與 untrusted fence。
 
 - WP2 `mise exec -- go vet -p 2 ./...`、`bin/check-docs`、`git diff --check`：exit 0；`mise run lint`：exit 0，0 issues。本階段可提交；WP3–WP6 與最終完整 gate 尚待完成。
+
+## 15. 新 baseline 與 CLI fixture 隔離
+
+`825ff686` 的隔離完整測試結果與 3,263 個 tracked blobs 完整性查核見
+[baseline 報告](../reference/runtime-continuation-baseline.md)。唯一失敗是全域 Cobra
+help 旗標污染 CLI fixture；原版本已用獨立回歸測試重現，working-tree 的 fixture
+修正與原 versioned-resume 測試均已通過 targeted／完整 CLI 及定向 race 驗證。
+本工作樹完整測試、vet 與 lint 均已通過（lint 0 issues）；immutable baseline 的失敗紀錄不改寫。
+WP6 是第 8 節允許的獨立工作包，將以獨立階段提交；WP3–WP5 未完成。
