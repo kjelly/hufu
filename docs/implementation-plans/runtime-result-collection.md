@@ -384,7 +384,7 @@ mise run run -- --new --agent-team hufu-code-review --report \
 - 公開診斷確認 `inv-20261027T082432.227691424Z-e94d215f48ab`／`run-20261027T082513.649081069Z-1bcddfdc3593` 已正確解析最近三個 commit；16 個任務中 5 個完成、11 個未解決。六個收集結果使用合法 `ev_` 證據短碼卻未轉成完整 artifact ID；三個結果的重複欄位不一致；另有未知欄位與普通任務提交外層 invariant assessments 的錯誤。
 - Collector 在 canonical admission 前重用工具 transport 的證據短碼解析器，以原工作 occurrence、model execution、branch、授權來源與 CAS 完整性驗證短碼。保存的結果與 receipt 仍使用完整 ID 及 canonical hash；未知、越權與損毀來源直接拒絕。
 - Collector schema 排除普通任務不適用的外層 `invariant_assessments`，不改變內層 payload 的 schema 或舊工具 transport。提示包含 durable task 的結果 assertions，說明重複 findings／invariant claims 必須一致。
-- 最終 admission 發現模型 schema 錯誤，或 findings／invariant assessments 與 payload 的 `equals_projection` 不一致時，可以使用原本剩餘的一次格式修復。只有這些表示方式錯誤可修復；其他 assertion、來源、權限、驗收、持久化失敗仍阻擋。已 materialize artifact 的結果不進入此修復路徑。
+- 最終 admission 發現模型 schema 錯誤，或 findings／invariant assessments 與 payload 的 `equals_projection` 不一致時，可以使用原本剩餘的一次格式修復。本節修正時只有這些表示方式錯誤可修復；後續〈Collector 宣告格式與 invariant 修復回歸〉將「已驗證 invariant 的關聯 finding 嚴重度不一致」列入同一額度。其他 assertion、來源、權限、驗收、持久化失敗仍阻擋。已 materialize artifact 的結果不進入此修復路徑。
 - 格式修復透過 checkpoint event 將 prepared claims 退回 received，保留原 response、work、receipt 與已消耗回合；重播及 crash-resume 不派發 worker、不重跑工具，也不增加預算。空回覆同樣可使用剩餘格式修復回合。
 - 回歸測試涵蓋 native producer → bound workset → 真實本機 HTTP worker `view` → collector → canonical receipt／event replay；另涵蓋未知與損毀證據拒絕、欄位投影、格式修復、預算耗盡、驗收失敗以及 prepared／received 中斷恢復。測試使用本機假 provider，未重跑或改寫使用者的失敗 session。
 
@@ -397,7 +397,7 @@ mise run run -- --new --agent-team hufu-code-review --report \
 
 驗收以公開 `status`／`inspect`／`results` 的 canonical outcome、未解決任務數與驗證結果為準；collector committed 僅表示結果已接納，不能取代任務與整體 acceptance。此修正不保證任意模型輸出或真實檢閱必然成功。
 
-本輪最終驗證結果：
+本輪最終驗證結果（修正提交為 `debfa2e3`；表中結果為提交前的本機執行紀錄）：
 
 | Gate | 結果 |
 |---|---|
@@ -412,14 +412,14 @@ mise run run -- --new --agent-team hufu-code-review --report \
 
 ### Collector 宣告格式與 invariant 修復回歸（2026-10-27）
 
-- 公開 `status`／`inspect` 確認 `inv-20261027T134629.468992092Z-77d461f83180`／`run-20261027T134712.927967234Z-388d6424a217` 在 branch `session-1793108807131174103` 為 blocked：14 個任務中 11 個完成、3 個未解決。task 3 在 1／2 回合因 invariant 定義要求 `error`、關聯 finding 卻是 `warning` 而停止；task 5 在 2／2 回合無法解碼 `files_read` 字串；task 7 在 2／2 回合仍提交 1002 runes 的摘要，超過 1000 上限。
+- 修正前，公開 `status`／`inspect` 確認 `inv-20261027T134629.468992092Z-77d461f83180`／`run-20261027T134712.927967234Z-388d6424a217` 在 branch `session-1793108807131174103` 為 blocked：14 個任務中 11 個完成、3 個未解決。task 3 在 1／2 回合因 invariant 定義要求 `error`、關聯 finding 卻是 `warning` 而停止；task 5 在 2／2 回合無法解碼 `files_read` 字串；task 7 在 2／2 回合仍提交 1002 runes 的摘要，超過 1000 上限。
 - 原 collector 共用的 submission schema 宣告 `files_read`／`files_modified` 項目可為字串或物件，strict DTO 卻只接受 `FileRef` 物件。現在先拒絕 raw duplicate／unknown fields，驗證原始 model-facing 格式，再只轉換已宣告的檔案字串；其他 shorthand、runtime-owned override 與不合法 nested fields 仍拒絕。相同正規化也用於證據短碼解析後的 admission。
 - Collector 重用原工作 invariant context 的驗證與提示，提供精確 ID、定義嚴重度與內容。以 typed attestation error 辨識「已驗證 invariant 的關聯 finding 嚴重度不一致」，僅在 collector 路徑使用原本剩餘的一次格式修復；tool transport、未知 invariant、過期來源及真正 gate failure 的語意維持原契約。runtime 不自動改寫嚴重度或刪除 violation。
 - 摘要維持 1000 runes 上限，提示要求簡短摘要與保留完整 `details`。超長摘要使用既有格式修復額度；兩次仍不合法就保留 blocked，沒有新增回合、截短內容或放寬限制。
 - 終止 receipt 保存經遮蔽、有限長度的 collector 診斷。FailureEvent 從 blocked collection 及其相符 provenance 投影 `result_collection`，不再將先前 `view` 或未實際呼叫的 `submit_result` 誤列為此次失敗來源。已 committed 的結果若後續 gate 失敗，仍由原驗證路徑呈現。
 - 測試涵蓋 schema 宣告的檔案字串／物件與非法輸入、字串證據短碼的 bound-workset 完整 admission／replay、invariant 嚴重度修復與耗盡、1000／1002 runes 邊界、修復後 gate 仍阻擋、未知 invariant 拒絕，以及 collector 診斷與遮蔽。測試只使用本機假 provider；本次不重跑或改寫使用者的失敗 session。
 
-本輪最終驗證結果：
+本輪最終驗證結果（修正提交為 `7dd7941a`；表中結果為提交前的本機執行紀錄）：
 
 | Gate | 結果 |
 |---|---|
@@ -445,14 +445,17 @@ mise run run -- --new --agent-team hufu-code-review --report \
 
 之後的確認重跑 `run-20261027T182828.389619252Z-7c8c6f91e63a` 中，task 4 的 collector 第一回合漏了頂層 `invariant_assessments`，修復回合把 record 內 1059 runes 的 summary 照抄到頂層，超過 runtime 的 1000 runes 上限而停止。runtime 依既有上限與單次修復額度執行，沒有缺陷；問題在 team 以 `equals_projection` 把沒有上限的 `record.invariant_assessments[].summary` 綁到有上限的 runtime claim。修正放在 team：`review-v1.json` 與四份內嵌的 review 定義加上與 runtime 相同的 `summary` 1000 runes、`missing_evidence` 項目 256 runes 上限；`review-primary-workset` 的 goal-template（collector 的 work input 也會帶到）與 reviewer prompt 明示 300 字內、兩份副本須相同。
 
-本輪驗證結果：
+本輪驗證結果（runtime 修正提交為 `d8986450`，team 修正提交為 `de16db7e`；表中結果為提交前的本機執行紀錄）：
 
 | Gate | 結果 |
 |---|---|
 | 修正前 verification duration 回歸測試 | exit 1；不含 duration 重現 `commit_failed`，含 duration 重現解碼拒絕 |
 | collector／transport／evidence keys／workset／attestation／invariant focused tests | exit 0；`internal/team` 10.836s |
-| `mise run test -- -timeout=20m` | exit 0；`internal/team` 258.651s、`cmd/hufu` 71.690s、`internal/improver` 117.377s；所有套件均通過 |
+| `mise run test -- -timeout=20m`（只含 collector duration 修正） | exit 0；`internal/team` 258.651s、`cmd/hufu` 71.690s、`internal/improver` 117.377s；所有套件均通過 |
+| `mise run test -- -timeout=20m`（含 `d8986450` 全部內容） | exit 0；`internal/team` 253.602s、`cmd/hufu` 63.408s；其餘套件沿用通過的快取結果 |
 | `mise run vet` | exit 0 |
 | `mise run lint` | exit 0，0 issues |
 | `bin/check-docs` | exit 0；86 active files、175 total files、542 relative links、38 Go anchors |
-| 真實 team 重跑 `run-20261027T165911.092004264Z-e77607e6fbbb` | completed；acceptance passed；12／12 任務完成、0 失敗嘗試；10 次 `critique_assessment` 皆 decided。該次沒有收集結果帶 verification 項目，duration 修正由上方回歸測試與先前失敗 run 證明 |
+| team 修正後的 `.agent-teams/hufu-code-review` reviewgate／reviewprep 測試 | exit 0 |
+| team 修正前的真實重跑 `run-20261027T165911.092004264Z-e77607e6fbbb` | completed；acceptance passed；12／12 任務完成、0 失敗嘗試；10 次 `critique_assessment` 皆 decided。該次沒有收集結果帶 verification 項目，duration 修正由上方回歸測試與先前失敗 run 證明 |
+| team 修正後的真實重跑 `run-20261027T185348.233713698Z-37cf45a4fd76` | completed；acceptance passed；12／12 任務完成、0 失敗嘗試；7 次 `critique_assessment` 皆 decided；task 4 的 invariant summary 為 295／280／289 runes，兩份副本相同 |

@@ -302,6 +302,9 @@ Collector 接受 schema 已宣告的 `files_read`／`files_modified` 字串項�
 格式修復回合，結果仍須通過完整 attestation 與 gate，不能降低定義嚴重度。
 每個 invariant 摘要上限仍為 1000 字元（runes）；詳細說明放入 `details`，
 runtime 不會自行截短 claim。額度耗盡後仍不合法的結果維持 blocked。
+`result-transport: tool` 的 `submit_result` 同樣接受這些檔案字串項目；嚴重度
+不一致時則拒絕該次提交並把錯誤回給 worker，由 worker 修正後重新提交，不使用
+collector 的修復回合。
 
 team.yaml 的平面設定或 versioned manifest 的 `spec`，以及 agent `.md` frontmatter
 都可設定：
