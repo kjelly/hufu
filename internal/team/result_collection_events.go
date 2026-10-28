@@ -8,7 +8,7 @@ import (
 
 func validateResultCollectionEvent(event RunEvent) error {
 	var payload resultCollectionEvent
-	if err := json.Unmarshal(event.Payload, &payload, json.RejectUnknownMembers(true)); err != nil {
+	if err := json.Unmarshal(event.Payload, &payload, json.RejectUnknownMembers(true), collectionDurationFormat); err != nil {
 		return err
 	}
 	checkpoint := payload.Receipt.ResultCollection
@@ -71,7 +71,7 @@ func (c *Coordinator) appendCollectionCheckpointLocked(ctx context.Context, item
 		c.applyResultContractReceipt(checkpoint.TaskID, result, &receipt)
 	}
 	payload := resultCollectionEvent{Receipt: receipt, Result: cloneTaskResult(result)}
-	body, err := json.Marshal(payload, json.Deterministic(true))
+	body, err := json.Marshal(payload, json.Deterministic(true), collectionDurationFormat)
 	if err != nil {
 		return err
 	}
@@ -86,7 +86,7 @@ func (c *Coordinator) appendCollectionCheckpointLocked(ctx context.Context, item
 		return err
 	}
 	var accepted resultCollectionEvent
-	if err := json.Unmarshal(durable.Payload, &accepted); err != nil {
+	if err := json.Unmarshal(durable.Payload, &accepted, collectionDurationFormat); err != nil {
 		return err
 	}
 	expected, err := collectionDigest(payload)
@@ -135,6 +135,10 @@ func validateCollectionTransition(prior, next *ResultCollectionCheckpoint) error
 			return errResultCollectionStale
 		}
 	case ResultCollectionReceived:
+		if prior.State == ResultCollectionPrepared && next.FailureReason == RepairFailureInvalidSchema && next.Prepared == nil &&
+			next.Response != nil && prior.Response != nil && *next.Response == *prior.Response {
+			break
+		}
 		if prior.State != ResultCollectionInFlight && prior.State != ResultCollectionReceived {
 			return errResultCollectionStale
 		}

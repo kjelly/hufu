@@ -1337,6 +1337,9 @@ go run ./cmd/hufu --report "重構模組"
 | 1 | `~/.config/hufu/hufu.yaml` | 全域配置 |
 | 2 | `./hufu.yaml` | 專案配置 |
 
+hufu.yaml 未定義的頂層 key 會被忽略，hufu 會印出一次指出檔案與 key 的警告。
+`decision-primitives` 等 team 專屬區塊要寫在 team.yaml；hufu.yaml 只共用 `decision-runtime` 的 backend 設定。
+
 ### 配置檔範例
 
 ```yaml

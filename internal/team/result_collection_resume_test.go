@@ -19,7 +19,7 @@ func TestResultCollectionResumeCompletesDurableClaimsWithoutWorkerOrProvider(t *
 			if err != nil {
 				t.Fatal(err)
 			}
-			checkpoint, err = c.recordCollectionResponse(ctx, checkpoint, []byte(`{"status":"success","summary":"analysis complete"}`))
+			checkpoint, err = c.recordCollectionResponse(ctx, checkpoint, []byte(`{"status":"success","summary":"analysis complete","files_read":["source.go"],"files_modified":["result.go"]}`))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -52,6 +52,9 @@ func TestResultCollectionResumeCompletesDurableClaimsWithoutWorkerOrProvider(t *
 			}
 			if worker.Calls() != 0 || current.ExecutionReceipt.ResultCollection.TurnsUsed != 1 {
 				t.Fatal("resume repeated worker execution or spent another model turn")
+			}
+			if len(current.TypedResult.FilesRead) != 1 || current.TypedResult.FilesRead[0].Path != "source.go" || len(current.TypedResult.FilesModified) != 1 || current.TypedResult.FilesModified[0].Path != "result.go" {
+				t.Fatal("resume lost canonical file entries")
 			}
 		})
 	}

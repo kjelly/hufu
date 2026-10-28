@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 )
@@ -367,5 +368,54 @@ func TestRequestAcceptanceRuntimeVerifierEvidenceIsBoundToReceipt(t *testing.T) 
 	item.VerifyResult.ExitCode = 1
 	if err := ValidateRequestAcceptanceBinding(t.Context(), result, []*TodoItem{item}, store); err == nil {
 		t.Fatal("failed runtime verifier accepted as successful evidence")
+	}
+}
+
+// A typed result's verification entry carries a time.Duration. Its response
+// text must still render for the reviewer and for offline quote replay.
+func TestRequestAcceptanceResponseSourceRendersVerification(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		verification VerificationResult
+	}{
+		{name: "zero_duration", verification: VerificationResult{Command: "go test ./...", ExitCode: 0}},
+		{name: "duration", verification: VerificationResult{Command: "go test ./...", ExitCode: 0, Duration: 1500 * time.Millisecond}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := requestAcceptanceFixture(t)
+			snapshot := freezeRequestFixture(t, c, "Explain the findings", "response")
+			item := completedRequestEvidence(t, c, "Supporting observation only", false)
+			item.TypedResult.Verification = []VerificationResult{tc.verification}
+			if err := c.taskTracker.TodoList().TryApplyProjectedItem(item); err != nil {
+				t.Fatal(err)
+			}
+			sources, err := c.requestAcceptanceSources(t.Context(), snapshot)
+			if err != nil {
+				t.Fatalf("response source failed to render: %v", err)
+			}
+			const quote = "comparison is explained with its limits"
+			var response *requestAcceptanceSource
+			for i := range sources {
+				if sources[i].Kind == "response" && sources[i].TaskID == item.ID {
+					response = &sources[i]
+				}
+			}
+			if response == nil || !strings.Contains(response.Text, quote) || !strings.Contains(response.Text, `"verification"`) {
+				t.Fatalf("response source=%+v", response)
+			}
+			store, err := OpenFileArtifactStoreReadOnly(c.session.Workspace, c.session.Workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := &RunResult{RunID: c.executionRunID, RunInputs: snapshot}
+			proof := RequestAcceptanceProof{Kind: "response", TaskID: item.ID, ArtifactID: response.ArtifactID, ArtifactHash: response.ArtifactHash, Quote: quote}
+			if err := validateRequestAcceptanceProof(t.Context(), result, []*TodoItem{c.todoItemByID(item.ID)}, store, proof); err != nil {
+				t.Fatalf("offline replay rejected the rendered response quote: %v", err)
+			}
+			proof.Quote = "invented analysis"
+			if err := validateRequestAcceptanceProof(t.Context(), result, []*TodoItem{c.todoItemByID(item.ID)}, store, proof); err == nil {
+				t.Fatal("offline replay accepted a quotation absent from the typed result")
+			}
+		})
 	}
 }

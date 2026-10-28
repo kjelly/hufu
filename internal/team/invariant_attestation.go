@@ -15,6 +15,18 @@ type expectedInvariantAssessment struct {
 	item       ContextManifestItem
 }
 
+// This mismatch is a representation error: the invariant's severity is already
+// fixed by its verified definition. It never grants permission to lower it.
+type invariantFindingSeverityMismatch struct {
+	id       string
+	actual   string
+	expected InvariantSeverity
+}
+
+func (e *invariantFindingSeverityMismatch) Error() string {
+	return fmt.Sprintf("invariant %q finding severity %q does not equal definition severity %q", e.id, e.actual, e.expected)
+}
+
 const (
 	maxInvariantAssessmentClaims       = 128
 	maxInvariantAssessmentSummaryRunes = 1000
@@ -389,7 +401,7 @@ func (c *Coordinator) attestInvariantClaims(todoID string, attempt int, modelExe
 				return fmt.Errorf("invariant %q finding_index %d is outside canonical findings", id, index)
 			}
 			if result.Findings[index].Severity != string(expectedInvariant.definition.Severity) {
-				return fmt.Errorf("invariant %q finding severity %q does not equal definition severity %q", id, result.Findings[index].Severity, expectedInvariant.definition.Severity)
+				return &invariantFindingSeverityMismatch{id: id, actual: result.Findings[index].Severity, expected: expectedInvariant.definition.Severity}
 			}
 		}
 		assessment := InvariantAssessment{

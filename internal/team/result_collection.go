@@ -3,6 +3,7 @@ package team
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	jsonv1 "encoding/json"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -22,6 +23,13 @@ const (
 	repairFailureCollectionUnavailable    RepairFailureReason = "collection_unavailable"
 	repairFailureCollectionBudget         RepairFailureReason = "collection_budget_exhausted"
 )
+
+// collectionDurationFormat encodes VerificationResult.Duration as the integer
+// nanoseconds that the claims schema advertises and the tool transport's
+// encoding/json writes. json/v2 has no default time.Duration representation
+// and rejects even an omitted zero, so every collected result, receipt, and
+// checkpoint payload that can carry a verification entry needs it.
+var collectionDurationFormat = jsonv1.FormatDurationAsNano(true)
 
 type ResultCollectionState string
 
@@ -160,7 +168,7 @@ func preserveResultCollection(incoming, existing *ExecutionReceipt) {
 }
 
 func collectionDigest(value any) (string, error) {
-	data, err := json.Marshal(value, json.Deterministic(true))
+	data, err := json.Marshal(value, json.Deterministic(true), collectionDurationFormat)
 	if err != nil {
 		return "", err
 	}

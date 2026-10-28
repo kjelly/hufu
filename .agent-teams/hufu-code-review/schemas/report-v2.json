@@ -2170,7 +2170,8 @@
               },
               "summary": {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 1000
               },
               "finding_index": {
                 "type": "integer",
@@ -2181,7 +2182,8 @@
                 "maxItems": 16,
                 "items": {
                   "type": "string",
-                  "minLength": 1
+                  "minLength": 1,
+                  "maxLength": 256
                 }
               }
             },

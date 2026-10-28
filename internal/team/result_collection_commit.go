@@ -5,12 +5,25 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+
+	"charm.land/fantasy"
 )
 
 type resultCollectionAdmissionKey struct{}
 
+// Collection publishes only fields that the durable task can accept. Keep the
+// legacy tool schema separate so persisted tool sessions retain compatibility.
+func collectionSubmissionInfo(c *Coordinator, taskID string) fantasy.ToolInfo {
+	info := localResultSubmissionInfo(c, taskID)
+	if localResultSubmissionContract(c, taskID).InvariantVerification == "" {
+		delete(info.Parameters, "invariant_assessments")
+	}
+	return info
+}
+
 // decodeCollectionClaims accepts exactly the published model claims schema.
-// Unlike the legacy tool adapter it does not normalize shorthand or unwrap text.
+// Only the schema's declared file-entry shorthand is normalized; text is never
+// unwrapped and unsupported shorthand remains invalid.
 func (c *Coordinator) decodeCollectionClaims(taskID string, raw []byte) (SubmitResultInput, error) {
 	var input SubmitResultInput
 	if len(bytes.TrimSpace(raw)) == 0 {
@@ -22,17 +35,25 @@ func (c *Coordinator) decodeCollectionClaims(taskID string, raw []byte) (SubmitR
 	if _, err := decodeUniqueJSON(raw); err != nil {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
 	}
-	if err := json.Unmarshal(raw, &input, json.RejectUnknownMembers(true)); err != nil {
+	info := collectionSubmissionInfo(c, taskID)
+	if err := validateSubmissionFieldPresence(string(raw), info); err != nil {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
 	}
-	if input.Summary == "" {
-		return input, rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("summary is required"))
-	}
-	if err := validateToolArguments(string(raw), localResultSubmissionInfo(c, taskID)); err != nil {
+	if err := validateToolArguments(string(raw), info); err != nil {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
 	}
 	if err := c.validateFixedCollectionInputJSON(taskID, string(raw)); err != nil {
 		return input, rejectLocalResult(RepairFailureContract, err)
+	}
+	normalized, err := normalizeCollectionFileRefs(raw)
+	if err != nil {
+		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
+	}
+	if err := json.Unmarshal(normalized, &input, json.RejectUnknownMembers(true), collectionDurationFormat); err != nil {
+		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
+	}
+	if input.Summary == "" {
+		return input, rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("summary is required"))
 	}
 	return input, nil
 }
@@ -77,13 +98,28 @@ func (c *Coordinator) commitPreparedCollection(ctx context.Context, expected *Re
 	if err != nil {
 		return rejectLocalResult(RepairFailureSource, err)
 	}
-	input, err := c.decodeCollectionClaims(item.ID, raw)
+	if _, err := c.decodeCollectionClaims(item.ID, raw); err != nil {
+		return err
+	}
+	// Resolve only keys issued by successful authorized views in the original
+	// work occurrence. Canonical validation and storage still require full IDs.
+	resolved, err := c.resolveResultEvidenceKeys(ctx, item.ID, string(raw))
+	if err != nil {
+		return rejectLocalResult(RepairFailureSource, err)
+	}
+	input, err := c.decodeCollectionClaims(item.ID, []byte(resolved))
 	if err != nil {
 		return err
 	}
 	ctx = context.WithValue(ctx, resultCollectionAdmissionKey{}, expected)
 	admission := localResultAdmission{coordinator: c, todoID: item.ID}
-	return admission.admit(ctx, input, localResultSubmissionContract(c, item.ID), nil)
+	return admission.admit(ctx, input, localResultSubmissionContract(c, item.ID), func() RepairFailureReason {
+		issues, _, err := resultSubmissionIssues(resolved, localResultCandidateValidationInfo(c, item.ID))
+		if err == nil && len(issues) > 0 {
+			return RepairFailureInvalidSchema
+		}
+		return RepairFailureSource
+	})
 }
 
 func (c *Coordinator) acceptedCollectionResult(ctx context.Context, item *TodoItem, checkpoint *ResultCollectionCheckpoint) (*TaskResult, error) {
@@ -98,7 +134,7 @@ func (c *Coordinator) acceptedCollectionResult(ctx context.Context, item *TodoIt
 		return nil, err
 	}
 	var result TaskResult
-	if err := json.Unmarshal(body, &result, json.RejectUnknownMembers(true)); err != nil {
+	if err := json.Unmarshal(body, &result, json.RejectUnknownMembers(true), collectionDurationFormat); err != nil {
 		return nil, err
 	}
 	if result.TaskID != checkpoint.TaskID || result.Attempt != checkpoint.Attempt || result.Agent != checkpoint.Agent || !isLocalSubmittedResultSource(result.Source) {
@@ -148,7 +184,7 @@ func (tx *taskResultOccurrenceTransaction) commitCollection(ctx context.Context,
 	if err := c.attachCollectedTranscript(ctx, item, expected, canonical); err != nil {
 		return err
 	}
-	body, err := json.Marshal(canonical, json.Deterministic(true))
+	body, err := json.Marshal(canonical, json.Deterministic(true), collectionDurationFormat)
 	if err != nil {
 		return err
 	}

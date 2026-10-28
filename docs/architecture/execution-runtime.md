@@ -131,10 +131,27 @@ zero tools, then strictly decodes JSON and calls shared result admission.
 The accepted source is `collected`, with the same contract, evidence, verifier,
 terminal and workspace integration gates as a tool submission. Runtime-owned
 fields are still assembled from verified sources; the model cannot override them.
+Declared string entries in `files_read` and `files_modified` are converted
+losslessly to `{path: ...}` before DTO decoding. Duplicate keys, unknown fields
+and unsupported shorthand remain invalid.
 
-Each attempt has one collection call and at most one JSON/schema repair. A
+Each attempt has one collection call and at most one JSON/schema or
+representation repair. Only two representation errors qualify. The first is a
+failed `equals_projection` assertion (see Ordered result projections) whose
+`pointer` is `/findings` or `/invariant_verification/assessments` and whose
+reference array lies under `structured_payload`, when no other assertion fails
+and the result declares no artifacts. The second is a violated invariant's
+linked finding having a severity different from its verified definition. Any
+other assertion or attestation failure stops collection. The collector receives
+the original context's invariant IDs and severities. Repair may align the linked
+finding's severity with the definition; the runtime never rewrites it. The
+invariant's status and the other judgments stay unchanged, and the result must
+still pass attestation.
+Invariant summaries remain limited to 1000 runes; extended explanations belong
+in `details`. The runtime does not truncate a claim to make it valid. A
 turn is reserved durably before dispatch, so a lost in-flight call counts
-against the two-turn limit. Provider failure, cancellation, source mismatch,
+against the two-turn limit. Provider failure, cancellation, an authorized-source
+identity or integrity mismatch,
 storage failure or exhausted repair budget stops result collection, retaining
 work and isolated/fanout delivery artifacts. Resume uses received, prepared or
 accepted durable bytes before considering another permitted model call. It

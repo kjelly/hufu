@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	jsonv1 "encoding/json"
 	"encoding/json/v2"
 	"fmt"
 	"io"
@@ -115,8 +116,8 @@ func validateRequestAcceptanceProof(ctx context.Context, result *RunResult, item
 		return fmt.Errorf("quotation does not match a successful runtime verifier receipt")
 	}
 	if proof.Kind == "response" && item.TypedResult != nil {
-		body, err := json.Marshal(item.TypedResult, json.Deterministic(true))
-		if err == nil && strings.Contains(string(body), proof.Quote) {
+		body, err := requestAcceptanceResponseText(item.TypedResult)
+		if err == nil && strings.Contains(body, proof.Quote) {
 			return nil
 		}
 	}
@@ -124,6 +125,14 @@ func validateRequestAcceptanceProof(ctx context.Context, result *RunResult, item
 		return fmt.Errorf("invalid observed proof")
 	}
 	return validateRequestTranscriptQuote(ctx, store, ref, proof, receipt, item)
+}
+
+// requestAcceptanceResponseText is the typed-result text the reviewer quotes
+// and offline replay re-checks. json/v2 has no default time.Duration
+// representation, so a verification entry's Duration uses integer nanoseconds.
+func requestAcceptanceResponseText(result *TaskResult) (string, error) {
+	body, err := json.Marshal(result, json.Deterministic(true), jsonv1.FormatDurationAsNano(true))
+	return string(body), err
 }
 
 func requestAcceptanceVerificationResult(item *TodoItem, receipt *ExecutionReceipt) *VerificationResult {

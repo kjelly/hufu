@@ -185,7 +185,7 @@ func artifactScopeToolDenial(ctx context.Context, name string, inner fantasy.Age
 // against the same policy that will be installed for the attempt. This keeps
 // a custom resolver or future tool assembly from handing a bound worker an
 // exposed-but-uncallable required protocol tool.
-func (c *Coordinator) validateBoundWorkerToolPolicy(resolved ResolvedWorkerTools, task TaskDef, todoID string, scope *ArtifactAccessScope) error {
+func (c *Coordinator) validateBoundWorkerToolPolicy(ctx context.Context, resolved ResolvedWorkerTools, def *agent.AgentDef, task TaskDef, todoID string, scope *ArtifactAccessScope) error {
 	if c == nil || scope == nil || c.todoItemByID(todoID) == nil || c.todoItemByID(todoID).WorksetBinding == nil {
 		return nil
 	}
@@ -195,6 +195,7 @@ func (c *Coordinator) validateBoundWorkerToolPolicy(resolved ResolvedWorkerTools
 	}
 	policyCtx := context.WithValue(context.Background(), tools.ArtifactPathPolicyKey, policy)
 	resultToolPresent := false
+	planToolPresent := false
 	for _, candidate := range resolved.Tools {
 		if candidate == nil {
 			continue
@@ -202,12 +203,32 @@ func (c *Coordinator) validateBoundWorkerToolPolicy(resolved ResolvedWorkerTools
 		if resultTool, ok := candidate.(*submitResultTool); ok && resultTool != nil && resultTool.coordinator == c && resultTool.todoID == todoID {
 			resultToolPresent = true
 		}
+		if planTool, ok := candidate.(*submitPlanTool); ok && planTool != nil && planTool.coordinator == c && planTool.todoID == todoID {
+			planToolPresent = true
+		}
 		if denial := c.workerArtifactToolDenial(policyCtx, candidate.Info().Name, candidate); denial != "" {
 			return fmt.Errorf("resolved tool %q is incompatible with the bound artifact policy: %s", candidate.Info().Name, denial)
 		}
 	}
-	if task.Execution.RequiresResult && !resultToolPresent {
+	// Reuse the resolver's protocol requirements. Requiring a typed result
+	// does not grant submit_result under runtime collection, and initial plan
+	// submission has its own protocol. Resolve from trusted policy and the
+	// actual attempt target rather than trusting a custom resolver's metadata.
+	transport, err := c.resultTransportForTaskContext(ctx, def, task)
+	if err != nil {
+		return err
+	}
+	requirements, _, err := staticResultRequirements(StaticToolResolutionInput{
+		Agent: def, Task: task, LifecycleMode: workerToolResolutionModeForTask(task), ResultTransport: transport,
+	})
+	if err != nil {
+		return err
+	}
+	if requirements.ResultToolRequired && !resultToolPresent {
 		return fmt.Errorf("required protocol tool %q is missing from the final resolved worker surface", submitResultToolName)
+	}
+	if requirements.PlanRequired && !planToolPresent {
+		return fmt.Errorf("required protocol tool %q is missing from the final resolved worker surface", "submit_plan")
 	}
 	return nil
 }

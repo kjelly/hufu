@@ -441,11 +441,11 @@ func (c *Coordinator) requestAcceptanceSources(ctx context.Context, snapshot *Ru
 		if item.TypedResult == nil {
 			continue
 		}
-		response, err := json.Marshal(item.TypedResult, json.Deterministic(true))
+		response, err := requestAcceptanceResponseText(item.TypedResult)
 		if err != nil {
 			return nil, err
 		}
-		add(requestAcceptanceSource{Kind: "response", TaskID: item.ID, ArtifactID: ref.ID, ArtifactHash: ref.SHA256, Text: string(response)})
+		add(requestAcceptanceSource{Kind: "response", TaskID: item.ID, ArtifactID: ref.ID, ArtifactHash: ref.SHA256, Text: response})
 	}
 	return sources, nil
 }

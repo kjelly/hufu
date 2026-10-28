@@ -22,6 +22,11 @@ func resultCollectionFixture(t *testing.T) (*Coordinator, *TodoItem, context.Con
 
 func resultCollectionProviderFixture(t *testing.T, endpoint string, runtime bool, options ...func(*Coordinator)) (*Coordinator, *TodoItem, context.Context, ExecutionReceipt) {
 	t.Helper()
+	return resultCollectionTaskFixture(t, endpoint, runtime, nil, options...)
+}
+
+func resultCollectionTaskFixture(t *testing.T, endpoint string, runtime bool, configureTask func(*TodoSpec), options ...func(*Coordinator)) (*Coordinator, *TodoItem, context.Context, ExecutionReceipt) {
+	t.Helper()
 	c := newTestCoordinator(t)
 	c.maxConcurrent = 1
 	c.session.Config.DefaultLLMBackend = execution.OllamaBackendName
@@ -56,6 +61,9 @@ func resultCollectionProviderFixture(t *testing.T, endpoint string, runtime bool
 	}
 	target := execution.ExecutionTarget{Backend: execution.OllamaBackendName, Model: "test"}
 	spec := TodoSpec{Agent: "worker", Desc: "analyze the supplied evidence", Model: "ollama/test", ExecutionTarget: target, ExecutionTopology: []execution.ExecutionTarget{target}, Execution: ExecutionContract{RequiresResult: true}}
+	if configureTask != nil {
+		configureTask(&spec)
+	}
 	ids := c.taskTracker.TodoList().ReserveIDs(1)
 	projection, err := taskOccurrenceProjectionFromSpec(spec, ids[0])
 	if err != nil {

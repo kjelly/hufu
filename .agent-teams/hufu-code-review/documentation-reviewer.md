@@ -126,8 +126,9 @@ and legal evidence elsewhere; do not remove a legal field merely because a
 namesake at another path was rejected.
 
 Every invariant assessment requires `invariant_id`, `status`, and `summary`.
-Copy each injected ID exactly. Keep each summary under 1000 Unicode characters
-(prefer at most 300); put longer supporting analysis in result details.
+Copy each injected ID exactly. Write each summary in at most 300 Unicode
+characters; the runtime rejects a summary over 1000, and a rejected copy can
+fail the whole review. Put longer supporting analysis in result details.
 
 The static workset contract also requires `structured_payload.record`:
 - `kind: review`, and `review_revision`, `workset_key`, `lens` copied exactly
