@@ -195,8 +195,9 @@ and legal evidence elsewhere; do not remove a legal field merely because a
 namesake at another path was rejected.
 
 Every invariant assessment requires `invariant_id`, `status`, and `summary`.
-Copy each injected ID exactly. Keep each summary under 1000 Unicode characters
-(prefer at most 300); put longer supporting analysis in result details.
+Copy each injected ID exactly. Write each summary in at most 300 Unicode
+characters; the runtime rejects a summary over 1000, and a rejected copy can
+fail the whole review. Put longer supporting analysis in result details.
 
 The static workset contract also requires `structured_payload.record`:
 - `kind: review`, and `review_revision`, `workset_key`, `lens` copied exactly
@@ -209,7 +210,8 @@ The static workset contract also requires `structured_payload.record`:
   that raises a security concern or material disagreement requiring review;
 - `invariant_assessments`: copy the submitted invariant claims exactly —
   identical `invariant_id`, `status`, `summary`, `finding_index`, and
-  `missing_evidence`, never a shortened or reworded summary — ordered by
+  `missing_evidence`, never a summary that differs between the two copies
+  (shorten an overlong summary in both, identically) — ordered by
   ascending `invariant_id` (the order the runtime attests them). Omit optional
   fields in both copies when absent; never invent `finding_index: 0` as an
   empty value, because zero identifies the first finding. Submission checks

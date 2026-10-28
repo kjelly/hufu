@@ -432,3 +432,27 @@ mise run run -- --new --agent-team hufu-code-review --report \
 | `bin/check-docs` | exit 0；86 active files、175 total files、542 relative links、38 Go anchors |
 
 重型驗證依序執行，開始前確認沒有 live Hufu 團隊程序。上述結果證明本機回歸與相容性檢查通過，不代表原本 blocked 的真實 run 已完成；本輪未重跑真實 provider／team，也未更改其 session。
+
+### Collector verification duration 編碼回歸（2026-10-27）
+
+- 以 `--model ollama/minimax-m3.1-flash:cloud` 重跑 `hufu-code-review` 最近一個 commit 時，`run-20261027T163450.354602169Z-0bd3e58e9a5a` 的 task 6 在收集結果 commit 時停止：`commit_failed: store submitted result: json: cannot marshal from Go time.Duration within "/verification/0/duration": no default representation`。該 claims 的 `verification` 項目沒有 `duration`。
+- 原因是 collector 路徑以 `encoding/json/v2` 讀寫 `TaskResult`、`SubmitResultInput` 與 receipt，而 `VerificationResult.Duration` 是 `time.Duration`。json/v2 沒有 Duration 預設表示法，`omitempty` 需要先編碼才能判斷，因此連省略的零值也會失敗；claims schema 宣告的整數 `duration` 也會在解碼時被誤判為 `invalid_schema`，修復回合無法改正。tool transport 使用 `encoding/json`，沒有這個問題。
+- collector 的 claims 解碼、accepted bytes 寫入與讀回、checkpoint event 的寫入、驗證與讀回、work blob 及 collection digest 統一使用 `jsonv1.FormatDurationAsNano(true)`，與 tool transport 和 schema 一致採整數奈秒。沒有 Duration 的值編碼不變，既有 checkpoint digest 與 work hash 不受影響；先前含 verification 的收集結果從未成功寫入，因此沒有需要相容的舊資料。
+- request acceptance 以 json/v2 渲染 `TaskResult` 的同類問題一併修正：reviewer 的 response 來源與離線引用重驗共用 `requestAcceptanceResponseText`，同樣採整數奈秒。修正前只要已完成任務帶 verification，建立 reviewer 來源就會直接報錯，使 acceptance 失敗。
+- 回歸測試以本機 HTTP 假 provider 驅動完整工作→收集→commit，涵蓋不含與含 `duration` 的 verification 項目，並檢查單次收集、accepted bytes 讀回、checkpoint event 驗證與 replay 後的 Duration。修正前兩個案例分別重現 commit 失敗與解碼拒絕。
+
+同一次重跑中，`hufu-code-review` 的 `critique_assessment` decision primitive 原本使用全域 sidecar `ollama/glm-5.3-flash:cloud`。該模型在 DecisionProfile 關閉 reasoning、512 output tokens 的限制下會把分析寫進答案並被截斷，三次呼叫都回傳 `decision_invalid_backend_output`；JSON schema、system prompt、修復回合或 native `think:false` 都無法讓它直接回答。這是 team 的模型選擇問題，因此修正放在 team：該 entry 明訂 `backend: sidecar` 與 team 既有的 coordinator 模型 `ollama/minimax-m3:cloud`，runtime 的 sidecar decision 解析維持嚴格。
+
+之後的確認重跑 `run-20261027T182828.389619252Z-7c8c6f91e63a` 中，task 4 的 collector 第一回合漏了頂層 `invariant_assessments`，修復回合把 record 內 1059 runes 的 summary 照抄到頂層，超過 runtime 的 1000 runes 上限而停止。runtime 依既有上限與單次修復額度執行，沒有缺陷；問題在 team 以 `equals_projection` 把沒有上限的 `record.invariant_assessments[].summary` 綁到有上限的 runtime claim。修正放在 team：`review-v1.json` 與四份內嵌的 review 定義加上與 runtime 相同的 `summary` 1000 runes、`missing_evidence` 項目 256 runes 上限；`review-primary-workset` 的 goal-template（collector 的 work input 也會帶到）與 reviewer prompt 明示 300 字內、兩份副本須相同。
+
+本輪驗證結果：
+
+| Gate | 結果 |
+|---|---|
+| 修正前 verification duration 回歸測試 | exit 1；不含 duration 重現 `commit_failed`，含 duration 重現解碼拒絕 |
+| collector／transport／evidence keys／workset／attestation／invariant focused tests | exit 0；`internal/team` 10.836s |
+| `mise run test -- -timeout=20m` | exit 0；`internal/team` 258.651s、`cmd/hufu` 71.690s、`internal/improver` 117.377s；所有套件均通過 |
+| `mise run vet` | exit 0 |
+| `mise run lint` | exit 0，0 issues |
+| `bin/check-docs` | exit 0；86 active files、175 total files、542 relative links、38 Go anchors |
+| 真實 team 重跑 `run-20261027T165911.092004264Z-e77607e6fbbb` | completed；acceptance passed；12／12 任務完成、0 失敗嘗試；10 次 `critique_assessment` 皆 decided。該次沒有收集結果帶 verification 項目，duration 修正由上方回歸測試與先前失敗 run 證明 |

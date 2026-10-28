@@ -42,7 +42,13 @@ spec:
   # Bounded model inference remains permitted under no-net; tools remain offline.
   decision-primitives:
     critique_assessment:
-      # Inherit decision-runtime; without it the default remains sidecar.
+      # The verdict weighs up to 12 evidence slices within the 512-token
+      # DecisionProfile with reasoning disabled. A flash sidecar such as
+      # glm-5.3-flash writes its analysis into the answer and is cut off
+      # before the token (decision_invalid_backend_output), so pin the
+      # coordinator's model, which answers this question directly.
+      backend: sidecar
+      model: ollama/minimax-m3:cloud
       version: "1"
       kind: choice
       agents: [critic]
@@ -399,7 +405,7 @@ spec:
         source-artifact:
           task_id: produce-workset
           artifact: primary review workset manifest
-        goal-template: 'Review primary workset item {key} with the {lens} lens. Result identity: record.workset_key="{key}", record.review_revision="{review_revision}", record.lens="{lens}". The item key is distinct from the Workset ID. Assigned reference_candidate_ids={reference_candidate_ids}. Return exactly these IDs in record.reference_assessments, in this order; an empty list requires [].'
+        goal-template: 'Review primary workset item {key} with the {lens} lens. Result identity: record.workset_key="{key}", record.review_revision="{review_revision}", record.lens="{lens}". The item key is distinct from the Workset ID. Assigned reference_candidate_ids={reference_candidate_ids}. Return exactly these IDs in record.reference_assessments, in this order; an empty list requires []. Write every invariant summary in at most 300 characters (the runtime rejects more than 1000) and use the identical text in invariant_assessments and record.invariant_assessments.'
       execution:
         requires-result: true
         requires-grounded-result: true
