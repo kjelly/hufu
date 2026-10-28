@@ -181,3 +181,24 @@ func TestCompletedTaskResultForAgentRequiresTaskIDForAmbiguousSelector(t *testin
 		t.Fatalf("ambiguous selector = (ok=%v candidates=%v), want two candidates", ok, candidates)
 	}
 }
+
+// Replaced by branch-aware reader tests when the Markdown fallback is removed.
+func TestTeamInfoHistoricalMarkdownIsNotBoundToBranch(t *testing.T) {
+	c := newTestCoordinator(t)
+	dir := filepath.Join(c.session.Workspace, "tasks", c.session.Config.Name, "worker")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const sentinel = "SIBLING_ONLY_SENTINEL"
+	content := "**Status:** done\n\n## Task Description\n" + sentinel + "\n\n## Result\n" + sentinel
+	if err := os.WriteFile(filepath.Join(dir, "sibling.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := &teamInfoTool{coordinator: c}
+	for _, action := range []string{"task_history", "task_result"} {
+		response, err := tool.Run(t.Context(), fantasy.ToolCall{Input: `{"action":"` + action + `","agent":"worker"}`})
+		if err != nil || response.IsError || !strings.Contains(response.Content, sentinel) {
+			t.Fatalf("%s Markdown characterization: response=%+v err=%v", action, response, err)
+		}
+	}
+}

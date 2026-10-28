@@ -246,8 +246,8 @@ Negative fixtures 必須覆蓋來源在 admission 後／dispatch 前失效、cut
 
 ```bash
 mise exec -- go test -p 2 ./internal/team ./internal/inspect ./internal/context ./internal/runtimestore ./cmd/hufu
-mise exec -- go test -p 2 ./...
-mise exec -- go test -race -p 2 ./internal/team ./internal/inspect ./internal/context ./internal/runtimestore ./cmd/hufu
+mise exec -- go test -timeout 30m -p 2 ./...
+mise exec -- go test -timeout 60m -race -p 2 ./internal/team ./internal/inspect ./internal/context ./internal/runtimestore ./cmd/hufu
 mise run lint
 bin/check-docs
 git diff --check
@@ -267,3 +267,29 @@ Focused tests 依實際行為名稱選取並確認有執行測試，不以 WP �
 - 可先交付 WP0/1/2，再 WP3/4/5；WP6 獨立交付。只宣稱實際完成的工作包，不要求正式發布或 production canary。
 
 所有保留事項都能以 repo 程式碼與本地 fixture 完成。目前沒有需要使用者提供憑證、正式資料或操作外部系統的前置工作。
+
+## 12. WP0 實作紀錄
+
+### 範圍與入口
+
+- 原始 baseline：`4e13abfb91a1328ccc1c58d0fd4a7861b17d6d43`，使用 `git archive` 匯出 immutable snapshot；未把既有未提交的診斷／result-collection 修改混入 baseline。
+- 普通 Resume：resolveExistingExecutionWorkspace → ReadResumeSource → ActivateResumeSource → loadTeamCommon → bindRunWorkspaceVersioning → Coordinator。activation 目前早於 static gate 與 project lock。
+- required session checkout：openVersionedSession → team lock → project lock → workspaceOps/recovery → WorkspaceSessionOps.Checkout → materialization → canonical session rebuild。
+- 明確 `--workspace` 的 resolver 先走 unmanaged adapter；WP1 必須辨識已註冊 control root 並保持 team/project lease 到 run 結束。
+- task_history 與 task_result(agent) fallback 走 taskHistoryEntries；task_result(task_id) 走 current TodoList typed result。WP2 保留 current typed lookup，只更換未授權歷史來源。
+- ordinary stateful fork 保留舊投影；completed follow-up 經 workflow_cycle_started；FAILED 不允許普通 follow-up。這些是 WP4 的相容基線。
+
+### 特徵測試
+
+- `TestResumeActivationMetadataLeavesMaterializedBranchUnchanged`：建立 required A/B snapshot，對 A 做 metadata activation，觀察 active branch=A、live files/materialized branch=B。WP1 落地時以正確行為測試替換。
+- `TestTeamInfoHistoricalMarkdownIsNotBoundToBranch`：寫入不含 canonical branch binding 的 sentinel Markdown，觀察兩個 history/fallback action 可讀取它。WP2 落地時以 cutoff／sibling negative tests 替換。
+
+### 驗證紀錄
+
+初次 immutable baseline 全測因 sandbox 禁止 local listener，觸發 httptest socket 權限錯誤；確認程序身份後終止該輪（exit 143），不把它當成完整 baseline 結果。允許本地 fixture listener 後，以同一 immutable archive 重跑 `mise exec -- go -C <archive> test -p 2 ./...`。完整執行 exit 1；唯一失敗 package 為 `cmd/hufu`（141.080s），唯一失敗 case 為 `TestResumeRecoveryPreviewThenExecute/direct`：重新載入時 execution-policy snapshot drift。`internal/team` 通過（597.409s），其餘 package 均通過或無測試。未修改 baseline 以消除失敗。本工作樹特徵測試與 lint 結果另列。
+
+- `mise exec -- go test -p 2 ./internal/team -run 'Test(ResumeActivationMetadataLeavesMaterializedBranchUnchanged|TeamInfoHistoricalMarkdownIsNotBoundToBranch)$' -count=1`：exit 0，4.377s，兩項特徵均重現。branch ID 依既有規則小寫正規化，fixture 使用 `b`。
+
+由於 baseline 的 team suite 已接近預設 10 分鐘，後續完整 test 使用 `-timeout 30m`，race 使用 `-timeout 60m`；單項協定 deadline、fixture readiness 與失敗斷言維持不變。
+
+- WP0 `mise run lint`：exit 0，0 issues；`bin/check-docs`：exit 0（88 active files／561 relative links）；`git diff --check`：exit 0。
