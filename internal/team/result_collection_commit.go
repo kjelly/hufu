@@ -49,7 +49,7 @@ func (c *Coordinator) decodeCollectionClaims(taskID string, raw []byte) (SubmitR
 	if err != nil {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
 	}
-	if err := json.Unmarshal(normalized, &input, json.RejectUnknownMembers(true)); err != nil {
+	if err := json.Unmarshal(normalized, &input, json.RejectUnknownMembers(true), collectionDurationFormat); err != nil {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
 	}
 	if input.Summary == "" {
@@ -134,7 +134,7 @@ func (c *Coordinator) acceptedCollectionResult(ctx context.Context, item *TodoIt
 		return nil, err
 	}
 	var result TaskResult
-	if err := json.Unmarshal(body, &result, json.RejectUnknownMembers(true)); err != nil {
+	if err := json.Unmarshal(body, &result, json.RejectUnknownMembers(true), collectionDurationFormat); err != nil {
 		return nil, err
 	}
 	if result.TaskID != checkpoint.TaskID || result.Attempt != checkpoint.Attempt || result.Agent != checkpoint.Agent || !isLocalSubmittedResultSource(result.Source) {
@@ -184,7 +184,7 @@ func (tx *taskResultOccurrenceTransaction) commitCollection(ctx context.Context,
 	if err := c.attachCollectedTranscript(ctx, item, expected, canonical); err != nil {
 		return err
 	}
-	body, err := json.Marshal(canonical, json.Deterministic(true))
+	body, err := json.Marshal(canonical, json.Deterministic(true), collectionDurationFormat)
 	if err != nil {
 		return err
 	}

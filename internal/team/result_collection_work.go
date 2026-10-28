@@ -101,7 +101,7 @@ func (c *Coordinator) beginResultCollection(ctx context.Context, taskID string, 
 	generation, captured := ctx.Value(resultCollectionGenerationKey{}).(agent.GenerationParams)
 	stopReason, _ := ctx.Value(resultCollectionStopKey{}).(string)
 	timeout, _ := ctx.Value(resultCollectionTimeoutKey{}).(int64)
-	body, err := json.Marshal(resultCollectionWork{StopReason: stopReason, Version: resultCollectionVersion, BindingSHA256: bindingHash, Receipt: original, Workspace: workspace, Report: []byte(utils.RedactSecrets(report)), Input: []byte(utils.RedactSecrets(input)), Generation: generation, TeamGeneration: c.session.Config.Generation, GenerationCaptured: captured, TimeoutSeconds: timeout}, json.Deterministic(true))
+	body, err := json.Marshal(resultCollectionWork{StopReason: stopReason, Version: resultCollectionVersion, BindingSHA256: bindingHash, Receipt: original, Workspace: workspace, Report: []byte(utils.RedactSecrets(report)), Input: []byte(utils.RedactSecrets(input)), Generation: generation, TeamGeneration: c.session.Config.Generation, GenerationCaptured: captured, TimeoutSeconds: timeout}, json.Deterministic(true), collectionDurationFormat)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +155,7 @@ func (c *Coordinator) loadCollectionWork(ctx context.Context, item *TodoItem, ch
 		return nil, err
 	}
 	var work resultCollectionWork
-	if err := json.Unmarshal(body, &work, json.RejectUnknownMembers(true)); err != nil {
+	if err := json.Unmarshal(body, &work, json.RejectUnknownMembers(true), collectionDurationFormat); err != nil {
 		return nil, err
 	}
 	bindingHash, err := collectionBindingDigest(checkpoint)
