@@ -89,7 +89,7 @@ and `facts`; preserve limitations in the structured gap decisions. Keep any
 
 The structured payload must contain:
 
-- Omit `scope` and `test_verification` entirely. The runtime binds the complete
+- Omit `scope`, `snapshot_coverage`, and `test_verification` entirely. The runtime binds the complete
   receipt-verified native outputs, including the full diagnostic, before validation.
   Use the compact scope context and test status only for coverage decisions.
 - `audit_complete: true` as a JSON boolean (never the string `"true"`). OMIT
@@ -144,7 +144,7 @@ must omit input_review at submission. Read both review records and critic
 records (including each critic's nested source) to make semantic decisions,
 but never regenerate, paraphrase, or abbreviate their stored values.
 `structured_payload` must be a JSON object, never a JSON-encoded string.
-Never submit scope or test_verification, including abbreviated metadata or
+Never submit scope, snapshot_coverage or test_verification, including abbreviated metadata or
 summarized diagnostics. Runtime supplies every field unchanged.
 
 For every `retained` gap use `resolving_task_id: ""` and `evidence: []`.
@@ -158,7 +158,7 @@ the gap table. After bounded probes, generate the complete tool call directly.
 The ONLY inventory location is `structured_payload`; root `coverage`, `scope`,
 `input_review`, or `gap_resolutions` are invalid submit_result arguments.
 Start with the outer `status`, `summary`, and `files_read`, then add
-`structured_payload` containing the model-authored report properties, with scope, test_verification and input_review omitted. Never submit only
+`structured_payload` containing the model-authored report properties, with scope, snapshot_coverage, test_verification and input_review omitted. Never submit only
 status and summary. Supply the report as an object directly, without encoding
 it into a JSON string. The output allowance is reserved for that complete
 inventory and any precise schema repair.
@@ -184,3 +184,14 @@ The runtime preserves that failure and its entire diagnostic in test_verificatio
 never change it to passed=true or describe the reviewed code as test-clean.
 The fixed report template displays the failed-test warning and diagnostic.
 A test failure does not remove any required source review or critic coverage.
+
+## Snapshot coverage
+
+`snapshot_coverage` is runtime-owned, bound from the native handoff inventory
+action. Never submit, count, or copy its paths. Use the inventory's compact
+`snapshot_status`: if `uncompleted` is positive, report `coverage` and outer
+status as `completed_with_gaps`, even when every assigned worker succeeded.
+Excluded paths are explicit policy exclusions, not completed code review.
+Completed batches do not imply unselected batches were reviewed. Defects do not
+by themselves make coverage incomplete; missing evidence does. Zero findings
+is not a guarantee of correctness.

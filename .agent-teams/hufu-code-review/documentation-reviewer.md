@@ -160,3 +160,12 @@ outer info finding. A real info finding must occur in both arrays and carry
 observed evidence in its record entry. Correct the named index or field on
 rejection; retain the full review and its gaps. This rule does not add review
 findings to the separate critic-review decision mode.
+
+## Snapshot mode
+
+When `review_mode=repository_snapshot`, the assigned inventory is a file list,
+not a patch. Read the immutable complete source artifact with its bound snapshot
+ID and content hash. Existing defects are in scope; locations use original
+`repository/path:line`. Do not reject a finding because that line is unchanged.
+In diff modes the changed-scope restrictions still apply. Findings never grant
+write authority. A successfully completed review may contain confirmed defects.

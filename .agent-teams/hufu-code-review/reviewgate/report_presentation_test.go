@@ -145,3 +145,44 @@ func TestHumanReportRejectsMissingFindingContext(t *testing.T) {
 		}
 	}
 }
+
+func TestHumanReportRendersOptionalSnapshotCoverage(t *testing.T) {
+	schema, document := contractSchema(t, "report-v2.json")
+	renderer, err := template.New("report").Option("missingkey=error").Parse(document["x-hufu-final-report"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"legacy", "diff", "repository_snapshot"} {
+		t.Run(mode, func(t *testing.T) {
+			_, report := critiqueCoverageFixture(0)
+			if mode != "legacy" {
+				report["snapshot_coverage"] = map[string]any{
+					"mode": mode, "snapshot_id": "sha256:" + strings.Repeat("a", 64),
+					"content_sha256": strings.Repeat("a", 64), "revision": "reviewed-commit",
+					"batch": 1, "batch_count": 2,
+					"expected": []any{"main.go", "next.go"}, "completed": []any{"main.go"},
+					"excluded": []any{map[string]any{"path": "vendor/lib.go", "reason": "dependency"}},
+					"uncompleted": []any{map[string]any{"path": "next.go", "reason": "outside_selected_batch"}},
+				}
+			}
+			if err := schema.Validate(report); err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			if err := renderer.Execute(&output, report); err != nil {
+				t.Fatal(err)
+			}
+			if mode != "repository_snapshot" {
+				if strings.Contains(output.String(), "## 完整快照覆蓋") {
+					t.Fatal("diff report rendered repository snapshot coverage")
+				}
+				return
+			}
+			for _, expected := range []string{"## 完整快照覆蓋", "reviewed-commit", "sha256:" + strings.Repeat("a", 64), "批次 1 / 2", "main.go", "vendor/lib.go：dependency", "next.go：outside_selected_batch"} {
+				if !strings.Contains(output.String(), expected) {
+					t.Errorf("snapshot report lost %q", expected)
+				}
+			}
+		})
+	}
+}

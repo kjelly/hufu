@@ -426,3 +426,108 @@ Missing evidence remains visible
 through unverified decisions. A failed or interrupted required helper requires
 a minimal blocked result with no structured_payload; an incomplete decision
 collection cannot claim a successful audit.
+
+## Complete code review
+
+Describe the review scope in ordinary language. Interactive users do not need
+`--input`, JSON, internal scope kinds, or a history-mode setting.
+
+```bash
+mise exec -- go run -p 2 ./cmd/hufu --team hufu-code-review --new --report \
+  '完整審查目前專案的所有程式碼，包含未修改檔案與既有問題。'
+```
+
+The team resolves this request to the complete latest committed tree. To pin a
+version, name it in the prompt: `完整審查 commit abc123 的全部程式碼，包含既有問題。`
+That audits all code at the named commit, not just changes introduced by it.
+Uncommitted content is not part of a complete code audit yet; the existing
+uncommitted-changes review remains available.
+
+For a large audit, the report identifies the reviewed commit and available
+batches. Request the next one naturally, for example:
+`完整審查 commit abc123 的全部程式碼，第 2 批，包含既有問題。`
+Use the commit from the previous report so a moving branch does not change
+what is being reviewed. Cross-run aggregation is not automatic.
+
+### Internal scope contract and automation
+
+Natural-language resolution produces a schema-validated `review.scope` object.
+`kind=repository_snapshot` inventories a complete committed tree rather than a
+Git diff. `head` accepts a commit or `HEAD`; `history=first_parent` is an internal
+schema-compatibility value and does not trigger history traversal in this mode.
+These names are team-authoring details, not required operator vocabulary.
+
+Explicit typed input remains available for automation that needs fixed
+parameters; ordinary interactive review should use the natural-language
+commands above. Explicit input and a scope expression in the prompt must agree.
+
+The producer resolves `HEAD` once, archives that commit, and inventories every
+tracked tree entry with its mode, byte count, line count and SHA-256. The content
+identity hashes ordered path/mode/content-hash/size tuples, including excluded
+entries; dispositions and batch selection do not change that identity. Gitlinks
+are recorded by object identity and never traversed. Symlinks are recorded by
+link target and never followed. Dependency trees (`vendor`, `node_modules`,
+`third_party`), generated Go sources, binary files, and ordinary documentation
+outside the code audit are explicitly excluded with reasons. Team prompts and
+AGENTS.md remain eligible configuration. Other tracked text (source, tests,
+configuration, scripts) is included by default. Large primary files are unfinished
+coverage, never silently truncated or classified as excluded.
+
+The verifier now depends on `produce-workset` in the same PREPARE batch. For a
+snapshot audit it reads the current accepted producer through the read-only
+ActionState interface, checks its run and frozen-input identity, and archives
+that exact resolved commit. It recomputes the content hash before execution;
+source identity, revision, and hash are preserved in the full verification
+artifact and receipt. Workset bindings and source artifact headers carry the
+same identity. The native inventory and final audit reject differing reviewer
+or verifier identities. No runtime/core team-name special case is involved.
+
+Worksets contain package/directory file lists and complete primary source,
+with the existing bounded related caller/test context. Snapshot mode uses a
+single primary review route; the other routes emit explicit noops. Existing
+issues are valid findings at `repository/path:line`; the native gate verifies
+assigned-file membership and original source line bounds. Diff review retains
+its changed-scope rules. Snapshot reference reports have zero deterministic
+link/path checks: this is not proof that references are valid; semantic review
+of the supplied source remains mandatory.
+
+### Bounded batches and truthful coverage
+
+Snapshot mode removes the 256 changed-path selection limit. It uses actual
+source bytes, the configured per-item source/token budgets, package boundaries,
+and the smaller of the configured workset limit and 32 total slots. Two slots
+are reserved for the mandatory no-op routes, leaving at most 30 primary
+worksets. The legacy observed-budget field `changed_paths` counts inventoried paths in
+snapshot mode; coverage uses the explicit inventory dispositions instead.
+This preserves the 64-source synthesis limit when each review needs
+a critic, and the existing no-progress budgets. It does not widen runtime caps.
+
+A large inventory is divided into deterministic numbered batches. The default
+is batch 1; request batch 2 and the same reviewed commit in the prompt.
+Automation may set the corresponding typed `batch` value explicitly. Keep the same resolved commit for every batch. Each run
+reports its batch number and total batch count; it never claims other runs'
+coverage or silently marks unselected batches complete. Separate reports can be
+compared by their exact snapshot identity; automatic cross-run aggregation is
+not provided. If the requested batch is out of range, preparation fails clearly.
+
+The complete inventory remains durable in the producer scope and the declared
+`repository_snapshot_inventory` artifact. Models receive only compact scope
+context and runtime-owned workset bindings. `snapshot_coverage` is runtime-owned
+report data bound from `inventory-review-handoffs`: expected paths, completed
+paths, excluded paths/reasons, and unfinished paths/reasons. Completion requires
+an accepted, verified review that observed its assigned source artifact; a
+review declaring evidence gaps conservatively leaves its assigned files
+unfinished. This accounts for evidence and contract completion, not a proof that
+every possible semantic defect was discovered. An unfinished selected review
+blocks the gate; budget omissions remain explicit unfinished coverage.
+
+Any unfinished coverage forces report coverage and terminal task status to
+`completed_with_gaps`. Findings alone do not. Failed target tests also remain
+visible review evidence under the existing outcome contract. Successful audit
+acceptance means evidence, scope and reporting were checked; it does not mean
+the program is correct. Zero findings does not guarantee zero defects.
+
+The complete native output is bounded below the adapter's 1 MiB output cap. An
+inventory that exceeds that limit fails with `snapshot_inventory_too_large`; it
+is not silently truncated. Automatic aggregation across repositories/modules is
+not implemented.
