@@ -1918,6 +1918,10 @@ The report includes:
 | 1 | `~/.config/hufu/hufu.yaml` | Global configuration |
 | 2 | `./hufu.yaml` | Project configuration |
 
+A top-level key that hufu.yaml does not define is ignored, and hufu prints one
+warning naming the file and key. Team-only blocks such as `decision-primitives`
+belong in team.yaml; hufu.yaml shares only `decision-runtime` backend settings.
+
 ### Configuration File Example
 
 ```yaml

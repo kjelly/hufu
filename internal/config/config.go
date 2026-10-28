@@ -258,6 +258,7 @@ func (c *Config) mergeFromFile(path string) {
 		fmt.Fprintf(os.Stderr, "warning: failed to parse %s: %v\n", path, err)
 		return
 	}
+	warnUnknownConfigKeys(os.Stderr, path, data)
 	c.mergeScalarFields(&fileCfg)
 	c.recordSources(&fileCfg, path)
 	c.WorkspaceVersioning.merge(fileCfg.WorkspaceVersioning)

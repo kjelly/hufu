@@ -59,6 +59,7 @@ catalog 最多 64 個 entry，完整公開 tool contract 不得超過 256 KiB。
 entry 明訂值 > team > 專案 > 全域 > 原有預設，逐欄位合併。
 System One 缺必要模型時報錯；sidecar 不繼承 System One 的模型、端點或憑證。
 詳見[共同設定與控制入口](control-decisions.md)。題目、候選、grants 與呼叫上限仍由 entry 宣告。
+`decision-primitives` entry 只能寫在 team.yaml；寫在 hufu.yaml 不會生效，載入時會印出未知 key 警告。
 
 ## Agent 呼叫與回傳
 
