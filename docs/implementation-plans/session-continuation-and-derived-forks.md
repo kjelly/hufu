@@ -6,11 +6,11 @@
 > Supersedes: —
 > Superseded-By: —
 
-> **Implementation status**：可從 WP0 開始；不表示缺陷已動態重現或功能已完成。
+> **Implementation status**：WP0–WP2 已提交；WP3–WP6 與最終全套驗證尚未完成，階段證據見第 12–14 節。
 > **Repository**：`kjelly/hufu`
 > **Reviewed baseline**：`4e13abfb91a1328ccc1c58d0fd4a7861b17d6d43`
 > **Revised**：2026-10-28
-> **Evidence**：已對照本地主要程式路徑；本次文件修訂沒有執行 Go 測試、真實模型或 Session E2E。
+> **Evidence**：原始查核為靜態閱讀；其後 WP0–WP2 已執行本地 fake-provider 測試，命令與限制見第 12–14 節。未執行真實模型。
 > **Execution boundary**：所有開發與驗收使用本地 fixture、fake provider、暫存 managed workspace。使用者已授權將原 `docs/tmp/spec.md` 移入本正式計畫，並逐階段驗證及提交。
 
 ## 0. 執行範圍與工作方式
