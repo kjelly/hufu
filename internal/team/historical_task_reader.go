@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -38,6 +39,11 @@ type HistoricalTaskResult struct {
 	TypedResult    *TaskResult `json:"typed_result,omitempty"`
 	SourceEventID  string      `json:"source_event_id"`
 	SourceHash     string      `json:"source_hash"`
+	PayloadSHA256  string      `json:"payload_sha256,omitempty"`
+	// TypedResultJSON preserves the complete detached projection, including
+	// fields a newer writer added. It is runtime data, not another model input.
+	TypedResultJSON json.RawMessage `json:"-"`
+	Workspace       string          `json:"-"`
 }
 
 // HistoricalTaskReader is implemented by the command layer's inspect adapter;

@@ -30,6 +30,7 @@ func (canonicalHistoricalTaskReader) Load(ctx context.Context, scope team.Histor
 			Status: row.Status, CurrentStatus: row.CurrentStatus, Validity: row.Validity, Description: row.Description,
 			Summary: row.Summary, Output: row.Output, TypedResult: row.TypedResult,
 			SourceEventID: row.SourceEventID, SourceHash: row.SourceHash,
+			PayloadSHA256: row.PayloadSHA256, TypedResultJSON: append([]byte(nil), row.TypedResultJSON...), Workspace: row.Workspace,
 		})
 	}
 	return rows, nil

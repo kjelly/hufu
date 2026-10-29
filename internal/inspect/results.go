@@ -1,8 +1,11 @@
 package inspect
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	jsonv1 "encoding/json"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"maps"
@@ -37,6 +40,8 @@ type HistoricalResult struct {
 	Summary               string           `json:"summary,omitempty"`
 	Output                string           `json:"output,omitempty"`
 	TypedResult           *team.TaskResult `json:"typed_result,omitempty"`
+	PayloadSHA256         string           `json:"payload_sha256,omitempty"`
+	TypedResultJSON       []byte           `json:"-"`
 	SourceBranchID        string           `json:"source_branch_id"`
 	SourceEventID         string           `json:"source_event_id"`
 	SourceHash            string           `json:"source_hash"`
@@ -328,26 +333,25 @@ func historicalResultFromItem(indexed IndexedEvent, item *team.TodoItem, branch,
 		SourceBranchID: cmp.Or(event.BranchID, "main"), SourceEventID: event.ID, SourceHash: event.Hash, Branches: []string{branch}, Workspace: workspace, Ordinal: indexed.Ordinal,
 	}
 	var content struct {
-		TypedResult *team.TaskResult `json:"typed_result"`
+		TypedResult jsontext.Value `json:"typed_result"`
 	}
 	if err := unmarshalHistoricalJSON(event.Payload, &content); err != nil {
 		return HistoricalResult{}, fmt.Errorf("%w: decode terminal result content: %v", ErrIntegrity, err)
 	}
-	if content.TypedResult != nil {
-		// Canonical result bytes are never changed: redact a detached view.
-		encoded, err := marshalHistoricalJSON(content.TypedResult)
-		if err != nil {
-			return HistoricalResult{}, fmt.Errorf("%w: encode historical content: %v", ErrIntegrity, err)
-		}
-		redacted, err := utils.RedactJSON(encoded)
+	if len(content.TypedResult) != 0 && !bytes.Equal(bytes.TrimSpace(content.TypedResult), []byte("null")) {
+		redacted, payloadHash, err := team.ProjectHistoricalTaskResult(content.TypedResult)
 		if err != nil {
 			return HistoricalResult{}, fmt.Errorf("%w: redact historical content: %v", ErrIntegrity, err)
 		}
 		var detached team.TaskResult
-		if err := unmarshalHistoricalJSON(redacted, &detached); err != nil {
+		decoder := jsonv1.NewDecoder(bytes.NewReader(redacted))
+		decoder.UseNumber()
+		if err := decoder.Decode(&detached); err != nil {
 			return HistoricalResult{}, fmt.Errorf("%w: decode historical content: %v", ErrIntegrity, err)
 		}
 		row.TypedResult = &detached
+		row.TypedResultJSON = redacted
+		row.PayloadSHA256 = payloadHash
 		row.Summary = detached.Summary
 	}
 	return row, nil

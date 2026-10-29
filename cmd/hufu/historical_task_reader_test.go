@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json/v2"
 	"os"
 	"path/filepath"
@@ -69,6 +70,9 @@ func TestCanonicalHistoricalTaskReaderHonorsForkScope(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].ResultID != ids[0] || rows[0].SourceHash != anchor.SourceHash || rows[0].SourceEventID != anchor.SourceEventID || rows[0].SourceBranchID != "main" || rows[0].Team != "review" {
 		t.Fatalf("reader did not preserve exact child-visible source: %+v", rows)
+	}
+	if rows[0].PayloadSHA256 == "" || rows[0].PayloadSHA256 != anchor.PayloadSHA256 || !bytes.Equal(rows[0].TypedResultJSON, anchor.TypedResultJSON) || rows[0].Workspace != workspace {
+		t.Fatal("adapter lost canonical payload digest, full projection or workspace identity")
 	}
 	encoded, err := json.Marshal(rows)
 	if err != nil {

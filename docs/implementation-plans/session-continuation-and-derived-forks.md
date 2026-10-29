@@ -6,7 +6,7 @@
 > Supersedes: —
 > Superseded-By: —
 
-> **Implementation status**：WP0–WP2 已提交；WP6 已提交；WP3 儲存層、grant envelope 與事件原子寫入已驗證。WP3–WP5 與目標結束時的完整整合／race gate 尚未完成。階段證據見第 12–18 節。
+> **Implementation status**：WP0–WP2 已提交；WP6 已提交；WP3 儲存層、grant envelope、事件原子寫入及來源與接收者的唯讀準備已驗證。WP3–WP5 與目標結束時的完整整合／race gate 尚未完成。階段證據見第 12–19 節。
 > **Repository**：`kjelly/hufu`
 > **Reviewed baseline**：`4e13abfb91a1328ccc1c58d0fd4a7861b17d6d43`
 > **Revised**：2026-10-28
@@ -408,3 +408,44 @@ runtimestore 重用已通過結果。
 目錄與已退出的測試 engine 目錄，合計約 2.26 GiB。當前 normal／race project
 exports 約 687 MiB；沒有新增快取 ELF 殘留。私有 scratch 約 149 MiB，保留單一
 約 126 MiB baseline binary 供後續最終相容性測試。共享依賴與工具鏈快取維持原設定。
+
+## 19. WP3 canonical 來源與接收者準備
+
+唯讀 preflight 使用既有 inspect reader 的 managed control workspace／team／branch
+範圍，要求完整 ResultID、有效已接受且完成的 typed result。接收者沿用 agent resolver，
+別名正規化後去重與排序，拒絕 coordinator／orchestrator、wildcard、未知或歧義身份；
+限制 16 組與所有完整 presentation 合計 1 MiB UTF-8 bytes。停用 historical task
+reuse 時拒絕，單獨停用 historical memory 不擴張成拒絕 explicit result reference。
+
+Reader 分開回傳原儲存 `typed_result` bytes 的 SHA-256 與完整 redacted JSON。
+未知欄位、大於 2^53 的精確整數、原納秒 duration 與完整診斷不因 DTO 轉換遺失。
+僅 canonical 頂層 runtime outputs 保留已綁定收據的值；任意巢狀 model facts
+自稱 `source: runtime` 不能繞過遮罩。Inspect 的 typed DTO 亦保留精確 JSON number。
+投影與 presentation 編碼保留原 raw JSON 跳脫字元，不將 `\u003c` 自動改寫為 `<`
+而破壞 structured payload SHA-256；回歸測試驗證完成兩層編碼後仍符合原收據。
+
+Presentation 包含 Summary、完整 typed JSON、source citation 與 validity；資料以
+untrusted fence 包裝，明示不提供新任務完成證據或 artifact 讀取權限。不匯入 raw
+Output、對話或 artifact bytes。來源雜湊、payload 雜湊、presentation 雜湊與
+policy fingerprint 分開保存；native outputs／structured payload 的收據雜湊須完整。
+重新建立 frozen envelope 時任一來源、有效性、policy 或內容變動均拒絕，不更新原 hash。
+
+此 API 僅建立內容不外露的唯讀準備結果，不持久化 admission、不建立 task、也不呼叫
+模型。CLI 入口限制、cycle activation、task binding、required context delivery、
+dispatch proof 與 recovery 仍待後續實作；`--inherit-result` 尚未開放。
+
+最終 working-tree 完整 `mise exec -- go test -p 2 ./... -timeout 30m` 通過：
+CLI 155.142s、inspect 19.392s、improver 152.150s、team 703.718s；其餘 packages
+通過、重用未變更來源的既有結果或無測試。這包含保留的其他本地修改，不稱為
+immutable commit snapshot 的全測證據。定向 `-race` 涵蓋歷史查詢、來源準備、
+接收者與 canonical reader：team 4.182s、inspect 3.304s、CLI 8.048s，全部通過。
+
+`mise run lint` 通過、0 issues；`mise run vet`、`bin/check-docs`、
+`git diff --check` 通過。最後審查以最小 probe 確認 JSON 預設編碼會改寫 raw
+跳脫字元，再以回歸測試重現 structured payload SHA 損壞；修正投影與 presentation
+兩層編碼後，對同一最終版本的 2,552 個 Go／設定檔重新完成全部必要檢查。
+
+本階段清除可追溯的過時 project archives 與已退出測試目錄，合計約 1.94 GiB。
+當前 normal／race project exports 約 806 MiB；沒有新增快取 ELF 殘留或未清除的
+自有 Go work 目錄。私有 scratch 約 151 MiB，保留約 126 MiB 的單一 baseline
+binary 供最終相容性驗證；依賴、工具鏈與既有 cache 路徑保持原設定。

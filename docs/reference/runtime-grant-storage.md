@@ -39,9 +39,35 @@ The journal's first grant event for that branch/cycle remains authoritative
 even when the index has been deleted. Index writes reject a later event, and
 index reads reject a reference redirected to a later event with a valid hash.
 
-Recipient authorization, source/presentation resolution, task binding and
-model-context delivery remain WP3 implementation work. These storage and
-envelope stages do not enable `--inherit-result` or grant any worker access.
+Read-only source preparation resolves worker aliases to their canonical
+identity, deduplicates and sorts recipient/result pairs, and rejects
+coordinator/orchestrator recipients, disabled historical reuse, unmanaged or
+mismatched control roots, unavailable policies and invalid sources. It uses the
+existing canonical reader for the exact consumer team and branch; IDs are
+locators, never credentials. One missing required source rejects the entire
+set. Disabling historical memory alone does not disable explicit references.
+
+The reader provides a complete redacted JSON projection and a separate
+`payload_sha256` over the original stored `typed_result` bytes. Unknown fields
+and exact JSON integers survive projection. Canonical top-level runtime outputs
+keep their receipt-bound values; untrusted nested objects cannot gain that
+exception by naming their own fields `source` and `runtime_outputs`.
+Projection and presentation encoding preserve pre-escaped raw JSON strings, so
+canonical structured values such as `\u003c` are not rewritten to `<` underneath
+their stored SHA-256. No receipt hash is recomputed to accommodate a projection.
+
+Preparation renders summary, complete typed JSON and source/validity citation
+as fenced historical data. It imports no raw output, conversation or artifact
+bytes and grants no artifact reads. Native output and structured-payload hashes
+must remain valid. The complete UTF-8 presentation, including its labels, is
+counted against the 1 MiB total; it is never truncated. Rebuilding a frozen
+envelope requires matching source, payload, presentation and policy digests.
+
+This preparation API is private-content runtime plumbing: it does not write an
+admission event or create tasks. CLI entry eligibility, cycle activation, task
+binding, required model-context delivery, dispatch proof and recovery remain
+WP3 implementation work. These stages do not enable `--inherit-result` or grant
+any worker access.
 
 ## Upgrade and downgrade
 
