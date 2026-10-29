@@ -106,6 +106,29 @@ func normalizeManifestContracts(data []byte, version string, yc *teamConfigYAML)
 	if len(declared) == 0 {
 		return nil
 	}
+	declaration := fields[strings.TrimPrefix(declared[0], "spec.")][1]
+	if declared[0] == "advanced.tasks" {
+		advanced, mapErr := manifestMapping(fields["advanced"][1], make(map[*yaml.Node]bool))
+		if mapErr != nil {
+			return mapErr
+		}
+		declaration = advanced["tasks"][1]
+	}
+	declaration = dependencyViewYAMLValue(declaration)
+	if declaration != nil && declaration.Kind == yaml.SequenceNode {
+		for _, contract := range declaration.Content {
+			mapping, mapErr := manifestMapping(contract, make(map[*yaml.Node]bool))
+			if mapErr != nil {
+				return mapErr
+			}
+			if view, present := mapping["dependency-result-view"]; present {
+				value := dependencyViewYAMLValue(view[1])
+				if value == nil || value.Tag == "!!null" {
+					return fmt.Errorf("dependency-result-view requires a mapping with a mode")
+				}
+			}
+		}
+	}
 	yc.contractCollection = declared[0]
 	switch declared[0] {
 	case "tasks", "spec.tasks":

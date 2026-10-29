@@ -221,6 +221,7 @@ func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 // was not honored instead of quietly running without it.
 var modelTaskRuntimeOwnedFields = []string{
 	"workset_binding", "workset_receipt",
+	"dependency_result_view", "dependency-result-view", "dependencyresultview",
 	"result_contract", "result-contract", "structured_payload",
 	"worker_workspace", "worker-workspace",
 	"execution_route", "execution-route", "execution_candidates", "fallback_on",
@@ -1129,9 +1130,10 @@ func (t *todoTool) handleCreate(ctx context.Context, callerName string, items []
 			ExecutionTarget: occurrence.ResolvedExecutionTarget, ExecutionTopology: cloneExecutionTopology(occurrence.ExecutionTopology),
 			Source: TaskSourceAgent, ParentID: parentID, SideEffect: occurrence.SideEffect,
 			Recovery: occurrence.Recovery, ReconcileTool: occurrence.ReconcileTool,
-			ResultContract:  occurrence.ResultContract.clone(),
-			WorkerWorkspace: occurrence.WorkerWorkspace.clone(),
-			ExecutionRoute:  occurrence.ExecutionRoute.clone(),
+			ResultContract:       occurrence.ResultContract.clone(),
+			DependencyResultView: occurrence.DependencyResultView.clone(),
+			WorkerWorkspace:      occurrence.WorkerWorkspace.clone(),
+			ExecutionRoute:       occurrence.ExecutionRoute.clone(),
 		}
 		if err := t.coordinator.freezeTodoSpecDynamicAuthorization(ctx, occurrence, agentDef, &batch[i]); err != nil {
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to freeze tool authorization: %v", err)), nil

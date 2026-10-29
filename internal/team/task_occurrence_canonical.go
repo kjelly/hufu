@@ -30,6 +30,14 @@ func (c *Coordinator) canonicalizeTaskOccurrence(task TaskDef, def *agent.AgentD
 	if task.CatalogAction == nil {
 		task.ResultContract = c.admittedResultContract(task, def)
 	}
+	view, viewErr := task.DependencyResultView.normalized()
+	if viewErr != nil {
+		return task, viewErr
+	}
+	task.DependencyResultView = view
+	if err := validateDependencyResultViewTask(task, def, true); err != nil {
+		return task, err
+	}
 	legacyProvider := strings.TrimSpace(task.SubagentProvider)
 	if legacyProvider == "" && def != nil {
 		legacyProvider = strings.TrimSpace(def.SubagentProvider)

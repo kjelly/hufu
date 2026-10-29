@@ -384,6 +384,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 			ExecutionTarget:               t.ResolvedExecutionTarget,
 			ExecutionTopology:             cloneExecutionTopology(t.ExecutionTopology),
 			ResultContract:                t.ResultContract.clone(),
+			DependencyResultView:          t.DependencyResultView.clone(),
 			WorkerWorkspace:               t.WorkerWorkspace.clone(),
 			ExecutionRoute:                t.ExecutionRoute.clone(),
 			CatalogAction:                 t.CatalogAction.clone(),

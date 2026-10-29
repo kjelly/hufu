@@ -42,7 +42,7 @@ func executionPolicyMCPActionProviders(session *TeamSession) []ExecutionMCPActio
 // validateExecutionPolicyMCPActionProviders checks a durable snapshot's MCP
 // provider pins: complete, bound, and in strict capability order.
 func validateExecutionPolicyMCPActionProviders(version int, entries []ExecutionMCPActionProviderSnapshot) error {
-	if len(entries) > 0 && (version < executionPolicyPreviousSnapshotVersion || version > executionPolicySnapshotVersion) {
+	if len(entries) > 0 && (version < executionPolicyPreviousSnapshotVersion || version > selectedDependencyPolicyVersion) {
 		return fmt.Errorf("execution policy snapshot v%d cannot pin MCP action providers", version)
 	}
 	for index, entry := range entries {

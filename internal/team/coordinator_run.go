@@ -149,6 +149,9 @@ func (c *Coordinator) checkRunAdmission() error {
 			},
 		}
 	}
+	if c.executionPolicy != nil && c.executionPolicy.snapshot.DependencyResultViewsHash != "" {
+		return errDependencyResultViewUnavailable
+	}
 	if c.sessionData != nil && c.sessionData.RecoveryRequired {
 		reason := c.sessionData.RecoveryReason
 		if reason == "" {
@@ -459,6 +462,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		ExecutionTarget:      directTask.ResolvedExecutionTarget,
 		ExecutionTopology:    cloneExecutionTopology(directTask.ExecutionTopology),
 		ResultContract:       directTask.ResultContract.clone(),
+		DependencyResultView: directTask.DependencyResultView.clone(),
 		WorkerWorkspace:      directTask.WorkerWorkspace.clone(),
 		ExecutionRoute:       directTask.ExecutionRoute.clone(),
 		Source:               TaskSourceCoordinator,
@@ -991,22 +995,23 @@ func (c *Coordinator) persistPreCancelledDirectAgentWithDef(ctx context.Context,
 	occurrence.ExecutionTopology = []execution.ExecutionTarget{occurrence.ResolvedExecutionTarget}
 	spec := TodoSpec{
 		RunInputSnapshotID: occurrence.RunInputSnapshotID, RunInputSnapshotHash: occurrence.RunInputSnapshotHash,
-		Agent:             occurrence.Agent,
-		Desc:              occurrence.Goal,
-		Goal:              occurrence.Goal,
-		Model:             occurrence.Model,
-		ModelTopology:     cloneModelTopology(occurrence.ModelTopology),
-		ExecutionTarget:   occurrence.ResolvedExecutionTarget,
-		ExecutionTopology: cloneExecutionTopology(occurrence.ExecutionTopology),
-		ResultContract:    occurrence.ResultContract.clone(),
-		WorkerWorkspace:   occurrence.WorkerWorkspace.clone(),
-		ExecutionRoute:    occurrence.ExecutionRoute.clone(),
-		Source:            TaskSourceCoordinator,
-		ParentID:          "",
-		Execution:         cloneExecutionContract(occurrence.Execution),
-		SideEffect:        occurrence.SideEffect,
-		Recovery:          occurrence.Recovery,
-		ReconcileTool:     occurrence.ReconcileTool,
+		Agent:                occurrence.Agent,
+		Desc:                 occurrence.Goal,
+		Goal:                 occurrence.Goal,
+		Model:                occurrence.Model,
+		ModelTopology:        cloneModelTopology(occurrence.ModelTopology),
+		ExecutionTarget:      occurrence.ResolvedExecutionTarget,
+		ExecutionTopology:    cloneExecutionTopology(occurrence.ExecutionTopology),
+		ResultContract:       occurrence.ResultContract.clone(),
+		DependencyResultView: occurrence.DependencyResultView.clone(),
+		WorkerWorkspace:      occurrence.WorkerWorkspace.clone(),
+		ExecutionRoute:       occurrence.ExecutionRoute.clone(),
+		Source:               TaskSourceCoordinator,
+		ParentID:             "",
+		Execution:            cloneExecutionContract(occurrence.Execution),
+		SideEffect:           occurrence.SideEffect,
+		Recovery:             occurrence.Recovery,
+		ReconcileTool:        occurrence.ReconcileTool,
 	}
 	if err := c.freezeTodoSpecDynamicAuthorization(ctx, occurrence, agentDef, &spec); err != nil {
 		return errors.Join(cancellation, fmt.Errorf("freeze pre-cancelled direct task tools: %w", err))

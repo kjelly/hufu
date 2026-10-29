@@ -91,6 +91,7 @@ type TaskOccurrenceProjection struct {
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot
 	ResultContract           *ResultContractRef
+	DependencyResultView     *DependencyResultViewSpec `json:"DependencyResultView,omitempty"`
 	WorkerWorkspace          *WorkerWorkspacePolicy
 	ExecutionRoute           *ExecutionRouteBinding
 	CatalogAction            *CatalogActionBinding
@@ -137,6 +138,7 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 		DynamicToolAuthorization: cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		ResourceScopeSnapshot:    cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		ResultContract:           item.ResultContract.clone(),
+		DependencyResultView:     item.DependencyResultView.clone(),
 		WorkerWorkspace:          item.WorkerWorkspace.clone(),
 		ExecutionRoute:           item.ExecutionRoute.clone(),
 		CatalogAction:            item.CatalogAction.clone(),
@@ -198,12 +200,13 @@ func taskOccurrenceProjectionFromTaskDef(task TaskDef, runtimeID string) (TaskOc
 		DecisionProfile: task.DecisionProfile, DecisionOptions: append([]DecisionOption(nil), task.DecisionOptions...),
 		DecisionAssumptions: cloneDecisionAssumptions(task.DecisionAssumptions), DecisionFacts: cloneDecisionFacts(task.DecisionFacts),
 		DecisionArtifacts: append([]ArtifactRef(nil), task.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(task.DecisionBaseRates),
-		DecisionProvenance: cloneEvidenceProvenance(task.DecisionProvenance),
-		SubagentProvider:   task.SubagentProvider,
-		ResultContract:     task.ResultContract.clone(),
-		WorkerWorkspace:    task.WorkerWorkspace.clone(),
-		ExecutionRoute:     task.ExecutionRoute.clone(),
-		CatalogAction:      task.CatalogAction.clone(),
+		DecisionProvenance:   cloneEvidenceProvenance(task.DecisionProvenance),
+		SubagentProvider:     task.SubagentProvider,
+		ResultContract:       task.ResultContract.clone(),
+		DependencyResultView: task.DependencyResultView.clone(),
+		WorkerWorkspace:      task.WorkerWorkspace.clone(),
+		ExecutionRoute:       task.ExecutionRoute.clone(),
+		CatalogAction:        task.CatalogAction.clone(),
 	}, runtimeID)
 	if strings.TrimSpace(runtimeID) == "" {
 		// Digest-only compatibility callers do not have an occurrence ID. The

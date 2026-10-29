@@ -138,7 +138,8 @@ type TaskDef struct {
 	ResultContractSpec *agent.ResultContractSpec `json:"-" yaml:"result-contract,omitempty"`
 	// ResultContract is the compiled contract identity bound at admission.
 	// It is runtime-owned and frozen into the TodoItem.
-	ResultContract *ResultContractRef `json:"-" yaml:"-"`
+	ResultContract       *ResultContractRef        `json:"-" yaml:"-"`
+	DependencyResultView *DependencyResultViewSpec `json:"-" yaml:"dependency-result-view,omitempty"`
 	// ExecutionRoute is the execution route frozen at admission for a
 	// route-bound worker. It is runtime-owned and never coordinator JSON.
 	ExecutionRoute *ExecutionRouteBinding `json:"-" yaml:"-"`

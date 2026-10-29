@@ -173,6 +173,7 @@ func decisionOccurrenceInputDigest(task TaskOccurrenceProjection) (string, error
 		DynamicToolAuthorization                                             *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization,omitempty"`
 		ResourceScopeSnapshot                                                *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot,omitempty"`
 		CatalogAction                                                        *CatalogActionBinding             `json:"catalog_action,omitempty"`
+		DependencyResultView                                                 *DependencyResultViewSpec         `json:"dependency_result_view,omitempty"`
 	}{
 		ID: task.ID, PlanTaskID: task.PlanTaskID, Phase: string(task.Phase), Agent: task.Agent, Desc: task.Desc, Goal: task.Goal, Constraints: task.Constraints, Model: task.Model, Source: task.Source, PlanFirst: task.PlanFirst, ModelTopology: task.ModelTopology,
 		Sidecar: task.Sidecar, Summarize: task.Summarize, OutputMode: task.OutputMode, ContextFiles: task.ContextFiles, Requires: task.Requires,
@@ -187,6 +188,7 @@ func decisionOccurrenceInputDigest(task TaskOccurrenceProjection) (string, error
 		DynamicToolAuthorization: task.DynamicToolAuthorization,
 		ResourceScopeSnapshot:    task.ResourceScopeSnapshot,
 		CatalogAction:            task.CatalogAction,
+		DependencyResultView:     task.DependencyResultView.clone(),
 	}
 	b, err := json.Marshal(v)
 	if err != nil {

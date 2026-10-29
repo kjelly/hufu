@@ -1368,12 +1368,13 @@ func taskDefFromTodoItem(it *TodoItem) TaskDef {
 		DecisionProfile: it.DecisionProfile, DecisionOptions: append([]DecisionOption(nil), it.DecisionOptions...),
 		DecisionAssumptions: cloneDecisionAssumptions(it.DecisionAssumptions), DecisionFacts: cloneDecisionFacts(it.DecisionFacts),
 		DecisionArtifacts: append([]ArtifactRef(nil), it.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(it.DecisionBaseRates),
-		DecisionProvenance: cloneEvidenceProvenance(it.DecisionProvenance),
-		SubagentProvider:   it.SubagentProvider,
-		ResultContract:     it.ResultContract.clone(),
-		WorkerWorkspace:    it.WorkerWorkspace.clone(),
-		ExecutionRoute:     it.ExecutionRoute.clone(),
-		CatalogAction:      it.CatalogAction.clone(),
+		DecisionProvenance:   cloneEvidenceProvenance(it.DecisionProvenance),
+		SubagentProvider:     it.SubagentProvider,
+		ResultContract:       it.ResultContract.clone(),
+		DependencyResultView: it.DependencyResultView.clone(),
+		WorkerWorkspace:      it.WorkerWorkspace.clone(),
+		ExecutionRoute:       it.ExecutionRoute.clone(),
+		CatalogAction:        it.CatalogAction.clone(),
 	}
 }
 

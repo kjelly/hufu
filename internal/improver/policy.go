@@ -35,7 +35,7 @@ var policyFields = map[string]policyFieldClass{
 	"DecisionRuntimeHash": fixedPolicy, "DecisionPrimitiveHash": fixedPolicy, "ControlDecisionHash": fixedPolicy, "SemanticRetrievalHash": fixedPolicy,
 	"Belief": fixedPolicy, "DiagnosticLoop": fixedPolicy, "MCPActionProviders": fixedPolicy,
 	"MCPWorkerPolicies": fixedPolicy, "ContextArtifacts": fixedPolicy, "ContextQuery": fixedPolicy,
-	"Cost": fixedPolicy, "ConfigurationHash": derivedPolicyHash,
+	"Cost": fixedPolicy, "DependencyResultViewsHash": fixedPolicy, "ConfigurationHash": derivedPolicyHash,
 }
 
 var agentFields = map[string]policyFieldClass{

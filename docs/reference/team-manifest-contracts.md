@@ -87,6 +87,42 @@ retry limits, remediation context, and recovery behavior still apply. Contract
 hashes and the execution policy snapshot pin the declarations and retry policy;
 changing them requires a new run rather than resuming an older policy.
 
+## Dependency result view: configuration foundation
+
+`dependency-result-view` is static contract policy, available only with static
+contract binding and same-batch dependencies. The configuration and persistence
+foundation is installed; selected execution currently fails explicitly before
+provider startup until the delivery integration is installed. It does not fall
+back to full. See the [implementation plan](../implementation-plans/dependency-result-projection-and-contract-regressions.md).
+
+```yaml
+contracts:
+  - id: produce
+    agent: producer
+  - id: consume
+    agent: worker
+    depends-on-contracts: [produce]
+    dependency-result-view:
+      mode: selected
+      fields: [summary, findings, artifacts, files_modified, verification]
+```
+
+Omission and `mode: full` use the existing formatter, policy version 5 and
+contract revision 1 without changing their bytes or hashes. Full must not
+include `fields`. Selected requires nonempty, unique fields from the five shown
+above; mode and field names are lowercase. Unknown keys and null policies fail
+loading. Field order is canonicalized in the order shown.
+
+Selected is rejected with required evidence, `evidence_from`, result contracts,
+native actions, sidecar execution, plan-first or closed tool sequences. Dynamic
+`agent` task input cannot set this field. Selected contracts use revision 2 and
+policy version 6, pinning the normalized policy in the configuration hash and
+immutable occurrence admission. Task events, checkpoints, replay, clones and
+manifest migration preserve it. Existing sessions cannot acquire selected
+policy through resume or configuration edits. Binaries supporting only policy
+versions through 5 must reject version 6; there is no policy down-migration.
+This version distinction is separate from the [runtime-store schema upgrade](runtime-grant-storage.md).
+
 ## Authoring
 
 This fragment shows placement; the team's agents and execution requirements must

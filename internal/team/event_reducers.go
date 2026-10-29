@@ -780,6 +780,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization"`
 			ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot"`
 			ResultContract           *ResultContractRef                `json:"result_contract"`
+			DependencyResultView     *DependencyResultViewSpec         `json:"dependency_result_view,omitempty"`
 			WorkerWorkspace          *WorkerWorkspacePolicy            `json:"worker_workspace"`
 			ExecutionRoute           *ExecutionRouteBinding            `json:"execution_route"`
 			CatalogAction            *CatalogActionBinding             `json:"catalog_action"`
@@ -894,6 +895,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(payload.DynamicToolAuthorization),
 				ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(payload.ResourceScopeSnapshot),
 				ResultContract:                payload.ResultContract.clone(),
+				DependencyResultView:          payload.DependencyResultView.clone(),
 				WorkerWorkspace:               payload.WorkerWorkspace.clone(),
 				ExecutionRoute:                payload.ExecutionRoute.clone(),
 				CatalogAction:                 payload.CatalogAction.clone(),
@@ -1140,6 +1142,9 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 		if payload.ResultContract != nil {
 			item.ResultContract = payload.ResultContract.clone()
+		}
+		if payload.DependencyResultView != nil {
+			item.DependencyResultView = payload.DependencyResultView.clone()
 		}
 		if payload.WorkerWorkspace != nil {
 			item.WorkerWorkspace = payload.WorkerWorkspace.clone()

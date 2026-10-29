@@ -6,7 +6,7 @@
 > Supersedes: —
 > Superseded-By: —
 
-> **狀態**：文件已定稿，可由 coding agent 從 PR-1 開始；本文功能尚未實作。
+> **狀態**：PR-1 設定與持久化完成，必要驗證通過；selected 執行仍明確拒絕，PR-2／PR-3 尚未實作。
 > **查核基準**：`a3ae5756`（2026-10-28）；以已提交原始碼確認既有能力，另核對目前工作樹。
 > **文件性質**：正式實作計畫；功能完成以前，不取代既有 normative 架構文件。
 > **範圍**：靜態依賴結果投影、三條既有結果路徑的契約回歸、已證實缺口的最小修正。
@@ -280,5 +280,42 @@ mise run lint
 ## 8. Baseline 實測紀錄
 
 正式文件提交 `825ff686` 的完整隔離測試已執行，結果及 CLI fixture 問題見
-[baseline 報告](../reference/runtime-continuation-baseline.md)。本計畫 PR-1–PR-3
-尚未實作；baseline 失敗不當成產品功能已驗收，也不以工作樹測試代替 immutable baseline。
+[baseline 報告](../reference/runtime-continuation-baseline.md)。當時 PR-1–PR-3
+尚未實作；後續實作紀錄見下節。baseline 失敗不當成產品功能已驗收，也不以工作樹測試代替 immutable baseline。
+
+## 9. PR-1 實作與驗證（2026-10-29）
+
+- 嚴格 YAML policy、固定欄位順序、full 正規化為未設定；未知鍵、重複／空欄位與動態覆寫均拒絕。
+- Initial／named 靜態 contract 同步 policy 與 revision 2；full 保持 revision 1。
+  任務建立、occurrence digest、event reducer、checkpoint、clone 與 journal 保留 policy。
+- Selected 使用 policy snapshot 6 與完整 SHA-256 policy digest；full 仍使用版本 5，
+  舊版 3/4/5 讀取算法保留，舊 session 加入 selected 會在 admission 拒絕。
+- Provider startup 前先封存 selected policy，再明確拒絕執行；PR-2 尚未完成，不以 full
+  替代 selected，也不把此階段當成已交付投影功能。
+- 實際 `b02b302b` 隔離 source 的舊 helper 量出 full contract 與 occurrence digest，
+  以固定 fixture 驗證新程式未改 hash；沒有改 baseline tracked source 或更新 golden 迴避漂移。
+- 定向契約／舊 golden／task digest／manifest alias 測試通過（team 0.381s）；
+  加入 migration 案例後，全部 TestDependencyResultView 定向測試亦通過（0.103s）。
+  隨後將兩項 unavailable 斷言改為 errors.Is 檢查既有 sentinel。2026-10-29 恢復驗證後，
+  投影／occurrence／policy 定向測試通過：team 0.920s、improver 0.026s。
+- 初次驗證曾因快取磁碟不足而停止；使用者於 2026-10-29 授權清理可重建的專案快取與
+  停用暫存，保留相依套件與快取設定，容量阻礙已解除。後續按新的階段快取預算執行。
+- 恢復後第一輪完整測試發現 improver 的明確 policy schema 分類缺少新增欄位；
+  已將 DependencyResultViewsHash 分類為固定政策，recursive fixture 僅增加該欄位與分類。
+  不放寬未知欄位或既有 version-5 strict comparison 邊界。team 全量通過（660.199s）；
+  CLI／improver 的已知失敗須由修正後的完整重跑確認，不宣稱此輪全套通過。
+- 修正後完整 `mise exec -- go test -p 2 ./... -timeout 30m` 已通過：CLI 146.639s、
+  improver 153.815s；team 沿用上述相同原始碼的成功測試快取，其餘 packages 通過或無測試。
+  此為保留既有無關修改的 working-tree 驗證，不稱為 immutable 新 HEAD 測試。
+- 上述原始碼的定向 race 通過：team 42.901s、improver 1.096s；`mise run vet` 通過。
+  `mise run lint` 指出 policy factory 複雜度 44 超過門檻 40；已將新增的 selected hash／
+  版本驗證原樣抽成 helper。抽取後定向回歸通過：team 4.522s、improver 0.027s。
+- 抽取後的最終完整 `go test -p 2 ./... -timeout 30m` 通過：CLI 145.112s、
+  improver 159.500s、team 666.902s；其餘 packages 通過或無測試。
+  定向 race 覆蓋 selected、occurrence digest、execution policy 與 schema 分類，
+  通過：team 55.199s、improver 1.104s。`mise run vet`、`mise run lint` 通過，lint 0 issues。
+- 驗證前後 2,556 個 Go／工具設定檔的 SHA-256 一致。保留目前 normal／race compiler
+  exports 後，清理本輪 104 個過期專案封存檔與索引（約 698 MiB）；本輪仍需保留的
+  專案封存檔約 701 MiB，未刪相依套件或現行 exports。
+- 文件與 diff 檢查通過；本階段可提交。PR-2／PR-3、另一份計畫的 WP3–WP5 與
+  最終整合驗收仍未完成，不能把 PR-1 當成可實際執行 selected 的交付。

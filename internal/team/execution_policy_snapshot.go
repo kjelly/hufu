@@ -20,8 +20,8 @@ import (
 )
 
 // executionPolicySnapshotVersion is incremented only when the canonical
-// fingerprint input changes. New snapshots use version 5; versions 3 and 4
-// remain read-compatible. The append-only compatibility materializer may
+// fingerprint input changes. Full-view snapshots use version 5; selected
+// dependency views use version 6. Versions 3 and 4 remain read-compatible. The append-only compatibility materializer may
 // replace a v3 snapshot with the current canonical version.
 const (
 	executionPolicyLegacySnapshotVersion   = 3
@@ -82,8 +82,9 @@ type ExecutionPolicySnapshot struct {
 	ContextQuery *ExecutionContextQueryPolicySnapshot `json:"context_query,omitempty"`
 	// Cost pins explicit generation-price entries used by this team and the
 	// effective team policy. It is omitted when neither is configured.
-	Cost              *cost.PolicySnapshot `json:"cost,omitempty"`
-	ConfigurationHash string               `json:"configuration_hash"`
+	Cost                      *cost.PolicySnapshot `json:"cost,omitempty"`
+	DependencyResultViewsHash string               `json:"dependency_result_views_hash,omitempty"`
+	ConfigurationHash         string               `json:"configuration_hash"`
 }
 
 // ExecutionBackendPolicySnapshot records one canonical backend limiter.
@@ -265,7 +266,17 @@ func (c *Coordinator) executionPolicyModelInputs() []executionPolicyModelInput {
 }
 
 func newExecutionPolicyState(c *Coordinator) (*executionPolicyState, error) {
-	return newExecutionPolicyStateForVersion(c, executionPolicySnapshotVersion)
+	version := executionPolicySnapshotVersion
+	if c != nil && c.session != nil {
+		hash, err := dependencyResultViewsHash(c.session)
+		if err != nil {
+			return nil, err
+		}
+		if hash != "" {
+			version = selectedDependencyPolicyVersion
+		}
+	}
+	return newExecutionPolicyStateForVersion(c, version)
 }
 
 func populateRunContractPolicySnapshot(snapshot *ExecutionPolicySnapshot, session *TeamSession) error {
@@ -289,16 +300,18 @@ func populateRunContractPolicySnapshot(snapshot *ExecutionPolicySnapshot, sessio
 	return nil
 }
 
-// newExecutionPolicyStateForVersion is used only to compare a v3 durable
-// snapshot with the current admission inputs during the compatibility window.
-// Production writers always call newExecutionPolicyState and therefore emit
-// the current canonical version.
+// newExecutionPolicyStateForVersion reconstructs the durable version for resume
+// comparison. Production writers select the version through newExecutionPolicyState.
 func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionPolicyState, error) {
 	if c == nil || c.session == nil || c.providerManager == nil {
 		return nil, fmt.Errorf("execution policy snapshot requires an initialized coordinator")
 	}
 	if !supportedExecutionPolicySnapshotVersion(version) {
 		return nil, fmt.Errorf("execution policy snapshot version %d is unsupported", version)
+	}
+	viewsHash, err := dependencyResultViewsHashForVersion(c.session, version)
+	if err != nil {
+		return nil, err
 	}
 	if err := c.session.Config.ContextRouting.Validate(); err != nil {
 		return nil, err
@@ -308,9 +321,10 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 		defaultBackend = configured
 	}
 	snapshot := &ExecutionPolicySnapshot{
-		Version:           version,
-		TeamMaxConcurrent: c.maxConcurrent,
-		DefaultLLMBackend: defaultBackend,
+		Version:                   version,
+		DependencyResultViewsHash: viewsHash,
+		TeamMaxConcurrent:         c.maxConcurrent,
+		DefaultLLMBackend:         defaultBackend,
 	}
 	runtimeHash, runtimeErr := settings.Merge(c.session.GlobalDecisionRuntime, c.session.Config.DecisionRuntime).Fingerprint("sidecar")
 	if runtimeErr != nil {
@@ -427,7 +441,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 		}
 		snapshot.ModelRoutes = append(snapshot.ModelRoutes, route)
 	}
-	if version == executionPolicySnapshotVersion {
+	if version >= executionPolicySnapshotVersion {
 		prices := make([]cost.PriceSnapshot, 0, len(relevantCostTargets))
 		for _, target := range slices.Sorted(maps.Keys(relevantCostTargets)) {
 			if price, ok := c.session.CostCatalog.Resolve(target); ok {
@@ -666,6 +680,13 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	if !supportedExecutionPolicySnapshotVersion(snapshot.Version) {
 		return fmt.Errorf("execution policy snapshot version %d is unsupported", snapshot.Version)
 	}
+	if snapshot.Version == selectedDependencyPolicyVersion {
+		if !validFullContentHash(snapshot.DependencyResultViewsHash) {
+			return fmt.Errorf("selected dependency policy hash is missing or invalid")
+		}
+	} else if snapshot.DependencyResultViewsHash != "" {
+		return fmt.Errorf("historical execution policy cannot contain selected dependency views")
+	}
 	if snapshot.ResultCollection != nil && snapshot.Version < executionPolicySnapshotVersion {
 		return fmt.Errorf("legacy execution policy cannot contain result collection")
 	}
@@ -749,7 +770,7 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 }
 
 func supportedExecutionPolicySnapshotVersion(version int) bool {
-	return version == executionPolicyLegacySnapshotVersion || version == executionPolicyPreviousSnapshotVersion || version == executionPolicySnapshotVersion
+	return version == executionPolicyLegacySnapshotVersion || version == executionPolicyPreviousSnapshotVersion || version == executionPolicySnapshotVersion || version == selectedDependencyPolicyVersion
 }
 
 func (s *executionPolicyState) teamMaxConcurrent() int {

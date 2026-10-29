@@ -855,6 +855,13 @@ func workerNormativeContextItems(input WorkerContextInput) []ContextItem {
 
 // CompileWorkerContext collects all worker context sources and executes the pipeline.
 func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (CompiledContext, error) {
+	view, viewErr := input.TaskDef.DependencyResultView.normalized()
+	if viewErr != nil {
+		return CompiledContext{}, viewErr
+	}
+	if view != nil {
+		return CompiledContext{}, errDependencyResultViewUnavailable
+	}
 	ctx = contextstore.WithEvaluationTime(ctx, contextEvaluationTime(ctx, input.CanonicalMemory))
 	if finish := startContextStage(ctx, input.Request.RequestID, input.Request.ModelExecutionID, "compilation"); finish != nil {
 		defer finish()

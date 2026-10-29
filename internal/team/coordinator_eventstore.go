@@ -1647,6 +1647,9 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 	if item.ResultContract != nil {
 		payload["result_contract"] = item.ResultContract.clone()
 	}
+	if item.DependencyResultView != nil {
+		payload["dependency_result_view"] = item.DependencyResultView.clone()
+	}
 	if item.WorkerWorkspace != nil {
 		payload["worker_workspace"] = item.WorkerWorkspace.clone()
 	}

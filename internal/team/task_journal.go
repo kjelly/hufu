@@ -54,6 +54,7 @@ type journalRecord struct {
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization,omitempty"`
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot,omitempty"`
 	ResultContract           *ResultContractRef                `json:"result_contract,omitempty"`
+	DependencyResultView     *DependencyResultViewSpec         `json:"dependency_result_view,omitempty"`
 	WorkerWorkspace          *WorkerWorkspacePolicy            `json:"worker_workspace,omitempty"`
 	ExecutionRoute           *ExecutionRouteBinding            `json:"execution_route,omitempty"`
 	CatalogAction            *CatalogActionBinding             `json:"catalog_action,omitempty"`
@@ -174,7 +175,7 @@ func (c *Coordinator) recordTerminalTypedTaskResult(todoID string) {
 		if runID == "" {
 			runID = c.taskTracker.TodoList().RunID()
 		}
-		_ = c.journal.append(journalRecord{Op: "result", Agent: item.Agent, TaskID: item.ID, RunID: runID, Desc: item.Desc, TypedResult: copyResult, ContextManifests: normalizeContextManifests(item.ContextManifests), DynamicToolAuthorization: cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization), ResourceScopeSnapshot: cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot), ResultContract: item.ResultContract.clone(), WorkerWorkspace: item.WorkerWorkspace.clone(), ExecutionRoute: item.ExecutionRoute.clone(), CatalogAction: item.CatalogAction.clone(), TS: time.Now().Format(time.RFC3339)})
+		_ = c.journal.append(journalRecord{Op: "result", Agent: item.Agent, TaskID: item.ID, RunID: runID, Desc: item.Desc, TypedResult: copyResult, ContextManifests: normalizeContextManifests(item.ContextManifests), DynamicToolAuthorization: cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization), ResourceScopeSnapshot: cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot), ResultContract: item.ResultContract.clone(), DependencyResultView: item.DependencyResultView.clone(), WorkerWorkspace: item.WorkerWorkspace.clone(), ExecutionRoute: item.ExecutionRoute.clone(), CatalogAction: item.CatalogAction.clone(), TS: time.Now().Format(time.RFC3339)})
 		return
 	}
 }
