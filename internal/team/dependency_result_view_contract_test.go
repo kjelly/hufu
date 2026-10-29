@@ -89,6 +89,7 @@ func TestDependencyResultViewContractRejectsUnsupportedTasks(t *testing.T) {
 		{"result schema", func(s *TeamSession) { s.ContractTasks[1].ResultContractSpec = &agent.ResultContractSpec{} }},
 		{"worker schema", func(s *TeamSession) { s.Agents["worker"].ResultContract = &agent.ResultContractSpec{} }},
 		{"native action", func(s *TeamSession) { s.ContractTasks[1].Action = &Action{} }},
+		{"structured execution", func(s *TeamSession) { s.ContractTasks[1].Execution.Steps = []ExecutionStep{{ID: "read", Tool: "view"}} }},
 		{"sidecar", func(s *TeamSession) { s.ContractTasks[1].Sidecar = true }},
 		{"plan first", func(s *TeamSession) { s.ContractTasks[1].PlanFirst = true }},
 		{"worker plan requirement", func(s *TeamSession) { s.Agents["worker"].Requirements.PlanFirst = true }},
@@ -163,7 +164,7 @@ func TestDependencyResultViewPersistsCanonicalOccurrence(t *testing.T) {
 			t.Fatal("projection mutation changed durable task")
 		}
 	}
-	if _, err := CompileWorkerContext(t.Context(), WorkerContextInput{TaskDef: task}); !errors.Is(err, errDependencyResultViewUnavailable) {
+	if _, err := CompileWorkerContext(t.Context(), WorkerContextInput{TaskDef: task}); !errors.Is(err, errDependencyResultViewUnprepared) {
 		t.Fatalf("selected execution silently used full: %v", err)
 	}
 }

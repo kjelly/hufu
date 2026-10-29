@@ -881,6 +881,39 @@ tasks as skipped. The sealed terminal snapshot keeps their states and original
 diagnostics for inspection and recovery, without appending task transitions
 after the run boundary.
 
+### Selected dependency-result presentation
+
+Static contracts can opt into `dependency-result-view: {mode: selected,
+fields: [...]}` for ordinary workers with same-batch dependencies. The setting
+is frozen in the admitted task and execution policy, rather than accepted from
+model tool arguments. Full mode keeps the legacy formatter and identities.
+See [the configuration reference](../reference/agent-format.md#靜態依賴結果視圖dependency-result-view).
+
+The runtime resolves complete accepted dependency results through the existing
+workset restrictions, then authenticates their completion events against the
+active branch lineage and fork cutoff. A separate renderer produces selected
+fields without modifying canonical results, receipts, CAS objects or access
+grants. Structured upstream payloads and downstream complete-evidence or
+result-contract requirements are incompatible with selected presentation.
+Selected context remains required, uncompressed and complete; insufficient
+capacity stops the downstream request before worker invocation.
+
+Selected manifests use schema 4, including when composed with query attribution;
+full manifests retain schema 2 or query schema 3. Each selected item binds the
+normalized policy SHA-256, ordered source branch/run/task/attempt/revision,
+completion event ID/hash and SHA-256 of each authorized full handoff. Its
+`ContentHash` is the full SHA-256 of the actual selected context bytes. These
+presentation hashes never replace canonical payload or receipt hashes.
+
+Primary selected requests begin with `ModelCalled: false`, outcome `prepared`.
+At the actual agent/provider invocation boundary the runtime persists the
+dispatched manifest before invoking the worker; this denotes runtime dispatch,
+not remote acknowledgement. Preview, cancellation and uncalled requests cannot
+prove delivery. Retry, fanout, completion and result-only recovery verify the
+frozen policy, exact source occurrence and dispatched view. Result-only recovery
+does not rerun work to obtain omitted fields. Inspector and report projections
+expose content-free attribution and distinguish preparation from dispatch.
+
 ### Follow-up workflows in one conversation
 
 A completed workflow is one execution cycle, not the end of its conversation.

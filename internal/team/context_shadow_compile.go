@@ -46,7 +46,7 @@ func (c *Coordinator) compileShadowCoordinator(ctx context.Context, input Coordi
 }
 
 func (c *Coordinator) compileShadowWorker(ctx context.Context, input WorkerContextInput, legacy string) {
-	compiled, err := c.ContextCompiler().CompileWorkerContext(ctx, input)
+	compiled, err := c.compileWorkerContext(ctx, input)
 	c.recordShadowTrace(ctx, "worker", legacy, input.Request, nil, input.ModelContext, compiled, err)
 }
 

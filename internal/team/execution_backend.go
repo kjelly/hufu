@@ -249,7 +249,14 @@ func (b *AgentExecutionBackend) RunAttempt(ctx context.Context, request AttemptR
 	if err != nil {
 		return AttemptResult{}, err
 	}
-	result, err := b.provider.RunAttempt(ctx, request)
+	callCtx, dispatchErr := markDependencyViewModelCall(ctx)
+	if dispatchErr != nil {
+		if reservation.ProviderInvocationID != "" {
+			b.costBoundary.SettleAgentExecution(ctx, reservation, AttemptResult{}, dispatchErr)
+		}
+		return AttemptResult{}, dispatchErr
+	}
+	result, err := b.provider.RunAttempt(callCtx, request)
 	if reservation.ProviderInvocationID != "" {
 		b.costBoundary.SettleAgentExecution(ctx, reservation, result, err)
 	}

@@ -32,6 +32,9 @@ func (c *Coordinator) restoreCollectionContext(ctx context.Context, expected *Re
 	if err != nil {
 		return nil, err
 	}
+	if err := c.validateSelectedRepairContext(ctx, item, work.Receipt.ContextManifest); err != nil {
+		return nil, err
+	}
 	workspace, err := filepath.Abs(c.session.Workspace)
 	if err != nil || workspace != work.Workspace {
 		return nil, errResultCollectionStale

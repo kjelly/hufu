@@ -1015,7 +1015,7 @@ retryLoop:
 			return "", fmt.Errorf("worker memory recall preflight failed: %w", recallErr)
 		}
 		attemptInput.WorkerMemory = workerMemory
-		compiled, compileErr := c.ContextCompiler().CompileWorkerContext(attemptCtx, attemptInput)
+		compiled, compileErr := c.compileWorkerContext(attemptCtx, attemptInput)
 		if compileErr == nil {
 			compileErr = validateRequiredEvidenceContext(attemptInput, compiled)
 		}
@@ -1125,6 +1125,7 @@ retryLoop:
 			taskCtx = context.WithValue(taskCtx, modelKey{}, resolvedModel)
 			taskCtx = context.WithValue(taskCtx, taskRequiresResultKey{}, task.Execution.RequiresResult)
 			taskCtx = context.WithValue(taskCtx, workerRuntimeResultKey{}, runtimeCollection)
+			taskCtx = c.bindDependencyViewCall(taskCtx, &contextManifest)
 			taskCtx = withInvocationMetadata(taskCtx, invocationMetadataFromRequest(request, contextManifest))
 			if identity, ok := c.activeTaskResultOccurrence(todoID); ok {
 				taskCtx = withSubmitResultRuntimeIdentity(taskCtx, identity)
@@ -5104,7 +5105,11 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		observedStreamUsage = 0
 		directStreamUsageRecorded = false
 		observedStreamUsageMu.Unlock()
-		streamResult, streamErr := ag.Stream(ctx, call)
+		callCtx, dispatchErr := markDependencyViewModelCall(ctx)
+		if dispatchErr != nil {
+			return nil, dispatchErr
+		}
+		streamResult, streamErr := ag.Stream(callCtx, call)
 		if boundaryErr := coordinatorFailure.failure(); boundaryErr != nil {
 			streamErr = boundaryErr
 		}

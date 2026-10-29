@@ -75,6 +75,9 @@ type ContextItem struct {
 	// ConflictIDs are open memory conflicts for this item. They only change
 	// manifest attribution (knowledge_state=conflicting), never the prompt.
 	ConflictIDs []string
+	// DependencyResultView is runtime-authenticated presentation attribution;
+	// canonical dependency results remain separate compiler inputs.
+	DependencyResultView *DependencyResultViewAttribution `json:"dependency_result_view,omitempty"`
 }
 
 type CoordinatorContextInput struct {
@@ -129,6 +132,7 @@ type WorkerContextInput struct {
 	ContextFiles         map[string]string // filename -> content
 	ConcurrentTasks      string
 	DependencyResults    []TaskResult
+	DependencyView       *dependencyResultView `json:"-"`
 	ModelContext         ModelContextSpec
 	SystemTokens         int
 	ToolsTokens          int
@@ -855,12 +859,8 @@ func workerNormativeContextItems(input WorkerContextInput) []ContextItem {
 
 // CompileWorkerContext collects all worker context sources and executes the pipeline.
 func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (CompiledContext, error) {
-	view, viewErr := input.TaskDef.DependencyResultView.normalized()
-	if viewErr != nil {
-		return CompiledContext{}, viewErr
-	}
-	if view != nil {
-		return CompiledContext{}, errDependencyResultViewUnavailable
+	if err := validateDependencyResultViewInput(input); err != nil {
+		return CompiledContext{}, err
 	}
 	ctx = contextstore.WithEvaluationTime(ctx, contextEvaluationTime(ctx, input.CanonicalMemory))
 	if finish := startContextStage(ctx, input.Request.RequestID, input.Request.ModelExecutionID, "compilation"); finish != nil {
@@ -948,8 +948,16 @@ func workerProjectAndDependencyItems(input WorkerContextInput) []ContextItem {
 		}
 		items = append(items, ContextItem{ID: "file:" + fileName, Kind: "project_instructions", Content: fmt.Sprintf("### %s\n```\n%s\n```", fileName, fileContent), Priority: PriorityProjectInstructions, Compressible: true, DedupKey: hashContentKey(fileContent)})
 	}
-	if depsFormatted := FormatDependencyResults(input.DependencyResults); depsFormatted != "" {
-		items = append(items, ContextItem{ID: "dependency_results", Kind: "dependency_result", Content: depsFormatted, Priority: PriorityDependencyTaskResults, DedupKey: hashContentKey(depsFormatted), Required: true})
+	var depsFormatted string
+	var attribution *DependencyResultViewAttribution
+	if input.DependencyView != nil {
+		depsFormatted = input.DependencyView.content
+		attribution = input.DependencyView.attribution.Clone()
+	} else {
+		depsFormatted = FormatDependencyResults(input.DependencyResults)
+	}
+	if depsFormatted != "" {
+		items = append(items, ContextItem{ID: "dependency_results", Kind: "dependency_result", Content: depsFormatted, Priority: PriorityDependencyTaskResults, DedupKey: hashContentKey(depsFormatted), Required: true, DependencyResultView: attribution})
 	}
 	return items
 }

@@ -405,7 +405,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		return "", fmt.Errorf("sub-agent worker memory preflight failed: %w", recallErr)
 	}
 	workerInput.WorkerMemory = workerMemory
-	compiled, compileErr := c.ContextCompiler().CompileWorkerContext(ctx, workerInput)
+	compiled, compileErr := c.compileWorkerContext(ctx, workerInput)
 	if compileErr != nil {
 		return "", fmt.Errorf("sub-agent context preflight failed: %w", compileErr)
 	}
@@ -423,6 +423,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 
 	timing := &taskTiming{}
 	timing.reset()
+	ctx = c.bindDependencyViewCall(ctx, &manifest)
 	ctx = withInvocationMetadata(ctx, invocationMetadataFromRequest(request, manifest))
 	startedAt := time.Now().UTC()
 	_, steps, transcriptRef, err := c.runInlineWorkerTranscript(ctx, ag, agentDef.Name, prompt, timing)

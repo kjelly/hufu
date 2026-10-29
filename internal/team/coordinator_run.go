@@ -149,9 +149,6 @@ func (c *Coordinator) checkRunAdmission() error {
 			},
 		}
 	}
-	if c.executionPolicy != nil && c.executionPolicy.snapshot.DependencyResultViewsHash != "" {
-		return errDependencyResultViewUnavailable
-	}
 	if c.sessionData != nil && c.sessionData.RecoveryRequired {
 		reason := c.sessionData.RecoveryReason
 		if reason == "" {
@@ -748,7 +745,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return &DirectAgentResult{AgentName: resolvedName, Error: failure}, nil
 	}
 	workerInput.WorkerMemory = memBundle
-	compiled, compileErr := c.ContextCompiler().CompileWorkerContext(taskCtx, workerInput)
+	compiled, compileErr := c.compileWorkerContext(taskCtx, workerInput)
 	c.recordShadowTrace(taskCtx, "direct_worker", prompt, request, routeDecisions, workerInput.ModelContext, compiled, compileErr)
 	if compileErr != nil {
 		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{
@@ -789,6 +786,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{todoID: todoID, agent: resolvedName, agentDef: agentDef, task: task, directModel: directModel, attemptStarted: attemptStarted, roundCancel: roundCancel, err: fmt.Errorf("direct-agent context manifest preflight failed: %w", manifestErr)})
 		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent context manifest preflight failed: %w", manifestErr)}, nil
 	}
+	taskCtx = c.bindDependencyViewCall(taskCtx, &contextManifest)
 	taskCtx = withInvocationMetadata(taskCtx, invocationMetadataFromRequest(request, contextManifest))
 	runID := c.executionRunID
 	if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {

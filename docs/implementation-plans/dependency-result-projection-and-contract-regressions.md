@@ -6,7 +6,7 @@
 > Supersedes: —
 > Superseded-By: —
 
-> **狀態**：PR-1 設定與持久化完成，必要驗證通過；selected 執行仍明確拒絕，PR-2／PR-3 尚未實作。
+> **狀態**：PR-1 已提交；PR-2 已完成實作與階段驗證，selected 可供合格靜態 Worker 使用；PR-3 尚未實作。
 > **查核基準**：`a3ae5756`（2026-10-28）；以已提交原始碼確認既有能力，另核對目前工作樹。
 > **文件性質**：正式實作計畫；功能完成以前，不取代既有 normative 架構文件。
 > **範圍**：靜態依賴結果投影、三條既有結果路徑的契約回歸、已證實缺口的最小修正。
@@ -188,15 +188,15 @@ Selected manifest 的新增 attribution 必須由 runtime 計算，至少包含�
 
 ### 4.3 必要驗收
 
-- [ ] 未設定／full：prompt bytes、source order、hash、manifest、依賴 gate 與既有結果查詢不變。
-- [ ] Selected：只含 header 與選定欄位；來源、CAS、artifact 授權、payload／receipt bytes 不變。
-- [ ] Parser：未知欄位、空選擇、重複、非法 mode、動態覆寫及不相容任務均拒絕。
-- [ ] 完整 evidence 場景仍成功；相同場景宣告 selected 時，在下游 provider 前拒絕。
-- [ ] 多上游不同完成順序、retry、fanout，來源與 policy 相同則投影 digest 相同。
-- [ ] Cross-branch、過期 revision、篡改 checkpoint／manifest／policy 均拒絕；不擴大 source scope。
-- [ ] Required budget 不足不派發；不截斷、不改派更大 context 的未授權模型。
-- [ ] Resume 與 result-only repair 保留原 receipt、view 及 task identity，不重播 mutating tools。
-- [ ] 固定 fixture 含大量未選 details／risks，selected 的 bytes 及相同 tokenizer 的 token 數
+- [x] 未設定／full：prompt bytes、source order、hash、manifest、依賴 gate 與既有結果查詢不變。
+- [x] Selected：只含 header 與選定欄位；來源、CAS、artifact 授權、payload／receipt bytes 不變。
+- [x] Parser：未知欄位、空選擇、重複、非法 mode、動態覆寫及不相容任務均拒絕。
+- [x] 完整 evidence 場景仍成功；相同場景宣告 selected 時，在下游 provider 前拒絕。
+- [x] 多上游不同完成順序、retry、fanout，來源與 policy 相同則投影 digest 相同。
+- [x] Cross-branch、過期 revision、篡改 checkpoint／manifest／policy 均拒絕；不擴大 source scope。
+- [x] Required budget 不足不派發；不截斷、不改派更大 context 的未授權模型。
+- [x] Resume 與 result-only repair 保留原 receipt、view 及 task identity，不重播 mutating tools。
+- [x] 固定 fixture 含大量未選 details／risks，selected 的 bytes 及相同 tokenizer 的 token 數
   均小於 full；記錄數值。此測試只證明 context 縮減，不以模型品質作驗收。
 
 ## 5. PR-3：既有結果路徑的契約一致性
@@ -319,3 +319,53 @@ mise run lint
   專案封存檔約 701 MiB，未刪相依套件或現行 exports。
 - 文件與 diff 檢查通過；本階段可提交。PR-2／PR-3、另一份計畫的 WP3–WP5 與
   最終整合驗收仍未完成，不能把 PR-1 當成可實際執行 selected 的交付。
+
+## 10. PR-2 實作與驗證（2026-10-29）
+
+- 獨立 selected renderer 保留完整 canonical source，只渲染選定欄位與來源 header。
+  Artifact 不揭露 backing path；選定 verification 的診斷與 duration 不截斷。
+- 共用 runtime compiler 邊界驗證靜態任務、canonical completion event、branch lineage／
+  fork cutoff、workset 與來源 revision；普通 worker、nested、direct、fanout 及 repair
+  的 context 路徑沿用同一驗證。Required budget 不足在 Worker 前停止。
+- Selected manifest 使用 schema 4，可與原 query attribution 組合；full 保留 schema 2/3。
+  來源 event／full handoff、正規化 policy 與實際 selected context 各有完整 SHA-256。
+  主 Worker request 先記為 prepared，到實際 agent/backend invocation 前才封存派送紀錄。
+  交付與 repair 必須能在 canonical 可見事件中找到該已派送 manifest；單改 checkpoint
+  的 ModelCalled 並重算公開 fingerprint，不能製造交付證明。
+- 結果收集的 restart 沿用原 receipt 與 selected view；來源有效時完成、過期時拒絕，
+  兩者都不重新派送 Worker。JSON／inspector／report 提供不含來源內容的 attribution，
+  並區分 prepared 與 dispatched。正式 agent-format、runtime、strict-verification、
+  workset 文件同步說明適用範圍與限制。
+- 最新定向測試通過：team 28.907s、inspect 使用成功快取、CLI 0.054s。
+  包含真實 executeTask → scripted Worker → submit_result → completion、
+  多 attempt／fanout manifest、event replay、branch cutoff、失敗／取消派送、
+  輔助呼叫身分隔離、偽造交付、result-only collection restart 及 inspector/report。
+- 固定 `dependencyViewRenderFixture` 以 tiktoken 0.14.0 的 `cl100k_base` 離線量測：
+  full **78,450 bytes／12,442 tokens**，selected `summary` **193 bytes／44 tokens**。
+  [量測紀錄](../../internal/team/testdata/dependency-result-view/token-measurement.json)
+  保留 tokenizer 版本、兩份輸出的 SHA-256 與計數；測試釘住相同 fixture bytes，
+  不把 runtime estimator 當作真實 tokenizer。只驗收此 fixture 的 context 縮減。
+- 階段邊界清理 177 個已過期的本任務 Hufu archives 與對應索引，回收約 1.87 GiB；
+  當時現行專案 exports 約 420 MiB。保留正常相依、toolchain 與原快取設定。
+  Tokenizer 暫存套件與已完成 PR-1 比較的 source checkout 已刪除。
+- 第一輪完整測試發現模型呼叫 inventory 仍尋找舊 `ag.Stream(ctx, call)`，team
+  在 715.783s 回報該稽核失敗；其他 packages 通過（CLI 177.427s）。已更新實際
+  呼叫標記，並以 Go AST 計算 Generate／Stream 呼叫，不再依賴 context 變數名或
+  將註解當成實際呼叫。保留未登錄呼叫的拒絕測試，增加註解／字串不計入的回歸。
+- 補充回歸實際重現：compiler 若保留 selected body 卻改寫來源 run／event／branch，
+  舊 preflight 未比對 runtime 已準備的 attribution。已加入精確比對，拒絕在派送前
+  重綁來源；三個原先失敗案例、模型 inventory 與完整 gates 重跑均通過。
+- 最終定向測試通過：team 27.860s、inspect 0.928s、CLI 0.081s。
+  完整 `mise exec -- go test -p 2 ./... -timeout 30m` 通過：team 679.195s、
+  CLI 144.161s、improver 149.567s，其餘 packages 通過或無測試。
+  這是保留既有無關修改的 working-tree 驗證，不稱為 immutable HEAD 全測。
+- 定向 race 涵蓋 selected view、context manifest/query、完整 evidence、result collection、
+  model fanout 與 occurrence，通過：team 169.098s、inspect 1.233s、CLI 1.345s。
+  `mise run vet`、`mise run lint` 通過，lint 0 issues。
+  2,544 個 Go／工具設定檔的 SHA-256 在此輪驗證前後一致。
+- 最終保留現行 normal／race exports 後，再清掉 122 個過期 archives 與對應索引，
+  回收約 1.05 GiB；現行專案 exports 約 800 MiB。加上前次清理，本階段已回收約
+  2.92 GiB 專案編譯輸出；任務 scratch 約 152 MiB，含供最終相容性檢查保留的
+  126 MiB baseline binary，其餘為小型紀錄與復原 checkpoint。
+- 文件與 diff 檢查通過，本階段可獨立提交。PR-3、另一份計畫的 WP3–WP5 與
+  最終整合驗收仍未完成；未執行真實模型或外部 agent。

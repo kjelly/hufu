@@ -327,6 +327,45 @@ runtime 收集的 envelope 使用相同的 `status`、`summary`、`structured_pa
 `--output json`、report 與 inspect 可看到收集狀態、已用／上限回合及失敗分類；完整
 內容保存在 durable artifact store。
 
+### 靜態依賴結果視圖（dependency-result-view）
+
+`dependency-result-view` 只接受在 team.yaml 的靜態 `contracts:` 任務宣告，
+必須啟用對應的靜態 contract binding；不是 agent frontmatter 或動態 `agent` tool 參數。
+以下為 contract 片段，agents 及其他團隊設定仍須完整定義：
+
+```yaml
+contracts:
+  - id: implement
+    agent: coder
+  - id: review
+    agent: reviewer
+    depends-on-contracts: [implement]
+    dependency-result-view:
+      mode: selected
+      fields: [summary, findings]
+```
+
+未設定或 `mode: full` 沿用完整 handoff。`full` 不接受 `fields`。
+`selected.fields` 必須是非空且不重複的陣列，只接受 `summary`、`findings`、
+`artifacts`、`files_modified`、`verification`，按此固定順序封存；未知鍵、
+未知值及其他大小寫均拒絕。所有視圖保留 task ID、agent、status 與
+「選定欄位視圖，不代表完整上游證據」標示。Artifact 僅提供既有 opaque reference
+與允許的 metadata，不揭露 backing path，也不增加讀取權限。
+
+Selected 僅適用於具有同批依賴的普通 Worker；`requires-evidence`、`evidence_from`、
+下游 result-contract、native action、sidecar、plan-first 及 closed tool sequence
+均拒絕。上游 canonical result 含 `StructuredPayload` 或無法驗證來源時，
+在該下游 Worker 呼叫前拒絕，不退回 full。選定欄位必須完整交付；context budget
+不足會停止，不截斷、不自動加入未選欄位。完整結果、收據、CAS 與 coordinator
+原有 handoff 保持完整，這項設定只改變 Worker 的 dependency presentation。
+
+Policy 隨靜態契約及 execution policy 封存。Retry、額外模型及復原必須驗證
+同一來源 revision、policy 與 view digest；來源漂移不能以最新結果替換。
+Inspector、JSON 與 report 提供模式、欄位、來源 event／branch／run／task／attempt
+及雜湊，並區分 prepared 與實際 runtime dispatch。含 selected 的新 session
+使用 policy v6、effective contract revision 2；舊 binary 必須拒絕該版本。
+全為 full 的 session 沿用原 policy、contract 與 manifest 版本。
+
 ### 結果合約（result-contract）
 
 ```yaml

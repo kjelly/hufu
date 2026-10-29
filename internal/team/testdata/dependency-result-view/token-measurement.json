@@ -1,0 +1,18 @@
+{
+  "tokenizer": "tiktoken",
+  "tokenizer_version": "0.14.0",
+  "encoding": "cl100k_base",
+  "fields": [
+    "summary"
+  ],
+  "full": {
+    "bytes": 78450,
+    "tokens": 12442,
+    "sha256": "94a2190335b82aed40854c9e6668aafce98efc89b9892776a83683e98fd830e4"
+  },
+  "selected": {
+    "bytes": 193,
+    "tokens": 44,
+    "sha256": "42ccf2aa607f0eadc42e2bcfa48b2f99e410ccf545277c8b76115bdbae0b3f83"
+  }
+}

@@ -200,6 +200,11 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 	if !check("context_manifest", err) {
 		return finish()
 	}
+	if item.DependencyResultView != nil {
+		if !check("dependency_view", c.validateSelectedRepairContext(ctx, item, manifest)) {
+			return finish()
+		}
+	}
 	if manifest != nil {
 		ctx = withInvocationMetadata(ctx, invocationMetadataFromManifest(manifest))
 	}

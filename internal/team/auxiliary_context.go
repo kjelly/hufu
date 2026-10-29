@@ -168,7 +168,7 @@ func (c *Coordinator) compileAuxiliaryPrompt(ctx context.Context, purpose, rawPr
 			}
 		}
 	}
-	compiled, err := c.ContextCompiler().CompileWorkerContext(ctx, input)
+	compiled, err := c.compileWorkerContext(ctx, input)
 	if err != nil {
 		return "", nil, err
 	}

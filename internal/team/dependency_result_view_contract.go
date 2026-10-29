@@ -4,15 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
 )
-
-var errDependencyResultViewUnavailable = errors.New("selected dependency-result-view execution is unavailable until delivery integration is installed")
 
 const selectedDependencyContractRevision = 2
 const selectedDependencyPolicyVersion = 6
@@ -52,13 +49,13 @@ func validateDependencyResultViewTask(task TaskDef, def *agent.AgentDef, bound b
 	if task.Execution.RequiresEvidence || len(task.EvidenceFrom) > 0 || task.ResultContractSpec != nil || task.ResultContract != nil {
 		return fmt.Errorf("selected dependency-result-view cannot restrict required evidence or result contracts")
 	}
-	if task.Action != nil || task.CatalogAction != nil || task.Sidecar || task.PlanFirst || len(task.Execution.ToolSequence) > 0 {
+	if task.Action != nil || task.CatalogAction != nil || len(task.Execution.Steps) > 0 || task.Sidecar || task.PlanFirst || len(task.Execution.ToolSequence) > 0 {
 		return fmt.Errorf("selected dependency-result-view supports ordinary workers without plan-first or closed tool sequences")
 	}
 	if def != nil && (def.Requirements.PlanFirst || def.ResultContract != nil) {
 		return fmt.Errorf("selected dependency-result-view conflicts with the worker's plan/result contract")
 	}
-	if len(task.DependsOnContracts) == 0 && len(task.DependsOn) == 0 && !task.Pipeline {
+	if !bound && len(task.DependsOnContracts) == 0 && len(task.DependsOn) == 0 && !task.Pipeline {
 		return fmt.Errorf("selected dependency-result-view requires same-batch dependencies")
 	}
 	return nil

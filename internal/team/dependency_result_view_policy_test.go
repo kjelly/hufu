@@ -2,7 +2,6 @@ package team
 
 import (
 	"encoding/json/v2"
-	"errors"
 	"strings"
 	"testing"
 
@@ -62,8 +61,8 @@ func TestDependencyResultViewPolicyVersionAndDrift(t *testing.T) {
 	}
 	c.executionPolicy = current
 	c.SetSessionData(&SessionData{})
-	if err := c.FreezeExecutionPolicyAtStartup(); !errors.Is(err, errDependencyResultViewUnavailable) {
-		t.Fatalf("selected startup did not reject before provider probes: %v", err)
+	if err := c.FreezeExecutionPolicyAtStartup(); err != nil {
+		t.Fatalf("selected startup did not freeze the policy: %v", err)
 	}
 	store, err := OpenEventStoreReadOnly(c.session.Workspace)
 	if err != nil {
@@ -76,7 +75,7 @@ func TestDependencyResultViewPolicyVersionAndDrift(t *testing.T) {
 	}
 	durable, err := executionPolicySnapshotFromEvents(events)
 	if err != nil || durable == nil || durable.ConfigurationHash != snapshot.ConfigurationHash {
-		t.Fatalf("startup did not seal policy before refusing execution: %v", err)
+		t.Fatalf("startup did not seal selected policy: %v", err)
 	}
 	selected.Fields = []string{"summary", "verification"}
 	reordered, err := newExecutionPolicyState(c)

@@ -96,7 +96,7 @@ func findInvariantVerificationManifest(manifests []ContextInjectionManifest, fin
 }
 
 func validateInvariantManifestIdentity(todo *TodoItem, result *TaskResult, manifest *ContextInjectionManifest, runID string) string {
-	if manifest.SchemaVersion != ContextManifestSchemaVersion && manifest.SchemaVersion != ContextQueryManifestSchemaVersion {
+	if manifest.SchemaVersion != ContextManifestSchemaVersion && manifest.SchemaVersion != ContextQueryManifestSchemaVersion && manifest.SchemaVersion != DependencyResultViewManifestSchemaVersion {
 		return "manifest_version"
 	}
 	if strings.TrimSpace(runID) == "" || manifest.RunID != runID {

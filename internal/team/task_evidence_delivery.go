@@ -129,6 +129,9 @@ func (c *Coordinator) validateDependencyPayloads(results []TaskResult) error {
 }
 
 func validateRequiredEvidenceContext(input WorkerContextInput, compiled CompiledContext) error {
+	if err := validateSelectedDependencyContext(input, compiled); err != nil {
+		return err
+	}
 	if !input.TaskDef.Execution.RequiresEvidence {
 		return nil
 	}
@@ -147,6 +150,9 @@ func validateRequiredEvidenceContext(input WorkerContextInput, compiled Compiled
 // The canonical manifest is the durable proof of delivery, also after replay.
 // Old manifests without a dependency hash cannot prove a complete audit.
 func (c *Coordinator) validateRequiredEvidenceDelivery(todoID string, attempt int, runIDs ...string) error {
+	if err := c.validateSelectedDependencyDelivery(todoID, attempt, runIDs...); err != nil {
+		return err
+	}
 	item := c.todoItemByID(todoID)
 	if item == nil {
 		return nil

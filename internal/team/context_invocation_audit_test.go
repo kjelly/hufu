@@ -2,6 +2,9 @@ package team
 
 import (
 	"bufio"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -97,8 +100,16 @@ func TestModelCallChokepointInventoryIsComplete(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			for _, marker := range []string{"sidecar.NewSidecar(", ".Generate(ctx,", ".Stream(ctx,", `exec.CommandContext(ctx2, "ollama", "run"`, "systemone.New("} {
-				if count := strings.Count(string(data), marker); count != registeredMarkerCount(entries, rel, marker) {
+			modelCalls, err := modelPrimitiveCalls(data)
+			if err != nil {
+				return err
+			}
+			for _, marker := range []string{"sidecar.NewSidecar(", ".Generate(", ".Stream(", `exec.CommandContext(ctx2, "ollama", "run"`, "systemone.New("} {
+				count := strings.Count(string(data), marker)
+				if marker == ".Generate(" || marker == ".Stream(" {
+					count = modelCalls[marker]
+				}
+				if count != registeredMarkerCount(entries, rel, marker) {
 					return &unregisteredModelChokepointError{path: rel, marker: marker}
 				}
 			}
@@ -109,6 +120,46 @@ func TestModelCallChokepointInventoryIsComplete(t *testing.T) {
 				t.Fatalf("unregistered production model chokepoint: %s: %s", issue.path, issue.marker)
 			}
 			t.Fatal(err)
+		}
+	}
+}
+
+// Count actual calls independently of the context variable's name. Comments
+// and string literals must not stand in for a registered provider boundary.
+func modelPrimitiveCalls(source []byte) (map[string]int, error) {
+	file, err := parser.ParseFile(token.NewFileSet(), "", source, 0)
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int)
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if ok && (selector.Sel.Name == "Generate" || selector.Sel.Name == "Stream") {
+			counts["."+selector.Sel.Name+"("]++
+		}
+		return true
+	})
+	return counts, nil
+}
+
+func TestModelCallAuditIgnoresContextNamesAndComments(t *testing.T) {
+	for _, test := range []struct {
+		source           string
+		stream, generate int
+	}{
+		{`package fixture; func run() { agent.Stream(callCtx, call); model.Generate(bound, call) }`, 1, 1},
+		{`package fixture; func run() { /* agent.Stream(ctx, call) */ _ = "agent.Generate(ctx, call)" }`, 0, 0},
+	} {
+		calls, err := modelPrimitiveCalls([]byte(test.source))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if calls[".Stream("] != test.stream || calls[".Generate("] != test.generate {
+			t.Fatalf("model boundary counts included comments or depended on a context name: %v", calls)
 		}
 	}
 }

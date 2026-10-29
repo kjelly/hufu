@@ -1168,6 +1168,7 @@ func writeContextRoutingReport(b *strings.Builder, summary team.ContextManifestS
 	}
 	b.WriteString("## Context Routing\n\n")
 	fmt.Fprintf(b, "- **Requests:** %d\n- **Model calls:** %d\n- **Deterministic fallbacks:** %d\n- **Included items:** %d (%d tokens)\n- **Omitted items:** %d (%d tokens)\n", summary.Requests, summary.ModelCalls, summary.Fallbacks, summary.Included, summary.IncludedTokens, summary.Omitted, summary.OmittedTokens)
+	writeDependencyResultViewReport(b, summary)
 	if len(summary.OmitReasons) > 0 {
 		b.WriteString("- **Omission reasons:**\n")
 		keys := make([]string, 0, len(summary.OmitReasons))

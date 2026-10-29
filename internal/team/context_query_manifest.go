@@ -21,8 +21,11 @@ func cloneContextQueryAttribution(query *ContextQueryAttribution) *ContextQueryA
 // WithContextQueryAttribution creates schema3 without recomputing the v1
 // request identity or applying a newer fingerprint to a legacy manifest.
 func WithContextQueryAttribution(manifest ContextInjectionManifest, attribution ContextQueryAttribution) (ContextInjectionManifest, error) {
-	if manifest.SchemaVersion != ContextManifestSchemaVersion {
+	if manifest.SchemaVersion != ContextManifestSchemaVersion && manifest.SchemaVersion != DependencyResultViewManifestSchemaVersion {
 		return manifest, fmt.Errorf("query attribution requires a schema2 compiler manifest")
+	}
+	if manifest.Query != nil {
+		return manifest, fmt.Errorf("context manifest already carries query attribution")
 	}
 	if err := ValidateContextQueryManifest(manifest); err != nil {
 		return manifest, err
@@ -32,9 +35,13 @@ func WithContextQueryAttribution(manifest ContextInjectionManifest, attribution 
 	}
 	manifest = *cloneContextInjectionManifest(&manifest)
 	attribution.Sources = slices.Clone(attribution.Sources)
-	manifest.SchemaVersion = ContextQueryManifestSchemaVersion
 	manifest.Query = &attribution
-	manifest.Fingerprint = queryContextManifestFingerprint(manifest)
+	if manifest.SchemaVersion == DependencyResultViewManifestSchemaVersion {
+		manifest.Fingerprint = dependencyResultViewManifestFingerprint(manifest)
+	} else {
+		manifest.SchemaVersion = ContextQueryManifestSchemaVersion
+		manifest.Fingerprint = queryContextManifestFingerprint(manifest)
+	}
 	return manifest, nil
 }
 
@@ -49,6 +56,11 @@ func queryContextManifestFingerprint(manifest ContextInjectionManifest) string {
 }
 
 func ValidateContextQueryManifest(manifest ContextInjectionManifest) error {
+	if manifest.SchemaVersion != DependencyResultViewManifestSchemaVersion {
+		if err := rejectLegacyDependencyResultView(manifest); err != nil {
+			return err
+		}
+	}
 	switch manifest.SchemaVersion {
 	case 1, ContextManifestSchemaVersion:
 		if manifest.Query != nil {
@@ -67,6 +79,8 @@ func ValidateContextQueryManifest(manifest ContextInjectionManifest) error {
 		if manifest.Fingerprint != queryContextManifestFingerprint(manifest) {
 			return fmt.Errorf("query context manifest fingerprint mismatch")
 		}
+	case DependencyResultViewManifestSchemaVersion:
+		return validateDependencyResultViewManifest(manifest)
 	default:
 		return fmt.Errorf("unsupported context manifest schema %d", manifest.SchemaVersion)
 	}
@@ -74,5 +88,5 @@ func ValidateContextQueryManifest(manifest ContextInjectionManifest) error {
 }
 
 func supportedDeliveryContextManifest(manifest ContextInjectionManifest) bool {
-	return (manifest.SchemaVersion == ContextManifestSchemaVersion || manifest.SchemaVersion == ContextQueryManifestSchemaVersion) && ValidateContextQueryManifest(manifest) == nil
+	return (manifest.SchemaVersion == ContextManifestSchemaVersion || manifest.SchemaVersion == ContextQueryManifestSchemaVersion || manifest.SchemaVersion == DependencyResultViewManifestSchemaVersion) && ValidateContextQueryManifest(manifest) == nil
 }
