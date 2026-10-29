@@ -37,6 +37,32 @@ mise exec -- go test -p 2 ./internal/inspect -run TestBindReadTarget
 The project defaults to `GOMAXPROCS=2`; Go build/test/vet tasks also use `-p 2`.
 Run heavyweight validation tasks sequentially, not as parallel mise tasks.
 
+### Codex build-cache lifecycle
+
+- Preserve configured cache locations and reusable dependency artifacts. Remove
+  obsolete Hufu build/test artifacts and abandoned work directories during
+  development; preserving caches does not mean retaining every project revision.
+- Record allocated `GOCACHE`, `GOTMPDIR`, and task scratch sizes before validation
+  and after each implementation phase. Use 2 GiB as the default retained budget
+  for task-specific build artifacts, separate from the 512 MiB scratch budget.
+  If growth exceeds that budget, inspect and remove obsolete project outputs
+  before starting another heavyweight command; account for necessary dependency
+  builds separately rather than deleting reusable dependencies.
+- Group edits before validation and reuse completed checks for unchanged source
+  and settings. Reuse a baseline checkout and binary for the same revision;
+  changing absolute checkout paths can create additional Go cache variants.
+- Keep only needed current normal/race project outputs and one active baseline.
+  Identify disposable cache entries by project/output provenance; timestamps
+  alone do not establish ownership in a shared cache. Do not routinely run
+  `go clean -cache` or `go clean -modcache`, or change cache paths/build flags as
+  a space workaround.
+- After a failed, cancelled, or interrupted command, check for its surviving
+  processes and work directories. Once consumers exit, remove its exact owned
+  leftovers, including those under configured `GOTMPDIR`. Recheck on resumption.
+- At phase completion and handoff, remove superseded owned binaries, logs,
+  checkouts, and cache outputs, preserving recovery evidence and deliverables.
+  Report cache growth, cleanup, and any necessary retained large artifacts.
+
 ## Required Validation
 
 Any task that modifies Go source code, tests, or other code must run:
