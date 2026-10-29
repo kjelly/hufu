@@ -165,7 +165,8 @@ hufu session fork <branch-or-event> --name investigation --new-task \
 - 新版 read-only reader 必須安全讀取原本支援的舊 schema，不因查詢偷偷 migration；新表缺少時視為無新功能記錄，而不是猜測 derived 狀態。
 - **升級後曾以新版 writable-open migration 的整個 runtime.sqlite，舊 binary 均可能無法再讀寫，即使沒有使用新旗標。** 文件必須明確揭露，不聲稱只影響單一 child。
 - 不實作 down-migration，不要求舊 binary 支援 export。診斷/export 使用新版既有唯讀介面；保留原舊格式 fixture 作為相容性證據。
-- 以 baseline binary 操作新版 fixture 驗證拒絕；覆蓋 run/resume/session fork/checkout 與唯讀 results，確認拒絕前沒有事件、檔案或 provider 副作用。新版再驗證可正常讀寫。
+- 以 baseline binary 操作新版 fixture 驗證拒絕；覆蓋 run/resume/session fork/checkout 與唯讀 results，所有支援布局均須在模型與任務執行前拒絕，不能新增事件或改動專案內容。已初始化 version-store 的工作區另須驗證完整檔案零變動。
+- 未初始化 version-store 的布局須明確記錄舊 binary 可能先建立空版本資料庫與鎖檔的限制；不能把已初始化 fixture 的零變動結果推論至此布局。此限制不允許啟動 provider／Worker 或改寫 runtime events。新版再驗證可正常讀寫。
 
 這是本地格式與測試工作，不包含操作任何使用者資料庫或發布升級。
 
@@ -217,7 +218,7 @@ WP1／WP2 完成後才能修改 derived cycle。WP6 可獨立交付，但重量�
 | 16-grant/1-MiB 上限、模型 token overflow | 不截斷 required 內容；派送前拒絕；manifest/error 可診斷 | 3 |
 | retry、fallback、compaction、restart、new follow-up | 同 cycle 凍結來源一致；未授權 target 不收到；新 cycle 不自動繼承 | 3 |
 | 未派工 recipient、artifact locator、prompt injection | not_dispatched 可辨識；locator 不授權讀檔；工具政策不改 | 3 |
-| old schema read-only、新 schema baseline binary | 新版讀舊資料不 migration；舊版拒絕新資料且無副作用 | 3/4 |
+| old schema read-only、新 schema baseline binary | 新版讀舊資料不 migration；舊版在模型／任務前拒絕，檔案變動依第 6.3 節的布局別保證驗證 | 3/4 |
 | FAILED/DONE/safe interrupted source derived fork | child 全新任務，父狀態/receipt/report 不變 | 4 |
 | metadata-only、off/observe、unknown side effect、pending worlds | derived branch 建立前拒絕；一般 fork 行為不變 | 4 |
 | awaiting request、boundary append 後 crash、第二個 request | 不恢復父任務、不重複 boundary、正常 cycle lifecycle | 4 |
@@ -355,8 +356,9 @@ Migration 5 新增 branch/cycle → canonical grant event 的索引，沒有另�
 [格式相容性與本機實測](../reference/runtime-grant-storage.md) 記錄新版唯讀支援
 schema 3/4、舊 verifier 拒絕 schema 5、rollback 與來源驗證測試。
 真正 baseline binary 的初始化 managed fixture 實測通過；未初始化 version-store 的
-布局仍有舊 fork 建立空版本資料庫／lock 的限制，已提請使用者決定支援前提。
-在決定前不宣稱第 6.3 節所有布局均已達成零檔案副作用，也不把儲存層視為 WP3 完成。
+布局有舊 fork 建立空版本資料庫／lock 的限制。使用者於 2026-10-29 同意第 6.3 節的
+分層保證：所有支援布局在模型與任務執行前拒絕；已初始化布局另外保證檔案零變動。
+相容性決定已解決；儲存層仍不代表 WP3 的 grant／recipient／delivery 已完成。
 
 本階段 working-tree 完整 `mise exec -- go test -p 2 ./... -timeout 30m` 通過：
 CLI 149.681s、runtimestore 3.634s、team 653.881s；其餘 packages 通過或無測試。
@@ -364,5 +366,5 @@ CLI 149.681s、runtimestore 3.634s、team 653.881s；其餘 packages 通過或�
 定向 `-race` 覆蓋 HistoricalGrant、PreReportReadOnly、unknown-schema rejection、
 RunReportPreCapture，通過：runtimestore 5.390s、team 1.374s。
 `mise run vet`、`mise run lint` 均通過，lint 0 issues；`bin/check-docs`、
-`git diff --check` 通過。此儲存層可獨立提交；WP3 其餘功能、相容性決定與最終
+`git diff --check` 通過。此儲存層可獨立提交；WP3 其餘功能與最終
 integration／完整受影響 race gate 仍未完成。

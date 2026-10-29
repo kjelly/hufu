@@ -64,6 +64,14 @@ old fork created an empty version database and lock before reading the session
 tree. This remains a recorded limitation for that layout; the initialized-fixture
 result must not be generalized to it. No events or worker/provider work ran.
 
+The accepted downgrade guarantee distinguishes these layouts: every supported
+layout rejects the new database before model calls or task execution, without
+new runtime events or changes to project content. An initialized version store
+additionally guarantees no file changes. An uninitialized layout may acquire the
+old binary's empty version database and lock; it has no blanket zero-file-change
+guarantee. This limitation was accepted on 2026-10-29 and does not authorize
+running an old binary on a user's upgraded workspace.
+
 The local probe uses temporary fixture data and does not require Git history or
 an old binary in CI. CI verifies old migration checksum rules and byte-preserving
 schema-3/4 reads. These storage tests do not substitute for WP3's envelope,
