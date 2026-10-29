@@ -65,9 +65,31 @@ envelope requires matching source, payload, presentation and policy digests.
 
 This preparation API is private-content runtime plumbing: it does not write an
 admission event or create tasks. CLI entry eligibility, cycle activation, task
-binding, required model-context delivery, dispatch proof and recovery remain
-WP3 implementation work. These stages do not enable `--inherit-result` or grant
-any worker access.
+binding, required model-context delivery, dispatch proof and source-content
+restoration remain WP3 implementation work. These stages do not enable
+`--inherit-result` or grant any worker access.
+
+## Cycle projection and recovery
+
+The session checkpoint stores only `historical_result_grants`, a detached
+branch/cycle/event/hash reference. Replay retains the original grant through
+resume invocations and clears it at the next `workflow_cycle_started` boundary.
+The previous grant event and index remain available as historical evidence.
+Conflicting grants, grants for another cycle, and grants after task creation
+are invalid lineage and require recovery.
+
+Startup, branch rebuild and active-branch refresh verify the grant against the
+canonical policy admitted before it, its control workspace and its original
+transactional index. A missing index is an error; recovery does not manufacture
+a replacement event or index. A missing checkpoint can be rebuilt from these
+authorities. A checkpoint that names a different grant in the same cycle is
+rejected.
+
+An ordinary fork retains a grant only when its exact ancestor event is visible
+before the fork cutoff. The reference keeps the ancestor's branch identity;
+checkout creates no child grant index. This authenticates the envelope only:
+restoring source content must still revalidate source visibility, validity and
+all frozen content hashes on the consumer branch before model delivery.
 
 ## Upgrade and downgrade
 

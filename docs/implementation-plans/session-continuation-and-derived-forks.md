@@ -449,3 +449,37 @@ immutable commit snapshot 的全測證據。定向 `-race` 涵蓋歷史查詢、
 當前 normal／race project exports 約 806 MiB；沒有新增快取 ELF 殘留或未清除的
 自有 Go work 目錄。私有 scratch 約 151 MiB，保留約 126 MiB 的單一 baseline
 binary 供最終相容性驗證；依賴、工具鏈與既有 cache 路徑保持原設定。
+
+## 20. WP3 cycle 授權投影與重建
+
+Session checkpoint 僅保留 immutable grant event 的 branch／cycle／event／hash
+reference，不複製來源內容或形成另一份授權。事件重播保留 resume 前的原 cycle 授權，
+`workflow_cycle_started` 清除 active reference，歷史事件與索引仍保留。
+同 cycle 重複授權、錯誤 cycle、task 建立後才出現授權，均拒絕重建並要求 recovery。
+
+啟動、branch rebuild 與 active projection refresh 同時驗證可見 lineage、原始
+transactional index、control workspace，以及授權前已存在的 canonical policy。
+append 已完成但 checkpoint 尚未寫入時，可以從上述權威重建；同 cycle 的 checkpoint
+若改寫授權 reference 則拒絕，不用 checkpoint 補造 index 或 grant event。
+
+普通 fork 只保留分岔點前可見的 grant，繼續引用祖先 branch 的原 event／index；
+不複製 child 授權。本階段只驗證 envelope 的持久身份，後續內容恢復仍須以 consumer
+branch 重新驗證來源有效性與所有 frozen hashes。CLI admission、task binding、required
+context／manifest delivery、dispatch proof 仍待後續實作；`--inherit-result` 尚未開放。
+
+最終 working-tree 完整 `mise exec -- go test -p 2 ./... -timeout 30m` 通過：
+CLI 147.857s、inspect 14.047s、improver 170.990s、team 721.747s；其餘 packages
+通過、重用未變更來源的既有結果或無測試。此證據包含保留的其他本地修改，不稱為
+immutable commit snapshot 的全測證據。定向 `-race` 覆蓋歷史結果、cycle、branch
+重建與 canonical reader：team 20.785s、inspect 11.660s、CLI 8.804s，全部通過。
+
+`mise run lint` 通過、0 issues；`mise run vet`、`bin/check-docs`、
+`git diff --check` 通過。定向測試亦驗證 append-before-checkpoint 重建、snapshot
+pointer 隔離、偽造 checkpoint、索引遺失、fork cutoff、scope／policy 不匹配及
+policy 晚於 grant 的拒絕。驗證期間 2,584 個 Go／工具設定檔保持相同內容。
+
+本階段清除可追溯的過時 project archives 及 48 個已退出的私有測試目錄，合計約
+1.0 GiB。保留的當前 normal／race project exports 約 806 MiB；記錄的自有 Go work
+目錄均已隨程序退出清除。私有 scratch 約 151 MiB，其中單一約 126 MiB baseline
+binary 保留供最終相容性測試：`/tmp/codex-task.OVwpKj/baseline-hufu`。
+依賴、工具鏈與 configured cache／GOTMPDIR 路徑保持原設定。

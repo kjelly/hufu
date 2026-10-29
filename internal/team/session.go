@@ -146,6 +146,9 @@ type SessionData struct {
 	PendingTerminalCommit       *PendingTerminalCommit     `json:"pending_terminal_commit,omitempty"`
 	PendingWrapUp               *PendingWrapUp             `json:"pending_wrap_up,omitempty"`
 	CoordinatorContextManifests []ContextInjectionManifest `json:"coordinator_context_manifests,omitempty"`
+	// HistoricalResultGrants is a disposable reference to the cycle's immutable
+	// grant event. Only the canonical event and its index establish authority.
+	HistoricalResultGrants *runtimestore.HistoricalGrantCycleRef `json:"historical_result_grants,omitempty"`
 	// DecisionProjections is a disposable presentation projection rebuilt from
 	// the canonical decision events when needed. It is persisted so a resumed
 	// session can surface assumption invalidation before the index is opened.

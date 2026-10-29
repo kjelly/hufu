@@ -92,6 +92,7 @@ func workflowTaskIDHighWater(events []RunEvent) int {
 // history, immutable execution policy, run input history, or stored results.
 func resetWorkflowCycleProjection(sd *SessionData, cycleID string, floor int) {
 	sd.WorkflowCycleID, sd.WorkflowTaskIDFloor = cycleID, floor
+	sd.HistoricalResultGrants = nil
 	sd.Tasks, sd.WorksetReceipts, sd.WorksetStates = nil, nil, nil
 	sd.WorkflowState, sd.PhaseResults, sd.RetryState = PhaseInit, nil, NewRetryState()
 	sd.RunResult, sd.ContinuationCheckpoint = nil, nil

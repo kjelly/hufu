@@ -1383,6 +1383,7 @@ func (c *Coordinator) SessionData() *SessionData {
 	c.viewSessionData(func(sd *SessionData) {
 		copySD := *sd
 		copySD.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(sd.ExecutionPolicySnapshot)
+		copySD.HistoricalResultGrants = cloneHistoricalGrantCycleRef(sd.HistoricalResultGrants)
 		copySD.RunInputSnapshots = CloneRunInputSnapshots(sd.RunInputSnapshots)
 		copySD.DecisionPrimitiveResults = slices.Clone(sd.DecisionPrimitiveResults)
 		copySD.Entries = append([]SessionEntry(nil), sd.Entries...)

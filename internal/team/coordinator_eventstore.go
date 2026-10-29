@@ -340,8 +340,21 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 		c.markSessionRecovery("event-store read failed: " + utils.RedactSecrets(err.Error()))
 		return
 	}
-	lineage := FilterEventsForBranch(events, st, activeBranch)
+	lineage, err := ProjectValidatedEventsForBranch(events, st, activeBranch)
+	if err != nil {
+		c.markSessionRecovery("canonical branch replay rejected: " + utils.RedactSecrets(err.Error()))
+		return
+	}
+	if _, err := c.eventStore.validateHistoricalResultGrantProjection(context.Background(), lineage); err != nil {
+		c.markSessionRecovery("canonical historical result grants rejected: " + utils.RedactSecrets(err.Error()))
+		return
+	}
 	if !hasCurrentCanonicalProjectionEvents(lineage) {
+		var hasCheckpointGrant bool
+		c.viewSessionData(func(sd *SessionData) { hasCheckpointGrant = sd.HistoricalResultGrants != nil })
+		if hasCheckpointGrant {
+			c.markSessionRecovery("checkpoint historical result grant has no canonical event")
+		}
 		return
 	}
 	if _, err := executionPolicySnapshotFromEvents(lineage); err != nil {
@@ -350,6 +363,15 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 	}
 
 	replayedSD := ReduceToSessionData(lineage)
+	var grantsMismatch bool
+	c.viewSessionData(func(sd *SessionData) {
+		grantsMismatch = sd.WorkflowCycleID == replayedSD.WorkflowCycleID && sd.HistoricalResultGrants != nil &&
+			!reflect.DeepEqual(sd.HistoricalResultGrants, replayedSD.HistoricalResultGrants)
+	})
+	if grantsMismatch {
+		c.markSessionRecovery("checkpoint historical result grant differs from its canonical cycle")
+		return
+	}
 	replayedTasks, err := ReplayTodoList(lineage)
 	if err != nil {
 		c.markSessionRecovery("canonical execution replay rejected: " + utils.RedactSecrets(err.Error()))
@@ -443,6 +465,7 @@ func (c *Coordinator) replaceCanonicalProjection(replayedSD *SessionData, replay
 	cycleChanged := c.workflowCycleID() != replayedSD.WorkflowCycleID
 	_ = c.mutateSessionData(func(sd *SessionData) error {
 		sd.WorkflowCycleID, sd.WorkflowTaskIDFloor = replayedSD.WorkflowCycleID, replayedSD.WorkflowTaskIDFloor
+		sd.HistoricalResultGrants = cloneHistoricalGrantCycleRef(replayedSD.HistoricalResultGrants)
 		sd.WorkflowState, sd.PhaseResults, sd.RetryState = replayedSD.WorkflowState, replayedSD.PhaseResults, replayedSD.RetryState
 		if cycleChanged {
 			sd.RunResult, sd.ContinuationCheckpoint = replayedSD.RunResult, replayedSD.ContinuationCheckpoint
@@ -525,6 +548,9 @@ func isProjectionPrefixOrRecoverable(live, replayedSD *SessionData, replayedTask
 			}
 		}
 		return true
+	}
+	if live.HistoricalResultGrants != nil && !reflect.DeepEqual(live.HistoricalResultGrants, replayedSD.HistoricalResultGrants) {
+		return false
 	}
 	if len(live.Tasks) > len(replayedTasks) {
 		return false

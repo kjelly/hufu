@@ -366,6 +366,13 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 	} else {
 		session.DelegationPhase = DelegationPhaseInitialPending
 	}
+	grants, _, err := historicalResultGrantProjection(events)
+	if err != nil {
+		session.RecoveryRequired = true
+		session.RecoveryReason = "invalid historical result grant lineage"
+	} else {
+		session.HistoricalResultGrants = grants
+	}
 	return session
 }
 

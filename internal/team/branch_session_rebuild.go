@@ -1,6 +1,9 @@
 package team
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // Branch switches rebuild the session checkpoint from the target branch's event
 // lineage. Every branch-specific field comes from replay; only the state that
@@ -89,6 +92,7 @@ func RefreshActiveBranchProjection(workspace string, st *SessionTree, es *EventS
 	sd.CriterionCheckpoints = replayed.CriterionCheckpoints
 	sd.LastCriterionProgressAt = replayed.LastCriterionProgressAt
 	sd.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(replayed.ExecutionPolicySnapshot)
+	sd.HistoricalResultGrants = cloneHistoricalGrantCycleRef(replayed.HistoricalResultGrants)
 	if err := SaveSession(workspace, sd); err != nil {
 		return fmt.Errorf("refresh projection for branch %q: %w", b.ID, err)
 	}
@@ -138,6 +142,9 @@ func branchReplayInputs(st *SessionTree, es *EventStore, branchID string) (*Sess
 	lineage, err := ProjectValidatedEventsForBranch(events, st, b.ID)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("rebuild session: project branch: %w", err)
+	}
+	if _, err := es.validateHistoricalResultGrantProjection(context.Background(), lineage); err != nil {
+		return nil, nil, nil, fmt.Errorf("rebuild session: historical result grants: %w", err)
 	}
 	tasks, err := ReplayTodoList(lineage)
 	if err != nil {
