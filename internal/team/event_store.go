@@ -422,6 +422,9 @@ func (es *EventStore) appendPersistedContext(ctx context.Context, event RunEvent
 		}
 		identity := newEventIdempotencyIdentity(branchID, event.IdempotencyKey)
 		if durable, exists := es.idempotencyKeys[identity]; exists {
+			if err := es.validateHistoricalGrantReplay(dbctx, tx, durable, event); err != nil {
+				return RunEvent{}, err
+			}
 			if isDecisionCorrectnessEvent(event.Type) || isDecisionCorrectnessEvent(durable.Type) {
 				equivalent, compareErr := decisionIdempotencyEquivalent(durable, event)
 				if compareErr != nil {
@@ -474,6 +477,13 @@ func (es *EventStore) appendPersistedContext(ctx context.Context, event RunEvent
 // prepareEvent redacts, stamps, validates, and chains event onto the
 // validated head.
 func (es *EventStore) prepareEvent(event RunEvent) (RunEvent, error) {
+	if event.Type == string(EventHistoricalResultsGranted) {
+		// The legacy redactor decodes into maps. Reject duplicate members and
+		// unknown fields before that transformation can erase their ambiguity.
+		if _, err := decodeHistoricalResultGrantPayload(event.Payload); err != nil {
+			return RunEvent{}, err
+		}
+	}
 	if IsTerminalEvent(event.Type) && IsEmptyPayload(event.Payload) {
 		return RunEvent{}, fmt.Errorf("reject terminal event %q with empty payload", event.Type)
 	}

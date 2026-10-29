@@ -109,6 +109,38 @@ func TestHistoricalGrantCycleRejectsMismatchedSources(t *testing.T) {
 	}
 }
 
+func TestHistoricalGrantCycleUsesFirstJournalAdmission(t *testing.T) {
+	store, err := Open(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	first := HistoricalGrantCycleRef{BranchID: "main", CycleID: "cycle", EventID: "first", EventHash: strings.Repeat("a", 64)}
+	second := first
+	second.EventID, second.EventHash = "second", strings.Repeat("b", 64)
+	insertGrantEvent(t, store.DB(), 1, first, historicalGrantEventType)
+	if err := PutHistoricalGrantCycleRef(t.Context(), store.DB(), first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(t.Context(), `DELETE FROM historical_grant_cycles`); err != nil {
+		t.Fatal(err)
+	}
+	insertGrantEvent(t, store.DB(), 2, second, historicalGrantEventType)
+	if err := PutHistoricalGrantCycleRef(t.Context(), store.DB(), second); !errors.Is(err, ErrHistoricalGrantConflict) {
+		t.Errorf("index loss allowed a later admission to replace the first: %v", err)
+	}
+	if _, err := store.DB().ExecContext(t.Context(), `DELETE FROM historical_grant_cycles`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(t.Context(), `INSERT INTO historical_grant_cycles(branch_id,cycle_id,source_event_id,source_hash) VALUES(?,?,?,?)`,
+		second.BranchID, second.CycleID, second.EventID, second.EventHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := HistoricalGrantCycle(t.Context(), store.DB(), "main", "cycle"); !errors.Is(err, ErrHistoricalGrantSource) {
+		t.Errorf("reader accepted a valid event hash bound to the wrong admission: %v", err)
+	}
+}
+
 func TestHistoricalGrantCycleRollsBackWithSourceEvent(t *testing.T) {
 	store, err := Open(t.Context(), t.TempDir())
 	if err != nil {

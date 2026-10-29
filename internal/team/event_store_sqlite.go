@@ -82,6 +82,11 @@ func acceptLoadedEvent(state *eventStoreState, verifier *eventchain.Verifier, ev
 	if err := verifier.Verify(eventChainEntry(event)); err != nil {
 		return err
 	}
+	if event.Type == string(EventHistoricalResultsGranted) {
+		if _, err := decodeHistoricalResultGrants(event); err != nil {
+			return err
+		}
+	}
 	state.events = append(state.events, event)
 	state.lastEventID = event.ID
 	state.lastHash = event.Hash
@@ -90,6 +95,11 @@ func acceptLoadedEvent(state *eventStoreState, verifier *eventchain.Verifier, ev
 		existing, exists := state.idempotencyKeys[identity]
 		if !exists {
 			existing, exists = state.publishedKeys[identity]
+		}
+		if exists && (event.Type == string(EventHistoricalResultsGranted) || existing.Type == string(EventHistoricalResultsGranted)) {
+			if err := historicalGrantIdempotencyEquivalent(existing, event); err != nil {
+				return fmt.Errorf("event %d historical grant idempotency: %w", state.sequence+1, err)
+			}
 		}
 		if exists && (isDecisionCorrectnessEvent(event.Type) || isDecisionCorrectnessEvent(existing.Type)) {
 			equivalent, compareErr := decisionIdempotencyEquivalent(existing, event)
@@ -113,8 +123,14 @@ func acceptLoadedEvent(state *eventStoreState, verifier *eventchain.Verifier, ev
 }
 
 // insertEvent writes event as the chain position sequence. The primary key
-// rejects a position another writer already took.
+// rejects a position another writer already took. Callers must supply their
+// existing transaction so event-owned indexes commit or roll back with it.
 func insertEvent(ctx context.Context, q runtimestore.Queryer, sequence int, event RunEvent) error {
+	if event.Type == string(EventHistoricalResultsGranted) {
+		if _, err := decodeHistoricalResultGrants(event); err != nil {
+			return err
+		}
+	}
 	scope := ""
 	if event.IdempotencyKey != "" {
 		scope = newEventIdempotencyIdentity(event.BranchID, event.IdempotencyKey).branchID
@@ -130,6 +146,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		payload, event.PreviousHash, event.Hash, scope)
 	if err != nil {
 		return fmt.Errorf("insert event %d: %w", sequence, err)
+	}
+	if event.Type == string(EventHistoricalResultsGranted) {
+		ref := runtimestore.HistoricalGrantCycleRef{BranchID: event.BranchID, CycleID: event.RunID, EventID: event.ID, EventHash: event.Hash}
+		if err := runtimestore.PutHistoricalGrantCycleRef(ctx, q, ref); err != nil {
+			return fmt.Errorf("index historical result grant event: %w", err)
+		}
 	}
 	return nil
 }

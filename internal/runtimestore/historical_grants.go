@@ -54,6 +54,13 @@ WHERE id=? AND hash=? AND branch_id=? AND run_id=? AND type=?`,
 	if matches != 1 {
 		return ErrHistoricalGrantSource
 	}
+	firstID, firstHash, err := firstHistoricalGrantEvent(ctx, q, ref.BranchID, ref.CycleID)
+	if err != nil {
+		return err
+	}
+	if firstID != ref.EventID || firstHash != ref.EventHash {
+		return ErrHistoricalGrantConflict
+	}
 	if _, err := q.ExecContext(ctx, `INSERT INTO historical_grant_cycles(branch_id,cycle_id,source_event_id,source_hash)
 VALUES(?,?,?,?) ON CONFLICT(branch_id,cycle_id) DO NOTHING`, ref.BranchID, ref.CycleID, ref.EventID, ref.EventHash); err != nil {
 		return fmt.Errorf("index historical grant cycle: %w", err)
@@ -92,13 +99,26 @@ WHERE g.branch_id=? AND g.cycle_id=?`, branch, cycle).Scan(&ref.BranchID, &ref.C
 	if err := ref.validate(); err != nil {
 		return HistoricalGrantCycleRef{}, false, err
 	}
-	var matches int
-	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM events
-WHERE id=? AND hash=? AND branch_id=? AND run_id=? AND type=?`, ref.EventID, ref.EventHash, ref.BranchID, ref.CycleID, historicalGrantEventType).Scan(&matches); err != nil {
-		return HistoricalGrantCycleRef{}, false, fmt.Errorf("verify stored historical grant event: %w", err)
+	firstID, firstHash, err := firstHistoricalGrantEvent(ctx, q, ref.BranchID, ref.CycleID)
+	if err != nil {
+		return HistoricalGrantCycleRef{}, false, err
 	}
-	if matches != 1 {
+	if firstID != ref.EventID || firstHash != ref.EventHash {
 		return HistoricalGrantCycleRef{}, false, ErrHistoricalGrantSource
 	}
 	return ref, true, nil
+}
+
+// The journal determines first admission even if its index was lost or
+// changed. A later event with a valid hash cannot replace that authority.
+func firstHistoricalGrantEvent(ctx context.Context, q Queryer, branch, cycle string) (id, hash string, err error) {
+	err = q.QueryRowContext(ctx, `SELECT id,hash FROM events
+WHERE branch_id=? AND run_id=? AND type=? ORDER BY sequence LIMIT 1`, branch, cycle, historicalGrantEventType).Scan(&id, &hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", ErrHistoricalGrantSource
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("read first historical grant event: %w", err)
+	}
+	return id, hash, nil
 }

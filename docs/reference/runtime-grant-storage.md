@@ -13,15 +13,35 @@ branch and cycle. A row contains only the exact event ID and hash of the
 `historical_results_granted` event. It is an index into the existing canonical
 journal, not another result store or a standalone authorization grant.
 
-The event store must validate the complete grant envelope and write its event
-and reference in the same transaction. The low-level reference helper checks
+The event store validates the versioned reference envelope and writes its event
+and reference in the same transaction, including event-log import. The low-level reference helper checks
 that the event type, branch, cycle/run, ID and hash match. Exact admission replay
 is idempotent; a different source cannot replace an existing cycle reference.
 Reading an index with a missing or changed source fails closed.
 
-The higher-level envelope, recipient authorization, CAS presentation, task
-binding and model-context delivery remain WP3 implementation work. This storage
-foundation alone does not enable `--inherit-result` or grant any worker access.
+The envelope has schema version 1. It binds the consumer's absolute control
+workspace, canonical team, session, branch and cycle to the policy fingerprint.
+Its sorted, unique recipient/result pairs identify the exact accepted source
+session, branch, run, task, agent, occurrence attempt and dispatch attempt.
+Source-event, typed-payload and presentation SHA-256 digests remain separate;
+only the presentation's byte count is stored here, never its body. The envelope
+allows at most 16 pairs and 1 MiB of declared presentation bytes. Admission must
+still reconstruct the presentations and verify those claims against canonical
+sources before they can authorize delivery.
+
+The event reader, writer and importer reject malformed envelopes, duplicate
+JSON members, unknown fields, unsupported versions and mismatched identities.
+Writer validation runs before redaction can collapse duplicate members and
+again on the final redacted event. Reusing an admission key requires equivalent
+frozen metadata and the original intact index; a changed grant or missing index
+fails closed. Another key cannot replace the same branch/cycle admission.
+The journal's first grant event for that branch/cycle remains authoritative
+even when the index has been deleted. Index writes reject a later event, and
+index reads reject a reference redirected to a later event with a valid hash.
+
+Recipient authorization, source/presentation resolution, task binding and
+model-context delivery remain WP3 implementation work. These storage and
+envelope stages do not enable `--inherit-result` or grant any worker access.
 
 ## Upgrade and downgrade
 

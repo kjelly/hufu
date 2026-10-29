@@ -6,7 +6,7 @@
 > Supersedes: —
 > Superseded-By: —
 
-> **Implementation status**：WP0–WP2 已提交；WP6 已提交；WP3 儲存層已驗證，WP3–WP5 與目標結束時的完整整合／race gate 尚未完成。階段證據見第 12–16 節。
+> **Implementation status**：WP0–WP2 已提交；WP6 已提交；WP3 儲存層、grant envelope 與事件原子寫入已驗證。WP3–WP5 與目標結束時的完整整合／race gate 尚未完成。階段證據見第 12–18 節。
 > **Repository**：`kjelly/hufu`
 > **Reviewed baseline**：`4e13abfb91a1328ccc1c58d0fd4a7861b17d6d43`
 > **Revised**：2026-10-28
@@ -368,3 +368,43 @@ RunReportPreCapture，通過：runtimestore 5.390s、team 1.374s。
 `mise run vet`、`mise run lint` 均通過，lint 0 issues；`bin/check-docs`、
 `git diff --check` 通過。此儲存層可獨立提交；WP3 其餘功能與最終
 integration／完整受影響 race gate 仍未完成。
+
+## 18. WP3 grant envelope 與事件原子寫入
+
+Schema-versioned envelope 只保存 consumer scope、recipient 與完整 ResultID、
+來源身份、分開的 source／typed payload／presentation SHA-256，以及 presentation
+byte count；不另存結果本文。Occurrence attempt 與實際 dispatch attempt 分別保存。
+Envelope 驗證穩定排序與唯一性、16 組上限及合計 1 MiB 的宣告大小限制。
+
+EventStore 的 append 與 event-log import 沿用既有交易，同時寫入 canonical event
+及 migration 5 的索引；索引失敗整筆回滾。相同 admission key 必須符合原 envelope
+且原索引仍完整；不同 key 也不能替換同一 branch/cycle 的原授權。Journal 中的
+第一筆 grant event 是 first-admission 權威，索引遺失不允許改由後一筆取代。
+讀取器亦拒絕被改指向後一筆有效 event 的索引。
+
+回歸測試先重現兩項問題再修正：遮罩流程原本會合併重複 JSON member，現於遮罩前
+嚴格解碼、遮罩後再驗證 envelope；索引遺失原本允許新 key／另一筆有效 event
+取代原 admission，現寫入與讀取均查核 journal 的第一筆來源。測試另外涵蓋
+不確定 commit acknowledgment 後精確 replay、branch/cycle 隔離、匯出／匯入保留
+canonical bytes，以及整筆 import 遇衝突時零 event／零 index 殘留。
+
+本階段仍未開放 `--inherit-result`。Recipient role／scope／lineage 授權、實際
+presentation 重建與大小驗證、task binding、required context delivery 和 recovery
+仍屬 WP3 後續工作，不能以 envelope 測試代替。
+
+最終 working-tree 完整 `mise exec -- go test -p 2 ./... -timeout 30m` 通過：
+CLI 149.299s、improver 160.415s、team 712.802s；runtimestore 等未再變更來源的
+packages 重用已通過結果。這包含保留的其他本地修改，不稱為 immutable commit
+snapshot 的全測證據。定向 `-race` 覆蓋 Historical、EventStore、EventLog、
+Import／Decode／ExportEventLog 及 WorkflowCycle，通過：team 15.382s，
+runtimestore 重用已通過結果。
+
+`mise run lint` 通過、0 issues；`mise run vet`、`bin/check-docs`、
+`git diff --check` 通過。Lint 曾指出 envelope 驗證函式複雜度過高；拆分單筆來源
+與重播驗證後，對最終相同的 2,547 個 Go／設定檔重新完成全部必要檢查。
+`event_store.go` 維持 799 行，新增測試檔低於 800 行。
+
+本階段依 provenance 清除過時 project archives、被中止的精確 Go work／fixture
+目錄與已退出的測試 engine 目錄，合計約 2.26 GiB。當前 normal／race project
+exports 約 687 MiB；沒有新增快取 ELF 殘留。私有 scratch 約 149 MiB，保留單一
+約 126 MiB baseline binary 供後續最終相容性測試。共享依賴與工具鏈快取維持原設定。
