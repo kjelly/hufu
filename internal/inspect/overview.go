@@ -25,7 +25,7 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidQuery, err)
 	}
-	bound, err := BindReadTarget(ctx, operatorpkg.BindingRequest{
+	bound, err := bindOverviewReadTarget(ctx, operatorpkg.BindingRequest{
 		Workspace: workspace,
 		SessionID: query.SessionID,
 		RunID:     query.RunID,
@@ -39,6 +39,9 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 	resolvedQuery.RunID = bound.Scope.RunID
 	resolvedQuery.SessionID = bound.Scope.SessionID
 	resolvedQuery.BranchID = bound.Scope.BranchID
+	if bound.DerivedFork != nil && bound.DerivedFork.AwaitingNewRequest {
+		return pendingDerivedForkOverview(ctx, resolvedQuery, bound)
+	}
 	runData, selected, err := projectRunData(ctx, resolvedQuery, bound.Lineage)
 	if err != nil {
 		return nil, err
@@ -99,6 +102,7 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 		Blockers:         blockers,
 		LatestChanges:    latestChanges(bound.Lineage.Events, bound.Scope.RunID, 3),
 		RoleTargets:      roleTargetsFromTasks(tasks),
+		DerivedFork:      bound.DerivedFork,
 		Learning:         learning,
 		SecondaryActions: []operatorpkg.ActionSuggestion{},
 	}

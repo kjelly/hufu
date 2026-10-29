@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -100,6 +101,15 @@ func prepareDerivedProcessBranch(t *testing.T, f historicalRunProcessFixture, bi
 			if err != nil || id <= 2 || item.Status != team.TaskDone || item.TypedResult == nil {
 				t.Fatalf("derived result reuses a parent occurrence: %+v", item)
 			}
+		}
+		overview, err := inspectpkg.InspectOverview(t.Context(), inspectpkg.InspectQuery{Workspace: f.control})
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot := overview.Data.(inspectpkg.OverviewData).Snapshot
+		if snapshot.DerivedFork == nil || snapshot.DerivedFork.AwaitingNewRequest || snapshot.DerivedFork.FirstCycleID == "" ||
+			snapshot.DerivedFork.SourceRunID != "failed-parent-run" || snapshot.Scope.RunID == snapshot.DerivedFork.SourceRunID {
+			t.Fatal("completed child lost its native source or inherited the parent run")
 		}
 	}
 }

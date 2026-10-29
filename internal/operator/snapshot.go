@@ -26,6 +26,7 @@ func FinalizeSnapshot(snapshot OperatorSnapshot) (OperatorSnapshot, error) {
 }
 
 func NormalizeSnapshot(snapshot OperatorSnapshot) OperatorSnapshot {
+	snapshot.DerivedFork = cloneDerivedForkView(snapshot.DerivedFork)
 	snapshot.Observations = snapshot.Observations.Clone()
 	snapshot.Outcome.GoalSatisfied = clonePointer(snapshot.Outcome.GoalSatisfied)
 	snapshot.Learning.Exposures = clonePointer(snapshot.Learning.Exposures)
@@ -105,6 +106,9 @@ func ValidateSnapshot(snapshot OperatorSnapshot) error {
 	if snapshot.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("operator snapshot schema version %d is unsupported", snapshot.SchemaVersion)
 	}
+	if err := validateDerivedForkView(snapshot.DerivedFork); err != nil {
+		return err
+	}
 	if !validActivity(snapshot.Activity.State) {
 		return fmt.Errorf("operator snapshot activity %q is invalid", snapshot.Activity.State)
 	}
@@ -126,10 +130,13 @@ func ValidateSnapshot(snapshot OperatorSnapshot) error {
 	if !contains([]string{"verified", "absent", "ambiguous", "conflict", "unknown"}, snapshot.Scope.BindingStatus) {
 		return fmt.Errorf("operator snapshot binding %q is invalid", snapshot.Scope.BindingStatus)
 	}
-	if !contains([]string{"explicit", "active_binding", "single_candidate", "legacy", "unknown"}, snapshot.Scope.SelectionSource) {
+	if !contains([]string{"explicit", "active_binding", "single_candidate", "legacy", "unknown", "derived_fork"}, snapshot.Scope.SelectionSource) {
 		return fmt.Errorf("operator snapshot selection source %q is invalid", snapshot.Scope.SelectionSource)
 	}
-	if snapshot.Scope.BindingStatus == "verified" && (snapshot.Scope.WorkspaceExact == "" || snapshot.Scope.RunID == "" || snapshot.Scope.BranchID == "") {
+	if snapshot.Scope.SelectionSource == "derived_fork" && !pendingDerivedScope(snapshot) {
+		return fmt.Errorf("derived fork scope requires a verified pending branch projection")
+	}
+	if snapshot.Scope.BindingStatus == "verified" && (snapshot.Scope.WorkspaceExact == "" || snapshot.Scope.RunID == "" && !pendingDerivedScope(snapshot) || snapshot.Scope.BranchID == "") {
 		return fmt.Errorf("verified operator snapshot scope is incomplete")
 	}
 	if !contains([]string{"", "completed", "unverified", "partial", "blocked", "failed", "cancelled", "stalled"}, snapshot.Outcome.RunOutcome) {

@@ -165,10 +165,7 @@ func projectWorkerAttemptsContext(ctx context.Context, todos []*team.TodoItem, e
 			return nil, err
 		}
 		event := indexed.Event
-		identity := event.ID
-		if identity == "" && event.IdempotencyKey != "" {
-			identity = event.BranchID + "\x00" + event.IdempotencyKey
-		}
+		identity := workerEventIdentity(event)
 		if identity != "" {
 			if seen[identity] {
 				continue
@@ -176,6 +173,14 @@ func projectWorkerAttemptsContext(ctx context.Context, todos []*team.TodoItem, e
 			seen[identity] = true
 		}
 		switch {
+		case event.Type == string(team.EventDerivedForkCreated):
+			// A derived branch keeps the parent's attempts as historical
+			// evidence. Its current worker hub starts at the native boundary.
+			clear(createdRun)
+			clear(current)
+			clear(dispatchFallbacks)
+			clear(pending)
+			attempts = nil
 		case event.Type == string(team.EventTaskCreated):
 			if _, ok := createdRun[event.TaskID]; !ok {
 				createdRun[event.TaskID] = event.RunID
@@ -269,6 +274,16 @@ func projectWorkerAttemptsContext(ctx context.Context, todos []*team.TodoItem, e
 		return false // keep event order for attempts of the same occurrence
 	})
 	return views, nil
+}
+
+func workerEventIdentity(event team.RunEvent) string {
+	if event.ID != "" {
+		return event.ID
+	}
+	if event.IdempotencyKey != "" {
+		return event.BranchID + "\x00" + event.IdempotencyKey
+	}
+	return ""
 }
 
 func projectCollectionEvent(builder *attemptBuilder, event team.RunEvent) {

@@ -6,7 +6,7 @@
 > Supersedes: —
 > Superseded-By: —
 
-> **Implementation status**：WP0–WP2 與 WP6 已提交。WP3 已完成 grant 儲存、任務綁定、required context、canonical run CLI 與使用報告的階段實作及驗證。WP4 已完成 native fork、child 投影與第一個新請求的階段實作及驗證；WP5 與目標結束時的完整整合／race／baseline compatibility matrix 尚未完成。階段證據見第 12–24 節。
+> **Implementation status**：WP0–WP6 已完成並依階段提交；WP5 與最終完整整合、五套件完整 race、30 項 baseline binary compatibility matrix 均通過。階段證據見第 12–25 節。
 > **Repository**：`kjelly/hufu`
 > **Reviewed baseline**：`4e13abfb91a1328ccc1c58d0fd4a7861b17d6d43`
 > **Revised**：2026-10-29
@@ -674,3 +674,51 @@ child 投影為 `awaiting_new_request`，清除父任務、對話、compaction�
 定向回歸已通過：team 18.943s、CLI 68.272s，包含四種實際 binary 路徑及五種 recovery preview／execute 案例。沒有修改 recovery eligibility 或放寬 policy drift 檢查。完整工作樹測試已通過：CLI 167.000s、team 737.749s、inspect 20.036s、improver 151.452s；context／runtimestore 等未改動輸入重用已通過的快取結果。定向 `-race` 通過：team 91.531s、inspect 13.429s、CLI 65.672s；context 沒有符合本階段 selector 的測試，不將它列為 race 覆蓋。`mise run lint` 為 0 issues，`mise run vet`、`bin/check-docs` 及 `git diff --check` 通過。2,622 個 Go／工具輸入在 gates 期間未變動。這是含保留本地修改的 working-tree 證據，不稱為 immutable commit 的全測。WP5、最終五個受影響 packages 的完整 race 及 baseline binary compatibility matrix 仍未完成。
 
 本階段可核對的清理累計回收 3,437,486,080 bytes（約 3.20 GiB），包含 96 個已退出的私有 fixture 目錄；這是過程中的累計回收，不等於 shared cache 的淨縮減量。目前 normal／race 專案編譯輸出保留 872,824,832 bytes（約 832 MiB），task scratch 約 156 MiB。已記錄的三個 Go work 目錄均不存在，configured Go temporary root 也沒有殘留 compiler workdir。唯一刻意保留的大型暫存檔是約 126 MiB 的 baseline binary，供目標結束時的舊版相容性矩陣使用；既有 dependency/toolchain caches 未清空。
+
+
+## 25. WP5 typed diagnostics 與最終驗收
+
+Offline overview／status 的 `derived_fork` adapter 直接投影已驗證 native intent 與
+lineage，包含來源 branch/run membership、source snapshot／tree、capture provenance、
+等待新請求及第一個 cycle 的身份。不複製來源本文，也不賦予新的 recovery authority。
+Pending child 的 verified scope 可沒有 run／invocation，但必須有 native provenance、
+完整 source hashes、session/team 與 freshness；呈現 `waiting_input`／
+`awaiting_new_request`，不宣稱父工作已完成或目標已達成。下一步沿用 provide-input，
+不產生執行父工作的 argv。未知來源 run membership 與 capture 保持 unavailable。
+
+父 terminal report 不再與 derived child 的重設 checkpoint 比較。明確選取父 run
+仍得到原歷史 report；目前 worker hub 在 native fork 邊界清除父 attempts，child
+開始後只顯示 child 工作。Normalize 會複製 provenance，避免呼叫端修改共用物件。
+既有 recovery disposition、side-effect assessment、result-only repair、acceptance 與
+historical grant manifest 仍使用原權威，不另造 retry eligibility 或決策事件。
+
+定向回歸已通過：operator／inspect／CLI 的 pending view、status JSON/text、scope
+驗證、唯讀 byte preservation、父 report 與 worker boundary；四種實際 binary
+inheritance 路徑也通過（CLI 37.770s）。
+
+最終 working-tree 完整 `mise exec -- go test -p 2 ./... -timeout 30m` 通過：
+CLI 183.460s、team 725.950s、inspect 11.658s、improver 159.495s；其餘套件
+通過、重用有效快取或無測試。`mise run lint` 通過，0 issues。
+完整 `mise exec -- go test -race -p 2 ./internal/team ./internal/inspect
+./internal/context ./internal/runtimestore ./cmd/hufu -timeout 60m` 通過，沒有
+測試名稱 selector：team 3388.433s、inspect 44.806s、context 515.842s、
+runtimestore 8.624s、CLI 677.047s。2,628 個 Go／工具設定輸入在驗證期間
+保持一致。證據包含保留的本地修改，不稱為 immutable commit snapshot 的全測。
+已核對 18 個既有修改檔案，扣除本階段自有內容後全部保持原雜湊。
+
+
+舊 binary 矩陣使用保留的 `4e13abfb` baseline，涵蓋 required initialized、
+required derived、required uninitialized、observe initialized、off、unmanaged
+六種布局，各執行 run／resume／session fork／checkout／results，共 30 項，全部
+拒絕且 provider 呼叫為零。所有 runtime store bytes、原有 control／state 檔案與
+project 內容保持一致，三種已初始化布局另驗證所有檔案零變動。只有未初始化的
+required 布局由舊 fork 新增空版本資料庫與鎖檔，符合已接受的限制；每種布局均由
+新版 reader／writer 成功重開（矩陣 package 4.789s）。
+
+`mise run vet`、`bin/check-docs`、`git diff --check` 均通過。最終階段清除可追溯的
+過期專案編譯輸出 287,940,608 bytes，另清除 96 個退出後的私有 fixture 目錄
+2,498,560 bytes；這是累計回收量，不等於 shared cache 淨縮減。保留目前可重用的
+normal／race 專案 exports 875,061,248 bytes（約 835 MiB），低於 2 GiB 預算。
+相容性矩陣完成後 baseline binary 不再需要；提交與清理完成後不保留本次 task
+scratch、測試 binary、log 或 recovery checkpoint。依賴、工具鏈、共享快取與
+configured GOTMPDIR 維持原設定。

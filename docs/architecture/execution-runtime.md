@@ -1019,6 +1019,15 @@ grants still work and commit with the cycle atomically. Later follow-ups use
 the ordinary conversation rules. A derived fork never clears the failed
 parent's workflow state.
 
+Offline overview and status expose the committed source branch/run membership,
+snapshot, capture provenance and first-cycle identity as `derived_fork`
+metadata. Before the first request, the selected child reports
+`awaiting_new_request` without inventing a run, invocation or successful outcome.
+Its next action requests input rather than offering to resume the parent's work.
+The current worker hub starts at the native fork boundary; explicitly selected
+historical parent runs retain their original report and attempts. Reading these
+views neither activates the branch nor migrates its database.
+
 Recovery settles completed phase contracts through the same workflow observer
 as normal execution before building the coordinator's phase-scoped tools. This
 also covers a checkpoint taken after task completion but before phase settlement,

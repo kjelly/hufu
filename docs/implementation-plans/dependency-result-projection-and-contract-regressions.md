@@ -6,7 +6,7 @@
 > Supersedes: —
 > Superseded-By: —
 
-> **狀態**：PR-1／PR-2 已提交；PR-3 已完成三路徑回歸、已重現缺口修正與全部階段驗證。本計畫範圍完成，另一份 continuation／derived-fork 計畫仍在實作。
+> **狀態**：PR-1／PR-2 已提交；PR-3 已完成三路徑回歸、已重現缺口修正與全部階段驗證。本計畫與 continuation／derived-fork 計畫範圍均完成，最終完整整合與五套件完整 race 通過；收尾證據見 [continuation 計畫第 25 節](session-continuation-and-derived-forks.md#25-wp5-typed-diagnostics-與最終驗收)。
 > **查核基準**：`a3ae5756`（2026-10-28）；以已提交原始碼確認既有能力，另核對目前工作樹。
 > **文件性質**：正式實作計畫；功能完成以前，不取代既有 normative 架構文件。
 > **範圍**：靜態依賴結果投影、三條既有結果路徑的契約回歸、已證實缺口的最小修正。

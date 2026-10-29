@@ -254,3 +254,19 @@ The local probe uses temporary fixture data and does not require Git history or
 an old binary in CI. CI verifies old migration checksum rules and byte-preserving
 schema-3/4/5 reads. These storage tests do not substitute for WP3's envelope,
 recipient and context-delivery integration or its final compatibility audit.
+
+
+The final audit repeats the retained `4e13abfb` binary against schema-6 fixture
+workspaces in six layouts: required initialized, required derived, required
+uninitialized, observe initialized, off, and unmanaged. Each layout exercises
+run, resume, session fork, checkout, and results: all 30 operations refuse,
+with zero provider calls and unchanged runtime-store bytes and project content.
+Existing control and project-state files remain byte-identical in every case.
+The three initialized layouts additionally have no added or deleted files.
+Only required uninitialized fork adds the recorded empty version database and
+lock. Current read and write paths reopen every fixture successfully (4.789s).
+
+The baseline's verifier calls an unknown migration a checksum mismatch at
+version 5; this message does not mean it supports migration 5. Resume retains
+its older no-session diagnostic. These observations preserve the accepted
+layout-specific guarantee rather than promising better old-binary diagnostics.
