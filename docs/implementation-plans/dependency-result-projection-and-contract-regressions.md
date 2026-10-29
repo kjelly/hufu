@@ -6,7 +6,7 @@
 > Supersedes: —
 > Superseded-By: —
 
-> **狀態**：PR-1 已提交；PR-2 已完成實作與階段驗證，selected 可供合格靜態 Worker 使用；PR-3 尚未實作。
+> **狀態**：PR-1／PR-2 已提交；PR-3 已完成三路徑回歸、已重現缺口修正與全部階段驗證。本計畫範圍完成，另一份 continuation／derived-fork 計畫仍在實作。
 > **查核基準**：`a3ae5756`（2026-10-28）；以已提交原始碼確認既有能力，另核對目前工作樹。
 > **文件性質**：正式實作計畫；功能完成以前，不取代既有 normative 架構文件。
 > **範圍**：靜態依賴結果投影、三條既有結果路徑的契約回歸、已證實缺口的最小修正。
@@ -369,3 +369,34 @@ mise run lint
   126 MiB baseline binary，其餘為小型紀錄與復原 checkpoint。
 - 文件與 diff 檢查通過，本階段可獨立提交。PR-3、另一份計畫的 WP3–WP5 與
   最終整合驗收仍未完成；未執行真實模型或外部 agent。
+
+## 11. PR-3 實作與驗證（2026-10-29）
+
+- 新增三個實際 adapter 的共同 claims／status、完成邊界、非法 claims 及原生 artifact
+  hash 比較；使用既有 coordinator、collection checkpoint、外部 canonicalizer 與真實
+  暫存檔案 snapshot/delta，保留不同 Source、store ID 與原始 receipt。
+- 原先回歸確實重現四種差異：重複 status、巢狀重複 key、尾接第二個 JSON object、
+  尾接垃圾文字，在 tool／collector 拒絕，external 卻接受。修正只在 external decoder
+  進入既有 schema decode 前呼叫共用 `decodeUniqueJSON`，沒有新增 admission service
+  或另一套 canonical result 儲存／完成狀態。
+- 合法狀態固定比較 `success`、`completed_with_gaps`、`partial`、`failed`、`blocked`；
+  admission 後都仍是 in progress，沒有將接收 claims 當成完成。
+  初次 fixtures 誤用不合法 finding severity `high`，三路徑均正確拒絕；改用既有 enum
+  `warning` 後，定向契約測試通過（team 11.120s）。
+- 另補兩個上游以相反順序完成的 canonical event fixtures；即使 consumer 的 depends_on
+  宣告順序相反，runtime 保留既有 task 順序，selected presentation digest 一致。
+- [結果傳輸契約參考](../reference/result-transport-contracts.md) 對照狀態、證據、lease、
+  CAS／event failure、result-only restart、workspace apply、特殊入口與 native action
+  的新／既有行為測試。既有 gates 沿用，沒有為湊齊表格而重寫 lifecycle。
+- 完整 `mise exec -- go test -p 2 ./... -timeout 30m` 通過：team 703.283s、
+  CLI 152.481s、improver 161.947s，其餘 packages 通過或無測試。
+  這是保留既有無關修改的 working-tree 驗證，不稱為 immutable HEAD 全測。
+- 定向 race 覆蓋三路徑契約、external canonicalization、collector/candidate repair、
+  lease／artifact transaction、workspace reconciliation、特殊入口及 native action，
+  team 183.789s 通過。`mise run vet`、`mise run lint` 通過，lint 0 issues。
+  2,545 個 Go／工具設定檔 SHA-256 在驗證前後一致。
+- 驗證前清理 127 個過期 archives／索引，回收約 964 MiB；最後保留現行 normal／
+  race exports 後，再清理 29 個過期 archives／索引，回收約 30 MiB。
+  現行專案 exports 約 800 MiB；必要相依與快取設定保留，scratch 約 154 MiB。
+- 文件與 diff 檢查通過；本階段可提交。本計畫不需要新的 admission service、
+  結果傳輸模式或 lifecycle 重寫。另一份計畫的 WP3–WP5 與最終跨計畫整合仍未完成。

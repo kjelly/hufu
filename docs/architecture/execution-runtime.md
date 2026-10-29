@@ -112,6 +112,11 @@ explicit runtime mode conflicts with that sequence and fails preflight.
 External workers, native actions, auxiliary tasks and plan submission retain
 their existing protocols.
 
+Tool, collection and external proposal decoders reject duplicate object keys
+and trailing JSON/text before interpreting claims. Their distinct canonical
+owners, native evidence checks and shared completion expectations are documented
+in [result transport contracts](../reference/result-transport-contracts.md).
+
 The work phase has no `submit_result` authority in runtime mode. After work
 returns, the runtime seals its complete report, transcript, source inputs and
 original attempt identity before starting a separate `result_collection`

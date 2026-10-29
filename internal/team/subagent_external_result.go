@@ -88,6 +88,9 @@ func validWorkerResultProposalStatus(status string) bool {
 // (§9.1: "Any such fields supplied by the provider MUST cause strict schema
 // decode failure").
 func DecodeWorkerResultProposal(data []byte) (*WorkerResultProposal, error) {
+	if _, err := decodeUniqueJSON(data); err != nil {
+		return nil, fmt.Errorf("decode worker result proposal: %w", err)
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var proposal WorkerResultProposal

@@ -327,6 +327,11 @@ runtime 收集的 envelope 使用相同的 `status`、`summary`、`structured_pa
 `--output json`、report 與 inspect 可看到收集狀態、已用／上限回合及失敗分類；完整
 內容保存在 durable artifact store。
 
+Tool、runtime collector 與 external proposal 都要求單一 JSON value，並拒絕
+物件內重複的 key（包含巢狀物件）、尾接 JSON 與尾接非 JSON 文字；尾端空白可保留。
+通過解碼或 admission 仍不代表任務完成。各 adapter 的來源與信任邊界、原生證據及
+回歸對照見 [結果傳輸契約](result-transport-contracts.md)。
+
 ### 靜態依賴結果視圖（dependency-result-view）
 
 `dependency-result-view` 只接受在 team.yaml 的靜態 `contracts:` 任務宣告，
