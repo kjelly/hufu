@@ -74,7 +74,8 @@ func ValidateEventPayload(event RunEvent) error {
 	// Schema v1 intentionally allowed sparse events. Preserve those old
 	// workspaces (and their hash chains); v2 is the current event-first
 	// contract and requires complete durable identity.
-	if event.SchemaVersion >= eventStoreSchemaVersion && (strings.TrimSpace(event.ID) == "" || strings.TrimSpace(event.RunID) == "" || strings.TrimSpace(event.SessionID) == "" || strings.TrimSpace(event.Actor) == "" || strings.TrimSpace(event.Timestamp) == "") {
+	missingRun := strings.TrimSpace(event.RunID) == "" && event.Type != string(EventDerivedForkCreated)
+	if event.SchemaVersion >= eventStoreSchemaVersion && (strings.TrimSpace(event.ID) == "" || missingRun || strings.TrimSpace(event.SessionID) == "" || strings.TrimSpace(event.Actor) == "" || strings.TrimSpace(event.Timestamp) == "") {
 		return fmt.Errorf("event identity is incomplete")
 	}
 	if len(event.Payload) > 0 && !json.Valid(event.Payload) {
@@ -85,6 +86,10 @@ func ValidateEventPayload(event RunEvent) error {
 	}
 	if event.Type == string(EventHistoricalResultsGranted) {
 		_, err := decodeHistoricalResultGrants(event)
+		return err
+	}
+	if event.Type == string(EventDerivedForkCreated) {
+		_, err := decodeDerivedForkCreated(event)
 		return err
 	}
 	if event.SchemaVersion == eventStoreLegacySchemaVersion {

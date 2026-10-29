@@ -82,6 +82,7 @@ func (f versionedCLIFixture) read(t *testing.T, rel string) string {
 func runCLI(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	sessionWorkspace, sessionJSON, sessionMetadataOnly, sessionForkName = "", false, false, ""
+	sessionNewTask = false
 	var runErr error
 	out := captureStdout(t, func() {
 		root := newRootCommand()

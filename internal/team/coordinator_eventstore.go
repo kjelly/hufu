@@ -462,9 +462,17 @@ func (c *Coordinator) replaceCanonicalProjection(replayedSD *SessionData, replay
 	if replayedSD == nil {
 		return
 	}
-	cycleChanged := c.workflowCycleID() != replayedSD.WorkflowCycleID
+	var liveDerived *DerivedForkRef
+	c.viewSessionData(func(sd *SessionData) { liveDerived = cloneDerivedForkRef(sd.DerivedFork) })
+	derivedChanged := !sameDerivedForkLineage(liveDerived, replayedSD.DerivedFork)
+	cycleChanged := c.workflowCycleID() != replayedSD.WorkflowCycleID || derivedChanged
 	_ = c.mutateSessionData(func(sd *SessionData) error {
+		if derivedChanged {
+			carryWorkspaceSessionState(replayedSD, sd)
+			*sd = *replayedSD
+		}
 		sd.WorkflowCycleID, sd.WorkflowTaskIDFloor = replayedSD.WorkflowCycleID, replayedSD.WorkflowTaskIDFloor
+		sd.DerivedFork = cloneDerivedForkRef(replayedSD.DerivedFork)
 		sd.HistoricalResultGrants = cloneHistoricalGrantCycleRef(replayedSD.HistoricalResultGrants)
 		sd.WorkflowState, sd.PhaseResults, sd.RetryState = replayedSD.WorkflowState, replayedSD.PhaseResults, replayedSD.RetryState
 		if cycleChanged {
@@ -510,6 +518,9 @@ func (c *Coordinator) replaceCanonicalProjection(replayedSD *SessionData, replay
 func isProjectionPrefixOrRecoverable(live, replayedSD *SessionData, replayedTasks []*TodoItem) bool {
 	if live == nil || replayedSD == nil {
 		return false
+	}
+	if !sameDerivedForkLineage(live.DerivedFork, replayedSD.DerivedFork) {
+		return false // Native fork recovery owns this cross-lineage reset.
 	}
 	// The event journal is canonical. It may safely repair a missing or stale
 	// checkpoint snapshot only when it actually contains a valid policy; a

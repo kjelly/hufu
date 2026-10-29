@@ -353,6 +353,11 @@ func (es *EventStore) appendPersistedContext(ctx context.Context, event RunEvent
 // prepareEvent redacts, stamps, validates, and chains event onto the
 // validated head.
 func (es *EventStore) prepareEvent(event RunEvent) (RunEvent, error) {
+	if event.Type == string(EventDerivedForkCreated) {
+		if _, err := decodeDerivedForkCreatedPayload(event.Payload); err != nil {
+			return RunEvent{}, err
+		}
+	}
 	if event.Type == string(EventHistoricalResultsGranted) {
 		// The legacy redactor decodes into maps. Reject duplicate members and
 		// unknown fields before that transformation can erase their ambiguity.
@@ -383,7 +388,7 @@ func (es *EventStore) prepareEvent(event RunEvent) (RunEvent, error) {
 	if event.ID == "" {
 		event.ID = generateEventID()
 	}
-	if event.RunID == "" {
+	if event.RunID == "" && event.Type != string(EventDerivedForkCreated) {
 		if es.runID == "" {
 			// A recovered empty store has no inherited identity. Give the first
 			// current-schema event a durable recovery run identity instead of

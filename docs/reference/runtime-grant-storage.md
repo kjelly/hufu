@@ -69,8 +69,8 @@ worker delivery still requires the canonical task binding and dispatch proof.
 
 ## Operator admission
 
-Use a new request after a completed runtime workflow in the same managed team
-workspace:
+Use a new request after a completed runtime workflow, or the first request of
+a derived new-task fork, in the same managed team workspace:
 
 ```bash
 hufu run --team review \
@@ -201,13 +201,17 @@ observations retain their existing evidence semantics and confer no grants.
 
 A writable open uses the existing checksum-verified migration lifecycle.
 Migration 5 applies to the entire `runtime.sqlite`, even when no inherited
-result flag has been used. A binary supporting only migrations through 4 must
-reject this database. There is no down-migration.
+result flag has been used. Migration 6 adds immutable derived-fork intent to
+branch rows and a unique native initialization event per derived branch.
+It stores provenance and task-ID bounds, not inherited result bodies. A binary
+supporting only earlier migrations must reject an upgraded database. There is
+no down-migration.
 
-New read-only opens retain support for schema 3 and schema 4. They validate the
+New read-only opens retain support for schemas 3, 4 and 5. They validate the
 original migration names and checksums and do not migrate or rewrite the
-source. An old schema contains no grant references; the reader does not infer
-them from history. A new schema whose required grant table is missing is an
+source. Schemas 3 and 4 contain no grant references, and schema 5 contains no
+derived-fork intent; the reader does not infer missing authority from history.
+A new schema whose required grant table is missing is an
 error, rather than an old-format fallback.
 
 Use a current binary's existing read-only inspect/export interfaces to examine
@@ -248,5 +252,5 @@ running an old binary on a user's upgraded workspace.
 
 The local probe uses temporary fixture data and does not require Git history or
 an old binary in CI. CI verifies old migration checksum rules and byte-preserving
-schema-3/4 reads. These storage tests do not substitute for WP3's envelope,
+schema-3/4/5 reads. These storage tests do not substitute for WP3's envelope,
 recipient and context-delivery integration or its final compatibility audit.

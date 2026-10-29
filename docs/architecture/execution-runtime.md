@@ -976,6 +976,49 @@ failed only when its canonical history contains an aborted zero-turn checkpoint
 and no model, tool, task or unknown activity. Other uncertain commits remain
 blocked until their actual terminal event can be confirmed.
 
+### Derived forks for a new task
+
+Use a derived fork to preserve a completed, failed, or safely interrupted
+workflow while starting a different request from its saved project files:
+
+```bash
+hufu session fork main --name investigation --new-task --workspace <control-root>
+hufu run --team <same-team> -- "Investigate a new question from this snapshot."
+```
+
+This requires a managed Linux workspace, required workspace versioning, a
+verified materializable source snapshot, and exclusive workspace/project
+locks. Off/observe mode and `--metadata-only` are rejected. Preflight is
+read-only and precedes workspace recovery: pending terminal commits, version
+recovery, unfinished isolated applies, paused tasks, and uncertain external
+effects require inspection and reconciliation first. Typed read-only or
+workspace-write attempts can be forked without replaying their work; external
+effects need explicit settled recovery metadata.
+
+The branch row durably records immutable source event/snapshot identities,
+hashes, capture provenance, team, and visible task-ID high-water mark. Its
+snapshot commit and `derived_fork_created` event publish atomically. An
+incomplete branch cannot be interpreted as an ordinary fork. Existing native
+fork recovery either removes an eventless incomplete child or completes a
+durable publication forward.
+
+The child starts as `awaiting_new_request`, with no executable parent tasks,
+conversation, compaction, input snapshots, acceptance evidence, retries, or
+historical grants. Parent events, results, receipts and reports remain
+unchanged. An ordinary fork of this pending child retains the original pending
+lineage. Resume, direct-agent, chat, dry-run, empty requests, and decision intent
+cannot activate it.
+
+The first nonempty canonical execute `run` for the same team establishes a
+version-1 `workflow_cycle_started` envelope with kind `derived_fork`, the
+original native event reference and a fresh invocation identity. It admits the
+child's current execution policy and fresh inputs; new task IDs exceed the
+source high-water mark. The first cycle withholds unscoped parent memory and
+automatic previous-response sharing. Explicit `--inherit-result worker=<id>`
+grants still work and commit with the cycle atomically. Later follow-ups use
+the ordinary conversation rules. A derived fork never clears the failed
+parent's workflow state.
+
 Recovery settles completed phase contracts through the same workflow observer
 as normal execution before building the coordinator's phase-scoped tools. This
 also covers a checkpoint taken after task completion but before phase settlement,

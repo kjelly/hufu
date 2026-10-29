@@ -6,10 +6,10 @@
 > Supersedes: —
 > Superseded-By: —
 
-> **Implementation status**：WP0–WP2 與 WP6 已提交。WP3 已完成 grant 儲存、任務綁定、required context、canonical run CLI 與使用報告的階段實作及驗證。WP4–WP5 與目標結束時的完整整合／race／baseline compatibility matrix 尚未完成。階段證據見第 12–23 節。
+> **Implementation status**：WP0–WP2 與 WP6 已提交。WP3 已完成 grant 儲存、任務綁定、required context、canonical run CLI 與使用報告的階段實作及驗證。WP4 已完成 native fork、child 投影與第一個新請求的階段實作及驗證；WP5 與目標結束時的完整整合／race／baseline compatibility matrix 尚未完成。階段證據見第 12–24 節。
 > **Repository**：`kjelly/hufu`
 > **Reviewed baseline**：`4e13abfb91a1328ccc1c58d0fd4a7861b17d6d43`
-> **Revised**：2026-10-28
+> **Revised**：2026-10-29
 > **Evidence**：原始查核為靜態閱讀；其後 WP0–WP2 已執行本地 fake-provider 測試，命令與限制見第 12–14 節。未執行真實模型。
 > **Execution boundary**：所有開發與驗收使用本地 fixture、fake provider、暫存 managed workspace。使用者已授權將原 `docs/tmp/spec.md` 移入本正式計畫，並逐階段驗證及提交。
 
@@ -658,3 +658,19 @@ ELF，記錄的三個自有 Go work 目錄均已清除。
 baseline binary：`/tmp/codex-task.OVwpKj/baseline-hufu`。既有依賴、工具鏈與
 configured caches／GOTMPDIR 保留原設定。Derived new-task fork activation、
 完整 operator diagnostics 與最終 baseline compatibility matrix 仍屬後續階段。
+
+## 24. WP4 derived new-task fork
+
+新增 `session fork --new-task`，僅允許 Linux managed required-mode、具備已驗證且可 materialize 的來源快照。命令先以唯讀 store 檢查來源、鎖、pending terminal commit、workspace recovery、isolated apply 與 typed side-effect state，再開 writer；拒絕來源時不自動執行 recovery。已結束、失敗及安全中斷的工作可成為來源；等待第一個新請求的 child 不能再當成另一個 new-task 來源。
+
+Migration 6 在 branch row 保存不可替換的 derivation metadata，並限制每個 child 只有一筆 native 初始化事件。來源 event／snapshot／capture 的身份與雜湊及 task-ID floor 都固定保存。child snapshot 與 `derived_fork_created` 於同一事件交易發布，沿用既有 fork 恢復：無事件的未完成 child 可移除；已發布者向前完成，不另造執行 run。checked lineage 同時驗證 branch 意圖、原子發布、來源前綴及 high-water，拒絕只選到發布第一筆事件的 cutoff。
+
+child 投影為 `awaiting_new_request`，清除父任務、對話、compaction、inputs、驗收、重試與舊 grants；父 events、results、receipts 及 reports 留在原位置。一般 fork 的後代仍保留原 pending 身份。相同 team 的第一個非空 canonical execute `run` 以新的 invocation 身份建立 version-1 `derived_fork` cycle，重新分配高於來源 floor 的 task ID。可在同一原子交易納入明確的歷史結果 grants；resume、direct-agent、chat、dry-run、decision、空請求及停用 workflow 的設定不能啟用 child。
+
+第一個 derived cycle 不自動交付父回覆或未分隔的 legacy memory；後續 cycle 恢復一般對話規則。實際 binary fixture 使用成功結果 A、失敗工作 B、required-mode snapshot 與新任務 child，驗證指定 worker 收到完整 A、其他角色沒有本文、child 重新產生 typed result、下一個 cycle 沒有前一次 grant，且父事件前綴、失敗狀態及原始 SQL report snapshots 不變。
+
+測試另揭露並修正三項整合問題：historical reader 的第一輪只有標頭，現在僅選取 scope，待預算內載入內容後才執行完整 payload-dependent lineage 驗證；舊 native report 的 verification duration 依 nanosecond JSON 格式讀取；多模型收據以共用 identity／時間順序寫入及 replay，canonical comparison 對舊 checkpoint 的副本排序，保留完整證據且仍拒絕收據內容變動。新增 CLI fixture 也會還原全域 options，避免 resume 的路徑捕捉污染後續測試。
+
+定向回歸已通過：team 18.943s、CLI 68.272s，包含四種實際 binary 路徑及五種 recovery preview／execute 案例。沒有修改 recovery eligibility 或放寬 policy drift 檢查。完整工作樹測試已通過：CLI 167.000s、team 737.749s、inspect 20.036s、improver 151.452s；context／runtimestore 等未改動輸入重用已通過的快取結果。定向 `-race` 通過：team 91.531s、inspect 13.429s、CLI 65.672s；context 沒有符合本階段 selector 的測試，不將它列為 race 覆蓋。`mise run lint` 為 0 issues，`mise run vet`、`bin/check-docs` 及 `git diff --check` 通過。2,622 個 Go／工具輸入在 gates 期間未變動。這是含保留本地修改的 working-tree 證據，不稱為 immutable commit 的全測。WP5、最終五個受影響 packages 的完整 race 及 baseline binary compatibility matrix 仍未完成。
+
+本階段可核對的清理累計回收 3,437,486,080 bytes（約 3.20 GiB），包含 96 個已退出的私有 fixture 目錄；這是過程中的累計回收，不等於 shared cache 的淨縮減量。目前 normal／race 專案編譯輸出保留 872,824,832 bytes（約 832 MiB），task scratch 約 156 MiB。已記錄的三個 Go work 目錄均不存在，configured Go temporary root 也沒有殘留 compiler workdir。唯一刻意保留的大型暫存檔是約 126 MiB 的 baseline binary，供目標結束時的舊版相容性矩陣使用；既有 dependency/toolchain caches 未清空。

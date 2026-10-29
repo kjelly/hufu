@@ -22,6 +22,9 @@ func startTeamCoordinator(ctx context.Context, coordinator *team.Coordinator, se
 	if err := freezeStartupExecutionPolicy(coordinator); err != nil {
 		return err
 	}
+	if err := validateDerivedCoordinatorStartup(ctx, coordinator); err != nil {
+		return err
+	}
 	if err := coordinator.ValidateHistoricalResultStartupSources(ctx); err != nil {
 		return err
 	}

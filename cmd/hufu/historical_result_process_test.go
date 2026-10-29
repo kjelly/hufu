@@ -32,6 +32,9 @@ func historicalRunProcessSetup(t *testing.T, endpoint string, semantic bool, var
 	// Grant intake is independent of file versioning mode. The derived-fork
 	// matrix separately exercises required-mode snapshot materialization.
 	configuration := "workspace-versioning:\n  mode: off\n"
+	if variant == "derived_fork" {
+		configuration = "workspace-versioning:\n  mode: required\n"
+	}
 	if variant == "fallback" {
 		configuration += "execution-routes:\n  research:\n    candidates: [ollama/test, ollama/test-fallback]\n    fallback-on: [rate_limited]\n"
 	}
@@ -81,6 +84,9 @@ contracts:
 `, endpoint)
 	if semantic {
 		manifest += "semantic-retrieval:\n  mode: shadow\n  endpoint: " + endpoint + "\n"
+	}
+	if variant == "derived_fork" {
+		manifest = strings.Replace(manifest, "delegation:\n", "delegation:\n  share-request-with: [researcher]\n", 1)
 	}
 	if variant == "extra_model" {
 		// Fanout produces the existing runtime merge rather than a submitted
@@ -132,6 +138,9 @@ contracts:
 		{Type: string(team.EventWorkflowStateChanged), Actor: "runtime", Payload: []byte(`{"state":"DONE","phase_results":{"VERIFY":{"status":"SUCCESS"}}}`)},
 		{Type: string(team.EventRunFinished), Actor: "coordinator", Payload: []byte(`{"outcome":"completed","goal_satisfied":true,"response":"original accepted report"}`)},
 	} {
+		if variant == "derived_fork" && event.Type == string(team.EventTaskCreated) {
+			event.Payload = []byte(strings.Replace(string(event.Payload), `"status":"pending"`, `"status":"pending","side_effect":"none"`, 1))
+		}
 		durable, err := store.AppendPersisted(event)
 		if err != nil {
 			t.Fatal(err)
@@ -190,7 +199,7 @@ func (f historicalRunProcessFixture) run(t *testing.T, binary string, flags []st
 }
 
 func TestHistoricalResultRunBinaryAdmissionAndDelivery(t *testing.T) {
-	for _, variant := range []string{"single", "fallback", "extra_model"} {
+	for _, variant := range []string{"single", "fallback", "extra_model", "derived_fork"} {
 		t.Run(variant, func(t *testing.T) { historicalResultRunBinaryAdmissionAndDelivery(t, variant) })
 	}
 }
@@ -223,6 +232,9 @@ func historicalResultRunBinaryAdmissionAndDelivery(t *testing.T, variant string)
 		}
 		encoded, _ := json.Marshal(request)
 		text := string(encoded)
+		if variant == "derived_fork" && strings.Contains(text, derivedParentInstructions) {
+			t.Error("derived request received executable parent instructions")
+		}
 		coordinator := false
 		for _, tool := range request.Tools {
 			if tool.Function.Name == "agent" || tool.Function.Name == "finish" || tool.Name == "agent" || tool.Name == "finish" {
@@ -268,6 +280,10 @@ func historicalResultRunBinaryAdmissionAndDelivery(t *testing.T, variant string)
 	t.Cleanup(server.Close)
 	f := historicalRunProcessSetup(t, server.URL, false, variant)
 	binary := buildTestBinary(t)
+	var checkDerived func()
+	if variant == "derived_fork" {
+		checkDerived = prepareDerivedProcessBranch(t, f, binary)
+	}
 	output, err, diagnostic := f.run(t, binary, []string{"--inherit-result", "researcher=" + f.resultID, "--inherit-result", "observer=" + f.resultID}, "Review the authorized evidence as a new request.")
 	wantFirst, wantTotal := int64(1), int64(2)
 	if variant == "fallback" {
@@ -278,7 +294,7 @@ func historicalResultRunBinaryAdmissionAndDelivery(t *testing.T, variant string)
 	if err != nil || output.Outcome != "completed" || !output.GoalSatisfied || len(output.Teams) != 1 || researcherCalls.Load() != wantFirst || verifierCalls.Load() != 1 {
 		t.Fatalf("historical CLI run: %v, researcher=%d verifier=%d\n%s", err, researcherCalls.Load(), verifierCalls.Load(), diagnostic)
 	}
-	if variant != "single" && alternateCalls.Load() != 1 {
+	if (variant == "fallback" || variant == "extra_model") && alternateCalls.Load() != 1 {
 		t.Fatalf("authorized alternate model calls = %d", alternateCalls.Load())
 	}
 	states := make(map[string]string)
@@ -314,6 +330,9 @@ func historicalResultRunBinaryAdmissionAndDelivery(t *testing.T, variant string)
 	}
 	if !foundSource {
 		t.Fatal("follow-up lost the original accepted result")
+	}
+	if checkDerived != nil {
+		checkDerived()
 	}
 }
 

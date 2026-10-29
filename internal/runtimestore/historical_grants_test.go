@@ -169,7 +169,7 @@ func TestHistoricalGrantCycleRollsBackWithSourceEvent(t *testing.T) {
 }
 
 func TestHistoricalGrantReadOnlyCompatibilityDoesNotMigrate(t *testing.T) {
-	for _, version := range []int{3, 4} {
+	for _, version := range []int{3, 4, 5} {
 		t.Run(strconv.Itoa(version), func(t *testing.T) {
 			workspace := t.TempDir()
 			db, err := sql.Open("sqlite", Path(workspace))

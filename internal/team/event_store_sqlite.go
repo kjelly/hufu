@@ -87,6 +87,11 @@ func acceptLoadedEvent(state *eventStoreState, verifier *eventchain.Verifier, ev
 			return err
 		}
 	}
+	if event.Type == string(EventDerivedForkCreated) {
+		if _, err := decodeDerivedForkCreated(event); err != nil {
+			return err
+		}
+	}
 	state.events = append(state.events, event)
 	state.lastEventID = event.ID
 	state.lastHash = event.Hash
@@ -110,6 +115,9 @@ func acceptLoadedEvent(state *eventStoreState, verifier *eventchain.Verifier, ev
 				return fmt.Errorf("%w: branch %q key %q", ErrDecisionIdempotencyConflict, identity.branchID, identity.key)
 			}
 		}
+		if exists && (event.Type == string(EventDerivedForkCreated) || existing.Type == string(EventDerivedForkCreated)) && !equivalentDerivedForkEvents(existing, event) {
+			return ErrDerivedForkIntent
+		}
 		state.idempotencyKeys[identity] = event
 	}
 	state.sequence++
@@ -126,6 +134,11 @@ func acceptLoadedEvent(state *eventStoreState, verifier *eventchain.Verifier, ev
 // rejects a position another writer already took. Callers must supply their
 // existing transaction so event-owned indexes commit or roll back with it.
 func insertEvent(ctx context.Context, q runtimestore.Queryer, sequence int, event RunEvent) error {
+	if event.Type == string(EventDerivedForkCreated) {
+		if err := validateDerivedForkStoredBranch(ctx, q, event); err != nil {
+			return err
+		}
+	}
 	if event.Type == string(EventHistoricalResultsGranted) {
 		if _, err := decodeHistoricalResultGrants(event); err != nil {
 			return err

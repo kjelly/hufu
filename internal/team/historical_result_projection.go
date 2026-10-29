@@ -23,6 +23,12 @@ func historicalResultGrantProjection(events []RunEvent) (*runtimestore.Historica
 	tasksCreated := false
 	for _, event := range events {
 		switch EventType(event.Type) {
+		case EventDerivedForkCreated:
+			if _, err := decodeDerivedForkCreated(event); err != nil {
+				return nil, nil, err
+			}
+			cycleID, tasksCreated = "", false
+			ref, admitted = nil, nil
 		case EventRunStarted:
 			if cycleID == "" {
 				cycleID = event.RunID

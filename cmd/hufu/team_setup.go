@@ -235,6 +235,9 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	resolvedJudgeModel := roleModels.Judge
 	resolvedPlanReviewerModel := roleModels.PlanReviewer
 	startsFresh := opts.newSession || execProfile.DisableHistoricalTaskReuse
+	if err := validateDerivedRunEntry(ctx, session, startsFresh); err != nil {
+		return nil, err
+	}
 	resolvedMaxConcurrent := cfg.ResolveMaxConcurrent(session.Config.MaxConcurrent)
 	if resolvedMaxConcurrent <= 0 {
 		resolvedMaxConcurrent = 8

@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	jsonv1 "encoding/json"
 	"encoding/json/v2"
 	"fmt"
 	"strings"
@@ -17,7 +18,7 @@ func PreviousResponseContextItem(event RunEvent) (ContextItem, error) {
 	switch EventType(event.Type) {
 	case EventRunFinished:
 		var payload RunFinishedEventPayload
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		if err := json.Unmarshal(event.Payload, &payload, jsonv1.FormatDurationAsNano(true)); err != nil {
 			return ContextItem{}, err
 		}
 		response = payload.Response
@@ -68,7 +69,7 @@ func previousWorkflowResponse(events []RunEvent, cycleID string) (ContextItem, e
 		switch EventType(event.Type) {
 		case EventRunFinished:
 			var payload RunFinishedEventPayload
-			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			if err := json.Unmarshal(event.Payload, &payload, jsonv1.FormatDurationAsNano(true)); err != nil {
 				return ContextItem{}, fmt.Errorf("decode previous run response: %w", err)
 			}
 			if strings.TrimSpace(payload.Response) != "" {
@@ -104,6 +105,9 @@ func (c *Coordinator) previousResponseForWorker(ctx context.Context, agentName s
 	}
 	cycleID := c.workflowCycleID()
 	if cycleID == "" {
+		return nil, nil
+	}
+	if c.initialDerivedCycle() {
 		return nil, nil
 	}
 	if !c.hasDurableEventJournal() {

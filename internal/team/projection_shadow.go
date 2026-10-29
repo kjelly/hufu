@@ -46,6 +46,9 @@ func CompareCanonicalProjection(live *SessionData, events []RunEvent) error {
 	if !reflect.DeepEqual(live.HistoricalResultGrants, replayed.HistoricalResultGrants) {
 		return fmt.Errorf("historical result grant projection differs")
 	}
+	if !reflect.DeepEqual(live.DerivedFork, replayed.DerivedFork) {
+		return fmt.Errorf("derived fork projection differs")
+	}
 	if err := compareTaskProjection(live.Tasks, replayed.Tasks); err != nil {
 		return err
 	}
@@ -88,6 +91,11 @@ func executionPolicySnapshotFromEvents(events []RunEvent) (*ExecutionPolicySnaps
 			continue
 		}
 		switch EventType(event.Type) {
+		case EventDerivedForkCreated:
+			if _, err := decodeDerivedForkCreated(event); err != nil {
+				return nil, err
+			}
+			admitted = nil
 		case EventExecutionPolicySnapshot:
 			var candidate ExecutionPolicySnapshot
 			if err := json.Unmarshal(event.Payload, &candidate); err != nil {
@@ -257,6 +265,9 @@ func toCanonicalReceipts(receipts []ExecutionReceipt, single *ExecutionReceipt) 
 	if len(merged) == 0 {
 		return nil
 	}
+	// Older checkpoints can retain fanout completion order. Compare the same
+	// chronological projection as replay without rewriting any saved receipt.
+	sortTaskExecutionReceipts(merged)
 	out := make([]canonicalReceipt, 0, len(merged))
 	for _, r := range merged {
 		out = append(out, canonicalReceipt{
@@ -562,7 +573,7 @@ func hasCurrentCanonicalProjectionEvents(events []RunEvent) bool {
 			continue
 		}
 		switch EventType(event.Type) {
-		case EventExecutionPolicySnapshot, EventRunInputsResolved, EventUserMessageAdded, EventAssistantMessageAdded, EventWorkflowCycleStarted, EventHistoricalResultsGranted, EventTaskCreated, EventTaskStarted, EventTaskVerifying, EventTaskCompleted, EventTaskFailed, EventTaskBlocked, EventTaskSkipped, EventTaskProtocolIncomplete:
+		case EventExecutionPolicySnapshot, EventRunInputsResolved, EventUserMessageAdded, EventAssistantMessageAdded, EventWorkflowCycleStarted, EventDerivedForkCreated, EventHistoricalResultsGranted, EventTaskCreated, EventTaskStarted, EventTaskVerifying, EventTaskCompleted, EventTaskFailed, EventTaskBlocked, EventTaskSkipped, EventTaskProtocolIncomplete:
 			return true
 		}
 	}

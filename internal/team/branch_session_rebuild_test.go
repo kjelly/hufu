@@ -27,6 +27,7 @@ var sessionFieldClass = map[string]string{
 	"LastCriterionProgressAt": "replay", "WorkflowState": "replay", "PhaseResults": "replay",
 	"WorkflowCycleID": "replay", "WorkflowTaskIDFloor": "replay",
 	"HistoricalResultGrants": "replay",
+	"DerivedFork":            "replay",
 	"RuntimeWorkspace":       "carry", "RetryState": "replay", "LearningGaps": "carry",
 	"RecoveryRequired": "replay", "RecoveryReason": "replay",
 	// Kept by a rebuild of its own branch; blocks a switch to any other.

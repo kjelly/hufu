@@ -23,9 +23,12 @@ func WithSessionResume(ctx context.Context) context.Context {
 // conversation. Task IDs remain monotonic across cycles so historical receipts,
 // artifact grants, and task idempotency keys retain their original owners.
 type WorkflowCycleStartedPayload struct {
-	PreviousCycleID string `json:"previous_cycle_id,omitempty"`
-	TaskIDFloor     int    `json:"task_id_floor"`
-	Request         string `json:"request"`
+	SchemaVersion   int             `json:"schema_version,omitzero"`
+	Kind            string          `json:"kind,omitempty"`
+	DerivedFork     *DerivedForkRef `json:"derived_fork,omitempty"`
+	PreviousCycleID string          `json:"previous_cycle_id,omitempty"`
+	TaskIDFloor     int             `json:"task_id_floor"`
+	Request         string          `json:"request"`
 }
 
 func decodeWorkflowCycleStarted(event RunEvent) (WorkflowCycleStartedPayload, error) {
@@ -36,6 +39,19 @@ func decodeWorkflowCycleStarted(event RunEvent) (WorkflowCycleStartedPayload, er
 	if event.RunID == "" || payload.TaskIDFloor < 0 || strings.TrimSpace(payload.Request) == "" || payload.PreviousCycleID == event.RunID {
 		return payload, fmt.Errorf("invalid workflow cycle identity or task ID floor")
 	}
+	if payload.Kind == "derived_fork" {
+		if err := json.Unmarshal(event.Payload, &payload, json.RejectUnknownMembers(true)); err != nil {
+			return payload, fmt.Errorf("%w: %v", ErrDerivedForkIntent, err)
+		}
+		ref := payload.DerivedFork
+		if payload.SchemaVersion != 1 || payload.PreviousCycleID != "" || ref == nil || !ref.AwaitingNewRequest || ref.FirstCycleID != "" ||
+			!historicalGrantIdentity(ref.BranchID) || !historicalGrantIdentity(ref.EventID) || !historicalGrantSHA256(ref.EventHash) ||
+			!historicalGrantIdentity(ref.SnapshotID) || !historicalGrantCanonicalName(ref.Team) {
+			return payload, ErrDerivedForkIntent
+		}
+	} else if payload.Kind != "" || payload.SchemaVersion != 0 || payload.DerivedFork != nil {
+		return payload, ErrDerivedForkIntent
+	}
 	return payload, nil
 }
 
@@ -44,8 +60,22 @@ func decodeWorkflowCycleStarted(event RunEvent) (WorkflowCycleStartedPayload, er
 func validateWorkflowCycleLineage(events []RunEvent) error {
 	var state Phase
 	cycleID, floor := "", 0
+	var pending *DerivedForkRef
+	startedRuns := make(map[string]string)
 	for i, event := range events {
 		switch EventType(event.Type) {
+		case EventRunStarted:
+			startedRuns[event.RunID] = effectiveEventBranchID(event)
+		case EventDerivedForkCreated:
+			payload, err := decodeDerivedForkCreated(event)
+			if err != nil {
+				return err
+			}
+			session := NewSession()
+			resetDerivedForkProjection(session, event, payload)
+			pending = session.DerivedFork
+			clear(startedRuns)
+			state, cycleID, floor = PhaseInit, "", payload.Intent.TaskIDFloor
 		case EventWorkflowStateChanged:
 			var payload WorkflowStateChangedPayload
 			if json.Unmarshal(event.Payload, &payload) == nil {
@@ -58,7 +88,12 @@ func validateWorkflowCycleLineage(events []RunEvent) error {
 			}
 			// Run-scoped inspection can start at a cycle boundary without
 			// its predecessor. A complete lineage has a state to validate.
-			if (state != "" && (state != PhaseDone || payload.PreviousCycleID != cycleID)) || payload.TaskIDFloor < floor {
+			derived := payload.Kind == "derived_fork"
+			if derived {
+				if pending == nil || *pending != *payload.DerivedFork || payload.TaskIDFloor != floor || startedRuns[event.RunID] != effectiveEventBranchID(event) {
+					return ErrDerivedForkIntent
+				}
+			} else if pending != nil || (state != "" && (state != PhaseDone || payload.PreviousCycleID != cycleID)) || payload.TaskIDFloor < floor {
 				return fmt.Errorf("workflow cycle %q does not follow its completed predecessor", event.RunID)
 			}
 			if payload.TaskIDFloor < workflowTaskIDHighWater(events[:i]) {
@@ -74,6 +109,7 @@ func validateWorkflowCycleLineage(events []RunEvent) error {
 				}
 			}
 			state, cycleID, floor = PhaseInit, event.RunID, payload.TaskIDFloor
+			pending = nil
 		}
 	}
 	return nil
@@ -94,6 +130,13 @@ func workflowTaskIDHighWater(events []RunEvent) int {
 func resetWorkflowCycleProjection(sd *SessionData, cycleID string, floor int) {
 	sd.WorkflowCycleID, sd.WorkflowTaskIDFloor = cycleID, floor
 	sd.HistoricalResultGrants = nil
+	if sd.DerivedFork != nil {
+		sd.DerivedFork = cloneDerivedForkRef(sd.DerivedFork)
+		if sd.DerivedFork.AwaitingNewRequest {
+			sd.DerivedFork.FirstCycleID = cycleID
+		}
+		sd.DerivedFork.AwaitingNewRequest = false
+	}
 	sd.Tasks, sd.WorksetReceipts, sd.WorksetStates = nil, nil, nil
 	sd.WorkflowState, sd.PhaseResults, sd.RetryState = PhaseInit, nil, NewRetryState()
 	sd.RunResult, sd.ContinuationCheckpoint = nil, nil
@@ -112,17 +155,23 @@ func (c *Coordinator) workflowCycleID() string {
 // initialContextWithheld protects a fresh session's first delegation without
 // discarding the conversation that supplies the meaning of a follow-up request.
 func (c *Coordinator) initialContextWithheld() bool {
-	return c.initialDelegationPending() && c.workflowCycleID() == ""
+	return c.initialDelegationPending() && (c.workflowCycleID() == "" || c.initialDerivedCycle())
 }
 
 // beginFollowUpWorkflow is called only by coordinator user-request entry
 // points, after admission and before any auxiliary/model preparation. Interrupted
 // and failed workflows keep their existing recovery semantics.
 func (c *Coordinator) beginFollowUpWorkflow(ctx context.Context, prompt string) (bool, error) {
+	derived := c.AwaitingDerivedForkRequest()
+	if derived {
+		if err := c.ValidateDerivedForkRequest(ctx, prompt); err != nil {
+			return false, err
+		}
+	}
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() && c.phaseWorkflow.State() == PhaseFailed {
 		return false, fmt.Errorf("workflow is failed; preserve this session and use targeted reconciliation or fork an earlier checkpoint before resuming")
 	}
-	if c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || c.phaseWorkflow.State() != PhaseDone {
+	if c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || (!derived && c.phaseWorkflow.State() != PhaseDone) {
 		if pendingHistoricalResultRequest(ctx) != nil {
 			return false, fmt.Errorf("historical result intake cannot attach to an unfinished workflow")
 		}
@@ -143,6 +192,9 @@ func (c *Coordinator) beginFollowUpWorkflow(ctx context.Context, prompt string) 
 	payload := WorkflowCycleStartedPayload{Request: utils.RedactSecrets(prompt)}
 	c.viewSessionData(func(sd *SessionData) {
 		payload.PreviousCycleID, payload.TaskIDFloor = sd.WorkflowCycleID, sd.WorkflowTaskIDFloor
+		if derived {
+			payload.SchemaVersion, payload.Kind, payload.DerivedFork = 1, "derived_fork", cloneDerivedForkRef(sd.DerivedFork)
+		}
 	})
 	for _, item := range c.taskTracker.TodoList().Items() {
 		if item == nil {
@@ -167,12 +219,16 @@ func (c *Coordinator) beginFollowUpWorkflow(ctx context.Context, prompt string) 
 	if err != nil {
 		return false, err
 	}
-	lineage := FilterEventsForBranch(events, tree, tree.ActiveBranch)
-	if err := validateWorkflowCycleLineage(lineage); err != nil {
+	lineage, err := ProjectValidatedEventsForBranch(events, tree, tree.ActiveBranch)
+	if err != nil {
 		return false, err
 	}
 	canonical := ReduceToSessionData(lineage)
-	if canonical.WorkflowState != PhaseDone || canonical.WorkflowCycleID != payload.PreviousCycleID {
+	if derived {
+		if canonical.DerivedFork == nil || *canonical.DerivedFork != *payload.DerivedFork || canonical.WorkflowState != PhaseInit {
+			return false, ErrDerivedForkIntent
+		}
+	} else if canonical.WorkflowState != PhaseDone || canonical.WorkflowCycleID != payload.PreviousCycleID {
 		return false, fmt.Errorf("completed workflow has no matching durable completion checkpoint")
 	}
 	payload.TaskIDFloor = max(payload.TaskIDFloor, workflowTaskIDHighWater(lineage))
@@ -186,13 +242,7 @@ func (c *Coordinator) beginFollowUpWorkflow(ctx context.Context, prompt string) 
 		Type: string(EventWorkflowCycleStarted), Actor: "coordinator", RunID: c.executionRunID, Payload: data,
 		IdempotencyKey: "workflow-cycle:" + c.executionRunID,
 	}
-	var durable RunEvent
-	var grant *runtimestore.HistoricalGrantCycleRef
-	if pendingHistoricalResultRequest(ctx) != nil {
-		durable, grant, err = c.appendHistoricalCycle(ctx, boundary, payload)
-	} else {
-		durable, err = c.EventJournal().Append(ctx, boundary)
-	}
+	durable, grant, err := c.appendWorkflowCycle(ctx, boundary, payload, events)
 	if err != nil {
 		return false, fmt.Errorf("start follow-up workflow: %w", err)
 	}
@@ -241,4 +291,28 @@ func (c *Coordinator) beginFollowUpWorkflow(ctx context.Context, prompt string) 
 	c.saveCheckpoint()
 	c.report(c.newEvent("todos_updated").withTodos([]*TodoItem{}))
 	return true, nil
+}
+
+// appendWorkflowCycle keeps every cycle's durable commit on the canonical
+// journal, including the atomic head fence required by derived requests.
+func (c *Coordinator) appendWorkflowCycle(ctx context.Context, boundary RunEvent, payload WorkflowCycleStartedPayload, events []RunEvent) (RunEvent, *runtimestore.HistoricalGrantCycleRef, error) {
+	if pendingHistoricalResultRequest(ctx) != nil {
+		return c.appendHistoricalCycle(ctx, boundary, payload)
+	}
+	if payload.Kind != "derived_fork" {
+		durable, err := c.EventJournal().Append(ctx, boundary)
+		return durable, nil, err
+	}
+	journal, ok := c.EventJournal().(AtomicEventJournal)
+	if !ok || len(events) == 0 {
+		return RunEvent{}, nil, fmt.Errorf("derived workflow requires an atomic event journal")
+	}
+	batch, err := journal.AppendBatchAtHead(ctx, []RunEvent{boundary}, events[len(events)-1].ID)
+	if err != nil {
+		return RunEvent{}, nil, err
+	}
+	if len(batch) != 1 {
+		return RunEvent{}, nil, ErrEventBatchConflict
+	}
+	return batch[0], nil, nil
 }

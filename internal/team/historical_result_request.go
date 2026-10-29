@@ -19,6 +19,7 @@ type PreparedHistoricalResultRequest struct {
 	bindings      []string
 	prepared      *PreparedHistoricalResultGrants
 	previousCycle string
+	derivedFork   *DerivedForkRef
 	state         atomic.Uint32 // 0=prepared, 1=claimed by Run, 2=consumed
 }
 
@@ -57,7 +58,7 @@ func (c *Coordinator) PrepareHistoricalResultRequest(ctx context.Context, prompt
 		return nil, err
 	}
 	return &PreparedHistoricalResultRequest{owner: c, prompt: strings.TrimSpace(prompt), bindings: slices.Clone(bindings),
-		prepared: prepared, previousCycle: canonical.WorkflowCycleID}, nil
+		prepared: prepared, previousCycle: canonical.WorkflowCycleID, derivedFork: cloneDerivedForkRef(canonical.DerivedFork)}, nil
 }
 
 func (c *Coordinator) historicalRequestLineage(ctx context.Context) ([]RunEvent, error) {
@@ -97,7 +98,8 @@ func (c *Coordinator) historicalRequestPredecessor(lineage []RunEvent) (*Session
 		return nil, err
 	}
 	canonical := ReduceToSessionData(lineage)
-	if c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || c.phaseWorkflow.State() != PhaseDone || canonical.WorkflowState != PhaseDone {
+	derived := canonical.DerivedFork != nil && canonical.DerivedFork.AwaitingNewRequest
+	if c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || (!derived && (c.phaseWorkflow.State() != PhaseDone || canonical.WorkflowState != PhaseDone)) {
 		return nil, fmt.Errorf("new historical result grants require a completed workflow; resume or repair unfinished work without new grants")
 	}
 	current := c.SessionData()
@@ -106,6 +108,9 @@ func (c *Coordinator) historicalRequestPredecessor(lineage []RunEvent) (*Session
 	}
 	if current.WorkflowCycleID != canonical.WorkflowCycleID {
 		return nil, ErrHistoricalResultGrantDrift
+	}
+	if derived && (current.DerivedFork == nil || *current.DerivedFork != *canonical.DerivedFork || canonical.WorkflowState != PhaseInit) {
+		return nil, ErrDerivedForkIntent
 	}
 	for _, item := range canonical.Tasks {
 		if item == nil || isInterruptedStatus(item.Status) {
@@ -145,7 +150,7 @@ func (c *Coordinator) claimHistoricalResultRequest(ctx context.Context, prompt s
 
 func sameHistoricalResultRequest(a, b *PreparedHistoricalResultRequest) bool {
 	return a != nil && b != nil && a.previousCycle == b.previousCycle && a.prepared.scope == b.prepared.scope &&
-		a.prepared.policyFingerprint == b.prepared.policyFingerprint && slices.Equal(a.prepared.grants, b.prepared.grants)
+		sameDerivedForkLineage(a.derivedFork, b.derivedFork) && a.prepared.policyFingerprint == b.prepared.policyFingerprint && slices.Equal(a.prepared.grants, b.prepared.grants)
 }
 
 // ValidateHistoricalResultStartupSources restores an unfinished cycle before

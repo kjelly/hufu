@@ -1771,21 +1771,10 @@ func (tl *TodoList) SetExecutionReceipt(id string, receipt *ExecutionReceipt) er
 				preserveResultCollection(&copyR, ti.ExecutionReceipt)
 				ti.ExecutionReceipt = &copyR
 
-				// A repair updates the durable record for the same execution
-				// attempt. Keep one receipt per attempt rather than appending a
-				// second receipt when provenance is completed after repair.
-				replaced := false
-				for i := range ti.ExecutionReceipts {
-					existing := &ti.ExecutionReceipts[i]
-					if existing.RunID == copyR.RunID && existing.TaskID == copyR.TaskID && existing.Attempt == copyR.Attempt && existing.ModelExecutionID == copyR.ModelExecutionID {
-						ti.ExecutionReceipts[i] = copyR
-						replaced = true
-						break
-					}
-				}
-				if !replaced {
-					ti.ExecutionReceipts = append(ti.ExecutionReceipts, copyR)
-				}
+				// Use replay's identity and chronological order. Fanout leaves
+				// can complete in the reverse of their start order; that must not
+				// make the next startup reject this checkpoint's evidence.
+				ti.ExecutionReceipts = appendExecutionReceipt(ti.ExecutionReceipts, copyR)
 			}
 			updated = true
 			break

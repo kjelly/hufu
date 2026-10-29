@@ -211,6 +211,7 @@ func prepareRunSegments(ctx context.Context, prompt, initialTeam string, registr
 			return nil, nil, err
 		}
 	}
+	ctx = derivedRunContext(ctx, segments, registry)
 	ctx, err = historicalRunContext(ctx, segments, registry)
 	return ctx, segments, err
 }

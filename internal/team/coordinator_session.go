@@ -630,7 +630,10 @@ func (c *Coordinator) SetFreshSession(v bool) {
 // context from an earlier session. --new retains that session as a durable
 // archive, but it must not influence the fresh run that created the archive.
 func (c *Coordinator) historicalMemoryDisabled() bool {
-	return c == nil || c.ExecutionProfile().DisableHistoricalMemory || c.freshSessionMemory.Load()
+	if c == nil || c.ExecutionProfile().DisableHistoricalMemory || c.freshSessionMemory.Load() {
+		return true
+	}
+	return c.initialDerivedCycle()
 }
 
 // canonicalMemoryDisabled reports whether canonical context (this session's
@@ -1384,6 +1387,7 @@ func (c *Coordinator) SessionData() *SessionData {
 		copySD := *sd
 		copySD.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(sd.ExecutionPolicySnapshot)
 		copySD.HistoricalResultGrants = cloneHistoricalGrantCycleRef(sd.HistoricalResultGrants)
+		copySD.DerivedFork = cloneDerivedForkRef(sd.DerivedFork)
 		copySD.RunInputSnapshots = CloneRunInputSnapshots(sd.RunInputSnapshots)
 		copySD.DecisionPrimitiveResults = slices.Clone(sd.DecisionPrimitiveResults)
 		copySD.Entries = append([]SessionEntry(nil), sd.Entries...)

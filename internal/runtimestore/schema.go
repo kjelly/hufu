@@ -98,6 +98,9 @@ CREATE TABLE historical_grant_cycles (
   source_hash TEXT NOT NULL,
   PRIMARY KEY (branch_id, cycle_id)
 );`},
+	{Version: 6, Name: "derived fork branch intent", SQL: `
+ALTER TABLE session_branches ADD COLUMN derivation BLOB;
+CREATE UNIQUE INDEX events_derived_fork ON events(branch_id) WHERE type = 'derived_fork_created';`},
 }
 
 func verifyReadOnlySchema(ctx context.Context, db *sql.DB) error {
@@ -106,7 +109,7 @@ func verifyReadOnlySchema(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("read runtime store schema version: %w", err)
 	}
 	required := migrations
-	if version == 3 || version == 4 {
+	if version >= 3 && version < len(migrations) {
 		// Preserve the previously supported read-only formats. Missing new
 		// grant references mean no grant, never an inferred authorization.
 		// Every existing migration still needs its original checksum/name.

@@ -1,6 +1,7 @@
 package team
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -91,6 +92,10 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			if payload, err := decodeWorkflowCycleStarted(e); err == nil {
 				resetWorkflowCycleProjection(session, e.RunID, payload.TaskIDFloor)
 				session.addEntryAt("user", payload.Request, e.Timestamp)
+			}
+		case string(EventDerivedForkCreated):
+			if payload, err := decodeDerivedForkCreated(e); err == nil {
+				resetDerivedForkProjection(session, e, payload)
 			}
 		case "acceptance_contract_modified":
 			reduceAcceptanceContractModified(session, e)
@@ -411,6 +416,12 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 	// Earlier cycles remain in the journal for historical run inspection, but
 	// cannot establish tasks or verification evidence in the active cycle.
 	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type == string(EventDerivedForkCreated) {
+			if _, err := decodeDerivedForkCreated(events[i]); err == nil {
+				events = events[i+1:]
+				break
+			}
+		}
 		if events[i].Type == string(EventWorkflowCycleStarted) {
 			if _, err := decodeWorkflowCycleStarted(events[i]); err == nil {
 				events = events[i+1:]
@@ -1392,13 +1403,17 @@ func appendExecutionReceipt(receipts []ExecutionReceipt, receipt ExecutionReceip
 		}
 	}
 	res := append(receipts, receipt)
-	sort.SliceStable(res, func(i, j int) bool {
-		if res[i].Attempt != res[j].Attempt {
-			return res[i].Attempt < res[j].Attempt
-		}
-		return res[i].StartedAt.Before(res[j].StartedAt)
-	})
+	sortTaskExecutionReceipts(res)
 	return res
+}
+
+func sortTaskExecutionReceipts(receipts []ExecutionReceipt) {
+	slices.SortStableFunc(receipts, func(left, right ExecutionReceipt) int {
+		if order := cmp.Compare(left.Attempt, right.Attempt); order != 0 {
+			return order
+		}
+		return left.StartedAt.Compare(right.StartedAt)
+	})
 }
 
 func sameExecutionReceiptProjection(left, right ExecutionReceipt) bool {

@@ -45,6 +45,7 @@ const (
 	EventWorkflowStateChanged                    EventType = "workflow_state_changed"
 	EventWorkflowCycleStarted                    EventType = "workflow_cycle_started"
 	EventHistoricalResultsGranted                EventType = "historical_results_granted"
+	EventDerivedForkCreated                      EventType = "derived_fork_created"
 	EventCoordinatorCompactionCommitted          EventType = "coordinator_compaction_committed"
 	EventCoordinatorCompactionCheckpointAttested EventType = "coordinator_compaction_checkpoint_attested"
 	EventCoordinatorModelContinuationAdmitted    EventType = "coordinator_model_continuation_admitted"
@@ -142,7 +143,7 @@ func IsKnownEventType(eventType string) bool {
 		EventArtifactCreated, EventCriterionReevaluated,
 		EventCriterionCheckpoint, EventMemoryRetrieved,
 		EventMemoryUsageRecorded, EventMemoryOutcomeRecorded,
-		EventPolicyDecision, EventRecoveryDecision, EventWorkflowStateChanged, EventWorkflowCycleStarted, EventHistoricalResultsGranted,
+		EventPolicyDecision, EventRecoveryDecision, EventWorkflowStateChanged, EventWorkflowCycleStarted, EventHistoricalResultsGranted, EventDerivedForkCreated,
 		EventCoordinatorCompactionCommitted, EventCoordinatorCompactionCheckpointAttested,
 		EventCoordinatorModelContinuationAdmitted, EventContextWindowAdmission,
 		EventContextWindowCompactionCommitted, EventContextWindowDownshift,

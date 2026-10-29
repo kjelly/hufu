@@ -58,6 +58,9 @@ func carryWorkspaceSessionState(next, live *SessionData) {
 	next.RuntimeWorkspace = live.RuntimeWorkspace
 	next.LearningGaps = append([]LearningGap(nil), live.LearningGaps...)
 	next.Rounds = live.Rounds
+	if !sameDerivedForkLineage(next.DerivedFork, live.DerivedFork) {
+		return
+	}
 	next.ConversationHistorySourceOffset = live.ConversationHistorySourceOffset
 	next.ConversationHistorySourceCounts = append([]int(nil), live.ConversationHistorySourceCounts...)
 	next.ConversationHistorySourceRanges = cloneSourceRanges(live.ConversationHistorySourceRanges)
@@ -79,12 +82,16 @@ func RefreshActiveBranchProjection(workspace string, st *SessionTree, es *EventS
 		return err
 	}
 	replayed := ReduceToSessionData(lineage)
-	if len(tasks) == 0 && len(replayed.Entries) == 0 && len(replayed.CriterionResults) == 0 && len(replayed.CriterionCheckpoints) == 0 && replayed.LastCriterionProgressAt == "" && replayed.ExecutionPolicySnapshot == nil {
+	if len(tasks) == 0 && len(replayed.Entries) == 0 && len(replayed.CriterionResults) == 0 && len(replayed.CriterionCheckpoints) == 0 && replayed.LastCriterionProgressAt == "" && replayed.ExecutionPolicySnapshot == nil && replayed.DerivedFork == nil {
 		return nil
 	}
 	sd := LoadSession(workspace)
 	if sd == nil {
 		sd = NewSession()
+	}
+	if replayed.DerivedFork != nil && !sameDerivedForkLineage(sd.DerivedFork, replayed.DerivedFork) {
+		carryWorkspaceSessionState(replayed, sd)
+		return SaveSession(workspace, replayed)
 	}
 	sd.Tasks = tasks
 	sd.Entries = replayed.Entries
@@ -93,6 +100,7 @@ func RefreshActiveBranchProjection(workspace string, st *SessionTree, es *EventS
 	sd.LastCriterionProgressAt = replayed.LastCriterionProgressAt
 	sd.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(replayed.ExecutionPolicySnapshot)
 	sd.HistoricalResultGrants = cloneHistoricalGrantCycleRef(replayed.HistoricalResultGrants)
+	sd.DerivedFork = cloneDerivedForkRef(replayed.DerivedFork)
 	if err := SaveSession(workspace, sd); err != nil {
 		return fmt.Errorf("refresh projection for branch %q: %w", b.ID, err)
 	}

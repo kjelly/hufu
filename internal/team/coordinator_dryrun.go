@@ -114,6 +114,9 @@ func NewDryRunCoordinator(params DryRunCoordinatorParams) (*Coordinator, error) 
 }
 
 func (c *Coordinator) DryRun(ctx context.Context, userPrompt string) (*DryRunResult, error) {
+	if err := c.rejectPendingDerivedFork(); err != nil {
+		return nil, err
+	}
 	if pendingHistoricalResultRequest(ctx) != nil {
 		return nil, fmt.Errorf("historical result intake cannot be added by dry run")
 	}

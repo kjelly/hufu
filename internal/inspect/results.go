@@ -234,7 +234,7 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 			known[metadata.Team] = true
 		}
 		switch team.EventType(event.Type) {
-		case team.EventWorkflowCycleStarted:
+		case team.EventWorkflowCycleStarted, team.EventDerivedForkCreated:
 			grant = nil
 		case team.EventHistoricalResultsGranted:
 			grant = &event

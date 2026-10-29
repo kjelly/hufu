@@ -167,6 +167,18 @@ func (es *EventStore) replayedEventBatch(ctx context.Context, q runtimestore.Que
 		if err := es.validateHistoricalGrantReplay(ctx, q, durable, event); err != nil {
 			return nil, false, err
 		}
+		if event.Type == string(EventDerivedForkCreated) || durable.Type == string(EventDerivedForkCreated) {
+			candidate, err := es.prepareEvent(event)
+			if err != nil {
+				return nil, false, err
+			}
+			if !equivalentDerivedForkEvents(candidate, durable) {
+				return nil, false, ErrDerivedForkIntent
+			}
+			if err := validateDerivedForkStoredBranch(ctx, q, durable); err != nil {
+				return nil, false, err
+			}
+		}
 		if isDecisionCorrectnessEvent(event.Type) || isDecisionCorrectnessEvent(durable.Type) {
 			equivalent, err := decisionIdempotencyEquivalent(durable, event)
 			if err != nil {

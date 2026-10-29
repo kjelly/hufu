@@ -359,6 +359,9 @@ func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.Age
 
 //nolint:gocyclo // direct-agent execution is the canonical closed lifecycle path.
 func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (directResult *DirectAgentResult, err error) {
+	if err := c.rejectPendingDerivedFork(); err != nil {
+		return nil, err
+	}
 	if pendingHistoricalResultRequest(ctx) != nil {
 		return nil, fmt.Errorf("historical result intake requires a new coordinator Run")
 	}
@@ -2243,6 +2246,9 @@ func compactProjectContext(ctx context.Context, compacter textCompacter, project
 }
 
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
+	if err := c.ValidateDerivedForkRequest(ctx, userPrompt); err != nil {
+		return "", err
+	}
 	intake, err := c.claimHistoricalResultRequest(ctx, userPrompt)
 	if err != nil {
 		return "", err
@@ -2449,6 +2455,9 @@ func (c *Coordinator) runRequest(ctx context.Context, userPrompt string) (string
 }
 
 func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt string) (string, error) {
+	if err := c.rejectPendingDerivedFork(); err != nil {
+		return "", err
+	}
 	if pendingHistoricalResultRequest(ctx) != nil {
 		return "", fmt.Errorf("historical result intake requires a new coordinator Run")
 	}
