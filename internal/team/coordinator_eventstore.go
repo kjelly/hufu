@@ -1237,6 +1237,11 @@ func (c *Coordinator) CommitTaskCreationResolved(ctx context.Context, specs []To
 		items[i] = todoItemFromSpec(spec, ids[i])
 	}
 	if !c.hasDurableEventJournal() {
+		for _, item := range items {
+			if err := c.validateTaskHistoricalResultBinding(context.WithoutCancel(ctx), item); err != nil {
+				return nil, err
+			}
+		}
 		tl.AddReserved(items)
 		c.markAdmittedTodoIDs(items)
 		return items, nil
@@ -1675,6 +1680,9 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 	}
 	if item.DependencyResultView != nil {
 		payload["dependency_result_view"] = item.DependencyResultView.clone()
+	}
+	if item.HistoricalResultBinding != nil {
+		payload["historical_result_binding"] = item.HistoricalResultBinding.clone()
 	}
 	if item.WorkerWorkspace != nil {
 		payload["worker_workspace"] = item.WorkerWorkspace.clone()

@@ -391,6 +391,7 @@ type TodoItem struct {
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization,omitempty"`
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot,omitempty"`
 	ResultContract           *ResultContractRef                `json:"result_contract,omitempty"`
+	HistoricalResultBinding  *HistoricalResultTaskBinding      `json:"historical_result_binding,omitempty"`
 	DependencyResultView     *DependencyResultViewSpec         `json:"dependency_result_view,omitempty"`
 	WorkerWorkspace          *WorkerWorkspacePolicy            `json:"worker_workspace,omitempty"`
 	ExecutionRoute           *ExecutionRouteBinding            `json:"execution_route,omitempty"`
@@ -530,7 +531,8 @@ type TodoSpec struct {
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot
 	ResultContract           *ResultContractRef
-	DependencyResultView     *DependencyResultViewSpec `json:"dependency_result_view,omitempty"`
+	HistoricalResultBinding  *HistoricalResultTaskBinding `json:"-"`
+	DependencyResultView     *DependencyResultViewSpec    `json:"dependency_result_view,omitempty"`
 	WorkerWorkspace          *WorkerWorkspacePolicy
 	ExecutionRoute           *ExecutionRouteBinding
 	CatalogAction            *CatalogActionBinding
@@ -615,6 +617,7 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		ResultContract:                item.ResultContract.clone(),
+		HistoricalResultBinding:       item.HistoricalResultBinding.clone(),
 		DependencyResultView:          item.DependencyResultView.clone(),
 		WorkerWorkspace:               item.WorkerWorkspace.clone(),
 		ExecutionRoute:                item.ExecutionRoute.clone(),
@@ -1404,6 +1407,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		ResultContract:                item.ResultContract.clone(),
+		HistoricalResultBinding:       item.HistoricalResultBinding.clone(),
 		DependencyResultView:          item.DependencyResultView.clone(),
 		WorkerWorkspace:               item.WorkerWorkspace.clone(),
 		ExecutionRoute:                item.ExecutionRoute.clone(),
@@ -1588,6 +1592,7 @@ func restoreTodoOccurrenceContract(dst, src *TodoItem) {
 	dst.DynamicToolAuthorization = cloneDynamicToolAuthorizationSnapshot(src.DynamicToolAuthorization)
 	dst.ResourceScopeSnapshot = cloneTaskResourceScopeSnapshot(src.ResourceScopeSnapshot)
 	dst.ResultContract = src.ResultContract.clone()
+	dst.HistoricalResultBinding = src.HistoricalResultBinding.clone()
 	dst.DependencyResultView = src.DependencyResultView.clone()
 	dst.WorkerWorkspace = src.WorkerWorkspace.clone()
 	dst.ExecutionRoute = src.ExecutionRoute.clone()

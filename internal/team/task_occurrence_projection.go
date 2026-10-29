@@ -91,7 +91,8 @@ type TaskOccurrenceProjection struct {
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot
 	ResultContract           *ResultContractRef
-	DependencyResultView     *DependencyResultViewSpec `json:"DependencyResultView,omitempty"`
+	HistoricalResultBinding  *HistoricalResultTaskBinding `json:"HistoricalResultBinding,omitempty"`
+	DependencyResultView     *DependencyResultViewSpec    `json:"DependencyResultView,omitempty"`
 	WorkerWorkspace          *WorkerWorkspacePolicy
 	ExecutionRoute           *ExecutionRouteBinding
 	CatalogAction            *CatalogActionBinding
@@ -102,6 +103,9 @@ type TaskOccurrenceProjection struct {
 func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, error) {
 	if item == nil || strings.TrimSpace(item.ID) == "" {
 		return TaskOccurrenceProjection{}, fmt.Errorf("task occurrence projection requires a Todo ID")
+	}
+	if err := validateHistoricalResultTaskBindingShape(item); err != nil {
+		return TaskOccurrenceProjection{}, err
 	}
 	if err := validateDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization); err != nil {
 		return TaskOccurrenceProjection{}, err
@@ -138,6 +142,7 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 		DynamicToolAuthorization: cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		ResourceScopeSnapshot:    cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		ResultContract:           item.ResultContract.clone(),
+		HistoricalResultBinding:  item.HistoricalResultBinding.clone(),
 		DependencyResultView:     item.DependencyResultView.clone(),
 		WorkerWorkspace:          item.WorkerWorkspace.clone(),
 		ExecutionRoute:           item.ExecutionRoute.clone(),

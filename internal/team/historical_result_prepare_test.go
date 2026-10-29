@@ -19,6 +19,7 @@ func historicalGrantPreparationFixture(t *testing.T) (*Coordinator, *[]Historica
 	def := c.session.Agents["worker"]
 	def.Name = "Review Worker"
 	c.session.Agents = map[string]*agent.AgentDef{"review worker": def, "review-worker": def,
+		"observer":     {Name: "Observer", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
 		"coordinator":  {Name: "Coordinator", Role: "coordinator", Generation: agent.GenerationParams{Model: "test"}},
 		"orchestrator": {Name: "Orchestrator", Role: "orchestrator", Generation: agent.GenerationParams{Model: "test"}}}
 	if err := c.session.SetWorkspaceScope(WorkspaceScope{Managed: true, ProjectID: "project", ContextScopeID: "project",

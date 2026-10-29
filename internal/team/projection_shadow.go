@@ -414,6 +414,7 @@ type canonicalTaskShadow struct {
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization,omitempty"`
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot,omitempty"`
 	ResultContract           *ResultContractRef                `json:"result_contract,omitempty"`
+	HistoricalResultBinding  *HistoricalResultTaskBinding      `json:"historical_result_binding,omitempty"`
 	DependencyResultView     *DependencyResultViewSpec         `json:"dependency_result_view,omitempty"`
 	WorkerWorkspace          *WorkerWorkspacePolicy            `json:"worker_workspace,omitempty"`
 	ExecutionRoute           *ExecutionRouteBinding            `json:"execution_route,omitempty"`
@@ -491,6 +492,7 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		ResultContract:                item.ResultContract.clone(),
+		HistoricalResultBinding:       item.HistoricalResultBinding.clone(),
 		DependencyResultView:          item.DependencyResultView.clone(),
 		WorkerWorkspace:               item.WorkerWorkspace.clone(),
 		ExecutionRoute:                item.ExecutionRoute.clone(),

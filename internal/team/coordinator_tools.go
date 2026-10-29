@@ -222,6 +222,7 @@ func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 var modelTaskRuntimeOwnedFields = []string{
 	"workset_binding", "workset_receipt",
 	"dependency_result_view", "dependency-result-view", "dependencyresultview",
+	"historical_result_binding", "historical-result-binding", "historicalresultbinding",
 	"result_contract", "result-contract", "structured_payload",
 	"worker_workspace", "worker-workspace",
 	"execution_route", "execution-route", "execution_candidates", "fallback_on",
@@ -1138,6 +1139,9 @@ func (t *todoTool) handleCreate(ctx context.Context, callerName string, items []
 		if err := t.coordinator.freezeTodoSpecDynamicAuthorization(ctx, occurrence, agentDef, &batch[i]); err != nil {
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to freeze tool authorization: %v", err)), nil
 		}
+	}
+	if err := t.coordinator.freezeHistoricalResultTaskBindings(ctx, batch, ids); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to bind historical results: %v", err)), nil
 	}
 	if t.coordinator.hasDurableEventJournal() {
 		for i := range batch {

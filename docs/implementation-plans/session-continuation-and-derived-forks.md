@@ -483,3 +483,49 @@ policy 晚於 grant 的拒絕。驗證期間 2,584 個 Go／工具設定檔保�
 目錄均已隨程序退出清除。私有 scratch 約 151 MiB，其中單一約 126 MiB baseline
 binary 保留供最終相容性測試：`/tmp/codex-task.OVwpKj/baseline-hufu`。
 依賴、工具鏈與 configured cache／GOTMPDIR 路徑保持原設定。
+
+## 21. WP3 runtime 任務綁定
+
+Runtime 在 occurrence／decision admission digest 前固定
+`historical_result_binding`：consumer task ID、canonical recipient、原 grant event
+reference，以及該 recipient 的完整 ResultID 清單。來源內容與 source／presentation
+hash 仍由既有 grant event 保存，不複製另一份權威，也不增加 artifact 權限。
+
+一般 execution envelope 與 Worker 自建 TODO 都在 admission 前綁定；持久化與
+dispatch admission 再驗證 exact binding，不能在已授權 digest 後補寫或改綁。
+按 typed `TaskSourceSubagent` 排除 nested subagent，另排除 runtime primary decision；
+不按 `ParentID` 排除合法 workset／objective 子任務。Fanout 由原 task owner 驗證授權，
+未派工的 recipient 不產生假 task。
+
+Checkpoint、task cloning、canonical shadow、事件 payload 與 checked replay 均保留
+binding；只有第一個 `task_created` 可建立它，且 grant 必須先於 task 可見。
+Lifecycle snapshot 不得改寫，retry 沿用同一綁定。Model task ingress 明確拒絕 binding
+欄位，runtime-only TodoSpec 欄位不序列化為輸入；nil binding 維持既有 digest bytes。
+
+本階段完成 occurrence metadata 綁定。CLI admission／cycle activation、來源內容在
+consumer branch 上重建、required context／manifest delivery、dispatch proof 與最終
+整合仍待後續實作；`--inherit-result` 尚未開放。
+
+第一輪完整測試發現 pre-cancelled workflow 在新的 metadata 檢查提早返回，停留於
+PREPARE，未投影既有的 FAILED 狀態。修正 envelope 的純 metadata binding 準備使用
+`context.WithoutCancel`；實際 tool／model／scheduler 仍使用原已取消 context。
+取消回歸與綁定／舊 digest／派工定向測試通過（20.161s），並對修正後版本重跑必要檢查。
+
+最終 working-tree 完整 `mise exec -- go test -p 2 ./... -timeout 30m` 通過：
+CLI 152.357s、improver 160.493s、team 704.577s；inspect 及其他 packages 通過、
+重用有效既有結果或無測試。此證據包含保留的其他本地修改，不稱為 immutable commit
+snapshot 的全測證據。定向 `-race` 包含 historical binding、取消回歸、occurrence／
+admission、舊 dependency view、TODO、branch／cycle、canonical reader：team
+50.525s、inspect 3.215s、CLI 8.140s，全部通過。
+
+`mise run lint` 通過、0 issues；`mise run vet`、`bin/check-docs`、
+`git diff --check` 通過。最終驗證期間 2,587 個 Go／工具設定檔保持相同內容。
+新增測試亦覆蓋完整 recipient/result 子集、metadata override、task_created 前置證據、
+Worker TODO admission、envelope digest、fanout owner、primary exclusion、profile／
+policy／index／checkpoint 拒絕與 runtime-only model ingress。
+
+本階段清除可追溯的過時 project archives 與前後兩輪共 96 個已退出的私有測試目錄，
+合計約 1.32 GiB。保留的當前 normal／race project exports 約 807 MiB；沒有新增快取
+ELF，記錄的自有 Go work 目錄均已清除。私有 scratch 約 152 MiB，含最終相容性測試
+所需的單一約 126 MiB baseline binary：`/tmp/codex-task.OVwpKj/baseline-hufu`。
+依賴、工具鏈與 configured cache／GOTMPDIR 路徑保持原設定。

@@ -64,8 +64,8 @@ counted against the 1 MiB total; it is never truncated. Rebuilding a frozen
 envelope requires matching source, payload, presentation and policy digests.
 
 This preparation API is private-content runtime plumbing: it does not write an
-admission event or create tasks. CLI entry eligibility, cycle activation, task
-binding, required model-context delivery, dispatch proof and source-content
+admission event or create tasks. CLI entry eligibility, cycle activation,
+required model-context delivery, dispatch proof and source-content
 restoration remain WP3 implementation work. These stages do not enable
 `--inherit-result` or grant any worker access.
 
@@ -90,6 +90,31 @@ before the fork cutoff. The reference keeps the ancestor's branch identity;
 checkout creates no child grant index. This authenticates the envelope only:
 restoring source content must still revalidate source visibility, validity and
 all frozen content hashes on the consumer branch before model delivery.
+
+## Task occurrence bindings
+
+The runtime freezes `historical_result_binding` before calculating a task's
+occurrence and decision-admission digests. A binding contains the task ID,
+canonical recipient, original grant-event reference and every ResultID granted
+to that recipient. It carries no source bodies or artifact capabilities.
+Normal task envelopes and worker-created TODOs use the same binding boundary;
+creation and dispatch admission verify it against the canonical cycle grant.
+
+Typed `subagent` tasks and runtime primary-decision occurrences receive no
+binding. A parent ID alone does not exclude workset children or worker-created
+objective TODOs. Fanout leaves verify the original occurrence against their
+parent coordinator's grant authority. Unused recipients create no tasks.
+
+The first `task_created` contract must contain the binding and reference a
+grant already visible at that point. Checked replay rejects a binding without
+that creation proof, while later lifecycle snapshots cannot replace it. Retries
+retain the same binding, and cloned task projections detach its ResultID slice.
+Nil bindings preserve existing occurrence digest bytes. Model task inputs
+explicitly reject the binding field; `TodoSpec` does not serialize it as input.
+
+These checks authenticate occurrence metadata. Required source-content
+restoration, full model-context delivery, dispatch manifests and CLI activation
+remain separate WP3 implementation work; `--inherit-result` remains unavailable.
 
 ## Upgrade and downgrade
 

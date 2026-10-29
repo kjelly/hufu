@@ -67,6 +67,11 @@ func historicalGrantReplayFixture(t *testing.T) (*Coordinator, *EventStore, *Ses
 	if err != nil {
 		t.Fatal(err)
 	}
+	return historicalGrantPreparedReplayFixture(t, c, prepared)
+}
+
+func historicalGrantPreparedReplayFixture(t *testing.T, c *Coordinator, prepared *PreparedHistoricalResultGrants) (*Coordinator, *EventStore, *SessionTree, RunEvent) {
+	t.Helper()
 	payload, err := prepared.envelope("consumer-session", "consumer-cycle")
 	if err != nil {
 		t.Fatal(err)

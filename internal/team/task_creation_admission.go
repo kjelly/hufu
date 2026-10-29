@@ -16,6 +16,9 @@ func (c *Coordinator) validateTaskCreationAdmission(ctx context.Context, item *T
 	if c == nil || item == nil {
 		return nil
 	}
+	if err := c.validateTaskHistoricalResultBinding(ctx, item); err != nil {
+		return fmt.Errorf("validate task %s historical results: %w", item.ID, err)
+	}
 	if err := validateActionOccurrenceBinding(item); err != nil {
 		return fmt.Errorf("validate task %s action input binding: %w", item.ID, err)
 	}
