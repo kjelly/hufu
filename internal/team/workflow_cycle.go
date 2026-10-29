@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -122,6 +123,9 @@ func (c *Coordinator) beginFollowUpWorkflow(ctx context.Context, prompt string) 
 		return false, fmt.Errorf("workflow is failed; preserve this session and use targeted reconciliation or fork an earlier checkpoint before resuming")
 	}
 	if c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || c.phaseWorkflow.State() != PhaseDone {
+		if pendingHistoricalResultRequest(ctx) != nil {
+			return false, fmt.Errorf("historical result intake cannot attach to an unfinished workflow")
+		}
 		return false, nil
 	}
 	if resume, _ := ctx.Value(sessionResumeKey{}).(bool); resume || c.IsWrapUp() {
@@ -178,10 +182,17 @@ func (c *Coordinator) beginFollowUpWorkflow(ctx context.Context, prompt string) 
 	}
 	// The append is the commit point. If projection persistence fails, restart
 	// rebuilds this boundary without rerunning the completed cycle's workers.
-	durable, err := c.EventJournal().Append(ctx, RunEvent{
+	boundary := RunEvent{
 		Type: string(EventWorkflowCycleStarted), Actor: "coordinator", RunID: c.executionRunID, Payload: data,
 		IdempotencyKey: "workflow-cycle:" + c.executionRunID,
-	})
+	}
+	var durable RunEvent
+	var grant *runtimestore.HistoricalGrantCycleRef
+	if pendingHistoricalResultRequest(ctx) != nil {
+		durable, grant, err = c.appendHistoricalCycle(ctx, boundary, payload)
+	} else {
+		durable, err = c.EventJournal().Append(ctx, boundary)
+	}
 	if err != nil {
 		return false, fmt.Errorf("start follow-up workflow: %w", err)
 	}
@@ -191,6 +202,7 @@ func (c *Coordinator) beginFollowUpWorkflow(ctx context.Context, prompt string) 
 	}
 	if err := c.mutateSessionData(func(sd *SessionData) error {
 		resetWorkflowCycleProjection(sd, c.executionRunID, payload.TaskIDFloor)
+		sd.HistoricalResultGrants = cloneHistoricalGrantCycleRef(grant)
 		sd.addEntryAt("user", payload.Request, durable.Timestamp)
 		return nil
 	}); err != nil {

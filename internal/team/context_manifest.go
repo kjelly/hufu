@@ -11,6 +11,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 const ContextManifestSchemaVersion = 2
@@ -240,6 +241,8 @@ type ContextManifestSummary struct {
 	Prepared              int                              `json:"prepared,omitzero"`
 	DependencyResultViews []DependencyResultViewReport     `json:"dependency_result_views,omitempty"`
 	HistoricalResults     []HistoricalResultDeliveryReport `json:"historical_results,omitempty"`
+	HistoricalGrants      []HistoricalResultGrantReport    `json:"historical_grants,omitempty"`
+	HistoricalGrantsError string                           `json:"historical_grants_error,omitempty"`
 }
 
 func SummarizeContextManifests(manifests []ContextInjectionManifest) ContextManifestSummary {
@@ -679,5 +682,16 @@ func (c *Coordinator) ContextManifestReport() ContextManifestSummary {
 	c.viewSessionData(func(sd *SessionData) {
 		manifests = append(manifests, sd.CoordinatorContextManifests...)
 	})
-	return SummarizeContextManifests(manifests)
+	summary := SummarizeContextManifests(manifests)
+	var hasGrant bool
+	c.viewSessionData(func(sd *SessionData) { hasGrant = sd.HistoricalResultGrants != nil })
+	if hasGrant || len(summary.HistoricalResults) > 0 {
+		grants, err := c.HistoricalResultGrantReport(context.Background())
+		if err != nil {
+			summary.HistoricalGrantsError = utils.RedactSecrets(err.Error())
+		} else {
+			summary.HistoricalGrants = grants
+		}
+	}
+	return summary
 }

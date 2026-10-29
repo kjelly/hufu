@@ -22,6 +22,12 @@ func startTeamCoordinator(ctx context.Context, coordinator *team.Coordinator, se
 	if err := freezeStartupExecutionPolicy(coordinator); err != nil {
 		return err
 	}
+	if err := coordinator.ValidateHistoricalResultStartupSources(ctx); err != nil {
+		return err
+	}
+	if err := prepareHistoricalRunIntake(ctx, coordinator, session); err != nil {
+		return err
+	}
 	if err := completeManagedFreshSession(ctx, session); err != nil {
 		return fmt.Errorf("complete rebound workspace fresh-session checkpoint: %w", err)
 	}

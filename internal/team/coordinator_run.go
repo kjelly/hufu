@@ -359,6 +359,9 @@ func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.Age
 
 //nolint:gocyclo // direct-agent execution is the canonical closed lifecycle path.
 func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (directResult *DirectAgentResult, err error) {
+	if pendingHistoricalResultRequest(ctx) != nil {
+		return nil, fmt.Errorf("historical result intake requires a new coordinator Run")
+	}
 	ctx = withDirectAgentInvocation(ctx)
 	originalCancellation := invocationContextError(ctx)
 	executionParent := ctx
@@ -2182,6 +2185,13 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 		coreText.WriteString("\n\n" + reminder)
 	}
 	systemPrompt = utils.RedactSecrets(systemPrompt)
+	routing, err := c.historicalResultRoutingMetadata(ctx)
+	if err != nil {
+		return "", err
+	}
+	if routing != "" {
+		coreText.WriteString("\n\n" + routing)
+	}
 	coordInput.CorePrompt = utils.RedactSecrets(coreText.String())
 	compiled, compileErr := c.ContextCompiler().CompileCoordinatorContext(ctx, coordInput)
 	c.recordShadowTrace(ctx, "coordinator", systemPrompt, contextRequest, routeDecisions, coordInput.ModelContext, compiled, compileErr)
@@ -2233,6 +2243,17 @@ func compactProjectContext(ctx context.Context, compacter textCompacter, project
 }
 
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
+	intake, err := c.claimHistoricalResultRequest(ctx, userPrompt)
+	if err != nil {
+		return "", err
+	}
+	if intake != nil {
+		defer intake.state.Store(2)
+	}
+	return c.runRequest(ctx, userPrompt)
+}
+
+func (c *Coordinator) runRequest(ctx context.Context, userPrompt string) (string, error) {
 	ctx, endExecutionRun, err := c.beginPublicInvocationExecutionRun(ctx)
 	if err != nil {
 		return "", err
@@ -2428,6 +2449,9 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 }
 
 func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt string) (string, error) {
+	if pendingHistoricalResultRequest(ctx) != nil {
+		return "", fmt.Errorf("historical result intake requires a new coordinator Run")
+	}
 	ctx, endExecutionRun, err := c.beginPublicInvocationExecutionRun(ctx)
 	if err != nil {
 		return "", err

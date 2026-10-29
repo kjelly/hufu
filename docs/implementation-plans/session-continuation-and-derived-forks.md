@@ -6,7 +6,7 @@
 > Supersedes: —
 > Superseded-By: —
 
-> **Implementation status**：WP0–WP2 已提交；WP6 已提交；WP3 儲存層、grant envelope、事件原子寫入及來源與接收者的唯讀準備已驗證。WP3–WP5 與目標結束時的完整整合／race gate 尚未完成。階段證據見第 12–19 節。
+> **Implementation status**：WP0–WP2 與 WP6 已提交。WP3 已完成 grant 儲存、任務綁定、required context、canonical run CLI 與使用報告的階段實作及驗證。WP4–WP5 與目標結束時的完整整合／race／baseline compatibility matrix 尚未完成。階段證據見第 12–23 節。
 > **Repository**：`kjelly/hufu`
 > **Reviewed baseline**：`4e13abfb91a1328ccc1c58d0fd4a7861b17d6d43`
 > **Revised**：2026-10-28
@@ -593,3 +593,68 @@ ELF，記錄的自有 Go work 目錄均已清除。私有 scratch 約
 152 MiB，含最終 compatibility audit 所需的單一約 126 MiB baseline binary：
 `/tmp/codex-task.OVwpKj/baseline-hufu`。既有依賴、工具鏈及 configured caches／
 GOTMPDIR 保留原設定。
+
+## 23. WP3 CLI admission、原子 cycle 與授權使用報告
+
+Canonical `run` 的 execute intent 開放 repeatable
+`--inherit-result worker=<full-result-id>`。要求明確指定單一 managed team，使用既有
+agent alias resolver；自動選隊、direct-agent／piped chain、fast route、new／temp、
+dry-run、decision 與 recovery augmentation 均在 model startup 前拒絕。
+普通 prompt 中的 literal shell pipe 沿用原 parser 語意。
+
+先建立 runtime 私有、單次使用的 request preflight，再由 `Run` 在 invocation 前
+重驗；只有完成的 predecessor workflow 可以開新 cycle。既有 canonical policy
+允許的 unused backend environment 相容差異不會改寫 grant 綁定的原始 policy hash，
+也不會授權該 backend。CLI semantic warmup 延至 request admission 後，防止無效
+recipient／source 在拒絕前啟動 embedding。Resume 只恢復原始 grants；下一個沒有
+明確授權的 completed follow-up 清除舊 grants。
+
+Cycle boundary 與 grant/index 共用 EventStore 的單一 transaction；在重新讀取來源
+前擷取 journal head，conditional append 拒絕並行 head 變動。SQL failure 不留下
+半個 cycle；uncertain commit 重播完整事件與原 index，不另造授權。單筆 append
+沿用同一 transaction engine，保留原 idempotency 與 degraded recovery。
+
+Coordinator 只收到 worker／ResultID routing metadata。JSON context routing 與
+Markdown report 按 canonical manifest 顯示 `not_dispatched`、`prepared`、
+`dispatched`；unused recipient 不產生假 task，checkpoint 自稱 dispatch 不成立。
+
+實際 CLI 測試找到並修正兩個 replay 整合缺口：歷史結果的 per-task projection
+必須保留 task_created 之前的原 grant authority；terminal input origin validation
+必須以既有 JSON duration encoding 解讀 acceptance evidence。Fallback 的 dispatch
+attempt 另由 active runtime occurrence 決定，不用 DAG retry counter 取代。
+
+第二次請求的 CLI 測試亦暴露既有 shared-memory reducer 的 ID 碰撞迴圈：原先只取
+timestamp ASCII hex 的前八碼，相同內容第三次以不同 execution identity 儲存時
+無法產生新 ID。改用隨機碰撞 suffix，原 execution identity 的去重規則維持不變；
+同一 regression 測試覆蓋四個 execution identities 與全部重播的 idempotency。
+
+實際 binary 測試涵蓋單模型、rate-limit fallback 與 extra-model fanout，逐一驗證
+完整本文與大整數送達、coordinator／未授權 verifier 不收到本文、unused observer
+顯示 `not_dispatched`。每個案例另執行第二次普通 follow-up，驗證不沿用舊 grant，
+原 accepted source event/hash 保持不變。拒絕 unknown recipient、coordinator、
+invisible source、direct-agent 與 piped chain 時，連 provider metadata／embedding
+啟動都沒有新增 HTTP 呼叫。Fanout 沿用既有 runtime merge 語意，由 submitted
+verifier 驗收，不把 merge 冒充 worker-submitted result。
+
+第一輪 lint 指出三個流程的複雜度超標，已拆分入口準備與歷史投影更新函式；沒有
+新增 suppression 或放寬門檻。修正後 `mise run lint` 通過，0 issues。
+
+最終 working-tree 完整測試通過：CLI 170.874s、context 61.316s、improver
+155.025s、inspect 11.069s、team 709.207s；其他 packages 通過、重用有效結果或
+無測試。此證據包含保留的其他本地修改，不稱為 immutable commit snapshot 的全測
+證據。定向 `-race` 通過：team 254.816s、inspect 6.888s、context 1.907s、
+CLI 57.514s，包含 historical grants／delivery、atomic event store、semantic
+startup、workflow cycle、terminal input origin、context reducer、occurrence／
+admission、collection／repair、query／manifest 與 dependency view 等受影響路徑。
+
+`mise run vet`、`bin/check-docs`、`git diff --check` 通過。最終驗證期間固定的
+2,605 個 Go／工具設定檔內容一致。清除可追溯的過期 project outputs 與 48 個已
+退出的私有測試目錄，合計約 2.92 GiB。CLI 迭代期間 current 與 obsolete project
+outputs 曾累積約 2.32 GiB，正式 gates 前已辨識並清理；最終保留的 current
+normal／race project exports 約 829 MiB，低於 2 GiB 預算。沒有新增 cache
+ELF，記錄的三個自有 Go work 目錄均已清除。
+
+私有 scratch 約 154 MiB，包含最終 compatibility audit 所需的單一約 126 MiB
+baseline binary：`/tmp/codex-task.OVwpKj/baseline-hufu`。既有依賴、工具鏈與
+configured caches／GOTMPDIR 保留原設定。Derived new-task fork activation、
+完整 operator diagnostics 與最終 baseline compatibility matrix 仍屬後續階段。

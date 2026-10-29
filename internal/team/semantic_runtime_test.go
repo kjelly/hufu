@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -203,6 +204,38 @@ func TestSemanticRuntimeOffStartsNothing(t *testing.T) {
 	}
 	if fake.requests() != 0 {
 		t.Fatalf("off mode sent %d embedding requests", fake.requests())
+	}
+}
+
+func TestSemanticRuntimeDeferredStartup(t *testing.T) {
+	for _, closeFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("close_first_%t", closeFirst), func(t *testing.T) {
+			fake := newConceptOllama(t)
+			runtime, err := newSemanticRuntimeWithStartup(conceptSettings(t, fake, semantic.ModeActive, nil), openSemanticTestRepo(t), "project", false, time.Hour, false, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(runtime.Close)
+			if runtime.started || fake.requests() != 0 {
+				t.Fatal("deferred constructor started model work")
+			}
+			if closeFirst {
+				runtime.Close()
+			}
+			runtime.start()
+			runtime.start()
+			if closeFirst {
+				if runtime.started || fake.requests() != 0 {
+					t.Fatal("closed runtime restarted background model work")
+				}
+				return
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			if err := runtime.WaitReady(ctx); err != nil || fake.requests() == 0 {
+				t.Fatalf("admitted runtime did not warm: %v", err)
+			}
+		})
 	}
 }
 

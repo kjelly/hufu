@@ -12,13 +12,13 @@ import (
 // (hufu.yaml under the team block) and, unless the mode is off, starts the
 // shared runtime and wires it into worker memory. Mode off keeps the legacy
 // worker memory service exactly.
-func (c *Coordinator) initSemanticRetrieval(repo contextstore.Repository, noNet bool) error {
+func (c *Coordinator) initSemanticRetrieval(repo contextstore.Repository, noNet, deferred bool) error {
 	settings, err := semantic.Merge(c.session.GlobalSemanticRetrieval, c.session.Config.SemanticRetrieval).Resolve()
 	if err != nil {
 		return fmt.Errorf("resolve semantic-retrieval: %w", err)
 	}
 	c.semanticSettings = settings
-	runtime, err := newSemanticRetrievalRuntime(settings, repo, c.contextScopeProjectID(), noNet)
+	runtime, err := newSemanticRuntimeWithStartup(settings, repo, c.contextScopeProjectID(), noNet, semanticRefreshPoll, false, !deferred)
 	if err != nil {
 		return fmt.Errorf("start semantic retrieval: %w", err)
 	}

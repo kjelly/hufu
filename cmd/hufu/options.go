@@ -26,6 +26,7 @@ type runOptions struct {
 	// profile merge in applyNamedProfile may replace it with the keyed union
 	// of profile and explicit CLI entries before team loading reads it.
 	workerModelOverrides []string
+	inheritResults       []string
 
 	// Team selection / discovery
 	agentTeamName       string

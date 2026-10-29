@@ -481,34 +481,39 @@ func TestSQLiteRepositoryAppendReducerDeduplicatesByExecutionIdentity(t *testing
 		t.Fatal(err)
 	}
 	defer r.Close()
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
 	scope := Scope{ProjectID: "p", TeamID: "team", SessionID: "session"}
 	base := ContextItem{Kind: ContextObservation, Content: "same finding", Scope: scope, Authority: AuthorityAgent, TrustLevel: TrustInternal, Confidence: 1, Lifecycle: LifecycleConfirmed}
-	// Two distinct tasks report the same finding content. They must not
+	// Multiple distinct tasks report the same finding content. They must not
 	// collapse into one item because their execution identity differs.
 	itemA := base
 	itemA.Metadata = map[string]string{"run_id": "run-1", "task_id": "task-a", "attempt": "1"}
 	itemB := base
 	itemB.Metadata = map[string]string{"run_id": "run-1", "task_id": "task-b", "attempt": "1"}
-	if err := r.AppendReducer(ctx, itemA, itemB); err != nil {
+	itemC := base
+	itemC.Metadata = map[string]string{"run_id": "run-2", "task_id": "task-a", "attempt": "1"}
+	itemD := base
+	itemD.Metadata = map[string]string{"run_id": "run-2", "task_id": "task-b", "attempt": "2"}
+	if err := r.AppendReducer(ctx, itemA, itemB, itemC, itemD); err != nil {
 		t.Fatal(err)
 	}
 	items, err := r.Query(ctx, RepositoryQuery{Scope: scope, Visibility: VisibilityExact})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 2 {
+	if len(items) != 4 {
 		t.Fatalf("AppendReducer collapsed distinct execution identities: %#v", items)
 	}
 	// Re-appending the same execution identity is a no-op (idempotent).
-	if err := r.AppendReducer(ctx, itemA); err != nil {
+	if err := r.AppendReducer(ctx, itemA, itemB, itemC, itemD); err != nil {
 		t.Fatal(err)
 	}
 	items, err = r.Query(ctx, RepositoryQuery{Scope: scope, Visibility: VisibilityExact})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 2 {
+	if len(items) != 4 {
 		t.Fatalf("AppendReducer was not idempotent for the same execution identity: %#v", items)
 	}
 }

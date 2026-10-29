@@ -6,6 +6,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 )
@@ -43,7 +44,10 @@ func (c *Coordinator) PrepareHistoricalResultGrants(ctx context.Context, binding
 	if err != nil {
 		return nil, err
 	}
-	policy := c.ExecutionPolicySnapshot()
+	policy, err := c.historicalResultGrantPolicy(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
 	if policy == nil {
 		return nil, fmt.Errorf("historical result grants require a frozen execution policy")
 	}
@@ -83,6 +87,49 @@ func (c *Coordinator) PrepareHistoricalResultGrants(ctx context.Context, binding
 		prepared.presentations = append(prepared.presentations, presentation)
 	}
 	return prepared, nil
+}
+
+// Admission can accept harmless differences in an unused backend environment.
+// Grants still bind the original event-authoritative policy hash, rather than
+// the current process's compatible reconstruction. Read-only preflight before
+// first policy admission may use the private frozen construction snapshot.
+func (c *Coordinator) historicalResultGrantPolicy(ctx context.Context, scope HistoricalTaskScope) (*ExecutionPolicySnapshot, error) {
+	policy := c.ExecutionPolicySnapshot()
+	store := c.EventStore()
+	if store == nil {
+		var err error
+		store, err = OpenEventStoreReadOnly(scope.Workspace)
+		if errors.Is(err, os.ErrNotExist) {
+			return policy, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = store.Close() }()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	events, err := store.ReadEvents()
+	if err != nil {
+		return nil, err
+	}
+	tree, err := LoadSessionTreeContext(ctx, scope.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	lineage, err := ProjectValidatedEventsForBranch(events, tree, scope.Branch)
+	if err != nil {
+		return nil, err
+	}
+	admitted, err := executionPolicySnapshotFromEvents(lineage)
+	if err != nil {
+		return nil, err
+	}
+	if admitted != nil {
+		policy = admitted
+	}
+	return policy, nil
 }
 
 func (c *Coordinator) historicalResultGrantScope(ctx context.Context) (HistoricalTaskScope, error) {

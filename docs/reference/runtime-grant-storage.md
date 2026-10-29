@@ -63,11 +63,60 @@ must remain valid. The complete UTF-8 presentation, including its labels, is
 counted against the 1 MiB total; it is never truncated. Rebuilding a frozen
 envelope requires matching source, payload, presentation and policy digests.
 
-This preparation API is private-content runtime plumbing: it does not write an
-admission event or create tasks. CLI entry eligibility, cycle activation,
-required model-context delivery, dispatch proof and source-content
-restoration remain WP3 implementation work. These stages do not enable
-`--inherit-result` or grant any worker access.
+The low-level preparation API writes no admission event and creates no tasks.
+The operator entry below adds request eligibility and atomic cycle admission;
+worker delivery still requires the canonical task binding and dispatch proof.
+
+## Operator admission
+
+Use a new request after a completed runtime workflow in the same managed team
+workspace:
+
+```bash
+hufu run --team review \
+  --inherit-result researcher=res-<full-64-character-digest> \
+  --inherit-result reviewer=res-<another-full-64-character-digest> \
+  -- "Verify the authorized historical evidence in a new workflow."
+```
+
+The repeatable value is `worker=<full-result-id>`, with no wildcard or
+receiverless form. Worker aliases resolve through the normal team resolver.
+Every task created for a named worker in that cycle receives its complete
+required references; a grant does not require creating a task for that worker.
+The explicit team must resolve to the same managed control workspace and
+visible branch lineage. Standalone roots cannot import results by ID.
+
+This entry implies the coordinator route. It rejects `--route fast`, automatic
+team selection, direct-agent mentions, piped agent chains, `--new`, `--temp`,
+`--dry-run`, decision intent and new grants on resume or repair. Root execution,
+chat and decide do not expose the flag. Ordinary task text containing a literal
+shell pipe remains text under the existing prompt parser.
+
+Startup validates entry, recipient, source, policy and complete presentation
+before provider introspection. CLI semantic retrieval also stays paused until
+request admission, so rejected input does not start background embedding work.
+Run revalidates the prepared request before opening its invocation, then reads
+the chain head before rebuilding sources. The conditional transaction commits
+`workflow_cycle_started`, `historical_results_granted` and the original grant
+index together. A concurrent head change or failed write cannot leave a cycle
+without its intended grants. An uncertain commit is recovered from both durable
+events, rather than authorizing a replacement grant.
+
+The grant binds the canonical admitted policy hash. Existing compatibility for
+an unused backend's ambient environment does not replace that hash with a new
+process's reconstruction and does not enable the unused backend.
+
+An unfinished workflow resumes its original durable grants without CLI
+augmentation; source visibility, validity and digests are checked before startup
+model consumers and again before provider work. A subsequent completed follow-up
+without this flag clears the previous cycle's grants. Derived new-task fork
+activation remains a separate implementation stage.
+
+Coordinator prompts receive routing metadata only, without source bodies. JSON
+context routing and Markdown reports distinguish each grant as `not_dispatched`,
+`prepared` or `dispatched`; per-request manifests preserve attempt and execution
+identity. These states come from checked canonical events. A checkpoint-only
+claim does not prove dispatch, and unavailable evidence is reported explicitly.
 
 ## Cycle projection and recovery
 
@@ -112,8 +161,8 @@ retain the same binding, and cloned task projections detach its ResultID slice.
 Nil bindings preserve existing occurrence digest bytes. Model task inputs
 explicitly reject the binding field; `TodoSpec` does not serialize it as input.
 
-CLI activation remains separate WP3 implementation work;
-`--inherit-result` remains unavailable.
+CLI admission uses the same immutable bindings; it does not expose a task or
+model input that can manufacture them.
 
 ## Required worker context and delivery
 

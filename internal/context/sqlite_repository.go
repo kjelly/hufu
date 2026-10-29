@@ -2,6 +2,7 @@ package context
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -572,7 +573,7 @@ func (r *SQLiteRepository) appendReducerOnce(ctx context.Context, items ...Conte
 			if probeErr != nil {
 				return probeErr
 			}
-			id = it.ID + "-" + hex.EncodeToString([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))[:8]
+			id = it.ID + "-" + rand.Text()
 		}
 		it.ID = id
 		if err = insertItemRowTx(ctx, tx, it); err != nil {

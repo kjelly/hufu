@@ -208,6 +208,7 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 	teams := map[string]string{}
 	states := make(map[string]*historicalTaskState)
 	known := make(map[string]bool)
+	var grant *team.RunEvent
 	for _, indexed := range events {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
@@ -232,6 +233,12 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 			teams[event.RunID] = metadata.Team
 			known[metadata.Team] = true
 		}
+		switch team.EventType(event.Type) {
+		case team.EventWorkflowCycleStarted:
+			grant = nil
+		case team.EventHistoricalResultsGranted:
+			grant = &event
+		}
 		if event.Type == string(team.EventRunFinished) && (scope.Team == "" || teams[event.RunID] == scope.Team) {
 			row, err := historicalRunResponse(indexed, branch, scope.Workspace, teams[event.RunID])
 			if err != nil {
@@ -254,6 +261,12 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 		newOccurrence := event.Type == string(team.EventTaskCreated) && !metadata.ResetForRetry && !metadata.ResetForResume && state != nil && state.originRun != event.RunID
 		if state == nil || newOccurrence {
 			state = &historicalTaskState{originRun: event.RunID}
+			// Per-task replay still needs the original cycle's grant before
+			// task_created. Keep that immutable authority with this occurrence
+			// across later cycles, without replaying unrelated tasks or bodies.
+			if grant != nil {
+				state.events = append(state.events, *grant)
+			}
 			states[key] = state
 		}
 		state.events = append(state.events, event)
@@ -263,13 +276,7 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 			}
 		}
 		if event.Type == string(team.EventTaskRemoved) || metadata.ResetForRetry || metadata.ResetForResume {
-			for _, index := range state.rows {
-				rows[index].Validity = "invalidated"
-				rows[index].CurrentStatus = "pending"
-				if event.Type == string(team.EventTaskRemoved) {
-					rows[index].CurrentStatus = "removed"
-				}
-			}
+			invalidateHistoricalRows(rows, state.rows, event.Type == string(team.EventTaskRemoved))
 		}
 		if !team.IsTerminalEvent(event.Type) {
 			continue
@@ -302,6 +309,15 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 		row.OriginalPrompt, row.OriginalPromptEventID = prompt.content, prompt.eventID
 	}
 	return rows, slices.Sorted(maps.Keys(known)), nil
+}
+
+func invalidateHistoricalRows(rows []HistoricalResult, indices []int, removed bool) {
+	for _, index := range indices {
+		rows[index].Validity, rows[index].CurrentStatus = "invalidated", "pending"
+		if removed {
+			rows[index].CurrentStatus = "removed"
+		}
+	}
 }
 
 func historicalRunResponse(indexed IndexedEvent, branch, workspace, teamName string) (HistoricalResult, error) {

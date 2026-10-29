@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/execution"
 )
 
 func historicalGrantPreparationFixture(t *testing.T) (*Coordinator, *[]HistoricalTaskResult, *scriptedWorker) {
@@ -45,6 +46,69 @@ func historicalGrantPreparationFixture(t *testing.T) (*Coordinator, *[]Historica
 		return rows, nil
 	}))
 	return c, &rows, worker
+}
+
+func TestHistoricalResultPreparationBindsCanonicalCompatiblePolicy(t *testing.T) {
+	c := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 2)
+	delete(c.session.Agents, "codex-worker")
+	if err := c.session.SetWorkspaceScope(WorkspaceScope{Managed: true, ProjectID: "project", ContextScopeID: "project",
+		ControlRoot: c.session.Workspace, SubjectRoot: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	c.projectDir = c.session.Scope.SubjectRoot
+	var err error
+	c.executionPolicy, err = newExecutionPolicyState(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admitted := c.ExecutionPolicySnapshot()
+	changed := false
+	for i := range admitted.ExecutionWorlds {
+		world := &admitted.ExecutionWorlds[i]
+		if world.Backend == "codex" && len(world.InheritEnv) > 0 {
+			world.InheritEnv[0].Present, world.InheritEnv[0].ValueHash = true, strings.Repeat("d", 64)
+			changed = true
+		}
+	}
+	if !changed {
+		t.Fatal("fixture lacks the unused backend environment")
+	}
+	admitted.ConfigurationHash, err = executionPolicyConfigurationHash(admitted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewEventStore(c.session.Workspace, "source-run", "source-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.eventStore = store
+	c.SetEventJournal(eventStoreJournal{store: store})
+	data, err := json.Marshal(admitted, jsonv1.DefaultOptionsV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendPersisted(RunEvent{Type: string(EventExecutionPolicySnapshot), Actor: "coordinator", Payload: data}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveSessionTree(c.session.Workspace, NewSessionTree()); err != nil {
+		t.Fatal(err)
+	}
+	row := historicalGrantSourceFixture(t, c.session.Workspace, "1")
+	row.Team = c.session.Config.Name
+	c.SetHistoricalTaskReader(historicalTaskReaderFunc(func(context.Context, HistoricalTaskScope) ([]HistoricalTaskResult, error) {
+		return []HistoricalTaskResult{row}, nil
+	}))
+	prepared, err := c.PrepareHistoricalResultGrants(t.Context(), []string{"worker=" + row.ResultID})
+	if err != nil || prepared.policyFingerprint != admitted.ConfigurationHash || prepared.policyFingerprint == c.ExecutionPolicySnapshot().ConfigurationHash {
+		t.Fatalf("compatible reconstruction replaced canonical grant policy: %v", err)
+	}
+	if _, allowed := c.executionPolicy.backendPolicy(execution.ExecutionTarget{Backend: "codex", Model: "ungranted"}); allowed {
+		t.Fatal("historical compatibility enabled an unused backend")
+	}
+	c.maxConcurrent++
+	if _, err := c.PrepareHistoricalResultGrants(t.Context(), []string{"worker=" + row.ResultID}); err == nil {
+		t.Fatal("canonical grant policy permitted an active configuration change")
+	}
 }
 
 func historicalGrantSourceFixture(t *testing.T, workspace, id string) HistoricalTaskResult {

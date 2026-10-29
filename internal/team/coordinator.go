@@ -1416,11 +1416,21 @@ type coordinatorParams struct {
 	AutoSkillsMode          bool
 	OllamaWebTransport      http.RoundTripper // test-only seam; production always uses the default verified transport
 	ProviderBoundaryFactory agent.ProviderBoundaryFactory
+	DeferSemanticRetrieval  bool
 }
 
 // CoordinatorOption injects trusted construction dependencies. Options cannot
 // be supplied through authored team configuration or changed during a run.
 type CoordinatorOption func(*coordinatorParams) error
+
+// WithDeferredSemanticRetrieval keeps background model work behind request
+// admission. CLI callers use it while validating restored or new authorizations.
+func WithDeferredSemanticRetrieval() CoordinatorOption {
+	return func(params *coordinatorParams) error {
+		params.DeferSemanticRetrieval = true
+		return nil
+	}
+}
 
 func WithProviderBoundaryFactory(factory agent.ProviderBoundaryFactory) CoordinatorOption {
 	return func(params *coordinatorParams) error {
@@ -1725,7 +1735,7 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 	if err := c.loadAdoptedMemoryPolicy(context.Background()); err != nil {
 		return nil, fmt.Errorf("load adopted memory policy: %w", err)
 	}
-	if err := c.initSemanticRetrieval(repo, noNet); err != nil {
+	if err := c.initSemanticRetrieval(repo, noNet, params.DeferSemanticRetrieval); err != nil {
 		return nil, err
 	}
 	c.sharedMemorySvc = NewSharedMemoryService(repo)

@@ -116,8 +116,14 @@ func (c *Coordinator) prepareHistoricalResultContext(ctx context.Context, input 
 		return input, err
 	}
 	def, _, err := owner.resolveAgentName(input.Request.AgentName)
+	attempt := owner.taskAttempt(item.ID)
+	if occurrence, active := owner.activeTaskResultOccurrence(item.ID); active {
+		// Route fallback advances the dispatch attempt without incrementing
+		// DAG retry statistics. The runtime occurrence owns that identity.
+		attempt = occurrence.Attempt
+	}
 	if err != nil || input.Request.AgentRole != "worker" || strings.ToLower(strings.TrimSpace(def.Name)) != item.HistoricalResultBinding.Recipient ||
-		input.Request.Attempt != owner.taskAttempt(item.ID) || input.Request.ModelExecutionID == "" {
+		input.Request.Attempt != attempt || input.Request.ModelExecutionID == "" {
 		return input, fmt.Errorf("historical result request does not identify its admitted worker attempt")
 	}
 	if input.AgentDef == nil || !strings.EqualFold(strings.TrimSpace(input.AgentDef.Name), def.Name) ||

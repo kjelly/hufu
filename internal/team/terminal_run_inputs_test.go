@@ -2,8 +2,10 @@ package team
 
 import (
 	"bytes"
+	jsonv1 "encoding/json"
 	"encoding/json/v2"
 	"testing"
+	"time"
 )
 
 func TestTerminalRunInputsRequireCurrentSelection(t *testing.T) {
@@ -77,5 +79,16 @@ func TestTerminalInputOriginsAcceptLegacyEvents(t *testing.T) {
 		if err := validateTerminalInputOrigins([]RunEvent{{Type: "run_finished", Payload: payload}}); err != nil {
 			t.Fatalf("legacy terminal event rejected: %v", err)
 		}
+	}
+}
+
+func TestTerminalInputOriginsPreserveAcceptanceDurationEncoding(t *testing.T) {
+	payload, err := json.Marshal(RunFinishedEventPayload{Outcome: RunOutcomeCompleted,
+		Acceptance: &AcceptanceResult{VerificationEvidence: []*VerificationResult{{Command: "true", Duration: time.Second}}}}, jsonv1.DefaultOptionsV1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTerminalInputOrigins([]RunEvent{{Type: string(EventRunFinished), Payload: payload}}); err != nil {
+		t.Fatalf("canonical acceptance durations prevented branch replay: %v", err)
 	}
 }

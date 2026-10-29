@@ -137,7 +137,10 @@ func (c *Coordinator) validateHistoricalResultGrantConsumer(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	policy := c.ExecutionPolicySnapshot()
+	policy, err := c.historicalResultGrantPolicy(ctx, scope)
+	if err != nil {
+		return err
+	}
 	if scope.Workspace != payload.Workspace || scope.Team != payload.Team || scope.Branch != branch ||
 		policy == nil || policy.ConfigurationHash != payload.PolicyFingerprint {
 		return ErrHistoricalResultGrantDrift

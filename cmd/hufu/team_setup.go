@@ -323,7 +323,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		}
 	}
 
-	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, resolvedModelList, roleModels, resolvedMaxConcurrent, opts.verbose, opts.think, opts.direnv, allowedPaths, teamPathConsent, hookRegistry, opts.rbashMode, resolvedRestrictedPath, resolvedNoNet, resolvedForceMCP, forcedSkills, planMode, autoSkillsMode)
+	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, resolvedModelList, roleModels, resolvedMaxConcurrent, opts.verbose, opts.think, opts.direnv, allowedPaths, teamPathConsent, hookRegistry, opts.rbashMode, resolvedRestrictedPath, resolvedNoNet, resolvedForceMCP, forcedSkills, planMode, autoSkillsMode, team.WithDeferredSemanticRetrieval())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
