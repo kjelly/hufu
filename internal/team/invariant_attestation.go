@@ -198,7 +198,7 @@ func (c *Coordinator) invariantContextManifest(todo *TodoItem, attempt int, mode
 	if err != nil {
 		return nil, err
 	}
-	if matched.SchemaVersion != ContextManifestSchemaVersion && matched.SchemaVersion != ContextQueryManifestSchemaVersion && matched.SchemaVersion != DependencyResultViewManifestSchemaVersion {
+	if matched.SchemaVersion != ContextManifestSchemaVersion && matched.SchemaVersion != ContextQueryManifestSchemaVersion && matched.SchemaVersion != DependencyResultViewManifestSchemaVersion && matched.SchemaVersion != HistoricalResultManifestSchemaVersion {
 		return nil, fmt.Errorf("context manifest for task %q uses schema version %d; version %d is required for invariant attestation", todo.ID, matched.SchemaVersion, ContextManifestSchemaVersion)
 	}
 	if matched.Fingerprint == "" || ValidateContextQueryManifest(*matched) != nil {

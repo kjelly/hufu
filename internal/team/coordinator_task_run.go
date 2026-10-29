@@ -4455,6 +4455,15 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				pendingRecovery = ""
 			}
 			recoveryMu.Unlock()
+			historicalMessages, historicalProtected, historicalErr := protectHistoricalResultMessages(ctx, preparedMessages)
+			if historicalErr != nil {
+				return ctx, fantasy.PrepareStepResult{}, historicalErr
+			}
+			if len(historicalProtected) > 0 && contextManager == nil {
+				return ctx, fantasy.PrepareStepResult{}, fmt.Errorf("historical result request requires full provider budget admission")
+			}
+			preparedMessages = historicalMessages
+			runtimeRequiredMessages = append(runtimeRequiredMessages, historicalProtected...)
 			var preflightSystem string
 			var preflightTools []fantasy.AgentTool
 			preflightApplied := false
@@ -5097,6 +5106,9 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		c.recordReliabilityUsage(todoID, attempt, int(receiptResponseUsage))
 	}
 	runStream := func(call fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+		if err := validateHistoricalResultOutbound(ctx, call.Prompt, call.Messages); err != nil {
+			return nil, err
+		}
 		tokenStateMu.Lock()
 		start := len(tokenSteps)
 		activeTokenStep = nil

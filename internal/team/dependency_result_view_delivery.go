@@ -106,6 +106,9 @@ func (c *Coordinator) validateSelectedDependencyDelivery(todoID string, attempt 
 }
 
 func (c *Coordinator) validateSelectedRepairContext(ctx context.Context, item *TodoItem, manifest *ContextInjectionManifest) error {
+	if err := c.validateHistoricalResultRepairContext(ctx, item, manifest); err != nil {
+		return err
+	}
 	owner := c.dependencyViewOwner(item.ID)
 	expected, err := owner.expectedDependencyResultView(ctx, item)
 	if err != nil || expected == nil {

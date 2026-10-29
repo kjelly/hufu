@@ -245,6 +245,9 @@ func (b *AgentExecutionBackend) RunAttempt(ctx context.Context, request AttemptR
 	request.ModelID = request.ExecutionTarget.Model
 	request.Provider = b.name
 	request.ProviderBinding = providerBindingFromBackendBinding(request.BackendBinding)
+	if err := validateHistoricalResultOutbound(ctx, request.Prompt, request.History); err != nil {
+		return AttemptResult{}, err
+	}
 	reservation, err := b.costBoundary.ReserveAgentExecution(ctx, request)
 	if err != nil {
 		return AttemptResult{}, err

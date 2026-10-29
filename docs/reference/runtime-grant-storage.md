@@ -112,9 +112,41 @@ retain the same binding, and cloned task projections detach its ResultID slice.
 Nil bindings preserve existing occurrence digest bytes. Model task inputs
 explicitly reject the binding field; `TodoSpec` does not serialize it as input.
 
-These checks authenticate occurrence metadata. Required source-content
-restoration, full model-context delivery, dispatch manifests and CLI activation
-remain separate WP3 implementation work; `--inherit-result` remains unavailable.
+CLI activation remains separate WP3 implementation work;
+`--inherit-result` remains unavailable.
+
+## Required worker context and delivery
+
+For an admitted worker occurrence, the compiler restores complete redacted
+presentations from the consumer branch's checked lineage and verifies all
+frozen source, payload, presentation and policy hashes. An ordinary fork may
+use its visible ancestor grant, while source validity is checked on the child.
+Changed, missing or invalidated sources fail closed. Historical context is
+required, noncompressible reference data; exceeding the context budget fails
+before dispatch instead of truncating or dropping it.
+
+Historical items use context-manifest schema 5, composed with existing selected
+dependency and query attribution. Each item records its task binding, actual
+worker/request/attempt/model-execution identity, source hashes, complete byte
+count, inclusion reason and token estimate. Schemas 1–4 cannot carry historical
+attribution; manifests without historical items retain their existing formats.
+Summaries contain provenance only, without source bodies.
+
+A prepared manifest does not prove delivery. The existing canonical manifest
+event records runtime dispatch immediately before invoking the worker or
+execution backend; it does not represent acknowledgement by a remote server.
+Completion and result-only repair require the original canonical dispatch
+proof. A checkpoint-only claim cannot replace it. Native actions and declared
+tool steps do not manufacture model-call evidence.
+
+Native provider steps revalidate sources and protect complete presentations
+through full-request admission and lawful history compaction, including
+continuations. External execution requests must carry the complete authorized
+presentations in their prompt or history. Auxiliary requests receive no
+automatic historical-context injection. The result collector's input projection
+withholds runtime-injected historical blocks while durable original inputs,
+transcripts, manifests and receipts remain intact. Worker-authored reports and
+observations retain their existing evidence semantics and confer no grants.
 
 ## Upgrade and downgrade
 

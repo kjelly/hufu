@@ -16,20 +16,21 @@ import (
 const ContextManifestSchemaVersion = 2
 
 type ContextManifestItem struct {
-	ID                   string                           `json:"id"`
-	Kind                 string                           `json:"kind"`
-	Source               string                           `json:"source,omitempty"`
-	Included             bool                             `json:"included"`
-	Reason               ContextDecisionReason            `json:"reason"`
-	Tokens               int                              `json:"tokens"`
-	Compressed           bool                             `json:"compressed,omitempty"`
-	BaseScore            float64                          `json:"base_score,omitempty"`
-	FinalScore           float64                          `json:"final_score,omitempty"`
-	DisclosureLevel      string                           `json:"disclosure_level,omitempty"`
-	ContentHash          string                           `json:"content_hash,omitempty"`
-	InvariantSeverity    InvariantSeverity                `json:"invariant_severity,omitempty"`
-	KnowledgeState       KnowledgeState                   `json:"knowledge_state,omitempty"`
-	DependencyResultView *DependencyResultViewAttribution `json:"dependency_result_view,omitempty"`
+	ID                   string                              `json:"id"`
+	Kind                 string                              `json:"kind"`
+	Source               string                              `json:"source,omitempty"`
+	Included             bool                                `json:"included"`
+	Reason               ContextDecisionReason               `json:"reason"`
+	Tokens               int                                 `json:"tokens"`
+	Compressed           bool                                `json:"compressed,omitempty"`
+	BaseScore            float64                             `json:"base_score,omitempty"`
+	FinalScore           float64                             `json:"final_score,omitempty"`
+	DisclosureLevel      string                              `json:"disclosure_level,omitempty"`
+	ContentHash          string                              `json:"content_hash,omitempty"`
+	InvariantSeverity    InvariantSeverity                   `json:"invariant_severity,omitempty"`
+	KnowledgeState       KnowledgeState                      `json:"knowledge_state,omitempty"`
+	DependencyResultView *DependencyResultViewAttribution    `json:"dependency_result_view,omitempty"`
+	HistoricalResult     *HistoricalResultContextAttribution `json:"historical_result,omitempty"`
 }
 
 type ContextInjectionManifest struct {
@@ -93,6 +94,9 @@ func BuildContextInjectionManifest(request ContextRequest, compiled CompiledCont
 		manifestItem := ContextManifestItem{ID: id, Kind: item.Kind, Source: item.Source, Included: included, Reason: reason, Tokens: item.TokenCount, Compressed: item.Compressed, BaseScore: decision.BaseScore, FinalScore: decision.FinalScore, DisclosureLevel: contextDisclosureLevel(item.Kind)}
 		if item.Kind == "dependency_result" || item.Kind == "previous_response" {
 			manifestItem.ContentHash = hashContentKey(item.Content)
+		}
+		if err := attachHistoricalResultManifestItem(&manifestItem, item, included); err != nil {
+			return err
 		}
 		if err := attachDependencyResultViewManifestItem(&manifestItem, item, included); err != nil {
 			return err
@@ -224,17 +228,18 @@ func contextManifestFingerprint(manifest ContextInjectionManifest) string {
 }
 
 type ContextManifestSummary struct {
-	Requests              int                          `json:"requests"`
-	ModelCalls            int                          `json:"model_calls"`
-	Fallbacks             int                          `json:"fallbacks"`
-	Included              int                          `json:"included"`
-	Omitted               int                          `json:"omitted"`
-	IncludedTokens        int                          `json:"included_tokens"`
-	OmittedTokens         int                          `json:"omitted_tokens"`
-	OmitReasons           map[string]int               `json:"omit_reasons,omitempty"`
-	Purposes              map[string]int               `json:"purposes,omitempty"`
-	Prepared              int                          `json:"prepared,omitzero"`
-	DependencyResultViews []DependencyResultViewReport `json:"dependency_result_views,omitempty"`
+	Requests              int                              `json:"requests"`
+	ModelCalls            int                              `json:"model_calls"`
+	Fallbacks             int                              `json:"fallbacks"`
+	Included              int                              `json:"included"`
+	Omitted               int                              `json:"omitted"`
+	IncludedTokens        int                              `json:"included_tokens"`
+	OmittedTokens         int                              `json:"omitted_tokens"`
+	OmitReasons           map[string]int                   `json:"omit_reasons,omitempty"`
+	Purposes              map[string]int                   `json:"purposes,omitempty"`
+	Prepared              int                              `json:"prepared,omitzero"`
+	DependencyResultViews []DependencyResultViewReport     `json:"dependency_result_views,omitempty"`
+	HistoricalResults     []HistoricalResultDeliveryReport `json:"historical_results,omitempty"`
 }
 
 func SummarizeContextManifests(manifests []ContextInjectionManifest) ContextManifestSummary {
@@ -251,6 +256,9 @@ func SummarizeContextManifests(manifests []ContextInjectionManifest) ContextMani
 			summary.Purposes[manifest.Purpose]++
 		}
 		for _, item := range manifest.Items {
+			if projection := historicalResultDeliveryReport(manifest, item); projection != nil {
+				summary.HistoricalResults = append(summary.HistoricalResults, *projection)
+			}
 			if projection := dependencyResultViewReport(manifest, item); projection != nil {
 				summary.DependencyResultViews = append(summary.DependencyResultViews, *projection)
 			}
@@ -300,6 +308,7 @@ func cloneContextInjectionManifest(manifest *ContextInjectionManifest) *ContextI
 	copyManifest.Items = append([]ContextManifestItem(nil), manifest.Items...)
 	for i := range copyManifest.Items {
 		copyManifest.Items[i].DependencyResultView = manifest.Items[i].DependencyResultView.Clone()
+		copyManifest.Items[i].HistoricalResult = manifest.Items[i].HistoricalResult.Clone()
 	}
 	copyManifest.Semantic = cloneSemanticRetrievalIdentity(manifest.Semantic)
 	if manifest.Query != nil {

@@ -77,7 +77,8 @@ type ContextItem struct {
 	ConflictIDs []string
 	// DependencyResultView is runtime-authenticated presentation attribution;
 	// canonical dependency results remain separate compiler inputs.
-	DependencyResultView *DependencyResultViewAttribution `json:"dependency_result_view,omitempty"`
+	DependencyResultView *DependencyResultViewAttribution    `json:"dependency_result_view,omitempty"`
+	HistoricalResult     *HistoricalResultContextAttribution `json:"historical_result,omitempty"`
 }
 
 type CoordinatorContextInput struct {
@@ -132,7 +133,8 @@ type WorkerContextInput struct {
 	ContextFiles         map[string]string // filename -> content
 	ConcurrentTasks      string
 	DependencyResults    []TaskResult
-	DependencyView       *dependencyResultView `json:"-"`
+	DependencyView       *dependencyResultView    `json:"-"`
+	HistoricalResults    *historicalResultContext `json:"-"`
 	ModelContext         ModelContextSpec
 	SystemTokens         int
 	ToolsTokens          int
@@ -903,6 +905,9 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 	if err := validateRequiredEvidenceContext(input, compiled); err != nil {
 		return CompiledContext{}, err
 	}
+	if err := validateHistoricalResultContext(input, compiled); err != nil {
+		return CompiledContext{}, err
+	}
 	return compiled, nil
 }
 
@@ -959,7 +964,7 @@ func workerProjectAndDependencyItems(input WorkerContextInput) []ContextItem {
 	if depsFormatted != "" {
 		items = append(items, ContextItem{ID: "dependency_results", Kind: "dependency_result", Content: depsFormatted, Priority: PriorityDependencyTaskResults, DedupKey: hashContentKey(depsFormatted), Required: true, DependencyResultView: attribution})
 	}
-	return items
+	return append(items, historicalResultCompilerItems(input.HistoricalResults)...)
 }
 
 func appendWorkerHistoricalContext(ctx context.Context, input WorkerContextInput, items []ContextItem) []ContextItem {

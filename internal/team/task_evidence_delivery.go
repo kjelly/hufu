@@ -150,6 +150,9 @@ func validateRequiredEvidenceContext(input WorkerContextInput, compiled Compiled
 // The canonical manifest is the durable proof of delivery, also after replay.
 // Old manifests without a dependency hash cannot prove a complete audit.
 func (c *Coordinator) validateRequiredEvidenceDelivery(todoID string, attempt int, runIDs ...string) error {
+	if err := c.validateHistoricalResultDelivery(todoID, attempt, runIDs...); err != nil {
+		return err
+	}
 	if err := c.validateSelectedDependencyDelivery(todoID, attempt, runIDs...); err != nil {
 		return err
 	}

@@ -59,6 +59,10 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 			return "", nil, err
 		}
 	}
+	workInput, err := c.historicalResultCollectionInput(ctx, checkpoint.TaskID, work.Input)
+	if err != nil {
+		return "", nil, err
+	}
 	data, err := json.Marshal(struct {
 		Schema           map[string]any        `json:"claims_schema"`
 		Assertions       []TaskResultAssertion `json:"result_assertions,omitempty"`
@@ -69,7 +73,7 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 		Diagnostic       string                `json:"format_diagnostic,omitempty"`
 	}{map[string]any{"type": "object", "properties": info.Parameters, "required": info.Required, "additionalProperties": false},
 		localResultSubmissionContract(c, checkpoint.TaskID).SubmissionTaskResultAssertions,
-		string(work.Input), string(work.Report), string(transcript), string(previous), schemaRepairDiagnostic(diagnostic)}, json.Deterministic(true))
+		workInput, string(work.Report), string(transcript), string(previous), schemaRepairDiagnostic(diagnostic)}, json.Deterministic(true))
 	if err != nil {
 		return "", nil, err
 	}

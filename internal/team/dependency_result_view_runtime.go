@@ -18,11 +18,18 @@ func (c *Coordinator) compileWorkerContext(ctx context.Context, input WorkerCont
 	if err != nil {
 		return CompiledContext{}, err
 	}
+	prepared, err = c.prepareHistoricalResultContext(ctx, prepared)
+	if err != nil {
+		return CompiledContext{}, err
+	}
 	compiled, err := c.ContextCompiler().CompileWorkerContext(ctx, prepared)
 	if err != nil {
 		return compiled, err
 	}
 	if err := validateRequiredEvidenceContext(prepared, compiled); err != nil {
+		return CompiledContext{}, err
+	}
+	if err := validateHistoricalResultContext(prepared, compiled); err != nil {
 		return CompiledContext{}, err
 	}
 	return compiled, nil

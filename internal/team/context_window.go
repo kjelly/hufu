@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 
@@ -446,6 +447,15 @@ func splitRequestForCompaction(request ContextWindowRequest) (prior, fixed []fan
 		}
 	}
 	if request.Prompt != "" {
+		// The current prompt is already reattached separately. A required
+		// context block may protect that same message; retain only one copy.
+		protected = slices.DeleteFunc(protected, func(message fantasy.Message) bool {
+			if message.Role != fantasy.MessageRoleUser || len(message.Content) != 1 {
+				return false
+			}
+			part, ok := fantasy.AsMessagePart[fantasy.TextPart](message.Content[0])
+			return ok && part.Text == request.Prompt
+		})
 		for i := len(messages) - 1; i >= 0; i-- {
 			if messages[i].Role != fantasy.MessageRoleUser || len(messages[i].Content) != 1 {
 				continue

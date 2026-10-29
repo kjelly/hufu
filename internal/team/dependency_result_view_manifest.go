@@ -12,7 +12,11 @@ import (
 const DependencyResultViewManifestSchemaVersion = 4
 
 func finalizeContextManifestAttribution(manifest ContextInjectionManifest, query *ContextQueryAttribution) (ContextInjectionManifest, error) {
-	if err := finalizeDependencyResultViewManifest(&manifest); err != nil {
+	if hasHistoricalResultManifestItems(manifest) {
+		if err := finalizeHistoricalResultManifest(&manifest); err != nil {
+			return ContextInjectionManifest{}, err
+		}
+	} else if err := finalizeDependencyResultViewManifest(&manifest); err != nil {
 		return ContextInjectionManifest{}, err
 	}
 	if query != nil {
@@ -115,24 +119,14 @@ func dependencyResultViewManifestFingerprint(manifest ContextInjectionManifest) 
 }
 
 func validateDependencyResultViewManifest(manifest ContextInjectionManifest) error {
+	if manifest.SchemaVersion == HistoricalResultManifestSchemaVersion {
+		return validateHistoricalResultManifest(manifest)
+	}
 	if manifest.SchemaVersion != DependencyResultViewManifestSchemaVersion {
 		return fmt.Errorf("selected dependency manifest uses an unsupported schema")
 	}
-	count := 0
-	for _, item := range manifest.Items {
-		if item.Kind != "dependency_result" && item.DependencyResultView == nil {
-			continue
-		}
-		if item.ID != "dependency_results" || item.Kind != "dependency_result" || !item.Included || item.Compressed || item.Reason != ContextIncludedRequired || !validFullContentHash(item.ContentHash) {
-			return fmt.Errorf("selected dependency manifest does not prove complete presentation")
-		}
-		if err := validateDependencyResultViewAttribution(item.DependencyResultView); err != nil {
-			return err
-		}
-		count++
-	}
-	if count != 1 {
-		return fmt.Errorf("selected dependency manifest requires one dependency context item")
+	if err := validateDependencyResultViewManifestItems(manifest); err != nil {
+		return err
 	}
 	if manifest.Query != nil {
 		if err := ValidateContextQueryAttribution(*manifest.Query); err != nil {
@@ -150,6 +144,26 @@ func rejectLegacyDependencyResultView(manifest ContextInjectionManifest) error {
 		if item.DependencyResultView != nil {
 			return fmt.Errorf("legacy context manifest cannot carry selected dependency attribution")
 		}
+	}
+	return nil
+}
+
+func validateDependencyResultViewManifestItems(manifest ContextInjectionManifest) error {
+	count := 0
+	for _, item := range manifest.Items {
+		if item.Kind != "dependency_result" && item.DependencyResultView == nil {
+			continue
+		}
+		if item.ID != "dependency_results" || item.Kind != "dependency_result" || !item.Included || item.Compressed || item.Reason != ContextIncludedRequired || !validFullContentHash(item.ContentHash) {
+			return fmt.Errorf("selected dependency manifest does not prove complete presentation")
+		}
+		if err := validateDependencyResultViewAttribution(item.DependencyResultView); err != nil {
+			return err
+		}
+		count++
+	}
+	if count != 1 {
+		return fmt.Errorf("selected dependency manifest requires one dependency context item")
 	}
 	return nil
 }

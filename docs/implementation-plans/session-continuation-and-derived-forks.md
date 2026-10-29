@@ -529,3 +529,67 @@ policy／index／checkpoint 拒絕與 runtime-only model ingress。
 ELF，記錄的自有 Go work 目錄均已清除。私有 scratch 約 152 MiB，含最終相容性測試
 所需的單一約 126 MiB baseline binary：`/tmp/codex-task.OVwpKj/baseline-hufu`。
 依賴、工具鏈與 configured cache／GOTMPDIR 路徑保持原設定。
+
+## 22. WP3 required historical context 與派送證據
+
+在已授權的 occurrence 上，由既有 ContextCompiler 恢復完整 redacted historical
+presentation。先驗證 consumer lineage、task_created binding、原 grant/index 與
+frozen policy，再在 consumer branch 重讀來源並比對 source／payload／presentation
+hash。一般 fork 保留 ancestor grant identity，但不能只用 ancestor 的有效性替代
+child branch 的判斷。Missing、invalidated 或任何內容漂移均拒絕派送。
+
+歷史項目是 required、不可壓縮的 reference data；compiler omission、摘要替代、
+recipient／attempt 錯置與 attribution override 都拒絕。超過可用 context budget 時
+不截斷。Native provider 每步與 continuation 重驗來源，將完整 presentation 列為
+full-request admission 的 protected messages；合法 history compaction 保留它，
+並修正同一 current prompt 同時受保護時重複附加的情況。External backend dispatch
+也驗證 prompt／history 必須攜帶完整內容。
+
+沿用既有 manifest/event authority，歷史項目使用 schema 5，與 selected dependency
+view／query attribution 組合。記錄 task、recipient、attempt、request、model execution、
+source hashes、完整 bytes、tokens、included/reason。舊 schema 1–4 不得夾帶新欄位；
+沒有 historical item 的舊格式與 fingerprint 保持原行為。報告摘要只含 metadata。
+
+Prepared 與實際 runtime dispatch 分開；完成與 result-only repair 必須驗證原始
+canonical dispatched manifest，checkpoint 自稱已呼叫不足以成立。這是 runtime
+呼叫邊界的證據，不宣稱遠端 server acknowledgment。Native action／declared tool
+steps 不捏造 model-call 證據。Auxiliary model 不自動注入歷史本文。
+
+端到端 runtime collector 測試發現原 `work_input` 會攜帶 worker 的完整 compiled
+prompt。已在 collector 的輸入投影排除 runtime 注入的完整 historical blocks；原始
+work input、transcript、receipt 與 manifest 仍完整保存。Worker 自己產出的 report／
+observations 仍沿用既有 evidence 語意，不因此授予 source 存取權限。Tool transport
+與 runtime collection 均經正常 acceptance path；replay 比對原 binding／manifests。
+
+本階段不開放 CLI flag。新 request admission／cycle activation、resume CLI 整合、
+unused recipient 的 not_dispatched 呈現、fallback／extra-model 完整入口驗收與最終
+CLI／舊 binary compatibility matrix 仍屬後續 WP3／WP5 整合工作。
+
+定向測試 `Test(HistoricalResult|DependencyResultView|ContextWindowManager)` 通過
+（25.886s）；完整 lint／test／race／vet 與資源清理結果於本節末記錄。
+
+第一輪完整測試發現無 grant 任務的 metadata 查詢提早回傳 cancellation，改變了既有
+retry loop 的取消投影。僅在沒有 task binding 的負向 metadata 檢查使用
+`context.WithoutCancel`；實際 source-content、worker 與 provider 呼叫仍保留取消。
+另確認 collection replay 的兩筆 manifest 內容完全相同、只有未受契約保證的陣列順序
+不同；測試改按 request identity 排序後比對完整 canonical bytes，而非依賴 map 迭代
+順序。取消／collection 定向回歸連續 5 次通過（19.788s），修正後重跑必要 gates。
+
+最終 working-tree 完整測試通過：CLI 138.096s、improver 155.774s、team 695.302s；
+inspect 與其他 packages 通過、重用有效結果或無測試。此證據包含保留的其他本地
+修改，不稱為 immutable commit snapshot 的全測證據。修正後 `mise run lint` 通過，
+0 issues；最終驗證期間固定同一組 Go／工具設定內容。
+
+定向 `-race` 通過：team 221.745s、inspect 5.718s、CLI 15.579s。範圍包含
+historical grants／delivery、context window／query／manifest、result collection／
+repair、invariant、取消回歸、occurrence／admission、dependency view、TODO、
+branch／cycle 與 canonical reader。
+
+`mise run vet`、`bin/check-docs`、`git diff --check` 通過。最終固定的 2,595 個
+Go／工具設定檔內容保持一致。清除可追溯的過期 project cache outputs 與兩輪共 96 個
+已退出的私有測試目錄，合計 2.01 GiB。保留的 current normal／race project
+exports 約 809 MiB，低於 2 GiB task build-artifact 預算；沒有新增 cache
+ELF，記錄的自有 Go work 目錄均已清除。私有 scratch 約
+152 MiB，含最終 compatibility audit 所需的單一約 126 MiB baseline binary：
+`/tmp/codex-task.OVwpKj/baseline-hufu`。既有依賴、工具鏈及 configured caches／
+GOTMPDIR 保留原設定。

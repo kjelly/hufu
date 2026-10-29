@@ -21,7 +21,7 @@ func primaryDependencyViewRequest(manifest ContextInjectionManifest) bool {
 }
 
 func (c *Coordinator) bindDependencyViewCall(ctx context.Context, manifest *ContextInjectionManifest) context.Context {
-	if manifest.SchemaVersion != DependencyResultViewManifestSchemaVersion || !primaryDependencyViewRequest(*manifest) {
+	if (manifest.SchemaVersion != DependencyResultViewManifestSchemaVersion && manifest.SchemaVersion != HistoricalResultManifestSchemaVersion) || !primaryDependencyViewRequest(*manifest) {
 		if ctx.Value(dependencyViewCallKey{}) != nil {
 			return context.WithValue(ctx, dependencyViewCallKey{}, (*dependencyViewCallState)(nil))
 		}
@@ -49,11 +49,18 @@ func markDependencyViewModelCall(ctx context.Context) (context.Context, error) {
 		// must retain its own invocation identity and cannot mark its parent.
 		return ctx, nil
 	}
+	if err := state.coordinator.validateHistoricalResultCall(ctx, *state.manifest); err != nil {
+		return ctx, err
+	}
 	if !state.manifest.ModelCalled {
 		before := *cloneContextInjectionManifest(state.manifest)
 		state.manifest.ModelCalled = true
 		state.manifest.Outcome = "model_call"
-		state.manifest.Fingerprint = dependencyResultViewManifestFingerprint(*state.manifest)
+		if state.manifest.SchemaVersion == HistoricalResultManifestSchemaVersion {
+			state.manifest.Fingerprint = historicalResultManifestFingerprint(*state.manifest)
+		} else {
+			state.manifest.Fingerprint = dependencyResultViewManifestFingerprint(*state.manifest)
+		}
 		if err := state.coordinator.persistContextManifest(state.manifest, ctx); err != nil {
 			*state.manifest = before
 			// Persistence updates the Todo projection before its durable sinks.
