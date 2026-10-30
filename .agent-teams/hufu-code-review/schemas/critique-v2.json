@@ -688,6 +688,7 @@
     }
   ],
   "x-hufu-evidence-keys": {
+    "runtime_owned_files_read": true,
     "pointers": [
       "/record/decisions/*/evidence/*"
     ]

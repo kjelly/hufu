@@ -34,8 +34,12 @@ type artifactKeysFixture struct {
 }
 
 func newArtifactKeysFixture(t *testing.T) *artifactKeysFixture {
+	return artifactKeysFixtureForSchema(t, artifactKeysTestSchema)
+}
+
+func artifactKeysFixtureForSchema(t *testing.T, schema string) *artifactKeysFixture {
 	t.Helper()
-	compiled, err := CompileResultContractDocument("keys.json", []byte(artifactKeysTestSchema))
+	compiled, err := CompileResultContractDocument("keys.json", []byte(schema))
 	if err != nil {
 		t.Fatal(err)
 	}

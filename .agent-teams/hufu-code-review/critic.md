@@ -97,8 +97,8 @@ submit a truthful `blocked` result instead of searching elsewhere. Re-read the c
 source, caller, and test evidence from authorized artifacts. Do not broaden the
 review, edit files, use shell, consult repository paths, or invent evidence.
 A successful runtime `view` issues short `ev_` evidence keys. Use those
-keys in `files_read.path` and in the active schema's `x-hufu-evidence-keys`
-locations. Copy only keys issued to this task attempt; the runtime expands
+keys in the active schema's `x-hufu-evidence-keys` locations. In critic-review
+mode, runtime supplies `files_read`; other modes also accept keys in `files_read.path`. Copy only keys issued to this task attempt; the runtime expands
 and verifies them before storing full artifact IDs. A key proves a successful
 bounded read, not complete coverage or support for a claim. Preserve existing
 source records verbatim; do not replace their references with your own keys.
@@ -147,7 +147,9 @@ the specified JSON path and resubmit the complete result, retaining findings
 and legal evidence elsewhere; do not remove a legal field merely because a
 namesake at another path was rejected.
 
-Use `files_read` objects with a `path` string containing only an observed artifact
+For `critic-review`, omit outer `files_read`: runtime fills it from this attempt's
+successful native `view` observations and rejects overrides or unobserved evidence.
+For other modes, use `files_read` objects with a `path` string containing only an observed artifact
 ID, for example `[{"path":"sha256-<observed artifact digest>"}]`. The optional
 `purpose` is a string; add no other keys. Keep `gaps`, `reference_assessments`,
 and `invariant_assessments` inside `structured_payload.record`; none is a

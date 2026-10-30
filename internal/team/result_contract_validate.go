@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -53,6 +52,19 @@ type ResultPayload struct {
 	CollectionBindings []ResultCollectionBinding `json:"collection_bindings,omitempty"`
 }
 
+// Keep the canonical validator's cause without exposing its unbounded error
+// text. Portable provider schemas are guidance, not failure classifiers.
+type resultPayloadSchemaError struct {
+	contract string
+	cause    error
+}
+
+func (e *resultPayloadSchemaError) Error() string {
+	return fmt.Sprintf("%s: structured_payload does not satisfy result contract %q:\n%s", structuredPayloadInvalidCode, e.contract, formatResultPayloadValidationError(e.cause))
+}
+
+func (e *resultPayloadSchemaError) Unwrap() error { return e.cause }
+
 func (p *ResultPayload) clone() *ResultPayload {
 	if p == nil {
 		return nil
@@ -96,7 +108,7 @@ func validateStructuredResultPayload(compiled *CompiledResultContract, ref Resul
 		value = canonicalResultScalars(value, compiled.schema, 0)
 	}
 	if err := compiled.schema.Validate(value); err != nil {
-		return nil, fmt.Errorf("%s: structured_payload does not satisfy result contract %q:\n%s", structuredPayloadInvalidCode, ref.ID, formatResultPayloadValidationError(err))
+		return nil, &resultPayloadSchemaError{contract: ref.ID, cause: err}
 	}
 	var records []taskTranscriptRecord
 	if len(observations) > 0 {
@@ -313,7 +325,7 @@ func (c *Coordinator) validateStructuredPayloadClaims(todoID string, raw json.Ra
 	if err == nil {
 		payload, err = validateStructuredResultPayload(compiled, *ref, assembled, observations...)
 		if err != nil {
-			repairable = collectionDecisionSchemaFailure(compiled, assembled, plans)
+			repairable = collectionModelSchemaFailure(compiled, plans, err)
 		}
 	}
 	if err == nil {
@@ -449,7 +461,9 @@ func resultContractPromptSection(ref *ResultContractRef, compiled *CompiledResul
 		fmt.Fprintf(b, " Include %s that satisfies the schema below when you can.\n", field)
 	}
 	b.WriteString("Do not put credentials, authentication tokens, or secret API keys in the payload; a payload containing them is rejected.\n")
-	if compiled != nil && compiled.evidenceKeys != nil && !external {
+	if runtimeOwnsFilesRead(compiled) {
+		b.WriteString("The runtime supplies outer files_read from successful native view observations in this work attempt. Omit files_read entirely, even when empty or null. Evidence references at the declared x-hufu-evidence-keys paths must name artifacts actually observed by this task, not merely authorized dependencies. This mode requires the local native runtime.\n")
+	} else if compiled != nil && compiled.evidenceKeys != nil && !external {
 		b.WriteString("Successful runtime view calls issue short ev_ evidence keys. Use these keys only in files_read.path (or string entries) and the x-hufu-evidence-keys pointers below. The runtime resolves them to full artifact IDs before all canonical validation and hashing. Keys are task/attempt/branch/model-execution scoped; never invent or borrow keys. They attest a successful bounded read, not full artifact coverage or support for a semantic claim.\n")
 	}
 	if compiled != nil && len(compiled.fixedCollections) > 0 {
@@ -511,6 +525,9 @@ func (c *Coordinator) attemptResultContractSchema(task TaskDef) *CompiledResultC
 // canonicalExternalStructuredPayload applies the local submit_result payload
 // rules to an external provider's proposal, through the same validator.
 func canonicalExternalStructuredPayload(request AttemptRequest, proposal *WorkerResultProposal, filesRead []FileRef) (*ResultPayload, error) {
+	if runtimeOwnsFilesRead(request.resultContractSchema) {
+		return nil, fmt.Errorf("runtime-owned files_read requires native observations from the local runtime")
+	}
 	if hasResultDecisions(request.resultContractSchema) {
 		return nil, fmt.Errorf("bound decisions require the local runtime")
 	}
@@ -584,21 +601,40 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 	return payload, nil
 }
 
-// collectionDecisionSchemaFailure identifies canonical schema errors confined
-// to model-authored fields of bound decision rows. Trusted source, identity,
-// and runtime-owned fields must never be repaired by another model turn.
-func collectionDecisionSchemaFailure(compiled *CompiledResultContract, assembled []byte, plans []resultFixedCollectionPlan) bool {
-	if compiled == nil || len(plans) == 0 {
+// collectionModelSchemaFailure runs only after source assembly and independent
+// provenance validation. Canonical JSON Schema errors in model-owned fields
+// are repairable even when portability projection omitted their constraints.
+// Runtime-owned values and parent-level constraints involving them stay blocked.
+func collectionModelSchemaFailure(compiled *CompiledResultContract, plans []resultFixedCollectionPlan, err error) bool {
+	failure, ok := errors.AsType[*resultPayloadSchemaError](err)
+	if !ok || compiled == nil {
 		return false
 	}
-	value, err := decodeUniqueJSON(assembled)
-	if err != nil {
-		return false
-	}
-	value = canonicalResultScalars(value, compiled.schema, 0)
-	validation, ok := errors.AsType[*jsonschema.ValidationError](compiled.schema.Validate(value))
+	validation, ok := errors.AsType[*jsonschema.ValidationError](failure.cause)
 	if !ok {
 		return false
+	}
+	var protected []string
+	for _, input := range compiled.runtimeInputs {
+		protected = append(protected, input.Target)
+	}
+	if compiled.evidenceInputs.runtimeOwned() {
+		protected = append(protected, compiled.evidenceInputs.ItemsPointer)
+	}
+	for _, plan := range plans {
+		fields := plan.spec.fixedFields()
+		fields["key"] = true
+		for _, group := range plan.spec.DecisionGroups {
+			for _, field := range group.Outputs {
+				fields[field] = true
+			}
+		}
+		for index := range plan.rows {
+			row := plan.spec.ItemsPointer + "/" + strconv.Itoa(index)
+			for field := range fields {
+				protected = append(protected, row+"/"+escapeJSONPointerToken(field))
+			}
+		}
 	}
 	var visit func(*jsonschema.ValidationError) bool
 	visit = func(node *jsonschema.ValidationError) bool {
@@ -610,25 +646,16 @@ func collectionDecisionSchemaFailure(compiled *CompiledResultContract, assembled
 			}
 			return true
 		}
-		for _, plan := range plans {
-			if len(plan.spec.DecisionGroups) == 0 {
-				continue
-			}
-			prefix := fixedCollectionPointerTokens(plan.spec.ItemsPointer)
-			location := node.InstanceLocation
-			if len(location) < len(prefix)+2 || !slices.Equal(location[:len(prefix)], prefix) {
-				continue
-			}
-			index, err := strconv.Atoi(location[len(prefix)])
-			if err != nil || index < 0 || index >= len(plan.rows) {
-				continue
-			}
-			properties, _ := plan.spec.decisionSchema["properties"].(map[string]any)
-			if _, exists := properties[location[len(prefix)+1]]; exists {
-				return true
+		pointer := ""
+		for _, token := range node.InstanceLocation {
+			pointer += "/" + escapeJSONPointerToken(token)
+		}
+		for _, owned := range protected {
+			if resultPointersOverlap(pointer, owned) {
+				return false
 			}
 		}
-		return false
+		return true
 	}
 	return visit(validation)
 }

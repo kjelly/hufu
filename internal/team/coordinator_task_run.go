@@ -5533,7 +5533,7 @@ func (c *Coordinator) resultProtocolInstructions(task TaskDef, granted map[strin
 			}
 		}
 	}
-	instructions := resultProtocolInstructionsForSubmission(task, granted, backendKind, fields)
+	instructions := resultProtocolInstructionsForSubmission(task, granted, backendKind, fields, runtimeOwnsFilesRead(compiled))
 	if instructions == "" || task.ResultContract == nil {
 		return instructions
 	}
@@ -5541,10 +5541,10 @@ func (c *Coordinator) resultProtocolInstructions(task TaskDef, granted map[strin
 }
 
 func resultProtocolInstructionsForBackendKind(task TaskDef, granted map[string]bool, backendKind execution.BackendKind) string {
-	return resultProtocolInstructionsForSubmission(task, granted, backendKind, nil)
+	return resultProtocolInstructionsForSubmission(task, granted, backendKind, nil, false)
 }
 
-func resultProtocolInstructionsForSubmission(task TaskDef, granted map[string]bool, backendKind execution.BackendKind, submissionFields []string) string {
+func resultProtocolInstructionsForSubmission(task TaskDef, granted map[string]bool, backendKind execution.BackendKind, submissionFields []string, runtimeOwnedReads bool) string {
 	if !task.Execution.RequiresResult {
 		return ""
 	}
@@ -5569,6 +5569,7 @@ func resultProtocolInstructionsForSubmission(task TaskDef, granted map[string]bo
 		b.WriteString("- Put domain findings only in structured_payload. Use only the fields advertised by this task's submit_result schema.\n")
 	}
 	contract := taskResultSubmissionContractForTask(task)
+	contract.RuntimeOwnedFilesRead = runtimeOwnedReads
 	info := submitResultToolInfo(contract)
 	if len(submissionFields) > 0 {
 		info.Parameters["structured_payload"] = map[string]any{"type": "object"}
@@ -5592,7 +5593,7 @@ func resultProtocolInstructionsForSubmission(task TaskDef, granted map[string]bo
 	if contract.InvariantVerification != "" {
 		b.WriteString("- In that example, replace the placeholder `invariant_id` value with each exact invariant ID injected into this task.\n")
 	}
-	if contract.FilesReadMinItems > 0 {
+	if contract.FilesReadMinItems > 0 && !runtimeOwnedReads {
 		fmt.Fprintf(b, "- A successful result must include `files_read` with at least %d object(s), each containing a non-empty `path`; use `files_read`, not evidence, for observed inputs.\n", contract.FilesReadMinItems)
 	}
 	if !contract.AllowEvidence {

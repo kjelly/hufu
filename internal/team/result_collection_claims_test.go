@@ -15,8 +15,92 @@ import (
 
 const collectedFindingSchema = `{"type":"object","additionalProperties":false,"required":["findings"],"properties":{"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["summary"],"properties":{"summary":{"type":"string"}}}}}}`
 
+const collectedConditionalFindingSchema = `{"type":"object","additionalProperties":false,"required":["findings"],"properties":{"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["summary","status"],"properties":{"summary":{"type":"string"},"status":{"type":"string","enum":["unknown","violated"]},"finding_index":{"type":"integer","minimum":0}},"allOf":[{"if":{"properties":{"status":{"const":"unknown"}}},"then":{"not":{"required":["finding_index"]}}}]}}}}`
+
+func preparedCollectionClaimsFixture(t *testing.T, schema, body string) (*Coordinator, *TodoItem, context.Context, *ResultCollectionCheckpoint) {
+	t.Helper()
+	compiled, err := CompileResultContractDocument("claims.json", []byte(schema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, item, ctx, receipt := resultCollectionTaskFixture(t, "http://127.0.0.1:1/v1", false, func(spec *TodoSpec) {
+		spec.ResultContract = new(compiled.ref(true))
+	}, func(c *Coordinator) {
+		c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
+	})
+	cp, err := c.beginResultCollection(ctx, item.ID, receipt, "completed original work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp, err = c.reserveResultCollection(ctx, cp, "original-collector", []byte(`{"tools":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp, err = c.recordCollectionResponse(ctx, cp, []byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp, err = c.prepareCollectionClaims(ctx, cp)
+	if err != nil {
+		t.Fatalf("portable schema should accept this representation: %v", err)
+	}
+	return c, item, ctx, cp
+}
+
+func TestResultCollectionClassifiesCanonicalSchemaFailures(t *testing.T) {
+	for _, tc := range []struct{ name, schema, payload string }{
+		{"conditional not", collectedConditionalFindingSchema, `{"findings":[{"summary":"observed","status":"unknown","finding_index":0}]}`},
+		{"allOf", `{"type":"object","properties":{"value":{"type":"string","allOf":[{"minLength":2},{"pattern":"^a"}]}}}`, `{"value":"b"}`},
+		{"anyOf", `{"type":"object","properties":{"value":{"type":"string","anyOf":[{"pattern":"^a"},{"pattern":"^b"}]}}}`, `{"value":"c"}`},
+		{"oneOf", `{"type":"object","properties":{"value":{"type":"string","oneOf":[{"pattern":"^a"},{"pattern":"a$"}]}}}`, `{"value":"a"}`},
+		{"conditional else", `{"type":"object","properties":{"kind":{"type":"string"},"value":{"type":"string"}},"if":{"properties":{"kind":{"const":"large"}}},"then":{"properties":{"value":{"minLength":5}}},"else":{"properties":{"value":{"maxLength":2}}}}`, `{"kind":"small","value":"long"}`},
+		{"length", `{"type":"object","properties":{"value":{"type":"string","maxLength":2}}}`, `{"value":"long"}`},
+		{"pattern", `{"type":"object","properties":{"value":{"type":"string","pattern":"^ok$"}}}`, `{"value":"wrong"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"status":"success","summary":"completed original work","structured_payload":` + tc.payload + `}`
+			c, item, ctx, cp := preparedCollectionClaimsFixture(t, tc.schema, body)
+			err := c.commitPreparedCollection(ctx, cp)
+			if err == nil || localResultRejectionReason(err) != RepairFailureInvalidSchema {
+				t.Fatalf("canonical schema failure classified as %s: %v", localResultRejectionReason(err), err)
+			}
+			if c.todoItemByID(item.ID).TypedResult != nil || currentResultCollection(c.todoItemByID(item.ID)).TurnsUsed != 1 {
+				t.Fatal("rejection published a result or changed the collector budget")
+			}
+		})
+	}
+}
+
+func TestCollectionModelSchemaFailureProtectsRuntimeOwnedValues(t *testing.T) {
+	for _, tc := range []struct {
+		name, schema, payload string
+		want                  bool
+	}{
+		{"model constraint", `{"type":"object","properties":{"bound":{"type":"string"},"model":{"type":"string","minLength":1}}}`, `{"bound":"trusted","model":""}`, true},
+		{"runtime constraint", `{"type":"object","properties":{"bound":{"type":"string","minLength":10},"model":{"type":"string"}}}`, `{"bound":"trusted","model":"ok"}`, false},
+		{"ancestor constraint", `{"type":"object","properties":{"bound":{"type":"string"}},"not":{"required":["bound"]}}`, `{"bound":"trusted"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			compiled, err := CompileResultContractDocument("claims.json", []byte(tc.schema))
+			if err != nil {
+				t.Fatal(err)
+			}
+			compiled.runtimeInputs = []resultRuntimeInputSpec{{Target: "/bound"}}
+			_, err = validateStructuredResultPayload(compiled, compiled.ref(true), []byte(tc.payload))
+			if err == nil || collectionModelSchemaFailure(compiled, nil, err) != tc.want {
+				t.Fatalf("repairability=%t want=%t error=%v", collectionModelSchemaFailure(compiled, nil, err), tc.want, err)
+			}
+			if collectionModelSchemaFailure(compiled, nil, errors.New(err.Error())) {
+				t.Fatal("untyped error text earned schema repair authority")
+			}
+		})
+	}
+}
+
 func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 	valid := `{"status":"success","summary":"review complete","findings":[{"summary":"observed finding"}],"structured_payload":{"findings":[{"summary":"observed finding"}]}}`
+	conditionalValid := strings.Replace(valid, `"structured_payload":{"findings":[{"summary":"observed finding"}]}`, `"structured_payload":{"findings":[{"summary":"observed finding","status":"unknown"}]}`, 1)
+	conditionalInvalid := strings.Replace(conditionalValid, `"status":"unknown"`, `"status":"unknown","finding_index":0`, 1)
 	mismatch := strings.Replace(valid, `"findings":[{"summary":"observed finding"}]`, `"findings":[{"summary":"different wording"}]`, 1)
 	richSchema := strings.Replace(collectedFindingSchema, `"summary":{"type":"string"}`, `"summary":{"type":"string"},"location":{"type":"string"},"evidence":{"type":"array","items":{"type":"string"}}`, 1)
 	richValid := `{"status":"success","summary":"review complete","findings":[{"summary":"one"},{"summary":"two"},{"summary":"three"}],"structured_payload":{"findings":[{"summary":"one","location":"a.go:1","evidence":["source-a"]},{"summary":"two","location":"b.go:2","evidence":["source-b"]},{"summary":"three","location":"c.go:3","evidence":["source-c"]}]}}`
@@ -38,6 +122,8 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 		second          string
 		schema          string
 		contractFailure bool
+		sourceFailure   bool
+		failureReason   RepairFailureReason
 	}{
 		{name: "multiple_wrong_layers", first: string(richInvalid), second: richValid, schema: richSchema},
 		{name: "empty_response", second: valid},
@@ -46,6 +132,9 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 		{name: "projection_mismatch", first: mismatch, second: valid},
 		{name: "projection_budget_exhausted", first: mismatch, second: mismatch},
 		{name: "acceptance_failure", first: valid, contractFailure: true},
+		{name: "canonical_conditional", first: conditionalInvalid, second: conditionalValid, schema: collectedConditionalFindingSchema},
+		{name: "canonical_conditional_budget", first: conditionalInvalid, second: conditionalInvalid, schema: collectedConditionalFindingSchema, failureReason: RepairFailureInvalidSchema},
+		{name: "forged_receipt_with_conditional", first: strings.Replace(conditionalInvalid, `"status":"success"`, `"receipt_ids":["forged-receipt"],"status":"success"`, 1), schema: collectedConditionalFindingSchema, sourceFailure: true, failureReason: RepairFailureSource},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls atomic.Int32
@@ -63,7 +152,7 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 					t.Error("collector exposed tools")
 				}
 				n := calls.Add(1)
-				if n > 2 || (tc.contractFailure && n > 1) {
+				if n > 2 || ((tc.contractFailure || tc.sourceFailure) && n > 1) {
 					t.Error("unexpected repair turn")
 					http.Error(w, "extra call", 400)
 					return
@@ -71,7 +160,7 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 				body := tc.first
 				if n == 2 {
 					body = tc.second
-					if tc.schema != "" {
+					if tc.schema == richSchema {
 						var feedback *collectionFormatFeedback
 						for _, message := range request["messages"].([]any) {
 							content, _ := message.(map[string]any)["content"].(string)
@@ -128,12 +217,12 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 			_, err = c.ExecuteTasks(t.Context(), []TaskDef{{ID: "review", Agent: "worker", Model: "ollama/test", Goal: "Review findings", SideEffect: SideEffectNone,
 				Execution: ExecutionContract{RequiresResult: true, ForbidArtifacts: true}, VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: assertions}}})
 			item := c.taskTracker.TodoList().Items()[1]
-			wantSuccess := tc.second == valid || tc.second == richValid
+			wantSuccess := tc.second == valid || tc.second == richValid || tc.second == conditionalValid
 			if (err == nil) != wantSuccess {
 				t.Fatalf("status=%s detail=%s error=%v", item.Status, item.Detail, err)
 			}
 			wantCalls := int32(2)
-			if tc.contractFailure {
+			if tc.contractFailure || tc.sourceFailure {
 				wantCalls = 1
 			}
 			checkpoint := currentResultCollection(item)
@@ -146,7 +235,10 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 			if !wantSuccess && (item.TypedResult != nil || checkpoint.State != ResultCollectionBlocked) {
 				t.Fatal("rejected claims published success")
 			}
-			if tc.schema != "" {
+			if tc.failureReason != "" && checkpoint.FailureReason != tc.failureReason {
+				t.Fatalf("failure reason=%s want=%s", checkpoint.FailureReason, tc.failureReason)
+			}
+			if tc.schema == richSchema {
 				if item.TypedResult == nil || !strings.Contains(string(item.TypedResult.StructuredPayload.Value), `"source-c"`) || len(item.TypedResult.Findings) != 3 {
 					t.Fatal("repair lost legal nested evidence or findings")
 				}
@@ -159,7 +251,7 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 			if replayed.Status != item.Status || currentResultCollection(replayed).TurnsUsed != checkpoint.TurnsUsed {
 				t.Fatal("replay changed completion or budget")
 			}
-			if tc.schema != "" && (replayed.TypedResult == nil || string(replayed.TypedResult.StructuredPayload.Value) != string(item.TypedResult.StructuredPayload.Value)) {
+			if wantSuccess && (replayed.TypedResult == nil || string(replayed.TypedResult.StructuredPayload.Value) != string(item.TypedResult.StructuredPayload.Value)) {
 				t.Fatal("replay changed nested findings or evidence")
 			}
 		})

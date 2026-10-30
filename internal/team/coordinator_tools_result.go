@@ -99,6 +99,9 @@ func decodeSubmitResultInput(raw []byte, contract taskResultSubmissionContract) 
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(normalized, &fields); err == nil {
+		if _, present := fields["files_read"]; present && contract.RuntimeOwnedFilesRead {
+			return SubmitResultInput{}, fmt.Errorf("files_read is runtime-owned; omit it entirely")
+		}
 		if !contract.AllowEvidence {
 			if _, ok := fields["evidence"]; ok {
 				return SubmitResultInput{}, fmt.Errorf("evidence is not a legal field for this task; report observed files in files_read")
@@ -199,6 +202,7 @@ func localResultSubmissionContract(coordinator *Coordinator, todoID string) task
 		// A drifted contract still advertises the property; the submission
 		// itself is then rejected by structuredPayloadForSubmission.
 		compiled, _ := coordinator.compiledResultContract(item.ResultContract)
+		contract.RuntimeOwnedFilesRead = runtimeOwnsFilesRead(compiled)
 		contract.ResultContract = item.ResultContract.clone()
 		contract.resultPayloadSchema = coordinator.fixedCollectionSubmissionSchema(todoID, *item.ResultContract, compiled)
 	}
@@ -442,6 +446,9 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 		if ok {
 			filesRead["minItems"] = contract.FilesReadMinItems
 		}
+	}
+	if contract.RuntimeOwnedFilesRead {
+		delete(info.Parameters, "files_read")
 	}
 	if contract.InvariantVerification != "" && !slices.Contains(info.Required, "invariant_assessments") {
 		info.Required = append(info.Required, "invariant_assessments")

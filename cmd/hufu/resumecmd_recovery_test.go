@@ -51,8 +51,10 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs bool) {
 	t.Setenv("HOME", filepath.Join(root, "home"))
 	t.Setenv("HUFU_STATE_HOME", filepath.Join(root, "state"))
 	t.Chdir(filepath.Join(root, "project"))
+	// Recovery exercises durable CLI checkpoints and bounded collector turns;
+	// its contract is turn/work preservation, not a five-second latency bound.
 	files := map[string]string{
-		"team.yaml":      "name: fixture-team\nworker-model: ollama/recovery-cli-fixture\ncoordinator-model: ollama/recovery-cli-fixture\nresult-transport: runtime\ngoal-mode: exploratory\ntimeout: 5\nmax-retries: 0\nacceptance:\n  required-workers: [worker]\n  require-no-unresolved-tasks: true\ninputs:\n  purpose:\n    type: string\n    default: review\n",
+		"team.yaml":      "name: fixture-team\nworker-model: ollama/recovery-cli-fixture\ncoordinator-model: ollama/recovery-cli-fixture\nresult-transport: runtime\ngoal-mode: exploratory\ntimeout: 30\nmax-retries: 0\nacceptance:\n  required-workers: [worker]\n  require-no-unresolved-tasks: true\ninputs:\n  purpose:\n    type: string\n    default: review\n",
 		"worker.md":      "---\nname: worker\nrole: worker\n---\nReturn a report with original limitations.\n",
 		"coordinator.md": "---\nname: coordinator\nrole: coordinator\n---\nCall finish after recovery.\n",
 	}

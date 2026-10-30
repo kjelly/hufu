@@ -479,7 +479,8 @@ func TestBoundDecisionConditionalClaimsAreRepairable(t *testing.T) {
 	}
 	compiled := f.c.session.ResultContracts["decisions.json"]
 	invalidSource := []byte(`{"decisions":[{"origin":5,"position":0,"asset":"a","state":"reject","reason":""}]}`)
-	if collectionDecisionSchemaFailure(compiled, invalidSource, f.plans) {
+	_, sourceErr := validateStructuredResultPayload(compiled, compiled.ref(true), invalidSource)
+	if sourceErr == nil || collectionModelSchemaFailure(compiled, f.plans, sourceErr) {
 		t.Fatal("trusted source error must not trigger model repair")
 	}
 }

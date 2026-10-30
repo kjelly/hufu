@@ -413,6 +413,13 @@ spec:
       verify-spec:
         type: task_result_assert
         task-result-assertions:
+          - &review-status-by-gaps
+            pointer: /status
+            op: equals_by_items
+            value:
+              pointer: /structured_payload/value/record/gaps
+              empty: success
+              non_empty: completed_with_gaps
           - { pointer: /summary, op: non_empty }
           - { pointer: /files_read, op: min_items, value: 1 }
           - pointer: /findings
@@ -452,6 +459,7 @@ spec:
       verify-spec:
         type: task_result_assert
         task-result-assertions:
+          - *review-status-by-gaps
           - { pointer: /summary, op: non_empty }
           - { pointer: /files_read, op: min_items, value: 1 }
           - pointer: /findings
@@ -479,6 +487,7 @@ spec:
       verify-spec:
         type: task_result_assert
         task-result-assertions:
+          - *review-status-by-gaps
           - { pointer: /summary, op: non_empty }
           - { pointer: /files_read, op: min_items, value: 1 }
           - pointer: /findings

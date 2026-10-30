@@ -41,6 +41,116 @@ func blockedRecoveryFixture(t *testing.T, body string, prepared bool, reason Rep
 	return c, item.ID, cp
 }
 
+func TestResultCollectionRecoveryRepairsHistoricalCanonicalSchemaFailure(t *testing.T) {
+	for _, originalReason := range []RepairFailureReason{RepairFailureSource, RepairFailureInvalidSchema} {
+		t.Run(string(originalReason), func(t *testing.T) {
+			invalid := `{"status":"success","summary":"original uncertainty retained","structured_payload":{"findings":[{"summary":"observed","status":"unknown","finding_index":0}]}}`
+			valid := strings.Replace(invalid, `,"finding_index":0`, "", 1)
+			c, item, ctx, cp := preparedCollectionClaimsFixture(t, collectedConditionalFindingSchema, invalid)
+			cp, err := c.blockResultCollection(ctx, cp, originalReason)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.recordCollectionStopReceipt(item.ID, &resultCollectionFailure{Reason: originalReason, Checkpoint: cp, Cause: errors.New("historical canonical schema rejection")})
+			c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "collection blocked", NeedsHuman, FailureProtocol, TaskBlocked, "")
+			c = reopenRecoveryCoordinator(t, c)
+			before := cloneTodoItem(c.todoItemByID(item.ID))
+			eventsBefore, err := c.EventJournal().ReadEvents(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			assessment, err := c.AssessResultCollectionRecovery(t.Context(), item.ID)
+			if err != nil || assessment.Disposition != RecoveryRepairClaims || assessment.AdditionalTurns != 2 || assessment.TurnsUsed != 1 || assessment.RemainingTurns != 1 || assessment.OriginalReason != originalReason {
+				t.Fatalf("assessment=%+v error=%v", assessment, err)
+			}
+			eventsAfter, err := c.EventJournal().ReadEvents(t.Context())
+			if err != nil || !reflect.DeepEqual(eventsBefore, eventsAfter) || !reflect.DeepEqual(before, c.todoItemByID(item.ID)) || len(c.resultValidationFailures) != 0 {
+				t.Fatal("read-only preview changed durable evidence or counters")
+			}
+			c.executionRunID = "schema-recovery"
+			if err := c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), item.ID)); err != nil {
+				t.Fatal(err)
+			}
+			// Restart after the grant, then persist a corrected collector response.
+			// No worker or model is needed to accept that already durable response.
+			c = reopenRecoveryCoordinator(t, c)
+			c.executionRunID = "schema-recovery"
+			granted := currentResultCollection(c.todoItemByID(item.ID))
+			ctx, err = c.restoreCollectionContext(WithSessionResume(t.Context()), granted)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reserved, err := c.reserveResultCollection(ctx, granted, "corrected-collector", []byte(`{"tools":[]}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.recordCollectionResponse(ctx, reserved, []byte(valid)); err != nil {
+				t.Fatal(err)
+			}
+			c = reopenRecoveryCoordinator(t, c)
+			c.executionRunID = "schema-recovery"
+			worker := scriptWorker(textTurn("must never repeat original work"))
+			c.workerAgentOverride = worker
+			if _, err := c.executeTask(WithSessionResume(t.Context()), taskDefFromTodoItem(c.todoItemByID(item.ID)), item.ID); err != nil {
+				t.Fatal(err)
+			}
+			done := c.todoItemByID(item.ID)
+			current := currentResultCollection(done)
+			if worker.Calls() != 0 || done.Status != TaskDone || current.State != ResultCollectionCommitted || current.TurnsUsed != 2 || current.TurnLimit != 3 || current.Work != cp.Work || done.TypedResult == nil || done.TypedResult.Summary != "original uncertainty retained" {
+				t.Fatal("recovery replayed work, reset the budget, or changed original evidence")
+			}
+			replayed, err := c.EventJournal().ReadEvents(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, task := range ReduceToTodoList(replayed) {
+				if task.ID == item.ID && (task.Status != TaskDone || task.TypedResult == nil || string(task.TypedResult.StructuredPayload.Value) != string(done.TypedResult.StructuredPayload.Value)) {
+					t.Fatal("replay changed the repaired result")
+				}
+			}
+		})
+	}
+}
+
+func TestResultCollectionRecoverySchemaFailureCannotHideInvalidSources(t *testing.T) {
+	for _, scenario := range []string{"receipt", "policy", "contract", "work"} {
+		t.Run(scenario, func(t *testing.T) {
+			body := `{"status":"success","summary":"review complete","structured_payload":{"findings":[{"summary":"observed","status":"unknown","finding_index":0}]}}`
+			if scenario == "receipt" {
+				body = strings.Replace(body, `"status":"success"`, `"status":"success","receipt_ids":["forged-receipt"]`, 1)
+			}
+			c, item, ctx, cp := preparedCollectionClaimsFixture(t, collectedConditionalFindingSchema, body)
+			cp, err := c.blockResultCollection(ctx, cp, RepairFailureSource)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.recordCollectionStopReceipt(item.ID, &resultCollectionFailure{Reason: RepairFailureSource, Checkpoint: cp, Cause: errors.New("historical rejection")})
+			c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "collection blocked", NeedsHuman, FailureProtocol, TaskBlocked, "")
+			switch scenario {
+			case "policy":
+				c.executionPolicy.snapshot.ConfigurationHash = strings.Repeat("a", 64)
+			case "contract":
+				delete(c.session.ResultContracts, "claims.json")
+			case "work":
+				task := c.todoItemByID(item.ID)
+				task.ExecutionReceipt.ResultCollection.Work.ArtifactID = "sha256-" + strings.Repeat("a", 64)
+				task.ExecutionReceipt.ResultCollection.Work.SHA256 = strings.Repeat("a", 64)
+				if err := c.taskTracker.TodoList().TryApplyProjectedItem(task); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := cloneTodoItem(c.todoItemByID(item.ID))
+			assessment, err := c.AssessResultCollectionRecovery(t.Context(), item.ID)
+			if err == nil && (assessment.Disposition != RecoveryBlocked || assessment.AdditionalTurns != 0) {
+				t.Fatalf("invalid source earned repair authority: %+v", assessment)
+			}
+			if !reflect.DeepEqual(before, c.todoItemByID(item.ID)) {
+				t.Fatal("rejected preview changed the task")
+			}
+		})
+	}
+}
+
 func TestResultCollectionRecoveryAssessmentPreservesEvidence(t *testing.T) {
 	for _, tc := range []struct {
 		name, body string

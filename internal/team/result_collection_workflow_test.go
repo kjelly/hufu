@@ -211,7 +211,7 @@ func TestResultCollectionDefaultDryRunMakesNoProviderOrWorkerCalls(t *testing.T)
 }
 
 func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
-	for _, scenario := range []string{"valid", "string_refs", "unknown", "corrupt"} {
+	for _, scenario := range []string{"valid", "string_refs", "unknown", "corrupt", "runtime_owned", "runtime_full_id"} {
 		t.Run(scenario, func(t *testing.T) {
 			var workCalls, collectionCalls atomic.Int32
 			var source ArtifactRef
@@ -245,6 +245,12 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 						}
 					}
 					body = fmt.Sprintf(`{"status":"success","summary":"reviewed","files_read":[{"path":%q}],"structured_payload":{"claims":[{"evidence":[%q]}]}}`, key, key)
+					if scenario == "runtime_owned" || scenario == "runtime_full_id" {
+						if scenario == "runtime_full_id" {
+							key = source.ID
+						}
+						body = fmt.Sprintf(`{"status":"success","summary":"reviewed","structured_payload":{"claims":[{"evidence":[%q]}]}}`, key)
+					}
 					if scenario == "string_refs" {
 						body = fmt.Sprintf(`{"status":"success","summary":"reviewed","files_read":[%q],"structured_payload":{"claims":[{"evidence":[%q]}]}}`, key, key)
 					}
@@ -259,7 +265,11 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 				_, _ = fmt.Fprintf(w, "data: {\"id\":\"review\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", body)
 			}))
 			t.Cleanup(server.Close)
-			compiled, err := CompileResultContractDocument("keys.json", []byte(artifactKeysTestSchema))
+			schema := artifactKeysTestSchema
+			if scenario == "runtime_owned" || scenario == "runtime_full_id" {
+				schema = observedFilesTestSchema()
+			}
+			compiled, err := CompileResultContractDocument("keys.json", []byte(schema))
 			if err != nil {
 				t.Fatal(err)
 			}

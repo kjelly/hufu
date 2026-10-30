@@ -47,6 +47,9 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 	if err != nil {
 		return "", nil, err
 	}
+	if localResultSubmissionContract(c, checkpoint.TaskID).RuntimeOwnedFilesRead {
+		collectionContext += "\nOuter files_read is runtime-owned and filled from the original work's successful native view observations. Omit it entirely; preserve the evidence references in structured_payload.\n"
+	}
 	info := collectionSubmissionInfo(c, checkpoint.TaskID)
 	invariants, _, err := c.invariantRepairInstructions(checkpoint.TaskID, checkpoint.Attempt, checkpoint.ModelExecutionID)
 	if err != nil {
@@ -78,7 +81,7 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 	if err != nil {
 		return "", nil, err
 	}
-	return collectionContext + invariants + "Collect the result of the already returned work. Do not repeat work, explore sources, or change its outcome to satisfy a format requirement. Use only these frozen authorized inputs. Result assertions use canonical stored paths: /structured_payload/value refers to your structured_payload, and /invariant_verification/assessments is attested from your invariant_assessments when the schema permits them. For equals_projection, match array order and only the fields declared by the projection; each representation must obey its own schema. Do not copy extra domain fields into the outer envelope. Do not independently paraphrase or omit findings. Fix all reported format_feedback issues together. Object hints are local examples, never complete submissions. Preserve legal namesake fields and evidence at other paths. A truncated list is incomplete; check the full claims_schema too. For a violated invariant, finding_index must name a finding with the invariant definition's exact severity. Keep each invariant summary concise, well below its schema maxLength; put extended explanations in details. Preserve the original judgments, findings and evidence when fixing representation.\n" + fenceUntrusted("json", string(data)), work, nil
+	return collectionContext + invariants + "Collect the result of the already returned work. Do not repeat work, explore sources, or change its outcome to satisfy a format requirement. Use only these frozen authorized inputs. Result assertions use canonical stored paths: /structured_payload/value refers to your structured_payload, and /invariant_verification/assessments is attested from your invariant_assessments when the schema permits them. For equals_by_items, choose the configured empty or non_empty label from the referenced array; preserve every array item, finding and evidence reference when correcting the label. For equals_projection, match array order and only the fields declared by the projection; each representation must obey its own schema. Do not copy extra domain fields into the outer envelope. Do not independently paraphrase or omit findings. Fix all reported format_feedback issues together. Object hints are local examples, never complete submissions. Preserve legal namesake fields and evidence at other paths. A truncated list is incomplete; check the full claims_schema too. For a violated invariant, finding_index must name a finding with the invariant definition's exact severity. Keep each invariant summary concise, well below its schema maxLength; put extended explanations in details. Preserve the original judgments, findings and evidence when fixing representation.\n" + fenceUntrusted("json", string(data)), work, nil
 }
 
 func (c *Coordinator) prepareCollectionInvocation(ctx context.Context, def *agent.AgentDef, checkpoint *ResultCollectionCheckpoint, id, diagnostic string) (context.Context, []byte, error) {

@@ -295,6 +295,14 @@ leaf 也一樣。
 的原生 structured-output／tool-calling 功能。通常增加一次模型呼叫；格式或 schema
 不合法時最多再修復一次，共兩回合，包含中斷時已派發的回合。
 
+收集失敗的分類以完整 canonical schema 為準，不以 provider 的可攜式 schema
+投影代替。來源、收據、workset 與 runtime 綁定驗證成功後，模型欄位的條件式
+`allOf`／`anyOf`／`oneOf`／`if`／`then`／`else`／`not`、長度或 pattern
+限制不合屬於 `invalid_schema`，可使用剩餘的結果修復回合；runtime-owned
+欄位及涉及它們的父層限制、無效來源或 policy 漂移仍拒絕修復。
+唯讀恢復評估使用相同分類，因此歷史上被記成 `source_invalid` 的表示方式錯誤，
+在重新驗證原始來源與授權後也可提出有界的結果修復，不重跑工作工具、不重置額度。
+
 Collector 接受 schema 已宣告的 `files_read`／`files_modified` 字串項目，
 以不改變路徑的方式轉成 `{path: ...}`；未知欄位、重複鍵與未宣告的縮寫仍拒絕。
 它從原工作經驗證的 context 取得 invariant ID 與定義嚴重度；`violated` claim
@@ -331,6 +339,57 @@ Tool、runtime collector 與 external proposal 都要求單一 JSON value，並�
 物件內重複的 key（包含巢狀物件）、尾接 JSON 與尾接非 JSON 文字；尾端空白可保留。
 通過解碼或 admission 仍不代表任務完成。各 adapter 的來源與信任邊界、原生證據及
 回歸對照見 [結果傳輸契約](result-transport-contracts.md)。
+
+### 依陣列項目宣告結果標籤
+
+`task_result_assert` 的 `equals_by_items` 比較指定欄位與另一個陣列的空／非空標籤。
+規則由契約宣告，適用於 collection、tool submission、external proposal 與既有驗收／重播：
+
+```yaml
+verify-spec:
+  type: task_result_assert
+  task-result-assertions:
+    - pointer: /status
+      op: equals_by_items
+      value:
+        pointer: /structured_payload/value/record/gaps
+        empty: success
+        non_empty: completed_with_gaps
+```
+
+`value` 只接受 `pointer`、`empty`、`non_empty`；兩個標籤都必須明示為字串。
+Reference pointer 必須是非空 JSON Pointer，且實際指向有界陣列；缺值、null 或其他
+型別一律失敗，不視為空陣列。規則只比較，不自動改寫 status 或移除陣列內容。
+
+Collection 中，只有 `/status` 從 `structured_payload` 陣列推導、且兩個標籤都屬
+`success`／`completed_with_gaps` 的一致性失敗，能沿用既有有界格式修復回合。
+修復提示包含原 assertion 與拒絕原因，要求保留 findings、限制及證據。其他驗收失敗、
+runtime-owned 來源、非成功 outcome 的變更及已有 materialized artifacts 均不因此
+取得格式修復權限；工作工具不會重跑。新規則隨原 verification spec 封存，既有 run
+不會因 team.yaml 改動而被追溯改寫或自動重開。
+
+### 原生讀取紀錄的 runtime 投影
+
+`x-hufu-evidence-keys` 可加上 `runtime_owned_files_read: true`。此模式限具備原生
+`view` 的 local worker，external backend 或 execution-route 中的 external candidate
+在執行前拒絕；external proposal 也不能宣告或替代原生讀取證據。
+
+```json
+"x-hufu-evidence-keys": {
+  "runtime_owned_files_read": true,
+  "pointers": ["/record/decisions/*/evidence/*"]
+}
+```
+
+啟用後，模型與 collector 必須完全省略 outer `files_read`，包含 null、空陣列或
+與 runtime 相同的值都不接受。Runtime 從同一工作回合、branch、model execution 的
+成功 `view` 觀測及完整性檢查產生排序去重的 `files_read`，並在提交前檢查宣告
+pointer 下的每個 evidence ID 確實有觀測；只獲授權但未讀取的 artifact 不算證據。
+這只證明觀測過指定 artifact 的有界片段，不代表完整覆蓋或語意上的支持。
+
+Collection 恢復沿用原工作觀測，不重跑工具；接受結果保留完整投影，事件重播不從
+後來的讀取重新產生它。新的執行重試使用新的 lifecycle occurrence，歷史 collection
+與收據保留供稽核，但不能代替新工作。既有 schema 未啟用此選項時維持原提交契約。
 
 ### 靜態依賴結果視圖（dependency-result-view）
 

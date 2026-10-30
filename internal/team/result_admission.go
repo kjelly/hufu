@@ -86,7 +86,14 @@ func (a *localResultAdmission) validateClaims(ctx context.Context, input SubmitR
 	if decision, blocked := a.coordinator.decisionBlock(ctx); blocked && res.Status != TaskResultStatusBlocked {
 		return nil, errors.New(decisionBlockResultDenial(decision, res.Status))
 	}
-	if err := contract.validateWorkerClaims(&res); err != nil {
+	workerContract := contract
+	if contract.RuntimeOwnedFilesRead {
+		if input.FilesRead != nil {
+			return nil, errors.New("files_read is runtime-owned; omit it entirely")
+		}
+		workerContract.FilesReadMinItems = 0
+	}
+	if err := workerContract.validateWorkerClaims(&res); err != nil {
 		return nil, errors.New("submit_result contract violation: " + err.Error())
 	}
 	if err := validateFindingSeverities(res.Findings); err != nil {
@@ -109,12 +116,12 @@ func (a *localResultAdmission) validateClaims(ctx context.Context, input SubmitR
 			}
 		}
 		if res.Status != TaskResultStatusBlocked || len(bytes.TrimSpace(input.StructuredPayload)) != 0 || !hasResultDecisions(compiled) {
-			payload, rejection, decisionFormat := a.coordinator.validateStructuredPayloadClaims(a.todoID, input.StructuredPayload, recordFailure, observations)
+			payload, rejection, payloadFormat := a.coordinator.validateStructuredPayloadClaims(a.todoID, input.StructuredPayload, recordFailure, observations)
 			if rejection != "" {
 				payloadReason := RepairFailureSource
 				if classifyPayloadRejection != nil {
 					payloadReason = classifyPayloadRejection()
-					if decisionFormat {
+					if payloadFormat {
 						payloadReason = RepairFailureInvalidSchema
 					}
 				}
@@ -124,6 +131,9 @@ func (a *localResultAdmission) validateClaims(ctx context.Context, input SubmitR
 			if payload != nil && payload.EvidenceDowngrades > 0 {
 				res.Summary = "Result includes claims without matching successful tool evidence; consult the structured payload for downgraded findings."
 			}
+		}
+		if err := a.bindObservedFilesRead(ctx, compiled, input, &res, contract); err != nil {
+			return nil, err
 		}
 	} else if len(bytes.TrimSpace(input.StructuredPayload)) > 0 {
 		return nil, errors.New("structured_payload is not accepted for this task because it has no result contract; omit the field")

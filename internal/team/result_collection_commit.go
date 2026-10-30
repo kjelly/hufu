@@ -91,7 +91,8 @@ func (c *Coordinator) commitPreparedCollection(ctx context.Context, expected *Re
 		return rejectLocalResult(RepairFailureSource, err)
 	}
 	item := c.todoItemByID(expected.TaskID)
-	if _, err := c.loadCollectionWork(ctx, item, expected); err != nil {
+	work, err := c.loadCollectionWork(ctx, item, expected)
+	if err != nil {
 		return rejectLocalResult(RepairFailureSource, err)
 	}
 	raw, err := c.readCollectionBlob(ctx, expected, "claims", expected.Prepared)
@@ -111,13 +112,23 @@ func (c *Coordinator) commitPreparedCollection(ctx context.Context, expected *Re
 	if err != nil {
 		return err
 	}
+	// A malformed model field must not conceal forged receipts or artifact
+	// claims and earn a new model turn before those sources are checked.
+	claims := input.taskResult()
+	claims.Attempt = expected.Attempt
+	if err := c.validateTaskResultReceiptClaims(item.ID, &claims); err != nil {
+		return rejectLocalResult(RepairFailureSource, err)
+	}
+	if len(claims.Artifacts) > 0 {
+		if err := validateSubmittedArtifactClaims(ctx, work.Workspace, claims.Artifacts); err != nil {
+			return rejectLocalResult(RepairFailureSource, err)
+		}
+	}
 	ctx = context.WithValue(ctx, resultCollectionAdmissionKey{}, expected)
 	admission := localResultAdmission{coordinator: c, todoID: item.ID}
 	return admission.admit(ctx, input, localResultSubmissionContract(c, item.ID), func() RepairFailureReason {
-		issues, _, err := resultSubmissionIssues(resolved, localResultCandidateValidationInfo(c, item.ID))
-		if err == nil && len(issues) > 0 {
-			return RepairFailureInvalidSchema
-		}
+		// validateStructuredPayloadClaims classifies canonical model-schema
+		// failures after independent source checks. Other failures stay closed.
 		return RepairFailureSource
 	})
 }
