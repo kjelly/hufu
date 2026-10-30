@@ -80,14 +80,103 @@ Full JSONL contains case identities, outcomes, skips and package/test timings;
 observation JSON contains monotonic wall time and child user/system CPU seconds.
 Do not add package or parent/subtest elapsed times to derive wall time.
 
-**At report creation, the three Actions jobs are running.** No completed
-three-sample full-suite cell is yet accepted. Collect artifacts from the linked
-run and replace this status with actual results before considering closure.
-Artifacts retain failures for 14 days; archive their original ZIPs and digests
-before expiry. A passing job alone is insufficient: review case inventory and
-skip reasons first. In particular, the three revisions do not have an identical
-raw test inventory. A same-case filtered capture or complete assertion-preserving
-workload reconciliation is still required for a speedup claim.
+## Terminal hosted capture — verified 2026-10-31 (Asia/Taipei)
+
+**Capture ended; acceptance remains incomplete.** Run 41046691306 has one attempt, two successful jobs (normal and CGO-free) and a failed race job. No rerun was performed. All three original artifact ZIPs were downloaded and their published SHA-256 digests verified. The run finished at 2026-10-30 23:43:59 Asia/Taipei.
+
+The **unaltered three GitHub artifact ZIPs**, source/capture metadata, all raw JSONL/stderr/module logs inside those ZIPs, observation/summary JSON, run/jobs API snapshots, a SHA-256 manifest and the analysis script/derived analysis.json have been preserved in a separate evidence package delivered to the requester. The earlier local/correctness evidence package is preserved separately. Public repository readers can retrieve the original artifacts from the [Actions run](https://github.com/kjelly/hufu/actions/runs/41046691306), using the IDs/digests below; original GitHub artifacts expire on 2026-11-13 UTC. No private delivery link is published here.
+
+| Original artifact | ID / published SHA-256 |
+| --- | --- |
+| issue26-full-race-attempt-1 | 12989923186 / `271c51b9bb763daf1430c1bbeefb41474af6808670113994a87f2cb0cbbd7ef9` |
+| issue26-full-normal-attempt-1 | 12984623919 / `8ce542170d165ab1fdb3c06a6cc02c24dc36ca3e73ca99fd41efc407ab3eb989` |
+| issue26-full-cgo-free-attempt-1 | 12980386061 / `99d69a927f7ce9d4dcd7dc1bb9314803ba0fdfa98edf84683496729a089ce86b` |
+
+### Three successful samples within each source/mode/cache group
+
+Seconds: monotonic whole-command wall median (min–max); child user and system CPU medians are reported independently. Every row below contains exactly three successful observations. These describe each revision’s own workload; **they are not an equal-case before/after speedup or accepted full-contract coverage**. Cold/warm use -count=1. Result rows replay 63/65/67 packages respectively and still execute uncached packages. Seed timings remain in the raw evidence and are excluded from these medians.
+
+| Mode | Source | Cache | Wall median (min–max), s | User / system CPU median, s | Cached packages in each sample |
+| --- | --- | --- | ---: | ---: | --- |
+| normal | before | cold | 502.224 (500.917–514.728) | 882.832 / 127.845 | 0,0,0 |
+| normal | before | warm | 339.960 (337.943–341.079) | 457.491 / 80.836 | 0,0,0 |
+| normal | before | result | 105.697 (105.438–105.891) | 103.661 / 29.477 | 63,63,63 |
+| normal | after-32 | cold | 483.826 (482.138–484.388) | 851.273 / 124.032 | 0,0,0 |
+| normal | after-32 | warm | 312.112 (309.662–312.987) | 420.369 / 79.109 | 0,0,0 |
+| normal | after-32 | result | 50.183 (50.071–50.601) | 50.189 / 22.578 | 65,65,65 |
+| normal | current-main | cold | 549.991 (545.625–555.742) | 929.079 / 120.739 | 0,0,0 |
+| normal | current-main | warm | 370.030 (361.854–371.704) | 471.215 / 71.358 | 0,0,0 |
+| normal | current-main | result | 58.492 (57.912–59.168) | 60.522 / 24.053 | 67,67,67 |
+| cgo-free | before | cold | 334.056 (333.183–340.414) | 506.925 / 79.932 | 0,0,0 |
+| cgo-free | before | warm | 229.580 (227.780–232.516) | 251.025 / 49.791 | 0,0,0 |
+| cgo-free | before | result | 68.371 (67.233–68.609) | 60.679 / 20.159 | 63,63,63 |
+| cgo-free | after-32 | cold | 316.782 (315.618–322.598) | 489.950 / 79.140 | 0,0,0 |
+| cgo-free | after-32 | warm | 206.101 (204.144–215.906) | 222.529 / 47.619 | 0,0,0 |
+| cgo-free | after-32 | result | 30.949 (30.775–31.204) | 28.489 / 15.412 | 65,65,65 |
+| cgo-free | current-main | cold | 364.111 (355.280–364.356) | 524.992 / 76.034 | 0,0,0 |
+| cgo-free | current-main | warm | 250.287 (245.904–252.664) | 249.152 / 44.335 | 0,0,0 |
+| cgo-free | current-main | result | 35.676 (35.343–37.952) | 33.541 / 16.750 | 67,67,67 |
+
+### Race failures and incomplete groups
+
+No race group has three successful observations. Do not use the harness’s partial summary medians as acceptance results. Failed package commands can have zero terminal **test** fail events: the process exit status, package failure, panic and race diagnostics control success.
+
+| Source | Captured successful samples: cold / warm / result | Failure retained |
+| --- | --- | --- |
+| before | 2 / 2 / 1 | `result-seed-2`: exit 1, wall 1805.924793s; team package failed after 1160.369s. `WARNING: DATA RACE` shows `TodoList.TryApplyProjectedItem` (`status.go:1473`) writing while `dagScheduler.routeCriterionRetry` (`dag_scheduler.go:569`) reads; the reader originated in `TestCriterionRetryRoutingHonorsMaxRetriesAfterBudgetReset` (`dag_test.go:342`). Attribution by the currently active JSON Test name alone would be wrong. |
+| after-32 | 0 / 0 / 0 | `cold-1`: exit 1, wall 2145.762881s; team package timeout 20m, package elapsed 1200.242s. Active test: `TestWP6SavedSessionMemoryRecallsAcrossForkAtWorkerScope`; this does not prove that test alone caused the package deadline. |
+| current-main | 0 / 0 / 0 | `cold-1`: exit 1, wall 2111.497284s; team package timeout 20m, package elapsed 1200.208s. Active test: `TestBranchSwitchCommitsAllOrNothing/fork`; no deadlock conclusion follows from that active frame alone. |
+
+The capture stops each source at its first failed command. There are 81 measured/seed commands altogether: 78 exit zero and three fail. The normal/CGO-free modes each have 36 passing commands, including seeds and partial result-cache replays. This is an observed outcome count, not a statistically defensible flake probability; the historical race is a real safety finding, not a reason for a blind retry.
+
+### Environment, inventory and coverage reconciliation
+
+All source worktrees report dirty=false, Go 1.27.2, Linux 7.0.0-1017-azure / glibc 2.39, four logical CPUs, configured/effective GOMAXPROCS=2, GOTOOLCHAIN=local, GOFLAGS=-mod=readonly and unset GOTMPDIR. CGO=1 in normal/race and 0 in CGO-free. Normal/race jobs used AMD EPYC 7763; CGO-free used AMD EPYC 9V45. Each source within a mode stayed on that mode’s one runner. cpu.max was unavailable (`null`), so CPU quota is **unknown**, not unlimited or equal to logical CPU count. Cross-mode timing comparisons are confounded by CPU model.
+
+| Successful mode workload | Top-level Test/Example/Fuzz terminal identities | Ordinary top-level skips | Normalized nested identities |
+| --- | ---: | ---: | ---: |
+| before (normal and CGO-free) | 7436 | 27 | 14422 |
+| after-32 (normal and CGO-free) | 7590 | 27 | 14901 |
+| current-main (normal and CGO-free) | 7676 | 26 | 15668 |
+
+Top-level inventories and outcomes are stable across the 12 commands per successful source/mode. Raw nested case hashes vary because three fixtures embed ephemeral values in subtest names. Audit normalization is limited to loopback URL ports in `TestWarmModelProfilesNoNetAllowsLoopbackAndRejectsRemote`, a trailing 64-hex object hash in `TestReviewBundleIndependentReadOnlyRoundTrip/tamper_objects`, and the temporary-directory numeric suffix in `TestIngestActionProviderArtifactsRejectsMissingAndEscapedPaths/.../001/stable.json`. With only those substitutions, the complete `(package, test, terminal outcome)` set has one hash across all 12 commands in each source/mode. The raw names/outcomes are retained; none is deleted. Different revisions still have different sets and assertions.
+
+Before→after-32: 7,407 shared top-level identities, 29 removed and 183 added. Before→current-main: 7,176 shared, 260 removed and 500 added. Full name lists are in analysis.json. The published #28 five-duplicate and #29 PTY replacement maps explain specific intentional changes; #32 moved cases execute without -short, but those maps do not establish assertion equivalence for every unrelated addition/removal or the later #49 consolidation. No same-case filtered full-suite measurement was collected.
+
+All six passing source/mode suites still skip the four native grep-selection/policy Tests because ripgrep is unavailable. That required environment-dependent coverage is **unexecuted**, despite exit zero. Other skips retain their raw reasons: opt-in live Codex, SQLite discovery, operator performance, interactive readline, real tmux, sidecar-dependent skill cases and a subprocess-helper entry. Before/after-32 also skip `TestBaselineContract_PerWorkerRecallNotImplemented`; current-main removes that skipped placeholder. Therefore fewer skips cannot be called improved coverage without its replacement contract proof.
+
+### Slow packages and tests
+
+Warm/fresh package elapsed median in seconds (three successful samples); values overlap and must not be summed into command wall time.
+
+| Mode/source | team | CLI | improver | tools | evalharness |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| normal/before | 183.403 | 115.678 | 103.667 | 47.132 | 39.943 |
+| normal/after-32 | 201.931 | 50.492 | 104.780 | 47.120 | 42.141 |
+| normal/current-main | 229.894 | 59.283 | 99.819 | 47.210 | 42.725 |
+| cgo-free/before | 124.795 | 73.683 | 57.553 | 46.455 | 25.349 |
+| cgo-free/after-32 | 133.770 | 29.606 | 56.413 | 46.560 | 26.446 |
+| cgo-free/current-main | 152.368 | 35.461 | 50.835 | 46.456 | outside top five |
+
+The warm normal slow-test samples are led by `TestReviewBundleSyntheticLessonAndInvalidEvidence` (before 37.78–38.51s; after-32 34.64–34.93s; current-main 30.78–32.66s). CGO-free current-main instead includes `TestManagedMCPTemporaryDirectoriesCleanFailedInitializationAndDuplicate` at about 30.11s. Parent/subtest events overlap; these are diagnostic events, not additive cost contributions. Exact per-package distributions and slow events are preserved in analysis.json and raw observation JSON.
+
+### All-attempt runner cost and capture critical path
+
+The Actions API reports **one attempt** and three distinct completed jobs; all are included, including the failed race job. Job duration sum is **35,345 runner seconds** (9.818 runner-hours). Earliest job start to last completion is **16,149 seconds**; run creation to last job completion is **16,151 seconds**, including the initial queue gap. The race job is the capture critical path. This is the cost of the measurement experiment, not a before/after PR-CI cost improvement.
+
+| Capture job | Runner seconds | Toolchain setup step | Raw artifact upload step |
+| --- | ---: | ---: | ---: |
+| full-suite (cgo-free) | 7696 | 4s | 5s |
+| full-suite (race) | 16148 | 3s | 4s |
+| full-suite (normal) | 11501 | 4s | 7s |
+
+No Actions Go build-cache restore/save is configured; every cold repetition uses a private build cache. Toolchain and module downloads occur before timing. Their network bytes/cost and module download durations are not separately instrumented; cache transfer savings are therefore unmeasured. The setup/upload step spans above include their action overhead and are not pure transfer measurements. Child CPU seconds belong to individual go-test process trees, not total runner CPU utilization or billed CPU time.
+
+### Terminal acceptance decision
+
+Keep #26 **open** and PR #53 **draft**. Required missing evidence is: (1) three successful race samples for every source/cache group, with the historical data race and both deadline failures resolved through an explicitly reviewed measurement approach; (2) equal-case timing or full assertion-preserving workload reconciliation across all revisions; (3) actual execution of the four missing-ripgrep contracts; (4) comparable repeated correctness-CI critical-path/cache-transfer costs and sufficient flake observation. No Go source/test, timeout, assertion or measured historical commit was changed to manufacture these results.
+
+Retain the decision to defer team package splitting and additional sharding. Team remains a large package, but splitting it cannot establish correctness or cure the observed historical race. Shards may duplicate setup, compilation, caches and shared CLI fixture builds; current evidence does not justify that architectural change. The full capture is now archived and its terminal report submitted; further polling is unnecessary.
 
 ## Completed local original-revision failure observation
 
@@ -114,10 +203,10 @@ container is not the hosted runner; its measurements are not mixed with Actions.
 No retry, timeout change, assertion relaxation or excluded failure was used.
 Warm/result/race/CGO-free local groups remain unmeasured after this failed baseline.
 
-The [downloadable raw evidence package](https://chatgpt.com/library?file_id=libfile_3478037263e88191b4b571f490701c1b&account_id=personal)
+The earlier separately delivered raw evidence package
 preserves this local capture and the five original correctness artifact ZIPs
 audited below, with per-file SHA-256 and byte sizes. Private Go build caches are
-excluded. It does not contain the still-running hosted capture.
+excluded. It does not contain the hosted capture; that complete evidence is archived separately above.
 
 ## Existing focused comparisons (not new full-suite samples)
 
@@ -250,5 +339,5 @@ That is distinct from the deliberately pinned measurement source `4e13abfb`.
 The documentation fix does not establish that these correctness gates pass.
 The user's acceptance scope excludes Go production/test changes; the three
 affected Go fixture files have therefore not been edited. The benchmark capture
-continues against its original immutable source SHAs, without reruns or altered
-assertions. This PR remains draft and #26 remains open.
+used its original immutable source SHAs, without reruns or altered
+assertions; see the terminal hosted section above. This PR remains draft and #26 remains open.
