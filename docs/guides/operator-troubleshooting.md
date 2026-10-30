@@ -28,6 +28,24 @@ Confirm `Workspace`, `Team`, `Run`, and `Branch` in the overview. Use
 `hufu session status` with the same exact selectors. Do not guess a sibling
 branch or combine `--workspace` with `--workspace-root`.
 
+## Result collection recovery
+
+```sh
+hufu status --team dev-team
+hufu status --team dev-team --json
+```
+
+Plain `hufu status` also shows recovery hints for the canonically selected
+run, without requiring `--workers`. `--json` includes the same information
+under `recovery`: unresolved task IDs, scoped inspection actions, and, for a
+blocked result collection, an `assess-result-repair` action containing
+`resume --repair-result <task-id> --dry-run`. Its availability describes the
+read-only assessment command, not permission or a guarantee that repair will
+succeed. Run the preview from the original project directory with the original
+configuration and model overrides; it may still report policy drift, stale
+sources, or exhausted recovery authority. Status itself does not call a model,
+assess live repair eligibility, grant turns, or resume execution.
+
 ## Interrupted work with known-safe effects
 
 Inspect the task and evidence first. If the overview recommends resume, use

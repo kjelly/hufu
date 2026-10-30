@@ -7,6 +7,34 @@ import (
 	"github.com/kjelly/hufu/internal/team"
 )
 
+func TestRecoveryEligibilityRecognizesBlockedCollection(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		status     team.TaskStatus
+		class      team.TaskFailureClass
+		kind       string
+		checkpoint bool
+		want       bool
+	}{
+		{"collection", team.TaskBlocked, team.FailureProtocol, "collection", true, true},
+		{"missing checkpoint", team.TaskBlocked, team.FailureProtocol, "collection", false, false},
+		{"tool submission", team.TaskBlocked, team.FailureProtocol, "submission", true, false},
+		{"execution failure", team.TaskBlocked, team.FailureExecution, "collection", true, false},
+		{"completed", team.TaskDone, team.FailureProtocol, "collection", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			item := &team.TodoItem{ID: "11", Status: tc.status, FailureEvent: &team.FailureEventPayload{FailureClass: tc.class, FailureType: tc.kind}}
+			if tc.checkpoint {
+				item.ExecutionReceipt = &team.ExecutionReceipt{ResultCollection: &team.ResultCollectionCheckpoint{State: team.ResultCollectionBlocked}}
+			}
+			got := RecoveryEligibilityForTask(item, nil, "run", false)
+			if got == nil || got.ResultCollectionBlocked != tc.want || got.RetryEligible {
+				t.Fatalf("eligibility=%+v", got)
+			}
+		})
+	}
+}
+
 func TestRecoveryEligibilityReusesRepairPolicyWithoutExecuting(t *testing.T) {
 	item := &team.TodoItem{
 		ID: "task-7", Status: team.TaskBlocked, SideEffect: team.SideEffectExternalWrite,

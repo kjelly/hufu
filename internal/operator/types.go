@@ -12,6 +12,7 @@ const (
 	ActionSelectScope         = "select-scope"
 	ActionInspectIntegrity    = "inspect-integrity"
 	ActionInspectTaskRecovery = "inspect-task-recovery"
+	ActionAssessResultRepair  = "assess-result-repair"
 	ActionProvideInput        = "provide-input"
 	ActionReviewApproval      = "review-approval"
 	ActionWaitRuntime         = "wait-runtime"
@@ -210,22 +211,23 @@ type ActionPreconditions struct {
 // RecoveryEligibility is a read-only projection of the existing runtime
 // recovery and policy decision. It does not grant permission to mutate.
 type RecoveryEligibility struct {
-	TaskID              string
-	Attempt             int
-	TaskStatus          string
-	ExpectedEventID     string
-	ExpectedEventHash   string
-	ExternalEffectState string
-	EffectivePolicy     string
-	PolicyRevision      string
-	ExpectedRevision    string
-	PolicyDenied        bool
-	ResumeEligible      bool
-	ReconcileEligible   bool
-	RetryEligible       bool
-	CapabilityKnown     bool
-	ReasonCode          string
-	SourceRefs          []string
+	ResultCollectionBlocked bool
+	TaskID                  string
+	Attempt                 int
+	TaskStatus              string
+	ExpectedEventID         string
+	ExpectedEventHash       string
+	ExternalEffectState     string
+	EffectivePolicy         string
+	PolicyRevision          string
+	ExpectedRevision        string
+	PolicyDenied            bool
+	ResumeEligible          bool
+	ReconcileEligible       bool
+	RetryEligible           bool
+	CapabilityKnown         bool
+	ReasonCode              string
+	SourceRefs              []string
 }
 
 type ActionSelectionFacts struct {

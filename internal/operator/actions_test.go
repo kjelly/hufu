@@ -8,6 +8,54 @@ import (
 	"testing"
 )
 
+func TestSelectActionsOffersOnlyReadOnlyResultRepairAssessment(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		pending   bool
+		integrity string
+		binding   string
+		want      bool
+	}{
+		{"collection with denied replay", true, "valid", "unique", true},
+		{"ordinary protocol failure", false, "valid", "unique", false},
+		{"invalid evidence", true, "invalid", "unique", false},
+		{"ambiguous scope", true, "valid", "ambiguous", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot := selectionTestSnapshot(ActivityBlocked, "blocked")
+			snapshot.Integrity.Status = tc.integrity
+			snapshot.Scope.BindingStatus = tc.binding
+			snapshot.Scope.ProjectDir = "/project"
+			primary, secondary, err := SelectActions(ActionSelectionFacts{Snapshot: snapshot, Recovery: &RecoveryEligibility{
+				TaskID: "11", TaskStatus: "blocked", PolicyDenied: true, ResultCollectionBlocked: tc.pending,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (len(secondary) != 0) != tc.want {
+				t.Fatalf("primary=%+v secondary=%+v", primary, secondary)
+			}
+			if !tc.want {
+				return
+			}
+			action := secondary[0]
+			want := []string{"hufu", "resume", "--workspace", snapshot.Scope.WorkspaceExact, "--run", snapshot.Scope.RunID, "--branch", snapshot.Scope.BranchID, "--execution-profile", "default", "--repair-result", "11", "--dry-run"}
+			if snapshot.Scope.TeamName != "" {
+				want = append(want, "--team", snapshot.Scope.TeamName)
+			}
+			if action.ID != ActionAssessResultRepair || action.Kind != "inspect" || action.Risk != "read-only" || action.CWD != "/project" || !reflect.DeepEqual(action.Argv, want) {
+				t.Fatalf("repair assessment = %+v", action)
+			}
+			incomplete := action.Target
+			incomplete.BranchID = ""
+			missing, err := BuildAction(ActionAssessResultRepair, ActionBuildInput{Target: incomplete})
+			if err != nil || missing.Availability != "blocked" || len(missing.Argv) != 0 {
+				t.Fatalf("incomplete target = %+v err=%v", missing, err)
+			}
+		})
+	}
+}
+
 func TestBuildActionUsesOnlyRegisteredExistingInspectFlags(t *testing.T) {
 	target := ActionTarget{Workspace: "/tmp/work space", TeamID: "ignored-team", RunID: "run-1", BranchID: "branch-1", TaskID: "task-1", Attempt: 2}
 	action, err := BuildAction(ActionInspectTaskRecovery, ActionBuildInput{

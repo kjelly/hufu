@@ -40,6 +40,8 @@ func actionDefinitionFor(id string) (actionDefinition, bool) {
 		return actionDefinition{kind: "inspect", actor: "user", risk: "read-only", confirmation: "none", command: "inspect-replay"}, true
 	case ActionInspectTaskRecovery:
 		return actionDefinition{kind: "inspect", actor: "user", risk: "read-only", confirmation: "none", command: "inspect-task"}, true
+	case ActionAssessResultRepair:
+		return actionDefinition{kind: "inspect", actor: "user", risk: "read-only", confirmation: "none", command: "assess-result-repair"}, true
 	case ActionProvideInput:
 		return actionDefinition{kind: "provide_input", actor: "user", risk: "approval", confirmation: "existing-runtime-gate"}, true
 	case ActionReviewApproval:
@@ -107,6 +109,14 @@ func BuildAction(id string, input ActionBuildInput) (ActionSuggestion, error) {
 }
 
 func buildRegisteredArgv(command string, target ActionTarget) []string {
+	if command == "assess-result-repair" {
+		if target.Workspace == "" || target.RunID == "" || target.BranchID == "" || target.TaskID == "" {
+			return []string{}
+		}
+		argv := []string{"hufu", "resume", "--workspace", target.Workspace, "--run", target.RunID, "--branch", target.BranchID,
+			"--execution-profile", "default", "--repair-result", target.TaskID, "--dry-run"}
+		return appendFlag(argv, "--team", target.TeamID)
+	}
 	var argv []string
 	switch command {
 	case "inspect-replay":
@@ -297,6 +307,15 @@ func SelectActions(facts ActionSelectionFacts) (*ActionSuggestion, []ActionSugge
 	}
 	if err != nil {
 		return nil, nil, err
+	}
+	// Offer assessment, never repair authority. The preview revalidates the
+	// original work, policy, sources and grants without loading a provider.
+	if primary.ID == ActionInspectTaskRecovery && facts.Recovery != nil && facts.Recovery.ResultCollectionBlocked {
+		addSecondary(ActionAssessResultRepair, "result_collection_assessment_required", "available", facts.Recovery)
+		if err != nil {
+			return nil, nil, err
+		}
+		secondary[len(secondary)-1].CWD = snapshot.Scope.ProjectDir
 	}
 	if len(secondary) > 2 {
 		secondary = secondary[:2]
