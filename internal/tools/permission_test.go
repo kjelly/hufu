@@ -2,8 +2,12 @@ package tools
 
 import (
 	"context"
+	"encoding/json/v2"
 	"path/filepath"
+	"strconv"
 	"testing"
+
+	"charm.land/fantasy"
 )
 
 func TestResolvePathWithWorkDir_ExpandsHomeAndTilde(t *testing.T) {
@@ -672,5 +676,55 @@ func TestTruncBy_EdgeCaseMaxZero(t *testing.T) {
 	result := truncBy(10, 0, 500, 0)
 	if result != "lines+bytes" {
 		t.Errorf("truncBy(10, 0, 500, 0) = %q, want \"lines+bytes\"", result)
+	}
+}
+
+func TestToolPermissionDenialEmitsNativeDisposition(t *testing.T) {
+	ctx := SetToolsAllowed(t.Context(), []string{"view"})
+	var got []ToolExecutionDisposition
+	ctx = context.WithValue(ctx, ToolExecutionDispositionReporterKey, ToolExecutionDispositionReporter(func(d ToolExecutionDisposition) { got = append(got, d) }))
+	response, err := NewBashTool().Run(ctx, fantasy.ToolCall{ID: "denied-call", Name: "bash", Input: `{"command":"true"}`})
+	if err != nil || !response.IsError {
+		t.Fatalf("denial = %#v, %v", response, err)
+	}
+	if len(got) != 1 || got[0].ReasonCode != "tool_permission_denied" || got[0].Executed || got[0].ToolCallID != "denied-call" {
+		t.Fatalf("native disposition = %#v", got)
+	}
+}
+
+func TestPathDenialEmitsNativeDisposition(t *testing.T) {
+	allowed, outside := t.TempDir(), t.TempDir()
+	ctx := SetToolsAllowed(t.Context(), []string{"view"})
+	var got []ToolExecutionDisposition
+	ctx = context.WithValue(ctx, ToolExecutionDispositionReporterKey, ToolExecutionDispositionReporter(func(d ToolExecutionDisposition) { got = append(got, d) }))
+	input, err := json.Marshal(map[string]string{"file_path": filepath.Join(outside, "file.txt")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := NewViewTool(WithWorkDir(allowed), WithAllowedPaths([]string{allowed})).Run(ctx, fantasy.ToolCall{ID: "path-call", Name: "view", Input: string(input)})
+	if err != nil || !response.IsError {
+		t.Fatalf("denial = %#v, %v", response, err)
+	}
+	if len(got) != 1 || got[0].ReasonCode != "path_out_of_scope" || got[0].Executed || got[0].ToolCallID != "path-call" || got[0].ToolName != "view" {
+		t.Fatalf("disposition = %#v", got)
+	}
+}
+
+func TestLuaPathDenialDoesNotClaimUnexecutedCall(t *testing.T) {
+	allowed, outside := t.TempDir(), t.TempDir()
+	ctx := SetToolsAllowed(t.Context(), []string{"lua"})
+	var got []ToolExecutionDisposition
+	ctx = context.WithValue(ctx, ToolExecutionDispositionReporterKey, ToolExecutionDispositionReporter(func(d ToolExecutionDisposition) { got = append(got, d) }))
+	code := "print('started'); assert(io.open(" + strconv.Quote(filepath.Join(outside, "file.txt")) + ", 'r'))"
+	input, err := json.Marshal(map[string]string{"code": code})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := NewLuaTool(WithWorkDir(allowed), WithAllowedPaths([]string{allowed})).Run(ctx, fantasy.ToolCall{ID: "lua-path", Name: "lua", Input: string(input)})
+	if err != nil || !response.IsError {
+		t.Fatalf("denial = %#v, %v", response, err)
+	}
+	if len(got) != 1 || got[0].ReasonCode != "path_out_of_scope" || !got[0].Executed || got[0].ToolCallID != "lua-path" {
+		t.Fatalf("disposition = %#v", got)
 	}
 }

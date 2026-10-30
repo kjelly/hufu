@@ -47,11 +47,11 @@ func TestClassifyTaskFailureStructured(t *testing.T) {
 			want: FailureContract,
 		},
 		{
-			name: "warning finding does not override text",
+			name: "warning finding cannot classify an error",
 			in: FailureClassificationInput{Err: errors.New("verification failed: deliverable missing"), ResolveFindings: []ContractFinding{
 				{Severity: FindingSeverityWarning, Code: FindingExecutableUnresolved, Field: "verify"},
 			}},
-			want: FailureVerify,
+			want: FailureExecution,
 		},
 		{
 			name: "environment finding beats verify exit code",
@@ -64,20 +64,20 @@ func TestClassifyTaskFailureStructured(t *testing.T) {
 			want: FailureEnvironment,
 		},
 
-		// source= details.
-		{"source=environment", FailureClassificationInput{Err: errors.New("source=environment | error=command not found")}, FailureEnvironment},
-		{"source=cancelled", FailureClassificationInput{Err: errors.New("source=cancelled | error=user sigint")}, FailureCancelled},
-		{"source=sigint", FailureClassificationInput{Err: errors.New("source=sigint | error=user sigint")}, FailureCancelled},
-		{"source=context_canceled", FailureClassificationInput{Err: errors.New("source=context_canceled | error=parent cancel")}, FailureCancelled},
-		{"source=contract", FailureClassificationInput{Err: errors.New("source=contract | error=verifier_not_asserting")}, FailureContract},
-		{"source=contract with verifier detail", FailureClassificationInput{Err: errors.New("source=contract | error=verifier contract error: verify (verifier_not_asserting): ...")}, FailureContract},
+		// Source-like text is not typed metadata in live errors.
+		{"source=environment", FailureClassificationInput{Err: errors.New("source=environment | error=command not found")}, FailureExecution},
+		{"source=cancelled", FailureClassificationInput{Err: errors.New("source=cancelled | error=user sigint")}, FailureExecution},
+		{"source=sigint", FailureClassificationInput{Err: errors.New("source=sigint | error=user sigint")}, FailureExecution},
+		{"source=context_canceled", FailureClassificationInput{Err: errors.New("source=context_canceled | error=parent cancel")}, FailureExecution},
+		{"source=contract", FailureClassificationInput{Err: errors.New("source=contract | error=verifier_not_asserting")}, FailureExecution},
+		{"source=contract with verifier detail", FailureClassificationInput{Err: errors.New("source=contract | error=verifier contract error: verify (verifier_not_asserting): ...")}, FailureExecution},
 
-		// Text fallback.
-		{"text: command not found", FailureClassificationInput{Err: errors.New("bash: foo: command not found")}, FailureEnvironment},
-		{"text: executable unresolved", FailureClassificationInput{Err: errors.New("executable unresolved in verify stage")}, FailureEnvironment},
-		{"text: environment", FailureClassificationInput{Err: errors.New("environment setup failed")}, FailureEnvironment},
-		{"text: contract preflight", FailureClassificationInput{Err: errors.New("contract preflight failed: verify (verifier_invalid): missing path")}, FailureContract},
-		{"text: verification failed", FailureClassificationInput{Err: errors.New("verification failed: deliverable missing")}, FailureVerify},
+		// Live prose cannot select a failure class.
+		{"text: command not found", FailureClassificationInput{Err: errors.New("bash: foo: command not found")}, FailureExecution},
+		{"text: executable unresolved", FailureClassificationInput{Err: errors.New("executable unresolved in verify stage")}, FailureExecution},
+		{"text: environment", FailureClassificationInput{Err: errors.New("environment setup failed")}, FailureExecution},
+		{"text: contract preflight", FailureClassificationInput{Err: errors.New("contract preflight failed: verify (verifier_invalid): missing path")}, FailureExecution},
+		{"text: verification failed", FailureClassificationInput{Err: errors.New("verification failed: deliverable missing")}, FailureExecution},
 		{"text: deadline exceeded", FailureClassificationInput{Err: errors.New("context deadline exceeded")}, FailureTimeout},
 		{"text: execution fallback", FailureClassificationInput{Err: errors.New("agent failed: exit code 1")}, FailureExecution},
 		{"nil error defaults to execution", FailureClassificationInput{}, FailureExecution},
@@ -181,4 +181,33 @@ func TestVerifyResultForTodo(t *testing.T) {
 	check("stored result", c, todoID, 2, false)
 	check("unknown todo", c, "nonexistent", -1, true)
 	check("nil coordinator", nil, todoID, -1, true)
+}
+
+func TestFailureDetailSourceIgnoresDiagnosticText(t *testing.T) {
+	for _, detail := range []string{
+		"provider returned source=cancelled",
+		"provider returned | source=cancelled",
+		"source=cancelled_elsewhere | error=failed",
+		"source=error | error=quoted | source=cancelled",
+		"source=error | error=source=contract",
+	} {
+		if class, ok := classFromFailureDetailSource(errors.New(detail)); ok {
+			t.Errorf("diagnostic %q selected class %q", detail, class)
+		}
+	}
+	class, ok := classFromFailureDetailSource(errors.New("current=task todo_id=1 | source=contract | error=invalid"))
+	if !ok || class != FailureContract {
+		t.Fatalf("bound task source = %q, %v", class, ok)
+	}
+}
+
+func TestLegacyFailureDetailSources(t *testing.T) {
+	for source, want := range map[string]TaskFailureClass{
+		"environment": FailureEnvironment, "cancelled": FailureCancelled,
+		"sigint": FailureCancelled, "context_canceled": FailureCancelled, "contract": FailureContract,
+	} {
+		if got := classifyTaskFailure(errors.New("current=task todo_id=1 | source=" + source + " | error=diagnostic")); got != want {
+			t.Errorf("source %s = %s, want %s", source, got, want)
+		}
+	}
 }

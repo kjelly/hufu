@@ -14,6 +14,12 @@ func policySnapshotUsesBackend(snapshot *ExecutionPolicySnapshot, backend string
 // world, network, contracts and the entire route set, without migrating or
 // rewriting the original policy snapshot.
 func compatibleUnusedExecutionEnvironment(frozen, current *ExecutionPolicySnapshot) (bool, error) {
+	normalized := normalizeUnusedExecutionEnvironment(frozen, current)
+	hash, err := executionPolicyConfigurationHash(normalized)
+	return hash == frozen.ConfigurationHash, err
+}
+
+func normalizeUnusedExecutionEnvironment(frozen, current *ExecutionPolicySnapshot) *ExecutionPolicySnapshot {
 	normalized := cloneExecutionPolicySnapshot(current)
 	for i := range normalized.ExecutionWorlds {
 		world := &normalized.ExecutionWorlds[i]
@@ -27,6 +33,5 @@ func compatibleUnusedExecutionEnvironment(frozen, current *ExecutionPolicySnapsh
 			world.InheritEnv = slices.Clone(frozen.ExecutionWorlds[index].InheritEnv)
 		}
 	}
-	hash, err := executionPolicyConfigurationHash(normalized)
-	return hash == frozen.ConfigurationHash, err
+	return normalized
 }

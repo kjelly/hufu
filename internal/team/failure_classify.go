@@ -10,8 +10,8 @@ import (
 )
 
 // FailureClassificationInput carries the structured signals used to classify a
-// task failure. Structured inputs take precedence over text matching, which
-// is retained only as a fallback for errors that carry no structured metadata.
+// task failure. Unknown live errors default to execution; their wording never
+// selects recovery policy. Text fallback is limited to legacy persisted details.
 //
 // Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §5.3, WP-05
 type FailureClassificationInput struct {
@@ -144,13 +144,9 @@ const (
 	ExitCodeSourceWorker = "worker"
 )
 
-// ClassifyTaskFailureStructured classifies a failure using structured inputs
-// first, falling back to text matching on the error message for errors that
-// carry no structured metadata. Cancelled failures (§5.3) are detected from
-// the context error and the interactive-abort flag and never fall through to
-// the text-matching path.
-//
-// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, §5.3, WP-05
+// ClassifyTaskFailureStructured classifies live failures from explicit signals.
+// Unknown errors remain execution failures. Legacy persisted prose is handled
+// separately by classifyTaskFailure.
 func ClassifyTaskFailureStructured(in FailureClassificationInput) TaskFailureClass {
 	// §5.3: cancelled must be detected and separated from execution before
 	// any text matching, and must never be counted as a retry/fingerprint.
@@ -175,13 +171,6 @@ func ClassifyTaskFailureStructured(in FailureClassificationInput) TaskFailureCla
 	if class, ok := classFromResolveFindings(in.ResolveFindings); ok {
 		return class
 	}
-	// Structured: FailureDetail source= label (WP-02/WP-13 write structured
-	// payloads with a `source=<label>` prefix). Map environment and cancelled
-	// sources explicitly; contract is handled below by the text path for
-	// backwards compatibility with existing messages.
-	if class, ok := classFromFailureDetailSource(in.Err); ok {
-		return class
-	}
 	// Structured: exit code (§5, §5.2). A non-zero verify-command exit code is
 	// objective evidence the deliverable failed verification and classifies
 	// as FailureVerify, taking precedence over the text fallback. This is the
@@ -191,9 +180,9 @@ func ClassifyTaskFailureStructured(in FailureClassificationInput) TaskFailureCla
 	if class, ok := classFromExitCode(in.ExitCode, in.ExitCodeSource); ok {
 		return class
 	}
-	// Fallback: text matching on the error message. This is the legacy path
-	// retained for errors that carry no structured metadata.
-	return classifyTaskFailureByText(in.Err)
+	// An unclassified live error is an execution failure. Its prose must not
+	// select recovery policy. Historical records use classifyTaskFailure.
+	return FailureExecution
 }
 
 // classFromExitCode maps a process exit code to a failure class when the
@@ -255,28 +244,29 @@ func classFromResolveFindings(findings []ContractFinding) (TaskFailureClass, boo
 	return "", false
 }
 
-// classFromFailureDetailSource maps the `source=<label>` prefix of a
-// structured FailureDetail payload to a failure class. Only environment and
-// cancelled sources are mapped here; contract is handled by the text path
-// (which recognises both the `source=contract` prefix and the legacy
-// "contract preflight failed" message) to preserve the WP-02 behavior tested
-// in wp02_review_fixes_test.go.
+// classFromFailureDetailSource reads the stable source field in persisted
+// failure headers. Diagnostic payloads and partial label matches are ignored.
 func classFromFailureDetailSource(err error) (TaskFailureClass, bool) {
 	if err == nil {
 		return "", false
 	}
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "source=environment") {
-		return FailureEnvironment, true
-	}
-	if strings.Contains(msg, "source=cancelled") {
-		return FailureCancelled, true
-	}
-	if strings.Contains(msg, "source=sigint") {
-		return FailureCancelled, true
-	}
-	if strings.Contains(msg, "source=context_canceled") {
-		return FailureCancelled, true
+	// Only runtime header fields are metadata. Never interpret source-like
+	// text inside the human-readable error payload as a control signal.
+	for field := range strings.SplitSeq(err.Error(), " | ") {
+		field = strings.TrimSpace(field)
+		if strings.HasPrefix(field, "current=") || strings.HasPrefix(field, "last_tool=") {
+			continue
+		}
+		switch field {
+		case "source=environment":
+			return FailureEnvironment, true
+		case "source=cancelled", "source=sigint", "source=context_canceled":
+			return FailureCancelled, true
+		case "source=contract":
+			return FailureContract, true
+		default:
+			return "", false
+		}
 	}
 	return "", false
 }
@@ -293,14 +283,11 @@ func classifyTaskFailureByText(err error) TaskFailureClass {
 	if isTaskTimeout(err) || errors.Is(err, context.DeadlineExceeded) {
 		return FailureTimeout
 	}
-	msg := strings.ToLower(err.Error())
-	// Structured failure detail begins with `source=<label>` (FailureDetail).
-	// Recognize the contract source so preflight failures are recorded with
-	// the contract class rather than falling through to execution.
-	// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, WP-02
-	if strings.HasPrefix(msg, "source=contract") || strings.Contains(msg, "| source=contract") {
-		return FailureContract
+	text := err.Error()
+	if _, payload, ok := strings.Cut(text, " | error="); ok {
+		text = payload
 	}
+	msg := strings.ToLower(text)
 	if strings.Contains(msg, "contract preflight failed") {
 		return FailureContract
 	}
@@ -319,14 +306,23 @@ func classifyTaskFailureByText(err error) TaskFailureClass {
 	return FailureExecution
 }
 
-// classifyTaskFailure is the legacy single-argument classifier, retained as a
-// thin wrapper over ClassifyTaskFailureStructured for callers that have no
-// structured inputs available. New call sites should build a
-// FailureClassificationInput and call ClassifyTaskFailureStructured directly.
-//
-// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5, WP-05
+// classifyTaskFailure supports historical persisted details without typed
+// classification. Live execution must use ClassifyTaskFailureStructured.
 func classifyTaskFailure(err error) TaskFailureClass {
-	return ClassifyTaskFailureStructured(FailureClassificationInput{Err: err})
+	class := ClassifyTaskFailureStructured(FailureClassificationInput{Err: err})
+	if class != FailureExecution {
+		return class
+	}
+	if override, ok := errors.AsType[interface {
+		error
+		FailureClassOverride() TaskFailureClass
+	}](err); ok && override.FailureClassOverride() != "" {
+		return class
+	}
+	if class, ok := classFromFailureDetailSource(err); ok {
+		return class
+	}
+	return classifyTaskFailureByText(err)
 }
 
 // IsCancelledClass reports whether a failure class represents a cancellation

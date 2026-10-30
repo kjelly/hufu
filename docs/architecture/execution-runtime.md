@@ -102,6 +102,17 @@ contract can be attached to an upstream resolver worker through
 schema-validated successful result. The schema is pinned in the execution
 policy snapshot and cannot be changed by a coordinator task payload.
 
+When resuming, execution policy drift is rejected before provider preflight.
+The error lists changed snapshot fields, identifies model routes, contract
+owners and MCP servers, and shows old/new numeric or boolean settings. Entry
+identities are bounded, redacted and escaped for terminal output. Diagnostics
+use the same historical snapshot shape and unused-backend environment rules
+as admission; they do not rewrite the saved policy. Endpoint/credential,
+schema-content and other hash-only changes are identified by their fingerprint
+field; their underlying old values were not retained and cannot be reconstructed.
+Restore the original settings to resume, or use `--new` to archive the previous
+session and begin with the current settings.
+
 New compatible local sessions use runtime result collection by default. Static
 `result-transport: runtime|tool` in team configuration or agent frontmatter is
 pinned in the execution policy; an agent override takes precedence over the

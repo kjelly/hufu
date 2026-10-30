@@ -1967,6 +1967,7 @@ retryLoop:
 										err = fmt.Errorf("protocol failure (class: %s, reason: %s) for task %s (%s): agent produced output but failed protocol repair to submit_result",
 											string(FailureProtocol), string(repairReason), todoID, agentName)
 									}
+									err = withFailureClassOverride(err, FailureProtocol)
 									receipt.RepairProvenance.Error = err.Error()
 								}
 							}
@@ -2192,6 +2193,7 @@ retryLoop:
 		// (§5: the verify result supplies the exit code; environment findings
 		// supply command-not-found signals that take precedence over exit
 		// codes per §5.1).
+		err = withAttemptDenials(err, receipt.ToolDispositions)
 		verifyResult := verifyResultForTodo(c, todoID)
 		currentClass := ClassifyTaskFailureStructured(FailureClassificationInput{
 			Err:             err,
@@ -2322,11 +2324,11 @@ retryLoop:
 		// operational decision ahead of the retry switch; packet persistence must
 		// not merely record a block after a worker has already been re-dispatched.
 		replayAvoided := false
-		if isPermissionBlockedFailureDetail(c.FailureDetail(err, "error")) {
+		if isPermissionBlockedError(err) {
 			disposition = NeedsHuman
 			reason = "capability or permission is unavailable"
 		} else if (disposition == RetryWorker || disposition == RetryNone) && workerReportedBlocked(err) ||
-			disposition == RetryWorker && isSafetyDenialFailureDetail(c.FailureDetail(err, "error")) {
+			disposition == RetryWorker && isSafetyDeniedError(err) && (!protocolCapabilityFallback || !onlyReadOnlyPolicyDenials(receipt.ToolDispositions)) {
 			// Do not replay a task its worker reported blocked, or one stopped
 			// by a path-consent or read-only policy denial: a retry runs under
 			// a hint to change approach, which is exactly how a denied action
@@ -2737,7 +2739,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		}
 		if item.Status == TaskPending || item.Status == TaskPlanned {
 			detail := c.FailureDetail(returnErr, FailureSourceError)
-			persistErr := c.PersistFailureWithClassAndStatusError(task.Agent, task.Goal, todoID, detail, RetryNone, classifyTaskFailure(returnErr), TaskError)
+			persistErr := c.PersistFailureWithClassAndStatusError(task.Agent, task.Goal, todoID, detail, RetryNone, ClassifyTaskFailureStructured(FailureClassificationInput{Err: returnErr}), TaskError)
 			returnErr = errors.Join(returnErr, persistErr)
 		}
 	}()

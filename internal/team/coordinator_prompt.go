@@ -373,14 +373,6 @@ func (c *Coordinator) GetOrchestratorDef() *agent.AgentDef {
 			return &defCopy
 		}
 	}
-	for _, def := range c.session.Agents {
-		n := strings.ToLower(def.Name)
-		if strings.Contains(n, "coordinat") || strings.Contains(n, "orchestr") {
-			defCopy := *def
-			c.ensureModelFallback(&defCopy)
-			return &defCopy
-		}
-	}
 	def := &agent.AgentDef{
 		Name:        "coordinator",
 		Description: "Default team coordinator",

@@ -216,3 +216,39 @@ passing comparable full-suite samples and classify failure/skip causes.
   function anchors valid; `git diff --check` passes.
 - Go production and test files remain unchanged. Lint ran only after the local
   measurement stopped; no heavyweight local validation competed with timings.
+
+## PR correctness CI follow-up
+
+[CI 41047921497](https://github.com/kjelly/hufu/actions/runs/41047921497)
+checks merge commit `5e2739a3b9c7dfc74d72c50b73d0d62cd4b604c5`, which merges
+this PR into advanced main `2100b1b227f27ecc11790b49b8fe8915920e4f9a`.
+That is distinct from the deliberately pinned measurement source `4e13abfb`.
+
+- [Docs job](https://github.com/kjelly/hufu/actions/runs/41047921497/job/124037133348)
+  rejects the newly added `docs/reference/runtime-string-contracts.md` for a
+  missing lifecycle header. The follow-up adds its five required fields; the
+  complete documentation check passes locally (88 active / 178 total files).
+- [CGO-free job](https://github.com/kjelly/hufu/actions/runs/41047921497/job/124037133363)
+  fails four code-review team fixtures: `TestHufuCodeReviewRuntimeOwnsAll51GapIdentities`,
+  `TestHufuCodeReviewEmptyCritiqueOwnsSource`,
+  `TestHufuCodeReviewCharacterizesPromptCannotRewriteStaticScope` and
+  `TestHufuCodeReviewSynthesisReceivesCompactPrepareStatusWithoutCoordinatorConstraints`.
+  Diagnostics require the newly introduced snapshot-coverage source occurrence,
+  complete static workflow contract batch, and `scope_context` runtime output.
+  Advanced main's own runtime-string migration note already records the same
+  four failures on an independent unchanged snapshot.
+- The team race job's raw `short-team` artifact (ID `12975035006`, SHA-256
+  `6c688740490e1cfbb062d691b495cb8cc0b1b825d259c1c02a456d59f621b761`)
+  confirms exactly the same four top-level failures and diagnostics. There is
+  no need to infer the cause from its failed conclusion alone.
+- A focused normal execution on the merged source reproduces all four failures:
+  `mise exec -- go test -p 2 -count=1 -timeout 10m ./internal/team -run
+  '^(TestHufuCodeReviewRuntimeOwnsAll51GapIdentities|TestHufuCodeReviewEmptyCritiqueOwnsSource|TestHufuCodeReviewCharacterizesPromptCannotRewriteStaticScope|TestHufuCodeReviewSynthesisReceivesCompactPrepareStatusWithoutCoordinatorConstraints)$'`.
+  This is a diagnostic selection, not another performance observation or a
+  replacement for the failed full-suite CI run.
+
+The documentation fix does not establish that these correctness gates pass.
+The user's acceptance scope excludes Go production/test changes; the three
+affected Go fixture files have therefore not been edited. The benchmark capture
+continues against its original immutable source SHAs, without reruns or altered
+assertions. This PR remains draft and #26 remains open.

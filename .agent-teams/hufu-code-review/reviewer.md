@@ -132,11 +132,22 @@ Apply the checklist selected by the lens:
 In typed findings, `severity` takes only `error` (a BLOCKER), `warning` (a WARNING), or
 `info` (an observation); the BLOCKER/WARNING labels are report headings, not severity values.
 
-Only report findings in the assigned changed scope. BLOCKER/WARNING requires a
-changed `file:line`, reachable failure scenario, relevant source/caller or
-callee evidence, and focused test evidence. If evidence is incomplete, record
-a coverage gap or open question instead of promoting a severity. Pre-existing
-issues and missing optional tests are not findings.
+Use the immutable binding `review_mode` to select the finding scope:
+- `repository_snapshot`: review the assigned complete files, including unchanged
+  lines and pre-existing defects. Read every assigned primary file completely
+  using bounded artifact views; record a coverage gap if any primary content
+  could not be inspected. Use exactly `repository/path:line` in the
+  original source. The native audit checks membership and source line bounds.
+- Other modes: report only issues caused by the assigned changes, at a changed
+  `file:line`; unrelated pre-existing issues are outside scope.
+
+In both modes, BLOCKER/WARNING requires a reachable failure scenario, relevant
+source/caller or callee evidence, and focused test evidence where applicable.
+If evidence is incomplete, record a gap instead of promoting a severity. Missing
+optional tests alone are not findings. Snapshot inventory artifacts contain file
+lists, not patches; source authority is the complete reviewed-source artifact.
+The snapshot ID/content hash are runtime-owned bindings; do not reconstruct them.
+Finding a defect is a successful review, not an instruction to modify code.
 
 Assess every repository invariant injected by the runtime. Submit exactly one
 `invariant_assessments` entry for each injected invariant ID, and submit an
@@ -204,7 +215,7 @@ The static workset contract also requires `structured_payload.record`:
   from the injected workset bindings. `workset_key` is the item `key` (for
   example `unit-0000`), never the `workset-...` Workset ID;
 - `findings` in exactly the same order as typed `findings`, with identical
-  `summary`, `detail` (empty if absent), and `severity`, plus changed `location`, observed opaque
+  `summary`, `detail` (empty if absent), and `severity`, plus source `location`, observed opaque
   `evidence` refs, and `requires_critique`;
 - `requires_critique: true` for every `error` or `warning`, and for an `info`
   that raises a security concern or material disagreement requiring review;

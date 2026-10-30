@@ -1,7 +1,7 @@
 {
   "team": {
     "name": "web-research",
-    "description": "Independently research factual claims online, verify source evidence, and report uncertainty",
+    "description": "Independently research factual claims online, verify source evidence, and synthesize an evidence-qualified answer",
     "max_rounds": 8,
     "timeout": 600,
     "verify_timeout": 120,
@@ -11,7 +11,8 @@
       "required_workers": [
         "researcher",
         "countercheck",
-        "verifier"
+        "verifier",
+        "synthesizer"
       ],
       "required_workers_accept_gaps": true,
       "require_no_unresolved_tasks": true,
@@ -41,6 +42,7 @@
     "workflow": {
       "phases": [
         "prepare",
+        "audit",
         "verify"
       ]
     },
@@ -55,7 +57,8 @@
       "AllowedWorkers": [
         "researcher",
         "countercheck",
-        "verifier"
+        "verifier",
+        "synthesizer"
       ],
       "InitialBatch": null,
       "RequireExactInitialBatch": false,
@@ -65,7 +68,8 @@
       "NoRedispatchAfterSuccess": [
         "researcher",
         "countercheck",
-        "verifier"
+        "verifier",
+        "synthesizer"
       ],
       "ForbidContextFiles": true,
       "TaskGoalInvariants": null,
@@ -74,7 +78,8 @@
       "ShareRequestWith": [
         "researcher",
         "countercheck",
-        "verifier"
+        "verifier",
+        "synthesizer"
       ]
     }
   },
@@ -108,6 +113,14 @@
       "max_retries": -1
     },
     {
+      "name": "synthesizer",
+      "role": "worker",
+      "tools": "submit_result",
+      "side_effect": "none",
+      "recovery": "retry",
+      "max_retries": -1
+    },
+    {
       "name": "verifier",
       "role": "worker",
       "tools": "web_search,playwright_verifier__browser_navigate,playwright_verifier__browser_snapshot",
@@ -134,6 +147,13 @@
     {
       "id": "evidence-audit",
       "agent": "verifier",
+      "phase": "AUDIT",
+      "side_effect": "none",
+      "recovery": "retry"
+    },
+    {
+      "id": "research-synthesis",
+      "agent": "synthesizer",
       "phase": "VERIFY",
       "side_effect": "none",
       "recovery": "retry"

@@ -77,7 +77,7 @@ func TestWebResearchReportRetainsSourcesAndPreciseGaps(t *testing.T) {
 
 func TestWebResearchPromptJSONExamplesSatisfyContracts(t *testing.T) {
 	dir := filepath.Join("..", "..", ".agent-teams", "web-research")
-	for _, tc := range []struct{ name, version string }{{"researcher", "v1"}, {"countercheck", "v1"}, {"verifier", "v1"}, {"verifier", "v2"}} {
+	for _, tc := range []struct{ name, version string }{{"researcher", "v1"}, {"countercheck", "v1"}, {"verifier", "audit-v1"}} {
 		t.Run(tc.name+"_"+tc.version, func(t *testing.T) {
 			name := tc.name
 			content, err := os.ReadFile(filepath.Join(dir, name+".md"))
@@ -102,7 +102,7 @@ func TestWebResearchPromptJSONExamplesSatisfyContracts(t *testing.T) {
 			}
 			schema := "schemas/research-v1.json"
 			if name == "verifier" {
-				schema = "schemas/report-" + tc.version + ".json"
+				schema = "schemas/audit-v1.json"
 			}
 			compiled, err := compileResultContractSchema(dir, schema)
 			if err != nil {

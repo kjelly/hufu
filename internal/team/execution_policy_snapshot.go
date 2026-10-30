@@ -903,7 +903,7 @@ func (c *Coordinator) ensureExecutionPolicySnapshot() error {
 		return fmt.Errorf("resolve execution policy snapshot: %w", err)
 	}
 	if current.snapshot.ConfigurationHash != c.executionPolicy.snapshot.ConfigurationHash {
-		return fmt.Errorf("execution policy changed after coordinator startup")
+		return fmt.Errorf("execution policy changed after coordinator startup\n%s", executionPolicyDifferences(c.executionPolicy.snapshot, current.snapshot))
 	}
 
 	var persisted *ExecutionPolicySnapshot
@@ -931,7 +931,7 @@ func (c *Coordinator) ensureExecutionPolicySnapshot() error {
 			return matchErr
 		}
 		if !matchesCurrent {
-			return fmt.Errorf("execution policy snapshot drift detected (event_store=%s current=%s)", journalSnapshot.ConfigurationHash, current.snapshot.ConfigurationHash)
+			return c.executionPolicySnapshotDriftError(journalSnapshot)
 		}
 		return nil
 	}
@@ -995,9 +995,20 @@ func (c *Coordinator) executionPolicySnapshotMatchesCurrent(snapshot *ExecutionP
 	if err := c.checkLegacySnapshotMCPActionProviders(snapshot); err != nil {
 		return false, err
 	}
+	current, err := c.executionPolicySnapshotForComparison(snapshot)
+	if err != nil {
+		return false, err
+	}
+	if current.ConfigurationHash == snapshot.ConfigurationHash {
+		return true, nil
+	}
+	return compatibleUnusedExecutionEnvironment(snapshot, current)
+}
+
+func (c *Coordinator) executionPolicySnapshotForComparison(snapshot *ExecutionPolicySnapshot) (*ExecutionPolicySnapshot, error) {
 	current, err := newExecutionPolicyStateForVersion(c, snapshot.Version)
 	if err != nil {
-		return false, fmt.Errorf("resolve execution policy snapshot compatibility: %w", err)
+		return nil, fmt.Errorf("resolve execution policy snapshot compatibility: %w", err)
 	}
 	// The absence of this field is itself historical tool policy. Compare
 	// the original serialization shape only when no authored transport change
@@ -1006,13 +1017,10 @@ func (c *Coordinator) executionPolicySnapshotMatchesCurrent(snapshot *ExecutionP
 		current.snapshot.ResultCollection = nil
 		current.snapshot.ConfigurationHash, err = executionPolicyConfigurationHash(current.snapshot)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 	}
-	if current.snapshot.ConfigurationHash == snapshot.ConfigurationHash {
-		return true, nil
-	}
-	return compatibleUnusedExecutionEnvironment(snapshot, current.snapshot)
+	return current.snapshot, nil
 }
 
 // canonicalExecutionPolicySnapshot reads the active branch's event-first

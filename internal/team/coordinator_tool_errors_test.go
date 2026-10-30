@@ -17,8 +17,9 @@ type scriptedCoordinatorTool struct {
 }
 
 type scriptedToolResult struct {
-	response fantasy.ToolResponse
-	err      error
+	disposition *tools.ToolExecutionDisposition
+	response    fantasy.ToolResponse
+	err         error
 }
 
 func (t *scriptedCoordinatorTool) Info() fantasy.ToolInfo { return fantasy.ToolInfo{Name: t.name} }
@@ -26,9 +27,12 @@ func (t *scriptedCoordinatorTool) ProviderOptions() fantasy.ProviderOptions {
 	return fantasy.ProviderOptions{}
 }
 func (t *scriptedCoordinatorTool) SetProviderOptions(fantasy.ProviderOptions) {}
-func (t *scriptedCoordinatorTool) Run(context.Context, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+func (t *scriptedCoordinatorTool) Run(ctx context.Context, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	result := t.results[t.calls%len(t.results)]
 	t.calls++
+	if result.disposition != nil {
+		tools.ReportToolExecutionDisposition(ctx, *result.disposition)
+	}
 	return result.response, result.err
 }
 
@@ -260,5 +264,25 @@ func TestValidateToolArgumentsLetsAgentDecoderOwnUndeclaredKeys(t *testing.T) {
 				t.Fatalf("validateToolArguments() = %+v, want error at %s", err, tc.wantPath)
 			}
 		})
+	}
+}
+
+func TestCoordinatorNativeDenialPreservesReceiptReporter(t *testing.T) {
+	c := newTestCoordinator(t)
+	native := tools.ToolExecutionDisposition{Kind: "guard_denied", ReasonCode: "guard_rule", ToolName: "agent", ToolCallID: "denied"}
+	inner := &scriptedCoordinatorTool{name: "agent", results: []scriptedToolResult{{err: errors.New("操作遭拒"), disposition: &native}}}
+	ctx := tools.SetToolsAllowed(t.Context(), []string{"agent"})
+	ctx = context.WithValue(ctx, todoIDKey{}, CoordTodoID)
+	var received []tools.ToolExecutionDisposition
+	ctx = context.WithValue(ctx, tools.ToolExecutionDispositionReporterKey, tools.ToolExecutionDispositionReporter(func(d tools.ToolExecutionDisposition) { received = append(received, d) }))
+	_, err := c.gatePolicyTools([]fantasy.AgentTool{inner})[0].Run(ctx, fantasy.ToolCall{ID: "denied", Name: "agent", Input: `{}`})
+	if !isPermissionBlockedError(err) || !isPermissionBlockedFailureDetail(c.FailureDetail(err, FailureSourceError)) {
+		t.Fatalf("lost native denial: %v", err)
+	}
+	if len(received) != 1 || received[0] != native {
+		t.Fatalf("receipt reporter = %#v", received)
+	}
+	if isPermissionBlockedFailureDetail(c.FailureDetail(errors.New("permission denied"), FailureSourceError)) {
+		t.Fatal("plain diagnostic selected a human gate")
 	}
 }

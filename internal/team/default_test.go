@@ -157,3 +157,17 @@ func TestLoadDefaultTeamHelperTools(t *testing.T) {
 		})
 	}
 }
+
+func TestCoordinatorSelectionDoesNotInferRoleFromName(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.session.Agents = map[string]*agent.AgentDef{
+		"orchestrator-helper": {Name: "orchestrator-helper", Role: "worker"},
+	}
+	if def := c.GetOrchestratorDef(); def.Name != "coordinator" || def.Role != "coordinator" {
+		t.Fatalf("worker name selected coordinator: %#v", def)
+	}
+	c.session.Agents["lead"] = &agent.AgentDef{Name: "lead", Role: "coordinator"}
+	if def := c.GetOrchestratorDef(); def.Name != "lead" {
+		t.Fatalf("explicit role ignored: %#v", def)
+	}
+}

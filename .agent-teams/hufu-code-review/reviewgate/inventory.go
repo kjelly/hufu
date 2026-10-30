@@ -25,6 +25,7 @@ type gapRef struct {
 }
 
 type handoffInventory struct {
+	SnapshotStatus        map[string]any  `json:"snapshot_status,omitempty"`
 	Passed                bool            `json:"passed"`
 	SourceTaskIDs         []string        `json:"source_task_ids"`
 	RequiredCriticSources []string        `json:"required_critic_source_task_ids"`
@@ -90,6 +91,13 @@ func collectReviewHandoffs(current session, runID string) (handoffInventory, err
 		if source.RequiresCritique {
 			inventory.RequiredCriticSources = append(inventory.RequiredCriticSources, source.TaskID)
 		}
+	}
+	coverage, err := collectSnapshotCoverage(current, runID)
+	if err != nil {
+		return handoffInventory{}, err
+	}
+	if coverage.Mode == "repository_snapshot" {
+		inventory.SnapshotStatus = map[string]any{"snapshot_id": coverage.SnapshotID, "expected": len(coverage.Expected), "completed": len(coverage.Completed), "excluded": len(coverage.Excluded), "uncompleted": len(coverage.Uncompleted), "batch": coverage.Batch, "batch_count": coverage.BatchCount}
 	}
 	return inventory, nil
 }

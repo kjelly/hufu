@@ -76,6 +76,7 @@ func extractHookContext(ctx context.Context) hooks.HookContext {
 }
 
 func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+	ctx = context.WithValue(ctx, toolExecutionIdentityKey{}, toolExecutionIdentity{name: t.info.Name, callID: call.ID})
 	if t.pathReviewer != nil {
 		ctx = context.WithValue(ctx, PathReviewerKey, t.pathReviewer)
 	}
@@ -166,10 +167,12 @@ func (t *coreTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.Tool
 			}
 
 			if !allowed {
+				ReportToolExecutionDisposition(ctx, ToolExecutionDisposition{Kind: "policy_denied", ReasonCode: "tool_permission_denied", ToolName: t.info.Name, ToolCallID: call.ID})
 				reason := promptDenialReason(ctx)
 				return fantasy.NewTextErrorResponse(formatDenialError(t.info.Name, reason)), nil
 			}
 		} else {
+			ReportToolExecutionDisposition(ctx, ToolExecutionDisposition{Kind: "policy_denied", ReasonCode: "tool_permission_denied", ToolName: t.info.Name, ToolCallID: call.ID})
 			msg := fmt.Sprintf("tool '%s' is not permitted (%s).", t.info.Name, denyReason)
 			if strings.Contains(denyReason, "allowlist") {
 				msg += fmt.Sprintf(" Add '%s' to tools.allowed in team.yaml to enable.", t.info.Name)

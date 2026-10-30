@@ -127,7 +127,73 @@ func SegmentFailureSource(kind string) string {
 	return FailureSourceSegmentFailed
 }
 
+// attemptDenialFailure carries a native authorization decision separately
+// from model/provider prose. The receipt remains the durable source evidence.
+type attemptDenialFailure struct {
+	err     error
+	blocked bool
+	safety  bool
+}
+
+func (e *attemptDenialFailure) Error() string { return e.err.Error() }
+func (e *attemptDenialFailure) Unwrap() error { return e.err }
+
+func withAttemptDenials(err error, dispositions []ToolExecutionDisposition) error {
+	if err == nil {
+		return nil
+	}
+	// A submitted blocked result already forbids replay. Preserve its own
+	// continuation policy: a denied write did not mutate the environment.
+	if workerReportedBlocked(err) {
+		return &attemptDenialFailure{err: err}
+	}
+	denial := &attemptDenialFailure{err: err}
+	if existing, ok := errors.AsType[*attemptDenialFailure](err); ok {
+		denial.blocked, denial.safety = existing.blocked, existing.safety
+	}
+	for _, disposition := range dispositions {
+		if disposition.ReasonCode == "path_out_of_scope" {
+			denial.safety = true
+		}
+		if disposition.Executed {
+			continue
+		}
+		if disposition.Kind == ToolExecutionGuardDenied {
+			denial.blocked = true
+		}
+		switch disposition.ReasonCode {
+		case "tool_permission_denied", "tool_authorization_denied":
+			denial.blocked = true
+		case "path_out_of_scope", "read_only_tool_denied", "read_only_shell_empty_command", "read_only_shell_redirect_denied", "read_only_shell_syntax_denied", "read_only_shell_malformed_syntax", "read_only_command_denied":
+			denial.safety = true
+		}
+	}
+	if denial.blocked {
+		denial.err = withFailureClassOverride(err, FailurePolicy)
+	}
+	return denial
+}
+
+func isPermissionBlockedError(err error) bool {
+	permission, ok := errors.AsType[*attemptDenialFailure](err)
+	return ok && permission.blocked
+}
+
 func isPermissionBlockedFailureDetail(detail string) bool {
+	for field := range strings.SplitSeq(detail, " | ") {
+		field = strings.TrimSpace(field)
+		if strings.HasPrefix(field, "error=") {
+			break
+		}
+		switch field {
+		case "permission_blocked=true":
+			return true
+		case "permission_blocked=false":
+			return false
+		}
+	}
+	// Compatibility only for historical details without the native marker.
+
 	if detail == "" {
 		return false
 	}
@@ -138,13 +204,28 @@ func isPermissionBlockedFailureDetail(detail string) bool {
 		strings.Contains(s, "guard rule")
 }
 
-// isSafetyDenialFailureDetail reports hufu's own path-consent and read-only
-// policy denials. Unlike a permission block, they do not stop the run for a
-// human, but replaying the task would only invite a workaround, so it is not
-// retried and the coordinator decides what happens next.
-func isSafetyDenialFailureDetail(detail string) bool {
-	s := strings.ToLower(detail)
-	return strings.Contains(s, "is outside allowed paths") ||
-		strings.Contains(s, "access denied by user") ||
-		strings.Contains(s, "read-only bash policy denied")
+// isSafetyDeniedError prevents retries after native path or read-only denials.
+func isSafetyDeniedError(err error) bool {
+	denial, ok := errors.AsType[*attemptDenialFailure](err)
+	return ok && denial.safety
+}
+
+// onlyReadOnlyPolicyDenials permits the existing single grammar correction
+// only for native read-only denials. Authorization and path consent are never
+// bypassed by this protocol fallback.
+func onlyReadOnlyPolicyDenials(dispositions []ToolExecutionDisposition) bool {
+	if len(dispositions) == 0 {
+		return false
+	}
+	for _, d := range dispositions {
+		if d.Executed || d.Kind != ToolExecutionPolicyDenied {
+			return false
+		}
+		switch d.ReasonCode {
+		case "read_only_tool_denied", "read_only_shell_empty_command", "read_only_shell_redirect_denied", "read_only_shell_syntax_denied", "read_only_shell_malformed_syntax", "read_only_command_denied":
+		default:
+			return false
+		}
+	}
+	return true
 }

@@ -29,8 +29,8 @@ func builtinProfile(t *testing.T, name ExecutionProfileName) ExecutionProfile {
 }
 
 func TestExecuteTaskRetryDisposition(t *testing.T) {
-	contractErr := errors.New("contract preflight failed: verify (verifier_not_asserting): tail || echo")
-	environmentErr := errors.New("bash: nonexistent-cmd: command not found")
+	contractErr := withFailureClassOverride(errors.New("invalid verification contract"), FailureContract)
+	environmentErr := withFailureClassOverride(errors.New("required executable unavailable"), FailureEnvironment)
 
 	tests := []struct {
 		name   string
@@ -80,7 +80,7 @@ func TestExecuteTaskRetryDisposition(t *testing.T) {
 			worker: scriptWorker(
 				failTurn(errors.New("worker failed: connection refused")),
 				failTurn(errors.New("worker failed: file not found")),
-				failTurn(errors.New("worker failed: permission denied")),
+				failTurn(&attemptDenialFailure{err: errors.New("worker authorization refused"), blocked: true}),
 			),
 			wantCalls: 3,
 		},
