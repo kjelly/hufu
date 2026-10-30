@@ -24,7 +24,7 @@ python3 .agents/skills/hufu-review-recent-commits/scripts/pick_commit_count.py
 - If the user named a count, pass `--count N`. The script keeps it when it
   fits and otherwise lowers it to the largest count that does.
 - Without `--count`, the script looks for the largest count that fits, up to
-  the team's maximum of 100.
+  the `spec.inputs.review.scope` count maximum in `team.yaml`.
 - Pass `--model` only when the user asks for a different model.
 
 The script needs Git, PyYAML, and mise with the repository's pinned Go toolchain.
@@ -73,22 +73,23 @@ review.
 
 ## What the picker checks
 
-The script reads every limit from `.agent-teams/hufu-code-review/team.yaml`
-and the team's result schemas, so it follows changes to the team. A count
-passes only when all of these hold:
+The authoritative limits live in
+[team.yaml](../../../.agent-teams/hufu-code-review/team.yaml) and its
+referenced result schemas. The picker loads the schema and evidence-source
+limits from those files and probes the native producer for its scope limits.
+A count passes only when all of these hold:
 
-1. The producer accepts the scope. It rejects scopes over its totals (2 MiB of
-   diff, 30,000 diff lines, 256 changed paths, or 64 review items) and items
-   it cannot split. This rejection costs nothing, because the run stops
+1. The producer accepts the scope under the workset action's configured total
+   diff, changed-path, item, and splitting limits. Rejected probes stop
    before any model call.
 2. No route has more items than the schemas' `workset_key` enum allows
-   (`unit-0000` to `unit-0031`). The producer does not check this; the run
-   would fail partway, after spending time and tokens, when a review cannot
-   name its item.
+   in the review agents' result schemas. The producer does not check this;
+   the run would fail partway, after spending time and tokens, when a review
+   cannot name its item.
 3. All reviews, including no-op items, plus one possible critic per real
-   review fit within the synthesizer's `max-evidence-sources` (64).
-4. The count does not exceed the `review.scope` maximum (100) or the
-   first-parent history length.
+   review fit within the synthesizer's configured `max-evidence-sources`.
+4. The count does not exceed the `spec.inputs.review.scope` count maximum
+   in `team.yaml` or the first-parent history length.
 
 The search assumes a larger count never makes the scope smaller, which holds
 unless a later commit reverts a large earlier one. The chosen count is always
@@ -97,5 +98,5 @@ choice smaller than necessary, never unsafe.
 
 If the range changes `go.mod`, `go.sum`, `go.work`, or `go.work.sum`, the
 targeted-test step runs `go test ./...` instead of the changed packages. That
-takes longer, and the verifier allows 1200 seconds. The script adds a note
-when this applies.
+takes longer; the deadline is the targeted-test action's configured timeout
+in `team.yaml`. The script adds a note when this applies.
