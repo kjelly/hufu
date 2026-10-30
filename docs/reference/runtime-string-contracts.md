@@ -46,3 +46,13 @@ evalharness 回歸測試均通過。最終執行
 - `TestHufuCodeReviewSynthesisReceivesCompactPrepareStatusWithoutCoordinatorConstraints`：缺少 `scope_context` runtime output。
 
 因此完整測試並非全綠；上述既有團隊契約 fixture 問題未納入本次修改。
+
+## 後續 fixture 修正驗證（2026-10-30）
+
+上述四個失敗已修正：report fixture 補齊 inventory action 的完整
+`snapshot_coverage` 與來源 receipt；靜態 scope fixture 補上同批的
+`verify-targeted-go-tests`；synthesis fixture 使用現行 `scope_context` 輸出。
+原有證據保存、防覆寫與範圍斷言均保留，runtime 驗證規則未放寬。
+
+修正後重新執行 `mise exec -- go test -p 2 -timeout 30m ./...`，完整測試通過。
+`mise run vet` 與 `mise run lint`（0 issues）亦通過。

@@ -251,8 +251,17 @@ func bindHufuCodeReviewReceiptFixture(t *testing.T, c *Coordinator, report map[s
 	test := report["test_verification"].(map[string]any)
 	test["completed"], test["passed"], test["exit_code"] = true, false, 1
 	test["diagnostic"] = strings.Repeat("FAIL snapshot α: expected {suffix}\n", 1000)
-	expected := map[string]any{"scope": report["scope"], "test_verification": test}
-	for field, sourceID := range map[string]string{"scope": "produce-workset", "test_verification": "verify-targeted-go-tests"} {
+	// Report binding also requires the inventory action's canonical coverage,
+	// even for a diff review without repository-snapshot batches.
+	expected := map[string]any{
+		"scope": report["scope"], "test_verification": test,
+		"snapshot_coverage": map[string]any{
+			"mode": "diff", "snapshot_id": "", "content_sha256": "", "revision": "head",
+			"batch": 0, "batch_count": 0,
+			"expected": []any{}, "completed": []any{}, "excluded": []any{}, "uncompleted": []any{},
+		},
+	}
+	for field, sourceID := range map[string]string{"scope": "produce-workset", "test_verification": "verify-targeted-go-tests", "snapshot_coverage": "inventory-review-handoffs"} {
 		item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "runtime", PlanTaskID: sourceID, ContractID: sourceID}})[0]
 		id := item.ID
 		*item = *template

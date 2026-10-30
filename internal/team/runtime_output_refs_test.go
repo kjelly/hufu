@@ -164,7 +164,7 @@ func TestHufuCodeReviewSynthesisReceivesCompactPrepareStatusWithoutCoordinatorCo
 	c.session.Config = loaded.Config
 	c.session.ContractTasks = loaded.ContractTasks
 	item.PlanTaskID, item.ContractID = "produce-workset", "produce-workset"
-	outputs, digest, err := CanonicalizeRuntimeOutputs(map[string]any{"scope": map[string]any{"requested": map[string]any{"count": 10}, "satisfied": true}})
+	outputs, digest, err := CanonicalizeRuntimeOutputs(map[string]any{"scope_context": map[string]any{"requested": map[string]any{"count": 10}, "satisfied": true}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -361,12 +361,12 @@ func TestHufuCodeReviewCharacterizesPromptCannotRewriteStaticScope(t *testing.T)
 		Goal:       "Produce workset for the last 7 commits.",
 		ContractID: "produce-workset",
 		Action:     &Action{Payload: `{"max_commits":7}`},
-	}}
+	}, {Agent: "reviewer", ContractID: "verify-targeted-go-tests"}}
 	bound, _, err := CompileTaskGoalContracts(session, requested)
 	if err != nil {
 		t.Fatalf("CompileTaskGoalContracts: %v", err)
 	}
-	if len(bound) != 1 || bound[0].Action == nil {
+	if len(bound) != 2 || bound[0].Action == nil {
 		t.Fatalf("bound tasks = %#v", bound)
 	}
 	var payload struct {
