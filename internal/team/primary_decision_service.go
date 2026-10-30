@@ -104,7 +104,7 @@ func (service *primaryDecisionService) PrepareDecisionForTerminal(ctx context.Co
 			return DecisionTerminalPreparationResult{Action: TerminalPreparationCommitTerminal, PrimaryBinding: existing.ActivePrimary, PrimaryBindingEventID: &eventID, SupportRevisionDigest: &existing.ActivePrimary.SupportRevisionDigest}, nil
 		}
 		return DecisionTerminalPreparationResult{}, fmt.Errorf("logical decision %s is already active without a bound primary", request.LogicalRunID)
-	} else if !strings.Contains(replayErr.Error(), "not found") {
+	} else if !errors.Is(replayErr, errLogicalDecisionRunNotFound) {
 		return DecisionTerminalPreparationResult{Action: TerminalPreparationRecoverOnly, ReasonCodes: []string{ReasonDecisionTerminalRecoveryRequired}}, replayErr
 	}
 

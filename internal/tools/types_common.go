@@ -136,6 +136,7 @@ type ArtifactPathPolicy struct {
 }
 
 type ToolConfig struct {
+	reportPathDenial   func()
 	WorkDir            string
 	AllowedPaths       []string
 	AllowedWritePaths  []string

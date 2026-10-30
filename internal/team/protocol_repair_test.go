@@ -945,7 +945,7 @@ func (m *incompleteFreeTextWorker) result() *fantasy.AgentResult {
 			}}},
 		},
 		Response: fantasy.Response{Content: fantasy.ResponseContent{
-			fantasy.TextContent{Text: "Let me inspect more files"},
+			fantasy.TextContent{Text: ""},
 		}},
 	}
 }
@@ -1620,7 +1620,7 @@ func TestReadOnlyFreeTextWorkerCapturesTranscriptEvidence(t *testing.T) {
 	}
 }
 
-func TestReadOnlyFreeTextIncompleteHandoffIsRetryableNotDone(t *testing.T) {
+func TestReadOnlyFreeTextEmptyHandoffIsRetryableNotDone(t *testing.T) {
 	workspace := t.TempDir()
 	workerCalls := 0
 	c := &Coordinator{

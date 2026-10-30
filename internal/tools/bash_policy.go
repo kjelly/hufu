@@ -707,17 +707,17 @@ func checkBashPathConsent(ctx context.Context, command string, cfg ToolConfig) e
 		if cfg.PathConsent != nil {
 			result, suggestion, err := cfg.PathConsent.AskConsent(absPath, "access", cfg.ToolName, command)
 			if err != nil {
-				return fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", absPath, err)
+				return pathDenied(cfg, fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", absPath, err))
 			}
 			switch result {
 			case ConsentDenied:
 				if suggestion != "" {
-					return fmt.Errorf("path '%s' is outside allowed paths; user suggested '%s', retry the command using that path instead", absPath, suggestion)
+					return pathDenied(cfg, fmt.Errorf("path '%s' is outside allowed paths; user suggested '%s', retry the command using that path instead", absPath, suggestion))
 				}
-				return fmt.Errorf("path '%s' is outside allowed paths — access denied by user", absPath)
+				return pathDenied(cfg, fmt.Errorf("path '%s' is outside allowed paths — access denied by user", absPath))
 			}
 		} else {
-			return fmt.Errorf("path '%s' is outside allowed paths", absPath)
+			return pathDenied(cfg, fmt.Errorf("path '%s' is outside allowed paths", absPath))
 		}
 	}
 	return nil
@@ -1064,6 +1064,10 @@ func resolveBashWorkDir(workDir string, cfg ToolConfig, toolName string) (string
 		return "", &r
 	}
 
+	deniedResp := func(msg string) (string, *fantasy.ToolResponse) {
+		reportPathDenial(cfg)
+		return errResp(msg)
+	}
 	abs, err := filepath.Abs(workDir)
 	if err != nil {
 		return errResp(fmt.Sprintf("invalid working_directory: %v", err))
@@ -1078,17 +1082,17 @@ func resolveBashWorkDir(workDir string, cfg ToolConfig, toolName string) (string
 	}
 	if !isPathAllowed(abs, cfg.AllowedPaths) {
 		if cfg.PathConsent == nil {
-			return errResp("working_directory is outside allowed paths")
+			return deniedResp("working_directory is outside allowed paths")
 		}
 		result, suggestion, err := cfg.PathConsent.AskConsent(abs, "workdir", toolName, workDir)
 		if err != nil {
-			return errResp(fmt.Sprintf("working_directory outside allowed paths and consent failed: %v", err))
+			return deniedResp(fmt.Sprintf("working_directory outside allowed paths and consent failed: %v", err))
 		}
 		if result == ConsentDenied {
 			if suggestion != "" {
-				return errResp(fmt.Sprintf("working_directory is outside allowed paths. User suggested '%s'; retry with that directory instead.", suggestion))
+				return deniedResp(fmt.Sprintf("working_directory is outside allowed paths. User suggested '%s'; retry with that directory instead.", suggestion))
 			}
-			return errResp("working_directory is outside allowed paths — access denied by user")
+			return deniedResp("working_directory is outside allowed paths — access denied by user")
 		}
 	}
 	return abs, nil

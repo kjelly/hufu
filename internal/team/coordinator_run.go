@@ -871,7 +871,8 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		}
 		_ = c.setAttemptReceipt(todoID, &directReceipt)
 		c.recordAttemptUsage(todoID, 1, usageFromSteps(steps))
-		failureClass := classifyTaskFailure(err)
+		err = withAttemptDenials(err, directReceipt.ToolDispositions)
+		failureClass := ClassifyTaskFailureStructured(FailureClassificationInput{Err: err})
 		if terminalBlocked {
 			c.PersistFailureWithClassAndStatus(resolvedName, task, todoID, c.FailureDetail(err, FailureSourceDirectAgentFailed), ReconcileOnly, failureClass, TaskBlocked)
 		} else {

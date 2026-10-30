@@ -45,6 +45,11 @@ func mergedAllowedWritePaths(cfg ToolConfig, ctx context.Context) []string {
 }
 
 func cfgWithMergedPaths(cfg ToolConfig, ctx context.Context) ToolConfig {
+	identity, _ := ctx.Value(toolExecutionIdentityKey{}).(toolExecutionIdentity)
+	cfg.reportPathDenial = func() {
+		ReportToolExecutionDisposition(ctx, ToolExecutionDisposition{Kind: "policy_denied", ReasonCode: "path_out_of_scope", ToolName: identity.name, ToolCallID: identity.callID})
+	}
+
 	needMerge := false
 	if _, ok := ctx.Value(AgentAllowedPathsKey).([]string); ok {
 		needMerge = true

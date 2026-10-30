@@ -88,6 +88,8 @@ func ReadOnlyMutationDenied(ctx context.Context, toolName string) (fantasy.ToolR
 	}
 	switch strings.ToLower(strings.TrimSpace(toolName)) {
 	case "sudo", "ssh", "scp", "write", "edit", "multiedit", "golang", "lua", "download", "fetch", "agentic_fetch", "create_skill", "terminal", "terminal_start", "terminal_write", "terminal_wait", "terminal_close", "terminal_reconcile":
+		identity, _ := ctx.Value(toolExecutionIdentityKey{}).(toolExecutionIdentity)
+		ReportToolExecutionDisposition(ctx, ToolExecutionDisposition{Kind: "policy_denied", ReasonCode: "read_only_tool_denied", ToolName: toolName, ToolCallID: identity.callID})
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("tool %q is denied for side_effect:none tasks; no mutation-capable tool may run", toolName)), true
 	default:
 		return fantasy.ToolResponse{}, false

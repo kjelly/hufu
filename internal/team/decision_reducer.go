@@ -3,10 +3,13 @@ package team
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
 )
+
+var errLogicalDecisionRunNotFound = errors.New("logical decision run not found")
 
 type decisionPreparedState struct {
 	Payload PrimaryDecisionPreparedPayload
@@ -68,7 +71,7 @@ func ReplayLogicalDecisionRun(events []RunEvent, logicalRunID, branchID string) 
 		}
 	}
 	if reducer.run == nil {
-		return nil, fmt.Errorf("logical decision run %q not found on branch %q", logicalRunID, branchID)
+		return nil, fmt.Errorf("%w: %q on branch %q", errLogicalDecisionRunNotFound, logicalRunID, branchID)
 	}
 	return reducer.Snapshot(), nil
 }

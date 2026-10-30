@@ -68,11 +68,8 @@ func TestTeamLintMissingCoordinator(t *testing.T) {
 			}
 			coordinator := (&Coordinator{session: spec.RuntimeSession()}).GetOrchestratorDef()
 			want := "coordinator"
-			if name == "orchestrator-helper" {
-				want = name
-			}
 			if coordinator.Name != want {
-				t.Fatalf("coordinator = %q, want existing selection %q", coordinator.Name, want)
+				t.Fatalf("coordinator = %q, want role-based selection %q", coordinator.Name, want)
 			}
 		})
 	}

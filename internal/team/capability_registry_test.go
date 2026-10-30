@@ -410,3 +410,15 @@ func TestCapabilityRegistry_CostWeightAffectsRanking(t *testing.T) {
 		t.Fatalf("want cheap ranked first with a strictly higher score, got %#v", candidates)
 	}
 }
+
+func TestCapabilityMatchingRequiresExactID(t *testing.T) {
+	records := map[string]CapabilityRecord{"security-review": {Confidence: 1}}
+	for _, key := range []string{"security", "review", "not-security-review", ""} {
+		if _, ok := matchCapability(records, key); ok {
+			t.Errorf("matched undeclared capability %q", key)
+		}
+	}
+	if _, ok := matchCapability(records, "security-review"); !ok {
+		t.Fatal("declared capability did not match")
+	}
+}
