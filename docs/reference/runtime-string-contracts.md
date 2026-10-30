@@ -1,5 +1,11 @@
 # Runtime 字串判斷與契約遷移
 
+> Status: active
+> Authority: reference
+> Verified-Commit: `2100b1b227f27ecc11790b49b8fe8915920e4f9a`
+> Supersedes: —
+> Superseded-By: —
+
 Runtime 的控制訊號應來自原生執行資料、型別化錯誤與已驗證的結果契約。
 自然語言輸出不應因為特定措辭而被接受或拒絕。
 

@@ -1,0 +1,107 @@
+name: Issue 26 full-suite evidence
+
+# Explicit, one-time opt-in through the dedicated evidence PR. Subsequent
+# documentation updates do not launch another expensive measurement attempt.
+on:
+  pull_request:
+    types: [opened]
+    paths: ['.github/workflows/test-baseline-issue26.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.head_ref == 'codex/issue26-baseline-20261030')
+    name: full-suite (${{ matrix.mode }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [normal, race, cgo-free]
+    env:
+      GOMAXPROCS: '2'
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly
+      CGO_ENABLED: '1'
+    steps:
+      - name: Checkout measurement controller
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up pinned mise toolchain
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3, resolved 2026-10-30
+        with:
+          version: '2026.10.23'
+          cache: false
+          install_args: go
+      - name: Check existing evidence parser
+        run: mise exec -- python3 -m unittest discover -s scripts -p '*_test.py'
+      - name: Capture immutable revisions sequentially on this runner
+        id: capture
+        env:
+          BASELINE_MODE: ${{ matrix.mode }}
+        run: |
+          # The existing harness is imported byte-for-byte; only its source ROOT
+          # points at each clean detached worktree. No historical source, test,
+          # assertion, timeout, go.mod or toolchain declaration is patched.
+          mise exec -- python3 - <<'PY'
+          import importlib.util
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+          import hashlib
+
+          controller = Path.cwd()
+          evidence = controller / 'work' / ('issue26-' + os.environ['BASELINE_MODE'])
+          evidence.mkdir(parents=True, exist_ok=False)
+          harness = controller / 'scripts/test-baseline.py'
+          refs = {
+              'before': '8f65a57cca7470aa773a28f7c70bfaa5c6b4f550',
+              'after-32': 'b3360c9a5804e83934204d8118c5c322e50a94e9',
+              'current-main': '4e13abfb91a1328ccc1c58d0fd4a7861b17d6d43',
+          }
+          results = {'refs': refs, 'mode': os.environ['BASELINE_MODE'],
+                     'harness_sha256': hashlib.sha256(harness.read_bytes()).hexdigest(),
+                     'run_id': os.environ['GITHUB_RUN_ID'],
+                     'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'outcomes': {}}
+          for label, sha in refs.items():
+              source = controller / 'work' / ('source-' + label)
+              try:
+                  subprocess.run(['git', 'worktree', 'add', '--detach', str(source), sha], check=True)
+                  # Downloads precede timing: cold means Go build cache, not modules.
+                  with (evidence / (label + '-modules.log')).open('w') as log:
+                      subprocess.run(['go', 'mod', 'download'], cwd=source,
+                                     stdout=log, stderr=subprocess.STDOUT, check=True)
+                  spec = importlib.util.spec_from_file_location('baseline', harness)
+                  module = importlib.util.module_from_spec(spec)
+                  spec.loader.exec_module(module)
+                  module.ROOT = source
+                  sys.argv = [str(harness), '--output', str(evidence / label),
+                              '--mode', os.environ['BASELINE_MODE'], '--cache-state', 'all',
+                              '--repetitions', '3', '--full']
+                  status = module.main()
+                  results['outcomes'][label] = {'exit_code': status}
+              except Exception as error:
+                  results['outcomes'][label] = {'exit_code': 1, 'error': str(error)}
+              (evidence / 'capture.json').write_text(json.dumps(results, indent=2) + '\n')
+          # A failure stops repetitions on that revision. Other revisions are
+          # independent observations, never retries or replacements for failures.
+          raise SystemExit(int(any(row['exit_code'] for row in results['outcomes'].values())))
+          PY
+      - name: Upload raw evidence including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: issue26-full-${{ matrix.mode }}-attempt-${{ github.run_attempt }}
+          path: work/issue26-*/
+          retention-days: 14
+          if-no-files-found: error
