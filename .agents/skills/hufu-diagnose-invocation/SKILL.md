@@ -1,6 +1,6 @@
 ---
 name: hufu-diagnose-invocation
-description: Diagnose Hufu invocations or runs through public status, inspect, results, and debug interfaces. Use to assess progress, investigate failures or suspected stalls, and distinguish runtime, team-contract, and target-repository causes.
+description: Diagnose Hufu invocations or runs through public status, inspect, results, and debug interfaces. Use to assess progress, investigate failures or suspected stalls, attribute causes to Hufu runtime, agent team, or other layers, and recommend concrete improvements.
 ---
 
 # Hufu Diagnose Invocation
@@ -170,15 +170,56 @@ and missing evidence distinct. A strict gate rejecting an invalid result is
 not by itself a runtime bug; successful execution does not prove the reviewed
 repository has no defects.
 
-## 5. Report the finding
+For every failure diagnosis, explicitly assess **Hufu runtime** and **agent
+team** responsibility. Do not stop at an error message or a classification
+such as `protocol`, `invalid_schema`, or `needs_human`: these describe the
+observed failure, not which component caused it. For each layer, state whether
+it is a confirmed cause, a contributing factor, unsupported by the available
+evidence, or unresolved with specific missing evidence. Attribute other causes
+to the layers above when appropriate; do not force a runtime/team binary choice.
+
+Separate the immediate trigger from factors that made repair fail or exhausted
+its budget. For a result-contract failure, compare the actual submission,
+model-facing schema and instructions, validation diagnostic, and repair
+responses when available. Distinguish a model violating a valid contract from
+contradictory team guidance or a runtime defect in schema presentation,
+validation, or recovery. Multiple layers may contribute; explain the evidence
+for each rather than assigning all responsibility to the layer that rejected
+the result. Record unavailable artifacts as limitations.
+
+## 5. Recommend improvements
+
+For each confirmed cause or contributing factor, identify the owning layer,
+the concrete change, why it addresses the observed failure, and how to verify
+it. Tie recommendations to relevant source/configuration locations when
+available. Keep team-specific prompts, schemas, and workflow fixes in the agent
+team; recommend runtime changes for reusable runtime behavior. Label proposals
+that still need evidence as conditional rather than proven fixes.
+
+Distinguish immediate recovery of the affected run from prevention of future
+failures. State what work can be retained and what must be repaired only when
+supported by canonical evidence or a documented read-only recovery assessment.
+Check the installed CLI's supported flags and the original version/configuration
+before recommending recovery commands; identify policy drift or other unmet
+prerequisites. More retries, a larger budget, or a model change alone does not
+explain or fix a contract defect. Preserve the authorization boundary above;
+recommendations do not authorize implementation or recovery execution.
+
+## 6. Report the finding
 
 Scale the report to the question. Include:
 
 - Current or terminal status, target identities and scope, and observation time.
-- The decisive task/attempt transitions and the layer responsible for failure.
+- The decisive task/attempt transitions, immediate cause, and contributing
+  factors, with an explicit assessment of Hufu runtime and agent team
+  responsibility and any unresolved attribution.
 - Reproducible CLI commands and their relevant output, with code/file links
   where they establish the cause. Use normal Markdown file links.
-- A concrete next action, and any missing evidence or interface limitation.
+- Concrete improvements with their owning layer and validation criteria,
+  separate from run-recovery steps and prerequisites. State what was actually
+  tested or assessed versus what remains a recommendation.
+- Any missing evidence or interface limitation that limits the diagnosis or
+  the proposed remedy.
 
 If the user asked only whether progress is normal, answer that first. Do not
 turn a status check into a full audit or claim an observability defect merely
