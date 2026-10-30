@@ -391,22 +391,32 @@ func TestHufuCodeReviewCharacterizesPromptCannotRewriteStaticScope(t *testing.T)
 		Goal:       "Produce workset for the last 7 commits.",
 		ContractID: "produce-workset",
 		Action:     &Action{Payload: `{"max_commits":7}`},
+	}, {
+		Agent:      "reviewer",
+		Goal:       "Verify the workset for the last 7 commits.",
+		ContractID: "verify-targeted-go-tests",
+		Action:     &Action{Payload: `{"max_commits":7}`},
 	}}
 	bound, _, err := CompileTaskGoalContracts(session, requested)
 	if err != nil {
 		t.Fatalf("CompileTaskGoalContracts: %v", err)
 	}
-	if len(bound) != 1 || bound[0].Action == nil {
+	if len(bound) != 2 || bound[0].Action == nil || bound[1].Action == nil {
 		t.Fatalf("bound tasks = %#v", bound)
 	}
-	var payload struct {
-		Scope map[string]any `json:"scope"`
+	if len(bound[1].DependsOn) != 1 || bound[1].DependsOn[0] != 0 {
+		t.Fatalf("verifier lost its producer dependency: %#v", bound[1].DependsOn)
 	}
-	if err := json.Unmarshal([]byte(bound[0].Action.Payload), &payload); err != nil {
-		t.Fatalf("decode bound payload: %v", err)
-	}
-	if payload.Scope["count"] != float64(10) {
-		t.Fatalf("prompt/model payload changed static scope to %#v, want configured default 10", payload.Scope)
+	for _, task := range bound {
+		var payload struct {
+			Scope map[string]any `json:"scope"`
+		}
+		if err := json.Unmarshal([]byte(task.Action.Payload), &payload); err != nil {
+			t.Fatalf("decode bound payload: %v", err)
+		}
+		if payload.Scope["count"] != float64(10) {
+			t.Fatalf("prompt/model payload changed %s static scope to %#v, want configured default 10", task.ContractID, payload.Scope)
+		}
 	}
 }
 

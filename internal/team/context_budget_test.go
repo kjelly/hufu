@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -108,5 +109,24 @@ func TestCompactToolResultTextPreservesMiddleDiagnostic(t *testing.T) {
 	got := compactToolResultText(input, 1_000)
 	if !strings.Contains(got, "COMPILER ERROR E1234") {
 		t.Fatalf("middle diagnostic was lost: %q", got)
+	}
+}
+
+func TestSqueezeMessagePreservesStructuredErrorInAnyLanguage(t *testing.T) {
+	text := strings.Repeat("一般輸出\n", 1000) + "無法讀取指定檔案"
+	msg := fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
+		fantasy.ToolResultPart{Output: fantasy.ToolResultOutputContentError{Error: errors.New(text)}},
+	}}
+	got, changed := squeezeMessage(msg, 100)
+	if changed {
+		t.Fatal("structured error was squeezed")
+	}
+	part, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](got.Content[0])
+	if !ok {
+		t.Fatal("missing tool result")
+	}
+	actual, isErr := toolResultOutputText(part.Output)
+	if !isErr || actual != text {
+		t.Fatal("structured diagnostic was lost")
 	}
 }

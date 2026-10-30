@@ -198,7 +198,7 @@ func TestCoordinatorFinalizeTaskTerminalResourcesClosesLeakAfterAcceptedTerminal
 	if blocked {
 		t.Fatalf("contained terminal unexpectedly requires manual intervention: %v", got)
 	}
-	if got == nil || !strings.Contains(got.Error(), "unclosed terminal session") {
+	if !errors.Is(got, errUnclosedTerminalSession) {
 		t.Fatalf("accepted result with live terminal = %v, want terminal boundary failure", got)
 	}
 	if err := manager.RequireTaskClosed("task-accepted-result-leak"); err != nil {

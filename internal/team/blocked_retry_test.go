@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -79,7 +80,12 @@ func TestDenialDetectionAndHintsNeverInviteWorkarounds(t *testing.T) {
 		"read-only bash policy denied command \"rm\"",
 	}
 	for index, denial := range denials {
-		if index == 0 && !isPermissionBlockedFailureDetail(denial) || index > 0 && !isSafetyDenialFailureDetail(denial) {
+		code := "path_out_of_scope"
+		if index == 0 {
+			code = "tool_permission_denied"
+		}
+		err := withAttemptDenials(errors.New(denial), []ToolExecutionDisposition{{Kind: ToolExecutionPolicyDenied, ReasonCode: code}})
+		if index == 0 && !isPermissionBlockedError(err) || index > 0 && !isSafetyDeniedError(err) {
 			t.Errorf("not detected as a denial: %q", denial)
 		}
 		hint := strings.ToLower(localFailureHint(denial))

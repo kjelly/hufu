@@ -221,7 +221,7 @@ func (c *Coordinator) finalizeTaskTerminalResources(ctx context.Context, todoID 
 	reason := TerminalCleanupTaskFailed
 	if errors.Is(taskErr, context.Canceled) || errors.Is(taskErr, context.DeadlineExceeded) {
 		reason = TerminalCleanupTaskCancelled
-	} else if strings.Contains(taskErr.Error(), "unclosed terminal session") {
+	} else if errors.Is(taskErr, errUnclosedTerminalSession) {
 		reason = TerminalCleanupTaskIncomplete
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)

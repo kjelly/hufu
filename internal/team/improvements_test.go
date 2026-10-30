@@ -350,7 +350,7 @@ func TestValidateTaskOutput(t *testing.T) {
 	}{
 		{"normal output passes", "Summary complete.\n\nKey issue: guest agent was disconnected.", false},
 		{"empty output fails", "   ", true},
-		{"short unfinished progress update fails", "Let me try to query the VMs for their IPs using different methods:", true},
+		{"short text does not determine completion", "Let me explain the findings:", false},
 		{"long report starting with 'let me' passes", longReport, false},
 		{"terse but complete output passes", "CANNOT VERIFY. The VMs do not exist.", false},
 	}

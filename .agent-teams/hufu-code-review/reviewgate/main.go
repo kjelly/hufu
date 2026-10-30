@@ -19,6 +19,7 @@ import (
 )
 
 type finding struct {
+	Location         string   `json:"location"`
 	Summary          string   `json:"summary"`
 	Detail           string   `json:"detail"`
 	Severity         string   `json:"severity"`
@@ -77,12 +78,13 @@ type gapResolution struct {
 }
 
 type payload struct {
-	Scope          json.RawMessage `json:"scope"`
-	Tests          json.RawMessage `json:"test_verification"`
-	Record         json.RawMessage `json:"record"`
-	InputReview    []inputReview   `json:"input_review"`
-	Coverage       string          `json:"coverage"`
-	GapResolutions []gapResolution `json:"gap_resolutions"`
+	Scope            json.RawMessage `json:"scope"`
+	Tests            json.RawMessage `json:"test_verification"`
+	SnapshotCoverage json.RawMessage `json:"snapshot_coverage"`
+	Record           json.RawMessage `json:"record"`
+	InputReview      []inputReview   `json:"input_review"`
+	Coverage         string          `json:"coverage"`
+	GapResolutions   []gapResolution `json:"gap_resolutions"`
 }
 
 type task struct {
@@ -92,7 +94,13 @@ type task struct {
 	EvidenceFrom []string `json:"evidence_from"`
 	SnapshotID   string   `json:"run_input_snapshot_id"`
 	Binding      *struct {
-		Bindings map[string]string `json:"bindings"`
+		Bindings     map[string]string `json:"bindings"`
+		TouchedPaths []string          `json:"touched_paths"`
+		Inputs       []struct {
+			ID     string `json:"id"`
+			Kind   string `json:"kind"`
+			SHA256 string `json:"sha256"`
+		} `json:"inputs"`
 	} `json:"workset_binding"`
 	Receipt *struct {
 		RunID            string `json:"run_id"`
@@ -212,7 +220,11 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		return json.NewEncoder(out).Encode(map[string]any{"outputs": map[string]any{"review_handoff_inventory": inventory}})
+		coverage, err := collectSnapshotCoverage(current, os.Getenv("HUFU_RUN_ID"))
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(map[string]any{"outputs": map[string]any{"review_handoff_inventory": inventory, "snapshot_coverage": coverage}})
 	}
 	reportID, reportHash, err := verify(current, os.Getenv("HUFU_RUN_ID"))
 	if err != nil {
@@ -397,6 +409,17 @@ func verify(current session, runID string) (string, string, error) {
 		return "", "", err
 	}
 	limited = limited || testLimited
+	snapshotCoverage, err := collectSnapshotCoverage(current, runID)
+	if err != nil {
+		return "", "", err
+	}
+	if snapshotCoverage.Mode == "repository_snapshot" {
+		encodedCoverage, err := json.Marshal(snapshotCoverage)
+		if err != nil || !equalJSON(encodedCoverage, report.SnapshotCoverage) {
+			return "", "", fmt.Errorf("report substituted snapshot coverage")
+		}
+		limited = limited || len(snapshotCoverage.Uncompleted) > 0
+	}
 	if err := verifyHandoffInventory(current, runID); err != nil {
 		return "", "", err
 	}

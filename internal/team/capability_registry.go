@@ -230,26 +230,14 @@ func costClassScore(class string) float64 {
 	return 0.5
 }
 
-// matchCapability finds the highest-confidence record whose capability text
-// contains the query key (or vice versa), so a maintainer-declared tag like
-// "security-review" matches a self-declared prose line that mentions it.
+// matchCapability resolves an explicit capability ID. Natural-language
+// interpretation belongs to the caller's structured resolver, not routing.
 func matchCapability(best map[string]CapabilityRecord, key string) (CapabilityRecord, bool) {
 	if key == "" {
 		return CapabilityRecord{}, false
 	}
-	if rec, ok := best[key]; ok {
-		return rec, true
-	}
-	var found CapabilityRecord
-	ok := false
-	for capText, rec := range best {
-		if strings.Contains(capText, key) || strings.Contains(key, capText) {
-			if !ok || rec.Confidence > found.Confidence {
-				found, ok = rec, true
-			}
-		}
-	}
-	return found, ok
+	record, ok := best[key]
+	return record, ok
 }
 
 // recordsFor merges self-declared (from the agent's own system prompt) and

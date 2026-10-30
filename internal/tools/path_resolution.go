@@ -183,7 +183,7 @@ func checkPathOrConsent(path, workDir, operation string, cfg ToolConfig) (string
 	if cfg.PathConsent != nil {
 		result, suggestion, err := cfg.PathConsent.AskConsent(absPath, operation, cfg.ToolName, path)
 		if err != nil {
-			return "", fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", path, err)
+			return "", pathDenied(cfg, fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", path, err))
 		}
 		switch result {
 		case ConsentOnce, ConsentAlways:
@@ -191,16 +191,16 @@ func checkPathOrConsent(path, workDir, operation string, cfg ToolConfig) (string
 			if evalErr == nil {
 				evalPath = filepath.Clean(evalPath)
 				if evalPath != absPath && !isPathAllowed(evalPath, cfg.AllowedPaths) {
-					return "", fmt.Errorf("path '%s' resolves to '%s' which is outside allowed paths", path, evalPath)
+					return "", pathDenied(cfg, fmt.Errorf("path '%s' resolves to '%s' which is outside allowed paths", path, evalPath))
 				}
 			}
 			return absPath, nil
 		default:
-			return "", formatPathConsentDenied(path, suggestion)
+			return "", pathDenied(cfg, formatPathConsentDenied(path, suggestion))
 		}
 	}
 
-	return "", fmt.Errorf("path '%s' is outside allowed paths", path)
+	return "", pathDenied(cfg, fmt.Errorf("path '%s' is outside allowed paths", path))
 }
 
 func resolveAndValidatePathWithConsent(path string, cfg ToolConfig) (string, error) {
@@ -228,7 +228,7 @@ func resolveAndValidatePathWithConsent(path string, cfg ToolConfig) (string, err
 	if cfg.PathConsent != nil {
 		result, suggestion, err := cfg.PathConsent.AskConsent(absPath, "edit", cfg.ToolName, path)
 		if err != nil {
-			return "", fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", path, err)
+			return "", pathDenied(cfg, fmt.Errorf("path '%s' is outside allowed paths and consent failed: %w", path, err))
 		}
 		switch result {
 		case ConsentOnce, ConsentAlways:
@@ -244,11 +244,11 @@ func resolveAndValidatePathWithConsent(path string, cfg ToolConfig) (string, err
 			consentedPaths = append(consentedPaths, dirOfPath(absPath))
 			return resolveAndValidatePathForAllowedPath(absPath, projectDir, consentedPaths)
 		default:
-			return "", formatPathConsentDenied(path, suggestion)
+			return "", pathDenied(cfg, formatPathConsentDenied(path, suggestion))
 		}
 	}
 
-	return "", fmt.Errorf("path '%s' is outside allowed paths", path)
+	return "", pathDenied(cfg, fmt.Errorf("path '%s' is outside allowed paths", path))
 }
 
 // canonicalPathForAuthorization resolves the target itself when it exists and

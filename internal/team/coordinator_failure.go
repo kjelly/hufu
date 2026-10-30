@@ -70,7 +70,7 @@ func (c *Coordinator) FailureDetail(err error, source string) string {
 	if source == "" {
 		source = detectFailureSource(err)
 	}
-	parts := []string{fmt.Sprintf("source=%s", source)}
+	parts := []string{fmt.Sprintf("source=%s", source), fmt.Sprintf("permission_blocked=%t", isPermissionBlockedError(err)), fmt.Sprintf("safety_denied=%t", isSafetyDeniedError(err))}
 	if status := c.GetCurrentStatus(); status != "" && status != "idle" {
 		parts = append(parts, "current="+status)
 	}
@@ -230,7 +230,7 @@ func (c *Coordinator) terminalizeTaskErrorIfUnresolved(todoID string, err error,
 		return
 	}
 	status := TaskError
-	class := classifyTaskFailure(err)
+	class := ClassifyTaskFailureStructured(FailureClassificationInput{Err: err})
 	disposition := RetryNone
 	if _, blocked := isCapabilityBlockedError(err); blocked {
 		status = TaskBlocked

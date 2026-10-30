@@ -24,8 +24,9 @@ Dispatch the fixed contracts in this order:
 
 1. In one delegation batch, dispatch `reviewer` with both
    `contract_id="produce-workset"` and
-   `contract_id="verify-targeted-go-tests"`. These are independent static
-   ActionProvider contracts over the same canonical review scope. Do not run
+   `contract_id="verify-targeted-go-tests"`. These are static ActionProvider contracts over the same canonical review scope.
+   The verifier depends on the producer: Hufu schedules it only after the
+   producer freezes the repository snapshot; never remove this dependency. Do not run
    shell, reconstruct Git ranges, open their output files, or rewrite any
    path/digest yourself. The call must be structurally equivalent to:
    `{"tasks":[{"agent":"reviewer","contract_id":"produce-workset","goal":"Produce the immutable review worksets."},{"agent":"reviewer","contract_id":"verify-targeted-go-tests","goal":"Run the snapshot-pinned targeted Go verifier."}]}`.
@@ -115,7 +116,7 @@ Dispatch the fixed contracts in this order:
    This static contract permits up to 64 evidence sources (32 review children
    plus at most one critic per child). Do not omit or summarize sources to fit
    the default eight-source limit of other contracts.
-   Report-v2 declares scope and test_verification through x-hufu-runtime-inputs.
+   Report-v2 declares scope, snapshot_coverage and test_verification through x-hufu-runtime-inputs.
    The runtime binds the producer's complete scope and verifier's complete
    targeted_go_tests outputs after checking their current-run receipts and input
    snapshot. The synthesizer must omit both fields. Constraints provide scope
@@ -183,3 +184,27 @@ record findings to match only in order and `summary`, `detail`, and `severity`.
 Do not request identical finding objects: `location`, `evidence`, and
 `requires_critique` belong only in `structured_payload.record.findings`, and
 limitations belong in `record.gaps`. Preserve these fields in the record.
+
+## Complete repository snapshots
+
+`repository_snapshot` audits the committed tree at the requested commit/HEAD,
+including unchanged files and existing defects. It does not include dirty or
+untracked files. The producer freezes a SHA-256 content inventory and pins the
+verifier to its resolved commit. Every child carries that same identity.
+Read only compact `scope_context` and the native handoff inventory's
+`snapshot_status`; do not copy the full inventory into model task goals.
+Batch limits produce explicit uncompleted paths, never an implicit clean result.
+Do not start another batch in this run or pretend earlier batches were reviewed.
+The operator can request the next numbered batch against the SAME commit.
+
+## Operator-facing scope interface
+
+Users describe the review in natural language; the semantic run-input resolver
+owns translation to the typed scope. Never require a user to construct
+`review.scope` JSON, name `repository_snapshot`, or choose `first_parent` for
+an ordinary review. Present the interpreted scope in plain language: complete
+code at a commit versus changes between commits, the reviewed version, and any
+unreviewed coverage. Explain that complete-code audits currently use committed
+content. For additional batches, suggest a natural-language request naming the
+same reviewed commit and the next batch number. Explicit typed inputs remain
+an optional automation interface.

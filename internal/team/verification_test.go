@@ -286,17 +286,17 @@ func TestVerification_CaseCommandSubstitutionSelectorMismatchIsNonZero(t *testin
 	}
 }
 
-func TestVerification_CommandExitRejectsExplicitFailureOutput(t *testing.T) {
+func TestVerification_CommandExitDoesNotInterpretPrintedStatus(t *testing.T) {
 	dir := t.TempDir()
 	res, err := ExecuteVerificationSpec(context.Background(), "sh", dir, VerificationSpec{
 		Type:    VerifyCommandExit,
 		Command: "echo 'failed -1' && exit 0",
 	})
-	if err == nil {
-		t.Fatal("explicit failed result must fail verification even when wrapper exits 0")
+	if err != nil {
+		t.Fatalf("printed text must not override exit status: %v", err)
 	}
-	if res == nil || res.ExitCode == 0 {
-		t.Fatalf("expected non-zero verification result, got %#v", res)
+	if res == nil || res.ExitCode != 0 || res.Overturned {
+		t.Fatalf("expected original zero exit status, got %#v", res)
 	}
 }
 

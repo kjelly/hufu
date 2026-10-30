@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -244,4 +245,14 @@ func replaceJSONField(t *testing.T, raw json.RawMessage, field string, value any
 		t.Fatal(err)
 	}
 	return result
+}
+
+func TestMissingDecisionRunHasTypedIdentity(t *testing.T) {
+	_, err := ReplayLogicalDecisionRun(nil, "missing", "main")
+	if !errors.Is(fmt.Errorf("replay: %w", err), errLogicalDecisionRunNotFound) {
+		t.Fatalf("missing run: %v", err)
+	}
+	if errors.Is(errors.New("unrelated not found"), errLogicalDecisionRunNotFound) {
+		t.Fatal("prose matched sentinel")
+	}
 }

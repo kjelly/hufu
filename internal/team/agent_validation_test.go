@@ -76,8 +76,8 @@ func TestAllowsFreeTextWorkerResultOnlyForExplicitReadOnlyAgent(t *testing.T) {
 }
 
 func TestFreeTextResultNeedsSummaryOnlyForInvalidFinalOutput(t *testing.T) {
-	if !freeTextResultNeedsSummary(TaskDef{}, "Let me inspect one more file") {
-		t.Fatal("unfinished narration should require a summary repair")
+	if freeTextResultNeedsSummary(TaskDef{}, "Let me explain the findings") {
+		t.Fatal("wording must not require a summary repair")
 	}
 	if !freeTextResultNeedsSummary(TaskDef{}, "   ") {
 		t.Fatal("empty output should require a summary repair")
@@ -93,7 +93,7 @@ func TestPromoteValidatedReadOnlyHandoffRequiresFinalOutput(t *testing.T) {
 	if got == nil || got.Status != TaskResultStatusSuccess || got.Source != "promoted_free_text" || got.Details != complete {
 		t.Fatalf("promoted result = %#v, want validated free-text handoff", got)
 	}
-	if got := promoteValidatedReadOnlyHandoff(TaskDef{}, "task-7", "reader", "Let me inspect one more file"); got != nil {
+	if got := promoteValidatedReadOnlyHandoff(TaskDef{}, "task-7", "reader", "   "); got != nil {
 		t.Fatalf("unfinished output was promoted: %#v", got)
 	}
 }

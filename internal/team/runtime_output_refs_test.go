@@ -164,7 +164,10 @@ func TestHufuCodeReviewSynthesisReceivesCompactPrepareStatusWithoutCoordinatorCo
 	c.session.Config = loaded.Config
 	c.session.ContractTasks = loaded.ContractTasks
 	item.PlanTaskID, item.ContractID = "produce-workset", "produce-workset"
-	outputs, digest, err := CanonicalizeRuntimeOutputs(map[string]any{"scope": map[string]any{"requested": map[string]any{"count": 10}, "satisfied": true}})
+	outputs, digest, err := CanonicalizeRuntimeOutputs(map[string]any{
+		"scope":         map[string]any{"requested": map[string]any{"count": 10}, "satisfied": true, "diagnostic": "SCOPE_DETAILS_MODEL_MUST_NOT_ECHO"},
+		"scope_context": map[string]any{"requested": map[string]any{"count": 10}, "satisfied": true},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +219,7 @@ func TestHufuCodeReviewSynthesisReceivesCompactPrepareStatusWithoutCoordinatorCo
 			t.Fatalf("static synthesis context omitted %s: %s", want, final[0].Constraints)
 		}
 	}
-	if strings.Contains(final[0].Constraints, "should-not-reach-model") {
+	if strings.Contains(final[0].Constraints, "should-not-reach-model") || strings.Contains(final[0].Constraints, "SCOPE_DETAILS_MODEL_MUST_NOT_ECHO") {
 		t.Fatal("synthesis context asks the model to transcribe a large diagnostic")
 	}
 }

@@ -118,7 +118,11 @@ spec:
       properties:
         kind:
           type: string
-          enum: [last_n, revision_range, since, working_tree]
+          enum: [last_n, revision_range, since, working_tree, repository_snapshot]
+        batch:
+          type: integer
+          minimum: 1
+          maximum: 10000
         count:
           type: integer
           minimum: 1
@@ -156,15 +160,20 @@ spec:
         timeout: 10
         semantic-guidance: |
           Interpret only the requested Git review scope; do not infer it from domain keywords.
-          A named commit or "latest commit" means kind=last_n with count=1 and head set to that revision or HEAD.
+          Determine whether the user wants complete current code or changes before interpreting any revision mention. A whole-code request takes precedence over a named commit: that commit pins the complete tree, not a one-commit diff.
+          A named commit or "latest commit" means kind=last_n with count=1 and head set to that revision or HEAD only when the user asks to review its changes rather than all code.
           "Latest N commits" means kind=last_n with count=N and the requested head, defaulting to HEAD.
+          Reviewing all current code, the whole repository, or pre-existing issues means kind=repository_snapshot with head=HEAD or the explicitly requested commit. This audits committed source, never uncommitted content.
+          Ordinary users describe scope naturally and never need to name JSON fields, history modes, or internal scope kinds. For example, "完整審查目前專案的所有程式碼，包含未修改檔案與既有問題" selects repository_snapshot at HEAD.
+          A request such as "完整審查 commit abc123 的全部程式碼" selects repository_snapshot with head=abc123; do not interpret it as reviewing only that commit's changes.
+          For repository_snapshot only, set batch when the user explicitly requests a numbered batch in ordinary language; omit it otherwise. A second-batch request must still identify the same commit, not silently advance to a new HEAD.
           An explicit base and head means kind=revision_range with those two revisions.
           A YYYY-MM-DD lower bound means kind=since with since set to that date.
           kind=working_tree is only for staged, unstaged, or untracked changes, always uses head=HEAD, and never carries count, base, since, or commit_type.
           Never use kind=working_tree for a named commit, commit hash, committed revision, or commit history.
           Set commit_type only when the request explicitly limits the review to commits of that type, such as "feat commits".
           Always set history=first_parent, the only supported history mode.
-          Omit every property the request does not state; never set a property to an empty string.
+          Omit optional properties the request does not state; never set a property to an empty string.
           Return null when the scope remains ambiguous.
 
   # No agent selects codex by default. This configures the codex backend for
@@ -371,6 +380,7 @@ spec:
           - { pointer: /runtime_outputs/documentation_verification/passed, op: equals, value: true }
 
     - id: verify-targeted-go-tests
+      depends-on-contracts: [produce-workset]
       kind: outcome
       advances: [test-scope-attested, targeted-go-tests-executed]
       agent: reviewer
@@ -551,7 +561,7 @@ spec:
       max_retries: 1
       result-contract: { schema: schemas/report-v2.json, require-structured: true }
       constraints: |-
-        Scope and test_verification are runtime-owned result fields. Omit them from your submission; runtime binding supplies the complete receipt-verified values, including the full diagnostic.
+        Scope, snapshot_coverage and test_verification are runtime-owned result fields. Omit them from your submission; runtime binding supplies the complete receipt-verified values, including the full diagnostic.
         Scope context (for analysis only): {scope_attestation}
         Test status (for analysis only): {test_status}
         Review Handoff Inventory (receipt-verified; every listed required source must have a critic-review dependency):
@@ -559,7 +569,7 @@ spec:
         Omit input_review from structured_payload: the runtime fills every accepted dependency record and hash. Do not spend model output copying source records.
         The runtime Fixed Collections manifest owns gap membership and identity. Submit gap_resolutions as an object keyed by its issued keys, with decision fields only. The runtime generates source_task_id, gap_index, order, and the final array from accepted review records; never recreate those fields or create indices from prose or nested critic records.
       fact_refs:
-        - { name: scope_attestation, task_id: produce-workset, runtime_output: scope }
+        - { name: scope_attestation, task_id: produce-workset, runtime_output: scope_context }
         - { name: test_status, task_id: verify-targeted-go-tests, runtime_output: targeted_go_test_status }
         - { name: handoff_inventory, task_id: inventory-review-handoffs, runtime_output: review_handoff_inventory }
       execution:

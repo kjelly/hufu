@@ -116,7 +116,11 @@ func executeLua(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fan
 		lua.OpenIo(L)
 		lua.OpenOs(L)
 
-		sandboxLua(L, projectDir, luaAllowedPaths, luaAllowedWritePaths, luaPathConsent)
+		sandboxLua(L, projectDir, luaAllowedPaths, luaAllowedWritePaths, luaPathConsent, func() {
+			// Lua may already have executed statements before this path check.
+			// Never claim that the whole tool call had no side effects.
+			ReportToolExecutionDisposition(ctx, ToolExecutionDisposition{Kind: "policy_denied", ReasonCode: "path_out_of_scope", ToolName: "lua", ToolCallID: call.ID, Executed: true})
+		})
 
 		var buf bytes.Buffer
 		overridePrint(L, &buf)
@@ -149,7 +153,12 @@ func executeLua(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fan
 	return fantasy.NewTextResponse(tr.Content), nil
 }
 
-func sandboxLua(L *lua.LState, projectDir string, allowedPaths []string, allowedWritePaths []string, consent *PathConsent) {
+func sandboxLua(L *lua.LState, projectDir string, allowedPaths []string, allowedWritePaths []string, consent *PathConsent, denialReporters ...func()) {
+	reportDenial := func() {
+		for _, report := range denialReporters {
+			report()
+		}
+	}
 	global := L.Get(lua.EnvironIndex).(*lua.LTable)
 
 	L.SetGlobal(lua.DebugLibName, lua.LNil)
@@ -199,6 +208,7 @@ func sandboxLua(L *lua.LState, projectDir string, allowedPaths []string, allowed
 
 			absPath, err := validateLuaPathWithConsent(path, projectDir, pathsToCheck, consent, strictWrite)
 			if err != nil {
+				reportDenial()
 				L.Push(lua.LNil)
 				L.Push(lua.LString(err.Error()))
 				return 2
@@ -222,6 +232,7 @@ func sandboxLua(L *lua.LState, projectDir string, allowedPaths []string, allowed
 			top := L.GetTop()
 			absPath, err := validateLuaPathWithConsent(path, projectDir, allowedPaths, consent, false)
 			if err != nil {
+				reportDenial()
 				L.RaiseError("path outside project directory: %s", path)
 			}
 			L.Push(originalLines)
@@ -241,6 +252,7 @@ func sandboxLua(L *lua.LState, projectDir string, allowedPaths []string, allowed
 				path := L.CheckString(1)
 				absPath, err := validateLuaPathWithConsent(path, projectDir, allowedPaths, consent, false)
 				if err != nil {
+					reportDenial()
 					L.RaiseError("%s", err.Error())
 					return 0
 				}
@@ -271,6 +283,7 @@ func sandboxLua(L *lua.LState, projectDir string, allowedPaths []string, allowed
 				}
 				absPath, err := validateLuaPathWithConsent(path, projectDir, pathsToCheck, consent, strictWrite)
 				if err != nil {
+					reportDenial()
 					L.RaiseError("%s", err.Error())
 					return 0
 				}

@@ -28,7 +28,7 @@ import (
 
 const (
 	manifestSchemaVersion = 3
-	scopeResolverVersion  = "semantic-validator-3"
+	scopeResolverVersion  = "semantic-validator-4"
 )
 
 const (
@@ -50,6 +50,7 @@ type actionRequest struct {
 
 type resolverScope struct {
 	Kind       string `json:"kind"`
+	Batch      int    `json:"batch,omitempty"`
 	Count      int    `json:"count,omitempty"`
 	History    string `json:"history"`
 	Head       string `json:"head"`
@@ -143,6 +144,8 @@ type goTestVerification struct {
 	Command          []string `json:"command"`
 	ExitCode         int      `json:"exit_code"`
 	TimedOut         bool     `json:"timed_out"`
+	SnapshotID       string   `json:"snapshot_id,omitempty"`
+	ContentSHA256    string   `json:"content_sha256,omitempty"`
 	OutputSHA256     string   `json:"output_sha256"`
 	OutputBytes      int      `json:"output_bytes"`
 	OutputTruncated  bool     `json:"output_truncated"`
@@ -163,6 +166,8 @@ type goTestReceipt struct {
 	ArtifactID         string   `json:"artifact_id"`
 	ArtifactSHA256     string   `json:"artifact_sha256"`
 	RequestedInputHash string   `json:"requested_input_hash"`
+	SnapshotID         string   `json:"snapshot_id,omitempty"`
+	ContentSHA256      string   `json:"content_sha256,omitempty"`
 }
 
 type cappedBuffer struct {
@@ -219,11 +224,12 @@ type resolvedScope struct {
 }
 
 type scopeAttestation struct {
-	Requested          requestedScope `json:"requested"`
-	RequestedInputHash string         `json:"requested_input_hash"`
-	Resolved           resolvedScope  `json:"resolved"`
-	ObservedBudget     observedBudget `json:"observed_budget"`
-	Satisfied          bool           `json:"satisfied"`
+	Requested          requestedScope              `json:"requested"`
+	RequestedInputHash string                      `json:"requested_input_hash"`
+	Resolved           resolvedScope               `json:"resolved"`
+	ObservedBudget     observedBudget              `json:"observed_budget"`
+	Satisfied          bool                        `json:"satisfied"`
+	RepositorySnapshot *repositorySnapshotManifest `json:"repository_snapshot,omitempty"`
 }
 
 type observedBudget struct {
@@ -317,6 +323,7 @@ type routedWorkset struct {
 
 type reviewSourceSnapshot struct {
 	root         string
+	identity     *repositorySnapshotManifest
 	revision     string
 	baseRevision string
 	goIndex      []goSnapshotIndexEntry
@@ -534,6 +541,9 @@ func validateRequestedScope(scope resolverScope) error {
 	if !validRevision(scope.Head) {
 		return fmt.Errorf("review scope head %q is invalid", scope.Head)
 	}
+	if scope.Kind != "repository_snapshot" && scope.Batch != 0 {
+		return errors.New("batch is only supported for repository_snapshot")
+	}
 	switch scope.Kind {
 	case "last_n":
 		if err := validateMaxCommits(scope.Count); err != nil {
@@ -544,6 +554,10 @@ func validateRequestedScope(scope resolverScope) error {
 		}
 		if scope.CommitType != "" && scope.CommitType != "feat" {
 			return fmt.Errorf("last_n review scope commit_type %q is unsupported", scope.CommitType)
+		}
+	case "repository_snapshot":
+		if scope.Count != 0 || scope.Base != "" || scope.Since != "" || scope.CommitType != "" || scope.Batch < 0 || scope.Batch > 10000 {
+			return errors.New("repository_snapshot accepts only head, history, and optional batch (1..10000)")
 		}
 	case "revision_range":
 		if scope.Count != 0 || scope.Since != "" || scope.CommitType != "" || !validRevision(scope.Base) {
@@ -587,6 +601,11 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 // and the repository mutation canary verifies that preparation does not change
 // repository state.
 func Prepare(ctx context.Context, config Config) (result actionResult, resultErr error) {
+	defer func() {
+		if resultErr == nil && result.Outputs != nil {
+			result.Outputs["scope_context"] = compactScopeContext(result.Outputs["scope"])
+		}
+	}()
 	applyConfigDefaults(&config)
 	if err := validateConfig(config); err != nil {
 		return actionResult{}, err
@@ -630,6 +649,9 @@ func Prepare(ctx context.Context, config Config) (result actionResult, resultErr
 		return actionResult{}, err
 	}
 	reviewRangeValue := resolution.Range
+	if reviewRangeValue.isRepositorySnapshot() {
+		return prepareRepositorySnapshot(ctx, repo, artifactRoot, outputDir, resolution, config)
+	}
 	if reviewRangeValue.CommitCount == 0 && !reviewRangeValue.isWorkingTree() {
 		return actionResult{}, fmt.Errorf("scope_empty: requested review scope %s selected no commits", compactScope(config.Scope))
 	}
@@ -673,8 +695,9 @@ func Prepare(ctx context.Context, config Config) (result actionResult, resultErr
 			SelectedCommitCount: reviewRangeValue.CommitCount, AvailableCommitCount: resolution.AvailableCommitCount,
 			HistoryExhausted: resolution.HistoryExhausted, RepositoryShallow: resolution.RepositoryShallow,
 		},
-		ObservedBudget: observed,
-		Satisfied:      true,
+		ObservedBudget:     observed,
+		Satisfied:          true,
+		RepositorySnapshot: snapshot.identity,
 	}
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return actionResult{}, fmt.Errorf("create output directory: %w", err)
@@ -754,7 +777,18 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 	if err := rejectGitAdministrativeOutput(ctx, repo, outputDir); err != nil {
 		return actionResult{}, err
 	}
-	resolution, err := resolveRequestedRange(ctx, repo, config)
+	pinnedConfig := config
+	var frozen *repositorySnapshotManifest
+	if config.Scope.Kind == "repository_snapshot" {
+		frozen, err = frozenRepositorySnapshot(config.Scope)
+		if err != nil {
+			return actionResult{}, err
+		}
+		if frozen != nil {
+			pinnedConfig.Scope.Head = frozen.Revision
+		}
+	}
+	resolution, err := resolveRequestedRange(ctx, repo, pinnedConfig)
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -778,6 +812,17 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 		return actionResult{}, err
 	}
 	defer snapshot.Close()
+	if reviewRangeValue.isRepositorySnapshot() {
+		identity, inventoryErr := repositorySnapshotInventory(ctx, repo, snapshot)
+		if inventoryErr != nil {
+			return actionResult{}, inventoryErr
+		}
+		if frozen != nil && (identity.ID != frozen.ID || identity.ContentSHA256 != frozen.ContentSHA256) {
+			return actionResult{}, errors.New("snapshot_mismatch: verifier source differs from workset source")
+		}
+		snapshot.identity = identity
+		paths = eligibleSnapshotPaths(identity)
+	}
 
 	goTestEnvironment, err := sanitizedGoTestEnvironment(ctx)
 	if err != nil {
@@ -785,6 +830,10 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 	}
 	packages := targetedGoTestPackages(snapshot.root, paths)
 	verification := runSnapshotGoTests(ctx, snapshot, packages, goTestEnvironment)
+	if snapshot.identity != nil {
+		verification.SnapshotID = snapshot.identity.ID
+		verification.ContentSHA256 = snapshot.identity.ContentSHA256
+	}
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return actionResult{}, fmt.Errorf("create verification output directory: %w", err)
 	}
@@ -810,6 +859,7 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 		TimedOut: verification.TimedOut, OutputTruncated: verification.OutputTruncated,
 		ArtifactID: reportArtifact.ID, ArtifactSHA256: reportArtifact.SHA256,
 		RequestedInputHash: scopeInputDigest(config.Scope),
+		SnapshotID:         verification.SnapshotID, ContentSHA256: verification.ContentSHA256,
 	}
 	if !verification.Passed {
 		receipt.Diagnostic = verification.Diagnostic
@@ -960,6 +1010,10 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 	routineDocumentationPaths := make([]string, 0)
 	escalatedDocumentationPaths := make([]string, 0)
 	for _, path := range paths {
+		if r.isRepositorySnapshot() {
+			primaryPaths = append(primaryPaths, path)
+			continue
+		}
 		switch classifyReviewPath(ctx, repo, r, path) {
 		case "documentation":
 			documentationPaths = append(documentationPaths, path)
@@ -973,7 +1027,11 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 		}
 	}
 
-	verification, err := verifyDocumentationChanges(ctx, repo, r, diffPlan, documentationPaths)
+	verification := documentationVerification{Passed: true, CheckedFiles: []string{}, ReviewedRevision: r.End}
+	var err error
+	if !r.isRepositorySnapshot() {
+		verification, err = verifyDocumentationChanges(ctx, repo, r, diffPlan, documentationPaths)
+	}
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -1016,6 +1074,9 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 	}
 	allBatches := append(append(append([]*batch(nil), primaryBatches...), documentationBatches...), escalationBatches...)
 	observed := observeBudget(allBatches, paths)
+	if snapshot.identity != nil {
+		observed.ChangedPaths = len(snapshot.identity.Files)
+	}
 	if err := enforceTotalBudget(config, observed); err != nil {
 		return actionResult{}, err
 	}
@@ -1027,8 +1088,9 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 			SelectedCommitCount: r.CommitCount, AvailableCommitCount: resolution.AvailableCommitCount,
 			HistoryExhausted: resolution.HistoryExhausted, RepositoryShallow: resolution.RepositoryShallow,
 		},
-		ObservedBudget: observed,
-		Satisfied:      true,
+		ObservedBudget:     observed,
+		Satisfied:          true,
+		RepositorySnapshot: snapshot.identity,
 	}
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return actionResult{}, fmt.Errorf("create output directory: %w", err)
@@ -1604,6 +1666,14 @@ func compareRepositorySnapshots(before, after repositorySnapshot) error {
 }
 
 func resolveRequestedRange(ctx context.Context, repo string, config Config) (rangeResolution, error) {
+	if config.Scope.Kind == "repository_snapshot" {
+		revision, err := resolveCommit(ctx, repo, config.Scope.Head)
+		if err != nil {
+			return rangeResolution{}, err
+		}
+		revision = strings.TrimSpace(revision)
+		return rangeResolution{Range: reviewRange{Start: revision, End: revision, CommitCount: 1, Source: "repository_snapshot"}, AvailableCommitCount: 1}, nil
+	}
 	shallowText, err := git(ctx, repo, "rev-parse", "--is-shallow-repository")
 	if err != nil {
 		return rangeResolution{}, fmt.Errorf("detect shallow repository: %w", err)
@@ -1747,6 +1817,9 @@ func finalizeSelectedRange(ctx context.Context, repo string, commits []string, r
 }
 
 func changedPaths(ctx context.Context, repo string, r reviewRange, diffPlan selectedCommitDiffPlan) ([]string, error) {
+	if r.isRepositorySnapshot() {
+		return repositoryTreePaths(ctx, repo, r.End)
+	}
 	var output string
 	var err error
 	if r.isSelectedCommits() {
@@ -2815,6 +2888,9 @@ func (s *reviewSourceSnapshot) bundleData(partition string, primaryPaths []strin
 
 	var bundle strings.Builder
 	fmt.Fprintf(&bundle, "# Immutable reviewed source snapshot\nreview_revision: %s\nreview_base_revision: %s\nworkset_partition: %s\n", s.revision, s.baseRevision, filepath.ToSlash(partition))
+	if s.identity != nil {
+		fmt.Fprintf(&bundle, "review_mode: repository_snapshot\nsnapshot_id: %s\ncontent_sha256: %s\n", s.identity.ID, s.identity.ContentSHA256)
+	}
 	bundle.WriteString("Read this artifact as the source/caller/test authority for the assigned workset. Do not substitute the live checkout.\n")
 	fmt.Fprintf(&bundle, "primary_paths: %d\nrelated_paths: %d\nrelated_content_budget_bytes: %d\n", len(primarySet), len(relatedPaths), maxRelatedSnapshotContentBytes)
 	remaining := maxRelatedSnapshotContentBytes
@@ -3247,6 +3323,9 @@ func reviewTargetLabel(r reviewRange) string {
 }
 
 func buildBatches(ctx context.Context, repo string, r reviewRange, diffPlan selectedCommitDiffPlan, paths []string, config Config) ([]*batch, error) {
+	if r.isRepositorySnapshot() {
+		return buildSnapshotBatches(ctx, repo, r, paths, config)
+	}
 	var batches []*batch
 	for _, path := range paths {
 		diff, err := reviewDiff(ctx, repo, r, diffPlan, path)
@@ -3336,7 +3415,7 @@ func writeItems(artifactRoot, outputDir string, batches []*batch, snapshot *revi
 		}
 		items = append(items, item{
 			Key: key, Lens: current.lens,
-			Bindings:     map[string]string{"key": key, "lens": current.lens, "review_revision": snapshot.revision},
+			Bindings:     snapshotWorksetBindings(snapshot, key, current.lens),
 			TouchedPaths: append([]string(nil), current.paths...),
 			Inputs:       []artifact{diffArtifact, snapshotArtifact},
 			DiffPath:     filepath.ToSlash(filepath.Join("batches", key, "diff.patch")),
@@ -3360,7 +3439,7 @@ func observeBudget(batches []*batch, paths []string) observedBudget {
 func enforceTotalBudget(config Config, observed observedBudget) error {
 	if observed.TotalDiffBytes <= config.MaxTotalDiffBytes &&
 		observed.TotalDiffLines <= config.MaxTotalDiffLines &&
-		observed.ChangedPaths <= config.MaxChangedPaths &&
+		(config.Scope.Kind == "repository_snapshot" || observed.ChangedPaths <= config.MaxChangedPaths) &&
 		observed.WorksetItems <= config.MaxWorksetItems {
 		return nil
 	}

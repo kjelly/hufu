@@ -1,16 +1,15 @@
 name: web-research
-description: "Independently research factual claims online, verify source evidence, and report uncertainty"
+description: "Independently research factual claims online, verify source evidence, and synthesize an evidence-qualified answer"
 goal-mode: outcome
 request-acceptance: true
 max-rounds: 8
 max-concurrent: 2
 max-retries: 1
 allow-free-text-results: false
-# PREPARE runs both independent searches; VERIFY audits their accepted inputs.
-# Skipping permits omission of the unused AUDIT/EXECUTE phases, not bypassing
-# either required research contract or the final evidence audit.
+# PREPARE: independent research; AUDIT: verifier; VERIFY: synthesis.
+# Skipping omits unused EXECUTE, never a required research/audit/synthesis task.
 workflow:
-  phases: [prepare, verify]
+  phases: [prepare, audit, verify]
 policies:
   require_phase_success: true
   allow_phase_skip: true
@@ -88,14 +87,14 @@ mcp-servers:
         inputSchema: {type: object, additionalProperties: false, properties: {}}
 delegation:
   bind-task-goal-contracts: true
-  allowed-workers: [researcher, countercheck, verifier]
-  no-redispatch-after-success: [researcher, countercheck, verifier]
-  share-request-with: [researcher, countercheck, verifier]
+  allowed-workers: [researcher, countercheck, verifier, synthesizer]
+  no-redispatch-after-success: [researcher, countercheck, verifier, synthesizer]
+  share-request-with: [researcher, countercheck, verifier, synthesizer]
   forbid-context-files: true
 acceptance:
   mode: blocking
   require-no-unresolved-tasks: true
-  required-workers: [researcher, countercheck, verifier]
+  required-workers: [researcher, countercheck, verifier, synthesizer]
   # A finished search that records an inaccessible source reports
   # completed_with_gaps; that still completes the research stage.
   required-workers-accept-gaps: true
@@ -130,6 +129,22 @@ contracts:
         - {pointer: /structured_payload/value/findings, op: min_items, value: 1}
   - id: evidence-audit
     agent: verifier
+    phase: audit
+    side_effect: none
+    recovery: retry
+    max_retries: 1
+    execution:
+      requires-result: true
+      requires-grounded-result: true
+      requires-evidence: true
+      max-evidence-sources: 2
+    verify-spec:
+      type: task_result_assert
+      task-result-assertions:
+        - {pointer: /structured_payload/value/audit_complete, op: equals, value: true}
+        - {pointer: /structured_payload/value/findings, op: min_items, value: 1}
+  - id: research-synthesis
+    agent: synthesizer
     phase: verify
     side_effect: none
     recovery: retry
@@ -138,8 +153,12 @@ contracts:
       requires-result: true
       requires-grounded-result: true
       requires-evidence: true
+      max-evidence-sources: 1
+      tool-sequence: [submit_result]
     verify-spec:
       type: task_result_assert
       task-result-assertions:
-        - {pointer: /structured_payload/value/audit_complete, op: equals, value: true}
-        - {pointer: /structured_payload/value/findings, op: min_items, value: 1}
+        - {pointer: /structured_payload/value/synthesis_complete, op: equals, value: true}
+        - {pointer: /structured_payload/value/input_review, op: min_items, value: 1}
+        - {pointer: /structured_payload/value/input_review/0/audit_complete, op: equals, value: true}
+        - {pointer: /structured_payload/value/answer, op: min_items, value: 1}

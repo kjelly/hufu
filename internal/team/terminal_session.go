@@ -1947,6 +1947,8 @@ func (m *TerminalSessionManager) Reconcile(_ context.Context, id string) (Termin
 	return copy, nil
 }
 
+var errUnclosedTerminalSession = errors.New("unclosed terminal session")
+
 // RequireTaskClosed rejects completion/retry while an owner still has a running
 // or unknown child. Unknown is deliberately fail-closed after a restart.
 func (m *TerminalSessionManager) RequireTaskClosed(taskID string) error {
@@ -1956,7 +1958,7 @@ func (m *TerminalSessionManager) RequireTaskClosed(taskID string) error {
 		s := managed.session
 		normalizeTerminalSessionDefaults(&s)
 		if s.ControllerTaskID == taskID && (s.State == TerminalSessionRunning || s.State == TerminalSessionUnknown || s.Running) {
-			return fmt.Errorf("task %q has unclosed terminal session %q (%s); close or reconcile it before retrying or completing", taskID, s.ID, s.State)
+			return fmt.Errorf("task %q has %w %q (%s); close or reconcile it before retrying or completing", taskID, errUnclosedTerminalSession, s.ID, s.State)
 		}
 	}
 	return nil
