@@ -64,20 +64,21 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 		return "", nil, err
 	}
 	data, err := json.Marshal(struct {
-		Schema           map[string]any        `json:"claims_schema"`
-		Assertions       []TaskResultAssertion `json:"result_assertions,omitempty"`
-		WorkInput        string                `json:"work_input"`
-		WorkReport       string                `json:"work_report"`
-		Transcript       string                `json:"work_transcript"`
-		PreviousResponse string                `json:"previous_response,omitempty"`
-		Diagnostic       string                `json:"format_diagnostic,omitempty"`
+		Schema           map[string]any            `json:"claims_schema"`
+		Assertions       []TaskResultAssertion     `json:"result_assertions,omitempty"`
+		WorkInput        string                    `json:"work_input"`
+		WorkReport       string                    `json:"work_report"`
+		Transcript       string                    `json:"work_transcript"`
+		PreviousResponse string                    `json:"previous_response,omitempty"`
+		Diagnostic       string                    `json:"format_diagnostic,omitempty"`
+		Feedback         *collectionFormatFeedback `json:"format_feedback,omitempty"`
 	}{map[string]any{"type": "object", "properties": info.Parameters, "required": info.Required, "additionalProperties": false},
 		localResultSubmissionContract(c, checkpoint.TaskID).SubmissionTaskResultAssertions,
-		workInput, string(work.Report), string(transcript), string(previous), schemaRepairDiagnostic(diagnostic)}, json.Deterministic(true))
+		workInput, string(work.Report), string(transcript), string(previous), schemaRepairDiagnostic(diagnostic), resultCollectionFormatFeedback(previous, info)}, json.Deterministic(true))
 	if err != nil {
 		return "", nil, err
 	}
-	return collectionContext + invariants + "Collect the result of the already returned work. Do not repeat work, explore sources, or change its outcome to satisfy a format requirement. Use only these frozen authorized inputs. Result assertions use canonical stored paths: /structured_payload/value refers to your structured_payload, and /invariant_verification/assessments is attested from your invariant_assessments when the schema permits them. For equals_projection, preserve identical claims in both representations; do not independently paraphrase or omit findings. For a violated invariant, finding_index must name a finding with the invariant definition's exact severity. Keep each invariant summary concise, well below its schema maxLength; put extended explanations in details. Preserve the original judgments, findings and evidence when fixing representation.\n" + fenceUntrusted("json", string(data)), work, nil
+	return collectionContext + invariants + "Collect the result of the already returned work. Do not repeat work, explore sources, or change its outcome to satisfy a format requirement. Use only these frozen authorized inputs. Result assertions use canonical stored paths: /structured_payload/value refers to your structured_payload, and /invariant_verification/assessments is attested from your invariant_assessments when the schema permits them. For equals_projection, match array order and only the fields declared by the projection; each representation must obey its own schema. Do not copy extra domain fields into the outer envelope. Do not independently paraphrase or omit findings. Fix all reported format_feedback issues together. Object hints are local examples, never complete submissions. Preserve legal namesake fields and evidence at other paths. A truncated list is incomplete; check the full claims_schema too. For a violated invariant, finding_index must name a finding with the invariant definition's exact severity. Keep each invariant summary concise, well below its schema maxLength; put extended explanations in details. Preserve the original judgments, findings and evidence when fixing representation.\n" + fenceUntrusted("json", string(data)), work, nil
 }
 
 func (c *Coordinator) prepareCollectionInvocation(ctx context.Context, def *agent.AgentDef, checkpoint *ResultCollectionCheckpoint, id, diagnostic string) (context.Context, []byte, error) {

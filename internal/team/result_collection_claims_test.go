@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -17,12 +18,28 @@ const collectedFindingSchema = `{"type":"object","additionalProperties":false,"r
 func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 	valid := `{"status":"success","summary":"review complete","findings":[{"summary":"observed finding"}],"structured_payload":{"findings":[{"summary":"observed finding"}]}}`
 	mismatch := strings.Replace(valid, `"findings":[{"summary":"observed finding"}]`, `"findings":[{"summary":"different wording"}]`, 1)
+	richSchema := strings.Replace(collectedFindingSchema, `"summary":{"type":"string"}`, `"summary":{"type":"string"},"location":{"type":"string"},"evidence":{"type":"array","items":{"type":"string"}}`, 1)
+	richValid := `{"status":"success","summary":"review complete","findings":[{"summary":"one"},{"summary":"two"},{"summary":"three"}],"structured_payload":{"findings":[{"summary":"one","location":"a.go:1","evidence":["source-a"]},{"summary":"two","location":"b.go:2","evidence":["source-b"]},{"summary":"three","location":"c.go:3","evidence":["source-c"]}]}}`
+	var invalid map[string]any
+	if err := json.Unmarshal([]byte(richValid), &invalid); err != nil {
+		t.Fatal(err)
+	}
+	invalid["gaps"] = []any{}
+	for _, finding := range invalid["findings"].([]any) {
+		finding.(map[string]any)["location"] = "wrong layer"
+	}
+	richInvalid, err := json.Marshal(invalid)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name            string
 		first           string
 		second          string
+		schema          string
 		contractFailure bool
 	}{
+		{name: "multiple_wrong_layers", first: string(richInvalid), second: richValid, schema: richSchema},
 		{name: "empty_response", second: valid},
 		{name: "ordinary_invariant_field", first: strings.Replace(valid, `"status"`, `"invariant_assessments":[],"status"`, 1), second: valid},
 		{name: "unknown_field", first: strings.Replace(valid, `"status"`, `"assumptions":[],"status"`, 1), second: valid},
@@ -54,6 +71,31 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 				body := tc.first
 				if n == 2 {
 					body = tc.second
+					if tc.schema != "" {
+						var feedback *collectionFormatFeedback
+						for _, message := range request["messages"].([]any) {
+							content, _ := message.(map[string]any)["content"].(string)
+							_, suffix, ok := strings.Cut(content, `{"claims_schema":`)
+							if !ok {
+								continue
+							}
+							raw, readErr := jsontext.NewDecoder(strings.NewReader(`{"claims_schema":` + suffix)).ReadValue()
+							if readErr != nil {
+								t.Error(readErr)
+								continue
+							}
+							var data struct {
+								Feedback *collectionFormatFeedback `json:"format_feedback"`
+							}
+							if decodeErr := json.Unmarshal(raw, &data); decodeErr != nil {
+								t.Error(decodeErr)
+							}
+							feedback = data.Feedback
+						}
+						if feedback == nil || len(feedback.Issues) != 4 || feedback.Truncated {
+							t.Errorf("incomplete repair feedback: %+v", feedback)
+						}
+					}
 					if prompt := fmt.Sprint(request["messages"]); !strings.Contains(prompt, "format_diagnostic") || (tc.first != "" && !strings.Contains(prompt, "previous_response")) {
 						t.Error("repair lost rejected claims or diagnostic")
 					}
@@ -62,7 +104,11 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 				_, _ = fmt.Fprintf(w, "data: {\"id\":\"claims\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", body)
 			}))
 			t.Cleanup(server.Close)
-			compiled, err := CompileResultContractDocument("findings.json", []byte(collectedFindingSchema))
+			schema := collectedFindingSchema
+			if tc.schema != "" {
+				schema = tc.schema
+			}
+			compiled, err := CompileResultContractDocument("findings.json", []byte(schema))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -82,7 +128,7 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 			_, err = c.ExecuteTasks(t.Context(), []TaskDef{{ID: "review", Agent: "worker", Model: "ollama/test", Goal: "Review findings", SideEffect: SideEffectNone,
 				Execution: ExecutionContract{RequiresResult: true, ForbidArtifacts: true}, VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: assertions}}})
 			item := c.taskTracker.TodoList().Items()[1]
-			wantSuccess := tc.second == valid
+			wantSuccess := tc.second == valid || tc.second == richValid
 			if (err == nil) != wantSuccess {
 				t.Fatalf("status=%s detail=%s error=%v", item.Status, item.Detail, err)
 			}
@@ -100,6 +146,11 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 			if !wantSuccess && (item.TypedResult != nil || checkpoint.State != ResultCollectionBlocked) {
 				t.Fatal("rejected claims published success")
 			}
+			if tc.schema != "" {
+				if item.TypedResult == nil || !strings.Contains(string(item.TypedResult.StructuredPayload.Value), `"source-c"`) || len(item.TypedResult.Findings) != 3 {
+					t.Fatal("repair lost legal nested evidence or findings")
+				}
+			}
 			events, readErr := c.EventJournal().ReadEvents(t.Context())
 			if readErr != nil {
 				t.Fatal(readErr)
@@ -107,6 +158,9 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 			replayed := ReduceToTodoList(events)[1]
 			if replayed.Status != item.Status || currentResultCollection(replayed).TurnsUsed != checkpoint.TurnsUsed {
 				t.Fatal("replay changed completion or budget")
+			}
+			if tc.schema != "" && (replayed.TypedResult == nil || string(replayed.TypedResult.StructuredPayload.Value) != string(item.TypedResult.StructuredPayload.Value)) {
+				t.Fatal("replay changed nested findings or evidence")
 			}
 		})
 	}

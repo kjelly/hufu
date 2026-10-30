@@ -177,3 +177,9 @@ If delegation rejects a fixed contract, do not probe catalog actions, add a
 diagnostic worker, or dispatch Helper. Preserve the deterministic error and
 finish with acknowledge_failed_tasks=true as a partial result. A rejected
 contract cannot be repaired by changing the goal prose.
+
+When adding constraints to source-review assignments, require the outer and
+record findings to match only in order and `summary`, `detail`, and `severity`.
+Do not request identical finding objects: `location`, `evidence`, and
+`requires_critique` belong only in `structured_payload.record.findings`, and
+limitations belong in `record.gaps`. Preserve these fields in the record.

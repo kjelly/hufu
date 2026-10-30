@@ -3,11 +3,55 @@ package team
 import (
 	"encoding/json/v2"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	"charm.land/fantasy"
 )
+
+func TestResultCollectionFormatFeedback(t *testing.T) {
+	info := fantasy.ToolInfo{Parameters: map[string]any{
+		"findings": map[string]any{"type": "array", "items": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"summary": map[string]any{"type": "string"}}, "required": []string{"summary"}}},
+	}}
+	for _, tc := range []struct {
+		name      string
+		raw       string
+		count     int
+		truncated bool
+	}{
+		{"multiple layers", `{"gaps":[],"findings":[{"summary":"one","location":"wrong"},{"summary":"two","location":"wrong"},{"summary":"three","location":"wrong"}]}`, 4, false},
+		{"invalid JSON", `{"findings":`, 1, false},
+		{"duplicate keys", `{"findings":[],"findings":[]}`, 1, false},
+		{"issue limit", `{"findings":[` + strings.Repeat(`{"location":"wrong"},`, 20) + `{}]}`, maxResultIssues, true},
+		{"large pointer", `{"` + strings.Repeat("x", maxCollectionFeedbackBytes) + `":true}`, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			feedback := resultCollectionFormatFeedback([]byte(tc.raw), info)
+			if feedback == nil || len(feedback.Issues) != tc.count || feedback.Truncated != tc.truncated {
+				t.Fatalf("feedback = %+v", feedback)
+			}
+			encoded, err := json.Marshal(feedback)
+			if err != nil || len(encoded) > maxCollectionFeedbackBytes {
+				t.Fatalf("unbounded feedback: bytes=%d err=%v", len(encoded), err)
+			}
+			if tc.name == "multiple layers" {
+				for _, pointer := range []string{"/gaps", "/findings/0/location", "/findings/1/location", "/findings/2/location"} {
+					if !slices.ContainsFunc(feedback.Issues, func(issue ResultSubmissionIssue) bool {
+						return issue.Pointer == pointer && issue.Code == "additional_property"
+					}) {
+						t.Errorf("missing issue %s", pointer)
+					}
+				}
+				if !slices.ContainsFunc(feedback.Objects, func(hint collectionSchemaHint) bool {
+					return hint.Pointer == "/findings/0" && slices.Equal(hint.AllowedFields, []string{"summary"}) && hint.Example != nil
+				}) {
+					t.Fatal("missing local object guidance")
+				}
+			}
+		})
+	}
+}
 
 func TestLargeResultContractSyntaxFeedbackIsBounded(t *testing.T) {
 	properties := make(map[string]any)
