@@ -97,7 +97,11 @@ func MaterializeAction(staticAction Action, bindings []ActionInputBinding, snaps
 func (c *Coordinator) materializeTaskActions(tasks []TaskDef) ([]TaskDef, error) {
 	result := make([]TaskDef, len(tasks))
 	for index := range tasks {
-		result[index] = cloneTaskDef(tasks[index])
+		var err error
+		result[index], err = c.bindTaskRunInputs(cloneTaskDef(tasks[index]))
+		if err != nil {
+			return nil, fmt.Errorf("task %q inputs: %w", tasks[index].ID, err)
+		}
 	}
 	var snapshot *RunInputSnapshot
 	var policyHash string

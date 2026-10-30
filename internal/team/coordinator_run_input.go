@@ -64,9 +64,6 @@ func (c *Coordinator) resolveRunInputsForInvocation(ctx context.Context, prompt 
 	c.mu.RLock()
 	assignments := cloneRunInputAssignments(c.runInputAssignments)
 	c.mu.RUnlock()
-	if len(c.session.RunInputDefinitions) == 0 && len(assignments) == 0 {
-		return nil
-	}
 	runID := strings.TrimSpace(c.executionRunID)
 	if runID == "" {
 		return fmt.Errorf("run input resolution requires an active run identity")
@@ -90,6 +87,9 @@ func (c *Coordinator) resolveRunInputsForInvocation(ctx context.Context, prompt 
 			}
 		}
 		return c.selectRecoveryRunInputSnapshot(frozen)
+	}
+	if reused, err := c.reuseEmptyRunInputContext(assignments); reused || err != nil {
+		return err
 	}
 	if frozen, err := c.unfinishedRequestAcceptance(ctx); err != nil {
 		return fmt.Errorf("recover request acceptance: %w", err)
@@ -448,6 +448,9 @@ func (c *Coordinator) previewRunInputs(ctx context.Context, prompt string) (*Run
 	definitions := slices.DeleteFunc(cloneRunInputDefinitions(c.session.RunInputDefinitions), func(definition RunInputDefinition) bool {
 		return definition.Name == requestAcceptanceInput
 	})
+	if len(definitions) == 0 && len(assignments) == 0 {
+		return nil, nil // Preview does not create invocation identity.
+	}
 	return ResolveRunInputSnapshot(definitions, assignments, "dry-run", "dry-run:invocation", c.session.Config.Name)
 }
 

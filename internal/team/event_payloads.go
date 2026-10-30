@@ -21,8 +21,10 @@ type SessionMessageEventPayload struct {
 }
 
 type TaskTransitionEventPayload struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
+	ID                string             `json:"id"`
+	Status            string             `json:"status"`
+	ResultRepairGrant *ResultRepairGrant `json:"result_repair_grant,omitempty"`
+	ExecutionReceipt  *ExecutionReceipt  `json:"execution_receipt,omitempty"`
 }
 
 type RunFinishedEventPayload struct {
@@ -127,6 +129,11 @@ func validateCurrentEventPayload(event RunEvent) error {
 		var payload TaskTransitionEventPayload
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			return fmt.Errorf("decode %s payload: %w", event.Type, err)
+		}
+		if grant := payload.ResultRepairGrant; grant != nil && grant.Recovery != nil {
+			if err := validateCollectionRecoveryGrantEvent(event, grant, payload.ExecutionReceipt); err != nil {
+				return err
+			}
 		}
 		// Old task_started records did not always carry id/status. Keep schema
 		// v1 replayable while enforcing the complete v2 transition contract.

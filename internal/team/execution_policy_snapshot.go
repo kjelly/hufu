@@ -1041,10 +1041,7 @@ func (c *Coordinator) canonicalExecutionPolicySnapshot() (*ExecutionPolicySnapsh
 			return nil, fmt.Errorf("load execution policy session tree: %w", err)
 		}
 	}
-	branch := "main"
-	if tree != nil && tree.ActiveBranch != "" {
-		branch = tree.ActiveBranch
-	}
+	branch := c.activeBranchID()
 	return executionPolicySnapshotFromEvents(FilterEventsForBranch(events, tree, branch))
 }
 

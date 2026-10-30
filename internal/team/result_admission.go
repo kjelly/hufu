@@ -47,7 +47,23 @@ func rejectLocalResultPersistence(err error) error {
 // admit consumes schema-decoded claims. The optional classifier distinguishes a
 // model-facing payload shape error from failure to bind trusted source data.
 // It cannot grant authority or replace the canonical payload validator.
-func (a *localResultAdmission) admit(ctx context.Context, input SubmitResultInput, contract taskResultSubmissionContract, classifyPayloadRejection func() RepairFailureReason) (admissionErr error) {
+func (a *localResultAdmission) admit(ctx context.Context, input SubmitResultInput, contract taskResultSubmissionContract, classifyPayloadRejection func() RepairFailureReason) error {
+	res, err := a.validateClaims(ctx, input, contract, classifyPayloadRejection, true)
+	if err != nil {
+		return err
+	}
+	err = a.commit(ctx, input, res, contract)
+	if err != nil {
+		if _, classified := errors.AsType[*localResultAdmissionError](err); !classified {
+			return rejectLocalResult(RepairFailureContract, err)
+		}
+	}
+	return err
+}
+
+// validateClaims is the pure claims boundary; admission and recovery use the
+// same rules before any occurrence reservation or artifact materialization.
+func (a *localResultAdmission) validateClaims(ctx context.Context, input SubmitResultInput, contract taskResultSubmissionContract, classifyPayloadRejection func() RepairFailureReason, recordFailure bool) (_ *TaskResult, admissionErr error) {
 	reason := RepairFailureInvalidSchema
 	defer func() {
 		if admissionErr != nil {
@@ -58,48 +74,51 @@ func (a *localResultAdmission) admit(ctx context.Context, input SubmitResultInpu
 	}()
 	res := input.taskResult()
 	if res.Summary == "" {
-		return errors.New("summary is required")
+		return nil, errors.New("summary is required")
 	}
 	switch strings.ToLower(strings.TrimSpace(res.Status)) {
 	case TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps, TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked:
 		res.Status = strings.ToLower(strings.TrimSpace(res.Status))
 	default:
-		return errors.New("status must be success, completed_with_gaps, partial, failed, or blocked")
+		return nil, errors.New("status must be success, completed_with_gaps, partial, failed, or blocked")
 	}
 	reason = RepairFailureContract
 	if decision, blocked := a.coordinator.decisionBlock(ctx); blocked && res.Status != TaskResultStatusBlocked {
-		return errors.New(decisionBlockResultDenial(decision, res.Status))
+		return nil, errors.New(decisionBlockResultDenial(decision, res.Status))
 	}
 	if err := contract.validateWorkerClaims(&res); err != nil {
-		return errors.New("submit_result contract violation: " + err.Error())
+		return nil, errors.New("submit_result contract violation: " + err.Error())
 	}
 	if err := validateFindingSeverities(res.Findings); err != nil {
-		return errors.New("submit_result contract violation: " + err.Error())
+		return nil, errors.New("submit_result contract violation: " + err.Error())
 	}
 	if contract.InvariantVerification == "" && input.InvariantAssessments != nil {
-		return errors.New("submit_result contract violation: ordinary task must omit invariant_assessments or submit null")
+		return nil, errors.New("submit_result contract violation: ordinary task must omit invariant_assessments or submit null")
 	}
 	if a.coordinator != nil {
 		var observations []taskTranscriptRecord
 		_, compiled, contractErr := a.coordinator.boundResultContract(a.todoID)
 		if contractErr != nil {
-			return rejectLocalResult(RepairFailureContract, contractErr)
+			return nil, rejectLocalResult(RepairFailureContract, contractErr)
 		}
 		if compiled != nil && compiled.toolEvidence != nil {
 			var evidenceErr error
 			observations, evidenceErr = submissionToolEvidence(ctx, a.coordinator, a.todoID)
 			if evidenceErr != nil {
-				return rejectLocalResult(RepairFailureSource, evidenceErr)
+				return nil, rejectLocalResult(RepairFailureSource, evidenceErr)
 			}
 		}
 		if res.Status != TaskResultStatusBlocked || len(bytes.TrimSpace(input.StructuredPayload)) != 0 || !hasResultDecisions(compiled) {
-			payload, rejection := a.coordinator.structuredPayloadForSubmission(a.todoID, input.StructuredPayload, observations)
+			payload, rejection, decisionFormat := a.coordinator.validateStructuredPayloadClaims(a.todoID, input.StructuredPayload, recordFailure, observations)
 			if rejection != "" {
 				payloadReason := RepairFailureSource
 				if classifyPayloadRejection != nil {
 					payloadReason = classifyPayloadRejection()
+					if decisionFormat {
+						payloadReason = RepairFailureInvalidSchema
+					}
 				}
-				return rejectLocalResult(payloadReason, errors.New(rejection))
+				return nil, rejectLocalResult(payloadReason, errors.New(rejection))
 			}
 			res.StructuredPayload = payload
 			if payload != nil && payload.EvidenceDowngrades > 0 {
@@ -107,20 +126,20 @@ func (a *localResultAdmission) admit(ctx context.Context, input SubmitResultInpu
 			}
 		}
 	} else if len(bytes.TrimSpace(input.StructuredPayload)) > 0 {
-		return errors.New("structured_payload is not accepted for this task because it has no result contract; omit the field")
+		return nil, errors.New("structured_payload is not accepted for this task because it has no result contract; omit the field")
 	}
 
 	if protocolRepairExecution(ctx) && len(res.Artifacts) > 0 {
-		return errors.New("protocol repair cannot add artifact evidence; submit the corrected result without artifacts")
+		return nil, errors.New("protocol repair cannot add artifact evidence; submit the corrected result without artifacts")
 	}
 	if len(res.Outputs) > 0 {
-		return errors.New("outputs are runtime-owned; cite execution receipt_ids instead of declaring task outputs")
+		return nil, errors.New("outputs are runtime-owned; cite execution receipt_ids instead of declaring task outputs")
 	}
 	if res.RawOutputRef != nil {
-		return errors.New("raw_output_ref is runtime-owned; workers cannot declare or copy transcript references")
+		return nil, errors.New("raw_output_ref is runtime-owned; workers cannot declare or copy transcript references")
 	}
 	if a.forbidsArtifacts() && len(res.Artifacts) > 0 {
-		return errors.New("artifacts are forbidden by this task's execution contract; omit the artifacts field and submit the result again")
+		return nil, errors.New("artifacts are forbidden by this task's execution contract; omit the artifacts field and submit the result again")
 	}
 	// A model-authored failure summary is useful context, but it is not the
 	// canonical execution record. Prefix non-success results with the first
@@ -144,7 +163,7 @@ func (a *localResultAdmission) admit(ctx context.Context, input SubmitResultInpu
 	for i := range res.Evidence {
 		res.Evidence[i].SystemHMAC = ""
 	}
-	return a.commit(ctx, input, &res, contract)
+	return &res, nil
 }
 
 // commit reserves the occurrence before materializing artifacts and publishing

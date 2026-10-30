@@ -72,10 +72,6 @@ func (c *Coordinator) runTargetedRecovery(ctx context.Context, taskID string, ac
 		c.finalizePublicInvocationFailure(err)
 		return TargetedRecoveryReport{Action: action, TaskID: taskID}, err
 	}
-	if err := c.resolveRecoveryRunInputs(invocationCtx, taskID); err != nil {
-		c.finalizePublicInvocationFailure(err)
-		return TargetedRecoveryReport{Action: action, TaskID: taskID}, err
-	}
 	if err := c.ValidateWorkspaceIsolation(); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return TargetedRecoveryReport{Action: action, TaskID: taskID}, err
@@ -85,6 +81,10 @@ func (c *Coordinator) runTargetedRecovery(ctx context.Context, taskID string, ac
 		return TargetedRecoveryReport{Action: action, TaskID: taskID}, err
 	}
 	if err := c.ValidateRequiredResourceLocks(invocationCtx, c.projectDir); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return TargetedRecoveryReport{Action: action, TaskID: taskID}, err
+	}
+	if err := c.resolveRecoveryRunInputs(invocationCtx, taskID); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return TargetedRecoveryReport{Action: action, TaskID: taskID}, err
 	}
@@ -131,9 +131,6 @@ func (c *Coordinator) runTargetedRecovery(ctx context.Context, taskID string, ac
 }
 
 func (c *Coordinator) resolveRecoveryRunInputs(ctx context.Context, taskID string) error {
-	if !c.requestAcceptanceEnabled() {
-		return c.resolveRunInputsForInvocation(ctx, "")
-	}
 	item := c.todoItemByID(taskID)
 	if item == nil {
 		return fmt.Errorf("recovery task %s not found", taskID)
@@ -147,15 +144,20 @@ func (c *Coordinator) resolveRecoveryRunInputs(ctx context.Context, taskID strin
 			}
 		}
 	})
-	if _, err := RequestAcceptanceContractFromSnapshot(frozen); err != nil {
-		return fmt.Errorf("recover frozen request acceptance: %w", err)
-	}
-	if frozen.SnapshotHash != item.RunInputSnapshotHash {
-		return fmt.Errorf("recovery task request acceptance snapshot drift")
-	}
 	c.mu.RLock()
 	assignments := cloneRunInputAssignments(c.runInputAssignments)
 	c.mu.RUnlock()
+	if frozen == nil && item.RunInputSnapshotID == "" && item.RunInputSnapshotHash == "" && len(c.session.RunInputDefinitions) == 0 && len(assignments) == 0 {
+		return nil // Preserve legacy no-input retry/reconciliation without rebinding.
+	}
+	if frozen == nil || ValidateRunInputSnapshot(frozen) != nil || frozen.Team != c.session.Config.Name || frozen.SnapshotHash != item.RunInputSnapshotHash {
+		return fmt.Errorf("recovery task has no matching canonical frozen input snapshot")
+	}
+	if c.requestAcceptanceEnabled() {
+		if _, err := RequestAcceptanceContractFromSnapshot(frozen); err != nil {
+			return fmt.Errorf("recover frozen request acceptance: %w", err)
+		}
+	}
 	for _, assignment := range assignments {
 		if assignment.Name == requestAcceptanceInput {
 			return fmt.Errorf("request acceptance cannot be replaced during recovery")

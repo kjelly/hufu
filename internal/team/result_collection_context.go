@@ -38,19 +38,23 @@ func resultFixedCollectionContextForStage(plans []resultFixedCollectionPlan, run
 	}
 	b.WriteString("Each items_pointer below is relative to structured_payload; submission_pointer gives its path in the complete tool arguments. Put the collection at that path as an OBJECT keyed by the exact runtime-issued keys, with one decision object per key. Never put row keys or decision fields at the outer tool level. Supply only the decision fields inside each row; the runtime generates the final array, order, identities and copied values. Preserve all other payload fields required by the result schema. Do not submit arrays or runtime-owned fields. Interpret meaning using the supplied evidence and choose only schema enum values. Do not guess a choice when evidence is insufficient; use an explicitly declared uncertainty option or report blocked. Invalid submissions return corrective feedback within the current attempt.\n")
 	if collector {
-		b.WriteString("For decision_groups, the runtime injects outputs only from the original work's settled decisions. Never call tools or supply those output fields. Abstention/errors require blocked. Omit runtime-owned evidence input arrays.\n")
+		b.WriteString("For decision_groups, row fixed fields include available verified settled outputs from the original work. Use them with canonical_item_schema to satisfy conditional schema rules, but never submit those output fields. Canonical validation diagnostics use array indices in the displayed row order; correct the corresponding keyed row. Never call tools. Abstention/errors require blocked. Omit runtime-owned evidence input arrays.\n")
 	} else {
 		b.WriteString("For decision_groups, first read authorized artifact evidence and call decision_primitive with collection=items_pointer, row_key and group=id. Runtime injects group outputs from settled decisions. Never submit those output fields. Abstention/errors require blocked. Runtime-owned evidence input arrays must be omitted.\n")
 	}
 	for _, plan := range plans {
 		manifest := struct {
-			ItemsPointer      string                     `json:"items_pointer"`
-			SubmissionPointer string                     `json:"submission_pointer"`
-			Sources           []ResultCollectionSource   `json:"sources"`
-			Rows              []resultFixedCollectionRow `json:"rows"`
-			DecisionGroups    []resultDecisionGroup      `json:"decision_groups,omitempty"`
-			DecisionSchema    map[string]any             `json:"decision_schema"`
-		}{plan.spec.ItemsPointer, "/structured_payload" + plan.spec.ItemsPointer, plan.binding.Sources, plan.rows, plan.spec.DecisionGroups, plan.spec.decisionSchema}
+			ItemsPointer        string                     `json:"items_pointer"`
+			SubmissionPointer   string                     `json:"submission_pointer"`
+			Sources             []ResultCollectionSource   `json:"sources"`
+			Rows                []resultFixedCollectionRow `json:"rows"`
+			DecisionGroups      []resultDecisionGroup      `json:"decision_groups,omitempty"`
+			DecisionSchema      map[string]any             `json:"decision_schema"`
+			CanonicalItemSchema map[string]any             `json:"canonical_item_schema,omitempty"`
+		}{plan.spec.ItemsPointer, "/structured_payload" + plan.spec.ItemsPointer, plan.binding.Sources, plan.rows, plan.spec.DecisionGroups, plan.spec.decisionSchema, nil}
+		if collector && len(plan.spec.DecisionGroups) > 0 {
+			manifest.CanonicalItemSchema = plan.spec.itemSchema
+		}
 		encoded, err := json.Marshal(manifest, json.Deterministic(true))
 		if err != nil {
 			return "", err

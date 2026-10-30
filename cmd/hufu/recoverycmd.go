@@ -114,7 +114,7 @@ func resolveExistingExecutionWorkspace(ctx context.Context, requestedTeam string
 	}
 	request := commandWorkspaceRequest{
 		StartDir: runtimeStartDir(), TeamName: teamName, Mode: workspacepkg.ResolveExisting,
-		NewSession: opts.newSession,
+		NewSession: opts.newSession, ReadOnly: opts.dryRun,
 	}
 	if workspaceExplicit {
 		request.ExplicitExact = workspacePath

@@ -808,20 +808,10 @@ func (c *Coordinator) commitTaskTransition(ctx context.Context, taskID string, e
 		projected.OccurrenceRevision = 1
 	}
 	projected.DispatchID = ""
-	if repairGrant != nil && projected.ExecutionReceipt.ResultCollection != nil {
-		receipt := projected.ExecutionReceipt
-		checkpoint := cloneResultCollectionCheckpoint(receipt.ResultCollection)
-		checkpoint.Revision++
-		checkpoint.SubmissionRevision = projected.OccurrenceRevision
-		checkpoint.SubmissionDispatchID = newTaskDispatchID()
-		checkpoint.TurnLimit = max(checkpoint.TurnLimit, repairGrant.AfterAttempts+repairGrant.AdditionalAttempts)
-		if checkpoint.Prepared != nil && checkpoint.State != ResultCollectionCommitted {
-			checkpoint.State, checkpoint.FailureReason = ResultCollectionPrepared, ""
-		}
-		receipt.ResultCollection = checkpoint
-		projected.DispatchID = checkpoint.SubmissionDispatchID
-		projected.ExecutionReceipts = appendExecutionReceipt(append([]ExecutionReceipt(nil), current.ExecutionReceipts...), cloneExecutionReceipt(receipt))
+	if repairGrant != nil {
+		applyCollectionRepairGrant(&projected, current, repairGrant)
 	}
+
 	if resetForResume {
 		projected.Status = TaskPending
 		projected.Detail = detail
@@ -968,13 +958,20 @@ func (c *Coordinator) appendTaskTransition(ctx context.Context, item *TodoItem, 
 	// A terminal/cancellation transition is itself recovery evidence. Do not
 	// let the already-cancelled worker context suppress its durable record.
 	appendCtx := context.WithoutCancel(ctx)
-	durable, err := c.EventJournal().Append(appendCtx, RunEvent{
-		Type:           eventType,
-		Actor:          item.Agent,
-		TaskID:         item.ID,
-		IdempotencyKey: key,
-		Payload:        rawPayload,
-	})
+	event := RunEvent{Type: eventType, Actor: item.Agent, TaskID: item.ID, IdempotencyKey: key, Payload: rawPayload}
+	if grant, ok := metadata["result_repair_grant"].(*ResultRepairGrant); ok && grant.Recovery != nil {
+		event.RunID, event.BranchID = grant.RunID, grant.BranchID
+	}
+	var durable RunEvent
+	if grant, ok := metadata["result_repair_grant"].(*ResultRepairGrant); ok && grant.Recovery != nil {
+		journal, ok := c.EventJournal().(ConditionalEventJournal)
+		if !ok {
+			return RunEvent{}, fmt.Errorf("recovery requires conditional event append")
+		}
+		durable, err = journal.AppendAtHead(ctx, event, grant.Recovery.JournalHeadID)
+	} else {
+		durable, err = c.EventJournal().Append(appendCtx, event)
+	}
 	if err != nil {
 		return RunEvent{}, fmt.Errorf("commit task transition append: %w", err)
 	}

@@ -199,7 +199,9 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	resolvedProviderAPIKey := config.ResolveProviderAPIKey(defaultProviderAPIKey, session.Config.ProviderAPIKey)
 	team.RegisterProviderSecretsGlobally(session, resolvedProviderAPIKey)
 
-	displayTeamHeader(session, cliModelOverrides.WorkerModels)
+	if !opts.dryRun {
+		displayTeamHeader(session, cliModelOverrides.WorkerModels)
+	}
 
 	cfg := config.LoadConfig()
 	costCatalog, err := cfg.Cost.Catalog()
@@ -233,9 +235,6 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	resolvedJudgeModel := roleModels.Judge
 	resolvedPlanReviewerModel := roleModels.PlanReviewer
 	startsFresh := opts.newSession || execProfile.DisableHistoricalTaskReuse
-	if err := bindRunWorkspaceVersioning(ctx, session, cfg); err != nil {
-		return nil, err
-	}
 	resolvedMaxConcurrent := cfg.ResolveMaxConcurrent(session.Config.MaxConcurrent)
 	if resolvedMaxConcurrent <= 0 {
 		resolvedMaxConcurrent = 8
@@ -251,6 +250,9 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 			return nil, err
 		}
 		return &teamContext{teamName: teamName, session: session, coordinator: coordinator, roleSources: roleSources}, nil
+	}
+	if err := bindRunWorkspaceVersioning(ctx, session, cfg); err != nil {
+		return nil, err
 	}
 	// Read the durable checkpoint before any lifecycle mutation. A resumed
 	// occurrence owns its frozen canonical target, so a changed CLI/config

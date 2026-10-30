@@ -118,6 +118,17 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 		return &resultCollectionFailure{Reason: RepairFailureSource, Checkpoint: checkpoint, Cause: err}
 	}
 	var diagnostic string
+	if receipt := collectionReceipt(c.todoItemByID(checkpoint.TaskID), checkpoint); receipt != nil && receipt.RepairProvenance != nil {
+		for _, grant := range receipt.RepairProvenance.OperatorGrants {
+			if grant.RunID == c.executionRunID && grant.Recovery != nil {
+				for _, check := range grant.Recovery.Checks {
+					if !check.Passed {
+						diagnostic += check.Diagnostic + "\n"
+					}
+				}
+			}
+		}
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return &resultCollectionFailure{Reason: repairFailureCollectionUnavailable, Checkpoint: checkpoint, Cause: err}

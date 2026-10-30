@@ -14,15 +14,16 @@ func WithResultOnlyRepair(ctx context.Context, taskID string) context.Context {
 }
 
 // ResultRepairGrant authorizes submission repair, preserving every previous turn.
-// Prepared candidates receive zero additional model turns for local completion.
+// Validated local completion receives zero additional model turns.
 // The grant is committed in the task transition before a repair lease opens.
 type ResultRepairGrant struct {
-	RunID              string `json:"run_id"`
-	BranchID           string `json:"branch_id"`
-	AfterAttempts      int    `json:"after_attempts"`
-	AdditionalAttempts int    `json:"additional_attempts"`
-	TranscriptRef      string `json:"transcript_ref"`
-	Model              string `json:"model,omitempty"`
+	RunID              string                              `json:"run_id"`
+	BranchID           string                              `json:"branch_id"`
+	AfterAttempts      int                                 `json:"after_attempts"`
+	AdditionalAttempts int                                 `json:"additional_attempts"`
+	TranscriptRef      string                              `json:"transcript_ref"`
+	Model              string                              `json:"model,omitempty"`
+	Recovery           *ResultCollectionRecoveryAssessment `json:"recovery,omitempty"`
 }
 
 func validateResultRepairTarget(item *TodoItem) error {
@@ -77,8 +78,16 @@ func (c *Coordinator) authorizeOperatorResultRepair(ctx context.Context) error {
 		return nil
 	}
 	item := c.todoItemByID(taskID)
-	if err := validateResultRepairTarget(item); err != nil {
-		return fmt.Errorf("task %q: %w", taskID, err)
+	if item == nil || item.ExecutionReceipt == nil {
+		return fmt.Errorf("task %q has no repair receipt", taskID)
+	}
+	if item.ExecutionReceipt.ResultCollection == nil {
+		if err := validateResultRepairTarget(item); err != nil {
+			return fmt.Errorf("task %q: %w", taskID, err)
+		}
+	}
+	if item.ExecutionReceipt.RepairProvenance == nil {
+		return fmt.Errorf("task %q has no failed submission", taskID)
 	}
 	for _, prior := range item.ExecutionReceipt.RepairProvenance.OperatorGrants {
 		if prior.RunID == c.executionRunID {
@@ -86,15 +95,20 @@ func (c *Coordinator) authorizeOperatorResultRepair(ctx context.Context) error {
 		}
 	}
 	if checkpoint := item.ExecutionReceipt.ResultCollection; checkpoint != nil {
-		if _, err := c.loadCollectionWork(ctx, item, checkpoint); err != nil {
+		assessment, err := c.AssessResultCollectionRecovery(ctx, taskID)
+		if err != nil {
 			return err
 		}
+		if err := validateRecoveryAssessment(assessment); err != nil {
+			return fmt.Errorf("task %q recovery blocked: %v: %w", taskID, assessment.Checks, err)
+		}
+
 		if model, _ := ctx.Value(resultRepairModelKey{}).(string); model != "" {
 			return fmt.Errorf("collection repair must retain its original target")
 		}
-		grant := &ResultRepairGrant{RunID: c.executionRunID, BranchID: c.activeBranchID(), AfterAttempts: checkpoint.TurnsUsed, AdditionalAttempts: collectionGrantAttempts(item.ExecutionReceipt), TranscriptRef: item.ExecutionReceipt.TranscriptRef}
+		grant := &ResultRepairGrant{RunID: c.executionRunID, BranchID: c.activeBranchID(), AfterAttempts: checkpoint.TurnsUsed, AdditionalAttempts: assessment.AdditionalTurns, TranscriptRef: item.ExecutionReceipt.TranscriptRef, Recovery: assessment}
 		return c.CommitTaskTransition(ctx, taskID, item.Status, TaskProtocolIncomplete,
-			"operator authorized collection continuation; worker replay forbidden", "", map[string]any{"result_repair_grant": grant})
+			fmt.Sprintf("operator authorized %s after %s; at most %d additional collector turns; worker replay forbidden", assessment.Disposition, assessment.OriginalReason, assessment.AdditionalTurns), "", map[string]any{"result_repair_grant": grant})
 	}
 	if _, err := c.restoreProtocolRepairToolEvidence(ctx, item); err != nil {
 		return fmt.Errorf("task %q evidence: %w", taskID, err)
@@ -121,29 +135,29 @@ func (c *Coordinator) authorizeOperatorResultRepair(ctx context.Context) error {
 }
 
 func (c *Coordinator) validResultRepairGrant(item *TodoItem, next TaskStatus, grant *ResultRepairGrant) bool {
+	if grant != nil && grant.Recovery != nil {
+		if validateRecoveryAssessment(grant.Recovery) != nil || next != TaskProtocolIncomplete || validateCollectionRecoveryTarget(item) != nil || grant.RunID == "" || grant.RunID != c.executionRunID || grant.BranchID != c.activeBranchID() || grant.Model != "" {
+			return false
+		}
+		fresh, err := c.AssessResultCollectionRecovery(context.Background(), item.ID)
+		if err != nil || validateRecoveryAssessment(fresh) != nil || fresh.Fingerprint != grant.Recovery.Fingerprint {
+			return false
+		}
+		return grant.AfterAttempts == fresh.TurnsUsed && grant.AdditionalAttempts == fresh.AdditionalTurns && grant.TranscriptRef == fresh.TranscriptRef
+	}
 	if grant == nil || validateResultRepairTarget(item) != nil || next != TaskProtocolIncomplete {
 		return false
 	}
 	if grant.RunID == "" || grant.RunID != c.executionRunID || grant.BranchID != c.activeBranchID() || grant.AfterAttempts != item.ExecutionReceipt.RepairProvenance.RepairAttempts || grant.TranscriptRef != item.ExecutionReceipt.TranscriptRef {
 		return false
 	}
-	if checkpoint := item.ExecutionReceipt.ResultCollection; checkpoint != nil {
-		additional := collectionGrantAttempts(item.ExecutionReceipt)
-		return grant.AfterAttempts == checkpoint.TurnsUsed && grant.AdditionalAttempts == additional && grant.Model == ""
+	if item.ExecutionReceipt.ResultCollection != nil {
+		// New collection grants always carry a freshly verified assessment.
+		// Old grants remain readable through replay, not newly issuable here.
+		return false
 	}
 	if item.ResultCandidate != nil && item.ResultCandidate.Prepared {
 		return grant.AdditionalAttempts == 0 && grant.Model == ""
 	}
 	return grant.AdditionalAttempts == 2
-}
-
-// Storage continuation cannot create model budget. It can use only turns
-// already reserved by the frozen policy; durable prepared/accepted bytes
-// likewise require no additional model allowance.
-func collectionGrantAttempts(receipt *ExecutionReceipt) int {
-	checkpoint := receipt.ResultCollection
-	if checkpoint.Prepared != nil || checkpoint.State == ResultCollectionCommitted || checkpoint.FailureReason == RepairFailureCommit || receipt.RepairProvenance != nil && receipt.RepairProvenance.FailureReason == RepairFailureCommit {
-		return 0
-	}
-	return 2
 }

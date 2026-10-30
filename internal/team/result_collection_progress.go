@@ -35,6 +35,11 @@ func collectionTurnLimit(receipt *ExecutionReceipt) (int, error) {
 			(grant.AdditionalAttempts != 0 && grant.AdditionalAttempts != 2) {
 			return 0, errResultCollectionStale
 		}
+		if grant.Recovery != nil {
+			if err := validateStoredRecoveryGrant(grant, checkpoint); err != nil {
+				return 0, err
+			}
+		}
 		limit = max(limit, grant.AfterAttempts+grant.AdditionalAttempts)
 	}
 	return limit, nil

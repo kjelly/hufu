@@ -666,11 +666,8 @@ func ResolveRunInputSnapshot(definitions []RunInputDefinition, assignments []Run
 	if len(definitions) > maxRunInputDefinitions {
 		return nil, fmt.Errorf("input_schema_invalid: %d definitions exceed maximum %d", len(definitions), maxRunInputDefinitions)
 	}
-	if len(definitions) == 0 {
-		if len(assignments) > 0 {
-			return nil, fmt.Errorf("input_unknown: team %q declares no run inputs", teamName)
-		}
-		return nil, nil
+	if len(definitions) == 0 && len(assignments) > 0 {
+		return nil, fmt.Errorf("input_unknown: team %q declares no run inputs", teamName)
 	}
 	definitions, byName, err := validateAndIndexRunInputDefinitions(definitions)
 	if err != nil {

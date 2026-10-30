@@ -180,6 +180,9 @@ The static contract determines the structured payload:
   Rationale must explain the observed scenario, and evidence contains only
   issued evidence keys or exact opaque IDs you read. For unverified, supply concrete nonempty
   missing_evidence; other verdicts require evidence and empty missing_evidence.
+  In the returned work report, state the settled verdict for each row and whether
+  its decision-level missing evidence is empty. Describe inherited source-review
+  gaps separately in the summary; do not put them in a settled decision.
   Use completed_with_gaps if any decided verdict is unverified. If all verdicts
   are settled, use success; completed_with_gaps is also valid when the bound
   source review has nonempty record.gaps and your summary identifies those

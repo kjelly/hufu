@@ -60,12 +60,15 @@ type WorkerAttemptView struct {
 	// Usage is nil when unknown (a running attempt has no receipt yet).
 	Usage *team.ExecutionUsage `json:"usage,omitempty"`
 
-	ResultContractID        string `json:"result_contract_id,omitempty"`
-	ResultValidation        string `json:"result_validation,omitempty"`
-	ResultCollectionState   string `json:"result_collection_state,omitempty"`
-	ResultCollectionTurns   int    `json:"result_collection_turns,omitempty"`
-	ResultCollectionLimit   int    `json:"result_collection_limit,omitempty"`
-	ResultCollectionFailure string `json:"result_collection_failure,omitempty"`
+	ResultContractID             string `json:"result_contract_id,omitempty"`
+	ResultValidation             string `json:"result_validation,omitempty"`
+	ResultCollectionState        string `json:"result_collection_state,omitempty"`
+	ResultCollectionTurns        int    `json:"result_collection_turns,omitempty"`
+	ResultCollectionLimit        int    `json:"result_collection_limit,omitempty"`
+	ResultCollectionFailure      string `json:"result_collection_failure,omitempty"`
+	ResultRecovery               string `json:"result_recovery,omitempty"`
+	ResultRecoveryOriginalReason string `json:"result_recovery_original_reason,omitempty"`
+	ResultRecoveryFingerprint    string `json:"result_recovery_fingerprint,omitempty"`
 
 	FailureClass  string `json:"failure_class,omitempty"`
 	RetryCount    int    `json:"retry_count"`
@@ -366,6 +369,15 @@ func projectResultCollection(view *WorkerAttemptView, receipt *team.ExecutionRec
 	view.ResultCollectionTurns = checkpoint.TurnsUsed
 	view.ResultCollectionLimit = checkpoint.TurnLimit
 	view.ResultCollectionFailure = string(checkpoint.FailureReason)
+	if receipt.RepairProvenance != nil {
+		for _, grant := range receipt.RepairProvenance.OperatorGrants {
+			if a := grant.Recovery; a != nil {
+				view.ResultRecovery = string(a.Disposition)
+				view.ResultRecoveryOriginalReason = string(a.OriginalReason)
+				view.ResultRecoveryFingerprint = a.Fingerprint
+			}
+		}
+	}
 	if latest && !isTerminalWorkerStatus(status) && checkpoint.State != team.ResultCollectionCommitted {
 		view.Activity = WorkerActivityResultCollection
 	}

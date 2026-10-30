@@ -33,6 +33,7 @@ type resultFixedCollectionSpec struct {
 	ValueBindings   map[string]string     `json:"value_bindings,omitempty"`
 	ChoiceFields    []string              `json:"choice_fields"`
 	decisionSchema  map[string]any
+	itemSchema      map[string]any
 	arraySchema     *jsonschema.Schema
 }
 
@@ -152,6 +153,7 @@ func (s *resultFixedCollectionSpec) compile(root map[string]any) error {
 	}
 	// Keep all conditionals for canonical validation after assembly. The
 	// submission projection removes only fields that the runtime owns.
+	s.itemSchema = maps.Clone(item)
 	s.decisionSchema = maps.Clone(item)
 	if len(s.DecisionGroups) > 0 {
 		for _, key := range []string{"allOf", "anyOf", "oneOf", "if", "then", "else", "dependentSchemas", "dependentRequired"} {

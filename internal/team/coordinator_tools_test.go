@@ -30,6 +30,26 @@ func TestFinishRejectsUnresolvedPendingTasks(t *testing.T) {
 	}
 }
 
+func TestAgentCreatedTodosRetainRunInputs(t *testing.T) {
+	c, _, capture := newWorkerProviderSurfaceCoordinator(t, "todo-input-fixture", "direct")
+	snapshot := setTaskInputSnapshot(t, c, false)
+	response, err := (&todoTool{coordinator: c}).handleCreate(t.Context(), "worker", []string{"inspect original inputs"})
+	if err != nil || response.IsError {
+		t.Fatalf("create todo response=%+v error=%v", response, err)
+	}
+	events, err := c.EventJournal().ReadEvents(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := ReplayTodoList(events)
+	if err != nil || len(items) != 1 || items[0].RunInputSnapshotID != snapshot.ID || items[0].RunInputSnapshotHash != snapshot.SnapshotHash {
+		t.Fatalf("todo replay lost input binding: %+v error=%v", items, err)
+	}
+	if len(capture.providerRequests()) != 0 {
+		t.Fatal("todo creation invoked a model")
+	}
+}
+
 func TestRunAgentsRejectsProviderWorksetStateBeforeTodoCreation(t *testing.T) {
 	for _, field := range []string{"workset_binding", "workset_receipt"} {
 		t.Run(field, func(t *testing.T) {

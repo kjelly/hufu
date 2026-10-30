@@ -189,6 +189,7 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("%s: agent %q uses an isolated worker workspace, which request_agent cannot provide; dispatch it as a task instead", workspaceIsolationUnsupportedCode, selected)), nil
 	}
 	subSpec.Agent, subSpec.Model = subTask.Agent, subTask.Model
+	subSpec.RunInputSnapshotID, subSpec.RunInputSnapshotHash = subTask.RunInputSnapshotID, subTask.RunInputSnapshotHash
 	subSpec.ModelTopology = cloneModelTopology(subTask.ModelTopology)
 	subSpec.ExecutionTarget = subTask.ResolvedExecutionTarget
 	subSpec.ExecutionTopology = cloneExecutionTopology(subTask.ExecutionTopology)
@@ -267,7 +268,7 @@ func (t *requestAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fant
 	return fantasy.NewTextResponse(output), nil
 }
 
-func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task string, constraints string) (string, error) {
+func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task string, constraints string) (output string, returnErr error) {
 	if c.IsWrapUp() {
 		return "", fmt.Errorf("wrap-up in progress: cannot create sub-agent")
 	}
@@ -334,10 +335,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 		return "", fmt.Errorf("cannot create sub-agent: no active result occurrence for Todo %q", todoID)
 	}
 
-	// Sub-agent streams do not produce a separate execution receipt. Make the
-	// usage-accounting boundary explicit even when the parent worker context
-	// carried the receipt marker.
-	ctx = context.WithValue(ctx, llmUsageReceiptExpectedKey{}, false)
+	ctx = context.WithValue(ctx, llmUsageReceiptExpectedKey{}, true)
 
 	var ag fantasy.Agent
 	if c.workerAgentOverride != nil {
@@ -425,8 +423,17 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 
 	timing := &taskTiming{}
 	timing.reset()
-
-	_, _, err = c.runAgentWithStatusAndHistory(ctx, ag, agentDef.Name, prompt, nil, timing)
+	ctx = withInvocationMetadata(ctx, invocationMetadataFromRequest(request, manifest))
+	startedAt := time.Now().UTC()
+	_, steps, transcriptRef, err := c.runInlineWorkerTranscript(ctx, ag, agentDef.Name, prompt, timing)
+	defer func() {
+		receipt := &ExecutionReceipt{RunID: coordinatorRuntimeRunID(c), TaskID: todoID, Attempt: c.taskAttempt(todoID), OccurrenceAttempt: c.taskAttempt(todoID),
+			ExecutionTarget: receiptExecutionTarget(canonical.Task.ResolvedExecutionTarget), Model: subAgModelID, ProducerID: agentDef.Name,
+			RunInputSnapshotID: canonical.Task.RunInputSnapshotID, RunInputSnapshotHash: canonical.Task.RunInputSnapshotHash,
+			StartedAt: startedAt, FinishedAt: time.Now().UTC(), ModelExecutionID: manifest.ModelExecutionID,
+			ContextManifest: cloneContextInjectionManifest(&manifest), Usage: receiptUsage(usageFromSteps(steps)), ExitCode: new(0)}
+		returnErr = errors.Join(returnErr, c.persistInlineWorkerReceipt(receipt, transcriptRef, steps, returnErr))
+	}()
 	if err != nil {
 		return "", err
 	}
@@ -437,7 +444,7 @@ func (c *Coordinator) ExecuteSubAgent(ctx context.Context, name string, task str
 	if err := validateCompletedTaskResult(result); err != nil {
 		return "", fmt.Errorf("sub-agent %q submitted an incomplete result for Todo %q: %w", name, todoID, err)
 	}
-	output := result.FormatForContext()
+	output = result.FormatForContext()
 	if strings.TrimSpace(output) == "" {
 		output = strings.TrimSpace(result.Summary)
 	}

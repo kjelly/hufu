@@ -46,6 +46,7 @@ printf '%s' '{"outputs":{"ok":true}}'
 	definitions := []RunInputDefinition{{Name: "scope", Schema: RunInputSchema{Type: "object"}, Required: true}}
 	snapshot := mustRunInputSnapshot(t, definitions, []RunInputAssignment{{Name: "scope", RawValue: []byte(`{"count":10}`), Source: RunInputSourceCLI}})
 	c.session.RunInputDefinitions = definitions
+	c.session.Config.Name = snapshot.Team
 	c.sessionData = &SessionData{RunInputSnapshots: []RunInputSnapshot{*snapshot}, ActiveRunInputSnapshotID: snapshot.ID}
 	tasks, err := c.materializeTaskActions([]TaskDef{{
 		ID: "action", Agent: "executor", Goal: "apply", Phase: PhaseExecute,

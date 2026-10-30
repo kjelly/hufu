@@ -197,7 +197,7 @@ func validateResultCollectionBinding(value *ResultCollectionCheckpoint) error {
 		value.TurnLimit < resultCollectionDefaultTurns || value.TurnsUsed < 0 || value.TurnsUsed > value.TurnLimit {
 		return fmt.Errorf("invalid result collection binding")
 	}
-	if (value.InputsID == "") != (value.InputsSHA256 == "") || (value.InputsSHA256 != "" && !validCollectionDigest(value.InputsSHA256)) {
+	if (value.InputsID == "") != (value.InputsSHA256 == "") || (value.InputsSHA256 != "" && !validCollectionDigest(value.InputsSHA256) && !runInputHashPattern.MatchString(value.InputsSHA256)) {
 		return fmt.Errorf("invalid result collection frozen inputs")
 	}
 	return validateCollectionReferences(value)

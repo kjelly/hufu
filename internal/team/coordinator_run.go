@@ -536,7 +536,10 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	if _, directLLMErr := c.ExecutionRegistry().LanguageModelBackend(directTask.ResolvedExecutionTarget); directLLMErr != nil || directTransport == agent.ResultTransportRuntime || directTask.WorkerWorkspace.isolated() ||
 		(directTask.ExecutionRoute != nil && len(directTask.ExecutionRoute.Candidates) > 1) || c.requestAcceptanceEnabled() {
 		output, execErr := c.executeTask(ctx, directTask, todoID)
-		if c.requestAcceptanceEnabled() {
+		// Runtime collection delegates work to executeTask, but the direct
+		// invocation still owns run finalization. Without it, an otherwise
+		// recoverable collection failure leaves an uncertain terminal commit.
+		if c.requestAcceptanceEnabled() || directTransport == agent.ResultTransportRuntime {
 			runResult := c.finalizeDirectRun(ctx, todoID, execErr == nil, output)
 			if execErr == nil && (runResult == nil || !IsRunOutcomeSuccess(runResult.Outcome) || !runResult.GoalSatisfied) {
 				return directRunNotAcceptedResult(resolvedName, output, runResult, 0), nil
@@ -810,7 +813,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent memory manifest preflight failed: %w", manifestErr)}, nil
 	}
 
-	output, steps, err := c.runAgentWithStatusAndHistory(taskCtx, ag, resolvedName, prompt, nil, timing)
+	output, steps, transcriptRef, err := c.runInlineWorkerTranscript(taskCtx, ag, resolvedName, prompt, timing)
 	roundCancel()
 	c.unregisterTerminalRound(todoID)
 	if _, checkpointStopped := asCheckpointControlError(err); checkpointStopped {
@@ -820,6 +823,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	directArtifactScope, _ := artifactAccessScopeFromContext(taskCtx)
 	directReceipt := ExecutionReceipt{
 		RunID: runID, TaskID: todoID, Attempt: 1, StartedAt: attemptStarted,
+		RunInputSnapshotID: directTask.RunInputSnapshotID, RunInputSnapshotHash: directTask.RunInputSnapshotHash,
 		OccurrenceAttempt: c.taskAttempt(todoID),
 		ExecutionTarget:   receiptExecutionTarget(directTask.ResolvedExecutionTarget),
 		Usage:             receiptUsage(usageFromSteps(steps)),
@@ -834,10 +838,14 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	}
 	directReceipt.ToolInvocations, directReceipt.ToolInvocationsTruncated = directDynamicInvocations.snapshot()
 	directReceipt.ToolSequence = toolSequenceRecord(directExecutedCalls.snapshot())
+	if transcriptRef != nil {
+		directReceipt.TranscriptRef = transcriptRef.ID
+	}
 	if err == nil {
 		zero := 0
 		directReceipt.ExitCode = &zero
 	}
+	c.applyResultContractReceipt(todoID, c.GetTaskResult(todoID), &directReceipt)
 	_ = c.setAttemptReceipt(todoID, &directReceipt)
 	err, terminalBlocked := c.finalizeTaskTerminalResources(ctx, todoID, err)
 	var typedRes *TaskResult
@@ -982,6 +990,7 @@ func (c *Coordinator) persistPreCancelledDirectAgentWithDef(ctx context.Context,
 	occurrence.ModelTopology = []string{occurrence.Model}
 	occurrence.ExecutionTopology = []execution.ExecutionTarget{occurrence.ResolvedExecutionTarget}
 	spec := TodoSpec{
+		RunInputSnapshotID: occurrence.RunInputSnapshotID, RunInputSnapshotHash: occurrence.RunInputSnapshotHash,
 		Agent:             occurrence.Agent,
 		Desc:              occurrence.Goal,
 		Goal:              occurrence.Goal,

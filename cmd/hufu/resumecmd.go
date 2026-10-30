@@ -1,7 +1,10 @@
 package main
 
 import (
+	"cmp"
 	"context"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -45,8 +48,8 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	if err := validateRunFlags(); err != nil {
 		return err
 	}
-	if resumeRepairModel != "" && resumeRepairResult == "" {
-		return fmt.Errorf("--repair-model requires --repair-result")
+	if err := validateResumeRepairFlags(); err != nil {
+		return err
 	}
 	if err := captureRuntimeRoots(); err != nil {
 		return err
@@ -100,6 +103,18 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 		if !found {
 			return team.ResumeSourceError(workspace, fmt.Errorf("branch %q has no blocked protocol task %q", source.BranchID, resumeRepairResult))
 		}
+	}
+	if opts.dryRun {
+		tc, err := loadTeamByNameWithWorkspaceBinding(context.Background(), teamName, binding, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, false, false)
+		if err != nil {
+			return err
+		}
+		defer func() { runErr = errors.Join(runErr, tc.Close()) }()
+		assessment, err := tc.coordinator.AssessResumeResultCollection(cmd.Context(), source, resumeRepairResult)
+		if err != nil {
+			return err
+		}
+		return printResultRecoveryAssessment(cmd, assessment)
 	}
 	if err := team.ActivateResumeSource(context.Background(), workspace, source); err != nil {
 		return team.ResumeSourceError(workspace, err)
@@ -198,6 +213,7 @@ func init() {
 	f.StringArrayVar(&opts.inputFlags, "input", nil, "Set a typed run input (name=value; repeatable)")
 	f.StringArrayVar(&opts.inputFiles, "input-file", nil, "Read typed run inputs from JSON or YAML (repeatable)")
 	f.StringArrayVar(&opts.forcedSkills, "skill", nil, "Force-load specific skills (repeatable)")
+	f.BoolVar(&opts.dryRun, "dry-run", false, "Read-only result repair assessment; no branch activation, tools or model calls")
 	f.BoolVar(&opts.verbose, "verbose", false, "Show full agent text output in real-time")
 	f.BoolVar(&opts.quietMode, "quiet", false, "Suppress status output")
 	f.StringVar(&opts.outputFormat, "output", "", "Final-result format: text or json")
@@ -211,4 +227,65 @@ func init() {
 	f.BoolVar(&opts.reportMode, "report", false, "Export the saved run report to workspace/report.md")
 	f.BoolVar(&opts.noSummary, "no-summary", false, "Suppress the execution summary")
 	_ = resumeCmd.MarkFlagFilename("var-file")
+}
+
+func printResultRecoveryAssessment(cmd *cobra.Command, a *team.ResultCollectionRecoveryAssessment) error {
+	if opts.outputFormat == "json" {
+		body, err := json.Marshal(a, json.Deterministic(true))
+		if err != nil {
+			return err
+		}
+		if a.Checkpoint == nil {
+			var fields map[string]jsontext.Value
+			if err := json.Unmarshal(body, &fields); err != nil {
+				return err
+			}
+			delete(fields, "turns_used")
+			delete(fields, "remaining_turns")
+			delete(fields, "additional_turns")
+			body, err = json.Marshal(fields, json.Deterministic(true))
+			if err != nil {
+				return err
+			}
+		}
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), string(body))
+		return err
+	}
+	count := "unknown"
+	if a.AcceptedTasks != nil {
+		count = fmt.Sprint(*a.AcceptedTasks)
+	}
+	continuation := "After a successful repair, execution continues the coordinator and any undispatched downstream work."
+	if !a.ContinuesWorkflow {
+		continuation = "Other unresolved tasks remain; inspect them before ordinary resume continues the workflow."
+	}
+	if a.Disposition == team.RecoveryBlocked {
+		continuation = "Recovery is blocked; no grant or execution is authorized."
+	}
+	turns := "unknown (no verified collection checkpoint)"
+	if a.Checkpoint != nil {
+		turns = fmt.Sprintf("used: %d; remaining: %d; additional maximum: %d", a.TurnsUsed, a.RemainingTurns, a.AdditionalTurns)
+	}
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "Task: %s; branch: %s; source run: %s\nRecovery: %s\nAccepted tasks retained: %s\nCollector turns %s\n%s\n", cmp.Or(a.TaskID, "unknown"), cmp.Or(a.BranchID, "unknown"), cmp.Or(a.SourceRunID, "unknown"), a.Disposition, count, turns, continuation)
+	if err != nil {
+		return err
+	}
+	for _, check := range a.Checks {
+		if !check.Passed {
+			if _, err = fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", check.Code, check.Diagnostic); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateResumeRepairFlags() error {
+	if resumeRepairModel != "" && resumeRepairResult == "" {
+		return fmt.Errorf("--repair-model requires --repair-result")
+	}
+	if opts.dryRun && (resumeRepairResult == "" || resumeRepairModel != "" || opts.reportMode || opts.tuiMode || len(opts.inputFlags) > 0 || len(opts.inputFiles) > 0) {
+		return fmt.Errorf("resume --dry-run requires --repair-result and cannot use --repair-model, --report, --tui, or input assignments")
+	}
+	return nil
 }

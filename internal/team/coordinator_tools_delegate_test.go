@@ -81,6 +81,7 @@ func TestRequestAgentToolInfoOmitsEnumWithNoWorkers(t *testing.T) {
 func TestRequestAgentToolUsesTypedResultWorkerSurface(t *testing.T) {
 	modelID := "request-agent-worker-surface-test"
 	c, def, capture := newWorkerProviderSurfaceCoordinator(t, modelID, "sub-agent")
+	snapshot := setTaskInputSnapshot(t, c, false)
 	testTaskCache(c).entries = make(map[string][]cachedTaskEntry)
 	if err := c.startProviderExecutionBoundary(t.Context()); err != nil {
 		t.Fatal(err)
@@ -100,6 +101,14 @@ func TestRequestAgentToolUsesTypedResultWorkerSurface(t *testing.T) {
 		t.Fatalf("nested task items=%#v, want one task", items)
 	}
 	item := items[0]
+	if item.RunInputSnapshotID != snapshot.ID || item.RunInputSnapshotHash != snapshot.SnapshotHash {
+		t.Fatalf("nested task lost invocation inputs: %+v", item)
+	}
+	if receipt := latestSuccessfulExecutionReceipt(item, c.executionRunID); receipt == nil || receipt.RunInputSnapshotID != snapshot.ID || receipt.RunInputSnapshotHash != snapshot.SnapshotHash {
+		t.Fatalf("nested task has no input-bound transcript receipt: %+v", item.ExecutionReceipt)
+	} else if err := c.validateResumeTranscript(t.Context(), receipt); err != nil {
+		t.Fatalf("nested transcript provenance: %v", err)
+	}
 	if item.Agent != def.Name || item.Source != TaskSourceSubagent || !item.Execution.RequiresResult {
 		t.Fatalf("nested task=%#v, want selected worker, subagent source, and required result", item)
 	}
