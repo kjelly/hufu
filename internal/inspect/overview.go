@@ -120,9 +120,20 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 		snapshot.Attention = operatorpkg.DeriveAttention(activity.State, runData.Outcome, "valid", recovery.ExternalEffectState)
 	}
 	sessionRevision, sessionRefs := SessionRecoveryRevision(bound.Session, bound.Scope.BranchID)
+	var collectionRecoveries []*operatorpkg.RecoveryEligibility
+	for _, item := range tasks {
+		if item == nil || item.Status != team.TaskBlocked {
+			continue
+		}
+		candidate := RecoveryEligibilityForTask(item, bound.Lineage.Events, bound.Scope.RunID, activity.State == operatorpkg.ActivityInterrupted)
+		if candidate.ResultCollectionBlocked {
+			collectionRecoveries = append(collectionRecoveries, candidate)
+		}
+	}
 	snapshot.PrimaryAction, snapshot.SecondaryActions, err = operatorpkg.SelectActions(operatorpkg.ActionSelectionFacts{
 		Snapshot: snapshot, Recovery: recovery, SessionExpectedRevision: sessionRevision, SessionSourceRefs: sessionRefs,
-		MutationFacadeAvailable: true,
+		ResultCollectionRecoveries: collectionRecoveries,
+		MutationFacadeAvailable:    true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: select operator action: %v", ErrIntegrity, err)

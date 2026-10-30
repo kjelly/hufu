@@ -56,6 +56,94 @@ func TestSelectActionsOffersOnlyReadOnlyResultRepairAssessment(t *testing.T) {
 	}
 }
 
+func TestSelectActionsAssessesEveryBlockedCollectionWithoutChangingSafetyPriority(t *testing.T) {
+	snapshot := selectionTestSnapshot(ActivityBlocked, "blocked")
+	snapshot.Scope.ProjectDir = "/project"
+	snapshot.Scope.RequestedSemantics, snapshot.Scope.SelectionSource = "exact", "explicit"
+	recoveries := []*RecoveryEligibility{
+		{TaskID: "3", TaskStatus: "blocked", ResultCollectionBlocked: true, Attempt: 2},
+		{TaskID: "1", TaskStatus: "blocked", ResultCollectionBlocked: true},
+		{TaskID: "4", TaskStatus: "blocked", ResultCollectionBlocked: true},
+		{TaskID: "2", TaskStatus: "blocked", ResultCollectionBlocked: true},
+		nil, {TaskID: "ordinary", TaskStatus: "blocked"},
+		{TaskID: "stale", TaskStatus: "done", ResultCollectionBlocked: true},
+	}
+	recoveries = append(recoveries, recoveries[0])
+	for _, test := range []struct {
+		name    string
+		primary *RecoveryEligibility
+	}{
+		{"unknown external effect", &RecoveryEligibility{TaskID: "external", TaskStatus: "blocked", ExternalEffectState: "unknown", ReconcileEligible: true}},
+		{"collection selected", recoveries[0]},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			facts := ActionSelectionFacts{Snapshot: snapshot, Recovery: test.primary, ResultCollectionRecoveries: recoveries}
+			primary, secondary, err := SelectActions(facts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if primary.ID != ActionInspectTaskRecovery || primary.Target.TaskID != test.primary.TaskID {
+				t.Fatalf("changed primary safety target: %+v", primary)
+			}
+			seen := make(map[string]bool)
+			for _, action := range secondary {
+				if action.ID != ActionAssessResultRepair {
+					continue
+				}
+				if seen[action.Target.TaskID] || action.Kind != ActionKindInspect || action.Risk != "read-only" || action.Confirmation != "none" ||
+					action.CWD != "/project" || action.Target.RunID != snapshot.Scope.RunID || action.Target.BranchID != snapshot.Scope.BranchID ||
+					!strings.Contains(strings.Join(action.Argv, " "), "--dry-run") {
+					t.Fatalf("invalid assessment: %+v", action)
+				}
+				seen[action.Target.TaskID] = true
+			}
+			if len(seen) != 4 {
+				t.Fatalf("assessed %v; want all four collections", seen)
+			}
+			first := snapshot
+			first.PrimaryAction, first.SecondaryActions = primary, secondary
+			first.Attention, first.Learning.Status = AttentionReviewRequired, "unknown"
+			normalized, err := FinalizeSnapshot(first)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for index, taskID := range []string{"1", "2", "3", "4"} {
+				if normalized.SecondaryActions[index].Target.TaskID != taskID {
+					t.Fatalf("unstable task ordering: %+v", normalized.SecondaryActions)
+				}
+			}
+		})
+	}
+}
+
+func TestSelectActionsSuppressesCollectionAssessmentsWhenScopeOrIntegrityIsUnavailable(t *testing.T) {
+	for _, test := range []struct{ name, binding, integrity, projection, activity string }{
+		{"ambiguous", "ambiguous", "valid", "consistent", ActivityBlocked},
+		{"unknown binding", "unknown", "valid", "consistent", ActivityBlocked},
+		{"invalid integrity", "verified", "invalid", "consistent", ActivityBlocked},
+		{"unknown integrity", "verified", "unknown", "consistent", ActivityBlocked},
+		{"projection drift", "verified", "degraded", "drift", ActivityBlocked},
+		{"runtime active", "verified", "valid", "consistent", ActivityExecuting},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := selectionTestSnapshot(test.activity, "")
+			snapshot.Scope.BindingStatus = test.binding
+			snapshot.Integrity.Status, snapshot.Integrity.Projection = test.integrity, test.projection
+			_, secondary, err := SelectActions(ActionSelectionFacts{Snapshot: snapshot,
+				ResultCollectionRecoveries: []*RecoveryEligibility{{TaskID: "collection", TaskStatus: "blocked", ResultCollectionBlocked: true}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, action := range secondary {
+				if action.ID == ActionAssessResultRepair {
+					t.Fatalf("assessment escaped gate: %+v", action)
+				}
+			}
+		})
+	}
+}
+
 func TestBuildActionUsesOnlyRegisteredExistingInspectFlags(t *testing.T) {
 	target := ActionTarget{Workspace: "/tmp/work space", TeamID: "ignored-team", RunID: "run-1", BranchID: "branch-1", TaskID: "task-1", Attempt: 2}
 	action, err := BuildAction(ActionInspectTaskRecovery, ActionBuildInput{

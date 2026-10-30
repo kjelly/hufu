@@ -28,11 +28,11 @@ func workspaceRecoveryFromSnapshot(snapshot operatorpkg.OperatorSnapshot) *works
 		recovery.Blockers = []operatorpkg.DiagnosticView{}
 	}
 	for _, action := range snapshot.SecondaryActions {
-		if action.Kind == "inspect" {
+		if action.Kind == operatorpkg.ActionKindInspect {
 			recovery.Actions = append(recovery.Actions, action)
 		}
 	}
-	if snapshot.PrimaryAction != nil && snapshot.PrimaryAction.Kind == "inspect" {
+	if snapshot.PrimaryAction != nil && snapshot.PrimaryAction.Kind == operatorpkg.ActionKindInspect {
 		recovery.Actions = append([]operatorpkg.ActionSuggestion{*snapshot.PrimaryAction}, recovery.Actions...)
 	}
 	return recovery
@@ -55,7 +55,7 @@ func writeWorkspaceRecovery(out io.Writer, recovery *workspaceRecovery) {
 	}
 	for _, action := range recovery.Actions {
 		_, _ = fmt.Fprintf(out, "  %s: %s (%s)\n", safeOverviewValue(action.ID), safeOverviewValue(action.Availability), safeOverviewValue(action.ReasonCode))
-		if action.Availability != "available" || len(action.Argv) == 0 {
+		if action.Availability != operatorpkg.ActionAvailabilityAvailable || len(action.Argv) == 0 {
 			continue
 		}
 		command, renderable := operatorpkg.RenderArgv(action.Argv, shell)

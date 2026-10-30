@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: normative
-> Verified-Commit: 2026-09-14
+> Verified-Commit: 2026-10-30
 > Supersedes: —
 > Superseded-By: —
 > Implementation-Ready: yes（依 §1.3 的 PR 邊界與 phase gates 漸進實作）
@@ -578,7 +578,8 @@ type ActionPreconditions struct {
 | 8 | run terminal 且無 blocker | review result / none；「無須操作」是成功體驗 |
 | 9 | 條件不足 | inspect/unknown；絕不為湊出建議建立寫入命令 |
 
-多個 blockers 同時存在：顯示 highest-priority action 與「另有 N 個待處理」，最多展開兩個 secondary actions；不能把安全 blocker 隱藏在裝飾性摘要下。
+多個 blockers 同時存在：顯示 highest-priority action 與「另有 N 個待處理」，最多展開兩個一般 secondary actions；不能把安全 blocker 隱藏在裝飾性摘要下。
+在 scope 與 integrity 可用且 runtime 未要求 wait 時，`secondary_actions` 另可包含每個 result-collection 阻塞任務各一個 `assess-result-repair` 唯讀評估動作，不計入一般動作上限。每個評估必須綁定同一 workspace/run/branch 中不同的 task；排序依 action ID、task ID，避免同種評估順序不穩定。這些入口不改變 primary action 的安全優先順序，也不授予修復、重試或工具重播權限。
 
 #### v1 action registry
 

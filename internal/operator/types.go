@@ -8,6 +8,14 @@ import "github.com/kjelly/hufu/internal/cost"
 
 const SchemaVersion = 1
 
+const ActionKindInspect = "inspect"
+
+const (
+	ActionAvailabilityAvailable = "available"
+	ActionAvailabilityBlocked   = "blocked"
+	ActionAvailabilityUnknown   = "unknown"
+)
+
 const (
 	ActionSelectScope         = "select-scope"
 	ActionInspectIntegrity    = "inspect-integrity"
@@ -231,11 +239,13 @@ type RecoveryEligibility struct {
 }
 
 type ActionSelectionFacts struct {
-	Snapshot                OperatorSnapshot
-	Recovery                *RecoveryEligibility
-	SessionExpectedRevision string
-	SessionSourceRefs       []string
-	MutationFacadeAvailable bool
+	Snapshot OperatorSnapshot
+	Recovery *RecoveryEligibility
+	// ResultCollectionRecoveries are per-task previews, independent of the primary safety target.
+	ResultCollectionRecoveries []*RecoveryEligibility
+	SessionExpectedRevision    string
+	SessionSourceRefs          []string
+	MutationFacadeAvailable    bool
 }
 
 type OperatorSummary struct {

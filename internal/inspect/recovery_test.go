@@ -16,11 +16,11 @@ func TestRecoveryEligibilityRecognizesBlockedCollection(t *testing.T) {
 		checkpoint bool
 		want       bool
 	}{
-		{"collection", team.TaskBlocked, team.FailureProtocol, "collection", true, true},
-		{"missing checkpoint", team.TaskBlocked, team.FailureProtocol, "collection", false, false},
+		{"collection", team.TaskBlocked, team.FailureProtocol, team.FailureTypeResultCollection, true, true},
+		{"missing checkpoint", team.TaskBlocked, team.FailureProtocol, team.FailureTypeResultCollection, false, false},
 		{"tool submission", team.TaskBlocked, team.FailureProtocol, "submission", true, false},
-		{"execution failure", team.TaskBlocked, team.FailureExecution, "collection", true, false},
-		{"completed", team.TaskDone, team.FailureProtocol, "collection", true, false},
+		{"execution failure", team.TaskBlocked, team.FailureExecution, team.FailureTypeResultCollection, true, false},
+		{"completed", team.TaskDone, team.FailureProtocol, team.FailureTypeResultCollection, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			item := &team.TodoItem{ID: "11", Status: tc.status, FailureEvent: &team.FailureEventPayload{FailureClass: tc.class, FailureType: tc.kind}}

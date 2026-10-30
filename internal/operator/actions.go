@@ -35,13 +35,13 @@ type actionDefinition struct {
 func actionDefinitionFor(id string) (actionDefinition, bool) {
 	switch id {
 	case ActionSelectScope:
-		return actionDefinition{kind: "inspect", actor: "user", risk: "read-only", confirmation: "none"}, true
+		return actionDefinition{kind: ActionKindInspect, actor: "user", risk: "read-only", confirmation: "none"}, true
 	case ActionInspectIntegrity:
-		return actionDefinition{kind: "inspect", actor: "user", risk: "read-only", confirmation: "none", command: "inspect-replay"}, true
+		return actionDefinition{kind: ActionKindInspect, actor: "user", risk: "read-only", confirmation: "none", command: "inspect-replay"}, true
 	case ActionInspectTaskRecovery:
-		return actionDefinition{kind: "inspect", actor: "user", risk: "read-only", confirmation: "none", command: "inspect-task"}, true
+		return actionDefinition{kind: ActionKindInspect, actor: "user", risk: "read-only", confirmation: "none", command: "inspect-task"}, true
 	case ActionAssessResultRepair:
-		return actionDefinition{kind: "inspect", actor: "user", risk: "read-only", confirmation: "none", command: "assess-result-repair"}, true
+		return actionDefinition{kind: ActionKindInspect, actor: "user", risk: "read-only", confirmation: "none", command: "assess-result-repair"}, true
 	case ActionProvideInput:
 		return actionDefinition{kind: "provide_input", actor: "user", risk: "approval", confirmation: "existing-runtime-gate"}, true
 	case ActionReviewApproval:
@@ -55,7 +55,7 @@ func actionDefinitionFor(id string) (actionDefinition, bool) {
 	case ActionRetryTask:
 		return actionDefinition{kind: "mutate", actor: "user", risk: "external-effect", confirmation: "explicit-review", command: "session-retry"}, true
 	case ActionReviewResult:
-		return actionDefinition{kind: "inspect", actor: "user", risk: "read-only", confirmation: "none", command: "inspect-run"}, true
+		return actionDefinition{kind: ActionKindInspect, actor: "user", risk: "read-only", confirmation: "none", command: "inspect-run"}, true
 	case ActionNoneRequired:
 		return actionDefinition{kind: "none", actor: "user", risk: "read-only", confirmation: "none"}, true
 	default:
@@ -79,14 +79,14 @@ func BuildAction(id string, input ActionBuildInput) (ActionSuggestion, error) {
 		SourceRefs: cloneSorted(input.SourceRefs),
 	}
 	if action.Availability == "" {
-		action.Availability = "available"
+		action.Availability = ActionAvailabilityAvailable
 	}
-	if !contains([]string{"available", "blocked", "unknown"}, action.Availability) {
+	if !contains([]string{ActionAvailabilityAvailable, ActionAvailabilityBlocked, ActionAvailabilityUnknown}, action.Availability) {
 		return ActionSuggestion{}, fmt.Errorf("operator action %q has invalid availability %q", id, action.Availability)
 	}
 	if definition.kind == "mutate" {
 		if !input.MutationFacadeAvailable || action.Preconditions.ExpectedRevision == "" {
-			action.Availability = "blocked"
+			action.Availability = ActionAvailabilityBlocked
 		}
 		if action.Preconditions.ExpectedRevision != "" {
 			key, err := ComputeActionRevalidationKey(action)
@@ -96,13 +96,13 @@ func BuildAction(id string, input ActionBuildInput) (ActionSuggestion, error) {
 			action.RevalidationKey = key
 		}
 	}
-	if action.Availability == "available" && definition.command != "" {
+	if action.Availability == ActionAvailabilityAvailable && definition.command != "" {
 		action.Argv = buildRegisteredArgv(definition.command, input.Target)
 		if len(action.Argv) == 0 {
-			action.Availability = "blocked"
+			action.Availability = ActionAvailabilityBlocked
 		}
 	}
-	if action.Availability != "available" {
+	if action.Availability != ActionAvailabilityAvailable {
 		action.Argv = []string{}
 	}
 	return action, nil
@@ -249,81 +249,108 @@ func SelectActions(facts ActionSelectionFacts) (*ActionSuggestion, []ActionSugge
 	}
 	switch {
 	case snapshot.Scope.BindingStatus == "ambiguous" || snapshot.Scope.BindingStatus == "conflict":
-		primary, err = build(ActionSelectScope, "scope_not_unique", "blocked", nil)
+		primary, err = build(ActionSelectScope, "scope_not_unique", ActionAvailabilityBlocked, nil)
 	case snapshot.Integrity.Status == "invalid" || snapshot.Integrity.Status == "unknown":
-		primary, err = build(ActionInspectIntegrity, "integrity_not_valid", "available", nil)
+		primary, err = build(ActionInspectIntegrity, "integrity_not_valid", ActionAvailabilityAvailable, nil)
 	case facts.Recovery != nil && facts.Recovery.ExternalEffectState == "unknown":
 		primary, err = build(ActionInspectTaskRecovery, "external_effect_unknown", inspectionAvailability(facts.Recovery), facts.Recovery)
 		if facts.Recovery.ReconcileEligible {
-			addSecondary(ActionReconcileTask, "reconcile_eligible", "available", facts.Recovery)
+			addSecondary(ActionReconcileTask, "reconcile_eligible", ActionAvailabilityAvailable, facts.Recovery)
 		}
 	case facts.Recovery != nil && facts.Recovery.PolicyDenied:
 		primary, err = build(ActionInspectTaskRecovery, "recovery_policy_denied", inspectionAvailability(facts.Recovery), facts.Recovery)
 	case snapshot.Activity.State == ActivityWaitingInput:
-		primary, err = build(ActionProvideInput, "input_required", "available", facts.Recovery)
+		primary, err = build(ActionProvideInput, "input_required", ActionAvailabilityAvailable, facts.Recovery)
 	case snapshot.Activity.State == ActivityWaitingApproval:
-		primary, err = build(ActionReviewApproval, "approval_required", "available", facts.Recovery)
+		primary, err = build(ActionReviewApproval, "approval_required", ActionAvailabilityAvailable, facts.Recovery)
 	case snapshot.Integrity.Status == "degraded" || snapshot.Integrity.Projection == "drift":
-		primary, err = build(ActionInspectIntegrity, "projection_requires_diagnosis", "available", nil)
+		primary, err = build(ActionInspectIntegrity, "projection_requires_diagnosis", ActionAvailabilityAvailable, nil)
 	case snapshot.Activity.State == ActivityInterrupted:
 		if facts.Recovery != nil && facts.Recovery.TaskID != "" {
 			primary, err = build(ActionInspectTaskRecovery, "interrupted_task_requires_inspection", inspectionAvailability(facts.Recovery), facts.Recovery)
 			if facts.Recovery.ReconcileEligible {
-				addSecondary(ActionReconcileTask, "reconcile_eligible", "available", facts.Recovery)
+				addSecondary(ActionReconcileTask, "reconcile_eligible", ActionAvailabilityAvailable, facts.Recovery)
 			} else if facts.Recovery.RetryEligible {
-				addSecondary(ActionRetryTask, "retry_eligible", "available", facts.Recovery)
+				addSecondary(ActionRetryTask, "retry_eligible", ActionAvailabilityAvailable, facts.Recovery)
 			}
 		} else {
 			resumePreconditions := preconditions
 			resumePreconditions.ExpectedRevision = facts.SessionExpectedRevision
 			primary, err = BuildAction(ActionResumeSession, ActionBuildInput{
 				Target: target, Preconditions: resumePreconditions,
-				ReasonCode: "resume_eligible", Availability: "available", SourceRefs: facts.SessionSourceRefs,
+				ReasonCode: "resume_eligible", Availability: ActionAvailabilityAvailable, SourceRefs: facts.SessionSourceRefs,
 				MutationFacadeAvailable: facts.MutationFacadeAvailable,
 			})
 		}
 	case slices.Contains([]string{ActivityPlanning, ActivityExecuting, ActivityVerifying, ActivityWrappingUp, ActivityPreflight}, snapshot.Activity.State):
-		primary, err = build(ActionWaitRuntime, "runtime_active", "available", nil)
+		primary, err = build(ActionWaitRuntime, "runtime_active", ActionAvailabilityAvailable, nil)
 	case isTerminalReplan(facts):
 		resumePreconditions := preconditions
 		resumePreconditions.ExpectedRevision = facts.SessionExpectedRevision
 		primary, err = BuildAction(ActionResumeSession, ActionBuildInput{
 			Target: target, Preconditions: resumePreconditions,
-			ReasonCode: "replan_required", Availability: "available", SourceRefs: facts.SessionSourceRefs,
+			ReasonCode: "replan_required", Availability: ActionAvailabilityAvailable, SourceRefs: facts.SessionSourceRefs,
 			MutationFacadeAvailable: facts.MutationFacadeAvailable,
 		})
 	case snapshot.Activity.State == ActivityFinished && snapshot.Outcome.RunOutcome == "completed" && len(snapshot.Blockers) == 0:
-		primary, err = build(ActionNoneRequired, "run_completed", "available", nil)
+		primary, err = build(ActionNoneRequired, "run_completed", ActionAvailabilityAvailable, nil)
 	case isFinishedRecovery(snapshot, facts.Recovery):
 		primary, err = build(ActionInspectTaskRecovery, "terminal_task_requires_recovery", inspectionAvailability(facts.Recovery), facts.Recovery)
 		secondary, err = appendRecoveryMutationAction(secondary, facts.Recovery, build, err)
 	case snapshot.Activity.State == ActivityFinished:
-		primary, err = build(ActionReviewResult, "terminal_result_requires_review", "available", nil)
+		primary, err = build(ActionReviewResult, "terminal_result_requires_review", ActionAvailabilityAvailable, nil)
 	case facts.Recovery != nil && facts.Recovery.TaskID != "":
 		primary, err = build(ActionInspectTaskRecovery, "task_requires_review", inspectionAvailability(facts.Recovery), facts.Recovery)
 		secondary, err = appendRecoveryMutationAction(secondary, facts.Recovery, build, err)
 	default:
-		primary, err = build(ActionInspectIntegrity, "insufficient_verified_facts", "available", nil)
+		primary, err = build(ActionInspectIntegrity, "insufficient_verified_facts", ActionAvailabilityAvailable, nil)
 	}
 	if err != nil {
 		return nil, nil, err
 	}
-	// Offer assessment, never repair authority. The preview revalidates the
-	// original work, policy, sources and grants without loading a provider.
-	if primary.ID == ActionInspectTaskRecovery && facts.Recovery != nil && facts.Recovery.ResultCollectionBlocked {
-		addSecondary(ActionAssessResultRepair, "result_collection_assessment_required", "available", facts.Recovery)
-		if err != nil {
-			return nil, nil, err
-		}
-		secondary[len(secondary)-1].CWD = snapshot.Scope.ProjectDir
-	}
 	if len(secondary) > 2 {
 		secondary = secondary[:2]
+	}
+	secondary, err = appendCollectionAssessmentActions(facts, primary, secondary, build)
+	if err != nil {
+		return nil, nil, err
 	}
 	if secondary == nil {
 		secondary = []ActionSuggestion{}
 	}
 	return &primary, secondary, nil
+}
+
+// appendCollectionAssessmentActions keeps the primary safety priority and the
+// general secondary-action bound. Each blocked collection additionally gets a
+// read-only preview, without granting repair authority or replaying tools.
+func appendCollectionAssessmentActions(
+	facts ActionSelectionFacts,
+	primary ActionSuggestion,
+	secondary []ActionSuggestion,
+	build func(string, string, string, *RecoveryEligibility) (ActionSuggestion, error),
+) ([]ActionSuggestion, error) {
+	snapshot := facts.Snapshot
+	if (snapshot.Scope.BindingStatus != "unique" && snapshot.Scope.BindingStatus != "verified") || primary.ID == ActionWaitRuntime ||
+		(snapshot.Integrity.Status != "valid" && snapshot.Integrity.Status != "degraded") ||
+		snapshot.Integrity.Projection != "consistent" || snapshot.Integrity.EventChain != "verified" {
+		return secondary, nil
+	}
+	seen := make(map[string]bool)
+	candidates := append([]*RecoveryEligibility{facts.Recovery}, facts.ResultCollectionRecoveries...)
+	for _, recovery := range candidates {
+		if recovery == nil || !recovery.ResultCollectionBlocked || recovery.TaskStatus != "blocked" || recovery.TaskID == "" || seen[recovery.TaskID] {
+			continue
+		}
+		seen[recovery.TaskID] = true
+		action, err := build(ActionAssessResultRepair, "result_collection_assessment_required", ActionAvailabilityAvailable, recovery)
+		if err != nil {
+			return nil, err
+		}
+		action.CWD = snapshot.Scope.ProjectDir
+		secondary = append(secondary, action)
+	}
+	return secondary, nil
 }
 
 func isTerminalReplan(facts ActionSelectionFacts) bool {
@@ -354,7 +381,7 @@ func appendRecoveryMutationAction(
 	default:
 		return actions, nil
 	}
-	action, err := build(id, reason, "available", recovery)
+	action, err := build(id, reason, ActionAvailabilityAvailable, recovery)
 	if err != nil {
 		return actions, err
 	}
@@ -363,9 +390,9 @@ func appendRecoveryMutationAction(
 
 func inspectionAvailability(recovery *RecoveryEligibility) string {
 	if recovery != nil && recovery.TaskID != "" {
-		return "available"
+		return ActionAvailabilityAvailable
 	}
-	return "blocked"
+	return ActionAvailabilityBlocked
 }
 
 func actionTargetFromSnapshot(snapshot OperatorSnapshot) ActionTarget {

@@ -74,7 +74,7 @@ func recoveryEligibilityForItem(item *team.TodoItem, events []IndexedEvent, runI
 	}
 	return &operatorpkg.RecoveryEligibility{
 		ResultCollectionBlocked: item.Status == team.TaskBlocked && item.FailureEvent != nil &&
-			item.FailureEvent.FailureClass == team.FailureProtocol && item.FailureEvent.FailureType == "collection" &&
+			item.FailureEvent.FailureClass == team.FailureProtocol && item.FailureEvent.FailureType == team.FailureTypeResultCollection &&
 			item.ExecutionReceipt != nil && item.ExecutionReceipt.ResultCollection != nil &&
 			item.ExecutionReceipt.ResultCollection.State == team.ResultCollectionBlocked,
 		TaskID: item.ID, Attempt: recoveryAttempt(item), TaskStatus: string(item.Status),

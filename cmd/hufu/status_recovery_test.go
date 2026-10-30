@@ -15,85 +15,116 @@ import (
 )
 
 func TestStatusShowsCanonicalRecoveryWithoutWorkersOrMutatingEvidence(t *testing.T) {
-	t.Setenv("SHELL", "/bin/sh")
-	workspace := t.TempDir()
-	store, err := team.NewEventStore(workspace, "run-recovery", "session-recovery")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, event := range []team.RunEvent{
-		{Type: string(team.EventRunStarted), Payload: inspectCommandJSON(t, map[string]any{"scope": map[string]string{"team_id": "review"}})},
-		{Type: string(team.EventTaskCreated), TaskID: "11", Payload: inspectCommandJSON(t, map[string]any{"id": "11", "agent": "reviewer", "status": team.TaskPending})},
-		{Type: string(team.EventTaskStarted), TaskID: "11", Payload: inspectCommandJSON(t, map[string]any{"id": "11", "status": team.TaskInProgress})},
-		{Type: string(team.EventTaskBlocked), TaskID: "11", Payload: inspectCommandJSON(t, map[string]any{
-			"id": "11", "status": team.TaskBlocked,
-			"failure_event":     &team.FailureEventPayload{FailureClass: team.FailureProtocol, FailureType: "collection", RetryDisposition: team.NeedsHuman},
-			"execution_receipt": &team.ExecutionReceipt{RunID: "run-recovery", TaskID: "11", ResultCollection: &team.ResultCollectionCheckpoint{State: team.ResultCollectionBlocked}},
-		})},
-		{Type: string(team.EventRunFinished), Payload: inspectCommandJSON(t, team.RunResult{RunID: "run-recovery", Outcome: team.RunOutcomeBlocked, StopReason: team.StopReasonPolicyViolation, Stats: team.RunStats{TasksTotal: 1, TasksUnresolved: 1}})},
+	for _, tc := range []struct {
+		name     string
+		tasks    []string
+		external bool
+	}{
+		{"single collection", []string{"11"}, false},
+		{"multiple collections behind unknown external effect", []string{"11", "12", "13", "14"}, true},
 	} {
-		event.Actor = "coordinator"
-		if _, err := store.AppendPersisted(event); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	// Deliberately stale checkpoint: the recovery hint must come from events.
-	if err := team.SaveSession(workspace, &team.SessionData{Tasks: []*team.TodoItem{{ID: "wrong-task", Status: team.TaskDone}}}); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(filepath.Join(workspace, "runtime.sqlite"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	previousWorkspace, previousJSON, previousWorkers := statusWorkspace, statusJSON, statusWorkers
-	t.Cleanup(func() { statusWorkspace, statusJSON, statusWorkers = previousWorkspace, previousJSON, previousWorkers })
-	statusWorkspace, statusWorkers = workspace, false
-	var output bytes.Buffer
-	command := &cobra.Command{}
-	command.SetOut(&output)
-	for _, asJSON := range []bool{false, true} {
-		statusJSON = asJSON
-		output.Reset()
-		if err := runStatus(command, nil); err != nil {
-			t.Fatal(err)
-		}
-		if !asJSON {
-			for _, want := range []string{"Task 11:", "assessment required", "--repair-result 11", "--dry-run", "Read-only preview"} {
-				if !strings.Contains(output.String(), want) {
-					t.Fatalf("missing %q in %s", want, output.String())
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SHELL", "/bin/sh")
+			workspace := t.TempDir()
+			store, err := team.NewEventStore(workspace, "run-recovery", "session-recovery")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			appendEvent := func(kind team.EventType, taskID string, payload any) {
+				t.Helper()
+				if _, err := store.AppendPersisted(team.RunEvent{Type: string(kind), TaskID: taskID, Actor: "coordinator", Payload: inspectCommandJSON(t, payload)}); err != nil {
+					t.Fatal(err)
 				}
 			}
-			if strings.Contains(output.String(), "Task wrong-task:") {
-				t.Fatal("checkpoint task leaked into canonical recovery")
+			appendEvent(team.EventRunStarted, "", map[string]any{"scope": map[string]string{"team_id": "review"}})
+			for _, id := range tc.tasks {
+				appendEvent(team.EventTaskCreated, id, map[string]any{"id": id, "agent": "reviewer", "status": team.TaskPending})
+				appendEvent(team.EventTaskStarted, id, map[string]any{"id": id, "status": team.TaskInProgress})
+				appendEvent(team.EventTaskBlocked, id, map[string]any{
+					"id": id, "status": team.TaskBlocked, "side_effect": team.SideEffectNone,
+					"failure_event":     &team.FailureEventPayload{FailureClass: team.FailureProtocol, FailureType: team.FailureTypeResultCollection, RetryDisposition: team.NeedsHuman},
+					"execution_receipt": &team.ExecutionReceipt{RunID: "run-recovery", TaskID: id, ResultCollection: &team.ResultCollectionCheckpoint{State: team.ResultCollectionBlocked}},
+				})
 			}
-			continue
-		}
-		var decoded workspaceStatus
-		if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
-			t.Fatal(err)
-		}
-		if decoded.Recovery == nil || decoded.Recovery.State != "assessment_required" || len(decoded.Recovery.Blockers) != 1 {
-			t.Fatalf("status=%+v", decoded)
-		}
-		found := false
-		for _, action := range decoded.Recovery.Actions {
-			if action.ID == operatorpkg.ActionAssessResultRepair {
-				found = true
-				if action.Target.TaskID != "11" || action.Target.RunID != decoded.RunID || action.Target.BranchID != decoded.BranchID || action.Kind != "inspect" {
-					t.Fatalf("wrong recovery scope: %+v", action)
+			taskCount := len(tc.tasks)
+			if tc.external {
+				taskCount++
+				appendEvent(team.EventTaskCreated, "external", map[string]any{"id": "external", "agent": "writer", "status": team.TaskPending})
+				appendEvent(team.EventTaskBlocked, "external", map[string]any{
+					"id": "external", "status": team.TaskBlocked, "side_effect": team.SideEffectExternalWrite, "recovery_state": team.RecoveryStateUnknown,
+					"failure_event": &team.FailureEventPayload{FailureClass: team.FailureExecution, RetryDisposition: team.ReconcileOnly},
+				})
+			}
+			appendEvent(team.EventRunFinished, "", team.RunResult{RunID: "run-recovery", Outcome: team.RunOutcomeBlocked, StopReason: team.StopReasonPolicyViolation, Stats: team.RunStats{TasksTotal: taskCount, TasksUnresolved: taskCount}})
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			// Deliberately stale: all hints must come from the event lineage.
+			if err := team.SaveSession(workspace, &team.SessionData{Tasks: []*team.TodoItem{{ID: "wrong-task", Status: team.TaskDone}}}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(filepath.Join(workspace, "runtime.sqlite"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			previousWorkspace, previousJSON, previousWorkers := statusWorkspace, statusJSON, statusWorkers
+			t.Cleanup(func() { statusWorkspace, statusJSON, statusWorkers = previousWorkspace, previousJSON, previousWorkers })
+			statusWorkspace, statusWorkers = workspace, false
+			var output bytes.Buffer
+			command := &cobra.Command{}
+			command.SetOut(&output)
+			for _, asJSON := range []bool{false, true} {
+				statusJSON = asJSON
+				output.Reset()
+				if err := runStatus(command, nil); err != nil {
+					t.Fatal(err)
+				}
+				if !asJSON {
+					for _, want := range []string{"assessment required", "--dry-run", "Read-only preview"} {
+						if !strings.Contains(output.String(), want) {
+							t.Fatalf("missing %q in %s", want, output.String())
+						}
+					}
+					for _, id := range tc.tasks {
+						if !strings.Contains(output.String(), "Task "+id+":") || !strings.Contains(output.String(), "--repair-result "+id+" ") {
+							t.Fatalf("missing assessment for %s: %s", id, output.String())
+						}
+					}
+					if strings.Contains(output.String(), "Task wrong-task:") {
+						t.Fatal("checkpoint task leaked into canonical recovery")
+					}
+					continue
+				}
+				var decoded workspaceStatus
+				if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+					t.Fatal(err)
+				}
+				if decoded.Recovery == nil || decoded.Recovery.State != "assessment_required" || len(decoded.Recovery.Blockers) != taskCount {
+					t.Fatalf("status=%+v", decoded)
+				}
+				if tc.external && (len(decoded.Recovery.Actions) == 0 || decoded.Recovery.Actions[0].Target.TaskID != "external" || decoded.Recovery.Actions[0].ReasonCode != "external_effect_unknown") {
+					t.Fatalf("lost primary safety priority: %+v", decoded.Recovery.Actions)
+				}
+				seen := make(map[string]bool)
+				for _, action := range decoded.Recovery.Actions {
+					if action.ID != operatorpkg.ActionAssessResultRepair {
+						continue
+					}
+					if seen[action.Target.TaskID] || action.Target.RunID != decoded.RunID || action.Target.BranchID != decoded.BranchID || action.Kind != operatorpkg.ActionKindInspect || action.Availability != operatorpkg.ActionAvailabilityAvailable {
+						t.Fatalf("wrong recovery scope: %+v", action)
+					}
+					seen[action.Target.TaskID] = true
+				}
+				if len(seen) != len(tc.tasks) {
+					t.Fatalf("assessments=%v; want %v", seen, tc.tasks)
 				}
 			}
-		}
-		if !found {
-			t.Fatal("JSON omitted repair assessment")
-		}
-	}
-	after, err := os.ReadFile(filepath.Join(workspace, "runtime.sqlite"))
-	if err != nil || !bytes.Equal(before, after) {
-		t.Fatalf("status modified durable evidence: %v", err)
+			after, err := os.ReadFile(filepath.Join(workspace, "runtime.sqlite"))
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("status modified durable evidence: %v", err)
+			}
+		})
 	}
 }
 

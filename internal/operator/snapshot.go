@@ -92,7 +92,10 @@ func NormalizeSnapshot(snapshot OperatorSnapshot) OperatorSnapshot {
 		normalizeAction(&snapshot.SecondaryActions[index])
 	}
 	slices.SortFunc(snapshot.SecondaryActions, func(left, right ActionSuggestion) int {
-		return compareString(left.ID, right.ID)
+		if order := compareString(left.ID, right.ID); order != 0 {
+			return order
+		}
+		return compareString(left.Target.TaskID, right.Target.TaskID)
 	})
 	if snapshot.PrimaryAction != nil {
 		action := *snapshot.PrimaryAction
@@ -161,19 +164,15 @@ func ValidateSnapshot(snapshot OperatorSnapshot) error {
 			return fmt.Errorf("operator snapshot diagnostic %q has invalid severity %q", diagnostic.Code, diagnostic.Severity)
 		}
 	}
-	if len(snapshot.SecondaryActions) > 2 {
-		return fmt.Errorf("operator snapshot has more than two secondary actions")
-	}
 	if snapshot.PrimaryAction != nil {
 		if err := validateAction(*snapshot.PrimaryAction); err != nil {
 			return fmt.Errorf("operator snapshot primary action: %w", err)
 		}
 	}
-	for _, action := range snapshot.SecondaryActions {
-		if err := validateAction(action); err != nil {
-			return fmt.Errorf("operator snapshot secondary action %q: %w", action.ID, err)
-		}
+	if err := validateSecondaryActions(snapshot); err != nil {
+		return err
 	}
+
 	counters := []struct {
 		name  string
 		value *int64
@@ -210,6 +209,29 @@ func ValidateSnapshot(snapshot OperatorSnapshot) error {
 	return validateObservations(snapshot.Observations, snapshot.Freshness)
 }
 
+func validateSecondaryActions(snapshot OperatorSnapshot) error {
+	generalActions := 0
+	assessedTasks := make(map[string]bool)
+	for _, action := range snapshot.SecondaryActions {
+		if err := validateAction(action); err != nil {
+			return fmt.Errorf("operator snapshot secondary action %q: %w", action.ID, err)
+		}
+		if action.ID != ActionAssessResultRepair {
+			generalActions++
+			continue
+		}
+		if action.Target.TaskID == "" || assessedTasks[action.Target.TaskID] ||
+			action.Target.Workspace != snapshot.Scope.WorkspaceExact || action.Target.RunID != snapshot.Scope.RunID || action.Target.BranchID != snapshot.Scope.BranchID {
+			return fmt.Errorf("operator snapshot collection assessment must target one distinct task in the selected scope")
+		}
+		assessedTasks[action.Target.TaskID] = true
+	}
+	if generalActions > 2 {
+		return fmt.Errorf("operator snapshot has more than two general secondary actions")
+	}
+	return nil
+}
+
 func validateAction(action ActionSuggestion) error {
 	definition, ok := actionDefinitionFor(action.ID)
 	if !ok {
@@ -218,13 +240,13 @@ func validateAction(action ActionSuggestion) error {
 	if action.Kind != definition.kind || action.Actor != definition.actor || action.Risk != definition.risk || action.Confirmation != definition.confirmation {
 		return fmt.Errorf("action fields do not match registry contract")
 	}
-	if !contains([]string{"wait", "inspect", "configure", "provide_input", "review", "mutate", "none"}, action.Kind) {
+	if !contains([]string{"wait", ActionKindInspect, "configure", "provide_input", "review", "mutate", "none"}, action.Kind) {
 		return fmt.Errorf("action kind %q is invalid", action.Kind)
 	}
 	if !contains([]string{"user", "runtime", "external-owner"}, action.Actor) {
 		return fmt.Errorf("action actor %q is invalid", action.Actor)
 	}
-	if !contains([]string{"available", "blocked", "unknown"}, action.Availability) {
+	if !contains([]string{ActionAvailabilityAvailable, ActionAvailabilityBlocked, ActionAvailabilityUnknown}, action.Availability) {
 		return fmt.Errorf("action availability %q is invalid", action.Availability)
 	}
 	if !contains([]string{"read-only", "local-write", "external-effect", "approval"}, action.Risk) {
@@ -233,10 +255,10 @@ func validateAction(action ActionSuggestion) error {
 	if !contains([]string{"none", "existing-runtime-gate", "explicit-review"}, action.Confirmation) {
 		return fmt.Errorf("action confirmation %q is invalid", action.Confirmation)
 	}
-	if (action.Kind == "wait" || action.Kind == "none" || action.Availability != "available") && len(action.Argv) != 0 {
+	if (action.Kind == "wait" || action.Kind == "none" || action.Availability != ActionAvailabilityAvailable) && len(action.Argv) != 0 {
 		return fmt.Errorf("non-executable action must have empty argv")
 	}
-	if action.Availability == "available" {
+	if action.Availability == ActionAvailabilityAvailable {
 		expected := buildRegisteredArgv(definition.command, action.Target)
 		if definition.command != "" && !slices.Equal(action.Argv, expected) {
 			return fmt.Errorf("action argv does not match registry contract")
