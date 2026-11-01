@@ -48,6 +48,10 @@ func rejectLocalResultPersistence(err error) error {
 // model-facing payload shape error from failure to bind trusted source data.
 // It cannot grant authority or replace the canonical payload validator.
 func (a *localResultAdmission) admit(ctx context.Context, input SubmitResultInput, contract taskResultSubmissionContract, classifyPayloadRejection func() RepairFailureReason) error {
+	input, err := a.coordinator.projectResultClaims(ctx, a.todoID, input)
+	if err != nil {
+		return rejectProjectedClaims(err)
+	}
 	res, err := a.validateClaims(ctx, input, contract, classifyPayloadRejection, true)
 	if err != nil {
 		return err
@@ -72,6 +76,13 @@ func (a *localResultAdmission) validateClaims(ctx context.Context, input SubmitR
 			}
 		}
 	}()
+	if a.coordinator != nil {
+		var err error
+		input, err = a.coordinator.projectResultClaims(ctx, a.todoID, input)
+		if err != nil {
+			return nil, rejectProjectedClaims(err)
+		}
+	}
 	res := input.taskResult()
 	if res.Summary == "" {
 		return nil, errors.New("summary is required")
@@ -372,4 +383,11 @@ func (a *localResultAdmission) materializeSubmittedArtifacts(ctx context.Context
 		tx.addMaterialized(res.Artifacts)
 	}
 	return nil
+}
+
+func rejectProjectedClaims(err error) error {
+	if _, ok := errors.AsType[*localResultAdmissionError](err); ok {
+		return err
+	}
+	return rejectLocalResult(RepairFailureInvalidSchema, err)
 }

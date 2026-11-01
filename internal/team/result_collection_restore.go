@@ -66,9 +66,7 @@ func (c *Coordinator) restoreCollectionContext(ctx context.Context, expected *Re
 		AgentName: expected.Agent, AgentRole: "worker", ModelExecutionID: expected.ModelExecutionID})
 	ctx = context.WithValue(ctx, taskTranscriptKey{}, (*taskTranscript)(nil))
 	ctx = context.WithValue(ctx, resultCollectionEvidenceKey{}, evidence)
-	if work.Receipt.ArtifactScope != nil {
-		ctx = context.WithValue(ctx, artifactAccessScopeKey, cloneArtifactAccessScope(work.Receipt.ArtifactScope))
-	}
+	ctx = c.withCollectedWorkArtifactScope(ctx, work)
 	if work.Receipt.ContextManifest != nil {
 		manifest, err := collectionContextManifest(item, expected, &work.Receipt)
 		if err != nil {
@@ -77,6 +75,20 @@ func (c *Coordinator) restoreCollectionContext(ctx context.Context, expected *Re
 		ctx = withInvocationMetadata(ctx, invocationMetadataFromManifest(manifest))
 	}
 	return ctx, nil
+}
+
+// Call only after sealed-work validation. Scope.RunID names the invocation
+// exercising these capabilities; the original receipt and every artifact's
+// provenance stay unchanged. Result collection never adds new references.
+func (c *Coordinator) withCollectedWorkArtifactScope(ctx context.Context, work *resultCollectionWork) context.Context {
+	if work.Receipt.ArtifactScope == nil {
+		return ctx
+	}
+	scope := cloneArtifactAccessScope(work.Receipt.ArtifactScope)
+	if c.executionRunID != "" {
+		scope.RunID = c.executionRunID
+	}
+	return context.WithValue(ctx, artifactAccessScopeKey, scope)
 }
 
 // Shared read-only provenance check used before either preview or lease-backed

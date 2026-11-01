@@ -609,8 +609,14 @@
   "x-hufu-fixed-collections": [
     {
       "items_pointer": "/record/decisions",
+      "source_task_contracts": [
+        "review-primary-workset",
+        "review-documentation-workset",
+        "review-documentation-escalation"
+      ],
       "source_contracts": [
-        "schemas/review-v1.json"
+        "schemas/review-v1.json",
+        "schemas/documentation-review-v1.json"
       ],
       "source_scope": "evidence_from",
       "source_pointer": "/record/findings",

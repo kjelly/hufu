@@ -137,8 +137,13 @@ func (c *Coordinator) verifyWorksetSource(ctx context.Context, receipt *WorksetE
 	if c == nil || c.session == nil {
 		return errors.New("coordinator workspace is unavailable")
 	}
-	if strings.TrimSpace(receipt.RunID) == "" || strings.TrimSpace(c.executionRunID) == "" || receipt.RunID != c.executionRunID {
+	if strings.TrimSpace(receipt.RunID) == "" || strings.TrimSpace(c.executionRunID) == "" {
 		return fmt.Errorf("workset receipt belongs to run %q, want current run %q", receipt.RunID, c.executionRunID)
+	}
+	if receipt.RunID != c.executionRunID {
+		if err := c.validateRecoveredWorksetReceipt(ctx, receipt, nil); err != nil {
+			return fmt.Errorf("workset receipt belongs to run %q, want current run %q or an admitted recovery source: %w", receipt.RunID, c.executionRunID, err)
+		}
 	}
 	producerRef, _, err := c.currentWorksetSourceOccurrence(receipt)
 	if err != nil {

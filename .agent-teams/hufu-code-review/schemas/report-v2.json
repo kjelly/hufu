@@ -2449,8 +2449,14 @@
   "x-hufu-fixed-collections": [
     {
       "items_pointer": "/gap_resolutions",
+      "source_task_contracts": [
+        "review-primary-workset",
+        "review-documentation-workset",
+        "review-documentation-escalation"
+      ],
       "source_contracts": [
-        "schemas/review-v1.json"
+        "schemas/review-v1.json",
+        "schemas/documentation-review-v1.json"
       ],
       "source_pointer": "/record/gaps",
       "task_id_field": "source_task_id",

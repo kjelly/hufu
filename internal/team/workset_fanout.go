@@ -248,7 +248,7 @@ func (c *Coordinator) validateWorksetInputs(manifest WorksetManifest, producerTa
 // validateCurrentProducerArtifactOccurrence accepts only the occurrence that
 // the current producer typed result committed. Content-addressed metadata may
 // be resolved separately, but missing provenance is never repaired from
-// coordinator state.
+// coordinator state. Admitted recovery sources retain their original run.
 func (c *Coordinator) validateCurrentProducerArtifactOccurrence(ref ArtifactRef, producerTaskID string, result *TaskResult) error {
 	if c == nil || result == nil {
 		return fmt.Errorf("producer typed result is missing")
@@ -259,7 +259,7 @@ func (c *Coordinator) validateCurrentProducerArtifactOccurrence(ref ArtifactRef,
 	if strings.TrimSpace(result.TaskID) == "" || result.TaskID != producerTaskID {
 		return fmt.Errorf("typed result task %q does not match producer task %q", result.TaskID, producerTaskID)
 	}
-	if strings.TrimSpace(ref.RunID) == "" || strings.TrimSpace(c.executionRunID) == "" || ref.RunID != c.executionRunID {
+	if strings.TrimSpace(ref.RunID) == "" || strings.TrimSpace(c.executionRunID) == "" {
 		return fmt.Errorf("belongs to run %q, want current run %q", ref.RunID, c.executionRunID)
 	}
 	if strings.TrimSpace(ref.TaskID) == "" || ref.TaskID != producerTaskID {
@@ -270,6 +270,11 @@ func (c *Coordinator) validateCurrentProducerArtifactOccurrence(ref ArtifactRef,
 	}
 	if strings.TrimSpace(result.Agent) == "" || strings.TrimSpace(ref.Agent) == "" || ref.Agent != result.Agent {
 		return fmt.Errorf("belongs to agent %q, want current agent %q", ref.Agent, result.Agent)
+	}
+	if ref.RunID != c.executionRunID {
+		if err := c.validateRecoveredArtifactOrigin(ref, producerTaskID, result); err != nil {
+			return fmt.Errorf("belongs to run %q, want current run %q or an admitted recovery source: %w", ref.RunID, c.executionRunID, err)
+		}
 	}
 	return nil
 }

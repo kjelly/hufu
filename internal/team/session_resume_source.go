@@ -10,12 +10,15 @@ import (
 // ResumeSource is a read-only projection of the exact selected event lineage.
 // Selection never creates a branch or substitutes the active checkpoint.
 type ResumeSource struct {
-	BranchID     string
-	Session      *SessionData
-	workspace    string
-	activeBranch string
-	eventHead    string
-	eventHash    string
+	BranchID            string
+	Session             *SessionData
+	workspace           string
+	activeBranch        string
+	eventHead           string
+	eventHash           string
+	sessionSHA256       string
+	metadataOnly        bool
+	inputPolicyRecovery bool
 }
 
 func ReadResumeSource(workspace, target, runID string) (*ResumeSource, error) {
@@ -48,6 +51,25 @@ func ReadResumeSource(workspace, target, runID string) (*ResumeSource, error) {
 	if runID != "" && !slices.ContainsFunc(lineage, func(event RunEvent) bool { return event.RunID == runID }) {
 		return nil, ResumeSourceError(workspace, fmt.Errorf("run %q is not in branch %q", runID, branch.ID))
 	}
+	if _, err := executionPolicySnapshotFromEvents(lineage); err != nil {
+		return nil, ResumeSourceError(workspace, err)
+	}
+	metadataOnly := false
+	inputPolicyRecovery := false
+	for _, event := range lineage {
+		switch event.Type {
+		case string(EventDerivedForkCreated):
+			metadataOnly = false // An explicit new-task derivation starts a new request.
+			inputPolicyRecovery = false
+		case string(EventContractRecovery):
+			plan, decodeErr := decodeContractRecovery(event)
+			if decodeErr != nil {
+				return nil, ResumeSourceError(workspace, decodeErr)
+			}
+			metadataOnly = plan.MetadataOnly
+			inputPolicyRecovery = inputPolicyRecovery || plan.InputPolicyUpgrade != nil
+		}
+	}
 	session := ReduceToSessionData(lineage)
 	session.Tasks = tasks
 	events, err := store.ReadEvents()
@@ -58,8 +80,12 @@ func ReadResumeSource(workspace, target, runID string) (*ResumeSource, error) {
 	if len(events) > 0 {
 		head, hash = events[len(events)-1].ID, events[len(events)-1].Hash
 	}
+	digest, err := collectionDigest(session)
+	if err != nil {
+		return nil, err
+	}
 	return &ResumeSource{BranchID: branch.ID, Session: session, workspace: workspace,
-		activeBranch: tree.ActiveBranch, eventHead: head, eventHash: hash}, nil
+		activeBranch: tree.ActiveBranch, eventHead: head, eventHash: hash, sessionSHA256: digest, metadataOnly: metadataOnly, inputPolicyRecovery: inputPolicyRecovery}, nil
 }
 
 // ResumeSourceError retains the refusal and names inspectable alternatives.

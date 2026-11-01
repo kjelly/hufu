@@ -199,7 +199,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	resolvedProviderAPIKey := config.ResolveProviderAPIKey(defaultProviderAPIKey, session.Config.ProviderAPIKey)
 	team.RegisterProviderSecretsGlobally(session, resolvedProviderAPIKey)
 
-	if !opts.dryRun {
+	if !opts.dryRun && !contractRecoverySetup(ctx) {
 		displayTeamHeader(session, cliModelOverrides.WorkerModels)
 	}
 
@@ -242,7 +242,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if resolvedMaxConcurrent <= 0 {
 		resolvedMaxConcurrent = 8
 	}
-	if opts.dryRun {
+	if opts.dryRun || contractRecoverySetup(ctx) {
 		coordinator, err := team.NewDryRunCoordinator(team.DryRunCoordinatorParams{
 			Session: session, Profile: execProfile,
 			DefaultProviderURL: resolvedProviderURL, DefaultProviderAPIKey: resolvedProviderAPIKey,

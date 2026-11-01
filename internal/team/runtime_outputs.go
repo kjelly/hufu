@@ -184,7 +184,9 @@ func redactJSONPreservingRuntimeOutputs(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.MarshalIndent(document, "", "  ")
+	// Machine projections embed canonical RawMessage values with byte hashes.
+	// Indenting the surrounding document would also indent those values.
+	return json.Marshal(document)
 }
 
 func maskCanonicalRuntimeOutputs(value any, preserved *[]any) {

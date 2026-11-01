@@ -109,6 +109,7 @@ type task struct {
 		ProducerID       string `json:"producer_id"`
 		ModelExecutionID string `json:"model_execution_id"`
 		TranscriptRef    string `json:"transcript_ref"`
+		ExitCode         *int   `json:"exit_code,omitempty"`
 	} `json:"execution_receipt"`
 	VerifyResult *struct {
 		ExitCode    *int   `json:"exit_code"`
@@ -133,9 +134,10 @@ type task struct {
 }
 
 type session struct {
-	RuntimeWorkspace string `json:"runtime_workspace"`
-	SnapshotID       string `json:"active_run_input_snapshot_id"`
-	Tasks            []task `json:"tasks"`
+	RuntimeWorkspace  string            `json:"runtime_workspace"`
+	SnapshotID        string            `json:"active_run_input_snapshot_id"`
+	Tasks             []task            `json:"tasks"`
+	RecoveredTaskRuns map[string]string `json:"-"`
 }
 
 // Run is the only embedded action entrypoint. Runtime-owned action identity,
@@ -202,6 +204,10 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	if !matched {
 		return fmt.Errorf("current review gate occurrence is absent from checkpoint")
 	}
+	current.RecoveredTaskRuns, err = recoveryOrigins(os.Getenv("HUFU_RECOVERED_TASK_RUNS"))
+	if err != nil {
+		return err
+	}
 	for _, item := range current.Tasks {
 		if item.ContractID == "produce-workset" && item.Result != nil {
 			var attestation struct {
@@ -256,13 +262,11 @@ func checkpointRoot(workspace, runID, actionID string) (string, string, error) {
 	return root, runtimeRoot, nil
 }
 
-func accepted(item task, snapshotID, runID string) (payload, error) {
+func accepted(item task, current session, runID string) (payload, error) {
 	var value payload
-	// Run-input snapshot metadata belongs to materialized native actions. LLM
-	// handoffs bind to the current run/task receipt and immutable workset instead.
-	// Reject conflicting snapshot metadata when present, without inventing it on
-	// ordinary workers, critics, or synthesis tasks.
-	if item.Status != "done" || item.Result == nil || (item.Result.Status != "success" && item.Result.Status != "completed_with_gaps") || item.Result.Payload == nil || item.Receipt == nil || item.Receipt.RunID != runID || item.Receipt.TaskID != item.ID || item.Receipt.Attempt <= 0 || item.Receipt.ProducerID == "" || item.Receipt.ModelExecutionID == "" || item.Receipt.TranscriptRef == "" || (item.SnapshotID != "" && item.SnapshotID != snapshotID) || item.VerifyResult == nil || item.VerifyResult.ExitCode == nil || *item.VerifyResult.ExitCode != 0 || item.VerifyResult.TimedOut || item.VerifyResult.Fingerprint == "" {
+	// Current-run legacy handoffs may omit snapshot metadata. Recovered
+	// handoffs require the runtime-issued origin grant and selected snapshot.
+	if item.Status != "done" || item.Result == nil || (item.Result.Status != "success" && item.Result.Status != "completed_with_gaps") || item.Result.Payload == nil || !current.acceptsReceiptOrigin(item, runID) || item.Receipt.Attempt <= 0 || item.Receipt.ProducerID == "" || item.Receipt.ModelExecutionID == "" || item.Receipt.TranscriptRef == "" || (item.SnapshotID != "" && item.SnapshotID != current.SnapshotID) || item.VerifyResult == nil || item.VerifyResult.ExitCode == nil || *item.VerifyResult.ExitCode != 0 || item.VerifyResult.TimedOut || item.VerifyResult.Fingerprint == "" {
 		return value, fmt.Errorf("task %s lacks a current accepted, verified handoff", item.ID)
 	}
 	canonical, err := canonicalJSON(item.Result.Payload.Value)
@@ -354,7 +358,7 @@ func verify(current session, runID string) (string, string, error) {
 		if _, duplicate := tasks[item.ID]; duplicate {
 			return "", "", fmt.Errorf("duplicate task ID")
 		}
-		value, err := accepted(item, current.SnapshotID, runID)
+		value, err := accepted(item, current, runID)
 		if err != nil {
 			return "", "", err
 		}
@@ -576,7 +580,7 @@ func verifyInvariants(item task, r record) error {
 		acceptedAssessments = item.Result.Invariants.Assessments
 	}
 	if len(r.Invariants) != len(acceptedAssessments) {
-		return fmt.Errorf("task %s omitted invariant assessments", item.ID)
+		return fmt.Errorf("task %s invariant assessment count mismatch: record has %d, runtime verified %d", item.ID, len(r.Invariants), len(acceptedAssessments))
 	}
 	for i, assessment := range r.Invariants {
 		expected := acceptedAssessments[i]
@@ -616,7 +620,7 @@ func verifyActionEvidence(current session, report payload, runID string) error {
 		default:
 			continue
 		}
-		if seen[item.ContractID] || item.Status != "done" || item.Result == nil || item.Result.Status != "success" || item.Receipt == nil || item.Receipt.RunID != runID || item.SnapshotID != current.SnapshotID {
+		if seen[item.ContractID] || item.Status != "done" || item.Result == nil || item.Result.Status != "success" || !current.acceptsReceiptOrigin(item, runID) || item.SnapshotID != current.SnapshotID {
 			return fmt.Errorf("missing or ambiguous PREPARE evidence")
 		}
 		seen[item.ContractID] = true

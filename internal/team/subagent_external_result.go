@@ -24,6 +24,8 @@ import (
 // (task_result.go) — reused deliberately, not redeclared, per this
 // specification's own §9.1 note.
 type WorkerResultProposal struct {
+	suppliedFields map[string]json.RawMessage
+
 	Status        string         `json:"status"`
 	Summary       string         `json:"summary"`
 	Details       string         `json:"details,omitempty"`
@@ -96,6 +98,9 @@ func DecodeWorkerResultProposal(data []byte) (*WorkerResultProposal, error) {
 	var proposal WorkerResultProposal
 	if err := dec.Decode(&proposal); err != nil {
 		return nil, fmt.Errorf("decode worker result proposal: %w", err)
+	}
+	if err := json.Unmarshal(data, &proposal.suppliedFields); err != nil {
+		return nil, err
 	}
 	if strings.TrimSpace(proposal.Status) == "" {
 		return nil, fmt.Errorf("decode worker result proposal: status is required")
@@ -253,6 +258,16 @@ func (defaultExternalResultCanonicalizer) Canonicalize(ctx context.Context, requ
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize external result: %w", err)
 	}
+	findings := boundedFindings(proposal.Findings)
+	if request.resultContractSchema != nil && request.resultContractSchema.claimsProjection != nil && structuredPayload != nil {
+		projected, err := projectClaimsInput(SubmitResultInput{StructuredPayload: structuredPayload.Value}, request.resultContractSchema.claimsProjection)
+		if err != nil {
+			return nil, err
+		}
+		if request.resultContractSchema.claimsProjection.Findings != "" {
+			findings = projected.Findings
+		}
+	}
 	summary := utils.TruncateRunes(proposal.Summary, workerResultProposalMaxTextRunes)
 	if structuredPayload != nil && structuredPayload.EvidenceDowngrades > 0 {
 		summary = "Result includes claims without matching successful tool evidence; consult the structured payload for downgraded findings."
@@ -270,7 +285,7 @@ func (defaultExternalResultCanonicalizer) Canonicalize(ctx context.Context, requ
 		FilesModified: filesModified,
 		FilesRead:     filesRead,
 
-		Findings:      boundedFindings(proposal.Findings),
+		Findings:      findings,
 		Risks:         boundedRisks(proposal.Risks),
 		OpenQuestions: boundedOpenQuestions(proposal.OpenQuestions),
 		Facts:         boundedFacts(proposal.Facts),

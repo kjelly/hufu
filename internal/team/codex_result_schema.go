@@ -114,3 +114,11 @@ func codexWorkerResultProposalSchema() map[string]any {
 		},
 	}
 }
+
+func codexWorkerResultProposalSchemaForProjection(spec *resultClaimsProjection) map[string]any {
+	schema := codexWorkerResultProposalSchema()
+	properties := schema["properties"].(map[string]any)
+	required := schema["required"].([]string)
+	schema["required"] = omitProjectedEnvelope(properties, required, spec)
+	return schema
+}

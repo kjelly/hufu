@@ -148,26 +148,38 @@ func TestResultCollectionRecoveryIndependentClaims(t *testing.T) {
 	}
 }
 
-// Ensure the new optional scope fields do not invalidate persisted v1 grants.
+// Historical grants keep the proof rules saved by their evaluator revision.
 func TestResultCollectionRecoveryLegacyAssessmentFingerprint(t *testing.T) {
 	c, id, _ := blockedRecoveryFixture(t, `{"status":"success","summary":"report"}`, true, RepairFailureSource)
-	a, err := c.AssessResultCollectionRecovery(t.Context(), id)
+	original, err := c.AssessResultCollectionRecovery(t.Context(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.TaskID, a.BranchID, a.SourceRunID = "", "", ""
-	a.ValidatorRevision = 1
-	a.Fingerprint, err = recoveryAssessmentFingerprint(a)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := json.Marshal(a)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var restored ResultCollectionRecoveryAssessment
-	if err := json.Unmarshal(body, &restored, collectionDurationFormat); err != nil || validateRecoveryAssessment(&restored) != nil {
-		t.Fatal("legacy assessment no longer validates", err)
+	for _, revision := range []int{1, 2} {
+		a := cloneRecoveryAssessment(original)
+		a.ValidatorRevision = revision
+		if revision == 1 {
+			a.TaskID, a.BranchID, a.SourceRunID = "", "", ""
+		}
+		var checks []ResultCollectionRecoveryCheck
+		for _, check := range a.Checks {
+			if check.Code != "execution_ended" {
+				checks = append(checks, check)
+			}
+		}
+		a.Checks = checks
+		a.Fingerprint, err = recoveryAssessmentFingerprint(a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := json.Marshal(a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var restored ResultCollectionRecoveryAssessment
+		if err := json.Unmarshal(body, &restored, collectionDurationFormat); err != nil || validateRecoveryAssessment(&restored) != nil {
+			t.Fatal("legacy assessment no longer validates", revision, err)
+		}
 	}
 }
 

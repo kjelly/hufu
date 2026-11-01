@@ -25,6 +25,30 @@ func LoadSessionTree(workspace string) (*SessionTree, error) {
 	return LoadSessionTreeContext(context.Background(), workspace)
 }
 
+// Reuse the journal's connection when reading its branch metadata. In
+// particular, a read-only journal already owns an immutable SQLite snapshot;
+// reopening the workspace for every artifact check copies the entire database
+// again and can mix its event snapshot with newer branch metadata.
+func (c *Coordinator) loadJournalSessionTree(ctx context.Context, workspace string) (*SessionTree, error) {
+	store := c.EventStore()
+	if !store.servesWorkspace(workspace) {
+		return LoadSessionTreeContext(ctx, workspace)
+	}
+	store.lock()
+	defer store.release()
+	if store.closed || store.store == nil || !store.stateValid {
+		return nil, fmt.Errorf("session tree journal is unavailable")
+	}
+	tree, exists, err := loadSessionTreeFrom(ctx, store.store.DB())
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return NewSessionTree(), nil
+	}
+	return tree, nil
+}
+
 // LoadSessionTreeContext is the cancellable read-only session-tree reader.
 func LoadSessionTreeContext(ctx context.Context, workspace string) (*SessionTree, error) {
 	if ctx == nil {

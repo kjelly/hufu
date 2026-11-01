@@ -33,7 +33,7 @@ func (c *Coordinator) dependencyViewLineage(ctx context.Context) ([]RunEvent, er
 	if root == "" {
 		root = c.artifactStoreRootPath()
 	}
-	tree, err := LoadSessionTreeContext(ctx, root)
+	tree, err := c.loadJournalSessionTree(ctx, root)
 	if err != nil {
 		return nil, err
 	}

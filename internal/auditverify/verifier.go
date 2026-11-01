@@ -363,6 +363,19 @@ func verifyInvocationBoundTask(runID string, item *team.TodoItem, snapshot *team
 }
 
 func replayInputBoundAssertions(runID string, runResult *team.RunResult, tasks []*team.TodoItem, snapshot *team.RunInputSnapshot) (int, string, error) {
+	origins := make(map[string]string)
+	if manifest := runResult.EvidenceManifest; manifest != nil {
+		if manifest.RunID != runID || team.ValidateEvidenceRecoveryInputs(manifest, snapshot) != nil {
+			return 0, "", errors.New("task output recovery manifest differs from the terminal invocation")
+		}
+		for _, item := range tasks {
+			if item != nil {
+				if binding, ok := manifest.VerifiedTaskBinding(item.ID); ok {
+					origins[item.ID] = binding.RunID
+				}
+			}
+		}
+	}
 	assertions := 0
 	if runResult.Acceptance != nil {
 		for _, verification := range runResult.Acceptance.VerificationEvidence {
@@ -370,7 +383,7 @@ func replayInputBoundAssertions(runID string, runResult *team.RunResult, tasks [
 				continue
 			}
 			assertions++
-			replayed, replayErr := team.ReplayTaskOutputAssertions(tasks, runID, snapshot, *verification.Spec)
+			replayed, replayErr := team.ReplayTaskOutputAssertions(tasks, runID, snapshot, *verification.Spec, origins)
 			persistedPassed := verification.ExitCode == 0
 			if persistedPassed == (replayErr != nil) || !reflect.DeepEqual(replayed, verification.TaskOutputAssertions) {
 				return 0, verification.Spec.WorksetSourceTask, errors.New("persisted task_output_assert result does not match independent replay")

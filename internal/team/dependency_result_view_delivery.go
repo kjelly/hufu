@@ -88,7 +88,7 @@ func (c *Coordinator) validateSelectedDependencyDelivery(todoID string, attempt 
 	}
 	matched := false
 	for _, manifest := range item.ContextManifests {
-		if !authoritativeDependencyViewRequest(manifest, item) || manifest.Attempt != attempt || (runID != "" && manifest.RunID != runID) {
+		if !c.deliveryManifestMatchesLeaf(todoID, manifest) || !authoritativeDependencyViewRequest(manifest, item) || manifest.Attempt != attempt || (runID != "" && manifest.RunID != runID) {
 			continue
 		}
 		if err := validateDependencyViewManifestAgainstSource(manifest, expected); err != nil {
@@ -103,6 +103,12 @@ func (c *Coordinator) validateSelectedDependencyDelivery(todoID string, attempt 
 		return fmt.Errorf("selected dependency delivery is unproven for task %s attempt %d", todoID, attempt)
 	}
 	return nil
+}
+
+// Parent completion checks every leaf. A running leaf must not require a
+// sibling's dispatch event while that sibling is still publishing its proof.
+func (c *Coordinator) deliveryManifestMatchesLeaf(todoID string, manifest ContextInjectionManifest) bool {
+	return !c.isModelFanoutLeaf(todoID) || (c.modelExecutionID != "" && manifest.ModelExecutionID == c.modelExecutionID)
 }
 
 func (c *Coordinator) validateSelectedRepairContext(ctx context.Context, item *TodoItem, manifest *ContextInjectionManifest) error {

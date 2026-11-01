@@ -115,7 +115,7 @@ func acceptedSnapshotScope(current session, runID string) (*snapshotAttestation,
 		if candidate.Requested.Kind != "repository_snapshot" {
 			continue
 		}
-		if scope != nil || item.Status != "done" || item.Result.Status != "success" || item.Receipt == nil || item.Receipt.RunID != runID || item.Receipt.TaskID != item.ID || current.SnapshotID == "" || item.SnapshotID != current.SnapshotID {
+		if scope != nil || item.Status != "done" || item.Result.Status != "success" || !current.acceptsReceiptOrigin(item, runID) || current.SnapshotID == "" || item.SnapshotID != current.SnapshotID {
 			return nil, fmt.Errorf("snapshot producer lacks current accepted identity")
 		}
 		scope = &candidate
@@ -168,7 +168,7 @@ func checkedSnapshotReviews(current session, runID string, identity *snapshotIde
 		default:
 			continue
 		}
-		value, err := accepted(item, current.SnapshotID, runID)
+		value, err := accepted(item, current, runID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -225,7 +225,7 @@ func checkedSnapshotVerifier(current session, runID string, identity *snapshotId
 		if item.ContractID != "verify-targeted-go-tests" {
 			continue
 		}
-		if found || item.Status != "done" || item.Result == nil || item.Result.Status != "success" || item.Receipt == nil || item.Receipt.RunID != runID || item.Receipt.TaskID != item.ID || item.SnapshotID != current.SnapshotID {
+		if found || item.Status != "done" || item.Result == nil || item.Result.Status != "success" || !current.acceptsReceiptOrigin(item, runID) || item.SnapshotID != current.SnapshotID {
 			return fmt.Errorf("missing or ambiguous snapshot verifier")
 		}
 		found = true

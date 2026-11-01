@@ -516,3 +516,37 @@ func TestReviewSchemaInvariantStateEvidence(t *testing.T) {
 		})
 	}
 }
+
+func TestDocumentationReviewContract(t *testing.T) {
+	schema, document := contractSchema(t, "documentation-review-v1.json")
+	_, base := contractSchema(t, "review-v1.json")
+	// Documentation projects findings only; it cannot attest invariants.
+	if !reflect.DeepEqual(document["x-hufu-result-projections"], map[string]any{"findings": "/record/findings"}) {
+		t.Fatal("documentation advertised invariant projection")
+	}
+	document["x-hufu-result-projections"] = base["x-hufu-result-projections"]
+	// All other constraints and runtime extensions must stay identical.
+	definition := document["$defs"].(map[string]any)["review"].(map[string]any)["properties"].(map[string]any)
+	baseProperties := base["$defs"].(map[string]any)["review"].(map[string]any)["properties"].(map[string]any)
+	for _, lens := range []string{"documentation", "documentation-risk", "noop"} {
+		t.Run(lens, func(t *testing.T) {
+			review, _, _ := schemaFixture()
+			review["lens"] = lens
+			if lens == "noop" {
+				review["findings"], review["gaps"] = []any{}, []any{}
+			}
+			if err := schema.Validate(map[string]any{"record": review}); err != nil {
+				t.Fatal(err)
+			}
+			review["invariant_assessments"] = []any{map[string]any{"invariant_id": "invented", "status": "preserved", "summary": "unsupported"}}
+			if err := schema.Validate(map[string]any{"record": review}); err == nil {
+				t.Fatal("accepted unverified invariant")
+			}
+		})
+	}
+	definition["lens"] = baseProperties["lens"]
+	definition["invariant_assessments"] = baseProperties["invariant_assessments"]
+	if !reflect.DeepEqual(document, base) {
+		t.Fatal("documentation contract drifted from base review")
+	}
+}

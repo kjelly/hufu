@@ -15,12 +15,17 @@ import (
 )
 
 var (
-	resumeTeamName     string
-	resumeSearch       string
-	resumeBranch       string
-	resumeRun          string
-	resumeRepairResult string
-	resumeRepairModel  string
+	resumeTeamName           string
+	resumeSearch             string
+	resumeBranch             string
+	resumeRun                string
+	resumeRepairResult       string
+	resumeRepairModel        string
+	resumeUpgradeContracts   bool
+	resumeUpgradeInputPolicy bool
+	resumeMetadataOnly       bool
+	resumeRecoveryBranch     string
+	resumeRecoveryPlan       string
 )
 
 var resumeCmd = &cobra.Command{
@@ -106,15 +111,20 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	if err != nil {
 		return err
 	}
+	if resumeUpgradeContracts {
+		return runContractRecoveryCommand(cmd, source, teamName, binding, registry, vars)
+	}
 	if resumeRepairResult != "" {
 		found := false
 		for _, item := range source.Session.Tasks {
-			if item != nil && item.ID == resumeRepairResult && item.Status == team.TaskBlocked && item.FailureEvent != nil && item.FailureEvent.FailureClass == team.FailureProtocol {
+			if item != nil && item.ID == resumeRepairResult && item.FailureEvent != nil &&
+				((item.Status == team.TaskBlocked && item.FailureEvent.FailureClass == team.FailureProtocol) ||
+					(item.Status == team.TaskError && item.FailureEvent.FailureClass == team.FailureCancelled && item.ExecutionReceipt != nil && item.ExecutionReceipt.ResultCollection != nil)) {
 				found = true
 			}
 		}
 		if !found {
-			return team.ResumeSourceError(workspace, fmt.Errorf("branch %q has no blocked protocol task %q", source.BranchID, resumeRepairResult))
+			return team.ResumeSourceError(workspace, fmt.Errorf("branch %q has no blocked protocol task or cancelled collection %q", source.BranchID, resumeRepairResult))
 		}
 	}
 	if opts.dryRun {
@@ -123,6 +133,9 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 			return err
 		}
 		defer func() { runErr = errors.Join(runErr, tc.Close()) }()
+		if resumeRepairResult == "" {
+			return runResumeSourcePreflight(cmd, tc.session, tc.coordinator, source)
+		}
 		assessment, err := tc.coordinator.AssessResumeResultCollection(cmd.Context(), source, resumeRepairResult)
 		if err != nil {
 			return err
@@ -207,7 +220,12 @@ func init() {
 	f := resumeCmd.Flags()
 	f.StringVar(&resumeBranch, "branch", "", "Exact existing branch ID, name, or label to resume (defaults to active)")
 	f.StringVar(&resumeRun, "run", "", "Require the source run to belong to the selected branch")
-	f.StringVar(&resumeRepairResult, "repair-result", "", "Authorize two result-only repair turns for one blocked protocol task; never replay worker tools")
+	f.BoolVar(&resumeUpgradeContracts, "upgrade-contracts", false, "Preview or create a recovery child for changed result schemas; never bypass ordinary resume policy checks")
+	f.BoolVar(&resumeUpgradeInputPolicy, "upgrade-input-policy", false, "Explicitly include resolver/provider policy changes in --upgrade-contracts; preserves verified frozen inputs and requires read-only contracts")
+	f.BoolVar(&resumeMetadataOnly, "metadata-only", false, "Explicit lineage-only contract recovery for an unversioned read-only team; project files remain shared")
+	f.StringVar(&resumeRecoveryBranch, "recovery-branch", "", "New child branch name for an explicitly previewed contract recovery")
+	f.StringVar(&resumeRecoveryPlan, "plan-hash", "", "Exact SHA-256 from the contract recovery preview")
+	f.StringVar(&resumeRepairResult, "repair-result", "", "Authorize bounded result-only recovery for a blocked protocol task or cancelled collection; never replay worker tools")
 	f.StringVar(&resumeRepairModel, "repair-model", "", "Auxiliary result submission model (must already be frozen in the source policy); preserves the original worker target")
 	registerTeamSelectionFlags(f, &resumeTeamName, "Agent team name (inferred from --workspace when omitted)")
 	f.StringVar(&resumeSearch, "agent-team-search-path", "", "Comma-separated team search paths")
@@ -224,7 +242,7 @@ func init() {
 	f.StringArrayVar(&opts.inputFlags, "input", nil, "Set a typed run input (name=value; repeatable)")
 	f.StringArrayVar(&opts.inputFiles, "input-file", nil, "Read typed run inputs from JSON or YAML (repeatable)")
 	f.StringArrayVar(&opts.forcedSkills, "skill", nil, "Force-load specific skills (repeatable)")
-	f.BoolVar(&opts.dryRun, "dry-run", false, "Read-only result repair assessment; no branch activation, tools or model calls")
+	f.BoolVar(&opts.dryRun, "dry-run", false, "Read-only resume, result repair or contract recovery preflight; no branch activation, tools or model calls")
 	f.BoolVar(&opts.verbose, "verbose", false, "Show full agent text output in real-time")
 	f.BoolVar(&opts.quietMode, "quiet", false, "Suppress status output")
 	f.StringVar(&opts.outputFormat, "output", "", "Final-result format: text or json")
@@ -292,11 +310,30 @@ func printResultRecoveryAssessment(cmd *cobra.Command, a *team.ResultCollectionR
 }
 
 func validateResumeRepairFlags() error {
+	if resumeUpgradeContracts {
+		if resumeRepairResult != "" || resumeRepairModel != "" || opts.reportMode || opts.tuiMode || len(opts.inputFlags) > 0 || len(opts.inputFiles) > 0 {
+			return fmt.Errorf("--upgrade-contracts cannot combine with result repair, report, tui or input assignments")
+		}
+		if opts.dryRun {
+			if resumeRecoveryBranch != "" || resumeRecoveryPlan != "" {
+				return fmt.Errorf("preview cannot apply a recovery plan")
+			}
+			return nil
+		}
+		if strings.TrimSpace(resumeRecoveryBranch) == "" || len(resumeRecoveryPlan) != 64 {
+			return fmt.Errorf("preview with --upgrade-contracts --dry-run, then supply --recovery-branch and --plan-hash")
+		}
+		return nil
+	}
+	if resumeRecoveryBranch != "" || resumeRecoveryPlan != "" || resumeMetadataOnly || resumeUpgradeInputPolicy {
+		return fmt.Errorf("--recovery-branch, --plan-hash, --metadata-only and --upgrade-input-policy require --upgrade-contracts")
+	}
+
 	if resumeRepairModel != "" && resumeRepairResult == "" {
 		return fmt.Errorf("--repair-model requires --repair-result")
 	}
-	if opts.dryRun && (resumeRepairResult == "" || resumeRepairModel != "" || opts.reportMode || opts.tuiMode || len(opts.inputFlags) > 0 || len(opts.inputFiles) > 0) {
-		return fmt.Errorf("resume --dry-run requires --repair-result and cannot use --repair-model, --report, --tui, or input assignments")
+	if opts.dryRun && (resumeRepairModel != "" || opts.reportMode || opts.tuiMode || len(opts.inputFlags) > 0 || len(opts.inputFiles) > 0) {
+		return fmt.Errorf("resume --dry-run cannot use --repair-model, --report, --tui, or input assignments")
 	}
 	return nil
 }

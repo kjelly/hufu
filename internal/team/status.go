@@ -390,6 +390,7 @@ type TodoItem struct {
 
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization,omitempty"`
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot,omitempty"`
+	ContractRevalidation     *ContractRevalidation             `json:"contract_revalidation,omitempty"`
 	ResultContract           *ResultContractRef                `json:"result_contract,omitempty"`
 	HistoricalResultBinding  *HistoricalResultTaskBinding      `json:"historical_result_binding,omitempty"`
 	DependencyResultView     *DependencyResultViewSpec         `json:"dependency_result_view,omitempty"`
@@ -1406,6 +1407,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		WorksetReceipt:                cloneWorksetReceipt(item.WorksetReceipt),
 		DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
+		ContractRevalidation:          cloneContractRevalidation(item.ContractRevalidation),
 		ResultContract:                item.ResultContract.clone(),
 		HistoricalResultBinding:       item.HistoricalResultBinding.clone(),
 		DependencyResultView:          item.DependencyResultView.clone(),

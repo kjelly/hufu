@@ -84,6 +84,10 @@ func ValidateEventPayload(event RunEvent) error {
 	if IsTerminalEvent(event.Type) && IsEmptyPayload(event.Payload) {
 		return fmt.Errorf("terminal event %q has empty payload", event.Type)
 	}
+	if event.Type == string(EventContractRecovery) {
+		_, err := decodeContractRecovery(event)
+		return err
+	}
 	if event.Type == string(EventHistoricalResultsGranted) {
 		_, err := decodeHistoricalResultGrants(event)
 		return err

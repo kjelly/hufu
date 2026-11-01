@@ -72,7 +72,7 @@ func TestResumeRecoveryPreviewFlags(t *testing.T) {
 	}{
 		{name: "ordinary resume"},
 		{name: "preview", dry: true, task: "7"},
-		{name: "missing task", dry: true, wantErr: true},
+		{name: "ordinary source preflight", dry: true},
 		{name: "model without task", model: "ollama/test", wantErr: true},
 		{name: "preview model", dry: true, task: "7", model: "ollama/test", wantErr: true},
 		{name: "preview report", dry: true, task: "7", report: true, wantErr: true},

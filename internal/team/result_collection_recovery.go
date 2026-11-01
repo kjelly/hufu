@@ -18,7 +18,7 @@ const (
 	RecoveryRepairClaims            ResultCollectionRecoveryDisposition = "repair_claims"
 	RecoveryResumeCollection        ResultCollectionRecoveryDisposition = "resume_collection"
 	RecoveryBlocked                 ResultCollectionRecoveryDisposition = "blocked"
-	resultRecoveryValidatorRevision                                     = 2
+	resultRecoveryValidatorRevision                                     = 3
 )
 
 type ResultCollectionRecoveryCheck struct {
@@ -70,9 +70,31 @@ func cloneRecoveryAssessment(a *ResultCollectionRecoveryAssessment) *ResultColle
 	return &copy
 }
 
+// HasCancelledCollectionWork identifies a candidate for read-only assessment.
+// It never authorizes recovery; AssessResultCollectionRecovery verifies sources.
+func HasCancelledCollectionWork(item *TodoItem) bool {
+	if item == nil || item.Status != TaskError || item.FailureEvent == nil || item.FailureEvent.FailureClass != FailureCancelled {
+		return false
+	}
+	r := item.ExecutionReceipt
+	if r == nil || currentResultCollection(item) == nil || r.FinishedAt.IsZero() || r.ExitCode == nil || *r.ExitCode != 0 {
+		return false
+	}
+	cp := r.ResultCollection
+	return cp.State != ResultCollectionBlocked && (cp.FailureReason == "" || cp.FailureReason == RepairFailureInvalidSchema)
+}
+
+func collectionRepairGrants(receipt *ExecutionReceipt) []ResultRepairGrant {
+	if receipt == nil || receipt.RepairProvenance == nil {
+		return nil
+	}
+	return receipt.RepairProvenance.OperatorGrants
+}
+
 func validateCollectionRecoveryTarget(item *TodoItem) error {
-	if item == nil || item.Status != TaskBlocked || item.FailureEvent == nil || item.FailureEvent.FailureClass != FailureProtocol {
-		return fmt.Errorf("recovery requires an existing blocked protocol task")
+	cancelled := HasCancelledCollectionWork(item)
+	if !cancelled && (item == nil || item.Status != TaskBlocked || item.FailureEvent == nil || item.FailureEvent.FailureClass != FailureProtocol) {
+		return fmt.Errorf("recovery requires a blocked protocol task or cancelled collection with completed work")
 	}
 	if item.CheckpointPause || item.RecoveryState == RecoveryStateUnknown || item.RecoveryState == RecoveryStatePartial {
 		return fmt.Errorf("result-only recovery requires reconciliation of paused or uncertain side effects")
@@ -84,7 +106,7 @@ func validateCollectionRecoveryTarget(item *TodoItem) error {
 	if item.WorkerWorkspace.isolated() || receipt == nil || receipt.ResultCollection == nil || receipt.ResultCollection.FanoutLeaf || receipt.ExecutionWorldID != "" || len(item.ExecutionTopology) > 1 {
 		return fmt.Errorf("recovery requires a shared local collection without model fanout")
 	}
-	if receipt.RepairProvenance == nil || !receipt.RepairProvenance.Attempted || receipt.RepairProvenance.Success || receipt.Attempt != receipt.ResultCollection.Attempt || (receipt.OccurrenceAttempt > 0 && receipt.OccurrenceAttempt != item.Retries+1) {
+	if (!cancelled && (receipt.RepairProvenance == nil || !receipt.RepairProvenance.Attempted)) || (receipt.RepairProvenance != nil && receipt.RepairProvenance.Success) || receipt.Attempt != receipt.ResultCollection.Attempt || (receipt.OccurrenceAttempt > 0 && receipt.OccurrenceAttempt != item.Retries+1) {
 		return fmt.Errorf("recovery requires the original failed collection receipt")
 	}
 	return validateResultCollectionCheckpoint(receipt.ResultCollection)
@@ -134,8 +156,11 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 	a.CheckpointSHA256, _ = collectionDigest(cp)
 	a.TranscriptRef = item.ExecutionReceipt.TranscriptRef
 	a.OriginalReason = cp.FailureReason
-	if a.OriginalReason == "" {
+	if a.OriginalReason == "" && item.ExecutionReceipt.RepairProvenance != nil {
 		a.OriginalReason = item.ExecutionReceipt.RepairProvenance.FailureReason
+	}
+	if a.OriginalReason == "" && HasCancelledCollectionWork(item) {
+		a.OriginalReason = repairFailureCollectionUnavailable
 	}
 	a.TurnsUsed, a.RemainingTurns = cp.TurnsUsed, max(0, cp.TurnLimit-cp.TurnsUsed)
 	for _, other := range UnresolvedTaskReferences(c.taskTracker.TodoList().Items()) {
@@ -151,8 +176,8 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 	if !check("work_sources_policy", err) {
 		return finish()
 	}
-	if work.Receipt.FinishedAt.IsZero() {
-		check("execution_ended", fmt.Errorf("work receipt is unfinished"))
+	if !collectionWorkCompleted(&work.Receipt, HasCancelledCollectionWork(item)) {
+		check("execution_ended", fmt.Errorf("work receipt is unfinished or cancelled work did not complete successfully"))
 		return finish()
 	}
 	// No ordinary worker can be active once a blocked protocol task has sealed
@@ -161,6 +186,7 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 		check("execution_ended", errTaskResultStale)
 		return finish()
 	}
+	check("execution_ended", nil)
 	_, compiled, err := c.boundResultContract(taskID)
 	if !check("contract", err) {
 		return finish()
@@ -212,9 +238,7 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 		check("checkpoint", errors.New(denial))
 		return finish()
 	}
-	if work.Receipt.ArtifactScope != nil {
-		ctx = context.WithValue(ctx, artifactAccessScopeKey, cloneArtifactAccessScope(work.Receipt.ArtifactScope))
-	}
+	ctx = c.withCollectedWorkArtifactScope(ctx, work)
 	if cp.State == ResultCollectionCommitted {
 		result, err := c.acceptedCollectionResult(ctx, item, cp)
 		if err == nil {
@@ -231,8 +255,12 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 	return finish()
 }
 
+func collectionWorkCompleted(receipt *ExecutionReceipt, cancelled bool) bool {
+	return receipt != nil && !receipt.FinishedAt.IsZero() && (!cancelled || (receipt.ExitCode != nil && *receipt.ExitCode == 0))
+}
+
 func validateRecoveryAssessment(a *ResultCollectionRecoveryAssessment) error {
-	if a == nil || a.Version != 1 || (a.ValidatorRevision != 1 && a.ValidatorRevision != 2) || a.Checkpoint == nil || a.JournalHeadID == "" || !validArtifactID(a.TranscriptRef) {
+	if a == nil || a.Version != 1 || a.ValidatorRevision < 1 || a.ValidatorRevision > resultRecoveryValidatorRevision || a.Checkpoint == nil || a.JournalHeadID == "" || !validArtifactID(a.TranscriptRef) {
 		return errResultCollectionStale
 	}
 	if (a.TaskID != "" && a.TaskID != a.Checkpoint.TaskID) || (a.BranchID != "" && a.BranchID != a.Checkpoint.BranchID) || (a.SourceRunID != "" && a.SourceRunID != a.Checkpoint.SourceRunID) {
@@ -283,12 +311,8 @@ func (c *Coordinator) AssessResumeResultCollection(ctx context.Context, source *
 		return nil, err
 	}
 	defer func() { _ = store.Close() }()
-	c.eventStore = store
-	c.eventJournal = eventStoreJournal{store: store}
-	c.recoveryBranch = source.BranchID
-	defer func() { c.eventStore = nil; c.eventJournal = nil; c.recoveryBranch = "" }()
-	c.taskTracker = NewTaskTracker()
-	c.taskTracker.TodoList().AddReserved(source.Session.Tasks)
+	restore := c.installResumeValidationSource(source, store)
+	defer restore()
 	a, err := c.AssessResultCollectionRecovery(ctx, taskID)
 	if err != nil {
 		return nil, err
@@ -462,7 +486,7 @@ func (c *Coordinator) assessRecoveryLineage(ctx context.Context, item *TodoItem,
 		check("canonical_transcript", errResultCollectionStale)
 		return false
 	}
-	if canonical.ExecutionReceipt.RepairProvenance == nil || !sameCanonicalEvidence(canonical.ExecutionReceipt.RepairProvenance.OperatorGrants, item.ExecutionReceipt.RepairProvenance.OperatorGrants) {
+	if !sameCanonicalEvidence(collectionRepairGrants(canonical.ExecutionReceipt), collectionRepairGrants(item.ExecutionReceipt)) {
 		check("canonical_grants", errResultCollectionStale)
 		return false
 	}
@@ -517,14 +541,19 @@ func (c *Coordinator) assessRecoveryClaims(ctx context.Context, item *TodoItem, 
 	if !check("claims_integrity", err) {
 		return
 	}
-	resolved, err := c.resolveResultEvidenceKeys(ctx, taskID, string(raw))
+	inspection, _ := collectionResponseJSON(raw)
+	resolved, err := c.resolveResultEvidenceKeys(ctx, taskID, string(inspection))
 	if !check("evidence_keys", err) {
 		return
 	}
 	if !c.validateRecoveryIndependentClaims(ctx, cp, work, compiled, resolved, check) {
 		return
 	}
-	input, err := c.decodeCollectionClaims(taskID, []byte(resolved))
+	claims := []byte(resolved)
+	input, err := c.decodeCollectionClaims(taskID, claims)
+	if err == nil {
+		input, err = c.projectResultClaims(ctx, taskID, input)
+	}
 	if err == nil {
 		admission := localResultAdmission{coordinator: c, todoID: taskID}
 		var res *TaskResult

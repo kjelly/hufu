@@ -2,6 +2,8 @@ package team
 
 import (
 	"encoding/json"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -92,11 +94,37 @@ func TestLifecycleAttemptIsOccurrenceAttempt(t *testing.T) {
 	}
 }
 
-// The DispatchID is a process-local counter, so it cannot be a durable
-// identity input for world IDs or attempt keys.
-func TestDispatchIDIsProcessLocal(t *testing.T) {
-	first, second := newTaskDispatchID(), newTaskDispatchID()
-	if first == second || !strings.HasPrefix(first, "dispatch-") || !strings.HasPrefix(second, "dispatch-") {
-		t.Fatalf("dispatch IDs = %q, %q, want distinct process-local counters", first, second)
+// Recovery must issue a fresh lease even when it is a process's first dispatch.
+func TestDispatchIDsDoNotRepeatAcrossProcesses(t *testing.T) {
+	const childKey = "HUFU_DISPATCH_ID_CHILD"
+	if os.Getenv(childKey) == "1" {
+		for range 2 {
+			if _, err := os.Stdout.WriteString(newTaskDispatchID() + "\n"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]bool)
+	for range 2 {
+		cmd := exec.CommandContext(t.Context(), executable, "-test.run=^TestDispatchIDsDoNotRepeatAcrossProcesses$")
+		cmd.Env = append(os.Environ(), childKey+"=1")
+		output, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("dispatch subprocess: %v", err)
+		}
+		remaining := string(output)
+		for range 2 {
+			var id string
+			id, remaining, _ = strings.Cut(remaining, "\n")
+			if !strings.HasPrefix(id, "dispatch-") || seen[id] {
+				t.Fatalf("dispatch lease repeated across processes or is invalid: %q", id)
+			}
+			seen[id] = true
+		}
 	}
 }

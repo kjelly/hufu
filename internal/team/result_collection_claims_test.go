@@ -1,6 +1,7 @@
 package team
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -17,7 +18,88 @@ const collectedFindingSchema = `{"type":"object","additionalProperties":false,"r
 
 const collectedConditionalFindingSchema = `{"type":"object","additionalProperties":false,"required":["findings"],"properties":{"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["summary","status"],"properties":{"summary":{"type":"string"},"status":{"type":"string","enum":["unknown","violated"]},"finding_index":{"type":"integer","minimum":0}},"allOf":[{"if":{"properties":{"status":{"const":"unknown"}}},"then":{"not":{"required":["finding_index"]}}}]}}}}`
 
+func TestResultCollectionPreparesStandaloneJSONFrames(t *testing.T) {
+	const valid = "{\"status\":\"success\",\"summary\":\"original ``` text preserved\",\"structured_payload\":{\"findings\":[]}}"
+	for _, tc := range []struct {
+		name, body string
+		accepted   bool
+	}{
+		{"plain", valid, true},
+		{"json block", "```json\n" + valid + "\n```", true},
+		{"unlabelled block", "```\n" + valid + "\n```", true},
+		{"crlf block", "```json\r\n" + valid + "\r\n```", true},
+		{"outer whitespace", " \t\n```json\n" + valid + "\n```\n ", true},
+		{"leading prose", "result:\n```json\n" + valid + "\n```", false},
+		{"trailing prose", "```json\n" + valid + "\n```\nextra", false},
+		{"multiple blocks", "```json\n" + valid + "\n```\n```json\n" + valid + "\n```", false},
+		{"multiple objects", "```json\n" + valid + "\n" + valid + "\n```", false},
+		{"duplicate key", "```json\n" + strings.Replace(valid, `"status":`, `"status":"success","status":`, 1) + "\n```", false},
+		{"duplicate nested key", "```json\n" + strings.Replace(valid, `"findings":[]`, `"findings":[],"findings":[]`, 1) + "\n```", false},
+		{"wrong label", "```python\n" + valid + "\n```", false},
+		{"empty block", "```json\n```", false},
+		{"malformed JSON", "```json\n{\n```", false},
+		{"array", "```json\n[]\n```", false},
+		{"null", "```json\nnull\n```", false},
+		{"invalid claims", "```json\n" + strings.Replace(valid, `"status":"success"`, `"status":42`, 1) + "\n```", false},
+		{"unknown field", "```json\n" + strings.Replace(valid, `"status":`, `"unpublished":true,"status":`, 1) + "\n```", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, item, ctx, before := receivedCollectionClaimsFixture(t, collectedFindingSchema, tc.body)
+			prepared, err := c.prepareCollectionClaims(ctx, before)
+			if !tc.accepted {
+				if err == nil || localResultRejectionReason(err) != RepairFailureInvalidSchema || currentResultCollection(c.todoItemByID(item.ID)).Prepared != nil {
+					t.Fatalf("ambiguous or invalid claims were prepared: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			claims, err := c.readCollectionBlob(ctx, prepared, "claims", prepared.Prepared)
+			if err != nil || string(claims) != valid {
+				t.Fatal("transport normalization changed the JSON object")
+			}
+			response, err := c.readCollectionBlob(ctx, prepared, "response", prepared.Response)
+			if err != nil || !bytes.Equal(response, []byte(tc.body)) || prepared.Work != before.Work || *prepared.Response != *before.Response {
+				t.Fatal("normalization changed original response or work evidence")
+			}
+			// Prepared claims survive a new coordinator and remain locally
+			// committable without any worker or additional collection turn.
+			c = reopenRecoveryCoordinator(t, c)
+			if err := c.commitPreparedCollection(WithSessionResume(t.Context()), prepared); err != nil {
+				t.Fatal(err)
+			}
+			result := c.todoItemByID(item.ID)
+			committed := currentResultCollection(result)
+			if committed.State != ResultCollectionCommitted || committed.TurnsUsed != before.TurnsUsed || committed.Work != before.Work || *committed.Response != *before.Response || result.TypedResult == nil {
+				t.Fatal("replay changed evidence or consumed another collection turn")
+			}
+		})
+	}
+}
+
+func TestResultCollectionJSONFramePreservesRawByteLimit(t *testing.T) {
+	raw := []byte("```json\n" + strings.Repeat(" ", resultCollectionResponseMaxBytes) + `{"status":"success","summary":"original"}` + "\n```")
+	if normalized, wrapped := collectionResponseJSON(raw); wrapped || !bytes.Equal(normalized, raw) {
+		t.Fatal("normalization bypassed the original response size limit")
+	}
+	c := newTestCoordinator(t)
+	if _, err := c.decodeCollectionClaims("1", raw); err == nil || localResultRejectionReason(err) != RepairFailureInvalidSchema {
+		t.Fatal("oversized wrapped claims were accepted")
+	}
+}
+
 func preparedCollectionClaimsFixture(t *testing.T, schema, body string) (*Coordinator, *TodoItem, context.Context, *ResultCollectionCheckpoint) {
+	t.Helper()
+	c, item, ctx, cp := receivedCollectionClaimsFixture(t, schema, body)
+	cp, err := c.prepareCollectionClaims(ctx, cp)
+	if err != nil {
+		t.Fatalf("portable schema should accept this representation: %v", err)
+	}
+	return c, item, ctx, cp
+}
+
+func receivedCollectionClaimsFixture(t *testing.T, schema, body string) (*Coordinator, *TodoItem, context.Context, *ResultCollectionCheckpoint) {
 	t.Helper()
 	compiled, err := CompileResultContractDocument("claims.json", []byte(schema))
 	if err != nil {
@@ -39,10 +121,6 @@ func preparedCollectionClaimsFixture(t *testing.T, schema, body string) (*Coordi
 	cp, err = c.recordCollectionResponse(ctx, cp, []byte(body))
 	if err != nil {
 		t.Fatal(err)
-	}
-	cp, err = c.prepareCollectionClaims(ctx, cp)
-	if err != nil {
-		t.Fatalf("portable schema should accept this representation: %v", err)
 	}
 	return c, item, ctx, cp
 }

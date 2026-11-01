@@ -456,7 +456,7 @@ spec:
       advances: [documentation-reviews-complete]
       agent: documentation-reviewer
       phase: verify
-      result-contract: { schema: schemas/review-v1.json, require-structured: true }
+      result-contract: { schema: schemas/documentation-review-v1.json, require-structured: true }
       fan_out:
         source-artifact:
           task_id: produce-workset
@@ -484,7 +484,7 @@ spec:
       advances: [documentation-escalation-complete]
       agent: critic
       phase: verify
-      result-contract: { schema: schemas/review-v1.json, require-structured: true }
+      result-contract: { schema: schemas/documentation-review-v1.json, require-structured: true }
       fan_out:
         source-artifact:
           task_id: produce-workset

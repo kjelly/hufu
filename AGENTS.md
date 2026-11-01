@@ -222,6 +222,9 @@ Results joined and printed to stdout
 - Verify source identity, current run, frozen input snapshot, receipts, and schema at binding time. Reject missing, stale, or mismatched sources; replay must validate the stored binding rather than rebuild historical results from newer outputs.
 - Keep complete canonical receipts and diagnostics in storage. Compact model-facing summaries must not replace or truncate durable evidence. Track execution completion separately from outcome: a completed test command with `passed: false` remains valid review evidence, while acceptance follows the declared contract.
 - When changing these contracts, verify model submission without deterministic fields, rejection of overrides and invalid sources, and exact receipt preservation through persistence and replay for both local and external submission paths.
+- Keep semantic claims in one model-authored location. Use `x-hufu-result-projections` for envelope copies and invariant-bound severity; update schema, prompts and repair examples together. Never erase findings, lower severity or change a judgment to satisfy formatting.
+- Contract changes require the offline workflow regression gate (`mise run test-contracts`), including empty/mixed sources, rejected submissions, bounded repair and replay. Schema-only validation is insufficient evidence of a working handoff.
+- Diagnose repeated failures from the exact task/attempt and rejection before retrying. Preserve completed work for result-only repair. For schema drift, preview controlled contract recovery; never edit historical receipts/checkpoints or bypass the ordinary resume policy check.
 
 ### Coordinator Features
 

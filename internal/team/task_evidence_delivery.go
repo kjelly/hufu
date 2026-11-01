@@ -57,7 +57,7 @@ func (c *Coordinator) validateAcceptedDependencyPayloadGraph(source *TodoItem, v
 	}
 	var results []TaskResult
 	if len(compiled.fixedCollections) > 0 {
-		results = c.dependencyResultsForTask(source.ID)
+		results = c.dependencyResultsForBinding(source.ID)
 	}
 	plans, err := buildResultFixedCollections(compiled.fixedCollections, source.EvidenceFrom, results)
 	if err != nil {

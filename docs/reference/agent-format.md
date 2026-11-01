@@ -1306,3 +1306,64 @@ schema、證據、收據、驗證與提交交易；候選存在不代表驗收�
 候選的 prepared 狀態；修復收據以 `prepared_candidate_sha256` 記錄本機完成
 的來源。證據、契約或提交失敗分別顯示 `source_invalid`、`contract_rejected`、
 `commit_failed`，不再當成 schema 錯誤反覆要求模型改寫。
+
+### 固定集合的靜態來源資料流
+
+`x-hufu-fixed-collections` 可加入 `source_task_contracts`，列出該集合預期消費的
+team manifest 靜態 task contract IDs（不是執行時 Todo IDs）：
+
+```json
+{
+  "source_task_contracts": ["review-code", "review-documents"],
+  "source_contracts": ["schemas/code-review.json", "schemas/document-review.json"],
+  "source_pointer": "/record/findings"
+}
+```
+
+此片段省略既有集合的輸出欄位設定。`source_task_contracts` 是靜態覆蓋宣告，
+不會自動建立依賴、授權讀取或要求每一種來源都在該次派工出現；實際來源仍由
+`evidence_from`／`source_scope` 與已接受結果決定。清單必須唯一且有界。
+
+`team lint`、`team validate` 與共用執行前檢查會檢查宣告的 task 是否存在且
+有結果契約、其 schema 是否被 `source_contracts` 接受，以及來源 pointer 是否
+指向陣列。未宣告的動態來源回報 `contract_dataflow_unverified` 警告；複雜 schema
+組合無法判定時回報 `contract_dataflow_pointer_unverified`，不宣稱已驗證。
+這不是一般 JSON Schema 子型別證明，也不比較由模型轉換的來源／決策物件型別。
+
+CI 可用 `hufu team lint --team <name> --fail-on warning` 將未驗證資料流也列為
+必須處理的項目。新增 producer 或更名其結果契約時，應同步更新此宣告、下游
+`source_contracts` 及零筆、多筆、混合來源的串接測試。
+
+### 同一份語意結果的外層投影
+
+以 `x-hufu-result-projections` 宣告 findings／invariant claims 在 payload 中的唯一來源：
+
+```json
+"x-hufu-result-projections": {
+  "findings": "/record/findings",
+  "invariant_assessments": "/record/invariant_assessments",
+  "bind_invariant_severity": true
+}
+```
+
+兩個 pointer 都是相對於 `structured_payload` 的 JSON Pointer，可各自省略，
+但至少需要一個。來源必須是可解析的 array，宣告 `maxItems`（0–128），
+且不能互相重疊或與 runtime inputs、runtime-owned evidence inputs、fixed
+collections 的目標或 tool-evidence rewriting groups 重疊。Array items 必須是 object。局部 `$defs` 引用可使用；無法呈現給 provider 的形狀會拒絕載入。
+
+模型只在 payload 中提交一次；對應的外層欄位會從本機工具與外部 worker 的
+submission schema 移除。即使提交空陣列、null 或完全相同的副本，也會拒絕。
+Runtime 在 canonical validation／hash／持久化之前產生外層 findings 與 claims；
+location、evidence 等領域欄位留在 payload。未宣告此 extension 的既有契約保留原協定。
+
+Invariant claims 投影的靜態 task 必須宣告 `invariant-verification: report` 或 `gate`；缺少此設定會在載入時拒絕。
+
+`bind_invariant_severity: true` 必須同時宣告兩種投影。對於 violated claim
+所指向的 finding，模型必須省略 severity；runtime 依原工作 context manifest
+驗證的 invariant 定義填入。獨立 finding 仍需自行提交 severity。未知 invariant、
+無效 index、定義衝突或來源證據不符不會被改寫成 preserved／較低 severity。
+摘要仍受既有長度限制，extended analysis 應放在 details。
+
+修復回應會提供被拒絕欄位的 JSON Pointer。修復保留已完成工作、判斷與證據，
+不會重新開啟工作工具；相同的被拒絕 JSON（忽略物件 key 順序與空白）再次出現時，
+停止自動修復並保留原始診斷。人工明確授權的額外修復自成一輪；原先已用次數與完整歷史仍保留，新一輪仍受其授權次數限制。

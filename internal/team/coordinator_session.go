@@ -654,6 +654,11 @@ func (c *Coordinator) applyLiveTaskProjection(tasks []*TodoItem) {
 	if c == nil {
 		return
 	}
+	// Canonical replay may replace the repaired checkpoint with a legacy
+	// task projection that omitted this hash-covered static contract field.
+	if c.session != nil {
+		restoreLegacyBoundInvariantVerification(tasks, c.session.ContractTasks)
+	}
 	c.setRestoredTodoIDs(tasks)
 	prof := c.ExecutionProfile()
 	if c.workflowCycleID() != "" && !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore && c.taskTracker != nil {

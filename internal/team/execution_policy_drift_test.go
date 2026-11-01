@@ -144,6 +144,15 @@ func TestExecutionPolicyDifferencesSliceRepresentation(t *testing.T) {
 			before: &ExecutionPolicySnapshot{}, after: &ExecutionPolicySnapshot{ResultContracts: []ExecutionResultContractPolicySnapshot{}},
 		},
 		{
+			name:   "canonical execution worlds null versus empty",
+			before: &ExecutionPolicySnapshot{}, after: &ExecutionPolicySnapshot{ExecutionWorlds: []ExecutionWorldPolicySnapshot{}},
+		},
+		{
+			name:   "nested omitted environment null versus empty",
+			before: &ExecutionPolicySnapshot{ExecutionWorlds: []ExecutionWorldPolicySnapshot{{Backend: "unused"}}},
+			after:  &ExecutionPolicySnapshot{ExecutionWorlds: []ExecutionWorldPolicySnapshot{{Backend: "unused", InheritEnv: []ExecutionEnvironmentVariableSnapshot{}}}},
+		},
+		{
 			name: "reordered entries", changed: true,
 			before: &ExecutionPolicySnapshot{Backends: []ExecutionBackendPolicySnapshot{{Backend: "a"}, {Backend: "b"}}},
 			after:  &ExecutionPolicySnapshot{Backends: []ExecutionBackendPolicySnapshot{{Backend: "b"}, {Backend: "a"}}},
@@ -255,10 +264,21 @@ func TestExecutionPolicySnapshotDriftDiagnosticUsesCompatibilityRules(t *testing
 	second := newExecutionPolicySnapshotCoordinator(t, workspace, 2, 1)
 	delete(second.session.Agents, "codex-worker")
 	message := second.executionPolicySnapshotDriftError(frozen).Error()
+	current, err := second.executionPolicySnapshotForComparison(frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedHash, err := executionPolicyConfigurationHash(normalizeUnusedExecutionEnvironment(frozen, current))
+	if err != nil || expectedHash == current.ConfigurationHash {
+		t.Fatalf("fixture must include a compatible environment difference: %v", err)
+	}
+	if !strings.Contains(message, "current="+expectedHash) || strings.Contains(message, "current="+current.ConfigurationHash) {
+		t.Fatalf("diagnostic hash differs from the actual admission comparison: %s", message)
+	}
 	if !strings.Contains(message, `backends["backend=remote"].max_concurrent`) {
 		t.Fatalf("missing incompatible backend setting: %s", message)
 	}
-	for _, compatible := range []string{"result_collection", "inherit_env", "old-unused-environment"} {
+	for _, compatible := range []string{"result_collection", "inherit_env", "old-unused-environment", "execution_worlds"} {
 		if strings.Contains(message, compatible) {
 			t.Errorf("compatible setting reported as drift (%s): %s", compatible, message)
 		}

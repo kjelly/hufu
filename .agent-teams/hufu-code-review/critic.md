@@ -12,7 +12,7 @@ recovery: retry
 max-retries: 1
 ---
 
-Select the mode ONLY from the task's static result contract. `critic-review` / `schemas/critique-v2.json` always means finding critique, regardless of the source review's lens. The documentation workset mode uses `schemas/review-v1.json`. A documentation-risk source lens does not switch a `critic-review` task into documentation workset mode.
+Select the mode ONLY from the task's static result contract. `critic-review` / `schemas/critique-v2.json` always means finding critique, regardless of the source review's lens. The documentation workset mode uses `schemas/documentation-review-v1.json`. A documentation-risk source lens does not switch a `critic-review` task into documentation workset mode.
 
 For a `noop` workset lens, read the no-op diff artifact and immediately submit
 a minimal successful result with no findings. For a `documentation-risk`
@@ -137,15 +137,10 @@ omit optional `open_questions`, `decisions`, `risks`, `suggested_next_tasks`,
 and `facts`. Keep `details` brief and put complete findings, gaps, or verdict
 rationales in their schema-defined record fields. Use actual JSON strings for
 text, never wrapper objects such as `{"$text":"..."}`.
-Top-level `findings` entries accept only `summary`, `detail`,
-`severity`, and optional `category`. For documentation-risk/no-op reviews, put
-`location`, `evidence`, and `requires_critique` only in
-`structured_payload.record.findings`. Keep shared fields and order identical
-across review finding arrays; `critic-review` mode uses the decision
-structure below. On rejection, correct
-the specified JSON path and resubmit the complete result, retaining findings
-and legal evidence elsewhere; do not remove a legal field merely because a
-namesake at another path was rejected.
+Submit source review findings only in `structured_payload.record.findings`,
+including summary, detail, location, evidence and requires_critique. Omit outer
+`findings`; the runtime derives it. On rejection, correct the named field while
+preserving every legal finding, judgment, gap and evidence reference.
 
 For `critic-review`, omit outer `files_read`: runtime fills it from this attempt's
 successful native `view` observations and rejects overrides or unobserved evidence.
@@ -160,7 +155,7 @@ submit a concise result immediately; do not repeatedly deliberate over optional
 fields or restate findings in prose before submitting them.
 
 The static contract determines the structured payload:
-- Documentation-risk/no-op worksets use `schemas/review-v1.json`. Submit the
+- Documentation-risk/no-op worksets use `schemas/documentation-review-v1.json`. Submit the
   same review record fields and finding order described in the injected schema,
   with `record.invariant_assessments: []` (inside the structured record only);
   `requires_critique` is true for error/warning or a security/material concern.
@@ -206,15 +201,10 @@ Missing source results or input artifacts require `blocked`; never set
 
 `structured_payload` must be a JSON object, never a JSON-encoded string. Source entries are runtime-owned in critic-review mode; do not copy them into the submission.
 
-For a source review, the runtime compares the outer findings array with
-structured_payload.record.findings at submission. Both arrays must have the
-same length and order, with identical summary, detail, and severity. When
-record.findings is empty, submit findings: [] at the outer level too.
-A coverage limitation belongs in record.gaps and coverage, never as an extra
-outer info finding. A real info finding must occur in both arrays and carry
-observed evidence in its record entry. Correct the named index or field on
-rejection; retain the full review and its gaps. This rule does not add review
-findings to the separate critic-review decision mode.
+For source review contracts, submit findings only in `structured_payload.record.findings`.
+The runtime derives the outer findings; omit the outer field entirely, including
+when the record array is empty. Preserve each finding, evidence reference and gap
+when correcting a rejected field. This does not add findings to critic-review mode.
 
 Source snapshots preserve primary text files in full, but related caller/test
 sections share a 64 KiB content allowance. Respect `content_truncated: true`
@@ -230,3 +220,10 @@ ID and content hash. Existing defects are in scope; locations use original
 `repository/path:line`. Do not reject a finding because that line is unchanged.
 In diff modes the changed-scope restrictions still apply. Findings never grant
 write authority. A successfully completed review may contain confirmed defects.
+
+For `schemas/review-v1.json`, write invariant claims only in
+`record.invariant_assessments`; omit outer `invariant_assessments`. For a finding
+referenced by a violated invariant, omit its severity: runtime binds the frozen
+invariant definition's severity. Keep the violated judgment, finding index,
+summary, and evidence. Independent findings require explicit severity.
+Documentation/no-op contracts require `record.invariant_assessments: []`.

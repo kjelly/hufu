@@ -27,7 +27,12 @@ func (c *Coordinator) executeTaskOutputAssertVerification(_ context.Context, spe
 		return fail(errors.New("coordinator task occurrence state is unavailable"))
 	}
 	snapshot := c.RunInputSnapshot()
-	evidence, err := ReplayTaskOutputAssertions(c.taskTracker.TodoList().Items(), coordinatorRuntimeRunID(c), snapshot, spec)
+	items := c.taskTracker.TodoList().Items()
+	origins, err := c.recoveredTaskOutputOrigins(items)
+	if err != nil {
+		return fail(err)
+	}
+	evidence, err := ReplayTaskOutputAssertions(items, coordinatorRuntimeRunID(c), snapshot, spec, origins)
 	res.TaskOutputAssertions = evidence
 	if err != nil {
 		return fail(err)
@@ -41,11 +46,16 @@ func (c *Coordinator) executeTaskOutputAssertVerification(_ context.Context, spe
 // ReplayTaskOutputAssertions independently re-evaluates a task_output_assert
 // against event-replayed task and input state. It performs no I/O and is the
 // shared trust boundary used by both live acceptance and offline audit.
-func ReplayTaskOutputAssertions(items []*TodoItem, runID string, snapshot *RunInputSnapshot, spec VerificationSpec) ([]TaskOutputAssertionResult, error) {
+// Optional origins must come from independently admitted canonical recovery
+// evidence (live) or the verified terminal evidence manifest (offline).
+func ReplayTaskOutputAssertions(items []*TodoItem, runID string, snapshot *RunInputSnapshot, spec VerificationSpec, origins ...map[string]string) ([]TaskOutputAssertionResult, error) {
+	if len(origins) > 1 {
+		return nil, errors.New("task output replay accepts one recovery origin set")
+	}
 	if err := validateVerificationSpec(spec); err != nil {
 		return nil, fmt.Errorf("malformed verification spec: %w", err)
 	}
-	source, err := uniqueTaskOutputSource(items, spec.WorksetSourceTask, runID)
+	source, err := uniqueTaskOutputSource(items, spec.WorksetSourceTask, runID, origins...)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +77,11 @@ func ReplayTaskOutputAssertions(items []*TodoItem, runID string, snapshot *RunIn
 		result.RunInputSnapshotID != snapshot.ID || result.RunInputSnapshotHash != snapshot.SnapshotHash {
 		return nil, errors.New("source task input snapshot is stale or does not match this invocation")
 	}
-	receipt := latestSuccessfulExecutionReceipt(source, runID)
+	sourceRun := taskOutputOriginRun(runID, source.ID, origins)
+	if sourceRun != runID && ValidateRunInputSnapshot(snapshot) != nil {
+		return nil, errors.New("recovered task output requires valid frozen inputs")
+	}
+	receipt := latestSuccessfulExecutionReceipt(source, sourceRun)
 	if receipt == nil || strings.TrimSpace(receipt.ActionInvocationID) == "" {
 		return nil, errors.New("source task has no valid action invocation receipt for this run")
 	}
@@ -96,7 +110,7 @@ func ReplayTaskOutputAssertions(items []*TodoItem, runID string, snapshot *RunIn
 	return evidence, nil
 }
 
-func uniqueTaskOutputSource(items []*TodoItem, logicalID, runID string) (*TodoItem, error) {
+func uniqueTaskOutputSource(items []*TodoItem, logicalID, runID string, origins ...map[string]string) (*TodoItem, error) {
 	logicalID = strings.TrimSpace(logicalID)
 	normalizedID := normalizeTaskReferenceID(logicalID)
 	var matches []*TodoItem
@@ -107,7 +121,7 @@ func uniqueTaskOutputSource(items []*TodoItem, logicalID, runID string) (*TodoIt
 		if item.Status != TaskDone {
 			continue
 		}
-		if latestSuccessfulExecutionReceipt(item, runID) == nil {
+		if latestSuccessfulExecutionReceipt(item, taskOutputOriginRun(runID, item.ID, origins)) == nil {
 			continue
 		}
 		matches = append(matches, item)
@@ -116,6 +130,13 @@ func uniqueTaskOutputSource(items []*TodoItem, logicalID, runID string) (*TodoIt
 		return nil, fmt.Errorf("source-task %q resolved to %d current-run terminal occurrences; exactly one is required", logicalID, len(matches))
 	}
 	return matches[0], nil
+}
+
+func taskOutputOriginRun(runID, taskID string, origins []map[string]string) string {
+	if len(origins) == 1 && origins[0][taskID] != "" {
+		return origins[0][taskID]
+	}
+	return runID
 }
 
 func evaluateTaskOutputAssertion(root any, assertion TaskOutputAssertion, inputs map[string]ResolvedRunInput, source *TodoItem, output string) (TaskOutputAssertionResult, error) {

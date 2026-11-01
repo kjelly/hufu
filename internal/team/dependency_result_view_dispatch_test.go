@@ -132,6 +132,87 @@ func TestDependencyResultViewCheckpointCannotForgeDispatch(t *testing.T) {
 	}
 }
 
+func TestDependencyResultViewFanoutLeafDelivery(t *testing.T) {
+	for _, historical := range []bool{false, true} {
+		name := "selected"
+		if historical {
+			name = "historical"
+		}
+		t.Run(name, func(t *testing.T) {
+			var c *Coordinator
+			var consumer *TodoItem
+			var input WorkerContextInput
+			if historical {
+				c, consumer, input = historicalContextFixture(t)
+			} else {
+				c, _, consumer, input = dependencyViewRuntimeFixture(t)
+			}
+			build := func(id string) ContextInjectionManifest {
+				input.Request.ModelExecutionID = id
+				input.Request.AssignRequestID()
+				compiled, err := c.compileWorkerContext(t.Context(), input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				manifest, err := BuildContextInjectionManifest(input.Request, compiled, nil, consumer.Agent, c.sessionTime, c.session.Config.MemoryLearning)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return manifest
+			}
+			first, sibling := build("first-leaf"), build("sibling-leaf")
+			if _, err := markDependencyViewModelCall(c.bindDependencyViewCall(t.Context(), &first)); err != nil {
+				t.Fatal(err)
+			}
+			// Pause a sibling between the checkpoint update and durable event
+			// publication. The first leaf must validate its own dispatch only.
+			sibling.ModelCalled, sibling.Outcome = true, "model_call"
+			if historical {
+				sibling.Fingerprint = historicalResultManifestFingerprint(sibling)
+			} else {
+				sibling.Fingerprint = dependencyResultViewManifestFingerprint(sibling)
+			}
+			if err := c.taskTracker.TodoList().SetContextManifest(consumer.ID, &sibling); err != nil {
+				t.Fatal(err)
+			}
+			leaf := newTestCoordinator(t)
+			leaf.modelFanout = &modelFanoutBinding{parent: c, taskID: consumer.ID}
+			leaf.modelExecutionID = first.ModelExecutionID
+			validate := func(owner *Coordinator) error {
+				if historical {
+					return owner.validateHistoricalResultDelivery(consumer.ID, 1, first.RunID)
+				}
+				return owner.validateSelectedDependencyDelivery(consumer.ID, 1, first.RunID)
+			}
+			if err := validate(leaf); err != nil {
+				t.Fatalf("a sibling's unpublished dispatch rejected this leaf: %v", err)
+			}
+			if err := validate(c); err == nil {
+				t.Fatal("parent accepted an unpublished sibling dispatch")
+			}
+			leaf.modelExecutionID = sibling.ModelExecutionID
+			if err := validate(leaf); err == nil {
+				t.Fatal("unpublished leaf borrowed a sibling's dispatch proof")
+			}
+			if err := c.persistContextManifest(&sibling); err != nil {
+				t.Fatal(err)
+			}
+			if err := validate(leaf); err != nil {
+				t.Fatal(err)
+			}
+			if err := validate(c); err != nil {
+				t.Fatal(err)
+			}
+			for _, id := range []string{"unrecorded-leaf", ""} {
+				leaf.modelExecutionID = id
+				if err := validate(leaf); err == nil {
+					t.Fatal("a leaf without a manifest borrowed sibling dispatch proofs")
+				}
+			}
+		})
+	}
+}
+
 func TestDependencyResultViewInvalidSourcesNeverReachWorker(t *testing.T) {
 	for _, test := range []struct {
 		name   string

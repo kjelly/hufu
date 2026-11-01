@@ -235,7 +235,7 @@ func TestStructuredFanOutRejectsStaleOccurrencesButAcceptsRepeatedContent(t *tes
 			t.Fatal(err)
 		}
 		c.taskResults[producer.ID] = &TaskResult{TaskID: producer.ID, Agent: "reviewprep", Attempt: 4, Status: TaskResultStatusSuccess, Artifacts: []ArtifactRef{stale.ArtifactRef}}
-		if _, err := c.expandFanOutTasks([]TaskDef{{FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "producer", Artifact: stale.ID}, GoalTemplate: "process {name}"}}}); err == nil || !strings.Contains(err.Error(), "belongs to run") {
+		if _, err := c.expandFanOutTasks([]TaskDef{{FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "producer", Artifact: stale.ID}, GoalTemplate: "process {name}"}}}); err == nil || !strings.Contains(err.Error(), "invalid current producer occurrence") {
 			t.Fatalf("stale manifest occurrence error = %v", err)
 		}
 	})

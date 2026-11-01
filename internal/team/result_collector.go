@@ -142,12 +142,15 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 			if err == nil {
 				return nil
 			}
-			if localResultRejectionReason(err) != RepairFailureInvalidSchema || checkpoint.TurnsUsed >= checkpoint.TurnLimit {
+			if localResultRejectionReason(err) != RepairFailureInvalidSchema {
 				return c.collectionFailure(ctx, checkpoint, localResultRejectionReason(err), err)
 			}
 			diagnostic = err.Error()
-			checkpoint, err = c.recordCollectionFormatFailure(ctx, checkpoint)
+			checkpoint, err = c.recordCollectionFormatFailure(ctx, checkpoint, err)
 			if err != nil {
+				if errors.Is(err, errResultCollectionNoProgress) {
+					return c.collectionFailure(ctx, checkpoint, RepairFailureInvalidSchema, errors.Join(err, errors.New(diagnostic)))
+				}
 				return &resultCollectionFailure{Reason: RepairFailureCommit, Cause: err}
 			}
 		case ResultCollectionReceived:
@@ -160,11 +163,11 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 				return c.collectionFailure(ctx, checkpoint, localResultRejectionReason(err), err)
 			}
 			diagnostic = err.Error()
-			if checkpoint.TurnsUsed >= checkpoint.TurnLimit {
-				return c.collectionFailure(ctx, checkpoint, localResultRejectionReason(err), err)
-			}
-			checkpoint, err = c.recordCollectionSchemaFailure(ctx, checkpoint)
+			checkpoint, err = c.recordCollectionFormatFailure(ctx, checkpoint, err)
 			if err != nil {
+				if errors.Is(err, errResultCollectionNoProgress) {
+					return c.collectionFailure(ctx, checkpoint, RepairFailureInvalidSchema, errors.Join(err, errors.New(diagnostic)))
+				}
 				return &resultCollectionFailure{Reason: RepairFailureCommit, Cause: err}
 			}
 		case ResultCollectionBlocked:
@@ -173,6 +176,9 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 			}
 		}
 		if checkpoint.TurnsUsed >= checkpoint.TurnLimit {
+			if diagnostic != "" {
+				return c.collectionFailure(ctx, checkpoint, RepairFailureInvalidSchema, errors.New(diagnostic))
+			}
 			return c.collectionFailure(ctx, checkpoint, repairFailureCollectionBudget, errResultCollectionBudget)
 		}
 		id := "result-collection-" + rand.Text()

@@ -3,9 +3,38 @@ package inspect
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/kjelly/hufu/internal/team"
 )
+
+func TestRecoveryEligibilityOffersAssessmentForCancelledCollection(t *testing.T) {
+	finished := time.Unix(10, 0)
+	for _, tc := range []struct {
+		name       string
+		exit       *int
+		finished   time.Time
+		occurrence int
+		want       bool
+	}{
+		{"saved work", new(0), finished, 1, true},
+		{"failed work", new(1), finished, 1, false},
+		{"unfinished work", new(0), time.Time{}, 1, false},
+		{"historical receipt", new(0), finished, 2, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			item := &team.TodoItem{ID: "22", Status: team.TaskError, Recovery: team.RecoveryRetry, SideEffect: team.SideEffectNone, MaxRetries: 3,
+				Execution: team.ExecutionContract{AllowsReplay: new(true)}, FailureEvent: &team.FailureEventPayload{FailureClass: team.FailureCancelled},
+				ExecutionReceipt: &team.ExecutionReceipt{Attempt: 1, OccurrenceAttempt: tc.occurrence, FinishedAt: tc.finished, ExitCode: tc.exit,
+					ResultCollection: &team.ResultCollectionCheckpoint{Attempt: 1, State: team.ResultCollectionReceived}},
+			}
+			got := RecoveryEligibilityForTask(item, nil, "run", true)
+			if got.ResultCollectionInterrupted != tc.want || (tc.want && (got.RetryEligible || got.ResumeEligible || !got.HasCollectionRecovery())) {
+				t.Fatalf("eligibility=%+v", got)
+			}
+		})
+	}
+}
 
 func TestRecoveryEligibilityRecognizesBlockedCollection(t *testing.T) {
 	for _, tc := range []struct {

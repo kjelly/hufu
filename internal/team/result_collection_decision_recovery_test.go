@@ -73,7 +73,7 @@ func decisionRecoveryFixtureAtEndpoint(t *testing.T, endpoint string, mutations 
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope := &ArtifactAccessScope{TaskID: item.ID, Attempt: 1, AuthorizedRefs: []ArtifactRef{artifact.ArtifactRef}}
+	scope := &ArtifactAccessScope{RunID: receipt.RunID, TaskID: item.ID, Attempt: 1, AuthorizedRefs: []ArtifactRef{artifact.ArtifactRef}}
 	ctx = context.WithValue(ctx, artifactAccessScopeKey, scope)
 	ctx = withInvocationMetadata(ctx, InvocationMetadata{RunID: receipt.RunID, TaskID: item.ID, AgentName: item.Agent, Attempt: 1, ModelExecutionID: receipt.ModelExecutionID})
 	ctx = tools.SetToolsAllowed(ctx, []string{"view", decisionPrimitiveToolName})

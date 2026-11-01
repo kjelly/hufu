@@ -291,7 +291,7 @@ func (c *Coordinator) readActiveLineageEvents(ctx context.Context) ([]RunEvent, 
 	if c == nil || c.session == nil || strings.TrimSpace(c.session.Workspace) == "" {
 		return events, nil
 	}
-	tree, err := LoadSessionTree(c.session.Workspace)
+	tree, err := c.loadJournalSessionTree(ctx, c.session.Workspace)
 	if err != nil {
 		return nil, fmt.Errorf("load session tree: %w", err)
 	}

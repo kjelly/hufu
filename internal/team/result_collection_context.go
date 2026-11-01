@@ -129,15 +129,20 @@ func (c *Coordinator) fixedCollectionPlans(todoID string) ([]resultFixedCollecti
 	if err != nil {
 		return nil, err
 	}
+	runtimeOwned := compiled.evidenceInputs != nil && compiled.evidenceInputs.runtimeOwned()
+	if !runtimeOwned && len(compiled.fixedCollections) == 0 {
+		return nil, nil
+	}
+	results := c.dependencyResultsForBinding(todoID)
 	if spec := compiled.evidenceInputs; spec != nil && spec.runtimeOwned() {
-		if _, err := runtimeBoundEvidenceEntries(spec, item.EvidenceFrom, c.dependencyResultsForTask(todoID)); err != nil {
+		if _, err := runtimeBoundEvidenceEntries(spec, item.EvidenceFrom, results); err != nil {
 			return nil, err
 		}
 	}
 	if len(compiled.fixedCollections) == 0 {
 		return nil, nil
 	}
-	return buildResultFixedCollections(compiled.fixedCollections, item.EvidenceFrom, c.dependencyResultsForTask(todoID))
+	return buildResultFixedCollections(compiled.fixedCollections, item.EvidenceFrom, results)
 }
 
 // Validate before argument normalization/case folding, which can otherwise

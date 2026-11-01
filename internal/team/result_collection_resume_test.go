@@ -13,6 +13,49 @@ import (
 	"testing"
 )
 
+func TestResultCollectionResumesOnlyOriginalArtifactCapabilities(t *testing.T) {
+	c, item, ctx, receipt := resultCollectionFixture(t)
+	ref, err := mustArtifactStore(t, c.session.Workspace).Put(t.Context(), PutArtifactRequest{Kind: "evidence", Path: "source.txt", Content: []byte("verified original evidence")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalScope := &ArtifactAccessScope{RunID: c.executionRunID, TaskID: item.ID, Attempt: 1, StoreRoot: c.artifactStoreRootPath(), AuthorizedRefs: []ArtifactRef{ref.ArtifactRef}}
+	receipt.ArtifactScope = originalScope
+	before, err := collectionDigest(originalScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp, err := c.beginResultCollection(ctx, item.ID, receipt, "completed original work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.revokeTaskOccurrence(item.ID)
+	c.executionRunID = "new-result-recovery"
+	stale := context.WithValue(ctx, artifactAccessScopeKey, originalScope)
+	if _, ok := c.authorizedDecisionEvidence(stale, ref.ID); ok {
+		t.Fatal("old invocation scope gained authority without sealed-work recovery")
+	}
+	restored, err := c.restoreCollectionContext(WithSessionResume(t.Context()), cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current, ok := c.authorizedDecisionEvidence(restored, ref.ID); !ok || current.SHA256 != ref.SHA256 {
+		t.Fatal("recovered scope lost original artifact authority")
+	}
+	for _, bad := range []context.Context{context.WithValue(restored, todoIDKey{}, "different-task"), context.WithValue(restored, executionAttemptKey{}, 2)} {
+		if _, ok := c.authorizedDecisionEvidence(bad, ref.ID); ok {
+			t.Fatal("recovered scope escaped its task or attempt")
+		}
+	}
+	if _, ok := c.authorizedDecisionEvidence(restored, "unknown"); ok {
+		t.Fatal("recovery added an artifact capability")
+	}
+	after, err := collectionDigest(originalScope)
+	if err != nil || before != after || originalScope.RunID == c.executionRunID {
+		t.Fatal("recovery rewrote the sealed original scope", err)
+	}
+}
+
 func TestResultCollectionResumeCompletesDurableClaimsWithoutWorkerOrProvider(t *testing.T) {
 	for _, state := range []ResultCollectionState{ResultCollectionReceived, ResultCollectionPrepared, ResultCollectionCommitted} {
 		t.Run(string(state), func(t *testing.T) {

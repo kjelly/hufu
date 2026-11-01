@@ -2,18 +2,17 @@ package team
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 	"sync"
-	"sync/atomic"
 )
 
 var (
 	errTaskResultStale     = errors.New("task result provenance does not match active runtime occurrence")
 	errTaskResultDuplicate = errors.New("task result already submitted for active runtime occurrence")
-	taskDispatchSeq        atomic.Uint64
 )
 
 // taskOccurrenceController is the coordinator-owned transaction boundary for
@@ -221,7 +220,9 @@ func (c *Coordinator) openTaskOccurrence(identity submitResultRuntimeIdentity) {
 }
 
 func newTaskDispatchID() string {
-	return fmt.Sprintf("dispatch-%d", taskDispatchSeq.Add(1))
+	// Checkpoints retain lease IDs across process restarts. A fresh process
+	// must never reissue an earlier lease when reopening a submission.
+	return "dispatch-" + rand.Text()
 }
 
 func (controller *taskOccurrenceController) snapshot() taskOccurrenceControllerSnapshot {

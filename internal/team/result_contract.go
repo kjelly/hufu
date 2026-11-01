@@ -48,6 +48,7 @@ type CompiledResultContract struct {
 	evidenceKeys       *resultEvidenceKeysSpec
 	evidenceReferences *resultEvidenceReferencesSpec
 	worksetInputs      *resultWorksetInputsSpec
+	claimsProjection   *resultClaimsProjection
 	fixedCollections   []resultFixedCollectionSpec
 	runtimeInputs      []resultRuntimeInputSpec
 	submissionFields   []string

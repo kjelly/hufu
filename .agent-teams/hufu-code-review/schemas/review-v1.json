@@ -461,5 +461,10 @@
       "/record/findings/*/evidence/*",
       "/record/reference_assessments/*/evidence/*"
     ]
+  },
+  "x-hufu-result-projections": {
+    "findings": "/record/findings",
+    "invariant_assessments": "/record/invariant_assessments",
+    "bind_invariant_severity": true
   }
 }

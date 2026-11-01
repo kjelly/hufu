@@ -91,6 +91,12 @@ func executionPolicySnapshotFromEvents(events []RunEvent) (*ExecutionPolicySnaps
 			continue
 		}
 		switch EventType(event.Type) {
+		case EventContractRecovery:
+			plan, err := validateContractRecoveryLineage(event, events[:index], admitted)
+			if err != nil {
+				return nil, err
+			}
+			admitted = cloneExecutionPolicySnapshot(plan.Policy)
 		case EventDerivedForkCreated:
 			if _, err := decodeDerivedForkCreated(event); err != nil {
 				return nil, err

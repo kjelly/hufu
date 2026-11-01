@@ -339,7 +339,7 @@ func appendCollectionAssessmentActions(
 	seen := make(map[string]bool)
 	candidates := append([]*RecoveryEligibility{facts.Recovery}, facts.ResultCollectionRecoveries...)
 	for _, recovery := range candidates {
-		if recovery == nil || !recovery.ResultCollectionBlocked || recovery.TaskStatus != "blocked" || recovery.TaskID == "" || seen[recovery.TaskID] {
+		if !recovery.HasCollectionRecovery() || recovery.TaskID == "" || seen[recovery.TaskID] {
 			continue
 		}
 		seen[recovery.TaskID] = true

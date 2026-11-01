@@ -164,7 +164,7 @@ func (c *Coordinator) runBoundDecision(ctx context.Context, metadata InvocationM
 	if err := validateResultDecisionCatalog(c.session, c.session.Agents[metadata.AgentName], compiled); err != nil {
 		return reject(err)
 	}
-	results := c.dependencyResultsForTask(metadata.TaskID)
+	results := c.dependencyResultsForBinding(metadata.TaskID)
 	if err := c.validateDependencyPayloads(results); err != nil {
 		return reject(err)
 	}

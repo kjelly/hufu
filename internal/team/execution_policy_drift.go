@@ -20,8 +20,13 @@ func (c *Coordinator) executionPolicySnapshotDriftError(frozen *ExecutionPolicyS
 	if err != nil {
 		return fmt.Errorf("describe execution policy snapshot drift: %w", err)
 	}
-	diff := executionPolicyDifferences(frozen, normalizeUnusedExecutionEnvironment(frozen, current))
-	return fmt.Errorf("execution policy snapshot drift detected (event_store=%s current=%s)\n%s\nRestore the original execution settings to resume, or use --new to archive the old session and start fresh", frozen.ConfigurationHash, current.ConfigurationHash, diff)
+	comparison := normalizeUnusedExecutionEnvironment(frozen, current)
+	hash, err := executionPolicyConfigurationHash(comparison)
+	if err != nil {
+		return fmt.Errorf("describe execution policy comparison hash: %w", err)
+	}
+	diff := executionPolicyDifferences(frozen, comparison)
+	return fmt.Errorf("execution policy snapshot drift detected (event_store=%s current=%s)\n%s\nRestore the original execution settings to resume, or use --new to archive the old session and start fresh", frozen.ConfigurationHash, hash, diff)
 }
 
 type executionPolicyDiff struct {
@@ -31,7 +36,10 @@ type executionPolicyDiff struct {
 
 func executionPolicyDifferences(frozen, current *ExecutionPolicySnapshot) string {
 	diff := &executionPolicyDiff{}
-	diff.compare(reflect.ValueOf(frozen).Elem(), reflect.ValueOf(current).Elem(), "")
+	// Admission hashes clones, which canonicalize execution_worlds to [].
+	// Compare that same shape so diagnostics do not report null versus [] as
+	// an additional policy change when both hash identically.
+	diff.compare(reflect.ValueOf(cloneExecutionPolicySnapshot(frozen)).Elem(), reflect.ValueOf(cloneExecutionPolicySnapshot(current)).Elem(), "")
 	var out strings.Builder
 	out.WriteString("Changed execution policy fields:")
 	for _, change := range diff.changes {
@@ -119,7 +127,7 @@ func (d *executionPolicyDiff) compareEntries(before, after reflect.Value, path s
 			d.compare(oldEntry, newEntry, entryPath)
 		}
 	}
-	if len(d.changes)+d.omitted == priorChanges {
+	if len(d.changes)+d.omitted == priorChanges && !sameCanonicalEvidence(before.Interface(), after.Interface()) {
 		// The canonical hash also distinguishes entry order and null from [].
 		d.add(path, "entry order or empty representation changed")
 	}

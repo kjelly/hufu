@@ -286,7 +286,7 @@ func (c *Coordinator) validateStructuredPayloadClaims(todoID string, raw json.Ra
 	plans, err := c.fixedCollectionPlans(todoID)
 	if err == nil {
 		item := c.todoItemByID(todoID)
-		results := c.dependencyResultsForTask(todoID)
+		results := c.dependencyResultsForBinding(todoID)
 		if compiled.evidenceInputs != nil && compiled.evidenceInputs.runtimeOwned() {
 			err = c.validateDependencyPayloads(results)
 			if err == nil {
@@ -412,6 +412,11 @@ func providerVisibleResultPayloadSchema(ref ResultContractRef, compiled *Compile
 				omitRuntimeEvidenceInputs(schema, compiled.evidenceInputs)
 				omitRuntimeResultInputs(schema, compiled.runtimeInputs)
 				delete(schema, "$schema")
+				if projected := projectProviderResultSchema(schema); compiled.claimsProjection != nil && projected != nil {
+					projectedPayloadSchema(projected, compiled.claimsProjection)
+					projected["description"] = description
+					return projected
+				}
 				if dynamicSchemaEligible(schema) {
 					if _, described := schema["description"]; !described {
 						schema["description"] = description
@@ -474,7 +479,17 @@ func resultContractPromptSection(ref *ResultContractRef, compiled *CompiledResul
 	}
 	if compiled != nil {
 		schema := compiled.CanonicalSchema
-		runtimeOwned := len(compiled.runtimeInputs) > 0
+		runtimeOwned := len(compiled.runtimeInputs) > 0 || compiled.claimsProjection != nil
+		if spec := compiled.claimsProjection; spec != nil {
+			for name, pointer := range map[string]string{"findings": spec.Findings, "invariant_assessments": spec.Invariants} {
+				if pointer != "" {
+					fmt.Fprintf(b, "Submit %s only at structured_payload%s; omit outer %s entirely, even when empty or null. Runtime projects its exact canonical claims.\n", name, pointer, name)
+				}
+			}
+			if spec.InvariantSeverity {
+				b.WriteString("For findings referenced by violated invariant claims, omit severity: runtime binds it from the original work context. Preserve the judgment and finding index. Independent findings require severity.\n")
+			}
+		}
 		for _, binding := range compiled.runtimeInputs {
 			fmt.Fprintf(b, "The runtime supplies `%s` from receipt-verified native task `%s` output `%s`. Omit this field entirely; never copy or summarize its value in the submission.\n", binding.Target, binding.SourceTask, binding.Output)
 		}
@@ -550,6 +565,30 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 	}
 	if request.resultContractSchema == nil {
 		return nil, fmt.Errorf("%s: result contract is not loaded", resultContractDriftCode)
+	}
+	if spec := request.resultContractSchema.claimsProjection; spec != nil {
+		for name, p := range map[string]string{"findings": spec.Findings, "invariant_assessments": spec.Invariants} {
+			if _, supplied := proposal.suppliedFields[name]; p != "" && supplied {
+				return nil, fmt.Errorf("projected %s is runtime-owned; omit it entirely", name)
+			}
+		}
+		input := SubmitResultInput{StructuredPayload: []byte(raw)}
+		if proposal != nil {
+			input.Findings = proposal.Findings
+			input.InvariantAssessments = proposal.InvariantAssessments
+		}
+		var err error
+		if request.resultProjectClaims != nil {
+			input, err = request.resultProjectClaims(input)
+		} else if spec.InvariantSeverity {
+			return nil, fmt.Errorf("invariant projections require verified work context")
+		} else {
+			input, err = projectClaimsInput(input, spec)
+		}
+		if err != nil {
+			return nil, err
+		}
+		raw = string(input.StructuredPayload)
 	}
 	plans, err := buildResultFixedCollections(request.resultContractSchema.fixedCollections, request.Task.EvidenceFrom, request.resultEvidenceInputs)
 	if err != nil {

@@ -2,6 +2,10 @@ package team
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json/v2"
+	"errors"
 	"fmt"
 )
 
@@ -154,14 +158,47 @@ func (c *Coordinator) recordCollectionSchemaFailure(ctx context.Context, expecte
 	if reason := localResultRejectionReason(rejection); rejection == nil || (reason != RepairFailureInvalidSchema && reason != RepairFailureResultMissing) {
 		return nil, errResultCollectionStale
 	}
-	return c.recordCollectionFormatFailure(ctx, expected)
+	return c.recordCollectionFormatFailure(ctx, expected, rejection)
 }
 
 // Called only after decoding or canonical admission rejects model formatting.
 // The original response remains durable; a new invocation consumes the same
 // bounded budget and never reopens worker execution.
-func (c *Coordinator) recordCollectionFormatFailure(ctx context.Context, expected *ResultCollectionCheckpoint) (*ResultCollectionCheckpoint, error) {
-	return c.updateResultCollection(ctx, expected, func(next *ResultCollectionCheckpoint, _ *ExecutionReceipt) error {
+func (c *Coordinator) recordCollectionFormatFailure(ctx context.Context, expected *ResultCollectionCheckpoint, rejections ...error) (*ResultCollectionCheckpoint, error) {
+	raw, err := c.readCollectionBlob(ctx, expected, "response", expected.Response)
+	if err != nil {
+		return nil, err
+	}
+	if value, decodeErr := decodeUniqueJSON(raw); decodeErr == nil {
+		raw, err = json.Marshal(value, json.Deterministic(true))
+		if err != nil {
+			return nil, err
+		}
+	}
+	sum := sha256.Sum256(raw)
+	digest := hex.EncodeToString(sum[:])
+	repeated := false
+	next, err := c.updateResultCollection(ctx, expected, func(next *ResultCollectionCheckpoint, receipt *ExecutionReceipt) error {
+		roundStart := 0
+		if receipt.RepairProvenance != nil {
+			for _, grant := range receipt.RepairProvenance.OperatorGrants {
+				if grant.AdditionalAttempts > 0 {
+					roundStart = max(roundStart, grant.AfterAttempts)
+				}
+			}
+		}
+		// Explicit grants authorize a fresh bounded repair round. Preserve
+		// consumed turns and prior fingerprints without treating that round
+		// as a repetition before its first new response can be repaired.
+		repeated = expected.LastRejectedSHA256 == digest && expected.TurnsUsed > expected.LastRejectedTurn && expected.LastRejectedTurn > roundStart
+		next.LastRejectedSHA256, next.LastRejectedTurn = digest, next.TurnsUsed
+		next.RepairIssue = nil
+		for _, rejection := range rejections {
+			if field, ok := errors.AsType[*resultProjectionFieldError](rejection); ok {
+				copyIssue := field.Issue
+				next.RepairIssue = &copyIssue
+			}
+		}
 		if next.State != ResultCollectionReceived && next.State != ResultCollectionPrepared {
 			return errResultCollectionStale
 		}
@@ -169,6 +206,10 @@ func (c *Coordinator) recordCollectionFormatFailure(ctx context.Context, expecte
 		next.FailureReason = RepairFailureInvalidSchema
 		return nil
 	})
+	if err == nil && repeated {
+		return next, errResultCollectionNoProgress
+	}
+	return next, err
 }
 
 func (c *Coordinator) recordCollectionResponse(ctx context.Context, expected *ResultCollectionCheckpoint, response []byte) (*ResultCollectionCheckpoint, error) {

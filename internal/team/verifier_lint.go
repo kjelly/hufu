@@ -74,7 +74,7 @@ func LintTeamContracts(session *TeamSession) []ContractFinding {
 	if session == nil {
 		return nil
 	}
-	var findings []ContractFinding
+	findings := lintContractDataflow(session)
 	if mode, err := ParseGoalMode(session.Config.GoalMode); err == nil && mode == GoalModeOutcome && stringSliceContainsFold(session.Config.ToolsDenied, "finish") {
 		findings = append(findings, ContractFinding{
 			Severity: FindingSeverityError,

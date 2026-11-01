@@ -231,51 +231,6 @@ func (s *acceptedTerminalResultStop) isAcceptedFor(c *Coordinator, todoID string
 	return ok && sameTaskResultOccurrence(identity, active)
 }
 
-// dependencyResultsForTask returns the completed TaskResult of every task
-// named in todoID's own DependsOn list (only the *direct* dependencies — a
-// task that needs an ancestor's result must list that ancestor explicitly in
-// depends_on; there is no automatic transitive walk). This is the only
-// mechanism a worker's compiled prompt uses to see another task's evidence,
-// so a team whose batch shape lists only the immediately preceding task
-// (e.g. a linear pipeline) never receives an earlier ancestor's contract —
-// widen depends_on in the team/coordinator's batch construction, not here,
-// when a downstream worker genuinely needs an earlier task's result.
-func (c *Coordinator) dependencyResultsForTask(todoID string) []TaskResult {
-	if c.taskTracker == nil || c.taskTracker.TodoList() == nil {
-		return nil
-	}
-	var currentTodo *TodoItem
-	for _, item := range c.taskTracker.TodoList().Items() {
-		if item.ID == todoID {
-			currentTodo = item
-			break
-		}
-	}
-	dependencies := resultDependencyIDs(currentTodo)
-	if len(dependencies) == 0 {
-		return nil
-	}
-	depSet := make(map[string]bool, len(dependencies))
-	for _, depID := range dependencies {
-		depSet[depID] = true
-	}
-	var depResults []TaskResult
-	for _, item := range c.taskTracker.TodoList().Items() {
-		if depSet[item.ID] && item.Status == TaskDone {
-			if res := c.GetTaskResult(item.ID); res != nil {
-				projected := projectDependencyResultForWorker(res, currentTodo.WorksetBinding)
-				if currentTodo.WorksetBinding == nil && slices.Contains(currentTodo.EvidenceFrom, item.ID) {
-					// Name the inputs the evidence task reviewed so the worker
-					// can open them by artifact_ref; its scope authorizes them.
-					projected.Artifacts = appendMissingArtifactRefs(projected.Artifacts, c.dependencyReviewedInputs(item))
-				}
-				depResults = append(depResults, projected)
-			}
-		}
-	}
-	return depResults
-}
-
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (result string, returnErr error) {
 	leafExecution := parentCtx.Value(leafExecutionKey{}) != nil
 	if c != nil && strings.HasPrefix(todoID, primaryDecisionTaskPrefix) {
@@ -1297,7 +1252,10 @@ retryLoop:
 							resultContractSchema:        compiledResult,
 							resultEvidenceInputs:        c.dependencyResultsForTask(todoID),
 							resultRuntimeInputs:         runtimeInputLookup,
-							timing:                      timing,
+							resultProjectClaims: func(input SubmitResultInput) (SubmitResultInput, error) {
+								return c.projectResultClaims(withInvocationMetadata(taskCtx, invocationMetadataFromManifest(&contextManifest)), todoID, input)
+							},
+							timing: timing,
 						})
 					}()
 					// An external provider's canonical result is Hufu-owned
@@ -1306,13 +1264,24 @@ retryLoop:
 					// submit_result tool uses so both providers converge on
 					// one receipt/verification/completion pipeline.
 					if attemptResult.CanonicalResult != nil && runErr == nil {
-						if attestErr := c.attestInvariantClaims(todoID, attempt, contextManifest.ModelExecutionID, attemptResult.invariantClaims, attemptResult.CanonicalResult); attestErr != nil {
-							runErr = withFailureClassOverride(fmt.Errorf("external invariant attestation: %w", attestErr), FailureProtocol)
-							attemptResult.CanonicalResult = nil
-							attemptResult.invariantClaims = nil
-						} else {
-							c.attachTaskKnowledgeCoverage(todoID, attempt, contextManifest.ModelExecutionID, attemptResult.CanonicalResult)
-							c.storeSubmittedTaskResult(todoID, attemptResult.CanonicalResult)
+						if compiledResult != nil && compiledResult.claimsProjection != nil && compiledResult.claimsProjection.Invariants != "" && attemptResult.CanonicalResult.StructuredPayload != nil {
+							projected, projectionErr := projectClaimsInput(SubmitResultInput{StructuredPayload: attemptResult.CanonicalResult.StructuredPayload.Value}, compiledResult.claimsProjection)
+							if projectionErr != nil {
+								runErr = projectionErr
+								attemptResult.CanonicalResult = nil
+							} else {
+								attemptResult.invariantClaims = projected.InvariantAssessments
+							}
+						}
+						if attemptResult.CanonicalResult != nil {
+							if attestErr := c.attestInvariantClaims(todoID, attempt, contextManifest.ModelExecutionID, attemptResult.invariantClaims, attemptResult.CanonicalResult); attestErr != nil {
+								runErr = withFailureClassOverride(fmt.Errorf("external invariant attestation: %w", attestErr), FailureProtocol)
+								attemptResult.CanonicalResult = nil
+								attemptResult.invariantClaims = nil
+							} else {
+								c.attachTaskKnowledgeCoverage(todoID, attempt, contextManifest.ModelExecutionID, attemptResult.CanonicalResult)
+								c.storeSubmittedTaskResult(todoID, attemptResult.CanonicalResult)
+							}
 						}
 					}
 					output, steps, err = attemptResult.Output, attemptResult.steps, runErr
@@ -2768,6 +2737,12 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", blocked)
 		return "", blocked
 	}
+	origins, err := c.runtimeActionRecoveryOrigins()
+	if err != nil {
+		failure := fmt.Errorf("authorize native action recovery sources: %w", err)
+		c.emitRuntimeActionEvent("action_failed", task, todoID, actionID, "failure", startedAt, time.Now().UTC(), "", failure)
+		return "", failure
+	}
 	attempt := c.currentTaskAttempt(todoID) + 1
 	c.emitRuntimeActionEvent("action_started", task, todoID, actionID, "started", startedAt, time.Time{}, "", nil)
 	if err := c.taskTracker.TodoList().SetRuntimeError(todoID, nil); err != nil {
@@ -2783,6 +2758,7 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 	actionEnv := ActionEnvironment{
 		Workspace: actionRoot, Repository: c.projectDir, RunID: coordinatorRuntimeRunID(c),
 		TaskID: todoID, Attempt: attempt, ActionInvocationID: actionID, CatalogInvocationID: catalogInvocationID(task),
+		RecoveredTaskRuns: origins,
 	}
 	if c.session != nil {
 		actionEnv.TeamName = c.session.Config.Name

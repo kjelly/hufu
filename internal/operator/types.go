@@ -219,23 +219,30 @@ type ActionPreconditions struct {
 // RecoveryEligibility is a read-only projection of the existing runtime
 // recovery and policy decision. It does not grant permission to mutate.
 type RecoveryEligibility struct {
-	ResultCollectionBlocked bool
-	TaskID                  string
-	Attempt                 int
-	TaskStatus              string
-	ExpectedEventID         string
-	ExpectedEventHash       string
-	ExternalEffectState     string
-	EffectivePolicy         string
-	PolicyRevision          string
-	ExpectedRevision        string
-	PolicyDenied            bool
-	ResumeEligible          bool
-	ReconcileEligible       bool
-	RetryEligible           bool
-	CapabilityKnown         bool
-	ReasonCode              string
-	SourceRefs              []string
+	ResultCollectionBlocked     bool
+	ResultCollectionInterrupted bool
+	TaskID                      string
+	Attempt                     int
+	TaskStatus                  string
+	ExpectedEventID             string
+	ExpectedEventHash           string
+	ExternalEffectState         string
+	EffectivePolicy             string
+	PolicyRevision              string
+	ExpectedRevision            string
+	PolicyDenied                bool
+	ResumeEligible              bool
+	ReconcileEligible           bool
+	RetryEligible               bool
+	CapabilityKnown             bool
+	ReasonCode                  string
+	SourceRefs                  []string
+}
+
+// HasCollectionRecovery selects a read-only assessment, never a worker retry.
+func (r *RecoveryEligibility) HasCollectionRecovery() bool {
+	return r != nil && ((r.ResultCollectionBlocked && r.TaskStatus == "blocked") ||
+		(r.ResultCollectionInterrupted && r.TaskStatus == "error"))
 }
 
 type ActionSelectionFacts struct {

@@ -122,11 +122,11 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 	sessionRevision, sessionRefs := SessionRecoveryRevision(bound.Session, bound.Scope.BranchID)
 	var collectionRecoveries []*operatorpkg.RecoveryEligibility
 	for _, item := range tasks {
-		if item == nil || item.Status != team.TaskBlocked {
+		if item == nil || (item.Status != team.TaskBlocked && item.Status != team.TaskError) {
 			continue
 		}
 		candidate := RecoveryEligibilityForTask(item, bound.Lineage.Events, bound.Scope.RunID, activity.State == operatorpkg.ActivityInterrupted)
-		if candidate.ResultCollectionBlocked {
+		if candidate.HasCollectionRecovery() {
 			collectionRecoveries = append(collectionRecoveries, candidate)
 		}
 	}

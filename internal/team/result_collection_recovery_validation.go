@@ -40,7 +40,7 @@ func validateRecoveryProofChecks(a *ResultCollectionRecoveryAssessment) error {
 	// Validate each saved revision against its original proof requirements;
 	// replays must never rerun today's evaluator against historical claims.
 	required := map[string]bool{"target": false, "lineage": false, "canonical_replay": false, "work_sources_policy": false, "settled_decisions": false, "transcript": false}
-	if a.ValidatorRevision == 2 {
+	if a.ValidatorRevision >= 2 {
 		if a.TaskID != a.Checkpoint.TaskID || a.BranchID != a.Checkpoint.BranchID || a.SourceRunID != a.Checkpoint.SourceRunID {
 			return errResultCollectionStale
 		}
@@ -51,8 +51,11 @@ func validateRecoveryProofChecks(a *ResultCollectionRecoveryAssessment) error {
 			required["independent_claims"] = false
 		}
 	}
+	if a.ValidatorRevision >= 3 {
+		required["execution_ended"] = false
+	}
 	for _, check := range a.Checks {
-		if a.ValidatorRevision == 2 && check.Code == "canonical_claims" && !check.Passed && a.Disposition != RecoveryRepairClaims {
+		if a.ValidatorRevision >= 2 && check.Code == "canonical_claims" && !check.Passed && a.Disposition != RecoveryRepairClaims {
 			return errResultCollectionStale
 		}
 		if !check.Passed && check.Code != "canonical_claims" {

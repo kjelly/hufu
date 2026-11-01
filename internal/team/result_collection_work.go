@@ -66,7 +66,7 @@ func (c *Coordinator) beginResultCollection(ctx context.Context, taskID string, 
 	if err != nil {
 		return nil, err
 	}
-	evidenceHash, err := c.resultCandidateEvidenceHash(item)
+	evidenceHash, err := c.resultCollectionEvidenceHash(item)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +85,7 @@ func (c *Coordinator) beginResultCollection(ctx context.Context, taskID string, 
 		WorkOccurrenceRevision: identity.OccurrenceRevision, WorkDispatchID: identity.DispatchID,
 		SubmissionRevision: identity.OccurrenceRevision, SubmissionDispatchID: identity.DispatchID,
 		PolicySHA256: policy.ConfigurationHash, TaskContractSHA256: contractHash,
-		InputsID: item.RunInputSnapshotID, InputsSHA256: item.RunInputSnapshotHash, EvidenceSHA256: evidenceHash,
+		InputsID: item.RunInputSnapshotID, InputsSHA256: item.RunInputSnapshotHash, EvidenceSHA256: evidenceHash, EvidenceRevision: 1,
 		WorkspaceIdentitySHA256: workspaceHash, CollectorSchemaRevision: resultCollectionVersion, TurnLimit: resultCollectionDefaultTurns,
 	}
 	if checkpoint.FanoutLeaf {
@@ -146,8 +146,7 @@ func (c *Coordinator) loadCollectionWork(ctx context.Context, item *TodoItem, ch
 	if err != nil || contractHash != checkpoint.TaskContractSHA256 {
 		return nil, fmt.Errorf("collection task contract changed: %w", errors.Join(err, errResultCollectionStale))
 	}
-	evidenceHash, err := c.resultCandidateEvidenceHash(item)
-	if err != nil || evidenceHash != checkpoint.EvidenceSHA256 {
+	if err := c.validateCollectionEvidence(item, checkpoint); err != nil {
 		return nil, fmt.Errorf("collection evidence sources changed: %w", errors.Join(err, errResultCollectionStale))
 	}
 	body, err := c.readCollectionBytes(ctx, checkpoint.Work, resultCollectionWorkMaxBytes)

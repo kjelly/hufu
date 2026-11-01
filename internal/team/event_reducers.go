@@ -93,6 +93,10 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 				resetWorkflowCycleProjection(session, e.RunID, payload.TaskIDFloor)
 				session.addEntryAt("user", payload.Request, e.Timestamp)
 			}
+		case string(EventContractRecovery):
+			if plan, err := decodeContractRecovery(e); err == nil {
+				applyContractRecoverySession(session, plan)
+			}
 		case string(EventDerivedForkCreated):
 			if payload, err := decodeDerivedForkCreated(e); err == nil {
 				resetDerivedForkProjection(session, e, payload)
@@ -440,6 +444,12 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 	frozenContracts := make(map[string]bool)
 
 	for _, e := range events {
+		if e.Type == string(EventContractRecovery) {
+			if plan, err := decodeContractRecovery(e); err == nil {
+				_ = applyContractRecoveryTasks(taskMap, plan)
+			}
+			continue
+		}
 		if e.Type == string(EventTaskResultCollectionCheckpointed) {
 			var payload resultCollectionEvent
 			if validateResultCollectionEvent(e) == nil && json.Unmarshal(e.Payload, &payload) == nil {

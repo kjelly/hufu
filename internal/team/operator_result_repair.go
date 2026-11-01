@@ -86,10 +86,10 @@ func (c *Coordinator) authorizeOperatorResultRepair(ctx context.Context) error {
 			return fmt.Errorf("task %q: %w", taskID, err)
 		}
 	}
-	if item.ExecutionReceipt.RepairProvenance == nil {
+	if item.ExecutionReceipt.RepairProvenance == nil && item.ExecutionReceipt.ResultCollection == nil {
 		return fmt.Errorf("task %q has no failed submission", taskID)
 	}
-	for _, prior := range item.ExecutionReceipt.RepairProvenance.OperatorGrants {
+	for _, prior := range collectionRepairGrants(item.ExecutionReceipt) {
 		if prior.RunID == c.executionRunID {
 			return fmt.Errorf("task %q already consumed this invocation's operator repair grant", taskID)
 		}

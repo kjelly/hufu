@@ -142,6 +142,14 @@ func compileResultContractDocument(id string, raw []byte) (*CompiledResultContra
 			}
 		}
 	}
+	projections, err := compileResultClaimsProjection(root)
+	if err != nil {
+		return nil, fmt.Errorf("schema %q projections: %w", id, err)
+	}
+
+	if err := validateResultProjectionTargets(projections, evidence, inputs, runtimeInputs, collections); err != nil {
+		return nil, err
+	}
 	canonical, err := json.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize schema %q: %w", id, err)
@@ -173,7 +181,7 @@ func compileResultContractDocument(id string, raw []byte) (*CompiledResultContra
 	return &CompiledResultContract{
 		ID: id, SchemaSHA256: hex.EncodeToString(sum[:]), CanonicalSchema: canonical, schema: schema,
 		toolEvidence: evidence, finalReport: report, evidenceInputs: inputs, evidenceReferences: references, worksetInputs: worksetInputs,
-		fixedCollections: collections, evidenceKeys: evidenceKeys, runtimeInputs: runtimeInputs, submissionFields: fields,
+		claimsProjection: projections, fixedCollections: collections, evidenceKeys: evidenceKeys, runtimeInputs: runtimeInputs, submissionFields: fields,
 	}, nil
 }
 
@@ -357,6 +365,9 @@ func compileTeamResultContracts(session *TeamSession) error {
 			return err
 		}
 		task.ResultContract = &ref
+	}
+	if err := validateResultProjectionModes(session, schemas, agentRefs); err != nil {
+		return fmt.Errorf("%s: %w", resultContractInvalidCode, err)
 	}
 	if err := validateFixedCollectionSourceContracts(schemas); err != nil {
 		return fmt.Errorf("%s: %w", resultContractInvalidCode, err)

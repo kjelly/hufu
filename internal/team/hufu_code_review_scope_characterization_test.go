@@ -572,3 +572,37 @@ func TestHufuCodeReviewReferenceScopeReachesWorkerPromptAndSubmission(t *testing
 		})
 	}
 }
+
+func TestDocumentationReviewContractsRejectInvariantClaims(t *testing.T) {
+	session := loadHufuCodeReviewTeam(t)
+	for _, id := range []string{"review-documentation-workset", "review-documentation-escalation"} {
+		t.Run(id, func(t *testing.T) {
+			var ref *ResultContractRef
+			for _, task := range session.ContractTasks {
+				if task.ID == id {
+					ref = task.ResultContract
+				}
+			}
+			if ref == nil || ref.ID != "schemas/documentation-review-v1.json" {
+				t.Fatalf("unexpected contract: %#v", ref)
+			}
+			compiled := session.ResultContracts[ref.ID]
+			value := map[string]any{"record": map[string]any{"kind": "review", "review_revision": "head", "workset_key": "unit-0000", "lens": "documentation-risk", "findings": []any{}, "gaps": []any{}, "reference_assessments": []any{}, "invariant_assessments": []any{}}}
+			raw, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := validateStructuredResultPayload(compiled, *ref, raw); err != nil {
+				t.Fatal(err)
+			}
+			value["record"].(map[string]any)["invariant_assessments"] = []any{map[string]any{"invariant_id": "invented", "status": "preserved", "summary": "unsupported"}}
+			raw, err = json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := validateStructuredResultPayload(compiled, *ref, raw); err == nil {
+				t.Fatal("accepted invented invariant claim")
+			}
+		})
+	}
+}

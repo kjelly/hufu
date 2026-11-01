@@ -20,6 +20,7 @@ type TeamLintIgnoreSelector struct {
 
 var teamLintKnownCodes = func() map[string]bool {
 	codes := []string{
+		"contract_dataflow_unverified", "contract_dataflow_source_invalid", "contract_dataflow_source_rejected", "contract_dataflow_pointer_invalid", "contract_dataflow_pointer_unverified",
 		FindingTeamPresetUnknown, FindingInlineAgentInvalid, FindingInlineAgentToolsEmpty,
 		FindingLegacyTasksKeyDeprecated, FindingVerifierNotAsserting, FindingVerifierInvalid, FindingExecutableUnresolved,
 		FindingAcceptanceVacuous, FindingCompletionToolDenied, FindingDelegationWorkerUnknown,

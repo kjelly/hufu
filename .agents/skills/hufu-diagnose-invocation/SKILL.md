@@ -45,6 +45,9 @@ hufu status --team "$team_name" --json --workers
 This returns the current workspace/run/invocation identities and task counts.
 It describes the active session, which may already differ from the requested
 invocation. Never substitute the latest run for the user's target.
+After resume, a worker's `run_id` can remain its original logical task run;
+use that attempt's `invocation_run_id` to inspect the new execution failure.
+Otherwise a task query can return the ancestor's earlier failure instead.
 
 For an invocation, discover its saved results and their run/branch identities:
 
@@ -204,6 +207,20 @@ before recommending recovery commands; identify policy drift or other unmet
 prerequisites. More retries, a larger budget, or a model change alone does not
 explain or fix a contract defect. Preserve the authorization boundary above;
 recommendations do not authorize implementation or recovery execution.
+
+Before recommending another full run, inspect whether returned work and its
+original transcript support result-only repair. Use the installed version's
+`resume --repair-result <id> --dry-run` assessment. For changed result schemas,
+check support for `resume --upgrade-contracts --dry-run`; report the retained
+and retried tasks, exact plan hash and unsupported drift. Apply creates a
+separate child and ordinary resume still verifies evidence and acceptance.
+Do not recommend overwriting saved contracts or a fresh session merely to
+suppress drift. Repeated identical rejected claims require diagnosis, not
+another budget grant. These previews do not authorize applying recovery.
+Check the assessment's disposition and failed checks, not just its exit code:
+a successful read-only command can report `blocked`. Distinguish schema drift
+from changed fan-out templates or other task execution contracts before giving
+resume commands. A profile override cannot authorize those contract changes.
 
 ## 6. Report the finding
 

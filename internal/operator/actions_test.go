@@ -10,25 +10,31 @@ import (
 
 func TestSelectActionsOffersOnlyReadOnlyResultRepairAssessment(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		pending   bool
-		integrity string
-		binding   string
-		want      bool
+		name        string
+		pending     bool
+		integrity   string
+		binding     string
+		want        bool
+		interrupted bool
 	}{
-		{"collection with denied replay", true, "valid", "unique", true},
-		{"ordinary protocol failure", false, "valid", "unique", false},
-		{"invalid evidence", true, "invalid", "unique", false},
-		{"ambiguous scope", true, "valid", "ambiguous", false},
+		{"collection with denied replay", true, "valid", "unique", true, false},
+		{"cancelled collection", true, "valid", "unique", true, true},
+		{"ordinary protocol failure", false, "valid", "unique", false, false},
+		{"invalid evidence", true, "invalid", "unique", false, false},
+		{"ambiguous scope", true, "valid", "ambiguous", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			snapshot := selectionTestSnapshot(ActivityBlocked, "blocked")
 			snapshot.Integrity.Status = tc.integrity
 			snapshot.Scope.BindingStatus = tc.binding
 			snapshot.Scope.ProjectDir = "/project"
-			primary, secondary, err := SelectActions(ActionSelectionFacts{Snapshot: snapshot, Recovery: &RecoveryEligibility{
+			recovery := &RecoveryEligibility{
 				TaskID: "11", TaskStatus: "blocked", PolicyDenied: true, ResultCollectionBlocked: tc.pending,
-			}})
+			}
+			if tc.interrupted {
+				recovery.TaskStatus, recovery.ResultCollectionBlocked, recovery.ResultCollectionInterrupted = "error", false, true
+			}
+			primary, secondary, err := SelectActions(ActionSelectionFacts{Snapshot: snapshot, Recovery: recovery})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -56,7 +62,7 @@ func TestSelectActionsOffersOnlyReadOnlyResultRepairAssessment(t *testing.T) {
 	}
 }
 
-func TestSelectActionsAssessesEveryBlockedCollectionWithoutChangingSafetyPriority(t *testing.T) {
+func TestSelectActionsAssessesEveryCollectionWithoutChangingSafetyPriority(t *testing.T) {
 	snapshot := selectionTestSnapshot(ActivityBlocked, "blocked")
 	snapshot.Scope.ProjectDir = "/project"
 	snapshot.Scope.RequestedSemantics, snapshot.Scope.SelectionSource = "exact", "explicit"
@@ -64,7 +70,7 @@ func TestSelectActionsAssessesEveryBlockedCollectionWithoutChangingSafetyPriorit
 		{TaskID: "3", TaskStatus: "blocked", ResultCollectionBlocked: true, Attempt: 2},
 		{TaskID: "1", TaskStatus: "blocked", ResultCollectionBlocked: true},
 		{TaskID: "4", TaskStatus: "blocked", ResultCollectionBlocked: true},
-		{TaskID: "2", TaskStatus: "blocked", ResultCollectionBlocked: true},
+		{TaskID: "2", TaskStatus: "error", ResultCollectionInterrupted: true},
 		nil, {TaskID: "ordinary", TaskStatus: "blocked"},
 		{TaskID: "stale", TaskStatus: "done", ResultCollectionBlocked: true},
 	}

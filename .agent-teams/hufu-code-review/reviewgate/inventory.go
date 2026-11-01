@@ -48,7 +48,7 @@ func collectReviewHandoffs(current session, runID string) (handoffInventory, err
 			return handoffInventory{}, fmt.Errorf("duplicate or empty review source ID")
 		}
 		seen[item.ID] = true
-		value, err := accepted(item, current.SnapshotID, runID)
+		value, err := accepted(item, current, runID)
 		if err != nil {
 			return handoffInventory{}, err
 		}
@@ -125,7 +125,7 @@ func verifyHandoffInventory(current session, runID string) error {
 		if item.ContractID != "inventory-review-handoffs" {
 			continue
 		}
-		if found || item.Status != "done" || item.Result == nil || item.Result.Status != "success" || item.Receipt == nil || item.Receipt.RunID != runID || item.Receipt.TaskID != item.ID || item.SnapshotID != current.SnapshotID || !equalJSON(encoded, item.Result.RuntimeOutputs["review_handoff_inventory"]) {
+		if found || item.Status != "done" || item.Result == nil || item.Result.Status != "success" || !current.acceptsReceiptOrigin(item, runID) || item.SnapshotID != current.SnapshotID || !equalJSON(encoded, item.Result.RuntimeOutputs["review_handoff_inventory"]) {
 			return fmt.Errorf("missing, stale, or ambiguous review handoff inventory")
 		}
 		found = true

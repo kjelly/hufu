@@ -113,6 +113,11 @@ field; their underlying old values were not retained and cannot be reconstructed
 Restore the original settings to resume, or use `--new` to archive the previous
 session and begin with the current settings.
 
+Frozen input and accepted payload decoding remove JSON transport whitespace added
+by checkpoint or export formatting. Machine projections store compact JSON to
+preserve embedded canonical values. String and number spellings, member order,
+receipts and existing hashes remain unchanged and are validated before reuse.
+
 New compatible local sessions use runtime result collection by default. Static
 `result-transport: runtime|tool` in team configuration or agent frontmatter is
 pinned in the execution policy; an agent override takes precedence over the
@@ -140,6 +145,14 @@ Declared string entries in `files_read` and `files_modified` are converted
 losslessly to `{path: ...}` before DTO decoding. Duplicate keys, unknown fields
 and unsupported shorthand remain invalid.
 
+A collector response wrapped entirely in one JSON code block may be normalized
+to its enclosed object before strict claims validation. Both LF and CRLF frames
+are supported. The complete original response remains in its immutable CAS blob;
+the prepared claims store the validated JSON separately. Extra prose, multiple
+frames, duplicate keys, non-object roots and oversized responses are rejected.
+This transport normalization does not change the tool submission decoder or
+permit runtime-owned fields, invalid source references or forged receipts.
+
 Each attempt has one collection call and at most one JSON/schema or
 representation repair. Only two representation errors qualify. The first is a
 failed `equals_projection` assertion (see Ordered result projections) whose
@@ -163,6 +176,10 @@ accepted durable bytes before considering another permitted model call. It
 never redispatches completed work to repair a report. A storage continuation
 adds no model turns. Collection usage, including cache counters, is accounted
 separately from the frozen work usage.
+
+Reopening a submission issues a random dispatch lease ID. Lease IDs must remain
+distinct across process restarts; a process-local counter can repeat a persisted
+lease and make an otherwise valid recovery fail its checkpoint validation.
 
 Inspect derives content-free collection state, turns and failure reason from
 receipts and checkpoint events. CLI JSON and reports expose these fields;
@@ -580,6 +597,162 @@ contracts, original receipts and content-addressed transcript bytes. A refusal
 names available branches for read-only inspection; it does not start a fresh
 workflow or regenerate accepted payloads.
 
+Legacy bound tasks can omit `invariant_verification` in their original event
+projection even when the static contract hash covered it. Checkpoint loading,
+canonical projection replacement, and resume preflight restore this field only
+when the complete current static contract reproduces that hash. Resume rejects
+projected invariant claims without a verified invariant mode before providers
+start; it never treats the projection as an ordinary task to bypass attestation.
+
+For result-schema changes, ordinary resume still refuses policy drift. The
+operator can preview a controlled recovery from the active canonical branch:
+
+```sh
+hufu resume --team <team> --workspace <control-root> --upgrade-contracts --dry-run
+hufu resume --team <team> --workspace <control-root> --upgrade-contracts \
+  --recovery-branch <new-name> --plan-hash <sha256-from-preview>
+hufu resume --team <team> --workspace <control-root> --branch <returned-branch-id>
+```
+
+Before execution, `hufu resume --team <team> --workspace <control-root>
+--branch <branch> --dry-run` checks ordinary source admission: policy
+compatibility, frozen inputs, retained results/receipts and pending artifact
+scopes. It reports accepted, resumable and terminal unresolved task counts.
+The check does not activate a branch or call tools/models. Provider reachability,
+workspace materialization and future verification/acceptance remain execution
+checks; passing source preflight is not a completed run. A shared workset receipt
+is verified against its canonical carrier while each consumer keeps its own
+exact frozen binding; every child need not store another receipt copy.
+
+If the team's configured profile forbids historical restore, explicitly select
+a restore-enabled profile, such as `--execution-profile default`, for all three
+commands. The ordinary evidence and execution-policy checks still apply.
+
+Preview lists each retained/retried task and pins the source event head, policy,
+original task digests and current policy in its plan hash. Versioned apply requires
+managed `required` versioning, the team/project locks and an unchanged plan. It refuses
+non-result execution-policy changes, changed static execution contracts, unsettled
+workspace operations and retries with side effects. It creates a native child
+branch, revalidates unchanged accepted payload bytes against the new schemas,
+and preserves the original receipts/transcripts and parent history. Invalid or
+failed read-only tasks and their dependent/evidence consumers become pending;
+verification and acceptance reopen. Apply itself makes no model calls. It does
+not authorize repairing a stored semantic judgment, copying a receipt into a new
+run, changing tools/models/scope, or replaying a completed external mutation.
+Only named static contracts are supported; unsupported sources fail closed.
+
+Recovered artifact access and workset verification retain the original producer
+run/task/attempt identities. A different invocation may use them only after the
+selected branch's canonical results, expansion receipts, frozen inputs and original
+successful receipts have been verified. Resume checks pending artifact scopes
+before entering the provider boundary; merely loading an old receipt grants no
+cross-run authority.
+Native output bindings and `task_output_assert` use the same admitted source-run
+mapping. Terminal evidence keeps those original identities so offline audit can
+replay acceptance against the verified recovery bindings as well.
+Local native adapters receive `HUFU_RECOVERED_TASK_RUNS`, a bounded runtime-owned
+task-to-origin-run map. Adapters can validate retained source receipts against
+that map and the selected snapshot while preserving the original identities.
+The runtime replaces inherited grants; checkpoint or model fields cannot supply
+the authority.
+
+An unversioned managed workspace can explicitly use `--metadata-only` on the
+upgrade preview and apply commands. This requires static task-goal binding,
+every source task and effective contract resolving to `side_effect: none`, and
+no recorded workspace versioning history. Agent defaults use ordinary admission
+rules; declared mutation/production steps remain ineligible. These conditions are
+checked again before ordinary resume. It uses the existing atomic session-lineage fork;
+project files remain shared and are not restored. The preview's `metadata_only`
+field is included in its hash. Ordinary resume of the returned child omits the
+flag. Observe/required modes and projects with versioning history must use
+versioned recovery; metadata-only never downgrades their protection.
+
+For actions with input bindings, recovery reconstructs the occurrence contract
+from the original frozen snapshot and input policy. It verifies the materialized
+payload, binding paths and bound-value hashes before comparing contract hashes;
+an unbound template hash alone cannot identify an admitted action. This check
+does not execute the action or resolve replacement inputs.
+
+Resolver/provider source changes can also change `run_input_policy_hash`, even
+when all requested input values have already been frozen. Ordinary resume and
+result-schema-only recovery continue to reject this drift. An operator can add
+`--upgrade-input-policy` to **both** the `--upgrade-contracts --dry-run` preview
+and the plan-hash-bound apply. The preview's `input_policy_upgrade` records the
+old/new resolution policy hashes and the exact selected snapshot ID/hash.
+This explicitly accepts a resolution-policy change; an old opaque fingerprint
+alone cannot prove that only a provider's source changed.
+
+This option requires static task-goal binding, unchanged input schema (including
+required fields/defaults), unchanged action contracts, and read-only source and
+future contracts. It does not admit model, tool, environment, network, input-value
+or scope changes. Replay independently verifies the proof against the canonical
+source snapshot and policies. Input-bound occurrence hashes are updated for the
+new policy only after reconstructing and verifying their original materialized
+payloads and bindings. Original receipts, native outputs, payload bytes and input
+snapshots remain unchanged. Verification and acceptance reopen in the child;
+ordinary resume uses the same frozen values without calling a resolver again.
+The read-only restriction is checked again on subsequent resumes. Managed
+versioning-off workspaces still require the separate `--metadata-only` selection;
+this option does not weaken workspace versioning or plan freshness checks.
+Policy-drift diagnostics display the same normalized comparison hash used by
+admission, including the existing unused-backend environment compatibility.
+Canonical-equivalent omitted empty fields are not reported as separate changes.
+
+In extra-model fanout, a leaf validates delivery proof for its own
+`model_execution_id`. A sibling can be between its checkpoint update and durable
+dispatch-event publication; that transient state cannot invalidate the first
+leaf's independently recorded dispatch. A leaf without its own recorded manifest
+cannot borrow a sibling's proof. Parent completion still verifies every leaf's
+canonical delivery evidence after all leaf executions return.
+
+A changed fan-out `goal-template` is a non-result task-contract change, even
+when the edit describes a new submission format. Schema-only recovery refuses
+that drift. Changing the execution profile does not authorize changing the
+saved task contract; restoring the exact original team configuration or adding
+an explicitly supported migration is required.
+For submission-format changes, put ownership instructions in the agent prompt
+and schema while preserving task goals whose canonical outcome is unchanged.
+
+Result-only collection uses the same compatibility rule as ordinary resume for
+an external backend absent from both frozen and current model routes. Its
+ambient environment cannot authorize execution on that backend. Compatible
+collection keeps the original durable policy and checkpoint hash; it never
+substitutes the current process's policy fingerprint. Reachable-backend,
+executable, network, model and contract changes remain blocking drift.
+
+The canonical `contract_recovery_created` event owns the new policy, task
+bindings and explicit revalidation proofs. Replay validates its source against
+the preceding lineage. A crash after native fork but before that event leaves
+an ordinary child under the original policy; it cannot silently run under the
+new policy. Inspect that child and select the preserved parent before previewing
+again. Successful recovery publication is followed by normal resume and all
+ordinary evidence, verification and acceptance gates.
+
+Collections interrupted by cancellation can use the same explicit
+`--repair-result <task-id>` recovery when the original work receipt proves a
+completed, successful local execution. Unfinished work, unknown side effects,
+and blocked source/authorization failures remain ineligible. Recovery preserves
+the sealed work, consumed collector turns and previous diagnostics; it never
+reruns worker tools. Assessment revision 3 requires execution-completion proof;
+stored revisions 1 and 2 retain their original validation rules.
+Operator recovery suggestions offer a read-only result-repair assessment for
+these cancelled collections and suppress worker retry or ordinary resume actions.
+
+Ordinary and result-only previews install the same detached session, selected
+frozen inputs and read-only event-store branch. Native output bindings therefore
+use the exact retained receipts. After sealed-work verification, result recovery
+rebinds only the artifact permission envelope to the current invocation; the
+original receipt, artifact identities and authorized reference list stay intact.
+
+New collection evidence hashes exclude task display timestamps and model/tool
+durations, which historical lifecycle events did not persist, and canonicalize
+context-manifest order. For an older checkpoint, replay may restore only these
+four timing fields and the manifest order from its branch snapshot
+when that snapshot reproduces the original complete evidence hash and agrees
+with canonical task projections. Manifest entries, results, receipts and contracts still come from canonical
+replay, and the original full hash must still validate. Missing
+or mismatched historical evidence fails closed.
+
 For a blocked protocol submission, `resume --branch <source> --repair-result
 <task-id>` explicitly grants two additional result-only turns. The grant and
 previous repair history are durable, the original execution run/attempt,
@@ -604,6 +777,14 @@ consumed/remaining turns, proposed additional allowance and accepted-task count.
 Unknown counts and turns are omitted from JSON and shown as unknown in text. Preview cannot be combined with
 `--repair-model`, `--report`, `--tui`, or new input assignments. A blocked preview
 is a successful inspection with `disposition: blocked`; no grant is created.
+
+Recovery applies the same single-block transport normalization before verifying
+claims. If the enclosed object passes the complete schema, source, receipt and
+decision checks, `commit_local` can publish it without another model call or an
+additional collection turn. Original response bytes and work receipts remain
+unchanged. The submission decoder still accepts only a JSON object; ambiguous
+frames, invalid claims, forged receipts and unauthorized evidence do not gain
+acceptance through normalization.
 
 Execution recomputes the assessment and atomically appends it with the grant and
 submission-only transition, fenced against the journal head. A competing writer
@@ -835,6 +1016,22 @@ EXECUTE. Configuration validation, catalog discovery, and provider dispatch use
 the same phase rule. A declared `task_result_assert` on an action evaluates the
 provider's canonical runtime outputs before publishing the successful result or
 receipt; verification failure leaves the occurrence failed.
+
+### Result binding and worker evidence views
+
+Payload binding uses accepted dependency results without adding reviewed-input
+artifact references. Fixed collections, runtime-owned evidence arrays, and
+payload graph validation consume these values without repeatedly replaying
+artifact receipts for every source. Worker evidence views still add reviewed
+inputs only after authorization; result evidence references and evidence-delivery
+manifests continue to use that authorized view. This keeps collection preparation
+bounded by payload work without changing artifact access checks.
+
+Recovery authorization reads branch metadata through the matching event store's
+existing connection. Read-only checks therefore use the same immutable snapshot
+for events and branches, without copying the entire runtime database again for
+each artifact reference. Source hashes, frozen inputs, receipts and branch
+cutoffs remain subject to the same validation.
 
 ### Ordered result projections
 

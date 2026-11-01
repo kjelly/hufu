@@ -66,7 +66,7 @@ func (c *Coordinator) validateHistoricalResultDelivery(todoID string, attempt in
 	}
 	matched := false
 	for _, manifest := range item.ContextManifests {
-		if !authoritativeDependencyViewRequest(manifest, item) || manifest.Attempt != attempt || (runID != "" && manifest.RunID != runID) {
+		if !c.deliveryManifestMatchesLeaf(todoID, manifest) || !authoritativeDependencyViewRequest(manifest, item) || manifest.Attempt != attempt || (runID != "" && manifest.RunID != runID) {
 			continue
 		}
 		if err := validateHistoricalResultManifestAgainstSource(manifest, expected); err != nil {

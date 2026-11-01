@@ -297,10 +297,11 @@ type codexTurnStartParams struct {
 }
 
 type codexTurnOptions struct {
-	ReasoningEffort string
-	DetailedOutput  bool
-	OnTurnStarted   func(turnID string)
-	OnActivity      func(codexTurnActivity)
+	ResultProjection *resultClaimsProjection
+	ReasoningEffort  string
+	DetailedOutput   bool
+	OnTurnStarted    func(turnID string)
+	OnActivity       func(codexTurnActivity)
 }
 
 // codexTurnActivity is intentionally a safe summary rather than a raw JSON-
@@ -435,7 +436,7 @@ func codexRunTurn(ctx context.Context, client *CodexRPCClient, threadID, prompt 
 	if err != nil {
 		return CodexTurnResult{}, fmt.Errorf("codex turn/start: %w", err)
 	}
-	schema, err := json.Marshal(codexWorkerResultProposalSchema())
+	schema, err := json.Marshal(codexWorkerResultProposalSchemaForProjection(options.ResultProjection))
 	if err != nil {
 		return CodexTurnResult{}, fmt.Errorf("codex turn/start: marshal output schema: %w", err)
 	}

@@ -17,29 +17,30 @@ import (
 
 func collectionBindingDigest(checkpoint *ResultCollectionCheckpoint) (string, error) {
 	return collectionDigest(struct {
-		Version         int                       `json:"version"`
-		Branch          string                    `json:"branch"`
-		Run             string                    `json:"run"`
-		Task            string                    `json:"task"`
-		Agent           string                    `json:"agent"`
-		Attempt         int                       `json:"attempt"`
-		ModelExecution  string                    `json:"model_execution"`
-		FanoutIndex     int                       `json:"fanout_index,omitzero"`
-		FanoutLeaf      bool                      `json:"fanout_leaf"`
-		Target          execution.ExecutionTarget `json:"target"`
-		Revision        int                       `json:"revision"`
-		Dispatch        string                    `json:"dispatch"`
-		Policy          string                    `json:"policy"`
-		Contract        string                    `json:"contract"`
-		InputsID        string                    `json:"inputs_id"`
-		InputsHash      string                    `json:"inputs_hash"`
-		Evidence        string                    `json:"evidence"`
-		Workspace       string                    `json:"workspace"`
-		CollectorSchema int                       `json:"collector_schema"`
+		Version          int                       `json:"version"`
+		Branch           string                    `json:"branch"`
+		Run              string                    `json:"run"`
+		Task             string                    `json:"task"`
+		Agent            string                    `json:"agent"`
+		Attempt          int                       `json:"attempt"`
+		ModelExecution   string                    `json:"model_execution"`
+		FanoutIndex      int                       `json:"fanout_index,omitzero"`
+		FanoutLeaf       bool                      `json:"fanout_leaf"`
+		Target           execution.ExecutionTarget `json:"target"`
+		Revision         int                       `json:"revision"`
+		Dispatch         string                    `json:"dispatch"`
+		Policy           string                    `json:"policy"`
+		Contract         string                    `json:"contract"`
+		InputsID         string                    `json:"inputs_id"`
+		InputsHash       string                    `json:"inputs_hash"`
+		Evidence         string                    `json:"evidence"`
+		EvidenceRevision int                       `json:"evidence_revision,omitzero"`
+		Workspace        string                    `json:"workspace"`
+		CollectorSchema  int                       `json:"collector_schema"`
 	}{checkpoint.Version, checkpoint.BranchID, checkpoint.SourceRunID, checkpoint.TaskID, checkpoint.Agent,
 		checkpoint.Attempt, checkpoint.ModelExecutionID, checkpoint.FanoutIndex, checkpoint.FanoutLeaf, checkpoint.ExecutionTarget, checkpoint.WorkOccurrenceRevision,
 		checkpoint.WorkDispatchID, checkpoint.PolicySHA256, checkpoint.TaskContractSHA256, checkpoint.InputsID,
-		checkpoint.InputsSHA256, checkpoint.EvidenceSHA256, checkpoint.WorkspaceIdentitySHA256, checkpoint.CollectorSchemaRevision})
+		checkpoint.InputsSHA256, checkpoint.EvidenceSHA256, checkpoint.EvidenceRevision, checkpoint.WorkspaceIdentitySHA256, checkpoint.CollectorSchemaRevision})
 }
 
 func (c *Coordinator) collectionWorkspaceIdentity(receipt *ExecutionReceipt, workspace string) (string, error) {
@@ -78,8 +79,16 @@ func (c *Coordinator) collectionPolicy(target execution.ExecutionTarget) (*Execu
 	if err != nil || policy == nil {
 		return nil, fmt.Errorf("result collection requires a durable execution policy: %w", errors.Join(err, errResultCollectionStale))
 	}
-	if current := c.ExecutionPolicySnapshot(); current != nil && current.ConfigurationHash != policy.ConfigurationHash {
-		return nil, fmt.Errorf("result collection execution policy drift (original=%s current=%s); restore the original team/model/runtime configuration before repair: %w", policy.ConfigurationHash, current.ConfigurationHash, errResultCollectionStale)
+	if current := c.ExecutionPolicySnapshot(); current != nil {
+		if currentErr := validateExecutionPolicySnapshot(current); currentErr != nil {
+			return nil, fmt.Errorf("result collection current execution policy is invalid: %w", errors.Join(errResultCollectionStale, currentErr))
+		}
+		if current.ConfigurationHash != policy.ConfigurationHash {
+			compatible, compareErr := compatibleUnusedExecutionEnvironment(policy, current)
+			if compareErr != nil || !compatible {
+				return nil, fmt.Errorf("result collection execution policy drift (original=%s current=%s); restore the original team/model/runtime configuration before repair: %w\n%s", policy.ConfigurationHash, current.ConfigurationHash, errors.Join(errResultCollectionStale, compareErr), executionPolicyDifferences(policy, normalizeUnusedExecutionEnvironment(policy, current)))
+			}
+		}
 	}
 	if !slices.ContainsFunc(policy.Backends, func(backend ExecutionBackendPolicySnapshot) bool {
 		return backend.Backend == target.Backend && backend.Kind == string(execution.BackendKindLLM)

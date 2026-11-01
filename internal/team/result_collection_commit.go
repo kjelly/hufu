@@ -63,6 +63,9 @@ func (c *Coordinator) prepareCollectionClaims(ctx context.Context, expected *Res
 	if err != nil {
 		return nil, err
 	}
+	// Normalize framing before strict submission decoding. Keep Response bound
+	// to the exact received bytes and persist the validated JSON as Claims.
+	raw, _ = collectionResponseJSON(raw)
 	if _, err := c.decodeCollectionClaims(expected.TaskID, raw); err != nil {
 		return nil, err
 	}

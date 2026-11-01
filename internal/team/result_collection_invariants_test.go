@@ -31,12 +31,15 @@ func TestResultCollectionRepairsInvariantClaimsWithOriginalLimits(t *testing.T) 
 		unknown      bool
 		repeat       bool
 		projection   bool
+		singleSource bool
 		wantCalls    int32
 		wantAccepted bool
 		wantDone     bool
 	}{
 		{name: "severity", mode: InvariantVerificationReport, summary: "violation", severity: "warning", wantCalls: 2, wantAccepted: true, wantDone: true},
 		{name: "severity_with_payload_projections", mode: InvariantVerificationReport, summary: "violation", severity: "warning", projection: true, wantCalls: 2, wantAccepted: true, wantDone: true},
+		{name: "single_source_runtime_severity", mode: InvariantVerificationReport, summary: "violation", severity: "warning", projection: true, singleSource: true, wantCalls: 2, wantAccepted: true, wantDone: true},
+		{name: "single_source_gate", mode: InvariantVerificationGate, summary: "violation", severity: "warning", projection: true, singleSource: true, wantCalls: 2, wantAccepted: true},
 		{name: "gate_stays_blocked", mode: InvariantVerificationGate, summary: "violation", severity: "warning", wantCalls: 2, wantAccepted: true},
 		{name: "summary_limit", mode: InvariantVerificationReport, summary: collectionInvariantSummary(1000), severity: "error", wantCalls: 1, wantAccepted: true, wantDone: true},
 		{name: "summary_repair", mode: InvariantVerificationReport, summary: collectionInvariantSummary(1002), severity: "error", wantCalls: 2, wantAccepted: true, wantDone: true},
@@ -45,6 +48,13 @@ func TestResultCollectionRepairsInvariantClaimsWithOriginalLimits(t *testing.T) 
 		{name: "unknown_invariant", mode: InvariantVerificationReport, summary: "violation", severity: "error", unknown: true, wantCalls: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			activeSchema := compiled
+			if tc.singleSource {
+				activeSchema, err = CompileResultContractDocument("projected.json", []byte(projectionTestSchema))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			var calls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/v1/chat/completions" {
@@ -88,6 +98,16 @@ func TestResultCollectionRepairsInvariantClaimsWithOriginalLimits(t *testing.T) 
 						return
 					}
 					claims["structured_payload"] = map[string]any{"findings": claims["findings"], "assessments": claims["invariant_assessments"]}
+					if tc.singleSource {
+						delete(claims, "findings")
+						delete(claims, "invariant_assessments")
+						if n == 2 {
+							delete(claims["structured_payload"].(map[string]any)["findings"].([]any)[0].(map[string]any), "severity")
+							if !strings.Contains(prompt, `runtime_owned`) || !strings.Contains(prompt, `/structured_payload/findings/0/severity`) {
+								t.Error("repair lacked typed field pointer")
+							}
+						}
+					}
 					encoded, err := json.Marshal(claims)
 					if err != nil {
 						t.Error(err)
@@ -104,8 +124,8 @@ func TestResultCollectionRepairsInvariantClaimsWithOriginalLimits(t *testing.T) 
 				c.session.Agents["worker"].MaxRetries = 0
 				c.session.InvariantCatalog = []InvariantDefinition{{ID: "safe", Statement: "Preserve the declared safety boundary", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}}
 				if tc.projection {
-					c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
-					c.session.AgentResultContracts = map[string]ResultContractRef{"worker": compiled.ref(true)}
+					c.session.ResultContracts = map[string]*CompiledResultContract{activeSchema.ID: activeSchema}
+					c.session.AgentResultContracts = map[string]ResultContractRef{"worker": activeSchema.ref(true)}
 				}
 			})
 			worker := scriptWorker(textTurn("Observed a violation of safe. Preserve the finding and original evidence."))
@@ -142,6 +162,12 @@ func TestResultCollectionRepairsInvariantClaimsWithOriginalLimits(t *testing.T) 
 				}
 			} else if item.TypedResult != nil || checkpoint.State != ResultCollectionBlocked {
 				t.Fatal("invalid invariant claims were accepted")
+			}
+			if tc.repeat {
+				message := item.ExecutionReceipt.RepairProvenance.Error
+				if !strings.Contains(message, "identical rejected claims") || (tc.name == "summary_exhausted" && !strings.Contains(message, "1000")) {
+					t.Fatalf("no-progress stop lost original diagnostic: %s", message)
+				}
 			}
 			events, readErr := c.EventJournal().ReadEvents(t.Context())
 			if readErr != nil {

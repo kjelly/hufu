@@ -22,7 +22,7 @@ env:
 
 jobs:
   # Parallel jobs: each gates independently, so a lint config bug no longer
-  # hides test or build results, and the merge gate is the aggregate of eight
+  # hides test or build results, and the merge gate is the aggregate of nine
   # independent required job groups.
   lint:
     # NOTE: jobs.<id>.name cannot reference the env context (workflow-level
@@ -344,15 +344,31 @@ jobs:
           path: eval-reports/*.json
           retention-days: 14
 
+  contracts:
+    name: contracts (offline result pipeline and recovery)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+      - name: Exercise contracts without live models
+        run: |
+          task_tmp=$(mktemp -d /tmp/codex-task.XXXXXX)
+          trap 'rm -rf -- "$task_tmp"' EXIT
+          export TMPDIR="$task_tmp" GOMAXPROCS=2
+          mise run test-contracts
+
   # Aggregate gate. Required by branch protection so PRs cannot merge with
-  # any of the eight parallel checks red.
+  # any of the nine parallel checks red.
   ci-success:
     name: ci-success
     permissions:
       actions: read
       contents: read
     runs-on: ubuntu-latest
-    needs: [lint, vet, test, integration, build, cgo-free, docs, eval-core]
+    needs: [lint, vet, test, integration, build, cgo-free, docs, eval-core, contracts]
     if: always()
     steps:
       - name: Checkout

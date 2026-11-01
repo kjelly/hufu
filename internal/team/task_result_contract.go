@@ -14,6 +14,7 @@ import (
 // TaskDef, rather than from agent prose, so prompt, schema, and commit-time
 // validation have one source of truth.
 type taskResultSubmissionContract struct {
+	claimsProjection     *resultClaimsProjection
 	RequiredFields       []string
 	TaskResultAssertions []TaskResultAssertion
 	// SubmissionTaskResultAssertions excludes only runtime transcript fields

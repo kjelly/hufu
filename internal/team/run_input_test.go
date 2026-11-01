@@ -118,6 +118,79 @@ func TestResolveRunInputSnapshotCanonicalizesSourcesAndDefaults(t *testing.T) {
 	}
 }
 
+func TestRunInputSnapshotJSONRoundTrip(t *testing.T) {
+	definitions := []RunInputDefinition{{Name: "review.scope", Required: true, Schema: RunInputSchema{Type: "object", Properties: map[string]RunInputSchema{
+		"count": {Type: "integer"}, "head": {Type: "string"}, "large": {Type: "integer"},
+		"paths": {Type: "array", Items: &RunInputSchema{Type: "string"}},
+	}}}}
+	original, err := ResolveRunInputSnapshot(definitions, []RunInputAssignment{{Name: "review.scope", RawValue: []byte(`{"head":"HEAD <&>\n","paths":["a","b"],"count":123,"large":9007199254740993}`), Source: RunInputSourceCLI}}, "run-1", "invocation-1", "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, format := range []string{"compact", "indented", "checkpoint"} {
+		t.Run(format, func(t *testing.T) {
+			var restored RunInputSnapshot
+			if format == "checkpoint" {
+				workspace := t.TempDir()
+				session := NewSession()
+				session.RunInputSnapshots = []RunInputSnapshot{*original}
+				session.ActiveRunInputSnapshotID = original.ID
+				if err := SaveSession(workspace, session); err != nil {
+					t.Fatal(err)
+				}
+				loaded, exists, err := LoadSessionReadOnly(workspace)
+				if err != nil || !exists || len(loaded.RunInputSnapshots) != 1 {
+					t.Fatalf("load checkpoint: %v", err)
+				}
+				restored = loaded.RunInputSnapshots[0]
+			} else {
+				var data []byte
+				if format == "indented" {
+					data, err = json.MarshalIndent(original, "", "  ")
+				} else {
+					data, err = json.Marshal(original)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(data, &restored); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := ValidateRunInputSnapshot(&restored); err != nil {
+				t.Fatalf("persisted canonical input was invalidated: %v", err)
+			}
+			if restored.ID != original.ID || restored.SnapshotHash != original.SnapshotHash || restored.Inputs[0].ValueHash != original.Inputs[0].ValueHash || !bytes.Equal(restored.Inputs[0].CanonicalValue, original.Inputs[0].CanonicalValue) {
+				t.Fatal("JSON formatting changed the frozen input identity or bytes")
+			}
+		})
+	}
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, changed := range map[string]string{
+		"changed value":   strings.Replace(string(data), `"count":123`, `"count":124`, 1),
+		"number spelling": strings.Replace(string(data), `"count":123`, `"count":1.23e2`, 1),
+		"duplicate key":   strings.Replace(string(data), `"count":123`, `"count":123,"count":123`, 1),
+		"string escaping": strings.Replace(string(data), `\u003c`, `<`, 1),
+		"member order": strings.Replace(
+			strings.Replace(string(data), `"count":123,"head":`, `"head":`, 1),
+			`"paths":`, `"count":123,"paths":`, 1),
+	} {
+		t.Run("reject/"+name, func(t *testing.T) {
+			var restored RunInputSnapshot
+			err := json.Unmarshal([]byte(changed), &restored)
+			if err == nil {
+				err = ValidateRunInputSnapshot(&restored)
+			}
+			if err == nil {
+				t.Fatal("transport normalization accepted a changed frozen value")
+			}
+		})
+	}
+}
+
 func TestResolveRunInputSnapshotFailsClosedOnConflictAndInvalidValues(t *testing.T) {
 	definitions := []RunInputDefinition{{Name: "count", Schema: RunInputSchema{Type: "integer"}, Required: true}}
 	tests := []struct {

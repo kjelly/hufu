@@ -51,7 +51,7 @@ func fixtureTask(t *testing.T, id, contract, status string, value payload, r rec
 		"ID": id, "Status": "done", "contract_id": contract,
 		"evidence_from": evidenceFrom, "run_input_snapshot_id": snapshotID,
 		"execution_receipt": map[string]any{"run_id": "run-1", "task_id": id,
-			"attempt": 1, "producer_id": "reviewer", "model_execution_id": "execution-" + id,
+			"attempt": 1, "exit_code": 0, "producer_id": "reviewer", "model_execution_id": "execution-" + id,
 			"transcript_ref": "transcript-" + id},
 		"VerifyResult": map[string]any{"exit_code": 0, "fingerprint": "vfp-1"},
 		"typed_result": map[string]any{"status": status, "findings": r.Findings,
@@ -308,7 +308,7 @@ func TestReviewGateInvariantHandoff(t *testing.T) {
 		t.Fatalf("error=%v", err)
 	}
 	r.Invariants = nil
-	if err := verifyInvariants(item, r); err == nil || !strings.Contains(err.Error(), "omitted invariant assessments") {
+	if err := verifyInvariants(item, r); err == nil || !strings.Contains(err.Error(), "record has 0, runtime verified 1") {
 		t.Fatalf("error=%v", err)
 	}
 }
@@ -485,5 +485,16 @@ func TestReviewGateRejectsRewritingFailedTestsAsPassed(t *testing.T) {
 	replacePayload(t, &fixture.Tasks[4], func(p *payload) { p.Tests = raw(t, map[string]any{"passed": true, "exit_code": 0}) })
 	if _, _, err := verify(fixture, "run-1"); err == nil || !strings.Contains(err.Error(), "substituted verify-targeted-go-tests") {
 		t.Fatalf("accepted forged test success: %v", err)
+	}
+}
+
+func TestInvariantAssessmentCountMismatch(t *testing.T) {
+	var item task
+	if err := json.Unmarshal(raw(t, map[string]any{"ID": "18", "typed_result": map[string]any{}}), &item); err != nil {
+		t.Fatal(err)
+	}
+	r := record{Invariants: []invariantAssessment{{ID: "invented", Status: "preserved", Summary: "unsupported"}}}
+	if err := verifyInvariants(item, r); err == nil || !strings.Contains(err.Error(), "record has 1, runtime verified 0") {
+		t.Fatalf("error=%v", err)
 	}
 }

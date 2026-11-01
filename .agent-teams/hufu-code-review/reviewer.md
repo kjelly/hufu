@@ -150,7 +150,7 @@ The snapshot ID/content hash are runtime-owned bindings; do not reconstruct them
 Finding a defect is a successful review, not an instruction to modify code.
 
 Assess every repository invariant injected by the runtime. Submit exactly one
-`invariant_assessments` entry for each injected invariant ID, and submit an
+`record.invariant_assessments` entry for each injected invariant ID, and submit an
 explicit empty array when none were injected. Use `preserved` only when the
 observed evidence supports it; use `violated` with a `finding_index` pointing
 to the corresponding typed finding; use `unknown` with concrete
@@ -197,13 +197,14 @@ and `facts`. Put every limitation or unanswered question in `record.gaps`;
 do not duplicate it in optional outer arrays. Use actual JSON strings for
 text, never wrapper objects such as `{"$text":"..."}`. Keep `details` brief;
 the complete findings and gaps belong in the structured record.
-Top-level `findings` entries accept only `summary`, `detail`,
-`severity`, and optional `category`. Put `location`, `evidence`, and
-`requires_critique` only in `structured_payload.record.findings`. Keep the
-shared fields and order identical across both arrays. On rejection, correct
-the specified JSON path and resubmit the complete result, retaining findings
-and legal evidence elsewhere; do not remove a legal field merely because a
-namesake at another path was rejected.
+Task goals requiring identical outer and record invariant claims describe the
+canonical stored result. Submit each claim only in `record.invariant_assessments`;
+the runtime creates the matching outer array.
+
+Submit source review findings only in `structured_payload.record.findings`,
+including summary, detail, location, evidence and requires_critique. Omit outer
+`findings`; the runtime derives it. On rejection, correct the named field while
+preserving every legal finding, judgment, gap and evidence reference.
 
 Every invariant assessment requires `invariant_id`, `status`, and `summary`.
 Copy each injected ID exactly. Write each summary in at most 300 Unicode
@@ -214,21 +215,14 @@ The static workset contract also requires `structured_payload.record`:
 - `kind: review`, and `review_revision`, `workset_key`, `lens` copied exactly
   from the injected workset bindings. `workset_key` is the item `key` (for
   example `unit-0000`), never the `workset-...` Workset ID;
-- `findings` in exactly the same order as typed `findings`, with identical
-  `summary`, `detail` (empty if absent), and `severity`, plus source `location`, observed opaque
-  `evidence` refs, and `requires_critique`;
+- `findings`: the sole findings array, with `summary`, `detail`, source
+  `location`, observed opaque `evidence` refs, and `requires_critique`;
 - `requires_critique: true` for every `error` or `warning`, and for an `info`
   that raises a security concern or material disagreement requiring review;
-- `invariant_assessments`: copy the submitted invariant claims exactly —
-  identical `invariant_id`, `status`, `summary`, `finding_index`, and
-  `missing_evidence`, never a summary that differs between the two copies
-  (shorten an overlong summary in both, identically) — ordered by
-  ascending `invariant_id` (the order the runtime attests them). Omit optional
-  fields in both copies when absent; never invent `finding_index: 0` as an
-  empty value, because zero identifies the first finding. Submission checks
-  these optional fields before accepting the review. Use an
-  explicit empty array when none apply. An `unknown`
-  invariant also requires a concrete entry in gaps and completed_with_gaps;
+- `invariant_assessments`: submit each claim once here, ordered by
+  invariant_id. Use an explicit empty array when none apply. Keep summaries
+  concise. A violated claim requires finding_index; other statuses omit it.
+  Unknown requires missing_evidence, a concrete gap, and completed_with_gaps;
 - `gaps`: each local limitation or open question, with `description` and
   `missing_evidence`. These describe this assigned boundary; do not claim the
   evidence is absent from every other workset.
@@ -239,12 +233,13 @@ empty findings and gaps, and `success`. Do not invent positive findings to
 fill the schema. The downstream synthesizer may resolve a local gap with
 sibling evidence while retaining the original gap and source record.
 
-For a source review, the runtime compares the outer findings array with
-structured_payload.record.findings at submission. Both arrays must have the
-same length and order, with identical summary, detail, and severity. When
-record.findings is empty, submit findings: [] at the outer level too.
-A coverage limitation belongs in record.gaps and coverage, never as an extra
-outer info finding. A real info finding must occur in both arrays and carry
-observed evidence in its record entry. Correct the named index or field on
-rejection; retain the full review and its gaps. This rule does not add review
-findings to the separate critic-review decision mode.
+For source review contracts, submit findings only in `structured_payload.record.findings`.
+The runtime derives the outer findings; omit the outer field entirely, including
+when the record array is empty. Preserve each finding, evidence reference and gap
+when correcting a rejected field. This does not add findings to critic-review mode.
+For `schemas/review-v1.json`, write invariant claims only in
+`record.invariant_assessments`; omit outer `invariant_assessments`. For a finding
+referenced by a violated invariant, omit its severity: runtime binds the frozen
+invariant definition's severity. Keep the violated judgment, finding index,
+summary, and evidence. Independent findings require explicit severity.
+Documentation/no-op contracts require `record.invariant_assessments: []`.

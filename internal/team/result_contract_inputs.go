@@ -161,7 +161,7 @@ func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *Re
 	if err := validateResultRuntimeInputs(value, compiled.runtimeInputs, runtimeInputs); err != nil {
 		return err
 	}
-	results := c.dependencyResultsForTask(todoID)
+	results := c.dependencyResultsForBinding(todoID)
 	if err := c.validateDependencyPayloads(results); err != nil {
 		return err
 	}
@@ -178,6 +178,9 @@ func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *Re
 	}
 	if err := validateResultEvidenceInputs(value, compiled.evidenceInputs, item.EvidenceFrom, results); err != nil {
 		return err
+	}
+	if compiled.evidenceReferences != nil {
+		results = c.dependencyResultsForTask(todoID)
 	}
 	return validateResultEvidenceReferences(value, compiled.evidenceReferences, item.EvidenceFrom, results, nil)
 }

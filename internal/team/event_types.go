@@ -143,7 +143,7 @@ func IsKnownEventType(eventType string) bool {
 		EventArtifactCreated, EventCriterionReevaluated,
 		EventCriterionCheckpoint, EventMemoryRetrieved,
 		EventMemoryUsageRecorded, EventMemoryOutcomeRecorded,
-		EventPolicyDecision, EventRecoveryDecision, EventWorkflowStateChanged, EventWorkflowCycleStarted, EventHistoricalResultsGranted, EventDerivedForkCreated,
+		EventPolicyDecision, EventRecoveryDecision, EventWorkflowStateChanged, EventWorkflowCycleStarted, EventHistoricalResultsGranted, EventDerivedForkCreated, EventContractRecovery,
 		EventCoordinatorCompactionCommitted, EventCoordinatorCompactionCheckpointAttested,
 		EventCoordinatorModelContinuationAdmitted, EventContextWindowAdmission,
 		EventContextWindowCompactionCommitted, EventContextWindowDownshift,

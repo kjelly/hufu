@@ -188,6 +188,33 @@ func TestRestoreLegacyBoundInvariantVerificationRequiresMatchingContractHash(t *
 	}
 }
 
+func TestRestoreLegacyBoundInvariantVerificationSurvivesCanonicalProjection(t *testing.T) {
+	for _, mode := range []InvariantVerificationMode{InvariantVerificationReport, InvariantVerificationGate} {
+		t.Run(string(mode), func(t *testing.T) {
+			contract := TaskDef{ID: "review", Agent: "worker", InvariantVerification: mode, Execution: ExecutionContract{RequiresResult: true}}
+			c := newTestCoordinator(t)
+			c.session.Config.Delegation.BindTaskGoalContracts = true
+			c.session.ContractTasks = []TaskDef{contract}
+			bound, _, err := CompileTaskGoalContracts(c.session, []TaskDef{{Agent: "worker", ContractID: "review", Goal: "review sources"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			legacy := &TodoItem{ID: "legacy", Agent: "worker", Status: TaskPending, ContractID: bound[0].ContractID, ContractHash: bound[0].ContractHash, ContractRevision: bound[0].ContractRevision}
+			c.SetSessionData(&SessionData{Tasks: []*TodoItem{cloneTodoItem(legacy)}})
+			// Event replay can replace the repaired checkpoint with the original
+			// projection, whose hash covered this field but whose writer omitted it.
+			c.applyLiveTaskProjection([]*TodoItem{cloneTodoItem(legacy)})
+			item := c.todoItemByID(legacy.ID)
+			if item == nil || taskDefFromTodoItem(item).InvariantVerification != mode || localResultSubmissionContract(c, legacy.ID).InvariantVerification != mode {
+				t.Fatal("canonical projection discarded the hash-verified invariant mode")
+			}
+			if legacy.InvariantVerification != "" {
+				t.Fatal("restoration changed the original event projection")
+			}
+		})
+	}
+}
+
 func TestCompileTaskGoalContractsBindsStaticActionAndItsIdentity(t *testing.T) {
 	session := &TeamSession{Config: agent.TeamConfig{Delegation: agent.DelegationPolicy{
 		BindTaskGoalContracts: true,

@@ -377,6 +377,11 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 		c.markSessionRecovery("canonical execution replay rejected: " + utils.RedactSecrets(err.Error()))
 		return
 	}
+	if st != nil {
+		if branch := st.GetBranch(activeBranch); branch != nil {
+			restoreLegacyCollectionEvidence(replayedTasks, branch.State.TaskPlan)
+		}
+	}
 
 	var emptyProjection bool
 	c.viewSessionData(func(sd *SessionData) {
@@ -830,6 +835,9 @@ func (c *Coordinator) commitTaskTransition(ctx context.Context, taskID string, e
 	projected := *current
 	if repairGrant != nil {
 		receipt := cloneExecutionReceipt(current.ExecutionReceipt)
+		if receipt.RepairProvenance == nil {
+			receipt.RepairProvenance = &RepairProvenance{Attempted: true, FailureReason: repairGrant.Recovery.OriginalReason, RepairAttempts: repairGrant.AfterAttempts}
+		}
 		receipt.RepairProvenance.OperatorGrants = append(receipt.RepairProvenance.OperatorGrants, *repairGrant)
 		projected.ExecutionReceipt = &receipt
 		// The previous blocked transition remains in the journal. This grant

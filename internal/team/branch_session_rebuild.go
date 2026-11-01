@@ -164,6 +164,7 @@ func branchReplayInputs(st *SessionTree, es *EventStore, branchID string) (*Sess
 			tasks[i] = cloneTodoItem(t)
 		}
 	}
+	restoreLegacyCollectionEvidence(tasks, b.State.TaskPlan)
 	return b, lineage, tasks, nil
 }
 

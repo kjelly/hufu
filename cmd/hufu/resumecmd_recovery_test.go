@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -110,7 +111,15 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs bool) {
 	}))
 	t.Cleanup(server.Close)
 	workspace := filepath.Join(root, "workspace")
-	opts = runOptions{workspace: workspace, workspaceMode: "exact", canonicalRun: true, providerURL: server.URL + "/v1", contextWindowOverride: 131072, displayMode: "plain", eventFormat: "text", autoApprove: true, quietMode: true}
+	// Both initial loading and resume must use this fixture's subject. Process
+	// CWD is ambient state and can change while in-process tools finish.
+	project := canonicalRuntimePath(filepath.Join(root, "project"))
+	// Stop subject-root discovery here, independent of Git markers in the
+	// configured temporary root or its ancestors.
+	if output, err := exec.CommandContext(t.Context(), "git", "init", "--quiet", project).CombinedOutput(); err != nil {
+		t.Fatalf("initialize recovery project: %v\n%s", err, output)
+	}
+	opts = runOptions{workspace: workspace, workspaceMode: "exact", startDir: project, subjectRoot: project, canonicalRun: true, providerURL: server.URL + "/v1", contextWindowOverride: 131072, displayMode: "plain", eventFormat: "text", autoApprove: true, quietMode: true}
 	registry := team.NewTeamRegistry([]string{search})
 	if err := registry.Discover(); err != nil {
 		t.Fatal(err)
@@ -120,6 +129,9 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs bool) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = tc.Close() })
+	if tc.session.Scope.SubjectRoot != project {
+		t.Fatalf("initial subject root = %q, want %q", tc.session.Scope.SubjectRoot, project)
+	}
 	var direct *team.DirectAgentResult
 	var directErr error
 	if delegated {
@@ -167,6 +179,7 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs bool) {
 	cmd.SetContext(t.Context())
 	var output bytes.Buffer
 	cmd.SetOut(&output)
+	t.Chdir(project)
 	if err := runResumeCommand(cmd, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -175,13 +188,14 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs bool) {
 		t.Fatal(err)
 	}
 	if a.Disposition != team.RecoveryRepairClaims || a.TaskID != blocked.ID {
-		t.Fatalf("preview=%+v", a)
+		t.Fatalf("preview=%+v; subject=%q cwd=%q", a, project, currentWorkingDir())
 	}
 	if !reflect.DeepEqual(before, runtimeStoreFiles(t, workspace)) || beforeCalls != collectorCalls.Load() {
 		t.Fatal("positive CLI preview wrote state or called model")
 	}
 	repair.Store(true)
 	opts.dryRun, opts.outputFormat = false, ""
+	t.Chdir(project)
 	runErr := runResumeCommand(cmd, nil)
 	if (runErr == nil) != succeeds {
 		t.Fatalf("repair succeeds=%t error=%v", succeeds, runErr)
