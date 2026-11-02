@@ -61,10 +61,12 @@ func TestResumeContractRecoveryPublishesChildWithoutCallingModels(t *testing.T) 
 		name        string
 		metadata    bool
 		inputPolicy bool
+		output      string
 	}{
-		{name: "versioned"},
-		{name: "metadata_only", metadata: true},
-		{name: "input_policy", metadata: true, inputPolicy: true},
+		{name: "versioned", output: "json"},
+		{name: "metadata_only", metadata: true, output: "json"},
+		{name: "metadata_only_text", metadata: true, output: "text"},
+		{name: "input_policy", metadata: true, inputPolicy: true, output: "json"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			metadata := test.metadata
@@ -224,24 +226,32 @@ func TestResumeContractRecoveryPublishesChildWithoutCallingModels(t *testing.T) 
 				t.Fatal("preview changed durable workspace")
 			}
 			opts.dryRun = false
-			if metadata {
-				opts.outputFormat = "text"
-			}
+			opts.outputFormat = test.output
 			resumeRecoveryBranch, resumeRecoveryPlan = "recovered", plan.SHA256
 			output.Reset()
 			if err = runResumeCommand(cmd, nil); err != nil {
 				t.Fatal(err)
 			}
-			var result map[string]string
-			if metadata {
-				if !strings.Contains(output.String(), `--execution-profile "default"`) || strings.Contains(output.String(), "--metadata-only") || strings.Contains(output.String(), "--upgrade-contracts") {
+			var result struct {
+				Branch       string `json:"branch"`
+				SourceBranch string `json:"source_branch"`
+				PlanHash     string `json:"plan_hash"`
+				MetadataOnly *bool  `json:"metadata_only"`
+			}
+			if test.output == "text" {
+				if !strings.Contains(output.String(), "project files remain shared") || !strings.Contains(output.String(), `--execution-profile "default"`) || strings.Contains(output.String(), "--metadata-only") || strings.Contains(output.String(), "--upgrade-contracts") {
 					t.Fatalf("continuation command lost the resume profile or retained recovery flags: %s", output.String())
 				}
-				result = map[string]string{"branch": "recovered"}
-			} else if err = json.Unmarshal(output.Bytes(), &result); err != nil {
-				t.Fatal(err, output.String())
+				result.Branch = "recovered"
+			} else {
+				if err = json.Unmarshal(output.Bytes(), &result); err != nil {
+					t.Fatal(err, output.String())
+				}
+				if result.MetadataOnly == nil || *result.MetadataOnly != metadata || result.SourceBranch != plan.SourceBranch || result.PlanHash != plan.SHA256 {
+					t.Fatalf("apply output lost recovery identity or shared-file semantics: %s", output.String())
+				}
 			}
-			child, err := team.ReadResumeSource(f.control, result["branch"], "")
+			child, err := team.ReadResumeSource(f.control, result.Branch, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -261,7 +271,7 @@ func TestResumeContractRecoveryPublishesChildWithoutCallingModels(t *testing.T) 
 			// Ordinary resume preflight must stay read-only and must not
 			// require either upgrade flag after the child was published.
 			resumeUpgradeContracts, resumeUpgradeInputPolicy, resumeMetadataOnly = false, false, false
-			resumeRecoveryBranch, resumeRecoveryPlan, resumeBranch = "", "", result["branch"]
+			resumeRecoveryBranch, resumeRecoveryPlan, resumeBranch = "", "", result.Branch
 			opts.dryRun, opts.outputFormat = true, "json"
 			before = runtimeStoreFiles(t, f.control)
 			output.Reset()

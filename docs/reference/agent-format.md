@@ -1346,21 +1346,50 @@ CI 可用 `hufu team lint --team <name> --fail-on warning` 將未驗證資料流
 }
 ```
 
-兩個 pointer 都是相對於 `structured_payload` 的 JSON Pointer，可各自省略，
+兩個 pointer 都是相對於解碼後 payload 值的 JSON Pointer，可各自省略，
 但至少需要一個。來源必須是可解析的 array，宣告 `maxItems`（0–128），
 且不能互相重疊或與 runtime inputs、runtime-owned evidence inputs、fixed
 collections 的目標或 tool-evidence rewriting groups 重疊。Array items 必須是 object。局部 `$defs` 引用可使用；無法呈現給 provider 的形狀會拒絕載入。
 
+本機工具的來源是 `submit_result.structured_payload`；外部 worker 的來源是
+`structured_payload_json` JSON 字串解碼後的物件。例中的 `/record/findings`
+不包含傳輸欄位名稱或儲存用的 `/structured_payload/value` 前綴。
+`equals_projection` assertion 的兩個 pointer 則都以 canonical `TaskResult`
+文件為根；同一來源在 assertion 中應寫成 `/structured_payload/value/record/findings`。
+
 模型只在 payload 中提交一次；對應的外層欄位會從本機工具與外部 worker 的
-submission schema 移除。即使提交空陣列、null 或完全相同的副本，也會拒絕。
+submission schema 移除。提交這些被移除的外層欄位，即使是空陣列、null 或完全相同的副本，也會拒絕。
+Payload 來源陣列可依其 schema 合法地使用 `[]`。
 Runtime 在 canonical validation／hash／持久化之前產生外層 findings 與 claims；
 location、evidence 等領域欄位留在 payload。未宣告此 extension 的既有契約保留原協定。
 
-Invariant claims 投影的靜態 task 必須宣告 `invariant-verification: report` 或 `gate`；缺少此設定會在載入時拒絕。
+Invariant claims 投影的靜態 task 必須在 `team.yaml` 的
+`spec.contracts[].invariant-verification` 宣告 `report` 或 `gate`；缺少此設定會在載入時拒絕。
+舊版 flat manifest 使用 `contracts[].invariant-verification`，`tasks[]` 僅為已棄用的讀取別名。
+此設定屬於靜態 task 契約，不放在 agent frontmatter，也不能由模型派工時覆寫。例如 v1 manifest 的 `spec` 片段：
+
+```yaml
+spec:
+  contracts:
+    - id: review
+      agent: reviewer
+      phase: verify
+      invariant-verification: report
+      execution:
+        requires-result: true
+```
+
+兩種模式都驗證原工作 context manifest、invariant 身分、來源證據與 claims，
+驗證失敗都不能接受結果。`report` 保留有效評估，不會僅因 error-severity invariant
+為 `violated`／`unknown` 就阻擋完成；`gate` 會以這兩種評估阻擋完成與 semantic
+regression acceptance。Warning／info 本身不觸發此 gate。
+Team 須有非空 `invariants.yaml` catalog；task 必須要求結果，在有 workflow 時位於
+`verify` phase，且不能使用 sidecar、summarize 或多模型執行。`gate` task 不能設為 optional。
 
 `bind_invariant_severity: true` 必須同時宣告兩種投影。對於 violated claim
 所指向的 finding，模型必須省略 severity；runtime 依原工作 context manifest
-驗證的 invariant 定義填入。獨立 finding 仍需自行提交 severity。未知 invariant、
+驗證的 invariant 定義填入。未啟用此選項時 severity 由模型提交，runtime 只驗證
+與定義是否相符；格式修復仍由模型對齊 severity。獨立 finding 仍需自行提交 severity。未知 invariant、
 無效 index、定義衝突或來源證據不符不會被改寫成 preserved／較低 severity。
 摘要仍受既有長度限制，extended analysis 應放在 details。
 

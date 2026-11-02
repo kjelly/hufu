@@ -23,11 +23,11 @@ run = "go test -p 2 -timeout 20m ./..."
 
 [tasks.vet]
 description = "Run Go static analysis"
-run = "go vet -p 2 ./..."
+run = "go vet -p 2 ./... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/..."
 
 [tasks.lint]
 description = "Run the pinned golangci-lint"
-run = "golangci-lint run"
+run = "golangci-lint run ./... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/..."
 
 [tasks.test-short]
 description = "Run short tests; heavier tests have a separate required integration gate"
@@ -44,10 +44,10 @@ run = "go run ./scripts/testlayers -list"
 [tasks.test-contracts]
 description = "Offline result projection, repair, recovery and review handoff regressions"
 run = [
-  "go test -p 2 ./internal/team -run '^(TestBoundDecisionContractRevalidation|TestTaskContextRequest|TestTodoListVerificationSelectsActiveModelExecution|TestResultEnvelope|TestResultClaimsProjection|TestContractRecovery|TestRecoveredArtifact|TestResumePreflight|TestRestoreLegacyBoundInvariantVerification|TestTaskOutputAssert|TestResolveFactRefs|TestStructuredFanOut|TestWorksetArtifact|TestContractDataflow|TestHufuCodeReview|TestResultCollection|TestDependencyResultViewFanoutLeafDelivery|TestDependencyBinding|TestJournalSessionTree|TestDispatchIDsDoNotRepeatAcrossProcesses|TestRunInputSnapshotJSONRoundTrip|TestResultPayloadJSONRoundTrip|TestWorkflowCycleRecoveryAfterDurableBoundary)' -count=1",
-  "go test -p 2 ./internal/inspect ./internal/operator -run '^(TestRecoveryEligibility|TestSelectActions(OffersOnly|AssessesEvery))' -count=1",
-  "go test -p 2 ./internal/auditverify -run '^(TestVerifyRunInputBinding|TestReplayInputBoundAssertions)' -count=1",
-  "go test -p 2 ./cmd/hufu -run '^(TestResumeContractRecovery|TestResumeRecoveryPreviewThenExecute|TestHistoricalResultRunBinaryAdmissionAndDelivery)' -count=1",
-  "go test -p 2 ./.agent-teams/hufu-code-review/reviewgate -count=1",
-  "go test -p 2 ./.agent-teams/hufu-code-review/reviewprep -run '^TestFrozenRepositorySnapshotRecovery' -count=1",
+  "go test -p 2 -timeout 20m ./internal/team -run '^(TestBoundDecisionContractRevalidation|TestTaskContextRequest|TestTodoListVerificationSelectsActiveModelExecution|TestResultEnvelope|TestResultClaimsProjection|TestContractRecovery|TestRecoveredArtifact|TestResumePreflight|TestRestoreLegacyBoundInvariantVerification|TestTaskOutputAssert|TestResolveFactRefs|TestStructuredFanOut|TestWorksetArtifact|TestContractDataflow|TestHufuCodeReview|TestResultCollection|TestDependencyResultViewFanoutLeafDelivery|TestDependencyBinding|TestJournalSessionTree|TestDispatchIDsDoNotRepeatAcrossProcesses|TestRunInputSnapshotJSONRoundTrip|TestResultPayloadJSONRoundTrip|TestWorkflowCycleRecoveryAfterDurableBoundary)' -count=1",
+  "go test -p 2 -timeout 20m ./internal/inspect ./internal/operator -run '^(TestRecoveryEligibility|TestSelectActions(OffersOnly|AssessesEvery))' -count=1",
+  "go test -p 2 -timeout 20m ./internal/auditverify -run '^(TestVerifyRunInputBinding|TestReplayInputBoundAssertions)' -count=1",
+  "go test -p 2 -timeout 20m ./cmd/hufu -run '^(TestBindResumePreflightVersion|TestResumeContractRecovery|TestResumeRecoveryPreviewThenExecute|TestHistoricalResultRunBinaryAdmissionAndDelivery)' -count=1",
+  "go test -p 2 -timeout 20m ./.agent-teams/hufu-code-review/reviewgate -count=1",
+  "go test -p 2 -timeout 20m ./.agent-teams/hufu-code-review/reviewprep -count=1",
 ]

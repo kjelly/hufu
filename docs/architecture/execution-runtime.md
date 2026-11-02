@@ -153,18 +153,29 @@ frames, duplicate keys, non-object roots and oversized responses are rejected.
 This transport normalization does not change the tool submission decoder or
 permit runtime-owned fields, invalid source references or forged receipts.
 
-Each attempt has one collection call and at most one JSON/schema or
-representation repair. Only two representation errors qualify. The first is a
-failed `equals_projection` assertion (see Ordered result projections) whose
-`pointer` is `/findings` or `/invariant_verification/assessments` and whose
-reference array lies under `structured_payload`, when no other assertion fails
-and the result declares no artifacts. The second is a violated invariant's
-linked finding having a severity different from its verified definition. Any
-other assertion or attestation failure stops collection. The collector receives
-the original context's invariant IDs and severities. Repair may align the linked
-finding's severity with the definition; the runtime never rewrites it. The
-invariant's status and the other judgments stay unchanged, and the result must
-still pass attestation.
+Each attempt has one collection call and at most one JSON/schema
+(including result-envelope consistency) or declared representation repair.
+A failed `equals_projection` assertion (see Ordered result projections) qualifies
+when its `pointer` is `/findings` or `/invariant_verification/assessments`, its
+reference array lies under `structured_payload`, no other assertion fails,
+and the result declares no artifacts. A declared `equals_by_items` assertion
+on `/status` also qualifies when its payload-derived empty/nonempty labels are
+both successful statuses. Both assertion cases require no artifacts and no
+other failing assertion. Without runtime severity binding, a violated
+invariant's linked finding severity can be repaired to match its verified
+definition; the model authors that severity and the runtime validates it.
+
+With `x-hufu-result-projections`, the model authors the payload source arrays
+once; the runtime derives the corresponding outer findings and assessments.
+When `bind_invariant_severity: true`, the model must omit severity on findings
+linked by violated invariant claims. The runtime fills those severities from
+definitions verified against the original work context manifest before canonical
+validation and hashing. Unlinked findings remain model-authored. This binding
+does not remove findings, change invariant judgments, or substitute evidence to
+obtain a passing result. Repair follows the same ownership rule and never
+supplies a duplicate outer projection. Other assertion or attestation failures stop collection;
+every repaired result must still pass attestation. See
+[the projection contract](../reference/agent-format.md#同一份語意結果的外層投影).
 Invariant summaries remain limited to 1000 runes; extended explanations belong
 in `details`. The runtime does not truncate a claim to make it valid. A
 turn is reserved durably before dispatch, so a lost in-flight call counts
@@ -663,7 +674,10 @@ no recorded workspace versioning history. Agent defaults use ordinary admission
 rules; declared mutation/production steps remain ineligible. These conditions are
 checked again before ordinary resume. It uses the existing atomic session-lineage fork;
 project files remain shared and are not restored. The preview's `metadata_only`
-field is included in its hash. Ordinary resume of the returned child omits the
+field is included in its hash. JSON apply output always includes a boolean
+`metadata_only`: `true` means project files remain shared without restoration;
+`false` means versioned recovery. The existing `branch`, `source_branch`, and
+`plan_hash` fields retain their meanings. Ordinary resume of the returned child omits the
 flag. Observe/required modes and projects with versioning history must use
 versioned recovery; metadata-only never downgrades their protection.
 
@@ -1040,6 +1054,13 @@ ordered object arrays before a successful worker result is committed and again
 at objective verification. The assertion's `pointer` selects the first array;
 its configuration-owned `value` contains a reference `pointer`, 1–16 unique
 `fields`, optional `optional_fields`, `field_defaults`, and optional boolean `allow_missing`.
+Both assertion pointers start at the canonical `TaskResult` document root:
+`/findings` selects its outer findings, while
+`/structured_payload/value/record/findings` selects an array in the saved
+payload. In contrast, `x-hufu-result-projections` pointers start at the decoded
+payload value itself, so the corresponding source is `/record/findings`.
+An external worker's `structured_payload_json` transport is decoded before
+projection; assertion pointers never traverse the transport string.
 Required and optional field names must be distinct, with at most 16 total. Both arrays must have the same
 length, and every selected field must exist and match at the same index.
 Fields listed in `optional_fields` may be absent from both objects; a value

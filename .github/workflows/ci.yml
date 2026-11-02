@@ -43,7 +43,7 @@ jobs:
         uses: golangci/golangci-lint-action@a4f60bb28d35aeee14e6880718e0c85ff1882e64 # v6.0.1
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
-          args: --timeout 5m ./... ./.agent-teams/hufu-dev/diagnostic-pilot/...
+          args: --timeout 5m ./... ./.agent-teams/hufu-dev/diagnostic-pilot/... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/...
           only-new-issues: true
 
   vet:
@@ -53,11 +53,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
-      - name: Set up Go ${{ env.GO_VERSION }}
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
 
       - name: go mod tidy -diff
         # Fails if go.mod / go.sum drift from the source tree. The x/sys
@@ -68,7 +65,7 @@ jobs:
         # `go mod tidy` locally and commit the result when this fails for
         # any other reason.
         run: |
-          go mod tidy -diff > /tmp/tidy.diff 2>&1 || true
+          mise exec -- go mod tidy -diff > /tmp/tidy.diff 2>&1 || true
           unexpected=$(grep -E "^[+-]" /tmp/tidy.diff | grep -vE "golang\.org/x/sys v0\.43\.0" || true)
           if [ -n "$unexpected" ]; then
             echo "go mod tidy -diff has unexpected drift:"
@@ -81,7 +78,7 @@ jobs:
           fi
 
       - name: go vet
-        run: go vet ./... ./.agent-teams/hufu-dev/diagnostic-pilot/...
+        run: mise exec -- go vet -p 2 ./... ./.agent-teams/hufu-dev/diagnostic-pilot/... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/...
 
   test:
     name: test (${{ matrix.scope }}; race, short, timeout ${{ matrix.package-timeout }})
@@ -347,7 +344,8 @@ jobs:
   contracts:
     name: contracts (offline result pipeline and recovery)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Allow the sequential package checks and cold compilation to complete.
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1

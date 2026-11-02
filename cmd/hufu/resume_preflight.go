@@ -7,6 +7,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/workspace/versionstore"
 	"github.com/spf13/cobra"
 )
 
@@ -32,8 +33,11 @@ func runResumeSourcePreflight(cmd *cobra.Command, session *team.TeamSession, coo
 
 func bindResumePreflightVersion(ctx context.Context, session *team.TeamSession) error {
 	managed, registry, _, err := lookupManagedWorkspace(ctx, session.Workspace)
-	if err != nil || registry == nil {
+	if err != nil {
 		return err
+	}
+	if registry == nil {
+		return fmt.Errorf("%w: resume preflight requires a managed workspace", versionstore.ErrVersionedWorkspaceUnresolved)
 	}
 	defer func() { _ = registry.Close() }()
 	version, err := resolveWorkspaceVersionContext(ctx, registry, managed, config.LoadConfig())

@@ -50,7 +50,12 @@ func runContractRecoveryCommand(cmd *cobra.Command, source *team.ResumeSource, n
 		return err
 	}
 	if opts.outputFormat == "json" {
-		data, err := json.Marshal(map[string]string{"branch": branch, "source_branch": source.BranchID, "plan_hash": plan.SHA256})
+		data, err := json.Marshal(struct {
+			Branch       string `json:"branch"`
+			SourceBranch string `json:"source_branch"`
+			PlanHash     string `json:"plan_hash"`
+			MetadataOnly bool   `json:"metadata_only"`
+		}{Branch: branch, SourceBranch: source.BranchID, PlanHash: plan.SHA256, MetadataOnly: plan.MetadataOnly})
 		if err != nil {
 			return err
 		}
