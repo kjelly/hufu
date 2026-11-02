@@ -169,7 +169,12 @@ func (c *Coordinator) beginFollowUpWorkflow(ctx context.Context, prompt string) 
 		}
 	}
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() && c.phaseWorkflow.State() == PhaseFailed {
-		return false, fmt.Errorf("workflow is failed; preserve this session and use targeted reconciliation or fork an earlier checkpoint before resuming")
+		if err := c.reconcileCollectedWorkflow(ctx); err != nil {
+			return false, err
+		}
+		if c.phaseWorkflow.State() == PhaseFailed {
+			return false, c.admitFailedWorkflowResultRepair(ctx)
+		}
 	}
 	if c.phaseWorkflow == nil || !c.phaseWorkflow.Enabled() || (!derived && c.phaseWorkflow.State() != PhaseDone) {
 		if pendingHistoricalResultRequest(ctx) != nil {

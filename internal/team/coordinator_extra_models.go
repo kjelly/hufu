@@ -396,6 +396,9 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	task.ModelTopology = []string{task.Model}
 	task.ExecutionTopology = []execution.ExecutionTarget{leafTarget}
 	isolationIdentity := strings.Join([]string{c.contextRunID(), todoID, agentName, agentDef.Generation.Model, slot}, "\x00")
+	if parentItem := c.todoItemByID(todoID); parentItem != nil && parentItem.Retries > 0 {
+		isolationIdentity += fmt.Sprintf("\x00occurrence:%d", parentItem.Retries+1)
+	}
 	isolatedCoord.modelExecutionID = "model-execution-" + hashContentKey(isolationIdentity)
 	if resumeCheckpoint != nil {
 		isolatedCoord.modelExecutionID = resumeCheckpoint.ModelExecutionID

@@ -114,15 +114,19 @@ func TestContextRequestJSONNeverPersistsFailureEvidence(t *testing.T) {
 }
 
 func TestTaskContextRequestUsesIsolatedModelExecutionIdentity(t *testing.T) {
-	c := &Coordinator{modelExecutionID: "extra-model-slot-2"}
-	r := c.newTaskContextRequest(TaskDef{Goal: "task", Model: "same-model"}, "task-1", 1, ContextTriggerTaskDispatch, "worker", "worker", nil)
+	c, item, _, _ := resultCollectionFixture(t)
+	c.modelExecutionID = "extra-model-slot-2"
+	r := c.newTaskContextRequest(TaskDef{Goal: "task", Model: "same-model"}, item.ID, 1, ContextTriggerTaskDispatch, "worker", "worker", nil)
 	if r.ModelExecutionID != "extra-model-slot-2" {
 		t.Fatalf("model execution identity = %q", r.ModelExecutionID)
 	}
 	if r.Purpose != "task_execution" {
 		t.Fatalf("dispatch purpose = %q", r.Purpose)
 	}
-	retry := c.newTaskContextRequest(TaskDef{Goal: "task", Model: "same-model"}, "task-1", 2, ContextTriggerRetry, "worker", "worker", &ContextFailure{ErrorClass: "timeout"})
+	retry := c.newTaskContextRequest(TaskDef{Goal: "task", Model: "same-model"}, item.ID, 2, ContextTriggerRetry, "worker", "worker", &ContextFailure{ErrorClass: "timeout"})
+	if retry.ModelExecutionID != r.ModelExecutionID {
+		t.Fatal("request rehashed the fanout owner's execution identity")
+	}
 	if retry.Purpose != "task_retry" {
 		t.Fatalf("retry purpose = %q", retry.Purpose)
 	}
@@ -233,5 +237,47 @@ func TestContextRequestRejectsInvalidAttemptAndMissingRetryFailure(t *testing.T)
 	r.RequestID = "api_key=raw-secret"
 	if err := r.Validate(); err == nil {
 		t.Fatal("noncanonical request ID accepted")
+	}
+}
+
+func TestTaskContextRequestScopesModelIdentityToLifecycle(t *testing.T) {
+	c, item, _, _ := resultCollectionFixture(t)
+	task := taskDefFromTodoItem(item)
+	first := c.newTaskContextRequest(task, item.ID, 1, ContextTriggerTaskDispatch, item.Agent, "worker", nil)
+	again := c.newTaskContextRequest(task, item.ID, 1, ContextTriggerTaskDispatch, item.Agent, "worker", nil)
+	if first.ModelExecutionID != again.ModelExecutionID {
+		t.Fatal("same dispatch identity changed")
+	}
+	for _, scenario := range []string{"attempt", "dispatch", "run", "lifecycle", "model slot"} {
+		t.Run(scenario, func(t *testing.T) {
+			before := cloneTodoItem(c.todoItemByID(item.ID))
+			run, slot := c.executionRunID, c.modelExecutionID
+			t.Cleanup(func() {
+				c.executionRunID, c.modelExecutionID = run, slot
+				c.taskTracker.TodoList().Restore([]*TodoItem{before})
+			})
+			attempt := 1
+			switch scenario {
+			case "attempt":
+				attempt = 2
+			case "dispatch":
+				nextItem := cloneTodoItem(before)
+				nextItem.DispatchID = "different-dispatch"
+				c.taskTracker.TodoList().Restore([]*TodoItem{nextItem})
+			case "run":
+				c.executionRunID = "different-run"
+			case "lifecycle":
+				nextItem := cloneTodoItem(before)
+				nextItem.Retries++
+				c.taskTracker.TodoList().Restore([]*TodoItem{nextItem})
+			case "model slot":
+				c.modelExecutionID = "extra-slot"
+			}
+			next := c.newTaskContextRequest(task, item.ID, attempt, ContextTriggerTaskDispatch, item.Agent, "worker", nil)
+			changed := scenario == "lifecycle" || scenario == "model slot"
+			if (next.ModelExecutionID != first.ModelExecutionID) != changed {
+				t.Fatal("model identity must separate logical lifecycles without making ordinary retries a strategy change")
+			}
+		})
 	}
 }

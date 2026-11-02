@@ -698,5 +698,169 @@
     "pointers": [
       "/record/decisions/*/evidence/*"
     ]
+  },
+  "x-hufu-result-envelope": {
+    "type": "object",
+    "required": [
+      "status",
+      "structured_payload"
+    ],
+    "properties": {
+      "status": {
+        "enum": [
+          "success",
+          "completed_with_gaps",
+          "blocked"
+        ]
+      },
+      "structured_payload": {
+        "type": [
+          "object",
+          "null"
+        ]
+      }
+    },
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "status": {
+              "enum": [
+                "success",
+                "completed_with_gaps"
+              ]
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        "then": {
+          "properties": {
+            "structured_payload": {
+              "type": "object"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "structured_payload": {
+                    "properties": {
+                      "record": {
+                        "properties": {
+                          "decisions": {
+                            "contains": {
+                              "properties": {
+                                "verdict": {
+                                  "const": "unverified"
+                                }
+                              },
+                              "required": [
+                                "verdict"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "decisions"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "record"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "status": {
+                    "const": "completed_with_gaps"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "completed_with_gaps"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "structured_payload": {
+                    "anyOf": [
+                      {
+                        "properties": {
+                          "record": {
+                            "properties": {
+                              "decisions": {
+                                "contains": {
+                                  "properties": {
+                                    "verdict": {
+                                      "const": "unverified"
+                                    }
+                                  },
+                                  "required": [
+                                    "verdict"
+                                  ]
+                                }
+                              }
+                            },
+                            "required": [
+                              "decisions"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "record"
+                        ]
+                      },
+                      {
+                        "properties": {
+                          "record": {
+                            "properties": {
+                              "input_review": {
+                                "contains": {
+                                  "properties": {
+                                    "record": {
+                                      "properties": {
+                                        "gaps": {
+                                          "type": "array",
+                                          "minItems": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "gaps"
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "record"
+                                  ]
+                                }
+                              }
+                            },
+                            "required": [
+                              "input_review"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "record"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
   }
 }

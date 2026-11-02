@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -234,6 +235,13 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	}
 	reportID, reportHash, err := verify(current, os.Getenv("HUFU_RUN_ID"))
 	if err != nil {
+		// verify returns this type directly. Native errors.As reflection cannot
+		// inspect a target type defined by the trusted-static interpreter.
+		if _, sourceFailure := err.(*sourceReviewError); sourceFailure {
+			// Rewriting the report cannot change accepted source records. Fail
+			// the action instead of taking the report-only verification back-edge.
+			return err
+		}
 		// A completed audit with a rejected report is verification evidence,
 		// not a provider outage. The task-result assertion fails and its bounded
 		// DAG repair sends this diagnostic back to the report producer.
@@ -360,6 +368,9 @@ func verify(current session, runID string) (string, string, error) {
 		}
 		value, err := accepted(item, current, runID)
 		if err != nil {
+			if item.ContractID != "synthesize-review" {
+				return "", "", &sourceReviewError{cause: err}
+			}
 			return "", "", err
 		}
 		tasks[item.ID], values[item.ID] = item, value
@@ -372,7 +383,7 @@ func verify(current session, runID string) (string, string, error) {
 		}
 		var r record
 		if err := json.Unmarshal(value.Record, &r); err != nil {
-			return "", "", err
+			return "", "", &sourceReviewError{cause: fmt.Errorf("task %s has an invalid source record: %w", item.ID, err)}
 		}
 		records[item.ID] = r
 	}
@@ -381,21 +392,32 @@ func verify(current session, runID string) (string, string, error) {
 	}
 	critiqued := make(map[string]bool)
 	limited := false
-	for id, r := range records {
+	ids := make([]string, 0, len(records))
+	for id := range records {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var sourceErrors []error
+	for _, id := range ids {
+		r := records[id]
 		item := tasks[id]
 		if item.ContractID != "critic-review" {
 			if err := verifyReview(item, r); err != nil {
-				return "", "", err
+				sourceErrors = append(sourceErrors, err)
 			}
 			limited = limited || len(r.Gaps) > 0
 			continue
 		}
 		sourceID, critiqueLimited, err := verifyCritique(item, r, tasks, values, records, critiqued)
 		if err != nil {
-			return "", "", err
+			sourceErrors = append(sourceErrors, err)
+			continue
 		}
 		limited = limited || critiqueLimited
 		critiqued[sourceID] = true
+	}
+	if len(sourceErrors) > 0 {
+		return "", "", &sourceReviewError{cause: errors.Join(sourceErrors...)}
 	}
 	for id, r := range records {
 		for _, f := range r.Findings {

@@ -52,6 +52,18 @@ func (c *Coordinator) AssessResumeSource(ctx context.Context, source *ResumeSour
 	if err := c.validateResumeSources(WithSessionResume(ctx)); err != nil {
 		return nil, err
 	}
+	if source.Session.WorkflowState == PhaseDone {
+		return nil, fmt.Errorf("workflow is already complete; start a follow-up request instead of resume")
+	}
+	if source.Session.WorkflowState == PhaseFailed {
+		proof, err := c.completedCollectionWorkflowProof(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if proof == nil {
+			return nil, fmt.Errorf("workflow is failed; use an eligible explicit result-only repair or targeted reconciliation")
+		}
+	}
 	assessment := &ResumePreflightAssessment{Branch: source.BranchID, PolicySHA256: source.Session.ExecutionPolicySnapshot.ConfigurationHash}
 	for _, item := range c.taskTracker.TodoList().Items() {
 		if item == nil || IsPrimaryOccurrence(item) || item.Status == TaskSkipped {

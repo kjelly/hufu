@@ -165,6 +165,30 @@ func compileResultContractDocument(id string, raw []byte) (*CompiledResultContra
 	if err != nil {
 		return nil, fmt.Errorf("compile schema %q: %w", id, err)
 	}
+	var envelopeSchema *jsonschema.Schema
+	var envelopeDocument []byte
+	if envelope, present := root["x-hufu-result-envelope"]; present {
+		if _, ok := envelope.(map[string]any); !ok {
+			return nil, fmt.Errorf("schema %q: x-hufu-result-envelope must be an object schema", id)
+		}
+		envelopeDocument, err = json.Marshal(envelope)
+		if err != nil {
+			return nil, err
+		}
+		if len(envelopeDocument) > resultContractPromptSchemaMaxBytes {
+			return nil, fmt.Errorf("result envelope %q exceeds its %d byte guidance limit", id, resultContractPromptSchemaMaxBytes)
+		}
+		// A self-contained schema has the same fragment namespace in validation
+		// and model guidance, even when payload projections omit definitions.
+		envelopeURL := url + ".envelope"
+		if err = compiler.AddResource(envelopeURL, envelope); err != nil {
+			return nil, err
+		}
+		envelopeSchema, err = compiler.Compile(envelopeURL)
+		if err != nil {
+			return nil, fmt.Errorf("compile result envelope %q: %w", id, err)
+		}
+	}
 	evidenceKeys, err := compileResultEvidenceKeys(root, schema)
 	if err != nil {
 		return nil, fmt.Errorf("schema %q: %w", id, err)
@@ -180,6 +204,7 @@ func compileResultContractDocument(id string, raw []byte) (*CompiledResultContra
 	sum := sha256.Sum256(canonical)
 	return &CompiledResultContract{
 		ID: id, SchemaSHA256: hex.EncodeToString(sum[:]), CanonicalSchema: canonical, schema: schema,
+		envelopeSchema: envelopeSchema, envelopeDocument: envelopeDocument,
 		toolEvidence: evidence, finalReport: report, evidenceInputs: inputs, evidenceReferences: references, worksetInputs: worksetInputs,
 		claimsProjection: projections, fixedCollections: collections, evidenceKeys: evidenceKeys, runtimeInputs: runtimeInputs, submissionFields: fields,
 	}, nil

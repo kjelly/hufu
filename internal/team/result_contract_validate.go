@@ -405,6 +405,10 @@ func (c *Coordinator) applyResultContractReceipt(todoID string, result *TaskResu
 // property stays open and names the contract. validateStructuredResultPayload is the
 // trust boundary, not the provider.
 func providerVisibleResultPayloadSchema(ref ResultContractRef, compiled *CompiledResultContract) map[string]any {
+	return visibleResultPayloadSchema(ref, compiled, false)
+}
+
+func visibleResultPayloadSchema(ref ResultContractRef, compiled *CompiledResultContract, guidance bool) map[string]any {
 	description := fmt.Sprintf("Structured payload that must satisfy result contract %s (sha256 %s).", ref.ID, shortResultContractHash(ref.SchemaSHA256))
 	if compiled != nil {
 		if value, err := decodeResultContractJSON(compiled.CanonicalSchema); err == nil {
@@ -412,6 +416,13 @@ func providerVisibleResultPayloadSchema(ref ResultContractRef, compiled *Compile
 				omitRuntimeEvidenceInputs(schema, compiled.evidenceInputs)
 				omitRuntimeResultInputs(schema, compiled.runtimeInputs)
 				delete(schema, "$schema")
+				if guidance {
+					if projected := projectResultGuidanceSchema(schema); projected != nil {
+						projectedPayloadSchema(projected, compiled.claimsProjection)
+						projected["description"] = description
+						return projected
+					}
+				}
 				if projected := projectProviderResultSchema(schema); compiled.claimsProjection != nil && projected != nil {
 					projectedPayloadSchema(projected, compiled.claimsProjection)
 					projected["description"] = description
@@ -479,6 +490,9 @@ func resultContractPromptSection(ref *ResultContractRef, compiled *CompiledResul
 	}
 	if compiled != nil {
 		schema := compiled.CanonicalSchema
+		if len(compiled.envelopeDocument) > 0 {
+			fmt.Fprintf(b, "The following JSON Schema validates {status, structured_payload} AFTER runtime-owned fields and decisions are bound. Preserve those decisions; correct only inconsistent reporting fields.\n%s\n", compiled.envelopeDocument)
+		}
 		runtimeOwned := len(compiled.runtimeInputs) > 0 || compiled.claimsProjection != nil
 		if spec := compiled.claimsProjection; spec != nil {
 			for name, pointer := range map[string]string{"findings": spec.Findings, "invariant_assessments": spec.Invariants} {
@@ -498,7 +512,7 @@ func resultContractPromptSection(ref *ResultContractRef, compiled *CompiledResul
 			runtimeOwned = true
 		}
 		if runtimeOwned {
-			schema, _ = json.Marshal(providerVisibleResultPayloadSchema(*ref, compiled))
+			schema, _ = json.Marshal(visibleResultPayloadSchema(*ref, compiled, true))
 		}
 		if len(schema) <= resultContractPromptSchemaMaxBytes {
 			fmt.Fprintf(b, "\n```json\n%s\n```\n", schema)
@@ -557,14 +571,18 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 		}
 		return nil, nil
 	}
+	if request.resultContractSchema == nil {
+		return nil, fmt.Errorf("%s: result contract is not loaded", resultContractDriftCode)
+	}
 	if raw == "" {
 		if ref.RequireStructured {
 			return nil, fmt.Errorf("%s: result contract %q requires structured_payload_json", structuredPayloadMissingCode, ref.ID)
 		}
-		return nil, nil
-	}
-	if request.resultContractSchema == nil {
-		return nil, fmt.Errorf("%s: result contract is not loaded", resultContractDriftCode)
+		status := ""
+		if proposal != nil {
+			status = proposal.Status
+		}
+		return nil, validateResultEnvelope(request.resultContractSchema, &TaskResult{Status: status})
 	}
 	if spec := request.resultContractSchema.claimsProjection; spec != nil {
 		for name, p := range map[string]string{"findings": spec.Findings, "invariant_assessments": spec.Invariants} {
@@ -636,6 +654,9 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 	}
 	if err := validateResultEvidenceReferences(value, request.resultContractSchema.evidenceReferences, request.Task.EvidenceFrom, request.resultEvidenceInputs, &filesRead); err != nil {
 		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
+	}
+	if err := validateResultEnvelope(request.resultContractSchema, &TaskResult{Status: proposal.Status, StructuredPayload: payload}); err != nil {
+		return nil, err
 	}
 	return payload, nil
 }

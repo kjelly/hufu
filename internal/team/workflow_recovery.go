@@ -11,6 +11,9 @@ func (c *Coordinator) reconcileRecoveredWorkflow(ctx context.Context) error {
 		return nil
 	}
 	w := c.phaseWorkflow
+	if err := c.reconcileCollectedWorkflow(ctx); err != nil {
+		return err
+	}
 	items := c.taskTracker.TodoList().Items()
 	for {
 		if err := ctx.Err(); err != nil {

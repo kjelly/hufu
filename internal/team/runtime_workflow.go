@@ -724,6 +724,10 @@ func (w *runtimeWorkflow) reconcileFailure(taskID string) bool {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.reconcileFailureLocked(taskID)
+}
+
+func (w *runtimeWorkflow) reconcileFailureLocked(taskID string) bool {
 	if w.state != PhaseFailed || w.failedTaskID == "" || w.failedTaskID != taskID {
 		return false
 	}
@@ -736,6 +740,16 @@ func (w *runtimeWorkflow) reconcileFailure(taskID string) bool {
 		Agent: "", Provider: "", FailureSignature: "", Artifacts: []ArtifactRef{},
 	})
 	return true
+}
+
+func (w *runtimeWorkflow) reconcileCollectedFailure(taskID string, phase Phase, original map[Phase]PhaseResult) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.state != PhaseFailed || taskID == "" || original[phase].Status != PhaseStatusBlocked || !sameCanonicalEvidence(w.results, original) {
+		return false
+	}
+	w.failedTaskID, w.failedFromPhase = taskID, phase
+	return w.reconcileFailureLocked(taskID)
 }
 
 func (w *runtimeWorkflow) fail(component, source, category, message string, retryable bool) error {

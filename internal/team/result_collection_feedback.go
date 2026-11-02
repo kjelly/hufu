@@ -30,6 +30,7 @@ func resultCollectionFormatFeedback(raw []byte, info fantasy.ToolInfo) *collecti
 	if len(raw) == 0 {
 		return nil
 	}
+	raw, _ = collectionResponseJSON(raw)
 	issues, truncated, err := resultSubmissionIssues(string(raw), info)
 	if err != nil || len(issues) == 0 {
 		return nil // Preserve the original diagnostic when schema analysis is unavailable.

@@ -1,6 +1,7 @@
 package team
 
 import (
+	"encoding/json/v2"
 	"net/url"
 	"strings"
 )
@@ -12,6 +13,16 @@ import (
 // the required fields of the entire payload. Unresolvable, cyclic or oversized
 // shapes retain the existing open-schema fallback.
 func projectProviderResultSchema(root map[string]any) map[string]any {
+	return projectResultSchema(root, false)
+}
+
+// Prompt guidance is not a provider tool descriptor. Retain scalar and
+// collection bounds here even when a provider's portable schema omits them.
+func projectResultGuidanceSchema(root map[string]any) map[string]any {
+	return projectResultSchema(root, true)
+}
+
+func projectResultSchema(root map[string]any, guidance bool) map[string]any {
 	nodes := 0
 	var project func(map[string]any, int, map[string]bool) map[string]any
 	project = func(schema map[string]any, depth int, visiting map[string]bool) map[string]any {
@@ -55,7 +66,7 @@ func projectProviderResultSchema(root map[string]any) map[string]any {
 		}
 		result := make(map[string]any)
 		for key, value := range schema {
-			if !dynamicSchemaKeywords[key] {
+			if !resultSchemaKeyword(key, guidance) {
 				continue
 			}
 			switch key {
@@ -104,8 +115,32 @@ func projectProviderResultSchema(root map[string]any) map[string]any {
 		return result
 	}
 	projected := project(root, 1, make(map[string]bool))
-	if !dynamicSchemaEligible(projected) {
+	if guidance {
+		encoded, err := json.Marshal(projected)
+		if err != nil || len(encoded) > maxDynamicDescriptorBytes {
+			return nil
+		}
+	}
+	if !guidance && !dynamicSchemaEligible(projected) {
 		return nil
 	}
 	return projected
+}
+
+func resultSchemaKeyword(keyword string, guidance bool) bool {
+	if dynamicSchemaKeywords[keyword] {
+		return true
+	}
+	if !guidance {
+		return false
+	}
+	switch keyword {
+	case "minLength", "maxLength", "pattern", "minItems", "maxItems", "uniqueItems",
+		"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf":
+		return true
+	default:
+		// Object property counts can include omitted runtime-owned fields.
+		// Their canonical constraints cannot validate the model's projection.
+		return false
+	}
 }

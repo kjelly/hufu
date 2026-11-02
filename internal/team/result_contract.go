@@ -43,6 +43,8 @@ type CompiledResultContract struct {
 	SchemaSHA256       string
 	CanonicalSchema    []byte
 	schema             *jsonschema.Schema
+	envelopeSchema     *jsonschema.Schema
+	envelopeDocument   []byte
 	toolEvidence       *resultToolEvidenceSpec
 	evidenceInputs     *resultEvidenceInputsSpec
 	evidenceKeys       *resultEvidenceKeysSpec

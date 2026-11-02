@@ -18,7 +18,7 @@ const (
 	RecoveryRepairClaims            ResultCollectionRecoveryDisposition = "repair_claims"
 	RecoveryResumeCollection        ResultCollectionRecoveryDisposition = "resume_collection"
 	RecoveryBlocked                 ResultCollectionRecoveryDisposition = "blocked"
-	resultRecoveryValidatorRevision                                     = 3
+	resultRecoveryValidatorRevision                                     = 4
 )
 
 type ResultCollectionRecoveryCheck struct {
@@ -170,6 +170,10 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 		}
 	}
 	if !c.assessRecoveryLineage(ctx, item, a, check) {
+		return finish()
+	}
+	_, workflowErr := resultRepairWorkflowPhase(c.collectionWorkflowSnapshot(), taskID)
+	if !check("workflow_recovery", workflowErr) {
 		return finish()
 	}
 	work, err := c.loadCollectionWork(ctx, item, cp)
@@ -553,6 +557,9 @@ func (c *Coordinator) assessRecoveryClaims(ctx context.Context, item *TodoItem, 
 	input, err := c.decodeCollectionClaims(taskID, claims)
 	if err == nil {
 		input, err = c.projectResultClaims(ctx, taskID, input)
+		if err != nil {
+			err = rejectProjectedClaims(err)
+		}
 	}
 	if err == nil {
 		admission := localResultAdmission{coordinator: c, todoID: taskID}

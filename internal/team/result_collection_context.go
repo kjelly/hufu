@@ -74,13 +74,20 @@ func providerFixedCollectionPayloadSchema(ref ResultContractRef, compiled *Compi
 }
 
 func resultFixedCollectionPayloadSchema(ref ResultContractRef, compiled *CompiledResultContract, plans []resultFixedCollectionPlan, portable bool) map[string]any {
-	base := providerVisibleResultPayloadSchema(ref, compiled)
+	return fixedCollectionPayloadSchema(ref, compiled, plans, portable, false)
+}
+
+func fixedCollectionPayloadSchema(ref ResultContractRef, compiled *CompiledResultContract, plans []resultFixedCollectionPlan, portable, guidance bool) map[string]any {
+	base := visibleResultPayloadSchema(ref, compiled, guidance)
 	for _, plan := range plans {
 		// Canonical provider guidance advertises arrays; submission accepts
 		// keyed decisions. Replace that shape while retaining sibling fields.
 		properties := make(map[string]any, len(plan.rows))
 		required := make([]any, 0, len(plan.rows))
 		decision := projectProviderResultSchema(plan.spec.decisionSchema)
+		if guidance {
+			decision = projectResultGuidanceSchema(plan.spec.decisionSchema)
+		}
 		if decision == nil {
 			decision = map[string]any{"type": "object"}
 		}

@@ -143,7 +143,7 @@ func (a *localResultAdmission) validateClaims(ctx context.Context, input SubmitR
 				res.Summary = "Result includes claims without matching successful tool evidence; consult the structured payload for downgraded findings."
 			}
 		}
-		if err := a.bindObservedFilesRead(ctx, compiled, input, &res, contract); err != nil {
+		if err := a.bindResultEnvelope(ctx, compiled, input, &res, contract, recordFailure); err != nil {
 			return nil, err
 		}
 	} else if len(bytes.TrimSpace(input.StructuredPayload)) > 0 {

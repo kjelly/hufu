@@ -18,7 +18,8 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 	if err != nil {
 		return "", nil, err
 	}
-	if _, _, err := c.boundResultContract(checkpoint.TaskID); err != nil {
+	_, compiled, err := c.boundResultContract(checkpoint.TaskID)
+	if err != nil {
 		return "", nil, err
 	}
 	store, err := OpenFileArtifactStoreReadOnly(c.artifactStoreRootPath(), c.artifactStoreRootPath())
@@ -50,7 +51,13 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 	if localResultSubmissionContract(c, checkpoint.TaskID).RuntimeOwnedFilesRead {
 		collectionContext += "\nOuter files_read is runtime-owned and filled from the original work's successful native view observations. Omit it entirely; preserve the evidence references in structured_payload.\n"
 	}
-	info := collectionSubmissionInfo(c, checkpoint.TaskID)
+	if compiled != nil && len(compiled.envelopeDocument) > 0 {
+		collectionContext += "\nResult envelope schema for {status, structured_payload}, evaluated AFTER runtime-owned decisions and source records are bound. Correct inconsistent status without changing settled verdicts or evidence:\n" + string(compiled.envelopeDocument) + "\n"
+	}
+	info, err := collectionGuidanceInfo(c, checkpoint.TaskID)
+	if err != nil {
+		return "", nil, err
+	}
 	invariants, _, err := c.invariantRepairInstructions(checkpoint.TaskID, checkpoint.Attempt, checkpoint.ModelExecutionID)
 	if err != nil {
 		return "", nil, err

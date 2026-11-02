@@ -17,11 +17,12 @@ import (
 // checkpointing, embedded provider execution, and objective verification. The
 // preceding accepted review inventory is a fixture; no model is called.
 func TestTeamAuditDispatchBindsScopeAndVerifiesProviderResult(t *testing.T) {
-	t.Run("accepted", func(t *testing.T) { testTeamAuditDispatch(t, false) })
-	t.Run("rejected", func(t *testing.T) { testTeamAuditDispatch(t, true) })
+	t.Run("accepted", func(t *testing.T) { testTeamAuditDispatch(t, false, false) })
+	t.Run("rejected", func(t *testing.T) { testTeamAuditDispatch(t, true, false) })
+	t.Run("invalid_source", func(t *testing.T) { testTeamAuditDispatch(t, false, true) })
 }
 
-func testTeamAuditDispatch(t *testing.T, rejected bool) {
+func testTeamAuditDispatch(t *testing.T, rejected, invalidSource bool) {
 	t.Helper()
 	teamDir, err := filepath.Abs("..")
 	if err != nil {
@@ -53,6 +54,9 @@ func testTeamAuditDispatch(t *testing.T, rejected bool) {
 		t.Fatal(err)
 	}
 	fixture := gateFixture(t)
+	if invalidSource {
+		fixture.Tasks[3].Result.Status = "success"
+	}
 	if rejected {
 		replacePayload(t, &fixture.Tasks[4], func(p *payload) { p.GapResolutions[0].ResolvingTaskID = "3" })
 	}
@@ -90,6 +94,12 @@ func testTeamAuditDispatch(t *testing.T, rejected bool) {
 		if item.ContractID == "verify-review-report" {
 			audit = item
 		}
+	}
+	if invalidSource {
+		if err == nil || audit == nil || audit.FailureEvent == nil || audit.FailureEvent.FailureClass == team.FailureVerify || !strings.Contains(audit.FailureEvent.Summary, "critic 6 concealed") {
+			t.Fatalf("source failure could take report-only verification edge: audit=%+v err=%v", audit, err)
+		}
+		return
 	}
 	if rejected {
 		if err == nil || audit == nil || audit.Status != team.TaskError || audit.FailureEvent == nil || audit.FailureEvent.FailureClass != team.FailureVerify || audit.VerifyResult == nil || !strings.Contains(audit.VerifyResult.Stderr, "lacks observed cross-workset evidence") {

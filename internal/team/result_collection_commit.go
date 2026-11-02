@@ -21,6 +21,25 @@ func collectionSubmissionInfo(c *Coordinator, taskID string) fantasy.ToolInfo {
 	return info
 }
 
+// The collector receives JSON as prompt text, not a provider tool schema.
+// Show validation bounds and use the same shape for exhaustive repair feedback.
+// Admission still validates the original pinned contract after binding sources.
+func collectionGuidanceInfo(c *Coordinator, taskID string) (fantasy.ToolInfo, error) {
+	info := collectionSubmissionInfo(c, taskID)
+	ref, compiled, err := c.boundResultContract(taskID)
+	if err != nil || compiled == nil {
+		return info, err
+	}
+	plans, err := c.fixedCollectionPlans(taskID)
+	if err != nil {
+		return info, err
+	}
+	schema := fixedCollectionPayloadSchema(*ref, compiled, plans, false, true)
+	advertiseResultEvidenceKeys(schema, compiled.evidenceKeys)
+	info.Parameters["structured_payload"] = providerResultIntegerStrings(schema, 0)
+	return info, nil
+}
+
 // decodeCollectionClaims accepts exactly the published model claims schema.
 // Only the schema's declared file-entry shorthand is normalized; text is never
 // unwrapped and unsupported shorthand remains invalid.

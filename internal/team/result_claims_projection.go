@@ -334,6 +334,9 @@ func resultProjectionSchemaAt(root map[string]any, pointer string) map[string]an
 // Revalidation must also respect the new projection contract without changing
 // historical payload bytes or judgments. A divergent envelope needs new work.
 func resultProjectionMatchesAccepted(result *TaskResult, compiled *CompiledResultContract) bool {
+	if validateResultEnvelope(compiled, result) != nil {
+		return false
+	}
 	spec := projectionForContract(compiled)
 	if spec == nil {
 		return true

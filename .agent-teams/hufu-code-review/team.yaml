@@ -595,6 +595,8 @@ spec:
       recovery: retry
       max_retries: 1
       depends-on-contracts: [synthesize-review]
+      # Only report-owned verification failures may return to synthesis.
+      # Invalid accepted sources fail the native action and require source repair.
       on-failure-contract: synthesize-review
       on-failure-classes: [verification]
       action:

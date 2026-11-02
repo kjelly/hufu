@@ -1367,3 +1367,32 @@ Invariant claims 投影的靜態 task 必須宣告 `invariant-verification: repo
 修復回應會提供被拒絕欄位的 JSON Pointer。修復保留已完成工作、判斷與證據，
 不會重新開啟工作工具；相同的被拒絕 JSON（忽略物件 key 順序與空白）再次出現時，
 停止自動修復並保留原始診斷。人工明確授權的額外修復自成一輪；原先已用次數與完整歷史仍保留，新一輪仍受其授權次數限制。
+
+### 完成狀態與 payload 的一致性
+
+結果契約可宣告 `x-hufu-result-envelope`，以 Draft 2020-12 JSON Schema
+檢查 `{ "status": ..., "structured_payload": ... }`。這個檢查在 runtime
+補齊固定集合、決策與已接受來源之後、保存結果之前執行。例如：
+
+```json
+"x-hufu-result-envelope": {
+  "if": {
+    "properties": {
+      "structured_payload": {
+        "properties": { "coverage": { "const": "incomplete" } },
+        "required": ["coverage"]
+      }
+    }
+  },
+  "then": { "properties": { "status": { "const": "completed_with_gaps" } } }
+}
+```
+
+此 envelope schema 是獨立的 schema 文件；fragment references 只指向其自身的
+`$defs` 等節點，不能引用外層 payload schema。外部檔案與網路引用仍禁止。
+模型與 collector 會收到完整規則；provider 的可攜提交 schema 不因此改變。
+本機提交、外部 worker、結果修復、下游來源驗證與契約升級預覽共用相同檢查。
+不一致時修正完成狀態，保留原始判斷、證據與限制，不能刪除 unknown／unverified
+來滿足契約。若 team 允許不帶 payload 的 blocked 結果，必須在此 schema
+明確允許 `structured_payload: null`。新增規則會改變凍結契約；既有 run 應先用
+`resume --upgrade-contracts --dry-run` 預覽，不能覆寫歷史結果或收據。

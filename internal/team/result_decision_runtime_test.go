@@ -172,6 +172,64 @@ func TestBoundDecisionCoverageReplayAndAssembly(t *testing.T) {
 	}
 }
 
+func TestBoundDecisionContractRevalidationPreservesOriginalRequest(t *testing.T) {
+	for _, name := range []string{"valid", "missing_proof", "wrong_original", "changed_mapping", "new_submission"} {
+		t.Run(name, func(t *testing.T) {
+			f := newBoundDecisionFixture(t, 1)
+			if response := f.call(t, 0, "original"); response.IsError {
+				t.Fatal(response.Content)
+			}
+			payload, rejection := f.c.structuredPayloadForSubmission(f.item.ID, f.submission(t, nil))
+			if rejection != "" {
+				t.Fatal(rejection)
+			}
+			original := *f.item.ResultContract
+			old := f.c.session.ResultContracts[original.ID]
+			root, err := decodeResultContractJSON(old.CanonicalSchema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root.(map[string]any)["$comment"] = "revalidated contract"
+			if name == "changed_mapping" {
+				spec := root.(map[string]any)["x-hufu-fixed-collections"].([]any)[0].(map[string]any)
+				group := spec["decision_groups"].([]any)[0].(map[string]any)
+				group["value_map"].(map[string]any)["b"].(map[string]any)["state"] = "accept"
+			}
+			raw, err := json.Marshal(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			compiled, err := CompileResultContractDocument(original.ID, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ref := compiled.ref(true)
+			f.c.session.ResultContracts[ref.ID] = compiled
+			f.item.ResultContract = &ref
+			payload.Contract = ref
+			f.item.TypedResult = &TaskResult{TaskID: f.item.ID, Status: TaskResultStatusSuccess, StructuredPayload: payload}
+			f.item.ExecutionReceipt = &ExecutionReceipt{ResultContractID: original.ID, ResultContractSHA256: original.SchemaSHA256, ResultPayloadSHA256: payload.SHA256}
+			f.item.ContractRevalidation = &ContractRevalidation{Original: original, Accepted: ref, PayloadSHA256: payload.SHA256, SourceTaskSHA256: strings.Repeat("a", 64)}
+			switch name {
+			case "missing_proof":
+				f.item.ContractRevalidation = nil
+			case "wrong_original":
+				f.item.ContractRevalidation.Original.SchemaSHA256 = strings.Repeat("b", 64)
+			}
+			if name == "new_submission" {
+				if _, rejection := f.c.structuredPayloadForSubmission(f.item.ID, f.submission(t, nil)); rejection == "" {
+					t.Fatal("new submission reused an old-schema decision")
+				}
+			} else if err := f.c.validateAcceptedDependencyPayload(f.item); (err == nil) != (name == "valid") {
+				t.Fatalf("revalidation error=%v", err)
+			}
+			if f.calls.Load() != 1 {
+				t.Fatal("revalidation repeated model execution")
+			}
+		})
+	}
+}
+
 func TestBoundDecisionRejectsInvalidSubmission(t *testing.T) {
 	f := newBoundDecisionFixture(t, 2)
 	if r := f.call(t, 0, "first"); r.IsError {

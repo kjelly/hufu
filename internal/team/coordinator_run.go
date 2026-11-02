@@ -2335,10 +2335,16 @@ func (c *Coordinator) runRequest(ctx context.Context, userPrompt string) (string
 
 	_ = EnsureWorkspaceDirs(c.session.Workspace)
 	if c.phaseWorkflow != nil {
-		if err := c.phaseWorkflow.Start(); err != nil {
+		var startErr error
+		if c.phaseWorkflow.State() == PhaseFailed {
+			startErr = c.admitFailedWorkflowResultRepair(ctx)
+		} else {
+			startErr = c.phaseWorkflow.Start()
+		}
+		if startErr != nil {
 			c.saveCheckpoint()
-			c.finalizePublicInvocationFailure(err)
-			return "", err
+			c.finalizePublicInvocationFailure(startErr)
+			return "", startErr
 		}
 		c.saveCheckpoint()
 	}

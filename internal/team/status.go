@@ -1802,6 +1802,9 @@ func (tl *TodoList) SetExecutionReceipt(id string, receipt *ExecutionReceipt) er
 // no-op. RunID is required: after crash-resume a todo can carry receipts from
 // a prior run with the same attempt number, so matching on attempt alone
 // would misattribute evidence to the wrong run.
+// When the current receipt matches, its model execution identity also selects
+// history: DAG retries restart the work counter and must not rewrite the prior
+// lifecycle's verification evidence.
 func (tl *TodoList) UpdateReceiptVerifyResult(runID, taskID string, attempt int, vr *VerificationResult) {
 	if tl == nil || taskID == "" || attempt < 1 || vr == nil {
 		return
@@ -1813,12 +1816,16 @@ func (tl *TodoList) UpdateReceiptVerifyResult(runID, taskID string, attempt int,
 		}
 		copyVR := *vr
 		copyVR.Spec = cloneVerificationSpecPtr(vr.Spec)
+		var active *ExecutionReceipt
+		if ti.ExecutionReceipt != nil && ti.ExecutionReceipt.RunID == runID && ti.ExecutionReceipt.Attempt == attempt {
+			active = ti.ExecutionReceipt
+		}
 		// Update the durable per-attempt history. Match on (RunID, Attempt)
 		// so a crash-resumed run with a fresh executionRunID does not overwrite
 		// a prior run's receipt that happens to share the attempt number.
 		for i := range ti.ExecutionReceipts {
 			r := &ti.ExecutionReceipts[i]
-			if r.Attempt == attempt && r.RunID == runID {
+			if r.Attempt == attempt && r.RunID == runID && (active == nil || sameExecutionReceiptProjection(*r, *active)) {
 				r.VerifyResult = &copyVR
 				break
 			}

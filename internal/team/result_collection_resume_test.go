@@ -301,6 +301,9 @@ func TestResultCollectionDAGRetryExecutesFreshWork(t *testing.T) {
 				spec.Recovery = RecoveryRetry
 				spec.VerifySpec = &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: []TaskResultAssertion{{Pointer: "/summary", Op: "non_empty"}}}
 			})
+			// Exercise the same model execution identity used by real dispatches,
+			// rather than the fixture's unrelated work-execution-1 placeholder.
+			receipt.ModelExecutionID = c.newTaskContextRequest(taskDefFromTodoItem(item), item.ID, 1, ContextTriggerTaskDispatch, item.Agent, "worker", nil).ModelExecutionID
 			cp, err := c.beginResultCollection(ctx, item.ID, receipt, "original work")
 			if err != nil {
 				t.Fatal(err)
@@ -324,6 +327,7 @@ func TestResultCollectionDAGRetryExecutesFreshWork(t *testing.T) {
 				t.Fatal(err)
 			}
 			task := taskDefFromTodoItem(item)
+			originalReceipt := cloneExecutionReceipt(collectionReceipt(c.todoItemByID(item.ID), cp))
 			scheduler := mustNewDAGScheduler(t, c, []TaskDef{task}, []*TodoItem{item}, nil)
 			scheduler.states[0] = TaskDone
 			if err := scheduler.resetTaskWithRemediation(t.Context(), 0, "verifier requires corrected work", &RemediationContext{FailureClass: FailureVerify, Summary: "correct the report"}); err != nil {
@@ -352,8 +356,11 @@ func TestResultCollectionDAGRetryExecutesFreshWork(t *testing.T) {
 			}
 			current := c.todoItemByID(item.ID)
 			fresh := currentResultCollection(current)
-			if worker.Calls() != 1 || calls.Load() != 1 || current.Status != TaskDone || fresh == nil || fresh.Work == cp.Work || current.ExecutionReceipt.OccurrenceAttempt != 2 || current.TypedResult.Summary != "corrected work" {
+			if worker.Calls() != 1 || calls.Load() != 1 || current.Status != TaskDone || fresh == nil || fresh.Work == cp.Work || fresh.ModelExecutionID == cp.ModelExecutionID || current.ExecutionReceipt.OccurrenceAttempt != 2 || current.TypedResult.Summary != "corrected work" {
 				t.Fatalf("work=%d collection=%d status=%s", worker.Calls(), calls.Load(), current.Status)
+			}
+			if !sameCanonicalEvidence(&originalReceipt, collectionReceipt(current, cp)) {
+				t.Fatal("DAG retry rewrote the prior lifecycle's receipt or verification")
 			}
 		})
 	}

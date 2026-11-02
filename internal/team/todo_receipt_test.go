@@ -139,3 +139,30 @@ func TestTodoListItemsDeepCopyReceiptVerifyResult(t *testing.T) {
 		t.Errorf("canonical receipt verify result = %#v, want Stderr %q", got, "original")
 	}
 }
+
+func TestTodoListVerificationSelectsActiveModelExecution(t *testing.T) {
+	for _, lifecycle := range []int{1, 2} {
+		t.Run(strconv.Itoa(lifecycle), func(t *testing.T) {
+			list := NewTaskTracker().TodoList()
+			id := list.AddBatch([]TodoSpec{{Agent: "worker", Desc: "verify accepted result"}})[0].ID
+			old := ExecutionReceipt{RunID: "run", TaskID: id, Attempt: 1, OccurrenceAttempt: 1, ModelExecutionID: "original", VerifyResult: &VerificationResult{ExitCode: 0, Fingerprint: "original-verifier"}}
+			current := ExecutionReceipt{RunID: "run", TaskID: id, Attempt: 1, OccurrenceAttempt: lifecycle, ModelExecutionID: "active"}
+			for _, r := range []ExecutionReceipt{old, current} {
+				if err := list.SetExecutionReceipt(id, &r); err != nil {
+					t.Fatal(err)
+				}
+			}
+			list.UpdateReceiptVerifyResult("run", id, 1, &VerificationResult{ExitCode: 1, Fingerprint: "new-verifier"})
+			item := list.Items()[0]
+			for _, r := range item.ExecutionReceipts {
+				want := "original-verifier"
+				if r.ModelExecutionID == "active" {
+					want = "new-verifier"
+				}
+				if r.VerifyResult == nil || r.VerifyResult.Fingerprint != want {
+					t.Fatal("verification overwrote another execution's evidence")
+				}
+			}
+		})
+	}
+}
