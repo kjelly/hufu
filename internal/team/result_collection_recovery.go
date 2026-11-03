@@ -169,7 +169,7 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 			break
 		}
 	}
-	if !c.assessRecoveryLineage(ctx, item, a, check) {
+	if !c.assessRecoveryLineage(ctx, item, a, check, validateCollectionRecoveryTarget) {
 		return finish()
 	}
 	_, workflowErr := resultRepairWorkflowPhase(c.collectionWorkflowSnapshot(), taskID)
@@ -437,7 +437,7 @@ func validateStoredRecoveryGrant(grant ResultRepairGrant, checkpoint *ResultColl
 	return nil
 }
 
-func (c *Coordinator) assessRecoveryLineage(ctx context.Context, item *TodoItem, a *ResultCollectionRecoveryAssessment, check func(string, error) bool) bool {
+func (c *Coordinator) assessRecoveryLineage(ctx context.Context, item *TodoItem, a *ResultCollectionRecoveryAssessment, check func(string, error) bool, validateTarget func(*TodoItem) error) bool {
 	cp := a.Checkpoint
 	if !check("lineage", c.EventJournal().VerifyHashChain(ctx)) {
 		return false
@@ -466,7 +466,7 @@ func (c *Coordinator) assessRecoveryLineage(ctx context.Context, item *TodoItem,
 		return false
 	}
 	canonical := todoItemByID(replayed, item.ID)
-	if !check("canonical_target", validateCollectionRecoveryTarget(canonical)) {
+	if !check("canonical_target", validateTarget(canonical)) {
 		return false
 	}
 	canonicalCheckpoint := currentResultCollection(canonical)

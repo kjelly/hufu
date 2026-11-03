@@ -24,13 +24,14 @@ func decisionRecoveryFixture(t *testing.T, mutations ...func(map[string]any)) (*
 	return decisionRecoveryFixtureAtEndpoint(t, "http://127.0.0.1:1/v1", mutations...)
 }
 
-func decisionRecoveryFixtureAtEndpoint(t *testing.T, endpoint string, mutations ...func(map[string]any)) (*Coordinator, string, *ResultCollectionCheckpoint, *atomic.Int32) {
+func decisionCollectionFixture(t *testing.T, endpoint string, count, settled int, amendments ...func(map[string]any)) (*Coordinator, *TodoItem, context.Context, ExecutionReceipt, *atomic.Int32) {
 	t.Helper()
-	f := newBoundDecisionFixture(t, 1, func(root map[string]any) {
-		item := root["properties"].(map[string]any)["decisions"].(map[string]any)["items"].(map[string]any)
-		item["properties"].(map[string]any)["reason"] = map[string]any{"type": "string"}
-		item["allOf"] = []any{map[string]any{"if": map[string]any{"properties": map[string]any{"state": map[string]any{"const": "reject"}}}, "then": map[string]any{"properties": map[string]any{"reason": map[string]any{"const": ""}}}}}
-	})
+	return configuredDecisionCollectionFixture(t, endpoint, count, settled, nil, nil, amendments...)
+}
+
+func configuredDecisionCollectionFixture(t *testing.T, endpoint string, count, settled int, configureTask func(*TodoSpec), configure func(*Coordinator, *TodoItem), amendments ...func(map[string]any)) (*Coordinator, *TodoItem, context.Context, ExecutionReceipt, *atomic.Int32) {
+	t.Helper()
+	f := newBoundDecisionFixture(t, count, amendments...)
 	f.sources[0].ID = "accepted-source"
 	f.sources[0].TypedResult.TaskID = f.sources[0].ID
 	calls := new(atomic.Int32)
@@ -38,6 +39,9 @@ func decisionRecoveryFixtureAtEndpoint(t *testing.T, endpoint string, mutations 
 		ref := f.c.session.ResultContracts["decisions.json"].ref(true)
 		spec.ResultContract = &ref
 		spec.EvidenceFrom = []string{f.sources[0].ID}
+		if configureTask != nil {
+			configureTask(spec)
+		}
 	}, func(c *Coordinator) {
 		c.sidecarModel = "test-sidecar"
 		c.session.ResultContracts = f.c.session.ResultContracts
@@ -50,7 +54,24 @@ func decisionRecoveryFixtureAtEndpoint(t *testing.T, endpoint string, mutations 
 		}
 		c.decisionPrimitiveGate = make(chan struct{}, 1)
 		c.taskTracker.TodoList().AddReserved(f.sources)
+		if configure != nil {
+			configure(c, f.sources[0])
+		}
 	})
+	artifacts, err := NewFileArtifactStore(c.session.Workspace, c.projectDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := artifacts.Put(ctx, PutArtifactRequest{Kind: "test", Path: "source.txt", Content: []byte("original source has a documented local limitation"), TaskID: f.sources[0].ID, RunID: receipt.RunID, Agent: f.sources[0].Agent, Attempt: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configure != nil {
+		f.sources[0].TypedResult.Artifacts = []ArtifactRef{artifact.ArtifactRef}
+		if err := c.taskTracker.TodoList().TryApplyProjectedItem(f.sources[0]); err != nil {
+			t.Fatal(err)
+		}
+	}
 	// Persist the accepted source in this lineage as well as the in-memory view.
 	for _, eventType := range []EventType{EventTaskCreated, EventTaskCompleted} {
 		source := cloneTodoItem(f.sources[0])
@@ -64,14 +85,6 @@ func decisionRecoveryFixtureAtEndpoint(t *testing.T, endpoint string, mutations 
 		if _, err = c.EventJournal().Append(ctx, RunEvent{Type: string(eventType), RunID: receipt.RunID, BranchID: "main", TaskID: source.ID, Actor: source.Agent, Payload: body}); err != nil {
 			t.Fatal(err)
 		}
-	}
-	artifacts, err := NewFileArtifactStore(c.session.Workspace, c.projectDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	artifact, err := artifacts.Put(ctx, PutArtifactRequest{Kind: "test", Path: "source.txt", Content: []byte("original source has a documented local limitation"), TaskID: f.sources[0].ID})
-	if err != nil {
-		t.Fatal(err)
 	}
 	scope := &ArtifactAccessScope{RunID: receipt.RunID, TaskID: item.ID, Attempt: 1, AuthorizedRefs: []ArtifactRef{artifact.ArtifactRef}}
 	ctx = context.WithValue(ctx, artifactAccessScopeKey, scope)
@@ -91,12 +104,28 @@ func decisionRecoveryFixtureAtEndpoint(t *testing.T, endpoint string, mutations 
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ = json.Marshal(map[string]any{"collection": "/decisions", "row_key": plans[0].rows[0].Key, "group": "assessment"})
-	response, err = (&decisionPrimitiveTool{coordinator: c}).Run(ctx, fantasy.ToolCall{ID: "original-decision", Name: decisionPrimitiveToolName, Input: string(raw)})
-	if err != nil || response.IsError {
-		t.Fatalf("decision: %v %s", err, response.Content)
+	for i := range settled {
+		raw, _ = json.Marshal(map[string]any{"collection": "/decisions", "row_key": plans[0].rows[i].Key, "group": "assessment"})
+		response, err = (&decisionPrimitiveTool{coordinator: c}).Run(ctx, fantasy.ToolCall{ID: fmt.Sprintf("original-decision-%d", i), Name: decisionPrimitiveToolName, Input: string(raw)})
+		if err != nil || response.IsError {
+			t.Fatalf("decision: %v %s", err, response.Content)
+		}
 	}
 	receipt.ArtifactScope = scope
+	return c, item, ctx, receipt, calls
+}
+
+func decisionRecoveryFixtureAtEndpoint(t *testing.T, endpoint string, mutations ...func(map[string]any)) (*Coordinator, string, *ResultCollectionCheckpoint, *atomic.Int32) {
+	t.Helper()
+	c, item, ctx, receipt, calls := decisionCollectionFixture(t, endpoint, 1, 1, func(root map[string]any) {
+		item := root["properties"].(map[string]any)["decisions"].(map[string]any)["items"].(map[string]any)
+		item["properties"].(map[string]any)["reason"] = map[string]any{"type": "string"}
+		item["allOf"] = []any{map[string]any{"if": map[string]any{"properties": map[string]any{"state": map[string]any{"const": "reject"}}}, "then": map[string]any{"properties": map[string]any{"reason": map[string]any{"const": ""}}}}}
+	})
+	plans, err := c.fixedCollectionPlans(item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cp, err := c.beginResultCollection(ctx, item.ID, receipt, "Original local limitation belongs in summary/source; settled decision is reject.")
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +138,7 @@ func decisionRecoveryFixtureAtEndpoint(t *testing.T, endpoint string, mutations 
 	for _, mutate := range mutations {
 		mutate(claims)
 	}
-	raw, _ = json.Marshal(claims)
+	raw, _ := json.Marshal(claims)
 	cp, err = c.recordCollectionResponse(ctx, cp, raw)
 	if err != nil {
 		t.Fatal(err)

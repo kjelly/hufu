@@ -135,6 +135,105 @@ func TestCollectionItemsProjectionRepairKeepsAuthorityBoundaries(t *testing.T) {
 	}
 }
 
+func TestResultCollectionPreservesUnsettledDecisionOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		count, settled int
+		fabricate      bool
+	}{
+		{name: "missing decision", count: 1},
+		{name: "partially settled", count: 2, settled: 1},
+		{name: "empty collection"},
+		{name: "settled decision", count: 1, settled: 1},
+		{name: "fabricated success", count: 1, fabricate: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			unsettled := tc.settled < tc.count
+			var collectorCalls atomic.Int32
+			var response string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/chat/completions" {
+					_, _ = fmt.Fprint(w, `{"model":"test","parameters":"num_ctx 131072","capabilities":["completion","tools"]}`)
+					return
+				}
+				collectorCalls.Add(1)
+				var request map[string]any
+				if err := json.UnmarshalRead(r.Body, &request); err != nil {
+					t.Error(err)
+					return
+				}
+				if tools, _ := request["tools"].([]any); len(tools) != 0 {
+					t.Error("collector exposed decision or work tools")
+				}
+				prompt := fmt.Sprint(request["messages"])
+				if unsettled {
+					for _, want := range []string{"Bound decision failure", "decision_missing:", "OMIT structured_payload", `"status":{"enum":["blocked"],"type":"string"}`} {
+						if !strings.Contains(prompt, want) {
+							t.Errorf("collector lacks runtime outcome guidance: %s", want)
+						}
+					}
+				} else if strings.Contains(prompt, "Bound decision failure") {
+					t.Error("settled or empty collection was incorrectly blocked")
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprintf(w, "data: {\"id\":\"outcome\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", response)
+			}))
+			t.Cleanup(server.Close)
+			c, item, ctx, receipt, decisionCalls := decisionCollectionFixture(t, server.URL+"/v1", tc.count, tc.settled)
+			worker := scriptWorker(textTurn("must never execute"))
+			c.workerAgentOverride = worker
+			source := c.dependencyResultsForTask(item.ID)[0].StructuredPayload.clone()
+			plans, err := c.fixedCollectionPlans(item.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			report := "All required decisions settled."
+			response = `{"status":"success","summary":"settled assessment","structured_payload":` + fixedCollectionSubmission(t, plans[0], func(rows map[string]any) {
+				for _, row := range rows {
+					delete(row.(map[string]any), "state")
+				}
+			}) + `}`
+			if unsettled {
+				report = "Blocked: decision_primitive rejected the arguments; no complete settled assessment exists."
+				if !tc.fabricate {
+					response = `{"status":"blocked","summary":"Required decision did not settle"}`
+				}
+			}
+			cp, err := c.beginResultCollection(ctx, item.ID, receipt, report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = c.collectWorkResult(ctx, c.session.Agents["worker"], cp)
+			if (err != nil) != tc.fabricate || collectorCalls.Load() != 1 || decisionCalls.Load() != int32(tc.settled) || worker.Calls() != 0 {
+				t.Fatalf("collection=%d decisions=%d work=%d err=%v", collectorCalls.Load(), decisionCalls.Load(), worker.Calls(), err)
+			}
+			current := c.todoItemByID(item.ID)
+			if currentResultCollection(current).Work != cp.Work || current.ExecutionReceipt.TranscriptRef != receipt.TranscriptRef || string(c.dependencyResultsForTask(item.ID)[0].StructuredPayload.Value) != string(source.Value) {
+				t.Fatal("collection changed the original work, transcript or accepted source")
+			}
+			events, err := c.EventJournal().ReadEvents(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, candidate := range []*TodoItem{current, todoItemByID(ReduceToTodoList(events), item.ID)} {
+				if tc.fabricate {
+					if candidate.TypedResult != nil || currentResultCollection(candidate).State != ResultCollectionBlocked {
+						t.Fatal("fabricated success reached canonical state or replay")
+					}
+					continue
+				}
+				result := candidate.TypedResult
+				if result == nil || (result.Status == TaskResultStatusBlocked) != unsettled || (result.StructuredPayload == nil) != unsettled || currentResultCollection(candidate).State != ResultCollectionCommitted {
+					t.Fatal("collection or replay changed the verified decision outcome")
+				}
+				if !unsettled && len(result.StructuredPayload.CollectionBindings[0].Decisions) != tc.settled {
+					t.Fatal("accepted result lost settled decision provenance")
+				}
+			}
+		})
+	}
+}
+
 func TestResultCollectionResumesStatusRepairWithOriginalBudget(t *testing.T) {
 	const payload = `{"notes":["missing source","unexecuted probe"]}`
 	for _, state := range []ResultCollectionState{ResultCollectionPrepared, ResultCollectionReceived} {

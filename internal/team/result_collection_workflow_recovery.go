@@ -10,6 +10,10 @@ import (
 // can only settle the failed phase's sole remaining protocol task. Match typed
 // failure provenance rather than message text, which can change during repair.
 func resultRepairWorkflowPhase(session *SessionData, taskID string) (Phase, error) {
+	return blockedCollectionWorkflowPhase(session, taskID, validateCollectionRecoveryTarget)
+}
+
+func blockedCollectionWorkflowPhase(session *SessionData, taskID string, validateTarget func(*TodoItem) error) (Phase, error) {
 	if session == nil || session.WorkflowState == "" {
 		return "", nil
 	}
@@ -21,7 +25,7 @@ func resultRepairWorkflowPhase(session *SessionData, taskID string) (Phase, erro
 	}
 	item := todoItemByID(session.Tasks, taskID)
 	unresolved := UnresolvedTaskReferences(session.Tasks)
-	if item == nil || len(unresolved) != 1 || unresolved[0].ID != taskID || validateCollectionRecoveryTarget(item) != nil {
+	if item == nil || len(unresolved) != 1 || unresolved[0].ID != taskID || validateTarget(item) != nil {
 		return "", fmt.Errorf("failed workflow recovery requires its sole blocked collection task")
 	}
 	result, exists := session.PhaseResults[item.Phase]
@@ -29,10 +33,17 @@ func resultRepairWorkflowPhase(session *SessionData, taskID string) (Phase, erro
 		return "", fmt.Errorf("workflow failure is not attributable to the selected collection")
 	}
 	failure := result.Errors[0]
-	if failure.Category != "TASK_BLOCKED" || failure.Phase != item.Phase || failure.Component != item.Agent || failure.Source != item.Agent {
+	if failure.Category != blockedTaskFailureCategory(item.Optional) || failure.Phase != item.Phase || failure.Component != item.Agent || failure.Source != item.Agent {
 		return "", fmt.Errorf("workflow failure does not match the selected task's canonical failure")
 	}
 	return item.Phase, nil
+}
+
+func blockedTaskFailureCategory(optional bool) string {
+	if optional {
+		return "OPTIONAL_TASK_BLOCKED"
+	}
+	return "TASK_BLOCKED"
 }
 
 func (c *Coordinator) collectionWorkflowSnapshot() *SessionData {

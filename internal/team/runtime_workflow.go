@@ -595,10 +595,7 @@ func (w *runtimeWorkflow) observe(items []*TodoItem) error {
 			if VerifiedTaskResolution(item, items, resolutionRunID(items, item)) != nil {
 				continue
 			}
-			if optionalContracts[item.ContractID] {
-				return w.failLocked(item.ID, item.Agent, item.Agent, "OPTIONAL_TASK_BLOCKED", item.Detail, false, PhaseStatusBlocked)
-			}
-			return w.failLocked(item.ID, item.Agent, item.Agent, "TASK_BLOCKED", item.Detail, false, PhaseStatusBlocked)
+			return w.failLocked(item.ID, item.Agent, item.Agent, blockedTaskFailureCategory(optionalContracts[item.ContractID]), item.Detail, false, PhaseStatusBlocked)
 		}
 	}
 	for contractID := range expectedContracts {

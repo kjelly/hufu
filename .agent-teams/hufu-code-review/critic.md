@@ -208,6 +208,10 @@ The static contract determines the structured payload:
   without silently summarizing or dropping earlier observations. A settled
   slot retains its original context even if you read more afterwards.
   This status describes completion of the critique, not approval of the code.
+  When runtime result collection is active, return the blocked work report
+  with the exact helper failure. The collector must preserve blocked and omit
+  structured_payload; it cannot settle a missing decision or claim success
+  by turning the prepared rationale into a verdict.
 Missing source results or input artifacts require `blocked`; never set
 `audit_complete` or fill in another finding to satisfy a completion gate.
 
