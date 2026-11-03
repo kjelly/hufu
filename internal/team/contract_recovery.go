@@ -21,6 +21,9 @@ type ContractRevalidation struct {
 }
 
 type ContractRecoveryTask struct {
+	Reason         string                `json:"reason,omitempty"`
+	SourceStatus   TaskStatus            `json:"source_status,omitempty"`
+	AffectedBy     []string              `json:"affected_by,omitempty"`
 	ID             string                `json:"id"`
 	SourceSHA256   string                `json:"source_sha256"`
 	Action         string                `json:"action"`
@@ -30,19 +33,22 @@ type ContractRecoveryTask struct {
 }
 
 type ContractRecoveryPlan struct {
-	InputPolicyUpgrade *RunInputPolicyRecovery  `json:"input_policy_upgrade,omitempty"`
-	MetadataOnly       bool                     `json:"metadata_only,omitzero"`
-	Version            int                      `json:"version"`
-	SourceBranch       string                   `json:"source_branch"`
-	SourceHead         string                   `json:"source_head"`
-	SourceHash         string                   `json:"source_hash"`
-	SourcePolicy       string                   `json:"source_policy"`
-	Policy             *ExecutionPolicySnapshot `json:"policy"`
-	Tasks              []ContractRecoveryTask   `json:"tasks"`
-	ResumePhase        Phase                    `json:"resume_phase"`
-	Retained           int                      `json:"retained"`
-	Retried            int                      `json:"retried"`
-	SHA256             string                   `json:"sha256"`
+	ContractChanges      []ContractRecoveryChange `json:"contract_changes,omitempty"`
+	ReopenedAcceptance   []string                 `json:"reopened_acceptance,omitempty"`
+	ReopenedVerification []string                 `json:"reopened_verification,omitempty"`
+	InputPolicyUpgrade   *RunInputPolicyRecovery  `json:"input_policy_upgrade,omitempty"`
+	MetadataOnly         bool                     `json:"metadata_only,omitzero"`
+	Version              int                      `json:"version"`
+	SourceBranch         string                   `json:"source_branch"`
+	SourceHead           string                   `json:"source_head"`
+	SourceHash           string                   `json:"source_hash"`
+	SourcePolicy         string                   `json:"source_policy"`
+	Policy               *ExecutionPolicySnapshot `json:"policy"`
+	Tasks                []ContractRecoveryTask   `json:"tasks"`
+	ResumePhase          Phase                    `json:"resume_phase"`
+	Retained             int                      `json:"retained"`
+	Retried              int                      `json:"retried"`
+	SHA256               string                   `json:"sha256"`
 }
 
 func recoveryPlanHash(plan ContractRecoveryPlan) (string, error) {
@@ -158,6 +164,7 @@ func (c *Coordinator) assessPreparedContractRecovery(ctx context.Context, source
 	if plan.Retried == 0 {
 		return nil, fmt.Errorf("contract recovery has no failed or invalid task to resume")
 	}
+	c.describeContractRecovery(plan, source.Session, old, current)
 	plan.SHA256, err = recoveryPlanHash(*plan)
 	return plan, err
 }
@@ -574,18 +581,23 @@ func (c *Coordinator) assessContractRecoveryTask(ctx context.Context, item *Todo
 			targetRef = bound.clone()
 		}
 	}
-	patch := ContractRecoveryTask{ID: item.ID, SourceSHA256: digest, Action: "retain", ResultContract: targetRef, ContractHash: newHash, Revalidation: nil}
+	patch := ContractRecoveryTask{Reason: "accepted_result", SourceStatus: item.Status, ID: item.ID, SourceSHA256: digest, Action: "retain", ResultContract: targetRef, ContractHash: newHash, Revalidation: nil}
 	if validContractRevalidation(item, item.ExecutionReceipt) {
 		patch.Revalidation = cloneContractRevalidation(item.ContractRevalidation)
 		patch.Revalidation.SourceTaskSHA256 = digest
 	}
 	if item.Status != TaskDone {
+		patch.Reason = "unfinished_task"
+		if item.Status == TaskError || item.Status == TaskBlocked {
+			patch.Reason = "original_failure"
+		}
 		needsRetry = true
 	} else {
 		if err := c.validateContractRecoverySource(ctx, item, session); err != nil {
 			return ContractRecoveryTask{}, false, err
 		}
 		if patch.ResultContract != nil && !resultProjectionMatchesAccepted(item.TypedResult, c.session.ResultContracts[patch.ResultContract.ID]) {
+			patch.Reason = "result_projection_changed"
 			return patch, true, nil
 		}
 		if item.ResultContract != nil && patch.ResultContract != nil && *item.ResultContract != *patch.ResultContract {
@@ -595,15 +607,18 @@ func (c *Coordinator) assessContractRecoveryTask(ctx context.Context, item *Todo
 			}
 			payload, e := validateStructuredResultPayload(compiled, *patch.ResultContract, item.TypedResult.StructuredPayload.Value)
 			if e != nil || payload.SHA256 != item.TypedResult.StructuredPayload.SHA256 {
+				patch.Reason = "result_schema_invalid"
 				needsRetry = true
 			} else {
 				original := *item.ResultContract
 				if validContractRevalidation(item, item.ExecutionReceipt) {
 					original = item.ContractRevalidation.Original
 				}
+				patch.Reason = "result_revalidated"
 				patch.Revalidation = &ContractRevalidation{Original: original, Accepted: *patch.ResultContract, PayloadSHA256: payload.SHA256, SourceTaskSHA256: digest}
 			}
 		} else if (item.ResultContract == nil) != (patch.ResultContract == nil) {
+			patch.Reason = "result_contract_binding_changed"
 			needsRetry = true
 		}
 	}

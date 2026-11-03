@@ -208,6 +208,7 @@ func TestResumeContractRecoveryPublishesChildWithoutCallingModels(t *testing.T) 
 			resumeUpgradeContracts, resumeMetadataOnly = true, metadata
 			resumeUpgradeInputPolicy = test.inputPolicy
 			resumeRecoveryBranch, resumeRecoveryPlan = "", ""
+			opts.outputFormat = "json"
 			cmd := &cobra.Command{Use: "resume"}
 			cmd.SetContext(t.Context())
 			var output bytes.Buffer

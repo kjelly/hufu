@@ -38,12 +38,7 @@ func runContractRecoveryCommand(cmd *cobra.Command, source *team.ResumeSource, n
 		return err
 	}
 	if opts.dryRun {
-		data, err := json.Marshal(plan, json.Deterministic(true))
-		if err != nil {
-			return err
-		}
-		_, err = fmt.Fprintln(cmd.OutOrStdout(), string(data))
-		return err
+		return writeContractRecoveryPreview(cmd.OutOrStdout(), plan, opts.outputFormat)
 	}
 	branch, err := tc.coordinator.ApplyContractRecovery(recoveryCtx, source, resumeRecoveryBranch, resumeRecoveryPlan)
 	if err != nil {

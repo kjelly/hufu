@@ -639,6 +639,20 @@ If the team's configured profile forbids historical restore, explicitly select
 a restore-enabled profile, such as `--execution-profile default`, for all three
 commands. The ordinary evidence and execution-policy checks still apply.
 
+The default preview is a readable summary; use `--output json` for the full
+machine-readable plan. Each task includes a `reason`, its original `source_status`,
+and `affected_by` upstream task IDs when applicable. `original_failure` identifies
+an originally failed/blocked task; `upstream_changed` identifies an accepted result
+invalidated by an upstream retry or changed result binding. Invalid schemas,
+changed envelope projections, unfinished tasks and successfully revalidated
+results have separate reason codes. The preview also lists old/new schema IDs,
+hashes and structured-result requirements by owner, task verification to rerun,
+and acceptance checks/selected frozen request requirements that will reopen.
+It lists acceptance IDs or check positions, never command bodies or artifact paths.
+These descriptions are included in the plan hash and persisted recovery event;
+older events without descriptions remain readable. They explain the existing
+recovery decisions and do not authorize additional retries or relax acceptance.
+
 Preview lists each retained/retried task and pins the source event head, policy,
 original task digests and current policy in its plan hash. Versioned apply requires
 managed `required` versioning, the team/project locks and an unchanged plan. It refuses
