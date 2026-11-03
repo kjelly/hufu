@@ -170,6 +170,18 @@ The static contract determines the structured payload:
   the exact `row_key`, and `group: assessment`. Do not supply name, context,
   source IDs, hashes, indices, receipt or an expected answer. This entry is
   unavailable for documentation-risk/no-op review tasks.
+  Minimal tool call (replace the placeholder with this task's exact issued key):
+  ```json
+  {"collection":"/record/decisions","row_key":"<issued row key>","group":"assessment"}
+  ```
+  These are the ONLY three arguments to `decision_primitive`. Never add
+  `rationale`, `evidence`, or `missing_evidence`, even as JSON-encoded strings;
+  those fields belong only in the result row described below. A
+  `decision_input_invalid` rejection starts no helper decision: use its
+  diagnostic to make at most ONE corrected call with only these three
+  arguments. If that correction is rejected, stop with blocked and preserve
+  the diagnostic. Other helper failures follow the failure rule below;
+  never retry an already started or settled decision to change its outcome.
   The decision returns a combined verdict/severity choice. The runtime owns
   both fields and finding_index; do not copy any of them into submit_result.
   Submit `record.decisions` as an object keyed by every issued row key, each

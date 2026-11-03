@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -237,6 +238,38 @@ func TestDecisionPrimitiveRejectsBeforeInference(t *testing.T) {
 			response, err := c.coreTools[0].Run(primitiveTestContext(t, test.actor), fantasy.ToolCall{ID: "denied", Input: test.input})
 			if err != nil || !response.IsError || strings.Contains(response.Content, "backend") {
 				t.Fatalf("rejection: %v %#v", err, response)
+			}
+		})
+	}
+}
+
+func TestDecisionPrimitiveInputDiagnosticsPermitCorrectedBoundCall(t *testing.T) {
+	for _, tc := range []struct {
+		name, extra, diagnostic string
+	}{
+		{"rationale", `,"rationale":"private-value"`, `unknown field "rationale"`},
+		{"evidence array", `,"evidence":["private-value"]`, `unknown field "evidence"`},
+		{"evidence string", `,"evidence":"[\"private-value\"]"`, `unknown field "evidence"`},
+		{"missing evidence", `,"missing_evidence":"private-value"`, `unknown field "missing_evidence"`},
+		{"mixed modes", `,"name":"classify","context":{}`, "without name or context"},
+		{"duplicate group", `,"group":42`, "duplicate"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newBoundDecisionFixture(t, 1)
+			tool := &decisionPrimitiveTool{coordinator: f.c}
+			input := fmt.Sprintf(`{"collection":"/decisions","row_key":%q,"group":"assessment"%s}`, f.plans[0].rows[0].Key, tc.extra)
+			response, err := tool.Run(f.ctx, fantasy.ToolCall{ID: "invalid", Name: decisionPrimitiveToolName, Input: input})
+			if err != nil || !response.IsError || !strings.HasPrefix(response.Content, "decision_input_invalid:") || !strings.Contains(response.Content, tc.diagnostic) || !strings.Contains(response.Content, "{collection, row_key, group}") || strings.Contains(response.Content, "private-value") {
+				t.Fatalf("unhelpful or unsafe rejection: %#v %v", response, err)
+			}
+			if f.calls.Load() != 0 {
+				t.Fatal("invalid arguments started inference")
+			}
+			if corrected := f.call(t, 0, "corrected"); corrected.IsError || f.calls.Load() != 1 {
+				t.Fatalf("corrected call did not settle once: %s", corrected.Content)
+			}
+			if replay := f.call(t, 0, "replay"); replay.IsError || f.calls.Load() != 1 {
+				t.Fatal("corrected decision lost replay identity")
 			}
 		})
 	}

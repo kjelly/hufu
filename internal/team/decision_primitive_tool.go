@@ -17,6 +17,7 @@ import (
 	"github.com/kjelly/hufu/internal/decisionrt"
 	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/tools"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 const decisionPrimitiveToolName = "decision_primitive"
@@ -35,7 +36,7 @@ func (t *decisionPrimitiveTool) Info() fantasy.ToolInfo {
 	// The handler's catalog is filtered again using runtime invocation identity.
 	// The tool descriptor is stable across agents so frozen surface digests
 	// remain consistent; transport and credentials never enter the schema.
-	description := "Use exactly one mode: legacy {name, context}, or bound {collection, row_key, group} from the Runtime Fixed Collections manifest, never both. Only legacy mode supplies the declared scalar context fields. Bound mode supplies NO name or context: the runtime constructs context and owns decision output fields; do not copy them into submit_result. Make a bounded helper decision from the team's trusted catalog. Return decided or abstained; a decision never authorizes an action. Catalog (agents lists define grants): "
+	description := "Use exactly one mode: legacy {name, context}, or bound {collection, row_key, group} from the Runtime Fixed Collections manifest, never both. Only legacy mode supplies the declared scalar context fields. Bound mode accepts ONLY collection, row_key and group. Do not pass rationale, evidence, missing_evidence, name or context: rationale/evidence belong in the result row, and runtime constructs the helper context and owns decision output fields. Do not copy runtime-owned outputs into submit_result. Make a bounded helper decision from the team's trusted catalog. Return decided or abstained; a decision never authorizes an action. Catalog (agents lists define grants): "
 	if t.coordinator != nil && t.coordinator.decisionPrimitives != nil {
 		description += t.coordinator.decisionPrimitives.ToolDescription()
 	}
@@ -90,20 +91,20 @@ func (t *decisionPrimitiveTool) Run(ctx context.Context, call fantasy.ToolCall) 
 		Context    map[string]any `json:"context"`
 	}
 	if len(call.Input) > 80<<10 {
-		return fantasy.NewTextErrorResponse("decision_input_invalid"), nil
+		return decisionPrimitiveInputError("input exceeds the 81920 byte limit"), nil
 	}
 	if _, err := decodeUniqueJSON([]byte(call.Input)); err != nil {
-		return fantasy.NewTextErrorResponse("decision_input_invalid"), nil
+		return decisionPrimitiveInputError(err.Error()), nil
 	}
 	decoder := json.NewDecoder(strings.NewReader(call.Input))
 	decoder.DisallowUnknownFields()
 	decoder.UseNumber()
-	if decoder.Decode(&args) != nil {
-		return fantasy.NewTextErrorResponse("decision_input_invalid"), nil
+	if err := decoder.Decode(&args); err != nil {
+		return decisionPrimitiveInputError(err.Error()), nil
 	}
 	if args.Collection != "" || args.RowKey != "" || args.Group != "" {
 		if args.Name != "" || args.Context != nil || args.Collection == "" || args.RowKey == "" || args.Group == "" {
-			return fantasy.NewTextErrorResponse("decision_input_invalid"), nil
+			return decisionPrimitiveInputError("bound mode requires collection, row_key and group together, without name or context"), nil
 		}
 		return c.runBoundDecision(ctx, metadata, args.Collection, args.RowKey, args.Group, call.ID)
 	}
@@ -131,6 +132,13 @@ func (t *decisionPrimitiveTool) Run(ctx context.Context, call fantasy.ToolCall) 
 		return fantasy.ToolResponse{}, err
 	}
 	return c.runDecisionPrimitive(ctx, metadata, args.Name, request, digest, limit, call.ID)
+}
+
+func decisionPrimitiveInputError(diagnostic string) fantasy.ToolResponse {
+	// Decoder errors can contain model-supplied property names. Bound the
+	// diagnostic and never echo argument values or the complete rejected input.
+	diagnostic = utils.TruncateRunes(utils.RedactSecrets(diagnostic), 512)
+	return fantasy.NewTextErrorResponse("decision_input_invalid: " + diagnostic + ". Bound calls accept only {collection, row_key, group}; put rationale, evidence and missing_evidence in the result row, not this tool call. Legacy calls accept {name, context}. No decision was started by this rejected call.")
 }
 
 func (c *Coordinator) runDecisionPrimitive(ctx context.Context, metadata InvocationMetadata, name string, request decisionrt.Request, digest string, limit int, callID string) (fantasy.ToolResponse, error) {
