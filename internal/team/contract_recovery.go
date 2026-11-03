@@ -33,6 +33,7 @@ type ContractRecoveryTask struct {
 }
 
 type ContractRecoveryPlan struct {
+	WorkRetry            *ReadOnlyWorkRetry       `json:"work_retry,omitempty"`
 	ContractChanges      []ContractRecoveryChange `json:"contract_changes,omitempty"`
 	ReopenedAcceptance   []string                 `json:"reopened_acceptance,omitempty"`
 	ReopenedVerification []string                 `json:"reopened_verification,omitempty"`
@@ -92,10 +93,20 @@ func (c *Coordinator) assessPreparedContractRecovery(ctx context.Context, source
 	if err != nil {
 		return nil, err
 	}
-	if old.ConfigurationHash == current.ConfigurationHash {
+	workRetryTask, retryWork := readOnlyWorkRetryRequested(ctx)
+	if retryWork && old.ConfigurationHash != current.ConfigurationHash {
+		return nil, fmt.Errorf("work retry requires unchanged result contracts and execution policy; preview contract recovery separately")
+	}
+	if !retryWork && old.ConfigurationHash == current.ConfigurationHash {
 		return nil, fmt.Errorf("result contracts are unchanged; use ordinary resume or result-only repair")
 	}
 	plan := &ContractRecoveryPlan{MetadataOnly: metadataContractRecoveryRequested(ctx), Version: 1, SourceBranch: source.BranchID, SourceHead: source.eventHead, SourceHash: source.eventHash, SourcePolicy: old.ConfigurationHash, Policy: current, ResumePhase: PhaseVerify}
+	if retryWork {
+		plan.WorkRetry, err = c.assessReadOnlyWorkRetry(ctx, source, workRetryTask)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if old.RunInputPolicyHash != current.RunInputPolicyHash {
 		plan.InputPolicyUpgrade, err = c.assessRunInputPolicyRecovery(source.Session, old, current)
 		if err != nil {
@@ -165,6 +176,11 @@ func (c *Coordinator) assessPreparedContractRecovery(ctx context.Context, source
 		return nil, fmt.Errorf("contract recovery has no failed or invalid task to resume")
 	}
 	c.describeContractRecovery(plan, source.Session, old, current)
+	if plan.WorkRetry != nil {
+		if err := validateWorkRetryScope(source.Session.Tasks, plan); err != nil {
+			return nil, err
+		}
+	}
 	plan.SHA256, err = recoveryPlanHash(*plan)
 	return plan, err
 }
@@ -357,6 +373,17 @@ func validateContractRecoveryLineage(event RunEvent, preceding []RunEvent, admit
 	}
 	if admitted == nil || admitted.ConfigurationHash != plan.SourcePolicy {
 		return nil, fmt.Errorf("contract recovery original policy mismatch")
+	}
+	if plan.WorkRetry == nil && plan.SourcePolicy == plan.Policy.ConfigurationHash {
+		return nil, fmt.Errorf("unchanged-policy recovery requires an explicit work retry proof")
+	}
+	if plan.WorkRetry != nil {
+		if admitted.ConfigurationHash != plan.Policy.ConfigurationHash || plan.InputPolicyUpgrade != nil || len(plan.ContractChanges) != 0 {
+			return nil, fmt.Errorf("work retry cannot change execution policy or result contracts")
+		}
+		if err := validateReadOnlyWorkRetry(preceding, plan); err != nil {
+			return nil, err
+		}
 	}
 	left, right := *cloneExecutionPolicySnapshot(admitted), *cloneExecutionPolicySnapshot(plan.Policy)
 	if plan.InputPolicyUpgrade != nil {

@@ -836,6 +836,43 @@ rerunning settled decisions. A local result commit still
 passes ordinary verification and workflow acceptance; repairing one task can
 unlock undispatched downstream work and does not complete the entire run.
 
+When work has returned but a required bound decision never started, result-only
+repair cannot supply that decision. Use the separate, explicit work retry:
+
+```bash
+hufu resume --team <team> --workspace <control-root> --retry-work <task-id> --dry-run
+hufu resume --team <team> --workspace <control-root> --retry-work <task-id> \
+  --recovery-branch <new-name> --plan-hash <preview-sha256>
+hufu resume --team <team> --workspace <control-root> --branch <child-id>
+```
+
+An unversioned managed workspace additionally requires `--metadata-only` on
+preview and publication. Supply the original resume-compatible execution
+profile and model overrides where required. Publication creates and selects a
+child branch without running work; ordinary resume performs all normal policy,
+source, verification and acceptance checks before execution.
+
+This path requires unchanged execution policy and result contracts, static
+read-only contracts, canonical frozen inputs and accepted source evidence. The
+selected task must be the sole unresolved task, with completed successful sealed
+work and either a failed protocol collection or a verified committed `blocked`
+handoff without a structured decision payload. A committed blocked handoff keeps
+its original unsuccessful task outcome receipt; successful sealed work is
+verified independently. Both `TASK_BLOCKED` and
+`OPTIONAL_TASK_BLOCKED` are matched to the task's canonical optional status.
+Interrupted, errored or abstained decisions, tool policy denials, isolated or
+fanout work, and writing contracts require separate reconciliation. At most 64
+missing decision slots and a bounded pinned schema can enter one retry proof.
+
+The hash binds the exact parent head, sealed checkpoint, original schema and
+missing decision slots. Publication reassesses it and rejects stale previews.
+Replay reconstructs the slots from the original accepted source arrays. Parent
+results, work receipts and decisions remain historical evidence; the child
+retains unrelated accepted tasks, archives the old work receipt and opens a new
+occurrence for the selected task and its transitive consumers. New work uses
+the child branch's decision scope and fresh tool authorization. Verification
+and acceptance reopen; branch publication alone does not establish success.
+
 An optional `--repair-model <backend/model>` selects an auxiliary submitter
 already present in both the original and current frozen LLM routes. The grant
 and repair turns record that model separately; the original worker target and

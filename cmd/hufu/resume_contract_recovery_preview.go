@@ -29,8 +29,14 @@ func writeContractRecoveryPreview(w io.Writer, plan *team.ContractRecoveryPlan, 
 		}
 	}
 	label := "Contract recovery"
+	if plan.WorkRetry != nil {
+		label = "Read-only work recovery"
+	}
 	fmt.Fprintf(&out, "%s preview: retain %d; retry %d (original failures: %d; affected downstream: %d)\n", label, plan.Retained, plan.Retried, failed, downstream)
 	fmt.Fprintf(&out, "Source branch: %q; event: %s\n", plan.SourceBranch, plan.SourceHead)
+	if retry := plan.WorkRetry; retry != nil {
+		fmt.Fprintf(&out, "Read-only work retry: task %q; missing required decisions: %d; old work and decisions remain in the source branch.\n", retry.TaskID, len(retry.MissingDecisions))
+	}
 	if upgrade := plan.InputPolicyUpgrade; upgrade != nil {
 		fmt.Fprintf(&out, "Input policy upgrade: %s -> %s; frozen snapshot: %q (sha256 %s)\n", upgrade.OriginalSHA256, upgrade.AcceptedSHA256, upgrade.SnapshotID, upgrade.SnapshotSHA256)
 	}

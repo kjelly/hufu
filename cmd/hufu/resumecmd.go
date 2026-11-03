@@ -20,6 +20,7 @@ var (
 	resumeBranch             string
 	resumeRun                string
 	resumeRepairResult       string
+	resumeRetryWork          string
 	resumeRepairModel        string
 	resumeUpgradeContracts   bool
 	resumeUpgradeInputPolicy bool
@@ -111,7 +112,7 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	if err != nil {
 		return err
 	}
-	if resumeUpgradeContracts {
+	if resumeBranchRecoveryRequested() {
 		return runContractRecoveryCommand(cmd, source, teamName, binding, registry, vars)
 	}
 	if resumeRepairResult != "" {
@@ -222,10 +223,11 @@ func init() {
 	f.StringVar(&resumeRun, "run", "", "Require the source run to belong to the selected branch")
 	f.BoolVar(&resumeUpgradeContracts, "upgrade-contracts", false, "Preview or create a recovery child for changed result schemas; never bypass ordinary resume policy checks")
 	f.BoolVar(&resumeUpgradeInputPolicy, "upgrade-input-policy", false, "Explicitly include resolver/provider policy changes in --upgrade-contracts; preserves verified frozen inputs and requires read-only contracts")
-	f.BoolVar(&resumeMetadataOnly, "metadata-only", false, "Explicit lineage-only contract recovery for an unversioned read-only team; project files remain shared")
-	f.StringVar(&resumeRecoveryBranch, "recovery-branch", "", "New child branch name for an explicitly previewed contract recovery")
-	f.StringVar(&resumeRecoveryPlan, "plan-hash", "", "Exact SHA-256 from the contract recovery preview")
+	f.BoolVar(&resumeMetadataOnly, "metadata-only", false, "Explicit lineage-only recovery for an unversioned read-only team; project files remain shared")
+	f.StringVar(&resumeRecoveryBranch, "recovery-branch", "", "New child branch name for an explicitly previewed recovery")
+	f.StringVar(&resumeRecoveryPlan, "plan-hash", "", "Exact SHA-256 from the recovery preview")
 	f.StringVar(&resumeRepairResult, "repair-result", "", "Authorize bounded result-only recovery for a blocked protocol task or cancelled collection; never replay worker tools")
+	f.StringVar(&resumeRetryWork, "retry-work", "", "Preview or fork a controlled retry of one completed read-only work attempt whose required decisions never started")
 	f.StringVar(&resumeRepairModel, "repair-model", "", "Auxiliary result submission model (must already be frozen in the source policy); preserves the original worker target")
 	registerTeamSelectionFlags(f, &resumeTeamName, "Agent team name (inferred from --workspace when omitted)")
 	f.StringVar(&resumeSearch, "agent-team-search-path", "", "Comma-separated team search paths")
@@ -309,10 +311,17 @@ func printResultRecoveryAssessment(cmd *cobra.Command, a *team.ResultCollectionR
 	return nil
 }
 
+func resumeBranchRecoveryRequested() bool {
+	return resumeUpgradeContracts || resumeRetryWork != ""
+}
+
 func validateResumeRepairFlags() error {
-	if resumeUpgradeContracts {
+	if resumeRetryWork != "" && (strings.TrimSpace(resumeRetryWork) != resumeRetryWork || resumeUpgradeContracts || resumeUpgradeInputPolicy) {
+		return fmt.Errorf("--retry-work requires an exact task ID and cannot combine with contract or input policy upgrades")
+	}
+	if resumeBranchRecoveryRequested() {
 		if resumeRepairResult != "" || resumeRepairModel != "" || opts.reportMode || opts.tuiMode || len(opts.inputFlags) > 0 || len(opts.inputFiles) > 0 {
-			return fmt.Errorf("--upgrade-contracts cannot combine with result repair, report, tui or input assignments")
+			return fmt.Errorf("recovery branching cannot combine with result repair, report, tui or input assignments")
 		}
 		if opts.dryRun {
 			if resumeRecoveryBranch != "" || resumeRecoveryPlan != "" {
@@ -321,12 +330,12 @@ func validateResumeRepairFlags() error {
 			return nil
 		}
 		if strings.TrimSpace(resumeRecoveryBranch) == "" || len(resumeRecoveryPlan) != 64 {
-			return fmt.Errorf("preview with --upgrade-contracts --dry-run, then supply --recovery-branch and --plan-hash")
+			return fmt.Errorf("preview with --upgrade-contracts or --retry-work and --dry-run, then supply --recovery-branch and --plan-hash")
 		}
 		return nil
 	}
 	if resumeRecoveryBranch != "" || resumeRecoveryPlan != "" || resumeMetadataOnly || resumeUpgradeInputPolicy {
-		return fmt.Errorf("--recovery-branch, --plan-hash, --metadata-only and --upgrade-input-policy require --upgrade-contracts")
+		return fmt.Errorf("branch recovery options require --upgrade-contracts or --retry-work; --upgrade-input-policy requires --upgrade-contracts")
 	}
 
 	if resumeRepairModel != "" && resumeRepairResult == "" {

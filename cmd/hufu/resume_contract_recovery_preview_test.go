@@ -40,3 +40,35 @@ func TestContractRecoveryPreviewFormats(t *testing.T) {
 		})
 	}
 }
+
+func TestResumeContractRecoveryWorkRetryPreview(t *testing.T) {
+	var plan team.ContractRecoveryPlan
+	if err := json.Unmarshal([]byte(`{"retained":31,"retried":1,"work_retry":{"version":1,"task_id":"32","missing_decisions":[{}]}}`), &plan); err != nil {
+		t.Fatal(err)
+	}
+	for _, format := range []string{"text", "json"} {
+		t.Run(format, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := writeContractRecoveryPreview(&out, &plan, format); err != nil {
+				t.Fatal(err)
+			}
+			if format == "json" {
+				var replay team.ContractRecoveryPlan
+				if err := json.Unmarshal(out.Bytes(), &replay); err != nil {
+					t.Fatal("JSON lost work retry proof", err)
+				}
+				before, _ := json.Marshal(plan, json.Deterministic(true))
+				after, _ := json.Marshal(replay, json.Deterministic(true))
+				if string(before) != string(after) {
+					t.Fatal("JSON changed work retry proof")
+				}
+				return
+			}
+			for _, want := range []string{"Read-only work recovery preview", "retain 31; retry 1", `task "32"`, "missing required decisions: 1", "old work and decisions remain", "no tasks executed"} {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("missing %q: %s", want, out.String())
+				}
+			}
+		})
+	}
+}

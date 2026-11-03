@@ -18,6 +18,9 @@ import (
 // invocation with its full policy, evidence, verification and acceptance gates.
 func runContractRecoveryCommand(cmd *cobra.Command, source *team.ResumeSource, name string, binding *commandWorkspaceBinding, registry *team.TeamRegistry, vars map[string]string) (runErr error) {
 	recoveryCtx := commandContext(cmd)
+	if resumeRetryWork != "" {
+		recoveryCtx = team.WithReadOnlyWorkRetry(recoveryCtx, resumeRetryWork)
+	}
 	if resumeMetadataOnly {
 		recoveryCtx = team.WithMetadataOnlyContractRecovery(recoveryCtx)
 	}

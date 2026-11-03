@@ -51,22 +51,26 @@ func (c *Coordinator) assessRunInputPolicyRecovery(session *SessionData, old, cu
 }
 
 func (c *Coordinator) validateInputPolicyRecoveryContracts(session *SessionData) error {
+	return c.validateReadOnlyRecoveryContracts(session, "input policy recovery")
+}
+
+func (c *Coordinator) validateReadOnlyRecoveryContracts(session *SessionData, operation string) error {
 	if !c.session.Config.Delegation.BindTaskGoalContracts {
-		return fmt.Errorf("input policy recovery requires static task-goal contracts")
+		return fmt.Errorf("%s requires static task-goal contracts", operation)
 	}
 	for _, definition := range c.session.ContractTasks {
 		worker := c.session.Agents[normalizedName(definition.Agent)]
 		if worker == nil {
-			return fmt.Errorf("input policy recovery requires configured worker %q", definition.Agent)
+			return fmt.Errorf("%s requires configured worker %q", operation, definition.Agent)
 		}
 		effect, _, _ := resolveTaskRecovery(worker, definition)
 		if !metadataReadOnlyTask(effect, definition.Execution) {
-			return fmt.Errorf("input policy recovery refuses writing contract %q", definition.ID)
+			return fmt.Errorf("%s refuses writing contract %q", operation, definition.ID)
 		}
 	}
 	for _, item := range session.Tasks {
 		if item != nil && !IsPrimaryOccurrence(item) && !metadataReadOnlyTask(item.SideEffect, item.Execution) {
-			return fmt.Errorf("input policy recovery refuses writing task %s", item.ID)
+			return fmt.Errorf("%s refuses writing task %s", operation, item.ID)
 		}
 	}
 	return nil

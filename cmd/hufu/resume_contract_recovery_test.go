@@ -18,6 +18,8 @@ import (
 )
 
 func TestResumeContractRecoveryFlags(t *testing.T) {
+	oldRetry := resumeRetryWork
+	t.Cleanup(func() { resumeRetryWork = oldRetry })
 	savedOpts, upgrade, branch, hash, task, model, metadata, inputPolicy := opts, resumeUpgradeContracts, resumeRecoveryBranch, resumeRecoveryPlan, resumeRepairResult, resumeRepairModel, resumeMetadataOnly, resumeUpgradeInputPolicy
 	t.Cleanup(func() {
 		opts, resumeUpgradeContracts, resumeRecoveryBranch, resumeRecoveryPlan, resumeRepairResult, resumeRepairModel, resumeMetadataOnly = savedOpts, upgrade, branch, hash, task, model, metadata
@@ -29,8 +31,17 @@ func TestResumeContractRecoveryFlags(t *testing.T) {
 		branch, hash, repair   string
 		valid                  bool
 		inputPolicy            bool
+		retry                  string
 	}{
 		{name: "preview", dry: true, upgrade: true, valid: true},
+		{name: "work preview", dry: true, retry: "32", valid: true},
+		{name: "work metadata preview", dry: true, retry: "32", metadata: true, valid: true},
+		{name: "work apply", retry: "32", branch: "recovery", hash: strings.Repeat("a", 64), valid: true},
+		{name: "work requires plan", retry: "32"},
+		{name: "work cannot upgrade", dry: true, retry: "32", upgrade: true},
+		{name: "work cannot upgrade inputs", dry: true, retry: "32", inputPolicy: true},
+		{name: "work cannot repair", dry: true, retry: "32", repair: "32"},
+		{name: "work exact id", dry: true, retry: " 32"},
 		{name: "ordinary preflight", dry: true, valid: true},
 		{name: "metadata preview", dry: true, upgrade: true, metadata: true, valid: true},
 		{name: "metadata requires upgrade", metadata: true},
@@ -46,6 +57,7 @@ func TestResumeContractRecoveryFlags(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			opts = runOptions{dryRun: tc.dry}
+			resumeRetryWork = tc.retry
 			resumeMetadataOnly = tc.metadata
 			resumeUpgradeInputPolicy = tc.inputPolicy
 			resumeUpgradeContracts, resumeRecoveryBranch, resumeRecoveryPlan, resumeRepairResult, resumeRepairModel = tc.upgrade, tc.branch, tc.hash, tc.repair, ""
