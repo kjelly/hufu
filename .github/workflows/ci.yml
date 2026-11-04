@@ -43,7 +43,7 @@ jobs:
         uses: golangci/golangci-lint-action@a4f60bb28d35aeee14e6880718e0c85ff1882e64 # v6.0.1
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
-          args: --timeout 5m ./... ./.agent-teams/hufu-dev/diagnostic-pilot/... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/...
+          args: --timeout 5m ./... ./.agent-teams/hufu-dev/diagnostic-pilot/... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/... ./.agent-teams/web-research/tests
           only-new-issues: true
 
   vet:
@@ -78,7 +78,7 @@ jobs:
           fi
 
       - name: go vet
-        run: mise exec -- go vet -p 2 ./... ./.agent-teams/hufu-dev/diagnostic-pilot/... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/...
+        run: mise exec -- go vet -p 2 ./... ./.agent-teams/hufu-dev/diagnostic-pilot/... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/... ./.agent-teams/web-research/tests
 
   test:
     name: test (${{ matrix.scope }}; race, short, timeout ${{ matrix.package-timeout }})
@@ -296,7 +296,7 @@ jobs:
         run: CGO_ENABLED=0 go build -v ./cmd/hufu
 
       - name: CGO_ENABLED=0 test
-        run: CGO_ENABLED=0 go test ./... ./.agent-teams/hufu-dev/diagnostic-pilot/...
+        run: CGO_ENABLED=0 go test ./... ./.agent-teams/hufu-dev/diagnostic-pilot/... ./.agent-teams/web-research/tests
 
   # Offline deterministic workflow regression harness. All ten critical
   # semantic cases plus the core lifecycle baseline are implemented, so this

@@ -52,7 +52,7 @@ func run(layer, scope string, list bool, extra []string) error {
 		!slices.Contains([]string{"all", "cli", "team", "improver", "other"}, scope) {
 		return fmt.Errorf("invalid layer %q or scope %q", layer, scope)
 	}
-	inventory, err := discoverCommand(exec.Command("go", "list", "-json", "./...", "./.agent-teams/hufu-dev/diagnostic-pilot/..."), os.Stderr)
+	inventory, err := discoverCommand(exec.Command("go", "list", "-json", "./...", "./.agent-teams/hufu-dev/diagnostic-pilot/...", "./.agent-teams/web-research/tests"), os.Stderr)
 	if err != nil {
 		return err
 	}

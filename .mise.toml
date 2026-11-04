@@ -19,15 +19,15 @@ raw = true
 [tasks.test]
 description = "Run the Go test suite (20m per package)"
 # Native persistence/protocol suites need a package-wide budget on slower filesystems.
-run = "go test -p 2 -timeout 20m ./..."
+run = "go test -p 2 -timeout 20m ./... ./.agent-teams/web-research/tests"
 
 [tasks.vet]
 description = "Run Go static analysis"
-run = "go vet -p 2 ./... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/..."
+run = "go vet -p 2 ./... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/... ./.agent-teams/web-research/tests"
 
 [tasks.lint]
 description = "Run the pinned golangci-lint"
-run = "golangci-lint run ./... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/..."
+run = "golangci-lint run ./... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/... ./.agent-teams/web-research/tests"
 
 [tasks.test-short]
 description = "Run short tests; heavier tests have a separate required integration gate"
@@ -50,4 +50,5 @@ run = [
   "go test -p 2 -timeout 20m ./cmd/hufu -run '^(TestBindResumePreflightVersion|TestResumeContractRecovery|TestResumeRecoveryPreviewThenExecute|TestHistoricalResultRunBinaryAdmissionAndDelivery)' -count=1",
   "go test -p 2 -timeout 20m ./.agent-teams/hufu-code-review/reviewgate -count=1",
   "go test -p 2 -timeout 20m ./.agent-teams/hufu-code-review/reviewprep -count=1",
+  "go test -p 2 -timeout 20m ./.agent-teams/web-research/tests -count=1",
 ]
