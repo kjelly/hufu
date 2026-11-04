@@ -98,7 +98,7 @@ class CostTests(unittest.TestCase):
     def test_workflow_isolates_reporting_and_preserves_required_gate(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/ci.yml').read_text()
         aggregate = workflow.split('  ci-success:\n', 1)[1]
-        self.assertIn('needs: [lint, vet, test, integration, build, cgo-free, docs, eval-core]', aggregate)
+        self.assertIn('needs: [lint, vet, test, integration, build, cgo-free, docs, eval-core, contracts]', aggregate)
         self.assertIn('permissions:\n      actions: read\n      contents: read', aggregate)
         self.assertIn('    if: always()', aggregate)
         gate, report = aggregate.split('      - name: Report workflow and runner cost\n')

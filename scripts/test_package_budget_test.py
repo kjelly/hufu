@@ -31,7 +31,7 @@ class PackageBudgetTests(unittest.TestCase):
             self.assertIn('scripts/test-package-budget.py --timeout "$PACKAGE_TIMEOUT"', job)
             self.assertIn('path: work/ci-tests/', job)
         self.assertIn('CGO_ENABLED=0 go test ./... ./.agent-teams/hufu-dev/diagnostic-pilot/...', workflow)
-        self.assertIn('needs: [lint, vet, test, integration, build, cgo-free, docs, eval-core]', workflow)
+        self.assertIn('needs: [lint, vet, test, integration, build, cgo-free, docs, eval-core, contracts]', workflow)
 
     def test_package_elapsed_not_sum_of_test_or_command_elapsed(self):
         events = [
