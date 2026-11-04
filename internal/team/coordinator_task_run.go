@@ -1267,7 +1267,7 @@ retryLoop:
 						if compiledResult != nil && compiledResult.claimsProjection != nil && compiledResult.claimsProjection.Invariants != "" && attemptResult.CanonicalResult.StructuredPayload != nil {
 							projected, projectionErr := projectClaimsInput(SubmitResultInput{StructuredPayload: attemptResult.CanonicalResult.StructuredPayload.Value}, compiledResult.claimsProjection)
 							if projectionErr != nil {
-								runErr = projectionErr
+								runErr = withFailureClassOverride(projectionErr, FailureProtocol)
 								attemptResult.CanonicalResult = nil
 							} else {
 								attemptResult.invariantClaims = projected.InvariantAssessments

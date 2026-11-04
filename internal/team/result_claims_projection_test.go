@@ -71,6 +71,63 @@ func TestResultClaimsProjectionRejectsEnvelopeCopies(t *testing.T) {
 	}
 }
 
+func TestResultClaimsProjectionExternalFailureDoesNotReplayWork(t *testing.T) {
+	for _, test := range []struct{ name, payload string }{
+		{"missing projection", `{"findings":[]}`},
+		{"invalid projection type", `{"findings":[],"assessments":{}}`},
+		{"invalid claim fields", `{"findings":[],"assessments":[{"unknown":true}]}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := newTestCoordinator(t, withMaxRetries(3))
+			c.projectDir = c.session.Workspace
+			compiled, err := CompileResultContractDocument("claims.json", []byte(projectionTestSchema))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ref := compiled.ref(true)
+			c.session.ResultContracts = map[string]*CompiledResultContract{ref.ID: compiled}
+			c.session.Agents["worker"].SubagentProvider = "shadow"
+			provider := &externalCostTestProvider{name: "shadow", result: AttemptResult{
+				Output: "preserved work report",
+				CanonicalResult: &TaskResult{
+					Status: TaskResultStatusSuccess, Source: ExternalProviderProposalSource,
+					StructuredPayload: &ResultPayload{Value: []byte(test.payload)},
+				},
+			}}
+			registry := NewSubagentRegistry(NewHufuLocalSubagentProvider(c))
+			if err := registry.Register(provider); err != nil {
+				t.Fatal(err)
+			}
+			c.SetSubagentRegistry(registry)
+			task, err := c.canonicalizeTaskOccurrence(TaskDef{
+				Agent: "worker", Goal: "review", SideEffect: SideEffectNone,
+				ResultContract: &ref, InvariantVerification: InvariantVerificationReport,
+			}, c.session.Agents["worker"], "shadow/test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", Desc: "review"}})[0]
+			_, err = c.executeTask(t.Context(), task, item.ID)
+			if err == nil {
+				t.Fatal("invalid projection accepted")
+			}
+			if provider.calls != 1 {
+				t.Fatalf("worker calls = %d, want one execution without replay; error: %v", provider.calls, err)
+			}
+			item = c.todoItemByID(item.ID)
+			if item.FailureEvent == nil || item.FailureEvent.FailureClass != FailureProtocol || item.FailureEvent.RetryDisposition != ReconcileOnly {
+				t.Fatalf("failure = %+v, want protocol/result-only reconciliation", item.FailureEvent)
+			}
+			if c.GetTaskResult(item.ID) != nil || item.ExecutionReceipt == nil || item.ExecutionReceipt.Attempt != 1 {
+				t.Fatalf("rejected result or repeated attempt: %+v", item)
+			}
+			if item.Output != "preserved work report" {
+				t.Fatalf("original work report lost: %q", item.Output)
+			}
+		})
+	}
+}
+
 func TestResultClaimsProjectionExternalAndLocalUseOnePayload(t *testing.T) {
 	schema := strings.ReplaceAll(projectionTestSchema, `,"bind_invariant_severity":true`, ``)
 	compiled, err := CompileResultContractDocument("claims.json", []byte(schema))
