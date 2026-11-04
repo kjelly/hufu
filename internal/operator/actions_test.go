@@ -17,10 +17,10 @@ func TestSelectActionsOffersOnlyReadOnlyResultRepairAssessment(t *testing.T) {
 		want        bool
 		interrupted bool
 	}{
-		{"collection with denied replay", true, "valid", "unique", true, false},
-		{"cancelled collection", true, "valid", "unique", true, true},
-		{"ordinary protocol failure", false, "valid", "unique", false, false},
-		{"invalid evidence", true, "invalid", "unique", false, false},
+		{"collection with denied replay", true, "valid", "verified", true, false},
+		{"cancelled collection", true, "valid", "verified", true, true},
+		{"ordinary protocol failure", false, "valid", "verified", false, false},
+		{"invalid evidence", true, "invalid", "verified", false, false},
 		{"ambiguous scope", true, "valid", "ambiguous", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -28,6 +28,8 @@ func TestSelectActionsOffersOnlyReadOnlyResultRepairAssessment(t *testing.T) {
 			snapshot.Integrity.Status = tc.integrity
 			snapshot.Scope.BindingStatus = tc.binding
 			snapshot.Scope.ProjectDir = "/project"
+			snapshot.Scope.RequestedSemantics, snapshot.Scope.SelectionSource = "exact", "explicit"
+			snapshot.Attention, snapshot.Learning.Status = AttentionReviewRequired, "unknown"
 			recovery := &RecoveryEligibility{
 				TaskID: "11", TaskStatus: "blocked", PolicyDenied: true, ResultCollectionBlocked: tc.pending,
 			}
@@ -40,6 +42,12 @@ func TestSelectActionsOffersOnlyReadOnlyResultRepairAssessment(t *testing.T) {
 			}
 			if (len(secondary) != 0) != tc.want {
 				t.Fatalf("primary=%+v secondary=%+v", primary, secondary)
+			}
+			if tc.binding == "verified" && tc.integrity == "valid" {
+				snapshot.PrimaryAction, snapshot.SecondaryActions = primary, secondary
+				if _, err := FinalizeSnapshot(snapshot); err != nil {
+					t.Fatalf("selected actions do not satisfy the snapshot contract: %v", err)
+				}
 			}
 			if !tc.want {
 				return
@@ -126,6 +134,7 @@ func TestSelectActionsSuppressesCollectionAssessmentsWhenScopeOrIntegrityIsUnava
 	for _, test := range []struct{ name, binding, integrity, projection, activity string }{
 		{"ambiguous", "ambiguous", "valid", "consistent", ActivityBlocked},
 		{"unknown binding", "unknown", "valid", "consistent", ActivityBlocked},
+		{"unsupported binding", "unique", "valid", "consistent", ActivityBlocked},
 		{"invalid integrity", "verified", "invalid", "consistent", ActivityBlocked},
 		{"unknown integrity", "verified", "unknown", "consistent", ActivityBlocked},
 		{"projection drift", "verified", "degraded", "drift", ActivityBlocked},

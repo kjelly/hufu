@@ -331,7 +331,7 @@ func appendCollectionAssessmentActions(
 	build func(string, string, string, *RecoveryEligibility) (ActionSuggestion, error),
 ) ([]ActionSuggestion, error) {
 	snapshot := facts.Snapshot
-	if (snapshot.Scope.BindingStatus != "unique" && snapshot.Scope.BindingStatus != "verified") || primary.ID == ActionWaitRuntime ||
+	if snapshot.Scope.BindingStatus != "verified" || primary.ID == ActionWaitRuntime ||
 		(snapshot.Integrity.Status != "valid" && snapshot.Integrity.Status != "degraded") ||
 		snapshot.Integrity.Projection != "consistent" || snapshot.Integrity.EventChain != "verified" {
 		return secondary, nil
