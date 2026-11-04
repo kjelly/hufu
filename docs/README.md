@@ -175,6 +175,7 @@ to re-create an abstraction that already exists in the runtime.
   — paired structured-result probes, durable budgets, bounded proposals and
   review bundles, with offline acceptance.
 
+- [Native image runtime](implementation-plans/native-image-runtime.md) — staged native image I/O, scope, persistence, offline validation and [implementation evidence](implementation-plans/native-image-runtime-progress.md).
 - `implementation-plans/` contains active, versioned delivery plans. Plans are
   reference material subordinate to code, tests, and normative contracts;
   completed or superseded plans belong in `archive/implementation-plans/`.
