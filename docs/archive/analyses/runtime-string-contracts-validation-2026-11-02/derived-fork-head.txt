@@ -1,0 +1,43 @@
+=== RUN   TestHistoricalResultRunBinaryAdmissionAndDelivery
+=== RUN   TestHistoricalResultRunBinaryAdmissionAndDelivery/single
+Team: dev
+Agents: Helper (worker), coordinator (coordinator), observer (worker), researcher (worker), verifier (worker)
+→ Starting new session
+warning: no exact tokenizer for model "ollama/test"; using "estimated" estimator fallback (token counts are estimated)
+Profile: default (v1)
+Worker: ollama/test  (./.agent-teams/dev/team.yaml worker-model)
+Coordinator: ollama/test  (./.agent-teams/dev/team.yaml coordinator-model)
+Plan reviewer: ollama/test  (coordinator fallback)
+=== RUN   TestHistoricalResultRunBinaryAdmissionAndDelivery/fallback
+Team: dev
+Agents: Helper (worker), coordinator (coordinator), observer (worker), researcher (worker), verifier (worker)
+→ Starting new session
+warning: no exact tokenizer for model "ollama/test-fallback"; using "estimated" estimator fallback (token counts are estimated)
+Profile: default (v1)
+Worker: ollama/test  (./.agent-teams/dev/team.yaml worker-model)
+Coordinator: ollama/test  (./.agent-teams/dev/team.yaml coordinator-model)
+Plan reviewer: ollama/test  (coordinator fallback)
+=== RUN   TestHistoricalResultRunBinaryAdmissionAndDelivery/extra_model
+Team: dev
+Agents: Helper (worker), coordinator (coordinator), observer (worker), researcher (worker), verifier (worker)
+→ Starting new session
+warning: no exact tokenizer for model "ollama/test-extra"; using "estimated" estimator fallback (token counts are estimated)
+Profile: default (v1)
+Worker: ollama/test  (./.agent-teams/dev/team.yaml worker-model)
+Coordinator: ollama/test  (./.agent-teams/dev/team.yaml coordinator-model)
+Plan reviewer: ollama/test  (coordinator fallback)
+=== RUN   TestHistoricalResultRunBinaryAdmissionAndDelivery/derived_fork
+Team: dev
+Agents: Helper (worker), coordinator (coordinator), observer (worker), researcher (worker), verifier (worker)
+→ Starting new session
+Profile: default (v1)
+Worker: ollama/test  (./.agent-teams/dev/team.yaml worker-model)
+Coordinator: ollama/test  (./.agent-teams/dev/team.yaml coordinator-model)
+Plan reviewer: ollama/test  (coordinator fallback)
+--- PASS: TestHistoricalResultRunBinaryAdmissionAndDelivery (46.18s)
+    --- PASS: TestHistoricalResultRunBinaryAdmissionAndDelivery/single (27.60s)
+    --- PASS: TestHistoricalResultRunBinaryAdmissionAndDelivery/fallback (5.81s)
+    --- PASS: TestHistoricalResultRunBinaryAdmissionAndDelivery/extra_model (6.24s)
+    --- PASS: TestHistoricalResultRunBinaryAdmissionAndDelivery/derived_fork (6.53s)
+PASS
+ok  	github.com/kjelly/hufu/cmd/hufu	46.234s

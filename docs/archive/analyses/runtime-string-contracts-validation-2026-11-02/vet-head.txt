@@ -1,0 +1,6 @@
+revision: 39756d921c5b847ccf8a4a0087da52287113c9c3
+execution_date_utc: 2026-11-02
+working_directory: Git archive snapshot of revision
+command: mise exec -- go vet -p 2 ./... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/...
+exit_code: 0
+stdout_stderr: (empty)
