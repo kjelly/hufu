@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: normative
-> Verified-Commit: 2026-10-30
+> Verified-Commit: `3130bac0557ce31b096cc1b4a3dd9f3cb750a4cd`（2026-11-04；僅 §6.2 修復評估契約，見[局部核對紀錄](#section-1-verification)）
 > Supersedes: —
 > Superseded-By: —
 > Implementation-Ready: yes（依 §1.3 的 PR 邊界與 phase gates 漸進實作）
@@ -114,6 +114,26 @@ contract inventory，不改 production behavior。最低交付：
 可並行。HF-UX-012A 必須等 HF-UX-010B 與 HF-UX-011B 完成。不需要再做 package
 ownership、schema 名稱或 MVP 範圍選擇。真人 usability 與電子紙實機驗收是 release gate，
 不阻擋前置工程 PR 合併。
+
+<a id="section-1-verification"></a>
+
+### 1.5 2026-11-04 修復評估契約局部核對
+
+原始查核基準仍為 `ba30643754d8d6cd85f91624a3f9bedf9d32457a`；
+2026-09-14 的環境、測試結果與 phase gate 紀錄保留其歷史意義。
+原 header 的 `2026-10-30` 戳記未附對應 revision、命令與結果，不能據此延伸原始
+基準的驗證範圍。本次以可追溯的局部核對取代該戳記。
+
+本次核對的程式碼版本為 `3130bac0557ce31b096cc1b4a3dd9f3cb750a4cd`，
+環境為 Linux x86_64／Go 1.27.2。範圍限於 §6.2 的 `assess-result-repair`：
+blocked／interrupted collection 候選、scope／integrity gate、唯讀 argv、
+snapshot 契約、逐任務評估及既有 primary action 的安全優先順序。
+五項既有測試以 `-count=1` 重跑並通過；版本、UTC 時間、來源雜湊、完整命令與
+原始輸出見[本次驗證紀錄](../archive/analyses/operator-experience-verification-2026-11-04.md)。
+
+Header 的 Verified-Commit 指向本次核對的程式碼版本；本次文件更正及紀錄是其後的
+文件變更。其餘功能、完整 runtime／CLI 流程、其他平台與真人 usability 驗收仍依
+各自的歷史證據與 phase gate 狀態，不納入本次局部通過結論。
 
 ---
 
@@ -579,7 +599,7 @@ type ActionPreconditions struct {
 | 9 | 條件不足 | inspect/unknown；絕不為湊出建議建立寫入命令 |
 
 多個 blockers 同時存在：顯示 highest-priority action 與「另有 N 個待處理」，最多展開兩個一般 secondary actions；不能把安全 blocker 隱藏在裝飾性摘要下。
-在 scope 與 integrity 可用且 runtime 未要求 wait 時，`secondary_actions` 另可包含每個 result-collection 阻塞任務各一個 `assess-result-repair` 唯讀評估動作，不計入一般動作上限。每個評估必須綁定同一 workspace/run/branch 中不同的 task；排序依 action ID、task ID，避免同種評估順序不穩定。這些入口不改變 primary action 的安全優先順序，也不授予修復、重試或工具重播權限。
+`secondary_actions` 的 `assess-result-repair` 評估動作僅在下方 [v1 action registry](#v1-action-registry) 中該條目的完整條件成立時產生。候選任務包括 result-collection 失敗且 task status 為 `blocked`，以及 collection 已中斷且 task status 為 `error`；每個符合條件的任務各提供一個唯讀評估，不計入一般動作上限。每個評估必須綁定同一 workspace/run/branch 中不同的 task；排序依 action ID、task ID，避免同種評估順序不穩定。這些入口不改變 primary action 的安全優先順序，也不授予修復、重試或工具重播權限。
 
 #### v1 action registry
 
