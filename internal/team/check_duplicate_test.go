@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -129,7 +130,7 @@ func TestCheckDuplicateTasks_SameBatch(t *testing.T) {
 			if tt.warningContains != "" && len(warnings) > 0 {
 				found := false
 				for _, w := range warnings {
-					if containsString(w, tt.warningContains) {
+					if strings.Contains(w, tt.warningContains) {
 						found = true
 						break
 					}
@@ -165,7 +166,7 @@ func TestCheckDuplicateTasks_SuppressesExistingActiveTodo(t *testing.T) {
 	if suppressed[0] == nil || suppressed[0].Item.ID != items[0].ID {
 		t.Fatalf("expected suppression to reference existing task %s", items[0].ID)
 	}
-	if len(warnings) == 0 || !containsString(warnings[0], "SUPPRESSED DUPLICATE") {
+	if len(warnings) == 0 || !strings.Contains(warnings[0], "SUPPRESSED DUPLICATE") {
 		t.Fatalf("expected suppression warning, got %v", warnings)
 	}
 }
@@ -255,22 +256,9 @@ func TestCheckDuplicateTasks_SuppressesPermissionBlockedFailure(t *testing.T) {
 	if suppressed[0] == nil || suppressed[0].Item.ID != items[0].ID {
 		t.Fatalf("expected suppression to reference existing task %s", items[0].ID)
 	}
-	if len(warnings) == 0 || !containsString(warnings[0], "SUPPRESSED DUPLICATE") {
+	if len(warnings) == 0 || !strings.Contains(warnings[0], "SUPPRESSED DUPLICATE") {
 		t.Fatalf("expected suppression warning, got %v", warnings)
 	}
-}
-
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
-}
-
-func containsSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 // A cache entry pinned from a previous run (session/journal restore) must not
@@ -322,7 +310,7 @@ func TestCheckDuplicateTasks_CurrentRunCacheStillRejects(t *testing.T) {
 	if !duplicates[0] {
 		t.Fatal("same-run completed task should still be flagged as a semantic duplicate")
 	}
-	if len(warnings) == 0 || !containsString(warnings[0], "SEMANTIC DUPLICATE") {
+	if len(warnings) == 0 || !strings.Contains(warnings[0], "SEMANTIC DUPLICATE") {
 		t.Fatalf("expected SEMANTIC DUPLICATE warning, got %v", warnings)
 	}
 }

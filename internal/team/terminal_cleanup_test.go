@@ -12,6 +12,50 @@ import (
 	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
+// startCleanupTerminal waits until the child has installed its signal handler.
+// Cleanup restores injected hooks before reclaiming the owned process group.
+func startCleanupTerminal(t *testing.T, manager *TerminalSessionManager, ctx context.Context, req TerminalStartRequest) *TerminalSession {
+	t.Helper()
+	session, err := manager.Start(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		manager.mu.Lock()
+		manager.persistDocument = nil
+		manager.mu.Unlock()
+		_, err := manager.CleanupTaskTerminals(context.Background(), TerminalCleanupRequest{OwnerTaskID: req.OwnerTaskID, GracePeriod: 20 * time.Millisecond, ForceAfter: time.Second})
+		if err != nil {
+			t.Errorf("cleanup fixture terminal: %v", err)
+		}
+	})
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	var output strings.Builder
+	for {
+		result, err := manager.Read(ctx, session.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		output.Write(result.Output)
+		if strings.Contains(output.String(), "cleanup-ready\n") {
+			return session
+		}
+		if result.EOF {
+			t.Fatalf("terminal exited before readiness: %s", output.String())
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("terminal readiness timed out: %s", output.String())
+		case <-t.Context().Done():
+			t.Fatal(t.Context().Err())
+		case <-ticker.C:
+		}
+	}
+}
+
 func TestTerminalCleanupLegacyDefaultsAndOwnershipGuard(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration: mise run test-integration")
@@ -72,17 +116,13 @@ func TestTerminalCleanupGracefulCustodyTransferAndLeaseRevocation(t *testing.T) 
 		t.Fatal(err)
 	}
 	owner := WithTerminalTaskID(context.Background(), "task-cleanup")
-	session, err := manager.Start(owner, TerminalStartRequest{
-		RunID: "run-cleanup", OwnerTaskID: "task-cleanup", Command: []string{"sh", "-c", "trap 'exit 0' TERM; while :; do sleep .05; done"},
+	session := startCleanupTerminal(t, manager, owner, TerminalStartRequest{
+		RunID: "run-cleanup", OwnerTaskID: "task-cleanup", Command: []string{"sh", "-c", "trap 'exit 0' TERM; printf 'cleanup-ready\\n'; while :; do sleep .05; done"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	lease, err := manager.AcquireUserLease(session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(100 * time.Millisecond)
 	results, err := manager.CleanupTaskTerminals(context.Background(), TerminalCleanupRequest{
 		OwnerTaskID: "task-cleanup", Reason: TerminalCleanupTaskFailed,
 		GracePeriod: 300 * time.Millisecond, ForceAfter: 300 * time.Millisecond,
@@ -138,13 +178,9 @@ func TestTerminalCleanupEscalatesAndIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := WithTerminalTaskID(context.Background(), "task-force")
-	_, err = manager.Start(owner, TerminalStartRequest{
-		RunID: "run-force", OwnerTaskID: "task-force", Command: []string{"sh", "-c", "trap '' TERM; exec sleep 5"},
+	_ = startCleanupTerminal(t, manager, owner, TerminalStartRequest{
+		RunID: "run-force", OwnerTaskID: "task-force", Command: []string{"sh", "-c", "trap '' TERM; printf 'cleanup-ready\\n'; exec sleep 30"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(100 * time.Millisecond)
 	results, err := manager.CleanupTaskTerminals(context.Background(), TerminalCleanupRequest{
 		OwnerTaskID: "task-force", Reason: TerminalCleanupTaskCancelled,
 		GracePeriod: 20 * time.Millisecond, ForceAfter: 500 * time.Millisecond,
@@ -171,13 +207,9 @@ func TestTerminalCleanupForcedStatePersistenceFailureStopsEscalation(t *testing.
 		t.Fatal(err)
 	}
 	owner := WithTerminalTaskID(context.Background(), "task-persist-failure")
-	session, err := manager.Start(owner, TerminalStartRequest{
-		RunID: "run-persist-failure", OwnerTaskID: "task-persist-failure", Command: []string{"sh", "-c", "trap '' TERM; exec sleep 5"},
+	session := startCleanupTerminal(t, manager, owner, TerminalStartRequest{
+		RunID: "run-persist-failure", OwnerTaskID: "task-persist-failure", Command: []string{"sh", "-c", "trap '' TERM; printf 'cleanup-ready\\n'; exec sleep 30"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(100 * time.Millisecond)
 	cleanupDone := make(chan error, 1)
 	go func() {
 		_, cleanupErr := manager.CleanupTaskTerminals(context.Background(), TerminalCleanupRequest{
@@ -232,13 +264,9 @@ func TestTerminalCleanupCustodyBlocksOwnerAndConcurrentCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := WithTerminalTaskID(context.Background(), "task-serialized")
-	session, err := manager.Start(owner, TerminalStartRequest{
-		RunID: "run-serialized", OwnerTaskID: "task-serialized", Command: []string{"sh", "-c", "trap '' TERM; exec sleep 5"},
+	session := startCleanupTerminal(t, manager, owner, TerminalStartRequest{
+		RunID: "run-serialized", OwnerTaskID: "task-serialized", Command: []string{"sh", "-c", "trap '' TERM; printf 'cleanup-ready\\n'; exec sleep 30"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(100 * time.Millisecond)
 	firstDone := make(chan error, 1)
 	go func() {
 		_, cleanupErr := manager.CleanupTaskTerminals(context.Background(), TerminalCleanupRequest{
