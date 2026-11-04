@@ -38,6 +38,7 @@ type ResolvedModelProfile struct {
 
 type providerBoundInvocationContext struct {
 	ModelID           string
+	SupportsTools     modelprofile.CapabilityState
 	AdmissionContext  agent.ProviderAdmissionContext
 	ModelContext      ModelContextSpec
 	ProfileResolution modelprofile.TelemetryProjection
@@ -417,6 +418,7 @@ func (c *Coordinator) resolveProviderBoundInvocationContextWithOutputAndTelemetr
 	}
 	invocation := providerBoundInvocationContext{
 		ModelID:           modelID,
+		SupportsTools:     resolved.Profile.SupportsTools,
 		AdmissionContext:  bound,
 		ModelContext:      modelContextSpecForProviderRequest(agent.ProviderRequest{ModelID: modelID, AdmissionContext: bound}),
 		ProfileResolution: resolved.ProfileResolution,

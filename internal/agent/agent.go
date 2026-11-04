@@ -1799,6 +1799,8 @@ type AgentConfig struct {
 	PrepareStep      fantasy.PrepareStepFunction
 	Admission        RequestAdmission
 	AdmissionContext ProviderAdmissionContext
+	// StructuredResponse uses a data-only provider function instead of work tools.
+	StructuredResponse *StructuredResponseConfig
 	// InvocationModelID is the selected model for this concrete agent
 	// invocation. It may differ from Def.Generation.Model during retry,
 	// repair, rescue, direct, or subagent execution.
@@ -1832,6 +1834,15 @@ func CreateAgent(ctx context.Context, provider *OpenAICompatibleProvider, cfg Ag
 		return nil, fmt.Errorf("failed to create language model for %q: %w", cfg.Def.Name, err)
 	}
 	lm = NewAdmittedLanguageModelWithContext(modelStr, lm, cfg.Admission, cfg.AdmissionContext)
+	if cfg.StructuredResponse != nil {
+		if len(agentTools) != 0 {
+			return nil, fmt.Errorf("structured response cannot register executable tools")
+		}
+		lm, err = newStructuredResponseModel(lm, cfg.StructuredResponse)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	opts := []fantasy.AgentOption{
 		fantasy.WithSystemPrompt(cfg.Def.System),

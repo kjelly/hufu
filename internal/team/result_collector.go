@@ -217,6 +217,7 @@ type frozenCollectionRequest struct {
 	Generation          agent.GenerationParams `json:"generation"`
 	TeamGeneration      agent.GenerationParams `json:"team_generation"`
 	Tools               []any                  `json:"tools"`
+	ClaimsSchema        map[string]any         `json:"claims_schema,omitempty"`
 }
 
 func decodeFrozenCollectionRequest(data []byte, checkpoint *ResultCollectionCheckpoint) (frozenCollectionRequest, error) {
@@ -229,6 +230,9 @@ func decodeFrozenCollectionRequest(data []byte, checkpoint *ResultCollectionChec
 		return request, errResultCollectionStale
 	}
 	if request.Version != resultCollectionVersion || request.InvocationID != checkpoint.InvocationID || request.Prompt == "" || len(request.Tools) != 0 {
+		return request, errResultCollectionStale
+	}
+	if request.ClaimsSchema != nil && request.ClaimsSchema["type"] != "object" {
 		return request, errResultCollectionStale
 	}
 	return request, nil

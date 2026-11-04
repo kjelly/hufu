@@ -291,8 +291,13 @@ leaf 也一樣。
 
 相容的新 session 預設使用 `runtime`。一般 local worker 執行工作並留下完整報告，
 不需要呼叫 `submit_result`；runtime 先保存工作輸出與 transcript，再以同一個已核准
-模型 target 的普通文字生成收集 strict JSON。收集 request 不提供工具，不依賴 provider
-的原生 structured-output／tool-calling 功能。通常增加一次模型呼叫；格式或 schema
+模型 target 收集 strict JSON。新收集 request 封存完整 claims schema，並要求 provider
+透過 `return_result` 資料回傳函式交付 JSON 參數。這個函式沒有執行 handler，也不授予
+任何工作工具；實際 wire schema 仍經 provider admission。Runtime 保留原始參數 bytes，
+與額外推理文字分離後再做完整驗證；未知、多個或宣稱已執行的函式一律拒絕。
+若舊 endpoint 忽略函式選擇，回傳文字仍須是合法 JSON，不會從前言抽取物件。
+已確認不支援工具的模型，以及未宣告 claims schema 的歷史 frozen request，維持
+原文字傳輸。通常增加一次模型呼叫；格式或 schema
 不合法時最多再修復一次，共兩回合，包含中斷時已派發的回合。
 
 收集失敗的分類以完整 canonical schema 為準，不以 provider 的可攜式 schema

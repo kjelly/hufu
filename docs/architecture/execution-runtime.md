@@ -136,8 +136,17 @@ in [result transport contracts](../reference/result-transport-contracts.md).
 The work phase has no `submit_result` authority in runtime mode. After work
 returns, the runtime seals its complete report, transcript, source inputs and
 original attempt identity before starting a separate `result_collection`
-invocation on the admitted work target. It uses ordinary text generation with
-zero tools, then strictly decodes JSON and calls shared result admission.
+invocation on the admitted work target. New requests freeze the model-facing
+claims schema and require the provider's `return_result` function response
+unless the immutable model profile explicitly rules out tool support.
+This is a data channel with no executable handler: admission counts its actual
+wire schema, while the collector retains zero work-tool authority. The adapter
+passes its exact argument bytes to strict JSON decoding and shared result
+admission; separate explanatory text cannot become claims. Unknown or multiple
+function responses are denied before any handler runs. Older endpoints that
+ignore the requested function may still supply a bare JSON object, subject to
+the same strict validation and bounded repair. Explicitly text-only models and
+historical frozen text requests retain their original text transport.
 The accepted source is `collected`, with the same contract, evidence, verifier,
 terminal and workspace integration gates as a tool submission. Runtime-owned
 fields are still assembled from verified sources; the model cannot override them.

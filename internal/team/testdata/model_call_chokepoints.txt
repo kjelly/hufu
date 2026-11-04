@@ -2,6 +2,8 @@
 internal/agent/agent.go<TAB>agent.Generate(ctx, fantasy.AgentCall{<TAB>agent.RunAgent<TAB>generic_agent<TAB>runtime_boundary
 internal/agent/provider_request.go<TAB>.Generate(ctx,<TAB>admittedLanguageModel.generateOnce<TAB>provider_admission<TAB>runtime_boundary
 internal/agent/provider_request.go<TAB>.Stream(streamCtx,<TAB>admittedLanguageModel.streamOnce<TAB>provider_admission<TAB>runtime_boundary
+internal/agent/structured_response.go<TAB>m.LanguageModel.Generate(ctx, call)<TAB>structuredResponseModel.Generate<TAB>result_collection_response_schema_before_provider_admission<TAB>adapter_boundary
+internal/agent/structured_response.go<TAB>m.LanguageModel.Stream(ctx, call)<TAB>structuredResponseModel.Stream<TAB>result_collection_response_schema_before_provider_admission<TAB>adapter_boundary
 internal/sidecar/sidecar.go<TAB>invocationAgent.Generate(ctx, call)<TAB>sidecar.generate<TAB>sidecar<TAB>runtime_boundary
 internal/team/coordinator_task_run.go<TAB>ag.Stream(callCtx, call)<TAB>Coordinator.runAgentWithStatusAndHistory<TAB>task_execution<TAB>runtime_boundary
 internal/promotion/analyzer.go<TAB>a.Generator.Generate(ctx, DraftRequest{<TAB>promotion.Analyzer<TAB>promotion_draft<TAB>adapter_boundary

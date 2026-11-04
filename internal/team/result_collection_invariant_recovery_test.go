@@ -44,9 +44,7 @@ func TestResultCollectionRecoveryRepairsProjectedInvariantBounds(t *testing.T) {
 		if !strings.Contains(prompt, `"maxLength":256`) {
 			t.Error("collector prompt lost the missing-evidence length bound")
 		}
-		if tools, _ := request["tools"].([]any); len(tools) != 0 {
-			t.Error("result-only collection exposed worker tools")
-		}
+		assertCollectorResponseChannel(t, request)
 		n := calls.Add(1)
 		if n > 3 {
 			t.Error("repair exceeded its bounded model budget")

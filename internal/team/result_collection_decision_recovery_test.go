@@ -289,9 +289,7 @@ func TestResultCollectionRecoveryRunsOnlyCollector(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		if exposed, _ := request["tools"].([]any); len(exposed) != 0 {
-			t.Error("recovery collector exposed tools")
-		}
+		assertCollectorResponseChannel(t, request)
 		prompt := fmt.Sprint(request["messages"])
 		if !strings.Contains(prompt, "format_diagnostic") || !strings.Contains(prompt, "previous_response") || !strings.Contains(prompt, "canonical_item_schema") {
 			t.Error("recovery collector lost original claims, diagnostic, or settled contract")

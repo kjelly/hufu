@@ -70,9 +70,7 @@ func TestResultCollectionRepairsInvariantClaimsWithOriginalLimits(t *testing.T) 
 				if !strings.Contains(prompt, "safe (error)") || !strings.Contains(prompt, "well below its schema maxLength") {
 					t.Error("collector lost invariant definition or length guidance")
 				}
-				if exposed, _ := request["tools"].([]any); len(exposed) != 0 {
-					t.Error("collector exposed tools")
-				}
+				assertCollectorResponseChannel(t, request)
 				n := calls.Add(1)
 				if n > tc.wantCalls {
 					t.Error("unexpected extra collection turn")

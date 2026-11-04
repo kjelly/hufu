@@ -41,9 +41,7 @@ func TestResultCollectionRepairsStatusFromPayloadItems(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				if tools, _ := request["tools"].([]any); len(tools) != 0 {
-					t.Error("collector exposed work tools")
-				}
+				assertCollectorResponseChannel(t, request)
 				n := calls.Add(1)
 				if n > int32(tc.calls) {
 					t.Error("collection exceeded authorized turn budget")
@@ -162,9 +160,7 @@ func TestResultCollectionPreservesUnsettledDecisionOutcome(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				if tools, _ := request["tools"].([]any); len(tools) != 0 {
-					t.Error("collector exposed decision or work tools")
-				}
+				assertCollectorResponseChannel(t, request)
 				prompt := fmt.Sprint(request["messages"])
 				if unsettled {
 					for _, want := range []string{"Bound decision failure", "decision_missing:", "OMIT structured_payload", `"status":{"enum":["blocked"],"type":"string"}`} {

@@ -20,6 +20,28 @@ func resultCollectionFixture(t *testing.T) (*Coordinator, *TodoItem, context.Con
 	return resultCollectionProviderFixture(t, "http://127.0.0.1:1/v1", false)
 }
 
+// The response function is a data channel with no handler; no work tool can be
+// exposed or executed by a collection turn.
+func assertCollectorResponseChannel(t *testing.T, request map[string]any) {
+	t.Helper()
+	functions, _ := request["tools"].([]any)
+	if len(functions) != 1 {
+		t.Errorf("collector response functions=%v", functions)
+		return
+	}
+	entry, _ := functions[0].(map[string]any)
+	function, _ := entry["function"].(map[string]any)
+	choice, _ := request["tool_choice"].(map[string]any)
+	selected, _ := choice["function"].(map[string]any)
+	if entry["type"] != "function" || function["name"] != agent.StructuredResponseFunctionName || choice["type"] != "function" || selected["name"] != agent.StructuredResponseFunctionName {
+		t.Errorf("collector exposed a work tool or did not require its response channel: %v %v", functions, choice)
+	}
+	parameters, _ := function["parameters"].(map[string]any)
+	if parameters["type"] != "object" {
+		t.Error("collector response schema is not an object")
+	}
+}
+
 func resultCollectionProviderFixture(t *testing.T, endpoint string, runtime bool, options ...func(*Coordinator)) (*Coordinator, *TodoItem, context.Context, ExecutionReceipt) {
 	t.Helper()
 	return resultCollectionTaskFixture(t, endpoint, runtime, nil, options...)

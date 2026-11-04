@@ -74,9 +74,7 @@ func TestResultCollectionRepairsEnvelopeWithoutRepeatingWork(t *testing.T) {
 		if !strings.Contains(prompt, "Result envelope schema") {
 			t.Error("collector lost envelope rules")
 		}
-		if tools, _ := request["tools"].([]any); len(tools) != 0 {
-			t.Error("collector exposed tools")
-		}
+		assertCollectorResponseChannel(t, request)
 		status := "success"
 		if n == 2 {
 			status = "completed_with_gaps"

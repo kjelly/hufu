@@ -226,9 +226,7 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				if exposed, _ := request["tools"].([]any); len(exposed) != 0 {
-					t.Error("collector exposed tools")
-				}
+				assertCollectorResponseChannel(t, request)
 				n := calls.Add(1)
 				if n > 2 || ((tc.contractFailure || tc.sourceFailure) && n > 1) {
 					t.Error("unexpected repair turn")

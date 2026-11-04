@@ -6,6 +6,8 @@ import (
 
 	"charm.land/fantasy"
 	"fmt"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/tools"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +18,7 @@ import (
 	"testing"
 )
 
-func TestResultCollectorUsesToolFreeRequestsAndBoundedFormatRepair(t *testing.T) {
+func TestResultCollectorUsesDataOnlyRequestsAndBoundedFormatRepair(t *testing.T) {
 	for _, scenario := range []struct {
 		replies []string
 		worker  bool
@@ -24,6 +26,8 @@ func TestResultCollectorUsesToolFreeRequestsAndBoundedFormatRepair(t *testing.T)
 		fanout  bool
 	}{
 		{replies: []string{`{"status":"success","summary":"analysis complete"}`}},
+		{entry: "native_response", replies: []string{`{"status":"success","summary":"analysis complete"}`}},
+		{entry: "native_response", replies: []string{`{"status":"success","summary":""}`, `{"status":"success","summary":"analysis complete"}`}},
 		{replies: []string{`invalid JSON`, `{"status":"success","summary":"analysis complete"}`}},
 		{replies: []string{`{"status":"success","summary":""}`, `{"status":"success","summary":"analysis complete"}`}},
 		{replies: []string{`invalid JSON`, `still invalid JSON`}},
@@ -69,6 +73,10 @@ func TestResultCollectorUsesToolFreeRequestsAndBoundedFormatRepair(t *testing.T)
 						return
 					}
 					w.Header().Set("Content-Type", "text/event-stream")
+					if scenario.entry == "native_response" {
+						_, _ = fmt.Fprintf(w, "data: {\"id\":\"collection\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Let me analyze this task carefully.\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"collection\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"response\",\"type\":\"function\",\"function\":{\"name\":%q,\"arguments\":%q}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"collection\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15,\"prompt_tokens_details\":{\"cached_tokens\":4}}}\n\ndata: [DONE]\n\n", agent.StructuredResponseFunctionName, replies[index])
+						return
+					}
 					if replies[index] == "call_tool" {
 						_, _ = fmt.Fprint(w, "data: {\"id\":\"forbidden-tool\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"forbidden-call\",\"type\":\"function\",\"function\":{\"name\":\"write\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"forbidden-tool\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n")
 						return
@@ -211,6 +219,10 @@ func TestResultCollectorUsesToolFreeRequestsAndBoundedFormatRepair(t *testing.T)
 				t.Fatalf("model calls=%d want %d", len(requests), len(replies))
 			}
 			for _, request := range requests {
+				if strings.Contains(fmt.Sprint(request["messages"]), resultCollectorSystem) {
+					assertCollectorResponseChannel(t, request)
+					continue
+				}
 				if tools, _ := request["tools"].([]any); len(tools) != 0 {
 					t.Fatalf("collector exposed tools: %v", tools)
 				}
@@ -277,6 +289,17 @@ func TestResultCollectorUsesToolFreeRequestsAndBoundedFormatRepair(t *testing.T)
 			if wantSuccess && (current.TypedResult == nil || current.TypedResult.Source != "collected" || checkpoint.State != ResultCollectionCommitted) {
 				t.Fatalf("result not committed: %+v", current)
 			}
+			if scenario.entry == "native_response" {
+				raw, readErr := c.readCollectionBlob(t.Context(), checkpoint, "response", checkpoint.Response)
+				if readErr != nil || string(raw) != replies[len(replies)-1] {
+					t.Fatalf("native claim bytes changed or included reasoning: %s %v", raw, readErr)
+				}
+				requestRaw, readErr := c.readCollectionBlob(t.Context(), checkpoint, "request", checkpoint.Request)
+				frozen, decodeErr := decodeFrozenCollectionRequest(requestRaw, checkpoint)
+				if readErr != nil || decodeErr != nil || frozen.ClaimsSchema == nil || len(frozen.Tools) != 0 {
+					t.Fatalf("response schema was not frozen separately from work tools: %v %v", readErr, decodeErr)
+				}
+			}
 			if scenario.entry == "verbatim" {
 				accepted, readErr := c.acceptedCollectionResult(t.Context(), current, checkpoint)
 				before, _ := json.Marshal(accepted, json.Deterministic(true))
@@ -287,6 +310,75 @@ func TestResultCollectorUsesToolFreeRequestsAndBoundedFormatRepair(t *testing.T)
 			}
 			if !wantSuccess && (current.TypedResult != nil || checkpoint.State != ResultCollectionBlocked) {
 				t.Fatal("invalid responses produced an accepted result")
+			}
+		})
+	}
+}
+
+func TestResultCollectionTextRequestCompatibility(t *testing.T) {
+	for _, scenario := range []string{"historical request", "text-only model"} {
+		t.Run(scenario, func(t *testing.T) {
+			const claims = `{"status":"success","summary":"preserved legacy work"}`
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/chat/completions" {
+					capabilities := `["completion","tools"]`
+					if scenario == "text-only model" {
+						capabilities = `["completion"]`
+					}
+					_, _ = fmt.Fprintf(w, `{"model":"test","parameters":"num_ctx 131072","model_info":{"general.architecture":"qwen2","qwen2.context_length":131072},"capabilities":%s}`, capabilities)
+					return
+				}
+				var request map[string]any
+				if err := json.UnmarshalRead(r.Body, &request); err != nil {
+					t.Error(err)
+					return
+				}
+				if exposed, _ := request["tools"].([]any); len(exposed) != 0 {
+					t.Error("a historical frozen text request gained a response function")
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprintf(w, "data: {\"id\":\"legacy\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", claims)
+			}))
+			t.Cleanup(server.Close)
+			c, item, ctx, receipt := resultCollectionProviderFixture(t, server.URL+"/v1", true)
+			checkpoint, err := c.beginResultCollection(ctx, item.ID, receipt, "complete original work")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "text-only model" {
+				var bound providerBoundInvocationContext
+				ctx, bound, err = c.resolveProviderBoundInvocationContext(ctx, c.executionModelIDForTarget(checkpoint.ExecutionTarget, receipt.Model), c.session.Agents["worker"])
+				if err != nil {
+					t.Fatal(err)
+				}
+				// The original invocation's immutable capability decision wins
+				// even if later metadata is unknown or reports tool support.
+				bound.SupportsTools = modelprofile.CapabilityNo
+				ctx = withProviderBoundInvocationContext(ctx, bound)
+			}
+			invocation, data, err := c.prepareCollectionInvocation(ctx, c.session.Agents["worker"], checkpoint, "result-collection-legacy", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var frozen frozenCollectionRequest
+			if err := json.Unmarshal(data, &frozen); err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "text-only model" && frozen.ClaimsSchema != nil {
+				t.Fatal("text-only model was offered a response function")
+			}
+			frozen.ClaimsSchema = nil
+			data, err = json.Marshal(frozen)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkpoint, err = c.reserveResultCollection(ctx, checkpoint, frozen.InvocationID, data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			actual, _, err := c.runCollectionInvocation(invocation, c.session.Agents["worker"], checkpoint)
+			if err != nil || actual != claims {
+				t.Fatalf("legacy output changed: %q %v", actual, err)
 			}
 		})
 	}

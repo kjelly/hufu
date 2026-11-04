@@ -33,9 +33,7 @@ func TestResultCollectionCompletesBoundWorksetWithResultContract(t *testing.T) {
 		body := "Review complete; there are no assigned rows."
 		if strings.Contains(fmt.Sprint(request["messages"]), resultCollectorSystem) {
 			collectionCalls.Add(1)
-			if exposed, _ := request["tools"].([]any); len(exposed) != 0 {
-				t.Error("collector exposed execution tools")
-			}
+			assertCollectorResponseChannel(t, request)
 			body = `{"status":"success","summary":"review complete","structured_payload":{"rows":[]}}`
 		} else {
 			workCalls.Add(1)
@@ -117,9 +115,7 @@ func TestResultCollectionHandsValidatedPayloadsToDependentWorkers(t *testing.T) 
 					http.Error(w, "bad request", 400)
 					return
 				}
-				if tools, _ := request["tools"].([]any); len(tools) != 0 {
-					t.Errorf("collector tools=%v", tools)
-				}
+				assertCollectorResponseChannel(t, request)
 				collections.Add(1)
 				w.Header().Set("Content-Type", "text/event-stream")
 				body := `{"status":"success","summary":"accepted evidence","structured_payload":{"marker":"validated-handoff"}}`
