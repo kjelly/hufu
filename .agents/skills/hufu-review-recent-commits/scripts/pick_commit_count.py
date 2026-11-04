@@ -20,8 +20,8 @@ import time
 TEAM = "hufu-code-review"
 DEFAULT_MODEL = "ollama/minimax-m3.1-flash:cloud"
 PROMPT = "review 最近{count}個的 git commit，告訴我這些修改有無潛在問題"
-# Producer errors that reject this scope; any other error means the tool broke.
-REJECTIONS = ("scope_too_large", "workset_item_too_large", "documentation_verification_failed")
+# Only explicit capacity failures may lower the count. Verification and execution failures stop selection.
+SCOPE_REJECTIONS = ("scope_too_large", "workset_item_too_large")
 DEPENDENCY_FILES = {"go.mod", "go.sum", "go.work", "go.work.sum"}
 DRIVER = """package main
 
@@ -165,9 +165,14 @@ class Prober:
         seconds = round(time.monotonic() - started, 1)
         shutil.rmtree(root, ignore_errors=True)
         if result.returncode != 0:
-            message = " | ".join(line for line in result.stderr.strip().splitlines()[:4])
-            if not any(code in message for code in REJECTIONS):
-                raise SystemExit(f"reviewprep failed for count {count} with an unexpected error:\n{result.stderr}")
+            lines = result.stderr.strip().splitlines()
+            message = " | ".join(lines[:4])
+            error_code = lines[0].partition(":")[0].strip() if lines else ""
+            if error_code not in SCOPE_REJECTIONS:
+                raise SystemExit(
+                    f"reviewprep failed for count {count}; refusing to narrow the review scope "
+                    f"for a non-capacity failure:\n{result.stderr}"
+                )
             log(f"  {count:>3}: rejected by producer ({seconds}s): {message}")
             return {"count": count, "ok": False, "seconds": seconds, "problems": [message]}
         outputs = json.loads(result.stdout)["outputs"]

@@ -43,6 +43,11 @@ is a JSON summary:
 | `notes` | A lowered request or a longer test step; relay these to the user. |
 | `command` | The command above with `N` already filled in. |
 
+Only explicit `scope_too_large` and `workset_item_too_large` producer failures
+permit lowering the count. Documentation verification and other producer failures
+stop selection with the original diagnostic; a smaller scope cannot substitute
+for investigating the failure.
+
 If the script exits with an error, report the error and stop. Do not guess a
 count or fall back to a default.
 
