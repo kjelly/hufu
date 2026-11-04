@@ -38,29 +38,32 @@ type resultsCLIOptions struct {
 }
 
 type resultsDeps struct {
-	report    func(context.Context, string, string) (*team.RunReport, error)
-	workspace workspaceCommandDeps
-	load      func(context.Context, inspectpkg.HistoricalResultScope) (inspectpkg.HistoricalSnapshot, error)
-	generate  func(context.Context, *operatorpkg.OperatorSnapshot, string, string, string, sidecar.Profile) (explainAIResult, error)
-	now       func() time.Time
-	pick      func(context.Context, io.Reader, io.Writer, []inspectpkg.HistoricalResult, string) (int, error)
+	deliverable func(context.Context, inspectpkg.HistoricalResult) (string, bool, error)
+	report      func(context.Context, string, string) (*team.RunReport, error)
+	workspace   workspaceCommandDeps
+	load        func(context.Context, inspectpkg.HistoricalResultScope) (inspectpkg.HistoricalSnapshot, error)
+	generate    func(context.Context, *operatorpkg.OperatorSnapshot, string, string, string, sidecar.Profile) (explainAIResult, error)
+	now         func() time.Time
+	pick        func(context.Context, io.Reader, io.Writer, []inspectpkg.HistoricalResult, string) (int, error)
 }
 
 type resultsEnvelope struct {
-	Report         *team.RunReport                 `json:"report,omitempty"`
-	ReportMarkdown string                          `json:"report_markdown,omitempty"`
-	SchemaVersion  int                             `json:"schema_version"`
-	Kind           string                          `json:"kind"`
-	Team           string                          `json:"team_scope,omitempty"`
-	Operation      string                          `json:"operation"`
-	Coverage       []inspectpkg.HistoricalCoverage `json:"coverage"`
-	Matched        int                             `json:"matched_count"`
-	Results        []inspectpkg.HistoricalResult   `json:"results"`
-	NextCursor     string                          `json:"next_cursor,omitempty"`
-	Query          *resultquery.Result             `json:"query,omitempty"`
-	Model          string                          `json:"model,omitempty"`
-	Error          string                          `json:"error,omitempty"`
-	Usage          resultsAnalysisUsage            `json:"usage"`
+	Deliverable     string                          `json:"deliverable,omitempty"`
+	SourceRunStatus string                          `json:"source_run_status,omitempty"`
+	Report          *team.RunReport                 `json:"report,omitempty"`
+	ReportMarkdown  string                          `json:"report_markdown,omitempty"`
+	SchemaVersion   int                             `json:"schema_version"`
+	Kind            string                          `json:"kind"`
+	Team            string                          `json:"team_scope,omitempty"`
+	Operation       string                          `json:"operation"`
+	Coverage        []inspectpkg.HistoricalCoverage `json:"coverage"`
+	Matched         int                             `json:"matched_count"`
+	Results         []inspectpkg.HistoricalResult   `json:"results"`
+	NextCursor      string                          `json:"next_cursor,omitempty"`
+	Query           *resultquery.Result             `json:"query,omitempty"`
+	Model           string                          `json:"model,omitempty"`
+	Error           string                          `json:"error,omitempty"`
+	Usage           resultsAnalysisUsage            `json:"usage"`
 }
 
 type resultsAnalysisUsage struct {
@@ -107,9 +110,14 @@ func newResultsCommandWithDeps(deps resultsDeps) *cobra.Command {
 	registerStaticFlagCompletion(command, "output", []string{"text", "json"})
 	registerStaticFlagCompletion(command, "status", []string{"done", "error", "blocked", "skipped", "protocol_incomplete"})
 	command.RunE = func(cmd *cobra.Command, _ []string) error { return runResults(cmd, options, deps, "read", "") }
-	for _, operation := range []string{"runs", "list", "search", "latest", "show", "final", "invocation", "query", "pick", "report"} {
+	for _, operation := range []string{"runs", "list", "search", "latest", "show", "final", "invocation", "query", "pick", "report", "deliverable"} {
 		child := &cobra.Command{Use: operation, ValidArgsFunction: cobra.NoFileCompletions, Args: cobra.NoArgs}
 		switch operation {
+		case "deliverable":
+			child.Use += " [result-id]"
+			child.Short = "Read the latest accepted report deliverable without a model"
+			child.Args = cobra.MaximumNArgs(1)
+			child.Flags().StringVar(&options.exportPath, "export", "", "Export the rendered deliverable as Markdown to this path")
 		case "report":
 			child.Use += " [result-id]"
 			child.Short = "Read an immutable execution report for a saved result (default: latest run)"
@@ -241,6 +249,9 @@ func runResults(command *cobra.Command, options *resultsCLIOptions, deps results
 			return resultsExit(2, err)
 		}
 	}
+	if operation == "deliverable" {
+		return presentAcceptedDeliverable(command, options, deps, request, all, rows, response, options.run != "" || value != "")
+	}
 	response.Matched = len(rows)
 	limit := options.limit
 	full := resultsReadFull(operation)
@@ -270,11 +281,11 @@ func runResults(command *cobra.Command, options *resultsCLIOptions, deps results
 }
 
 func resultsReadFull(operation string) bool {
-	return slices.Contains([]string{"show", "latest", "final", "read", "report"}, operation)
+	return slices.Contains([]string{"show", "latest", "final", "read", "report", "deliverable"}, operation)
 }
 
 func isFinalResultsOperation(operation string) bool {
-	return slices.Contains([]string{"read", "final", "overview", "report"}, operation)
+	return slices.Contains([]string{"read", "final", "overview", "report", "deliverable"}, operation)
 }
 
 func validateResultsOptions(options *resultsCLIOptions, now time.Time) (resultquery.Request, error) {

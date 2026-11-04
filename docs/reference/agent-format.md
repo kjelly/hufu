@@ -541,6 +541,9 @@ Schema 可選用下列通用 runtime 擴充（都包含在 schema hash 中）：
   已完成的報告 task 的 validated payload 產生最終回覆，保留其判定與限制，
   取代 coordinator 的自由摘要。無報告或多份報告不明確時 fail closed；
   明確承認失敗的 partial finish 仍可結束並揭露缺少報告的原因。
+  渲染時，能精確容納於 Go `int` 的 JSON 整數字面值會在獨立的 template
+  view 中轉成整數，供 `index` 使用；小數與更大的數值保留原始精度。
+  此轉換不改寫已接受的 payload、證據、收據或雜湊，無效索引仍拒絕渲染。
 
 例如，在 schema 根節點宣告（欄位名稱與降級值由團隊定義）：
 

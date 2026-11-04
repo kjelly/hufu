@@ -99,6 +99,33 @@ hufu results final <result-id> --team <team>
 
 ## 離線列表與結果閱讀
 
+若要直接閱讀團隊宣告的綜合成果，可使用通用的 `deliverable` 指令：
+
+```bash
+hufu results deliverable --team <team>
+hufu results deliverable --team <team> --run <run-id>
+hufu results deliverable <result-id> --team <team>
+hufu results deliverable --team <team> --export deliverable.md
+```
+
+不指定 ID 時，依 run 保存時間尋找範圍內最近一份已接受、且 schema 宣告
+`x-hufu-final-report` 的完成任務。後來一次沒有成果的失敗恢復不會遮住既有
+報告；來源提示會列出報告原始問題、run 與狀態。不依賴 worker 名稱或特定
+payload 欄位；同一 run 多份報告、沒有報告或結果已被取代時明確拒絕。
+指定 `--run` 或 result-id 後，只讀該 run，不會改選另一個 run。
+`--branch` 與 `--all-branches` 沿用其他 results 指令的範圍規則。
+
+這是已接受任務的成果呈現，不會將原 run 的 partial／失敗狀態改成成功。
+文字來源提示與 JSON 的 `source_run_status` 會保留原 run 狀態；JSON 的
+`deliverable` 是報告正文。可加 `--render markdown` 閱讀或以 `--export` 匯出，
+全程不呼叫模型、啟動 MCP 或恢復工作流程。`results report` 仍讀取已保存的
+run 層級執行報告，`results final` 仍只讀取原來保存的最終回覆。
+
+渲染使用本機原團隊 schema，必須與結果所綁定的 schema SHA-256 完全相符，
+並重驗 payload 雜湊與 schema。原 schema 已改變或缺失時，請還原原 schema，
+或使用 `results show --payload` 讀取保存資料；指令不會套用不同版本的模板。
+原始 payload、來源與收據不會因渲染或匯出而改寫。
+
 ```bash
 hufu results list --team <team> --limit 20
 hufu results search "timeout" --team <team>

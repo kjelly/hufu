@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -260,6 +262,131 @@ func TestContractFinalReportPreservesEvidence(t *testing.T) {
 	payload.SHA256 = "forged"
 	if _, _, err := c.renderedContractFinalReport(); err == nil {
 		t.Fatal("tampered payload accepted")
+	}
+}
+
+func TestContractFinalReportIndexesPersistedNumbers(t *testing.T) {
+	const schema = `{
+	 "type":"object","required":["indices","findings","large","fraction"],
+	 "properties":{"indices":{"type":"array"},"findings":{"type":"array"},"large":{"type":"number"},"fraction":{"type":"number"}},
+	 "x-hufu-final-report":"{{range .indices}}{{$f := index $.findings .}}{{.}}:{{$f.verdict}};{{end}} large={{.large}} fraction={{.fraction}}"
+	}`
+	compiled, err := compileResultContractDocument("report.json", []byte(schema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, indices, want string
+	}{
+		{"first and last", `[1,0,1]`, "1:unverified;0:supported;1:unverified;"},
+		{"negative zero", `[-0]`, "0:supported;"},
+		{"negative", `[-1]`, ""},
+		{"out of range", `[2]`, ""},
+		{"fraction", `[0.5]`, ""},
+		{"numeric string", `["0"]`, ""},
+		{"overflow", `[18446744073709551616]`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestCoordinator(t)
+			c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
+			ref := compiled.ref(true)
+			raw := []byte(fmt.Sprintf(`{"indices":%s,"findings":[{"verdict":"supported"},{"verdict":"unverified"}],"large":9007199254740993,"fraction":0.12345678901234567890123456789}`, tc.indices))
+			payload, err := validateStructuredResultPayload(compiled, ref, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", ResultContract: &ref}})[0]
+			stored := TaskResult{TaskID: item.ID, Agent: item.Agent, Status: TaskResultStatusSuccess, StructuredPayload: payload}
+			encoded, err := jsonv2.Marshal(stored)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var restored TaskResult
+			if err := jsonv2.Unmarshal(encoded, &restored); err != nil {
+				t.Fatal(err)
+			}
+			item.Status, item.TypedResult = TaskDone, &restored
+			before, err := jsonv2.Marshal(item.TypedResult)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := (&finishTool{coordinator: c}).Run(t.Context(), fantasy.ToolCall{Input: `{"response":"procedural completion"}`})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == "" {
+				if !response.IsError || c.finishCalled.Load() {
+					t.Fatal("invalid report index was accepted")
+				}
+			} else {
+				if response.IsError || !c.finishCalled.Load() {
+					t.Fatalf("persisted integer indices could not finish: %+v", response)
+				}
+				final := c.LastRunResult()
+				want := tc.want + " large=9007199254740993 fraction=0.12345678901234567890123456789"
+				if final == nil || final.Response != want || c.canonicalFinishedResponse("model summary") != want {
+					t.Fatalf("final report lost ordering, verdicts or numeric precision: %+v", final)
+				}
+			}
+			after, err := jsonv2.Marshal(item.TypedResult)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("rendering changed canonical payload or hash: %v", err)
+			}
+		})
+	}
+}
+
+func TestRenderAcceptedResultReportChecksFrozenIdentity(t *testing.T) {
+	for _, scenario := range []string{"valid", "schema drift", "tampered payload", "failed result", "no template", "invalid index"} {
+		t.Run(scenario, func(t *testing.T) {
+			dir := t.TempDir()
+			schema := `{"type":"object","required":["rows","position"],"properties":{"rows":{"type":"array"},"position":{"type":"integer"}},"x-hufu-final-report":"{{index .rows .position}}"}`
+			if scenario == "no template" {
+				schema = `{"type":"object"}`
+			}
+			writeResultContractSchema(t, dir, "result.json", schema)
+			compiled, err := compileResultContractSchema(dir, "result.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw := []byte(`{"rows":["qualified conclusion"],"position":0}`)
+			if scenario == "invalid index" {
+				raw = []byte(`{"rows":[],"position":0}`)
+			}
+			payload, err := validateStructuredResultPayload(compiled, compiled.ref(true), raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := &TaskResult{Status: TaskResultStatusCompletedWithGaps, StructuredPayload: payload}
+			switch scenario {
+			case "schema drift":
+				writeResultContractSchema(t, dir, "result.json", `{"type":"object","x-hufu-final-report":"changed report"}`)
+			case "tampered payload":
+				payload.Value = append(payload.Value, ' ')
+			case "failed result":
+				result.Status = TaskResultStatusBlocked
+			}
+			before, err := jsonv2.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text, declared, err := RenderAcceptedResultReport(dir, result)
+			if scenario == "valid" {
+				if err != nil || !declared || text != "qualified conclusion" {
+					t.Fatalf("text=%q declared=%v error=%v", text, declared, err)
+				}
+			} else if scenario == "no template" {
+				if err != nil || declared || text != "" {
+					t.Fatalf("undeclared report: %q %v %v", text, declared, err)
+				}
+			} else if err == nil || text != "" {
+				t.Fatal("invalid historical report was rendered")
+			}
+			after, err := jsonv2.Marshal(result)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatal("historical result changed during presentation")
+			}
+		})
 	}
 }
 

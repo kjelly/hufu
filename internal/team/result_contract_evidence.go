@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"text/template"
 )
@@ -555,6 +556,32 @@ func (b *boundedReportBuffer) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 
+// finalReportTemplateValue builds a presentation-only view. Canonical JSON
+// preserves numbers as json.Number, which Go templates cannot use as array
+// indices. Expose integer literals that fit int without float64 rounding;
+// retain fractions and larger numbers exactly, and never mutate stored data.
+func finalReportTemplateValue(value any) any {
+	switch node := value.(type) {
+	case json.Number:
+		if integer, err := strconv.Atoi(node.String()); err == nil {
+			return integer
+		}
+	case map[string]any:
+		view := make(map[string]any, len(node))
+		for name, child := range node {
+			view[name] = finalReportTemplateValue(child)
+		}
+		return view
+	case []any:
+		view := make([]any, len(node))
+		for index, child := range node {
+			view[index] = finalReportTemplateValue(child)
+		}
+		return view
+	}
+	return value
+}
+
 // renderedContractFinalReport seals the declared terminal worker's payload
 // without a second model synthesis. Templates are team-owned and schema-hashed.
 func (c *Coordinator) renderedContractFinalReport() (string, bool, error) {
@@ -562,7 +589,6 @@ func (c *Coordinator) renderedContractFinalReport() (string, bool, error) {
 		return "", false, nil
 	}
 	var selected *TodoItem
-	var report *template.Template
 	for _, item := range c.taskTracker.TodoList().Items() {
 		if item == nil || item.ResultContract == nil {
 			continue
@@ -580,7 +606,7 @@ func (c *Coordinator) renderedContractFinalReport() (string, bool, error) {
 		if selected != nil {
 			return "", true, fmt.Errorf("multiple final report tasks are ambiguous")
 		}
-		selected, report = item, compiled.finalReport
+		selected = item
 	}
 	if selected == nil {
 		// A declared final worker must not be bypassed by finish before dispatch.
@@ -591,10 +617,6 @@ func (c *Coordinator) renderedContractFinalReport() (string, bool, error) {
 		}
 		return "", false, nil
 	}
-	value, err := decodeResultContractJSON(selected.TypedResult.StructuredPayload.Value)
-	if err != nil {
-		return "", true, err
-	}
 	payload := selected.TypedResult.StructuredPayload
 	if err := c.validateSubmittedEvidenceInputs(selected.ID, payload); err != nil {
 		return "", true, err
@@ -602,23 +624,58 @@ func (c *Coordinator) renderedContractFinalReport() (string, bool, error) {
 	if err := c.validateResultReferenceReads(selected.ID, selected.TypedResult); err != nil {
 		return "", true, err
 	}
-	sum := sha256.Sum256(payload.Value)
-	if payload.Contract != *selected.ResultContract || payload.SHA256 != hex.EncodeToString(sum[:]) {
+	if payload.Contract != *selected.ResultContract {
 		return "", true, fmt.Errorf("final report payload identity does not match its contract or hash")
 	}
 	compiled, err := c.compiledResultContract(selected.ResultContract)
 	if err != nil {
 		return "", true, err
 	}
+	text, err := compiled.renderFinalReportPayload(payload)
+	return text, true, err
+}
+
+// RenderAcceptedResultReport is a read-only presentation of an already accepted
+// task result. The caller owns historical scope and acceptance selection. The
+// original schema must still be available with its exact frozen hash; this
+// function never loads a session, starts tools, or changes run acceptance.
+func RenderAcceptedResultReport(teamDir string, result *TaskResult) (string, bool, error) {
+	if result == nil || !taskResultStatusIsSuccessful(result.Status) || result.StructuredPayload == nil {
+		return "", false, fmt.Errorf("report requires a successful structured task result")
+	}
+	payload := result.StructuredPayload
+	compiled, err := compileResultContractSchema(teamDir, payload.Contract.ID)
+	if err != nil {
+		return "", false, err
+	}
+	if payload.Contract.SchemaSHA256 != compiled.SchemaSHA256 {
+		return "", false, fmt.Errorf("saved report schema hash differs from the current team schema; restore the original schema to render this result")
+	}
+	if compiled.finalReport == nil {
+		return "", false, nil
+	}
+	text, err := compiled.renderFinalReportPayload(payload)
+	return text, true, err
+}
+
+func (compiled *CompiledResultContract) renderFinalReportPayload(payload *ResultPayload) (string, error) {
+	sum := sha256.Sum256(payload.Value)
+	if payload.Contract.ID != compiled.ID || payload.Contract.SchemaSHA256 != compiled.SchemaSHA256 || payload.SHA256 != hex.EncodeToString(sum[:]) {
+		return "", fmt.Errorf("final report payload identity does not match its contract or hash")
+	}
+	value, err := decodeResultContractJSON(payload.Value)
+	if err != nil {
+		return "", err
+	}
 	if err := compiled.schema.Validate(value); err != nil {
-		return "", true, fmt.Errorf("final report payload no longer satisfies its schema: %w", err)
+		return "", fmt.Errorf("final report payload no longer satisfies its schema: %w", err)
 	}
 	var out boundedReportBuffer
-	if err := report.Execute(&out, value); err != nil {
-		return "", true, err
+	if err := compiled.finalReport.Execute(&out, finalReportTemplateValue(value)); err != nil {
+		return "", err
 	}
 	if strings.TrimSpace(out.String()) == "" {
-		return "", true, fmt.Errorf("final report template rendered empty output")
+		return "", fmt.Errorf("final report template rendered empty output")
 	}
-	return out.String(), true, nil
+	return out.String(), nil
 }
