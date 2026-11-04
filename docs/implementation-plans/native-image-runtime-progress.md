@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `5b160410`
+> Verified-Commit: `82b0884a`
 > Supersedes: —
 > Superseded-By: —
 
@@ -33,8 +33,9 @@
 | 階段 | 狀態 | 證據／commit |
 |---|---|---|
 | 文件移入正式目錄 | 已提交 | `515b95b9`；文件 map、規格與本紀錄 |
-| PR-00 SDK/schema fixture 與回歸基線 | 完成；本次階段 commit | SDK HTTP wire／tool media、pinned Codex schema；全部 required gates 與 targeted race 通過 |
-| PR-01 M0 private media/binding/policy/quota | 尚未開始 | — |
+| PR-00 SDK/schema fixture 與回歸基線 | 完成 | `82b0884a`；SDK HTTP wire／tool media、pinned Codex schema；全部 required gates 與 targeted race 通過 |
+| PR-01A 私有圖片 storage 與前置拒絕 | 完成；同本次階段 commit | 格式／CAS／資源限制與 universal provider guard；required gates、targeted race 與 Darwin package cross-build 通過 |
+| PR-01B M0 canonical binding/policy/quota | 尚未開始 | PR-01 整體尚未完成 |
 | PR-02 M0 history/compaction/recovery/audit | 尚未開始 | — |
 | PR-03 M1 CLI/direct/single native images | 尚未開始 | — |
 | PR-04 M2 coordinator/chat/DAG/routing | 尚未開始 | — |
@@ -67,6 +68,7 @@
 - `internal/agent/native_image_transport_test.go`：使用真正 loopback HTTP request 驗證 Stream 的 Messages/Prompt precedence、有序／重複 image parts、空輸入前置拒絕，以及 NewImageResponse 工具結果進入下一次 provider request；比對原始 fixture bytes 的 SHA-256，未呼叫真實 provider。
 - `internal/team/codex_input_schema_test.go` 與 `testdata/codex/0.166.0/`：固定原始 UserInput definition digest 及其 transitive definitions，驗證 text producer 相容與 localImage 的必要欄位／detail／variant case。
 - `mise exec -- go test -p 2 ./internal/agent ./internal/team -run '^(TestNativeImage|TestPinnedCodexUserInputSchema|TestCodexTextInputMatchesPinnedSchema)' -count=1`：PASS（agent 0.055s、team 0.035s）。
+
 | PR-00 gate | 結果 |
 |---|---|
 | targeted SDK/schema tests | PASS，agent 0.055s、team 0.035s |
@@ -84,3 +86,35 @@ Race 命令：`mise exec -- go test -p 2 -race ./internal/agent ./internal/team 
 
 接續 PR-01：純 media 型別／驗證、同一 CAS 的私有 namespace、canonical task binding／policy／lease、資源配額與自動結果重用隔離；PR-02～07 與 M0～M4 尚未完成，不縮減原規格範圍。
 - 此階段只建立 SDK/protocol 回歸證據，Hufu CLI 的 native image ingress、media grants／codec 與 backend image admission 仍未實作；尚不能宣稱原生圖片 runtime 可用。
+
+## PR-01A：私有圖片 storage 與前置拒絕
+
+- Canonical storage owner 仍為 `FileArtifactStore`。新增 `media/{data,meta}`，目錄 0700／檔案 0600；ID 由 version、SHA-256 與 canonical MIME 決定。metadata 只含 immutable content identity／尺寸，沒有 first-writer task／run authority；舊 data/meta 目錄、artifact IDs 與 permissions 不改寫。
+- 新增 `internal/media`：PNG／JPEG／static WebP magic detection、bounded header/config validation、完整 decode、APNG／animated WebP 拒絕、byte／pixel／side／bundle ceiling。JPEG 包含 APP1 metadata 的原 bytes 保留；不做 resize、EXIF 移除或格式轉換。
+- Linux／Darwin 的 file ingress 以 directory handles 逐層拒絕 symlink，以 nonblocking file handle 排除 FIFO／device／directory，再對同一 handle 限量讀取。其他平台明確 unsupported；沒有宣稱已執行 Darwin runtime 測試。
+- Process-wide decode concurrency 為 1；storage 的讀寫持有 raw-byte reservation，reader Close 才釋放。raw ceiling 64 MiB，另外按每個 frame 的 Base64 padding 預留三份 encoding/frame copies；碎片化 reservation 也有界，並不宣稱這些數值就是程序 RSS 上限。必須避免巢狀取得 reservation，後續 compiler 要沿用相同資源 ownership。
+- `Put/Get/Resolve/Verify/Open/TrustedArtifactMetadata` 走同一 namespace routing；media 不接受 digest-only lookup，嚴格驗證 metadata、MIME、hash、尺寸與 canonical claims。read-only opener 不建目錄；檢查 aggregate artifact read budget。data 已落地但 metadata 尚未建立的情形由相同 trusted publication 補完，不因未提交 occurrence 刪除 blob。
+- Universal provider admission 在文字 token counting／transport 前拒絕 FilePart／tool media；Generate、Stream、GenerateObject、StreamObject 共用相同 boundary。文字 artifact opener 明確拒絕 media IDs，避免將 raw image 當文字內容返回模型。
+- 此子階段沒有新增 task/session/receipt schema 或擴張 task 授權。尚未交付 Todo binding、media events、frozen target policy、branch quota、cache/reuse 隔離、history codec、CLI ingress 或 native image transport；PR-01B／PR-02 的驗收不能由本子階段測試替代。migration 僅新增 private namespace，不搬移既有 artifacts 或修改歷史 receipts。
+- 新增 tests 涵蓋同圖多 publisher、immutable collision、mode／namespace／symlink、FIFO／device、MIME 偽裝、截斷／動畫、EXIF byte identity、decode 取消、raw/encoding reservation、reader 釋放、aggregate read budget、metadata 中斷後重試與零 provider transport。所有圖片均為小型合成 fixture，沒有真實模型呼叫。
+
+本次 Go 變更以 `82b0884a` 為父，驗證後與此紀錄一併提交；PR-01A 完成，PR-01／M0 尚未完成。`golang.org/x/image/webp` 固定 v0.47.0；Fantasy SDK 未升級，既有 x/sync v0.24.0 改為直接依賴。
+
+| PR-01A gate | 結果 |
+|---|---|
+| `mise run lint` | PASS，exit 0，`0 issues.`；首輪兩項診斷已修正後重跑 |
+| `mise run test` | PASS，exit 0；cmd/hufu 208.680s、team 846.082s、media 0.008s、tools 48.344s |
+| `mise run test-contracts` | PASS，exit 0；team 121.027s、cmd/hufu 65.327s、reviewgate 23.428s、reviewprep 22.679s |
+| `mise run vet` | PASS，exit 0 |
+| 新圖片路徑 targeted race | PASS，exit 0；media 1.042s、team 1.453s |
+| Darwin arm64 `internal/media` compile-only | PASS，exit 0；`-o /dev/null`，未執行 Darwin runtime／測試或真實模型 |
+
+Race 命令：`mise exec -- go test -p 2 -race ./internal/media ./internal/team -run '^Test(Validate$|ReadFile|CheckBundle|DecodeLimiter|TransportReservation|MediaArtifact|MediaPublication|MediaReader|MediaStoreRespects|TaskArtifactOpener|ProviderRejectsMedia)' -count=1`。
+
+Darwin compile 命令：`GOOS=darwin GOARCH=arm64 mise exec -- go build -p 2 -o /dev/null ./internal/media`。
+
+早期 targeted regex 誤匹配既有 provider model-validation HTTP tests，sandbox 阻擋 loopback，該次不是通過證據；後續改用精確範圍，完整回歸在允許 loopback 的環境通過。lint 初次 sandbox 的既有 cache 為唯讀，後續沿用同一 cache 正常完成，未新建或搬移快取。
+
+全部 heavyweight gates 序列執行。已確認無 Go consumer 後，根據本工作開始前的 cache inventory、新 media owner symbols 與目前 export 清單，刪除 7 個過期的 owned archives，回收 910,897,152 bytes（約 869 MiB）。驗證後共享 GOCACHE（排除 GOTMPDIR）23,283,948 KiB；本階段開始後新 cache entries 留存 901,072 KiB（包含目前 normal/race outputs 與必要 Darwin/decode dependency artifacts），低於 2 GiB。未清除其他 session、共享依賴、toolchain 或既有 fixtures。
+
+Task scratch 最終約 4.5 MiB，峰值觀察約 139 MiB；CLI fixtures 已自行清理。階段提交後刪除 task-owned logs／inventory，不留二進位或大型 dump。GOTMPDIR 約 12 MiB，包含既有共享 fixtures，未依時間戳猜測 ownership 刪除。

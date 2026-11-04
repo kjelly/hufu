@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/media"
 )
 
 // ArtifactAccessScope is the immutable, attempt-local capability set for
@@ -156,6 +157,9 @@ func (c *Coordinator) managedSkillArtifactRefs(agentDef *agent.AgentDef, goal st
 // can interpret model text as a new path.
 func (c *Coordinator) openArtifactRef(ctx context.Context, id string) (io.ReadCloser, error) {
 	id = strings.TrimSpace(id)
+	if isMediaArtifactID(id) {
+		return nil, media.Reject(media.Unsupported, "media requires an admitted native image input")
+	}
 	if c == nil || c.session == nil || id == "" {
 		return nil, fmt.Errorf("artifact reference is required")
 	}

@@ -337,6 +337,11 @@ list/show 只顯示已授權安全 metadata。export 先驗證 scope/hash，寫�
 - 停用含圖 task 自動快取、歷史 reuse 與 inflight coalescing，保存 MediaInputDigest；文字任務不變。
 - **Exit:** repeated bytes/parts、多 occurrence owner、跨 task 拒絕、quota/取消、Put 後 crash、舊 artifact layout／policy hash 測試通過；實際圖片 transport 仍拒絕。
 
+PR-01 分兩個可獨立驗證的子階段提交，保留上述整體 exit：
+
+- **PR-01A：私有 storage 與前置拒絕。** 完成 shared ArtifactStore 的 media namespace、完整圖片驗證、process-wide decode／raw／encoding reservations，以及 universal provider／文字 artifact opener 的圖片拒絕。此時只有內部 storage API，尚無公開圖片 ingress、task grant 或模型傳輸。
+- **PR-01B：canonical admission。** 完成 Todo／task projection、event/reducer、frozen policy、attempt lease、branch lineage 配額與 cache／historical reuse／inflight 隔離。PR-01B 通過整體 exit 後才標記 PR-01 完成；PR-02 的 history／recovery／audit 仍是 M0 的必要交付。
+
 ### PR-02 — M0 引用式 history／compaction／recovery／audit
 
 - 實作第 5/9 節 codec、hydration 邊界、checkpoint schema、canonical digest、舊格式相容與獨立 audit。

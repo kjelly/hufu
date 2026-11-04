@@ -10,6 +10,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/cost"
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/modelprofile"
 )
 
@@ -37,6 +38,12 @@ func (c *Coordinator) providerAdmission() agent.RequestAdmission {
 func (a providerRequestAdmission) AdmitProviderRequest(ctx context.Context, request agent.ProviderRequest) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	// Native media transport remains closed until the reference compiler and
+	// provider-bound grants are available. Check every request shape here so
+	// workers, auxiliary roles and later tool rounds share the same boundary.
+	if providerRequestHasMedia(request) {
+		return media.Reject(media.Unsupported, "native media transport is not enabled")
 	}
 	if err := requireInvocationBinding(ctx); err != nil {
 		return err
