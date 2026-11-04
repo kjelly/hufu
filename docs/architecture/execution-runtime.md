@@ -845,6 +845,15 @@ rerunning settled decisions. A local result commit still
 passes ordinary verification and workflow acceptance; repairing one task can
 unlock undispatched downstream work and does not complete the entire run.
 
+For result-only repair with `--repair-result`, an optional
+`--repair-model <backend/model>` selects an auxiliary submitter
+already present in both the original and current frozen LLM routes. The grant
+and repair turns record that model separately; the original worker target and
+execution receipt identity are retained. Unknown, bare and agent-backend repair
+targets fail before generation. This lets an operator repair a submission with
+an already admitted model when the worker model repeatedly exhausts its output
+budget without a tool call.
+
 When work has returned but a required bound decision never started, result-only
 repair cannot supply that decision. Use the separate, explicit work retry:
 
@@ -881,14 +890,6 @@ retains unrelated accepted tasks, archives the old work receipt and opens a new
 occurrence for the selected task and its transitive consumers. New work uses
 the child branch's decision scope and fresh tool authorization. Verification
 and acceptance reopen; branch publication alone does not establish success.
-
-An optional `--repair-model <backend/model>` selects an auxiliary submitter
-already present in both the original and current frozen LLM routes. The grant
-and repair turns record that model separately; the original worker target and
-execution receipt identity are retained. Unknown, bare and agent-backend repair
-targets fail before generation. This lets an operator repair a submission with
-an already admitted model when the worker model repeatedly exhausts its output
-budget without a tool call.
 
 An unused external agent backend's inherited environment does not block an LLM
 continuation. This compatibility applies only when neither frozen nor current

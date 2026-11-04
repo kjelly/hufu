@@ -47,9 +47,13 @@ hufu resume --workspace ./workspace/dev-team --team dev-team \
   --repair-result <task-id> --dry-run
 ```
 
-Use the exact workspace, run, branch, task, and working directory from the
-suggested action. These repair-preview flags belong to `hufu resume`;
-`hufu session resume` does not accept them. Each blocked collection has its own
+Copy the complete suggested argv, including its workspace, run, branch, task,
+and execution profile, and use its working directory. The current action
+builder explicitly selects `--execution-profile default` for this read-only
+preview. This does not replace the source run's frozen policy; incompatible
+profiles remain subject to ordinary resume preflight. These repair-preview flags
+belong to `hufu resume`; `hufu session resume` does not accept them.
+Each blocked collection has its own
 preview, even when the primary action prioritizes another task's unknown
 external effect. The primary action retains that safety priority. Availability
 describes the read-only assessment command, not permission or a guarantee that

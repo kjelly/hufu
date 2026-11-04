@@ -588,6 +588,7 @@ type ActionPreconditions struct {
 | `select-scope` | binding ambiguous/conflict | inspect/read-only | `[]`；由 TTY selector 或錯誤訊息處理 | HF-UX-011B |
 | `inspect-integrity` | event/projection invalid 或 degraded | inspect/read-only | `hufu inspect replay RUN --workspace WS [--branch B]`；沒有唯一 RUN 時為 blocked | HF-UX-012A |
 | `inspect-task-recovery` | external effect unknown | inspect/read-only | `hufu inspect task TASK --run RUN --workspace WS [--branch B] [--attempt N]` | HF-UX-020A |
+| `assess-result-repair` | scope verified、integrity valid/degraded、projection consistent、event chain verified、runtime 不要求 wait；每個 blocked collection 或 interrupted collection 各一個 | inspect/read-only | `hufu resume --workspace WS --run RUN --branch B --execution-profile default --repair-result TASK --dry-run [--team TEAM]` | 已實作（result-collection recovery） |
 | `provide-input` | pending input gate | provide_input/approval | owner TUI 使用 typed intent；CLI v1 無 argv | HF-UX-020A |
 | `review-approval` | pending approval gate | review/approval | owner TUI 使用 typed intent；不產生 approve argv | HF-UX-020A |
 | `wait-runtime` | planning/executing/verifying/wrapping_up | wait/read-only | `[]` | HF-UX-020A |
@@ -597,9 +598,18 @@ type ActionPreconditions struct {
 | `review-result` | terminal run，且 outcome 需人工查看 | inspect/read-only | `hufu inspect run RUN --workspace WS [--branch B]` | HF-UX-020A |
 | `none-required` | terminal completed 且無 blocker | none/read-only | `[]` | HF-UX-020A |
 
-argv 的 flag 順序固定為 command path、`--workspace`、`--team`、`--run`、`--branch`、
-`--task`、`--attempt`；空 selector 不輸出。Registry 只生成已註冊且已有 contract test 的命令。
-在對應 façade 落地前，必須保留相同 ID/reason，但 `availability=blocked`、`argv=[]`。
+一般 argv 的 flag 順序固定為 command path、`--workspace`、`--team`、`--run`、`--branch`、
+`--task`、`--attempt`；空 selector 不輸出。`assess-result-repair` 使用表中既有 `resume`
+preview 的專用順序，選用的 `--team` 放在最後。Registry 只生成已註冊且已有 contract test
+的命令。在對應 façade 落地前，必須保留相同 ID/reason，但 `availability=blocked`、`argv=[]`。
+
+`assess-result-repair` 的 actor 為 `user`、reason code 為
+`result_collection_assessment_required`、confirmation 為 `none`，CWD 使用所選 scope 的
+project directory。Target、preconditions 與 source refs 由既有 `BuildAction` facts 建構；
+作為 read-only action，其 RevalidationKey 可為空。Workspace、run、branch、task 任一缺少時
+為 blocked 且無 argv；完整 target 可提供 available preview，仍由 preview 判定是否能修復。
+此入口已實作，不等待 `session` mutation façade，也不授予修復權限。Builder 目前固定選用
+`--execution-profile default`；這不會改寫來源 run 的 frozen policy，仍須通過普通 resume 檢查。
 
 ### 6.3 指令安全與 freshness
 

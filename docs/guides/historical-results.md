@@ -97,7 +97,7 @@ hufu results final <result-id> --team <team>
 
 `final` 使用原本保存的 run response，不重新執行 LLM，也不會自行拼湊 worker 結果。多 team invocation 的各 run response 仍是個別回覆，不代表 CLI 聚合輸出的完整副本。run outcome 可能是 partial 或失敗，應一起閱讀。`--agent` 和 `--status` 是 worker filters，不能搭配 `final`；可先找 worker 的 result-id，再交給 `final`。
 
-## 離線列表與結果閱讀
+## 團隊綜合成果（deliverable）
 
 若要直接閱讀團隊宣告的綜合成果，可使用通用的 `deliverable` 指令：
 
@@ -125,6 +125,10 @@ run 層級執行報告，`results final` 仍只讀取原來保存的最終回覆
 並重驗 payload 雜湊與 schema。原 schema 已改變或缺失時，請還原原 schema，
 或使用 `results show --payload` 讀取保存資料；指令不會套用不同版本的模板。
 原始 payload、來源與收據不會因渲染或匯出而改寫。
+
+## 離線列表與結果閱讀
+
+下列指令列出、搜尋或讀取已保存的任務結果：
 
 ```bash
 hufu results list --team <team> --limit 20
