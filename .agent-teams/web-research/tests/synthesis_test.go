@@ -12,6 +12,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -310,5 +311,14 @@ func TestResearchPipelineRequiresSynthesisAfterAudit(t *testing.T) {
 	}
 	if session.Agents["synthesizer"].Tools != "submit_result" {
 		t.Fatal("synthesizer has unexpected tools")
+	}
+	if session.Config.ResultTransport != agent.ResultTransportRuntime || session.Agents["synthesizer"].ResultTransport != agent.ResultTransportTool {
+		t.Fatal("research collection and the synthesizer's closed sequence do not have explicit compatible transports")
+	}
+	for _, name := range []string{"researcher", "countercheck", "verifier"} {
+		prompt := session.Agents[name].System
+		if !strings.Contains(prompt, "Never call `submit_result`") || strings.Contains(prompt, "Submit exactly one `submit_result`") || !strings.Contains(prompt, "return one complete JSON report") {
+			t.Fatalf("%s still uses a tool submission instruction under runtime collection", name)
+		}
 	}
 }

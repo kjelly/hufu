@@ -2,6 +2,7 @@ name: web-research
 description: "Independently research factual claims online, verify source evidence, and synthesize an evidence-qualified answer"
 goal-mode: outcome
 request-acceptance: true
+result-transport: runtime
 max-rounds: 8
 max-concurrent: 2
 max-retries: 1
@@ -31,7 +32,7 @@ mcp-servers:
   playwright_researcher:
     type: local
     temporary-directory-env: [PLAYWRIGHT_MCP_OUTPUT_DIR]
-    command: [npx, -y, '@playwright/mcp@latest', --headless, --isolated, --browser, chromium, --image-responses, omit, --snapshot-mode, none, --codegen, none, --no-webmcp]
+    command: [npx, -y, '@playwright/mcp@0.0.84', --headless, --isolated, --browser, chromium, --image-responses, omit, --snapshot-mode, none, --codegen, none, --no-webmcp]
     allowedTools: [browser_navigate, browser_snapshot]
     toolPolicies:
       browser_navigate:
@@ -50,7 +51,7 @@ mcp-servers:
   playwright_countercheck:
     type: local
     temporary-directory-env: [PLAYWRIGHT_MCP_OUTPUT_DIR]
-    command: [npx, -y, '@playwright/mcp@latest', --headless, --isolated, --browser, chromium, --image-responses, omit, --snapshot-mode, none, --codegen, none, --no-webmcp]
+    command: [npx, -y, '@playwright/mcp@0.0.84', --headless, --isolated, --browser, chromium, --image-responses, omit, --snapshot-mode, none, --codegen, none, --no-webmcp]
     allowedTools: [browser_navigate, browser_snapshot]
     toolPolicies:
       browser_navigate:
@@ -69,7 +70,7 @@ mcp-servers:
   playwright_verifier:
     type: local
     temporary-directory-env: [PLAYWRIGHT_MCP_OUTPUT_DIR]
-    command: [npx, -y, '@playwright/mcp@latest', --headless, --isolated, --browser, chromium, --image-responses, omit, --snapshot-mode, none, --codegen, none, --no-webmcp]
+    command: [npx, -y, '@playwright/mcp@0.0.84', --headless, --isolated, --browser, chromium, --image-responses, omit, --snapshot-mode, none, --codegen, none, --no-webmcp]
     allowedTools: [browser_navigate, browser_snapshot]
     toolPolicies:
       browser_navigate:

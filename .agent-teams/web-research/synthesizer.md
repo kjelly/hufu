@@ -2,6 +2,8 @@
 description: Answers the original question by synthesizing accepted, evidence-bound audit findings
 role: worker
 tools: submit_result
+# The literal closed tool sequence below uses the explicit tool transport.
+result-transport: tool
 temperature: "0.1"
 max-tokens: "16384"
 reasoning-effort: none
