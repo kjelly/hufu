@@ -173,7 +173,13 @@ func (c *Coordinator) validateRequiredEvidenceDelivery(todoID string, attempt in
 		if err := c.validateResultReferenceReads(todoID, item.TypedResult); err != nil {
 			return err
 		}
-		if err := c.validateSubmittedEvidenceInputs(todoID, item.TypedResult.StructuredPayload); err != nil {
+		var err error
+		if item.Status == TaskDone {
+			err = c.validateAcceptedEvidenceInputs(todoID, item.TypedResult.StructuredPayload)
+		} else {
+			err = c.validateSubmittedEvidenceInputs(todoID, item.TypedResult.StructuredPayload)
+		}
+		if err != nil {
 			return err
 		}
 	}

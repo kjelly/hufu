@@ -1,9 +1,44 @@
 package team
 
 import (
+	"errors"
 	"reflect"
 	"testing"
+
+	"charm.land/fantasy"
 )
+
+func TestResumePreflightRejectsMalformedConversation(t *testing.T) {
+	c, _, source := metadataContractRecoveryFixture(t)
+	ctx := WithMetadataOnlyContractRecovery(t.Context())
+	plan, err := c.AssessContractRecovery(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	branch, err := c.ApplyContractRecovery(ctx, source, "conversation-recovery", plan.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err = ReadResumeSource(c.session.Workspace, branch, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken := []fantasy.Message{{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "missing-call", Output: fantasy.ToolResultOutputContentText{Text: "original observation"}}}}}
+	if err := SaveConversationHistory(c.session.Workspace, broken); err != nil {
+		t.Fatal(err)
+	}
+	preview := newTestCoordinator(t)
+	preview.executionRunID = ""
+	preview.session, preview.providerManager, preview.maxConcurrent, preview.projectDir = c.session, c.providerManager, c.maxConcurrent, c.projectDir
+	_, err = preview.AssessResumeSource(t.Context(), source)
+	detail, ok := errors.AsType[*toolPairingError](err)
+	if !ok || detail.Reason != "result_without_call" {
+		t.Fatalf("preflight did not diagnose the malformed conversation: %v", err)
+	}
+	if !sameCanonicalEvidence(LoadConversationHistory(c.session.Workspace), broken) || preview.eventStore != nil || preview.executionRunID != "" {
+		t.Fatal("read-only preflight modified history or retained an active execution")
+	}
+}
 
 func TestResumePreflightRetainsFrozenNativeOutputContext(t *testing.T) {
 	c := newRecoveredArtifactCoordinator(t, configureInputBoundContractRecovery)

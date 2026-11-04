@@ -95,6 +95,12 @@ func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepRes
 			nextSourceIndex++
 		}
 	}
+	projected, err := projectHistoryToolPairs(history)
+	if err != nil {
+		log.Printf("warning: durable conversation checkpoint has invalid tool pairs: %v; retaining prior history", err)
+		return
+	}
+	history = projected
 	sourceCounts := sourceCountsForRanges(sourceRanges)
 	policy := c.compactionPolicy()
 	maxHistory := policy.MaxHistoryMessages

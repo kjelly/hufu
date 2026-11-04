@@ -52,12 +52,31 @@ func LoadConversationHistory(workspace string) []fantasy.Message {
 		}
 		messages = append(messages, msg)
 	}
+	projected, err := projectHistoryToolPairs(messages)
+	if err != nil {
+		// Do not hide malformed persisted history by trimming away its defect.
+		return filterMessages(messages)
+	}
+	messages = projected
 
 	if len(messages) > maxConversationHistory {
-		messages = messages[len(messages)-maxConversationHistory:]
+		messages, _, _ = trimHistoryPreservingHead(messages, nil, maxConversationHistory)
 	}
 
 	return filterMessages(messages)
+}
+
+// Use the same persisted conversation selected by coordinator startup. A
+// resume preview must reject malformed tool pairs before spending provider work.
+func validateResumeConversation(workspace, branch string) error {
+	state, exists, err := LoadConversationCompactionState(workspace)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return validateToolPairs(state.Branches[branch].History)
+	}
+	return validateToolPairs(LoadConversationHistory(workspace))
 }
 
 func filterMessages(messages []fantasy.Message) []fantasy.Message {

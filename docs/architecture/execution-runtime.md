@@ -1323,6 +1323,20 @@ also covers a checkpoint taken after task completion but before phase settlement
 even when no task needs replay. The resulting workflow snapshot is persisted as
 a canonical event and checkpoint; pending or operator-blocked tasks do not
 advance, and objective VERIFY evidence and phase order remain required.
+Ordinary resume and its read-only preflight also validate the restored
+coordinator conversation before provider work. Legacy history limits preserve
+complete tool-call/result groups and the original request. Invalid pairing
+diagnostics identify the kind of mismatch, message/part positions and a bounded
+hash of the provider call ID, without including model-controlled IDs or content.
+Providers may recycle an ID in a later completed exchange. Request and legacy
+history projections assign collision-free aliases to these closed pairs while
+preserving messages, arguments and results. Native observations, historical
+receipts and stored legacy history remain unchanged; concurrent collisions,
+orphan results and missing results are rejected before provider work.
+Completed results retained across a fork revalidate decisions against their
+recorded provenance in the admitted ancestor lineage. New submissions still
+require decisions in the current occurrence scope; they cannot import an
+ancestor decision by supplying its provenance.
 The closed context-purpose registry permits terminal-phase context only for
 coordinator delivery, compaction, final-summary repair and acceptance review,
 with the exact declared role and trigger. Context manifests keep `DONE` or

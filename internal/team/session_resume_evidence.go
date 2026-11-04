@@ -25,6 +25,9 @@ func (c *Coordinator) validateResumeSources(ctx context.Context) error {
 	if err := c.validateResumeRecoveryMode(ctx, source); err != nil {
 		return fail(err)
 	}
+	if err := validateResumeConversation(workspace, source.BranchID); err != nil {
+		return fail(fmt.Errorf("coordinator conversation for branch %q: %w", source.BranchID, err))
+	}
 	items := c.taskTracker.TodoList().Items()
 	canonical := make(map[string]*TodoItem, len(source.Session.Tasks))
 	for _, item := range source.Session.Tasks {

@@ -81,6 +81,45 @@ func TestLoadConversationHistoryMissing(t *testing.T) {
 	}
 }
 
+func TestLoadConversationHistoryPreservesToolPairsAtLimit(t *testing.T) {
+	for _, parallel := range []bool{false, true} {
+		t.Run(map[bool]string{false: "single", true: "parallel"}[parallel], func(t *testing.T) {
+			workspace := t.TempDir()
+			messages := []fantasy.Message{fantasy.NewUserMessage("original request")}
+			calls := []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: "old-call", ToolName: "view"}}
+			results := []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "old-call", Output: fantasy.ToolResultOutputContentText{Text: "old observation"}}}
+			if parallel {
+				calls = append(calls, fantasy.ToolCallPart{ToolCallID: "parallel-call", ToolName: "view"})
+				results = append(results, fantasy.ToolResultPart{ToolCallID: "parallel-call", Output: fantasy.ToolResultOutputContentText{Text: "parallel observation"}})
+			}
+			messages = append(messages,
+				fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: calls},
+				fantasy.Message{Role: fantasy.MessageRoleTool, Content: results})
+			for range maxConversationHistory - 1 {
+				messages = append(messages, fantasy.NewUserMessage("recent context"))
+			}
+			if !toolPairsIntact(messages) || toolPairsIntact(messages[len(messages)-maxConversationHistory:]) {
+				t.Fatal("fixture does not cross a tool pair at the old load boundary")
+			}
+			if err := SaveConversationHistory(workspace, messages); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				loaded := LoadConversationHistory(workspace)
+				if len(loaded) == 0 || len(loaded) > maxConversationHistory || !toolPairsIntact(loaded) {
+					t.Fatal("restored history splits tool-call/result pairs")
+				}
+				if !reflect.DeepEqual(loaded[0], messages[0]) || !reflect.DeepEqual(loaded[len(loaded)-1], messages[len(messages)-1]) {
+					t.Fatal("restored history lost the original request or newest context")
+				}
+				if _, err := NewContextWindowManager(nil, nil).Admit(t.Context(), ContextWindowRequest{Messages: loaded}); err != nil {
+					t.Fatalf("restored history cannot enter the provider boundary: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestLoadConversationHistoryCorrupt(t *testing.T) {
 	dir := t.TempDir()
 	putRuntimeDocument(t, dir, runtimestore.DocumentSessionHistory, []byte("not valid json{}"))
