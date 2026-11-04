@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `515b95b9`
+> Verified-Commit: `5b160410`
 > Supersedes: —
 > Superseded-By: —
 
@@ -33,7 +33,7 @@
 | 階段 | 狀態 | 證據／commit |
 |---|---|---|
 | 文件移入正式目錄 | 已提交 | `515b95b9`；文件 map、規格與本紀錄 |
-| PR-00 SDK/schema fixture 與回歸基線 | baseline 已確認；準備實作 | 測試草稿尚未加入工作樹 |
+| PR-00 SDK/schema fixture 與回歸基線 | 完成；本次階段 commit | SDK HTTP wire／tool media、pinned Codex schema；全部 required gates 與 targeted race 通過 |
 | PR-01 M0 private media/binding/policy/quota | 尚未開始 | — |
 | PR-02 M0 history/compaction/recovery/audit | 尚未開始 | — |
 | PR-03 M1 CLI/direct/single native images | 尚未開始 | — |
@@ -61,3 +61,26 @@
 | Codex | `CodexSubagentProvider.RunAttempt` → execution world/process → `codexRunTurn` | pinned union、projection、effective world、cancel/resume；text-only 相容 |
 | durable / replay | `SaveConversationHistory`、compaction state、event reducer、policy/receipt、branch lineage、audit | ref codec 與 version/hash 一致；不能把 hydrated SDK bytes 寫回紀錄 |
 | bypass inventory | sidecar、runtime actions、unattended、dry-run、direct synthesis、old session/result reuse | 未授權者不 hydrate；尚未支援組合明確拒絕 |
+
+## PR-00 SDK/schema 證據
+
+- `internal/agent/native_image_transport_test.go`：使用真正 loopback HTTP request 驗證 Stream 的 Messages/Prompt precedence、有序／重複 image parts、空輸入前置拒絕，以及 NewImageResponse 工具結果進入下一次 provider request；比對原始 fixture bytes 的 SHA-256，未呼叫真實 provider。
+- `internal/team/codex_input_schema_test.go` 與 `testdata/codex/0.166.0/`：固定原始 UserInput definition digest 及其 transitive definitions，驗證 text producer 相容與 localImage 的必要欄位／detail／variant case。
+- `mise exec -- go test -p 2 ./internal/agent ./internal/team -run '^(TestNativeImage|TestPinnedCodexUserInputSchema|TestCodexTextInputMatchesPinnedSchema)' -count=1`：PASS（agent 0.055s、team 0.035s）。
+| PR-00 gate | 結果 |
+|---|---|
+| targeted SDK/schema tests | PASS，agent 0.055s、team 0.035s |
+| `mise run test` | PASS，exit 0；cmd/hufu 229.249s、agent 0.364s、team 830.858s |
+| `mise run vet` | PASS，exit 0 |
+| `mise run lint` | PASS，exit 0，0 issues |
+| `mise run test-contracts` | PASS，exit 0；team 118.987s、cmd/hufu 67.663s、reviewgate 12.742s、reviewprep 24.233s |
+| 新增測試 targeted race | PASS，exit 0；agent 1.116s、team 1.129s |
+
+上述驗證針對以 `5b160410` 為父的同一份 Go 變更；PR-00 已完成。
+
+Race 命令：`mise exec -- go test -p 2 -race ./internal/agent ./internal/team -run '^(TestNativeImage|TestPinnedCodexUserInputSchema|TestCodexTextInputMatchesPinnedSchema)' -count=1`。此階段只新增測試／fixture，race 覆蓋新增 HTTP callbacks 與 schema 測試；未宣稱整個 repository 的全量 race 已重跑。
+
+驗證後共享 GOCACHE（排除 GOTMPDIR）23,863,644 KiB，較工作起始總量淨增約 1.67 GiB（包含必要的 normal/race dependency outputs），低於 2 GiB；保留當前可重用輸出，不清共享 cache。一次只有一個 heavyweight gate。階段 scratch 約 7 MiB，摘要記錄後清理；無保留 CLI executable 或大型 schema dump。
+
+接續 PR-01：純 media 型別／驗證、同一 CAS 的私有 namespace、canonical task binding／policy／lease、資源配額與自動結果重用隔離；PR-02～07 與 M0～M4 尚未完成，不縮減原規格範圍。
+- 此階段只建立 SDK/protocol 回歸證據，Hufu CLI 的 native image ingress、media grants／codec 與 backend image admission 仍未實作；尚不能宣稱原生圖片 runtime 可用。
