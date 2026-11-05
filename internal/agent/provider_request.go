@@ -397,15 +397,18 @@ func NewProviderInvocationID() (string, error) {
 }
 
 func (m *admittedLanguageModel) commitInvocation(ctx context.Context, request *ProviderRequest) error {
-	if m.invocationCommitter == nil {
-		return nil
+	if m.invocationCommitter != nil {
+		id, err := NewProviderInvocationID()
+		if err != nil {
+			return err
+		}
+		request.InvocationID = id
+		if err := m.invocationCommitter.CommitProviderInvocation(ctx, *request); err != nil {
+			return err
+		}
 	}
-	id, err := NewProviderInvocationID()
-	if err != nil {
-		return err
-	}
-	request.InvocationID = id
-	return m.invocationCommitter.CommitProviderInvocation(ctx, *request)
+	m.bindTransportAuthorization(ctx, *request)
+	return nil
 }
 
 func (m *admittedLanguageModel) settleInvocation(ctx context.Context, request ProviderRequest, result ProviderInvocationResult) {

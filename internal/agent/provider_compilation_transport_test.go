@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 )
@@ -86,6 +88,71 @@ func TestProviderCompilationReachesSDKWireWithoutChangingHistory(t *testing.T) {
 			after, err := EncodeMediaHistory(messages, "fixture-checkpoint")
 			if err != nil || string(before) != string(after) {
 				t.Fatal("hydrated wire parts changed persistent caller history")
+			}
+		})
+	}
+}
+
+func TestProviderCompilationDrainsSDKStreamOnEarlyStop(t *testing.T) {
+	for _, scenario := range []string{"iterator break", "cancel before iteration", "cancel during iteration"} {
+		t.Run(scenario, func(t *testing.T) {
+			parent, deadline := context.WithTimeout(t.Context(), 5*time.Second)
+			defer deadline()
+			ctx, cancel := context.WithCancel(parent)
+			defer cancel()
+			started, disconnected, released := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			var received atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				received.Add(1)
+				_, _ = io.Copy(io.Discard, r.Body)
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, "data: {\"id\":\"fixture\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"fixture-vision\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"fixture\"},\"finish_reason\":null}]}\n\n")
+				w.(http.Flusher).Flush()
+				close(started)
+				<-r.Context().Done()
+				close(disconnected)
+			}))
+			t.Cleanup(func() { cancel(); server.Close() })
+			limiter := newCapacityLimiter(1)
+			admission := &compilationAdmission{recordingAdmission: &recordingAdmission{limiter: limiter}, compile: func(request ProviderRequest) (ProviderRequest, func(), error) {
+				wire, cleanup, err := compileFixtureImages(t, request)
+				return wire, func() { cleanup(); close(released) }, err
+			}}
+			model := NewAdmittedLanguageModel("fixture-vision", nativeImageModel(t, server), admission)
+			stream, err := model.Stream(ctx, fantasy.Call{Prompt: []fantasy.Message{{Role: fantasy.MessageRoleUser, Content: historyReferenceParts(t)}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-started:
+			case <-parent.Done():
+				t.Fatal("SDK did not open its stream before returning the iterator")
+			}
+			if scenario == "cancel before iteration" {
+				cancel()
+				select {
+				case <-released:
+				case <-parent.Done():
+					t.Fatal("cancelled, unconsumed SDK iterator retained compiler buffers")
+				}
+			}
+			for part := range stream {
+				if part.Type == fantasy.StreamPartTypeTextDelta {
+					if scenario == "iterator break" {
+						break
+					}
+					cancel()
+				}
+			}
+			for _, done := range []<-chan struct{}{released, disconnected} {
+				select {
+				case <-done:
+				case <-parent.Done():
+					t.Fatal("SDK stream stopped without draining transport and compiler ownership")
+				}
+			}
+			if received.Load() != 1 || limiter.active.Load() != 0 {
+				t.Fatal("stopped SDK stream replayed transport or leaked its slot")
 			}
 		})
 	}

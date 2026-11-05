@@ -18,6 +18,28 @@ type ProviderRequestCompiler interface {
 	CompileProviderRequest(context.Context, ProviderRequest) (ProviderRequest, func(), error)
 }
 
+// ProviderTransportAuthorizer rechecks a native request at each HTTP send,
+// after durable invocation commit and SDK encoding. The request is the original
+// canonical reference projection, never the SDK's private image buffers.
+// Implementations must not issue provider calls or mutate the request.
+type ProviderTransportAuthorizer interface {
+	AuthorizeProviderTransport(context.Context, ProviderRequest) error
+}
+
+func (m *admittedLanguageModel) bindTransportAuthorization(ctx context.Context, request ProviderRequest) {
+	scope := nativeProviderCompilation(ctx)
+	if scope == nil {
+		return
+	}
+	if authorizer, ok := m.admission.(ProviderTransportAuthorizer); ok {
+		scope.mu.Lock()
+		scope.authorize = func(ctx context.Context) error {
+			return authorizer.AuthorizeProviderTransport(ctx, request)
+		}
+		scope.mu.Unlock()
+	}
+}
+
 func (m *admittedLanguageModel) compileInvocation(ctx context.Context, original ProviderRequest) (ProviderRequest, *providerCompilation, error) {
 	wire := original
 	var release func()

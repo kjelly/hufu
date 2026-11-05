@@ -38,6 +38,25 @@ type MediaProviderAdmittedPayload struct {
 
 const mediaOperatorEstimate = "operator_upper_bound"
 
+func (c *Coordinator) mediaProviderAdmissionPayload(ctx context.Context, request agent.ProviderRequest) (nativeProviderMedia, MediaProviderAdmittedPayload, error) {
+	admission, err := c.resolveNativeProviderMedia(ctx, request)
+	if err != nil {
+		return admission, MediaProviderAdmittedPayload{}, err
+	}
+	tokens, err := defaultCounter.CountProviderRequest(withNativeProviderCounter(ctx, c), request.ModelID, request)
+	if err != nil {
+		return admission, MediaProviderAdmittedPayload{}, err
+	}
+	payload := MediaProviderAdmittedPayload{Version: media.Version, ProviderInvocationID: request.InvocationID,
+		OccurrenceRevision: admission.Identity.OccurrenceRevision, Attempt: admission.Identity.Attempt, DispatchID: admission.Identity.DispatchID,
+		BindingHash: admission.Binding.Hash, MediaInputDigest: admission.Binding.InputDigest, PolicyHash: admission.Binding.PolicyHash,
+		Target: admission.Target, ProviderKey: admission.Grant.ProviderKey, ProviderConfigurationHash: admission.Grant.IdentityHash,
+		ImageCount: len(admission.Locations), ImageTokenUpperBound: admission.Grant.ImageTokenUpperBound, ImageTokens: admission.ImageTokens,
+		TextTokens: int64(tokens) - admission.ImageTokens, RequestTokens: int64(tokens), ContextWindow: int64(request.AdmissionContext.ContextWindow),
+		OutputReservation: int64(providerRequestOutputReservation(request)), SafetyMargin: int64(request.AdmissionContext.SafetyMarginTokens), EstimateSource: mediaOperatorEstimate}
+	return admission, payload, validateMediaProviderEstimate(payload)
+}
+
 func decodeMediaProviderEvent(event RunEvent) (MediaProviderAdmittedPayload, error) {
 	var payload MediaProviderAdmittedPayload
 	if event.SchemaVersion < eventStoreSchemaVersion || len(event.Payload) > 16<<10 {
@@ -84,23 +103,11 @@ func (c *Coordinator) commitMediaProviderAdmission(ctx context.Context, request 
 	if !ok {
 		return media.Reject(media.DurabilityRequired, "image provider admission requires an atomic event journal")
 	}
-	ctx = withNativeProviderCounter(ctx, c)
 	for range 16 {
-		admission, err := c.resolveNativeProviderMedia(ctx, request)
+		admission, payload, err := c.mediaProviderAdmissionPayload(ctx, request)
 		if err != nil {
 			return err
 		}
-		tokens, err := defaultCounter.CountProviderRequest(ctx, request.ModelID, request)
-		if err != nil {
-			return err
-		}
-		payload := MediaProviderAdmittedPayload{Version: media.Version, ProviderInvocationID: request.InvocationID,
-			OccurrenceRevision: admission.Identity.OccurrenceRevision, Attempt: admission.Identity.Attempt, DispatchID: admission.Identity.DispatchID,
-			BindingHash: admission.Binding.Hash, MediaInputDigest: admission.Binding.InputDigest, PolicyHash: admission.Binding.PolicyHash,
-			Target: admission.Target, ProviderKey: admission.Grant.ProviderKey, ProviderConfigurationHash: admission.Grant.IdentityHash,
-			ImageCount: len(admission.Locations), ImageTokenUpperBound: admission.Grant.ImageTokenUpperBound, ImageTokens: admission.ImageTokens,
-			TextTokens: int64(tokens) - admission.ImageTokens, RequestTokens: int64(tokens), ContextWindow: int64(request.AdmissionContext.ContextWindow),
-			OutputReservation: int64(providerRequestOutputReservation(request)), SafetyMargin: int64(request.AdmissionContext.SafetyMarginTokens), EstimateSource: mediaOperatorEstimate}
 		encoded, err := json.Marshal(payload)
 		if err != nil {
 			return err

@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `8ddd0f04`（PR-03B 證據與變更同本次階段 commit；M1 整體仍未完成）
+> Verified-Commit: `9484c5e7`（PR-03C 證據與變更同本次階段 commit；M1 整體仍未完成）
 > Supersedes: —
 > Superseded-By: —
 
@@ -38,8 +38,9 @@
 | PR-01B M0 canonical binding/policy/quota | 完成 | `3143197f`；required gates、定向 race 與 Darwin media compile 通過；PR-01 完成，M0 仍待 PR-02 |
 | PR-02 M0 history/compaction/recovery/audit | 完成 | `bb2301c2`；required gates、定向 race 通過；M0 資料基礎完成，圖片 transport 仍關閉 |
 | PR-03A provider compiler／圖片能力基礎 | 完成 | `8ddd0f04`；required gates、SDK wire／生命週期定向 race 通過；未開啟 runtime 圖片執行 |
-| PR-03B canonical provider admission／CAS compiler／token counter／audit | 完成；同本次階段 commit | required gates、最終 source 定向 race 通過；runtime 與 CLI 送圖仍關閉 |
-| PR-03 M1 CLI/direct/single native images | 進行中 | task 授權／凍結目標、圖片 token admission、CLI 與 runtime wire E2E 仍待完成 |
+| PR-03B canonical provider admission／CAS compiler／token counter／audit | 完成 | `9484c5e7`；required gates、最終 source 定向 race 通過；runtime 與 CLI 送圖仍關閉 |
+| PR-03C 最後 HTTP 授權／SDK stream 排空 | 完成；同本次階段 commit | 完整測試、contracts、vet、lint 與定向 race 通過；圖片執行入口仍關閉 |
+| PR-03 M1 CLI/direct/single native images | 進行中 | 受支援 ingress／mode、worker／CLI 串接與 runtime wire E2E 仍待完成 |
 | PR-04 M2 coordinator/chat/DAG/routing | 尚未開始 | — |
 | PR-05 M3 MCP/result binding | 尚未開始 | — |
 | PR-06 M3 inspect/export/docs | 尚未開始 | — |
@@ -245,7 +246,7 @@ PR-03 的待辦仍包含：canonical task／當前 lease 與凍結 provider iden
 |---|---|
 | Metadata／compiler／counter／CAS 定向測試 | PASS；最新 counter／compiler group team 10.066s；CAS group media 0.006s、team 6.808s |
 | Media event／audit／redactor 定向測試 | PASS；utils 0.008s、team 16.389s |
-| Helper 定向 race | PASS；media 1.021s、agent 1.098s、team 68.461s；此輪早於 event／audit／redactor 變更，後者尚待補測 |
+| Helper 定向 race | PASS；media 1.021s、agent 1.098s、team 68.461s；此輪早於 event／audit／redactor 變更，不替代下方最終 source race |
 | `mise run lint` | PASS，exit 0，`0 issues.`；28 個 Go 變更固定後啟動完整 gates |
 | `mise run test` | PASS，exit 0；team 936.763s、cmd/hufu 226.080s、agent 0.485s、auditverify 15.693s、tools 48.435s |
 | `mise run test-contracts` | PASS，exit 0；team 124.349s、cmd/hufu 73.516s、reviewgate 19.393s、reviewprep 27.100s、web-research 0.259s |
@@ -265,3 +266,39 @@ M1 尚待：受支援 ingress／mode 的 canonical binding、RunTask／RunDirect
 最終 full-source normal／race exports 完成後再清理，沒有額外 obsolete archive 可刪。盤點共享 GOCACHE 17,891,102,720 bytes；本任務 project archives 732,622,848 bytes、test-cache logs 23,683,072 bytes，合計 756,305,920 bytes（約 721 MiB），低於 2 GiB。從 PR-01B 至此累計回收 7,857,086,464 bytes；沒有整批清 cache 或改 cache 路徑。一次 cleanup 在 exports job 尚未退出時被 own-consumer guard 拒絕，待退出後才重試，未刪除 active outputs。
 
 Task scratch 約 10.1 MiB，觀察峰值約 144 MiB；CLI fixtures 自行清理，沒有保留 disposable binary。GOTMPDIR 約 203 MiB，保留其他 checkout 與未知 ownership 的工作目錄。提交後刪除本階段 disposable logs，保留 inventories、cleanup manifest、source hashes 與 M1 continuation notes 在同一私有 task 目錄；不建立第二個暫存根。最後 `/tmp` 可用約 7.3 GiB、cache/module volume 約 64 GiB、available RAM 約 11 GiB。
+
+## PR-03C：最後 HTTP 授權與 SDK stream 排空
+
+此子階段以 `9484c5e7` 為父。圖片執行入口仍關閉；M1 的 CLI／direct／single-task 串接與完整 runtime wire 驗收尚未完成。
+
+- 共用 optional `ProviderTransportAuthorizer` 在 durable invocation commit 與 SDK encoding 之後、每次 native HTTP send 之前重新授權。接收原始 canonical refs 與已提交的 invocation ID，不接收 hydrated bytes；文字請求維持原路徑。
+- Team adapter 從 hash-chain-verified branch lineage 尋找相同 invocation 的圖片 permission，核對 task／run／branch／actor、revision／attempt／dispatch、binding／policy／目標／configuration hash 與 token estimates，再從 preceding lineage 驗證 profile／policy evidence。journal read 後重驗 live lease，不沿用等待前的權限。
+- 權限撤銷、context 取消或 scope 已關閉時，HTTP body 在未讀取／未交給 underlying transport 前關閉。SDK fixture 覆蓋 Generate／Stream／GenerateObject／StreamObject：native positive control 通過，授權拒絕為零 fake-endpoint requests，文字相容路徑不新增 native gate。
+- 真正 pinned SDK 的 iterator 提早 break、尚未迭代就取消、迭代中取消，都驗證 HTTP disconnect、buffer cleanup 與 provider slot 釋放，且不重送。這些證據只支持已驗證的 SDK 生命週期，不宣稱任意 lazy encoder 相容。
+- 沿用既有 media admission payload，commit 與最後 transport check 共用同一 estimates builder；沒有 SQL／event schema migration、SDK 升級、文件搬移或真實 inference。
+
+最初 structured-object positive fixture 回傳文字而非該 adapter 所需的 tool call，測試正確失敗；修正 fixture 後，以下 gates 使用固定的 8 個 Go 檔，SHA-256 未變。
+
+| PR-03C gate | 結果 |
+|---|---|
+| Native transport／durable permission 定向測試 | PASS；agent 0.131s、team 13.233s |
+| SDK stream early-stop 定向測試 | PASS；agent 0.142s |
+| `mise run lint` | PASS，exit 0，`0 issues.` |
+| 定向 race | PASS，exit 0；agent 1.473s、team 42.513s |
+| `mise run test` | PASS，exit 0；team 863.834s、cmd/hufu 238.988s、agent 0.481s、auditverify 47.462s、tools 48.489s |
+| `mise run test-contracts` | PASS，exit 0；team 116.453s、cmd/hufu 67.335s、reviewgate 13.278s、reviewprep 23.419s、web-research 0.284s |
+| `mise run vet` | PASS，exit 0，無診斷 |
+
+Race 命令：`mise exec -- go test -p 2 -race ./internal/agent ./internal/team -run '^Test(ProviderCompilation|NativeProviderRequests|MediaProviderTransport|MediaProviderAdmission)' -count=1`。
+
+Lint、race、完整測試、contracts、vet 依序執行；全部結束後再次核對 8 個 Go 檔的 SHA-256。文件證據在驗證期間及完成後更新，沒有改動固定的 Go source，也沒有以較早版本的結果替代。
+
+M1 尚待受支援 ingress／mode、RunTask／direct／worker／PrepareStep 串接、repair／synthesis 的文字 view、CLI／legacy／dry-run／binary guard，以及 runtime wire／retry／新 process resume 驗收。啟用前還需檢查已完成 iterator 保留 cleanup 閉包時的 buffer references，避免已清零的 raw arrays 長期留存；目前 production media guards 仍全部關閉。M2～M4 未完成。
+
+本階段前共享 GOCACHE 18,098,425,856 allocated bytes；lint 後 18,512,576,512、race 後 18,728,443,904。已識別的本任務留存接近 2 GiB 前，先取得同一 source 的 normal／race exports，再清除 51 個過期 owned archives，回收 696,315,904 bytes，才開始完整 gates。完整測試後 GOCACHE 18,286,063,616、contracts 後 18,287,976,448、vet 後 18,288,308,224；共享總量包含其他工作的活動，不能全歸本任務。
+
+盤點補含先前未完整計入的大型 task test-cache logs。Gates 結束後依確切清單、task 開始前 inventory、test-log header、絕對 source root 與 open／mapped／hard-link guards 清除 33 個舊 logs，回收 495,165,440 bytes；保留本階段結果及目前編譯輸出。兩次清理共回收 1,191,481,344 bytes（約 1.11 GiB），自 PR-01B 累計 9,048,567,808 bytes。最終 GOCACHE 17,793,142,784 bytes；本任務 archives 730,820,608、其他可辨識 task 輸出 126,222,336，合計 857,042,944 bytes（約 817 MiB），低於 2 GiB。
+
+清理守衛曾保留仍有 consumer 的輸出；追查確認其中一個是使用者 nu／tmux 啟動的閒置 hufu，而非本任務。以確切 PID／start identity 辨識後仍保護其 open／mapped outputs，沒有停止該程序、刪除其 binary 或改動共享 dependencies。當時沒有 socket／runtime store handle 且 I/O 未變；完整 gates 沒有與本任務的 live agent-team run 重疊。
+
+Task scratch 最終約 15.6 MiB，觀察峰值約 150 MiB；fixtures 自行清理，沒有留下 disposable binary。GOTMPDIR 約 12.5 MiB，保留既有／未知 ownership 的資料；沿用原 cache 路徑。階段提交後清理本階段 disposable logs，保留 inventories、cleanup manifest、source hashes 與 M1 continuation checkpoint 於同一私有 task 目錄。最後 `/tmp` 可用約 7.2 GiB、cache/module volume 約 64 GiB、available RAM 約 11 GiB。

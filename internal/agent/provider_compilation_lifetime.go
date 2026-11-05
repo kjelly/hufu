@@ -12,6 +12,7 @@ type providerCompilationKey struct{}
 type providerCompilation struct {
 	native       bool
 	cleanup      func()
+	authorize    func(context.Context) error
 	returned     chan struct{}
 	markReturned func()
 	finish       func()
@@ -87,9 +88,13 @@ func compiledProviderRoundTrip(req *http.Request, transport http.RoundTripper) (
 	scope.mu.Lock()
 	if scope.closed {
 		scope.mu.Unlock()
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
 		return nil, context.Canceled
 	}
 	scope.active.Add(1)
+	authorize := scope.authorize
 	scope.mu.Unlock()
 	done := sync.OnceFunc(scope.active.Done)
 	defer done()
@@ -100,6 +105,12 @@ func compiledProviderRoundTrip(req *http.Request, transport http.RoundTripper) (
 		}
 		req = req.Clone(req.Context())
 		req.Body = body
+	}
+	if err := authorizeCompiledTransport(req.Context(), authorize); err != nil {
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
+		return nil, err
 	}
 	response, err := transport.RoundTrip(req)
 	if response == nil || response.Body == nil {
@@ -115,6 +126,18 @@ func compiledProviderRoundTrip(req *http.Request, transport http.RoundTripper) (
 	}
 	response.Body = body
 	return response, nil
+}
+
+func authorizeCompiledTransport(ctx context.Context, authorize func(context.Context) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if authorize != nil {
+		if err := authorize(ctx); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
 }
 
 func (s *providerCompilation) trackBody(source io.ReadCloser) (*compiledProviderBody, bool) {
