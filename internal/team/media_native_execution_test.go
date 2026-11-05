@@ -62,7 +62,7 @@ func TestNativeMediaPublicInvocationReachesSDKWithCanonicalImages(t *testing.T) 
 					Messages []mediaWorkerWireMessage `json:"messages"`
 					Stream   bool                     `json:"stream"`
 				}
-				if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" || json.UnmarshalRead(io.LimitReader(r.Body, 1<<20), &request) != nil {
+				if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" || json.UnmarshalRead(io.LimitReader(r.Body, 1<<20), &request) != nil || request.Model != "vision" {
 					http.Error(w, "invalid fixture request", http.StatusBadRequest)
 					return
 				}
@@ -265,6 +265,11 @@ func TestNativeMediaPublicInvocationRejectsBeforeHTTP(t *testing.T) {
 
 func assertMediaWorkerWire(t *testing.T, messages []mediaWorkerWireMessage, binding *media.TaskBinding) {
 	t.Helper()
+	assertMediaWorkerWireForPrompt(t, messages, binding, "Compare the images.")
+}
+
+func assertMediaWorkerWireForPrompt(t *testing.T, messages []mediaWorkerWireMessage, binding *media.TaskBinding, prompt string) {
+	t.Helper()
 	var hashes []string
 	imageTurns, matchingText := 0, 0
 	for _, message := range messages {
@@ -281,7 +286,7 @@ func assertMediaWorkerWire(t *testing.T, messages []mediaWorkerWireMessage, bind
 		}
 		turnImages := 0
 		for _, part := range parts {
-			if message.Role == "user" && strings.Contains(part.Text, "Compare the images.") {
+			if message.Role == "user" && strings.Contains(part.Text, prompt) {
 				matchingText++
 			}
 			if part.Type != "image_url" {

@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `a1ad9c8a`（PR-03D 證據與變更同本次階段 commit；M1 整體仍未完成）
+> Verified-Commit: `cac9d373`（PR-03E 證據與變更同本次階段 commit；M1 整體仍未完成）
 > Supersedes: —
 > Superseded-By: —
 
@@ -40,8 +40,9 @@
 | PR-03A provider compiler／圖片能力基礎 | 完成 | `8ddd0f04`；required gates、SDK wire／生命週期定向 race 通過；未開啟 runtime 圖片執行 |
 | PR-03B canonical provider admission／CAS compiler／token counter／audit | 完成 | `9484c5e7`；required gates、最終 source 定向 race 通過；runtime 與 CLI 送圖仍關閉 |
 | PR-03C 最後 HTTP 授權／SDK stream 排空 | 完成；`a1ad9c8a` | 完整測試、contracts、vet、lint 與定向 race 通過；圖片執行入口仍關閉 |
-| PR-03D 原生圖片 API／共用 worker 串接 | 完成；同本次階段 commit | API wire、full、contracts、vet、lint 與定向 race 全部通過；M1 整體仍未完成 |
-| PR-03 M1 CLI/direct/single native images | 進行中 | API／worker 已串接；CLI／非視覺 synthesis／retry 與新 process resume wire 驗收待完成 |
+| PR-03D 原生圖片 API／共用 worker 串接 | 完成；`cac9d373` | API wire、full、contracts、vet、lint 與定向 race 全部通過；M1 整體仍未完成 |
+| PR-03E canonical 圖片恢復／重試 | 完成；同本次階段 commit | 新程序 CAS wire、reset 授權、分支政策與所有 required gates 通過 |
+| PR-03 M1 CLI/direct/single native images | 進行中 | API／worker／新 process 恢復與明確 retry reset 已驗證；CLI／非視覺 synthesis／自動 worker retry／cost／acceptance 驗收待完成 |
 | PR-04 M2 coordinator/chat/DAG/routing | 尚未開始 | — |
 | PR-05 M3 MCP/result binding | 尚未開始 | — |
 | PR-06 M3 inspect/export/docs | 尚未開始 | — |
@@ -338,3 +339,36 @@ Race 命令：`mise exec -- go test -p 2 -race -timeout 20m ./internal/agent ./i
 依目前 normal／race exports、初始 inventory、source-root／compile-unit／test-log header 與 open／mapped／hard-link guards，分段清理本工作的舊 archives 與已完成的 test-input logs，本階段回收 4,518,031,360 bytes（約 4.21 GiB），自 PR-01B 累計 13,566,599,168 bytes。中斷測試的確切程序退出後，其已記錄 work roots 已不存在，未以時間或廣泛 glob 刪除其他目錄；其他 checkout 的工作與未明 ownership 的資料保留。
 
 最終共享 GOCACHE 19,928,477,696 bytes；可辨識本任務 archives 733,970,432、其他輸出 9,265,152，合計 743,235,584 bytes（約 709 MiB），低於 2 GiB。Task scratch 約 22.5 MiB，沒有保留 executable；GOTMPDIR 約 13.3 MiB。提交後清理本階段 disposable logs，保留同一私有 task 目錄中的 source hashes、inventories、cleanup manifest 與後續 M1 recovery checkpoint，供下一階段接續使用。
+
+## PR-03E：保留 canonical 圖片 owner 的恢復與重試
+
+此子階段以 `cac9d373` 為父，修正真正恢復執行時的 reset 與政策驗證。CLI 與非視覺 synthesis 尚未交付，M1 整體仍未完成。
+
+- 原有 `task_created` 的 resume／retry reset 延續既有 owner，不建立第二份圖片 binding。持久化前依同一 verified journal head 驗證原始成對 creation／binding、前一狀態、revision、重試計數、immutable execution contract 與 frozen media policy，再 conditional append；成功後才更新 live projection。
+- Independent media audit 以相同規則驗證 reset；拒絕移除 binding／digest、同時宣告兩種 reset、偽造來源狀態／revision／dispatch／attempt，以及改寫 agent／goal／圖片綁定。原始唯一 owner、輸入摘要與歷史 receipts 不重寫。
+- 執行政策的 authority 是分支 lineage 中的有效快照，並非每次 invocation 各有一份快照。媒體 ingress、provider admission、reset 與 audit 共用既有 canonical policy resolver，保留 snapshot migration／contract recovery／derived fork 的一般規則；逐次 profile／provider invocation／lease 的身分驗證仍照原規則執行。
+- 新程序離線測試先保存 interrupted task，關閉原 coordinator、刪除來源 PNG，再由獨立 test executable 透過 `ResumeInterruptedTasks` 執行恢復或明確 retry reset。驗證實際 SDK HTTP model、圖片 bytes／MIME／順序／重複 occurrence、唯一 user turn、原始 owner／binding hash、正確 retry counter、完成 receipt digest 與獨立 audit。
+- Fixture 必須保留 task execution contract；本次修正既有 media helper 遺漏該欄位造成 `submit_result` 缺席的問題。這不是 production provider 的重試修正。
+
+定向恢復／拒絕／public API wire 測試通過（internal/team 16.272s），lint 通過（0 issues）。兩輪完整測試均未通過整包 20 分鐘上限：team 分別在 1200.138s 與 1200.111s timeout，當時不同 case 僅開始約 1 秒與 0 秒，沒有 assertion failure；其他 packages 通過。降低同期 I/O 爭用未解除第二次 timeout，因此不再把環境負載當成唯一原因。
+
+以相同 source 列出測試清單，確認共有 4,769 個頂層測試；兩次分別到第 4,752（剩 17 個）與第 4,678（剩 91 個）才被整包預算截斷。據此將 `.mise.toml` 完整 suite 的 package timeout 改為 30 分鐘，提供整包執行餘裕；保留所有測試與既有個別 fixture deadlines，contracts／race 等定向 gates 的預算不變。這是明確記錄的驗證設定調整。最終完整 gate 已通過，team 實際 942.516s；期間沒有改動 Go source，執行時間的變動與前兩輪 timeout 分開記錄，不將前兩輪視為通過。未執行真實模型推論或圖片外送。
+
+| PR-03E gate | 最終結果 | 證據 |
+|---|---|---|
+| 定向恢復／拒絕／public API wire | PASS | internal/team 16.272s；包含新 process 恢復與明確 retry reset |
+| `mise run lint` | PASS | 0 issues |
+| `mise run test` | PASS，exit 0 | team 942.516s、cmd/hufu 215.787s、tools 48.689s、web 0.329s；全部 packages 通過 |
+| `mise run test-contracts` | PASS | team 147.913s、cmd/hufu 90.385s、reviewgate 14.764s、reviewprep 28.066s、web 0.454s |
+| `mise run vet` | PASS | 無診斷 |
+| 定向 race | PASS | internal/team 276.644s；native／media 與 timeout 時的 workspace case |
+
+上述各輪驗證固定同一份 13 個 Go 檔的 SHA-256。兩輪 timeout 後只調整完整 suite 的總預算，另記錄 `.mise.toml` 的 SHA-256；lint／contracts／vet／race 的命令與 Go source 未改，沿用已通過的結果，沒有排除測試或放寬 assertion。
+
+PR-03E 資源紀錄：刷新同一 source 的 normal exports 後，已識別的本任務編譯輸出短暫約 2.07 GiB；在下一個 heavyweight gate 前依 source／compile-unit provenance 清除過期 owned archives。兩次共回收 1,740,419,072 bytes，自前期累計回收 15,307,018,240 bytes；目前 normal／race exports 都保留本階段 source。30m 完整 gate 前的可辨識 task 輸出為 861,483,008 bytes（約 822 MiB），低於 2 GiB；共享 GOCACHE 19,076,440,064 bytes，包含其他工作的使用量，不能全歸本任務。
+
+沿用既有 GOCACHE／GOTMPDIR／GOMODCACHE；只使用同一私有 task scratch，約 26 MiB，另含約 120 KiB 的下一階段未套用 CLI 草稿。兩個 timeout active-case 的確切 fixture 路徑在最終 gate 通過、確認沒有 cwd／open FD／mapping consumer 後清理，回收 294,912 bytes。未刪共享快取、未知 ownership 資料或另一 checkout 的程序。
+
+最終 normal／race exports 對應同一 source；已無過期 owned archives 可清。共享 GOCACHE 19,228,086,272 bytes；本任務 archives 734,478,336、其他可辨識輸出 247,971,840，合計 982,450,176 bytes（約 937 MiB），低於 2 GiB。GOTMPDIR 約 13.8 MiB，task scratch 約 27 MiB，沒有保留 executable；/tmp 可用約 7.3 GiB、cache/module volume 約 62 GiB、available RAM 約 12 GiB。提交後清除本階段 disposable logs，保留 source/config hashes、inventories、cleanup manifest 與下一階段草稿／checkpoint，供同一目標接續使用。
+
+M1 尚待 CLI／legacy／profile／dry-run／binary context guard、同一 direct lifecycle 的明確非視覺 synthesis、禁止含圖工作自動 replan，以及自動 retry／cost／acceptance 驗收；M2～M4 未完成。

@@ -31,7 +31,7 @@ func verifyMediaProviderAdmission(event RunEvent, payload MediaProviderAdmittedP
 		item.ExecutionTarget != payload.Target || len(binding.Refs) != payload.ImageCount {
 		return media.Reject(media.BindingConflict, "image provider admission differs from canonical task input")
 	}
-	policy, err := mediaProviderPolicyFromLineage(prior, event.RunID)
+	policy, err := mediaProviderPolicyFromLineage(prior)
 	if err != nil {
 		return err
 	}
@@ -65,25 +65,15 @@ func verifyMediaProviderAdmission(event RunEvent, payload MediaProviderAdmittedP
 	return verifyMediaProviderInvocationUniqueness(event, payload, prior)
 }
 
-func mediaProviderPolicyFromLineage(prior []RunEvent, runID string) (ExecutionPolicySnapshot, error) {
-	for index := len(prior) - 1; index >= 0; index-- {
-		event := prior[index]
-		if event.RunID != runID || (event.Type != string(EventExecutionPolicySnapshot) && event.Type != string(EventExecutionPolicySnapshotMigrated)) {
-			continue
-		}
-		var snapshot ExecutionPolicySnapshot
-		if event.Type == string(EventExecutionPolicySnapshotMigrated) {
-			var migration ExecutionPolicySnapshotMigratedPayload
-			if err := json.Unmarshal(event.Payload, &migration); err != nil {
-				return snapshot, err
-			}
-			snapshot = migration.Snapshot
-		} else if err := json.Unmarshal(event.Payload, &snapshot); err != nil {
-			return snapshot, err
-		}
-		return snapshot, validateExecutionPolicySnapshot(&snapshot)
+func mediaProviderPolicyFromLineage(prior []RunEvent) (ExecutionPolicySnapshot, error) {
+	snapshot, err := executionPolicySnapshotFromEvents(prior)
+	if err != nil {
+		return ExecutionPolicySnapshot{}, err
 	}
-	return ExecutionPolicySnapshot{}, media.Reject(media.DurabilityRequired, "image provider policy evidence is missing")
+	if snapshot == nil {
+		return ExecutionPolicySnapshot{}, media.Reject(media.DurabilityRequired, "image provider policy evidence is missing")
+	}
+	return *snapshot, nil
 }
 
 func verifyMediaProviderProfile(event RunEvent, payload MediaProviderAdmittedPayload, prior []RunEvent) error {

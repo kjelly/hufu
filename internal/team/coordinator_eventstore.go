@@ -1030,6 +1030,8 @@ func (c *Coordinator) appendTaskTransition(ctx context.Context, item *TodoItem, 
 			return RunEvent{}, fmt.Errorf("recovery requires conditional event append")
 		}
 		durable, err = journal.AppendAtHead(ctx, event, grant.Recovery.JournalHeadID)
+	} else if item.MediaBinding != nil && event.Type == string(EventTaskCreated) {
+		durable, err = c.appendMediaTaskReset(appendCtx, event)
 	} else {
 		durable, err = c.EventJournal().Append(appendCtx, event)
 	}
@@ -1133,13 +1135,19 @@ func (c *Coordinator) commitTaskResetForRetry(ctx context.Context, taskID string
 	}
 	key := taskTransitionEventKey(&projected)
 	appendCtx := context.WithoutCancel(ctx)
-	if _, err := c.EventJournal().Append(appendCtx, RunEvent{
+	resetEvent := RunEvent{
 		Type:           string(EventTaskCreated),
 		Actor:          projected.Agent,
 		TaskID:         projected.ID,
 		IdempotencyKey: key,
 		Payload:        rawPayload,
-	}); err != nil {
+	}
+	if projected.MediaBinding != nil {
+		_, err = c.appendMediaTaskReset(appendCtx, resetEvent)
+	} else {
+		_, err = c.EventJournal().Append(appendCtx, resetEvent)
+	}
+	if err != nil {
 		return fmt.Errorf("commit task reset for retry append: %w", err)
 	}
 	c.eventOnceMu.Lock()

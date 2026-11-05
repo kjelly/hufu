@@ -64,7 +64,11 @@ func validateTaskMediaEventFields(e RunEvent) error {
 	if err := validateTaskMediaShape(&TodoItem{ID: e.TaskID, Agent: payload.Agent, MediaBinding: payload.Binding, MediaInputDigest: payload.Digest}); err != nil {
 		return err
 	}
-	if payload.Binding != nil && e.Type == string(EventTaskCreated) && (payload.Binding.RunID != e.RunID || payload.Binding.BranchID != e.BranchID) {
+	_, reset, err := decodeMediaTaskReset(e)
+	if err != nil {
+		return err
+	}
+	if payload.Binding != nil && e.Type == string(EventTaskCreated) && !reset && (payload.Binding.RunID != e.RunID || payload.Binding.BranchID != e.BranchID) {
 		return media.Reject(media.BindingConflict, "created media owner differs from event identity")
 	}
 	if payload.Receipt != nil && payload.Receipt.MediaInputDigest != payload.Digest {
@@ -175,34 +179,15 @@ func (c *Coordinator) mediaLineage(ctx context.Context) (mediaLineageView, error
 	if err != nil {
 		return view, err
 	}
+	policy, err := executionPolicySnapshotFromEvents(view.events)
+	if err != nil {
+		return view, err
+	}
+	if policy != nil && policy.Media != nil {
+		view.policyHash = policy.Media.Hash
+	}
 	view.snapshots = make(map[string]media.InputSnapshot)
 	for _, event := range view.events {
-		if event.Type == string(EventExecutionPolicySnapshot) && event.SchemaVersion >= eventStoreSchemaVersion {
-			var policy ExecutionPolicySnapshot
-			if err := json.Unmarshal(event.Payload, &policy); err != nil {
-				return view, err
-			}
-			if err := validateExecutionPolicySnapshot(&policy); err != nil {
-				return view, err
-			}
-			view.policyHash = ""
-			if policy.Media != nil {
-				view.policyHash = policy.Media.Hash
-			}
-		}
-		if event.Type == string(EventExecutionPolicySnapshotMigrated) && event.SchemaVersion >= eventStoreSchemaVersion {
-			var payload ExecutionPolicySnapshotMigratedPayload
-			if err := json.Unmarshal(event.Payload, &payload); err != nil {
-				return view, err
-			}
-			if err := validateExecutionPolicySnapshot(&payload.Snapshot); err != nil {
-				return view, err
-			}
-			view.policyHash = ""
-			if payload.Snapshot.Media != nil {
-				view.policyHash = payload.Snapshot.Media.Hash
-			}
-		}
 		if event.Type != string(EventMediaInputAdmitted) {
 			continue
 		}

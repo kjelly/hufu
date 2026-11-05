@@ -70,6 +70,57 @@ func TestNativeMediaCancelledPreflightKeepsCanonicalCancellation(t *testing.T) {
 	}
 }
 
+func TestNativeMediaResumeResetRetainsCanonicalBinding(t *testing.T) {
+	for _, restartInvocation := range []bool{false, true} {
+		name := "same invocation"
+		if restartInvocation {
+			name = "new invocation"
+		}
+		t.Run(name, func(t *testing.T) {
+			c := newMediaPolicyCoordinator(t)
+			ctx, end, err := c.beginPublicInvocationExecutionRun(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(end)
+			if err := c.checkRunAdmission(); err != nil {
+				t.Fatal(err)
+			}
+			item := createMediaOccurrence(t, c, ctx, nativeInvocationTask(t, c, ctx, media.InvocationSingleTask))
+			bindingHash, inputRun := item.MediaBinding.Hash, item.MediaBinding.RunID
+			if err := c.CommitTaskTransition(ctx, item.ID, TaskPending, TaskInProgress, "interrupted work", "", nil); err != nil {
+				t.Fatal(err)
+			}
+			if restartInvocation {
+				c.finalizePublicInvocationFailure(context.Canceled)
+				end()
+				ctx = openMediaInvocation(t, c)
+			}
+			if err := c.AdmitExecutionPolicy(); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.prepareInterruptedTaskForResume(ctx, item.ID, "resume canonical image work"); err != nil {
+				t.Fatal("native reset could not retain the admitted owner", err)
+			}
+			item = c.todoItemByID(item.ID)
+			if item.Status != TaskPending || item.MediaBinding.Hash != bindingHash || item.MediaBinding.RunID != inputRun {
+				t.Fatal("native reset recreated or changed its input binding")
+			}
+			events, err := c.EventJournal().ReadEvents(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := VerifyNativeMediaLineage(t.Context(), c.session.Workspace, events); err != nil {
+				t.Fatal("canonical resume reset failed independent image audit", err)
+			}
+			replayed := todoItemByID(ReduceToTodoList(events), item.ID)
+			if replayed.Status != item.Status || !replayed.StartedAt.Equal(item.StartedAt) || !replayed.EndedAt.Equal(item.EndedAt) || replayed.ModelTime != item.ModelTime || replayed.ToolTime != item.ToolTime {
+				t.Fatal("resume reset replay retained the interrupted attempt's lifecycle projection")
+			}
+		})
+	}
+}
+
 func nativeInvocationTask(t *testing.T, c *Coordinator, ctx context.Context, mode media.InvocationMode) TaskDef {
 	t.Helper()
 	task := admittedMediaTask(t, c, ctx, "native-invocation")

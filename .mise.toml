@@ -17,9 +17,9 @@ run = "go run -p 2 ./cmd/hufu"
 raw = true
 
 [tasks.test]
-description = "Run the Go test suite (20m per package)"
-# Native persistence/protocol suites need a package-wide budget on slower filesystems.
-run = "go test -p 2 -timeout 20m ./... ./.agent-teams/web-research/tests"
+description = "Run the Go test suite (30m per package)"
+# The complete persistence/protocol suite needs more headroom than focused gates.
+run = "go test -p 2 -timeout 30m ./... ./.agent-teams/web-research/tests"
 
 [tasks.vet]
 description = "Run Go static analysis"

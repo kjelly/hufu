@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"reflect"
+	"slices"
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/execution"
@@ -53,7 +54,7 @@ func VerifyNativeMediaLineage(ctx context.Context, workspace string, lineage []R
 }
 
 type nativeMediaVerifier struct {
-	policies map[string]*MediaPolicySnapshot
+	policy   *MediaPolicySnapshot
 	sources  map[string]media.InputSnapshot
 	created  map[string]mediaCreatedOccurrence
 	bound    map[string]bool
@@ -67,7 +68,7 @@ func verifyNativeMediaAdmissions(ctx context.Context, workspace string, lineage 
 	if err != nil {
 		return err
 	}
-	verifier := nativeMediaVerifier{policies: make(map[string]*MediaPolicySnapshot), sources: make(map[string]media.InputSnapshot), created: make(map[string]mediaCreatedOccurrence), bound: make(map[string]bool), verified: make(map[string]media.Ref), store: store}
+	verifier := nativeMediaVerifier{sources: make(map[string]media.InputSnapshot), created: make(map[string]mediaCreatedOccurrence), bound: make(map[string]bool), verified: make(map[string]media.Ref), store: store}
 	for index, event := range lineage {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -91,7 +92,7 @@ func verifyNativeMediaAdmissions(ctx context.Context, workspace string, lineage 
 
 func (v *nativeMediaVerifier) accept(ctx context.Context, event RunEvent, previous *RunEvent) error {
 	switch EventType(event.Type) {
-	case EventExecutionPolicySnapshot, EventExecutionPolicySnapshotMigrated:
+	case EventExecutionPolicySnapshot, EventExecutionPolicySnapshotMigrated, EventContractRecovery, EventDerivedForkCreated:
 		return v.acceptPolicy(event)
 	case EventMediaInputAdmitted:
 		return v.acceptInput(ctx, event)
@@ -111,23 +112,14 @@ func (v *nativeMediaVerifier) accept(ctx context.Context, event RunEvent, previo
 }
 
 func (v *nativeMediaVerifier) acceptPolicy(event RunEvent) error {
-	if event.SchemaVersion < eventStoreSchemaVersion {
-		return nil
-	}
-	var policy ExecutionPolicySnapshot
-	if event.Type == string(EventExecutionPolicySnapshotMigrated) {
-		var migration ExecutionPolicySnapshotMigratedPayload
-		if err := json.Unmarshal(event.Payload, &migration); err != nil {
-			return err
-		}
-		policy = migration.Snapshot
-	} else if err := json.Unmarshal(event.Payload, &policy); err != nil {
+	policy, err := executionPolicySnapshotFromEvents(slices.Concat(v.prior, []RunEvent{event}))
+	if err != nil {
 		return err
 	}
-	if err := validateExecutionPolicySnapshot(&policy); err != nil {
-		return err
+	v.policy = nil
+	if policy != nil {
+		v.policy = policy.Media.clone()
 	}
-	v.policies[event.RunID] = policy.Media.clone()
 	return nil
 }
 
@@ -136,7 +128,7 @@ func (v *nativeMediaVerifier) acceptInput(ctx context.Context, event RunEvent) e
 	if err != nil {
 		return err
 	}
-	policy := v.policies[event.RunID]
+	policy := v.policy
 	if policy == nil || policy.Hash != snapshot.PolicyHash {
 		return media.Reject(media.EgressDenied, "media input has no preceding frozen policy")
 	}
@@ -168,12 +160,26 @@ func (v *nativeMediaVerifier) acceptCreation(event RunEvent) error {
 		return err
 	}
 	if occurrence.Binding == nil && occurrence.Digest == "" {
+		if _, exists := v.created[event.TaskID]; exists {
+			return media.Reject(media.BindingConflict, "media lifecycle reset omitted its original binding")
+		}
 		return nil
 	}
 	if err := validateTaskMediaShape(&TodoItem{ID: event.TaskID, Agent: occurrence.Agent, MediaBinding: occurrence.Binding, MediaInputDigest: occurrence.Digest}); err != nil {
 		return err
 	}
-	if err := verifyMediaCreationPolicy(event, occurrence, v.policies[event.RunID], v.sources); err != nil {
+	_, reset, err := decodeMediaTaskReset(event)
+	if err != nil {
+		return err
+	}
+	if reset {
+		original, exists := v.created[event.TaskID]
+		if !exists || !v.bound[event.TaskID] || !reflect.DeepEqual(original.Binding, occurrence.Binding) || original.Digest != occurrence.Digest {
+			return media.Reject(media.AccessDenied, "media reset has no original atomic binding")
+		}
+		return verifyMediaTaskReset(event, v.prior)
+	}
+	if err := verifyMediaCreationPolicy(event, occurrence, v.policy, v.sources); err != nil {
 		return err
 	}
 	if occurrence.Binding.InvocationMode != "" {

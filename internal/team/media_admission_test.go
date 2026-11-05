@@ -29,9 +29,14 @@ func newMediaPolicyCoordinatorWithTransport(t *testing.T, endpoint string, facto
 	if err != nil {
 		t.Fatal(err)
 	}
+	return newMediaPolicyCoordinatorAtRoot(t, root, endpoint, factory, imageInput, configure, limits...)
+}
+
+func newMediaPolicyCoordinatorAtRoot(t *testing.T, root, endpoint string, factory agent.ProviderBoundaryFactory, imageInput providerintrospection.CapabilityState, configure func(*TeamSession), limits ...media.Limits) *Coordinator {
+	t.Helper()
 	control, subject := filepath.Join(root, "control"), filepath.Join(root, "subject")
 	for _, dir := range []string{control, subject} {
-		if err := os.Mkdir(dir, 0o700); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -201,11 +201,21 @@ func (c *Coordinator) validateMediaAttempt(ctx context.Context, task TaskDef, ta
 
 func validateMediaOccurrenceBinding(item *TodoItem, events []RunEvent) error {
 	created, bound := false, false
-	for _, e := range events {
+	for index, e := range events {
 		if e.TaskID != item.ID {
 			continue
 		}
 		if e.Type == string(EventTaskCreated) {
+			_, reset, err := decodeMediaTaskReset(e)
+			if err != nil {
+				return err
+			}
+			if reset {
+				if err := verifyMediaTaskReset(e, events[:index]); err != nil {
+					return err
+				}
+				continue
+			}
 			var projection struct {
 				Binding *media.TaskBinding `json:"media_binding"`
 				Digest  string             `json:"media_input_digest"`

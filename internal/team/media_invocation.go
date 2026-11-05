@@ -157,7 +157,7 @@ func verifyNativeMediaInvocationCreation(event RunEvent, prior []RunEvent) error
 		return err
 	}
 	item := todoItemByID(items, event.TaskID)
-	policy, err := mediaProviderPolicyFromLineage(prior, event.RunID)
+	policy, err := mediaProviderPolicyFromLineage(prior)
 	if err != nil {
 		return err
 	}
