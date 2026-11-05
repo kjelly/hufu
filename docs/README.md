@@ -31,6 +31,10 @@ to re-create an abstraction that already exists in the runtime.
 
 ### Architecture and normative contracts
 
+- [Responses API integration](architecture/responses-api.md) — implementation-ready
+  explicit protocol configuration, provider boundaries, admission, accounting,
+  durable binding and offline acceptance gates.
+
 - [Execution runtime](architecture/execution-runtime.md) — canonical
   `ExecutionTarget` / `ExecutionBackend` model, admission, replay, and legacy
   compatibility.
