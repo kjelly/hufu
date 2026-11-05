@@ -9,9 +9,40 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/improve/paired"
 	"github.com/kjelly/hufu/internal/team"
 )
+
+func TestPolicyProtocolIsFixedDuringComparison(t *testing.T) {
+	project := t.TempDir()
+	roots, err := RegisterRoots(map[string]string{"subject_root": project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var previous string
+	for _, protocol := range []string{"chat-completions", "responses"} {
+		policy := testPolicy(t, project, "model")
+		policy.Version = 7
+		binding := config.APIProtocolBinding{Requested: protocol, Effective: protocol, Source: "explicit", Version: 1}
+		policy.Backends[0].APIProtocol = binding
+		policy.ModelRoutes[0].APIProtocol = binding
+		policy.ConfigurationHash = ""
+		raw, err := json.Marshal(policy, json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy.ConfigurationHash = paired.BytesDigest(raw)
+		projection, err := ProjectPolicy(policy, roots)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if previous != "" && projection.ComparisonDigest == previous {
+			t.Fatal("comparison erased the protocol change")
+		}
+		previous = projection.ComparisonDigest
+	}
+}
 
 var updatePairedPolicySchema = flag.Bool("update-paired-policy-schema", false, "Update the reviewed paired policy type schema")
 

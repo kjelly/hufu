@@ -19,10 +19,10 @@ func dependencyResultViewsHashForVersion(session *TeamSession, version int) (str
 	if err != nil {
 		return "", err
 	}
-	if hash != "" && version < selectedDependencyPolicyVersion {
+	if hash != "" && !isSelectedDependencyPolicyVersion(version) {
 		return "", fmt.Errorf("historical execution policy cannot admit selected dependency views")
 	}
-	if hash == "" && version == selectedDependencyPolicyVersion {
+	if hash == "" && isSelectedDependencyPolicyVersion(version) {
 		return "", fmt.Errorf("selected dependency policy requires its original view configuration")
 	}
 	return hash, nil

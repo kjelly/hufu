@@ -99,8 +99,8 @@ func ProjectPolicy(snapshot *team.ExecutionPolicySnapshot, roots RegisteredRoots
 	if err := team.ValidateExecutionPolicySnapshot(snapshot); err != nil {
 		return PolicyProjection{}, err
 	}
-	if snapshot.Version != 5 {
-		return PolicyProjection{}, errors.New("strict comparison requires execution policy version 5")
+	if !snapshot.SupportsInvocationAccounting() {
+		return PolicyProjection{}, errors.New("strict comparison requires an execution policy with invocation accounting")
 	}
 	copySnapshot := *snapshot
 	copySnapshot.ConfigurationHash = ""

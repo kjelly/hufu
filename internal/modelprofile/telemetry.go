@@ -1,6 +1,10 @@
 package modelprofile
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/kjelly/hufu/internal/config"
+)
 
 // TelemetryValue is a bounded, secret-free value with its resolution
 // provenance. It is intended for status, durable events, and reports; it does
@@ -25,12 +29,13 @@ type TelemetryCapability struct {
 // normalized identity and metadata evidence is included. Provider URLs,
 // credentials, headers, and raw provider responses are intentionally absent.
 type TelemetryProjection struct {
-	SchemaVersion int                    `json:"schema_version"`
-	InvocationID  string                 `json:"invocation_id,omitempty"`
-	ModelID       string                 `json:"model_id"`
-	Provider      string                 `json:"provider"`
-	Family        string                 `json:"family,omitempty"`
-	Estimator     TelemetryValue[string] `json:"estimator,omitzero"`
+	APIProtocol   config.APIProtocolBinding `json:"api_protocol,omitzero"`
+	SchemaVersion int                       `json:"schema_version"`
+	InvocationID  string                    `json:"invocation_id,omitempty"`
+	ModelID       string                    `json:"model_id"`
+	Provider      string                    `json:"provider"`
+	Family        string                    `json:"family,omitempty"`
+	Estimator     TelemetryValue[string]    `json:"estimator,omitzero"`
 
 	Operator         TelemetryValue[int] `json:"operator_context,omitzero"`
 	Catalog          TelemetryValue[int] `json:"catalog_context,omitzero"`

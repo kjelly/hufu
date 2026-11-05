@@ -166,3 +166,44 @@ also fence the SDK's environment-key fallback.
   shared cache, so total growth is not attributable to this task alone.
 - Removed 18 exact superseded phase-2 archives, reclaiming 134,156,298 bytes;
   ownership was checked against the source-root marker, preserving shared dependencies.
+
+## WP 4: durable protocol identity and resume
+
+Explicit protocol selection now participates in provider transport identity and
+new v7/v8 policy snapshots (full/selected dependency views). Legacy Chat retains
+the exact previous hash input and serialization. Historical v3-v6 reconstruction
+rejects newly explicit protocol configuration rather than changing old hashes.
+
+Static routes and provider policies carry the same binding; dynamic model
+invocations validate that binding against frozen policy before committing a
+schema-v2 model-profile event. Legacy profile events remain schema v1. Protocol
+metadata is shared as a secret-free config value, without provider credentials.
+
+- Protocol/provider identity/profile/execution-policy targeted suites: passed,
+  exit 0. This includes historical versions, selected views, unchanged resume,
+  legacy/explicit drift, fallback and dynamic-model binding checks.
+- Persistent invocation tests verify the binding is in the durable event before
+  generation and that changed binding cannot commit another event. The fixture
+  explicitly owns its event store and uses the standard coordinator cleanup.
+- Economics inspection now accepts the supported accounting-policy versions and
+  schema-v2 profile events. Its explicit-Responses ledger fixture retains complete
+  accounting coverage. Policy comparison preserves protocol fields as fixed
+  policy; its recursive schema fixture adds only the two protocol config fields
+  and the backend/route binding trees, removing no classifications.
+- Economics tests and policy/schema tests: passed, exit 0.
+- `mise run test-contracts`: passed, exit 0, including team (180.276 s),
+  inspect/operator, auditverify, CLI (92.770 s), reviewgate, reviewprep and
+  web-research offline tests. No real provider was contacted.
+- After extracting the provider-policy freeze helper to keep snapshot
+  construction below the lint complexity limit, the execution-policy,
+  dependency-view and invocation-protocol tests passed again (8.437 s).
+- `mise run lint`: passed, exit 0, 0 issues.
+- Compared the recorded phase-3 and current export paths, verified this
+  checkout's source-root marker and absence of live consumers, and removed
+  21 superseded project archives (136,550,600 bytes). Across phases 2-4,
+  exact inventoried archive cleanup has reclaimed 405,138,820 bytes.
+- Shared cache allocated 30,990,456 KiB; scratch 1,464 KiB. The aggregate
+  includes reusable normal/race dependencies and other checkouts' builds;
+  it is not a task-specific allocation measurement. Configured caches and
+  current project exports are preserved. Fixture binaries cleaned up after
+  their consumers exited; no task binary is retained.

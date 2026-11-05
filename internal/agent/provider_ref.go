@@ -73,6 +73,14 @@ func (pm *ProviderManager) ResolveProviderExecutionIdentity(modelID string) (Pro
 		target.apiKey,
 		strconv.FormatBool(insecure),
 	}, "\x00")
+	protocol, err := pm.ResolveAPIProtocol(modelID)
+	if err != nil {
+		return ProviderExecutionIdentity{}, err
+	}
+	// Preserve the exact historical hash input for unconfigured Chat.
+	if protocol.Requested != "" {
+		input += "\x00api-protocol\x00" + protocol.Requested + "\x00" + protocol.Effective + "\x00" + protocol.Source + "\x00" + strconv.Itoa(protocol.Version)
+	}
 	sum := sha256.Sum256([]byte(input))
 	return ProviderExecutionIdentity{
 		ProviderKey:       providerName,

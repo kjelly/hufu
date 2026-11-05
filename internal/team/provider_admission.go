@@ -99,6 +99,9 @@ func (a providerRequestAdmission) CommitProviderInvocation(ctx context.Context, 
 	if !request.AdmissionContext.IsBound() {
 		return fmt.Errorf("provider profile commit context is not provider-bound")
 	}
+	if err := a.c.validateInvocationProtocol(request); err != nil {
+		return err
+	}
 	if request.InvocationID == "" {
 		return fmt.Errorf("provider profile commit invocation ID is empty")
 	}
@@ -110,6 +113,9 @@ func (a providerRequestAdmission) CommitProviderInvocation(ctx context.Context, 
 		return fmt.Errorf("decode provider profile commit projection: %w", err)
 	}
 	projection.InvocationID = request.InvocationID
+	if projection.APIProtocol != request.AdmissionContext.APIProtocol {
+		return fmt.Errorf("provider profile API protocol differs from invocation binding")
+	}
 	if err := a.c.commitModelProfileResolved(ctx, projection); err != nil {
 		return err
 	}

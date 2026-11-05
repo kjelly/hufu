@@ -151,7 +151,7 @@ API key 沿用現有 credential 機制，不新增 YAML 環境變數插值語法
 - 新配置的 canonical requested／effective protocol 和 binding version 納入新 provider／route identity。legacy 空值保留原 hash 輸入與序列化形狀。
 - 為新設定建立有版本的 route／attempt binding；static targets 在 preflight 固定，動態 target 在自身第一次 invocation commit 前固定。兩者都不能在送出後補記。
 - 使用現有 snapshot versioning／compatibility materializer，涵蓋目前所有 supported versions（含 selected dependency view）。舊 snapshot 無欄位視為 legacy Chat，不改寫歷史 hash；不能在舊版本序列化時偷偷加欄位。
-- 新 session 只寫入該模式需要的新版本／欄位。explicit Chat 與 legacy Chat 的差異是配置來源身分，不是 wire format。
+- 新 session 只寫入該模式需要的新版本／欄位：explicit protocol 使用 full-view v7／selected-view v8；legacy 仍使用 v5／v6。每次 invocation 的 profile event 在送出前保存 schema v2 的協定 binding；legacy event 保持 schema v1。explicit Chat 與 legacy Chat 的差異是配置來源身分，不是 wire format。
 - resume 以 frozen binding 驗證目前 factory 可重建相同協定。配置／binding 變動先報 policy drift，零 generation，不重算既有 receipt。
 - 必測 upstream URL、credential／TLS 的既有 identity 保護未退化，以及 sidecar、fallback、escalation 和 selected dependency view 的 binding 不遺漏。
 

@@ -22,12 +22,7 @@ const apiProtocolBindingVersion = 1
 
 // APIProtocolResolution is copied into provider-owned transport policy. It
 // never interprets a model name, endpoint name, or model-authored input.
-type APIProtocolResolution struct {
-	Requested string `json:"requested,omitempty"`
-	Effective string `json:"effective"`
-	Source    string `json:"source"`
-	Version   int    `json:"version"`
-}
+type APIProtocolResolution = config.APIProtocolBinding
 
 func ResolveAPIProtocol(raw string) (APIProtocolResolution, error) {
 	requested, err := config.NormalizeAPIProtocol(raw)

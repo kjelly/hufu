@@ -21,7 +21,8 @@ import (
 
 // executionPolicySnapshotVersion is incremented only when the canonical
 // fingerprint input changes. Full-view snapshots use version 5; selected
-// dependency views use version 6. Versions 3 and 4 remain read-compatible. The append-only compatibility materializer may
+// dependency views use version 6. Explicit API protocol bindings use versions
+// 7 and 8 respectively. Versions 3 and 4 remain read-compatible. The append-only compatibility materializer may
 // replace a v3 snapshot with the current canonical version.
 const (
 	executionPolicyLegacySnapshotVersion   = 3
@@ -98,7 +99,8 @@ type ExecutionBackendPolicySnapshot struct {
 	// upstream/type/credential revision or a Codex app-server's launch and
 	// protocol configuration without retaining raw endpoint, credential, or
 	// command values in durable state.
-	IdentityHash string `json:"identity_hash"`
+	IdentityHash string                      `json:"identity_hash"`
+	APIProtocol  agent.APIProtocolResolution `json:"api_protocol,omitzero"`
 }
 
 // ExecutionModelRouteSnapshot records the resolved target for every configured
@@ -109,7 +111,8 @@ type ExecutionModelRouteSnapshot struct {
 	ProviderKey string `json:"provider_key,omitempty"`
 	// LegacyProvider is retained only to decode and verify v3 snapshots. New
 	// v4 and newer writers leave it empty, so it is omitted from new state.
-	LegacyProvider string `json:"legacy_provider,omitempty"`
+	LegacyProvider string                      `json:"legacy_provider,omitempty"`
+	APIProtocol    agent.APIProtocolResolution `json:"api_protocol,omitzero"`
 }
 
 // ExecutionWorldPolicySnapshot records the execution-world and allowlisted
@@ -276,7 +279,7 @@ func newExecutionPolicyState(c *Coordinator) (*executionPolicyState, error) {
 			version = selectedDependencyPolicyVersion
 		}
 	}
-	return newExecutionPolicyStateForVersion(c, version)
+	return newExecutionPolicyStateForVersion(c, explicitProtocolPolicyVersion(c, version))
 }
 
 func populateRunContractPolicySnapshot(snapshot *ExecutionPolicySnapshot, session *TeamSession) error {
@@ -308,6 +311,9 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 	}
 	if !supportedExecutionPolicySnapshotVersion(version) {
 		return nil, fmt.Errorf("execution policy snapshot version %d is unsupported", version)
+	}
+	if version < explicitProtocolFullPolicyVersion && explicitProtocolPolicyVersion(c, executionPolicySnapshotVersion) != executionPolicySnapshotVersion {
+		return nil, fmt.Errorf("historical execution policy cannot admit explicit API protocol configuration")
 	}
 	viewsHash, err := dependencyResultViewsHashForVersion(c.session, version)
 	if err != nil {
@@ -364,25 +370,8 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 	}
 	relevantCostTargets := make(map[string]struct{})
 
-	for _, ref := range c.providerManager.EffectiveProviderRefs() {
-		backend := execution.CanonicalTargetBackendName(ref.Name)
-		if backend == "" {
-			continue
-		}
-		policy, err := c.providerManager.ResolveProviderExecutionPolicy(backend + "/execution-policy")
-		if err != nil {
-			return nil, fmt.Errorf("resolve execution policy for backend %q: %w", backend, err)
-		}
-		identity, err := c.providerManager.ResolveProviderExecutionIdentity(backend + "/execution-policy")
-		if err != nil {
-			return nil, fmt.Errorf("resolve execution identity for backend %q: %w", backend, err)
-		}
-		if identity.ProviderKey != policy.ProviderKey {
-			return nil, fmt.Errorf("execution identity provider mismatch for backend %q: identity=%q policy=%q", backend, identity.ProviderKey, policy.ProviderKey)
-		}
-		state.backendByName[backend] = ExecutionBackendPolicySnapshot{
-			Backend: backend, Kind: string(execution.BackendKindLLM), ProviderKey: policy.ProviderKey, MaxConcurrent: policy.MaxConcurrent, IdentityHash: identity.ConfigurationHash,
-		}
+	if err := freezeProviderBackendPolicies(c, state, version); err != nil {
+		return nil, err
 	}
 
 	for backend, cfg := range configuredCodexProviderConfigs(c) {
@@ -435,6 +424,10 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 				return nil, fmt.Errorf("resolve execution policy provider for %q: %w", input.model, resolveErr)
 			}
 			route.ProviderKey = policy.ProviderKey
+			route.APIProtocol, resolveErr = frozenProviderProtocol(c, providerModel, version)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
 		}
 		if input.backendHint == "" {
 			state.modelRouteByModel[input.model] = route
@@ -680,7 +673,7 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	if !supportedExecutionPolicySnapshotVersion(snapshot.Version) {
 		return fmt.Errorf("execution policy snapshot version %d is unsupported", snapshot.Version)
 	}
-	if snapshot.Version == selectedDependencyPolicyVersion {
+	if isSelectedDependencyPolicyVersion(snapshot.Version) {
 		if !validFullContentHash(snapshot.DependencyResultViewsHash) {
 			return fmt.Errorf("selected dependency policy hash is missing or invalid")
 		}
@@ -709,6 +702,9 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 		if strings.TrimSpace(backend.Backend) == "" || strings.TrimSpace(backend.IdentityHash) == "" {
 			return fmt.Errorf("execution policy snapshot backend identity is incomplete")
 		}
+	}
+	if err := validateExecutionProtocolPolicy(snapshot); err != nil {
+		return err
 	}
 	if snapshot.Version >= executionPolicyPreviousSnapshotVersion {
 		for _, route := range snapshot.ModelRoutes {
@@ -770,7 +766,7 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 }
 
 func supportedExecutionPolicySnapshotVersion(version int) bool {
-	return version == executionPolicyLegacySnapshotVersion || version == executionPolicyPreviousSnapshotVersion || version == executionPolicySnapshotVersion || version == selectedDependencyPolicyVersion
+	return version == executionPolicyLegacySnapshotVersion || version == executionPolicyPreviousSnapshotVersion || version == executionPolicySnapshotVersion || version == selectedDependencyPolicyVersion || version == explicitProtocolFullPolicyVersion || version == explicitProtocolSelectedPolicyVersion
 }
 
 func (s *executionPolicyState) teamMaxConcurrent() int {

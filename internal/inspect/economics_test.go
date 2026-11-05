@@ -2,6 +2,7 @@ package inspect
 
 import (
 	"crypto/sha256"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"math"
@@ -10,10 +11,52 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/team"
 )
+
+func TestInspectEconomicsExplicitProtocolAccounting(t *testing.T) {
+	fixture := observabilityEvidenceFixtureWithEvents(t, func(events []team.RunEvent) []team.RunEvent {
+		events = economicsFixtureEvents(t, events)
+		binding := config.APIProtocolBinding{Requested: "responses", Effective: "responses", Source: "explicit", Version: 1}
+		for i := range events {
+			switch events[i].Type {
+			case string(team.EventExecutionPolicySnapshot):
+				var snapshot team.ExecutionPolicySnapshot
+				if err := json.Unmarshal(events[i].Payload, &snapshot); err != nil {
+					t.Fatal(err)
+				}
+				snapshot.Version = 7
+				snapshot.Backends[0].APIProtocol = binding
+				snapshot.ConfigurationHash = ""
+				snapshot.ConfigurationHash = fmt.Sprintf("%x", sha256.Sum256(jsonBytes(t, snapshot)))
+				if err := team.ValidateExecutionPolicySnapshot(&snapshot); err != nil {
+					t.Fatal(err)
+				}
+				events[i].Payload = jsonBytes(t, snapshot)
+			case string(team.EventModelProfileResolved):
+				var profile modelprofile.TelemetryProjection
+				if err := json.Unmarshal(events[i].Payload, &profile); err != nil {
+					t.Fatal(err)
+				}
+				profile.SchemaVersion = 2
+				profile.APIProtocol = binding
+				events[i].Payload = jsonBytes(t, profile)
+			}
+		}
+		return events
+	})
+	result, err := InspectEconomics(t.Context(), InspectQuery{Workspace: fixture.workspace, RunID: fixture.runID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := result.Data.(EconomicsData)
+	if data.CostPerVerifiedTaskMicros == nil || *data.CostPerVerifiedTaskMicros != 21 || data.KnownCostCoverage == nil || *data.KnownCostCoverage != 1 {
+		t.Fatalf("explicit protocol lost complete accounting: %+v", data)
+	}
+}
 
 // The synthetic snapshot deliberately uses the production snapshot validator.
 // It describes only the admitted LLM boundary, without initializing a provider.
