@@ -55,7 +55,7 @@ abandoned work directory and superseded CLI binary reclaimed about 230 MiB.
 
 | Phase | Status | Evidence |
 |---|---|---|
-| WP 0: pinned SDK wire contract | Not integrated | Test draft prepared; no production changes |
+| WP 0: pinned SDK wire contract | Complete | `internal/agent/responses_sdk_test.go`; offline HTTP transport, no live requests |
 | WP 1: configuration | Not started | — |
 | WP 2: transport and fixtures | Not started | — |
 | WP 3: options, admission and settlement | Not started | — |
@@ -65,3 +65,22 @@ abandoned work directory and superseded CLI binary reclaimed about 230 MiB.
 
 Real endpoint verification is outside these acceptance gates. The user will
 separately authorize it later; no offline result proves live provider support.
+
+## WP 0: pinned SDK wire contract
+
+Five test groups cover explicit protocol selection, all four language-model
+entry points (including tool-based structured output), reasoning options keys
+and the pinned model-classification branches, default `store:false`,
+provider-error HTTP counts, and skipped plain/encrypted reasoning history.
+The tests assert the SDK limitations instead of declaring them implemented.
+The transport is an in-memory `RoundTripper`, so it cannot contact a real
+provider or depend on local listener permissions.
+
+- `mise exec -- go test -p 2 -timeout 5m ./internal/agent -run '^TestResponsesSDK' -count=1`: passed, exit 0.
+- `mise exec -- go test -p 2 -timeout 20m ./internal/agent`: passed, exit 0.
+- `mise run lint`: passed, exit 0, 0 issues.
+- Other packages and production Go sources are unchanged; their completed
+  baseline results remain applicable. Full runtime validation is repeated
+  after production integration.
+- Shared cache after this phase: approximately 26,490,040 KiB, around
+  29 MiB above the exact post-baseline reading. No task binaries are retained.
