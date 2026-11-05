@@ -11,7 +11,8 @@ const ContentTypeMediaReference fantasy.ContentType = "media_ref"
 
 // MediaReferencePart is a runtime history part, never a provider wire part.
 // Its type has no byte or filename fields. Only the admitted request compiler
-// may replace it with a short-lived SDK FilePart.
+// may replace it with a short-lived SDK FilePart, or an explicitly admitted
+// non-visual consumer's deterministic metadata text.
 type MediaReferencePart struct {
 	Reference media.HistoryReference
 }

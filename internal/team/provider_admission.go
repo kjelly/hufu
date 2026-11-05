@@ -52,8 +52,14 @@ func (a providerRequestAdmission) AdmitProviderRequest(ctx context.Context, requ
 		if a.c == nil {
 			return media.Reject(media.AccessDenied, "native media request has no runtime owner")
 		}
-		if _, err := a.c.resolveNativeProviderMedia(ctx, request); err != nil {
+		metadata, err := a.c.resolveProviderReferenceMetadata(ctx, request)
+		if err != nil {
 			return err
+		}
+		if !metadata {
+			if _, err := a.c.resolveNativeProviderMedia(ctx, request); err != nil {
+				return err
+			}
 		}
 		ctx = withNativeProviderCounter(ctx, a.c)
 	}
@@ -131,6 +137,10 @@ func (a providerRequestAdmission) CommitProviderInvocation(ctx context.Context, 
 	if request.AdmissionContext.ProfileTelemetryJSON == "" {
 		return fmt.Errorf("provider profile commit projection is unavailable")
 	}
+	metadata, err := a.c.resolveProviderReferenceMetadata(ctx, request)
+	if err != nil {
+		return err
+	}
 	var projection modelprofile.TelemetryProjection
 	if err := json.Unmarshal([]byte(request.AdmissionContext.ProfileTelemetryJSON), &projection); err != nil {
 		return fmt.Errorf("decode provider profile commit projection: %w", err)
@@ -147,8 +157,10 @@ func (a providerRequestAdmission) CommitProviderInvocation(ctx context.Context, 
 		// Media permission is durable before cost reservation and transport.
 		// A media append failure therefore cannot strand a cost reservation;
 		// a later cost denial still leaves an admission record, not execution.
-		if err := a.c.commitMediaProviderAdmission(ctx, request); err != nil {
-			return err
+		if !metadata {
+			if err := a.c.commitMediaProviderAdmission(ctx, request); err != nil {
+				return err
+			}
 		}
 	}
 	if a.c.costManager == nil {

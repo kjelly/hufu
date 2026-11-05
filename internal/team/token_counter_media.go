@@ -30,6 +30,17 @@ func (tc *DefaultTokenCounter) countNativeProviderRequest(ctx context.Context, m
 		}
 	}
 	request.ModelID = actualModel
+	metadata, err := c.resolveProviderReferenceMetadata(ctx, request)
+	if err != nil {
+		return 0, err
+	}
+	if metadata {
+		text, err := agent.ProjectProviderReferenceMetadata(request)
+		if err != nil {
+			return 0, err
+		}
+		return tc.CountProviderRequest(ctx, actualModel, text)
+	}
 	admission, err := c.resolveNativeProviderMedia(ctx, request)
 	if err != nil {
 		return 0, err

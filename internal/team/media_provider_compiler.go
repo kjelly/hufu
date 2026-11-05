@@ -19,6 +19,14 @@ func (a providerRequestAdmission) CompileProviderRequest(ctx context.Context, re
 	if !agent.ProviderRequestHasMedia(request) {
 		return request, nil, nil
 	}
+	metadata, err := a.c.resolveProviderReferenceMetadata(ctx, request)
+	if err != nil {
+		return agent.ProviderRequest{}, nil, err
+	}
+	if metadata {
+		wire, err := agent.ProjectProviderReferenceMetadata(request)
+		return wire, nil, err
+	}
 	if request.Call == nil && request.ObjectCall == nil {
 		return agent.ProviderRequest{}, nil, media.Reject(media.Unsupported, "native compiler requires a concrete provider call")
 	}

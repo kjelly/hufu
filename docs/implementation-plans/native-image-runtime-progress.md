@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `7ebbf2f5`（PR-03G 證據與變更同本次階段 commit；M1 已完成，M2～M4 未完成）
+> Verified-Commit: `49f8b0d6`（PR-04A 證據與變更同本次階段 commit；M1 已完成，M2～M4 未完成）
 > Supersedes: —
 > Superseded-By: —
 
@@ -43,9 +43,10 @@
 | PR-03D 原生圖片 API／共用 worker 串接 | 完成；`cac9d373` | API wire、full、contracts、vet、lint 與定向 race 全部通過；M1 整體仍未完成 |
 | PR-03E canonical 圖片恢復／重試 | 完成；`532a6c45` | 新程序 CAS wire、reset 授權、分支政策與所有 required gates 通過 |
 | PR-03F CLI／文字 synthesis／自動 worker retry | 完成；`7ebbf2f5` | wire／cost／acceptance、完整 suite、contracts、vet、lint 與定向 race 通過 |
-| PR-03G result-only repair／verbatim wire | 完成；同本次階段 commit | 實際 SDK repair／cost／transcript、完整 suite、contracts、vet、lint 與定向 race 通過 |
-| PR-03 M1 CLI/direct/single native images | 完成；同本次階段 commit | PR-03A～G；明示單 worker、CLI／API native wire、CAS retry/resume、文字 synthesis/repair、cost 與 acceptance 全部離線驗證 |
-| PR-04 M2 coordinator/chat/DAG/routing | 尚未開始 | — |
+| PR-03G result-only repair／verbatim wire | 完成；`49f8b0d6` | 實際 SDK repair／cost／transcript、完整 suite、contracts、vet、lint 與定向 race 通過 |
+| PR-03 M1 CLI/direct/single native images | 完成；`49f8b0d6` | PR-03A～G；明示單 worker、CLI／API native wire、CAS retry/resume、文字 synthesis/repair、cost 與 acceptance 全部離線驗證 |
+| PR-04A metadata-only provider 邊界 | 完成；同本次階段 commit | 固定最終 source 的 focused／lint／contracts／vet／race／full 全部通過；公開 M2 入口尚未開啟 |
+| PR-04 M2 coordinator/chat/DAG/routing | 進行中 | A 建立控制流程基礎；公開入口與有序委派尚未開啟 |
 | PR-05 M3 MCP/result binding | 尚未開始 | — |
 | PR-06 M3 inspect/export/docs | 尚未開始 | — |
 | PR-07 M4 Codex localImage | 尚未開始 | — |
@@ -443,3 +444,34 @@ PR-03G 資源紀錄：沿用既有 caches 與同一 task scratch。normal export
 完整 gate 後共享 GOCACHE 20,299,264,000 bytes；可辨識本任務 archives 968,036,352、其他 project test cache 557,932,544，合計 1,525,968,896 bytes（約 1.42 GiB），低於 2 GiB。GOTMPDIR 約 14.1 MiB，task scratch 約 30 MiB，沒有保留 executable。/tmp 可用約 7.3 GiB、cache/module volume 約 61 GiB、available RAM 約 12 GiB。提交後清除本階段 disposable logs，保留 inventories、source/config hashes、cleanup manifest 與 M2 continuation checkpoint；未刪共享依賴、toolchain、未知來源資料或其他 session 的產物。
 
 M1 支援範圍：`hufu run --team … --image … '@worker …'`、legacy root 的明示 direct worker，以及 `RunTaskWithMedia`／`RunDirectAgentWithMedia`／具非視覺 synthesis 的 direct API；重複圖片、順序、CAS retry／新 process resume、summary／verbatim 文字 repair 與既有驗收語意均有離線證據。`--dry-run --image` 仍只提供本機 preview，不宣稱實際模型能力或 durable admission。成功的 result-only repair 沿用同一份看圖工作、逐字稿與收據。Coordinator delegation、Chat、DAG／fanout／fallback、MCP image results 與 Codex localImage 仍屬後續里程碑，未交付的入口繼續拒絕圖片。真實模型驗收由使用者另行安排，沒有執行推論或圖片外送。
+
+
+## PR-04A：明確授權的 coordinator metadata 投影
+
+以 `49f8b0d6` 為父，先建立 M2 的 provider 控制流程基礎；此階段不開啟 CLI Coordinator、Chat、DAG、fanout 或 fallback 的圖片入口。
+
+- 原始請求、history、admission、commit 與 accounting 保留 canonical typed refs。私有 wire projection 只能把每個引用替換成固定格式的文字，包含 turn／part、MIME、尺寸和 byte size；不含圖片 bytes、CAS ID、digest 或 source path。
+- 文字投影需要獨立的 runtime 授權。scope 綁定 live public invocation lease、run／invocation／branch、coordinator、完整 immutable provider context 與目前 canonical history 的有序引用。模型或一般 compiler 不能自行把原生送圖降級為文字。
+- 僅 coordinator purpose 與 coordinator task 可使用這份 scope；worker 與 auxiliary role 維持自己的 native admission。原生圖片的三層能力、frozen egress、task lease 與 buffer ownership 檢查保留。
+- metadata 計數使用實際送出的完整文字 projection，無 image token upper bound。編譯與送出前重新驗證 canonical metadata、provider identity 與授權；HTTP 前另核對已提交的精確 profile。這條流程不讀 image blob，也不產生 `media_provider_admitted` 圖片外送許可；正常 token/cost reservation 與 settlement 照常適用。
+- 離線測試使用明確不支援圖片的 text model 與 pinned SDK／本機 fake HTTP endpoint。覆蓋所有四種模型呼叫、三種 request shape、順序／重複、原始 history 不變、移除 blob 後的 metadata 行為、越權與失效 scope、HTTP 前 lease 撤銷，以及 worker 不繼承 metadata 權限而繼續原生送圖。
+
+審查補驗曾重現兩個授權缺口：journal 讀取後 consumer 不再適用 metadata view，以及 run 身分消失時，舊實作都可能回傳 `nil`。兩個新測試在修正前均失敗（1.170s）；修正後要求最後重驗同時滿足「仍適用且沒有錯誤」，已存在的 metadata scope 若失去 run 身分或 context 取消則明確拒絕。初版完整 suite 雖通過（team 939.897s、cmd 198.787s），僅為初版證據，不作最終 source 的通過依據。
+
+| PR-04A gate | 最終修正版本結果 |
+|---|---|
+| metadata/native focused regression | PASS, exit 0；agent 0.225s、team 34.357s，含修正前失敗的兩個授權邊界 |
+| `mise run lint` | PASS, exit 0；`0 issues.` |
+| `mise run test-contracts` | PASS, exit 0；team 121.517s、cmd 67.214s、reviewgate 12.189s、reviewprep 23.112s、web 0.254s |
+| `mise run vet` | PASS, exit 0；無診斷 |
+| metadata/compiler/transport 定向 race | PASS, exit 0；agent 1.515s、team 114.930s |
+| `mise run test` | PASS, exit 0；team 935.100s、cmd 201.192s、tools 48.738s、web 0.465s |
+
+M2 尚需有序 `image_inputs` 解析與 scope 綁定、Coordinator 完整委派／完成契約、Chat pending state、DAG／fanout／fallback，以及各入口生命週期回歸。metadata 本身不代表已看過圖片或已完成含圖工作，未交付的入口繼續拒絕圖片。沒有呼叫真實模型或外送圖片。
+
+
+PR-04A 最終驗證固定 11 個 Go source／test 檔與四個設定檔的 SHA-256；修正前的初版證據另行標記，最終 gates 全部使用相同修正版。此階段不改 SQL schema、既有 receipt 或 persisted media binding 格式；原生 worker 的三層能力與逐請求 byte 授權保留。效益是讓 coordinator 在明確授權下以純文字處理圖片清單與順序，為不必接收像素的控制流程建立共同邊界；完整委派、Chat 與圖形路由仍需後續 M2 實作，不能視為已交付。
+
+資源紀錄：沿用原有 caches 與同一 private task scratch；normal/race 清單均對應最終 source。階段內清除 147 個過期 archives 與三份經測試案例版本證明已過期的 test-input logs，共回收 2,095,947,776 bytes；前期累計回收 22,619,004,928 bytes。清理前先確認無執行中的驗證，保護 open／mapped／linked entries 與初始共享資料；最終修正版 test-input log 保留。各次編譯選取的 task 產物峰值約 1.98 GiB，未超過 2 GiB 保留預算。
+
+最終共享 GOCACHE 20,628,586,496 bytes；可辨識 task archives 969,195,520、其他 project test cache 618,790,912，合計 1,587,986,432 bytes（約 1.48 GiB）。GOTMPDIR 約 14.3 MiB、task scratch 約 32.5 MiB；沒有保留 executable。提交後清除本階段 disposable logs，保留 source/settings hashes、inventories、cleanup manifests 與 continuation checkpoint 以接續 M2；未刪共享 dependencies、toolchain、未知來源資料或其他 session 的產物。所有測試只使用離線 fixtures／loopback HTTP，沒有真實模型推論、圖片外送、登入／憑證操作或文件搬移。

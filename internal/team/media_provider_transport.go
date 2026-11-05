@@ -22,6 +22,13 @@ func (a providerRequestAdmission) AuthorizeProviderTransport(ctx context.Context
 	if a.c == nil || request.InvocationID == "" {
 		return media.Reject(media.DurabilityRequired, "image transport has no committed invocation")
 	}
+	metadata, err := a.c.resolveProviderReferenceMetadata(ctx, request)
+	if err != nil {
+		return err
+	}
+	if metadata {
+		return a.c.authorizeReferenceMetadataTransport(ctx, request)
+	}
 	admission, expected, err := a.c.mediaProviderAdmissionPayload(ctx, request)
 	if err != nil {
 		return err

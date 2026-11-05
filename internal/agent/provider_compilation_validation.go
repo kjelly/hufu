@@ -10,7 +10,11 @@ import (
 )
 
 func validateCompiledReferenceRequest(original, wire ProviderRequest) error {
-	if err := validateCompiledReferenceMessages(original.Messages, wire.Messages); err != nil {
+	return validateCompiledReferenceRequestWithPart(original, wire, validateCompiledImage)
+}
+
+func validateCompiledReferenceRequestWithPart(original, wire ProviderRequest, validatePart func(media.HistoryReference, fantasy.MessagePart) error) error {
+	if err := validateCompiledReferenceMessagesWithPart(original.Messages, wire.Messages, validatePart); err != nil {
 		return err
 	}
 	if original.Call != nil {
@@ -19,7 +23,7 @@ func validateCompiledReferenceRequest(original, wire ProviderRequest) error {
 		if !reflect.DeepEqual(before, after) {
 			return media.Reject(media.BindingConflict, "request compiler changed admitted call parameters")
 		}
-		return validateCompiledReferenceMessages(original.Call.Prompt, wire.Call.Prompt)
+		return validateCompiledReferenceMessagesWithPart(original.Call.Prompt, wire.Call.Prompt, validatePart)
 	}
 	if original.ObjectCall != nil {
 		before, after := *original.ObjectCall, *wire.ObjectCall
@@ -27,12 +31,12 @@ func validateCompiledReferenceRequest(original, wire ProviderRequest) error {
 		if !reflect.DeepEqual(before, after) {
 			return media.Reject(media.BindingConflict, "request compiler changed admitted object parameters")
 		}
-		return validateCompiledReferenceMessages(original.ObjectCall.Prompt, wire.ObjectCall.Prompt)
+		return validateCompiledReferenceMessagesWithPart(original.ObjectCall.Prompt, wire.ObjectCall.Prompt, validatePart)
 	}
 	return nil
 }
 
-func validateCompiledReferenceMessages(original, wire []fantasy.Message) error {
+func validateCompiledReferenceMessagesWithPart(original, wire []fantasy.Message, validatePart func(media.HistoryReference, fantasy.MessagePart) error) error {
 	if len(original) != len(wire) {
 		return media.Reject(media.BindingConflict, "request compiler changed message count")
 	}
@@ -57,7 +61,7 @@ func validateCompiledReferenceMessages(original, wire []fantasy.Message) error {
 				}
 				continue
 			}
-			if err := validateCompiledImage(*reference, compiled.Content[partIndex]); err != nil {
+			if err := validatePart(*reference, compiled.Content[partIndex]); err != nil {
 				return err
 			}
 		}

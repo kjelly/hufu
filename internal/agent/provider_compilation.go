@@ -18,7 +18,15 @@ type ProviderRequestCompiler interface {
 	CompileProviderRequest(context.Context, ProviderRequest) (ProviderRequest, func(), error)
 }
 
-// ProviderTransportAuthorizer rechecks a native request at each HTTP send,
+// ProviderReferenceMetadataAdmission authorizes an explicit non-visual
+// consumer of canonical references. Its private projection may replace each
+// reference only with ReferenceMetadataText, and may contain no image bytes.
+// Without this separate admission, references require native compilation.
+type ProviderReferenceMetadataAdmission interface {
+	AdmitProviderReferenceMetadata(context.Context, ProviderRequest) (bool, error)
+}
+
+// ProviderTransportAuthorizer rechecks a reference-bearing request at each HTTP send,
 // after durable invocation commit and SDK encoding. The request is the original
 // canonical reference projection, never the SDK's private image buffers.
 // Implementations must not issue provider calls or mutate the request.
@@ -41,6 +49,14 @@ func (m *admittedLanguageModel) bindTransportAuthorization(ctx context.Context, 
 }
 
 func (m *admittedLanguageModel) compileInvocation(ctx context.Context, original ProviderRequest) (ProviderRequest, *providerCompilation, error) {
+	metadataOnly := false
+	if admission, ok := m.admission.(ProviderReferenceMetadataAdmission); ok {
+		var err error
+		metadataOnly, err = admission.AdmitProviderReferenceMetadata(ctx, original)
+		if err != nil {
+			return ProviderRequest{}, nil, err
+		}
+	}
 	wire := original
 	var release func()
 	if compiler, ok := m.admission.(ProviderRequestCompiler); ok {
@@ -59,14 +75,14 @@ func (m *admittedLanguageModel) compileInvocation(ctx context.Context, original 
 			return ProviderRequest{}, nil, media.Reject(media.BindingConflict, "request compiler changed content without canonical media references")
 		}
 	}
-	if err := validateCompiledProviderRequest(original, wire); err != nil {
+	if err := validateCompiledProviderProjection(original, wire, metadataOnly); err != nil {
 		if release != nil {
 			release()
 		}
 		return ProviderRequest{}, nil, err
 	}
 	native := ProviderRequestHasMedia(original)
-	if native && providerRequestHasReferences(original) && release == nil {
+	if native && providerRequestHasReferences(original) && !metadataOnly && release == nil {
 		return ProviderRequest{}, nil, media.Reject(media.BindingConflict, "native request compiler omitted buffer ownership")
 	}
 	if !native && release == nil {
@@ -75,7 +91,7 @@ func (m *admittedLanguageModel) compileInvocation(ctx context.Context, original 
 	return wire, newProviderCompilation(native, release), nil
 }
 
-func validateCompiledProviderRequest(original, wire ProviderRequest) error {
+func validateCompiledProviderProjection(original, wire ProviderRequest, metadataOnly bool) error {
 	if wire.ModelID != original.ModelID || wire.InvocationID != original.InvocationID || wire.AdmissionContext != original.AdmissionContext ||
 		(wire.Call == nil) != (original.Call == nil) || (wire.ObjectCall == nil) != (original.ObjectCall == nil) {
 		return media.Reject(media.BindingConflict, "request compiler changed the admitted identity or call kind")
@@ -83,10 +99,16 @@ func validateCompiledProviderRequest(original, wire ProviderRequest) error {
 	if providerRequestHasReferences(wire) {
 		return media.Reject(media.Unsupported, "media references require an admitted request compiler")
 	}
+	if metadataOnly && (!providerRequestHasReferences(original) || ProviderRequestHasMedia(wire)) {
+		return media.Reject(media.BindingConflict, "metadata projection requires references and a byte-free wire view")
+	}
 	if !ProviderRequestHasMedia(original) && ProviderRequestHasMedia(wire) {
 		return media.Reject(media.BindingConflict, "request compiler introduced unadmitted media")
 	}
 	if providerRequestHasReferences(original) {
+		if metadataOnly {
+			return validateCompiledReferenceRequestWithPart(original, wire, validateCompiledMetadata)
+		}
 		return validateCompiledReferenceRequest(original, wire)
 	}
 	return nil
