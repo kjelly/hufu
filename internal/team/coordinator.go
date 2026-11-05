@@ -1807,25 +1807,7 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 
 	canonicalCompaction := initializeCoordinatorCompaction(c, session)
 	if !planMode && !canonicalCompaction {
-		if history := LoadConversationHistory(session.Workspace); len(history) > 0 {
-			c.conversationHistory = history
-			c.conversationHistorySourceRanges = historySourceRanges(len(history), 0, nil, nil)
-			c.conversationHistorySourceCounts = sourceCountsForRanges(c.conversationHistorySourceRanges)
-			c.conversationHistoryNextSourceIndex = maxSourceIndex(c.conversationHistorySourceRanges)
-
-			if persisted := LoadSession(session.Workspace); persisted != nil {
-				c.conversationHistorySourceRanges = historySourceRanges(len(history), persisted.ConversationHistorySourceOffset, persisted.ConversationHistorySourceCounts, persisted.ConversationHistorySourceRanges)
-				c.conversationHistorySourceCounts = sourceCountsForRanges(c.conversationHistorySourceRanges)
-				c.conversationHistorySourceOffset = persisted.ConversationHistorySourceOffset
-				c.conversationHistoryNextSourceIndex = persisted.ConversationHistoryNextSourceIndex
-				if c.conversationHistoryNextSourceIndex < maxSourceIndex(c.conversationHistorySourceRanges) {
-					c.conversationHistoryNextSourceIndex = maxSourceIndex(c.conversationHistorySourceRanges)
-				}
-				if c.conversationHistorySourceOffset < 0 {
-					c.conversationHistorySourceOffset = 0
-				}
-			}
-		}
+		restoreLegacyConversationProjection(c, session)
 	}
 
 	if pathConsent != nil {
@@ -1926,23 +1908,41 @@ func RegisterProviderSecretsGlobally(session *TeamSession, defaultKey string) {
 // ResetConversation clears the accumulated coordinator conversation history so
 // the next Run/ContinueWithPrompt starts fresh. Used by the chat REPL's /reset.
 func (c *Coordinator) ResetConversation() {
+	_ = c.ResetConversationChecked(context.Background())
+}
+
+// ResetConversationChecked persists media-aware context removal before
+// reporting reset success. The legacy wrapper keeps its existing signature.
+func (c *Coordinator) ResetConversationChecked(ctx context.Context) error {
+	if err := c.persistMediaConversationReset(ctx); err != nil {
+		c.markCompactionRecovery(err)
+		return err
+	}
+	nextSource := c.resetConversationSourceIndex()
 	c.conversationHistoryMu.Lock()
 	c.conversationHistory = nil
 	c.conversationHistorySourceCounts = nil
 	c.conversationHistorySourceRanges = nil
-	c.conversationHistorySourceOffset = 0
-	c.conversationHistoryNextSourceIndex = 0
+	c.conversationHistorySourceOffset = nextSource
+	c.conversationHistoryNextSourceIndex = nextSource
 	c.conversationHistoryMu.Unlock()
-	_ = c.mutateSessionData(func(sd *SessionData) error {
+	if err := c.mutateSessionData(func(sd *SessionData) error {
 		sd.ConversationHistorySourceCounts = nil
 		sd.ConversationHistorySourceRanges = nil
-		sd.ConversationHistorySourceOffset = 0
-		sd.ConversationHistoryNextSourceIndex = 0
+		sd.ConversationHistorySourceOffset = nextSource
+		sd.ConversationHistoryNextSourceIndex = nextSource
 		return nil
-	})
-	_ = c.persistSession("persist reset conversation")
+	}); err != nil {
+		c.markCompactionRecovery(err)
+		return err
+	}
+	if err := c.persistSession("persist reset conversation"); err != nil {
+		c.markCompactionRecovery(err)
+		return err
+	}
 
 	c.resetRoundState()
+	return nil
 }
 
 // totalRounds returns the round count across the whole session, including

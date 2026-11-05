@@ -20,7 +20,10 @@ type ProviderTransportObservation struct {
 
 type providerObserverKey struct{}
 type providerIdentityKey struct{}
-type providerTransportIdentity struct{ invocationID, modelID string }
+type providerTransportIdentity struct {
+	invocationID, modelID string
+	hasMedia              bool
+}
 
 // WithProviderTransportObserver installs a request-scoped diagnostic observer.
 // It cannot alter admission, routing, request bytes, or a provider result.
@@ -39,7 +42,7 @@ func withProviderTransportIdentity(ctx context.Context, request ProviderRequest)
 	if _, ok := ctx.Value(providerObserverKey{}).(func(context.Context, ProviderTransportObservation)); !ok {
 		return ctx
 	}
-	return context.WithValue(ctx, providerIdentityKey{}, providerTransportIdentity{request.InvocationID, request.ModelID})
+	return context.WithValue(ctx, providerIdentityKey{}, providerTransportIdentity{invocationID: request.InvocationID, modelID: request.ModelID, hasMedia: ProviderRequestHasMedia(request)})
 }
 
 func observeProviderTransport(request *http.Request) {
@@ -53,6 +56,11 @@ func observeProviderTransport(request *http.Request) {
 		return // Metadata/model-list calls are not model invocations.
 	}
 	observation := ProviderTransportObservation{InvocationID: identity.invocationID, ModelID: identity.modelID}
+	if identity.hasMedia {
+		observation.UnavailableReason = "media_body_omitted"
+		observer(ctx, observation)
+		return
+	}
 	if request.GetBody == nil {
 		observation.UnavailableReason = "request_body_unavailable"
 		observer(ctx, observation)

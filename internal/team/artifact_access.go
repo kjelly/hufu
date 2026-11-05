@@ -444,7 +444,7 @@ func (c *Coordinator) artifactScopePathCandidates(scope *ArtifactAccessScope) []
 	if c == nil || c.session == nil || scope == nil {
 		return nil
 	}
-	paths := make([]string, 0, len(scope.DeniedRefs)*4+2)
+	paths := make([]string, 0, len(scope.DeniedRefs)*4+3)
 	seen := make(map[string]bool)
 	add := func(path string) {
 		path = strings.TrimSpace(path)
@@ -460,6 +460,9 @@ func (c *Coordinator) artifactScopePathCandidates(scope *ArtifactAccessScope) []
 	artifactRoot := filepath.Join(storeRoot, logsDir, "artifacts")
 	add(filepath.Join(artifactRoot, "data"))
 	add(filepath.Join(artifactRoot, "meta"))
+	// Generic path tools never hydrate image bytes or read private metadata.
+	// Native image consumers resolve their canonical grants through the store.
+	add(filepath.Join(artifactRoot, "media"))
 	for _, ref := range scope.DeniedRefs {
 		if strings.TrimSpace(ref.ID) != "" {
 			add(filepath.Join(artifactRoot, "data", ref.ID))

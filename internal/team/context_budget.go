@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"charm.land/fantasy"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 const (
@@ -124,6 +125,9 @@ func compactToolResultText(s string, capChars int) string {
 
 // squeezeMessage returns a copy of msg with every text-bearing part reduced to at most capChars.
 func squeezeMessage(msg fantasy.Message, capChars int) (fantasy.Message, bool) {
+	if agent.MessagesHaveMedia([]fantasy.Message{msg}) {
+		return msg, false
+	}
 	changed := false
 	parts := make([]fantasy.MessagePart, len(msg.Content))
 	copy(parts, msg.Content)

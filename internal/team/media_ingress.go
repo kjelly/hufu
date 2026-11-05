@@ -103,6 +103,9 @@ func (c *Coordinator) prepareSingleTaskMedia(ctx context.Context, task TaskDef, 
 	if err != nil {
 		return TaskDef{}, err
 	}
+	if err := c.persistMediaInputHistory(ctx, input); err != nil {
+		return TaskDef{}, err
+	}
 	task.MediaBinding = &binding
 	task.MediaInputDigest = binding.InputDigest
 	return task, nil

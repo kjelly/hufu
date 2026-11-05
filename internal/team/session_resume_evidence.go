@@ -25,7 +25,7 @@ func (c *Coordinator) validateResumeSources(ctx context.Context) error {
 	if err := c.validateResumeRecoveryMode(ctx, source); err != nil {
 		return fail(err)
 	}
-	if err := validateResumeConversation(workspace, source.BranchID); err != nil {
+	if err := validateResumeConversation(ctx, workspace, source.BranchID); err != nil {
 		return fail(fmt.Errorf("coordinator conversation for branch %q: %w", source.BranchID, err))
 	}
 	items := c.taskTracker.TodoList().Items()

@@ -16,6 +16,7 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/sidecar"
 )
 
@@ -173,10 +174,10 @@ func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepRes
 		return
 	}
 	resultingHistory := append(cloneMessages(projection.messages), history[compactCount:]...)
-	resultingRanges := append([][]CompactionRange{flattenSourceRanges(compactedRanges)}, cloneSourceRanges(sourceRanges[compactCount:])...)
+	resultingRanges := append(projectionHistoryRanges(projection, compactedRanges), cloneSourceRanges(sourceRanges[compactCount:])...)
 	resultingCounts := sourceCountsForRanges(resultingRanges)
 	if workspace := c.sessionWorkspace(); workspace != "" {
-		record, err := c.commitCompactionCheckpointWithProvenance(ctx, resultingHistory, sourceOffset, resultingCounts, flattenSourceRanges(compactedRanges), resultingRanges, nextSourceIndex, projection)
+		record, err := c.commitCompactionCheckpointWithProvenance(ctx, resultingHistory, sourceOffset, resultingCounts, projectionCompactedRanges(projection, compactedRanges), resultingRanges, nextSourceIndex, projection)
 		if err != nil && record.ID == "" {
 			log.Printf("warning: durable compaction checkpoint failed before commit: %v; retaining original history", err)
 			return
@@ -226,6 +227,9 @@ func trimHistoryPreservingHead(msgs []fantasy.Message, sourceCounts []int, max i
 }
 
 func trimHistoryPreservingHeadWithProvenance(msgs []fantasy.Message, sourceRanges [][]CompactionRange, max int) ([]fantasy.Message, [][]CompactionRange, int) {
+	if agent.MessagesHaveMedia(msgs) {
+		return msgs, cloneSourceRanges(sourceRanges), 0
+	}
 	if max <= 0 {
 		return nil, nil, len(msgs)
 	}
@@ -294,13 +298,15 @@ func trimHistoryPreservingHeadWithProvenance(msgs []fantasy.Message, sourceRange
 }
 
 type compactionProjection struct {
-	messages     []fantasy.Message
-	summary      *StructuredSummary
-	err          error
-	tokensBefore int
-	tokensAfter  int
-	sourceOffset int
-	sourceCount  int
+	compactedStart int
+	compactedEnd   int
+	messages       []fantasy.Message
+	summary        *StructuredSummary
+	err            error
+	tokensBefore   int
+	tokensAfter    int
+	sourceOffset   int
+	sourceCount    int
 }
 
 type transientSidecarCompacter struct {
@@ -326,6 +332,16 @@ func (c *Coordinator) buildTransientCompactionProjection(ctx context.Context, me
 }
 
 func (c *Coordinator) buildCompactionProjection(ctx context.Context, messages []fantasy.Message, sourceOffset int, sourceCounts []int, predecessor *StructuredSummary, compacter SidecarCompacter) compactionProjection {
+	if err := ctx.Err(); err != nil {
+		return compactionProjection{messages: messages, err: err}
+	}
+	if agent.MessagesHaveMedia(messages) {
+		return c.buildMediaCompactionProjection(ctx, messages, sourceOffset, sourceCounts, predecessor, compacter)
+	}
+	return c.buildTextCompactionProjection(ctx, messages, sourceOffset, sourceCounts, predecessor, compacter, "")
+}
+
+func (c *Coordinator) buildTextCompactionProjection(ctx context.Context, messages []fantasy.Message, sourceOffset int, sourceCounts []int, predecessor *StructuredSummary, compacter SidecarCompacter, originalGoal string) compactionProjection {
 	if err := ctx.Err(); err != nil {
 		return compactionProjection{messages: messages, err: err}
 	}
@@ -356,7 +372,9 @@ func (c *Coordinator) buildCompactionProjection(ctx context.Context, messages []
 	}
 
 	// Invariant 2: Original user goal
-	originalGoal := c.initialPrompt
+	if originalGoal == "" {
+		originalGoal = c.initialPrompt
+	}
 	if originalGoal == "" && prevSummary != nil {
 		originalGoal = prevSummary.Goal
 	}
@@ -435,8 +453,10 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 	}
 
 	if workspace != "" {
-		checkpointCounts := []int{sumSourceCounts(sourceCounts)}
-		record, err := c.commitCompactionCheckpoint(ctx, projection.messages, sourceOffset, checkpointCounts, sourceCounts, projection)
+		originalRanges := historySourceRanges(len(messages), sourceOffset, sourceCounts, nil)
+		projectedRanges := projectionHistoryRanges(projection, originalRanges)
+		checkpointCounts := sourceCountsForRanges(projectedRanges)
+		record, err := c.commitCompactionCheckpointWithProvenance(ctx, projection.messages, sourceOffset, checkpointCounts, projectionCompactedRanges(projection, originalRanges), projectedRanges, maxSourceIndex(originalRanges), projection)
 		if err != nil && record.ID == "" {
 			log.Printf("warning: failed to save compaction record before canonical commit: %v", err)
 			return messages

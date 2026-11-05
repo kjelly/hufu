@@ -133,7 +133,7 @@ func TestLegacyHistoryProjectionPreservesStoredSource(t *testing.T) {
 		if !toolPairsIntact(loaded) || len(loaded) != len(history) {
 			t.Fatal("legacy history could not be restored without deleting messages")
 		}
-		if err := validateResumeConversation(workspace, "main"); err != nil {
+		if err := validateResumeConversation(t.Context(), workspace, "main"); err != nil {
 			t.Fatalf("resume preflight refused closed exchanges: %v", err)
 		}
 	}

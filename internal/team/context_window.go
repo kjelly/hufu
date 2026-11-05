@@ -183,6 +183,13 @@ func (c *Coordinator) newContextWindowRequestDescriptorWithContext(ctx context.C
 // bridge. It reuses the verified tool-evidence compactor, but never imports
 // coordinator task facts, history, summaries, metrics, or durable state.
 func (c *Coordinator) buildTransientWorkerCompactionProjection(ctx context.Context, messages []fantasy.Message, predecessor *StructuredSummary, originalGoal string) ([]fantasy.Message, *StructuredSummary, error) {
+	if agent.MessagesHaveMedia(messages) {
+		return c.buildMediaWorkerCompaction(ctx, messages, predecessor, originalGoal)
+	}
+	return c.buildTextWorkerCompactionProjection(ctx, messages, predecessor, originalGoal)
+}
+
+func (c *Coordinator) buildTextWorkerCompactionProjection(ctx context.Context, messages []fantasy.Message, predecessor *StructuredSummary, originalGoal string) ([]fantasy.Message, *StructuredSummary, error) {
 	canonical, err := c.buildCanonicalCompactionInput(ctx, messages)
 	if err != nil {
 		return nil, nil, err

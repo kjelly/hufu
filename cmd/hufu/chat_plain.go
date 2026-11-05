@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -51,7 +52,10 @@ func (s *chatSession) runPlainCommand(line string, turns *chatTurnSequencer) (ha
 	case "/exit", "/quit", ":q", "exit", "quit":
 		return true, true
 	case "/reset":
-		s.tc.coordinator.ResetConversation()
+		if err := s.tc.coordinator.ResetConversationChecked(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "Reset failed: %v\n", err)
+			return true, false
+		}
 		turns.reset()
 		fmt.Fprintf(os.Stderr, "%s Conversation context cleared.\n\n", dimStyle.Render("·"))
 	case "/help", "help", "?":

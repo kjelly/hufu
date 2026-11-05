@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `15ce1e17`（PR-01B 證據與變更同本次階段 commit）
+> Verified-Commit: `3143197f`（PR-02 證據與變更同本次階段 commit）
 > Supersedes: —
 > Superseded-By: —
 
@@ -35,8 +35,8 @@
 | 文件移入正式目錄 | 已提交 | `515b95b9`；文件 map、規格與本紀錄 |
 | PR-00 SDK/schema fixture 與回歸基線 | 完成 | `82b0884a`；SDK HTTP wire／tool media、pinned Codex schema；全部 required gates 與 targeted race 通過 |
 | PR-01A 私有圖片 storage 與前置拒絕 | 完成 | `15ce1e17`；格式／CAS／資源限制與 universal provider guard；required gates、targeted race 與 Darwin package cross-build 通過 |
-| PR-01B M0 canonical binding/policy/quota | 完成；同本次階段 commit | required gates、定向 race 與 Darwin media compile 通過；PR-01 完成，M0 仍待 PR-02 |
-| PR-02 M0 history/compaction/recovery/audit | 尚未開始 | — |
+| PR-01B M0 canonical binding/policy/quota | 完成 | `3143197f`；required gates、定向 race 與 Darwin media compile 通過；PR-01 完成，M0 仍待 PR-02 |
+| PR-02 M0 history/compaction/recovery/audit | 完成；同本次階段 commit | required gates、定向 race 通過；M0 資料基礎完成，圖片 transport 仍關閉 |
 | PR-03 M1 CLI/direct/single native images | 尚未開始 | — |
 | PR-04 M2 coordinator/chat/DAG/routing | 尚未開始 | — |
 | PR-05 M3 MCP/result binding | 尚未開始 | — |
@@ -153,4 +153,43 @@ Darwin 命令：`GOOS=darwin GOARCH=arm64 mise exec -- go build -p 2 -o /dev/nul
 
 所有 heavyweight gates 依序執行，沿用 mise、GOCACHE／GOTMPDIR／GOMODCACHE。GOCACHE（排除 GOTMPDIR，allocated bytes）由 23,842,762,752 增至 25,379,885,056；本階段新增且保留 1,537,122,304 bytes（約 1.43 GiB），包含目前 normal/race 與必要 Darwin dependency outputs，低於 2 GiB 預算。根據階段開始前 inventory、team compile-unit／新增 media method provenance 及 current normal/race exports，在無 Go consumer 後刪除 9 個過期 owned archives，回收 969,515,008 bytes（約 925 MiB）。未刪共享依賴、toolchain 或其他 session 的輸出。
 
-Task scratch 清理前 6,060 KiB，觀察峰值約 133 MiB；fixture binaries 已自行清理。階段提交後移除 task-owned logs／inventory，不保留可丟棄二進位或大型 dump。GOTMPDIR 最終 11,532 KiB，保留其中既有 fixtures。驗證後 `/tmp` 可用約 7.3 GiB、cache/module volume 約 57 GiB、available RAM 約 12 GiB。
+Task scratch 清理前 6,060 KiB，觀察峰值約 133 MiB；fixture binaries 已自行清理。階段提交後移除當階段 logs／fixtures，保留 cache inventory 在同一私有 task 目錄供連續階段辨識輸出來源，不保留可丟棄二進位或大型 dump。GOTMPDIR 最終 11,532 KiB，保留其中既有 fixtures。驗證後 `/tmp` 可用約 7.3 GiB、cache/module volume 約 57 GiB、available RAM 約 12 GiB。
+
+## PR-02：引用式 conversation 與獨立驗證
+
+- Fantasy 的開放 `MessagePart` 介面承載 inert `media_ref`，保留原 role、part 順序、重複圖片、source snapshot／part 與 binding hash；decoder 不讀 CAS bytes。歷史 codec 在 JSON 編碼前拒絕 raw FilePart、tool media 與未知 part；在 SDK decode 前依 discriminator 拒絕 raw media，避免先配置 Base64 decode buffer。
+- Canonical owner 仍是 conversation compaction state。含圖 state 使用 version 2，`native_input` 與 `context_reset` generation 明確沒有 model、summary、token usage 或宣稱已壓縮的 source ranges；文字 state version 1 的輸出格式與既有 digest 保留。相容 `session_history` 使用帶 checkpoint identity 的 envelope，不能替代遺失的 canonical state。
+- 文字壓縮只替換一段完整、連續的非圖片訊息，保留引用相對順序、tool pairing 與原 source ranges；hard trim／squeeze 不得丟圖。內容無法縮至 fit 時保留引用並拒絕後續請求。
+- 啟動只還原 refs 並核對 source／metadata，resume 前完整驗證 CAS。原始檔案移除不影響恢復；CAS 缺圖、內容竄改、未授權 source 或 branch cutoff 外的來源會拒絕。冪等輸入重試從 canonical checkpoint 還原 live history，不建立第二份 occurrence。
+- `/reset` 先提交空 checkpoint 並完成 attestation，再清除相容 history；plain 與 TUI 都回報持久化錯誤。來源索引保持單調遞增，quota／admitted snapshots 不清除。中斷測試修正了既有 reconciliation 對「generation 收據已存在、checkpoint 收據尚缺」的誤判；仍拒絕實際位於其他分支的收據。
+- 獨立 audit 使用已驗證 branch lineage、frozen policies、input／task binding events、canonical checkpoints 與 CAS，不信任 session cache。即使 run 尚無 terminal event，也驗證圖片完整性；宣告 media binding 卻缺 source events 的 task 不能跳過驗證。
+- Provider observer 對 media request 只留 invocation／model 與 `media_body_omitted`，不呼叫 `GetBody`。debug export 在開檔前排除 private media data，即使遭竄改內容看起來像文字也不匯出。typed media bytes 不進入本階段的 history／events／checkpoint／debug 文件；任意文字中的編碼不屬於此保證。
+- 中央 artifact path policy 封鎖整個 private media namespace，沿用 view／write 等 path-enforcing tools 的既有授權入口。receipt 測試涵蓋舊 data/meta 與新 media data/meta，在讀檔前回報 `path_out_of_scope` 且 `Executed=false`；native compiler 的 store access 與一般 path tool 保持不同 grant 邊界。
+- M0 仍不 hydrate 或傳輸圖片。PR-03～07、真實模型驗收及圖片功能完整交付均未完成。
+
+本階段以 `3143197f` 為父；以下是包含最後中央 media path 封鎖的完整 source 驗證。圖片均為離線合成 fixture，沒有真實模型呼叫、圖片外送、SDK 升級或 SQL schema migration。圖片 state version 2 不改寫舊文字 state／歷史 receipts，舊 binary 應拒絕未知版本而非猜測恢復。
+
+| PR-02 gate | 結果 |
+|---|---|
+| 中央路徑／history／audit 定向測試 | PASS，exit 0；team 5.467s |
+| `mise run test` | PASS，exit 0；team 888.353s、cmd/hufu 215.850s、auditverify 3.952s、tools 48.514s |
+| `mise run test-contracts` | PASS，exit 0；team 180.745s、cmd/hufu 92.397s、reviewgate 15.882s、reviewprep 28.161s |
+| `mise run vet` | PASS，exit 0，無診斷 |
+| `mise run lint` | PASS，exit 0，`0 issues.` |
+| 定向 race | PASS，exit 0；agent 1.144s、auditverify 1.400s、team 29.945s、cmd/hufu 2.700s |
+
+定向命令：`mise exec -- go test -p 2 ./internal/team -run '^Test(MediaHistory|MediaAudit|ArtifactPathDenial|CompactionAttestation|ConversationCompaction)' -count=1`。
+
+Race 命令：`mise exec -- go test -p 2 -race ./internal/agent ./internal/auditverify ./internal/team ./cmd/hufu -run '^Test(MediaHistory|MediaAudit|ArtifactPathDenial|AuditVerifiesMedia|PersistentMessages|Provider.*Media|ChatTeamHooks|DebugBundleOmits)' -count=1`。
+
+完整 agent／auditverify 定向前檢查亦通過（0.372s／9.099s），chat reset／debug 邊界測試通過（cmd/hufu 0.361s）。最終 full suite 包含這些 cases；沒有以較早 source 的結果替代最後版本。36 個變更 Go 檔的 SHA-256 已在最後 full suite 期間核對不變，文件證據另於完成後更新。
+
+早期 reset 測試抓到 source index 歸零造成 checkpoint regression，已修正為保持單調索引；不確定提交案例抓到 generation 收據已存在、checkpoint 收據尚缺的 reconciliation 誤判，已以重新開啟 EventStore 的恢復測試驗證。首輪 full regression 的 `TestChatTeamHooks` 使用沒有 session 的零值 Coordinator，新 checked reset 正確回報 session 不可用；已改用既有完整 fixture 並註冊 Close。第二輪 full suite 雖通過，但未包含最後中央 media path 封鎖，故在補上四種 path 的 policy-denied receipt cases 後，重新通過上表全部 gates。未通過／非最終 source 的結果不算完成證據。
+
+Full tests、contracts、vet、lint 與 race 各命令依序執行。一輪 export 盤點與 lint 曾短暫重疊；盤點退出後才安排後續 gates，未重啟安靜的驗證工作。共享 cache 另有其他 checkout 的 consumer，清理守衛拒絕時保留輸出，待 consumer 退出後才依 task inventory、media owner symbols 及 current normal/race exports 刪除過期 archives。
+
+GOCACHE 最後盤點（排除 GOTMPDIR，allocated bytes）為 30,716,428,288；相對 PR-01B 開始前 inventory 的新增 entries 為 6,874,546,176，包含其他 checkout 與必要依賴，不能當作本任務新增量。已識別的 media archives 912,551,936 bytes、task test-cache logs 253,132,800 bytes，另有前階段 baseline 380,006,400 bytes，合計約 1.44 GiB，低於 2 GiB；目前 normal/race exports 共 614,625,280 bytes。這些不是程序 RSS 的估算。
+
+PR-02 期間已回收 2,807,439,360 bytes（約 2.6 GiB），連同 PR-01B 的累計回收為 3,776,954,368 bytes。PR-01A 剩餘 3 個 baseline archives 由 `15ce1e17` 首次新增的 media owner symbols 識別，因共享 consumer 保護暫留；確切路徑記於 `/tmp/codex-task.bY44PR/pr01a-retained-baseline.json`，後續階段待 consumer 退出再清理。未依時間戳刪除未知輸出，也未清除 toolchain、共享依賴或整個 cache。
+
+Task scratch 最終盤點約 7.2 MiB，觀察峰值約 134 MiB；驗證二進位與 fixtures 已自行清理。提交後移除本階段 disposable logs，保留 cache inventories、cleanup manifest 與 PR-03 intake 在同一私有 task 目錄，供連續工作核對來源；不新增第二個暫存根目錄或保留大型 dump。GOTMPDIR 約 30 MiB 時仍有其他 checkout consumer，保留未知 work dirs；容量盤點 `/tmp` 可用約 7.3 GiB、cache/module volume 約 52 GiB、available RAM 約 10 GiB。

@@ -15,6 +15,7 @@ import (
 	"charm.land/fantasy/providers/openaicompat"
 	"charm.land/fantasy/schema"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/media"
 )
 
 // ProviderRequest is the provider-equivalent request shape used by Hufu's
@@ -66,6 +67,9 @@ func (c ProviderAdmissionContext) IsBound() bool {
 // used for admission. Fantasy's exported prompt conversion is the source of
 // truth for message and multimodal wire representation.
 func SerializeProviderRequest(request ProviderRequest) ([]byte, error) {
+	if providerRequestHasReferences(request) {
+		return nil, media.Reject(media.Unsupported, "media references require an admitted request compiler")
+	}
 	if request.AdmissionContext.APIProtocol.Effective == config.APIProtocolResponses {
 		return serializeResponsesAdmissionEstimate(request)
 	}

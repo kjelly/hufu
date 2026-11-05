@@ -1,0 +1,271 @@
+package team
+
+import (
+	"context"
+	"encoding/json/v2"
+	"reflect"
+
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/execution"
+	"github.com/kjelly/hufu/internal/media"
+)
+
+type mediaCreatedOccurrence struct {
+	Binding  *media.TaskBinding        `json:"media_binding"`
+	Digest   string                    `json:"media_input_digest"`
+	Agent    string                    `json:"agent"`
+	Revision int                       `json:"occurrence_revision"`
+	Target   execution.ExecutionTarget `json:"execution_target"`
+}
+
+// VerifyNativeMediaLineage audits a caller-verified branch lineage against
+// frozen policies, durable input/binding events, private CAS and retained
+// immutable conversation checkpoints. It does not consult session projections
+// or a live coordinator and never repairs or writes evidence.
+func VerifyNativeMediaLineage(ctx context.Context, workspace string, lineage []RunEvent) error {
+	hasMedia, hasCheckpoints := false, false
+	for _, event := range lineage {
+		if event.Type == string(EventMediaInputAdmitted) || event.Type == string(EventTaskMediaBound) {
+			hasMedia = true
+		}
+		if event.Type == string(EventTaskCreated) && len(event.Payload) > 0 {
+			var created mediaCreatedOccurrence
+			if err := json.Unmarshal(event.Payload, &created); err != nil {
+				return err
+			}
+			if created.Binding != nil || created.Digest != "" {
+				hasMedia = true
+			}
+		}
+		if event.Type == compactionCheckpointEventType {
+			hasCheckpoints = true
+		}
+	}
+	if hasMedia {
+		if err := verifyNativeMediaAdmissions(ctx, workspace, lineage); err != nil {
+			return err
+		}
+	}
+	if !hasCheckpoints {
+		return nil
+	}
+	return verifyRetainedMediaCheckpoints(ctx, workspace, lineage, hasMedia)
+}
+
+type nativeMediaVerifier struct {
+	policies map[string]*MediaPolicySnapshot
+	sources  map[string]media.InputSnapshot
+	created  map[string]mediaCreatedOccurrence
+	bound    map[string]bool
+	verified map[string]media.Ref
+	store    *FileArtifactStore
+}
+
+func verifyNativeMediaAdmissions(ctx context.Context, workspace string, lineage []RunEvent) error {
+	store, err := OpenFileArtifactStoreReadOnly(workspace, workspace)
+	if err != nil {
+		return err
+	}
+	verifier := nativeMediaVerifier{policies: make(map[string]*MediaPolicySnapshot), sources: make(map[string]media.InputSnapshot), created: make(map[string]mediaCreatedOccurrence), bound: make(map[string]bool), verified: make(map[string]media.Ref), store: store}
+	for index, event := range lineage {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var previous *RunEvent
+		if index > 0 {
+			previous = &lineage[index-1]
+		}
+		if err := verifier.accept(ctx, event, previous); err != nil {
+			return err
+		}
+	}
+	for taskID := range verifier.created {
+		if !verifier.bound[taskID] {
+			return media.Reject(media.DurabilityRequired, "media task lacks its atomic binding event")
+		}
+	}
+	return nil
+}
+
+func (v *nativeMediaVerifier) accept(ctx context.Context, event RunEvent, previous *RunEvent) error {
+	switch EventType(event.Type) {
+	case EventExecutionPolicySnapshot, EventExecutionPolicySnapshotMigrated:
+		return v.acceptPolicy(event)
+	case EventMediaInputAdmitted:
+		return v.acceptInput(ctx, event)
+	case EventTaskCreated:
+		return v.acceptCreation(event)
+	case EventTaskMediaBound:
+		return v.acceptBinding(event, previous)
+	default:
+		return v.acceptTransition(event)
+	}
+}
+
+func (v *nativeMediaVerifier) acceptPolicy(event RunEvent) error {
+	if event.SchemaVersion < eventStoreSchemaVersion {
+		return nil
+	}
+	var policy ExecutionPolicySnapshot
+	if event.Type == string(EventExecutionPolicySnapshotMigrated) {
+		var migration ExecutionPolicySnapshotMigratedPayload
+		if err := json.Unmarshal(event.Payload, &migration); err != nil {
+			return err
+		}
+		policy = migration.Snapshot
+	} else if err := json.Unmarshal(event.Payload, &policy); err != nil {
+		return err
+	}
+	if err := validateExecutionPolicySnapshot(&policy); err != nil {
+		return err
+	}
+	v.policies[event.RunID] = policy.Media.clone()
+	return nil
+}
+
+func (v *nativeMediaVerifier) acceptInput(ctx context.Context, event RunEvent) error {
+	snapshot, err := decodeMediaInputEvent(event)
+	if err != nil {
+		return err
+	}
+	policy := v.policies[event.RunID]
+	if policy == nil || policy.Hash != snapshot.PolicyHash {
+		return media.Reject(media.EgressDenied, "media input has no preceding frozen policy")
+	}
+	if err := snapshot.Validate(policy.Policy.Image); err != nil {
+		return err
+	}
+	if err := checkMediaBranchQuota(v.sources, snapshot, policy.Policy.Image); err != nil {
+		return err
+	}
+	for _, ref := range snapshot.Refs {
+		if previous, ok := v.verified[ref.ID]; ok {
+			if previous != ref {
+				return media.Reject(media.IntegrityMismatch, "admitted media metadata conflicts")
+			}
+			continue
+		}
+		if err := verifyHistoryImage(ctx, v.store, ref, true); err != nil {
+			return err
+		}
+		v.verified[ref.ID] = ref
+	}
+	v.sources[snapshot.ID] = snapshot
+	return nil
+}
+
+func (v *nativeMediaVerifier) acceptCreation(event RunEvent) error {
+	var occurrence mediaCreatedOccurrence
+	if err := json.Unmarshal(event.Payload, &occurrence); err != nil {
+		return err
+	}
+	if occurrence.Binding == nil && occurrence.Digest == "" {
+		return nil
+	}
+	if err := validateTaskMediaShape(&TodoItem{ID: event.TaskID, Agent: occurrence.Agent, MediaBinding: occurrence.Binding, MediaInputDigest: occurrence.Digest}); err != nil {
+		return err
+	}
+	if err := verifyMediaCreationPolicy(event, occurrence, v.policies[event.RunID], v.sources); err != nil {
+		return err
+	}
+	if _, exists := v.created[event.TaskID]; exists {
+		return media.Reject(media.BindingConflict, "media task has multiple creation events")
+	}
+	v.created[event.TaskID] = occurrence
+	return nil
+}
+
+func (v *nativeMediaVerifier) acceptBinding(event RunEvent, previous *RunEvent) error {
+	payload, err := decodeTaskMediaEvent(event)
+	if err != nil {
+		return err
+	}
+	occurrence, ok := v.created[event.TaskID]
+	if !ok || previous == nil || previous.Type != string(EventTaskCreated) || previous.TaskID != event.TaskID || payload.OccurrenceRevision != occurrence.Revision || !reflect.DeepEqual(&payload.Binding, occurrence.Binding) {
+		return media.Reject(media.BindingConflict, "task media event is not paired with its canonical creation")
+	}
+	v.bound[event.TaskID] = true
+	return nil
+}
+
+func (v *nativeMediaVerifier) acceptTransition(event RunEvent) error {
+	occurrence, ok := v.created[event.TaskID]
+	if !ok || !mediaTransitionCarriesBinding(EventType(event.Type)) {
+		return nil
+	}
+	var transition mediaCreatedOccurrence
+	if err := json.Unmarshal(event.Payload, &transition); err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(transition.Binding, occurrence.Binding) || transition.Digest != occurrence.Digest {
+		return media.Reject(media.BindingConflict, "task transition changed its media input binding")
+	}
+	return validateTaskMediaEventFields(event)
+}
+
+func verifyMediaCreationPolicy(event RunEvent, occurrence mediaCreatedOccurrence, policy *MediaPolicySnapshot, sources map[string]media.InputSnapshot) error {
+	binding := occurrence.Binding
+	if policy == nil || binding.PolicyHash != policy.Hash || binding.RunID != event.RunID || binding.BranchID != event.BranchID {
+		return media.Reject(media.EgressDenied, "task media owner differs from its frozen creation policy")
+	}
+	allowed := false
+	for _, target := range policy.Policy.AllowedTargets {
+		if target.Backend == occurrence.Target.Backend && target.Model == occurrence.Target.Model {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return media.Reject(media.EgressDenied, "media task target was not granted")
+	}
+	return mediaBindingSources(binding, mediaLineageView{snapshots: sources}, policy.Policy.Image)
+}
+
+func mediaTransitionCarriesBinding(kind EventType) bool {
+	switch kind {
+	case EventTaskPlanned, EventTaskStarted, EventTaskVerifying, EventTaskPaused, EventTaskCompleted, EventTaskFailed, EventTaskBlocked, EventTaskSkipped, EventTaskProtocolIncomplete, EventTaskCancelled:
+		return true
+	}
+	return false
+}
+
+func verifyRetainedMediaCheckpoints(ctx context.Context, workspace string, lineage []RunEvent, hasMedia bool) error {
+	state, exists, err := LoadConversationCompactionState(workspace)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if hasMedia {
+			return media.Reject(media.DurabilityRequired, "attested media history has no canonical state")
+		}
+		return nil
+	}
+	for index, event := range lineage {
+		if event.Type != compactionCheckpointEventType {
+			continue
+		}
+		reference, err := compactionCheckpointReferenceFromEvent(event)
+		if err != nil {
+			return err
+		}
+		checkpoint, retained := findCompactionCheckpoint(state, reference)
+		if !retained {
+			continue
+		}
+		hasReferences, err := agent.ValidatePersistentMessages(checkpoint.History)
+		if err != nil {
+			return err
+		}
+		if !hasReferences {
+			continue
+		}
+		generation := state.Generations[checkpoint.GenerationID]
+		if !compactionCheckpointAttestationMatches(event, checkpoint, generation) {
+			return media.Reject(media.IntegrityMismatch, "media checkpoint differs from its attestation")
+		}
+		if err := validateMediaHistoryLineage(ctx, workspace, lineage[:index+1], checkpoint.History, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}

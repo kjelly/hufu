@@ -109,6 +109,9 @@ func runLineageAudit(ctx context.Context, workspace, runID string, lineage []tea
 		result.finalizeVerdict()
 		return result, nil, nil
 	}
+	if err := verifyRunMedia(ctx, workspace, runID, lineage, terminals); err != nil {
+		return mediaIntegrityFailure(runID, err), nil, nil
+	}
 	if len(terminals) == 0 {
 		result.Integrity = AuditDimensionResult{Status: AuditDimensionPass, Reason: fmt.Sprintf("event chain verified (%d events); run has no terminal event yet", chain.Events)}
 		reason := fmt.Sprintf("run %q has no canonical run_finished event yet", runID)

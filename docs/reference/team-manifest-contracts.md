@@ -71,7 +71,11 @@ media:
 
 授權凍結 backend／provider／model、實際 backend identity hash 與 limits。圖片內容留在同一 ArtifactStore 的 private namespace；source paths 不寫入 binding。重複圖片保留 part 順序，但 branch storage 配額按 unique blobs 計算；fork 繼承祖先的 admitted 使用量，重新開始 invocation 不會重設配額。含圖任務停用自動結果 cache、歷史結果自動重用與 inflight 合併。
 
-Migration：未啟用 media 的舊文字 policy hash 與 artifact layout 不變；新增欄位為 optional，不改寫歷史 events／receipts。`--no-journal` 只停用 task-result journal，仍須具備 durable event journal 與 private CAS 才能接收圖片。引用式 conversation、完整恢復與獨立 audit 仍屬後續 M0 階段，不能由這份 storage／binding 支援推定已完成。
+圖片 conversation 只保存有序的 `media_ref`，不保存原始 bytes、Base64 或來源路徑。canonical conversation checkpoint 使用 version 2；`session_history` 的圖片 envelope 只是引用 checkpoint 的相容投影，遺失 canonical state 時不能用它恢復授權。載入 references 不讀取圖片內容；resume 與獨立 audit 會驗證 admitted source、分支 lineage、metadata 與 CAS 內容，缺圖或竄改會拒絕。
+
+壓縮只處理圖片訊息之間完整、連續的文字區段，保留圖片引用與重複順序。`/reset` 先提交空的 canonical context 再回報成功，來源索引持續遞增，既有 branch 圖片配額不會釋放。輸入與 reset checkpoint 不算模型壓縮，也不產生虛構 summary 或 token usage。
+
+Migration：未啟用 media 的舊文字 policy hash、conversation state version 1 與 artifact layout 不變；新增欄位為 optional，不改寫歷史 events／receipts。`--no-journal` 只停用 task-result journal，仍須具備 durable event journal 與 private CAS 才能接收圖片。這些持久化與驗證能力不代表已開放模型圖片傳輸；M1 入口仍待後續階段。
 
 ## Fixed batch contract graphs
 
