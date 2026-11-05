@@ -75,7 +75,7 @@ func (b *Boundary) RoundTrip(request *http.Request) (*http.Response, error) {
 	}
 	if request.URL.Scheme != "http" || request.URL.Host != "scripted.invalid" ||
 		request.URL.User != nil || request.URL.RawQuery != "" ||
-		(request.URL.Path != "/v1/chat/completions" && request.URL.Path != "/v1/models") {
+		(request.URL.Path != "/v1/chat/completions" && request.URL.Path != "/v1/responses" && request.URL.Path != "/v1/models") {
 		return nil, errors.New("scripted transport refuses unknown destination")
 	}
 	if err := request.Context().Err(); err != nil {

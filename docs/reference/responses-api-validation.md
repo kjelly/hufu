@@ -57,7 +57,7 @@ abandoned work directory and superseded CLI binary reclaimed about 230 MiB.
 |---|---|---|
 | WP 0: pinned SDK wire contract | Complete | `internal/agent/responses_sdk_test.go`; offline HTTP transport, no live requests |
 | WP 1: configuration | Complete | Normalization, canonical/legacy config, merge and alias tests; production Responses remains gated |
-| WP 2: transport and fixtures | Not started | — |
+| WP 2: transport and fixtures | Complete | Direct/in-process/subprocess paths, base-path preservation, SSE guard and scripted Responses fixtures |
 | WP 3: options, admission and settlement | Not started | — |
 | WP 4: durable binding and resume | Not started | — |
 | WP 5: offline integration | Not started | — |
@@ -110,3 +110,28 @@ merges. Production provider-manager construction rejects Responses with
   post-baseline reading). Task scratch is approximately 1.3 MiB. Project export
   paths are inventoried privately for provenance-aware cleanup of superseded
   phase outputs; shared dependencies and configured cache locations are kept.
+
+## WP 2: transport and deterministic fixtures
+
+Provider construction and boundary rebuild now share an immutable explicit
+protocol resolution. Legacy exported constructors remain Chat-only by default;
+the production manager's Responses enablement gate is still closed. The
+scripted provider supports Responses text/tool events and known/unknown usage
+through its existing in-memory ownership boundary. Chat event-index rewriting
+is restricted to POST requests ending in `/chat/completions`.
+
+- Targeted agent/scripted tests (including pinned SDK tests): passed, exit 0.
+- Complete agent, scripted and providerproxy suites: passed, exit 0.
+- `mise run lint`: passed, exit 0, 0 issues.
+- Direct, in-process and real subprocess proxy requests were tested for both
+  Generate and Stream, with legacy/explicit Chat and explicit Responses. A
+  prefixed upstream base path and stripped wire model were asserted. A local
+  fake server was used; no live provider was contacted.
+- Tool call/result history round-trip and Responses boundary malformed/oversize
+  rejection were verified. A Chat-shaped SSE payload on `/responses` remains
+  byte-for-byte unchanged, so the path guard is exercised independently of
+  event content.
+- Export-path inventories identified 19 superseded phase-1 project archives.
+  After confirming no validation consumers remained, their exact paths were
+  removed, reclaiming 134,431,922 bytes. Shared dependencies were preserved.
+  Post-cleanup shared cache: 27,359,304 KiB; scratch: approximately 1.3 MiB.

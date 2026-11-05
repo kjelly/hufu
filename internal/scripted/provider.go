@@ -65,6 +65,8 @@ func (p *Provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/v1/chat/completions":
 		p.serveCompletion(w, r)
+	case "/v1/responses":
+		p.serveResponses(w, r)
 	case "/v1/models":
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"data":[]}`)

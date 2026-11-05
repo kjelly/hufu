@@ -2,6 +2,11 @@ package agent
 
 import (
 	"errors"
+	"fmt"
+	"net/http"
+
+	"charm.land/fantasy"
+	"charm.land/fantasy/providers/openaicompat"
 
 	"github.com/kjelly/hufu/internal/config"
 )
@@ -30,4 +35,39 @@ func ResolveAPIProtocol(raw string) (APIProtocolResolution, error) {
 		resolution.Source = "legacy"
 	}
 	return resolution, nil
+}
+
+// newConfiguredOpenAICompatibleProvider is private while production Responses
+// construction remains fenced by the provider manager's integration gate.
+func newConfiguredOpenAICompatibleProvider(baseURL, apiKey, name, rawProtocol string) (*OpenAICompatibleProvider, error) {
+	resolution, err := ResolveAPIProtocol(rawProtocol)
+	if err != nil {
+		return nil, err
+	}
+	if baseURL == "" {
+		baseURL = config.DefaultProviderURL
+	}
+	if name == "" {
+		name = "local"
+	}
+	provider, err := newOpenAICompatProviderWithProtocol(baseURL, apiKey, name, nil, resolution)
+	if err != nil {
+		return nil, fmt.Errorf("create OpenAI-compatible provider: %w", err)
+	}
+	return &OpenAICompatibleProvider{provider: provider, apiProtocol: resolution, baseURL: baseURL, apiKey: apiKey, name: name}, nil
+}
+
+func newOpenAICompatProviderWithProtocol(baseURL, apiKey, name string, client *http.Client, resolution APIProtocolResolution) (fantasy.Provider, error) {
+	responses := resolution.Effective == config.APIProtocolResponses
+	options := []openaicompat.Option{
+		openaicompat.WithBaseURL(baseURL),
+		openaicompat.WithName(name),
+		openaicompat.WithHTTPClient(withToolCallIndexes(client)),
+		openaicompat.WithUseResponsesAPI(),
+		openaicompat.WithResponsesAPIFunc(func(string) bool { return responses }),
+	}
+	if apiKey != "" {
+		options = append(options, openaicompat.WithAPIKey(apiKey))
+	}
+	return openaicompat.New(options...)
 }

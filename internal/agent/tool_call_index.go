@@ -40,7 +40,8 @@ func (t toolCallIndexTransport) RoundTrip(req *http.Request) (*http.Response, er
 	if err == nil {
 		observeProviderRejection(req.Context(), resp)
 	}
-	if err != nil || resp == nil || resp.Body == nil || !isEventStream(resp.Header) {
+	if err != nil || resp == nil || resp.Body == nil || !isEventStream(resp.Header) ||
+		req.Method != http.MethodPost || !strings.HasSuffix(req.URL.Path, "/chat/completions") {
 		return resp, err
 	}
 	resp.Body = &toolCallIndexBody{source: resp.Body, reader: bufio.NewReader(resp.Body), choices: map[int64]*toolCallIndexes{}}

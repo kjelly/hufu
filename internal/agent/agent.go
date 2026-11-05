@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"charm.land/fantasy"
-	"charm.land/fantasy/providers/openaicompat"
 
 	"github.com/kjelly/hufu/internal/config"
 	contextstore "github.com/kjelly/hufu/internal/context"
@@ -1063,11 +1062,12 @@ type AcceptanceCriterion struct {
 }
 
 // OpenAICompatibleProvider is a provider backed by an OpenAI-compatible
-// /v1/chat/completions endpoint. It deliberately has no vendor-specific
+// chat-completions or Responses endpoint. It has no vendor-specific
 // behavior, so it can connect to Ollama, Lemonade, llama.cpp, LM Studio,
 // vLLM, or another compatible local server.
 type OpenAICompatibleProvider struct {
 	provider        fantasy.Provider
+	apiProtocol     APIProtocolResolution
 	baseURL         string
 	apiKey          string
 	name            string
@@ -1078,29 +1078,12 @@ type OpenAICompatibleProvider struct {
 }
 
 func NewOpenAICompatibleProvider(baseURL, apiKey, name string) (*OpenAICompatibleProvider, error) {
-	if baseURL == "" {
-		baseURL = config.DefaultProviderURL
-	}
-	if name == "" {
-		name = "local"
-	}
-	provider, err := newOpenAICompatProvider(baseURL, apiKey, name, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create OpenAI-compatible provider: %w", err)
-	}
-	return &OpenAICompatibleProvider{provider: provider, baseURL: baseURL, apiKey: apiKey, name: name}, nil
+	return newConfiguredOpenAICompatibleProvider(baseURL, apiKey, name, "")
 }
 
 func newOpenAICompatProvider(baseURL, apiKey, name string, client *http.Client) (fantasy.Provider, error) {
-	providerOptions := []openaicompat.Option{
-		openaicompat.WithBaseURL(baseURL),
-		openaicompat.WithName(name),
-	}
-	if apiKey != "" {
-		providerOptions = append(providerOptions, openaicompat.WithAPIKey(apiKey))
-	}
-	providerOptions = append(providerOptions, openaicompat.WithHTTPClient(withToolCallIndexes(client)))
-	return openaicompat.New(providerOptions...)
+	resolution, _ := ResolveAPIProtocol("")
+	return newOpenAICompatProviderWithProtocol(baseURL, apiKey, name, client, resolution)
 }
 
 // OllamaProvider is retained as a source-compatible alias for integrations
@@ -1120,7 +1103,7 @@ func (p *OpenAICompatibleProvider) LanguageModel(ctx context.Context, modelID st
 	if !boundary {
 		return p.provider.LanguageModel(ctx, model)
 	}
-	proxyProvider, err := newOpenAICompatProvider(baseURL, p.apiKey, p.name, client)
+	proxyProvider, err := newOpenAICompatProviderWithProtocol(baseURL, p.apiKey, p.name, client, p.apiProtocol)
 	if err != nil {
 		return nil, err
 	}
@@ -1546,7 +1529,7 @@ func NewProviderManager(defaultURL, defaultKey string, providerConfigs map[strin
 			localTarget.apiKey = cfg.ProviderAPIKey
 		}
 	}
-	defaultProv, err := NewOpenAICompatibleProvider(localTarget.upstreamURL, localTarget.apiKey, "local")
+	defaultProv, err := newConfiguredOpenAICompatibleProvider(localTarget.upstreamURL, localTarget.apiKey, "local", canonicalConfigs["local"].APIProtocol)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create canonical local provider: %w", err)
 	}
@@ -1772,7 +1755,7 @@ func (pm *ProviderManager) GetProvider(modelID string) *OpenAICompatibleProvider
 	_, hasCfg := pm.configs[name]
 	if hasCfg {
 		target := pm.effectiveProviderTargetLocked(name)
-		p, err := NewOpenAICompatibleProvider(target.upstreamURL, target.apiKey, target.name)
+		p, err := newConfiguredOpenAICompatibleProvider(target.upstreamURL, target.apiKey, target.name, pm.configs[name].APIProtocol)
 		if err == nil {
 			if boundary, ok := pm.invocationProxies[name]; ok {
 				p.setBoundary(boundary.URL(), boundary.HTTPClient())
