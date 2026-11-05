@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 
@@ -11,10 +10,6 @@ import (
 
 	"github.com/kjelly/hufu/internal/config"
 )
-
-// ErrResponsesNotEnabled fences production construction until admission,
-// accounting, durable binding and integration gates have been implemented.
-var ErrResponsesNotEnabled = errors.New("api-protocol responses is not enabled yet")
 
 // apiProtocolBindingVersion covers the pinned adapter capability rules and
 // admission estimate semantics too. Bump it when those change after release.
@@ -37,8 +32,7 @@ func ResolveAPIProtocol(raw string) (APIProtocolResolution, error) {
 	return resolution, nil
 }
 
-// newConfiguredOpenAICompatibleProvider is private while production Responses
-// construction remains fenced by the provider manager's integration gate.
+// newConfiguredOpenAICompatibleProvider constructs an explicitly bound transport.
 func newConfiguredOpenAICompatibleProvider(baseURL, apiKey, name, rawProtocol string) (*OpenAICompatibleProvider, error) {
 	resolution, err := ResolveAPIProtocol(rawProtocol)
 	if err != nil {

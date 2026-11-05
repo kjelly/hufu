@@ -207,3 +207,70 @@ metadata is shared as a secret-free config value, without provider credentials.
   it is not a task-specific allocation measurement. Configured caches and
   current project exports are preserved. Fixture binaries cleaned up after
   their consumers exited; no task binary is retained.
+
+## WP 5: production integration
+
+The production provider manager now accepts explicit Responses configuration.
+All four-entry-point admission/usage fixtures construct through that manager.
+Provider errors identify the selected protocol and retain their original cause;
+HTTP 404 is not treated as evidence for an automatic protocol switch.
+
+- Actual worker/collector workflows cover runtime and tool result transport,
+  bounded claims repair without repeated original work, forged receipt refusal,
+  persisted results and replay. The workflow race test passed (12.858 s).
+- Each fake upstream generation checks that its schema-v2 protocol profile was
+  already committed. Its cost ledger replays exactly one settlement per call.
+- The actual CLI binary sends one Responses request, preserves the unverified
+  outcome/exit 7 when no acceptance is configured, and rejects an explicit
+  protocol change before any further generation (6.626 s, exit 0 for the test).
+- Responses-focused production factory/transport/workflow race tests passed
+  (agent 2.470 s, team 16.605 s), before the final escaping regression below.
+- Full agent suite passed (0.585 s) and lint passed (0 issues), before that
+  final regression. Full final integration gates below supersede these results.
+- The wire-budget oracle now uses the captured original request bytes, rather
+  than decoding and re-encoding them. A new HTML/U+2028/U+2029 case reproduced
+  underestimation (294,797 versus 482,747 bytes for a function request; 10,693
+  versus 16,179 bytes for object generation). Matching the pinned SDK's HTML/JS
+  escaping in the estimate fixes both; the strengthened oracle passed (0.074 s).
+- The CI-wired `test-contracts` task now includes the Responses workflow,
+  wire-to-ledger usage and CLI protocol-drift regressions.
+- A content-provenance cache audit preserved 254 current normal/race project
+  exports (807,884,762 bytes), dependencies, other checkouts and agent-team
+  modules. It removed 1,953 superseded archives containing this checkout's core
+  source paths, reclaiming 13,301,234,910 bytes. No timestamp-only ownership
+  inference or whole-cache purge was used. Shared cache after cleanup and the
+  escaping regression: 19,247,580 KiB; scratch: 1,912 KiB. Temporary test
+  executables were cleaned by their fixture owners after consumers exited.
+- The first full suite completed every package but failed its static model-call
+  inventory: the new protocol wrapper was not yet registered. No other test
+  failed (team package: 851.159 s). The inventory now records the adapter and
+  the existing admitted object entry points, and independently audits all four
+  Fantasy methods plus the guarded object-stream helper. AST tests distinguish
+  actual object calls from comments/strings. The focused inventory gate passed
+  (1.063 s) and is now included in CI's contracts gate. Full validation resumes
+  below; this first full-suite invocation is not recorded as a passing gate.
+- Full normal suite after the inventory fix: passed, exit 0 (team 1083.397 s).
+- The first full team race run exhausted its 45-minute package budget at root
+  test 3958/4696, while a two-second test was opening a normally progressing
+  SQLite migration. No race warning was recorded. Agent/proxy race suites had
+  passed (3.986 s / 1.445 s). This timeout is a failed gate, not success; the
+  identical complete suite is rerun with a 90-minute budget. The specification
+  now records that empirical budget; no test is renamed, skipped or partitioned.
+- Final `mise run test-contracts`: passed, exit 0 after the inventory fix,
+  including the new workflow, wire-ledger, inventory and CLI drift tests.
+- Full race gate with the 90-minute budget: passed, exit 0; agent 3.315 s,
+  providerproxy 1.374 s, team 4228.548 s. The existing 100,010-row worker-memory
+  retrieval fixture accounts for a substantial late portion of this run. No
+  fixture was skipped or reduced. This successful run supersedes the earlier
+  timeout without concealing it.
+- `mise run vet`: passed, exit 0.
+- A refreshed current normal/race export inventory preserved current project
+  builds and removed 67 superseded, source-provenance-verified archives
+  (683,885,130 bytes). After the timed-out process exited, its exact abandoned
+  fixture directory was removed (137,048 logical bytes). Unowned shared
+  temporary directories were preserved.
+- Final `mise run lint`: passed, exit 0, 0 issues.
+- `mise exec -- go build -p 2 -o /dev/null ./cmd/hufu`: passed, exit 0.
+- After all gates, allocated shared cache was 19,060,256 KiB, configured
+  shared build temporary root 12,716 KiB, and task scratch 7,456 KiB. Current
+  exports and dependency builds remain reusable; no fixture binary is retained.

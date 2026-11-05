@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"fmt"
 
@@ -141,7 +142,10 @@ func serializeResponsesAdmissionEstimate(request ProviderRequest) ([]byte, error
 		// Store/history restrictions are enforced by validateResponsesRequest.
 		estimate["provider_options"] = value
 	}
-	return json.Marshal(estimate)
+	// The pinned SDK uses encoding/json v1 string escaping. Preserve its HTML
+	// and JavaScript expansion in this inventory so long strings cannot make
+	// the conservative byte floor smaller than the actual request body.
+	return json.Marshal(estimate, jsontext.EscapeForHTML(true), jsontext.EscapeForJS(true))
 }
 
 // ProviderRequestTokenFloor is a versioned conservative byte-based floor for

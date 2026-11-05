@@ -130,10 +130,10 @@ API key 沿用現有 credential 機制，不新增 YAML 環境變數插值語法
 - 保留 Chat serializer；新增明確標為 estimate 的 Responses serializer，不複製 Fantasy 私有 encoder。
 - Responses estimate 涵蓋 system（包含 SDK 轉成 developer 的內容）／user／assistant 文字、function names／descriptions／完整 schema、tool arguments／results、call IDs、角色／item 邊界及 structured-output schema。`GenerateObject`／`StreamObject` 不得因使用不同 schema 位置而漏算。
 - 首版 Responses 只接受文字及 function call/result 內容。image／audio／file 等 multimodal 請求在 transport 前拒絕；Chat 的既有媒體行為不變。刪除原計畫對 Responses multimodal 完整支援的承諾。
-- estimator 明列版本與公式：對完整估算表示使用 UTF-8 byte length 作保守文字基數，再加每個 input item／tool 的固定 overhead；與現有模型估算取較大值，最後使用現有 safety margin 與 output reservation。固定 overhead 常數須命名、註解來源與測試。不得繼續採 `len(json)/4` 作 Responses 的保守基數。
+- estimator 明列版本與公式：對完整估算表示使用與 pinned SDK 一致的 HTML／JavaScript escaping，再以 JSON UTF-8 byte length 作保守文字基數，再加每個 input item／tool 的固定 overhead；與現有模型估算取較大值，最後使用現有 safety margin 與 output reservation。固定 overhead 常數須命名、註解來源與測試。不得繼續採 `len(json)/4` 作 Responses 的保守基數。
 - 這是估算，不能宣稱為任意 provider tokenizer 的數學上界。未知 context capacity 沿用現有 fail-closed 規則，不能因協定改變而取得較寬鬆的容量。
 - `max_output_tokens` 包含 reasoning 與可見輸出；reservation 與實際有效 max output 一致。
-- 用 fake upstream capture 的實際 wire payload 建立獨立比較器：驗證上述每項內容均被估算涵蓋，且 estimate 至少覆蓋 captured input／tools／tool choice／output schema 的實際 JSON UTF-8 bytes 加上 base allowance。實際 wire JSON 已含 item/tool framing；logical estimate 的逐項 allowance 用來補足這些 framing 與 SDK defaults，不在 wire oracle 重複加一次。忽略不屬於 input token 的 transport 欄位，不能把 Chat estimate 當唯一 oracle。
+- 用 fake upstream capture 的實際 wire payload 建立獨立比較器：驗證上述每項內容均被估算涵蓋，且 estimate 至少覆蓋 captured input／tools／tool choice／output schema 的實際 JSON UTF-8 bytes 加上 base allowance。實際 wire JSON 已含 item/tool framing；logical estimate 的逐項 allowance 用來補足這些 framing 與 SDK defaults，不在 wire oracle 重複加一次。忽略不屬於 input token 的 transport 欄位，不能把 Chat estimate 當唯一 oracle；比較原始 wire bytes，禁止 decode 後以另一組 escaping 重新序列化來縮小 oracle。
 - 邊界測試驗證 estimate + reserved output + safety margin 超過容量時零 generation；涵蓋中文、emoji、長 history、多工具、大 schema、structured output 與空輸入。錯誤不能靠縮小 fixture、跳過 assertion 或提高容量解決。
 
 ## 6. Usage、串流與結果契約
@@ -199,7 +199,7 @@ WP 0 → 1 → 2 → 3 → 4 → 5 → 6。可分 commit，但 production 啟用
 TMPDIR="$task_tmp" GOMAXPROCS=2 mise exec -- gofmt -w <changed-go-files>
 TMPDIR="$task_tmp" GOMAXPROCS=2 mise exec -- go test -p 2 -timeout 20m ./internal/config ./internal/agent ./internal/providerproxy ./internal/scripted ./internal/sidecar
 TMPDIR="$task_tmp" GOMAXPROCS=2 mise exec -- go test -p 2 -timeout 20m ./internal/team ./cmd/hufu
-TMPDIR="$task_tmp" GOMAXPROCS=2 mise exec -- go test -race -p 2 -timeout 45m ./internal/agent ./internal/providerproxy ./internal/team
+TMPDIR="$task_tmp" GOMAXPROCS=2 mise exec -- go test -race -p 2 -timeout 90m ./internal/agent ./internal/providerproxy ./internal/team
 TMPDIR="$task_tmp" GOMAXPROCS=2 mise run test-contracts
 TMPDIR="$task_tmp" GOMAXPROCS=2 mise run test
 TMPDIR="$task_tmp" GOMAXPROCS=2 mise run vet

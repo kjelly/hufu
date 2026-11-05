@@ -1513,11 +1513,6 @@ func NewProviderManager(defaultURL, defaultKey string, providerConfigs map[strin
 	if hasExplicitLocal {
 		canonicalConfigs["local"] = explicitLocalConfig
 	}
-	for name, cfg := range canonicalConfigs {
-		if cfg.APIProtocol == config.APIProtocolResponses {
-			return nil, fmt.Errorf("provider %q: %w", name, ErrResponsesNotEnabled)
-		}
-	}
 	// Keep the original default target for non-local providers that inherit a
 	// missing URL or key. The provider exposed as the local default must instead
 	// be constructed from the fully resolved canonical local target.

@@ -26,6 +26,23 @@ type protocolLanguageModel struct {
 	resolution APIProtocolResolution
 }
 
+type responsesAdapterError struct{ cause error }
+
+func (e *responsesAdapterError) Error() string {
+	return fmt.Sprintf("api-protocol responses: %v; verify this provider's api-protocol, model and generation settings", e.cause)
+}
+func (e *responsesAdapterError) Unwrap() error { return e.cause }
+
+func (m *protocolLanguageModel) protocolError(err error) error {
+	if err == nil || m.resolution.Effective != config.APIProtocolResponses {
+		return err
+	}
+	if _, wrapped := errors.AsType[*responsesAdapterError](err); wrapped {
+		return err
+	}
+	return &responsesAdapterError{cause: err}
+}
+
 // ModelAPIProtocol follows Hufu wrappers without inferring capabilities from
 // Provider() or a model name. Third-party models retain legacy Chat semantics.
 func ModelAPIProtocol(model fantasy.LanguageModel) APIProtocolResolution {
@@ -112,7 +129,7 @@ func validateResponsesRequest(request ProviderRequest) error {
 }
 
 func (m *protocolLanguageModel) validate(call *fantasy.Call, object *fantasy.ObjectCall) error {
-	return validateResponsesRequest(ProviderRequest{ModelID: m.Model(), Call: call, ObjectCall: object, AdmissionContext: ProviderAdmissionContext{APIProtocol: m.resolution}})
+	return m.protocolError(validateResponsesRequest(ProviderRequest{ModelID: m.Model(), Call: call, ObjectCall: object, AdmissionContext: ProviderAdmissionContext{APIProtocol: m.resolution}}))
 }
 
 func (m *protocolLanguageModel) warn(warnings []fantasy.CallWarning) {
@@ -134,7 +151,7 @@ func (m *protocolLanguageModel) warn(warnings []fantasy.CallWarning) {
 
 func (m *protocolLanguageModel) Generate(ctx context.Context, call fantasy.Call) (*fantasy.Response, error) {
 	if err := m.validate(&call, nil); err != nil {
-		return nil, err
+		return nil, m.protocolError(err)
 	}
 	ctx = m.responseContext(ctx)
 	response, err := m.LanguageModel.Generate(ctx, call)
@@ -144,16 +161,16 @@ func (m *protocolLanguageModel) Generate(ctx context.Context, call fantasy.Call)
 			err = m.terminalError(ctx, response.FinishReason)
 		}
 	}
-	return response, err
+	return response, m.protocolError(err)
 }
 func (m *protocolLanguageModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
 	if err := m.validate(&call, nil); err != nil {
-		return nil, err
+		return nil, m.protocolError(err)
 	}
 	ctx = m.responseContext(ctx)
 	stream, err := m.LanguageModel.Stream(ctx, call)
 	if err != nil {
-		return nil, err
+		return nil, m.protocolError(err)
 	}
 	return func(yield func(fantasy.StreamPart) bool) {
 		var pending []fantasy.StreamPart
@@ -162,7 +179,7 @@ func (m *protocolLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 			if m.resolution.Effective == config.APIProtocolResponses && part.Type == fantasy.StreamPartTypeToolCall {
 				pendingBytes += responsesItemAllowance + len(part.ID) + len(part.ToolCallName) + len(part.ToolCallInput)
 				if pendingBytes > maxObservedProviderBody {
-					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeError, Error: ErrResponsesContent})
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeError, Error: m.protocolError(ErrResponsesContent)})
 					return
 				}
 				pending = append(pending, part)
@@ -181,6 +198,7 @@ func (m *protocolLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 				pending = nil
 			}
 			m.warn(part.Warnings)
+			part.Error = m.protocolError(part.Error)
 			if !yield(part) {
 				return
 			}
@@ -189,7 +207,7 @@ func (m *protocolLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 }
 func (m *protocolLanguageModel) GenerateObject(ctx context.Context, call fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
 	if err := m.validate(nil, &call); err != nil {
-		return nil, err
+		return nil, m.protocolError(err)
 	}
 	ctx = m.responseContext(ctx)
 	response, err := m.LanguageModel.GenerateObject(ctx, call)
@@ -199,11 +217,11 @@ func (m *protocolLanguageModel) GenerateObject(ctx context.Context, call fantasy
 			err = m.terminalError(ctx, response.FinishReason)
 		}
 	}
-	return response, err
+	return response, m.protocolError(err)
 }
 func (m *protocolLanguageModel) StreamObject(ctx context.Context, call fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
 	if err := m.validate(nil, &call); err != nil {
-		return nil, err
+		return nil, m.protocolError(err)
 	}
 	ctx = m.responseContext(ctx)
 	var stream fantasy.ObjectStreamResponse
@@ -217,7 +235,7 @@ func (m *protocolLanguageModel) StreamObject(ctx context.Context, call fantasy.O
 		stream, err = m.LanguageModel.StreamObject(ctx, call)
 	}
 	if err != nil {
-		return nil, err
+		return nil, m.protocolError(err)
 	}
 	return func(yield func(fantasy.ObjectStreamPart) bool) {
 		for part := range stream {
@@ -233,6 +251,7 @@ func (m *protocolLanguageModel) StreamObject(ctx context.Context, call fantasy.O
 				}
 			}
 			m.warn(part.Warnings)
+			part.Error = m.protocolError(part.Error)
 			if !yield(part) {
 				return
 			}
@@ -261,5 +280,5 @@ func (m *protocolLanguageModel) terminalError(ctx context.Context, reason fantas
 	if status == "" {
 		status = "unobserved"
 	}
-	return fmt.Errorf("%w: status=%s finish_reason=%s", ErrResponsesTerminal, status, reason)
+	return m.protocolError(fmt.Errorf("%w: status=%s finish_reason=%s", ErrResponsesTerminal, status, reason))
 }

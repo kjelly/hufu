@@ -19,16 +19,36 @@ import (
 
 func responsesFixtureModel(t *testing.T, modelID string, handler roundTripFunc) fantasy.LanguageModel {
 	t.Helper()
-	provider, err := newConfiguredOpenAICompatibleProvider("https://responses.invalid/v1", "", "remote", config.APIProtocolResponses)
+	manager, err := NewProviderManager("https://responses.invalid/v1", "", map[string]config.ProviderConfig{
+		"remote": {ProviderURL: "https://responses.invalid/v1", APIProtocol: config.APIProtocolResponses},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	provider := manager.GetProvider("remote/" + modelID)
 	provider.setBoundary("https://responses.invalid/v1", &http.Client{Transport: handler})
 	model, err := provider.LanguageModel(t.Context(), "remote/"+modelID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return model
+}
+
+func TestResponsesProviderErrorsPreserveCauseAndProtocol(t *testing.T) {
+	for _, entry := range []string{"generate", "stream", "generate_object", "stream_object"} {
+		t.Run(entry, func(t *testing.T) {
+			calls := 0
+			model := responsesFixtureModel(t, "custom", func(*http.Request) (*http.Response, error) {
+				calls++
+				return sdkJSONResponse(`{"error":{"message":"not found","type":"invalid_request_error","code":"not_found"}}`, http.StatusNotFound), nil
+			})
+			err := invokeResponsesFixture(t.Context(), model, entry)
+			wrapped, ok := errors.AsType[*responsesAdapterError](err)
+			if !ok || errors.Unwrap(wrapped) == nil || !strings.Contains(err.Error(), "api-protocol responses") || !strings.Contains(err.Error(), "generation settings") || calls != 1 {
+				t.Fatalf("error lost protocol/cause or retried: calls=%d error=%v", calls, err)
+			}
+		})
+	}
 }
 
 func TestResponsesRejectsUnsupportedBeforeInvocation(t *testing.T) {
@@ -128,14 +148,16 @@ func TestResponsesReasoningOptionsSurviveWrappers(t *testing.T) {
 
 func TestResponsesEstimateCoversCapturedWire(t *testing.T) {
 	for _, object := range []bool{false, true} {
-		for _, text := range []string{"", strings.Repeat("中文🙂\\\"", 512)} {
+		for _, text := range []string{"", strings.Repeat("中文🙂\\\"", 512), strings.Repeat("<>&\u2028\u2029", 512)} {
 			t.Run(map[bool]string{false: "call", true: "object"}[object]+"/"+strconv.Itoa(len(text)), func(t *testing.T) {
 				var wire map[string]any
+				var wireBytes int
 				model := responsesFixtureModel(t, "custom", func(request *http.Request) (*http.Response, error) {
 					raw, err := io.ReadAll(request.Body)
 					if err != nil {
 						return nil, err
 					}
+					wireBytes = len(raw)
 					if err = json.Unmarshal(raw, &wire); err != nil {
 						return nil, err
 					}
@@ -177,20 +199,11 @@ func TestResponsesEstimateCoversCapturedWire(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				selected := map[string]any{}
-				for _, key := range []string{"input", "tools", "tool_choice", "text"} {
-					if value, ok := wire[key]; ok {
-						selected[key] = value
-					}
-				}
-				captured, err := json.Marshal(selected)
-				if err != nil {
-					t.Fatal(err)
-				}
 				// Actual wire JSON already contains item/tool framing. Its bytes plus
-				// the base margin are the independent oracle for logical allowances.
-				if tokens < len(captured)+responsesBaseAllowance || tokens != ProviderRequestTokenFloor(request, estimate) {
-					t.Fatalf("tokens=%d actual bytes=%d estimate bytes=%d", tokens, len(captured), len(estimate))
+				// the base margin are the independent oracle. Do not re-marshal the
+				// decoded body: that can hide differences in SDK string escaping.
+				if tokens < wireBytes+responsesBaseAllowance || tokens != ProviderRequestTokenFloor(request, estimate) {
+					t.Fatalf("tokens=%d actual bytes=%d estimate bytes=%d", tokens, wireBytes, len(estimate))
 				}
 				for _, marker := range []string{"instructions", "result-marker", "lookup"} {
 					if !strings.Contains(string(estimate), marker) {

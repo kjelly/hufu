@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/config"
@@ -36,26 +35,20 @@ func TestResolveAPIProtocol(t *testing.T) {
 
 func TestProviderManagerAPIProtocol(t *testing.T) {
 	for _, tc := range []struct {
-		name                 string
-		providers            map[string]config.ProviderConfig
-		want                 string
-		unavailable, invalid bool
+		name      string
+		providers map[string]config.ProviderConfig
+		want      string
+		invalid   bool
 	}{
 		{name: "legacy", providers: map[string]config.ProviderConfig{"remote": {}}, want: ""},
 		{name: "normalized explicit", providers: map[string]config.ProviderConfig{"remote": {APIProtocol: " CHAT-COMPLETIONS "}}, want: config.APIProtocolChatCompletions},
-		{name: "responses gated", providers: map[string]config.ProviderConfig{"remote": {APIProtocol: " RESPONSES "}}, unavailable: true},
+		{name: "responses enabled", providers: map[string]config.ProviderConfig{"remote": {APIProtocol: " RESPONSES "}}, want: config.APIProtocolResponses},
 		{name: "auto rejected", providers: map[string]config.ProviderConfig{"remote": {APIProtocol: "auto"}}, invalid: true},
 		{name: "equivalent aliases", providers: map[string]config.ProviderConfig{"local": {APIProtocol: " CHAT-COMPLETIONS "}, "LOCAL": {APIProtocol: "chat-completions"}}, want: config.APIProtocolChatCompletions},
 		{name: "legacy explicit aliases conflict", providers: map[string]config.ProviderConfig{"local": {}, "LOCAL": {APIProtocol: "chat-completions"}}, invalid: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pm, err := NewProviderManager("https://fixture.invalid/v1", "", tc.providers)
-			if tc.unavailable {
-				if !errors.Is(err, ErrResponsesNotEnabled) {
-					t.Fatalf("error=%v", err)
-				}
-				return
-			}
 			if tc.invalid {
 				if err == nil {
 					t.Fatal("accepted invalid configuration")
