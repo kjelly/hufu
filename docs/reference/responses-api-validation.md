@@ -1,6 +1,6 @@
 # Responses API implementation evidence
 
-> Status: in progress
+> Status: complete (offline scope)
 > Authority: reference
 > Baseline: `9420c2f58118cb5647e582ace02cc840452cdfea`
 > Specification: [Responses API integration](../architecture/responses-api.md)
@@ -274,3 +274,50 @@ HTTP 404 is not treated as evidence for an automatic protocol switch.
 - After all gates, allocated shared cache was 19,060,256 KiB, configured
   shared build temporary root 12,716 KiB, and task scratch 7,456 KiB. Current
   exports and dependency builds remain reusable; no fixture binary is retained.
+
+## WP 6: protocol diagnostics and operator documentation
+
+Doctor and offline team check report requested/effective protocol, source and
+binding version through an additive `api_protocol` JSON projection and safe
+text messages. The display-only `legacy` label does not change configuration
+or durable identity. Resolution uses the same canonical merged provider map
+as execution, without constructing a provider or probing generation. Existing
+Doctor metadata checks and explicit team-check online behavior are preserved.
+
+The operator guide documents configuration/merge forms, supported content,
+pinned-SDK reasoning limitations, conservative admission, usage normalization
+and frozen resume behavior. The architecture contract is active and includes
+an unpublished release-note draft; no publication or live endpoint test occurs.
+
+- Focused protocol/Doctor/team-check suite: passed, exit 0 (0.960 s). Fixtures
+  assert zero provider requests for the new checks, no URL/credential leakage,
+  immutable configuration, and no changed team files.
+- Runtime and contract sources are unchanged from WP 5. Their successful full
+  normal, full race and contracts gates are reused rather than rerun. The final
+  changed CLI package and all static gates are validated below.
+- Full changed CLI package: passed, exit 0 (195.003 s).
+- Final `mise run vet`: passed, exit 0.
+- Final `mise run lint`: passed, exit 0, 0 issues.
+- Final `mise exec -- go build -p 2 -o /dev/null ./cmd/hufu`: passed, exit 0.
+- Refreshed the normal export manifest and retained the unchanged current race
+  exports. Removed 68 superseded source-provenance-verified archives, reclaiming
+  80,655,160 bytes. The retained current project export set is 254 archives,
+  808,091,880 bytes, below the 2 GiB task project-output budget. A separate ELF
+  inventory found no project executables retained in the shared cache.
+- Across the recorded phases, exact obsolete archive cleanup reclaimed
+  14,470,914,020 bytes (about 13.5 GiB). This includes pre-existing obsolete
+  revisions; it is not a claim that all removed data was created by this task.
+  Shared allocated cache at handoff was 19,278,556 KiB, compared with the
+  recorded 26,460,436 KiB post-baseline measurement. Reusable dependencies,
+  toolchains and other checkouts' builds are preserved. Configured build
+  temporary root was 12,716 KiB; unowned leftovers were not removed.
+- Task scratch before final handoff cleanup was 7,592 KiB. Disposable logs,
+  private drafts and inventory manifests have no requested consumer after
+  evidence is recorded; they are removed at handoff. Fixture binaries already
+  cleaned up after their processes exited. No disposable task binary or
+  recovery checkpoint is intentionally retained.
+
+WP 0–6 are complete within the offline scope. Real OpenAI endpoint verification
+remains unperformed and requires separate user authorization; it is not an
+outstanding implementation acceptance task. No API account, paid call, upstream
+publication or external release was used for this implementation.

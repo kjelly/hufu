@@ -60,6 +60,8 @@ is compared with the provider's model list only when that list is nonempty.
 
 | Check ID | Meaning |
 | --- | --- |
+| `provider.api_protocol` | Configured protocol selection for a backend; carries `api_protocol.requested`, `effective`, `source` and `binding_version`. This configuration-only check performs no generation probe. |
+| `provider.api_protocol.configuration` | Invalid backend/protocol configuration; emitted on failure without raw values or credentials. |
 | `provider.reachable` | Configured provider responds and reports model availability. |
 | `models.configuration` | Model override configuration can be resolved; emitted on failure. |
 | `models.resolved` | Role model configuration and provider-list comparison; `subject` names the role. |

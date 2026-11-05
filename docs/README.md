@@ -31,8 +31,8 @@ to re-create an abstraction that already exists in the runtime.
 
 ### Architecture and normative contracts
 
-- [Responses API integration](architecture/responses-api.md) — implementation-ready
-  explicit protocol configuration, provider boundaries, admission, accounting,
+- [Responses API integration](architecture/responses-api.md) — explicit protocol
+  configuration, provider boundaries, admission, accounting,
   durable binding and offline acceptance gates.
 
 - [Execution runtime](architecture/execution-runtime.md) — canonical
@@ -54,7 +54,7 @@ to re-create an abstraction that already exists in the runtime.
   `EvaluateRunOutcome` and `CompletionGate`.
 - [Unified observability inspector](architecture/unified-observability-inspector.md)
   — read-only run, task, evidence, context, trace, and replay projections.
-- [Operator experience](architecture/operator-experience.md) — implementation-ready
+- [Operator experience](architecture/operator-experience.md) — explicit protocol contract with offline validation;
   scope, overview snapshot, deterministic next-action, CLI/TUI presentation,
   compatibility, and incremental delivery contract.
 - [Model metadata](architecture/model-metadata.md) — model profile evidence,
@@ -84,6 +84,9 @@ to re-create an abstraction that already exists in the runtime.
   authoritative for implementation status.
 
 ### Guides and references
+
+- [Provider API protocol](reference/api-protocol.md) — explicit Chat/Responses
+  selection, content/option limits, context accounting and resume diagnostics.
 
 - [Responses API implementation evidence](reference/responses-api-validation.md) —
   baseline validation and incremental offline implementation results.

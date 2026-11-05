@@ -1,11 +1,11 @@
 # Hufu × Fantasy：Responses API 明確協定設定實作規格
 
-> Status: implementation-ready
+> Status: active
 > Authority: normative
-> Verified-Commit: `9420c2f58118cb5647e582ace02cc840452cdfea`
+> Validation: [offline implementation evidence](../reference/responses-api-validation.md)
 > Supersedes: —
 > Superseded-By: —
-> 狀態：可開始實作；本文件未宣稱功能已完成。
+> 狀態：WP 0–6 已完成離線實作與驗證；真實端點驗證仍待另行授權。
 > 修訂日期：2026-11-05。
 > 程式查核基準：`9420c2f58118cb5647e582ace02cc840452cdfea`。
 > SDK 基準：`charm.land/fantasy v0.45.5`，以 repository 的 `go.mod`／`go.sum` 為準。
@@ -30,7 +30,7 @@
 
 ## 1. 查核基準與 SDK 限制
 
-| 位置 | 現況 | 實作要求 |
+| 位置 | 原始查核基準現況 | 實作要求 |
 |---|---|---|
 | `internal/agent/agent.go` | `newOpenAICompatProvider` 未傳 Responses options；boundary 啟用時會重新建 provider | 初建與 proxy rebuild 使用同一份不可變協定設定 |
 | `internal/config/config.go`、`cmd/hufu/backend_config.go` | provider 無 `api-protocol`；backend 的 `protocol` 供 agent backend 使用 | 新增獨立欄位並涵蓋 canonical／legacy、global／team merge |
@@ -188,7 +188,7 @@ WP 0 → 1 → 2 → 3 → 4 → 5 → 6。可分 commit，但 production 啟用
 
 ### 執行命令與資源規則
 
-從 repository root 執行，沿用 `.mise.toml`、`GOTOOLCHAIN=local`、既有 caches 與 `GOTMPDIR`。以下是實作時的驗收工作，本次文件修訂不執行 Go gates。
+從 repository root 執行，沿用 `.mise.toml`、`GOTOOLCHAIN=local`、既有 caches 與 `GOTMPDIR`。以下是實作驗收命令；實際結果與分階段重用的驗證記錄見 implementation evidence。
 
 - 建立唯一私人 task scratch：`mktemp -d /tmp/codex-task.XXXXXX`。將其記為 `task_tmp`，各命令傳入 `TMPDIR="$task_tmp"`。不覆寫 `GOTMPDIR` 或另建 caches。
 - heavyweight commands 循序執行，前後記錄 scratch／GOCACHE／GOTMPDIR 用量、相關 volumes free space 與 available RAM；遵守根目錄 AGENTS.md 的容量、cache provenance、清理規則。
@@ -228,3 +228,19 @@ TMPDIR="$task_tmp" GOMAXPROCS=2 mise exec -- go build -p 2 -o /dev/null ./cmd/hu
 - [Fantasy v0.45.5 Responses options](https://github.com/charmbracelet/fantasy/blob/v0.45.5/providers/openai/responses_options.go)：options 型別與 public model heuristics。
 - [OpenAI Responses migration](https://developers.openai.com/api/docs/guides/migrate-to-responses)：function schema、storage 與 stateless history。
 - [OpenAI reasoning guide](https://developers.openai.com/api/docs/guides/reasoning)：reasoning items 往返及 reasoning/output token 語意；首版無 reasoning replay，不宣稱涵蓋全部建議能力。
+
+## Unpublished release-note draft
+
+Added explicit `api-protocol: responses` for OpenAI-compatible LLM backends.
+Workers, coordinator and auxiliary models share the same provider-owned
+selection. Omitted configuration retains legacy Chat Completions behavior;
+explicit selection and its version are frozen for resume admission.
+
+Responses supports text and local function calls, conservative context
+admission, usage-presence accounting and terminal-verified streaming tool
+execution. Doctor and team check expose the selection without generation
+probes. The pinned SDK's reasoning and content limitations are documented in
+[Provider API protocol](../reference/api-protocol.md).
+
+Validation uses fake HTTP and offline integration tests. Real OpenAI endpoint
+verification and external publication are outside this draft's acceptance scope.
