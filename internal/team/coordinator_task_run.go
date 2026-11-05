@@ -1744,6 +1744,10 @@ retryLoop:
 								}
 								if identity, ok := c.activeTaskResultOccurrence(todoID); ok {
 									repairCtx = withSubmitResultRuntimeIdentity(repairCtx, identity)
+									// This authorized same-attempt continuation owns the
+									// result and its later transcript finalization too.
+									attemptIdentity, attemptIdentityOK = identity, true
+									activeOccurrence, activeOccurrenceOK = identity, true
 								}
 								repairCtx = withContextWindowRequestDescriptor(repairCtx, c.newContextWindowRequestDescriptorWithContext(repairCtx, resolvedModel, agentDef, repairTools.Tools, agentName, "protocol-repair"))
 								repairCtx = context.WithValue(repairCtx, hooks.AgentNameKey, agentName)
