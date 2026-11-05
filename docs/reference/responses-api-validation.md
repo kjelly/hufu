@@ -56,7 +56,7 @@ abandoned work directory and superseded CLI binary reclaimed about 230 MiB.
 | Phase | Status | Evidence |
 |---|---|---|
 | WP 0: pinned SDK wire contract | Complete | `internal/agent/responses_sdk_test.go`; offline HTTP transport, no live requests |
-| WP 1: configuration | Not started | — |
+| WP 1: configuration | Complete | Normalization, canonical/legacy config, merge and alias tests; production Responses remains gated |
 | WP 2: transport and fixtures | Not started | — |
 | WP 3: options, admission and settlement | Not started | — |
 | WP 4: durable binding and resume | Not started | — |
@@ -84,3 +84,29 @@ provider or depend on local listener permissions.
   after production integration.
 - Shared cache after this phase: approximately 26,490,040 KiB, around
   29 MiB above the exact post-baseline reading. No task binaries are retained.
+
+## WP 1: configuration
+
+Added `api-protocol`, preserving the empty legacy value and omitting the new
+field from legacy JSON/YAML serialization. Canonical backend assembly checks
+backend kind, rejects misplaced `protocol`/`api-protocol`, and normalizes the
+provider configuration. Provider alias equivalence includes the normalized
+protocol and preserves the explicit-versus-legacy distinction.
+
+The initial merge test exposed a specification assumption: CLI backend
+assembly replaces complete entries, while the legacy config file loader and
+`MergeProviderConfigs` inherit individual non-empty fields. Both existing
+behaviors are preserved; the specification now describes them separately.
+Explicit `chat-completions` resets an inherited Responses setting in field
+merges. Production provider-manager construction rejects Responses with
+`ErrResponsesNotEnabled` until the later integration gates are complete.
+
+- API-protocol/backend targeted tests in config, agent and CLI: passed, exit 0.
+- Complete config and agent package suites: passed, exit 0.
+- `mise run lint`: passed, exit 0, 0 issues.
+- Baseline full-suite evidence predates these source changes; full runtime
+  validation after integration remains required.
+- Shared cache allocated 27,049,580 KiB (about 575 MiB above the exact
+  post-baseline reading). Task scratch is approximately 1.3 MiB. Project export
+  paths are inventoried privately for provenance-aware cleanup of superseded
+  phase outputs; shared dependencies and configured cache locations are kept.

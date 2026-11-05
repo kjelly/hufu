@@ -1410,6 +1410,7 @@ type providerTarget struct {
 type providerConfigEquivalence struct {
 	providerURL       string
 	providerAPIKey    string
+	apiProtocol       string
 	introspectionType string
 	insecure          bool
 	maxConcurrent     int
@@ -1423,6 +1424,7 @@ func providerConfigEquivalenceOf(providerConfig config.ProviderConfig) providerC
 	return providerConfigEquivalence{
 		providerURL:       providerURL,
 		providerAPIKey:    providerConfig.ProviderAPIKey,
+		apiProtocol:       providerConfig.APIProtocol,
 		introspectionType: providerConfig.IntrospectionType,
 		insecure:          providerConfig.Insecure,
 		maxConcurrent:     providerConfig.MaxConcurrent,
@@ -1471,6 +1473,7 @@ func NewProviderManager(defaultURL, defaultKey string, providerConfigs map[strin
 		if err := providerConfig.Validate(); err != nil {
 			return nil, fmt.Errorf("invalid provider %q: %w", name, err)
 		}
+		providerConfig.APIProtocol, _ = config.NormalizeAPIProtocol(providerConfig.APIProtocol)
 		canonicalName := canonicalProviderName(name)
 		providerConfig.IntrospectionType = strings.ToLower(strings.TrimSpace(providerConfig.IntrospectionType))
 		if providerConfig.IntrospectionType == "" {
@@ -1517,6 +1520,11 @@ func NewProviderManager(defaultURL, defaultKey string, providerConfigs map[strin
 	}
 	if hasExplicitLocal {
 		canonicalConfigs["local"] = explicitLocalConfig
+	}
+	for name, cfg := range canonicalConfigs {
+		if cfg.APIProtocol == config.APIProtocolResponses {
+			return nil, fmt.Errorf("provider %q: %w", name, ErrResponsesNotEnabled)
+		}
 	}
 	// Keep the original default target for non-local providers that inherit a
 	// missing URL or key. The provider exposed as the local default must instead

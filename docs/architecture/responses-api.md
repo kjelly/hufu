@@ -87,7 +87,7 @@ API key 沿用現有 credential 機制，不新增 YAML 環境變數插值語法
 
 - 正規化採 trim + lowercase。持久化與錯誤輸出使用 canonical 值。
 - `api-protocol` 只適用 `kind: llm`；agent backend 填此欄位應拒絕。LLM backend 錯填 agent 用的 `protocol` 時給明確診斷。
-- canonical backend → legacy provider adapter 必須傳遞此欄位。global／team override 沿用現有整筆 entry 覆寫語意，不新增欄位級 merge。
+- canonical backend → legacy provider adapter 必須傳遞此欄位。保留各層既有 merge 語意：`applyConfiguredBackends` 的 global／team 同 raw key 採整筆 entry 覆寫；config 檔案 loader 的 legacy providers 及 `MergeProviderConfigs` 採非空欄位覆寫。後兩者的空白 protocol 繼承前層，要取消前層 Responses 時明確填 `chat-completions`。不因本功能改變其他欄位的繼承方式。
 - 不同 raw key 被 canonicalize 成同名時，沿用現有拒絕／equivalence 規則，不透過 map iteration 決定協定。測試 legacy 空值與 explicit Chat 的身分差異。
 - 舊 exported constructors 保持原簽名與 legacy Chat 預設；新增 private factory/options 傳遞設定。
 - 不新增 CLI、agent frontmatter 或 model-output 協定覆寫來源。
