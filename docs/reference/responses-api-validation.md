@@ -135,3 +135,34 @@ is restricted to POST requests ending in `/chat/completions`.
   After confirming no validation consumers remained, their exact paths were
   removed, reclaiming 134,431,922 bytes. Shared dependencies were preserved.
   Post-cleanup shared cache: 27,359,304 KiB; scratch: approximately 1.3 MiB.
+
+## WP 3: admission, terminal safety and usage accounting
+
+Explicit Responses requests now validate supported content and options before
+admission or invocation commit. The conservative UTF-8 estimate includes tool
+schemas, object-generation tools and Responses options. Explicit credentials
+also fence the SDK's environment-key fallback.
+
+- Complete agent, sidecar, scripted and providerproxy race suites: passed,
+  exit 0. The relevant team provider/admission/context/profile suite passed,
+  exit 0 (52.153 seconds).
+- All four Fantasy entry points reject incompatible settings and media with
+  zero HTTP calls, commits or reservations. Captured requests cover CJK,
+  emoji, long tool schemas and structured output.
+- Usage tests distinguish absent, invalid and explicit-zero counters; cached
+  input and reasoning output are normalized once. Failed terminal responses
+  retain observed usage without quota replay. Cancellation and consumer-stop
+  tests verify a single settlement and release.
+- The pinned SDK can emit function calls before the terminal event. Responses
+  streaming now buffers those calls, with a byte limit, until a completed
+  terminal response is verified. Incomplete/failed/EOF fixtures never deliver
+  incomplete tool calls. One-byte CRLF and multiline SSE tests cover both
+  Stream and StreamObject.
+- No real provider endpoint or credentials were used. Live OpenAI verification
+  remains outside this implementation's acceptance criteria, pending separate
+  user authorization.
+- `mise run lint`: passed, 0 issues. Shared cache allocated 28,828,580 KiB;
+  task scratch approximately 1.4 MiB. Another checkout concurrently uses the
+  shared cache, so total growth is not attributable to this task alone.
+- Removed 18 exact superseded phase-2 archives, reclaiming 134,156,298 bytes;
+  ownership was checked against the source-root marker, preserving shared dependencies.

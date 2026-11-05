@@ -39,6 +39,7 @@ func (t toolCallIndexTransport) RoundTrip(req *http.Request) (*http.Response, er
 	resp, err := t.base.RoundTrip(req)
 	if err == nil {
 		observeProviderRejection(req.Context(), resp)
+		observeResponsesBody(req, resp)
 	}
 	if err != nil || resp == nil || resp.Body == nil || !isEventStream(resp.Header) ||
 		req.Method != http.MethodPost || !strings.HasSuffix(req.URL.Path, "/chat/completions") {

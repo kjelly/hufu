@@ -1100,14 +1100,23 @@ func NewOllamaProvider(baseURL, apiKey, name string) (*OpenAICompatibleProvider,
 func (p *OpenAICompatibleProvider) LanguageModel(ctx context.Context, modelID string) (fantasy.LanguageModel, error) {
 	model := p.modelName(modelID)
 	baseURL, client, boundary := p.effectiveBaseURL()
-	if !boundary {
-		return p.provider.LanguageModel(ctx, model)
+	resolution := p.apiProtocol
+	if resolution.Effective == "" {
+		resolution, _ = ResolveAPIProtocol("")
 	}
-	proxyProvider, err := newOpenAICompatProviderWithProtocol(baseURL, p.apiKey, p.name, client, p.apiProtocol)
+	provider := p.provider
+	if boundary {
+		var err error
+		provider, err = newOpenAICompatProviderWithProtocol(baseURL, p.apiKey, p.name, client, resolution)
+		if err != nil {
+			return nil, err
+		}
+	}
+	inner, err := provider.LanguageModel(ctx, model)
 	if err != nil {
 		return nil, err
 	}
-	return proxyProvider.LanguageModel(ctx, model)
+	return &protocolLanguageModel{LanguageModel: inner, resolution: resolution}, nil
 }
 
 func (p *OpenAICompatibleProvider) modelName(modelID string) string {

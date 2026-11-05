@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"context"
 	json "encoding/json/v2"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +17,43 @@ import (
 	"github.com/kjelly/hufu/internal/providerproxy"
 	"github.com/kjelly/hufu/internal/scripted"
 )
+
+func TestResponsesReconcilesTrustedFixtureUsage(t *testing.T) {
+	for _, usage := range []*scripted.Usage{nil, {}, {InputTokens: 1, OutputTokens: 2}} {
+		t.Run(fmt.Sprint(usage), func(t *testing.T) {
+			fixture := scripted.NewObservedProvider("custom", []scripted.Step{{Content: "done", Usage: usage}}, func(ctx context.Context, value *scripted.Usage) {
+				var observed *ProviderInvocationUsage
+				if value != nil {
+					observed = &ProviderInvocationUsage{InputTokens: value.InputTokens, OutputTokens: value.OutputTokens, TotalTokens: value.InputTokens + value.OutputTokens}
+				}
+				ObserveProviderResponseUsage(ctx, observed)
+			})
+			boundary, err := scripted.NewBoundary(t.Context(), fixture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer boundary.Stop()
+			provider, err := newConfiguredOpenAICompatibleProvider(scripted.Endpoint, "", "remote", config.APIProtocolResponses)
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider.setBoundary(boundary.URL(), boundary.HTTPClient())
+			inner, err := provider.LanguageModel(t.Context(), "remote/custom")
+			if err != nil {
+				t.Fatal(err)
+			}
+			admission := &settlingAdmission{recordingAdmission: &recordingAdmission{}}
+			model := NewAdmittedLanguageModel("remote/custom", inner, admission)
+			if _, err := model.Generate(t.Context(), fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("question")}}); err != nil {
+				t.Fatal(err)
+			}
+			results := admission.snapshotSettlements()
+			if len(results) != 1 || results[0].result.UsageReported != (usage != nil) {
+				t.Fatalf("settlements=%v", results)
+			}
+		})
+	}
+}
 
 func TestProviderProtocolAcrossBoundaries(t *testing.T) {
 	for _, protocol := range []string{"", config.APIProtocolChatCompletions, config.APIProtocolResponses} {
@@ -136,9 +175,17 @@ func TestResponsesScriptedToolRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	lm = NewAdmittedLanguageModel("remote/custom", lm, &recordingAdmission{})
+	var requests []string
+	var requestMu sync.Mutex
+	ctx := WithProviderTransportObserver(t.Context(), func(_ context.Context, observation ProviderTransportObservation) {
+		requestMu.Lock()
+		defer requestMu.Unlock()
+		requests = append(requests, string(observation.RequestBody))
+	})
 	prompt := fantasy.Prompt{fantasy.NewUserMessage("question")}
 	call := fantasy.Call{Prompt: prompt, Tools: []fantasy.Tool{fantasy.FunctionTool{Name: "lookup", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string"}}}}}}
-	response, err := lm.Generate(t.Context(), call)
+	response, err := lm.Generate(ctx, call)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,11 +198,70 @@ func TestResponsesScriptedToolRoundTrip(t *testing.T) {
 		fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: calls[0].ToolCallID, Output: fantasy.ToolResultOutputContentText{Text: "tool-result-marker"}}}},
 	)
 	call.Prompt = prompt
-	response, err = lm.Generate(t.Context(), call)
+	response, err = lm.Generate(ctx, call)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if response.Content.Text() != "answer" || len(script.Issues()) != 0 {
 		t.Fatalf("response=%+v issues=%v", response, script.Issues())
+	}
+	requestMu.Lock()
+	defer requestMu.Unlock()
+	if len(requests) != 2 {
+		t.Fatalf("captured requests=%d", len(requests))
+	}
+	var second struct {
+		Input []struct {
+			Type   string `json:"type"`
+			Name   string `json:"name"`
+			Output string `json:"output"`
+			CallID string `json:"call_id"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal([]byte(requests[1]), &second); err != nil {
+		t.Fatal(err)
+	}
+	var foundCall, foundResult bool
+	for _, item := range second.Input {
+		if item.Type == "function_call" && item.Name == "lookup" && item.CallID == calls[0].ToolCallID {
+			foundCall = true
+		}
+		if item.Type == "function_call_output" && item.Output == "tool-result-marker" && item.CallID == calls[0].ToolCallID {
+			foundResult = true
+		}
+	}
+	if !foundCall || !foundResult {
+		t.Fatalf("call/result identity lost in second request: %s", requests[1])
+	}
+}
+
+func TestResponsesUsesOnlyConfiguredCredential(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "environment-fixture-key")
+	for _, key := range []string{"", "configured-fixture-key"} {
+		t.Run(key, func(t *testing.T) {
+			provider, err := newConfiguredOpenAICompatibleProvider("https://fixture.invalid/v1", key, "remote", config.APIProtocolResponses)
+			if err != nil {
+				t.Fatal(err)
+			}
+			authorization := "unobserved"
+			provider.setBoundary("https://fixture.invalid/v1", &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				authorization = request.Header.Get("Authorization")
+				return sdkJSONResponse(`{"status":"completed","output":[]}`, 200), nil
+			})})
+			model, err := provider.LanguageModel(t.Context(), "remote/custom")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = model.Generate(t.Context(), fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("question")}}); err != nil {
+				t.Fatal(err)
+			}
+			want := ""
+			if key != "" {
+				want = "Bearer " + key
+			}
+			if authorization != want {
+				t.Fatalf("authorization=%q want configured fixture credential", authorization)
+			}
+		})
 	}
 }

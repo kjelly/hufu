@@ -1,9 +1,12 @@
 package team
 
 import (
+	"charm.land/fantasy/schema"
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 
 	"charm.land/fantasy"
@@ -338,5 +341,54 @@ func providerAdmissionTestContext(t *testing.T, modelID string) agent.ProviderAd
 	return agent.ProviderAdmissionContext{
 		ModelID: modelID, ProviderIdentity: "ollama", ProviderBaseURL: "http://localhost:11434/v1", Bound: true,
 		ContextWindow: 8_192, MaxOutputTokens: 64, SafetyMarginTokens: 32, ProfileTelemetryJSON: string(encoded),
+	}
+}
+
+func TestResponsesAdmissionCapacityBoundary(t *testing.T) {
+	resolution, _ := agent.ResolveAPIProtocol("responses")
+	for _, object := range []bool{false, true} {
+		for _, delta := range []int{-1, 0} {
+			name := "call"
+			if object {
+				name = "object"
+			}
+			if delta < 0 {
+				name += "/over_capacity"
+			} else {
+				name += "/exact_capacity"
+			}
+			t.Run(name, func(t *testing.T) {
+				prompt := fantasy.Prompt{fantasy.NewUserMessage(strings.Repeat("中文🙂", 200))}
+				request := agent.ProviderRequest{ModelID: "remote/custom", AdmissionContext: agent.ProviderAdmissionContext{ModelID: "remote/custom", APIProtocol: resolution, Bound: true, MaxOutputTokens: 64, SafetyMarginTokens: 32}}
+				if object {
+					request.ObjectCall = &fantasy.ObjectCall{Prompt: prompt, MaxOutputTokens: new(int64(64)), Schema: schema.Generate(reflect.TypeFor[struct {
+						Value string `json:"value"`
+					}]())}
+				} else {
+					request.Call = &fantasy.Call{Prompt: prompt, MaxOutputTokens: new(int64(64)), Tools: []fantasy.Tool{fantasy.FunctionTool{Name: "lookup", Description: strings.Repeat("schema description", 100), InputSchema: map[string]any{"type": "object"}}}}
+				}
+				tokens, err := defaultCounter.CountProviderRequest(t.Context(), request.ModelID, request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				floor, err := agent.CountProviderRequestTokens(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tokens < floor {
+					t.Fatalf("counter=%d conservative floor=%d", tokens, floor)
+				}
+				request.AdmissionContext.ContextWindow = tokens + 64 + 32 + delta
+				err = (providerRequestAdmission{}).AdmitProviderRequest(t.Context(), request)
+				var fit *CannotFitError
+				if delta < 0 {
+					if !errors.As(err, &fit) || !fit.ProvenNoSend {
+						t.Fatalf("admission=%v", err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
 	}
 }

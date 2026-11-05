@@ -98,7 +98,7 @@ func (p Profile) apply(call *fantasy.AgentCall, model fantasy.LanguageModel) {
 	temp := p.Temperature
 	call.Temperature = &temp
 	if agent.ValidReasoningEfforts[p.ReasoningEffort] {
-		call.ProviderOptions = agent.ReasoningEffortProviderOptions(model, p.ReasoningEffort)
+		call.ProviderOptions = agent.MergeReasoningEffortProviderOptions(model, call.ProviderOptions, p.ReasoningEffort)
 	}
 }
 

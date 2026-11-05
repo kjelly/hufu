@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"slices"
 	"sync"
 	"time"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openaicompat"
 	"charm.land/fantasy/schema"
+	"github.com/kjelly/hufu/internal/config"
 )
 
 // ProviderRequest is the provider-equivalent request shape used by Hufu's
@@ -34,6 +36,7 @@ type ProviderRequest struct {
 // ProviderAdmissionContext is the immutable, provider-bound capacity used by
 // pre-provider admission. It contains no credential material.
 type ProviderAdmissionContext struct {
+	APIProtocol      APIProtocolResolution `json:"api_protocol,omitzero"`
 	ModelID          string
 	ProviderIdentity string
 	ProviderBaseURL  string
@@ -56,13 +59,19 @@ type ProviderAdmissionContext struct {
 // A bound context must not be replaced with global model metadata when its
 // capacity is unavailable.
 func (c ProviderAdmissionContext) IsBound() bool {
-	return c.Bound || c.ProviderIdentity != "" || c.ProviderBaseURL != ""
+	return c.Bound || c.ProviderIdentity != "" || c.ProviderBaseURL != "" || c.APIProtocol.Requested != ""
 }
 
 // SerializeProviderRequest returns the compact OpenAI-compatible request body
 // used for admission. Fantasy's exported prompt conversion is the source of
 // truth for message and multimodal wire representation.
 func SerializeProviderRequest(request ProviderRequest) ([]byte, error) {
+	if request.AdmissionContext.APIProtocol.Effective == config.APIProtocolResponses {
+		return serializeResponsesAdmissionEstimate(request)
+	}
+	if protocol := request.AdmissionContext.APIProtocol.Effective; protocol != "" && protocol != config.APIProtocolChatCompletions {
+		return nil, ErrProtocolBinding
+	}
 	call, err := requestCall(request)
 	if err != nil {
 		return nil, err
@@ -99,6 +108,9 @@ func requestCall(request ProviderRequest) (*fantasy.Call, error) {
 		call = &fantasy.Call{Prompt: request.Messages}
 	}
 	if len(request.Tools) > 0 {
+		cloned := *call
+		cloned.Tools = slices.Clone(call.Tools)
+		call = &cloned
 		for _, tool := range request.Tools {
 			if tool == nil {
 				continue
@@ -163,10 +175,11 @@ func CountProviderRequestTokens(request ProviderRequest) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("serialize provider request: %w", err)
 	}
-	return (len(data) + 3) / 4, nil
+	return max((len(data)+3)/4, ProviderRequestTokenFloor(request, data)), nil
 }
 
 type admittedLanguageModel struct {
+	protocolErr         error
 	modelID             string
 	inner               fantasy.LanguageModel
 	admission           RequestAdmission
@@ -251,11 +264,21 @@ func NewAdmittedLanguageModelWithContext(modelID string, inner fantasy.LanguageM
 	if context.ModelID == "" {
 		context.ModelID = modelID
 	}
+	var protocolErr error
+	if _, bound := inner.(interface{ APIProtocol() APIProtocolResolution }); bound {
+		resolution := ModelAPIProtocol(inner)
+		if context.APIProtocol.Effective != "" && context.APIProtocol != resolution {
+			protocolErr = ErrProtocolBinding
+		}
+		if resolution.Requested != "" || context.APIProtocol.Effective != "" {
+			context.APIProtocol = resolution
+		}
+	}
 	limiter, _ := admission.(InvocationLimiter)
 	committer, _ := admission.(ProviderInvocationCommitter)
 	settler, _ := admission.(ProviderInvocationSettler)
 	return &admittedLanguageModel{
-		modelID: modelID, inner: inner, admission: admission,
+		modelID: modelID, inner: inner, admission: admission, protocolErr: protocolErr,
 		invocationLimiter: limiter, admissionContext: context,
 		invocationCommitter: committer, invocationSettler: settler,
 	}
@@ -299,10 +322,10 @@ func (s *providerStreamState) result(ctx context.Context) ProviderInvocationResu
 	switch {
 	case ctx.Err() != nil:
 		outcome = ProviderInvocationCancelled
-	case s.abandoned:
-		outcome = ProviderInvocationStreamAbandoned
 	case s.providerError:
 		outcome = ProviderInvocationProviderError
+	case s.abandoned:
+		outcome = ProviderInvocationStreamAbandoned
 	}
 	return ProviderInvocationResult{Usage: s.usage, Outcome: outcome, ResponseObserved: s.responseObserved}
 }
@@ -427,7 +450,7 @@ func (m *admittedLanguageModel) generateOnce(ctx context.Context, call fantasy.C
 		result.Usage = providerInvocationUsage(response.Usage)
 	}
 	m.settleInvocation(ctx, request, result)
-	return response, wrapProviderRejection(providerErr, response != nil)
+	return response, wrapProviderRejection(providerErr, response != nil || responsesWireObserved(ctx))
 }
 
 func (m *admittedLanguageModel) streamOnce(ctx context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
@@ -466,7 +489,7 @@ func (m *admittedLanguageModel) streamOnce(ctx context.Context, call fantasy.Cal
 	if err != nil {
 		stopCancellation()
 		finalize(ProviderInvocationResult{Outcome: providerInvocationOutcome(ctx, err)})
-		return nil, wrapProviderRejection(err, false)
+		return nil, wrapProviderRejection(err, responsesWireObserved(streamCtx))
 	}
 	return admittedStream(ctx, stream, state, cancel, stopCancellation, finalize, func(part fantasy.StreamPart) (*ProviderInvocationUsage, bool) {
 		return reportedProviderInvocationUsage(part.Usage), part.Error != nil || part.Type == fantasy.StreamPartTypeError
@@ -495,7 +518,7 @@ func (m *admittedLanguageModel) generateObjectOnce(ctx context.Context, call fan
 		result.Usage = providerInvocationUsage(response.Usage)
 	}
 	m.settleInvocation(ctx, request, result)
-	return response, wrapProviderRejection(providerErr, response != nil)
+	return response, wrapProviderRejection(providerErr, response != nil || responsesWireObserved(ctx))
 }
 
 func (m *admittedLanguageModel) streamObjectOnce(ctx context.Context, call fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
@@ -530,7 +553,7 @@ func (m *admittedLanguageModel) streamObjectOnce(ctx context.Context, call fanta
 	if err != nil {
 		stopCancellation()
 		finalize(ProviderInvocationResult{Outcome: providerInvocationOutcome(ctx, err)})
-		return nil, wrapProviderRejection(err, false)
+		return nil, wrapProviderRejection(err, responsesWireObserved(streamCtx))
 	}
 	return admittedStream(ctx, stream, state, cancel, stopCancellation, finalize, func(part fantasy.ObjectStreamPart) (*ProviderInvocationUsage, bool) {
 		return reportedProviderInvocationUsage(part.Usage), part.Error != nil || part.Type == fantasy.ObjectStreamPartTypeError
@@ -544,6 +567,16 @@ func (m *admittedLanguageModel) Model() string { return m.inner.Model() }
 // recover retries only a rejected provider request. The single-call methods
 // settle and release every invocation before this policy can wait or resend.
 func (m *admittedLanguageModel) recover[T any](ctx context.Context, request ProviderRequest, once func() (T, bool, error)) (T, error) {
+	if m.protocolErr != nil {
+		var zero T
+		return zero, m.protocolErr
+	}
+	validation := request
+	validation.ModelID = m.inner.Model()
+	if err := validateResponsesRequest(validation); err != nil {
+		var zero T
+		return zero, err
+	}
 	recovery, _ := m.admission.(ProviderRequestRecovery)
 	for {
 		var zero T

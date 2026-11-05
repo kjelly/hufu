@@ -76,7 +76,7 @@ providers:
     api-protocol: responses
 ```
 
-API key 沿用現有 credential 機制，不新增 YAML 環境變數插值語法。
+API key 沿用現有 credential 機制，不新增 YAML 環境變數插值語法。Responses factory 明確傳入 Hufu 已解析的 key（含空值），禁止 SDK 自行從 `OPENAI_API_KEY` 引入未納入 provider identity 的 credential；legacy Chat 的既有行為不變。
 
 | 輸入 | 有效協定 | 身分語意 |
 |---|---|---|
@@ -128,12 +128,12 @@ API key 沿用現有 credential 機制，不新增 YAML 環境變數插值語法
 
 - 在 `ProviderAdmissionContext`／`ProviderRequest` 傳遞已綁定 effective protocol。空值相容既有 Chat 路徑；計數器不得重跑模型 heuristic。
 - 保留 Chat serializer；新增明確標為 estimate 的 Responses serializer，不複製 Fantasy 私有 encoder。
-- Responses estimate 涵蓋 system／developer／user／assistant 文字、function names／descriptions／完整 schema、tool arguments／results、call IDs、角色／item 邊界及 structured-output schema。`GenerateObject`／`StreamObject` 不得因使用不同 schema 位置而漏算。
+- Responses estimate 涵蓋 system（包含 SDK 轉成 developer 的內容）／user／assistant 文字、function names／descriptions／完整 schema、tool arguments／results、call IDs、角色／item 邊界及 structured-output schema。`GenerateObject`／`StreamObject` 不得因使用不同 schema 位置而漏算。
 - 首版 Responses 只接受文字及 function call/result 內容。image／audio／file 等 multimodal 請求在 transport 前拒絕；Chat 的既有媒體行為不變。刪除原計畫對 Responses multimodal 完整支援的承諾。
 - estimator 明列版本與公式：對完整估算表示使用 UTF-8 byte length 作保守文字基數，再加每個 input item／tool 的固定 overhead；與現有模型估算取較大值，最後使用現有 safety margin 與 output reservation。固定 overhead 常數須命名、註解來源與測試。不得繼續採 `len(json)/4` 作 Responses 的保守基數。
 - 這是估算，不能宣稱為任意 provider tokenizer 的數學上界。未知 context capacity 沿用現有 fail-closed 規則，不能因協定改變而取得較寬鬆的容量。
 - `max_output_tokens` 包含 reasoning 與可見輸出；reservation 與實際有效 max output 一致。
-- 用 fake upstream capture 的實際 wire payload 建立獨立比較器：驗證上述每項內容均被估算涵蓋，且 estimate 至少覆蓋對 captured input／tools／output schema 使用同一保守公式的結果。忽略不屬於 input token 的 transport 欄位，不能把 Chat estimate 當唯一 oracle。
+- 用 fake upstream capture 的實際 wire payload 建立獨立比較器：驗證上述每項內容均被估算涵蓋，且 estimate 至少覆蓋 captured input／tools／tool choice／output schema 的實際 JSON UTF-8 bytes 加上 base allowance。實際 wire JSON 已含 item/tool framing；logical estimate 的逐項 allowance 用來補足這些 framing 與 SDK defaults，不在 wire oracle 重複加一次。忽略不屬於 input token 的 transport 欄位，不能把 Chat estimate 當唯一 oracle。
 - 邊界測試驗證 estimate + reserved output + safety margin 超過容量時零 generation；涵蓋中文、emoji、長 history、多工具、大 schema、structured output 與空輸入。錯誤不能靠縮小 fixture、跳過 assertion 或提高容量解決。
 
 ## 6. Usage、串流與結果契約
@@ -142,7 +142,7 @@ API key 沿用現有 credential 機制，不新增 YAML 環境變數插值語法
 - 核對 raw Responses usage、Fantasy normalized usage 和 ledger：API input 包含 cached input，reasoning 屬於 output；按照現有 normalized representation 結算，禁止再次扣除 cache 或再次加上 reasoning。
 - 分別測 usage 缺席、明確全零、cached、reasoning、取消與有 terminal usage 的失敗。不能把 SDK 零值視為上游真的回報零。
 - 必要時在 host-owned transport 保留 usage presence，覆用既有 trusted observation seam；不得以模型輸出作為用量證據。測 non-stream 與 stream，觀察器不能消耗掉下游的 body。
-- 分別處理 `response.completed`、`response.incomplete`、`response.failed`、無終止事件 EOF、取消與 consumer 提早停止。異常結束不得被當作成功結果。
+- 分別處理 `response.completed`、`response.incomplete`、`response.failed`、無終止事件 EOF、取消與 consumer 提早停止。異常結束不得被當作成功結果。以 bounded host-owned metadata observer 核對 terminal status，補足 pinned SDK 對部分 incomplete reason 仍回傳 tool-call finish 的限制；不以此 observer 組裝生成內容或取代 SDK parser。單一 JSON／SSE event data（含多行合併）超過既有 `maxObservedProviderBody` 上限而無法核對終止狀態時，observer 仍不得截斷或改寫回應 bytes，但須拒絕接受結果或派發工具，用量維持 unknown。
 - 多個 parallel function calls 的 ID／name／arguments 不混淆。未完成、異常終止或不合法的 arguments 不得執行工具；測 local tool authorization 與各工具的執行次數。
 - 驗證 `result-transport: runtime` 的 collector，以及 `tool` 的 `submit_result`。沿用 schema validation、runtime-owned fields、bounded repair、持久化／replay 與 idempotency，不修改語意判斷去迎合格式。
 

@@ -7,6 +7,7 @@ import (
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openaicompat"
+	"github.com/charmbracelet/openai-go/option"
 
 	"github.com/kjelly/hufu/internal/config"
 )
@@ -14,6 +15,10 @@ import (
 // ErrResponsesNotEnabled fences production construction until admission,
 // accounting, durable binding and integration gates have been implemented.
 var ErrResponsesNotEnabled = errors.New("api-protocol responses is not enabled yet")
+
+// apiProtocolBindingVersion covers the pinned adapter capability rules and
+// admission estimate semantics too. Bump it when those change after release.
+const apiProtocolBindingVersion = 1
 
 // APIProtocolResolution is copied into provider-owned transport policy. It
 // never interprets a model name, endpoint name, or model-authored input.
@@ -29,7 +34,7 @@ func ResolveAPIProtocol(raw string) (APIProtocolResolution, error) {
 	if err != nil {
 		return APIProtocolResolution{}, err
 	}
-	resolution := APIProtocolResolution{Requested: requested, Effective: requested, Source: "explicit", Version: 1}
+	resolution := APIProtocolResolution{Requested: requested, Effective: requested, Source: "explicit", Version: apiProtocolBindingVersion}
 	if requested == "" {
 		resolution.Effective = config.APIProtocolChatCompletions
 		resolution.Source = "legacy"
@@ -66,8 +71,29 @@ func newOpenAICompatProviderWithProtocol(baseURL, apiKey, name string, client *h
 		openaicompat.WithUseResponsesAPI(),
 		openaicompat.WithResponsesAPIFunc(func(string) bool { return responses }),
 	}
+	if responses {
+		// Prevent the SDK from introducing an environment credential outside the
+		// provider identity and the Hufu-owned boundary's configured key.
+		options = append(options, openaicompat.WithSDKOptions(option.WithAPIKey(apiKey)))
+	}
 	if apiKey != "" {
 		options = append(options, openaicompat.WithAPIKey(apiKey))
 	}
 	return openaicompat.New(options...)
+}
+
+// ResolveAPIProtocol returns the effective provider's transport binding. It
+// follows normal routing/fallback and never selects a protocol by model name.
+func (pm *ProviderManager) ResolveAPIProtocol(modelID string) (APIProtocolResolution, error) {
+	if pm == nil {
+		return APIProtocolResolution{}, fmt.Errorf("provider manager unavailable")
+	}
+	provider := pm.GetProvider(modelID)
+	if provider == nil {
+		return APIProtocolResolution{}, fmt.Errorf("no provider for model %q", modelID)
+	}
+	if provider.apiProtocol.Effective == "" {
+		return ResolveAPIProtocol("")
+	}
+	return provider.apiProtocol, nil
 }

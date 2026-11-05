@@ -234,6 +234,9 @@ func (r *ModelProfileRuntime) ResolveAdmission(ctx context.Context, modelID stri
 	} else {
 		result.Admission = admissionContextFromProfile(modelID, ref, profile, safetyMargin)
 	}
+	if protocol, protocolErr := r.manager.ResolveAPIProtocol(modelID); protocolErr == nil && protocol.Requested != "" {
+		result.Admission.APIProtocol = protocol
+	}
 	result.ProfileResolution = modelprofile.TelemetryFromProfile(profile)
 	if result.Admission.IsBound() {
 		telemetry, _ := json.Marshal(result.ProfileResolution)

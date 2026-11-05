@@ -481,7 +481,7 @@ func (tc *DefaultTokenCounter) CountProviderRequest(ctx context.Context, modelID
 		return 0, err
 	}
 	estimator := tc.estimatorForAdmission(modelID, request.AdmissionContext)
-	return estimateTextTokens(string(data), estimator), nil
+	return max(estimateTextTokens(string(data), estimator), agent.ProviderRequestTokenFloor(request, data)), nil
 }
 
 // estimateTextTokens calculates tokens using character density and model-family heuristics with conservative safety margin.
