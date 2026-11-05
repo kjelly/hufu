@@ -49,10 +49,14 @@ spec:
 		t.Fatal(err)
 	}
 	opts.imagePaths, opts.agentTeamName = []string{path, path}, "image-preview"
-	segments := []team.PromptSegment{{Type: team.SegmentSwitchTeam, Name: "image-preview"},
-		{Type: team.SegmentInvokeAgent, Name: "analyst", Content: "Describe these images."}}
-	if err := executeNativeImageDryRun(t.Context(), segments, map[string]*teamContext{"image-preview": tc}); err != nil {
-		t.Fatal(err)
+	for _, segments := range [][]team.PromptSegment{
+		{{Type: team.SegmentSwitchTeam, Name: "image-preview"}, {Type: team.SegmentInvokeAgent, Name: "analyst", Content: "Describe these images."}},
+		{{Type: team.SegmentSwitchTeam, Name: "image-preview", Content: "Describe these images."}},
+		{{Type: team.SegmentSwitchTeam, Name: "image-preview"}, {Type: team.SegmentText, Content: "Describe these images."}},
+	} {
+		if err := executeNativeImageDryRun(t.Context(), segments, map[string]*teamContext{"image-preview": tc}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if requests.Load() != 0 || len(tc.coordinator.TaskTracker().TodoList().Items()) != 0 {
 		t.Fatal("image preview entered a provider or task execution")

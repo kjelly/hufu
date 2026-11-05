@@ -97,6 +97,13 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 		return "", err
 	}
 	var err error
+	tasks, err = c.bindDelegatedImageInputs(ctx, tasks)
+	if err != nil {
+		return "", err
+	}
+	if err := validateNativeMediaBatch(tasks); err != nil {
+		return "", err
+	}
 	// Bind once before expansion so a static contract can contribute its
 	// artifact-backed FanOut definition to the coordinator's minimal goal
 	// request. A second binding pass below preserves the historical behavior of

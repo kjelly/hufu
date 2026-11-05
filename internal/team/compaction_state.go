@@ -1766,6 +1766,27 @@ func indexCompactionAttestations(state *ConversationCompactionState, lineage []R
 	if limit < 0 {
 		limit = 0
 	}
+	// Retention removes superseded bodies, while the append-only event log
+	// retains their attestations. Only an exactly attested retained snapshot
+	// in the same branch proves that an earlier body is no longer required.
+	retainedFloor := make(map[string]int)
+	for index, event := range lineage[:limit] {
+		if event.Type != compactionCheckpointEventType {
+			continue
+		}
+		ref, err := compactionCheckpointReferenceFromEvent(event)
+		if err != nil {
+			continue
+		}
+		checkpoint, ok := findCompactionCheckpoint(state, ref)
+		generation, generationExists := state.Generations[ref.GenerationID]
+		if !ok || !generationExists || !compactionCheckpointAttestationMatches(event, checkpoint, generation) {
+			continue
+		}
+		if _, exists := retainedFloor[ref.BranchID]; !exists {
+			retainedFloor[ref.BranchID] = index
+		}
+	}
 	for index, event := range lineage[:limit] {
 		if event.Type != compactionGenerationEventType {
 			if event.Type != compactionCheckpointEventType {
@@ -1778,11 +1799,17 @@ func indexCompactionAttestations(state *ConversationCompactionState, lineage []R
 			if effectiveEventBranchID(event) != ref.BranchID {
 				return nil, nil, errors.New("compaction checkpoint attestation has cross-branch event identity")
 			}
-			generation, ok := state.Generations[ref.GenerationID]
-			if !ok || generation.BranchID != ref.BranchID || ref.GenerationChecksum != generation.Checksum {
+			generation, generationExists := state.Generations[ref.GenerationID]
+			if generationExists && (generation.BranchID != ref.BranchID || ref.GenerationChecksum != generation.Checksum) {
 				return nil, nil, fmt.Errorf("compaction checkpoint attestation for generation %q does not match canonical generation", ref.GenerationID)
 			}
 			checkpoint, ok := findCompactionCheckpoint(state, ref)
+			if !ok {
+				floor, retained := retainedFloor[ref.BranchID]
+				if retained && index < floor && event.ID == "compaction-checkpoint-event-"+ref.CheckpointDigest && validCompactionDigest(ref.CheckpointDigest) && validCompactionDigest(ref.GenerationChecksum) {
+					continue
+				}
+			}
 			if !ok || checkpointAttestationMode(checkpoint) != compactionCheckpointAttestationMode {
 				return nil, nil, fmt.Errorf("compaction checkpoint attestation %q does not match canonical checkpoint", event.ID)
 			}
@@ -1798,6 +1825,10 @@ func indexCompactionAttestations(state *ConversationCompactionState, lineage []R
 		}
 		generation, ok := state.Generations[ref.GenerationID]
 		if !ok {
+			floor, retained := retainedFloor[ref.BranchID]
+			if retained && index < floor && effectiveEventBranchID(event) == ref.BranchID && event.ID == compactionGenerationEventID(ref.GenerationID) && validCompactionDigest(ref.Checksum) {
+				continue
+			}
 			return nil, nil, fmt.Errorf("compaction generation %q attestation references an unknown generation", ref.GenerationID)
 		}
 		if effectiveEventBranchID(event) != ref.BranchID {
@@ -1812,6 +1843,11 @@ func indexCompactionAttestations(state *ConversationCompactionState, lineage []R
 		generationEvents[ref.GenerationID] = append(generationEvents[ref.GenerationID], compactionIndexedEvent{event: event, index: index})
 	}
 	return generationEvents, checkpointEvents, nil
+}
+
+func validCompactionDigest(value string) bool {
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == sha256.Size && value == strings.ToLower(value)
 }
 
 func validateCompactionCheckpointContext(state *ConversationCompactionState, branchID string, checkpoint ConversationCompactionCheckpoint, lineageIndexes map[string]int, allEventsByID map[string]RunEvent, generationEvents map[string][]compactionIndexedEvent, checkpointEvents map[string]RunEvent, throughEventID string, cutoff int) (compactionAttestationGap, bool, error) {

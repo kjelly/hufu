@@ -16,21 +16,30 @@ func executeNativeImageDryRun(ctx context.Context, segments []team.PromptSegment
 	for _, segment := range segments {
 		if segment.Type == team.SegmentSwitchTeam {
 			selected = segment.Name
-			continue
 		}
-		if segment.Type != team.SegmentInvokeAgent || strings.TrimSpace(segment.Content) == "" {
+		if strings.TrimSpace(segment.Content) == "" {
 			continue
 		}
 		tc := loadedTeams[selected]
 		if tc == nil || tc.coordinator == nil {
 			return fmt.Errorf("image preview requires one loaded team")
 		}
-		preview, err := tc.coordinator.PreviewNativeImageTask(ctx, segment.Name, segment.Content, team.MediaTurnRequest{Images: opts.imagePaths})
+		var preview team.NativeImagePreview
+		var err error
+		if segment.Type == team.SegmentInvokeAgent {
+			preview, err = tc.coordinator.PreviewNativeImageTask(ctx, segment.Name, segment.Content, team.MediaTurnRequest{Images: opts.imagePaths})
+		} else {
+			preview, err = tc.coordinator.PreviewCoordinatorImageInput(ctx, segment.Content, team.MediaTurnRequest{Images: opts.imagePaths})
+		}
 		if err != nil {
 			return err
 		}
-		stderrLog("Image preview: %d image(s), %d bytes, target %s. Local validation only; model vision capability is unverified and no input has been admitted.\n", preview.ImageCount, preview.TotalBytes, preview.Target.String())
+		if preview.MetadataOnly {
+			stderrLog("Image preview: %d image(s), %d bytes, coordinator %s receives metadata only. Worker selection and vision capability remain unverified; no input has been admitted.\n", preview.ImageCount, preview.TotalBytes, preview.Target.String())
+		} else {
+			stderrLog("Image preview: %d image(s), %d bytes, target %s. Local validation only; model vision capability is unverified and no input has been admitted.\n", preview.ImageCount, preview.TotalBytes, preview.Target.String())
+		}
 		return nil
 	}
-	return fmt.Errorf("image preview requires one explicit worker task")
+	return fmt.Errorf("image preview requires one nonempty coordinator or explicit worker task")
 }

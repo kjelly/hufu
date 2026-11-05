@@ -22,6 +22,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/audit"
+	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/llmtimeout"
@@ -133,8 +134,14 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 		if candidateSpec.IsEstimated || candidateSpec.ContextWindow <= 0 {
 			continue
 		}
+		if agent.MessagesHaveMedia(messages) {
+			candidateContext, err = c.withCoordinatorReferenceMetadata(candidateContext, candidateAdmission)
+			if err != nil {
+				continue
+			}
+		}
 		candidatePreflight := newCoordinatorRequestPreflightWithAdmission(candidateID, prompt, fullSystem, fullTools, candidateAdmission)
-		candidateSystem, candidateTools, applied, err := candidatePreflight.prepare(ctx, messages, prompt, candidateOutputReservation, stepNumber)
+		candidateSystem, candidateTools, applied, err := candidatePreflight.prepare(candidateContext, messages, prompt, candidateOutputReservation, stepNumber)
 		if err != nil {
 			continue
 		}
@@ -143,7 +150,7 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 			requestSystem, requestTools = candidateSystem, candidateTools
 		}
 		manager := NewContextWindowManager(defaultCounter, nil)
-		admission, err := c.admitCoordinatorContext(ctx, manager, ContextWindowRequest{
+		admission, err := c.admitCoordinatorContext(candidateContext, manager, ContextWindowRequest{
 			ModelID: candidateID, System: requestSystem, Tools: requestTools, Messages: messages,
 			Prompt: prompt, Window: candidateSpec.ContextWindow, ReservedOutputTokens: candidateOutputReservation,
 			SafetyMarginTokens: candidateSpec.SafetyMarginTokens, StepNumber: stepNumber,
@@ -156,7 +163,7 @@ func (c *Coordinator) admitCoordinatorEarlierModel(ctx context.Context, prefligh
 		if backendErr != nil {
 			continue
 		}
-		model, err := languageModelBackend.LanguageModel(ctx, candidateTarget)
+		model, err := languageModelBackend.LanguageModel(candidateContext, candidateTarget)
 		if err != nil {
 			continue
 		}
@@ -1091,6 +1098,7 @@ retryLoop:
 			taskCtx = context.WithValue(taskCtx, workerRuntimeResultKey{}, runtimeCollection)
 			taskCtx = c.bindDependencyViewCall(taskCtx, &contextManifest)
 			taskCtx = withInvocationMetadata(taskCtx, invocationMetadataFromRequest(request, contextManifest))
+			taskCtx = withProviderCostContext(taskCtx, providerCostContext{Agent: agentDef.Name, Role: agentDef.Role, Purpose: cost.PurposeWorker})
 			if identity, ok := c.activeTaskResultOccurrence(todoID); ok {
 				taskCtx = withSubmitResultRuntimeIdentity(taskCtx, identity)
 			}
@@ -4237,6 +4245,8 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 	if nativeWorkerInput(ctx) {
 		admissionPrompt = nativeWorkerAdmissionPrompt(prompt, history)
 		sdkPrompt = ""
+	} else if coordinatorMediaPromptCommitted(ctx, prompt, history) {
+		admissionPrompt, sdkPrompt = "", ""
 	}
 	acceptedTerminalResult := &acceptedTerminalResultStop{}
 	ctx = context.WithValue(ctx, acceptedTerminalResultStopKey{}, acceptedTerminalResult)

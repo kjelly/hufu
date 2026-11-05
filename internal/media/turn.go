@@ -169,8 +169,9 @@ type Selection struct {
 type InvocationMode string
 
 const (
-	InvocationSingleTask  InvocationMode = "single_task"
-	InvocationDirectAgent InvocationMode = "direct_agent"
+	InvocationSingleTask    InvocationMode = "single_task"
+	InvocationDirectAgent   InvocationMode = "direct_agent"
+	InvocationDelegatedTask InvocationMode = "delegated_task"
 )
 
 // TaskBinding's owner is finalized after reserving the Todo ID. Revision and
@@ -220,7 +221,7 @@ func (b TaskBinding) Validate(limits Limits) error {
 		return Reject(BindingConflict, "incomplete task media binding")
 	}
 	switch b.InvocationMode {
-	case "", InvocationSingleTask, InvocationDirectAgent:
+	case "", InvocationSingleTask, InvocationDirectAgent, InvocationDelegatedTask:
 	default:
 		return Reject(BindingConflict, "unknown media invocation mode")
 	}

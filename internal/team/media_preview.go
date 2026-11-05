@@ -17,6 +17,7 @@ type NativeImagePreview struct {
 	ImageCount           int
 	TotalBytes           int64
 	ModelImageCapability providerintrospection.CapabilityState
+	MetadataOnly         bool
 }
 
 // PreviewNativeImageTask validates selected local images and the frozen target
@@ -62,13 +63,58 @@ func (c *Coordinator) PreviewNativeImageTask(ctx context.Context, agentName, goa
 	if err != nil || identity.ProviderKey != frozen.ProviderKey || identity.ConfigurationHash != frozen.IdentityHash || grant.IdentityHash != frozen.IdentityHash {
 		return preview, media.Reject(media.EgressDenied, "image preview provider differs from frozen policy")
 	}
+	preview, err = previewMediaTurnFiles(ctx, request, policy.Policy.Image)
+	if err != nil {
+		return preview, err
+	}
+	preview.Target = target
+	preview.ModelImageCapability = providerintrospection.CapabilityUnknown
+	return preview, nil
+}
+
+// PreviewCoordinatorImageInput validates local inputs for a metadata-only
+// coordinator. A later selected worker still needs independent vision gates.
+func (c *Coordinator) PreviewCoordinatorImageInput(ctx context.Context, goal string, request MediaTurnRequest) (NativeImagePreview, error) {
+	policy, err := c.requiredMediaPolicy()
+	if err != nil {
+		return NativeImagePreview{}, err
+	}
+	if strings.TrimSpace(goal) == "" || len(goal) > 256<<10 || c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+		return NativeImagePreview{}, media.Reject(media.Unsupported, "invalid or unsupported coordinator image preview")
+	}
+	modelID := c.resolveAgentModel(c.GetOrchestratorDef(), "")
+	target, err := c.resolveCanonicalTaskTarget(modelID, "")
+	if err != nil {
+		return NativeImagePreview{}, err
+	}
+	if _, err := c.ExecutionRegistry().LanguageModelBackend(target); err != nil {
+		return NativeImagePreview{}, err
+	}
+	frozen, ok := c.executionPolicy.backendByName[target.Backend]
+	if !ok {
+		return NativeImagePreview{}, media.Reject(media.EgressDenied, "coordinator preview has no frozen backend")
+	}
+	identity, err := c.providerManager.ResolveProviderExecutionIdentity(modelID)
+	if err != nil || identity.ProviderKey != frozen.ProviderKey || identity.ConfigurationHash != frozen.IdentityHash {
+		return NativeImagePreview{}, media.Reject(media.EgressDenied, "coordinator preview provider differs from frozen policy")
+	}
+	preview, err := previewMediaTurnFiles(ctx, request, policy.Policy.Image)
+	preview.Target, preview.MetadataOnly = target, true
+	return preview, err
+}
+
+func previewMediaTurnFiles(ctx context.Context, request MediaTurnRequest, maxLimits media.Limits) (NativeImagePreview, error) {
+	var preview NativeImagePreview
+	if len(request.Images) == 0 || len(request.Images) > maxLimits.MaxCount {
+		return preview, media.Reject(media.LimitExceeded, "invalid image preview count")
+	}
 	var refs []media.Ref
 	for _, path := range request.Images {
-		remaining := policy.Policy.Image.MaxBytesPerBundle - preview.TotalBytes
+		remaining := maxLimits.MaxBytesPerBundle - preview.TotalBytes
 		if remaining <= 0 {
 			return preview, media.Reject(media.LimitExceeded, "image preview exceeds bundle budget")
 		}
-		limits := policy.Policy.Image
+		limits := maxLimits
 		if remaining < limits.MaxBytesPerImage {
 			limits.MaxBytesPerImage = remaining
 		}
@@ -84,10 +130,10 @@ func (c *Coordinator) PreviewNativeImageTask(ctx context.Context, agentName, goa
 		refs = append(refs, ref)
 		preview.TotalBytes += ref.ByteSize
 	}
-	if err := media.CheckBundle(refs, policy.Policy.Image); err != nil {
+	if err := media.CheckBundle(refs, maxLimits); err != nil {
 		return preview, err
 	}
-	preview.Target, preview.ImageCount = target, len(refs)
+	preview.ImageCount = len(refs)
 	preview.ModelImageCapability = providerintrospection.CapabilityUnknown
 	return preview, nil
 }

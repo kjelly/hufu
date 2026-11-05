@@ -30,7 +30,7 @@ func validateNativeImageRunFlags(options runOptions) error {
 		return fmt.Errorf("--image requires an explicit --team/--agent-team or --default; --auto-team is unsupported")
 	}
 	if options.routeMode == "fast" || options.intent == "decision" || options.resumeDecision != "" || options.archiveMemory || len(options.inheritResults) > 0 {
-		return fmt.Errorf("--image requires a direct worker execution, without fast routing, decision resume or memory archival")
+		return fmt.Errorf("--image requires one coordinator or explicit worker execution, without fast routing, decision resume or memory archival")
 	}
 	for _, path := range options.imagePaths {
 		if strings.TrimSpace(path) == "" {
@@ -53,13 +53,14 @@ func validateNativeImageSegments(segments []team.PromptSegment) error {
 		if strings.TrimSpace(segment.Content) == "" {
 			continue
 		}
-		if segment.Type != team.SegmentInvokeAgent || strings.TrimSpace(segment.Name) == "" || segment.IsPiped {
-			return fmt.Errorf("--image requires one explicit @worker with a nonempty task")
+		if segment.IsPiped || segment.Type != team.SegmentSwitchTeam && segment.Type != team.SegmentText && segment.Type != team.SegmentInvokeAgent ||
+			segment.Type == team.SegmentInvokeAgent && strings.TrimSpace(segment.Name) == "" {
+			return fmt.Errorf("--image requires one nonempty coordinator or explicit @worker task")
 		}
 		executions++
 	}
 	if executions != 1 {
-		return fmt.Errorf("--image supports exactly one nonempty @worker execution")
+		return fmt.Errorf("--image supports exactly one nonempty execution")
 	}
 	return nil
 }

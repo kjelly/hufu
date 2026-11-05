@@ -149,6 +149,10 @@ func (c *Coordinator) initEventStore() {
 	es.SetBranchID(activeBranch)
 	c.eventStore = es
 	c.SetEventJournal(eventStoreJournal{store: es})
+	if err := c.rebindDecisionJournalForInvocation(); err != nil {
+		c.markSessionRecovery("decision journal rebind failed: " + utils.RedactSecrets(err.Error()))
+		return
+	}
 	c.resetContextWindowTelemetrySummary()
 	c.resetTeamActionProposals()
 	// Hydrate the active branch during every normal startup. Pending terminal

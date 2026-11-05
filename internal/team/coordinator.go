@@ -30,6 +30,7 @@ import (
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/mcp"
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/ollamaweb"
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/skill"
@@ -90,9 +91,10 @@ type taskRequiresResultKey struct{}
 type delegationChainKey struct{}
 
 type TaskDef struct {
-	MediaBinding     *MediaTaskBinding `json:"-" yaml:"-"`
-	MediaInputDigest string            `json:"-" yaml:"-"`
-	ID               string            `json:"id,omitempty"`
+	MediaBinding     *MediaTaskBinding          `json:"-" yaml:"-"`
+	MediaInputDigest string                     `json:"-" yaml:"-"`
+	ImageInputs      []media.ImageInputSelector `json:"image_inputs,omitempty" yaml:"-"`
+	ID               string                     `json:"id,omitempty"`
 	// WhenGoalContains is retained only so legacy manifests fail with a focused
 	// validation finding. Runtime contract selection never reads goal prose.
 	WhenGoalContains string `json:"-" yaml:"when-goal-contains,omitempty"`
@@ -2184,6 +2186,18 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 		contextFilesDesc = fmt.Sprintf("Optional files from the shared directory (%s) to provide as context", sharedDirPath)
 	}
 	props := map[string]any{
+		"image_inputs": map[string]any{
+			"type": "array", "minItems": 1, "maxItems": media.MaxCount,
+			"description": "Ordered image occurrences selected only from this invocation's authorized image metadata. Each entry requires turn_id and part_index. Repeated selections are preserved. Omit this field for text-only work; paths, CAS identifiers and media bindings are not accepted.",
+			"items": map[string]any{
+				"type": "object", "additionalProperties": false,
+				"properties": map[string]any{
+					"turn_id":    map[string]any{"type": "string", "minLength": 1},
+					"part_index": map[string]any{"type": "integer", "minimum": 0},
+				},
+				"required": []string{"turn_id", "part_index"},
+			},
+		},
 		"agent":         map[string]any{"type": "string", "enum": workerNames, "description": "Agent name for a new task. Do not select a worker whose prior task is already successful; retrieve its result with team_info/task_result instead."},
 		"goal":          map[string]any{"type": "string", "description": "The desired OUTCOME — what should be achieved. Do NOT include implementation details (file paths, function names, step-by-step instructions). Workers are specialists who determine their own approach."},
 		"constraints":   map[string]any{"type": "string", "description": "Non-obvious constraints the worker MUST respect (e.g., 'must use Python 3.11', 'cannot modify the public API'). Do NOT include obvious project conventions."},

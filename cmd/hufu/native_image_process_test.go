@@ -122,7 +122,7 @@ func TestNativeImageCLIUsesOrderedImagesWithoutReplanning(t *testing.T) {
 				acceptance = "true"
 			}
 			f := newNativeCLIProcessFixture(t, binary, server.URL, acceptance)
-			assertNativeCLIRejectsCoordinatorScopes(t, f, facade, requests)
+			assertNativeCLIRejectsUnsupportedScopes(t, f, facade, requests)
 			stdout, runErr, diagnostic := f.run(t, f.args(facade, "@worker Compare the images."))
 			var output jsonRunOutput
 			accepted := facade == "accepted"
@@ -151,9 +151,9 @@ func TestNativeImageCLIUsesOrderedImagesWithoutReplanning(t *testing.T) {
 	}
 }
 
-func assertNativeCLIRejectsCoordinatorScopes(t *testing.T, f nativeCLIProcessFixture, facade string, requests chan nativeCLIRequest) {
+func assertNativeCLIRejectsUnsupportedScopes(t *testing.T, f nativeCLIProcessFixture, facade string, requests chan nativeCLIRequest) {
 	t.Helper()
-	for _, goal := range []string{"Compare the images.", "@worker Compare the images. @worker Repeat the comparison."} {
+	for _, goal := range []string{"@worker Compare the images. @worker Repeat the comparison."} {
 		_, err, diagnostic := f.run(t, f.args(facade, goal))
 		if err == nil || len(requests) != 0 {
 			t.Fatalf("unsupported image scope entered a model: %v calls=%d\n%s", err, len(requests), diagnostic)
@@ -209,6 +209,11 @@ func assertNativeCLIDurableEvidence(t *testing.T, workspace string, paths []stri
 
 func nativeCLIProvider(t *testing.T, requests chan nativeCLIRequest) *httptest.Server {
 	t.Helper()
+	return nativeCLIProviderWithResponder(t, requests, nil)
+}
+
+func nativeCLIProviderWithResponder(t *testing.T, requests chan nativeCLIRequest, respond func(http.ResponseWriter, nativeCLIRequest)) *httptest.Server {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -249,6 +254,10 @@ func nativeCLIProvider(t *testing.T, requests chan nativeCLIRequest) *httptest.S
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
+		if respond != nil {
+			respond(w, request)
+			return
+		}
 		if request.Model == "vision" {
 			arguments := `{"status":"success","summary":"CLI worker comparison.","details":"Canonical CLI image observations."}`
 			fmt.Fprintf(w, "data: {\"id\":\"cli-worker\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"vision\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"submit-cli\",\"type\":\"function\",\"function\":{\"name\":\"submit_result\",\"arguments\":%q}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"cli-worker\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"vision\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n", arguments)

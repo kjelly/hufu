@@ -151,7 +151,7 @@ func isCanonicalEventStoreJournal(journal EventJournal, store *EventStore) bool 
 	}
 }
 
-// decisionJournalFor returns one pinned decision view for the coordinator's
+// decisionJournalFor returns one pinned decision view for the invocation's
 // lifetime. A workspace without a stored session tree is the legacy/unscoped main mode; an
 // invalid persisted tree fails closed instead of silently projecting another
 // branch. Custom injected journals are deliberately returned unchanged.
@@ -197,6 +197,27 @@ func (c *Coordinator) decisionJournalFor() (EventJournal, error) {
 	}
 	c.scopedDecisionJournal = scoped
 	return scoped, nil
+}
+
+// A public invocation opens a new canonical event-store handle after draining
+// the preceding invocation. Cached decision views must follow that handle;
+// isolated leaves keep their parent's immutable control plane for their attempt.
+func (c *Coordinator) rebindDecisionJournalForInvocation() error {
+	c.decisionJournalMu.Lock()
+	c.scopedDecisionJournal = nil
+	c.decisionJournalMu.Unlock()
+	c.decisionControlPlaneMu.Lock()
+	c.decisionControlPlane = nil
+	index := c.decisionIndexProjection
+	c.decisionControlPlaneMu.Unlock()
+	if index != nil {
+		journal, err := c.decisionJournalFor()
+		if err != nil {
+			return err
+		}
+		index.SetEventJournal(journal)
+	}
+	return nil
 }
 
 // pinDecisionControlPlane resolves all decision-owned resources from the

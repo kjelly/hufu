@@ -32,7 +32,7 @@ func TestNativeImageRunFlagsRequireExplicitExecutionScope(t *testing.T) {
 	}
 }
 
-func TestNativeImageSegmentsRequireOneDirectWorker(t *testing.T) {
+func TestNativeImageSegmentsRequireOneExecution(t *testing.T) {
 	selection := team.PromptSegment{Type: team.SegmentSwitchTeam, Name: "fixture"}
 	worker := team.PromptSegment{Type: team.SegmentInvokeAgent, Name: "worker", Content: "Compare images."}
 	for _, test := range []struct {
@@ -44,8 +44,9 @@ func TestNativeImageSegmentsRequireOneDirectWorker(t *testing.T) {
 		{"empty selection is not execution", []team.PromptSegment{selection, selection, worker}, true},
 		{"no task", []team.PromptSegment{selection}, false},
 		{"empty worker task", []team.PromptSegment{selection, {Type: worker.Type, Name: worker.Name, Content: " "}}, false},
-		{"coordinator task", []team.PromptSegment{{Type: selection.Type, Name: selection.Name, Content: worker.Content}}, false},
-		{"text task", []team.PromptSegment{selection, {Type: team.SegmentText, Content: worker.Content}}, false},
+		{"coordinator task", []team.PromptSegment{{Type: selection.Type, Name: selection.Name, Content: worker.Content}}, true},
+		{"text task", []team.PromptSegment{selection, {Type: team.SegmentText, Content: worker.Content}}, true},
+		{"multiple coordinator tasks", []team.PromptSegment{selection, {Type: team.SegmentText, Content: worker.Content}, {Type: team.SegmentText, Content: worker.Content}}, false},
 		{"multiple workers", []team.PromptSegment{selection, worker, worker}, false},
 		{"multiple teams", []team.PromptSegment{selection, {Type: selection.Type, Name: "other"}, worker}, false},
 		{"pipe", []team.PromptSegment{selection, {Type: worker.Type, Name: worker.Name, Content: worker.Content, IsPiped: true}}, false},

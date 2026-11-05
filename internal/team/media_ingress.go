@@ -36,67 +36,12 @@ func (c *Coordinator) prepareTaskMedia(ctx context.Context, task TaskDef, reques
 	if taskHasMedia(task) || len(request.Images) == 0 || len(request.Images) > policy.Policy.Image.MaxCount || len(task.Goal) > 256<<10 {
 		return TaskDef{}, media.Reject(media.BindingConflict, "invalid single-task media input")
 	}
-	if c.currentInvocationID() == "" {
-		c.SetInvocationID(NewInvocationID())
+	input, err := c.admitMediaTurnInput(ctx, task.Goal, request)
+	if err != nil {
+		return TaskDef{}, err
 	}
-	turnID := request.TurnID
-	if turnID == "" {
-		turnID = newRuntimeIdentity("turn")
-	}
-	task.Goal = utils.RedactSecrets(task.Goal)
-	input := media.InputSnapshot{RunID: c.executionRunID, BranchID: c.activeBranchID(), InvocationID: c.currentInvocationID(), TurnID: turnID, PolicyHash: policy.Hash,
-		Input: media.TurnInput{Parts: []media.Part{{Type: "text", Text: task.Goal}}}}
-	seen := make(map[string]bool)
+	task.Goal = input.Input.Parts[0].Text
 	var selections []media.Selection
-	var bundleBytes int64
-	for _, path := range request.Images {
-		if err := ctx.Err(); err != nil {
-			return TaskDef{}, err
-		}
-		absolute, err := filepath.Abs(path)
-		if err != nil || path == "" {
-			return TaskDef{}, media.Reject(media.InputMissing, "image file is unavailable")
-		}
-		// The caller explicitly selected this file. The store's existing source
-		// boundary is narrowed to that parent; ReadFile still rejects symlinks
-		// in every component, including the original parent path.
-		store, err := NewFileArtifactStore(c.artifactStoreRootPath(), filepath.Dir(absolute))
-		if err != nil {
-			return TaskDef{}, media.Reject(media.DurabilityRequired, "private artifact store unavailable")
-		}
-		remaining := policy.Policy.Image.MaxBytesPerBundle - bundleBytes
-		if remaining <= 0 {
-			return TaskDef{}, media.Reject(media.LimitExceeded, "image bundle exceeds byte budget")
-		}
-		limits := policy.Policy.Image
-		if remaining < limits.MaxBytesPerImage {
-			limits.MaxBytesPerImage = remaining
-		}
-		put, err := store.Put(ctx, PutArtifactRequest{Kind: "image", SourcePath: absolute, MediaLimits: limits})
-		if err != nil {
-			return TaskDef{}, err
-		}
-		bundleBytes += put.ByteSize
-		metadata, err := store.mediaMetadata(ctx, put.ID)
-		if err != nil {
-			return TaskDef{}, err
-		}
-		index := len(input.Input.Parts)
-		input.Input.Parts = append(input.Input.Parts, media.Part{Type: "image", MediaID: put.ID})
-		input.Occurrences = append(input.Occurrences, media.Occurrence{RunID: input.RunID, BranchID: input.BranchID, InvocationID: input.InvocationID, TurnID: input.TurnID, PartIndex: index, MediaID: put.ID, Origin: "user_file"})
-		if !seen[put.ID] {
-			input.Refs = append(input.Refs, *metadata.Image)
-			seen[put.ID] = true
-		}
-	}
-	input, err = media.SealSnapshot(input, policy.Policy.Image)
-	if err != nil {
-		return TaskDef{}, err
-	}
-	input, err = c.admitMediaInput(ctx, input)
-	if err != nil {
-		return TaskDef{}, err
-	}
 	var refs []media.Ref
 	for index, p := range input.Input.Parts {
 		if p.Type != "image" {
@@ -121,6 +66,83 @@ func (c *Coordinator) prepareTaskMedia(ctx context.Context, task TaskDef, reques
 	task.MediaBinding = &binding
 	task.MediaInputDigest = binding.InputDigest
 	return task, nil
+}
+
+// admitMediaTurnInput is shared trusted ingress for direct work and
+// coordinator turns. It publishes a canonical snapshot; callers commit its
+// history before exposing a turn to a provider.
+func (c *Coordinator) admitMediaTurnInput(ctx context.Context, goal string, request MediaTurnRequest) (media.InputSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return media.InputSnapshot{}, err
+	}
+	policy, err := c.requiredMediaPolicy()
+	if err != nil {
+		return media.InputSnapshot{}, err
+	}
+	if len(request.Images) == 0 || len(request.Images) > policy.Policy.Image.MaxCount || len(goal) > 256<<10 {
+		return media.InputSnapshot{}, media.Reject(media.BindingConflict, "invalid media turn input")
+	}
+	if c.currentInvocationID() == "" {
+		c.SetInvocationID(NewInvocationID())
+	}
+	turnID := request.TurnID
+	if turnID == "" {
+		turnID = newRuntimeIdentity("turn")
+	}
+	goal = utils.RedactSecrets(goal)
+	input := media.InputSnapshot{RunID: c.executionRunID, BranchID: c.activeBranchID(), InvocationID: c.currentInvocationID(), TurnID: turnID, PolicyHash: policy.Hash,
+		Input: media.TurnInput{Parts: []media.Part{{Type: "text", Text: goal}}}}
+	seen := make(map[string]bool)
+	var bundleBytes int64
+	for _, path := range request.Images {
+		if err := ctx.Err(); err != nil {
+			return media.InputSnapshot{}, err
+		}
+		absolute, err := filepath.Abs(path)
+		if err != nil || path == "" {
+			return media.InputSnapshot{}, media.Reject(media.InputMissing, "image file is unavailable")
+		}
+		// The caller explicitly selected this file. The store's existing source
+		// boundary is narrowed to that parent; ReadFile still rejects symlinks
+		// in every component, including the original parent path.
+		store, err := NewFileArtifactStore(c.artifactStoreRootPath(), filepath.Dir(absolute))
+		if err != nil {
+			return media.InputSnapshot{}, media.Reject(media.DurabilityRequired, "private artifact store unavailable")
+		}
+		remaining := policy.Policy.Image.MaxBytesPerBundle - bundleBytes
+		if remaining <= 0 {
+			return media.InputSnapshot{}, media.Reject(media.LimitExceeded, "image bundle exceeds byte budget")
+		}
+		limits := policy.Policy.Image
+		if remaining < limits.MaxBytesPerImage {
+			limits.MaxBytesPerImage = remaining
+		}
+		put, err := store.Put(ctx, PutArtifactRequest{Kind: "image", SourcePath: absolute, MediaLimits: limits})
+		if err != nil {
+			return media.InputSnapshot{}, err
+		}
+		bundleBytes += put.ByteSize
+		metadata, err := store.mediaMetadata(ctx, put.ID)
+		if err != nil {
+			return media.InputSnapshot{}, err
+		}
+		index := len(input.Input.Parts)
+		input.Input.Parts = append(input.Input.Parts, media.Part{Type: "image", MediaID: put.ID})
+		input.Occurrences = append(input.Occurrences, media.Occurrence{RunID: input.RunID, BranchID: input.BranchID, InvocationID: input.InvocationID, TurnID: input.TurnID, PartIndex: index, MediaID: put.ID, Origin: "user_file"})
+		if !seen[put.ID] {
+			input.Refs = append(input.Refs, *metadata.Image)
+			seen[put.ID] = true
+		}
+	}
+	input, err = media.SealSnapshot(input, policy.Policy.Image)
+	if err != nil {
+		return media.InputSnapshot{}, err
+	}
+	input, err = c.admitMediaInput(ctx, input)
+	if err != nil {
+		return media.InputSnapshot{}, err
+	}
+	return input, nil
 }
 
 func (c *Coordinator) rejectMediaTaskExecution(taskID string) error {

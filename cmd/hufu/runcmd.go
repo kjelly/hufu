@@ -117,7 +117,7 @@ managed workspace for the discovered project and selected team.`,
 	flags.StringVarP(&options.model, "model", "m", "", "Override the worker execution target")
 	flags.StringSliceVar(&options.workerModels, "worker-model", nil, "Override the execution target of specific worker(s) as agent=target; repeatable")
 	if name == "run" {
-		flags.StringArrayVar(&options.imagePaths, "image", nil, "Attach an image to one explicit worker; repeatable, ordered, preserves duplicates")
+		flags.StringArrayVar(&options.imagePaths, "image", nil, "Attach an image to one coordinator or explicit worker task; repeatable, ordered, preserves duplicates")
 		flags.StringArrayVar(&options.inheritResults, "inherit-result", nil, "Grant worker=<full-result-id> to every task of that worker in this new cycle (repeatable; requires one explicit team; implies --route team)")
 	}
 	flags.StringVarP(&options.coordinatorModel, "coordinator-model", "c", "", "Override the coordinator LLM target")

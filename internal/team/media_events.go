@@ -337,7 +337,8 @@ func mediaBindingSources(binding *media.TaskBinding, view mediaLineageView, limi
 	}
 	for index, selection := range binding.Selections {
 		s, ok := view.snapshots[selection.SnapshotID]
-		if !ok || s.Hash != selection.SnapshotHash || s.TurnID != selection.TurnID || s.PolicyHash != binding.PolicyHash || s.RunID != binding.RunID || selection.PartIndex >= len(s.Input.Parts) {
+		if !ok || s.Hash != selection.SnapshotHash || s.TurnID != selection.TurnID || s.PolicyHash != binding.PolicyHash ||
+			binding.InvocationMode != media.InvocationDelegatedTask && s.RunID != binding.RunID || selection.PartIndex >= len(s.Input.Parts) {
 			return media.Reject(media.AccessDenied, "media source is not admitted for this occurrence")
 		}
 		part := s.Input.Parts[selection.PartIndex]

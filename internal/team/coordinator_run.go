@@ -1393,11 +1393,28 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	if err != nil {
 		return "", nil, fmt.Errorf("resolve coordinator provider context: %w", err)
 	}
+	if agent.MessagesHaveMedia(historySnapshot) {
+		metadata, _ := invocationMetadataFromContext(orchCtx)
+		metadata.RunID, metadata.TaskID, metadata.AgentName, metadata.AgentRole = c.executionRunID, CoordTodoID, orchDef.Name, orchDef.Role
+		metadata.Attempt, metadata.Purpose, metadata.ModelExecutionID = executionAttempt, "coordinator", ""
+		orchCtx = withInvocationMetadata(orchCtx, metadata)
+		orchCtx, err = c.withCoordinatorReferenceMetadata(orchCtx, orchInvocation.AdmissionContext)
+		if err != nil {
+			return "", nil, err
+		}
+		copy := *orchDef
+		copy.System += coordinatorImageMetadataGuide
+		orchDef = &copy
+	}
 	gatedBackend, executionTarget, backendErr := c.gatedAgentBackendForModel(orchModelID)
 	if backendErr != nil {
 		return "", nil, fmt.Errorf("resolve coordinator execution backend: %w", backendErr)
 	}
-	preflight := newCoordinatorRequestPreflightWithAdmission(orchModelID, prompt, orchDef.System, orchTools, orchInvocation.AdmissionContext)
+	preflightPrompt := prompt
+	if coordinatorMediaPromptCommitted(orchCtx, prompt, historySnapshot) {
+		preflightPrompt = ""
+	}
+	preflight := newCoordinatorRequestPreflightWithAdmission(orchModelID, preflightPrompt, orchDef.System, orchTools, orchInvocation.AdmissionContext)
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 		preflight.refreshSystem = c.refreshWorkflowPrompt
 	}
@@ -2289,6 +2306,16 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	return c.runRequest(ctx, userPrompt)
 }
 
+func (c *Coordinator) validateInvocationWorkspace(ctx context.Context) error {
+	if err := c.ValidateWorkspaceIsolation(); err != nil {
+		return err
+	}
+	if err := c.ValidateResourceLocks(ctx); err != nil {
+		return err
+	}
+	return c.ValidateRequiredResourceLocks(ctx, c.projectDir)
+}
+
 func (c *Coordinator) runRequest(ctx context.Context, userPrompt string) (string, error) {
 	ctx, endExecutionRun, err := c.beginPublicInvocationExecutionRun(ctx)
 	if err != nil {
@@ -2305,15 +2332,12 @@ func (c *Coordinator) runRequest(ctx context.Context, userPrompt string) (string
 	if err := c.admitWorkspaceVersion(ctx); err != nil {
 		return "", c.finalizePublicInvocationFailureError(err)
 	}
-	if err := c.ValidateWorkspaceIsolation(); err != nil {
+	if err := c.validateInvocationWorkspace(ctx); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}
-	if err := c.ValidateResourceLocks(ctx); err != nil {
-		c.finalizePublicInvocationFailure(err)
-		return "", err
-	}
-	if err := c.ValidateRequiredResourceLocks(ctx, c.projectDir); err != nil {
+	ctx, userPrompt, err = c.admitCoordinatorMediaInput(ctx, userPrompt)
+	if err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}
@@ -2512,6 +2536,11 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}
+	ctx, additionalPrompt, err = c.admitCoordinatorMediaInput(ctx, additionalPrompt)
+	if err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return "", err
+	}
 	newWorkflowCycle, err := c.beginFollowUpWorkflow(ctx, additionalPrompt)
 	if err != nil {
 		c.finalizePublicInvocationFailure(err)
@@ -2559,7 +2588,13 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		additionalPrompt = "wrap up now"
 		c.report(c.newEvent("wrap_up_phase").withMessage("coordinator summarizing").withTodoID(CoordTodoID))
 	} else {
-		continuationPrompt = fmt.Sprintf(continuationPromptTemplate, additionalPrompt)
+		if _, committed := ctx.Value(coordinatorCommittedMediaKey{}).(media.InputSnapshot); committed {
+			// The mixed turn already owns its original text. Put continuation
+			// guidance in the system message instead of duplicating user input.
+			continuationPrompt = additionalPrompt
+		} else {
+			continuationPrompt = fmt.Sprintf(continuationPromptTemplate, additionalPrompt)
+		}
 		c.report(c.newEvent("step").withMessage("coordinator preparing").withTodoID(CoordTodoID))
 	}
 	ctx, _, err = c.resolveProviderBoundInvocationContext(ctx, c.resolveAgentModel(orchDef, ""), orchDef)
@@ -2577,6 +2612,9 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	orchDefCopy.System = systemPrompt
 
 	if !newWorkflowCycle {
+		if _, committed := ctx.Value(coordinatorCommittedMediaKey{}).(media.InputSnapshot); committed {
+			orchDefCopy.System += coordinatorMediaContinuationGuide
+		}
 		c.addSessionUserMessage(additionalPrompt)
 	}
 

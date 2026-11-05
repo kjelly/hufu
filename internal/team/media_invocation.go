@@ -60,15 +60,18 @@ func validateNativeMediaInvocation(item *TodoItem, policy *ExecutionPolicySnapsh
 		return media.Reject(media.AccessDenied, "native image invocation has no canonical owner")
 	}
 	switch item.MediaBinding.InvocationMode {
-	case media.InvocationSingleTask, media.InvocationDirectAgent:
+	case media.InvocationSingleTask, media.InvocationDirectAgent, media.InvocationDelegatedTask:
 	default:
 		return media.Reject(media.Unsupported, "image input has no supported invocation mode")
 	}
-	if item.ParentID != "" || item.Phase != "" || item.Sidecar || item.Action != nil || item.CatalogAction != nil ||
-		item.InvariantVerification != "" || len(item.Execution.Steps) != 0 || len(item.DependsOn) != 0 || len(item.OrderAfter) != 0 ||
-		item.OnFailure != "" || item.Escalate || len(item.ModelTopology) > 1 || len(item.ExecutionTopology) > 1 ||
+	if item.Phase != "" || item.Sidecar || item.Action != nil || item.CatalogAction != nil ||
+		item.InvariantVerification != "" || len(item.Execution.Steps) != 0 || item.Escalate || len(item.ModelTopology) > 1 || len(item.ExecutionTopology) > 1 ||
 		item.ExecutionRoute != nil && len(item.ExecutionRoute.Candidates) > 1 {
-		return media.Reject(media.Unsupported, "image invocation requires one root worker without graph or model routing")
+		return media.Reject(media.Unsupported, "image invocation has unsupported action, workflow or model routing")
+	}
+	if item.MediaBinding.InvocationMode != media.InvocationDelegatedTask &&
+		(item.ParentID != "" || len(item.DependsOn) != 0 || len(item.OrderAfter) != 0 || item.OnFailure != "") {
+		return media.Reject(media.Unsupported, "direct image invocation requires one root worker without a task graph")
 	}
 	if policy == nil {
 		return media.Reject(media.DurabilityRequired, "native image invocation has no frozen policy")
@@ -87,6 +90,20 @@ func validateNativeMediaInvocation(item *TodoItem, policy *ExecutionPolicySnapsh
 func validateNativeMediaSourceScope(binding *media.TaskBinding, lineage []RunEvent) error {
 	if binding == nil || len(binding.Selections) == 0 {
 		return media.Reject(media.AccessDenied, "native image invocation has no input source")
+	}
+	if binding.InvocationMode == media.InvocationDelegatedTask {
+		sources := make(map[string]media.InputSnapshot)
+		for _, event := range lineage {
+			if event.Type != string(EventMediaInputAdmitted) {
+				continue
+			}
+			snapshot, err := decodeMediaInputEvent(event)
+			if err != nil {
+				return err
+			}
+			sources[snapshot.ID] = snapshot
+		}
+		return mediaBindingSources(binding, mediaLineageView{snapshots: sources}, media.Limits{})
 	}
 	if err := validateMediaInvocationSourceOwner(binding, lineage); err != nil {
 		return err
@@ -120,7 +137,20 @@ func validateNativeMediaSourceScope(binding *media.TaskBinding, lineage []RunEve
 }
 
 func validateMediaInvocationSourceOwner(binding *media.TaskBinding, lineage []RunEvent) error {
-	for _, event := range lineage {
+	ownerIndex := -1
+	for index, event := range lineage {
+		if event.Type != string(EventTaskMediaBound) || event.TaskID != binding.TaskID {
+			continue
+		}
+		bound, err := decodeTaskMediaEvent(event)
+		if err != nil {
+			return err
+		}
+		if bound.Binding.Hash == binding.Hash {
+			ownerIndex = index
+		}
+	}
+	for index, event := range lineage {
 		if event.Type != string(EventTaskMediaBound) || event.TaskID == binding.TaskID {
 			continue
 		}
@@ -129,6 +159,11 @@ func validateMediaInvocationSourceOwner(binding *media.TaskBinding, lineage []Ru
 			return err
 		}
 		if binding.InvocationMode == "" && bound.Binding.InvocationMode == "" {
+			continue
+		}
+		// An explicit delegated grant does not revoke the source owner's
+		// existing input. It has its own canonical task binding and lease.
+		if bound.Binding.InvocationMode == media.InvocationDelegatedTask && ownerIndex >= 0 && index > ownerIndex {
 			continue
 		}
 		for _, source := range binding.Selections {
@@ -144,7 +179,7 @@ func validateMediaInvocationSourceOwner(binding *media.TaskBinding, lineage []Ru
 
 func validateNativeMediaBatch(tasks []TaskDef) error {
 	for _, task := range tasks {
-		if task.MediaBinding == nil || task.MediaBinding.InvocationMode == "" {
+		if task.MediaBinding == nil || task.MediaBinding.InvocationMode == "" || task.MediaBinding.InvocationMode == media.InvocationDelegatedTask {
 			continue
 		}
 		if len(tasks) != 1 || task.Pipeline || task.FanOut != nil || len(task.DependsOnContracts) != 0 || task.OnFailureContract != "" {
