@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -19,7 +20,7 @@ import (
 // through unchanged, so this follows the protocol rather than one vendor.
 func withToolCallIndexes(client *http.Client) *http.Client {
 	if client == nil {
-		return &http.Client{Transport: toolCallIndexTransport{base: http.DefaultTransport}}
+		client = new(http.Client)
 	}
 	wrapped := *client
 	base := client.Transport
@@ -27,6 +28,19 @@ func withToolCallIndexes(client *http.Client) *http.Client {
 		base = http.DefaultTransport
 	}
 	wrapped.Transport = toolCallIndexTransport{base: base}
+	redirect := client.CheckRedirect
+	wrapped.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if nativeProviderCompilation(req.Context()) != nil {
+			return http.ErrUseLastResponse
+		}
+		if redirect != nil {
+			return redirect(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
 	return &wrapped
 }
 
@@ -36,7 +50,7 @@ type toolCallIndexTransport struct {
 
 func (t toolCallIndexTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	observeProviderTransport(req)
-	resp, err := t.base.RoundTrip(req)
+	resp, err := compiledProviderRoundTrip(req, t.base)
 	if err == nil {
 		observeProviderRejection(req.Context(), resp)
 		observeResponsesBody(req, resp)

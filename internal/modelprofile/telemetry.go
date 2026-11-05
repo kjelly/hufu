@@ -59,7 +59,7 @@ const telemetrySchemaVersion = 1
 // adapter cannot accidentally turn a free-form provider response into an
 // observable payload.
 func TelemetryFromProfile(profile ModelProfile) TelemetryProjection {
-	return TelemetryProjection{
+	projection := TelemetryProjection{
 		SchemaVersion:    telemetrySchemaVersion,
 		ModelID:          safeTelemetryIdentity(profile.ModelID),
 		Provider:         safeTelemetryLabel(profile.Provider),
@@ -83,6 +83,11 @@ func TelemetryFromProfile(profile ModelProfile) TelemetryProjection {
 			"temperature": telemetryCapability(profile.Sources.Capabilities.Temperature),
 		},
 	}
+	// Preserve legacy projections when no image-specific evidence exists.
+	if source := profile.Sources.Capabilities.ImageInput; source.Source != "" {
+		projection.Capabilities["image_input"] = telemetryCapability(source)
+	}
+	return projection
 }
 
 func telemetryContext(value ResolvedValue[int]) TelemetryValue[int] {

@@ -706,6 +706,7 @@ func applyRuntimeEvidence(input *ModelProfileInput, provider providerintrospecti
 		input.MaxOutputTokens = mergeMaxOutputTokens(input.MaxOutputTokens, evidence.show.MaxOutputTokens)
 		applyCapabilityEvidence(&input.Capabilities, evidence.show.Capabilities, false)
 		applyCapabilityStates(&input.Capabilities, evidence.show.CapabilityEvidence, false)
+		applyImageInputEvidence(&input.Capabilities.ImageInput, evidence.show, false)
 	}
 	if evidence.processOK && evidence.process.RuntimeContext > 0 {
 		input.Context.RuntimeContext = evidence.process.RuntimeContext
@@ -713,6 +714,7 @@ func applyRuntimeEvidence(input *ModelProfileInput, provider providerintrospecti
 	if evidence.processOK {
 		applyCapabilityEvidence(&input.Capabilities, evidence.process.Capabilities, true)
 		applyCapabilityStates(&input.Capabilities, evidence.process.CapabilityEvidence, true)
+		applyImageInputEvidence(&input.Capabilities.ImageInput, evidence.process, true)
 	}
 }
 
@@ -931,6 +933,8 @@ func applyCapabilityEvidence(input *CapabilityResolutionInput, capabilities []st
 			} else {
 				input.Attachments.ProviderMetadata = CapabilityYes
 			}
+		case "image_input":
+			setImageInputEvidence(&input.ImageInput, CapabilityYes, runtime)
 		case "reasoning":
 			if runtime {
 				input.Reasoning.Runtime = CapabilityYes
@@ -973,6 +977,8 @@ func applyCapabilityStates(input *CapabilityResolutionInput, evidence map[string
 			} else {
 				input.Attachments.ProviderMetadata = value
 			}
+		case "image_input":
+			setImageInputEvidence(&input.ImageInput, value, runtime)
 		case "reasoning":
 			if runtime {
 				input.Reasoning.Runtime = value

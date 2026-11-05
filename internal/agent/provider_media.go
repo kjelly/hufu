@@ -1,6 +1,10 @@
 package agent
 
-import "charm.land/fantasy"
+import (
+	"reflect"
+
+	"charm.land/fantasy"
+)
 
 func ProviderRequestHasMedia(request ProviderRequest) bool {
 	return requestHasMessageParts(request, MessagesHaveMedia)
@@ -14,13 +18,21 @@ func providerRequestHasReferences(request ProviderRequest) bool {
 				case MediaReferencePart, *MediaReferencePart:
 					return true
 				}
-				if part != nil && part.GetType() == ContentTypeMediaReference {
+				if !nilContentPart(part) && part.GetType() == ContentTypeMediaReference {
 					return true
 				}
 			}
 		}
 		return false
 	})
+}
+
+func nilContentPart(part any) bool {
+	if part == nil {
+		return true
+	}
+	value := reflect.ValueOf(part)
+	return value.Kind() == reflect.Pointer && value.IsNil()
 }
 
 func requestHasMessageParts(request ProviderRequest, match func([]fantasy.Message) bool) bool {
@@ -49,6 +61,9 @@ func MessagesHaveMedia(messages []fantasy.Message) bool {
 					return true
 				}
 			default:
+				if nilContentPart(part) {
+					return true
+				}
 				if part != nil && (part.GetType() == fantasy.ContentTypeFile || part.GetType() == ContentTypeMediaReference) {
 					return true
 				}
@@ -61,6 +76,9 @@ func MessagesHaveMedia(messages []fantasy.Message) bool {
 func toolResultHasMedia(output fantasy.ToolResultOutputContent) bool {
 	switch output.(type) {
 	case fantasy.ToolResultOutputContentMedia, *fantasy.ToolResultOutputContentMedia:
+		return true
+	}
+	if output != nil && nilContentPart(output) {
 		return true
 	}
 	return output != nil && output.GetType() == fantasy.ToolResultContentTypeMedia

@@ -443,12 +443,18 @@ func (m *admittedLanguageModel) generateOnce(ctx context.Context, call fantasy.C
 			release()
 		}
 	}()
+	wire, compilation, err := m.compileInvocation(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	ctx = compilation.bind(ctx)
+	defer func() { compilation.innerReturned(); compilation.release() }()
 	if err := m.commitInvocation(ctx, &request); err != nil {
 		return nil, err
 	}
 	ctx = withProviderTransportIdentity(ctx, request)
 	ctx = withProviderUsageObservation(ctx)
-	response, providerErr := m.inner.Generate(ctx, call)
+	response, providerErr := m.inner.Generate(ctx, *wire.Call)
 	result := ProviderInvocationResult{Outcome: providerInvocationOutcome(ctx, providerErr), ResponseObserved: response != nil}
 	if response != nil {
 		result.Usage = providerInvocationUsage(response.Usage)
@@ -463,17 +469,28 @@ func (m *admittedLanguageModel) streamOnce(ctx context.Context, call fantasy.Cal
 	if err != nil {
 		return nil, err
 	}
-	if err := m.commitInvocation(ctx, &request); err != nil {
-		if release != nil {
+	handedOff := false
+	defer func() {
+		if !handedOff && release != nil {
 			release()
 		}
+	}()
+	wire, compilation, err := m.compileInvocation(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	release = joinProviderReleases(release, compilation)
+	defer compilation.innerReturned()
+	ctx = compilation.bind(ctx)
+	if err := m.commitInvocation(ctx, &request); err != nil {
 		return nil, err
 	}
 	state := &providerStreamState{}
 	streamCtx, cancel, finalize, stopCancellation := m.streamContext(ctx, request, state, release)
 	// Keep the registered .Stream(ctx, chokepoint marker while passing the
 	// derived context required to own the stream's transport lifetime.
-	stream, err := m.inner.Stream(streamCtx, call)
+	stream, err := m.inner.Stream(streamCtx, *wire.Call)
+	compilation.innerReturned()
 	if err == nil {
 		if rejection := m.streamRejection(streamCtx, request); rejection != nil {
 			err = rejection
@@ -495,6 +512,7 @@ func (m *admittedLanguageModel) streamOnce(ctx context.Context, call fantasy.Cal
 		finalize(ProviderInvocationResult{Outcome: providerInvocationOutcome(ctx, err)})
 		return nil, wrapProviderRejection(err, responsesWireObserved(streamCtx))
 	}
+	handedOff = true
 	return admittedStream(ctx, stream, state, cancel, stopCancellation, finalize, func(part fantasy.StreamPart) (*ProviderInvocationUsage, bool) {
 		return reportedProviderInvocationUsage(part.Usage), part.Error != nil || part.Type == fantasy.StreamPartTypeError
 	}), nil
@@ -511,12 +529,18 @@ func (m *admittedLanguageModel) generateObjectOnce(ctx context.Context, call fan
 			release()
 		}
 	}()
+	wire, compilation, err := m.compileInvocation(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	ctx = compilation.bind(ctx)
+	defer func() { compilation.innerReturned(); compilation.release() }()
 	if err := m.commitInvocation(ctx, &request); err != nil {
 		return nil, err
 	}
 	ctx = withProviderTransportIdentity(ctx, request)
 	ctx = withProviderUsageObservation(ctx)
-	response, providerErr := m.inner.GenerateObject(ctx, call)
+	response, providerErr := m.inner.GenerateObject(ctx, *wire.ObjectCall)
 	result := ProviderInvocationResult{Outcome: providerInvocationOutcome(ctx, providerErr), ResponseObserved: response != nil}
 	if response != nil {
 		result.Usage = providerInvocationUsage(response.Usage)
@@ -531,15 +555,26 @@ func (m *admittedLanguageModel) streamObjectOnce(ctx context.Context, call fanta
 	if err != nil {
 		return nil, err
 	}
-	if err := m.commitInvocation(ctx, &request); err != nil {
-		if release != nil {
+	handedOff := false
+	defer func() {
+		if !handedOff && release != nil {
 			release()
 		}
+	}()
+	wire, compilation, err := m.compileInvocation(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	release = joinProviderReleases(release, compilation)
+	defer compilation.innerReturned()
+	ctx = compilation.bind(ctx)
+	if err := m.commitInvocation(ctx, &request); err != nil {
 		return nil, err
 	}
 	state := &providerStreamState{}
 	streamCtx, cancel, finalize, stopCancellation := m.streamContext(ctx, request, state, release)
-	stream, err := m.inner.StreamObject(streamCtx, call)
+	stream, err := m.inner.StreamObject(streamCtx, *wire.ObjectCall)
+	compilation.innerReturned()
 	if err == nil {
 		if rejection := m.streamRejection(streamCtx, request); rejection != nil {
 			err = rejection
@@ -559,6 +594,7 @@ func (m *admittedLanguageModel) streamObjectOnce(ctx context.Context, call fanta
 		finalize(ProviderInvocationResult{Outcome: providerInvocationOutcome(ctx, err)})
 		return nil, wrapProviderRejection(err, responsesWireObserved(streamCtx))
 	}
+	handedOff = true
 	return admittedStream(ctx, stream, state, cancel, stopCancellation, finalize, func(part fantasy.ObjectStreamPart) (*ProviderInvocationUsage, bool) {
 		return reportedProviderInvocationUsage(part.Usage), part.Error != nil || part.Type == fantasy.ObjectStreamPartTypeError
 	}), nil
