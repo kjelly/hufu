@@ -24,6 +24,9 @@ func (c *Coordinator) validateNativeMediaTaskExecution(ctx context.Context, task
 	if err := validateNativeMediaInvocation(item, c.executionPolicy.snapshot); err != nil {
 		return err
 	}
+	if _, err := c.nativeImageWorkerDefinition(item.Agent); err != nil {
+		return err
+	}
 	if task.MediaBinding == nil || task.MediaBinding.Hash != item.MediaBinding.Hash || task.MediaInputDigest != item.MediaInputDigest {
 		return media.Reject(media.BindingConflict, "native image execution differs from its canonical binding")
 	}

@@ -27,6 +27,7 @@ type runOptions struct {
 	// of profile and explicit CLI entries before team loading reads it.
 	workerModelOverrides []string
 	inheritResults       []string
+	imagePaths           []string
 
 	// Team selection / discovery
 	agentTeamName       string

@@ -113,6 +113,8 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringArrayVar(&opts.varFiles, "var-file", nil, "Read template variables from a file (.yaml/.yml or KEY=VALUE format). Can be specified multiple times; later files override earlier ones")
 	rootCmd.Flags().StringArrayVar(&opts.inputFlags, "input", nil, "Set a typed run input (name=json-or-typed-scalar); repeatable")
 	rootCmd.Flags().StringArrayVar(&opts.inputFiles, "input-file", nil, "Read typed run inputs from a JSON or YAML mapping; repeatable")
+	rootCmd.Flags().StringArrayVar(&opts.imagePaths, "image", nil, "Attach an image to one explicit worker; repeatable, ordered, preserves duplicates")
+	rootCmd.Flags().Lookup("image").Annotations = map[string][]string{profileCommandLocalFlag: {"true"}}
 	rootCmd.Flags().StringArrayVar(&opts.forcedSkills, "skill", nil, "Force-load specific skills (repeatable, e.g. --skill code-review --skill tdd)")
 	rootCmd.Flags().BoolVar(&opts.requestAcceptance, "request-acceptance", false, "Freeze explicit request requirements and require evidence before successful completion")
 	rootCmd.Flags().BoolVar(&opts.planMode, "plan", false, "Force plan-first mode: agents must submit plans before executing")

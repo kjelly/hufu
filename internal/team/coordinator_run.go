@@ -359,7 +359,7 @@ func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.Age
 }
 
 //nolint:gocyclo // direct-agent execution is the canonical closed lifecycle path.
-func (c *Coordinator) runDirectAgent(ctx context.Context, agentName string, task string, input *MediaTurnRequest) (directResult *DirectAgentResult, err error) {
+func (c *Coordinator) runDirectAgent(ctx context.Context, agentName string, task string, input *MediaTurnRequest, synthesizeResult bool) (directResult *DirectAgentResult, err error) {
 	if err := c.rejectPendingDerivedFork(); err != nil {
 		return nil, err
 	}
@@ -380,6 +380,9 @@ func (c *Coordinator) runDirectAgent(ctx context.Context, agentName string, task
 		return nil, err
 	}
 	defer endExecutionRun()
+	// Keep the invocation authority before adding the worker's task envelope.
+	// A result consumer never inherits its producer's execution/read grant.
+	presentationCtx := ctx
 	defer func() {
 		if errors.Is(context.Cause(ctx), ErrInvocationStalled) {
 			err = ErrInvocationStalled
@@ -561,6 +564,14 @@ func (c *Coordinator) runDirectAgent(ctx context.Context, agentName string, task
 			ctx = withProviderCostContext(ctx, providerCostContext{Agent: resolvedName, Role: agentDef.Role, Purpose: cost.PurposeDirectAgent})
 		}
 		output, execErr := c.executeTask(ctx, directTask, todoID)
+		if execErr == nil && synthesizeResult {
+			presented, presentationErr := c.synthesizeNativeDirectResult(presentationCtx, todoID, output)
+			if presentationErr != nil {
+				execErr = presentationErr
+			} else {
+				output = presented
+			}
+		}
 		// Runtime collection delegates work to executeTask, but the direct
 		// invocation still owns run finalization. Without it, an otherwise
 		// recoverable collection failure leaves an uncertain terminal commit.

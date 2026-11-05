@@ -34,6 +34,20 @@ func nativeWorkerInput(ctx context.Context) bool {
 	return value && !protocolRepairExecution(ctx)
 }
 
+// An initial image-bearing user turn stays at its original position and is
+// protected by media compaction. A later plain retry instruction uses ordinary
+// current-prompt protection; it is still not appended through SDK Prompt.
+func nativeWorkerAdmissionPrompt(prompt string, history []fantasy.Message) string {
+	index := nativeWorkerPromptIndex(history, prompt)
+	if index < 0 || len(history[index].Content) != 1 {
+		return ""
+	}
+	if _, ok := fantasy.AsMessagePart[fantasy.TextPart](history[index].Content[0]); !ok {
+		return ""
+	}
+	return prompt
+}
+
 func (c *Coordinator) validateLocalMediaAttempt(ctx context.Context, request AttemptRequest) error {
 	item := c.todoItemByID(request.TaskID)
 	if !taskHasMedia(request.Task) && (item == nil || item.MediaBinding == nil && item.MediaInputDigest == "") {

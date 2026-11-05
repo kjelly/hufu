@@ -852,6 +852,9 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 
 		item, exists := taskMap[taskID]
+		// Ordinary worker retries reopen a failed occurrence through a new
+		// attempt-start transition. Decide before applying its projected lease.
+		retryStart := isReplayRetryStart(item, e, payload.Status, payload.OccurrenceRevision, payload.DispatchID)
 		var priorContract *TodoItem
 		if exists && frozenContracts[taskID] {
 			priorContract = cloneTodoItem(item)
@@ -1270,7 +1273,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				}
 			}
 		case "task_started":
-			if !isReducerTerminalTaskStatus(item.Status) {
+			if !isReducerTerminalTaskStatus(item.Status) || retryStart {
 				item.Status = TaskInProgress
 			}
 		case "task_verifying":

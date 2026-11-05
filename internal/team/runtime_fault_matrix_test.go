@@ -2,7 +2,9 @@ package team
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -138,8 +140,11 @@ func TestRuntimeFaultMatrixRetryReopensSameOccurrenceAndPersistsProjections(t *t
 		t.Fatalf("retry result = %q after %d calls, want success after 2 calls", out, worker.Calls())
 	}
 	current := todoItemByID(c.taskTracker.TodoList().Items(), ids[0])
-	if current == nil || current.Status != TaskDone || current.OccurrenceRevision != 2 {
-		t.Fatalf("retried occurrence = %#v, want same ID at revision 2 and done", current)
+	// start(1) -> failure(2) -> retry start(3) -> done(4). Activating
+	// attempt two must retain its committed revision instead of resetting it.
+	const terminalRevision = 4
+	if current == nil || current.Status != TaskDone || current.OccurrenceRevision != terminalRevision {
+		t.Fatalf("retried occurrence = %#v, want same ID at revision %d and done", current, terminalRevision)
 	}
 	if len(current.ContextManifests) != 2 || current.ContextManifests[0].Attempt != 1 || current.ContextManifests[1].Attempt != 2 {
 		t.Fatalf("retry context manifests = %#v, want attempts 1 and 2", current.ContextManifests)
@@ -153,7 +158,7 @@ func TestRuntimeFaultMatrixRetryReopensSameOccurrenceAndPersistsProjections(t *t
 		t.Fatalf("LoadSessionReadOnly = (%#v, %t, %v), want durable checkpoint", checkpoint, exists, err)
 	}
 	checkpointed := todoItemByID(checkpoint.Tasks, ids[0])
-	if checkpointed == nil || checkpointed.Status != TaskDone || checkpointed.OccurrenceRevision != 2 {
+	if checkpointed == nil || checkpointed.Status != TaskDone || checkpointed.OccurrenceRevision != terminalRevision {
 		t.Fatalf("checkpointed retry occurrence = %#v", checkpointed)
 	}
 
@@ -170,8 +175,33 @@ func TestRuntimeFaultMatrixRetryReopensSameOccurrenceAndPersistsProjections(t *t
 	if got := countFaultMatrixTaskEvent(events, ids[0], EventTaskCompleted); got != 1 {
 		t.Fatalf("task_completed events = %d, want exactly 1", got)
 	}
+	var attempts []int
+	lastRevision := 0
+	for _, event := range events {
+		if event.TaskID != ids[0] {
+			continue
+		}
+		if attempt := eventDispatchAttempt(event); attempt > 0 {
+			attempts = append(attempts, attempt)
+		}
+		var payload struct {
+			Revision int `json:"occurrence_revision"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Revision > 0 {
+			if payload.Revision < lastRevision || payload.Revision > lastRevision+1 {
+				t.Fatalf("durable occurrence revision changed from %d to %d", lastRevision, payload.Revision)
+			}
+			lastRevision = payload.Revision
+		}
+	}
+	if !slices.Equal(attempts, []int{1, 2}) || lastRevision != terminalRevision {
+		t.Fatalf("durable retry identity: attempts=%v revision=%d", attempts, lastRevision)
+	}
 	replayed := todoItemByID(ReduceToTodoList(events), ids[0])
-	if replayed == nil || replayed.Status != TaskDone || replayed.OccurrenceRevision != 2 {
+	if replayed == nil || replayed.Status != TaskDone || replayed.OccurrenceRevision != terminalRevision {
 		t.Fatalf("event-replayed retry occurrence = %#v", replayed)
 	}
 

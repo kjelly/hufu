@@ -181,7 +181,7 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	if err != nil {
 		return err
 	}
-	ctx, err = bindHistoricalRunIntake(ctx, segments)
+	ctx, err = bindRunSegmentInputs(ctx, segments)
 	if err != nil {
 		return err
 	}
@@ -217,6 +217,12 @@ func prepareRunSegments(ctx context.Context, prompt, initialTeam string, registr
 }
 
 func validateAndCaptureRunScope() error {
+	if err := validateNativeImageRunFlags(opts); err != nil {
+		return err
+	}
+	if len(opts.imagePaths) > 0 {
+		opts.routeMode = "team"
+	}
 	if err := validateRunFlags(); err != nil {
 		return err
 	}

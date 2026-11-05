@@ -65,6 +65,30 @@ func TestNativeWorkerInputPreservesOneOrderedCurrentTurn(t *testing.T) {
 	}
 }
 
+func TestNativeWorkerRetryPromptIsProtectedWithoutMovingImageTurn(t *testing.T) {
+	c, ctx, item, request := nativeMediaProviderFixture(t)
+	initial := request.Call.Prompt
+	if nativeWorkerAdmissionPrompt(item.Goal, initial) != "" {
+		t.Fatal("initial image-bearing prompt would be duplicated or relocated")
+	}
+	history := append(cloneMessages(initial), fantasy.Message{Role: fantasy.MessageRoleAssistant,
+		Content: []fantasy.MessagePart{fantasy.TextPart{Text: "Prior failed attempt."}}})
+	retry := "CURRENT_NATIVE_RETRY_INSTRUCTION"
+	messages, err := c.nativeWorkerMessages(ctx, item.ID, retry, history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior, _, current, _ := splitRequestForCompaction(ContextWindowRequest{
+		Messages: messages, Prompt: nativeWorkerAdmissionPrompt(retry, messages),
+	})
+	if current != retry {
+		t.Fatal("the current native retry instruction was left in compactable history")
+	}
+	if len(prior) != len(history) || !reflect.DeepEqual(prior[0], initial[0]) || len(historyReferences(prior)) != len(item.MediaBinding.Refs) {
+		t.Fatal("protecting retry text moved or duplicated the original image turn")
+	}
+}
+
 func TestNativeWorkerInputRejectsInvalidHistoryOrLease(t *testing.T) {
 	for _, scenario := range []string{"stale lease", "cancelled", "wrong owner", "missing image", "raw media"} {
 		t.Run(scenario, func(t *testing.T) {

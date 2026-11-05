@@ -29,6 +29,7 @@ type canonicalRunOptions struct {
 	vars, varFiles, inputs, inputFiles, skills, allowPath []string
 	workerModels                                          []string
 	inheritResults                                        []string
+	imagePaths                                            []string
 	timeout, verifyTimeout, maxDuration, maxTotalTokens   int64
 	gracefulWrapUpTimeout                                 time.Duration
 	maxRounds, maxConcurrent, maxSteps, contextWindow     int
@@ -116,6 +117,7 @@ managed workspace for the discovered project and selected team.`,
 	flags.StringVarP(&options.model, "model", "m", "", "Override the worker execution target")
 	flags.StringSliceVar(&options.workerModels, "worker-model", nil, "Override the execution target of specific worker(s) as agent=target; repeatable")
 	if name == "run" {
+		flags.StringArrayVar(&options.imagePaths, "image", nil, "Attach an image to one explicit worker; repeatable, ordered, preserves duplicates")
 		flags.StringArrayVar(&options.inheritResults, "inherit-result", nil, "Grant worker=<full-result-id> to every task of that worker in this new cycle (repeatable; requires one explicit team; implies --route team)")
 	}
 	flags.StringVarP(&options.coordinatorModel, "coordinator-model", "c", "", "Override the coordinator LLM target")
@@ -236,6 +238,7 @@ func resolveCanonicalRunOptionsForIntent(command *cobra.Command, options *canoni
 	resolved.modelOverride = options.model
 	resolved.workerModelOverrides = slices.Clone(options.workerModels)
 	resolved.inheritResults = slices.Clone(options.inheritResults)
+	resolved.imagePaths = slices.Clone(options.imagePaths)
 	resolved.coordinatorModelOverride = options.coordinatorModel
 	resolved.contextWindowOverride = options.contextWindow
 	resolved.temperatureOverride = options.temperature

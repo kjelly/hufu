@@ -256,7 +256,7 @@ func injectFileContexts(prompt string) (string, string) {
 		}
 
 		if fi.Size() > 100*1024 {
-			stderrLog("%s Warning: File %s is too large (>100KB), skipping context injection.\n", errStyle.Render("⚠"), cleanPath)
+			stderrLog("%s Warning: File %s is too large for text context (>100KB), skipping context injection. Use --image for supported images.\n", errStyle.Render("⚠"), cleanPath)
 			continue
 		}
 
@@ -265,15 +265,8 @@ func injectFileContexts(prompt string) (string, string) {
 			continue
 		}
 
-		isBinary := false
-		for i := 0; i < len(data) && i < 1024; i++ {
-			if data[i] == 0 {
-				isBinary = true
-				break
-			}
-		}
-		if isBinary {
-			stderrLog("%s Warning: File %s appears to be binary, skipping context injection.\n", errStyle.Render("⚠"), cleanPath)
+		if binaryContextContent(data) {
+			stderrLog("%s Warning: File %s is not UTF-8 text; skipping context injection. Use --image for supported images.\n", errStyle.Render("⚠"), cleanPath)
 			continue
 		}
 

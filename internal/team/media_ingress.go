@@ -24,6 +24,11 @@ func (c *Coordinator) prepareTaskMedia(ctx context.Context, task TaskDef, reques
 	if err := ctx.Err(); err != nil {
 		return TaskDef{}, err
 	}
+	if mode != "" {
+		if _, err := c.nativeImageWorkerDefinition(task.Agent); err != nil {
+			return TaskDef{}, err
+		}
+	}
 	policy, err := c.requiredMediaPolicy()
 	if err != nil {
 		return TaskDef{}, err

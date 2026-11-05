@@ -174,6 +174,9 @@ func synthesizeDirectAgentResult(ctx context.Context, tc *teamContext, agentName
 func executeSegments(ctx context.Context, segments []team.PromptSegment, registry *team.TeamRegistry, defaultProviderURL string, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string, route RouteDecision) (string, error) {
 	return executeSegmentsWithRunners(ctx, segments, registry, defaultProviderURL, loadedTeams, injector, activeCoord, pathConsent, vars, route,
 		func(ctx context.Context, coordinator *team.Coordinator, agentName, task string) (*team.DirectAgentResult, error) {
+			if len(opts.imagePaths) > 0 {
+				return coordinator.RunDirectAgentWithMediaAndSynthesis(ctx, agentName, task, team.MediaTurnRequest{Images: opts.imagePaths})
+			}
 			return coordinator.RunDirectAgent(ctx, agentName, task)
 		},
 		func(ctx context.Context, coordinator *team.Coordinator, prompt string) (string, error) {
@@ -293,6 +296,19 @@ func executeSegmentsWithRunners(ctx context.Context, segments []team.PromptSegme
 
 			if err != nil {
 				return handleSegmentError(ctx, tc, results, err, "direct agent @%s failed", seg.Name)
+			}
+			if len(opts.imagePaths) > 0 {
+				delivered, deliveryErr := presentNativeImageDirectResult(tc, directResult)
+				if deliveryErr != nil {
+					if strings.TrimSpace(delivered) != "" {
+						results = append(results, fmt.Sprintf("## Agent: @%s (team: %s)\n%s", seg.Name, currentTeamName, delivered))
+					}
+					return handleSegmentError(ctx, tc, results, deliveryErr, "direct image task @%s was not accepted", seg.Name)
+				}
+				disp2.finalizeTasks()
+				results = append(results, fmt.Sprintf("## Agent: @%s (team: %s)\n%s", seg.Name, currentTeamName, delivered))
+				prevResult = delivered
+				continue
 			}
 
 			if directResult.ReplanRequired {

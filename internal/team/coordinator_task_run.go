@@ -692,7 +692,11 @@ retryLoop:
 			return "", transportErr
 		}
 		runtimeCollection := transport == agent.ResultTransportRuntime && task.Execution.RequiresResult && (!task.PlanFirst || task.PlanID != "")
-		c.setCurrentTaskAttempt(todoID, attempt)
+		if attempt == 1 {
+			// The initial start transition was committed before this loop.
+			// Retries open their lease only after their own transition below.
+			c.setCurrentTaskAttempt(todoID, attempt)
+		}
 		attemptIdentity, attemptIdentityOK := c.activeTaskResultOccurrence(todoID)
 		if attemptIdentityOK {
 			activeOccurrence = attemptIdentity
@@ -784,10 +788,9 @@ retryLoop:
 			// A submitted partial/failed/blocked result belongs to the prior
 			// execution attempt. Preserve it in that attempt's receipt, but do
 			// not let it satisfy RequiresResult before the new worker runs.
-			// setCurrentTaskAttempt above atomically opened and cleared the new
-			// occurrence. Do not clear again: a delayed old submission must be
-			// rejected against the new owner, and a new submission must not be
-			// erased between opening and execution.
+			// Activating the new lease below clears the prior candidate
+			// atomically. Never clear it again after that activation: a new
+			// submission must not be erased between opening and execution.
 		}
 		trigger := ContextTriggerTaskDispatch
 		var failureContext *ContextFailure
@@ -811,18 +814,14 @@ retryLoop:
 				closeTranscript()
 				return "", fmt.Errorf("mark retry task started: %w", err)
 			}
-			// CommitTaskTransition always bumps OccurrenceRevision and revokes
-			// the task's current lease (coordinator_eventstore.go's
-			// revokeTaskOccurrence) to invalidate a prior worker's stale view --
-			// including the fresh lease this same iteration's setCurrentTaskAttempt
-			// call above just opened for this attempt. Without reopening it here,
-			// this attempt's own submit_result call finds no active occurrence and
-			// falls back to invocationMetadataFromContext, whose identity never
-			// carries an OccurrenceRevision/DispatchID and so can never pass
-			// validSubmitResultIdentity -- every retry's own resubmission would
-			// unconditionally fail with "submit_result runtime identity is missing
-			// or invalid", regardless of whether the attempt actually succeeded.
+			// Publish the new lease only after its lifecycle transition is
+			// durable. Transcript finalization and error terminalization must
+			// capture this same identity, not the preceding attempt's lease.
 			c.setCurrentTaskAttempt(todoID, attempt)
+			attemptIdentity, attemptIdentityOK = c.activeTaskResultOccurrence(todoID)
+			if attemptIdentityOK {
+				activeOccurrence, activeOccurrenceOK = attemptIdentity, true
+			}
 			if err := c.recordTaskExecutionRetryScope(parentCtx, task, todoID); err != nil {
 				closeTranscript()
 				return "", err
@@ -4230,8 +4229,10 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		history = view
 	}
 	admissionPrompt := prompt
+	sdkPrompt := prompt
 	if nativeWorkerInput(ctx) {
-		admissionPrompt = ""
+		admissionPrompt = nativeWorkerAdmissionPrompt(prompt, history)
+		sdkPrompt = ""
 	}
 	acceptedTerminalResult := &acceptedTerminalResultStop{}
 	ctx = context.WithValue(ctx, acceptedTerminalResultStopKey{}, acceptedTerminalResult)
@@ -4373,7 +4374,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		toolChoice = new(fantasy.SpecificToolChoice(submitResultToolName))
 	}
 	streamCall := fantasy.AgentStreamCall{
-		Prompt:     admissionPrompt,
+		Prompt:     sdkPrompt,
 		Messages:   history,
 		StopWhen:   stopWhen,
 		ToolChoice: toolChoice,

@@ -90,13 +90,24 @@ func verifyMediaProviderProfile(event RunEvent, payload MediaProviderAdmittedPay
 			continue
 		}
 		image := profile.Capabilities["image_input"]
-		if profile.ModelID != payload.Target.String() || profile.Provider != payload.ProviderKey || profile.Effective.Value != int(payload.ContextWindow) ||
+		if !mediaProfileMatchesTarget(profile.ModelID, payload.Target) || profile.Provider != payload.ProviderKey || profile.Effective.Value != int(payload.ContextWindow) ||
 			image.State != modelprofile.CapabilityYes || !trustedImageCapabilitySource(string(image.Source)) {
 			return media.Reject(media.Unsupported, "image provider admission differs from its bound profile evidence")
 		}
 		return nil
 	}
 	return media.Reject(media.DurabilityRequired, "image provider admission lacks its preceding profile evidence")
+}
+
+// Built-in Ollama profiling intentionally retains the provider's model leaf.
+// Named backends require the complete selector so no namespace can fall back
+// to the default provider. Provider/configuration identity is checked separately.
+func mediaProfileMatchesTarget(modelID string, target execution.ExecutionTarget) bool {
+	if execution.IsOllamaBackend(target.Backend) && modelID == target.Model {
+		return true
+	}
+	selector, err := execution.ParseExecutionSelector(modelID)
+	return err == nil && selector.Backend == target.Backend && selector.Model == target.Model
 }
 
 func verifyMediaProviderInvocationUniqueness(event RunEvent, payload MediaProviderAdmittedPayload, prior []RunEvent) error {

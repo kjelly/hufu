@@ -1785,6 +1785,11 @@ func taskTransitionEventKey(item *TodoItem) string {
 		return ""
 	}
 	base := fmt.Sprintf("%s:%s:%d", item.ID, item.Status, item.Retries)
+	// An unchanged status/body can begin a new attempt. Keep legacy keys for
+	// lease-less projections, but never deduplicate a new occurrence lease.
+	if item.OccurrenceRevision > 0 || item.DispatchID != "" {
+		base += fmt.Sprintf(":lease-%d:%s", item.OccurrenceRevision, item.DispatchID)
+	}
 	shadow := toCanonicalTaskShadow(item)
 	// Observations have their own canonical action_progress event. A heartbeat
 	// must not synthesize another task lifecycle transition at checkpoint time.

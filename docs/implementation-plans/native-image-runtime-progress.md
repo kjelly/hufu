@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `cac9d373`（PR-03E 證據與變更同本次階段 commit；M1 整體仍未完成）
+> Verified-Commit: `532a6c45`（PR-03F 證據與變更同本次階段 commit；M1 尚待 PR-03G repair wire）
 > Supersedes: —
 > Superseded-By: —
 
@@ -41,8 +41,10 @@
 | PR-03B canonical provider admission／CAS compiler／token counter／audit | 完成 | `9484c5e7`；required gates、最終 source 定向 race 通過；runtime 與 CLI 送圖仍關閉 |
 | PR-03C 最後 HTTP 授權／SDK stream 排空 | 完成；`a1ad9c8a` | 完整測試、contracts、vet、lint 與定向 race 通過；圖片執行入口仍關閉 |
 | PR-03D 原生圖片 API／共用 worker 串接 | 完成；`cac9d373` | API wire、full、contracts、vet、lint 與定向 race 全部通過；M1 整體仍未完成 |
-| PR-03E canonical 圖片恢復／重試 | 完成；同本次階段 commit | 新程序 CAS wire、reset 授權、分支政策與所有 required gates 通過 |
-| PR-03 M1 CLI/direct/single native images | 進行中 | API／worker／新 process 恢復與明確 retry reset 已驗證；CLI／非視覺 synthesis／自動 worker retry／cost／acceptance 驗收待完成 |
+| PR-03E canonical 圖片恢復／重試 | 完成；`532a6c45` | 新程序 CAS wire、reset 授權、分支政策與所有 required gates 通過 |
+| PR-03F CLI／文字 synthesis／自動 worker retry | 完成；同本次階段 commit | wire／cost／acceptance、完整 suite、contracts、vet、lint 與定向 race 通過 |
+| PR-03G result-only repair／verbatim wire | 待驗證 | 補驗合法 repair 更新 lease 後的 transcript finalization；保持原圖不重播 |
+| PR-03 M1 CLI/direct/single native images | 進行中 | PR-03F 完整 gates 與 PR-03G repair wire 通過後才宣告完成 |
 | PR-04 M2 coordinator/chat/DAG/routing | 尚未開始 | — |
 | PR-05 M3 MCP/result binding | 尚未開始 | — |
 | PR-06 M3 inspect/export/docs | 尚未開始 | — |
@@ -372,3 +374,43 @@ PR-03E 資源紀錄：刷新同一 source 的 normal exports 後，已識別的�
 最終 normal／race exports 對應同一 source；已無過期 owned archives 可清。共享 GOCACHE 19,228,086,272 bytes；本任務 archives 734,478,336、其他可辨識輸出 247,971,840，合計 982,450,176 bytes（約 937 MiB），低於 2 GiB。GOTMPDIR 約 13.8 MiB，task scratch 約 27 MiB，沒有保留 executable；/tmp 可用約 7.3 GiB、cache/module volume 約 62 GiB、available RAM 約 12 GiB。提交後清除本階段 disposable logs，保留 source/config hashes、inventories、cleanup manifest 與下一階段草稿／checkpoint，供同一目標接續使用。
 
 M1 尚待 CLI／legacy／profile／dry-run／binary context guard、同一 direct lifecycle 的明確非視覺 synthesis、禁止含圖工作自動 replan，以及自動 retry／cost／acceptance 驗收；M2～M4 未完成。
+
+
+## PR-03F：CLI、非視覺結果整理與自動重試
+
+此子階段以 `532a6c45` 為父；必要 gates 已通過。M1 尚待 PR-03G result-only repair／verbatim 的完整 wire 驗證。
+
+- canonical `run --image` 與 legacy root 使用 repeatable array，保留含逗號路徑、次序及重複值；canonical options 與 profile 不跨命令洩漏，尚未支援的子命令拒絕圖片 profile。含圖輸入在 router 前限制為明示 team/default、單一非空 direct worker；多 team、多 worker、pipe、自動選 team、fast routing 與 decision 等組合拒絕。`#path` 依內容辨識 UTF-8／binary，避免將圖片注入文字 context。
+- `--dry-run --image` 只做 bounded 本機格式／大小與凍結目標政策檢查，明示 model vision capability 尚未驗證；不查 provider、不入 CAS、不建 task/event/conversation，也不將 preview 當成 durable admission。
+- CLI 呼叫新的 `RunDirectAgentWithMediaAndSynthesis`，在原 direct invocation finalize 前，以 canonical worker result 與文字目標整理答案。結果消費者沒有圖片、原 worker grant、conversation 或工具，使用自己的 bound text profile、成本與完整 context admission；一個 step 的限制同時接入共用 stream runner。HTTP failure、工具呼叫、取消及容量不足均保留已完成 worker 與 receipt，不重跑看圖或建立第二個 run。
+- CLI 直接使用原 invocation 的終態，禁止含圖工作落入舊的 coordinator synthesis／自動 replan。實際 CLI process 驗證未設定驗收及失敗驗收回傳非零，明確通過驗收才回傳成功；三者均保留答案、receipt 與稽核證據。
+- built-in Ollama 的 profile 按既有 resolver 使用 model leaf；native profile verifier 現在允許這個既有身分，同時保留 named backend namespace、provider key、configuration hash、能力來源與 context 驗證。實際 canonical／legacy CLI fake-Ollama wire 驗證 model、兩張不同圖加重複第一張的 SHA／role／次序，圖片 flag 的原始路徑不進 durable events。
+- 自動重試揭露三個共用 lifecycle 缺口：reducer 將失敗狀態永久封閉、transition 去重鍵忽略 lease、attempt activation 將 revision 重設為 1。修正後只有 runtime attempt marker、新 revision、空 dispatch 且一般狀態機允許的 retry start 才能重開；舊 checkpoint、stale lease、done/skipped 不重開。去重鍵綁定 occurrence revision/dispatch，無 lease 的 legacy key 保留；activation 沿用已提交的 revision，再發新 dispatch。沒有放寬 media admission。延伸的 verbatim SDK fixture 又重現 transcript finalization 持有舊 lease；現在 retry transition 前不開新 lease，提交後只開一次並刷新 finalization／error terminalization 的 captured identity。
+- 真正 worker retry fixture 在第一次 HTTP rate-limit 後刪除原始 PNG；第二個 attempt 從 CAS 取得原圖，保留失敗證據、有序重複圖、receipt input digest 與獨立 audit。新的純文字 retry instruction 受 current-prompt compaction 保護，原 image-bearing turn 維持位置，SDK 不重複加入 Prompt。
+- 成本 fixture 使用凍結 metered catalog 與 unknown-price deny：每次 image reservation 的完整 input tokens 對應 durable media admission、重複圖逐張計數、attempt 一致；文字整理有獨立 coordinator reservation。未回報 usage 的 fake SDK settlement 保留 `admission_bound`／usage unknown。預算不足測試證明零 HTTP、durable denial，沒有 reservation、settlement 或假造 acceptance。
+
+| PR-03F gate | 目前結果 |
+|---|---|
+| 圖片／一般 retry 定向離線回歸 | PASS，最終 source internal/team 62.810s（含 summary／verbatim retry 與一般 fault matrix） |
+| CLI／legacy／profile／dry-run／binary context／acceptance | 最終完整 suite 的 cmd/hufu PASS，212.436s；先前定向 11.277s |
+| `mise run lint` | 最終 source PASS，0 issues |
+| `mise run test-contracts` | PASS：team 115.990s、cmd 55.005s、reviewgate 23.134s、reviewprep 22.588s、web 0.251s |
+| `mise run vet` | PASS，無診斷 |
+| 定向 race | PASS，internal/team 285.362s |
+| `mise run test` | PASS，exit 0：team 912.990s、cmd/hufu 212.436s、tools 48.334s、web 0.339s；全部 packages 通過 |
+
+最終 gates 凍結 38 個 Go source／test 檔與四個驗證設定檔的 SHA-256。測試只連線 loopback fake provider；沒有真實 inference、圖片外送、登入／憑證或文件搬移。M2～M4 尚未開始。
+
+首輪完整 gate 的 team 執行 925.761s，只有既有 fault-matrix 測試失敗：其三個 persistence 投影預期 revision 2，實際在修正後單調遞增至 4。此輪不算通過。已將預期明確寫成 start(1) → failure(2) → retry start(3) → done(4)，並新增完整 journal 的 revision 單調性與 attempts `[1,2]` 檢查，保留原有 receipt／context／task-journal 驗證。其他 packages 通過（cmd/hufu 198.558s、tools 48.614s、web 0.310s）；最終凍結 source 已重跑整個 required gate 並成功；沒有將首輪失敗視為通過。
+
+Review 補充：ordinary retry 的 captured identity 已修正並通過 summary／verbatim wire；result-only repair 亦有同 attempt 的合法 lease 更新，尚需獨立的實際 SDK repair→transcript finalization 組合測試。既有 media text-view unit 只證明不帶圖片與不改寫 history，不足以替代這條完整 wire 驗收。此項列入 PR-03G，在完成前 M1 保持進行中。
+
+
+PR-03F 資源紀錄（最終完整 gate 前）：沿用原 GOCACHE／GOTMPDIR／GOMODCACHE，沒有新 cache 或第二個 task scratch。多輪診斷與 normal exports 更新期間，可辨識本任務產物觀察到的暫時峰值約 2.10 GiB；取得當前 exports 後，在下一個 heavyweight gate 前依 source／compile-unit provenance 清理過期 archives。F 階段已回收 4,036,321,280 bytes，自前期累計 19,343,339,520 bytes；沒有刪除共用依賴或其他工作的產物。
+
+最後 normal／race exports 對應同一份 38 個 Go source。完整 gate 前可辨識本任務輸出 1,281,441,792 bytes（archives 967,839,744、其他 project test cache 313,602,048），約 1.19 GiB；共享 GOCACHE 19,901,906,944 bytes，不能全歸本任務。GOTMPDIR 約 13.9 MiB，單一 task scratch 約 28 MiB，CLI fixture 的觀察峰值約 162 MiB，執行後自行清理 binary。沒有保留 executable；最終完整 suite 已通過，最終盤點如下。最近 /tmp 可用約 7.3 GiB、cache/module volume 約 61 GiB、available RAM 約 12 GiB。
+
+
+最終完整 gate 後再次按 provenance 清理，沒有過期 owned archives 可刪。共享 GOCACHE 20,025,905,152 bytes；可辨識本任務 archives 967,839,744、其他 project test cache 434,417,664，合計 1,402,257,408 bytes（約 1.31 GiB），低於 2 GiB。此為目前 normal／race 與可重用測試證據所需產物，未清除共享依賴、toolchain 或未知來源資料。GOTMPDIR 約 14 MiB，task scratch 約 29 MiB，沒有保留 executable。階段提交後清除本階段 disposable logs，保留同一 task 目錄的 inventories、source/config hashes、cleanup manifest 與 PR-03G checkpoint，以接續同一目標。
+
+本階段效益：可用 `--image` 明示送圖給單一 worker，先做不外送的本機 preview，保留圖片次序與重複值；答案整理沿用原本驗收結果，重試從 CAS 恢復並保留完整 receipt／成本證據。此證據支持離線 protocol 與 runtime 行為，不代表真實模型的辨識準確率或尚未執行的服務驗收。
