@@ -126,6 +126,15 @@ func (a providerRequestAdmission) CommitProviderInvocation(ctx context.Context, 
 	if err := a.c.commitModelProfileResolved(ctx, projection); err != nil {
 		return err
 	}
+	if providerRequestHasMedia(request) {
+		ctx = withNativeProviderCounter(ctx, a.c)
+		// Media permission is durable before cost reservation and transport.
+		// A media append failure therefore cannot strand a cost reservation;
+		// a later cost denial still leaves an admission record, not execution.
+		if err := a.c.commitMediaProviderAdmission(ctx, request); err != nil {
+			return err
+		}
+	}
 	if a.c.costManager == nil {
 		return nil
 	}

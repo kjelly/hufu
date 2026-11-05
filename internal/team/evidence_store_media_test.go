@@ -255,9 +255,78 @@ func TestMediaStoreRespectsAggregateReadBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, budget := WithArtifactReadBudget(t.Context(), 1)
-	if _, err := store.Open(ctx, ref.ID); !errors.Is(err, ErrReadLimit) || !errors.Is(budget.Err(), ErrReadLimit) {
-		t.Fatalf("budget bypass: %v, %v", err, budget.Err())
+	metadata, err := os.Stat(store.mediaPath("meta", ref.ID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name  string
+		bytes int64
+		pass  bool
+	}{
+		{name: "insufficient", bytes: 1},
+		{name: "exact metadata and content", bytes: metadata.Size() + ref.ByteSize, pass: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, budget := WithArtifactReadBudget(t.Context(), test.bytes)
+			reader, err := store.Open(ctx, ref.ID)
+			if reader != nil {
+				t.Cleanup(func() { _ = reader.Close() })
+			}
+			if test.pass {
+				if err != nil || budget.Err() != nil {
+					t.Fatalf("exact image read budget was charged more than once: %v", err)
+				}
+			} else if !errors.Is(err, ErrReadLimit) || !errors.Is(budget.Err(), ErrReadLimit) {
+				t.Fatalf("budget bypass: %v, %v", err, budget.Err())
+			}
+		})
+	}
+}
+
+func TestMediaReservedReaderUsesBundleCreditAndVerifiesContent(t *testing.T) {
+	for _, variant := range []string{"valid", "metadata conflict", "corrupt content"} {
+		t.Run(variant, func(t *testing.T) {
+			workspace := mediaStoreDirectory(t)
+			store, err := NewFileArtifactStore(workspace, workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			published, err := store.Put(t.Context(), PutArtifactRequest{Kind: "image", Content: mediaStorePNG(t)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			metadata, err := store.mediaMetadata(t.Context(), published.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := *metadata.Image
+			if variant == "metadata conflict" {
+				expected.ByteSize++
+			} else if variant == "corrupt content" {
+				if err := os.WriteFile(store.mediaPath("data", published.ID), []byte("corrupt fixture"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Holding all raw credit proves this reader does not nest another
+			// storage reservation underneath the caller's bundle reservation.
+			reservation, err := media.ReserveTransportFrames(t.Context(), media.MaxConcurrentRawBytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(reservation.Release)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			data, err := store.readReservedMedia(ctx, expected, media.Limits{})
+			t.Cleanup(func() { clear(data) })
+			if variant == "valid" {
+				if err != nil || !bytes.Equal(data, mediaStorePNG(t)) {
+					t.Fatal("reserved reader changed content or acquired nested credit", err)
+				}
+			} else if err == nil || data != nil {
+				t.Fatal("reserved reader returned unverified image bytes")
+			}
+		})
 	}
 }
 

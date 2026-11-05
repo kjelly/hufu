@@ -25,7 +25,7 @@ type mediaCreatedOccurrence struct {
 func VerifyNativeMediaLineage(ctx context.Context, workspace string, lineage []RunEvent) error {
 	hasMedia, hasCheckpoints := false, false
 	for _, event := range lineage {
-		if event.Type == string(EventMediaInputAdmitted) || event.Type == string(EventTaskMediaBound) {
+		if event.Type == string(EventMediaInputAdmitted) || event.Type == string(EventTaskMediaBound) || event.Type == string(EventMediaProviderAdmitted) {
 			hasMedia = true
 		}
 		if event.Type == string(EventTaskCreated) && len(event.Payload) > 0 {
@@ -59,6 +59,7 @@ type nativeMediaVerifier struct {
 	bound    map[string]bool
 	verified map[string]media.Ref
 	store    *FileArtifactStore
+	prior    []RunEvent
 }
 
 func verifyNativeMediaAdmissions(ctx context.Context, workspace string, lineage []RunEvent) error {
@@ -75,6 +76,7 @@ func verifyNativeMediaAdmissions(ctx context.Context, workspace string, lineage 
 		if index > 0 {
 			previous = &lineage[index-1]
 		}
+		verifier.prior = lineage[:index]
 		if err := verifier.accept(ctx, event, previous); err != nil {
 			return err
 		}
@@ -97,6 +99,12 @@ func (v *nativeMediaVerifier) accept(ctx context.Context, event RunEvent, previo
 		return v.acceptCreation(event)
 	case EventTaskMediaBound:
 		return v.acceptBinding(event, previous)
+	case EventMediaProviderAdmitted:
+		payload, err := decodeMediaProviderEvent(event)
+		if err != nil {
+			return err
+		}
+		return verifyMediaProviderAdmission(event, payload, v.prior)
 	default:
 		return v.acceptTransition(event)
 	}

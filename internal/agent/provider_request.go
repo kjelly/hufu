@@ -16,6 +16,7 @@ import (
 	"charm.land/fantasy/schema"
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/media"
+	"github.com/kjelly/hufu/internal/providerintrospection"
 )
 
 // ProviderRequest is the provider-equivalent request shape used by Hufu's
@@ -41,6 +42,12 @@ type ProviderAdmissionContext struct {
 	ModelID          string
 	ProviderIdentity string
 	ProviderBaseURL  string
+	// Configuration identity and image evidence come from the same resolved
+	// provider snapshot. Neither a provider key nor attachment support proves
+	// that a particular frozen destination accepts native image input.
+	ProviderConfigurationHash string
+	ImageInputCapability      providerintrospection.CapabilityState
+	ImageInputSource          string
 	// Bound distinguishes a provider-specific context from the legacy
 	// registry-compatible zero value. Provider identity fields also imply a
 	// bound context for compatibility with older callers.
@@ -60,7 +67,7 @@ type ProviderAdmissionContext struct {
 // A bound context must not be replaced with global model metadata when its
 // capacity is unavailable.
 func (c ProviderAdmissionContext) IsBound() bool {
-	return c.Bound || c.ProviderIdentity != "" || c.ProviderBaseURL != "" || c.APIProtocol.Requested != ""
+	return c.Bound || c.ProviderIdentity != "" || c.ProviderBaseURL != "" || c.APIProtocol.Requested != "" || c.ProviderConfigurationHash != ""
 }
 
 // SerializeProviderRequest returns the compact OpenAI-compatible request body

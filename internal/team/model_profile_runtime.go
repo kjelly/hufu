@@ -237,6 +237,9 @@ func (r *ModelProfileRuntime) ResolveAdmission(ctx context.Context, modelID stri
 	if protocol, protocolErr := r.manager.ResolveAPIProtocol(modelID); protocolErr == nil && protocol.Requested != "" {
 		result.Admission.APIProtocol = protocol
 	}
+	if identity, identityErr := r.manager.ResolveProviderExecutionIdentity(modelID); identityErr == nil && identity.ProviderKey == ref.Provider {
+		result.Admission.ProviderConfigurationHash = identity.ConfigurationHash
+	}
 	result.ProfileResolution = modelprofile.TelemetryFromProfile(profile)
 	if result.Admission.APIProtocol.Requested != "" {
 		result.ProfileResolution.SchemaVersion = 2
@@ -259,6 +262,8 @@ func admissionContextFromProfile(modelID string, ref providerintrospection.Provi
 		ContextWindowSource:  string(profile.Sources.EffectiveContext.Source),
 		IsEstimated:          profile.Sources.EffectiveContext.Confidence == "estimated",
 		ProfileTelemetryJSON: string(telemetry),
+		ImageInputCapability: providerintrospection.CapabilityState(profile.SupportsImageInput),
+		ImageInputSource:     string(profile.Sources.Capabilities.ImageInput.Source),
 	}
 }
 

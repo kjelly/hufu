@@ -106,7 +106,7 @@ func (b *LLMExecutionBackend) Name() string { return b.name }
 func (*LLMExecutionBackend) Kind() execution.BackendKind { return execution.BackendKindLLM }
 
 func (*LLMExecutionBackend) Capabilities() execution.BackendCapabilities {
-	return execution.BackendCapabilities{DirectLanguageModel: true, StructuredResult: true, WorkspaceRead: true, WorkspaceWrite: true, Shell: true}
+	return execution.BackendCapabilities{DirectLanguageModel: true, NativeImageInput: true, StructuredResult: true, WorkspaceRead: true, WorkspaceWrite: true, Shell: true}
 }
 
 func (b *LLMExecutionBackend) ValidateTarget(_ context.Context, target execution.ExecutionTarget) error {

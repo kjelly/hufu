@@ -178,6 +178,9 @@ func mayContainSecretKeyName(content string) bool {
 var numericTelemetryKeys = map[string]struct{}{
 	"image_token_upper_bound":         {},
 	"image-token-upper-bound":         {},
+	"image_tokens":                    {},
+	"text_tokens":                     {},
+	"request_tokens":                  {},
 	"max_tokens":                      {},
 	"requested_tokens":                {},
 	"available_tokens":                {},

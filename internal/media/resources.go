@@ -38,13 +38,27 @@ func (r *Reservation) Release() {
 // another waiter needs the bytes an outer reservation holds. Storage readers
 // retain their own reservation until Close.
 func ReserveTransport(ctx context.Context, rawBytes int64) (*Reservation, error) {
-	if rawBytes <= 0 || rawBytes > MaxConcurrentRawBytes {
-		return nil, Reject(LimitExceeded, "transport buffer exceeds process budget")
+	return ReserveTransportFrames(ctx, rawBytes)
+}
+
+// ReserveTransportFrames reserves one whole request before loading any of its
+// images. Each occurrence gets its own Base64 padding, including repetitions;
+// the compiler must not acquire nested per-image storage reservations.
+func ReserveTransportFrames(ctx context.Context, frames ...int64) (*Reservation, error) {
+	if len(frames) == 0 || len(frames) > MaxCount {
+		return nil, Reject(LimitExceeded, "invalid transport image count")
+	}
+	var rawBytes, encoded int64
+	for _, size := range frames {
+		if size <= 0 || size > MaxConcurrentRawBytes-rawBytes {
+			return nil, Reject(LimitExceeded, "transport buffer exceeds process budget")
+		}
+		rawBytes += size
+		encoded += 3 * ((size + 2) / 3 * 4)
 	}
 	if err := rawTransportSlots.Acquire(ctx, rawBytes); err != nil {
 		return nil, err
 	}
-	encoded := 3 * ((rawBytes + 2) / 3 * 4)
 	if err := encodedTransportSlots.Acquire(ctx, encoded); err != nil {
 		rawTransportSlots.Release(rawBytes)
 		return nil, err

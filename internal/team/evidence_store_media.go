@@ -229,19 +229,50 @@ func (s *FileArtifactStore) readVerifiedMedia(ctx context.Context, id string) ([
 			reservation.Release()
 		}
 	}()
-	data, err := readPrivateMedia(ctx, s.mediaPath("data", id), media.Limits{MaxBytesPerImage: metadata.Image.ByteSize})
+	data, err := s.readReservedMediaData(ctx, *metadata.Image, media.Limits{})
 	if err != nil {
 		return nil, ArtifactRef{}, nil, err
-	}
-	actual, err := media.Validate(ctx, data, media.Limits{})
-	if err != nil {
-		return nil, ArtifactRef{}, nil, err
-	}
-	if actual != *metadata.Image {
-		return nil, ArtifactRef{}, nil, media.Reject(media.IntegrityMismatch, "private image changed")
 	}
 	success = true
 	return data, metadata.ArtifactRef, reservation, nil
+}
+
+// readReservedMedia verifies the exact bytes returned to the caller. The
+// caller must already own transport credit for expected.ByteSize; this helper
+// never nests a storage reservation inside a whole-request reservation.
+// Possession of a Ref is not an authorization: native compilers must validate
+// the canonical occurrence and current lease before calling this helper.
+func (s *FileArtifactStore) readReservedMedia(ctx context.Context, expected media.Ref, limits media.Limits) ([]byte, error) {
+	if err := expected.Validate(); err != nil {
+		return nil, err
+	}
+	metadata, err := s.mediaMetadata(ctx, expected.ID)
+	if err != nil {
+		return nil, err
+	}
+	if metadata.Image == nil || *metadata.Image != expected {
+		return nil, media.Reject(media.IntegrityMismatch, "private image metadata differs from the reserved reference")
+	}
+	return s.readReservedMediaData(ctx, expected, limits)
+}
+
+// readReservedMediaData shares the reservation contract above. Its caller has
+// already validated private metadata, avoiding a second metadata budget debit.
+func (s *FileArtifactStore) readReservedMediaData(ctx context.Context, expected media.Ref, limits media.Limits) ([]byte, error) {
+	data, err := readPrivateMedia(ctx, s.mediaPath("data", expected.ID), media.Limits{MaxBytesPerImage: expected.ByteSize})
+	if err != nil {
+		clear(data)
+		return nil, err
+	}
+	actual, err := media.Validate(ctx, data, limits)
+	if err != nil || actual != expected {
+		clear(data)
+		if err != nil {
+			return nil, err
+		}
+		return nil, media.Reject(media.IntegrityMismatch, "private image changed")
+	}
+	return data, nil
 }
 
 func (s *FileArtifactStore) verifyMedia(ctx context.Context, ref ArtifactRef) error {

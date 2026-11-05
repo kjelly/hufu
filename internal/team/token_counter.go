@@ -476,6 +476,9 @@ func (tc *DefaultTokenCounter) estimatorForAdmission(modelID string, admission a
 
 func (tc *DefaultTokenCounter) CountProviderRequest(ctx context.Context, modelID string, request agent.ProviderRequest) (int, error) {
 	request.ModelID = modelID
+	if agent.ProviderRequestHasMedia(request) {
+		return tc.countNativeProviderRequest(ctx, modelID, request)
+	}
 	data, err := agent.SerializeProviderRequest(request)
 	if err != nil {
 		return 0, err
