@@ -90,6 +90,7 @@ func (c *Coordinator) installResumeValidationSource(source *ResumeSource, store 
 	previousBranch, previousRun, previousSelection := c.recoveryBranch, c.executionRunID, c.runInputSelectionRunID
 	projection := *source.Session
 	projection.RunInputSnapshots = CloneRunInputSnapshots(source.Session.RunInputSnapshots)
+	projection.MediaInputSnapshots = cloneMediaInputSnapshots(source.Session.MediaInputSnapshots)
 	projection.Tasks = make([]*TodoItem, len(source.Session.Tasks))
 	for i, item := range source.Session.Tasks {
 		projection.Tasks[i] = cloneTodoItem(item)

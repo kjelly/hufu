@@ -176,6 +176,8 @@ func mayContainSecretKeyName(content string) bool {
 // explicit: every other scalar below a secret-looking key is redacted,
 // regardless of its JSON type.
 var numericTelemetryKeys = map[string]struct{}{
+	"image_token_upper_bound":         {},
+	"image-token-upper-bound":         {},
 	"max_tokens":                      {},
 	"requested_tokens":                {},
 	"available_tokens":                {},

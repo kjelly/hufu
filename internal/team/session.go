@@ -92,9 +92,10 @@ type PendingWrapUp struct {
 }
 
 type SessionData struct {
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
-	Rounds    int    `json:"rounds"`
+	MediaInputSnapshots []MediaInputSnapshot `json:"media_input_snapshots,omitempty"`
+	CreatedAt           string               `json:"created_at"`
+	UpdatedAt           string               `json:"updated_at"`
+	Rounds              int                  `json:"rounds"`
 	// ExecutionPolicySnapshot is the durable, redacted admission record that
 	// freezes scheduler limits, model routing, execution worlds, and inherited
 	// environment values before any task or provider call can begin.
@@ -301,6 +302,8 @@ func cloneSession(orig *TeamSession, newWorkspace string) *TeamSession {
 	clone.ActionCatalog = orig.ActionCatalog.clone()
 	clone.GlobalDecisionRuntime = orig.GlobalDecisionRuntime.Clone()
 	clone.Config.DecisionRuntime = orig.Config.DecisionRuntime.Clone()
+	clone.MediaPolicy = orig.MediaPolicy.Clone()
+	clone.Config.Media = orig.Config.Media.Clone()
 	clone.GlobalControlDecisions = orig.GlobalControlDecisions.Clone()
 	clone.Config.ControlDecisions = orig.Config.ControlDecisions.Clone()
 	clone.GlobalSemanticRetrieval = orig.GlobalSemanticRetrieval.Clone()

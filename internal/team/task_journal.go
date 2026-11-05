@@ -31,6 +31,8 @@ const (
 )
 
 type journalRecord struct {
+	MediaBinding        *MediaTaskBinding          `json:"media_binding,omitempty"`
+	MediaInputDigest    string                     `json:"media_input_digest,omitempty"`
 	Op                  string                     `json:"op"` // "put", "del", "err", or "progress" (diagnostic only)
 	Agent               string                     `json:"agent"`
 	TaskID              string                     `json:"task_id,omitempty"`
@@ -175,7 +177,7 @@ func (c *Coordinator) recordTerminalTypedTaskResult(todoID string) {
 		if runID == "" {
 			runID = c.taskTracker.TodoList().RunID()
 		}
-		_ = c.journal.append(journalRecord{Op: "result", Agent: item.Agent, TaskID: item.ID, RunID: runID, Desc: item.Desc, TypedResult: copyResult, ContextManifests: normalizeContextManifests(item.ContextManifests), DynamicToolAuthorization: cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization), ResourceScopeSnapshot: cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot), ResultContract: item.ResultContract.clone(), DependencyResultView: item.DependencyResultView.clone(), WorkerWorkspace: item.WorkerWorkspace.clone(), ExecutionRoute: item.ExecutionRoute.clone(), CatalogAction: item.CatalogAction.clone(), TS: time.Now().Format(time.RFC3339)})
+		_ = c.journal.append(journalRecord{Op: "result", MediaBinding: item.MediaBinding.Clone(), MediaInputDigest: item.MediaInputDigest, Agent: item.Agent, TaskID: item.ID, RunID: runID, Desc: item.Desc, TypedResult: copyResult, ContextManifests: normalizeContextManifests(item.ContextManifests), DynamicToolAuthorization: cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization), ResourceScopeSnapshot: cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot), ResultContract: item.ResultContract.clone(), DependencyResultView: item.DependencyResultView.clone(), WorkerWorkspace: item.WorkerWorkspace.clone(), ExecutionRoute: item.ExecutionRoute.clone(), CatalogAction: item.CatalogAction.clone(), TS: time.Now().Format(time.RFC3339)})
 		return
 	}
 }
@@ -280,6 +282,9 @@ func replayTaskJournal(records [][]byte, now time.Time, maxAge time.Duration, pe
 		}
 		switch rec.Op {
 		case "put":
+			if rec.MediaBinding != nil || rec.MediaInputDigest != "" {
+				continue
+			}
 			if rec.Agent == "" || rec.Desc == "" {
 				continue
 			}

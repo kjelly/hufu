@@ -16,6 +16,7 @@ import (
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/decisionrt/control"
 	"github.com/kjelly/hufu/internal/decisionrt/settings"
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/semantic"
 	"github.com/kjelly/hufu/internal/yamlutil"
@@ -123,6 +124,7 @@ type NormalizedTeamConfig struct {
 // on the original authored YAML, and changes nothing about strict decode
 // (omitempty only affects marshaling).
 type teamManifestSpecFields struct {
+	Media                    *media.Policy          `yaml:"media,omitempty"`
 	RequestAcceptance        bool                   `yaml:"request-acceptance,omitempty"`
 	Agents                   *teamAgentDeclarations `yaml:"agents,omitempty"`
 	Preset                   string                 `yaml:"preset,omitempty"`

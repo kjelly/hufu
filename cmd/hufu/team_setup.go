@@ -212,6 +212,11 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		return nil, fmt.Errorf("resolve cost catalog: %w", err)
 	}
 	session.CostCatalog = costCatalog
+	operatorMedia, err := cfg.ResolveMediaPolicy()
+	if err != nil {
+		return nil, fmt.Errorf("resolve media policy: %w", err)
+	}
+	session.MediaPolicy = operatorMedia
 	if err := applyConfiguredBackends(session, cfg); err != nil {
 		return nil, err
 	}

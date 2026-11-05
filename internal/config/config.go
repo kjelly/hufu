@@ -13,6 +13,7 @@ import (
 	"github.com/kjelly/hufu/internal/decisionrt/control"
 	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/llmtimeout"
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/semantic"
 	"github.com/kjelly/hufu/internal/yamlutil"
@@ -150,6 +151,9 @@ func (p ProviderConfig) Validate() error {
 }
 
 type Config struct {
+	Media                 *media.Policy `yaml:"media"`
+	mediaPolicies         []*media.Policy
+	mediaPolicyError      error
 	ProviderURL           string                    `yaml:"provider-url"`
 	ProviderAPIKey        string                    `yaml:"provider-api-key"`
 	Providers             map[string]ProviderConfig `yaml:"providers"`
@@ -264,6 +268,9 @@ func (c *Config) mergeFromFile(path string) {
 	}
 	var fileCfg Config
 	if err := yaml.Unmarshal(data, &fileCfg); err != nil {
+		if c.Media != nil || fileCfg.Media != nil {
+			c.mediaPolicyError = err
+		}
 		fmt.Fprintf(os.Stderr, "warning: failed to parse %s: %v\n", path, err)
 		return
 	}
@@ -316,6 +323,10 @@ func (c *Config) mergeFromFile(path string) {
 }
 
 func (c *Config) mergeScalarFields(fileCfg *Config) {
+	if fileCfg.Media != nil {
+		c.Media = fileCfg.Media.Clone()
+		c.mediaPolicies = append(c.mediaPolicies, fileCfg.Media.Clone())
+	}
 	for _, field := range []struct{ dst, src *string }{
 		{&c.ProviderURL, &fileCfg.ProviderURL}, {&c.ProviderAPIKey, &fileCfg.ProviderAPIKey},
 		{&c.Model, &fileCfg.Model},

@@ -160,6 +160,7 @@ const (
 )
 
 type TaskCacheLookupRequest struct {
+	MediaInputDigest     string
 	Scope                TaskCacheLookupScope
 	AgentKey             string
 	Task                 string
@@ -176,6 +177,7 @@ type TaskCacheLookupResult struct {
 }
 
 type TaskCacheStoreRequest struct {
+	MediaInputDigest     string
 	AgentKey             string
 	Task                 string
 	Output               string
@@ -199,16 +201,17 @@ type TaskCacheInvalidateRequest struct {
 // state. Deduplicate preserves the task journal's existing merge behavior;
 // session projection restores retain their baseline append behavior.
 type TaskCacheSeed struct {
-	AgentKey     string
-	Task         string
-	Output       string
-	VerifySpec   *VerificationSpec
-	Verify       string
-	VerifyMode   string
-	Verification *VerificationResult
-	Identity     CacheIdentity
-	Pinned       bool
-	Deduplicate  bool
+	MediaInputDigest string
+	AgentKey         string
+	Task             string
+	Output           string
+	VerifySpec       *VerificationSpec
+	Verify           string
+	VerifyMode       string
+	Verification     *VerificationResult
+	Identity         CacheIdentity
+	Pinned           bool
+	Deduplicate      bool
 }
 
 // TaskCache owns in-memory task-result reuse state, matching, generation

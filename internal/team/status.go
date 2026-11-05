@@ -250,6 +250,8 @@ func (t *TaskTracker) TodoList() *TodoList {
 }
 
 type TodoItem struct {
+	MediaBinding                  *MediaTaskBinding `json:"media_binding,omitempty"`
+	MediaInputDigest              string            `json:"media_input_digest,omitempty"`
 	ID                            string
 	Phase                         Phase                      `json:"phase,omitempty"`
 	Action                        *Action                    `json:"action,omitempty"`
@@ -453,6 +455,8 @@ func (tl *TodoList) RunID() string {
 
 // TodoSpec describes a todo item to be created via AddBatch.
 type TodoSpec struct {
+	MediaBinding                  *MediaTaskBinding
+	MediaInputDigest              string
 	PlanTaskID                    string
 	PlanFirst                     bool
 	PlanID                        string
@@ -579,15 +583,16 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		providerBinding = nil
 	}
 	return &TodoItem{
-		ID:                            id,
-		PlanTaskID:                    item.PlanTaskID,
-		PlanFirst:                     item.PlanFirst,
-		PlanID:                        item.PlanID,
-		Phase:                         item.Phase,
-		Action:                        action,
-		ActionInputBindings:           actionInputBindings,
-		RunInputSnapshotID:            item.RunInputSnapshotID,
-		RunInputSnapshotHash:          item.RunInputSnapshotHash,
+		ID:                   id,
+		PlanTaskID:           item.PlanTaskID,
+		PlanFirst:            item.PlanFirst,
+		PlanID:               item.PlanID,
+		Phase:                item.Phase,
+		Action:               action,
+		ActionInputBindings:  actionInputBindings,
+		RunInputSnapshotID:   item.RunInputSnapshotID,
+		RunInputSnapshotHash: item.RunInputSnapshotHash,
+		MediaBinding:         item.MediaBinding.Clone(), MediaInputDigest: item.MediaInputDigest,
 		MaterializedActionPayloadHash: item.MaterializedActionPayloadHash,
 		BoundInputs:                   cloneStringMap(item.BoundInputs),
 		InvariantVerification:         item.InvariantVerification,
@@ -1355,13 +1360,14 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		contextManifests[i] = *cloneContextInjectionManifest(&item.ContextManifests[i])
 	}
 	cloned := &TodoItem{
-		ID:                            item.ID,
-		Phase:                         item.Phase,
-		Action:                        cloneActionPtr(item.Action),
-		ActionProgress:                cloneActionProgress(item.ActionProgress),
-		ActionInputBindings:           append([]ActionInputBinding(nil), item.ActionInputBindings...),
-		RunInputSnapshotID:            item.RunInputSnapshotID,
-		RunInputSnapshotHash:          item.RunInputSnapshotHash,
+		ID:                   item.ID,
+		Phase:                item.Phase,
+		Action:               cloneActionPtr(item.Action),
+		ActionProgress:       cloneActionProgress(item.ActionProgress),
+		ActionInputBindings:  append([]ActionInputBinding(nil), item.ActionInputBindings...),
+		RunInputSnapshotID:   item.RunInputSnapshotID,
+		RunInputSnapshotHash: item.RunInputSnapshotHash,
+		MediaBinding:         item.MediaBinding.Clone(), MediaInputDigest: item.MediaInputDigest,
 		MaterializedActionPayloadHash: item.MaterializedActionPayloadHash,
 		BoundInputs:                   cloneStringMap(item.BoundInputs),
 		PlanTaskID:                    item.PlanTaskID,
@@ -1743,6 +1749,11 @@ func (tl *TodoList) SetExecutionReceipt(id string, receipt *ExecutionReceipt) er
 				ti.ExecutionReceipt = nil
 			} else {
 				copyR := cloneExecutionReceipt(receipt)
+				if copyR.MediaInputDigest != "" && copyR.MediaInputDigest != ti.MediaInputDigest {
+					tl.mu.Unlock()
+					return fmt.Errorf("receipt media input digest conflicts with task")
+				}
+				copyR.MediaInputDigest = ti.MediaInputDigest
 				if err := normalizeExecutionReceiptSemantic(&copyR); err != nil {
 					tl.mu.Unlock()
 					return err

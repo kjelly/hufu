@@ -489,6 +489,7 @@ func (c *Coordinator) replaceCanonicalProjection(replayedSD *SessionData, replay
 		// Run inputs are compared by the shadow check, so a repair must
 		// replace them too or every start reports the same mismatch again.
 		sd.RunInputSnapshots = append([]RunInputSnapshot(nil), replayedSD.RunInputSnapshots...)
+		sd.MediaInputSnapshots = cloneMediaInputSnapshots(replayedSD.MediaInputSnapshots)
 		sd.ActiveRunInputSnapshotID = replayedSD.ActiveRunInputSnapshotID
 		sd.Entries = replayedSD.Entries
 		sd.Tasks = replayedTasks
@@ -792,6 +793,11 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 // Explicit callers retain compare-and-swap semantics; cancellation and worker
 // finalization using FromCurrent cannot race between reading and committing.
 func (c *Coordinator) commitTaskTransition(ctx context.Context, taskID string, expected *TaskStatus, next TaskStatus, detail, output string, metadata map[string]interface{}) error {
+	for _, key := range []string{"media_binding", "media_input_digest"} {
+		if _, override := metadata[key]; override {
+			return fmt.Errorf("task media inputs are immutable")
+		}
+	}
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return fmt.Errorf("commit task transition: task tracker is unavailable")
 	}
@@ -1255,6 +1261,9 @@ func (c *Coordinator) CommitTaskCreationResolved(ctx context.Context, specs []To
 	items := make([]*TodoItem, len(specs))
 	for i, spec := range specs {
 		items[i] = todoItemFromSpec(spec, ids[i])
+		if err := c.validateTaskMediaCreation(ctx, items[i]); err != nil {
+			return nil, err
+		}
 	}
 	if !c.hasDurableEventJournal() {
 		for _, item := range items {
@@ -1281,13 +1290,13 @@ func (c *Coordinator) CommitTaskCreationResolved(ctx context.Context, specs []To
 			return created, fmt.Errorf("commit task creation payload: %w", err)
 		}
 		key := taskTransitionEventKey(item)
-		if _, err := c.EventJournal().Append(appendCtx, RunEvent{
+		if err := c.appendMediaTaskCreation(appendCtx, RunEvent{
 			Type:           string(EventTaskCreated),
 			Actor:          item.Agent,
 			TaskID:         item.ID,
 			IdempotencyKey: key,
 			Payload:        rawPayload,
-		}); err != nil {
+		}, item); err != nil {
 			// created items were already added incrementally below; they are
 			// durable AND visible, so return them as the explicit partial result.
 			return created, fmt.Errorf("commit task creation append: %w", err)
@@ -1644,6 +1653,7 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 	if item.RemediationContext != nil {
 		payload["remediation_context"] = item.RemediationContext
 	}
+	addTaskMediaPayload(payload, item)
 	failureTransition := item.Status == TaskError || item.Status == TaskBlocked || item.Status == TaskProtocolIncomplete
 	if !failureTransition {
 		payload["desc"] = item.Desc

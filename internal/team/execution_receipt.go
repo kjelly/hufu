@@ -168,6 +168,7 @@ type ToolInvocationReceipt struct {
 
 // ExecutionReceipt represents the execution provenance and metadata for a single task run attempt.
 type ExecutionReceipt struct {
+	MediaInputDigest              string            `json:"media_input_digest,omitempty"`
 	RunID                         string            `json:"run_id"`
 	TaskID                        string            `json:"task_id"`
 	Attempt                       int               `json:"attempt"`

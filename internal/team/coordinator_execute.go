@@ -361,14 +361,15 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 		}
 		tasks[i] = t
 		todoBatch[i] = TodoSpec{
-			PlanTaskID:                    t.ID,
-			PlanFirst:                     t.PlanFirst,
-			PlanID:                        t.PlanID,
-			Phase:                         t.Phase,
-			Action:                        cloneActionPtr(t.Action),
-			ActionInputBindings:           append([]ActionInputBinding(nil), t.ActionInputBindings...),
-			RunInputSnapshotID:            t.RunInputSnapshotID,
-			RunInputSnapshotHash:          t.RunInputSnapshotHash,
+			PlanTaskID:           t.ID,
+			PlanFirst:            t.PlanFirst,
+			PlanID:               t.PlanID,
+			Phase:                t.Phase,
+			Action:               cloneActionPtr(t.Action),
+			ActionInputBindings:  append([]ActionInputBinding(nil), t.ActionInputBindings...),
+			RunInputSnapshotID:   t.RunInputSnapshotID,
+			RunInputSnapshotHash: t.RunInputSnapshotHash,
+			MediaBinding:         t.MediaBinding.Clone(), MediaInputDigest: t.MediaInputDigest,
 			MaterializedActionPayloadHash: t.MaterializedActionPayloadHash,
 			BoundInputs:                   cloneStringMap(t.BoundInputs),
 			InvariantVerification:         t.InvariantVerification,
@@ -439,6 +440,11 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	// on_failure loop must not be lost on restart or branch replay.
 	ids := c.taskTracker.TodoList().ReserveIDs(len(todoBatch))
 	for i := range todoBatch {
+		if err := c.finalizeMediaTaskSpec(ctx, &todoBatch[i], ids[i]); err != nil {
+			return "", err
+		}
+		tasks[i].MediaBinding = todoBatch[i].MediaBinding.Clone()
+		tasks[i].MediaInputDigest = todoBatch[i].MediaInputDigest
 		agentDef, _, resolveErr := c.AgentPool().ResolveAgentName(tasks[i].Agent)
 		if resolveErr != nil {
 			if advancedPhase && c.sessionData != nil {

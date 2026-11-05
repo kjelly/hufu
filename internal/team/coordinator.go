@@ -90,7 +90,9 @@ type taskRequiresResultKey struct{}
 type delegationChainKey struct{}
 
 type TaskDef struct {
-	ID string `json:"id,omitempty"`
+	MediaBinding     *MediaTaskBinding `json:"-" yaml:"-"`
+	MediaInputDigest string            `json:"-" yaml:"-"`
+	ID               string            `json:"id,omitempty"`
 	// WhenGoalContains is retained only so legacy manifests fail with a focused
 	// validation finding. Runtime contract selection never reads goal prose.
 	WhenGoalContains string `json:"-" yaml:"when-goal-contains,omitempty"`
@@ -425,6 +427,7 @@ type backendSemaphoreState struct {
 }
 
 type Coordinator struct {
+	mediaAdmissionGate chan struct{}
 	// recoveryBranch selects a read-only source without checking it out.
 	recoveryBranch       string
 	historicalTaskReader HistoricalTaskReader

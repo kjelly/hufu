@@ -25,8 +25,19 @@ func mediaStorePNG(t *testing.T) []byte {
 	return buf.Bytes()
 }
 
+// Fixtures own this directory; normalize its trusted temporary root so OS
+// aliases such as /var do not masquerade as an untrusted input symlink.
+func mediaStoreDirectory(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 func TestMediaArtifactStore(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := mediaStoreDirectory(t)
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +107,7 @@ func TestMediaArtifactStore(t *testing.T) {
 func TestMediaArtifactStoreRejectsConflicts(t *testing.T) {
 	for _, scenario := range []string{"mime", "data", "metadata", "namespace", "file-symlink", "source-symlink"} {
 		t.Run(scenario, func(t *testing.T) {
-			workspace := t.TempDir()
+			workspace := mediaStoreDirectory(t)
 			store, err := NewFileArtifactStore(workspace, workspace)
 			if err != nil {
 				t.Fatal(err)
@@ -163,7 +174,7 @@ func TestMediaArtifactStoreRejectsConflicts(t *testing.T) {
 }
 
 func TestMediaPublicationWithoutOccurrenceGrantsNoTaskOwnership(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := mediaStoreDirectory(t)
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +214,7 @@ func TestMediaPublicationWithoutOccurrenceGrantsNoTaskOwnership(t *testing.T) {
 }
 
 func TestMediaReaderRetainsReservationUntilClosed(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := mediaStoreDirectory(t)
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {
 		t.Fatal(err)
@@ -235,7 +246,7 @@ func TestMediaReaderRetainsReservationUntilClosed(t *testing.T) {
 }
 
 func TestMediaStoreRespectsAggregateReadBudget(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := mediaStoreDirectory(t)
 	store, err := NewFileArtifactStore(workspace, workspace)
 	if err != nil {
 		t.Fatal(err)

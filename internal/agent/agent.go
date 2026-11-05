@@ -22,6 +22,7 @@ import (
 	"github.com/kjelly/hufu/internal/decisionrt/control"
 	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/llmtimeout"
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/ollamaquota"
 	"github.com/kjelly/hufu/internal/providerintrospection"
@@ -295,6 +296,7 @@ func DefaultMemoryLearningPolicy() MemoryLearningPolicy {
 }
 
 type TeamConfig struct {
+	Media *media.Policy `yaml:"media" json:"media,omitempty"`
 	// RequestAcceptance freezes explicit invocation requirements and checks them at finish.
 	RequestAcceptance bool `yaml:"request-acceptance" json:"request_acceptance,omitzero"`
 	Name              string

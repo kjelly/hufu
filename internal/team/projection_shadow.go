@@ -34,6 +34,9 @@ func CompareCanonicalProjection(live *SessionData, events []RunEvent) error {
 	if err := compareExecutionPolicySnapshotProjection(live.ExecutionPolicySnapshot, replayed.ExecutionPolicySnapshot); err != nil {
 		return err
 	}
+	if err := compareMediaInputSnapshotProjection(live.MediaInputSnapshots, replayed.MediaInputSnapshots); err != nil {
+		return err
+	}
 	if err := compareRunInputSnapshotProjection(live.RunInputSnapshots, live.ActiveRunInputSnapshotID, replayed.RunInputSnapshots, replayed.ActiveRunInputSnapshotID); err != nil {
 		return err
 	}

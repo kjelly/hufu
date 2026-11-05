@@ -225,7 +225,7 @@ Hufu API 對原生載圖、MCP、匯出及結果 binding 執行 task/attempt ACL
 
 不使用 `allow-remote-media` 加 hostname 判斷。所有圖片處理目標都必須有明示 allowlist，包含 loopback provider：本機 Ollama 也可能把請求轉到 cloud。grant 授權的是已解析且固定的 backend／provider／model，不宣稱能監控受信任外部服務內部的再次轉送。
 
-在現行 team/config schema 增加單一 `media` policy，預設 disabled；team、operator 與 runtime ceilings 取交集，CLI 不能放寬。以下是**待實作語法**；不是目前 parser 已接受的配置：
+現行 team/config parser 已接受單一 `media` policy，預設 disabled；team、operator 與 runtime ceilings 取交集，CLI 不能放寬。以下只設定授權與限制；目前 M0 仍拒絕含圖模型執行，尚無 `--image` CLI 功能：
 
 ```yaml
 media:
@@ -246,6 +246,8 @@ media:
 ```
 
 `fixture_*` 和 8192 僅供離線 fixture 示範，不作真實 provider 預設或使用者模型估算。targets 不支援 wildcard；拒絕不明 backend/provider/model、重複衝突與無效 token bound。Codex target 仍須固定其 backend、上游 provider key（若 backend 可提供）與 model，並經該 backend 的 trust boundary。
+
+operator 的全域／專案配置依載入順序取交集；一層明確停用後，後續配置不能重新啟用。team 未設定 `media` 時繼承 operator；team 設定時需明示 `enabled: true`，並只能縮小 limits／target 集合。`allowed-targets` 省略時繼承、明示 `[]` 時拒絕所有目標；token upper bound 取較大值以避免低估。未知 media 欄位及無效限制使配置失敗，不回退成較寬授權。
 
 - grant 凍結實際 resolved backend/provider identity（含 transport/config/credential revision hash）、model、formats、limits、estimator/bound 與 policy digest；每次 request 比對，不能只比 model 名稱。
 - 網路 adapter 不跟隨跨目標 redirect；transport identity 漂移時拒絕。授權不取代 provider authentication、工具權限或 subprocess `--no-net`。

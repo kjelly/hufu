@@ -16,6 +16,9 @@ func (c *Coordinator) validateTaskCreationAdmission(ctx context.Context, item *T
 	if c == nil || item == nil {
 		return nil
 	}
+	if err := c.validateTaskMediaCreation(ctx, item); err != nil {
+		return err
+	}
 	if err := c.validateTaskHistoricalResultBinding(ctx, item); err != nil {
 		return fmt.Errorf("validate task %s historical results: %w", item.ID, err)
 	}

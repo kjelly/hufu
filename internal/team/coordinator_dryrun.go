@@ -267,6 +267,7 @@ func canonicalDryRunTarget(raw, defaultBackend string) string {
 
 func cloneTaskDef(td TaskDef) TaskDef {
 	clone := td
+	clone.MediaBinding = td.MediaBinding.Clone()
 	clone.DependencyResultView = td.DependencyResultView.clone()
 	clone.Execution = cloneExecutionContract(td.Execution)
 	clone.ModelTopology = cloneModelTopology(td.ModelTopology)

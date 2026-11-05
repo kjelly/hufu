@@ -16,6 +16,7 @@ import (
 var sessionFieldClass = map[string]string{
 	"CreatedAt": "replay", "UpdatedAt": "save", "Rounds": "carry",
 	"ExecutionPolicySnapshot": "replay", "RunInputSnapshots": "replay",
+	"MediaInputSnapshots":      "replay",
 	"DecisionPrimitiveResults": "replay", "ActiveRunInputSnapshotID": "replay",
 	"RequiredResourceLockSet":         "replay",
 	"ConversationHistorySourceOffset": "carry", "ConversationHistorySourceCounts": "carry",

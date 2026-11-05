@@ -171,6 +171,7 @@ func (c *Coordinator) canonicalWorkerAttemptContextForID(taskID string) (*canoni
 
 func workerToolResolutionTaskProjection(task TaskDef) workerToolResolutionTaskProjectionValue {
 	return workerToolResolutionTaskProjectionValue{
+		MediaBinding: task.MediaBinding.Clone(), MediaInputDigest: task.MediaInputDigest,
 		Agent:          strings.ToLower(strings.TrimSpace(task.Agent)),
 		ContractID:     task.ContractID,
 		PlanFirst:      task.PlanFirst,
@@ -181,12 +182,14 @@ func workerToolResolutionTaskProjection(task TaskDef) workerToolResolutionTaskPr
 }
 
 type workerToolResolutionTaskProjectionValue struct {
-	Agent          string
-	ContractID     string
-	PlanFirst      bool
-	PlanID         string
-	Execution      ExecutionContract
-	WorksetBinding *WorksetBinding
+	MediaBinding     *MediaTaskBinding
+	MediaInputDigest string
+	Agent            string
+	ContractID       string
+	PlanFirst        bool
+	PlanID           string
+	Execution        ExecutionContract
+	WorksetBinding   *WorksetBinding
 }
 
 func workerToolResolutionTaskMatches(left, right TaskDef) bool {

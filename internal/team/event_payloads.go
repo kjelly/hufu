@@ -103,6 +103,22 @@ func ValidateEventPayload(event RunEvent) error {
 }
 
 func validateCurrentEventPayload(event RunEvent) error {
+	if err := validateTaskMediaEventFields(event); err != nil {
+		return err
+	}
+	switch EventType(event.Type) {
+	case EventMediaInputAdmitted:
+		_, err := decodeMediaInputEvent(event)
+		return err
+	case EventTaskMediaBound:
+		_, err := decodeTaskMediaEvent(event)
+		return err
+	default:
+		return validateNonMediaEventPayload(event)
+	}
+}
+
+func validateNonMediaEventPayload(event RunEvent) error {
 	switch EventType(event.Type) {
 	case EventDecisionArtifactObserved, EventArtifactEvidenceObserved:
 		return validateDecisionObservationEvent(event)

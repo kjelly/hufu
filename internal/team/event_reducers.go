@@ -123,6 +123,14 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			if err := json.Unmarshal(e.Payload, &snapshot); err == nil && validateExecutionPolicySnapshot(&snapshot) == nil {
 				session.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(&snapshot)
 			}
+		case string(EventMediaInputAdmitted):
+			snapshot, err := decodeMediaInputEvent(e)
+			if err != nil {
+				session.RecoveryRequired = true
+				session.RecoveryReason = "invalid media input event"
+			} else {
+				session.MediaInputSnapshots = appendMediaInputSnapshot(session.MediaInputSnapshots, snapshot)
+			}
 		case string(EventRunInputsResolved):
 			var snapshot RunInputSnapshot
 			if err := json.Unmarshal(e.Payload, &snapshot); err == nil && ValidateRunInputSnapshot(&snapshot) == nil {
@@ -706,6 +714,9 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			}
 			continue
 		}
+		if e.Type == string(EventTaskMediaBound) {
+			continue
+		}
 		if !strings.HasPrefix(e.Type, "task_") {
 			continue
 		}
@@ -718,6 +729,8 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			ActionInputBindings           []ActionInputBinding        `json:"action_input_bindings"`
 			RunInputSnapshotID            string                      `json:"run_input_snapshot_id"`
 			RunInputSnapshotHash          string                      `json:"run_input_snapshot_hash"`
+			MediaBinding                  *MediaTaskBinding           `json:"media_binding,omitempty"`
+			MediaInputDigest              string                      `json:"media_input_digest,omitempty"`
 			MaterializedActionPayloadHash string                      `json:"materialized_action_payload_hash"`
 			BoundInputs                   map[string]string           `json:"bound_inputs"`
 			PlanTaskID                    string                      `json:"plan_task_id"`
@@ -846,13 +859,14 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		failureEvent, hasFailureEvent := mergeFailureEventJSON(nil, e.Payload)
 		if !exists {
 			item = &TodoItem{
-				ID:                            taskID,
-				Phase:                         payload.Phase,
-				Action:                        payload.Action,
-				ActionProgress:                cloneActionProgress(payload.ActionProgress),
-				ActionInputBindings:           append([]ActionInputBinding(nil), payload.ActionInputBindings...),
-				RunInputSnapshotID:            payload.RunInputSnapshotID,
-				RunInputSnapshotHash:          payload.RunInputSnapshotHash,
+				ID:                   taskID,
+				Phase:                payload.Phase,
+				Action:               payload.Action,
+				ActionProgress:       cloneActionProgress(payload.ActionProgress),
+				ActionInputBindings:  append([]ActionInputBinding(nil), payload.ActionInputBindings...),
+				RunInputSnapshotID:   payload.RunInputSnapshotID,
+				RunInputSnapshotHash: payload.RunInputSnapshotHash,
+				MediaBinding:         payload.MediaBinding.Clone(), MediaInputDigest: payload.MediaInputDigest,
 				MaterializedActionPayloadHash: payload.MaterializedActionPayloadHash,
 				BoundInputs:                   cloneStringMap(payload.BoundInputs),
 				PlanTaskID:                    payload.PlanTaskID,

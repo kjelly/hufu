@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `82b0884a`
+> Verified-Commit: `15ce1e17`（PR-01B 證據與變更同本次階段 commit）
 > Supersedes: —
 > Superseded-By: —
 
@@ -34,8 +34,8 @@
 |---|---|---|
 | 文件移入正式目錄 | 已提交 | `515b95b9`；文件 map、規格與本紀錄 |
 | PR-00 SDK/schema fixture 與回歸基線 | 完成 | `82b0884a`；SDK HTTP wire／tool media、pinned Codex schema；全部 required gates 與 targeted race 通過 |
-| PR-01A 私有圖片 storage 與前置拒絕 | 完成；同本次階段 commit | 格式／CAS／資源限制與 universal provider guard；required gates、targeted race 與 Darwin package cross-build 通過 |
-| PR-01B M0 canonical binding/policy/quota | 尚未開始 | PR-01 整體尚未完成 |
+| PR-01A 私有圖片 storage 與前置拒絕 | 完成 | `15ce1e17`；格式／CAS／資源限制與 universal provider guard；required gates、targeted race 與 Darwin package cross-build 通過 |
+| PR-01B M0 canonical binding/policy/quota | 完成；同本次階段 commit | required gates、定向 race 與 Darwin media compile 通過；PR-01 完成，M0 仍待 PR-02 |
 | PR-02 M0 history/compaction/recovery/audit | 尚未開始 | — |
 | PR-03 M1 CLI/direct/single native images | 尚未開始 | — |
 | PR-04 M2 coordinator/chat/DAG/routing | 尚未開始 | — |
@@ -118,3 +118,39 @@ Darwin compile 命令：`GOOS=darwin GOARCH=arm64 mise exec -- go build -p 2 -o 
 全部 heavyweight gates 序列執行。已確認無 Go consumer 後，根據本工作開始前的 cache inventory、新 media owner symbols 與目前 export 清單，刪除 7 個過期的 owned archives，回收 910,897,152 bytes（約 869 MiB）。驗證後共享 GOCACHE（排除 GOTMPDIR）23,283,948 KiB；本階段開始後新 cache entries 留存 901,072 KiB（包含目前 normal/race outputs 與必要 Darwin/decode dependency artifacts），低於 2 GiB。未清除其他 session、共享依賴、toolchain 或既有 fixtures。
 
 Task scratch 最終約 4.5 MiB，峰值觀察約 139 MiB；CLI fixtures 已自行清理。階段提交後刪除 task-owned logs／inventory，不留二進位或大型 dump。GOTMPDIR 約 12 MiB，包含既有共享 fixtures，未依時間戳猜測 ownership 刪除。
+
+## PR-01B：canonical media admission
+
+- `internal/media` 定義有序 turn parts、input snapshot、source occurrence／selection 與 immutable task binding。snapshot 綁定 run／branch／invocation／turn；task binding 另綁定 runtime-reserved Todo ID、agent、purpose、policy 與 input digest。重複圖片保留順序，同內容的不同 task 有各自的 owner hash；不能憑 CAS ID 或 SHA 取得另一個 task 的 grant。
+- operator 全域／專案與 team policy 取交集，預設停用；limits 只能收緊、targets 必須 exact match，token upper bound 取較大值。未知欄位、重複 targets、wildcard、負值、超過 ceiling 以及可能被 YAML 截斷的浮點值均拒絕。frozen policy 綁定 backend identity 與 model routes；舊 policy version 不能啟用圖片，未啟用時保留原文字 policy hash。
+- `media_input_admitted` 是 branch quota 的 canonical source。quota 去重 immutable blobs，保留每個 turn 的 repeated parts 計數；全域 event head 的 compare-and-append fence 防止不同 EventStore handles 同時超額。fork 繼承祖先 cutoff 內的 admitted 使用量，新 run 不重置；提交失敗不發布 live snapshot，也不刪除已入庫內容，uncertain commit 可冪等重建 projection。
+- task creation 與 `task_media_bound` 使用同一 atomic event batch。圖片 binding 進入 Todo、task projection、decision admission、worker assertion、session、journal 與 receipt；transition metadata 不能覆寫。attempt 必須有當前 task／revision／dispatch 的明示 lease，且仍在 `in_progress`；transition 後舊 lease 失效。執行前重新檢查已提交 policy 與 source lineage。
+- 新增 host API `RunTaskWithMedia`，沿用公開 invocation admission 與 `ExecuteTasks`。此階段會入庫／綁定並明確保存 blocked occurrence；local worker、Codex、DAG、sidecar 與 runtime action 仍拒絕含圖執行，未新增 `--image`，也未送圖給 provider。這不是 M1 transport 已完成的聲明。
+- 含圖 task 不查詢／寫入自動 cache、不從 journal／completed-task seeds 自動重用、不參與 duplicate／inflight 合併；文字 cache 的 positive control 仍命中。`--no-journal` 不影響 durable event admission；測試證明仍建立兩個獨立 blocked 圖片 occurrence，沒有 cache lookup／store。
+- `ListByTask` 從當前 branch 的 canonical task binding 取得 media refs，不依 blob 第一位 publisher 的 TaskID。receipt 的 media digest 由 canonical Todo 派生，拒絕衝突值。SessionData 的 media snapshots 隨 target branch replay／checkout／refresh，resume preview 使用 defensive clone；沒有跨分支 carry。
+- improver 將 `Media` 分類為 fixed policy，recursive schema fixture 新增 36 個欄位且不移除舊欄位。comparison digest 保留 target identity 與 token 上界，不能將授權變更混成 prompt variant。數值 `image_token_upper_bound`／`image-token-upper-bound` 加入既有 numeric telemetry redaction 例外，非數值仍遮蔽，避免合法 policy 被持久化成字串而無法 replay。
+- Migration：只新增 optional JSON fields／events，沒有 SQL schema migration，不搬移既有 artifacts、不改寫歷史 receipt。正式 team manifest 參考文件已說明目前 API／config 支援與 M0 限制；history codec、完整 recovery 與獨立 audit 仍待 PR-02，M0 整體尚未完成。
+
+本階段以 `15ce1e17` 為父；以下 gates 全部通過後與本紀錄一併提交。圖片均為離線合成 fixture，沒有真實模型呼叫或圖片外送。
+
+| PR-01B gate | 結果 |
+|---|---|
+| 修正後定向測試 | PASS；media 0.005s、config 0.008s、team 9.942s、improver 0.031s |
+| `mise run test` | PASS，exit 0；team 844.522s、cmd/hufu 198.999s、improver 147.864s、tools 48.555s |
+| `mise run test-contracts` | PASS，exit 0；team 126.330s、cmd/hufu 55.924s、reviewgate 24.400s、reviewprep 25.267s |
+| `mise run vet` | PASS，exit 0，無診斷 |
+| `mise run lint` | PASS，exit 0，`0 issues.` |
+| 定向 race | PASS，exit 0；media 1.042s、config 1.026s、utils 1.109s、team 22.612s、improver 1.094s |
+| Darwin arm64 media compile-only | PASS，exit 0，`-o /dev/null`；未執行 Darwin runtime |
+
+定向命令：`mise exec -- go test -p 2 ./internal/media ./internal/config ./internal/team ./internal/improver -run '^Test(Media|TaskMedia|OperatorMedia|SingleTaskMedia|SessionDataFields|Policy)' -count=1`。
+
+Race 命令：`mise exec -- go test -p 2 -race ./internal/media ./internal/config ./internal/utils ./internal/team ./internal/improver -run '^Test(Media|TaskMedia|OperatorMedia|SingleTaskMedia|SessionDataFieldsAreClassifiedForBranchSwitch$|PolicyRetainsMediaAuthorization$|Paired|Redact)' -count=1`。
+
+Darwin 命令：`GOOS=darwin GOARCH=arm64 mise exec -- go build -p 2 -o /dev/null ./internal/media`。
+
+首輪 full regression 抓到 improver 的 policy field classification 與 SessionData branch classification 未更新，相關 CLI／improver／team 測試失敗，不能算通過證據。已補上 fixed／replay 分類、schema fixture、branch refresh 與實際 checkout 測試後重跑，完整測試第二輪通過。早期 lint 的三項 complexity 診斷已抽出媒體 owner helpers 修正，最終 source 的 lint 亦通過。更新 schema 的旗標只屬於 improver，誤套到多個 package 的定向命令不列為通過證據；schema 更新後已使用無該旗標的命令通過全部定向 packages。
+
+所有 heavyweight gates 依序執行，沿用 mise、GOCACHE／GOTMPDIR／GOMODCACHE。GOCACHE（排除 GOTMPDIR，allocated bytes）由 23,842,762,752 增至 25,379,885,056；本階段新增且保留 1,537,122,304 bytes（約 1.43 GiB），包含目前 normal/race 與必要 Darwin dependency outputs，低於 2 GiB 預算。根據階段開始前 inventory、team compile-unit／新增 media method provenance 及 current normal/race exports，在無 Go consumer 後刪除 9 個過期 owned archives，回收 969,515,008 bytes（約 925 MiB）。未刪共享依賴、toolchain 或其他 session 的輸出。
+
+Task scratch 清理前 6,060 KiB，觀察峰值約 133 MiB；fixture binaries 已自行清理。階段提交後移除 task-owned logs／inventory，不保留可丟棄二進位或大型 dump。GOTMPDIR 最終 11,532 KiB，保留其中既有 fixtures。驗證後 `/tmp` 可用約 7.3 GiB、cache/module volume 約 57 GiB、available RAM 約 12 GiB。

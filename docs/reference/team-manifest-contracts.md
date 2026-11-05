@@ -51,6 +51,28 @@ Team Preset、inline 與 Markdown 只允許不同名組合；同名不提供 pat
 Static contracts、delegation、action catalog 與 team worker defaults 可引用這些 worker；per-agent 進階契約及 coordinator 仍以 Markdown 宣告。
 完整欄位、工具限制與模板時序見 [inline worker 規格](agent-format.md#inline-worker)。
 
+## Native image policy (M0)
+
+`hufu.yaml` 的 `media` 是 operator 授權；flat team manifest 的 `media` 或版本化 manifest 的 `spec.media` 只能加嚴。未設定 operator 授權時，team 不能自行啟用。此階段提供私有圖片入庫、canonical turn／task binding 與配額；含圖任務會明確 blocked，尚未提供 CLI `--image` 或模型圖片傳輸。
+
+```yaml
+media:
+  enabled: true
+  image:
+    max-count: 2
+  allowed-targets:
+    - backend: fixture_backend
+      provider-key: fixture_provider
+      model: fixture_vision
+      image-token-upper-bound: 8192
+```
+
+這是離線 fixture 配置，實際 target 必須存在於 frozen execution policy；不是可直接使用的 provider。完整 limits 與 ceiling 見[圖片實作規格](../implementation-plans/native-image-runtime.md#72-明示目標授權不猜測-localremote)。限制及 token upper bound 必須是 YAML 整數，不接受會被截斷的小數。未知欄位、wildcard、重複 target、超出 ceiling 的值均拒絕。operator 各配置層與 team 取交集；停用不可被後續層重新啟用，target 陣列省略代表繼承，明示 `[]` 代表拒絕所有目標。每張圖片 token upper bound 取較大值，不能以縮小估算放寬容量。
+
+授權凍結 backend／provider／model、實際 backend identity hash 與 limits。圖片內容留在同一 ArtifactStore 的 private namespace；source paths 不寫入 binding。重複圖片保留 part 順序，但 branch storage 配額按 unique blobs 計算；fork 繼承祖先的 admitted 使用量，重新開始 invocation 不會重設配額。含圖任務停用自動結果 cache、歷史結果自動重用與 inflight 合併。
+
+Migration：未啟用 media 的舊文字 policy hash 與 artifact layout 不變；新增欄位為 optional，不改寫歷史 events／receipts。`--no-journal` 只停用 task-result journal，仍須具備 durable event journal 與 private CAS 才能接收圖片。引用式 conversation、完整恢復與獨立 audit 仍屬後續 M0 階段，不能由這份 storage／binding 支援推定已完成。
+
 ## Fixed batch contract graphs
 
 Static contracts can own a fixed batch graph using contract IDs:

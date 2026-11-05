@@ -28,6 +28,7 @@ const (
 // Every top-level field is classified explicitly. Nested fields inherit fixed
 // semantics; the recursive schema fixture additionally catches nested changes.
 var policyFields = map[string]policyFieldClass{
+	"Media":   fixedPolicy,
 	"Version": fixedPolicy, "Launch": fixedPolicy, "TeamMaxConcurrent": fixedPolicy, "DefaultLLMBackend": fixedPolicy,
 	"Backends": fixedPolicy, "ModelRoutes": fixedPolicy, "ExecutionWorlds": logicalWorld,
 	"RunInputSchemaHash": fixedPolicy, "RunInputPolicyHash": fixedPolicy, "ResultContracts": fixedPolicy, "ResultCollection": fixedPolicy,

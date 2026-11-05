@@ -38,6 +38,7 @@ const (
 // digest. The actual allowlisted child environment remains process-local and is
 // never written to the session checkpoint or the event store.
 type ExecutionPolicySnapshot struct {
+	Media              *MediaPolicySnapshot             `json:"media,omitempty"`
 	Version            int                              `json:"version"`
 	Launch             *LaunchSettings                  `json:"launch,omitempty"`
 	TeamMaxConcurrent  int                              `json:"team_max_concurrent"`
@@ -487,7 +488,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 			return snapshot.ExecutionWorlds[i].InheritEnv[j].Name < snapshot.ExecutionWorlds[i].InheritEnv[k].Name
 		})
 	}
-	configurationHash, err := executionPolicyConfigurationHash(snapshot)
+	configurationHash, err := c.mediaExecutionPolicyConfigurationHash(snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -639,6 +640,7 @@ func cloneExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) *ExecutionP
 	}
 	clone := *snapshot
 	clone.Launch = cloneLaunchSettings(snapshot.Launch)
+	clone.Media = snapshot.Media.clone()
 	clone.Backends = slices.Clone(snapshot.Backends)
 	clone.ModelRoutes = slices.Clone(snapshot.ModelRoutes)
 	clone.ResultContracts = slices.Clone(snapshot.ResultContracts)
@@ -757,6 +759,9 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 			}
 			seenAgents[policy.Agent] = struct{}{}
 		}
+	}
+	if err := validateMediaPolicySnapshot(snapshot.Media, snapshot); err != nil {
+		return err
 	}
 	if strings.TrimSpace(snapshot.ConfigurationHash) == "" {
 		return fmt.Errorf("execution policy snapshot configuration hash is missing")

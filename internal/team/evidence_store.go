@@ -523,6 +523,11 @@ func (s *FileArtifactStore) ListByTask(ctx context.Context, taskID string) ([]Ar
 			refs = append(refs, ref)
 		}
 	}
+	images, err := s.listTaskMedia(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	refs = append(refs, images...)
 	sort.Slice(refs, func(i, j int) bool { return refs[i].ID < refs[j].ID })
 	return refs, nil
 }

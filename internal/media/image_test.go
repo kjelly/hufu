@@ -111,7 +111,10 @@ func TestValidate(t *testing.T) {
 }
 
 func TestReadFile(t *testing.T) {
-	dir := t.TempDir()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(dir, "misleading.txt")
 	data := testPNG(t)
 	if err := os.WriteFile(path, data, 0o600); err != nil {

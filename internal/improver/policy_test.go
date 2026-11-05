@@ -11,6 +11,7 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/improve/paired"
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -155,5 +156,50 @@ func TestPolicyMapsOnlyRegisteredRoots(t *testing.T) {
 	policyA.ConfigurationHash = policyB.ConfigurationHash
 	if _, err := ProjectPolicy(policyA, rootsA); err == nil {
 		t.Fatal("tampered original policy accepted")
+	}
+}
+
+func TestPolicyRetainsMediaAuthorization(t *testing.T) {
+	root := t.TempDir()
+	roots, err := RegisterRoots(map[string]string{"subject_root": root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := func(bound int64) PolicyProjection {
+		t.Helper()
+		policy := testPolicy(t, root, "model_a")
+		limits, err := (media.Policy{Enabled: true, AllowedTargets: []media.Target{{Backend: "hufu-local", Model: "model_a", IdentityHash: "fixed-transport", ImageTokenUpperBound: bound}}}).Resolve()
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy.Media = &team.MediaPolicySnapshot{Version: media.Version, Policy: limits}
+		policy.Media.Hash, err = media.Digest(policy.Media)
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy.ConfigurationHash = ""
+		raw, err := json.Marshal(policy, json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy.ConfigurationHash = paired.BytesDigest(raw)
+		result, err := ProjectPolicy(policy, roots)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	first, same, changed := project(8192), project(8192), project(16384)
+	if first.ComparisonDigest != same.ComparisonDigest || first.ComparisonDigest == changed.ComparisonDigest {
+		t.Fatal("policy projection erased or destabilized fixed media authorization")
+	}
+	var projected struct {
+		Media *team.MediaPolicySnapshot `json:"media"`
+	}
+	if err := json.Unmarshal(first.Policy, &projected); err != nil {
+		t.Fatal(err)
+	}
+	if projected.Media == nil || projected.Media.Policy.AllowedTargets[0].ImageTokenUpperBound != 8192 || projected.Media.Policy.AllowedTargets[0].IdentityHash != "fixed-transport" {
+		t.Fatal("projection lost media limits or pinned target identity")
 	}
 }

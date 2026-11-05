@@ -682,7 +682,7 @@ func (c *Coordinator) applyLiveTaskProjection(tasks []*TodoItem) {
 	if !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
 		seeds := make([]TaskCacheSeed, 0, len(tasks))
 		for _, t := range tasks {
-			if t != nil && t.Status == TaskDone && t.Output != "" {
+			if t != nil && t.MediaBinding == nil && t.MediaInputDigest == "" && t.Status == TaskDone && t.Output != "" {
 				seeds = append(seeds, TaskCacheSeed{
 					AgentKey: strings.ToLower(t.Agent), Task: t.Desc, Output: t.Output,
 					VerifySpec: t.VerifySpec, Verify: t.Verify, VerifyMode: t.VerifyMode,
@@ -1365,7 +1365,7 @@ func taskDefFromTodoItem(it *TodoItem) TaskDef {
 	id := it.PlanTaskID
 	return TaskDef{
 		ID: id, Phase: it.Phase, Action: cloneActionPtr(it.Action), ActionInputBindings: append([]ActionInputBinding(nil), it.ActionInputBindings...), RunInputSnapshotID: it.RunInputSnapshotID,
-		RunInputSnapshotHash: it.RunInputSnapshotHash, MaterializedActionPayloadHash: it.MaterializedActionPayloadHash,
+		RunInputSnapshotHash: it.RunInputSnapshotHash, MediaBinding: it.MediaBinding.Clone(), MediaInputDigest: it.MediaInputDigest, MaterializedActionPayloadHash: it.MaterializedActionPayloadHash,
 		BoundInputs: cloneStringMap(it.BoundInputs), InvariantVerification: it.InvariantVerification, PlanFirst: it.PlanFirst, PlanID: it.PlanID, ContractID: it.ContractID, ContractHash: it.ContractHash, ContractRevision: it.ContractRevision,
 		Agent: it.Agent, Goal: goal, Constraints: it.Constraints, Model: it.Model, ModelTopology: cloneModelTopology(it.ModelTopology),
 		ResolvedExecutionTarget: it.ExecutionTarget, ExecutionTopology: cloneExecutionTopology(it.ExecutionTopology),
@@ -1400,6 +1400,7 @@ func (c *Coordinator) SessionData() *SessionData {
 		copySD.HistoricalResultGrants = cloneHistoricalGrantCycleRef(sd.HistoricalResultGrants)
 		copySD.DerivedFork = cloneDerivedForkRef(sd.DerivedFork)
 		copySD.RunInputSnapshots = CloneRunInputSnapshots(sd.RunInputSnapshots)
+		copySD.MediaInputSnapshots = cloneMediaInputSnapshots(sd.MediaInputSnapshots)
 		copySD.DecisionPrimitiveResults = slices.Clone(sd.DecisionPrimitiveResults)
 		copySD.Entries = append([]SessionEntry(nil), sd.Entries...)
 		copySD.Tasks = append([]*TodoItem(nil), sd.Tasks...)

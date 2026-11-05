@@ -232,6 +232,9 @@ func (s *acceptedTerminalResultStop) isAcceptedFor(c *Coordinator, todoID string
 }
 
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (result string, returnErr error) {
+	if taskHasMedia(task) {
+		return "", c.rejectMediaTaskExecution(task, todoID)
+	}
 	leafExecution := parentCtx.Value(leafExecutionKey{}) != nil
 	if c != nil && strings.HasPrefix(todoID, primaryDecisionTaskPrefix) {
 		item := c.todoItemByID(todoID)
@@ -274,6 +277,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 	// result contract.
 	if leafExecution && c.workerAgentOverride != nil {
 		task.Execution.RequiresResult = false
+	}
+	if taskHasMedia(task) {
+		return "", c.rejectMediaTaskExecution(task, todoID)
 	}
 	if item := c.todoItemByID(todoID); currentResultCollection(item) != nil {
 		return c.resumeCollectedTask(parentCtx, task, item)
@@ -2691,6 +2697,9 @@ func runtimeActionGateName(action *Action) string {
 }
 
 func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, todoID string) (output string, returnErr error) {
+	if taskHasMedia(task) {
+		return "", c.rejectMediaTaskExecution(task, todoID)
+	}
 	// Admission failures happen before the action's normal attempt lifecycle.
 	// They still own this pending occurrence and must leave a durable terminal
 	// failure, rather than an ERROR response paired with a pending checkpoint.
@@ -3765,6 +3774,9 @@ func isTaskTimeout(err error) bool {
 }
 
 func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todoID string) (string, error) {
+	if taskHasMedia(task) {
+		return "", c.rejectMediaTaskExecution(task, todoID)
+	}
 	s := c.AgentPool().Sidecar()
 	if s == nil {
 		if manifestErr := c.recordAuxiliaryFallback(ctx, "sidecar_task", "normal_worker_fallback"); manifestErr != nil {

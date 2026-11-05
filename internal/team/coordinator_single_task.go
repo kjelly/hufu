@@ -15,6 +15,17 @@ import (
 // Use a fresh coordinator/session; recovery of an interrupted invocation must
 // inspect its existing evidence rather than call this entry point again.
 func (c *Coordinator) RunTask(ctx context.Context, task TaskDef) (output string, err error) {
+	return c.runSingleTask(ctx, task, nil)
+}
+
+// RunTaskWithMedia admits a canonical input turn and binds its images to one
+// root occurrence. M0 persists that binding but rejects native execution.
+func (c *Coordinator) RunTaskWithMedia(ctx context.Context, task TaskDef, input MediaTurnRequest) (string, error) {
+	input.Images = append([]string(nil), input.Images...)
+	return c.runSingleTask(ctx, task, &input)
+}
+
+func (c *Coordinator) runSingleTask(ctx context.Context, task TaskDef, input *MediaTurnRequest) (output string, err error) {
 	if c == nil || c.session == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return "", errors.New("single task requires a coordinator and task tracker")
 	}
@@ -55,6 +66,12 @@ func (c *Coordinator) RunTask(ctx context.Context, task TaskDef) (output string,
 	}
 	if err := c.reconcileAttemptWorlds(ctx); err != nil {
 		return "", err
+	}
+	if input != nil {
+		task, err = c.prepareSingleTaskMedia(ctx, task, *input)
+		if err != nil {
+			return "", err
+		}
 	}
 	if err := c.startSemanticRunInputBoundary(ctx); err != nil {
 		return "", err

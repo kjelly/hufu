@@ -8,6 +8,8 @@ import "github.com/kjelly/hufu/internal/cost"
 type EventType string
 
 const (
+	EventMediaInputAdmitted                      EventType = "media_input_admitted"
+	EventTaskMediaBound                          EventType = "task_media_bound"
 	EventProviderQuotaCooldown                   EventType = "provider_quota_cooldown"
 	EventRunStarted                              EventType = "run_started"
 	EventRunFinished                             EventType = "run_finished"
@@ -132,7 +134,7 @@ func (e EventType) String() string { return string(e) }
 // reducers intentionally ignore what they do not understand.
 func IsKnownEventType(eventType string) bool {
 	switch EventType(eventType) {
-	case EventTaskResultCandidate, EventTaskResultCollectionCheckpointed, EventProviderQuotaCooldown, EventRunStarted, EventRunFinished, EventWrapUpPhase, EventRunCancellationRequested,
+	case EventMediaInputAdmitted, EventTaskMediaBound, EventTaskResultCandidate, EventTaskResultCollectionCheckpointed, EventProviderQuotaCooldown, EventRunStarted, EventRunFinished, EventWrapUpPhase, EventRunCancellationRequested,
 		EventDecisionArtifactObserved, EventArtifactEvidenceObserved, EventDecisionPrimitiveStarted, EventDecisionPrimitiveSettled, EventDecisionPrimitiveReused, EventControlDecisionObserved, EventRecoveryChangeObserved,
 		EventStrategyChangeEvaluated, EventStrategyChangeRejected,
 		EventUserMessageAdded, EventAssistantMessageAdded,

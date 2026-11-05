@@ -64,6 +64,9 @@ func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request Atte
 	if err := p.coordinator.AdmitExecutionPolicy(); err != nil {
 		return AttemptResult{}, fmt.Errorf("admit execution policy before hufu-local attempt: %w", err)
 	}
+	if err := p.coordinator.rejectUnsupportedMediaAttempt(ctx, request); err != nil {
+		return AttemptResult{}, err
+	}
 	ctx = withoutCoordinatorRequestPreflight(ctx)
 	if request.TaskID == "" || request.Attempt < 1 || request.ModelID == "" {
 		return AttemptResult{}, fmt.Errorf("hufu-local attempt has an incomplete contract")

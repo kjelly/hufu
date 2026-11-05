@@ -609,6 +609,9 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	// or starting the app-server. Otherwise a malformed request could still
 	// perform workspace/process side effects before canonicalization rejects
 	// its result.
+	if err := p.coordinator.rejectUnsupportedMediaAttempt(ctx, request); err != nil {
+		return AttemptResult{}, err
+	}
 	if err := validateAttemptArtifactScope(request); err != nil {
 		return AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("codex attempt artifact scope: %w", err))
 	}
