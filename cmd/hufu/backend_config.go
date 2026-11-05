@@ -48,7 +48,7 @@ func applyConfiguredBackends(session *team.TeamSession, global *config.Config) e
 	backends := map[string]config.BackendConfig{}
 	if global != nil {
 		maps.Copy(backends, global.Backends)
-		if session.Config.DefaultLLMBackend == "" && global.DefaultLLMBackend != "" {
+		if !session.RestoredLaunchSettings && session.Config.DefaultLLMBackend == "" && global.DefaultLLMBackend != "" {
 			session.Config.DefaultLLMBackend = execution.CanonicalTargetBackendName(global.DefaultLLMBackend)
 		}
 	}

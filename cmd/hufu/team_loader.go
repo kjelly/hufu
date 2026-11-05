@@ -345,6 +345,10 @@ func resolveExecutionRoleModels(session *team.TeamSession, cfg *config.Config) (
 	if err := resolveAndCheckModel(session, cfg); err != nil {
 		return team.RoleModels{}, err
 	}
+	if session.RestoredLaunchSettings {
+		return team.RoleModels{Sidecar: session.Config.SidecarModel, Guard: session.Config.GuardModel,
+			Judge: session.Config.JudgeModel, PlanReviewer: session.Config.PlanReviewerModel}, nil
+	}
 	sidecar := cfg.ResolveSidecarModel(session.Config.SidecarModel)
 	return team.RoleModels{
 		Sidecar:      sidecar,

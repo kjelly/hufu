@@ -1,6 +1,7 @@
 package team
 
 import (
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"testing"
 
@@ -119,6 +120,45 @@ func TestResultCollectionRecoveryRestartsAtDurableBoundaries(t *testing.T) {
 			}
 			if failures == 0 {
 				t.Fatal("historical failure disappeared")
+			}
+			if item.FailureEvent != nil {
+				t.Fatal("successful result repair retained an active failure")
+			}
+			for _, replayed := range ReduceToTodoList(events) {
+				if replayed.ID == id {
+					if err := compareSingleTaskProjection(item, replayed); err != nil {
+						t.Fatalf("successful repair differs after replay: %v", err)
+					}
+				}
+			}
+			// Historical writers omitted nil on success and synthesized a
+			// failure packet for the reopened protocol state. Keep those bytes
+			// immutable in storage; replay must still restore the cleared stop.
+			legacy := append([]RunEvent(nil), events...)
+			for i := range legacy {
+				if legacy[i].TaskID != id {
+					continue
+				}
+				var payload map[string]jsontext.Value
+				if err := json.Unmarshal(legacy[i].Payload, &payload); err != nil {
+					t.Fatal(err)
+				}
+				if legacy[i].Type == "task_protocol_incomplete" {
+					payload["failure_event"] = jsontext.Value(`{"task_id":"` + id + `","failure_class":"protocol","summary":"reopened collection"}`)
+				} else if legacy[i].Type == "task_completed" || legacy[i].Type == "task_verifying" {
+					delete(payload, "failure_event")
+				}
+				legacy[i].Payload, err = json.Marshal(payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, replayed := range ReduceToTodoList(legacy) {
+				if replayed.ID == id {
+					if err := compareSingleTaskProjection(item, replayed); err != nil {
+						t.Fatalf("historical repair differs after replay: %v", err)
+					}
+				}
 			}
 		})
 	}

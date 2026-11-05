@@ -17,7 +17,7 @@ import (
 // provider. Apply publishes a child only; ordinary resume remains a separate
 // invocation with its full policy, evidence, verification and acceptance gates.
 func runContractRecoveryCommand(cmd *cobra.Command, source *team.ResumeSource, name string, binding *commandWorkspaceBinding, registry *team.TeamRegistry, vars map[string]string) (runErr error) {
-	recoveryCtx := commandContext(cmd)
+	recoveryCtx := withResumeLaunchPolicy(commandContext(cmd), source)
 	if resumeRetryWork != "" {
 		recoveryCtx = team.WithReadOnlyWorkRetry(recoveryCtx, resumeRetryWork)
 	}
@@ -28,7 +28,7 @@ func runContractRecoveryCommand(cmd *cobra.Command, source *team.ResumeSource, n
 		recoveryCtx = team.WithFrozenInputPolicyRecovery(recoveryCtx)
 	}
 	setupCtx := context.WithValue(recoveryCtx, contractRecoverySetupKey{}, true)
-	tc, err := loadTeamByNameWithWorkspaceBinding(setupCtx, name, binding, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, false, false)
+	tc, err := loadTeamByNameWithWorkspaceBinding(setupCtx, name, binding, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
 	if err != nil {
 		return err
 	}

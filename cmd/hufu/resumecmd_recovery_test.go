@@ -135,6 +135,8 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflo
 		t.Fatalf("initialize recovery project: %v\n%s", err, output)
 	}
 	opts = runOptions{workspace: workspace, workspaceMode: "exact", startDir: project, subjectRoot: project, canonicalRun: true, providerURL: server.URL + "/v1", contextWindowOverride: 131072, displayMode: "plain", eventFormat: "text", autoApprove: true, quietMode: true}
+	opts.modelOverride, opts.maxTokensOverride, opts.temperatureOverride = "ollama/recovery-cli-fixture", "4096", "0.15"
+	opts.timeoutOverride = 45
 	registry := team.NewTeamRegistry([]string{search})
 	if err := registry.Discover(); err != nil {
 		t.Fatal(err)
@@ -193,6 +195,10 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflo
 		}
 	}
 	originalWork, originalTurns := blocked.ExecutionReceipt.ResultCollection.Work, blocked.ExecutionReceipt.ResultCollection.TurnsUsed
+	// Resume is a new CLI invocation: no original model/generation/timeout
+	// flags survive. Rehydrate them from the selected SQLite event lineage.
+	opts.modelOverride, opts.maxTokensOverride, opts.temperatureOverride = "", "", ""
+	opts.timeoutOverride, opts.contextWindowOverride = 0, 0
 	before := runtimeStoreFiles(t, workspace)
 	beforeCalls := collectorCalls.Load()
 	opts.dryRun, opts.outputFormat = true, "json"
@@ -201,6 +207,21 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflo
 	var output bytes.Buffer
 	cmd.SetOut(&output)
 	t.Chdir(project)
+	if succeeds && !delegated && !noInputs && !workflow {
+		opts.temperatureOverride = "0.8"
+		if err := runResumeCommand(cmd, nil); err != nil {
+			t.Fatal(err)
+		}
+		var rejected team.ResultCollectionRecoveryAssessment
+		if err := json.Unmarshal(output.Bytes(), &rejected); err != nil || rejected.Disposition != team.RecoveryBlocked {
+			t.Fatalf("changed launch override was not blocked: %+v %v", rejected, err)
+		}
+		if !reflect.DeepEqual(before, runtimeStoreFiles(t, workspace)) || beforeCalls != collectorCalls.Load() {
+			t.Fatal("blocked launch override wrote state or invoked a model")
+		}
+		opts.temperatureOverride = ""
+		output.Reset()
+	}
 	if err := runResumeCommand(cmd, nil); err != nil {
 		t.Fatal(err)
 	}

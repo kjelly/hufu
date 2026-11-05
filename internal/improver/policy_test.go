@@ -46,6 +46,33 @@ func TestPolicyProtocolIsFixedDuringComparison(t *testing.T) {
 
 var updatePairedPolicySchema = flag.Bool("update-paired-policy-schema", false, "Update the reviewed paired policy type schema")
 
+func TestPolicyLaunchSettingsAreFixedDuringComparison(t *testing.T) {
+	project := t.TempDir()
+	roots, err := RegisterRoots(map[string]string{"subject_root": project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var previous string
+	for _, timeout := range []int64{30, 60} {
+		policy := testPolicy(t, project, "model")
+		policy.Launch = &team.LaunchSettings{Version: 1, Timeout: timeout, Agents: map[string]team.LaunchAgentSettings{}}
+		policy.ConfigurationHash = ""
+		raw, err := json.Marshal(policy, json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy.ConfigurationHash = paired.BytesDigest(raw)
+		projection, err := ProjectPolicy(policy, roots)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if previous != "" && projection.ComparisonDigest == previous {
+			t.Fatal("comparison erased a launch setting change")
+		}
+		previous = projection.ComparisonDigest
+	}
+}
+
 func TestPolicyClassificationCoversRuntimeSchema(t *testing.T) {
 	for typ, classes := range map[reflect.Type]map[string]policyFieldClass{
 		reflect.TypeFor[team.ExecutionPolicySnapshot](): policyFields,

@@ -11,6 +11,20 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func validateResumeRepairTarget(source *team.ResumeSource, taskID string) error {
+	if taskID == "" {
+		return nil
+	}
+	for _, item := range source.Session.Tasks {
+		if item != nil && item.ID == taskID && item.FailureEvent != nil &&
+			((item.Status == team.TaskBlocked && item.FailureEvent.FailureClass == team.FailureProtocol) ||
+				(item.Status == team.TaskError && item.FailureEvent.FailureClass == team.FailureCancelled && item.ExecutionReceipt != nil && item.ExecutionReceipt.ResultCollection != nil)) {
+			return nil
+		}
+	}
+	return fmt.Errorf("branch %q has no blocked protocol task or cancelled collection %q", source.BranchID, taskID)
+}
+
 func runResumeSourcePreflight(cmd *cobra.Command, session *team.TeamSession, coordinator *team.Coordinator, source *team.ResumeSource) error {
 	if err := bindResumePreflightVersion(cmd.Context(), session); err != nil {
 		return err

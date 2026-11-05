@@ -617,6 +617,29 @@ contracts, original receipts and content-addressed transcript bytes. A refusal
 names available branches for read-only inspection; it does not start a fresh
 workflow or regenerate accepted payloads.
 
+New CLI sessions include a versioned `launch` object in the canonical execution
+policy event in `runtime.sqlite`. The same SQLite event commit and policy hash
+cover the startup values, so a crash cannot publish a policy without its launch
+settings. It records team and per-agent generation parameters, timeouts, worker
+and coordinator targets, resolved auxiliary targets (including disabled roles),
+execution-route choices, concurrency/round/step limits, goal mode, request
+acceptance and the allowlisted execution options. It does not store executable
+shell text, argv, provider URLs, API keys, environment values, or prompt text.
+Credentials must still be available from the current environment/configuration.
+
+`resume` restores these values from the selected branch's verified event lineage
+before applying explicit CLI/profile overrides and before model resolution or
+MCP/provider startup. Ordinary resume, result-only repair and contract recovery
+previews use the same restoration. Consequently `hufu resume --team <team>` no
+longer needs the original model/generation/timeout flags for new sessions.
+Explicit overrides still pass through normal policy-drift checks; restoration
+does not authorize changed tools, contracts, providers, network access or replay.
+Current host restrictions remain in force. Team definitions and provider
+registrations are still required; this is not a saved copy of the entire host.
+Old policies without `launch` stay unchanged and still require matching original
+settings: a hash-only historical setting cannot be reconstructed from today's
+defaults. No launch snapshot is backfilled into an old event or checkpoint.
+
 Legacy bound tasks can omit `invariant_verification` in their original event
 projection even when the static contract hash covered it. Checkpoint loading,
 canonical projection replacement, and resume preflight restore this field only
@@ -865,8 +888,9 @@ hufu resume --team <team> --workspace <control-root> --branch <child-id>
 ```
 
 An unversioned managed workspace additionally requires `--metadata-only` on
-preview and publication. Supply the original resume-compatible execution
-profile and model overrides where required. Publication creates and selects a
+preview and publication. Saved launch settings restore the execution profile
+and model overrides; legacy sessions without them still require the matching
+original settings. Publication creates and selects a
 child branch without running work; ordinary resume performs all normal policy,
 source, verification and acceptance checks before execution.
 
@@ -1244,6 +1268,15 @@ and the hash of the complete injected fragment. `inspect context --show-content`
 resolves and verifies this reference without depending on `context.sqlite`.
 
 Interrupted and failed workflows keep their existing recovery behavior.
+Lifecycle snapshots persist `failure_event: null` when an active failure has
+been cleared, including operator-authorized result repair. Replay preserves
+omitted fields in sparse events, but restores the cleared stop for historical
+completed operator repairs with a committed collection receipt. Original
+failure events, fingerprints and execution receipts remain in history.
+Startup can clear a recorded projection-mismatch recovery barrier only after
+validated canonical replay exactly matches the checkpoint and the barrier
+matches its durable mismatch event. Other recovery barriers remain enforced.
+
 `resume` never starts a new cycle, and dry-run and direct-agent entry points do
 not implicitly reopen completed workflows. Execution-policy compatibility is
 still enforced across the session. `--new` remains the explicit way to start a

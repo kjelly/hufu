@@ -11,6 +11,24 @@ import (
 	"github.com/kjelly/hufu/internal/team"
 )
 
+func TestApplyConfiguredBackendsPreservesRestoredDefault(t *testing.T) {
+	for _, restored := range []bool{false, true} {
+		session := &team.TeamSession{RestoredLaunchSettings: restored}
+		if err := applyConfiguredBackends(session, &config.Config{DefaultLLMBackend: "remote"}); err != nil {
+			t.Fatal(err)
+		}
+		want := "remote"
+		if restored {
+			// A saved empty selector means the built-in ollama default; it
+			// must not inherit a default introduced after the original run.
+			want = ""
+		}
+		if session.Config.DefaultLLMBackend != want {
+			t.Fatalf("restored=%t backend=%q, want %q", restored, session.Config.DefaultLLMBackend, want)
+		}
+	}
+}
+
 func TestApplyConfiguredBackendsMapsLLMAndCodex(t *testing.T) {
 	session := &team.TeamSession{Config: agent.TeamConfig{Backends: map[string]config.BackendConfig{
 		"lemonade": {Kind: "llm", Type: "openai-compatible", BaseURL: "http://127.0.0.1:8000/v1"},

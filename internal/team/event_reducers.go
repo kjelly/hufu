@@ -1273,6 +1273,12 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			}
 		case "task_completed":
 			item.Status = TaskDone
+			// Older lifecycle snapshots omitted a cleared active failure. A
+			// committed operator result repair proves that its submission stop
+			// was released; the original failure remains in the event history.
+			if !hasFailureEvent && completedOperatorResultRepair(item.ExecutionReceipt) {
+				item.FailureEvent = nil
+			}
 			if payload.Output != "" {
 				item.Output = payload.Output
 			}

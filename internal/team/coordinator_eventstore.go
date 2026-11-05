@@ -415,6 +415,7 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 		liveTasks = append([]*TodoItem(nil), sd.Tasks...)
 	})
 	if comparisonErr == nil {
+		c.clearMatchedProjectionRecovery(lineage, replayedSD)
 		if len(liveTasks) > 0 && (c.taskTracker == nil || len(c.taskTracker.TodoList().Items()) == 0) {
 			c.applyLiveTaskProjection(liveTasks)
 		}
@@ -1670,6 +1671,7 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 		payload["summary"] = failureSummary(item)
 		payload["output"] = utils.TruncateString(utils.RedactSecrets(item.Output), 2000)
 	}
+	projectTaskActiveFailure(payload, item, failureTransition)
 	if item.Verify != "" {
 		payload["verify"] = item.Verify
 		payload["verify_mode"] = item.VerifyMode

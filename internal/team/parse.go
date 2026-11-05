@@ -31,6 +31,12 @@ import (
 type TeamSession struct {
 	requestAcceptanceInputInstalled bool
 	compositionSources              map[string]compositionAgentSource // Process-local, never part of runtime policy.
+	// LaunchOptions opts command-created coordinators into restorable startup
+	// settings. Credentials and arbitrary command/environment text are excluded.
+	LaunchOptions *LaunchOptions
+	// RestoredLaunchSettings distinguishes saved empty selectors from a
+	// request to inherit today's host defaults.
+	RestoredLaunchSettings bool
 
 	Config            agent.TeamConfig
 	DecisionAuthoring DecisionAuthoringMetadata

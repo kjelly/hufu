@@ -39,6 +39,7 @@ const (
 // never written to the session checkpoint or the event store.
 type ExecutionPolicySnapshot struct {
 	Version            int                              `json:"version"`
+	Launch             *LaunchSettings                  `json:"launch,omitempty"`
 	TeamMaxConcurrent  int                              `json:"team_max_concurrent"`
 	DefaultLLMBackend  string                           `json:"default_llm_backend"`
 	Backends           []ExecutionBackendPolicySnapshot `json:"backends"`
@@ -331,6 +332,10 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 		DependencyResultViewsHash: viewsHash,
 		TeamMaxConcurrent:         c.maxConcurrent,
 		DefaultLLMBackend:         defaultBackend,
+	}
+	snapshot.Launch, err = captureLaunchSettings(c, version)
+	if err != nil {
+		return nil, err
 	}
 	runtimeHash, runtimeErr := settings.Merge(c.session.GlobalDecisionRuntime, c.session.Config.DecisionRuntime).Fingerprint("sidecar")
 	if runtimeErr != nil {
@@ -633,6 +638,7 @@ func cloneExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) *ExecutionP
 		return nil
 	}
 	clone := *snapshot
+	clone.Launch = cloneLaunchSettings(snapshot.Launch)
 	clone.Backends = slices.Clone(snapshot.Backends)
 	clone.ModelRoutes = slices.Clone(snapshot.ModelRoutes)
 	clone.ResultContracts = slices.Clone(snapshot.ResultContracts)
@@ -692,7 +698,7 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	if err := validateExecutionDiagnosticSnapshot(snapshot.DiagnosticLoop); err != nil {
 		return err
 	}
-	if err := validateOptionalPolicyHashes(snapshot); err != nil {
+	if err := validateOptionalPolicyFields(snapshot); err != nil {
 		return err
 	}
 	if len(snapshot.Backends) == 0 {
@@ -1027,6 +1033,13 @@ func (c *Coordinator) executionPolicySnapshotForComparison(snapshot *ExecutionPo
 	if err != nil {
 		return nil, fmt.Errorf("resolve execution policy snapshot compatibility: %w", err)
 	}
+	if snapshot.Launch == nil {
+		current.snapshot.Launch = nil
+		current.snapshot.ConfigurationHash, err = executionPolicyConfigurationHash(current.snapshot)
+		if err != nil {
+			return nil, err
+		}
+	}
 	// The absence of this field is itself historical tool policy. Compare
 	// the original serialization shape only when no authored transport change
 	// exists; the current new-session default cannot migrate a live session.
@@ -1071,7 +1084,7 @@ func activeSemanticRetrievalHash(settings semantic.Settings) string {
 	return settings.Hash()
 }
 
-func validateOptionalPolicyHashes(snapshot *ExecutionPolicySnapshot) error {
+func validateOptionalPolicyFields(snapshot *ExecutionPolicySnapshot) error {
 	if snapshot.DecisionRuntimeHash != "" && !decisionDigestPattern.MatchString(snapshot.DecisionRuntimeHash) {
 		return fmt.Errorf("invalid decision runtime hash")
 	}
@@ -1086,6 +1099,12 @@ func validateOptionalPolicyHashes(snapshot *ExecutionPolicySnapshot) error {
 	}
 	if snapshot.SemanticRetrievalHash != "" && !decisionDigestPattern.MatchString(snapshot.SemanticRetrievalHash) {
 		return fmt.Errorf("invalid semantic retrieval policy hash")
+	}
+	if snapshot.Launch != nil {
+		if snapshot.Version < executionPolicySnapshotVersion {
+			return fmt.Errorf("historical execution policy cannot contain launch settings")
+		}
+		return snapshot.Launch.validate()
 	}
 	return nil
 }

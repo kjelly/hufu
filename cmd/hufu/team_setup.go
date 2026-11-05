@@ -171,6 +171,9 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if err := ensureSessionWorkspaceScope(session); err != nil {
 		return nil, err
 	}
+	if err := restoreResumeLaunchSettings(ctx, session); err != nil {
+		return nil, fmt.Errorf("restore saved launch settings: %w", err)
+	}
 	// Apply CLI model overrides as the highest-priority model config layer.
 	cliModelOverrides, err := applyCLIRuntimeOverrides(session)
 	if err != nil {
@@ -242,6 +245,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if resolvedMaxConcurrent <= 0 {
 		resolvedMaxConcurrent = 8
 	}
+	session.LaunchOptions = captureLaunchOptions(session, execProfile, gate, planMode, autoSkillsMode)
 	if opts.dryRun || contractRecoverySetup(ctx) {
 		coordinator, err := team.NewDryRunCoordinator(team.DryRunCoordinatorParams{
 			Session: session, Profile: execProfile,

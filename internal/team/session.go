@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 
 	"path/filepath"
 	"strings"
@@ -290,6 +291,10 @@ func (s *SessionData) addEntryAt(role, content, timestamp string) {
 // so isolated coordinators cannot accidentally alias catalog state.
 func cloneSession(orig *TeamSession, newWorkspace string) *TeamSession {
 	clone := *orig
+	if orig.LaunchOptions != nil {
+		clone.LaunchOptions = new(*orig.LaunchOptions)
+		clone.LaunchOptions.ForcedSkills = slices.Clone(orig.LaunchOptions.ForcedSkills)
+	}
 	clone.Workspace = newWorkspace
 	clone.InvariantCatalog = cloneInvariantCatalog(orig.InvariantCatalog)
 	clone.RunInputDefinitions = cloneRunInputDefinitions(orig.RunInputDefinitions)

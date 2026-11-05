@@ -38,6 +38,10 @@ The command restores session state, re-drives only interrupted tasks according
 to their recovery policy, and then returns control to the coordinator. It does
 not create a new session or replay completed tasks automatically.
 
+New sessions save secret-free launch settings in runtime.sqlite. Resume restores
+them before applying explicit CLI/profile overrides and checking policy drift.
+Older sessions without these settings still require the original configuration.
+
 --run checks membership in the selected branch lineage; it does not rewind to
 that run. To start from a saved event, use session fork <event-id>.
 Required workspace versioning switches the managed files and checkpoint together.
@@ -105,31 +109,27 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	if err != nil {
 		return err
 	}
-	if err := validateResumeProfile(teamName, registry, vars); err != nil {
-		return err
-	}
 	source, err := team.ReadResumeSource(workspace, resumeBranch, resumeRun)
 	if err != nil {
+		return err
+	}
+	restoreResumeLaunchDefaults(cmd, source)
+	// Saved unattended defaults must disable interactive flags just as they
+	// would when supplied on the command line.
+	if err := validateRunFlags(); err != nil {
+		return err
+	}
+	if err := validateResumeProfile(teamName, registry, vars); err != nil {
 		return err
 	}
 	if resumeBranchRecoveryRequested() {
 		return runContractRecoveryCommand(cmd, source, teamName, binding, registry, vars)
 	}
-	if resumeRepairResult != "" {
-		found := false
-		for _, item := range source.Session.Tasks {
-			if item != nil && item.ID == resumeRepairResult && item.FailureEvent != nil &&
-				((item.Status == team.TaskBlocked && item.FailureEvent.FailureClass == team.FailureProtocol) ||
-					(item.Status == team.TaskError && item.FailureEvent.FailureClass == team.FailureCancelled && item.ExecutionReceipt != nil && item.ExecutionReceipt.ResultCollection != nil)) {
-				found = true
-			}
-		}
-		if !found {
-			return team.ResumeSourceError(workspace, fmt.Errorf("branch %q has no blocked protocol task or cancelled collection %q", source.BranchID, resumeRepairResult))
-		}
+	if err := validateResumeRepairTarget(source, resumeRepairResult); err != nil {
+		return team.ResumeSourceError(workspace, err)
 	}
 	if opts.dryRun {
-		tc, err := loadTeamByNameWithWorkspaceBinding(context.Background(), teamName, binding, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, false, false)
+		tc, err := loadTeamByNameWithWorkspaceBinding(withResumeLaunchPolicy(context.Background(), source), teamName, binding, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
 		if err != nil {
 			return err
 		}
@@ -143,7 +143,7 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 		}
 		return printResultRecoveryAssessment(cmd, assessment)
 	}
-	activationCtx := withResumeActivation(commandContext(cmd), source)
+	activationCtx := withResumeActivation(withResumeLaunchPolicy(commandContext(cmd), source), source)
 	tc, err := loadTeamByNameWithWorkspaceBinding(activationCtx, teamName, binding, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
 	if err != nil {
 		return team.ResumeSourceError(workspace, fmt.Errorf("failed to load team %q: %w", teamName, err))
@@ -219,6 +219,7 @@ func validateResumeProfile(teamName string, registry *team.TeamRegistry, vars ma
 
 func init() {
 	f := resumeCmd.Flags()
+	registerResumeLaunchFlags(f)
 	f.StringVar(&resumeBranch, "branch", "", "Exact existing branch ID, name, or label to resume (defaults to active)")
 	f.StringVar(&resumeRun, "run", "", "Require the source run to belong to the selected branch")
 	f.BoolVar(&resumeUpgradeContracts, "upgrade-contracts", false, "Preview or create a recovery child for changed result schemas; never bypass ordinary resume policy checks")

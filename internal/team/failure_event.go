@@ -364,6 +364,9 @@ func mergeFailureEventJSON(existing *FailureEventPayload, payload json.RawMessag
 	if err := json.Unmarshal(payload, &top); err != nil {
 		return existing, false
 	}
+	if raw, present := top["failure_event"]; present && string(raw) == "null" {
+		return nil, true
+	}
 	fields := top
 	hasExplicitFailure := false
 	if nested, ok := top["failure_event"]; ok && string(nested) != "null" && string(nested) != "{}" {
