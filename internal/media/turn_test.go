@@ -2,6 +2,7 @@ package media
 
 import (
 	"encoding/json/v2"
+	"os"
 	"testing"
 )
 
@@ -92,5 +93,45 @@ func TestMediaTaskBinding(t *testing.T) {
 	owner.TaskID = "2"
 	if err := owner.Validate(Limits{}); err == nil {
 		t.Fatal("owner substitution preserved binding validity")
+	}
+}
+
+func TestMediaTaskInvocationModePreservesLegacyBinding(t *testing.T) {
+	// This reference-only fixture uses the v1 field order and SHA contract
+	// before invocation_mode existed; it is not an admitted CAS object.
+	data, err := os.ReadFile("testdata/task-binding-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy TaskBinding
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Validate(Limits{}); err != nil {
+		t.Fatal("optional invocation mode changed a persisted v1 binding hash", err)
+	}
+	for _, mode := range []InvocationMode{InvocationSingleTask, InvocationDirectAgent, "unknown"} {
+		t.Run(string(mode), func(t *testing.T) {
+			bound := *legacy.Clone()
+			bound.InvocationMode = mode
+			if err := bound.Validate(Limits{}); err == nil {
+				t.Fatal("changing the invocation mode preserved an old grant")
+			}
+			bound, err := bound.Seal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bound.Hash == legacy.Hash || bound.InputDigest != legacy.InputDigest {
+				t.Fatal("invocation mode lost its authority or changed content identity")
+			}
+			err = bound.Validate(Limits{})
+			if mode == "unknown" {
+				if err == nil {
+					t.Fatal("unknown invocation mode accepted")
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

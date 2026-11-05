@@ -233,7 +233,9 @@ func (s *acceptedTerminalResultStop) isAcceptedFor(c *Coordinator, todoID string
 
 func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoID string) (result string, returnErr error) {
 	if taskHasMedia(task) {
-		return "", c.rejectMediaTaskExecution(task, todoID)
+		if err := c.validateNativeMediaTaskExecution(parentCtx, task, todoID); err != nil {
+			return "", c.blockMediaTaskExecution(todoID, err)
+		}
 	}
 	leafExecution := parentCtx.Value(leafExecutionKey{}) != nil
 	if c != nil && strings.HasPrefix(todoID, primaryDecisionTaskPrefix) {
@@ -279,7 +281,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		task.Execution.RequiresResult = false
 	}
 	if taskHasMedia(task) {
-		return "", c.rejectMediaTaskExecution(task, todoID)
+		if err := c.validateNativeMediaTaskExecution(parentCtx, task, todoID); err != nil {
+			return "", c.blockMediaTaskExecution(todoID, err)
+		}
 	}
 	if item := c.todoItemByID(todoID); currentResultCollection(item) != nil {
 		return c.resumeCollectedTask(parentCtx, task, item)
@@ -1091,6 +1095,12 @@ retryLoop:
 			if identity, ok := c.activeTaskResultOccurrence(todoID); ok {
 				taskCtx = withSubmitResultRuntimeIdentity(taskCtx, identity)
 			}
+			if taskHasMedia(task) && !protocolRepairExecution(taskCtx) {
+				conversationHistory, err = c.nativeWorkerMessages(taskCtx, todoID, currentPrompt, conversationHistory)
+				if err != nil {
+					return
+				}
+			}
 			// Per-attempt tool call evidence (§6.1, P1b: per-attempt, not
 			// coordinator-global, to prevent cross-task leakage).
 			taskCtx = context.WithValue(taskCtx, toolCallEvidenceKey{}, attemptEvidence)
@@ -1364,6 +1374,7 @@ retryLoop:
 			}
 		}
 		receipt := ExecutionReceipt{
+			MediaInputDigest:  task.MediaInputDigest,
 			RunID:             runID,
 			TaskID:            todoID,
 			Attempt:           attempt,
@@ -2698,7 +2709,7 @@ func runtimeActionGateName(action *Action) string {
 
 func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, todoID string) (output string, returnErr error) {
 	if taskHasMedia(task) {
-		return "", c.rejectMediaTaskExecution(task, todoID)
+		return "", c.rejectMediaTaskExecution(todoID)
 	}
 	// Admission failures happen before the action's normal attempt lifecycle.
 	// They still own this pending occurrence and must leave a durable terminal
@@ -3775,7 +3786,7 @@ func isTaskTimeout(err error) bool {
 
 func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todoID string) (string, error) {
 	if taskHasMedia(task) {
-		return "", c.rejectMediaTaskExecution(task, todoID)
+		return "", c.rejectMediaTaskExecution(todoID)
 	}
 	s := c.AgentPool().Sidecar()
 	if s == nil {
@@ -4211,6 +4222,17 @@ func (c *Coordinator) taskFinalizationBinding(todoID string, freeText bool) stri
 }
 
 func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fantasy.Agent, agentName, prompt string, history []fantasy.Message, timing *taskTiming, extraStop ...fantasy.StopCondition) (string, []fantasy.StepResult, error) {
+	if protocolRepairExecution(ctx) && agent.MessagesHaveMedia(history) {
+		view, err := mediaTextResultView(history)
+		if err != nil {
+			return "", nil, err
+		}
+		history = view
+	}
+	admissionPrompt := prompt
+	if nativeWorkerInput(ctx) {
+		admissionPrompt = ""
+	}
 	acceptedTerminalResult := &acceptedTerminalResultStop{}
 	ctx = context.WithValue(ctx, acceptedTerminalResultStopKey{}, acceptedTerminalResult)
 	ctx = mcp.WithToolAuthorizer(ctx, func(callCtx context.Context, server, tool, input string) error {
@@ -4351,7 +4373,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		toolChoice = new(fantasy.SpecificToolChoice(submitResultToolName))
 	}
 	streamCall := fantasy.AgentStreamCall{
-		Prompt:     prompt,
+		Prompt:     admissionPrompt,
 		Messages:   history,
 		StopWhen:   stopWhen,
 		ToolChoice: toolChoice,
@@ -4479,7 +4501,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					}
 					admission, admissionErr := c.admitCoordinatorContext(ctx, contextManager, ContextWindowRequest{
 						ModelID: descriptor.ModelID, System: descriptor.System, Tools: descriptor.Tools,
-						Messages: preparedMessages, Prompt: prompt, Window: descriptor.Window,
+						Messages: preparedMessages, Prompt: admissionPrompt, Window: descriptor.Window,
 						AdmissionContext:     descriptor.AdmissionContext,
 						ProtectedMessages:    runtimeRequiredMessages,
 						ReservedOutputTokens: descriptor.ReservedOutputTokens, SafetyMarginTokens: descriptor.SafetyMarginTokens,
@@ -4502,7 +4524,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 						Tools:                fullTools,
 						AdmissionContext:     activePreflight.admissionContextValue(),
 						Messages:             preparedMessages,
-						Prompt:               prompt,
+						Prompt:               admissionPrompt,
 						Window:               activePreflight.windowValue(),
 						ReservedOutputTokens: spec.MaxOutputTokens,
 						SafetyMarginTokens:   spec.SafetyMarginTokens,
@@ -4524,7 +4546,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 					contextChanged = !reflect.DeepEqual(preparedMessages, opts.Messages)
 
 					var preflightErr error
-					preflightSystem, preflightTools, preflightApplied, preflightErr = activePreflight.prepare(ctx, preparedMessages, prompt, spec.MaxOutputTokens, opts.StepNumber)
+					preflightSystem, preflightTools, preflightApplied, preflightErr = activePreflight.prepare(ctx, preparedMessages, admissionPrompt, spec.MaxOutputTokens, opts.StepNumber)
 					if preflightErr != nil {
 						return ctx, fantasy.PrepareStepResult{}, preflightErr
 					}
@@ -4538,7 +4560,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 						Tools:                requestTools,
 						AdmissionContext:     activePreflight.admissionContextValue(),
 						Messages:             preparedMessages,
-						Prompt:               prompt,
+						Prompt:               admissionPrompt,
 						Window:               activePreflight.windowValue(),
 						ReservedOutputTokens: spec.MaxOutputTokens,
 						SafetyMarginTokens:   spec.SafetyMarginTokens,
@@ -4582,12 +4604,19 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				}
 			}
 			opts.Messages = preparedMessages
+			requestTokens := estimateStepRequestTokens(preparedMessages, admissionPrompt)
+			if nativeWorkerInput(ctx) {
+				var countErr error
+				requestTokens, countErr = nativeWorkerStepTokens(ctx, workerDescriptor, preparedMessages)
+				if countErr != nil {
+					return ctx, fantasy.PrepareStepResult{}, countErr
+				}
+			}
 			if attemptTokens != nil {
-				if err := attemptTokens.reserveContext(estimateStepRequestTokens(preparedMessages, prompt)); err != nil {
+				if err := attemptTokens.reserveContext(requestTokens); err != nil {
 					return ctx, fantasy.PrepareStepResult{}, err
 				}
 			}
-			requestTokens := estimateStepRequestTokens(preparedMessages, prompt)
 			admissionTokens := requestTokens + int64(spec.MaxOutputTokens)
 			if admissionTokens <= 0 {
 				admissionTokens = 1
@@ -5188,8 +5217,8 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			}
 			reportFn(c.newEvent("text").withAgent(agentName).withTodoID(todoID).withMessage(stallReason + " on a task that requires one; requesting one same-turn continuation before falling back to a fresh attempt"))
 			continuationMessages := append([]fantasy.Message(nil), history...)
-			if strings.TrimSpace(prompt) != "" {
-				continuationMessages = append(continuationMessages, fantasy.NewUserMessage(prompt))
+			if strings.TrimSpace(admissionPrompt) != "" {
+				continuationMessages = append(continuationMessages, fantasy.NewUserMessage(admissionPrompt))
 			}
 			for _, step := range result.Steps {
 				continuationMessages = append(continuationMessages, step.Messages...)

@@ -39,12 +39,28 @@ func (a providerRequestAdmission) AdmitProviderRequest(ctx context.Context, requ
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// Native media transport remains closed until the reference compiler and
-	// provider-bound grants are available. Check every request shape here so
-	// workers, auxiliary roles and later tool rounds share the same boundary.
+	// Every media-bearing request must independently prove its canonical
+	// worker lease, frozen destination, supported capabilities and full input.
 	if providerRequestHasMedia(request) {
-		return media.Reject(media.Unsupported, "native media transport is not enabled")
+		messages, err := providerMediaMessages(request)
+		if err != nil {
+			return err
+		}
+		if _, err := agent.ValidatePersistentMessages(messages); err != nil {
+			return err
+		}
+		if a.c == nil {
+			return media.Reject(media.AccessDenied, "native media request has no runtime owner")
+		}
+		if _, err := a.c.resolveNativeProviderMedia(ctx, request); err != nil {
+			return err
+		}
+		ctx = withNativeProviderCounter(ctx, a.c)
 	}
+	return admitProviderRequestCapacity(ctx, request)
+}
+
+func admitProviderRequestCapacity(ctx context.Context, request agent.ProviderRequest) error {
 	if err := requireInvocationBinding(ctx); err != nil {
 		return err
 	}

@@ -17,6 +17,13 @@ type MediaTurnRequest struct {
 }
 
 func (c *Coordinator) prepareSingleTaskMedia(ctx context.Context, task TaskDef, request MediaTurnRequest) (TaskDef, error) {
+	return c.prepareTaskMedia(ctx, task, request, media.InvocationSingleTask)
+}
+
+func (c *Coordinator) prepareTaskMedia(ctx context.Context, task TaskDef, request MediaTurnRequest, mode media.InvocationMode) (TaskDef, error) {
+	if err := ctx.Err(); err != nil {
+		return TaskDef{}, err
+	}
 	policy, err := c.requiredMediaPolicy()
 	if err != nil {
 		return TaskDef{}, err
@@ -99,7 +106,7 @@ func (c *Coordinator) prepareSingleTaskMedia(ctx context.Context, task TaskDef, 
 		}
 	}
 	binding, err := (media.TaskBinding{Version: media.Version, RunID: input.RunID, BranchID: input.BranchID, Agent: strings.ToLower(strings.TrimSpace(task.Agent)), Purpose: "image_analysis",
-		PolicyHash: input.PolicyHash, Selections: selections, Refs: refs}).Seal()
+		InvocationMode: mode, PolicyHash: input.PolicyHash, Selections: selections, Refs: refs}).Seal()
 	if err != nil {
 		return TaskDef{}, err
 	}
@@ -111,13 +118,22 @@ func (c *Coordinator) prepareSingleTaskMedia(ctx context.Context, task TaskDef, 
 	return task, nil
 }
 
-func (c *Coordinator) rejectMediaTaskExecution(task TaskDef, taskID string) error {
+func (c *Coordinator) rejectMediaTaskExecution(taskID string) error {
 	err := media.Reject(media.Unsupported, "native image execution is not enabled")
+	return c.blockMediaTaskExecution(taskID, err)
+}
+
+func (c *Coordinator) blockMediaTaskExecution(taskID string, err error) error {
 	if c == nil || c.taskTracker == nil {
 		return err
 	}
 	if item := c.todoItemByID(taskID); item != nil && !isTerminalTaskStatus(item.Status) {
-		if persistErr := c.PersistFailureWithClassAndStatusError(task.Agent, task.Goal, taskID, err.Error(), RetryNone, FailurePolicy, TaskBlocked); persistErr != nil {
+		class := ClassifyTaskFailureStructured(FailureClassificationInput{Err: err})
+		status := TaskBlocked
+		if class == FailureCancelled || class == FailureTimeout {
+			status = TaskError
+		}
+		if persistErr := c.PersistFailureWithClassAndStatusError(item.Agent, item.Goal, taskID, err.Error(), RetryNone, class, status); persistErr != nil {
 			return persistErr
 		}
 	}

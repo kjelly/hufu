@@ -11,6 +11,8 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/media"
+	"github.com/kjelly/hufu/internal/modelprofile"
+	"github.com/kjelly/hufu/internal/providerintrospection"
 	"github.com/kjelly/hufu/internal/providerproxy"
 )
 
@@ -18,6 +20,10 @@ import (
 // needs registered, provider-bound backends. Every model boundary is a local
 // rejecting fixture; an accidental dispatch can never contact a real service.
 func newMediaPolicyCoordinator(t *testing.T, limits ...media.Limits) *Coordinator {
+	return newMediaPolicyCoordinatorWithTransport(t, "http://fixture.invalid/v1", nil, providerintrospection.CapabilityUnknown, nil, limits...)
+}
+
+func newMediaPolicyCoordinatorWithTransport(t *testing.T, endpoint string, factory agent.ProviderBoundaryFactory, imageInput providerintrospection.CapabilityState, configure func(*TeamSession), limits ...media.Limits) *Coordinator {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -36,23 +42,34 @@ func newMediaPolicyCoordinator(t *testing.T, limits ...media.Limits) *Coordinato
 	worker.MaxRetries = 0
 	session := &TeamSession{Dir: root, Workspace: control, Agents: map[string]*agent.AgentDef{"worker": worker},
 		Config: agent.TeamConfig{Name: "media-fixture", Generation: generation, WorkerModel: generation.Model, CoordinatorModel: generation.Model, DefaultLLMBackend: "fixture", MaxRetries: 0,
-			Providers: map[string]config.ProviderConfig{"fixture": {ProviderURL: "http://fixture.invalid/v1", MaxConcurrent: 1}}},
+			Providers: map[string]config.ProviderConfig{"fixture": {ProviderURL: endpoint, MaxConcurrent: 1}}},
 		MediaPolicy: &media.Policy{Enabled: true, AllowedTargets: []media.Target{{Backend: "fixture", ProviderKey: "fixture", Model: "vision", ImageTokenUpperBound: 8192}}}}
 	if len(limits) > 0 {
 		session.MediaPolicy.Image = limits[0]
 	}
+	if configure != nil {
+		configure(session)
+	}
 	if err := session.SetCompatibilityWorkspaceScope(subject); err != nil {
 		t.Fatal(err)
 	}
-	factory := func(context.Context, string, providerproxy.Config) (providerproxy.Boundary, error) {
-		t.Error("M0 media unexpectedly dispatched a provider")
-		return nil, errors.New("fixture rejects provider dispatch")
+	if factory == nil {
+		factory = func(context.Context, string, providerproxy.Config) (providerproxy.Boundary, error) {
+			t.Error("media unexpectedly dispatched a provider")
+			return nil, errors.New("fixture rejects provider dispatch")
+		}
 	}
-	c, err := NewCoordinator(session, "http://fixture.invalid/v1", "", nil, nil, RoleModels{}, 1, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false, WithProviderBoundaryFactory(factory))
+	c, err := NewCoordinator(session, endpoint, "", nil, nil, RoleModels{}, 1, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false, WithProviderBoundaryFactory(factory))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
+	// Metadata resolution is offline too. Unknown image support must reject
+	// before the provider boundary, without even trying fixture.invalid.
+	c.modelProfileRuntime.resolver = modelprofile.NewRuntimeResolver(func(providerintrospection.ProviderRef) providerintrospection.ModelIntrospector {
+		return imageProfileIntrospector{info: providerintrospection.RuntimeModelInfo{ConfiguredContext: 32768,
+			ImageInput: imageInput, Capabilities: []string{"tools"}}}
+	}, modelprofile.ProfileCacheOptions{})
 	c.SetSessionData(NewSession())
 	c.SetInvocationID(NewInvocationID())
 	return c
@@ -77,7 +94,9 @@ func admittedMediaTask(t *testing.T, c *Coordinator, ctx context.Context, turn s
 	if err := os.WriteFile(path, mediaStorePNG(t), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	task, err := c.prepareSingleTaskMedia(ctx, TaskDef{Agent: "worker", Goal: "compare image"}, MediaTurnRequest{TurnID: turn, Images: []string{path, path}})
+	// Generic M0 binding fixtures remain mode-neutral and can exercise
+	// independent owners. Public ingress assigns a supported execution mode.
+	task, err := c.prepareTaskMedia(ctx, TaskDef{Agent: "worker", Goal: "compare image"}, MediaTurnRequest{TurnID: turn, Images: []string{path, path}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

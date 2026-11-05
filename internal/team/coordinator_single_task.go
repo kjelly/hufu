@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 )
 
@@ -19,9 +20,10 @@ func (c *Coordinator) RunTask(ctx context.Context, task TaskDef) (output string,
 }
 
 // RunTaskWithMedia admits a canonical input turn and binds its images to one
-// root occurrence. M0 persists that binding but rejects native execution.
+// root occurrence. Native execution requires a supported invocation mode and
+// a provider-bound image capability and destination grant.
 func (c *Coordinator) RunTaskWithMedia(ctx context.Context, task TaskDef, input MediaTurnRequest) (string, error) {
-	input.Images = append([]string(nil), input.Images...)
+	input.Images = slices.Clone(input.Images)
 	return c.runSingleTask(ctx, task, &input)
 }
 

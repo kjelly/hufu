@@ -625,6 +625,9 @@ func (c *Coordinator) hydrateEmittedEventKeys(branchOpts ...any) {
 		if event.IdempotencyKey != "" {
 			c.emittedTaskTransitions[event.IdempotencyKey] = true
 		}
+		if key := taskCreationCheckpointKey(event); key != "" {
+			c.emittedTaskTransitions[key] = true
+		}
 	}
 	c.eventOnceMu.Unlock()
 	// A process can crash after the durable event append and before the SQLite
@@ -734,6 +737,12 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) error {
 		transitionKey := taskTransitionEventKey(item)
 		c.eventOnceMu.Lock()
 		alreadyEmitted := c.emittedTaskTransitions[transitionKey]
+		if eventType == string(EventTaskCreated) && c.emittedTaskTransitions[fmt.Sprintf("%s:%s:%d", item.ID, TaskPending, item.Retries)] {
+			// Canonical creation is already durable. Metadata such as failure
+			// fingerprints must not backfill a second creation before the real
+			// failure transition commits; that would redefine the occurrence.
+			alreadyEmitted = true
+		}
 		c.eventOnceMu.Unlock()
 
 		if alreadyEmitted {

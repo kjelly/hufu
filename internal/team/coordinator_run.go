@@ -22,6 +22,7 @@ import (
 	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
@@ -358,7 +359,7 @@ func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.Age
 }
 
 //nolint:gocyclo // direct-agent execution is the canonical closed lifecycle path.
-func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (directResult *DirectAgentResult, err error) {
+func (c *Coordinator) runDirectAgent(ctx context.Context, agentName string, task string, input *MediaTurnRequest) (directResult *DirectAgentResult, err error) {
 	if err := c.rejectPendingDerivedFork(); err != nil {
 		return nil, err
 	}
@@ -454,7 +455,16 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	directTask.ModelTopology = []string{directTask.Model}
 	directTask.ExecutionTopology = []execution.ExecutionTarget{directTask.ResolvedExecutionTarget}
 	directModel = directTask.Model
+	if input != nil {
+		directTask, err = c.prepareTaskMedia(ctx, directTask, *input, media.InvocationDirectAgent)
+		if err != nil {
+			c.finalizePublicInvocationFailure(err)
+			return nil, err
+		}
+	}
 	directSpec := TodoSpec{
+		MediaBinding:         directTask.MediaBinding.Clone(),
+		MediaInputDigest:     directTask.MediaInputDigest,
 		RunInputSnapshotID:   directTask.RunInputSnapshotID,
 		RunInputSnapshotHash: directTask.RunInputSnapshotHash,
 		Agent:                directTask.Agent,
@@ -475,6 +485,11 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		Recovery:             directTask.Recovery,
 		ReconcileTool:        directTask.ReconcileTool,
 	}
+	if err := c.finalizeMediaTaskSpec(ctx, &directSpec, todoID); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return nil, err
+	}
+	directTask.MediaBinding, directTask.MediaInputDigest = directSpec.MediaBinding.Clone(), directSpec.MediaInputDigest
 	if err := c.freezeTodoSpecDynamicAuthorization(ctx, directTask, agentDef, &directSpec); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return nil, err
@@ -541,12 +556,15 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return nil, transportErr
 	}
 	if _, directLLMErr := c.ExecutionRegistry().LanguageModelBackend(directTask.ResolvedExecutionTarget); directLLMErr != nil || directTransport == agent.ResultTransportRuntime || directTask.WorkerWorkspace.isolated() ||
-		(directTask.ExecutionRoute != nil && len(directTask.ExecutionRoute.Candidates) > 1) || c.requestAcceptanceEnabled() {
+		(directTask.ExecutionRoute != nil && len(directTask.ExecutionRoute.Candidates) > 1) || c.requestAcceptanceEnabled() || taskHasMedia(directTask) {
+		if taskHasMedia(directTask) {
+			ctx = withProviderCostContext(ctx, providerCostContext{Agent: resolvedName, Role: agentDef.Role, Purpose: cost.PurposeDirectAgent})
+		}
 		output, execErr := c.executeTask(ctx, directTask, todoID)
 		// Runtime collection delegates work to executeTask, but the direct
 		// invocation still owns run finalization. Without it, an otherwise
 		// recoverable collection failure leaves an uncertain terminal commit.
-		if c.requestAcceptanceEnabled() || directTransport == agent.ResultTransportRuntime {
+		if c.requestAcceptanceEnabled() || directTransport == agent.ResultTransportRuntime || taskHasMedia(directTask) {
 			runResult := c.finalizeDirectRun(ctx, todoID, execErr == nil, output)
 			if execErr == nil && (runResult == nil || !IsRunOutcomeSuccess(runResult.Outcome) || !runResult.GoalSatisfied) {
 				return directRunNotAcceptedResult(resolvedName, output, runResult, 0), nil

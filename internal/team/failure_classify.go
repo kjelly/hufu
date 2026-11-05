@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
@@ -165,6 +166,18 @@ func ClassifyTaskFailureStructured(in FailureClassificationInput) TaskFailureCla
 	// Structured: timeout (deadline exceeded).
 	if isTaskTimeout(in.Err) || errors.Is(in.Err, context.DeadlineExceeded) || errors.Is(in.ContextErr, context.DeadlineExceeded) {
 		return FailureTimeout
+	}
+	if rejected, ok := errors.AsType[*media.Error](in.Err); ok {
+		switch rejected.Code {
+		case media.Unsupported, media.AccessDenied, media.EgressDenied:
+			return FailurePolicy
+		case media.DurabilityRequired, media.InputMissing, media.IntegrityMismatch:
+			return FailureEnvironment
+		default:
+			// Malformed/oversized input and unknown future media codes need a
+			// new valid contract, never a replay chosen from diagnostic prose.
+			return FailureContract
+		}
 	}
 	// Structured: contract preflight findings (WP-01/WP-04). Error-severity
 	// executable_unresolved → environment; other error findings → contract.

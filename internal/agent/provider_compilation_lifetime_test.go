@@ -6,14 +6,37 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"weak"
 
 	"charm.land/fantasy"
 )
+
+func compilationWithRetainedBuffer() (*providerCompilation, weak.Pointer[[1 << 20]byte]) {
+	buffer := new([1 << 20]byte)
+	buffer[0] = 1
+	scope := newProviderCompilation(true, func() { clear(buffer[:]) })
+	scope.authorize = func(context.Context) error { runtime.KeepAlive(buffer); return nil }
+	return scope, weak.Make(buffer)
+}
+
+func TestProviderCompilationDropsFinishedBufferOwnership(t *testing.T) {
+	scope, buffer := compilationWithRetainedBuffer()
+	scope.innerReturned()
+	scope.release()
+	for range 3 {
+		runtime.GC()
+	}
+	if buffer.Value() != nil {
+		t.Fatal("retaining a finished compilation retained its private buffer owner")
+	}
+	runtime.KeepAlive(scope)
+}
 
 func TestProviderCompilationWaitsForEncoderReturn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)

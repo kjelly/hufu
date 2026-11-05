@@ -35,8 +35,15 @@ func newProviderCompilation(native bool, cleanup func()) *providerCompilation {
 		}
 		scope.closeBodies()
 		scope.active.Wait()
-		if scope.cleanup != nil {
-			scope.cleanup()
+		// A caller can retain a completed stream. Drop our callbacks after
+		// consumers drain so their captured buffers/history do not live with it.
+		scope.mu.Lock()
+		cleanup := scope.cleanup
+		scope.cleanup = nil
+		scope.authorize = nil
+		scope.mu.Unlock()
+		if cleanup != nil {
+			cleanup()
 		}
 	})
 	return scope

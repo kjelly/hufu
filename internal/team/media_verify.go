@@ -176,6 +176,13 @@ func (v *nativeMediaVerifier) acceptCreation(event RunEvent) error {
 	if err := verifyMediaCreationPolicy(event, occurrence, v.policies[event.RunID], v.sources); err != nil {
 		return err
 	}
+	if occurrence.Binding.InvocationMode != "" {
+		if err := verifyNativeMediaInvocationCreation(event, v.prior); err != nil {
+			return err
+		}
+	} else if err := validateMediaInvocationSourceOwner(occurrence.Binding, v.prior); err != nil {
+		return err
+	}
 	if _, exists := v.created[event.TaskID]; exists {
 		return media.Reject(media.BindingConflict, "media task has multiple creation events")
 	}
@@ -198,6 +205,16 @@ func (v *nativeMediaVerifier) acceptBinding(event RunEvent, previous *RunEvent) 
 
 func (v *nativeMediaVerifier) acceptTransition(event RunEvent) error {
 	occurrence, ok := v.created[event.TaskID]
+	if ok && event.Type == string(EventTaskResultCollectionCheckpointed) {
+		var collection resultCollectionEvent
+		if err := json.Unmarshal(event.Payload, &collection, collectionDurationFormat); err != nil {
+			return err
+		}
+		if collection.Receipt.MediaInputDigest != occurrence.Digest {
+			return media.Reject(media.BindingConflict, "result collection changed its media input digest")
+		}
+		return nil
+	}
 	if !ok || !mediaTransitionCarriesBinding(EventType(event.Type)) {
 		return nil
 	}

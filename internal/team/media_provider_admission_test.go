@@ -18,7 +18,7 @@ func nativeMediaProviderFixture(t *testing.T) (*Coordinator, context.Context, *T
 	t.Helper()
 	c := newMediaPolicyCoordinator(t)
 	ctx := openMediaInvocation(t, c)
-	item := createMediaOccurrence(t, c, ctx, admittedMediaTask(t, c, ctx, "provider-turn"))
+	item := createMediaOccurrence(t, c, ctx, nativeInvocationTask(t, c, ctx, media.InvocationSingleTask))
 	if err := c.CommitTaskTransition(ctx, item.ID, TaskPending, TaskInProgress, "running", "", nil); err != nil {
 		t.Fatal(err)
 	}

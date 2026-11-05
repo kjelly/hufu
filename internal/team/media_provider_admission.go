@@ -50,6 +50,19 @@ func (c *Coordinator) resolveNativeProviderMedia(ctx context.Context, request ag
 	if err != nil {
 		return admission, err
 	}
+	if ctx.Value(leafExecutionKey{}) != nil {
+		return admission, media.Reject(media.Unsupported, "native image invocation cannot execute a model fanout leaf")
+	}
+	if err := validateNativeMediaInvocation(item, c.executionPolicy.snapshot); err != nil {
+		return admission, err
+	}
+	view, err := c.mediaLineage(ctx)
+	if err != nil {
+		return admission, err
+	}
+	if err := validateNativeMediaSourceScope(item.MediaBinding, view.events); err != nil {
+		return admission, err
+	}
 	target, grant, limits, err := c.nativeProviderTarget(ctx, request, item)
 	if err != nil {
 		return admission, err

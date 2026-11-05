@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `9484c5e7`（PR-03C 證據與變更同本次階段 commit；M1 整體仍未完成）
+> Verified-Commit: `a1ad9c8a`（PR-03D 證據與變更同本次階段 commit；M1 整體仍未完成）
 > Supersedes: —
 > Superseded-By: —
 
@@ -39,8 +39,9 @@
 | PR-02 M0 history/compaction/recovery/audit | 完成 | `bb2301c2`；required gates、定向 race 通過；M0 資料基礎完成，圖片 transport 仍關閉 |
 | PR-03A provider compiler／圖片能力基礎 | 完成 | `8ddd0f04`；required gates、SDK wire／生命週期定向 race 通過；未開啟 runtime 圖片執行 |
 | PR-03B canonical provider admission／CAS compiler／token counter／audit | 完成 | `9484c5e7`；required gates、最終 source 定向 race 通過；runtime 與 CLI 送圖仍關閉 |
-| PR-03C 最後 HTTP 授權／SDK stream 排空 | 完成；同本次階段 commit | 完整測試、contracts、vet、lint 與定向 race 通過；圖片執行入口仍關閉 |
-| PR-03 M1 CLI/direct/single native images | 進行中 | 受支援 ingress／mode、worker／CLI 串接與 runtime wire E2E 仍待完成 |
+| PR-03C 最後 HTTP 授權／SDK stream 排空 | 完成；`a1ad9c8a` | 完整測試、contracts、vet、lint 與定向 race 通過；圖片執行入口仍關閉 |
+| PR-03D 原生圖片 API／共用 worker 串接 | 完成；同本次階段 commit | API wire、full、contracts、vet、lint 與定向 race 全部通過；M1 整體仍未完成 |
+| PR-03 M1 CLI/direct/single native images | 進行中 | API／worker 已串接；CLI／非視覺 synthesis／retry 與新 process resume wire 驗收待完成 |
 | PR-04 M2 coordinator/chat/DAG/routing | 尚未開始 | — |
 | PR-05 M3 MCP/result binding | 尚未開始 | — |
 | PR-06 M3 inspect/export/docs | 尚未開始 | — |
@@ -302,3 +303,38 @@ M1 尚待受支援 ingress／mode、RunTask／direct／worker／PrepareStep 串�
 清理守衛曾保留仍有 consumer 的輸出；追查確認其中一個是使用者 nu／tmux 啟動的閒置 hufu，而非本任務。以確切 PID／start identity 辨識後仍保護其 open／mapped outputs，沒有停止該程序、刪除其 binary 或改動共享 dependencies。當時沒有 socket／runtime store handle 且 I/O 未變；完整 gates 沒有與本任務的 live agent-team run 重疊。
 
 Task scratch 最終約 15.6 MiB，觀察峰值約 150 MiB；fixtures 自行清理，沒有留下 disposable binary。GOTMPDIR 約 12.5 MiB，保留既有／未知 ownership 的資料；沿用原 cache 路徑。階段提交後清理本階段 disposable logs，保留 inventories、cleanup manifest、source hashes 與 M1 continuation checkpoint 於同一私有 task 目錄。最後 `/tmp` 可用約 7.2 GiB、cache/module volume 約 64 GiB、available RAM 約 11 GiB。
+
+## PR-03D：原生圖片 API 與共用 worker 執行
+
+此子階段以 `a1ad9c8a` 為父，串接 `RunTaskWithMedia` 與 `RunDirectAgentWithMedia` 到既有 task／worker／provider pipeline。CLI `--image` 尚未交付，M1 整體仍未完成。
+
+- Trusted ingress 設定 `single_task`／`direct_agent` invocation mode，參與 immutable binding hash；舊 binding 省略此欄位，v1 JSON／hash golden fixture 保持相容。每個輸入 turn 僅綁定一個 root LLM worker，保留完整圖片順序；拒絕子集、重排、複製 owner、降級 mode、DAG／fanout／多 candidate routing。Codex、sidecar 與 runtime action 不取得 native 圖片權限。
+- `executeTask`／scheduler／Hufu-local 使用同一 canonical owner 與 live attempt lease。送出前重驗 model／backend／adapter 三層能力、frozen provider identity／grant、完整 system／tools／text／image token budget；metadata 拒絕先於 provider boundary，CAS byte read 與最後 HTTP 授權沿用 PR-03B/C。
+- Worker 建立 task-owned refs 的完整 Messages，SDK Prompt 留空以免重複當前 user turn；不使用 Files 捷徑。內容切片獨立複製，不能在綁定時改寫呼叫端歷史。PrepareStep 與逐 step 預算包含每次圖片 occurrence 的保守 token 上限。
+- Result-only repair 使用明確文字 view，不重讀／重送原圖，也不改寫 durable history。一般 attempt receipt 與 runtime collection 的 immutable work／checkpoint 從 canonical Todo 綁定 media digest，拒絕衝突值；collection replay 與獨立 media audit 重驗相同 digest。
+- 新 invocation 沿原始 creation／binding 事件驗證 owner，不將舊圖片改綁到新 run 或要求來源檔重現。此階段只驗證跨 invocation metadata 與移除來源檔後的 canonical owner；真正新 process 的恢復 wire E2E 仍列為 M1 未完成項目。
+- 取消發生於圖片已收件、worker 尚未開始時，保留標準 TaskError／FailureCancelled 與 `task_cancelled` 事件，不記重試指紋；一般媒體拒絕仍以既有失敗分類停止。取消回歸已確認修正前失敗、修正後通過。
+- Pending task 新增 failure fingerprints 時不再 backfill 第二個 `task_created`；live／rehydrated 回歸驗證 creation 唯一且終態證據完整。已完成 provider compilation 在 consumers 排空後清除 cleanup／authorizer callbacks 及 buffer map；弱引用回歸確認保留 scope 不再保留其 private buffer owner。
+
+`media_native_execution_test.go` 以真正 provider proxy／pinned SDK 連本機 fake HTTP endpoint，涵蓋 single-task／direct × tool／runtime result transport。兩張不同 PNG 加上第一張重複，核對原生 image parts 的 role／順序／解碼 SHA、user text 唯一、provider admission 次數、receipt 與獨立 audit；runtime collector 不收到圖片 bytes／refs。能力 unknown／no、context 不足與 CAS 替換均驗證零 HTTP；metadata 拒絕亦不啟動 boundary。未設定 whole-run acceptance 的執行仍是 unverified，沒有把 worker 完成當作 run acceptance。
+
+| PR-03D gate | 結果 |
+|---|---|
+| 最終 native API／worker／取消／checkpoint 定向測試 | PASS，team 13.608s |
+| `mise run lint` | PASS，exit 0，`0 issues.` |
+| `mise run test` | PASS，exit 0；team 1094.955s、cmd/hufu 246.707s、tools 49.831s |
+| `mise run test-contracts` | PASS，exit 0；team 170.836s、cmd/hufu 88.969s、reviewgate 26.691s、reviewprep 28.636s、web-research 0.448s |
+| `mise run vet` | PASS，exit 0，無診斷 |
+| 定向 race | PASS，exit 0；agent 1.665s、media 1.044s、team 270.417s |
+
+完整 gates 凍結 34 個 Go／JSON source／fixture 檔，持續核對 SHA-256。較早的完整測試因確認取消投影錯誤而中斷，沒有算作通過；修正後重新執行 lint、定向測試與完整測試，以上只列最終 source 的證據。所有模型請求僅進 fake provider，沒有真實 inference、圖片外送或文件搬移。
+
+M1 尚待 CLI／legacy／profile／dry-run／binary context guard、明確非視覺 direct synthesis、禁止含圖工作自動 replan 降級，以及 retry／真正新 process resume 的完整 wire／cost／acceptance 驗收。M2～M4 未完成。
+
+Race 命令：`mise exec -- go test -p 2 -race -timeout 20m ./internal/agent ./internal/media ./internal/team -run '^(TestNative|TestMedia|TestDirectMedia|TestSingleTaskMedia|TestPendingMetadata|TestProviderCompilation|TestClassifyTaskFailure)' -count=1`。全部 required gates 與最終 source 的定向 race 依序完成，沒有並行啟動本工作的 heavyweight commands。
+
+本階段沿用原 mise toolchain／GOCACHE／GOTMPDIR／GOMODCACHE，未清除共享依賴。完整測試後共享 GOCACHE 20,059,353,088 allocated bytes，contracts 後 20,130,680,832、vet 後 20,131,061,760；其中包含其他 checkout 活動，不以總量淨變化推定本任務成長。
+
+依目前 normal／race exports、初始 inventory、source-root／compile-unit／test-log header 與 open／mapped／hard-link guards，分段清理本工作的舊 archives 與已完成的 test-input logs，本階段回收 4,518,031,360 bytes（約 4.21 GiB），自 PR-01B 累計 13,566,599,168 bytes。中斷測試的確切程序退出後，其已記錄 work roots 已不存在，未以時間或廣泛 glob 刪除其他目錄；其他 checkout 的工作與未明 ownership 的資料保留。
+
+最終共享 GOCACHE 19,928,477,696 bytes；可辨識本任務 archives 733,970,432、其他輸出 9,265,152，合計 743,235,584 bytes（約 709 MiB），低於 2 GiB。Task scratch 約 22.5 MiB，沒有保留 executable；GOTMPDIR 約 13.3 MiB。提交後清理本階段 disposable logs，保留同一私有 task 目錄中的 source hashes、inventories、cleanup manifest 與後續 M1 recovery checkpoint，供下一階段接續使用。

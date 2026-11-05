@@ -164,21 +164,31 @@ type Selection struct {
 	PartIndex    int    `json:"part_index"`
 }
 
+// InvocationMode is assigned by trusted ingress, never task prose or model
+// arguments. Empty preserves legacy bindings without granting native execution.
+type InvocationMode string
+
+const (
+	InvocationSingleTask  InvocationMode = "single_task"
+	InvocationDirectAgent InvocationMode = "direct_agent"
+)
+
 // TaskBinding's owner is finalized after reserving the Todo ID. Revision and
 // lease are deliberately not immutable input: the current occurrence grants
 // each attempt separately, after its transition has committed.
 type TaskBinding struct {
-	Version     int         `json:"version"`
-	RunID       string      `json:"run_id"`
-	BranchID    string      `json:"branch_id"`
-	TaskID      string      `json:"task_id"`
-	Agent       string      `json:"agent"`
-	Purpose     string      `json:"purpose"`
-	PolicyHash  string      `json:"policy_hash"`
-	Selections  []Selection `json:"selections"`
-	Refs        []Ref       `json:"refs"`
-	InputDigest string      `json:"input_digest"`
-	Hash        string      `json:"hash"`
+	Version        int            `json:"version"`
+	RunID          string         `json:"run_id"`
+	BranchID       string         `json:"branch_id"`
+	TaskID         string         `json:"task_id"`
+	Agent          string         `json:"agent"`
+	Purpose        string         `json:"purpose"`
+	InvocationMode InvocationMode `json:"invocation_mode,omitempty"`
+	PolicyHash     string         `json:"policy_hash"`
+	Selections     []Selection    `json:"selections"`
+	Refs           []Ref          `json:"refs"`
+	InputDigest    string         `json:"input_digest"`
+	Hash           string         `json:"hash"`
 }
 
 func (b *TaskBinding) Clone() *TaskBinding {
@@ -208,6 +218,11 @@ func (b TaskBinding) Seal() (TaskBinding, error) {
 func (b TaskBinding) Validate(limits Limits) error {
 	if b.Version != Version || !validIdentity(b.RunID) || !validIdentity(b.BranchID) || !validIdentity(b.TaskID) || b.Agent == "" || b.Purpose != "image_analysis" || !validHash(b.PolicyHash) || len(b.Selections) != len(b.Refs) {
 		return Reject(BindingConflict, "incomplete task media binding")
+	}
+	switch b.InvocationMode {
+	case "", InvocationSingleTask, InvocationDirectAgent:
+	default:
+		return Reject(BindingConflict, "unknown media invocation mode")
 	}
 	if err := CheckBundle(b.Refs, limits); err != nil {
 		return err

@@ -72,7 +72,16 @@ func (c *Coordinator) validateTaskMediaCreation(ctx context.Context, item *TodoI
 	if _, err := policy.Policy.Allow(backend.Backend, backend.ProviderKey, item.ExecutionTarget.Model); err != nil {
 		return err
 	}
-	return mediaBindingSources(b, view, policy.Policy.Image)
+	if err := mediaBindingSources(b, view, policy.Policy.Image); err != nil {
+		return err
+	}
+	if b.InvocationMode != "" {
+		if err := validateNativeMediaInvocation(item, c.executionPolicy.snapshot); err != nil {
+			return err
+		}
+		return validateNativeMediaSourceScope(b, view.events)
+	}
+	return validateMediaInvocationSourceOwner(b, view.events)
 }
 
 // finalizeMediaTaskSpec assigns the runtime-reserved owner before decision
@@ -129,6 +138,16 @@ func (c *Coordinator) appendMediaTaskCreation(ctx context.Context, event RunEven
 		if err := mediaBindingSources(item.MediaBinding, view, policy.Policy.Image); err != nil {
 			return err
 		}
+		if item.MediaBinding.InvocationMode != "" {
+			if err := validateNativeMediaInvocation(item, c.executionPolicy.snapshot); err != nil {
+				return err
+			}
+			if err := validateNativeMediaSourceScope(item.MediaBinding, view.events); err != nil {
+				return err
+			}
+		} else if err := validateMediaInvocationSourceOwner(item.MediaBinding, view.events); err != nil {
+			return err
+		}
 		_, err = journal.AppendBatchAtHead(ctx, []RunEvent{event, bound}, view.head)
 		if errors.Is(err, ErrEventHeadChanged) {
 			continue
@@ -139,8 +158,8 @@ func (c *Coordinator) appendMediaTaskCreation(ctx context.Context, event RunEven
 }
 
 // validateMediaAttempt checks the current durable owner and the exact lease.
-// It never fills missing lease fields from a newer occurrence. M0 still denies
-// byte access and transport after this assertion succeeds.
+// It never fills missing lease fields from a newer occurrence. Provider byte
+// access and transport require their additional destination/capability checks.
 func (c *Coordinator) validateMediaAttempt(ctx context.Context, task TaskDef, taskID string) error {
 	item := c.todoItemByID(taskID)
 	if item == nil {
@@ -177,9 +196,13 @@ func (c *Coordinator) validateMediaAttempt(ctx context.Context, task TaskDef, ta
 	if err := mediaBindingSources(item.MediaBinding, view, policy.Policy.Image); err != nil {
 		return err
 	}
+	return validateMediaOccurrenceBinding(item, view.events)
+}
+
+func validateMediaOccurrenceBinding(item *TodoItem, events []RunEvent) error {
 	created, bound := false, false
-	for _, e := range view.events {
-		if e.TaskID != taskID {
+	for _, e := range events {
+		if e.TaskID != item.ID {
 			continue
 		}
 		if e.Type == string(EventTaskCreated) {

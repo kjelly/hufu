@@ -38,6 +38,14 @@ func verifyMediaProviderAdmission(event RunEvent, payload MediaProviderAdmittedP
 	if policy.Media == nil || policy.Media.Hash != payload.PolicyHash {
 		return media.Reject(media.EgressDenied, "image provider admission has no frozen media policy")
 	}
+	if binding.InvocationMode != "" {
+		if err := validateNativeMediaInvocation(item, &policy); err != nil {
+			return err
+		}
+		if err := validateNativeMediaSourceScope(binding, prior); err != nil {
+			return err
+		}
+	}
 	if err := verifyMediaProviderBackend(policy, payload); err != nil {
 		return err
 	}

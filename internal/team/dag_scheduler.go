@@ -931,9 +931,7 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 
 	var output string
 	var err error
-	if taskHasMedia(td) {
-		err = c.rejectMediaTaskExecution(td, tid)
-	} else if td.Sidecar {
+	if td.Sidecar {
 		output, err = c.executeSidecarTask(ctx, td, tid)
 	} else {
 		taskCtx := withResourceClaimsReported(withTaskExecutionEnvelope(ctx, envelope))

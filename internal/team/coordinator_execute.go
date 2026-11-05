@@ -87,6 +87,9 @@ func expandPipelineDeps(tasks []TaskDef) []TaskDef {
 
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ string, retErr error) {
 	tasks = withoutEmptyCollections(tasks)
+	if err := validateNativeMediaBatch(tasks); err != nil {
+		return "", err
+	}
 	if err := c.AdmitExecutionPolicy(); err != nil {
 		return "", markCoordinatorFatal(err)
 	}
@@ -438,6 +441,9 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	// initial event must carry the complete execution contract (PR-05): a
 	// dependent task must not be replayed as independent pending work, and an
 	// on_failure loop must not be lost on restart or branch replay.
+	if err := validateNativeMediaBatch(tasks); err != nil {
+		return "", err
+	}
 	ids := c.taskTracker.TodoList().ReserveIDs(len(todoBatch))
 	for i := range todoBatch {
 		if err := c.finalizeMediaTaskSpec(ctx, &todoBatch[i], ids[i]); err != nil {

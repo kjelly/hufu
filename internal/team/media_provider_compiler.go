@@ -13,8 +13,8 @@ import (
 var _ agent.ProviderRequestCompiler = providerRequestAdmission{}
 
 // CompileProviderRequest is called only after provider request admission and
-// slot acquisition. The universal media rejection remains in place until the
-// complete M1 execution path is enabled; this hook alone grants no transport.
+// slot acquisition. Each read rechecks the canonical worker and provider grant;
+// this hook alone grants no transport.
 func (a providerRequestAdmission) CompileProviderRequest(ctx context.Context, request agent.ProviderRequest) (agent.ProviderRequest, func(), error) {
 	if !agent.ProviderRequestHasMedia(request) {
 		return request, nil, nil
@@ -39,6 +39,7 @@ func (a providerRequestAdmission) CompileProviderRequest(ctx context.Context, re
 		for _, data := range buffers {
 			clear(data)
 		}
+		clear(buffers)
 		reservation.Release()
 	})
 	handedOff := false

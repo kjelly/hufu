@@ -64,7 +64,7 @@ func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request Atte
 	if err := p.coordinator.AdmitExecutionPolicy(); err != nil {
 		return AttemptResult{}, fmt.Errorf("admit execution policy before hufu-local attempt: %w", err)
 	}
-	if err := p.coordinator.rejectUnsupportedMediaAttempt(ctx, request); err != nil {
+	if err := p.coordinator.validateLocalMediaAttempt(ctx, request); err != nil {
 		return AttemptResult{}, err
 	}
 	ctx = withoutCoordinatorRequestPreflight(ctx)
@@ -115,6 +115,10 @@ func (p *HufuLocalSubagentProvider) RunAttempt(ctx context.Context, request Atte
 	def = p.coordinator.injectWorkerContext(ctx, def)
 	gatedTools := p.coordinator.gatePolicyTools(verified.Tools)
 	ctx, invocation, err := p.coordinator.resolveProviderBoundInvocationContext(ctx, request.ModelID, def)
+	if err != nil {
+		return AttemptResult{}, err
+	}
+	ctx, err = p.coordinator.prepareNativeWorkerRequest(ctx, &request, canonical.Task, def, gatedTools, invocation.AdmissionContext)
 	if err != nil {
 		return AttemptResult{}, err
 	}

@@ -5,7 +5,31 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/media"
 )
+
+func TestMediaFailureCodesUseStructuredRecoveryClasses(t *testing.T) {
+	for _, test := range []struct {
+		code media.Code
+		want TaskFailureClass
+	}{
+		{media.Unsupported, FailurePolicy}, {media.AccessDenied, FailurePolicy}, {media.EgressDenied, FailurePolicy},
+		{media.DurabilityRequired, FailureEnvironment}, {media.InputMissing, FailureEnvironment}, {media.IntegrityMismatch, FailureEnvironment},
+		{media.BindingConflict, FailureContract}, {media.FormatUnsupported, FailureContract}, {media.DecodeInvalid, FailureContract}, {media.LimitExceeded, FailureContract},
+		{media.Code("future_code"), FailureContract},
+	} {
+		t.Run(string(test.code), func(t *testing.T) {
+			err := fmt.Errorf("wrapped: %w", media.Reject(test.code, "fixture rejection"))
+			if got := ClassifyTaskFailureStructured(FailureClassificationInput{Err: err}); got != test.want {
+				t.Fatalf("media rejection class = %s, want %s", got, test.want)
+			}
+			if got := ClassifyTaskFailureStructured(FailureClassificationInput{Err: err, ContextErr: context.Canceled}); got != FailureCancelled {
+				t.Fatal("media rejection overrode parent cancellation")
+			}
+		})
+	}
+}
 
 func TestClassifyTaskFailureStructured(t *testing.T) {
 	commandNotFound := environmentFindingsFromVerifyResult(&VerificationResult{
