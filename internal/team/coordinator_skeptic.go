@@ -152,7 +152,21 @@ func (c *Coordinator) adversarialVerify(parentCtx context.Context, task TaskDef,
 	if task.AdversarialVerify <= 0 {
 		return nil
 	}
-	s := c.semanticSidecar(c.AgentPool().Sidecar())
+	parentCtx = withInvocationMetadata(parentCtx, InvocationMetadata{RunID: c.executionRunID, TaskID: todoID, Attempt: c.taskAttempt(todoID),
+		ModelExecutionID: c.modelExecutionID, AgentName: "skeptic", AgentRole: "auxiliary", Purpose: "skeptic"})
+	// The parent owns the public invocation and shared provider proxy. Leaves
+	// must not create competing proxy owners; each vote still carries its
+	// independent model-execution identity through the parent's sidecar.
+	owner := c
+	if c.isModelFanoutLeaf(todoID) {
+		owner = c.modelFanout.parent
+	}
+	if owner.sidecarModel != "" && owner.providerManager != nil {
+		if err := owner.startProviderExecutionBoundary(parentCtx); err != nil {
+			return fmt.Errorf("start skeptic provider boundary: %w", err)
+		}
+	}
+	s := c.semanticSidecar(owner.AgentPool().Sidecar())
 	if s == nil {
 		_ = c.recordAuxiliaryFallback(parentCtx, "skeptic", "no_model_fallback")
 		return nil

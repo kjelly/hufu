@@ -2091,7 +2091,7 @@ retryLoop:
 			}
 			// Adversarial verification: skeptic votes try to refute the result.
 			// A refutation flows into the same retry path as a failed verify.
-			if err == nil && task.AdversarialVerify > 0 && c.AgentPool().Sidecar() != nil {
+			if err == nil && task.AdversarialVerify > 0 {
 				if averr := c.adversarialVerify(parentCtx, task, todoID, coordinatorOutput); averr != nil {
 					err = averr
 					c.report(c.newEvent("skeptic").withAgent(agentName).withMessage(averr.Error()).withTodoID(todoID))

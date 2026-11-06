@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,41 @@ import (
 	"github.com/kjelly/hufu/internal/providerintrospection"
 	"github.com/kjelly/hufu/internal/providerproxy"
 )
+
+func TestNativeMediaFanoutProviderBoundaryFailurePreventsWorkers(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		http.Error(w, "worker bypassed failed boundary", http.StatusBadRequest)
+	}))
+	t.Cleanup(server.Close)
+	factory := func(context.Context, string, providerproxy.Config) (providerproxy.Boundary, error) {
+		return nil, errors.New("offline boundary startup failure")
+	}
+	c := newMediaPolicyCoordinatorWithTransport(t, server.URL+"/v1", factory, providerintrospection.CapabilityYes, func(session *TeamSession) {
+		configureNativeMediaProcessResume(session, true)
+	})
+	path := filepath.Join(c.projectDir, "input.png")
+	if err := os.WriteFile(path, mediaStorePNG(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := c.RunTaskWithMedia(t.Context(), TaskDef{Agent: "worker", Goal: "Compare the images."}, MediaTurnRequest{Images: []string{path}})
+	if err == nil || calls.Load() != 0 || c.LastRunResult() == nil || c.LastRunResult().GoalSatisfied {
+		t.Fatal("failed fanout provider boundary did not prevent execution", calls.Load(), err)
+	}
+	events, err := c.EventJournal().ReadEvents(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type == string(EventMediaProviderAdmitted) {
+			t.Fatal("failed boundary admitted an image provider request")
+		}
+	}
+	if err := VerifyNativeMediaLineage(t.Context(), c.session.Workspace, events); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestNativeMediaFanoutFailurePreservesIndependentLeafEvidence(t *testing.T) {
 	for _, scenario := range []string{"text leaf", "unknown leaf", "ungranted leaf", "cancel both leaves"} {

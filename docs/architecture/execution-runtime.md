@@ -396,6 +396,18 @@ credit remains capped across the parent occurrence. Provider token accounting
 charges each leaf once; parent lifecycle telemetry aggregates receipt usage
 without charging it again.
 
+Private leaf retry fingerprints stay in their private task projection. Only
+the parent publishes canonical task failure fingerprints; leaf diagnostics
+remain in execution receipts. Publishing a leaf fingerprint under the shared
+task ID would otherwise change the parent only during event replay.
+Before launching a fanout leaf, the public parent establishes the provider
+proxy boundary. Leaves cannot create clients against the direct upstream while
+the parent watchdog has no proxy to abort; a startup failure prevents dispatch.
+Configured skeptic votes use the parent's public provider boundary and sidecar,
+while retaining each leaf's model-execution identity. The skeptic consumes the
+text result without inheriting image access. If every vote abstains, the
+existing verification contract rejects completion.
+
 Tool schema normalization also owns its input. Admission serialization and
 Fantasy receive fresh nested schema containers, preserving the raw tool
 definition used for authorization digests across parallel workers.

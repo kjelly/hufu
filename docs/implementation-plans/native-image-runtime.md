@@ -99,8 +99,9 @@ type MediaOccurrence struct {
 - delegation 新增有序 `image_inputs`，元素選擇當前已授權的 `(turn_id, part_index)`，由 runtime 解析 MediaID。不可任意指定其他 run 的 ID／路徑；重複 index 是否出現依明示輸入保留，不能自動去重或重排。
 - Coordinator 可在 metadata-only 模式分派圖片：只收到 opaque refs、順序、MIME、尺寸與用途，不能宣稱自己看過圖片；worker 真正送圖才需 vision gate。metadata-only 是明確的控制流程，不能拿來完成含圖任務。
 - 依賴結果、fanout、judge/skeptic、sidecar 不自動繼承圖片。僅需讀取文字結果者維持文字路徑；若要消費 bytes，必須有新的明示 grant 和逐請求 admission。
-- extra-model fanout 由 parent 的 frozen ordered topology 與圖片 binding 決定各 slot；每個原生圖片 request 同時驗證 parent 和 private leaf 的 live lease，durable admission 保存兩者身分及 stable model-execution ID。parent 是 task/session checkpoint 的唯一發布者，private leaf 不得以自己的 revision 覆寫 parent；result-collection 仍使用其專用 durable events。
+- extra-model fanout 由 parent 的 frozen ordered topology 與圖片 binding 決定各 slot；public parent 在建立任何 leaf client 前啟動 provider proxy，失敗時不得分派。每個原生圖片 request 同時驗證 parent 和 private leaf 的 live lease，durable admission 保存兩者身分及 stable model-execution ID。parent 是 task/session checkpoint 的唯一發布者，private leaf 不得以自己的 revision 覆寫 parent；result-collection 仍使用其專用 durable events。
 - fanout 的每個已啟動 leaf 都須保留原始成功 receipt 與完整 accepted terminal result，包含原有 findings、限制與 structured payload。accepted result 由 runtime 綁在對應 receipt，不能由模型複製或重建，也不能以非終態 `SubmittedResult`、合併文字或 judge 選出的單一結果代替。缺少、失敗、未完成或身分不符的 leaf 阻擋整體圖片完成；讀取／重播保持原結果，不重新推導歷史判斷。
+- fanout 沿用既有恢復邊界：首次工作前可由新程序從 canonical CAS 恢復；執行中的 tool-result repair 只整理原有文字證據。已 blocked 的 runtime collector 不支援 operator 追加回合，必須保留 sealed work／receipt 並拒絕恢復，不得重新看圖或宣告成功。此階段不新增 fanout 的人工 repair grant。
 - `submit_result` 不要求模型複製 media digest／來源／receipt。結果中的確定性 media refs 由 runtime-owned result binding 注入；拒絕 model overrides，再進 canonical validation、hash、receipt 與保存。
 - 未授權的圖片連 metadata 也不主動廣播。Memory/LTM 不保存圖片 bytes；衍生文字經既有 redaction，保留必要 lineage，視覺判斷不成為 runtime-verified fact。
 
@@ -368,7 +369,7 @@ PR-01 分兩個可獨立驗證的子階段提交，保留上述整體 exit：
 
 - 實作有序 `image_inputs` delegation、metadata-only Coordinator、plain/TUI 共用 pending state。
 - 將相同 binding 沿 Direct synthesis、DAG、extra-model/fanout、route fallback、repair／compaction 傳遞；auxiliary role 未獲圖片 grant 就維持文字結果分析。
-- fanout 分兩個可驗收階段：D2A 交付各 frozen slot 的雙 lease、獨立 native admission/audit 與 accepted result 保存；D2B 以實際 SDK／新程序補驗 leaf retry、result-only repair 和 resume，不以一般文字 fanout 測試替代。多候選 route 與 fanout 的組合不在此階段開啟，須在 provider 前拒絕。
+- fanout 分兩個可驗收階段：D2A 交付各 frozen slot 的雙 lease、獨立 native admission/audit 與 accepted result 保存；D2B 以實際 SDK／新程序補驗 leaf retry、執行中的 tool-result repair、工作前 resume，以及 blocked collector 不重播工作／不追加 grant 的拒絕邊界，不以一般文字 fanout 測試替代。多候選 route 與 fanout 的組合不在此階段開啟，須在 provider 前拒絕。
 - **Exit:** 第 11 節 M2 case 通過；不同圖片不能 cache hit 或合併；所有前端與 JSONL/report/inspect/TUI 顯示真實狀態；未授權 refs 不洩漏。
 
 ### PR-05 — M3 MCP 原生 mixed-content 與 runtime-owned 結果

@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `130eb3d7`（PR-04D2A 證據與程式碼同本次階段 commit；M2～M4 未完成）
+> Verified-Commit: `40bed236`（PR-04D2B 證據與程式碼同本次階段 commit；M0～M2 完成，M3／M4 未完成）
 > Supersedes: —
 > Superseded-By: —
 
@@ -49,9 +49,9 @@
 | PR-04B coordinator 有序委派／續談／CLI | 完成；`5bee5767` | 離線 SDK／CLI／多輪／cost／audit，以及 lint、contracts、vet、race、完整 suite 全部通過 |
 | PR-04C Chat pending／canonical admission | 完成；`2f98de86` | staging、plain／Chat TUI PTY、crash、reset／team，以及 lint、contracts、vet、race、完整 suite 全部通過 |
 | PR-04D1 DAG／route fallback | 完成；`130eb3d7` | 候選授權、CAS wire、DAG 不重用／取消、audit／cost，以及 lint、contracts、vet、race、完整 suite 全部通過 |
-| PR-04D2A model fanout 授權／結果保存 | 完成；同本次階段 commit | 雙 lease、獨立 SDK／audit／cost、accepted leaf results、拒絕／取消、文字 judge 與全部 required gates 通過 |
-| PR-04D2B fanout retry／repair／resume | 尚未開始 | 補實際 native SDK 的 leaf retry、result-only repair 與新程序恢復組合；完成前不宣告整個 M2 交付 |
-| PR-04 M2 coordinator/chat/DAG/routing | 進行中 | A／B／C／D1／D2A 完成；D2B 的 fanout 生命週期組合尚待完成 |
+| PR-04D2A model fanout 授權／結果保存 | 完成；`40bed236` | 雙 lease、獨立 SDK／audit／cost、accepted leaf results、拒絕／取消、文字 judge 與全部 required gates 通過 |
+| PR-04D2B fanout retry／repair／resume | 完成；同本次階段 commit | 獨立 SDK retry／repair、新程序 CAS 恢復、blocked collector 拒絕、parent proxy ownership／文字 skeptic，以及最終 lint、contracts、vet、race、完整 suite 全部通過 |
+| PR-04 M2 coordinator/chat/DAG/routing | 完成；同本次階段 commit | A／B／C／D1／D2A／D2B；支援明示的獨立 DAG、route 與 frozen LLM fanout；多候選 route＋fanout、blocked collector 追加 grant 維持明確拒絕 |
 | PR-05 M3 MCP/result binding | 尚未開始 | — |
 | PR-06 M3 inspect/export/docs | 尚未開始 | — |
 | PR-07 M4 Codex localImage | 尚未開始 | — |
@@ -590,3 +590,33 @@ GOTMPDIR 約 14.4 MiB、private task scratch 約 34 MiB；沒有保留 executabl
 資源紀錄：本階段清除 137 個過期 task archives 與一份已被 D2 新測試特徵證明取代的 D1 full-team test log，回收 2,602,061,824 bytes；累計回收 31,664,680,960 bytes。清理保護目前 normal／race exports、open／mapped／linked 檔案、共享依賴與未知來源輸出。量測的 task 產物峰值為 2,126,966,784 bytes，低於 2 GiB，沒有保留預算例外。
 
 最終可辨識 task 產物 1,797,165,056 bytes（約 1.67 GiB），共享 GOCACHE 21,694,033,920 bytes；GOTMPDIR 約 14.8 MiB、同一 private task scratch 約 39.4 MiB。未保留 standalone executable；續作需要的 hashes、清理來源 manifests、失敗／通過 gate logs 與 recovery checkpoint 保留。沒有真實模型呼叫、圖片外送或文件搬移。
+
+
+## PR-04D2B：fanout 生命週期與 provider ownership
+
+- 實際 fake HTTP／SDK 覆蓋各 leaf 的 worker retry，以及 summary／verbatim 的 tool-result repair。retry 保留原 CAS、有序重複圖片、獨立 model-execution ID 與所有失敗／成功 receipts；repair 只消費自己的文字證據，不重新送圖或取得執行工具。
+- 新程序從原 canonical CAS 恢復工作前的 fanout，並驗證 genuine reset 後的 occurrence provenance。blocked runtime collector 保留 sealed work／已用 budget，普通 resume 與 operator 追加 grant 都不能重播 worker；兩次新程序 admission 後 receipts 維持原值。
+- 修正 private leaf 將 failure fingerprint 以 parent task ID 發布的問題。事件重播只恢復 parent 的 canonical 指紋；leaf 原始診斷保留在各自 receipts，不刪歷史紀錄或繞過 parity 檢查。
+- public parent 在建立 fanout clients 前取得 provider proxy；啟動失敗時所有 worker transport 為零。以 fixture provider 分開計數，避免將 fallback proxy 計入同一個 provider 的啟動次數。
+- configured skeptic 經 parent-owned boundary／sidecar 執行，保留 leaf identity，只讀文字結果；HTTP 401 導致全數 abstain 時沿用 fail-closed 驗收。沒有將不可用 reviewer 當成功。
+- 原路徑的 proxy-startup failure 回歸實際觀察到 2 個 worker HTTP（1.641s，FAIL），修正後完整定向組合通過（20.973s）。早期未按 provider 區分的總次數 probe 不作缺陷證據。
+- 最終驗證綁定 11 個 Go 檔與 4 個設定／依賴檔的 SHA-256；不包含真實模型呼叫、登入、部署、圖片外送或文件搬移。
+
+效益：同一圖片工作能保留各模型的原始證據，結果修補不重跑分析；新程序恢復不再依賴原始檔案，proxy 啟動失敗與 reviewer 不可用也不會被誤當完成。沒有宣稱模型的視覺判斷已通過真實服務驗收。
+
+| PR-04D2B 最終 gate | 結果 |
+|---|---|
+| 定向 SDK／生命週期／boundary 回歸 | PASS，team 20.973s |
+| `mise run lint` | PASS，exit 0，`0 issues.`；既有 lint cache save 警告不影響分析完成 |
+| `mise run test-contracts` | PASS，team 115.046s、cmd/hufu 58.845s、reviewgate 19.619s、reviewprep 24.018s、web 0.256s；inspect／operator／auditverify 通過 |
+| `mise run vet` | PASS，exit 0，無診斷 |
+| 定向 `-race` | PASS，team 120.787s |
+| `mise run test` | PASS，exit 0；team 1059.414s、cmd/hufu 207.373s、tools 49.784s、evalharness 44.300s、improver 153.936s、modelcatalog 0.653s、web 0.303s；其他套件通過，包含既有 cache 命中，TUI 為 cached |
+
+定向／race 範圍包括 native fanout worker retry、tool-result repair、工作前新程序 resume/reset、blocked collector 新程序拒絕、正常／失敗 proxy startup、各 leaf 授權與證據，以及既有一般 worker fingerprint／collection／skeptic 回歸。contracts、vet、race、full 依序執行，前後比對同一份 15 檔 SHA-256。
+
+較早的 13 檔版本完成 lint／contracts／vet／race，但其 full run 在發現 proxy ownership 需補驗後停止；該次只有已完成的 CLI 等套件結果，不列為完整 suite 通過。補測與修正後重跑本表的所有最終 gates，未縮減測試範圍或更換工具鏈。
+
+資源紀錄：本階段按來源清除過期 task archives／已被新版測試取代的 test logs，回收 3,029,663,744 bytes；本工作累計回收 34,694,344,704 bytes。另清理已退出之診斷／中止測試的確切暫存根與 private-task engine 目錄，回收 154,062,848 bytes。開啟中、mapped／linked、來源不明及其他專案使用中的輸出都保留，未清除共享 caches 或變更 GOCACHE／GOTMPDIR。
+
+最終可辨識本工作產物 1,762,033,664 bytes（約 1.64 GiB），低於 2 GiB；共享 GOCACHE 21,445,267,456 bytes，GOTMPDIR 約 15.2 MiB，private task scratch 約 18.5 MiB。續作保留當前 normal／race exports、必要 hashes／清理來源 manifests、gate logs 與 recovery checkpoint；沒有保留 standalone executable。M3／M4 尚未開始，不把此階段完成視為整個圖片 I/O 計畫完成。

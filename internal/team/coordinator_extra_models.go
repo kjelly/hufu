@@ -51,6 +51,12 @@ func (c *Coordinator) executeTaskWithExtraModels(
 			return "", err
 		}
 	}
+	// The parent owns the public watchdog and provider proxy. Private leaves
+	// cannot acquire that ownership when constructing their worker agents.
+	// Establish it before any leaf can create a client against the upstream.
+	if err := c.providerBoundaryRequired(parentCtx); err != nil {
+		return "", fmt.Errorf("start fanout provider boundary: %w", err)
+	}
 	// Fanout is a parent-owned lifecycle boundary. Open the single runtime
 	// occurrence once before any leaf starts; isolated leaves below receive
 	// private Todo state and therefore cannot race this transition or arm a

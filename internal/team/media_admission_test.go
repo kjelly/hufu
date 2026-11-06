@@ -64,7 +64,7 @@ func newMediaPolicyCoordinatorAtRoot(t *testing.T, root, endpoint string, factor
 			return nil, errors.New("fixture rejects provider dispatch")
 		}
 	}
-	c, err := NewCoordinator(session, endpoint, "", nil, nil, RoleModels{Judge: session.Config.JudgeModel}, 1, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false, WithProviderBoundaryFactory(factory))
+	c, err := NewCoordinator(session, endpoint, "", nil, nil, RoleModels{Sidecar: session.Config.SidecarModel, Judge: session.Config.JudgeModel}, 1, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false, WithProviderBoundaryFactory(factory))
 	if err != nil {
 		t.Fatal(err)
 	}

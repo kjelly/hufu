@@ -363,7 +363,14 @@ func (c *Coordinator) persistFailureRecord(agentName, taskDesc, todoID, detail s
 				persistedDetail += " | anti-thrashing limit reached; strategy change or human review required"
 			}
 		}
-		_ = c.emitEvent("failure_fingerprint", "coordinator", todoID, map[string]interface{}{"fingerprint": fp, "count": c.failureFingerprintCount(fp.Digest), "repeated": repeated})
+		// A private fanout leaf shares the parent's task ID, but its retry
+		// fingerprints belong to its private projection. Publishing them as
+		// task fingerprints would add failures to the parent only on replay.
+		// The parent records its aggregate failure; leaf diagnostics remain in
+		// the independently persisted execution receipts.
+		if !c.isModelFanoutLeaf(todoID) {
+			_ = c.emitEvent("failure_fingerprint", "coordinator", todoID, map[string]interface{}{"fingerprint": fp, "count": c.failureFingerprintCount(fp.Digest), "repeated": repeated})
+		}
 		if systemic {
 			// §6.2 systemic scope escalation: a (component, operation, class,
 			// digest) failure has now been observed across MaxSystemicFailureTasks

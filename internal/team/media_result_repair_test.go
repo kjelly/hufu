@@ -192,15 +192,19 @@ func nativeRepairImageTurns(t *testing.T, messages []mediaWorkerWireMessage) []m
 	return turns
 }
 
-func writeNativeRepairStream(t *testing.T, w http.ResponseWriter, delta map[string]any, finish string) {
+func writeNativeRepairStream(t *testing.T, w http.ResponseWriter, delta map[string]any, finish string, models ...string) {
 	t.Helper()
+	model := "vision"
+	if len(models) > 0 {
+		model = models[0]
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	for index, payload := range []map[string]any{delta, {}} {
 		var reason any
 		if index == 1 {
 			reason = finish
 		}
-		data, err := json.Marshal(map[string]any{"id": "native-repair", "object": "chat.completion.chunk", "created": 1, "model": "vision",
+		data, err := json.Marshal(map[string]any{"id": "native-repair", "object": "chat.completion.chunk", "created": 1, "model": model,
 			"choices": []any{map[string]any{"index": 0, "delta": payload, "finish_reason": reason}}})
 		if err != nil {
 			t.Error(err)

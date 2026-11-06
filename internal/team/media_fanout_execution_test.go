@@ -35,7 +35,7 @@ func (mediaFanoutIntrospector) InspectModel(ctx context.Context, ref providerint
 }
 
 func TestNativeMediaModelFanoutKeepsIndependentGrantsAndOriginalCAS(t *testing.T) {
-	for _, mode := range []string{"single_task", "coordinator", "judge_failure"} {
+	for _, mode := range []string{"single_task", "coordinator", "judge_failure", "skeptic_abstention"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
 			defer cancel()
@@ -45,6 +45,7 @@ func TestNativeMediaModelFanoutKeepsIndependentGrantsAndOriginalCAS(t *testing.T
 			}
 			requests := make(chan wireRequest, 6)
 			var coordinatorCalls atomic.Int32
+			var boundaryStarts atomic.Int32
 			paths := make(chan []string, 1)
 			removeSources := sync.OnceFunc(func() {
 				select {
@@ -77,8 +78,8 @@ func TestNativeMediaModelFanoutKeepsIndependentGrantsAndOriginalCAS(t *testing.T
 				}
 				removeSources()
 				if request.Model == "text" {
-					if mode == "judge_failure" {
-						http.Error(w, "offline judge unavailable", http.StatusUnauthorized)
+					if mode == "judge_failure" || mode == "skeptic_abstention" {
+						http.Error(w, "offline auxiliary unavailable", http.StatusUnauthorized)
 						return
 					}
 					if coordinatorCalls.Add(1) == 1 {
@@ -92,11 +93,18 @@ func TestNativeMediaModelFanoutKeepsIndependentGrantsAndOriginalCAS(t *testing.T
 					}
 					return
 				}
+				if boundaryStarts.Load() != 1 {
+					t.Errorf("image worker requires one fixture provider boundary, got %d", boundaryStarts.Load())
+				}
 				writeCoordinatorMediaToolStream(t, w, request.Model, "submit_result", map[string]any{"status": "success", "summary": request.Model + " image observations.", "details": "Independent native CAS input."})
 			}))
 			t.Cleanup(server.Close)
-			factory := func(ctx context.Context, _ string, cfg providerproxy.Config) (providerproxy.Boundary, error) {
-				return providerproxy.StartInProcess(ctx, cfg)
+			factory := func(ctx context.Context, providerName string, cfg providerproxy.Config) (providerproxy.Boundary, error) {
+				boundary, err := providerproxy.StartInProcess(ctx, cfg)
+				if err == nil && providerName == "fixture" {
+					boundaryStarts.Add(1)
+				}
+				return boundary, err
 			}
 			c := newMediaPolicyCoordinatorWithTransport(t, server.URL+"/v1", factory, providerintrospection.CapabilityYes, func(session *TeamSession) {
 				configureNativeMediaCost(t, session, "fixture/next")
@@ -104,6 +112,9 @@ func TestNativeMediaModelFanoutKeepsIndependentGrantsAndOriginalCAS(t *testing.T
 				session.Config.Timeout, session.Config.MaxRounds, session.Config.MaxSteps = 30, 3, 4
 				if mode == "judge_failure" {
 					session.Config.JudgeModel = "fixture/text"
+				}
+				if mode == "skeptic_abstention" {
+					session.Config.SidecarModel = "fixture/text"
 				}
 				worker := session.Agents["worker"]
 				worker.Tools, worker.ResultTransport, worker.MaxSteps = "submit_result", agent.ResultTransportTool, 1
@@ -145,16 +156,24 @@ func TestNativeMediaModelFanoutKeepsIndependentGrantsAndOriginalCAS(t *testing.T
 			if mode == "judge_failure" {
 				wantCalls = 3
 			}
+			if mode == "skeptic_abstention" {
+				wantCalls = 4
+			}
 			var runErr error
 			if mode == "coordinator" {
 				wantCalls = 4
 				_, runErr = c.RunWithMedia(ctx, goal, input)
 			} else {
-				_, runErr = c.RunTaskWithMedia(ctx, TaskDef{Agent: "worker", Goal: goal}, input)
+				task := TaskDef{Agent: "worker", Goal: goal}
+				if mode == "skeptic_abstention" {
+					task.AdversarialVerify = 1
+				}
+				_, runErr = c.RunTaskWithMedia(ctx, task, input)
 			}
 			items := c.TaskTracker().TodoList().Items()
-			if len(requests) != wantCalls || len(items) != 1 || items[0].Status != TaskDone || items[0].MediaBinding == nil ||
-				len(items[0].ExecutionReceipts) != 2 || c.LastRunResult() == nil || !c.LastRunResult().GoalSatisfied {
+			wantSuccess := mode != "skeptic_abstention"
+			if len(requests) != wantCalls || len(items) != 1 || (items[0].Status == TaskDone) != wantSuccess || items[0].MediaBinding == nil ||
+				len(items[0].ExecutionReceipts) != 2 || c.LastRunResult() == nil || c.LastRunResult().GoalSatisfied != wantSuccess {
 				for _, item := range items {
 					t.Logf("fanout task status=%s detail=%s receipts=%d", item.Status, item.Detail, len(item.ExecutionReceipts))
 				}
@@ -186,6 +205,10 @@ func TestNativeMediaModelFanoutKeepsIndependentGrantsAndOriginalCAS(t *testing.T
 			if mode == "judge_failure" {
 				// The judge's typed choice resolver is billed as a sidecar call.
 				assertNativeMediaCost(t, events, wantCalls, cost.PurposeSidecar)
+			} else if mode == "skeptic_abstention" {
+				// Each independent leaf receives one text-only skeptic vote.
+				// An unavailable skeptic abstains under the existing contract.
+				assertNativeMediaCost(t, events, wantCalls, cost.PurposeSidecar, cost.PurposeSidecar)
 			} else {
 				assertNativeMediaCost(t, events, wantCalls)
 			}
@@ -207,12 +230,15 @@ func TestNativeMediaModelFanoutKeepsIndependentGrantsAndOriginalCAS(t *testing.T
 				if !grants[receipt.ModelExecutionID].present() || receipt.MediaInputDigest != items[0].MediaInputDigest {
 					t.Fatal("fanout completion lost its own admitted media identity")
 				}
-				if receipt.AcceptedResult == nil || receipt.AcceptedResult.Details != "Independent native CAS input." {
+				if wantSuccess && (receipt.AcceptedResult == nil || receipt.AcceptedResult.Details != "Independent native CAS input.") {
 					t.Fatal("fanout completion lost its accepted semantic result")
+				}
+				if !wantSuccess && receipt.AcceptedResult != nil {
+					t.Fatal("unavailable skeptic fabricated an accepted semantic result")
 				}
 			}
 			replayed := todoItemByID(ReduceToTodoList(events), items[0].ID)
-			if replayed == nil || !c.nativeMediaAcceptedWork(replayed) {
+			if replayed == nil || c.nativeMediaAcceptedWork(replayed) != wantSuccess {
 				t.Fatal("canonical replay cannot verify accepted fanout completion")
 			}
 		})
