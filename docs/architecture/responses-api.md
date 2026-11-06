@@ -2,6 +2,7 @@
 
 > Status: active
 > Authority: normative
+> Verified-Commit: 9420c2f58118cb5647e582ace02cc840452cdfea
 > Validation: [offline implementation evidence](../reference/responses-api-validation.md)
 > Supersedes: —
 > Superseded-By: —

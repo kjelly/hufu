@@ -2,9 +2,38 @@ package team
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestNormalizeReplayEventsScopesIdempotencyToBranch(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		branch string
+		id     string
+		want   []string
+	}{
+		{name: "same branch", branch: "main", id: "second", want: []string{"first"}},
+		{name: "implicit main", branch: "", id: "second", want: []string{"first"}},
+		{name: "child branch", branch: "child", id: "second", want: []string{"first", "second"}},
+		{name: "duplicate event ID", branch: "child", id: "first", want: []string{"first"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			events := normalizeReplayEvents([]RunEvent{
+				{ID: "first", BranchID: "main", IdempotencyKey: "shared-key"},
+				{ID: tt.id, BranchID: tt.branch, IdempotencyKey: "shared-key"},
+			})
+			var ids []string
+			for _, event := range events {
+				ids = append(ids, event.ID)
+			}
+			if !slices.Equal(ids, tt.want) {
+				t.Fatalf("replayed event IDs = %v, want %v", ids, tt.want)
+			}
+		})
+	}
+}
 
 func TestReducersReconstructState(t *testing.T) {
 	var events []RunEvent

@@ -81,6 +81,9 @@ func TestWorkerMemoryPassesAncestorConstraintToEverySource(t *testing.T) {
 }
 
 func TestWorkerMemoryRecallsAncestorBeyondPostForkCandidateCeiling(t *testing.T) {
+	if testing.Short() {
+		t.Skip("large SQLite ancestor retrieval fixture runs in the integration gate")
+	}
 	repo, scope, allowed := workerAncestorRetrievalFixture(t, 100_010, true)
 	scope.BranchID = "child"
 	var work contextstore.QueryWork

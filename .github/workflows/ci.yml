@@ -180,7 +180,9 @@ jobs:
     env:
       GOMAXPROCS: "2"
       GOTOOLCHAIN: local
-      PACKAGE_TIMEOUT: 20m
+      # The 100k-row SQLite fixture can take about 19m with the race detector;
+      # leave room for the remaining integration tests in the same package.
+      PACKAGE_TIMEOUT: 30m
       GOCACHE: ${{ github.workspace }}/.cache/go-race-integration
     steps:
       - name: Checkout

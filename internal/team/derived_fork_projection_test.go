@@ -7,6 +7,34 @@ import (
 	"testing"
 )
 
+func TestDerivedForkReplaysIdenticalChildPolicySnapshot(t *testing.T) {
+	f, ops := derivedForkPreparationFixture(t)
+	policy := newExecutionPolicySnapshotCoordinator(t, t.TempDir(), 2, 3).ExecutionPolicySnapshot()
+	payload, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := RunEvent{Type: string(EventExecutionPolicySnapshot), Actor: "coordinator",
+		IdempotencyKey: "execution-policy-snapshot:" + policy.ConfigurationHash, Payload: payload}
+	appendBranchEvent(t, f.events, event)
+	if _, err := ops.ForkNewTask(t.Context(), "investigation", "main"); err != nil {
+		t.Fatal(err)
+	}
+	f.events.SetBranchID(f.tree.ActiveBranch)
+	appendBranchEvent(t, f.events, event)
+	lineage, err := ProjectValidatedEventsForBranch(mustReadEvents(t, f.events), f.tree, f.tree.ActiveBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := ReduceToSessionData(lineage)
+	if child.ExecutionPolicySnapshot == nil || child.ExecutionPolicySnapshot.ConfigurationHash != policy.ConfigurationHash {
+		t.Fatal("derived replay discarded the child's admitted policy")
+	}
+	if err := CompareCanonicalProjection(child, lineage); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDerivedForkResetsExecutableProjectionAndPreservesParent(t *testing.T) {
 	f, ops := derivedForkPreparationFixture(t)
 	compaction := testCompactionState(t, f.control)

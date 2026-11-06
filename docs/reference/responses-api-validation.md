@@ -2,6 +2,9 @@
 
 > Status: complete (offline scope)
 > Authority: reference
+> Verified-Commit: 9420c2f58118cb5647e582ace02cc840452cdfea
+> Supersedes: —
+> Superseded-By: —
 > Baseline: `9420c2f58118cb5647e582ace02cc840452cdfea`
 > Specification: [Responses API integration](../architecture/responses-api.md)
 > Date: 2026-11-05

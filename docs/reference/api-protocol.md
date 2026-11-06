@@ -2,6 +2,9 @@
 
 > Status: active
 > Authority: reference
+> Verified-Commit: f95d67db
+> Supersedes: —
+> Superseded-By: —
 > Validation: [offline implementation evidence](responses-api-validation.md)
 
 `api-protocol` explicitly selects the request format for one LLM provider.

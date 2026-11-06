@@ -1367,7 +1367,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 }
 
 // normalizeReplayEvents gives reducers deterministic duplicate semantics:
-// the first occurrence of an event ID or durable idempotency key wins. Input
+// the first occurrence of an event ID or branch-scoped idempotency key wins. Input
 // order is retained because the hash chain is the authoritative ordering; an
 // out-of-order slice remains replayable without allowing a late non-terminal
 // transition to reopen a terminal task.
@@ -1377,7 +1377,7 @@ func normalizeReplayEvents(events []RunEvent) []RunEvent {
 	}
 	result := make([]RunEvent, 0, len(events))
 	seenIDs := make(map[string]struct{}, len(events))
-	seenKeys := make(map[string]struct{}, len(events))
+	seenKeys := make(map[eventIdempotencyIdentity]struct{}, len(events))
 	for _, event := range events {
 		if event.ID != "" {
 			if _, seen := seenIDs[event.ID]; seen {
@@ -1386,10 +1386,11 @@ func normalizeReplayEvents(events []RunEvent) []RunEvent {
 			seenIDs[event.ID] = struct{}{}
 		}
 		if event.IdempotencyKey != "" {
-			if _, seen := seenKeys[event.IdempotencyKey]; seen {
+			identity := newEventIdempotencyIdentity(event.BranchID, event.IdempotencyKey)
+			if _, seen := seenKeys[identity]; seen {
 				continue
 			}
-			seenKeys[event.IdempotencyKey] = struct{}{}
+			seenKeys[identity] = struct{}{}
 		}
 		result = append(result, event)
 	}
