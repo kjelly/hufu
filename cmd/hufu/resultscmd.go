@@ -35,9 +35,12 @@ type resultsCLIOptions struct {
 	quiet, noColor                                                                                 bool
 	pickTasks                                                                                      bool
 	pickView, exportPath                                                                           string
+	imageID                                                                                        string
 }
 
 type resultsDeps struct {
+	images      func(context.Context, string, team.ResultImageScope) ([]team.ResultImage, error)
+	exportImage func(context.Context, string, team.ResultImageScope, string, string) error
 	deliverable func(context.Context, inspectpkg.HistoricalResult) (string, bool, error)
 	report      func(context.Context, string, string) (*team.RunReport, error)
 	workspace   workspaceCommandDeps
@@ -110,7 +113,7 @@ func newResultsCommandWithDeps(deps resultsDeps) *cobra.Command {
 	registerStaticFlagCompletion(command, "output", []string{"text", "json"})
 	registerStaticFlagCompletion(command, "status", []string{"done", "error", "blocked", "skipped", "protocol_incomplete"})
 	command.RunE = func(cmd *cobra.Command, _ []string) error { return runResults(cmd, options, deps, "read", "") }
-	for _, operation := range []string{"runs", "list", "search", "latest", "show", "final", "invocation", "query", "pick", "report", "deliverable"} {
+	for _, operation := range []string{"runs", "list", "search", "latest", "show", "images", "final", "invocation", "query", "pick", "report", "deliverable"} {
 		child := &cobra.Command{Use: operation, ValidArgsFunction: cobra.NoFileCompletions, Args: cobra.NoArgs}
 		switch operation {
 		case "deliverable":
@@ -140,6 +143,12 @@ func newResultsCommandWithDeps(deps resultsDeps) *cobra.Command {
 			child.Use += " <text>"
 			child.Short = "Search saved result text offline, including Unicode"
 			child.Args = cobra.ExactArgs(1)
+		case "images":
+			child.Use += " <result-id>"
+			child.Short = "List published tool images or export one original image to a new file"
+			child.Args = cobra.ExactArgs(1)
+			child.Flags().StringVar(&options.imageID, "artifact", "", "Exact published image artifact ID")
+			child.Flags().StringVar(&options.exportPath, "export", "", "Export original image bytes to a new path (requires --artifact)")
 		case "show":
 			child.Use += " <result-id>"
 			child.Short = "Read one exact saved result or unique ID prefix"
@@ -232,7 +241,7 @@ func runResults(command *cobra.Command, options *resultsCLIOptions, deps results
 		plan.SearchTerms = []string{value}
 	}
 	rows := resultquery.Retrieve(all, plan, request)
-	if operation == "show" {
+	if operation == "show" || operation == "images" {
 		// A result locator may also address a run_response; all explicit scope
 		// and time/status filters still apply.
 		rows = findHistoricalResult(all, request, value)
@@ -242,6 +251,9 @@ func runResults(command *cobra.Command, options *resultsCLIOptions, deps results
 		if len(rows) != 1 {
 			return resultsExit(2, errors.New("result ID prefix is ambiguous; use the full result-id"))
 		}
+	}
+	if operation == "images" {
+		return presentResultImages(command, options, deps, rows[0])
 	}
 	if isFinalResultsOperation(operation) {
 		rows, err = selectFinalResults(all, request, value)

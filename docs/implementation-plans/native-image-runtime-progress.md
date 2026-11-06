@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `00dfc522`（M2 已提交基準；PR-05 程式與驗證紀錄隨本次階段 commit 提交；M3／M4 尚未全部完成）
+> Verified-Commit: `171381da`（PR-05 已提交基準；PR-06 程式與最終證據隨本次階段提交；M4 尚未完成）
 > Supersedes: —
 > Superseded-By: —
 
@@ -50,11 +50,11 @@
 | PR-04C Chat pending／canonical admission | 完成；`2f98de86` | staging、plain／Chat TUI PTY、crash、reset／team，以及 lint、contracts、vet、race、完整 suite 全部通過 |
 | PR-04D1 DAG／route fallback | 完成；`130eb3d7` | 候選授權、CAS wire、DAG 不重用／取消、audit／cost，以及 lint、contracts、vet、race、完整 suite 全部通過 |
 | PR-04D2A model fanout 授權／結果保存 | 完成；`40bed236` | 雙 lease、獨立 SDK／audit／cost、accepted leaf results、拒絕／取消、文字 judge 與全部 required gates 通過 |
-| PR-04D2B fanout retry／repair／resume | 完成；同本次階段 commit | 獨立 SDK retry／repair、新程序 CAS 恢復、blocked collector 拒絕、parent proxy ownership／文字 skeptic，以及最終 lint、contracts、vet、race、完整 suite 全部通過 |
-| PR-04 M2 coordinator/chat/DAG/routing | 完成；同本次階段 commit | A／B／C／D1／D2A／D2B；支援明示的獨立 DAG、route 與 frozen LLM fanout；多候選 route＋fanout、blocked collector 追加 grant 維持明確拒絕 |
-| PR-05 M3 MCP/result binding | 完成；同本次階段 commit | 真實 SDK＋fake MCP/provider、canonical producer/consumer、runtime-owned 結果／receipt／replay，以及 contracts、vet、lint、race、完整 suite 通過 |
-| PR-06 M3 inspect/export/docs | 尚未開始 | — |
-| PR-07 M4 Codex localImage | 尚未開始 | — |
+| PR-04D2B fanout retry／repair／resume | 完成；`00dfc522` | 獨立 SDK retry／repair、新程序 CAS 恢復、blocked collector 拒絕、parent proxy ownership／文字 skeptic，以及最終 lint、contracts、vet、race、完整 suite 全部通過 |
+| PR-04 M2 coordinator/chat/DAG/routing | 完成；`00dfc522` | A／B／C／D1／D2A／D2B；支援明示的獨立 DAG、route 與 frozen LLM fanout；多候選 route＋fanout、blocked collector 追加 grant 維持明確拒絕 |
+| PR-05 M3 MCP/result binding | 完成；`171381da` | 真實 SDK＋fake MCP/provider、canonical producer/consumer、runtime-owned 結果／receipt／replay，以及 contracts、vet、lint、race、完整 suite 通過 |
+| PR-06 M3 inspect/export/docs | 完成；同本次階段 commit | CLI／原圖安全匯出、report／JSONL／TUI、指南與 bounded bench；最終 lint、contracts、vet、race、完整 suite 全部通過 |
+| PR-07 M4 Codex localImage | 私有草稿準備中，尚未驗證 | 不宣告支援；待套用、實際離線 RPC／恢復與所有 gates |
 
 ## PR-00 entrypoint impact map
 
@@ -654,3 +654,32 @@ GOTMPDIR 約 14.4 MiB、private task scratch 約 34 MiB；沒有保留 executabl
 資源：本階段按來源回收 6,216,544,256 bytes，本工作累計回收 40,910,888,960 bytes。最終可辨識本工作產物 949,116,928 bytes，低於 2 GiB；共享 GOCACHE 21,247,168,512 bytes，GOTMPDIR 16,080,896 bytes，private task scratch 21,110,784 bytes。開發中曾出現約 2.34 GiB 的本工作 cache 峰值，已在下一個 heavyweight command 前清理。保留目前 normal／race exports、必要的來源／清理 manifests、gate logs 與後續匯出草稿；沒有保留 standalone executable。未變更 configured caches／GOTMPDIR，未清除共享 dependencies 或其他 session 產物。
 
 PR-05 完成不代表 M3／M4 全部交付；PR-06 的成果查詢／安全匯出／介面文件與 PR-07 的 Codex adapter 仍依序實作。未呼叫真實模型、登入、圖片外送或移動文件；Ollama deepseek-v4.1-flash:cloud 的真實驗收由使用者另行安排。
+
+
+## PR-06：圖片成果查詢、安全匯出與介面
+
+擴充既有 `hufu results images <result-id>`：沿原 workspace／team／branch／run 選擇與唯一結果定位，從選定 terminal event 之前的已驗證 lineage 列出工具圖片。每個原圖保留 occurrence 次數與 producer identities；runtime-owned receipt 能證明的既有來源可恢復，未發布的 CAS ID 不能匯出。
+
+- `--artifact <image-id> --export <new-path>` 先核對結果來源、content hash 與圖片，再建立明示的新檔。逐層 pin 真實父目錄，拒絕 symlink／既存檔案；取消或失敗只清除本次建立的 inode。查詢與匯出不呼叫模型或工具。
+- report、JSONL、plain result-ready 與 TUI detail 只顯示圖片 metadata 與成果命令；不內嵌圖片，也不把 CAS 路徑當權限。舊文字結果維持既有投影；既有 immutable reports 不回填。
+- 新增[原生圖片參考指南](../reference/native-images.md)，說明政策、格式、支援矩陣、CLI、history version、recovery 與 migration。
+- 實際 CLI smoke 揭露 manifest 將 occurrence owner 附在圖片 ref 後，被 CAS 的全欄位比較拒絕。圖片驗證改為容許 manifest-local run／task／attempt／agent，內容欄位仍完全比對；來源歸屬仍由 evidence binding 驗證。未放寬模型的 Resolve 或授權邊界。
+
+效益：使用者能直接從已保存的 task 結果找到並匯出原圖，核對實際成果；報告與 TUI 提供可操作的查詢命令，無需重新執行昂貴或有副作用的工具。
+
+| 驗證 | 結果 |
+|---|---|
+| 最終定向測試 | PASS；team 7.592s、TUI 0.030s、CLI 26.494s |
+| CLI 原圖 smoke | PASS；真實 binary、fake MCP/provider；匯出 PNG bytes 完全相同，查詢／匯出不增加模型或 MCP 呼叫 |
+| bounded benchmark | PASS；1 MiB、1 iteration，27.88ms、37.61 MB/s、37,648 B/op、91 allocs/op |
+| mise run lint | PASS；exit 0，0 issues. |
+| mise run test-contracts | PASS；team 127.920s、CLI 66.637s、reviewgate 15.697s、reviewprep 23.391s、web 0.455s；inspect／operator／auditverify 通過 |
+| mise run vet | PASS；exit 0，無診斷 |
+| 定向 race | PASS；team 35.310s、TUI 2.064s、CLI 11.533s |
+| mise run test | PASS；exit 0；team 1019.871s、CLI 211.328s、evalharness 45.492s、improver 158.355s、tools 48.789s、TUI 6.629s、workspace 12.734s、web 0.348s；其他套件通過，含既有 cache 命中 |
+
+全部 Go 與工具設定以同一份 25 檔 SHA-256 固定驗證；Codex 後續草稿僅放於 private task scratch，不混入本階段 source。真實模型驗收另行安排，未呼叫真實模型、登入、圖片外送或移動文件。
+
+資源：本階段按來源清除 71 個過期工作產物，回收 1,262,211,072 bytes；本工作累計回收 42,173,100,032 bytes。最終可辨識本工作 cache 產物 1,190,174,720 bytes，低於 2 GiB；共享 GOCACHE 21,743,714,304 bytes，GOTMPDIR 119,455,744 bytes，private scratch 22,695,936 bytes。另有其他專案的 Go 程序使用相同 build temporary root，其資料與程序均保留。保留目前 normal／race exports、驗證與清理來源紀錄及 PR-07 草稿，未留下本工作 standalone executable，也未變更 configured caches。
+
+M3 的 PR-05／PR-06 已交付；M4 尚待 PR-07，不能將本節的完成視為整個圖片 I/O 計畫完成。

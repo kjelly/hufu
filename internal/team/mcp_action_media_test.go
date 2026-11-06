@@ -128,6 +128,7 @@ func TestMCPActionPublishesImagesAfterOutputsValidation(t *testing.T) {
 				t.Fatal("runtime media artifact is incompatible with the canonical resolver", err)
 			}
 			testRuntimeMediaResultInputs(t, c, item)
+			testResultImageExport(t, c, item)
 		})
 	}
 }

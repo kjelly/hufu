@@ -906,6 +906,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 				t.ID, statusIcon, t.Agent, reportExecutionTarget(t), reportProviderIdentity(t), t.Desc, detail, verify, dur)
 		}
 		b.WriteString("\n")
+		writeImageResultReport(&b, data)
 		writeTaskResourceScopeReport(&b, data.Todos)
 		writeResultCollectionReport(&b, data.Todos)
 		writeSemanticRetrievalRuntimeReport(&b, data.SemanticRetrieval)

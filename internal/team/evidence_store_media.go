@@ -281,8 +281,11 @@ func (s *FileArtifactStore) verifyMedia(ctx context.Context, ref ArtifactRef) er
 		return err
 	}
 	defer reservation.Release()
+	// Manifest-local ownership is verified by the evidence binding, not CAS.
+	// Keep every immutable content claim exact while allowing that occurrence.
+	ref.RunID, ref.TaskID, ref.Attempt, ref.Agent = "", "", 0, ""
 	if !sameArtifactRef(ref, canonical) {
-		return media.Reject(media.IntegrityMismatch, "media verification requires the canonical reference")
+		return media.Reject(media.IntegrityMismatch, "media verification requires canonical content metadata")
 	}
 	return nil
 }

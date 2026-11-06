@@ -15,6 +15,7 @@ type resultReadyIdentity struct {
 	Attempt       int    `json:"attempt"`
 	BranchID      string `json:"branch_id"`
 	SourceEventID string `json:"source_event_id"`
+	ImageCount    int    `json:"image_count,omitempty"`
 }
 
 func resultStatusIdentity(event team.StatusEvent) *resultReadyIdentity {
@@ -27,6 +28,7 @@ func resultStatusIdentity(event team.StatusEvent) *resultReadyIdentity {
 		return nil
 	}
 	attempt, _ := event.Data["attempt"].(int)
+	imageCount, _ := event.Data["image_count"].(int)
 	return &resultReadyIdentity{SchemaVersion: 1, ResultID: id, InvocationID: text("invocation_id"), RunID: text("run_id"),
-		TaskID: event.TodoID, Attempt: attempt, BranchID: text("branch_id"), SourceEventID: text("source_event_id")}
+		TaskID: event.TodoID, Attempt: attempt, BranchID: text("branch_id"), SourceEventID: text("source_event_id"), ImageCount: max(0, imageCount)}
 }

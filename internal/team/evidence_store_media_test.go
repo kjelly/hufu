@@ -99,6 +99,17 @@ func TestMediaArtifactStore(t *testing.T) {
 	if err := store.Verify(t.Context(), ArtifactRef{ID: first.ID}); err == nil {
 		t.Fatal("sparse reference verified without immutable claims")
 	}
+	occurrence, err := projectArtifactOccurrence(t.Context(), store, first.ArtifactRef, "run", "task", 1, "worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Verify(t.Context(), occurrence); err != nil {
+		t.Fatalf("manifest occurrence rejected: %v", err)
+	}
+	occurrence.SHA256 = "changed"
+	if err := store.Verify(t.Context(), occurrence); err == nil {
+		t.Fatal("occurrence masked changed content metadata")
+	}
 	if _, err := store.TrustedArtifactMetadata(t.Context(), first.ArtifactRef); err != nil {
 		t.Fatal(err)
 	}

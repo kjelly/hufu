@@ -51,6 +51,7 @@ type RunReport struct {
 	OriginalPrompt          string                    `json:"original_prompt,omitempty"`
 	Result                  *RunResult                `json:"result"`
 	Tasks                   []*TodoItem               `json:"tasks"`
+	ImageResultIDs          map[string]string         `json:"image_result_ids,omitempty"`
 	RequiredResourceLockSet *LockedResourceSet        `json:"required_resource_lock_set,omitempty"`
 	DecisionPrimitives      []DecisionPrimitiveRecord `json:"decision_primitives,omitempty"`
 }
@@ -170,6 +171,10 @@ func projectRunReport(events []RunEvent, tree *SessionTree, terminal RunEvent) (
 		}
 	}
 	report.Tasks, err = reportTasksForRun(lineage, terminal.RunID, report.Team)
+	if err != nil {
+		return nil, err
+	}
+	report.ImageResultIDs, err = reportImageResultIDs(lineage, terminal.RunID)
 	if err != nil {
 		return nil, err
 	}

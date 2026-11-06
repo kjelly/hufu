@@ -21,6 +21,9 @@ import (
 )
 
 func validateResultsPresentation(options *resultsCLIOptions, operation string) error {
+	if operation == "images" && options.render == "markdown" {
+		return errors.New("images supports --output text or json")
+	}
 	if operation == "pick" && options.displayMode == "plain" {
 		return errors.New("pick requires an interactive terminal display; use runs/list/search with --display-mode plain")
 	}

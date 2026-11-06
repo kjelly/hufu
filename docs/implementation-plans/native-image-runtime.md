@@ -313,7 +313,7 @@ admission 綁定本次 chosen target、profile、ordered media digest、policy �
 | History／repair | codec、`historyReferences`、`validateMediaHistoryLineage`、compaction 及 audit 都驗證 producer binding，不能把工具輸出當成無 task owner 的人類輸入。`projectHistoryToolPairs` 改展示用 call ID 時同步更新 carrier 的配對 ID，原 producer ID／receipt 不變；文字 repair view 移除圖片 carrier，保留文字、錯誤與 pairing |
 | Native action／結果 | 先沿 `canonicalizeRuntimeActionOutputs` 驗證完整 Outputs，再以 runtime publisher 綁定圖片；ordered media projection 與 Outputs 分開。擴充既有 runtime-owned result binding 的來源解析，從 canonical media projection 取值，不將 refs 塞入 Outputs 來冒充現有 output binding。local/external submission 都拒絕模型覆寫，replay 驗證原 receipt／binding，不重建成較新的來源 |
 
-PR-05 已完成上述 runtime 契約，離線 SDK、producer／consumer、失敗不重播、結果與 replay 的證據見[進度紀錄](native-image-runtime-progress.md#pr-05mcp-原生圖片與-runtime-owned-結果)。M3 整體仍待 PR-06 的成果查詢、安全匯出與介面文件，不能將 PR-05 的完成視為 M3 全部交付。
+PR-05 已完成上述 runtime 契約，離線 SDK、producer／consumer、失敗不重播、結果與 replay 的證據見[進度紀錄](native-image-runtime-progress.md#pr-05mcp-原生圖片與-runtime-owned-結果)。PR-06 已完成既有 results CLI 的原圖查詢／安全匯出與 report／JSONL／TUI 投影，最終 gates 與實際 CLI smoke 見[PR-06 紀錄](native-image-runtime-progress.md#pr-06圖片成果查詢安全匯出與介面)；操作方式見[原生圖片指南](../reference/native-images.md)。M3 已交付，M4 仍待 PR-07。
 
 ### 8.3 Codex App Server
 

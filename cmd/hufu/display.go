@@ -178,6 +178,9 @@ func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEve
 		}
 		if identity := resultStatusIdentity(event); identity != nil {
 			w.write(fmt.Sprintf("  Result ID: %s (team: %s, task: %s)\n  View: %s\n", identity.ResultID, safeResultsText(event.TeamName), identity.TaskID, team.HistoricalResultCommand(identity.ResultID, event.TeamName)))
+			if identity.ImageCount > 0 {
+				w.write("  Images: " + team.HistoricalResultImagesCommand(identity.ResultID, event.TeamName) + "\n")
+			}
 		}
 	case "provider_quota":
 		w.write(dimStyle.Render(event.Message) + "\n")
@@ -1645,7 +1648,7 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 		switch event.Type {
 		case "task_result_ready":
 			if identity := resultStatusIdentity(event); identity != nil {
-				p.Send(tuipkg.TaskResultIdentityMsg{TodoID: event.TodoID, ResultID: identity.ResultID, Team: event.TeamName})
+				p.Send(tuipkg.TaskResultIdentityMsg{TodoID: event.TodoID, ResultID: identity.ResultID, Team: event.TeamName, ImageCount: identity.ImageCount})
 				p.Send(tuipkg.TaskLogMsg{TodoID: event.TodoID, Line: "Result ID: " + identity.ResultID + "\n" + team.HistoricalResultCommand(identity.ResultID, event.TeamName)})
 			}
 		case "model_profile_resolved":
