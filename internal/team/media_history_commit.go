@@ -136,7 +136,10 @@ func (c *Coordinator) commitNativeConversationCheckpoint(ctx context.Context, st
 	if state == nil {
 		return media.Reject(media.DurabilityRequired, "cannot clone canonical conversation state")
 	}
-	state.Version = mediaCompactionStateVersion
+	state.Version = max(state.Version, mediaCompactionStateVersion)
+	if agent.MessagesHaveToolMedia(history) {
+		state.Version = toolMediaCompactionStateVersion
+	}
 	generation := CompactionGeneration{Kind: kind, ID: nextCompactionGenerationID(branch), BranchID: branch, CreatedAt: time.Now().UTC(), Replacement: cloneMessages(history)}
 	generation.SummaryDigest = digestStructuredSummary(&generation.Summary)
 	generation.ReplacementDigest = digestMessages(generation.Replacement)

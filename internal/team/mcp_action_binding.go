@@ -21,6 +21,7 @@ const (
 // reserved logical tool, the descriptor digest the execution policy snapshot
 // pins, and the compiled descriptor input schema.
 type mcpActionBinding struct {
+	descriptor       mcp.MCPTool
 	manager          *mcp.MCPToolManager
 	logicalName      string
 	descriptorSHA256 string
@@ -106,7 +107,7 @@ func (c *Coordinator) bindMCPActionProviders() error {
 		if err != nil {
 			return fmt.Errorf("%s: action provider %q: %w", mcpActionBindFailed, provider.capability, err)
 		}
-		if err := provider.bind(mcpActionBinding{manager: c.mcpManager, logicalName: tool.Name, descriptorSHA256: digest, inputSchema: schema}); err != nil {
+		if err := provider.bind(mcpActionBinding{descriptor: tool, manager: c.mcpManager, logicalName: tool.Name, descriptorSHA256: digest, inputSchema: schema}); err != nil {
 			return err
 		}
 	}

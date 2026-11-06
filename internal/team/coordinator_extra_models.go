@@ -190,6 +190,15 @@ func executionTopologySelectors(task TaskDef) []string {
 	return cloneModelTopology(task.ModelTopology)
 }
 
+// Private leaves share the parent's canonical media journal, branch tree,
+// invocation and snapshot projection; their workspaces contain worker files.
+func (c *Coordinator) canonicalJournalOwner() *Coordinator {
+	if c != nil && c.modelFanout != nil && c.modelFanout.parent != nil {
+		return c.modelFanout.parent.canonicalJournalOwner()
+	}
+	return c
+}
+
 // cloneAgentDef creates a deep copy of an AgentDef to prevent data races
 // when running multiple models concurrently.
 func cloneAgentDef(def *agent.AgentDef) *agent.AgentDef {

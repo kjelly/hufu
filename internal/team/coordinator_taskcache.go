@@ -52,12 +52,13 @@ type cachedTaskEntry struct {
 }
 
 type taskCacheDependencies struct {
-	PolicyEngine  func() PolicyEngine
-	Identity      func(TaskCacheLookupRequest) CacheIdentity
-	Forbidden     func(task, verify string) bool
-	SimilarTask   func(context.Context, string, []string, time.Duration) (int, error)
-	ObserveThink  func(TaskCacheLookupScope, string)
-	AppendJournal func(journalRecord)
+	PolicyEngine   func() PolicyEngine
+	Identity       func(TaskCacheLookupRequest) CacheIdentity
+	Forbidden      func(task, verify string) bool
+	AgentForbidden func(string) bool
+	SimilarTask    func(context.Context, string, []string, time.Duration) (int, error)
+	ObserveThink   func(TaskCacheLookupScope, string)
+	AppendJournal  func(journalRecord)
 }
 
 type defaultTaskCache struct {
@@ -72,7 +73,7 @@ func newDefaultTaskCache(deps taskCacheDependencies) *defaultTaskCache {
 }
 
 func (d taskCacheDependencies) isZero() bool {
-	return d.PolicyEngine == nil && d.Identity == nil && d.Forbidden == nil && d.SimilarTask == nil &&
+	return d.PolicyEngine == nil && d.Identity == nil && d.Forbidden == nil && d.AgentForbidden == nil && d.SimilarTask == nil &&
 		d.ObserveThink == nil && d.AppendJournal == nil
 }
 
@@ -92,6 +93,9 @@ func taskCacheDependenciesFor(c *Coordinator) taskCacheDependencies {
 			return identity
 		},
 		Forbidden: c.IsCacheForbidden,
+		AgentForbidden: func(agentKey string) bool {
+			return c.taskMayProduceToolMedia(context.Background(), TaskDef{Agent: agentKey})
+		},
 		SimilarTask: func(ctx context.Context, task string, candidates []string, timeout time.Duration) (int, error) {
 			sidecar := c.semanticSidecar(c.AgentPool().Sidecar())
 			if sidecar == nil {
@@ -143,6 +147,10 @@ func (tc *defaultTaskCache) forbidden(task, verify string) bool {
 	return tc.deps.Forbidden != nil && tc.deps.Forbidden(task, verify)
 }
 
+func (tc *defaultTaskCache) agentForbidden(agentKey string) bool {
+	return tc.deps.AgentForbidden != nil && tc.deps.AgentForbidden(agentKey)
+}
+
 func (tc *defaultTaskCache) appendJournal(record journalRecord) {
 	if tc.deps.AppendJournal != nil {
 		tc.deps.AppendJournal(record)
@@ -156,7 +164,7 @@ func (tc *defaultTaskCache) entriesFor(agentKey string) []cachedTaskEntry {
 }
 
 func (tc *defaultTaskCache) Lookup(ctx context.Context, req TaskCacheLookupRequest) (TaskCacheLookupResult, bool) {
-	if tc == nil || req.MediaInputDigest != "" {
+	if tc == nil || req.MediaInputDigest != "" || tc.agentForbidden(req.AgentKey) {
 		return TaskCacheLookupResult{}, false
 	}
 	policy := tc.cachePolicy()
@@ -253,7 +261,7 @@ func (tc *defaultTaskCache) Lookup(ctx context.Context, req TaskCacheLookupReque
 }
 
 func (tc *defaultTaskCache) Store(req TaskCacheStoreRequest) {
-	if tc == nil || req.MediaInputDigest != "" || tc.cachePolicy() == CacheBypass {
+	if tc == nil || req.MediaInputDigest != "" || tc.agentForbidden(req.AgentKey) || tc.cachePolicy() == CacheBypass {
 		return
 	}
 	normalizedSpec := normalizedVerificationSpecForCache(req.VerifySpec, req.Verify, req.VerifyMode)
@@ -340,7 +348,7 @@ func (tc *defaultTaskCache) Restore(seeds []TaskCacheSeed) {
 	defer tc.mu.Unlock()
 	generation := tc.generation.Load()
 	for _, seed := range seeds {
-		if seed.MediaInputDigest != "" {
+		if seed.MediaInputDigest != "" || tc.agentForbidden(seed.AgentKey) {
 			continue
 		}
 		if seed.Deduplicate {
@@ -694,7 +702,7 @@ func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, d
 	exactEligible := make([]*TodoItem, 0, len(items))
 	semanticEligible := make([]*TodoItem, 0, len(items))
 	for _, item := range items {
-		if item != nil && (item.MediaBinding != nil || item.MediaInputDigest != "") {
+		if item != nil && (item.MediaBinding != nil || item.MediaInputDigest != "" || runtimeMediaHash(item.TypedResult) != "") {
 			continue
 		}
 		// A catalog task's goal is display text; its identity is the catalog
@@ -777,7 +785,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 	// First pass: build local counts for this batch to handle duplicates within the batch
 	localCounts := make(map[string]int)
 	for _, t := range tasks {
-		if taskHasMedia(t) || t.InvariantVerification != "" || t.CatalogAction != nil {
+		if c.taskNeedsOwnMediaExecution(ctx, t) || t.InvariantVerification != "" || t.CatalogAction != nil {
 			continue
 		}
 		desc := t.Goal
@@ -794,7 +802,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 	// Track how many we've seen in this batch so far (for in-batch dedup: first instance proceeds, rest are duplicates)
 	batchSeen := make(map[string]int)
 	for i, t := range tasks {
-		if taskHasMedia(t) || t.InvariantVerification != "" || t.CatalogAction != nil {
+		if c.taskNeedsOwnMediaExecution(ctx, t) || t.InvariantVerification != "" || t.CatalogAction != nil {
 			continue
 		}
 		desc := t.Goal
@@ -821,7 +829,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 
 	// Increment global counts for all non-duplicate tasks
 	for i, t := range tasks {
-		if duplicates[i] || taskHasMedia(t) || t.InvariantVerification != "" || t.CatalogAction != nil {
+		if duplicates[i] || c.taskNeedsOwnMediaExecution(ctx, t) || t.InvariantVerification != "" || t.CatalogAction != nil {
 			continue
 		}
 		desc := t.Goal
@@ -835,7 +843,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 
 	// Third pass: current todo-list duplicate check (active work and recent failures).
 	for i, t := range tasks {
-		if duplicates[i] || taskHasMedia(t) || t.InvariantVerification != "" || t.CatalogAction != nil {
+		if duplicates[i] || c.taskNeedsOwnMediaExecution(ctx, t) || t.InvariantVerification != "" || t.CatalogAction != nil {
 			continue
 		}
 		desc := t.Goal
@@ -856,7 +864,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 	// duplicate of last run's work.
 	if !c.ExecutionProfile().DisableSemanticDedup {
 		for i, t := range tasks {
-			if duplicates[i] || taskHasMedia(t) || t.InvariantVerification != "" || t.CatalogAction != nil {
+			if duplicates[i] || c.taskNeedsOwnMediaExecution(ctx, t) || t.InvariantVerification != "" || t.CatalogAction != nil {
 				continue
 			}
 			desc := t.Goal

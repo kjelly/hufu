@@ -84,8 +84,20 @@ func mediaTextResultView(history []fantasy.Message) ([]fantasy.Message, error) {
 	for index := range messages {
 		var parts []fantasy.MessagePart
 		for _, part := range messages[index].Content {
-			switch part.(type) {
+			switch p := part.(type) {
 			case agent.MediaReferencePart, *agent.MediaReferencePart:
+			case fantasy.ToolResultPart:
+				result, err := agent.StripToolMediaMetadata(p)
+				if err != nil {
+					return nil, err
+				}
+				parts = append(parts, result)
+			case *fantasy.ToolResultPart:
+				result, err := agent.StripToolMediaMetadata(*p)
+				if err != nil {
+					return nil, err
+				}
+				parts = append(parts, result)
 			default:
 				parts = append(parts, part)
 			}

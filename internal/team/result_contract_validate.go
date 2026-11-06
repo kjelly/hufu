@@ -505,7 +505,11 @@ func resultContractPromptSection(ref *ResultContractRef, compiled *CompiledResul
 			}
 		}
 		for _, binding := range compiled.runtimeInputs {
-			fmt.Fprintf(b, "The runtime supplies `%s` from receipt-verified native task `%s` output `%s`. Omit this field entirely; never copy or summarize its value in the submission.\n", binding.Target, binding.SourceTask, binding.Output)
+			if binding.SourceKind == "runtime_media" {
+				fmt.Fprintf(b, "The runtime supplies `%s` from the receipt-verified media projection of native task `%s`. Omit this field entirely; never copy or summarize its value in the submission.\n", binding.Target, binding.SourceTask)
+			} else {
+				fmt.Fprintf(b, "The runtime supplies `%s` from receipt-verified native task `%s` output `%s`. Omit this field entirely; never copy or summarize its value in the submission.\n", binding.Target, binding.SourceTask, binding.Output)
+			}
 		}
 		if spec := compiled.evidenceInputs; spec != nil && spec.runtimeOwned() {
 			fmt.Fprintf(b, "The runtime supplies `%s` from every accepted evidence_from source. Omit this field entirely; the stored result retains all complete source records and hashes.\n", spec.ItemsPointer)

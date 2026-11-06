@@ -6,23 +6,42 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"uuid"
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// RuntimeToolContent is one content block of a runtime tool result. Text is
-// set only for text blocks; other blocks keep their type so a caller can
-// reject them instead of silently dropping them.
+// RuntimeToolContent preserves an untrusted MCP content block. Image Data is
+// still encoded; only the runtime media publisher may validate and admit it.
 type RuntimeToolContent struct {
-	Type string
-	Text string
+	Type     string
+	Text     string
+	Data     string
+	MIMEType string
+}
+
+// ErrUnsupportedToolContent prevents text callers from silently losing media.
+var ErrUnsupportedToolContent = errors.New("MCP tool result requires typed content support")
+
+func textOnlyToolResult(result RuntimeToolResult) (string, bool, error) {
+	parts := make([]string, 0, len(result.Content))
+	for _, block := range result.Content {
+		if block.Type != "text" {
+			return "", result.IsError, ErrUnsupportedToolContent
+		}
+		parts = append(parts, block.Text)
+	}
+	return strings.Join(parts, "\n"), result.IsError, nil
 }
 
 // RuntimeToolResult preserves the structure of an MCP CallTool result for a
 // runtime action: the error flag, the raw structuredContent, and every content
 // block in order.
 type RuntimeToolResult struct {
+	// InvocationID is allocated by this client, never copied from server data.
+	InvocationID      string
 	IsError           bool
 	StructuredContent json.RawMessage
 	Content           []RuntimeToolContent
@@ -111,11 +130,21 @@ func (m *MCPToolManager) ExecuteRuntimeTool(ctx context.Context, logicalName, ex
 	if err := authorize(ctx, t.ServerName, t.OrigName, arguments); err != nil {
 		return RuntimeToolResult{}, &toolAuthorizationError{cause: err}
 	}
-	result, err := callMCPTool(ctx, t, cli, arguments)
+	return callMCPToolResult(ctx, t, cli, arguments)
+}
+
+func callMCPToolResult(ctx context.Context, tool MCPTool, cli *client.Client, arguments string) (RuntimeToolResult, error) {
+	invocationID := "mcp-" + uuid.New().String()
+	result, err := callMCPTool(ctx, tool, cli, arguments)
 	if err != nil {
 		return RuntimeToolResult{}, err
 	}
-	return newRuntimeToolResult(result)
+	out, err := newRuntimeToolResult(result)
+	if err != nil {
+		return RuntimeToolResult{}, err
+	}
+	out.InvocationID = invocationID
+	return out, nil
 }
 
 func newRuntimeToolResult(result *mcp.CallToolResult) (RuntimeToolResult, error) {
@@ -140,6 +169,9 @@ func newRuntimeToolResult(result *mcp.CallToolResult) (RuntimeToolResult, error)
 func runtimeToolContent(content mcp.Content) RuntimeToolContent {
 	if text, ok := mcp.AsTextContent(content); ok {
 		return RuntimeToolContent{Type: "text", Text: text.Text}
+	}
+	if image, ok := mcp.AsImageContent(content); ok {
+		return RuntimeToolContent{Type: "image", Data: image.Data, MIMEType: image.MIMEType}
 	}
 	var envelope struct {
 		Type string `json:"type"`

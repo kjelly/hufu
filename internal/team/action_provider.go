@@ -45,6 +45,9 @@ type Action struct {
 type ActionResult struct {
 	Outputs   map[string]any `json:"outputs,omitempty"`
 	Artifacts []ArtifactRef  `json:"artifacts,omitempty"`
+	// Only the in-process MCP adapter can supply this transient publication
+	// input. It is never decoded from provider JSON or persisted as a result.
+	mcpMedia *pendingMCPActionMedia
 }
 
 func decodeActionResult(value interface{}) (ActionResult, error) {

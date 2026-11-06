@@ -578,6 +578,7 @@ type EvidenceBinding struct {
 	BoundInputs                   map[string]string `json:"bound_inputs,omitempty"`
 	ActionInvocationID            string            `json:"action_invocation_id,omitempty"`
 	RuntimeOutputsHash            string            `json:"runtime_outputs_hash,omitempty"`
+	RuntimeMediaHash              string            `json:"runtime_media_hash,omitempty"`
 }
 
 type EvidenceManifest struct {
@@ -688,6 +689,9 @@ func verifyEvidenceBinding(manifest EvidenceManifest, result EvidenceResult) err
 		if strings.TrimSpace(b.ActionInvocationID) == "" || !runInputHashPattern.MatchString(b.RuntimeOutputsHash) {
 			return fmt.Errorf("evidence requirement %q has incomplete runtime output binding", result.RequirementID)
 		}
+	}
+	if b.RuntimeMediaHash != "" && !runInputHashPattern.MatchString(b.RuntimeMediaHash) {
+		return fmt.Errorf("evidence requirement %q has an invalid runtime media binding", result.RequirementID)
 	}
 	wantIDs := make([]string, 0, len(result.ArtifactRefs))
 	if len(result.ArtifactRefs) == 0 {

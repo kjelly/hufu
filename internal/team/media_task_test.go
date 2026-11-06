@@ -19,7 +19,7 @@ func createMediaOccurrence(t *testing.T, c *Coordinator, ctx context.Context, ta
 	return created[0]
 }
 
-func prepareMediaOccurrence(t *testing.T, c *Coordinator, ctx context.Context, task TaskDef) (TodoSpec, string) {
+func prepareMediaOccurrence(t *testing.T, c *Coordinator, ctx context.Context, task TaskDef, configure ...func(*TodoSpec)) (TodoSpec, string) {
 	t.Helper()
 	canonical, err := c.canonicalizeTaskOccurrence(task, c.session.Agents["worker"], "fixture/vision")
 	if err != nil {
@@ -30,6 +30,9 @@ func prepareMediaOccurrence(t *testing.T, c *Coordinator, ctx context.Context, t
 		MediaBinding: canonical.MediaBinding.Clone(), MediaInputDigest: canonical.MediaInputDigest, Execution: cloneExecutionContract(canonical.Execution)}
 	if len(canonical.ExecutionTopology) > 1 {
 		spec.ModelTopology, spec.ExecutionTopology = canonical.ModelTopology, canonical.ExecutionTopology
+	}
+	for _, apply := range configure {
+		apply(&spec)
 	}
 	if err := c.finalizeMediaTaskSpec(ctx, &spec, id); err != nil {
 		t.Fatal(err)

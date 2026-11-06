@@ -1268,6 +1268,21 @@ runtime-owned evidence input 或 fixed collection 重疊。`source_task` 必須�
 驗證會重新核對綁定值，不會以較新的輸出重建歷史資料；文字與 JSON 數值不經
 模型重建或型別猜測。
 
+MCP native action 的圖片成果可選擇 `source_kind: "runtime_media"`，並省略
+`output`；runtime 從獨立的 canonical media projection 綁定完整有序 blocks、
+圖片 refs 與收據 hash，不會將媒體欄位塞進 action 的 `Outputs`：
+
+```json
+"x-hufu-runtime-inputs": [
+  {"target":"/images","source_task":"capture","source_kind":"runtime_media"}
+]
+```
+
+`source_kind` 僅接受 `runtime_output`、`runtime_media`；省略時沿用既有
+`runtime_output` 行為。圖片 metadata 不授予讀取 bytes 或轉送模型的權限。
+沒有凍結輸入的圖片來源只可在原 invocation 綁定；有凍結輸入的來源還須核對
+輸入 snapshot、action payload、來源 occurrence 與完整歷史收據。
+
 
 ### 收窄提交介面與候選結果修復
 

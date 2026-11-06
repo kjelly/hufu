@@ -1071,7 +1071,7 @@ func (c *Coordinator) canonicalExecutionPolicySnapshot() (*ExecutionPolicySnapsh
 	}
 	var tree *SessionTree
 	if c.session != nil {
-		tree, err = LoadSessionTree(c.session.Workspace)
+		tree, err = LoadSessionTree(c.canonicalJournalOwner().session.Workspace)
 		if err != nil {
 			return nil, fmt.Errorf("load execution policy session tree: %w", err)
 		}

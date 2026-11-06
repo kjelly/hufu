@@ -50,15 +50,13 @@ func (s *FileArtifactStore) listTaskMedia(ctx context.Context, taskID string) ([
 		}
 		binding = payload.Binding.Clone()
 	}
-	if binding == nil {
-		return nil, nil
-	}
+
 	items := ReduceToTodoList(lineage)
 	item := todoItemByID(items, taskID)
 	if item == nil {
 		return nil, nil
 	}
-	if !reflect.DeepEqual(binding, item.MediaBinding) || binding.InputDigest != item.MediaInputDigest {
+	if !reflect.DeepEqual(binding, item.MediaBinding) || binding != nil && binding.InputDigest != item.MediaInputDigest {
 		return nil, media.Reject(media.BindingConflict, "task media index differs from occurrence")
 	}
 	view := mediaLineageView{snapshots: make(map[string]media.InputSnapshot)}
@@ -71,12 +69,31 @@ func (s *FileArtifactStore) listTaskMedia(ctx context.Context, taskID string) ([
 			view.snapshots[snapshot.ID] = snapshot
 		}
 	}
-	if err := mediaBindingSources(binding, view, media.Limits{}); err != nil {
-		return nil, err
+	if binding != nil {
+		if err := mediaBindingSources(binding, view, media.Limits{}); err != nil {
+			return nil, err
+		}
 	}
 	seen := make(map[string]bool)
 	var refs []ArtifactRef
-	for _, image := range binding.Refs {
+	var images []media.Ref
+	if binding != nil {
+		images = append(images, binding.Refs...)
+	}
+	for index, event := range lineage {
+		if event.Type != string(EventToolMediaPublished) || event.TaskID != taskID {
+			continue
+		}
+		publication, err := decodeToolMediaPublication(event)
+		if err != nil {
+			return nil, err
+		}
+		if err := verifyToolMediaPublication(event, publication, lineage[:index]); err != nil {
+			return nil, err
+		}
+		images = append(images, publication.Snapshot.Refs...)
+	}
+	for _, image := range images {
 		if seen[image.ID] {
 			continue
 		}

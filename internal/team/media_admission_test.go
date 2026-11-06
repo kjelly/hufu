@@ -10,6 +10,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/providerintrospection"
@@ -25,14 +26,24 @@ func newMediaPolicyCoordinator(t *testing.T, limits ...media.Limits) *Coordinato
 
 func newMediaPolicyCoordinatorWithTransport(t *testing.T, endpoint string, factory agent.ProviderBoundaryFactory, imageInput providerintrospection.CapabilityState, configure func(*TeamSession), limits ...media.Limits) *Coordinator {
 	t.Helper()
+	return newMediaPolicyCoordinatorWithMCP(t, nil, endpoint, factory, imageInput, configure, limits...)
+}
+
+func newMediaPolicyCoordinatorWithMCP(t *testing.T, manager *mcp.MCPToolManager, endpoint string, factory agent.ProviderBoundaryFactory, imageInput providerintrospection.CapabilityState, configure func(*TeamSession), limits ...media.Limits) *Coordinator {
+	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newMediaPolicyCoordinatorAtRoot(t, root, endpoint, factory, imageInput, configure, limits...)
+	return newMediaPolicyCoordinatorAtRootWithMCP(t, root, manager, endpoint, factory, imageInput, configure, limits...)
 }
 
 func newMediaPolicyCoordinatorAtRoot(t *testing.T, root, endpoint string, factory agent.ProviderBoundaryFactory, imageInput providerintrospection.CapabilityState, configure func(*TeamSession), limits ...media.Limits) *Coordinator {
+	t.Helper()
+	return newMediaPolicyCoordinatorAtRootWithMCP(t, root, nil, endpoint, factory, imageInput, configure, limits...)
+}
+
+func newMediaPolicyCoordinatorAtRootWithMCP(t *testing.T, root string, manager *mcp.MCPToolManager, endpoint string, factory agent.ProviderBoundaryFactory, imageInput providerintrospection.CapabilityState, configure func(*TeamSession), limits ...media.Limits) *Coordinator {
 	t.Helper()
 	control, subject := filepath.Join(root, "control"), filepath.Join(root, "subject")
 	for _, dir := range []string{control, subject} {
@@ -64,7 +75,9 @@ func newMediaPolicyCoordinatorAtRoot(t *testing.T, root, endpoint string, factor
 			return nil, errors.New("fixture rejects provider dispatch")
 		}
 	}
-	c, err := NewCoordinator(session, endpoint, "", nil, nil, RoleModels{Sidecar: session.Config.SidecarModel, Judge: session.Config.JudgeModel}, 1, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false, WithProviderBoundaryFactory(factory))
+	// An explicitly supplied fake MCP manager needs its loopback transport.
+	// Other image fixtures keep the original network-denied configuration.
+	c, err := NewCoordinator(session, endpoint, "", manager, nil, RoleModels{Sidecar: session.Config.SidecarModel, Judge: session.Config.JudgeModel}, 1, false, false, false, nil, nil, nil, false, "", manager == nil, false, nil, false, false, WithProviderBoundaryFactory(factory))
 	if err != nil {
 		t.Fatal(err)
 	}

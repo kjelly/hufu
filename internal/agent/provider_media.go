@@ -2,6 +2,7 @@ package agent
 
 import (
 	"reflect"
+	"strings"
 
 	"charm.land/fantasy"
 )
@@ -17,6 +18,16 @@ func providerRequestHasReferences(request ProviderRequest) bool {
 				switch part.(type) {
 				case MediaReferencePart, *MediaReferencePart:
 					return true
+				}
+				switch p := part.(type) {
+				case fantasy.ToolResultPart:
+					if strings.HasPrefix(p.ClientMetadata, toolMediaMetadataPrefix) {
+						return true
+					}
+				case *fantasy.ToolResultPart:
+					if p != nil && strings.HasPrefix(p.ClientMetadata, toolMediaMetadataPrefix) {
+						return true
+					}
 				}
 				if !nilContentPart(part) && part.GetType() == ContentTypeMediaReference {
 					return true
@@ -53,11 +64,11 @@ func MessagesHaveMedia(messages []fantasy.Message) bool {
 				// MIME cannot route files through a text-only request counter.
 				return true
 			case fantasy.ToolResultPart:
-				if toolResultHasMedia(p.Output) {
+				if strings.HasPrefix(p.ClientMetadata, toolMediaMetadataPrefix) || toolResultHasMedia(p.Output) {
 					return true
 				}
 			case *fantasy.ToolResultPart:
-				if p == nil || toolResultHasMedia(p.Output) {
+				if p == nil || strings.HasPrefix(p.ClientMetadata, toolMediaMetadataPrefix) || toolResultHasMedia(p.Output) {
 					return true
 				}
 			default:

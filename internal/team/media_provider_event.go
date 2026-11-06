@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"slices"
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/execution"
@@ -14,6 +15,7 @@ import (
 // not execution completion or reported provider usage. Canonical bindings
 // already own the ordered references, so no image bytes or paths are copied.
 type MediaProviderAdmittedPayload struct {
+	ConsumerHash              string                    `json:"consumer_hash,omitempty"`
 	ModelFanout               MediaProviderFanoutGrant  `json:"model_fanout,omitzero"`
 	Version                   int                       `json:"version"`
 	ProviderInvocationID      string                    `json:"provider_invocation_id"`
@@ -50,12 +52,17 @@ func (c *Coordinator) mediaProviderAdmissionPayload(ctx context.Context, request
 	}
 	payload := MediaProviderAdmittedPayload{Version: media.Version, ProviderInvocationID: request.InvocationID,
 		OccurrenceRevision: admission.Identity.OccurrenceRevision, Attempt: admission.Identity.Attempt, DispatchID: admission.Identity.DispatchID,
-		BindingHash: admission.Binding.Hash, MediaInputDigest: admission.Binding.InputDigest, PolicyHash: admission.Binding.PolicyHash,
 		Target: admission.Target, ProviderKey: admission.Grant.ProviderKey, ProviderConfigurationHash: admission.Grant.IdentityHash,
 		ImageCount: len(admission.Locations), ImageTokenUpperBound: admission.Grant.ImageTokenUpperBound, ImageTokens: admission.ImageTokens,
 		TextTokens: int64(tokens) - admission.ImageTokens, RequestTokens: int64(tokens), ContextWindow: int64(request.AdmissionContext.ContextWindow),
 		OutputReservation: int64(providerRequestOutputReservation(request)), SafetyMargin: int64(request.AdmissionContext.SafetyMarginTokens), EstimateSource: mediaOperatorEstimate,
 		ModelFanout: admission.ModelFanout}
+	if admission.Binding != nil {
+		payload.BindingHash, payload.MediaInputDigest, payload.PolicyHash = admission.Binding.Hash, admission.Binding.InputDigest, admission.Binding.PolicyHash
+	}
+	if admission.Consumer != nil {
+		payload.ConsumerHash, payload.PolicyHash = admission.Consumer.Hash, admission.Consumer.PolicyHash
+	}
 	return admission, payload, validateMediaProviderEstimate(payload)
 }
 
@@ -69,7 +76,7 @@ func decodeMediaProviderEvent(event RunEvent) (MediaProviderAdmittedPayload, err
 	}
 	if payload.Version != media.Version || event.RunID == "" || event.BranchID == "" || event.TaskID == "" || event.Actor == "" ||
 		payload.ProviderInvocationID == "" || len(payload.ProviderInvocationID) > 256 || payload.OccurrenceRevision <= 0 || payload.Attempt <= 0 || payload.DispatchID == "" ||
-		payload.BindingHash == "" || payload.MediaInputDigest == "" || payload.PolicyHash == "" || payload.ProviderConfigurationHash == "" {
+		payload.ConsumerHash == "" && (payload.BindingHash == "" || payload.MediaInputDigest == "") || payload.PolicyHash == "" || payload.ProviderConfigurationHash == "" {
 		return payload, media.Reject(media.BindingConflict, "image provider admission identity is incomplete")
 	}
 	if err := payload.Target.Validate(); err != nil {
@@ -125,10 +132,26 @@ func (c *Coordinator) commitMediaProviderAdmission(ctx context.Context, request 
 		}
 		event := RunEvent{Type: string(EventMediaProviderAdmitted), RunID: admission.Identity.RunID, BranchID: view.branch, TaskID: admission.Identity.TaskID, Actor: admission.Identity.Agent,
 			IdempotencyKey: "media-provider:" + view.branch + ":" + request.InvocationID, Payload: encoded}
-		if err := verifyMediaProviderAdmission(event, payload, view.events); err != nil {
+		var batch []RunEvent
+		prior := view.events
+		if admission.Consumer != nil {
+			encoded, err := json.Marshal(admission.Consumer)
+			if err != nil {
+				return err
+			}
+			consumer := RunEvent{SchemaVersion: eventStoreSchemaVersion, Type: string(EventMediaConsumerBound), RunID: event.RunID, BranchID: view.branch, TaskID: event.TaskID, Actor: event.Actor,
+				IdempotencyKey: "media-consumer:" + view.branch + ":" + request.InvocationID, Payload: encoded}
+			if err := verifyMediaConsumer(consumer, *admission.Consumer, prior); err != nil {
+				return err
+			}
+			batch = append(batch, consumer)
+			prior = slices.Concat(prior, []RunEvent{consumer})
+		}
+		if err := verifyMediaProviderAdmission(event, payload, prior); err != nil {
 			return err
 		}
-		_, err = journal.AppendBatchAtHead(ctx, []RunEvent{event}, view.head)
+		batch = append(batch, event)
+		_, err = journal.AppendBatchAtHead(ctx, batch, view.head)
 		if errors.Is(err, ErrEventHeadChanged) {
 			continue
 		}

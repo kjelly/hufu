@@ -702,7 +702,7 @@ func (c *Coordinator) applyLiveTaskProjection(tasks []*TodoItem) {
 	if !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
 		seeds := make([]TaskCacheSeed, 0, len(tasks))
 		for _, t := range tasks {
-			if t != nil && t.MediaBinding == nil && t.MediaInputDigest == "" && t.Status == TaskDone && t.Output != "" {
+			if t != nil && t.MediaBinding == nil && t.MediaInputDigest == "" && runtimeMediaHash(t.TypedResult) == "" && t.Status == TaskDone && t.Output != "" {
 				seeds = append(seeds, TaskCacheSeed{
 					AgentKey: strings.ToLower(t.Agent), Task: t.Desc, Output: t.Output,
 					VerifySpec: t.VerifySpec, Verify: t.Verify, VerifyMode: t.VerifyMode,

@@ -35,6 +35,20 @@ func ProjectHistoricalTaskResult(data []byte) (jsonv1.RawMessage, string, error)
 		preserved = bytes.Clone(object["runtime_outputs"])
 		delete(object, "runtime_outputs")
 	}
+	var preservedMedia jsontext.Value
+	if raw := object["runtime_media"]; len(raw) != 0 && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		var result struct {
+			TaskID       string                  `json:"task_id"`
+			Attempt      int                     `json:"attempt"`
+			RuntimeMedia *RuntimeMediaProjection `json:"runtime_media"`
+		}
+		if err := json.Unmarshal(data, &result); err != nil || result.RuntimeMedia == nil || result.RuntimeMedia.Validate() != nil ||
+			result.TaskID != result.RuntimeMedia.TaskID || result.Attempt != result.RuntimeMedia.Attempt {
+			return nil, "", fmt.Errorf("historical runtime media projection is invalid")
+		}
+		preservedMedia = bytes.Clone(raw)
+		delete(object, "runtime_media")
+	}
 	masked, err := json.Marshal(object, json.Deterministic(true), jsontext.PreserveRawStrings(true))
 	if err != nil {
 		return nil, "", err
@@ -49,6 +63,9 @@ func ProjectHistoricalTaskResult(data []byte) (jsonv1.RawMessage, string, error)
 	}
 	if preserved != nil {
 		projectedObject["runtime_outputs"] = preserved
+	}
+	if preservedMedia != nil {
+		projectedObject["runtime_media"] = preservedMedia
 	}
 	projected, err := json.Marshal(projectedObject, json.Deterministic(true), jsontext.PreserveRawStrings(true))
 	if err != nil {

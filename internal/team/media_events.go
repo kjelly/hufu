@@ -22,6 +22,9 @@ func addTaskMediaPayload(payload map[string]any, item *TodoItem) {
 }
 
 func (c *Coordinator) mediaInputSemaphore() chan struct{} {
+	if c.modelFanout != nil && c.modelFanout.parent != nil {
+		return c.modelFanout.parent.mediaInputSemaphore()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.mediaAdmissionGate == nil {
@@ -160,7 +163,8 @@ func (c *Coordinator) mediaLineage(ctx context.Context) (mediaLineageView, error
 	if len(events) > 0 {
 		view.head = events[len(events)-1].ID
 	}
-	tree, err := LoadSessionTreeContext(ctx, c.session.Workspace)
+	owner := c.canonicalJournalOwner()
+	tree, err := LoadSessionTreeContext(ctx, owner.session.Workspace)
 	if err != nil {
 		return view, err
 	}
@@ -171,7 +175,7 @@ func (c *Coordinator) mediaLineage(ctx context.Context) (mediaLineageView, error
 	if c.eventStore != nil && c.eventStore.BranchID() != branch {
 		return view, media.Reject(media.AccessDenied, "media journal branch differs from active branch")
 	}
-	if branch != c.activeBranchID() {
+	if branch != owner.activeBranchID() {
 		return view, media.Reject(media.AccessDenied, "active media branch changed")
 	}
 	view.branch = branch
@@ -215,6 +219,11 @@ func (c *Coordinator) admitMediaInput(ctx context.Context, snapshot media.InputS
 	}
 	if err := snapshot.Validate(policy.Policy.Image); err != nil {
 		return media.InputSnapshot{}, err
+	}
+	for _, occurrence := range snapshot.Occurrences {
+		if occurrence.Origin == "mcp_tool" {
+			return media.InputSnapshot{}, media.Reject(media.AccessDenied, "tool image sources require atomic producer publication")
+		}
 	}
 	store, err := OpenFileArtifactStoreReadOnly(c.artifactStoreRootPath(), c.projectDir)
 	if err != nil {

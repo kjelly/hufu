@@ -100,6 +100,9 @@ func decodeSubmitResultInput(raw []byte, contract taskResultSubmissionContract) 
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(normalized, &fields); err == nil {
+		if _, present := fields["runtime_media"]; present {
+			return SubmitResultInput{}, fmt.Errorf("runtime_media is runtime-owned; omit it entirely")
+		}
 		if _, present := fields["files_read"]; present && contract.RuntimeOwnedFilesRead {
 			return SubmitResultInput{}, fmt.Errorf("files_read is runtime-owned; omit it entirely")
 		}

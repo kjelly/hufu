@@ -245,6 +245,7 @@ type canonicalReceipt struct {
 	BoundInputs                   map[string]string          `json:"bound_inputs,omitempty"`
 	ActionInvocationID            string                     `json:"action_invocation_id,omitempty"`
 	RuntimeOutputsHash            string                     `json:"runtime_outputs_hash,omitempty"`
+	RuntimeMediaHash              string                     `json:"runtime_media_hash,omitempty"`
 	Backend                       string                     `json:"backend,omitempty"`
 	ExitCode                      *int                       `json:"exit_code,omitempty"`
 	ProducerID                    string                     `json:"producer_id,omitempty"`
@@ -289,6 +290,7 @@ func toCanonicalReceipts(receipts []ExecutionReceipt, single *ExecutionReceipt) 
 			BoundInputs:                   cloneStringMap(r.BoundInputs),
 			ActionInvocationID:            r.ActionInvocationID,
 			RuntimeOutputsHash:            r.RuntimeOutputsHash,
+			RuntimeMediaHash:              r.RuntimeMediaHash,
 			Backend:                       r.Backend,
 			ExitCode:                      r.ExitCode,
 			ProducerID:                    r.ProducerID,

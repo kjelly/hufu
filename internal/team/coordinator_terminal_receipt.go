@@ -65,6 +65,9 @@ func (c *Coordinator) persistSuccessfulCoordinatorTaskReceipt(todoID, producer s
 		receipt.CatalogRuntimeFields = catalogRuntimeFields(item.CatalogAction)
 		if item.TypedResult != nil {
 			receipt.RuntimeOutputsHash = item.TypedResult.RuntimeOutputsHash
+			if item.TypedResult.RuntimeMedia != nil {
+				receipt.RuntimeMediaHash = item.TypedResult.RuntimeMedia.Hash
+			}
 		}
 	}
 	if len(actionInvocationID) > 0 {

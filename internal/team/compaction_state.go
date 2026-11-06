@@ -313,7 +313,10 @@ func redactedCompactionState(state *ConversationCompactionState) (*ConversationC
 		return nil, errors.New("clone canonical compaction state")
 	}
 	if hasReferences {
-		clone.Version = mediaCompactionStateVersion
+		clone.Version = max(clone.Version, mediaCompactionStateVersion)
+		if compactionHasToolMedia(clone) {
+			clone.Version = toolMediaCompactionStateVersion
+		}
 	}
 	data, err := json.Marshal(clone)
 	if err != nil {

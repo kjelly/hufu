@@ -12,6 +12,27 @@ import (
 
 func taskHasMedia(task TaskDef) bool { return task.MediaBinding != nil || task.MediaInputDigest != "" }
 
+// A text-starting worker can acquire image evidence from an authorized MCP
+// call. Such work owns its receipts and cannot share a cached prose result.
+func (c *Coordinator) taskMayProduceToolMedia(ctx context.Context, task TaskDef) bool {
+	if c == nil || c.executionPolicy == nil || c.executionPolicy.snapshot == nil || c.executionPolicy.snapshot.Media == nil || task.Action != nil {
+		return false
+	}
+	if c.session == nil || len(c.managerMCPDescriptors()) == 0 {
+		return false
+	}
+	def := c.session.Agents[strings.ToLower(task.Agent)]
+	if def == nil {
+		return true // Unresolved authority is never proof that reuse is safe.
+	}
+	authorization, err := c.resolveNewTaskToolAuthorization(ctx, task, def)
+	return err != nil || authorization != nil && len(authorization.Targets) != 0
+}
+
+func (c *Coordinator) taskNeedsOwnMediaExecution(ctx context.Context, task TaskDef) bool {
+	return taskHasMedia(task) || c.taskMayProduceToolMedia(ctx, task)
+}
+
 func (c *Coordinator) rejectUnsupportedMediaAttempt(ctx context.Context, request AttemptRequest) error {
 	item := c.todoItemByID(request.TaskID)
 	if !taskHasMedia(request.Task) && (item == nil || item.MediaBinding == nil && item.MediaInputDigest == "") {

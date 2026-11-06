@@ -235,7 +235,7 @@ func TestExecuteRuntimeToolPreservesResultStructure(t *testing.T) {
 			wantStructured: `{"summary":"ok"}`, wantContent: []RuntimeToolContent{{Type: "text", Text: "fallback"}}},
 		{name: "mixed blocks", result: &mcp.CallToolResult{Content: []mcp.Content{
 			mcp.NewTextContent("first"), mcp.NewImageContent("aGk=", "image/png"), mcp.NewTextContent("second"),
-		}}, wantContent: []RuntimeToolContent{{Type: "text", Text: "first"}, {Type: "image"}, {Type: "text", Text: "second"}}},
+		}}, wantContent: []RuntimeToolContent{{Type: "text", Text: "first"}, {Type: "image", Data: "aGk=", MIMEType: "image/png"}, {Type: "text", Text: "second"}}},
 		{name: "tool error", result: mcp.NewToolResultError("boom"), wantError: true, wantContent: []RuntimeToolContent{{Type: "text", Text: "boom"}}},
 		{name: "empty", result: &mcp.CallToolResult{}, wantContent: []RuntimeToolContent{}},
 	}

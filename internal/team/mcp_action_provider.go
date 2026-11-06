@@ -182,7 +182,16 @@ func (p *mcpActionProvider) Execute(ctx context.Context, action Action) (interfa
 	result, err := binding.manager.ExecuteRuntimeTool(ctx, binding.logicalName, binding.descriptorSHA256, action.Payload, authorize)
 	switch {
 	case err == nil:
-		return mcpActionResult(result)
+		envelope, err := mcpActionResult(result)
+		if err != nil {
+			return nil, err
+		}
+		if envelope.mcpMedia != nil {
+			envelope.mcpMedia.tool = binding.descriptor
+			envelope.mcpMedia.capability = p.capability
+			envelope.mcpMedia.actionID = ActionEnvironmentFromContext(ctx).ActionInvocationID
+		}
+		return envelope, nil
 	case mcp.IsToolDescriptorMismatchError(err):
 		return nil, fmt.Errorf("%s: %w", mcpActionDescriptorMismatch, err)
 	case mcp.IsToolAuthorizationError(err):

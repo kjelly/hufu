@@ -1157,6 +1157,11 @@ func (c *Coordinator) recallWorkerMemory(ctx context.Context, agentDef *agent.Ag
 // (that is WP-6). The method exists so WP-6 can wire it to the session tree
 // without changing call sites.
 func (c *Coordinator) activeBranchID() string {
+	// A model leaf has a disposable workspace and no independent branch tree.
+	// Its memory, policy and evidence belong to the parent's canonical branch.
+	if c != nil && c.modelFanout != nil && c.modelFanout.parent != nil {
+		return c.modelFanout.parent.activeBranchID()
+	}
 	if c != nil && c.recoveryBranch != "" {
 		return c.recoveryBranch
 	}

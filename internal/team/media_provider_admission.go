@@ -24,9 +24,16 @@ type nativeProviderMedia struct {
 	Locations   []historyReferenceLocation
 	ImageTokens int64
 	ModelFanout MediaProviderFanoutGrant
+	References  []media.Ref
+	Consumer    *MediaConsumerBoundPayload
 }
 
 func providerMediaMessages(request agent.ProviderRequest) ([]fantasy.Message, error) {
+	var err error
+	request, err = agent.ExpandToolMediaRequest(request)
+	if err != nil {
+		return nil, err
+	}
 	if request.Call != nil && request.ObjectCall != nil || len(request.Messages) > 0 && (request.Call != nil || request.ObjectCall != nil) {
 		return nil, media.Reject(media.BindingConflict, "native provider request has ambiguous message sources")
 	}
@@ -51,15 +58,19 @@ func (c *Coordinator) resolveNativeProviderMedia(ctx context.Context, request ag
 	if err != nil {
 		return admission, err
 	}
-	if err := validateNativeMediaInvocation(item, c.executionPolicy.snapshot); err != nil {
-		return admission, err
+	if item.MediaBinding != nil {
+		if err := validateNativeMediaInvocation(item, c.executionPolicy.snapshot); err != nil {
+			return admission, err
+		}
 	}
 	view, err := c.mediaLineage(ctx)
 	if err != nil {
 		return admission, err
 	}
-	if err := validateNativeMediaSourceScope(item.MediaBinding, view.events); err != nil {
-		return admission, err
+	if item.MediaBinding != nil {
+		if err := validateNativeMediaSourceScope(item.MediaBinding, view.events); err != nil {
+			return admission, err
+		}
 	}
 	expectedTarget, fanout, err := c.nativeMediaProviderTarget(ctx, item, identity, view.events)
 	if err != nil {
@@ -77,11 +88,54 @@ func (c *Coordinator) resolveNativeProviderMedia(ctx context.Context, request ag
 		return admission, err
 	}
 	locations := historyReferences(messages)
+	toolSources := make(map[string]bool)
+	for _, event := range view.events {
+		if event.Type == string(EventToolMediaPublished) {
+			producer, err := decodeToolMediaPublication(event)
+			if err != nil {
+				return admission, err
+			}
+			toolSources[producer.Hash] = true
+		}
+	}
+	hasToolSource := false
+	for _, location := range locations {
+		hasToolSource = hasToolSource || toolSources[location.Reference.BindingHash]
+	}
+	if hasToolSource {
+		if err := validateToolPairs(messages); err != nil {
+			return admission, err
+		}
+		consumer := MediaConsumerBoundPayload{Version: media.Version, RunID: identity.RunID, TaskID: identity.TaskID, Agent: identity.Agent,
+			ProviderInvocationID: request.InvocationID, OccurrenceRevision: identity.OccurrenceRevision, Attempt: identity.Attempt, DispatchID: identity.DispatchID,
+			PolicyHash: view.policyHash, Target: target, ModelFanout: fanout}
+		if item.MediaBinding != nil {
+			consumer.InputBindingHash = item.MediaBinding.Hash
+		}
+		for _, location := range locations {
+			if messages[location.Message].Role != fantasy.MessageRoleUser {
+				return admission, media.Reject(media.AccessDenied, "tool image projection is not a complete user media bundle")
+			}
+			consumer.References = append(consumer.References, location.Reference)
+		}
+		consumer.Hash, err = consumer.digest()
+		if err != nil {
+			return admission, err
+		}
+		if err := verifyMediaConsumer(RunEvent{RunID: identity.RunID, TaskID: identity.TaskID, Actor: identity.Agent}, consumer, view.events); err != nil {
+			return admission, err
+		}
+		return nativeProviderMedia{Identity: identity, Binding: item.MediaBinding.Clone(), Target: target, Grant: grant, Limits: limits, Locations: locations,
+			ImageTokens: int64(len(locations)) * grant.ImageTokenUpperBound, ModelFanout: fanout, References: consumer.refs(), Consumer: &consumer}, nil
+	}
+	if item.MediaBinding == nil {
+		return admission, media.Reject(media.AccessDenied, "image provider has no canonical media source")
+	}
 	if err := validateNativeProviderReferences(messages, locations, item.MediaBinding, limits); err != nil {
 		return admission, err
 	}
 	return nativeProviderMedia{Identity: identity, Binding: item.MediaBinding.Clone(), Target: target, Grant: grant, Limits: limits, Locations: locations,
-		ImageTokens: int64(len(locations)) * grant.ImageTokenUpperBound, ModelFanout: fanout}, nil
+		ImageTokens: int64(len(locations)) * grant.ImageTokenUpperBound, ModelFanout: fanout, References: item.MediaBinding.Refs}, nil
 }
 
 func (c *Coordinator) nativeMediaProviderTarget(ctx context.Context, item *TodoItem, identity submitResultRuntimeIdentity, events []RunEvent) (execution.ExecutionTarget, MediaProviderFanoutGrant, error) {
@@ -100,23 +154,7 @@ func (c *Coordinator) nativeMediaProviderTarget(ctx context.Context, item *TodoI
 }
 
 func (c *Coordinator) nativeProviderOccurrence(ctx context.Context) (submitResultRuntimeIdentity, *TodoItem, error) {
-	identity, ok := ctx.Value(submitResultRuntimeIdentityKey{}).(submitResultRuntimeIdentity)
-	if !ok || identity.RunID != c.executionRunID {
-		return identity, nil, media.Reject(media.AccessDenied, "image provider has no current task lease")
-	}
-	item := c.todoItemByID(identity.TaskID)
-	if item == nil || item.MediaBinding == nil {
-		return identity, nil, media.Reject(media.AccessDenied, "image provider has no canonical media occurrence")
-	}
-	if err := c.validateMediaAttempt(ctx, taskDefFromTodoItem(item), item.ID); err != nil {
-		return identity, nil, err
-	}
-	purpose, err := c.providerCostIdentity(ctx, "media-preflight")
-	if err != nil || (purpose.Purpose != cost.PurposeWorker && purpose.Purpose != cost.PurposeDirectAgent) ||
-		!nativeProviderPurposeMatches(purpose, identity) || currentResultCollection(item) != nil {
-		return identity, nil, media.Reject(media.AccessDenied, "image provider is outside the worker execution purpose")
-	}
-	return identity, item, nil
+	return c.toolMediaOccurrence(ctx)
 }
 
 func nativeProviderPurposeMatches(purpose cost.InvocationIdentity, identity submitResultRuntimeIdentity) bool {

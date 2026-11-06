@@ -43,13 +43,22 @@ func nativeMediaProviderFixture(t *testing.T, configure ...func(*TeamSession)) (
 		message.Content = append(message.Content, agent.MediaReferencePart{Reference: media.HistoryReference{Version: media.Version,
 			Source: selection, Ref: item.MediaBinding.Refs[index], TaskID: item.ID, BindingHash: item.MediaBinding.Hash, PolicyHash: item.MediaBinding.PolicyHash}})
 	}
+	return c, ctx, item, nativeMediaProviderRequest(t, c, []fantasy.Message{message})
+}
+
+func nativeMediaProviderRequest(t *testing.T, c *Coordinator, messages []fantasy.Message, windows ...int) agent.ProviderRequest {
+	t.Helper()
+	window := 32768
+	if len(windows) > 0 {
+		window = windows[0]
+	}
 	const modelID = "fixture/vision"
 	ref, err := c.providerManager.ResolveProviderRef(modelID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	profile := modelprofile.ResolveModelProfile(modelprofile.ModelProfileInput{ModelID: modelID, Provider: ref.Provider,
-		Context:      modelprofile.ContextResolutionInput{OperatorContext: 32768},
+		Context:      modelprofile.ContextResolutionInput{OperatorContext: window},
 		Capabilities: modelprofile.CapabilityResolutionInput{ImageInput: modelprofile.CapabilityEvidence{ProviderMetadata: modelprofile.CapabilityYes}}})
 	bound := admissionContextFromProfile(modelID, ref, profile, 64)
 	transport, err := c.providerManager.ResolveProviderExecutionIdentity(modelID)
@@ -57,7 +66,7 @@ func nativeMediaProviderFixture(t *testing.T, configure ...func(*TeamSession)) (
 		t.Fatal(err)
 	}
 	bound.ProviderConfigurationHash = transport.ConfigurationHash
-	return c, ctx, item, agent.ProviderRequest{ModelID: modelID, Call: &fantasy.Call{Prompt: []fantasy.Message{message}}, AdmissionContext: bound}
+	return agent.ProviderRequest{ModelID: modelID, Call: &fantasy.Call{Prompt: messages}, AdmissionContext: bound}
 }
 
 func TestNativeProviderMediaValidatesCanonicalMetadataWithoutReadingImages(t *testing.T) {

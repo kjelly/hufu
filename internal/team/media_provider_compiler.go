@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"reflect"
 	"slices"
 	"sync"
 
@@ -16,6 +17,11 @@ var _ agent.ProviderRequestCompiler = providerRequestAdmission{}
 // slot acquisition. Each read rechecks the canonical worker and provider grant;
 // this hook alone grants no transport.
 func (a providerRequestAdmission) CompileProviderRequest(ctx context.Context, request agent.ProviderRequest) (agent.ProviderRequest, func(), error) {
+	var err error
+	request, err = agent.ExpandToolMediaRequest(request)
+	if err != nil {
+		return agent.ProviderRequest{}, nil, err
+	}
 	if !agent.ProviderRequestHasMedia(request) {
 		return request, nil, nil
 	}
@@ -34,8 +40,8 @@ func (a providerRequestAdmission) CompileProviderRequest(ctx context.Context, re
 	if err != nil {
 		return agent.ProviderRequest{}, nil, err
 	}
-	frames := make([]int64, len(admission.Binding.Refs))
-	for index, ref := range admission.Binding.Refs {
+	frames := make([]int64, len(admission.References))
+	for index, ref := range admission.References {
 		frames[index] = ref.ByteSize
 	}
 	reservation, err := media.ReserveTransportFrames(ctx, frames...)
@@ -65,11 +71,11 @@ func (a providerRequestAdmission) CompileProviderRequest(ctx context.Context, re
 	if err != nil {
 		return agent.ProviderRequest{}, nil, err
 	}
-	for _, ref := range admission.Binding.Refs {
+	for _, ref := range admission.References {
 		if _, loaded := buffers[ref.ID]; loaded {
 			continue
 		}
-		if err := a.c.validateMediaAttempt(ctx, TaskDef{MediaBinding: admission.Binding, MediaInputDigest: admission.Binding.InputDigest}, admission.Identity.TaskID); err != nil {
+		if err := a.c.recheckNativeProviderMedia(ctx, request, admission); err != nil {
 			return agent.ProviderRequest{}, nil, err
 		}
 		data, err := store.readReservedMedia(ctx, ref, admission.Limits)
@@ -91,7 +97,8 @@ func (c *Coordinator) recheckNativeProviderMedia(ctx context.Context, request ag
 	if err != nil {
 		return err
 	}
-	if current.Identity != original.Identity || current.Target != original.Target || current.Grant != original.Grant || current.Binding.Hash != original.Binding.Hash {
+	if current.Identity != original.Identity || current.Target != original.Target || current.Grant != original.Grant || !reflect.DeepEqual(current.Binding, original.Binding) ||
+		!reflect.DeepEqual(current.References, original.References) || !reflect.DeepEqual(current.Consumer, original.Consumer) {
 		return media.Reject(media.BindingConflict, "native provider admission changed during compilation")
 	}
 	return nil

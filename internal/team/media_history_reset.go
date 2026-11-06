@@ -15,7 +15,7 @@ func (c *Coordinator) persistMediaConversationReset(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if !exists || state.Version != mediaCompactionStateVersion {
+	if !exists || !isMediaCompactionVersion(state.Version) {
 		return nil
 	}
 	branch := c.compactionBranch()
@@ -29,7 +29,7 @@ func (c *Coordinator) persistMediaConversationReset(ctx context.Context) error {
 func (c *Coordinator) resetConversationSourceIndex() int {
 	c.compactionMu.Lock()
 	defer c.compactionMu.Unlock()
-	if c.compactionState != nil && c.compactionState.Version == mediaCompactionStateVersion {
+	if c.compactionState != nil && isMediaCompactionVersion(c.compactionState.Version) {
 		return c.compactionState.Branches[c.compactionBranchID].NextSourceIndex
 	}
 	return 0

@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"charm.land/fantasy"
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 // projectHistoryToolPairs disambiguates provider IDs recycled in later, closed
@@ -72,6 +73,20 @@ func projectHistoryToolPairs(messages []fantasy.Message) ([]fantasy.Message, err
 						reason = "duplicate_result_id"
 					}
 					return messages, newToolPairingError(reason, id, i, j)
+				}
+				metadata, err := agent.DecodeToolMediaMetadata(result.ClientMetadata)
+				if err != nil {
+					return nil, err
+				}
+				if metadata != nil {
+					if metadata.ToolCallID != id {
+						return nil, newToolPairingError("media_result_id_mismatch", id, i, j)
+					}
+					metadata.ToolCallID = alias
+					result.ClientMetadata, err = agent.EncodeToolMediaMetadata(*metadata)
+					if err != nil {
+						return nil, err
+					}
 				}
 				result.ToolCallID = alias
 				projected[i].Content[j] = result

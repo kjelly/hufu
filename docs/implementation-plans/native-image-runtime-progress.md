@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `40bed236`（PR-04D2B 證據與程式碼同本次階段 commit；M0～M2 完成，M3／M4 未完成）
+> Verified-Commit: `00dfc522`（M2 已提交基準；PR-05 程式與驗證紀錄隨本次階段 commit 提交；M3／M4 尚未全部完成）
 > Supersedes: —
 > Superseded-By: —
 
@@ -52,7 +52,7 @@
 | PR-04D2A model fanout 授權／結果保存 | 完成；`40bed236` | 雙 lease、獨立 SDK／audit／cost、accepted leaf results、拒絕／取消、文字 judge 與全部 required gates 通過 |
 | PR-04D2B fanout retry／repair／resume | 完成；同本次階段 commit | 獨立 SDK retry／repair、新程序 CAS 恢復、blocked collector 拒絕、parent proxy ownership／文字 skeptic，以及最終 lint、contracts、vet、race、完整 suite 全部通過 |
 | PR-04 M2 coordinator/chat/DAG/routing | 完成；同本次階段 commit | A／B／C／D1／D2A／D2B；支援明示的獨立 DAG、route 與 frozen LLM fanout；多候選 route＋fanout、blocked collector 追加 grant 維持明確拒絕 |
-| PR-05 M3 MCP/result binding | 開發中，未驗收 | typed result／reference-only carrier／bounded Base64 staging 的未提交改動；尚未完成來源與消費授權、runtime-owned 結果或後續 wire E2E |
+| PR-05 M3 MCP/result binding | 完成；同本次階段 commit | 真實 SDK＋fake MCP/provider、canonical producer/consumer、runtime-owned 結果／receipt／replay，以及 contracts、vet、lint、race、完整 suite 通過 |
 | PR-06 M3 inspect/export/docs | 尚未開始 | — |
 | PR-07 M4 Codex localImage | 尚未開始 | — |
 
@@ -621,10 +621,36 @@ GOTMPDIR 約 14.4 MiB、private task scratch 約 34 MiB；沒有保留 executabl
 
 最終可辨識本工作產物 1,762,033,664 bytes（約 1.64 GiB），低於 2 GiB；共享 GOCACHE 21,445,267,456 bytes，GOTMPDIR 約 15.2 MiB，private task scratch 約 18.5 MiB。續作保留當前 normal／race exports、必要 hashes／清理來源 manifests、gate logs 與 recovery checkpoint；沒有保留 standalone executable。M3／M4 尚未開始，不把此階段完成視為整個圖片 I/O 計畫完成。
 
-## PR-05：開發中，尚未達成階段驗收
+## PR-05：MCP 原生圖片與 runtime-owned 結果
 
-2026-11-06 核對工作區已有未提交的 typed MCP result、trusted publisher hook、reference-only tool carrier、四種 provider API 的 message projection，以及 bounded Base64 staging。現存定向測試紀錄包含 agent／media／MCP 套件通過；最新 publisher 定向紀錄為 MCP 0.023s。這些是局部開發證據，不是 M3 的後續 wire E2E、完整 required gates 或已交付聲明。
+本階段將 MCP 圖片接到既有私有 CAS、原子來源事件與 provider compiler；direct／gateway 共用 typed result，native action 在完整 Outputs schema 驗證後才發布圖片。structuredContent 保留完整 object、文字依序換行連接、image-only 為空 Outputs；圖片另存於 runtime-owned projection，不改寫 action 輸出契約。
 
-接續工作以[規格第 8.2 節](native-image-runtime.md#82-mcp-mixed-content-與-output-artifacts)為準：direct／gateway 共用 publication、canonical producer／consumer 授權、token/preflight 與完整 pairing、history／repair／replay、runtime-owned result binding，以及 fake MCP → fake provider 的完整回歸。PR-06／PR-07 未開始。現有未提交程式改動不能沿用 M2 的綠燈當作驗收結果。
+- publisher 由 MCP client 產生獨立 UUID invocation，凍結 descriptor／tool-call／attempt／dispatch 與適用時的 model execution；snapshot、quota 與 producer event 原子提交。重用展示用 call ID 不會覆寫舊來源；空文字 block、有序重複圖片與同批多 tool calls 都保留。
+- consumer 綁定當次完整有序 bundle 與目的地；原 task input digest 不變。四種 Fantasy API、token counter、preflight 與 compiler 使用相同私有投影；完整 call/result pairing 通過後才送出原生圖片。canonical history 不保存本功能解碼或傳送的圖片 bytes／data URI。
+- 圖片發布、MIME／Base64、能力、egress 或限額失敗會停止 attempt；實際 SDK 測試將 worker retries 設為 2，仍只有一次 MCP 執行，不能把完成的工具重播成成功。被拒絕的 submit_result 可以在後續回合修正，保留工具配對與原收據。
+- RuntimeMediaProjection 與 execution／action receipts 以 hash 綁定。Artifacts 保持 CAS content-only refs，標準 resolver 可直接驗證；owner 取自 canonical producer／result，不能拿 blob 首位發布者當權限。
+- x-hufu-runtime-inputs 新增 source_kind: runtime_media（省略 output），從 canonical native action media projection 注入完整值。本機／外部提交皆拒絕模型覆寫，包括空值與相同內容；來源／收據／輸入快照不符時拒絕。既有 runtime_output 與省略 source_kind 的序列化保持相容。
+- history 只有出現 tool carrier 才使用 v2，compaction 只有出現 tool carrier 才使用 v3；既有 static media 維持原格式。文字修補移除 carrier、保留文字／錯誤／配對；journal、session、事件與歷史結果投影保留 canonical media hash。
+- 純文字起始、但有媒體政策與 MCP 授權的 worker 不使用文字結果 cache／inflight coalescing；有圖片結果的歷史 seed 不會偽裝成可重用文字工作。一般文字 worker 維持既有快取。
+- fanout leaf 共用 parent 的 invocation、canonical journal／session tree 與 active branch，仍各自持有 worker lease／model target／receipt。非主分支的實際 SDK 回歸驗證這些 owner；獨立 audit 核對所有 accepted leaf 的原始圖片成果，不能以 merged prose 取代。
 
-本次文件修訂移除 raw SDK image response 與 reference-only 保存契約之間的矛盾，補齊上述交付邊界及預期效益；未移動文件。使用者指定的 Ollama `deepseek-v4.1-flash:cloud` 僅記為另行安排的真實驗收背景，未發出模型請求或將帳戶／外送設定列入 coding agent 待辦。
+效益：MCP 取得的截圖能在下一個模型回合以圖片分析，工具產生的圖片可成為有來源的成果；使用者能核對原圖、順序與收據，錯誤回應不會造成隱藏重跑。這些離線測試驗證傳輸與 runtime 契約，不宣稱真實模型已正確解讀圖片。
+
+| 最終驗證 | 結果 |
+|---|---|
+| 全部 media／MCP 定向回歸 | PASS；agent 0.027s、media 0.007s、MCP 0.028s、team 126.928s；此輪在最後 canonical-parent owner 補強之前 |
+| canonical parent／fanout／雙 lease／來源定向回歸 | PASS；team 17.348s |
+| 最終 artifact resolver／native action／來源契約／SDK 回歸 | PASS；team 27.107s |
+| mise run test-contracts | PASS；team 125.359s、CLI 70.795s、reviewgate 12.144s、reviewprep 23.829s、web 0.279s；inspect／operator／auditverify 通過 |
+| mise run vet | PASS；exit 0，無診斷 |
+| mise run lint | PASS；exit 0，0 issues. |
+| 定向 -race | PASS；agent 1.125s、media 1.024s、MCP 1.167s、team 131.650s |
+| mise run test | PASS；exit 0，team 1000.373s、CLI 206.440s、evalharness 44.594s、improver 143.412s、tools 48.621s、TUI 6.598s、workspace 9.902s；其他套件通過，包含既有 cache 命中 |
+
+最終 gates 綁定同一份 84 檔 SHA-256（80 個 Go 檔與 4 個工具鏈／設定檔）；所有 heavyweight commands 循序執行。SDK matrix 包含 direct／gateway、image-only、多 calls、重用 call IDs、被拒絕的結果修補、fanout／非主分支、bad Base64／MIME／IsError、無視覺能力／egress denied／超限；native action 另驗證 schema-first、完整 Outputs、artifact resolver、immutable receipts 與唯讀 journal audit。
+
+較早的 lint 曾指出兩個函式超過既有複雜度門檻，已拆分來源／consumer 比對並通過最終 gate；未新增排除。較早的廣域回歸發現 coordinator metadata-only 計數誤入 worker admission，已收窄到 tool-media carrier。新的非主分支 fixture 揭露 leaf 的私有 session tree 會遮蔽 canonical policy，修正 owner 後重跑 SDK 與雙 lease 測試；不是放寬 branch 或 policy 檢查。
+
+資源：本階段按來源回收 6,216,544,256 bytes，本工作累計回收 40,910,888,960 bytes。最終可辨識本工作產物 949,116,928 bytes，低於 2 GiB；共享 GOCACHE 21,247,168,512 bytes，GOTMPDIR 16,080,896 bytes，private task scratch 21,110,784 bytes。開發中曾出現約 2.34 GiB 的本工作 cache 峰值，已在下一個 heavyweight command 前清理。保留目前 normal／race exports、必要的來源／清理 manifests、gate logs 與後續匯出草稿；沒有保留 standalone executable。未變更 configured caches／GOTMPDIR，未清除共享 dependencies 或其他 session 產物。
+
+PR-05 完成不代表 M3／M4 全部交付；PR-06 的成果查詢／安全匯出／介面文件與 PR-07 的 Codex adapter 仍依序實作。未呼叫真實模型、登入、圖片外送或移動文件；Ollama deepseek-v4.1-flash:cloud 的真實驗收由使用者另行安排。

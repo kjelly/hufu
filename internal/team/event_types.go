@@ -11,6 +11,8 @@ const (
 	EventMediaInputAdmitted                      EventType = "media_input_admitted"
 	EventTaskMediaBound                          EventType = "task_media_bound"
 	EventMediaProviderAdmitted                   EventType = "media_provider_admitted"
+	EventToolMediaPublished                      EventType = "tool_media_published"
+	EventMediaConsumerBound                      EventType = "media_consumer_bound"
 	EventProviderQuotaCooldown                   EventType = "provider_quota_cooldown"
 	EventRunStarted                              EventType = "run_started"
 	EventRunFinished                             EventType = "run_finished"
@@ -135,7 +137,7 @@ func (e EventType) String() string { return string(e) }
 // reducers intentionally ignore what they do not understand.
 func IsKnownEventType(eventType string) bool {
 	switch EventType(eventType) {
-	case EventMediaInputAdmitted, EventTaskMediaBound, EventMediaProviderAdmitted, EventTaskResultCandidate, EventTaskResultCollectionCheckpointed, EventProviderQuotaCooldown, EventRunStarted, EventRunFinished, EventWrapUpPhase, EventRunCancellationRequested,
+	case EventMediaInputAdmitted, EventTaskMediaBound, EventMediaProviderAdmitted, EventToolMediaPublished, EventMediaConsumerBound, EventTaskResultCandidate, EventTaskResultCollectionCheckpointed, EventProviderQuotaCooldown, EventRunStarted, EventRunFinished, EventWrapUpPhase, EventRunCancellationRequested,
 		EventDecisionArtifactObserved, EventArtifactEvidenceObserved, EventDecisionPrimitiveStarted, EventDecisionPrimitiveSettled, EventDecisionPrimitiveReused, EventControlDecisionObserved, EventRecoveryChangeObserved,
 		EventStrategyChangeEvaluated, EventStrategyChangeRejected,
 		EventUserMessageAdded, EventAssistantMessageAdded,

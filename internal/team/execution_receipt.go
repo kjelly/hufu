@@ -178,6 +178,7 @@ type ExecutionReceipt struct {
 	BoundInputs                   map[string]string `json:"bound_inputs,omitempty"`
 	ActionInvocationID            string            `json:"action_invocation_id,omitempty"`
 	RuntimeOutputsHash            string            `json:"runtime_outputs_hash,omitempty"`
+	RuntimeMediaHash              string            `json:"runtime_media_hash,omitempty"`
 	CatalogRuntimeFields
 	// OccurrenceAttempt is the occurrence-level attempt number (Retries+1),
 	// the same value lifecycle event payloads carry as "attempt". Attempt is

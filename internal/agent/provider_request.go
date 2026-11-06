@@ -685,28 +685,44 @@ func (m *admittedLanguageModel) recover[T any](ctx context.Context, request Prov
 }
 
 func (m *admittedLanguageModel) Generate(ctx context.Context, call fantasy.Call) (*fantasy.Response, error) {
-	call.Prompt = sanitizeToolCallHistory(call.Prompt)
+	prompt, err := ExpandToolMediaMessages(call.Prompt)
+	if err != nil {
+		return nil, err
+	}
+	call.Prompt = sanitizeToolCallHistory(prompt)
 	return m.recover(ctx, m.request(ProviderRequest{Call: &call}), func() (*fantasy.Response, bool, error) {
 		response, err := m.generateOnce(ctx, call)
 		return response, response != nil, err
 	})
 }
 func (m *admittedLanguageModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
-	call.Prompt = sanitizeToolCallHistory(call.Prompt)
+	prompt, err := ExpandToolMediaMessages(call.Prompt)
+	if err != nil {
+		return nil, err
+	}
+	call.Prompt = sanitizeToolCallHistory(prompt)
 	return m.recover(ctx, m.request(ProviderRequest{Call: &call}), func() (fantasy.StreamResponse, bool, error) {
 		response, err := m.streamOnce(ctx, call)
 		return response, response != nil, err
 	})
 }
 func (m *admittedLanguageModel) GenerateObject(ctx context.Context, call fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
-	call.Prompt = sanitizeToolCallHistory(call.Prompt)
+	prompt, err := ExpandToolMediaMessages(call.Prompt)
+	if err != nil {
+		return nil, err
+	}
+	call.Prompt = sanitizeToolCallHistory(prompt)
 	return m.recover(ctx, m.request(ProviderRequest{ObjectCall: &call}), func() (*fantasy.ObjectResponse, bool, error) {
 		response, err := m.generateObjectOnce(ctx, call)
 		return response, response != nil, err
 	})
 }
 func (m *admittedLanguageModel) StreamObject(ctx context.Context, call fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
-	call.Prompt = sanitizeToolCallHistory(call.Prompt)
+	prompt, err := ExpandToolMediaMessages(call.Prompt)
+	if err != nil {
+		return nil, err
+	}
+	call.Prompt = sanitizeToolCallHistory(prompt)
 	return m.recover(ctx, m.request(ProviderRequest{ObjectCall: &call}), func() (fantasy.ObjectStreamResponse, bool, error) {
 		response, err := m.streamObjectOnce(ctx, call)
 		return response, response != nil, err

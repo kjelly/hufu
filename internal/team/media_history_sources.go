@@ -26,7 +26,28 @@ func historyReferences(messages []fantasy.Message) []historyReferenceLocation {
 				if p != nil {
 					references = append(references, historyReferenceLocation{index, partIndex, p.Reference})
 				}
+			case fantasy.ToolResultPart:
+				references = appendToolHistoryReferences(references, index, partIndex, p)
+			case *fantasy.ToolResultPart:
+				if p != nil {
+					references = appendToolHistoryReferences(references, index, partIndex, *p)
+				}
 			}
+		}
+	}
+	return references
+}
+
+func appendToolHistoryReferences(references []historyReferenceLocation, message, part int, result fantasy.ToolResultPart) []historyReferenceLocation {
+	// Callers validate the complete persistent messages before using this
+	// projection; malformed recognized metadata fails that validation.
+	metadata, err := agent.DecodeToolMediaMetadata(result.ClientMetadata)
+	if err != nil || metadata == nil {
+		return references
+	}
+	for _, block := range metadata.Parts {
+		if block.Type == "image" {
+			references = append(references, historyReferenceLocation{message, part, block.Image})
 		}
 	}
 	return references
@@ -69,7 +90,8 @@ func validateMediaHistoryLineage(ctx context.Context, workspace string, lineage 
 	}
 	snapshots := make(map[string]media.InputSnapshot)
 	bindings := make(map[string]media.TaskBinding)
-	for _, event := range lineage {
+	producers := make(map[string]ToolMediaPublishedPayload)
+	for index, event := range lineage {
 		switch EventType(event.Type) {
 		case EventMediaInputAdmitted:
 			snapshot, err := decodeMediaInputEvent(event)
@@ -83,7 +105,19 @@ func validateMediaHistoryLineage(ctx context.Context, workspace string, lineage 
 				return err
 			}
 			bindings[event.TaskID] = payload.Binding
+		case EventToolMediaPublished:
+			payload, err := decodeToolMediaPublication(event)
+			if err != nil {
+				return err
+			}
+			if err := verifyToolMediaPublication(event, payload, lineage[:index]); err != nil {
+				return err
+			}
+			producers[payload.Hash] = payload
 		}
+	}
+	if err := validateToolMediaCarriers(messages, producers); err != nil {
+		return err
 	}
 	tasks, err := ReplayTodoList(lineage)
 	if err != nil {
@@ -104,8 +138,19 @@ func validateMediaHistoryLineage(ctx context.Context, workspace string, lineage 
 		if part.Type != "image" || part.MediaID != reference.Ref.ID || !snapshotHasImage(snapshot, reference.Ref) {
 			return media.Reject(media.IntegrityMismatch, "history image differs from its canonical source")
 		}
-		if err := validateHistoryReferenceOwner(reference, tasks, bindings); err != nil {
-			return err
+		if producer, ok := producers[reference.BindingHash]; ok {
+			if err := verifyToolMediaReference(reference, producer); err != nil {
+				return err
+			}
+		} else {
+			for _, occurrence := range snapshot.Occurrences {
+				if occurrence.PartIndex == reference.Source.PartIndex && occurrence.Origin == "mcp_tool" {
+					return media.Reject(media.AccessDenied, "tool image reference has no canonical producer binding")
+				}
+			}
+			if err := validateHistoryReferenceOwner(reference, tasks, bindings); err != nil {
+				return err
+			}
 		}
 		if old, ok := verified[reference.Ref.ID]; ok {
 			if old != reference.Ref {
@@ -169,7 +214,7 @@ func canonicalMediaHistoryProjection(workspace string, messages []fantasy.Messag
 	if err != nil {
 		return "", err
 	}
-	if !exists || state.Version != mediaCompactionStateVersion {
+	if !exists || !isMediaCompactionVersion(state.Version) {
 		return "", media.Reject(media.DurabilityRequired, "media history has no canonical checkpoint")
 	}
 	tree, err := LoadSessionTreeContext(context.Background(), workspace)

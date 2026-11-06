@@ -13,6 +13,7 @@ import (
 )
 
 const mediaCompactionStateVersion = 2
+const toolMediaCompactionStateVersion = 3
 const nativeInputGenerationKind = "native_input"
 const nativeResetGenerationKind = "context_reset"
 
@@ -101,14 +102,45 @@ func validateCompactionMediaVersion(state *ConversationCompactionState) error {
 	if err != nil {
 		return err
 	}
-	if hasReferences && state.Version != mediaCompactionStateVersion {
+	if hasReferences && !isMediaCompactionVersion(state.Version) {
 		return media.Reject(media.DurabilityRequired, "media history requires a media-aware checkpoint version")
+	}
+	if compactionHasToolMedia(state) && state.Version != toolMediaCompactionStateVersion {
+		return media.Reject(media.DurabilityRequired, "tool media history requires a tool-aware checkpoint version")
 	}
 	return nil
 }
 
+func isMediaCompactionVersion(version int) bool {
+	return version == mediaCompactionStateVersion || version == toolMediaCompactionStateVersion
+}
+
+func compactionHasToolMedia(state *ConversationCompactionState) bool {
+	if state == nil {
+		return false
+	}
+	for _, generation := range state.Generations {
+		if agent.MessagesHaveToolMedia(generation.Replacement) {
+			return true
+		}
+	}
+	for _, checkpoint := range state.Branches {
+		if agent.MessagesHaveToolMedia(checkpoint.History) {
+			return true
+		}
+	}
+	for _, checkpoints := range state.Checkpoints {
+		for _, checkpoint := range checkpoints {
+			if agent.MessagesHaveToolMedia(checkpoint.History) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func validateCompactionStateVersion(state *ConversationCompactionState) error {
-	if state.Version != conversationCompactionStateVersion && state.Version != mediaCompactionStateVersion {
+	if state.Version != conversationCompactionStateVersion && !isMediaCompactionVersion(state.Version) {
 		return fmt.Errorf("unsupported version %d", state.Version)
 	}
 	return validateCompactionMediaVersion(state)
@@ -128,7 +160,7 @@ func validateCompactionGenerationOrigin(generation CompactionGeneration, version
 		if err != nil {
 			return err
 		}
-		if version != mediaCompactionStateVersion || generation.ModelID != "" || generation.PredecessorID != "" ||
+		if !isMediaCompactionVersion(version) || generation.ModelID != "" || generation.PredecessorID != "" ||
 			len(generation.SourceRanges) != 0 || generation.TokensBefore != 0 || generation.TokensAfter != 0 || !reflect.DeepEqual(generation.Summary, StructuredSummary{}) {
 			return media.Reject(media.BindingConflict, "invalid uncompacted media input checkpoint")
 		}

@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"charm.land/fantasy"
+	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
@@ -16,6 +18,35 @@ func historyToolCall(id, input string) fantasy.Message {
 
 func historyToolResult(id, text string) fantasy.Message {
 	return fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: id, Output: fantasy.ToolResultOutputContentText{Text: text}}}}
+}
+
+func TestHistoryToolPairProjectionPreservesToolMediaSources(t *testing.T) {
+	_, _, _, request := nativeMediaProviderFixture(t)
+	ref := historyReferences(request.Call.Prompt)[0].Reference
+	metadata, err := agent.EncodeToolMediaMetadata(agent.ToolMediaResult{Version: media.Version, ToolCallID: "recycled", Parts: []agent.ToolMediaPart{{Type: "image", Image: ref}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := []fantasy.Message{historyToolCall("recycled", `{}`), historyToolResult("recycled", "first"), historyToolCall("recycled", `{}`), {
+		Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "recycled", Output: fantasy.ToolResultOutputContentText{Text: "second"}, ClientMetadata: metadata}},
+	}}
+	before := digestMessages(history)
+	projected, err := projectHistoryToolPairs(history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := projected[3].Content[0].(fantasy.ToolResultPart)
+	carrier, err := agent.DecodeToolMediaMetadata(result.ClientMetadata)
+	if err != nil || carrier == nil || carrier.ToolCallID != result.ToolCallID || result.ToolCallID == "recycled" || carrier.Parts[0].Image != ref {
+		t.Fatal("pair projection changed the source or failed to rebind its presentation ID", err)
+	}
+	if _, err := agent.ExpandToolMediaMessages(projected); err != nil {
+		t.Fatal(err)
+	}
+	view, err := mediaTextResultView(projected)
+	if err != nil || agent.MessagesHaveMedia(view) || validateToolPairs(view) != nil || digestMessages(history) != before {
+		t.Fatal("repair lost tool pairing, leaked media or modified the original history", err)
+	}
 }
 
 func TestHistoryToolPairProjectionPreservesCompletedExchanges(t *testing.T) {

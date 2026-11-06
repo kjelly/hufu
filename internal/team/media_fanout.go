@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/execution"
@@ -92,8 +93,7 @@ func (c *Coordinator) nativeMediaFanoutParent(item *TodoItem) (*TodoItem, execut
 		return nil, execution.ExecutionTarget{}, media.Reject(media.AccessDenied, "image leaf has no runtime fanout binding")
 	}
 	parent := c.modelFanout.parent.todoItemByID(item.ID)
-	if parent == nil || parent.MediaBinding == nil || item.MediaBinding == nil ||
-		parent.MediaBinding.Hash != item.MediaBinding.Hash || parent.MediaInputDigest != item.MediaInputDigest ||
+	if parent == nil || !reflect.DeepEqual(parent.MediaBinding, item.MediaBinding) || parent.MediaInputDigest != item.MediaInputDigest ||
 		!strings.EqualFold(parent.Agent, item.Agent) {
 		return nil, execution.ExecutionTarget{}, media.Reject(media.BindingConflict, "image leaf differs from its canonical parent input")
 	}

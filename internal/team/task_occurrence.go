@@ -50,6 +50,7 @@ func cloneTaskResult(result *TaskResult) *TaskResult {
 		return nil
 	}
 	copyResult := *result
+	copyResult.RuntimeMedia = result.RuntimeMedia.clone()
 	copyResult.BoundInputs = cloneStringMap(result.BoundInputs)
 	if result.RuntimeOutputs != nil {
 		copyResult.RuntimeOutputs = make(map[string]any, len(result.RuntimeOutputs))
@@ -438,6 +439,21 @@ func (c *Coordinator) finalizeTaskResultOccurrence(identity submitResultRuntimeI
 	if transcript.todoID != identity.TaskID || transcript.runID != identity.RunID || transcript.attempt != identity.Attempt {
 		return "", errTaskResultStale
 	}
+	return c.finalizeTaskResultRuntime(identity, func(finalized *TaskResult) (string, error) {
+		output, err := finalizeVerbatimTaskResult(transcript, finalized)
+		if err != nil {
+			return "", err
+		}
+		return output, contract.validateTranscriptFinalization(finalized)
+	})
+}
+
+// Runtime fields share the occurrence's existing clone/validate/publish gate.
+// No model-authored claim is rewritten by a finalization callback.
+func (c *Coordinator) finalizeTaskResultRuntime(identity submitResultRuntimeIdentity, finalize func(*TaskResult) (string, error)) (string, error) {
+	if c == nil || !validSubmitResultIdentity(identity) {
+		return "", errTaskResultStale
+	}
 	controller := c.occurrenceController(identity.TaskID)
 	if controller == nil {
 		return "", errTaskResultStale
@@ -451,11 +467,8 @@ func (c *Coordinator) finalizeTaskResultOccurrence(identity submitResultRuntimeI
 	}
 	finalized := cloneTaskResult(controller.result)
 	controller.mu.Unlock()
-	output, err := finalizeVerbatimTaskResult(transcript, finalized)
+	output, err := finalize(finalized)
 	if err != nil {
-		return "", err
-	}
-	if err := contract.validateTranscriptFinalization(finalized); err != nil {
 		return "", err
 	}
 	finalized.TaskID = identity.TaskID

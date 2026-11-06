@@ -9,6 +9,7 @@ import (
 )
 
 const mediaHistoryVersion = 1
+const toolMediaHistoryVersion = 2
 const mediaHistoryKind = "native_image_history_projection"
 
 // ValidatePersistentMessages permits inert media references and the SDK's
@@ -44,6 +45,11 @@ func ValidatePersistentMessages(messages []fantasy.Message) (bool, error) {
 				if err := validatePersistentToolOutput(p.Output); err != nil {
 					return false, err
 				}
+				toolReferences, err := persistentToolMediaMetadata(message.Role, p)
+				if err != nil {
+					return false, err
+				}
+				hasReferences = hasReferences || toolReferences
 			case *fantasy.ToolResultPart:
 				if p == nil {
 					return false, invalidHistoryPart()
@@ -51,6 +57,11 @@ func ValidatePersistentMessages(messages []fantasy.Message) (bool, error) {
 				if err := validatePersistentToolOutput(p.Output); err != nil {
 					return false, err
 				}
+				toolReferences, err := persistentToolMediaMetadata(message.Role, *p)
+				if err != nil {
+					return false, err
+				}
+				hasReferences = hasReferences || toolReferences
 			default:
 				return false, invalidHistoryPart()
 			}
@@ -101,13 +112,17 @@ func EncodeMediaHistory(messages []fantasy.Message, checkpointID string) ([]byte
 	if checkpointID == "" {
 		return nil, media.Reject(media.DurabilityRequired, "media projection has no canonical checkpoint")
 	}
+	version := mediaHistoryVersion
+	if MessagesHaveToolMedia(messages) {
+		version = toolMediaHistoryVersion
+	}
 	return json.Marshal(struct {
 		Version      int               `json:"version"`
 		Kind         string            `json:"kind"`
 		Authority    string            `json:"authority"`
 		CheckpointID string            `json:"checkpoint_id"`
 		Messages     []fantasy.Message `json:"messages"`
-	}{mediaHistoryVersion, mediaHistoryKind, "compatibility", checkpointID, messages}, json.Deterministic(true))
+	}{version, mediaHistoryKind, "compatibility", checkpointID, messages}, json.Deterministic(true))
 }
 
 func DecodeMediaHistory(data []byte) ([]fantasy.Message, string, error) {
@@ -121,7 +136,7 @@ func DecodeMediaHistory(data []byte) ([]fantasy.Message, string, error) {
 	if err := json.Unmarshal(data, &envelope, json.RejectUnknownMembers(true)); err != nil {
 		return nil, "", media.Reject(media.BindingConflict, "invalid persisted media history")
 	}
-	if envelope.Version != mediaHistoryVersion || envelope.Kind != mediaHistoryKind {
+	if envelope.Version != mediaHistoryVersion && envelope.Version != toolMediaHistoryVersion || envelope.Kind != mediaHistoryKind {
 		return nil, "", media.Reject(media.Unsupported, "unsupported persisted media history version")
 	}
 	if envelope.Authority != "compatibility" || envelope.CheckpointID == "" {
@@ -130,6 +145,9 @@ func DecodeMediaHistory(data []byte) ([]fantasy.Message, string, error) {
 	messages, err := DecodePersistentMessages(envelope.Messages)
 	if err != nil {
 		return nil, "", err
+	}
+	if MessagesHaveToolMedia(messages) && envelope.Version != toolMediaHistoryVersion {
+		return nil, "", media.Reject(media.Unsupported, "tool media history requires a tool-aware version")
 	}
 	hasReferences, err := ValidatePersistentMessages(messages)
 	if err != nil {

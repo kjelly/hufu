@@ -31,9 +31,11 @@ func TestMCPActionResultContract(t *testing.T) {
 		{name: "structured oversized", result: mcp.RuntimeToolResult{StructuredContent: json.RawMessage(`{"a":"` + oversized + `"}`)}, wantErr: "byte limit"},
 		{name: "one text block", result: mcp.RuntimeToolResult{Content: []mcp.RuntimeToolContent{text(`{"not":"parsed"}`)}},
 			want: map[string]any{"result": `{"not":"parsed"}`}},
-		{name: "no blocks", result: mcp.RuntimeToolResult{}, wantErr: "exactly one text block, got 0"},
-		{name: "two text blocks", result: mcp.RuntimeToolResult{Content: []mcp.RuntimeToolContent{text("a"), text("b")}}, wantErr: "got 2 block(s)"},
-		{name: "image block", result: mcp.RuntimeToolResult{Content: []mcp.RuntimeToolContent{{Type: "image"}}}, wantErr: "[image]"},
+		{name: "no blocks", result: mcp.RuntimeToolResult{}, wantErr: mcpActionResultInvalid},
+		{name: "two text blocks", result: mcp.RuntimeToolResult{Content: []mcp.RuntimeToolContent{text("a"), text("b")}}, want: map[string]any{"result": "a\nb"}},
+		{name: "image block", result: mcp.RuntimeToolResult{Content: []mcp.RuntimeToolContent{{Type: "image"}}}, want: map[string]any{}},
+		{name: "structured object with image", result: mcp.RuntimeToolResult{StructuredContent: json.RawMessage(`{"summary":"ok"}`), Content: []mcp.RuntimeToolContent{{Type: "image"}}}, want: map[string]any{"summary": "ok"}},
+		{name: "unsupported block", result: mcp.RuntimeToolResult{Content: []mcp.RuntimeToolContent{{Type: "audio"}}}, wantErr: mcpActionResultInvalid},
 		{name: "oversized text", result: mcp.RuntimeToolResult{Content: []mcp.RuntimeToolContent{text(oversized)}}, wantErr: "byte limit"},
 		{name: "tool error", result: mcp.RuntimeToolResult{IsError: true, Content: []mcp.RuntimeToolContent{text("failed: api_token=mcp-result-secret")}}, wantErr: mcpActionToolError + ": failed:"},
 	}
@@ -84,16 +86,17 @@ func TestMCPActionFailsInvalidResultsAfterTheCall(t *testing.T) {
 	summarySchema := &RunInputSchema{Type: "object", Properties: map[string]RunInputSchema{"summary": {Type: "string"}}, RequiredProperties: []string{"summary"}}
 	resultSchema := &RunInputSchema{Type: "object", Properties: map[string]RunInputSchema{"result": {Type: "string"}}, RequiredProperties: []string{"result"}}
 	tests := []struct {
-		name    string
-		result  *mcpgo.CallToolResult
-		schema  *RunInputSchema
-		wantErr string
+		name       string
+		result     *mcpgo.CallToolResult
+		schema     *RunInputSchema
+		wantErr    string
+		wantResult string
 	}{
 		{name: "tool error", result: mcpgo.NewToolResultError("boom"), wantErr: mcpActionToolError + ": boom"},
-		{name: "two blocks", result: &mcpgo.CallToolResult{Content: []mcpgo.Content{mcpgo.NewTextContent("a"), mcpgo.NewTextContent("b")}}, wantErr: mcpActionResultInvalid},
+		{name: "two text blocks", result: &mcpgo.CallToolResult{Content: []mcpgo.Content{mcpgo.NewTextContent("a"), mcpgo.NewTextContent("b")}}, wantResult: "a\nb"},
 		{name: "above the canonical output limit", result: mcpgo.NewToolResultStructuredOnly(map[string]any{"summary": strings.Repeat("x", maxRuntimeOutputBytes)}), wantErr: "canonical runtime outputs"},
 		{name: "output schema mismatch", result: mcpgo.NewToolResultStructuredOnly(map[string]any{"other": "x"}), schema: summarySchema, wantErr: "team_action_output_invalid"},
-		{name: "text result matches a result schema", result: mcpgo.NewToolResultText("collected"), schema: resultSchema},
+		{name: "text result matches a result schema", result: mcpgo.NewToolResultText("collected"), schema: resultSchema, wantResult: "collected"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -107,7 +110,7 @@ func TestMCPActionFailsInvalidResultsAfterTheCall(t *testing.T) {
 			}
 			got := c.taskTracker.TodoList().Items()[0]
 			if tt.wantErr == "" {
-				if err != nil || got.Status != TaskDone || got.TypedResult.RuntimeOutputs["result"] != "collected" {
+				if err != nil || got.Status != TaskDone || got.TypedResult.RuntimeOutputs["result"] != tt.wantResult {
 					t.Fatalf("error = %v, task = %s %#v", err, got.Status, got.TypedResult)
 				}
 				return

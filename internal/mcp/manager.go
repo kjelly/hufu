@@ -410,42 +410,48 @@ func (m *MCPToolManager) ExecuteTool(ctx context.Context, toolName string, args 
 // ExecuteAuthorizedTool is the shared direct/gateway MCP boundary. The
 // descriptor assertion and current ToolAuthorizer both run before transport.
 func (m *MCPToolManager) ExecuteAuthorizedTool(ctx context.Context, logicalName, expectedDescriptorSHA256, input string) (string, bool, error) {
+	result, err := m.ExecuteAuthorizedToolResult(ctx, logicalName, expectedDescriptorSHA256, input)
+	if err != nil {
+		return "", false, err
+	}
+	content, isError, err := textOnlyToolResult(result)
+	return utils.RedactSecrets(content), isError, err
+}
+
+// ExecuteAuthorizedToolResult retains ordered content and structured data after
+// the same direct/gateway authorization checks. Its output is untrusted and raw:
+// host callers must publish media and redact text before exposing it to a model.
+func (m *MCPToolManager) ExecuteAuthorizedToolResult(ctx context.Context, logicalName, expectedDescriptorSHA256, input string) (RuntimeToolResult, error) {
 	if expectedDescriptorSHA256 == "" {
-		return "", false, &toolDescriptorMismatchError{name: logicalName}
+		return RuntimeToolResult{}, &toolDescriptorMismatchError{name: logicalName}
 	}
 	t, cli, err := m.resolveToolForExecution(logicalName)
 	if err != nil {
 		if _, missing := errors.AsType[*toolNotFoundError](err); missing {
-			return "", false, &toolDescriptorMismatchError{name: logicalName}
+			return RuntimeToolResult{}, &toolDescriptorMismatchError{name: logicalName}
 		}
-		return "", false, err
+		return RuntimeToolResult{}, err
 	}
 	fingerprint, err := MCPToolDescriptorSHA256(t)
 	if err != nil {
-		return "", false, fmt.Errorf("fingerprint MCP tool %q: %w", logicalName, err)
+		return RuntimeToolResult{}, fmt.Errorf("fingerprint MCP tool %q: %w", logicalName, err)
 	}
 	if fingerprint != expectedDescriptorSHA256 {
-		return "", false, &toolDescriptorMismatchError{name: logicalName}
+		return RuntimeToolResult{}, &toolDescriptorMismatchError{name: logicalName}
 	}
 	if err := validateWorkerPolicyArguments(t, input); err != nil {
-		return "", false, &toolAuthorizationError{cause: err}
+		return RuntimeToolResult{}, &toolAuthorizationError{cause: err}
 	}
 	authorize := toolAuthorizerFromContext(ctx)
 	if t.WorkerPolicy != nil && authorize == nil {
-		return "", false, &toolAuthorizationError{cause: fmt.Errorf("MCP worker policy requires a runtime authorizer")}
+		return RuntimeToolResult{}, &toolAuthorizationError{cause: fmt.Errorf("MCP worker policy requires a runtime authorizer")}
 	}
 	if authorize != nil {
 		if err := authorize(ctx, t.ServerName, t.OrigName, input); err != nil {
-			return "", false, &toolAuthorizationError{cause: err}
+			return RuntimeToolResult{}, &toolAuthorizationError{cause: err}
 		}
 	}
-	content, isError, err := executeMCPTool(ctx, t, cli, input)
-	if err != nil {
-		return "", false, err
-	}
-	// Both callers hand this text to a model, so redact it here like bash
-	// output. Runtime action providers use a separate path and keep raw text.
-	return utils.RedactSecrets(content), isError, nil
+	return callMCPToolResult(ctx, t, cli, input)
 }
 
 func (m *MCPToolManager) resolveToolForExecution(toolName string) (MCPTool, *client.Client, error) {
@@ -478,14 +484,11 @@ func executeMCPTool(ctx context.Context, t MCPTool, cli *client.Client, args str
 		return "", false, err
 	}
 
-	var contentParts []string
-	for _, c := range result.Content {
-		if text, ok := c.(mcp.TextContent); ok {
-			contentParts = append(contentParts, text.Text)
-		}
+	typed, err := newRuntimeToolResult(result)
+	if err != nil {
+		return "", result.IsError, err
 	}
-
-	return strings.Join(contentParts, "\n"), result.IsError, nil
+	return textOnlyToolResult(typed)
 }
 
 // callMCPTool sends one CallTool request. Without a caller deadline the call
@@ -666,12 +669,9 @@ func (t *mcpAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
-	content, isError, err := t.manager.ExecuteAuthorizedTool(ctx, t.tool.Name, fingerprint, call.Input)
+	result, err := t.manager.ExecuteAuthorizedToolResult(ctx, t.tool.Name, fingerprint, call.Input)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
-	if isError {
-		return fantasy.NewTextErrorResponse(content), nil
-	}
-	return fantasy.NewTextResponse(content), nil
+	return PublishToolResult(ctx, t.tool, call, result)
 }

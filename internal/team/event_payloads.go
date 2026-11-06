@@ -116,6 +116,12 @@ func validateCurrentEventPayload(event RunEvent) error {
 	case EventMediaProviderAdmitted:
 		_, err := decodeMediaProviderEvent(event)
 		return err
+	case EventToolMediaPublished:
+		_, err := decodeToolMediaPublication(event)
+		return err
+	case EventMediaConsumerBound:
+		_, err := decodeMediaConsumerEvent(event)
+		return err
 	default:
 		return validateNonMediaEventPayload(event)
 	}

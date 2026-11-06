@@ -20,14 +20,14 @@ func verifyMediaProviderAdmission(event RunEvent, payload MediaProviderAdmittedP
 		return err
 	}
 	item := todoItemByID(tasks, event.TaskID)
-	if item == nil || item.Status != TaskInProgress || item.MediaBinding == nil || !strings.EqualFold(item.Agent, event.Actor) {
+	if item == nil || item.Status != TaskInProgress || !strings.EqualFold(item.Agent, event.Actor) {
 		return media.Reject(media.AccessDenied, "image provider admission has no current canonical occurrence")
 	}
-	binding := item.MediaBinding
-	if binding.Hash != payload.BindingHash || binding.InputDigest != payload.MediaInputDigest || binding.PolicyHash != payload.PolicyHash ||
-		len(binding.Refs) != payload.ImageCount {
-		return media.Reject(media.BindingConflict, "image provider admission differs from canonical task input")
+	refs, err := mediaProviderAdmissionReferences(event, payload, item, prior)
+	if err != nil {
+		return err
 	}
+	binding := item.MediaBinding
 	expectedTarget, err := verifyNativeMediaProviderOwner(event, payload, item, prior)
 	if err != nil {
 		return err
@@ -42,7 +42,7 @@ func verifyMediaProviderAdmission(event RunEvent, payload MediaProviderAdmittedP
 	if policy.Media == nil || policy.Media.Hash != payload.PolicyHash {
 		return media.Reject(media.EgressDenied, "image provider admission has no frozen media policy")
 	}
-	if binding.InvocationMode != "" {
+	if binding != nil && binding.InvocationMode != "" {
 		if err := validateNativeMediaInvocation(item, &policy); err != nil {
 			return err
 		}
@@ -60,13 +60,46 @@ func verifyMediaProviderAdmission(event RunEvent, payload MediaProviderAdmittedP
 	if grant.IdentityHash != payload.ProviderConfigurationHash || grant.ImageTokenUpperBound != payload.ImageTokenUpperBound {
 		return media.Reject(media.EgressDenied, "image provider identity or estimate differs from frozen policy")
 	}
-	if err := media.CheckBundle(binding.Refs, policy.Media.Policy.Image); err != nil {
+	if err := media.CheckBundle(refs, policy.Media.Policy.Image); err != nil {
 		return err
 	}
 	if err := verifyMediaProviderProfile(event, payload, prior); err != nil {
 		return err
 	}
 	return verifyMediaProviderInvocationUniqueness(event, payload, prior)
+}
+
+// The consumer and provider permissions must be adjacent in the same atomic
+// batch and agree on every source, occurrence and destination field.
+func mediaProviderAdmissionReferences(event RunEvent, payload MediaProviderAdmittedPayload, item *TodoItem, prior []RunEvent) ([]media.Ref, error) {
+	binding := item.MediaBinding
+	var refs []media.Ref
+	if payload.ConsumerHash != "" {
+		if len(prior) == 0 || prior[len(prior)-1].Type != string(EventMediaConsumerBound) {
+			return nil, media.Reject(media.DurabilityRequired, "image provider admission lacks its atomic consumer binding")
+		}
+		consumerEvent := prior[len(prior)-1]
+		consumer, err := decodeMediaConsumerEvent(consumerEvent)
+		if err != nil {
+			return nil, err
+		}
+		if consumer.Hash != payload.ConsumerHash || consumer.ProviderInvocationID != payload.ProviderInvocationID || consumerEvent.RunID != event.RunID || consumerEvent.BranchID != event.BranchID ||
+			consumerEvent.TaskID != event.TaskID || consumerEvent.Actor != event.Actor || consumer.Target != payload.Target || consumer.PolicyHash != payload.PolicyHash || consumer.InputBindingHash != payload.BindingHash ||
+			consumer.OccurrenceRevision != payload.OccurrenceRevision || consumer.Attempt != payload.Attempt || consumer.DispatchID != payload.DispatchID || consumer.ModelFanout != payload.ModelFanout || len(consumer.References) != payload.ImageCount ||
+			binding == nil && payload.MediaInputDigest != "" || binding != nil && payload.MediaInputDigest != binding.InputDigest {
+			return nil, media.Reject(media.BindingConflict, "image provider admission differs from its consumer binding")
+		}
+		if err := verifyMediaConsumer(consumerEvent, consumer, prior[:len(prior)-1]); err != nil {
+			return nil, err
+		}
+		refs = consumer.refs()
+	} else {
+		if binding == nil || binding.Hash != payload.BindingHash || binding.InputDigest != payload.MediaInputDigest || binding.PolicyHash != payload.PolicyHash || len(binding.Refs) != payload.ImageCount {
+			return nil, media.Reject(media.BindingConflict, "image provider admission differs from canonical task input")
+		}
+		refs = binding.Refs
+	}
+	return refs, nil
 }
 
 func mediaProviderPolicyFromLineage(prior []RunEvent) (ExecutionPolicySnapshot, error) {

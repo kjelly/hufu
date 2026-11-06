@@ -95,10 +95,11 @@ func (s InputSnapshot) Validate(limits Limits) error {
 	var bundle []Ref
 	var textBytes, occurrence int
 	used := make(map[string]bool)
+	toolResult := len(s.Occurrences) > 0 && !slices.ContainsFunc(s.Occurrences, func(o Occurrence) bool { return o.Origin != "mcp_tool" })
 	for index, p := range s.Input.Parts {
 		switch p.Type {
 		case "text":
-			if p.Text == "" || p.MediaID != "" {
+			if p.Text == "" && !toolResult || p.MediaID != "" {
 				return Reject(BindingConflict, "invalid text part")
 			}
 			textBytes += len(p.Text)

@@ -169,7 +169,7 @@ func (c *Coordinator) recordTerminalTypedTaskResult(todoID string) {
 		}
 		copyResult := cloneTaskResult(item.TypedResult)
 		if data, err := json.Marshal(copyResult); err == nil {
-			if redacted, err := utils.RedactJSON(data); err == nil {
+			if redacted, err := redactJSONPreservingRuntimeOutputs(data); err == nil {
 				_ = json.Unmarshal(redacted, copyResult)
 			}
 		}
@@ -282,7 +282,7 @@ func replayTaskJournal(records [][]byte, now time.Time, maxAge time.Duration, pe
 		}
 		switch rec.Op {
 		case "put":
-			if rec.MediaBinding != nil || rec.MediaInputDigest != "" {
+			if rec.MediaBinding != nil || rec.MediaInputDigest != "" || runtimeMediaHash(rec.TypedResult) != "" {
 				continue
 			}
 			if rec.Agent == "" || rec.Desc == "" {

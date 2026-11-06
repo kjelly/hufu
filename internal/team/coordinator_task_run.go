@@ -2043,6 +2043,20 @@ retryLoop:
 			// A receipt transcript is also captured for summary-mode tasks that
 			// require a typed result, but that must not change the task's output
 			// contract. Only an explicit verbatim task is reduced to a manifest.
+			if err == nil && typedRes != nil && attemptIdentityOK {
+				if mediaErr := c.finalizeTaskMedia(parentCtx, attemptIdentity); mediaErr != nil {
+					err = withFailureClassOverride(mediaErr, FailurePolicy)
+				} else {
+					typedRes = c.GetTaskResult(todoID)
+					if typedRes != nil && typedRes.RuntimeMedia != nil {
+						receipt.RuntimeMediaHash = typedRes.RuntimeMedia.Hash
+						receipt.SubmittedResult = cloneTaskResult(typedRes)
+						if mediaErr := c.setAttemptReceipt(todoID, &receipt); mediaErr != nil {
+							err = mediaErr
+						}
+					}
+				}
+			}
 			if err == nil && taskUsesVerbatimTranscript(task) && transcript != nil {
 				if !attemptIdentityOK {
 					err = fmt.Errorf("verbatim transcript finalization failed: no captured task result occurrence")
@@ -2822,11 +2836,18 @@ func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, to
 	if err := c.publishRuntimeWorksetProjection(actionRoot, actionID, declaredArtifacts, providerArtifacts); err != nil {
 		return "", c.failRuntimeAction(task, todoID, actionID, startedAt, err)
 	}
+	runtimeMedia, err := c.publishPendingMCPActionMedia(ctx, actionEnv, actionResult.mcpMedia)
+	if err != nil {
+		return "", c.failRuntimeAction(task, todoID, actionID, startedAt, err)
+	}
+	providerArtifacts = append(providerArtifacts, runtimeMedia.artifacts()...)
+	actionResult.Artifacts = providerArtifacts
 	output = actionResultDisplay(rawResult, actionResult)
 	typedResult := &TaskResult{
 		TaskID: todoID, Agent: task.Agent, Attempt: attempt, Status: TaskResultStatusSuccess,
 		Summary: output, Details: output, Source: "runtime", Artifacts: providerArtifacts,
 		RuntimeOutputs: runtimeOutputs, RuntimeOutputsHash: runtimeOutputsHash, Confidence: 1,
+		RuntimeMedia:       runtimeMedia,
 		RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash,
 		MaterializedActionPayloadHash: task.MaterializedActionPayloadHash, BoundInputs: cloneStringMap(task.BoundInputs),
 	}
@@ -2987,6 +3008,7 @@ func (c *Coordinator) ingestActionProviderArtifacts(ctx context.Context, actionR
 }
 
 type runtimeActionReceipt struct {
+	RuntimeMediaHash              string            `json:"runtime_media_hash,omitempty"`
 	Version                       int               `json:"version"`
 	RunID                         string            `json:"run_id,omitempty"`
 	TaskID                        string            `json:"task_id"`
@@ -3029,7 +3051,8 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 	}
 	if eventType != "action_started" {
 		ref, err := c.writeRuntimeActionReceipt(runtimeActionReceipt{
-			Version: 2, RunID: coordinatorRuntimeRunID(c), TaskID: todoID, Agent: task.Agent, ActionID: actionID,
+			RuntimeMediaHash: c.taskRuntimeMediaHash(todoID),
+			Version:          2, RunID: coordinatorRuntimeRunID(c), TaskID: todoID, Agent: task.Agent, ActionID: actionID,
 			Capability: capability, Provider: providerName, ProviderDescriptorSHA256: c.phaseWorkflow.providerDescriptorDigest(capability),
 			Type: task.Action.Type, Status: status,
 			StartedAt: startedAt, FinishedAt: finishedAt,
@@ -3065,7 +3088,8 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 		refs = append(refs, artifacts...)
 	}
 	_ = c.emitEvent(eventType, "runtime", todoID, LifecycleEventPayload{
-		Phase: runtimeActionEventPhase(c.phaseWorkflow), Agent: task.Agent, Provider: providerName,
+		RuntimeMediaHash: c.taskRuntimeMediaHash(todoID),
+		Phase:            runtimeActionEventPhase(c.phaseWorkflow), Agent: task.Agent, Provider: providerName,
 		Capability: capability, ActionID: actionID, ToolName: task.Action.Type,
 		ActionStatus: status, FailureSignature: failureSignature, Artifacts: refs,
 		RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash,
@@ -4233,6 +4257,13 @@ func (c *Coordinator) taskFinalizationBinding(todoID string, freeText bool) stri
 }
 
 func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fantasy.Agent, agentName, prompt string, history []fantasy.Message, timing *taskTiming, extraStop ...fantasy.StopCondition) (string, []fantasy.StepResult, error) {
+	toolMediaFailure := new(toolMediaFailureState)
+	ctx = withNativeProviderCounter(ctx, c)
+	ctx = mcp.WithToolResultPublisher(ctx, func(callCtx context.Context, tool mcp.MCPTool, call fantasy.ToolCall, result mcp.RuntimeToolResult) (fantasy.ToolResponse, error) {
+		response, err := c.publishToolMediaResult(callCtx, tool, call, result)
+		toolMediaFailure.record(err)
+		return response, err
+	})
 	if protocolRepairExecution(ctx) && agent.MessagesHaveMedia(history) {
 		view, err := mediaTextResultView(history)
 		if err != nil {
@@ -4397,6 +4428,9 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		// agent.CreateAgent — see internal/agent/toolcall_repair.go.
 		RepairToolCall: agent.RepairConcatenatedToolCall,
 		PrepareStep: func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
+			if err := toolMediaFailure.failure(); err != nil {
+				return ctx, fantasy.PrepareStepResult{}, err
+			}
 			if err := coordinatorFailure.failure(); err != nil {
 				return ctx, fantasy.PrepareStepResult{}, err
 			}
@@ -4620,7 +4654,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 			}
 			opts.Messages = preparedMessages
 			requestTokens := estimateStepRequestTokens(preparedMessages, admissionPrompt)
-			if nativeWorkerInput(ctx) {
+			if nativeWorkerInput(ctx) || agent.MessagesHaveToolMedia(preparedMessages) {
 				var countErr error
 				requestTokens, countErr = nativeWorkerStepTokens(ctx, workerDescriptor, preparedMessages)
 				if countErr != nil {
@@ -5161,6 +5195,9 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 		}
 		if callbackErr := submitResultLoopFailure(); callbackErr != nil {
 			streamErr = callbackErr
+		}
+		if mediaErr := toolMediaFailure.failure(); mediaErr != nil {
+			streamErr = mediaErr
 		}
 		accounted, reconcileErr := reconcileTokenStream(start, streamResult)
 		if llmUsageNeedsDirectNoProgressAccounting(ctx) {

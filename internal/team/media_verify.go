@@ -73,6 +73,17 @@ func verifyNativeMediaAdmissions(ctx context.Context, workspace string, lineage 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if event.Type == string(EventMediaInputAdmitted) {
+			snapshot, err := decodeMediaInputEvent(event)
+			if err != nil {
+				return err
+			}
+			for _, occurrence := range snapshot.Occurrences {
+				if occurrence.Origin == "mcp_tool" && (index+1 == len(lineage) || lineage[index+1].Type != string(EventToolMediaPublished)) {
+					return media.Reject(media.DurabilityRequired, "tool image snapshot lacks its atomic producer publication")
+				}
+			}
+		}
 		var previous *RunEvent
 		if index > 0 {
 			previous = &lineage[index-1]
@@ -100,6 +111,18 @@ func (v *nativeMediaVerifier) accept(ctx context.Context, event RunEvent, previo
 		return v.acceptCreation(event)
 	case EventTaskMediaBound:
 		return v.acceptBinding(event, previous)
+	case EventToolMediaPublished:
+		payload, err := decodeToolMediaPublication(event)
+		if err != nil {
+			return err
+		}
+		return verifyToolMediaPublication(event, payload, v.prior)
+	case EventMediaConsumerBound:
+		payload, err := decodeMediaConsumerEvent(event)
+		if err != nil {
+			return err
+		}
+		return verifyMediaConsumer(event, payload, v.prior)
 	case EventMediaProviderAdmitted:
 		payload, err := decodeMediaProviderEvent(event)
 		if err != nil {
@@ -210,6 +233,9 @@ func (v *nativeMediaVerifier) acceptBinding(event RunEvent, previous *RunEvent) 
 }
 
 func (v *nativeMediaVerifier) acceptTransition(event RunEvent) error {
+	if err := verifyRuntimeMediaTransition(event, v.prior); err != nil {
+		return err
+	}
 	occurrence, ok := v.created[event.TaskID]
 	if ok && event.Type == string(EventTaskResultCollectionCheckpointed) {
 		var collection resultCollectionEvent
