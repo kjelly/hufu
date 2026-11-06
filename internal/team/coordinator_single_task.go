@@ -3,7 +3,6 @@ package team
 import (
 	"context"
 	"errors"
-	"slices"
 	"strings"
 )
 
@@ -23,7 +22,7 @@ func (c *Coordinator) RunTask(ctx context.Context, task TaskDef) (output string,
 // root occurrence. Native execution requires a supported invocation mode and
 // a provider-bound image capability and destination grant.
 func (c *Coordinator) RunTaskWithMedia(ctx context.Context, task TaskDef, input MediaTurnRequest) (string, error) {
-	input.Images = slices.Clone(input.Images)
+	input = input.clone()
 	return c.runSingleTask(ctx, task, &input)
 }
 

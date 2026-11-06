@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/kjelly/hufu/internal/conversation"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 var errChatControlUnavailable = errors.New("not available in this chat session")
@@ -19,7 +20,8 @@ type chatRuntimeAdapter struct {
 	teamName string
 	seq      chatTurnSequencer
 
-	newDeps func(tc *teamContext, teamName string) chatTurnDeps
+	newDeps    func(tc *teamContext, teamName string) chatTurnDeps
+	stageImage chatImageStage
 	// resetHook and switchHook implement the P3 control commands; nil means
 	// the command is unavailable.
 	resetHook  func(ctx context.Context, tc *teamContext) error
@@ -27,7 +29,7 @@ type chatRuntimeAdapter struct {
 }
 
 func newChatRuntimeAdapter(tc *teamContext, teamName string) *chatRuntimeAdapter {
-	return &chatRuntimeAdapter{tc: tc, teamName: teamName, newDeps: newChatTurnDeps}
+	return &chatRuntimeAdapter{tc: tc, teamName: teamName, newDeps: newChatTurnDeps, seq: chatTurnSequencer{images: &chatPendingImages{}}}
 }
 
 // Current returns the team context the adapter currently drives.
@@ -38,18 +40,27 @@ func (a *chatRuntimeAdapter) Current() (*teamContext, string) {
 }
 
 func (a *chatRuntimeAdapter) RunTurn(ctx context.Context, turnID, prompt string) conversation.TurnResult {
+	return a.RunInputTurn(ctx, conversation.TurnRequest{TurnID: turnID, Prompt: prompt, IncludePending: true}, nil)
+}
+
+func (a *chatRuntimeAdapter) RunInputTurn(ctx context.Context, request conversation.TurnRequest, observer func(team.MediaTurnAdmission)) conversation.TurnResult {
 	tc, teamName := a.Current()
-	outcome := runChatTurn(ctx, a.newDeps(tc, teamName), &a.seq, turnID, prompt)
+	deps := a.newDeps(tc, teamName)
+	deps.skipPending, deps.onInputAdmission = !request.IncludePending, observer
+	outcome := runChatTurn(ctx, deps, &a.seq, request.TurnID, request.Prompt)
 	runIDs := make([]string, 0, len(outcome.RunIdentities))
 	for _, identity := range outcome.RunIdentities {
 		runIDs = append(runIDs, identity.RunID)
 	}
+	status := a.seq.images.status()
 	return conversation.TurnResult{
-		Answer:    outcome.Answer,
-		Result:    outcome.Result,
-		Err:       outcome.Err,
-		Cancelled: outcome.Cancelled,
-		RunIDs:    runIDs,
+		Answer:         outcome.Answer,
+		Result:         outcome.Result,
+		Err:            outcome.Err,
+		Cancelled:      outcome.Cancelled,
+		RunIDs:         runIDs,
+		InputAdmission: outcome.InputAdmission,
+		Images:         &status,
 	}
 }
 

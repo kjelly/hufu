@@ -31,7 +31,11 @@ func (c *Coordinator) PreviewNativeImageTask(ctx context.Context, agentName, goa
 	if err != nil {
 		return preview, err
 	}
-	if strings.TrimSpace(goal) == "" || len(goal) > 256<<10 || len(request.Images) == 0 || len(request.Images) > policy.Policy.Image.MaxCount {
+	count, err := request.imageCount()
+	if err != nil {
+		return preview, err
+	}
+	if strings.TrimSpace(goal) == "" || len(goal) > 256<<10 || count == 0 || count > policy.Policy.Image.MaxCount {
 		return preview, media.Reject(media.LimitExceeded, "invalid native image preview input")
 	}
 	def, err := c.nativeImageWorkerDefinition(agentName)
@@ -82,34 +86,46 @@ func (c *Coordinator) PreviewCoordinatorImageInput(ctx context.Context, goal str
 	if strings.TrimSpace(goal) == "" || len(goal) > 256<<10 || c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 		return NativeImagePreview{}, media.Reject(media.Unsupported, "invalid or unsupported coordinator image preview")
 	}
-	modelID := c.resolveAgentModel(c.GetOrchestratorDef(), "")
-	target, err := c.resolveCanonicalTaskTarget(modelID, "")
+	target, err := c.coordinatorImageTarget()
 	if err != nil {
 		return NativeImagePreview{}, err
-	}
-	if _, err := c.ExecutionRegistry().LanguageModelBackend(target); err != nil {
-		return NativeImagePreview{}, err
-	}
-	frozen, ok := c.executionPolicy.backendByName[target.Backend]
-	if !ok {
-		return NativeImagePreview{}, media.Reject(media.EgressDenied, "coordinator preview has no frozen backend")
-	}
-	identity, err := c.providerManager.ResolveProviderExecutionIdentity(modelID)
-	if err != nil || identity.ProviderKey != frozen.ProviderKey || identity.ConfigurationHash != frozen.IdentityHash {
-		return NativeImagePreview{}, media.Reject(media.EgressDenied, "coordinator preview provider differs from frozen policy")
 	}
 	preview, err := previewMediaTurnFiles(ctx, request, policy.Policy.Image)
 	preview.Target, preview.MetadataOnly = target, true
 	return preview, err
 }
 
+func (c *Coordinator) coordinatorImageTarget() (execution.ExecutionTarget, error) {
+	modelID := c.resolveAgentModel(c.GetOrchestratorDef(), "")
+	target, err := c.resolveCanonicalTaskTarget(modelID, "")
+	if err != nil {
+		return execution.ExecutionTarget{}, err
+	}
+	if _, err := c.ExecutionRegistry().LanguageModelBackend(target); err != nil {
+		return execution.ExecutionTarget{}, err
+	}
+	frozen, ok := c.executionPolicy.backendByName[target.Backend]
+	if !ok {
+		return execution.ExecutionTarget{}, media.Reject(media.EgressDenied, "coordinator preview has no frozen backend")
+	}
+	identity, err := c.providerManager.ResolveProviderExecutionIdentity(modelID)
+	if err != nil || identity.ProviderKey != frozen.ProviderKey || identity.ConfigurationHash != frozen.IdentityHash {
+		return execution.ExecutionTarget{}, media.Reject(media.EgressDenied, "coordinator preview provider differs from frozen policy")
+	}
+	return target, nil
+}
+
 func previewMediaTurnFiles(ctx context.Context, request MediaTurnRequest, maxLimits media.Limits) (NativeImagePreview, error) {
 	var preview NativeImagePreview
-	if len(request.Images) == 0 || len(request.Images) > maxLimits.MaxCount {
+	count, err := request.imageCount()
+	if err != nil {
+		return preview, err
+	}
+	if count == 0 || count > maxLimits.MaxCount {
 		return preview, media.Reject(media.LimitExceeded, "invalid image preview count")
 	}
 	var refs []media.Ref
-	for _, path := range request.Images {
+	for index := range count {
 		remaining := maxLimits.MaxBytesPerBundle - preview.TotalBytes
 		if remaining <= 0 {
 			return preview, media.Reject(media.LimitExceeded, "image preview exceeds bundle budget")
@@ -118,12 +134,7 @@ func previewMediaTurnFiles(ctx context.Context, request MediaTurnRequest, maxLim
 		if remaining < limits.MaxBytesPerImage {
 			limits.MaxBytesPerImage = remaining
 		}
-		data, err := media.ReadFile(ctx, path, limits)
-		if err != nil {
-			return preview, err
-		}
-		ref, err := media.Validate(ctx, data, limits)
-		clear(data)
+		ref, err := previewMediaTurnImage(ctx, request, index, limits)
 		if err != nil {
 			return preview, err
 		}
@@ -136,6 +147,23 @@ func previewMediaTurnFiles(ctx context.Context, request MediaTurnRequest, maxLim
 	preview.ImageCount = len(refs)
 	preview.ModelImageCapability = providerintrospection.CapabilityUnknown
 	return preview, nil
+}
+
+func previewMediaTurnImage(ctx context.Context, request MediaTurnRequest, index int, limits media.Limits) (media.Ref, error) {
+	if len(request.StagedImages) > 0 {
+		var ref media.Ref
+		err := request.StagedImages[index].WithBytes(ctx, func(_ []byte, staged media.Ref) error {
+			ref = staged
+			return media.CheckBundle([]media.Ref{ref}, limits)
+		})
+		return ref, err
+	}
+	data, err := media.ReadFile(ctx, request.Images[index], limits)
+	if err != nil {
+		return media.Ref{}, err
+	}
+	defer clear(data)
+	return media.Validate(ctx, data, limits)
 }
 
 func (c *Coordinator) nativeImageWorkerDefinition(name string) (*agent.AgentDef, error) {

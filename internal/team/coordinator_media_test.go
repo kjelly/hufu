@@ -242,6 +242,9 @@ func TestCoordinatorImageFinishRejectsMetadataWithoutNativeWork(t *testing.T) {
 	}
 	source := historyReferences(request.Call.Prompt)[0].Reference.Source
 	snapshot := view.snapshots[source.SnapshotID]
+	// A fresh invocation has no process-local committed-input marker. Its
+	// unfinished canonical image turn still requires native worker evidence.
+	requireMediaCode(t, c.requireCoordinatorImageWork(ctx), media.DurabilityRequired)
 	ctx = context.WithValue(ctx, coordinatorCommittedMediaKey{}, snapshot)
 	requireMediaCode(t, c.requireCoordinatorImageWork(ctx), media.DurabilityRequired)
 	response, err := (&finishTool{coordinator: c}).Run(ctx, fantasy.ToolCall{Input: `{"response":"I inspected the images."}`})

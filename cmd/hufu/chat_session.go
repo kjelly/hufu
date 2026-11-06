@@ -72,6 +72,7 @@ type chatSession struct {
 	registry    *team.TeamRegistry
 	pathConsent *tools.PathConsent
 	vars        map[string]string
+	images      *chatPendingImages
 }
 
 func openChatSession() (*chatSession, error) {
@@ -125,7 +126,7 @@ func (s *chatSession) installCompleter() {
 	for name := range s.tc.session.Agents {
 		agentNames = append(agentNames, name)
 	}
-	pr, err := readline.NewPromptReaderWithCompleter(defaultHistoryPath(), newChatCompleter(s.teamName, []string{s.teamName}, agentNames))
+	pr, err := readline.NewPromptReaderWithHistoryFilter(defaultHistoryPath(), newChatCompleter(s.teamName, []string{s.teamName}, agentNames), chatHistoryAllowsLine)
 	if err == nil {
 		s.pr = pr
 	}
@@ -135,7 +136,20 @@ func (s *chatSession) installCompleter() {
 // close releases the current team (coordinator, MCP, lease) and then the
 // prompt reader.
 func (s *chatSession) close() error {
-	return errors.Join(s.tc.Close(), s.closePrompt())
+	err := s.tc.Close()
+	if s.images != nil {
+		if count := s.images.close(); count > 0 {
+			fmt.Fprintf(os.Stderr, "Removed %d pending images.\n", count)
+		}
+	}
+	return errors.Join(err, s.closePrompt())
+}
+
+func (s *chatSession) pendingImageState() *chatPendingImages {
+	if s.images == nil {
+		s.images = &chatPendingImages{}
+	}
+	return s.images
 }
 
 func (s *chatSession) closePrompt() error {

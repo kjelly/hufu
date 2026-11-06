@@ -4,10 +4,11 @@ import "context"
 
 // work is one admitted command waiting for, or holding, the actor.
 type work struct {
-	cmd    Command
-	turnID string
-	ctx    context.Context
-	cancel context.CancelFunc
+	cmd            Command
+	turnID         string
+	ctx            context.Context
+	cancel         context.CancelFunc
+	includePending bool
 }
 
 func (w *work) isPrompt() bool { return w.cmd.Kind == CommandSubmitPrompt }

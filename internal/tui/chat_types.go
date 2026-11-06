@@ -46,7 +46,8 @@ type ChatOptions struct {
 	// History is the restored conversation shown before the first turn.
 	History []ChatHistoryEntry
 	// LastResult is the restored outcome of the previous run, if any.
-	LastResult *team.RunResult
+	LastResult    *team.RunResult
+	PendingImages *conversation.ImageStatus
 }
 
 type chatAckMsg struct {

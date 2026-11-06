@@ -56,6 +56,8 @@ func (s *chatSession) runChatUI() error {
 	defer cancelSession()
 
 	adapter := newChatRuntimeAdapter(s.tc, s.teamName)
+	adapter.seq.images = s.pendingImageState()
+	pendingImages := adapter.seq.images.status()
 	ctrl := conversation.New(adapter, conversation.Config{})
 	closeCtrl := func() conversation.CloseReport { return ctrl.Close(gracefulTimeout) }
 	model := tuipkg.NewChatModel(tuipkg.ChatOptions{
@@ -65,6 +67,7 @@ func (s *chatSession) runChatUI() error {
 		CommandPrefix: fmt.Sprintf("chat-%d", os.Getpid()),
 		History:       chatHistory(s.tc.sessionData),
 		LastResult:    s.tc.coordinator.LastRunResult(),
+		PendingImages: &pendingImages,
 	})
 	programOptions := []tea.ProgramOption{tea.WithoutSignalHandler()}
 	if presentation.DisplayPreset == tuipkg.DisplayEpaper {

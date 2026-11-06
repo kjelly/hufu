@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `75dd2adc`（PR-04B 證據與變更同本次階段 commit；M2～M4 未完成）
+> Verified-Commit: `5bee5767`（PR-04C 證據與程式碼同本次階段 commit；M2～M4 未完成）
 > Supersedes: —
 > Superseded-By: —
 
@@ -46,8 +46,9 @@
 | PR-03G result-only repair／verbatim wire | 完成；`49f8b0d6` | 實際 SDK repair／cost／transcript、完整 suite、contracts、vet、lint 與定向 race 通過 |
 | PR-03 M1 CLI/direct/single native images | 完成；`49f8b0d6` | PR-03A～G；明示單 worker、CLI／API native wire、CAS retry/resume、文字 synthesis/repair、cost 與 acceptance 全部離線驗證 |
 | PR-04A metadata-only provider 邊界 | 完成；`75dd2adc` | 固定最終 source 的 focused／lint／contracts／vet／race／full 全部通過；公開 M2 入口尚未開啟 |
-| PR-04B coordinator 有序委派／續談／CLI | 完成；同本次階段 commit | 離線 SDK／CLI／多輪／cost／audit，以及 lint、contracts、vet、race、完整 suite 全部通過 |
-| PR-04 M2 coordinator/chat/DAG/routing | 進行中 | A／B 完成；Chat pending、DAG／fanout／fallback 尚待後續階段 |
+| PR-04B coordinator 有序委派／續談／CLI | 完成；`5bee5767` | 離線 SDK／CLI／多輪／cost／audit，以及 lint、contracts、vet、race、完整 suite 全部通過 |
+| PR-04C Chat pending／canonical admission | 完成；同本次階段 commit | staging、plain／Chat TUI PTY、crash、reset／team，以及 lint、contracts、vet、race、完整 suite 全部通過 |
+| PR-04 M2 coordinator/chat/DAG/routing | 進行中 | A／B／C 完成；DAG／fanout／fallback 尚待後續階段 |
 | PR-05 M3 MCP/result binding | 尚未開始 | — |
 | PR-06 M3 inspect/export/docs | 尚未開始 | — |
 | PR-07 M4 Codex localImage | 尚未開始 | — |
@@ -505,3 +506,28 @@ PR-04A 最終驗證固定 11 個 Go source／test 檔與四個設定檔的 SHA-2
 PR-04B 資源紀錄：全程沿用同一 task scratch、GOCACHE、GOTMPDIR 與 module cache。最終 normal／race export 清單保護目前需要的版本；本階段清除 185 個過期 task archives 與一份由新／舊測試特徵證明過期的 test-input log，回收 3,496,677,376 bytes，累計回收 26,115,682,304 bytes。編譯新版本及保留已驗證基準時，可辨識 task 輸出曾暫時達 2,303,897,600 bytes（約 2.15 GiB，超過預設保留預算約 149 MiB）；在下一 heavyweight gate 前即清除過期版本。最終可辨識 task 產物 1,653,784,576 bytes（約 1.54 GiB），低於 2 GiB；共享 GOCACHE 總量 20,970,385,408 bytes，非全部由本工作新增。
 
 GOTMPDIR 約 14.4 MiB、private task scratch 約 34 MiB；沒有保留 executable。保留 source/settings hashes、資源與清理 manifests、必要驗證摘要和尚未接入的下一階段小型草稿，供後續工作續行；草稿不算已交付程式碼或測試證據。清理只處理確切來源已證明且沒有 consumer 的本工作輸出，沒有清除共享依賴、toolchain、未確認來源的既有 fixtures 或其他 session 資料。
+
+## PR-04C：Chat pending 圖片與提交邊界
+
+- plain 與 Chat TUI 共用 `/image add/list/remove/clear`、有序 staging、quota 與 turn sequencer。圖片在 add 時驗證並保存 process-local bytes；來源檔之後變更或刪除不影響本次輸入。只顯示安全名稱及 metadata，圖片控制指令不進 readline history。
+- canonical input checkpoint 的 admission 通知與 provider 成功分開。確認提交後立即消費 pending／釋放 staging，provider 失敗或取消也不加回；提交前失敗保留有效圖片；無法確認提交狀態時凍結並要求恢復。已排隊的下一個 prompt 不會自動採用前一回合保留的圖片。
+- reset／切 team 僅在成功後釋放 pending；正常退出清理並回報數量。未提交 staging 不承諾跨程序恢復。已提交圖片沿原 TurnID／snapshot／CAS 恢復，不重讀來源檔或建立新圖片 turn。`finish` 同時檢查目前 conversation 尚未完成的圖片，避免在提交後失敗、下一輪純文字續談時僅憑 metadata 宣稱完成。
+- staging 與 transport 各自使用有界 logical-byte quota，避免巢狀取得同一 semaphore；不宣稱它們等於 RSS 上限。legacy dashboard／prompt injection 明確拒絕 `/image`，支援入口為 `chat --ui plain` 與 `chat --ui chat`。
+
+效益：兩種 Chat 前端的圖片提交與重試行為一致，避免原始路徑重讀、失敗後意外重送和路徑歷史洩漏；圖片提交、worker 完成及整體 acceptance 仍是不同狀態。
+
+定向證據：core staging／admission／history／native invocation 回歸通過（media 0.011s、team 17.463s）；完整 TUI package 通過（6.150s），含實際 Bubble Tea program 的指令、resize 與退出。plain／Chat TUI PTY 驗證刪除來源後的原生 bytes、只有 worker 收到圖片、canonical evidence 與歷史隱私；程序崩潰測試驗證提交前 pending 為空、提交後 snapshot 不變且 CAS 可恢復。Chat lifecycle 定向測試通過（8.707s）。
+
+| PR-04C gate | 結果 |
+|---|---|
+| `mise run lint` | PASS，exit 0；`0 issues.`；已修正 helper 的 error 回傳位置 |
+| `mise run test-contracts` | PASS，exit 0；team 119.222s、cmd 65.426s、reviewgate 13.519s、reviewprep 23.916s、web 0.275s |
+| `mise run vet` | PASS，exit 0；無診斷 |
+| staging／Chat／admission 定向 race | PASS，exit 0；media 1.039s、team 61.401s、conversation 1.082s、readline 1.016s、TUI 4.363s、cmd 14.604s |
+| `mise run test` | PASS，exit 0；team 1004.466s、cmd 212.729s、tools 50.000s、TUI 6.682s、web 0.338s |
+
+最終驗證固定 46 個 Go source／test 檔及四個設定檔的 SHA-256。contracts 完成後僅補強 TUI program 測試的失敗清理；該測試不在 contracts 的依賴中，正式程式碼相同。補強後已重跑 lint／vet 與上述 race，並以同一份最終 source 執行完整 suite。
+
+本階段清除 165 個過期 archives 與一份已被本次完整回歸取代的基準 test-input log，回收 1,548,144,640 bytes；累計回收 27,663,826,944 bytes。清理前量測的 task 產物最高為 2,146,942,976 bytes，低於 2 GiB；每輪 heavyweight gate 前均檢查容量，並保護目前 normal／race outputs、共享依賴與其他 session 的 open／mapped 檔案。
+
+最終可辨識 task 產物 1,722,208,256 bytes（約 1.60 GiB），共享 GOCACHE 21,276,950,528 bytes；GOTMPDIR 約 14.5 MiB、private task scratch 約 35 MiB。沒有保留 executable；續作所需的 source hashes、快取來源／清理 manifests 與驗證 checkpoint 留在同一 private task directory。未呼叫真實模型或搬移文件。M2 整體仍待 DAG／fanout／fallback；M3、M4 尚未開始。

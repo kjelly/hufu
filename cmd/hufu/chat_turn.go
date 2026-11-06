@@ -20,12 +20,14 @@ type chatTurnCoordinator interface {
 // REPL and the chat TUI) builds it with newChatTurnDeps so prompt preparation,
 // delivery classification, and persistence stay identical across them.
 type chatTurnDeps struct {
-	coordinator  chatTurnCoordinator
-	prepare      func(line string) string
-	deliver      func(answer string, err error) (string, error)
-	snapshotRuns func() map[string]int
-	collectRuns  func(prior map[string]int) []cliRunIdentity
-	persist      func(line string)
+	coordinator      chatTurnCoordinator
+	prepare          func(line string) string
+	deliver          func(answer string, err error) (string, error)
+	snapshotRuns     func() map[string]int
+	collectRuns      func(prior map[string]int) []cliRunIdentity
+	persist          func(line string)
+	skipPending      bool
+	onInputAdmission func(team.MediaTurnAdmission)
 }
 
 func newChatTurnDeps(tc *teamContext, teamName string) chatTurnDeps {
@@ -59,17 +61,31 @@ func newChatTurnDeps(tc *teamContext, teamName string) chatTurnDeps {
 // a process calls Run; later turns continue the conversation. A cancelled
 // turn still established coordinator history, so it counts as a turn; a turn
 // that failed for any other reason does not.
-type chatTurnSequencer struct{ turns int }
+type chatTurnSequencer struct {
+	turns  int
+	images *chatPendingImages
+}
 
 func (s *chatTurnSequencer) first() bool { return s.turns == 0 }
 
 func (s *chatTurnSequencer) record(outcome chatTurnOutcome) {
+	if outcome.InputAdmission != nil {
+		if outcome.InputAdmission.State == team.MediaTurnCommitted {
+			s.turns++
+		}
+		return
+	}
 	if outcome.Err == nil || outcome.Cancelled {
 		s.turns++
 	}
 }
 
-func (s *chatTurnSequencer) reset() { s.turns = 0 }
+func (s *chatTurnSequencer) reset() {
+	s.turns = 0
+	if s.images != nil {
+		s.images.close()
+	}
+}
 
 // chatTurnOutcome is everything a front end needs to present one turn.
 type chatTurnOutcome struct {
@@ -78,8 +94,9 @@ type chatTurnOutcome struct {
 	Cancelled bool
 	// Result is the RunResult produced by this turn, or nil when the
 	// coordinator did not publish a new one (a stale result is never reused).
-	Result        *team.RunResult
-	RunIdentities []cliRunIdentity
+	Result         *team.RunResult
+	RunIdentities  []cliRunIdentity
+	InputAdmission *team.MediaTurnAdmission
 }
 
 // runChatTurn executes one conversational turn. It never writes to stdout or
@@ -91,20 +108,15 @@ func runChatTurn(ctx context.Context, deps chatTurnDeps, seq *chatTurnSequencer,
 	priorRuns := deps.snapshotRuns()
 	previous := deps.coordinator.LastRunResult()
 
-	var answer string
-	var err error
-	if seq.first() {
-		answer, err = deps.coordinator.Run(ctx, prompt)
-	} else {
-		answer, err = deps.coordinator.ContinueWithPrompt(ctx, prompt)
-	}
+	answer, inputAdmission, err := executeChatTurn(ctx, deps, seq, invocationID, prompt)
 	answer, err = deps.deliver(answer, err)
 
 	outcome := chatTurnOutcome{
-		Answer:        answer,
-		Err:           err,
-		Cancelled:     err != nil && errors.Is(ctx.Err(), context.Canceled),
-		RunIdentities: deps.collectRuns(priorRuns),
+		Answer:         answer,
+		Err:            err,
+		Cancelled:      err != nil && errors.Is(ctx.Err(), context.Canceled),
+		RunIdentities:  deps.collectRuns(priorRuns),
+		InputAdmission: inputAdmission,
 	}
 	if current := deps.coordinator.LastRunResult(); current != nil && current != previous {
 		outcome.Result = current

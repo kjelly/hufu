@@ -28,6 +28,7 @@ var chatCommands = []chatCommandSpec{
 	{name: "cost", usage: "/cost", summary: "show the last run's generation cost"},
 	{name: "theme", usage: "/theme [auto|light|dark|mono]", summary: "switch the color theme"},
 	{name: "save", usage: "/save <path>", summary: "export the conversation as Markdown"},
+	{name: "image", usage: "/image <add|list|remove|clear>", summary: "manage pending image inputs"},
 	{name: "cancel", usage: "/cancel", summary: "cancel the running turn"},
 	{name: "wrap", usage: "/wrap", summary: "ask the coordinator to wrap up the running turn"},
 	{name: "reset", usage: "/reset", summary: "clear the conversation context"},
@@ -70,6 +71,8 @@ func (m ChatModel) runChatCommand(in chatInput, draft string) (ChatModel, tea.Cm
 		return m.themeCommand(in.arg)
 	case "save":
 		return m.saveCommand(in.arg)
+	case "image":
+		return m.imageCommand(in.arg)
 	case "cancel":
 		return m.sendControl(conversation.CommandCancelTurn, "")
 	case "wrap":

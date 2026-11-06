@@ -11,6 +11,7 @@ import (
 
 	ergoreadline "github.com/ergochat/readline"
 
+	"github.com/kjelly/hufu/internal/conversation"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -20,7 +21,8 @@ func (s *chatSession) runPlain() error {
 	fmt.Fprintf(os.Stderr, "\n%s Chatting with team %s. Type %s to leave, %s to clear context.\n\n",
 		boldStyle.Render("💬"), teamStyle.Render(s.teamName),
 		dimStyle.Render("/exit"), dimStyle.Render("/reset"))
-	var turns chatTurnSequencer
+	turns := chatTurnSequencer{images: s.pendingImageState()}
+	fmt.Fprintln(os.Stderr, "Pending images start empty in this process. Use /image to list them.")
 	for {
 		line, err := readChatLine(s.pr)
 		if err != nil {
@@ -52,11 +54,18 @@ func (s *chatSession) runPlainCommand(line string, turns *chatTurnSequencer) (ha
 	case "/exit", "/quit", ":q", "exit", "quit":
 		return true, true
 	case "/reset":
+		removed := 0
+		if turns.images != nil {
+			removed = len(turns.images.status().Images)
+		}
 		if err := s.tc.coordinator.ResetConversationChecked(context.Background()); err != nil {
 			fmt.Fprintf(os.Stderr, "Reset failed: %v\n", err)
 			return true, false
 		}
 		turns.reset()
+		if removed > 0 {
+			fmt.Fprintf(os.Stderr, "Removed %d pending images.\n", removed)
+		}
 		fmt.Fprintf(os.Stderr, "%s Conversation context cleared.\n\n", dimStyle.Render("·"))
 	case "/help", "help", "?":
 		fmt.Fprint(os.Stderr, chatHelpText(s.tc.teamName))
@@ -68,6 +77,21 @@ func (s *chatSession) runPlainCommand(line string, turns *chatTurnSequencer) (ha
 		printChatSkills(s.tc)
 	case "/config":
 		fmt.Fprintf(os.Stderr, "Team: %s\nWorkspace: %s\nModel: %s\n\n", s.tc.session.Config.Name, s.tc.session.Workspace, s.tc.session.Config.Generation.Model)
+	case "/image":
+		command, err := conversation.ParseImageCommand(commandArg)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			break
+		}
+		if turns.images == nil {
+			turns.images = s.pendingImageState()
+		}
+		status, err := turns.images.manage(s.rootCtx, command, s.tc.coordinator.StageImageInput)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			break
+		}
+		fmt.Fprintln(os.Stderr, conversation.FormatImageStatus(status))
 	case "/save":
 		if commandArg == "" {
 			fmt.Fprintln(os.Stderr, "usage: /save <path>")
@@ -101,7 +125,14 @@ func (s *chatSession) switchPlainTeam(name string, turns *chatTurnSequencer) {
 	}
 	oldTC := s.tc
 	s.tc, s.teamName = newTC, newTC.teamName
+	removed := 0
+	if turns.images != nil {
+		removed = len(turns.images.status().Images)
+	}
 	turns.reset()
+	if removed > 0 {
+		fmt.Fprintf(os.Stderr, "Removed %d pending images.\n", removed)
+	}
 	if err := oldTC.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "%s Failed to close previous team: %v\n", errStyle.Render("⚠"), err)
 	}
@@ -113,10 +144,19 @@ func (s *chatSession) runPlainTurn(line string, turns *chatTurnSequencer) {
 	stopIdentityHeartbeat := startInvocationIdentityHeartbeat(os.Stderr, turnInvocationID, invocationIdentityHeartbeatInterval, s.tc.coordinator.ProviderQuotaWaiting)
 	turnCtx, cancel := signal.NotifyContext(s.rootCtx, os.Interrupt)
 	disp := newCoordDisplay(s.tc)
-	outcome := runChatTurn(turnCtx, newChatTurnDeps(s.tc, s.teamName), turns, turnInvocationID, line)
+	deps := newChatTurnDeps(s.tc, s.teamName)
+	deps.onInputAdmission = func(notice team.MediaTurnAdmission) {
+		if notice.State == team.MediaTurnCommitted {
+			fmt.Fprintf(os.Stderr, "Committed %d images to turn %s.\n", notice.ImageCount, notice.TurnID)
+		}
+	}
+	outcome := runChatTurn(turnCtx, deps, turns, turnInvocationID, line)
 	disp.stopTimer()
 	cancel()
 	stopIdentityHeartbeat()
+	if outcome.InputAdmission != nil && outcome.InputAdmission.State != team.MediaTurnCommitted {
+		fmt.Fprintf(os.Stderr, "%d images retained; admission state: %s.\n", len(turns.images.status().Images), outcome.InputAdmission.State)
+	}
 
 	switch {
 	case outcome.Cancelled:

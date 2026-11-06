@@ -2,7 +2,7 @@ package team
 
 import (
 	"context"
-	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/media"
@@ -14,6 +14,23 @@ import (
 type MediaTurnRequest struct {
 	TurnID string
 	Images []string
+	// StagedImages are borrowed from trusted host staging for this admission.
+	// The caller keeps them alive until OnAdmission or the invocation returns.
+	StagedImages []*media.StagedImage     `json:"-"`
+	OnAdmission  func(MediaTurnAdmission) `json:"-"`
+}
+
+func (r MediaTurnRequest) clone() MediaTurnRequest {
+	r.Images = slices.Clone(r.Images)
+	r.StagedImages = slices.Clone(r.StagedImages)
+	return r
+}
+
+func (r MediaTurnRequest) imageCount() (int, error) {
+	if len(r.Images) > 0 && len(r.StagedImages) > 0 {
+		return 0, media.Reject(media.BindingConflict, "image input has multiple source types")
+	}
+	return len(r.Images) + len(r.StagedImages), nil
 }
 
 func (c *Coordinator) prepareSingleTaskMedia(ctx context.Context, task TaskDef, request MediaTurnRequest) (TaskDef, error) {
@@ -33,7 +50,11 @@ func (c *Coordinator) prepareTaskMedia(ctx context.Context, task TaskDef, reques
 	if err != nil {
 		return TaskDef{}, err
 	}
-	if taskHasMedia(task) || len(request.Images) == 0 || len(request.Images) > policy.Policy.Image.MaxCount || len(task.Goal) > 256<<10 {
+	count, err := request.imageCount()
+	if err != nil {
+		return TaskDef{}, err
+	}
+	if taskHasMedia(task) || count == 0 || count > policy.Policy.Image.MaxCount || len(task.Goal) > 256<<10 {
 		return TaskDef{}, media.Reject(media.BindingConflict, "invalid single-task media input")
 	}
 	input, err := c.admitMediaTurnInput(ctx, task.Goal, request)
@@ -60,7 +81,7 @@ func (c *Coordinator) prepareTaskMedia(ctx context.Context, task TaskDef, reques
 	if err != nil {
 		return TaskDef{}, err
 	}
-	if err := c.persistMediaInputHistory(ctx, input); err != nil {
+	if err := c.persistMediaInputHistoryWithAdmission(ctx, input, request.OnAdmission); err != nil {
 		return TaskDef{}, err
 	}
 	task.MediaBinding = &binding
@@ -72,6 +93,7 @@ func (c *Coordinator) prepareTaskMedia(ctx context.Context, task TaskDef, reques
 // coordinator turns. It publishes a canonical snapshot; callers commit its
 // history before exposing a turn to a provider.
 func (c *Coordinator) admitMediaTurnInput(ctx context.Context, goal string, request MediaTurnRequest) (media.InputSnapshot, error) {
+	request = request.clone()
 	if err := ctx.Err(); err != nil {
 		return media.InputSnapshot{}, err
 	}
@@ -79,7 +101,11 @@ func (c *Coordinator) admitMediaTurnInput(ctx context.Context, goal string, requ
 	if err != nil {
 		return media.InputSnapshot{}, err
 	}
-	if len(request.Images) == 0 || len(request.Images) > policy.Policy.Image.MaxCount || len(goal) > 256<<10 {
+	count, err := request.imageCount()
+	if err != nil {
+		return media.InputSnapshot{}, err
+	}
+	if count == 0 || count > policy.Policy.Image.MaxCount || len(goal) > 256<<10 {
 		return media.InputSnapshot{}, media.Reject(media.BindingConflict, "invalid media turn input")
 	}
 	if c.currentInvocationID() == "" {
@@ -94,20 +120,9 @@ func (c *Coordinator) admitMediaTurnInput(ctx context.Context, goal string, requ
 		Input: media.TurnInput{Parts: []media.Part{{Type: "text", Text: goal}}}}
 	seen := make(map[string]bool)
 	var bundleBytes int64
-	for _, path := range request.Images {
+	for imageIndex := range count {
 		if err := ctx.Err(); err != nil {
 			return media.InputSnapshot{}, err
-		}
-		absolute, err := filepath.Abs(path)
-		if err != nil || path == "" {
-			return media.InputSnapshot{}, media.Reject(media.InputMissing, "image file is unavailable")
-		}
-		// The caller explicitly selected this file. The store's existing source
-		// boundary is narrowed to that parent; ReadFile still rejects symlinks
-		// in every component, including the original parent path.
-		store, err := NewFileArtifactStore(c.artifactStoreRootPath(), filepath.Dir(absolute))
-		if err != nil {
-			return media.InputSnapshot{}, media.Reject(media.DurabilityRequired, "private artifact store unavailable")
 		}
 		remaining := policy.Policy.Image.MaxBytesPerBundle - bundleBytes
 		if remaining <= 0 {
@@ -117,21 +132,17 @@ func (c *Coordinator) admitMediaTurnInput(ctx context.Context, goal string, requ
 		if remaining < limits.MaxBytesPerImage {
 			limits.MaxBytesPerImage = remaining
 		}
-		put, err := store.Put(ctx, PutArtifactRequest{Kind: "image", SourcePath: absolute, MediaLimits: limits})
+		ref, err := c.admitMediaTurnImage(ctx, request, imageIndex, limits)
 		if err != nil {
 			return media.InputSnapshot{}, err
 		}
-		bundleBytes += put.ByteSize
-		metadata, err := store.mediaMetadata(ctx, put.ID)
-		if err != nil {
-			return media.InputSnapshot{}, err
-		}
+		bundleBytes += ref.ByteSize
 		index := len(input.Input.Parts)
-		input.Input.Parts = append(input.Input.Parts, media.Part{Type: "image", MediaID: put.ID})
-		input.Occurrences = append(input.Occurrences, media.Occurrence{RunID: input.RunID, BranchID: input.BranchID, InvocationID: input.InvocationID, TurnID: input.TurnID, PartIndex: index, MediaID: put.ID, Origin: "user_file"})
-		if !seen[put.ID] {
-			input.Refs = append(input.Refs, *metadata.Image)
-			seen[put.ID] = true
+		input.Input.Parts = append(input.Input.Parts, media.Part{Type: "image", MediaID: ref.ID})
+		input.Occurrences = append(input.Occurrences, media.Occurrence{RunID: input.RunID, BranchID: input.BranchID, InvocationID: input.InvocationID, TurnID: input.TurnID, PartIndex: index, MediaID: ref.ID, Origin: "user_file"})
+		if !seen[ref.ID] {
+			input.Refs = append(input.Refs, ref)
+			seen[ref.ID] = true
 		}
 	}
 	input, err = media.SealSnapshot(input, policy.Policy.Image)

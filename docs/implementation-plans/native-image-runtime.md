@@ -135,12 +135,17 @@ CLI 與 Chat 統一為「一個非空 text part → 圖片依加入順序排列�
 | add | bounded 讀取、驗證並暫存私有 process-local bytes，保留順序；計入 staging quota |
 | remove／clear | 釋放對應暫存與 quota；remove 使用畫面列出的 1-based index |
 | 驗證或 admission event commit 前失敗／取消 | 保留仍有效的 pending，允許修正後重新提交；不呼叫 provider |
-| turn admission event 與 projection 成功 commit | 消費 pending，記錄 TurnID；後續 provider 失敗從該 turn 恢復，不能自動再加回下一回合 |
+| canonical input checkpoint 已提交 | 消費 pending，記錄 TurnID／snapshot；後續 provider 或 checkpoint attestation 失敗不能將圖片加回下一回合 |
+| checkpoint 提交狀態無法確認 | 凍結 pending 並標示需要恢復；不得自動重送，使用者可明確 clear |
 | `/reset`、切換 team、正常退出 | 清除未提交 pending，釋放資源並顯示清除數量；已提交的 snapshot 保留 |
 | admission 前 process crash | 未提交 staging 不承諾恢復；重開後明確從空 pending 開始 |
 | admission 後 process crash | 從 durable TurnID／snapshot 恢復；不重新讀原始 path、不重送新 turn |
 
 plain/TUI 共用相同 state machine。pending 變更不能與正在提交的 turn 競爭；以既有 chat turn 序列化機制凍結本次 snapshot。畫面只顯示安全名稱、opaque ID、size、dimensions、狀態，不顯示 bytes／完整原始路徑；終端與電子紙均採文字資訊。
+
+圖片控制指令適用 `chat --ui plain` 與 `chat --ui chat`：`/image add <path>`、`/image list`、`/image remove <1-based index>`、`/image clear`。路徑是 literal argument，不做 shell expansion；圖片控制指令不寫入 readline history。先前回合失敗所保留的圖片不會自動附加到已排隊的下一個 prompt，使用者須在 idle 時明確提交新 prompt。舊 `--ui dashboard`／prompt injection 入口明確拒絕 `/image`，不把來源路徑當任務交給模型。
+
+Pending staging 使用獨立的 process-wide 64 MiB logical-byte quota；provider transport 沿用自己的 quota。兩者不可巢狀持有同一 semaphore，這些 logical quotas 不代表程序 RSS 上限。提交後只從 canonical CAS 載入圖片，admission 通知會先釋放 staging bytes，再開始 provider request。
 
 ## 4. 私有儲存、ingestion 與資源限制
 

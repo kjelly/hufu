@@ -40,7 +40,11 @@ type nativeCLIProcessFixture struct {
 
 func newNativeCLIProcessFixture(t *testing.T, binary, endpoint, acceptance string) nativeCLIProcessFixture {
 	t.Helper()
-	root := t.TempDir()
+	return newNativeCLIProcessFixtureAtRoot(t, binary, endpoint, acceptance, t.TempDir())
+}
+
+func newNativeCLIProcessFixtureAtRoot(t *testing.T, binary, endpoint, acceptance, root string) nativeCLIProcessFixture {
+	t.Helper()
 	home, project, search := filepath.Join(root, "home"), filepath.Join(root, "project"), filepath.Join(root, "teams")
 	teamDir := filepath.Join(search, "native-cli")
 	for _, dir := range []string{filepath.Join(home, ".config", "hufu"), project, teamDir} {

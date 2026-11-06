@@ -52,7 +52,7 @@ func isWordBoundary(r rune) bool {
 }
 
 func completeCommand(prefix string) (newLine [][]rune, length int) {
-	cmds := []string{"/exit", "/help", "/quit", "/reset"}
+	cmds := []string{"/exit", "/help", "/quit", "/reset", "/image"}
 	return filterCompletions(cmds, prefix, len(prefix))
 }
 

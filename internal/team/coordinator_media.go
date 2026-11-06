@@ -2,7 +2,6 @@ package team
 
 import (
 	"context"
-	"slices"
 
 	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/media"
@@ -14,14 +13,14 @@ type coordinatorCommittedMediaKey struct{}
 // RunWithMedia uses the ordinary coordinator lifecycle. The coordinator sees
 // metadata; workers need explicit selections and native provider admission.
 func (c *Coordinator) RunWithMedia(ctx context.Context, prompt string, input MediaTurnRequest) (string, error) {
-	input.Images = slices.Clone(input.Images)
+	input = input.clone()
 	return c.Run(context.WithValue(ctx, coordinatorMediaInputKey{}, input), prompt)
 }
 
 // ContinueWithMedia retains the existing conversation and commits only this
 // turn's new attachments. Prior image turns remain canonical references.
 func (c *Coordinator) ContinueWithMedia(ctx context.Context, prompt string, input MediaTurnRequest) (string, error) {
-	input.Images = slices.Clone(input.Images)
+	input = input.clone()
 	return c.ContinueWithPrompt(context.WithValue(ctx, coordinatorMediaInputKey{}, input), prompt)
 }
 
@@ -37,7 +36,7 @@ func (c *Coordinator) admitCoordinatorMediaInput(ctx context.Context, prompt str
 	if err != nil {
 		return ctx, prompt, err
 	}
-	if err := c.persistMediaInputHistory(ctx, snapshot); err != nil {
+	if err := c.persistMediaInputHistoryWithAdmission(ctx, snapshot, input.OnAdmission); err != nil {
 		return ctx, prompt, err
 	}
 	return context.WithValue(ctx, coordinatorCommittedMediaKey{}, snapshot), snapshot.Input.Parts[0].Text, nil
@@ -66,15 +65,25 @@ The current image-bearing user turn is an additional message. Continue coordinat
 `
 
 func (c *Coordinator) requireCoordinatorImageWork(ctx context.Context) error {
-	snapshot, present := ctx.Value(coordinatorCommittedMediaKey{}).(media.InputSnapshot)
-	if !present {
-		return nil
-	}
 	required := make(map[media.Selection]bool)
-	for index, part := range snapshot.Input.Parts {
-		if part.Type == "image" {
-			required[media.Selection{SnapshotID: snapshot.ID, SnapshotHash: snapshot.Hash, TurnID: snapshot.TurnID, PartIndex: index}] = true
+	c.conversationHistoryMu.Lock()
+	history := cloneMessages(c.conversationHistory)
+	c.conversationHistoryMu.Unlock()
+	for _, location := range historyReferences(history) {
+		if location.Reference.TaskID == "" {
+			required[location.Reference.Source] = true
 		}
+	}
+	snapshot, present := ctx.Value(coordinatorCommittedMediaKey{}).(media.InputSnapshot)
+	if present {
+		for index, part := range snapshot.Input.Parts {
+			if part.Type == "image" {
+				required[media.Selection{SnapshotID: snapshot.ID, SnapshotHash: snapshot.Hash, TurnID: snapshot.TurnID, PartIndex: index}] = true
+			}
+		}
+	}
+	if len(required) == 0 {
+		return nil
 	}
 	for _, item := range c.TaskTracker().TodoList().Items() {
 		if item.Status != TaskDone || item.MediaBinding == nil || item.ExecutionReceipt == nil ||
@@ -86,7 +95,7 @@ func (c *Coordinator) requireCoordinatorImageWork(ctx context.Context) error {
 		}
 	}
 	if len(required) != 0 {
-		return media.Reject(media.DurabilityRequired, "current image input requires completed native worker results; metadata alone cannot finish visual work")
+		return media.Reject(media.DurabilityRequired, "image input in this conversation requires completed native worker results; metadata alone cannot finish visual work")
 	}
 	return nil
 }

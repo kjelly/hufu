@@ -64,7 +64,7 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	})
 	defer stopIdentityHeartbeat()
 
-	pr, err := readline.NewPromptReader(defaultHistoryPath())
+	pr, err := readline.NewPromptReaderWithHistoryFilter(defaultHistoryPath(), nil, chatHistoryAllowsLine)
 	if err != nil {
 		stderrLog("%s Readline initialization failed, falling back to basic input: %v\n", errStyle.Render("⚠"), err)
 		pr = nil
@@ -451,6 +451,10 @@ func runWithInjection(ctx context.Context, tc *teamContext, initialResult string
 			return result, nil
 		}
 
+		if command, _ := splitChatCommand(prompt); command == "/image" {
+			stderrLog("Image controls require chat --ui plain or chat --ui chat; this dashboard did not submit an image turn.\n")
+			continue
+		}
 		stderrLog("\n%s Injecting additional prompt...\n\n", boldStyle.Render("↩"))
 
 		var contResult string

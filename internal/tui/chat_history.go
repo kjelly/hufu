@@ -40,8 +40,19 @@ func (m ChatModel) handleControlDone(ev conversation.ControlDone) ChatModel {
 	switch ev.Kind {
 	case conversation.CommandResetContext:
 		m.transcript.add(chatItem{kind: itemNotice, body: "Conversation context cleared."})
+		m.clearPendingImagesAfterControl(ev.ClearedImages)
 	case conversation.CommandSwitchTeam:
 		m.transcript.add(chatItem{kind: itemNotice, body: fmt.Sprintf("Switched to team %s. Conversation context cleared.", ev.Target)})
+		m.clearPendingImagesAfterControl(ev.ClearedImages)
+	case conversation.CommandImages:
+		if ev.Images != nil {
+			m.setPendingImages(*ev.Images)
+			if ev.ImageOperation == conversation.ImageList {
+				m.openTextOverlay("Pending images", conversation.FormatImageStatus(*ev.Images))
+			} else {
+				m.notice = fmt.Sprintf("Pending images: %d; removed: %d.", len(ev.Images.Images), ev.Images.Removed)
+			}
+		}
 	}
 	return m
 }
@@ -52,6 +63,8 @@ func controlCommandName(kind conversation.CommandKind) string {
 		return "reset"
 	case conversation.CommandSwitchTeam:
 		return "team"
+	case conversation.CommandImages:
+		return "image"
 	default:
 		return string(kind)
 	}
