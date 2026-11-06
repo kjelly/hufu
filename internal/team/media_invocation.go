@@ -65,8 +65,7 @@ func validateNativeMediaInvocation(item *TodoItem, policy *ExecutionPolicySnapsh
 		return media.Reject(media.Unsupported, "image input has no supported invocation mode")
 	}
 	if item.Phase != "" || item.Sidecar || item.Action != nil || item.CatalogAction != nil ||
-		item.InvariantVerification != "" || len(item.Execution.Steps) != 0 || item.Escalate || len(item.ModelTopology) > 1 || len(item.ExecutionTopology) > 1 ||
-		item.ExecutionRoute != nil && len(item.ExecutionRoute.Candidates) > 1 {
+		item.InvariantVerification != "" || len(item.Execution.Steps) != 0 || item.Escalate || len(item.ModelTopology) > 1 || len(item.ExecutionTopology) > 1 {
 		return media.Reject(media.Unsupported, "image invocation has unsupported action, workflow or model routing")
 	}
 	if item.MediaBinding.InvocationMode != media.InvocationDelegatedTask &&
@@ -75,6 +74,9 @@ func validateNativeMediaInvocation(item *TodoItem, policy *ExecutionPolicySnapsh
 	}
 	if policy == nil {
 		return media.Reject(media.DurabilityRequired, "native image invocation has no frozen policy")
+	}
+	if err := validateNativeMediaRoute(item, policy); err != nil {
+		return err
 	}
 	for _, backend := range policy.Backends {
 		if backend.Backend == item.ExecutionTarget.Backend && backend.Kind == string(execution.BackendKindLLM) {

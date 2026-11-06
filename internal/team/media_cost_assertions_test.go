@@ -16,13 +16,17 @@ import (
 	"github.com/kjelly/hufu/internal/providerproxy"
 )
 
-func configureNativeMediaCost(t *testing.T, session *TeamSession) {
+func configureNativeMediaCost(t *testing.T, session *TeamSession, additionalModels ...string) {
 	t.Helper()
-	var err error
-	session.CostCatalog, err = cost.NewCatalog(map[string]cost.PriceConfig{
+	prices := map[string]cost.PriceConfig{
 		"fixture/vision": {BillingMode: cost.BillingMetered, InputUSDPerMillion: "1", OutputUSDPerMillion: "2"},
 		"fixture/text":   {BillingMode: cost.BillingMetered, InputUSDPerMillion: "1", OutputUSDPerMillion: "2"},
-	})
+	}
+	for _, model := range additionalModels {
+		prices[model] = prices["fixture/vision"]
+	}
+	var err error
+	session.CostCatalog, err = cost.NewCatalog(prices)
 	if err != nil {
 		t.Fatal(err)
 	}

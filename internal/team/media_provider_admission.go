@@ -63,7 +63,11 @@ func (c *Coordinator) resolveNativeProviderMedia(ctx context.Context, request ag
 	if err := validateNativeMediaSourceScope(item.MediaBinding, view.events); err != nil {
 		return admission, err
 	}
-	target, grant, limits, err := c.nativeProviderTarget(ctx, request, item)
+	expectedTarget, err := nativeMediaAttemptTarget(item, identity.RunID, identity.Attempt, view.events)
+	if err != nil {
+		return admission, err
+	}
+	target, grant, limits, err := c.nativeProviderTarget(ctx, request, expectedTarget)
 	if err != nil {
 		return admission, err
 	}
@@ -106,9 +110,9 @@ func nativeProviderPurposeMatches(purpose cost.InvocationIdentity, identity subm
 	return purpose.TaskID == identity.TaskID && purpose.OccurrenceAttempt == identity.Attempt && strings.EqualFold(purpose.Agent, identity.Agent)
 }
 
-func (c *Coordinator) nativeProviderTarget(ctx context.Context, request agent.ProviderRequest, item *TodoItem) (execution.ExecutionTarget, media.Target, media.Limits, error) {
+func (c *Coordinator) nativeProviderTarget(ctx context.Context, request agent.ProviderRequest, expected execution.ExecutionTarget) (execution.ExecutionTarget, media.Target, media.Limits, error) {
 	target, err := c.resolveCanonicalTaskTarget(request.ModelID, "")
-	if err != nil || target != item.ExecutionTarget {
+	if err != nil || target != expected {
 		return target, media.Target{}, media.Limits{}, media.Reject(media.EgressDenied, "image provider differs from the canonical task target")
 	}
 	policy, err := c.requiredMediaPolicy()

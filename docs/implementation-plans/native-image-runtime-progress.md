@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `5bee5767`（PR-04C 證據與程式碼同本次階段 commit；M2～M4 未完成）
+> Verified-Commit: `2f98de86`（PR-04D1 證據與程式碼同本次階段 commit；M2～M4 未完成）
 > Supersedes: —
 > Superseded-By: —
 
@@ -47,8 +47,10 @@
 | PR-03 M1 CLI/direct/single native images | 完成；`49f8b0d6` | PR-03A～G；明示單 worker、CLI／API native wire、CAS retry/resume、文字 synthesis/repair、cost 與 acceptance 全部離線驗證 |
 | PR-04A metadata-only provider 邊界 | 完成；`75dd2adc` | 固定最終 source 的 focused／lint／contracts／vet／race／full 全部通過；公開 M2 入口尚未開啟 |
 | PR-04B coordinator 有序委派／續談／CLI | 完成；`5bee5767` | 離線 SDK／CLI／多輪／cost／audit，以及 lint、contracts、vet、race、完整 suite 全部通過 |
-| PR-04C Chat pending／canonical admission | 完成；同本次階段 commit | staging、plain／Chat TUI PTY、crash、reset／team，以及 lint、contracts、vet、race、完整 suite 全部通過 |
-| PR-04 M2 coordinator/chat/DAG/routing | 進行中 | A／B／C 完成；DAG／fanout／fallback 尚待後續階段 |
+| PR-04C Chat pending／canonical admission | 完成；`2f98de86` | staging、plain／Chat TUI PTY、crash、reset／team，以及 lint、contracts、vet、race、完整 suite 全部通過 |
+| PR-04D1 DAG／route fallback | 完成；同本次階段 commit | 候選授權、CAS wire、DAG 不重用／取消、audit／cost，以及 lint、contracts、vet、race、完整 suite 全部通過 |
+| PR-04D2 model fanout | 尚未開始 | leaf 授權與獨立 audit 證據尚未交付，含圖組合仍拒絕 |
+| PR-04 M2 coordinator/chat/DAG/routing | 進行中 | A／B／C／D1 完成；fanout 尚待後續階段 |
 | PR-05 M3 MCP/result binding | 尚未開始 | — |
 | PR-06 M3 inspect/export/docs | 尚未開始 | — |
 | PR-07 M4 Codex localImage | 尚未開始 | — |
@@ -531,3 +533,28 @@ GOTMPDIR 約 14.4 MiB、private task scratch 約 34 MiB；沒有保留 executabl
 本階段清除 165 個過期 archives 與一份已被本次完整回歸取代的基準 test-input log，回收 1,548,144,640 bytes；累計回收 27,663,826,944 bytes。清理前量測的 task 產物最高為 2,146,942,976 bytes，低於 2 GiB；每輪 heavyweight gate 前均檢查容量，並保護目前 normal／race outputs、共享依賴與其他 session 的 open／mapped 檔案。
 
 最終可辨識 task 產物 1,722,208,256 bytes（約 1.60 GiB），共享 GOCACHE 21,276,950,528 bytes；GOTMPDIR 約 14.5 MiB、private task scratch 約 35 MiB。沒有保留 executable；續作所需的 source hashes、快取來源／清理 manifests 與驗證 checkpoint 留在同一 private task directory。未呼叫真實模型或搬移文件。M2 整體仍待 DAG／fanout／fallback；M3、M4 尚未開始。
+
+## PR-04D1：DAG 與 route fallback
+
+- 圖片 route 綁定須符合 frozen worker 的 route owner／digest／primary。每次 request 與獨立 audit 共用同一個 canonical attempt 重放：從既有 fallback decision 與帶 `dispatch_attempt` 的 task checkpoint 求出當次 target；候選清單成員身分本身不授權送圖。一般 retry 回到 primary，fallback 必須有前一 attempt 的正式決策；來源 run、revision、candidate 順序與 fallback 次數都受檢查。
+- 每個實際候選仍獨立檢查 model／backend／adapter 的圖片能力、provider identity、egress 與 context／cost 預留。切換模型保留相同 ordered binding／CAS bytes；不重讀 source path、不擴張 owner，也不新增 persisted media schema。
+- 真正 SDK／loopback 封包測試涵蓋 vision→vision、vision→text／unknown／未授權、auth failure 不 fallback 與 primary 成功；第一次 HTTP 收到圖後刪除原始檔案。合法 fallback 的原圖順序／重複次數、成本、receipt 與 audit 通過；替換成同清單的另一個模型仍拒絕。
+- DAG 使用相同文字目標、不同圖片與相依邊，驗證兩個 occurrence 不命中自動 reuse，各自取得自己的圖片與 completion receipt。取消第一個 worker 後，不啟動 dependent worker，也不產生其結果或 execution receipt。
+
+效益：備援模型切換不會遺失原圖或沿用另一個候選的圖片授權；DAG 的相同文字任務能保留不同圖片的執行證據，取消後不再消耗依賴節點的模型呼叫。
+
+固定最終 8 個 Go 檔與四個設定檔後的定向回歸通過（team 35.389s），涵蓋上述案例與既有 metadata coordinator／native retry／provider media 邊界。
+
+| PR-04D1 gate | 結果 |
+|---|---|
+| `mise run lint` | PASS，exit 0；`0 issues.` |
+| `mise run test-contracts` | PASS，exit 0；team 118.146s、cmd 64.600s、reviewgate 12.518s、reviewprep 25.124s、web 0.250s |
+| `mise run vet` | PASS，exit 0；無診斷 |
+| route／DAG／native lifecycle 定向 race | PASS，exit 0；team 146.636s |
+| `mise run test` | PASS，exit 0；team 975.388s、cmd 211.840s、tools 48.421s、TUI 6.504s、web 0.303s |
+
+上述 gates 全部使用相同最終 source／settings，完成後再次核對 SHA-256 一致；沒有修改 schema、歷史 receipt 或 acceptance 契約。D1 已完成，M2 整體仍待 model fanout 的 leaf 授權與獨立 audit，不能視為 M2 已完成。
+
+本階段清除 66 個過期 archives 與一份已被新測試特徵證明取代的 C team test-input log，回收 1,398,792,192 bytes，累計回收 29,062,619,136 bytes。fixture 迭代與保留已驗證基準時，量測 task 產物曾達 2,225,729,536 bytes（約 2.07 GiB）；在下一 heavyweight command 前即清理過期版本。最終可辨識 task 產物 1,787,002,880 bytes（約 1.66 GiB），低於 2 GiB，沒有保留預算例外。
+
+共享 GOCACHE 21,524,844,544 bytes，GOTMPDIR 約 14.6 MiB、private task scratch 約 37 MiB；沿用既有 caches，沒有保留 standalone executable。保留目前 normal／race exports、source hashes、清理來源與驗證 checkpoint 供下一階段續作；未知來源、共享依賴與使用中的檔案不刪除。沒有真實模型呼叫、圖片外送或文件搬移。

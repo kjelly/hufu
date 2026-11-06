@@ -28,8 +28,15 @@ func verifyMediaProviderAdmission(event RunEvent, payload MediaProviderAdmittedP
 	}
 	binding := item.MediaBinding
 	if binding.Hash != payload.BindingHash || binding.InputDigest != payload.MediaInputDigest || binding.PolicyHash != payload.PolicyHash ||
-		item.ExecutionTarget != payload.Target || len(binding.Refs) != payload.ImageCount {
+		len(binding.Refs) != payload.ImageCount {
 		return media.Reject(media.BindingConflict, "image provider admission differs from canonical task input")
+	}
+	expectedTarget, err := nativeMediaAttemptTarget(item, event.RunID, payload.Attempt, prior)
+	if err != nil {
+		return err
+	}
+	if expectedTarget != payload.Target {
+		return media.Reject(media.BindingConflict, "image provider admission differs from the current attempt target")
 	}
 	policy, err := mediaProviderPolicyFromLineage(prior)
 	if err != nil {
