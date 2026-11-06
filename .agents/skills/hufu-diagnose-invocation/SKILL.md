@@ -1,12 +1,44 @@
 ---
 name: hufu-diagnose-invocation
-description: Diagnose Hufu invocations or runs through public status, inspect, results, and debug interfaces. Use to assess progress, investigate failures or suspected stalls, attribute causes to Hufu runtime, agent team, or other layers, and recommend concrete improvements.
+description: Diagnose failed, stalled, or ongoing Hufu invocations through public interfaces. When asked to fix a failure, correct confirmed runtime or agent-team defects, validate recovery preflight, and provide exact recovery commands.
 ---
 
 # Hufu Diagnose Invocation
 
 Investigate the requested `inv-...` or `run-...` using Hufu's public diagnostic
 interfaces. Treat their scoped, canonical output as the evidence boundary.
+
+## Choose the mode
+
+- **Diagnosis mode (default):** Assess progress or failure, attribute causes,
+  run read-only recovery previews when relevant, and recommend improvements.
+  Pasting an error or asking whether a run is progressing does not authorize
+  source changes or execution of recovery.
+- **Full repair mode:** When the user requests necessary fixes, diagnose first,
+  correct confirmed defects within the authorized scope, complete validation,
+  then reassess the original session and provide recovery commands. An existing
+  authorization covering those fixes is sufficient; do not repeatedly ask for
+  permission to complete the same source changes.
+
+Source repair and live recovery are separate actions. By default, hand the
+recovery commands to the user to execute. Execute a retry, recovery publication,
+resume, checkout, or other runtime-state mutation only when the user has also
+authorized that action for the target. Preserve the original task's scope,
+privacy, network, and evidence constraints in both modes.
+
+Short requests are sufficient: an ID alone selects diagnosis mode; a request
+such as "修正 inv-..." selects full repair mode. The user need not repeat the
+runtime/team boundary, validation steps, or command-only recovery default.
+Accept either invocation or run IDs. Discover missing team/workspace identities
+through the public interfaces before asking the user for them.
+
+Example requests in Codex chat:
+
+```text
+$hufu-diagnose-invocation inv-...
+
+$hufu-diagnose-invocation 修正 inv-...
+```
 
 ## Interface contract
 
@@ -190,14 +222,49 @@ validation, or recovery. Multiple layers may contribute; explain the evidence
 for each rather than assigning all responsibility to the layer that rejected
 the result. Record unavailable artifacts as limitations.
 
-## 5. Recommend improvements
+## 5. Correct confirmed defects when authorized
+
+In diagnosis mode, skip source edits and proceed to recovery assessment and
+recommendations. In full repair mode, choose the owner from the evidence:
+
+| Owner | Allowed repair scope |
+| --- | --- |
+| Hufu runtime | Reusable mechanisms under `cmd/hufu/` or `internal/**`, with a team-independent regression case. Explain the violated invariant without relying on a concrete team name. |
+| Agent team | Domain prompts, schemas, workflow, acceptance rules, and action adapters under the owning `.agent-teams/<team>/` directory. |
+| Provider/environment | Correct a demonstrated configuration or integration defect within scope; otherwise report the external limitation and recovery prerequisites. |
+
+Runtime must stay team-neutral: do not add team-name branches, domain vocabulary,
+site-specific exceptions, or relaxed core policy solely to make one team pass.
+Natural-language intent belongs in model-resolved typed inputs, with domain
+guidance in the team and deterministic validation in the runtime. If the repair
+cannot fit this boundary, resolve the design rather than moving team behavior
+into core.
+
+For runtime changes, apply
+[harden-hufu-runtime](../harden-hufu-runtime/SKILL.md) and its required validation.
+For team definition or workflow changes, use
+[team-builder](../team-builder/SKILL.md) when relevant. Follow repository checks;
+contract changes also require the offline contract regression gate. Reproduce
+the observed failure and verify the affected replay or handoff, including
+preservation of completed work and original receipts. Use isolated fixtures for
+tests; they do not authorize running the user's live workflow.
+
+A timeout, unavailable website, model violating a valid schema, or a gate
+correctly rejecting invalid claims does not by itself establish a code defect.
+If none is demonstrated, explain why no source change is needed and assess
+recovery. Do not manufacture a fix by increasing budgets, changing models,
+weakening evidence requirements, or altering judgments merely to obtain success.
+Never edit historical events, checkpoints, receipts, or accepted payloads to
+repair the source code's behavior.
+
+## 6. Validate recovery and prepare commands
 
 For each confirmed cause or contributing factor, identify the owning layer,
 the concrete change, why it addresses the observed failure, and how to verify
 it. Tie recommendations to relevant source/configuration locations when
 available. Keep team-specific prompts, schemas, and workflow fixes in the agent
-team; recommend runtime changes for reusable runtime behavior. Label proposals
-that still need evidence as conditional rather than proven fixes.
+team; use runtime changes for reusable runtime behavior. State which changes
+were implemented and which remain conditional proposals.
 
 Distinguish immediate recovery of the affected run from prevention of future
 failures. State what work can be retained and what must be repaired only when
@@ -206,7 +273,7 @@ Check the installed CLI's supported flags and the original version/configuration
 before recommending recovery commands; identify policy drift or other unmet
 prerequisites. More retries, a larger budget, or a model change alone does not
 explain or fix a contract defect. Preserve the authorization boundary above;
-recommendations do not authorize implementation or recovery execution.
+recommendations do not expand the source-repair or live-recovery authorization.
 
 Before recommending another full run, inspect whether returned work and its
 original transcript support result-only repair. Use the installed version's
@@ -222,7 +289,31 @@ a successful read-only command can report `blocked`. Distinguish schema drift
 from changed fan-out templates or other task execution contracts before giving
 resume commands. A profile override cannot authorize those contract changes.
 
-## 6. Report the finding
+After any source or team fix, repeat the recovery assessment against the
+original target using the repaired version. A previously passing preview is
+not proof that the changed code or schema can resume the old session. Confirm
+the binary/version and supported flags used for both the preview and the
+commands handed to the user; do not preview with the repaired checkout and
+then recommend an older executable on PATH. In this repository, use mise for
+Go commands and preserve required environment/configuration without embedding
+credentials in the command.
+
+Provide copyable commands bound to the discovered team/workspace, branch,
+run, and task as appropriate. Include the read-only preflight and its assessed
+disposition, then the matching recovery command when eligible. Preserve saved
+launch settings and frozen policy; for older hash-only settings, require the
+known original values rather than guessing from today's defaults. Explain
+what is retained, what may execute, and which prerequisites remain.
+
+If the preview is blocked, report the exact failed checks and the supported
+next step. Do not invent an executable recovery path or use `--new`, profile
+overrides, or direct storage edits to bypass drift. For supported contract
+recovery, provide the preview, exact plan hash, child-publication and child-resume
+steps separately; publication alone does not prove the child can complete.
+If the workflow is already complete, identify that state and explain the
+appropriate follow-up entry point instead of requesting another repair.
+
+## 7. Report the finding
 
 Scale the report to the question. Include:
 
@@ -233,8 +324,12 @@ Scale the report to the question. Include:
 - Reproducible CLI commands and their relevant output, with code/file links
   where they establish the cause. Use normal Markdown file links.
 - Concrete improvements with their owning layer and validation criteria,
-  separate from run-recovery steps and prerequisites. State what was actually
-  tested or assessed versus what remains a recommendation.
+  changed files when applicable, separate from run-recovery steps and
+  prerequisites. State what was actually tested or assessed versus what
+  remains a recommendation.
+- Separate source-fix validation, recovery-preflight eligibility, and actual
+  workflow success. Explicitly state whether live recovery was executed; a
+  passing test or preview is not a successful resumed run.
 - Any missing evidence or interface limitation that limits the diagnosis or
   the proposed remedy.
 
