@@ -2,8 +2,8 @@
 internal/agent/agent.go<TAB>agent.Generate(ctx, fantasy.AgentCall{<TAB>agent.RunAgent<TAB>generic_agent<TAB>runtime_boundary
 internal/agent/provider_request.go<TAB>.Generate(ctx,<TAB>admittedLanguageModel.generateOnce<TAB>provider_admission<TAB>runtime_boundary
 internal/agent/provider_request.go<TAB>.Stream(streamCtx,<TAB>admittedLanguageModel.streamOnce<TAB>provider_admission<TAB>runtime_boundary
-internal/agent/provider_request.go<TAB>m.inner.GenerateObject(ctx, call)<TAB>admittedLanguageModel.generateObjectOnce<TAB>provider_admission<TAB>runtime_boundary
-internal/agent/provider_request.go<TAB>m.inner.StreamObject(streamCtx, call)<TAB>admittedLanguageModel.streamObjectOnce<TAB>provider_admission<TAB>runtime_boundary
+internal/agent/provider_request.go<TAB>m.inner.GenerateObject(ctx, *wire.ObjectCall)<TAB>admittedLanguageModel.generateObjectOnce<TAB>provider_admission<TAB>runtime_boundary
+internal/agent/provider_request.go<TAB>m.inner.StreamObject(streamCtx, *wire.ObjectCall)<TAB>admittedLanguageModel.streamObjectOnce<TAB>provider_admission<TAB>runtime_boundary
 internal/agent/responses_model.go<TAB>m.LanguageModel.Generate(ctx, call)<TAB>protocolLanguageModel.Generate<TAB>protocol_terminal_validation_after_admission<TAB>adapter_boundary
 internal/agent/responses_model.go<TAB>m.LanguageModel.Stream(ctx, call)<TAB>protocolLanguageModel.Stream<TAB>buffered_tool_calls_after_admission<TAB>adapter_boundary
 internal/agent/responses_model.go<TAB>m.LanguageModel.GenerateObject(ctx, call)<TAB>protocolLanguageModel.GenerateObject<TAB>protocol_object_validation_after_admission<TAB>adapter_boundary

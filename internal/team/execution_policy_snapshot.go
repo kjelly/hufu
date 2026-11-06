@@ -745,20 +745,8 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	if err := cost.ValidatePolicySnapshot(snapshot.Cost); err != nil {
 		return fmt.Errorf("execution policy snapshot cost: %w", err)
 	}
-	for _, world := range snapshot.ExecutionWorlds {
-		if strings.TrimSpace(world.Backend) == "" || strings.TrimSpace(world.ProjectRootHash) == "" {
-			return fmt.Errorf("execution policy snapshot execution world is incomplete")
-		}
-		seenAgents := make(map[string]struct{}, len(world.AgentNetworkPolicies))
-		for _, policy := range world.AgentNetworkPolicies {
-			if strings.TrimSpace(policy.Agent) == "" {
-				return fmt.Errorf("execution policy snapshot agent network policy is incomplete")
-			}
-			if _, duplicate := seenAgents[policy.Agent]; duplicate {
-				return fmt.Errorf("execution policy snapshot repeats network policy for agent %q", policy.Agent)
-			}
-			seenAgents[policy.Agent] = struct{}{}
-		}
+	if err := validateExecutionPolicyWorlds(snapshot.ExecutionWorlds); err != nil {
+		return err
 	}
 	if err := validateMediaPolicySnapshot(snapshot.Media, snapshot); err != nil {
 		return err
@@ -772,6 +760,25 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	}
 	if hash != snapshot.ConfigurationHash {
 		return fmt.Errorf("execution policy snapshot configuration hash does not match its contents")
+	}
+	return nil
+}
+
+func validateExecutionPolicyWorlds(worlds []ExecutionWorldPolicySnapshot) error {
+	for _, world := range worlds {
+		if strings.TrimSpace(world.Backend) == "" || strings.TrimSpace(world.ProjectRootHash) == "" {
+			return fmt.Errorf("execution policy snapshot execution world is incomplete")
+		}
+		seenAgents := make(map[string]struct{}, len(world.AgentNetworkPolicies))
+		for _, policy := range world.AgentNetworkPolicies {
+			if strings.TrimSpace(policy.Agent) == "" {
+				return fmt.Errorf("execution policy snapshot agent network policy is incomplete")
+			}
+			if _, duplicate := seenAgents[policy.Agent]; duplicate {
+				return fmt.Errorf("execution policy snapshot repeats network policy for agent %q", policy.Agent)
+			}
+			seenAgents[policy.Agent] = struct{}{}
+		}
 	}
 	return nil
 }
