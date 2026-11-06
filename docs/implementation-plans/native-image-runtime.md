@@ -27,9 +27,19 @@
 
 尚未交付的入口必須在該次模型呼叫前拒絕圖片，不能悄悄只送文字。M1 不以 M3/M4 完成為前提；各 milestone 僅宣告本身已通過的支援範圍。
 
-**開發驗收完全離線。** 真實模型呼叫、登入／憑證配置、正式部署及 canary 不在工作清單或 merge gate。使用者已指定後續真實驗收採 **Ollama `deepseek-v4.1-flash:cloud`**；[官方模型頁](https://ollama.com/library/deepseek-v4.1-flash:cloud)於核對日標示 vision。此為外部驗收背景，不寫成 runtime 的模型特例、預設值或已成功呼叫的證據；後續連線、外送範圍與驗收另行安排。
+**開發驗收完全離線。** 真實模型呼叫、登入／憑證配置、正式部署及 canary 不在工作清單或 merge gate。使用者已指定後續真實驗收採 **Ollama `deepseek-v4.1-flash:cloud`**，並自行安排真實驗收；[官方模型頁](https://ollama.com/library/deepseek-v4.1-flash:cloud)於 **2026-11-06** 重新核對時標示 vision。此為外部驗收背景，不寫成 runtime 的模型特例、預設值或已成功呼叫的證據。指定模型不等同於提供 endpoint、憑證、圖片外送範圍或 image-token 上界；開發不能假設這些條件已具備，也不以取得它們阻擋離線實作。
 
 本計畫不包含：圖片生成 API、OCR／計數演算法、音訊／影片／PDF、遠端圖片抓取、任意文字與圖片交錯的使用者介面、終端圖片預覽、自動轉檔／縮放／去 EXIF、自動圖片 GC，以及同一 OS 使用者下任意惡意程序之隔離。未知／未支援格式與能力一律拒絕，不加入 OCR 降級、未知能力試送或未驗證 adapter。
+
+各項實作的預期效益如下；離線測試驗證資料流與授權，不驗證模型判讀準確率。
+
+| 工作 | 效益 |
+|---|---|
+| 原生圖片輸入與有序引用 | 模型能收到原始圖片及指定順序，避免把路徑或 Base64 當成一般文字 |
+| 私有 CAS、canonical binding 與恢復 | 原始檔移除後仍可恢復相同輸入，並阻止跨 task／attempt 借用圖片權限 |
+| 逐請求能力、外送與資源 admission | 在送出前攔住不支援的模型、未授權目標與超限請求 |
+| MCP 圖片結果與 runtime-owned binding | 後續模型能使用工具產生的圖片，完整保留來源、錯誤與 receipt，免由模型抄寫確定性資料 |
+| 授權匯出與 Codex adapter | 使用者能取回原始成果；受支援的 Codex 版本可沿相同圖片授權接入 |
 
 ## 1. 現行權威與實作入口
 
@@ -39,7 +49,7 @@
 |---|---|---|
 | SDK | `go.mod`：Fantasy `v0.45.5`、mcp-go `v1.3.0` | 沿用 pinned SDK；不為圖片功能預先升級依賴 |
 | Fantasy | `AgentStreamCall` 有 `Prompt`、`Messages`、`Files`；`createPrompt` 會先加入 Messages，非空 Prompt 再追加 user message | 含圖使用完整 Messages、空 Prompt、空 Files；最後一則為合法 user/tool；禁止重複追加 |
-| SDK 工具媒體 | `fantasy.NewImageResponse`、`ToolResultOutputContentMedia`；openaicompat 已有工具圖片轉後續 user image 的處理與測試 | 優先沿用；混合／多圖片只補 SDK 未涵蓋的組裝，不能再注入同一張圖 |
+| SDK 工具媒體 | `fantasy.NewImageResponse`、`ToolResultOutputContentMedia`；openaicompat 已有工具圖片轉後續 user image 的處理與測試 | 使用既有 wire/compiler 能力；durable tool history 統一保存 refs，不能直接保存 SDK raw-media result 或重複注入 |
 | CLI／Chat | `cmd/hufu/{root,runcmd,prompt_input,chat_turn}.go` | 增量接入 typed turn；文字 API 保留相容 wrapper |
 | Worker | `internal/team/{subagent_provider,subagent_hufu,coordinator_task_run}.go` | AttemptRequest 只帶 canonical media assertion；不接受它另行選擇權限 |
 | CAS | `internal/team/evidence_store.go`；現有 data/meta 使用 `0755/0644` | 同一 FileArtifactStore 新增私有 media namespace；既有 artifact layout 不改 |
@@ -285,11 +295,25 @@ admission 綁定本次 chosen target、profile、ordered media digest、policy �
 
 - 保留 text/image blocks 的順序、原始 `IsError`、structuredContent 和 tool-call identity。base64 在解碼前檢查可計算的 decoded-size 上限，解碼後套用第 4 節 validator／quota，再以 runtime publisher 建立 refs、producer descriptor hash 和 attempt binding。
 - 工具 image MIME 與實際 bytes 不符時拒絕，不信任工具自稱的 owner、digest、path 或 artifact ID。未支援的其他 binary content 明確拒絕，不當成空成功。
-- 優先使用 pinned Fantasy 已存在的 media result conversion；單張圖片可以由短生命週期 `NewImageResponse` 路徑送出。混合／多圖片由同一 compiler 將 typed result 轉合法 tool response＋後續 native image bundle；若 SDK 已轉換，不再重複注入。
+- 單張、混合與多圖片統一使用 reference-only tool metadata。MCP publisher 先完成 bounded validation、canonical publication，再將有序 text/ref blocks 掛在對應 tool result；不能將 `NewImageResponse` 的 raw bytes 直接交給 SDK 作為 durable history。provider projection 在 admission 前才組裝合法 tool response＋後續 user media bundle，再由既有 compiler hydrate；不得同時使用 SDK raw-media conversion 而重複送圖。既有 SDK conversion 測試只證明 wire 能力，不代表來源或保存契約已滿足。
 - 所有同批 tool results 完成合法 call/result pairing 後才附加 synthetic user media message；保留各結果的 block 次序與 tool provenance。synthetic message 明示 tool data，不能提升為新的人類指令。下一個 provider request 執行同樣的 capability／egress／quota admission。
 - `IsError=true` 保持 error；圖片不能使工具或 task 成功。若無安全方式保留錯誤圖片，拒絕該次後續含圖回合並保留安全錯誤 metadata，不重執行已完成工具。
 - `MCP ActionResult.Outputs` 在有 structuredContent 時保持該完整 object，不額外塞媒體欄位；無 structuredContent 且有文字時沿用 `outputs.result`（依序以換行連接 text blocks），image-only 時為空 object。`Artifacts` 保存 runtime-published 圖片 refs；另在 canonical receipt/result 的版本化 runtime-owned media projection 保存有序 `{type: text, text}` 或 `{type: image, artifact_id}` blocks，避免從 Outputs 重建圖片次序。若 team output schema 要求不存在的文字欄位，依一般契約拒絕，不能捏造內容滿足 schema。舊 text-only object shape 不變。
 - runtime-owned 結果須走 canonical receipt/hash、local/external submission 與 replay 路徑；原始工具輸出只成為有來源 evidence，不自動升級成 verified semantic fact。
+
+#### M3 必須一併完成的來源與消費契約
+
+| 邊界 | 固定行為／既有 owner |
+|---|---|
+| 工具執行 | direct 與 dynamic gateway 共用 typed result／publisher；descriptor assertion、中央 authorizer、reserved-tool 邊界仍在 RPC 前執行。gateway offload／截斷保留 reference-only metadata，不得再次呼叫工具來取回圖片 |
+| 來源發布 | 沿 `media_events.go`、既有 ArtifactStore 和 branch quota 發布 `mcp_tool` snapshot。`tool_media_published` 綁 run／branch／invocation、task／occurrence revision／attempt／dispatch、適用時的 model-execution ID、tool-call ID／descriptor hash、ordered parts／refs、snapshot／policy hash 與 IsError；runtime action 另綁 ActionInvocationID。任何工具自報的相同欄位都不是權限 |
+| 原子性與失敗 | 沿既有 journal 的條件式原子 batch 將 snapshot／quota 與 producer binding 一起提交，更新 projection 後才讓 refs 可用。失敗可留下不可授權的 CAS orphan，不能留下半套可讀 grant。工具已完成但 publication 失敗時記錄 attempt failure 並停止後續模型回合；SDK 的 StopTurn 之外，runtime 必須保存該失敗，不能靠自動 worker retry 或 result repair 重跑工具 |
+| 後續請求 | 將原輸入與已授權工具來源組成獨立、有序的 consumer bundle；原 task 的 MediaInputDigest 不改寫。bundle 綁目前 live lease、producer identities、完整 ordered refs 與 target／policy，再與 provider admission 原子提交；最終 HTTP boundary 及獨立 audit 均重驗。純文字起始、稍後才取得工具圖片的 task 也走此路徑，不能要求先有使用者圖片 binding 或借用其他 task 的 grant |
+| SDK／計數 | 四種 provider API、token counter 和 preflight 使用相同的私有 message projection。完整 tool-call/result batch 通過 `validateToolPairs` 才能追加標示為不可信工具資料的 user media message；每個 occurrence 只送一次。不能只在 compiler 補訊息而繞過完整 request 的 token／policy admission |
+| History／repair | codec、`historyReferences`、`validateMediaHistoryLineage`、compaction 及 audit 都驗證 producer binding，不能把工具輸出當成無 task owner 的人類輸入。`projectHistoryToolPairs` 改展示用 call ID 時同步更新 carrier 的配對 ID，原 producer ID／receipt 不變；文字 repair view 移除圖片 carrier，保留文字、錯誤與 pairing |
+| Native action／結果 | 先沿 `canonicalizeRuntimeActionOutputs` 驗證完整 Outputs，再以 runtime publisher 綁定圖片；ordered media projection 與 Outputs 分開。擴充既有 runtime-owned result binding 的來源解析，從 canonical media projection 取值，不將 refs 塞入 Outputs 來冒充現有 output binding。local/external submission 都拒絕模型覆寫，replay 驗證原 receipt／binding，不重建成較新的來源 |
+
+上述為 PR-05 的交付契約，並非既有功能聲明。typed result、carrier 或 publisher hook 的單元測試通過，只能記為開發進度；在 producer／consumer 授權、後續 wire、失敗不重播及結果 replay 全部通過前，不開啟 MCP 原生圖片入口，也不標示 M3 完成。
 
 ### 8.3 Codex App Server
 
@@ -375,7 +399,7 @@ PR-01 分兩個可獨立驗證的子階段提交，保留上述整體 exit：
 ### PR-05 — M3 MCP 原生 mixed-content 與 runtime-owned 結果
 
 - 新增 typed MCP result，保留 authorizer／descriptor、ordered blocks、structuredContent 和 IsError；接共用 publisher／quota／下一回合 compiler。
-- 優先沿用 SDK media conversion，補 mixed/multiple 邊界而不重複送圖；輸出圖片走 canonical runtime-owned binding、receipt 與 replay。
+- 單張／混合／多圖片共用 reference-only carrier 與既有 compiler；完成第 8.2 節 producer／consumer 授權、計數及 failure latch，輸出圖片走 canonical runtime-owned binding、receipt 與 replay。
 - **Exit:** fake MCP → 後續 fake VLM wire E2E；多 tool calls 的 pairing／順序、工具錯誤、invalid base64/MIME、超限、重送與 rejected result repair 通過；text-only wrapper 不回歸。
 
 ### PR-06 — M3 圖片成果查詢／安全匯出與介面文件

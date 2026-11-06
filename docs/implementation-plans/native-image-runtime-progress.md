@@ -52,7 +52,7 @@
 | PR-04D2A model fanout 授權／結果保存 | 完成；`40bed236` | 雙 lease、獨立 SDK／audit／cost、accepted leaf results、拒絕／取消、文字 judge 與全部 required gates 通過 |
 | PR-04D2B fanout retry／repair／resume | 完成；同本次階段 commit | 獨立 SDK retry／repair、新程序 CAS 恢復、blocked collector 拒絕、parent proxy ownership／文字 skeptic，以及最終 lint、contracts、vet、race、完整 suite 全部通過 |
 | PR-04 M2 coordinator/chat/DAG/routing | 完成；同本次階段 commit | A／B／C／D1／D2A／D2B；支援明示的獨立 DAG、route 與 frozen LLM fanout；多候選 route＋fanout、blocked collector 追加 grant 維持明確拒絕 |
-| PR-05 M3 MCP/result binding | 尚未開始 | — |
+| PR-05 M3 MCP/result binding | 開發中，未驗收 | typed result／reference-only carrier／bounded Base64 staging 的未提交改動；尚未完成來源與消費授權、runtime-owned 結果或後續 wire E2E |
 | PR-06 M3 inspect/export/docs | 尚未開始 | — |
 | PR-07 M4 Codex localImage | 尚未開始 | — |
 
@@ -620,3 +620,11 @@ GOTMPDIR 約 14.4 MiB、private task scratch 約 34 MiB；沒有保留 executabl
 資源紀錄：本階段按來源清除過期 task archives／已被新版測試取代的 test logs，回收 3,029,663,744 bytes；本工作累計回收 34,694,344,704 bytes。另清理已退出之診斷／中止測試的確切暫存根與 private-task engine 目錄，回收 154,062,848 bytes。開啟中、mapped／linked、來源不明及其他專案使用中的輸出都保留，未清除共享 caches 或變更 GOCACHE／GOTMPDIR。
 
 最終可辨識本工作產物 1,762,033,664 bytes（約 1.64 GiB），低於 2 GiB；共享 GOCACHE 21,445,267,456 bytes，GOTMPDIR 約 15.2 MiB，private task scratch 約 18.5 MiB。續作保留當前 normal／race exports、必要 hashes／清理來源 manifests、gate logs 與 recovery checkpoint；沒有保留 standalone executable。M3／M4 尚未開始，不把此階段完成視為整個圖片 I/O 計畫完成。
+
+## PR-05：開發中，尚未達成階段驗收
+
+2026-11-06 核對工作區已有未提交的 typed MCP result、trusted publisher hook、reference-only tool carrier、四種 provider API 的 message projection，以及 bounded Base64 staging。現存定向測試紀錄包含 agent／media／MCP 套件通過；最新 publisher 定向紀錄為 MCP 0.023s。這些是局部開發證據，不是 M3 的後續 wire E2E、完整 required gates 或已交付聲明。
+
+接續工作以[規格第 8.2 節](native-image-runtime.md#82-mcp-mixed-content-與-output-artifacts)為準：direct／gateway 共用 publication、canonical producer／consumer 授權、token/preflight 與完整 pairing、history／repair／replay、runtime-owned result binding，以及 fake MCP → fake provider 的完整回歸。PR-06／PR-07 未開始。現有未提交程式改動不能沿用 M2 的綠燈當作驗收結果。
+
+本次文件修訂移除 raw SDK image response 與 reference-only 保存契約之間的矛盾，補齊上述交付邊界及預期效益；未移動文件。使用者指定的 Ollama `deepseek-v4.1-flash:cloud` 僅記為另行安排的真實驗收背景，未發出模型請求或將帳戶／外送設定列入 coding agent 待辦。
