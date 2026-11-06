@@ -85,9 +85,14 @@ func TestNativeImageBudgetDenialPreventsSDKTransport(t *testing.T) {
 // The fake transport reports no usage. Its reservations must include every
 // repeated image, while settlements retain an estimate rather than inventing
 // measured tokens. Every actual SDK call owns exactly one accounting pair.
-func assertNativeMediaCost(t *testing.T, events []RunEvent, calls int) {
+func assertNativeMediaCost(t *testing.T, events []RunEvent, calls int, auxiliaryPurposes ...cost.Purpose) {
 	t.Helper()
+	auxiliary := make(map[cost.Purpose]int)
+	for _, purpose := range auxiliaryPurposes {
+		auxiliary[purpose]++
+	}
 	mediaInputs := make(map[string]MediaProviderAdmittedPayload)
+	mediaTasks := make(map[string]bool)
 	for _, event := range events {
 		if event.Type == string(EventMediaProviderAdmitted) {
 			payload, err := decodeMediaProviderEvent(event)
@@ -95,6 +100,7 @@ func assertNativeMediaCost(t *testing.T, events []RunEvent, calls int) {
 				t.Fatal(err)
 			}
 			mediaInputs[payload.ProviderInvocationID] = payload
+			mediaTasks[event.TaskID] = true
 		}
 	}
 	accounting, err := costEventsFromRunEvents(events)
@@ -114,7 +120,10 @@ func assertNativeMediaCost(t *testing.T, events []RunEvent, calls int) {
 					t.Fatal("image cost lost its ordered occurrences, full request or attempt identity")
 				}
 			} else if reservation.Purpose != cost.PurposeCoordinator || reservation.TaskID != CoordTodoID {
-				t.Fatal("text presentation did not own a coordinator cost reservation")
+				if auxiliary[reservation.Purpose] < 1 || !mediaTasks[reservation.TaskID] {
+					t.Fatalf("text role did not own its expected cost reservation: purpose=%s task=%s", reservation.Purpose, reservation.TaskID)
+				}
+				auxiliary[reservation.Purpose]--
 			}
 			reservations[id] = reservation
 		}
@@ -128,5 +137,10 @@ func assertNativeMediaCost(t *testing.T, events []RunEvent, calls int) {
 	}
 	if len(reservations) != calls || len(settlements) != calls {
 		t.Fatalf("provider accounting pairs=%d/%d, calls=%d", len(reservations), len(settlements), calls)
+	}
+	for _, remaining := range auxiliary {
+		if remaining != 0 {
+			t.Fatal("expected auxiliary cost reservation missing")
+		}
 	}
 }

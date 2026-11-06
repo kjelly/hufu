@@ -23,6 +23,7 @@ type nativeProviderMedia struct {
 	Limits      media.Limits
 	Locations   []historyReferenceLocation
 	ImageTokens int64
+	ModelFanout MediaProviderFanoutGrant
 }
 
 func providerMediaMessages(request agent.ProviderRequest) ([]fantasy.Message, error) {
@@ -50,9 +51,6 @@ func (c *Coordinator) resolveNativeProviderMedia(ctx context.Context, request ag
 	if err != nil {
 		return admission, err
 	}
-	if ctx.Value(leafExecutionKey{}) != nil {
-		return admission, media.Reject(media.Unsupported, "native image invocation cannot execute a model fanout leaf")
-	}
 	if err := validateNativeMediaInvocation(item, c.executionPolicy.snapshot); err != nil {
 		return admission, err
 	}
@@ -63,7 +61,7 @@ func (c *Coordinator) resolveNativeProviderMedia(ctx context.Context, request ag
 	if err := validateNativeMediaSourceScope(item.MediaBinding, view.events); err != nil {
 		return admission, err
 	}
-	expectedTarget, err := nativeMediaAttemptTarget(item, identity.RunID, identity.Attempt, view.events)
+	expectedTarget, fanout, err := c.nativeMediaProviderTarget(ctx, item, identity, view.events)
 	if err != nil {
 		return admission, err
 	}
@@ -83,7 +81,22 @@ func (c *Coordinator) resolveNativeProviderMedia(ctx context.Context, request ag
 		return admission, err
 	}
 	return nativeProviderMedia{Identity: identity, Binding: item.MediaBinding.Clone(), Target: target, Grant: grant, Limits: limits, Locations: locations,
-		ImageTokens: int64(len(locations)) * grant.ImageTokenUpperBound}, nil
+		ImageTokens: int64(len(locations)) * grant.ImageTokenUpperBound, ModelFanout: fanout}, nil
+}
+
+func (c *Coordinator) nativeMediaProviderTarget(ctx context.Context, item *TodoItem, identity submitResultRuntimeIdentity, events []RunEvent) (execution.ExecutionTarget, MediaProviderFanoutGrant, error) {
+	if ctx.Value(leafExecutionKey{}) != nil || c.isModelFanoutLeaf(item.ID) {
+		if leaf, _ := ctx.Value(leafExecutionKey{}).(bool); !leaf {
+			return execution.ExecutionTarget{}, MediaProviderFanoutGrant{}, media.Reject(media.AccessDenied, "image provider has no runtime leaf context")
+		}
+		grant, target, err := c.nativeMediaProviderFanoutGrant(ctx, item)
+		return target, grant, err
+	}
+	if nativeMediaHasModelFanout(item) {
+		return execution.ExecutionTarget{}, MediaProviderFanoutGrant{}, media.Reject(media.AccessDenied, "image model fanout must dispatch an admitted leaf")
+	}
+	target, err := nativeMediaAttemptTarget(item, identity.RunID, identity.Attempt, events)
+	return target, MediaProviderFanoutGrant{}, err
 }
 
 func (c *Coordinator) nativeProviderOccurrence(ctx context.Context) (submitResultRuntimeIdentity, *TodoItem, error) {

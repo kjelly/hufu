@@ -247,7 +247,11 @@ type ExecutionReceipt struct {
 	// SubmittedResult retains a structurally valid but non-terminal worker
 	// handoff for this exact attempt. It is evidence for a bounded replay and
 	// must never satisfy the next attempt's requires-result contract.
-	SubmittedResult  *TaskResult       `json:"submitted_result,omitempty"`
+	SubmittedResult *TaskResult `json:"submitted_result,omitempty"`
+	// AcceptedResult preserves the complete terminal result of an isolated
+	// fanout leaf after its verification and completion gates passed. It is
+	// runtime-owned evidence, distinct from a non-terminal SubmittedResult.
+	AcceptedResult   *TaskResult       `json:"accepted_result,omitempty"`
 	RepairProvenance *RepairProvenance `json:"repair_provenance,omitempty"`
 	// ResultCollection preserves work and collection progress independently of
 	// terminal outcome. Its absence retains the historical tool protocol.

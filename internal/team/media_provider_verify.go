@@ -20,18 +20,15 @@ func verifyMediaProviderAdmission(event RunEvent, payload MediaProviderAdmittedP
 		return err
 	}
 	item := todoItemByID(tasks, event.TaskID)
-	if item == nil || item.Status != TaskInProgress || item.MediaBinding == nil || item.OccurrenceRevision != payload.OccurrenceRevision || !strings.EqualFold(item.Agent, event.Actor) {
+	if item == nil || item.Status != TaskInProgress || item.MediaBinding == nil || !strings.EqualFold(item.Agent, event.Actor) {
 		return media.Reject(media.AccessDenied, "image provider admission has no current canonical occurrence")
-	}
-	if item.DispatchID != "" && item.DispatchID != payload.DispatchID {
-		return media.Reject(media.AccessDenied, "image provider admission uses a different dispatch lease")
 	}
 	binding := item.MediaBinding
 	if binding.Hash != payload.BindingHash || binding.InputDigest != payload.MediaInputDigest || binding.PolicyHash != payload.PolicyHash ||
 		len(binding.Refs) != payload.ImageCount {
 		return media.Reject(media.BindingConflict, "image provider admission differs from canonical task input")
 	}
-	expectedTarget, err := nativeMediaAttemptTarget(item, event.RunID, payload.Attempt, prior)
+	expectedTarget, err := verifyNativeMediaProviderOwner(event, payload, item, prior)
 	if err != nil {
 		return err
 	}
@@ -129,9 +126,14 @@ func verifyMediaProviderInvocationUniqueness(event RunEvent, payload MediaProvid
 		if admitted.ProviderInvocationID == payload.ProviderInvocationID && (previous.RunID != event.RunID || previous.TaskID != event.TaskID || admitted != payload) {
 			return media.Reject(media.BindingConflict, "image provider invocation identity was reused")
 		}
-		if previous.TaskID == event.TaskID && admitted.OccurrenceRevision == payload.OccurrenceRevision &&
+		if previous.TaskID == event.TaskID && admitted.ModelFanout.ModelExecutionID == payload.ModelFanout.ModelExecutionID && admitted.OccurrenceRevision == payload.OccurrenceRevision &&
 			(admitted.DispatchID != payload.DispatchID || admitted.Attempt != payload.Attempt) {
 			return media.Reject(media.AccessDenied, "image provider admission changed an active occurrence lease")
+		}
+		if previous.RunID == event.RunID && previous.TaskID == event.TaskID && admitted.ModelFanout.present() && payload.ModelFanout.present() &&
+			admitted.ModelFanout.ParentRevision == payload.ModelFanout.ParentRevision &&
+			(admitted.ModelFanout.ParentAttempt != payload.ModelFanout.ParentAttempt || admitted.ModelFanout.ParentDispatchID != payload.ModelFanout.ParentDispatchID) {
+			return media.Reject(media.AccessDenied, "image leaves disagree on their canonical parent lease")
 		}
 	}
 	return nil

@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `2f98de86`（PR-04D1 證據與程式碼同本次階段 commit；M2～M4 未完成）
+> Verified-Commit: `130eb3d7`（PR-04D2A 證據與程式碼同本次階段 commit；M2～M4 未完成）
 > Supersedes: —
 > Superseded-By: —
 
@@ -48,9 +48,10 @@
 | PR-04A metadata-only provider 邊界 | 完成；`75dd2adc` | 固定最終 source 的 focused／lint／contracts／vet／race／full 全部通過；公開 M2 入口尚未開啟 |
 | PR-04B coordinator 有序委派／續談／CLI | 完成；`5bee5767` | 離線 SDK／CLI／多輪／cost／audit，以及 lint、contracts、vet、race、完整 suite 全部通過 |
 | PR-04C Chat pending／canonical admission | 完成；`2f98de86` | staging、plain／Chat TUI PTY、crash、reset／team，以及 lint、contracts、vet、race、完整 suite 全部通過 |
-| PR-04D1 DAG／route fallback | 完成；同本次階段 commit | 候選授權、CAS wire、DAG 不重用／取消、audit／cost，以及 lint、contracts、vet、race、完整 suite 全部通過 |
-| PR-04D2 model fanout | 尚未開始 | leaf 授權與獨立 audit 證據尚未交付，含圖組合仍拒絕 |
-| PR-04 M2 coordinator/chat/DAG/routing | 進行中 | A／B／C／D1 完成；fanout 尚待後續階段 |
+| PR-04D1 DAG／route fallback | 完成；`130eb3d7` | 候選授權、CAS wire、DAG 不重用／取消、audit／cost，以及 lint、contracts、vet、race、完整 suite 全部通過 |
+| PR-04D2A model fanout 授權／結果保存 | 完成；同本次階段 commit | 雙 lease、獨立 SDK／audit／cost、accepted leaf results、拒絕／取消、文字 judge 與全部 required gates 通過 |
+| PR-04D2B fanout retry／repair／resume | 尚未開始 | 補實際 native SDK 的 leaf retry、result-only repair 與新程序恢復組合；完成前不宣告整個 M2 交付 |
+| PR-04 M2 coordinator/chat/DAG/routing | 進行中 | A／B／C／D1／D2A 完成；D2B 的 fanout 生命週期組合尚待完成 |
 | PR-05 M3 MCP/result binding | 尚未開始 | — |
 | PR-06 M3 inspect/export/docs | 尚未開始 | — |
 | PR-07 M4 Codex localImage | 尚未開始 | — |
@@ -558,3 +559,34 @@ GOTMPDIR 約 14.4 MiB、private task scratch 約 34 MiB；沒有保留 executabl
 本階段清除 66 個過期 archives 與一份已被新測試特徵證明取代的 C team test-input log，回收 1,398,792,192 bytes，累計回收 29,062,619,136 bytes。fixture 迭代與保留已驗證基準時，量測 task 產物曾達 2,225,729,536 bytes（約 2.07 GiB）；在下一 heavyweight command 前即清理過期版本。最終可辨識 task 產物 1,787,002,880 bytes（約 1.66 GiB），低於 2 GiB，沒有保留預算例外。
 
 共享 GOCACHE 21,524,844,544 bytes，GOTMPDIR 約 14.6 MiB、private task scratch 約 37 MiB；沿用既有 caches，沒有保留 standalone executable。保留目前 normal／race exports、source hashes、清理來源與驗證 checkpoint 供下一階段續作；未知來源、共享依賴與使用中的檔案不刪除。沒有真實模型呼叫、圖片外送或文件搬移。
+
+## PR-04D2A：model fanout 授權與結果保存
+
+- 每個 leaf 以 frozen topology slot、stable model-execution ID、原有 ordered binding 和 parent／private leaf 雙 lease 取得自己的 provider admission；逐請求能力、egress、token／cost 與最後 HTTP 授權均保留。獨立 audit 驗證 parent／slot 身分與 leaf 間的 parent lease 一致性。
+- 原始成功 leaf receipt 保存完整 runtime-owned `accepted_result`，不以非終態 `submitted_result` 或合併文字替代。Coordinator finish 與單 task 的 fanout 完成都須驗證所有已啟動 leaf 的成功 receipt、模型／圖片／attempt 身分與 accepted result。
+- 失敗回歸重現 private leaf checkpoint 發布成 parent lifecycle、阻擋同伴合法授權的問題；改由 parent 單獨發布 task/session checkpoint，result-collection 保留專用 durable events。另補齊單 task fanout 的 parent judge provider 邊界初始化，未授權的 auxiliary role 仍只消費文字結果。
+
+效益：同一圖片工作可由多個獲授權模型獨立分析並保留完整來源與限制；某個 leaf 拒絕／失敗不會抹去另一個 leaf 的成功證據，也不會被誤判為整體完成。
+
+固定 25 個 team Go 檔與四個設定檔後的定向回歸通過（15.998s），包含原圖刪除後 CAS wire／順序／重複、Coordinator 完成、雙 lease 撤銷、leaf 拒絕、雙 leaf 取消、accepted result／payload hash 重播與文字 judge 的獨立呼叫／成本。typed choice resolver 依既有規則記為 sidecar 成本，綁定被評選的 parent task；judge 失敗後保留兩個原始 leaf 結果。本階段 D2A 已完成；D2B 的 native fanout retry／result-only repair／新程序 resume 組合仍待獨立驗證，不宣告整個 M2 完成。
+
+| PR-04D2A gate | 結果 |
+|---|---|
+| `mise run lint` | PASS，exit 0；`0 issues.` |
+| `mise run test-contracts` | PASS，exit 0；team 130.966s、cmd 57.093s、reviewgate 13.319s、reviewprep 23.109s、web 0.428s；inspect／operator／auditverify 通過 |
+| `mise run vet` | PASS，exit 0；無診斷 |
+| fanout／native lifecycle 定向 race | PASS，exit 0；team 162.746s，無競態診斷 |
+| native／Coordinator／Chat CLI 定向 race | PASS，exit 0；cmd 34.561s，含 ancestor Git 變化、PTY 與 crash recovery |
+| `mise run test` | 最終 PASS，exit 0；team 927.771s、cmd 187.762s、tools 48.490s、TUI cache 命中、web 0.303s |
+
+相容性：新增可選 `model_fanout` admission grant 與 receipt `accepted_result`，零值不寫出；不改 SQL schema，不重寫歷史 receipts／hashes。既有單 worker 路徑不需 migration；歷史上未獲支援的圖片 fanout 不能憑缺少的新證據宣稱完成。真實模型驗收仍另行安排。
+
+首輪完整 suite 的 team 通過（979.406s），但 CLI legacy fixture 因 project-root policy drift 失敗，該輪整體不算通過。根因是 `t.TempDir()` 位於既有 `GOTMPDIR` 下，空 project fixture 沒有自己的 Git marker；已用重疊 sandbox／host 唯讀程序確認暫時建立的 build-cache 祖先 `.git` 可被外部 subprocess 看見，改變 project discovery。新增受控祖先 marker 變化的回歸，修正前穩定失敗（6.471s、零模型呼叫）；為 fixture 建立自己的 Git 邊界後，native／Coordinator／Chat PTY／crash 定向測試全數通過（20.947s）。execution-world fingerprint 與授權檢查保持有效。
+
+最終固定 26 個 Go 檔與四個設定檔，全部 gates 完成後再次核對 SHA-256 相同。後加入的唯一 Go 檔變更是 CLI 測試 fixture；原先 25 個 team Go 檔與設定檔未變，contracts 與 team race 證據對應相同 source。CLI 修正後重跑 lint／vet、CLI race 與完整 suite。最終 lint 為 `0 issues.`、exit 0；sandbox 曾對原有 golangci cache 的寫入產生警告，未影響分析完成，未變更或另建快取。
+
+支援範圍：frozen LLM topology 的各 slot 獨立授權；與多候選 execution-route 同時使用的組合仍在 provider 前拒絕。D2B 將補 native fanout 的 retry／repair／新程序恢復封包驗收；本節不將它們標為完成，也不把 MCP／Codex 圖片入口視為已交付。
+
+資源紀錄：本階段清除 137 個過期 task archives 與一份已被 D2 新測試特徵證明取代的 D1 full-team test log，回收 2,602,061,824 bytes；累計回收 31,664,680,960 bytes。清理保護目前 normal／race exports、open／mapped／linked 檔案、共享依賴與未知來源輸出。量測的 task 產物峰值為 2,126,966,784 bytes，低於 2 GiB，沒有保留預算例外。
+
+最終可辨識 task 產物 1,797,165,056 bytes（約 1.67 GiB），共享 GOCACHE 21,694,033,920 bytes；GOTMPDIR 約 14.8 MiB、同一 private task scratch 約 39.4 MiB。未保留 standalone executable；續作需要的 hashes、清理來源 manifests、失敗／通過 gate logs 與 recovery checkpoint 保留。沒有真實模型呼叫、圖片外送或文件搬移。

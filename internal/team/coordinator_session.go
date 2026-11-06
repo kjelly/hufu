@@ -821,6 +821,12 @@ func (c *Coordinator) syncConversationHistoryStateToSessionData() {
 // through sessionMu: mutate under the write lock, snapshot under the read
 // lock, then persist the snapshot and update the branch state outside the lock.
 func (c *Coordinator) saveCheckpoint() {
+	// A private leaf does not own the parent task or session projection.
+	// Collection progress has its own durable events; ordinary leaf receipts
+	// are merged by the parent dispatcher before its checkpoint is published.
+	if c.modelFanout != nil {
+		return
+	}
 	var hasSessionData bool
 	c.viewSessionData(func(*SessionData) {
 		hasSessionData = true

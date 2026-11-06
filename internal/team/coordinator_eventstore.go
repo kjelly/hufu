@@ -727,7 +727,7 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) error {
 	c.eventOnceMu.Unlock()
 
 	for _, item := range tasks {
-		if item == nil {
+		if item == nil || c.isModelFanoutLeaf(item.ID) {
 			continue
 		}
 		eventType, err := taskTransitionEventType(item)

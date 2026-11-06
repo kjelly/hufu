@@ -2,9 +2,20 @@ package team
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/kjelly/hufu/internal/execution"
 )
+
+// Keep this recipe stable: persisted leaf receipts and collection checkpoints
+// use these IDs across retries and process recovery.
+func modelFanoutExecutionID(runID, taskID, agentName, model, slot string, retries int) string {
+	identity := strings.Join([]string{runID, taskID, agentName, model, slot}, "\x00")
+	if retries > 0 {
+		identity += fmt.Sprintf("\x00occurrence:%d", retries+1)
+	}
+	return "model-execution-" + hashContentKey(identity)
+}
 
 // modelFanoutBinding is installed only by the parent fanout dispatcher. DTOs,
 // model strings and tool arguments cannot create or retarget this binding.

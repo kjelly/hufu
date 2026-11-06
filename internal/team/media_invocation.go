@@ -18,8 +18,16 @@ func (c *Coordinator) validateNativeMediaTaskExecution(ctx context.Context, task
 	if item == nil || item.MediaBinding == nil || c.executionPolicy == nil {
 		return media.Reject(media.DurabilityRequired, "native image task has no canonical frozen occurrence")
 	}
-	if ctx.Value(leafExecutionKey{}) != nil || c.workerAgentOverride != nil || c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
+	if c.workerAgentOverride != nil || c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 		return media.Reject(media.Unsupported, "native image execution requires one canonical worker")
+	}
+	if ctx.Value(leafExecutionKey{}) != nil || c.isModelFanoutLeaf(taskID) {
+		if leaf, _ := ctx.Value(leafExecutionKey{}).(bool); !leaf {
+			return media.Reject(media.AccessDenied, "image fanout requires its runtime leaf context")
+		}
+		if _, _, err := c.nativeMediaFanoutParent(item); err != nil {
+			return err
+		}
 	}
 	if err := validateNativeMediaInvocation(item, c.executionPolicy.snapshot); err != nil {
 		return err
@@ -65,7 +73,7 @@ func validateNativeMediaInvocation(item *TodoItem, policy *ExecutionPolicySnapsh
 		return media.Reject(media.Unsupported, "image input has no supported invocation mode")
 	}
 	if item.Phase != "" || item.Sidecar || item.Action != nil || item.CatalogAction != nil ||
-		item.InvariantVerification != "" || len(item.Execution.Steps) != 0 || item.Escalate || len(item.ModelTopology) > 1 || len(item.ExecutionTopology) > 1 {
+		item.InvariantVerification != "" || len(item.Execution.Steps) != 0 || item.Escalate {
 		return media.Reject(media.Unsupported, "image invocation has unsupported action, workflow or model routing")
 	}
 	if item.MediaBinding.InvocationMode != media.InvocationDelegatedTask &&
@@ -76,6 +84,9 @@ func validateNativeMediaInvocation(item *TodoItem, policy *ExecutionPolicySnapsh
 		return media.Reject(media.DurabilityRequired, "native image invocation has no frozen policy")
 	}
 	if err := validateNativeMediaRoute(item, policy); err != nil {
+		return err
+	}
+	if err := validateNativeMediaModelTopology(item, policy); err != nil {
 		return err
 	}
 	for _, backend := range policy.Backends {

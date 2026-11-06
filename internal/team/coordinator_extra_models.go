@@ -19,6 +19,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/execution"
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/utils"
 )
@@ -139,6 +140,12 @@ func (c *Coordinator) executeTaskWithExtraModels(
 		} else {
 			c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), RetryNone, FailureExecution)
 		}
+		return "", err
+	}
+
+	if item := c.todoItemByID(todoID); item != nil && item.MediaBinding != nil && !c.nativeMediaAcceptedWork(item) {
+		err := media.Reject(media.DurabilityRequired, "image fanout requires accepted terminal results from every launched leaf")
+		c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), RetryNone, FailureProtocol)
 		return "", err
 	}
 
@@ -395,11 +402,11 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	// full topology because all leaves share its lifecycle record.
 	task.ModelTopology = []string{task.Model}
 	task.ExecutionTopology = []execution.ExecutionTarget{leafTarget}
-	isolationIdentity := strings.Join([]string{c.contextRunID(), todoID, agentName, agentDef.Generation.Model, slot}, "\x00")
-	if parentItem := c.todoItemByID(todoID); parentItem != nil && parentItem.Retries > 0 {
-		isolationIdentity += fmt.Sprintf("\x00occurrence:%d", parentItem.Retries+1)
+	parentRetries := 0
+	if parentItem := c.todoItemByID(todoID); parentItem != nil {
+		parentRetries = parentItem.Retries
 	}
-	isolatedCoord.modelExecutionID = "model-execution-" + hashContentKey(isolationIdentity)
+	isolatedCoord.modelExecutionID = modelFanoutExecutionID(c.contextRunID(), todoID, agentName, agentDef.Generation.Model, slot, parentRetries)
 	if resumeCheckpoint != nil {
 		isolatedCoord.modelExecutionID = resumeCheckpoint.ModelExecutionID
 	}
@@ -412,6 +419,10 @@ func (c *Coordinator) executeSingleAgentWithModel(
 		}
 		for i := range leafItem.ExecutionReceipts {
 			receipt := leafItem.ExecutionReceipts[i]
+			if err == nil && leafItem.Status == TaskDone && leafItem.ExecutionReceipt != nil &&
+				receipt.ModelExecutionID == isolatedCoord.modelExecutionID && receipt.Attempt == leafItem.ExecutionReceipt.Attempt {
+				receipt.AcceptedResult = cloneTaskResult(isolatedCoord.GetTaskResult(todoID))
+			}
 			if mergeErr := c.setAttemptReceipt(todoID, &receipt); mergeErr != nil {
 				if err == nil {
 					err = fmt.Errorf("merge %s leaf receipt: %w", slot, mergeErr)

@@ -47,7 +47,9 @@ func newNativeCLIProcessFixtureAtRoot(t *testing.T, binary, endpoint, acceptance
 	t.Helper()
 	home, project, search := filepath.Join(root, "home"), filepath.Join(root, "project"), filepath.Join(root, "teams")
 	teamDir := filepath.Join(search, "native-cli")
-	for _, dir := range []string{filepath.Join(home, ".config", "hufu"), project, teamDir} {
+	// t.TempDir may live below an ambient repository (including temporary
+	// sandbox Git markers). Keep every subprocess bound to this fixture root.
+	for _, dir := range []string{filepath.Join(home, ".config", "hufu"), filepath.Join(project, ".git"), teamDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -153,6 +155,33 @@ func TestNativeImageCLIUsesOrderedImagesWithoutReplanning(t *testing.T) {
 			assertNativeCLIDurableEvidence(t, f.workspace, f.paths)
 		})
 	}
+}
+
+func TestNativeImageCLIPreflightKeepsFixtureProjectAcrossAncestorGitChanges(t *testing.T) {
+	binary := buildTestBinary(t)
+	requests := make(chan nativeCLIRequest, 8)
+	server := nativeCLIProvider(t, requests)
+	root := t.TempDir()
+	ancestorMarker := filepath.Join(root, ".git")
+	if err := os.Mkdir(ancestorMarker, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f := newNativeCLIProcessFixtureAtRoot(t, binary, server.URL, "true", root)
+	assertNativeCLIRejectsUnsupportedScopes(t, f, "legacy", requests)
+	if err := os.Remove(ancestorMarker); err != nil {
+		t.Fatal(err)
+	}
+	stdout, runErr, diagnostic := f.run(t, f.args("legacy", "@worker Compare the images."))
+	var output jsonRunOutput
+	if err := json.Unmarshal(stdout, &output); err != nil || runErr != nil || !output.GoalSatisfied || len(requests) != 2 {
+		t.Fatalf("ancestor Git change altered the fixture project: decode=%v run=%v calls=%d\n%s", err, runErr, len(requests), diagnostic)
+	}
+	worker, formatter := <-requests, <-requests
+	assertNativeCLIImages(t, worker, [][]byte{f.images[0], f.images[1], f.images[0]})
+	if formatter.Model != "text" {
+		t.Fatal("image work did not retain its text presentation")
+	}
+	assertNativeCLIDurableEvidence(t, f.workspace, f.paths)
 }
 
 func assertNativeCLIRejectsUnsupportedScopes(t *testing.T, f nativeCLIProcessFixture, facade string, requests chan nativeCLIRequest) {

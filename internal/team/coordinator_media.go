@@ -87,7 +87,7 @@ func (c *Coordinator) requireCoordinatorImageWork(ctx context.Context) error {
 	}
 	for _, item := range c.TaskTracker().TodoList().Items() {
 		if item.Status != TaskDone || item.MediaBinding == nil || item.ExecutionReceipt == nil ||
-			item.ExecutionReceipt.MediaInputDigest != item.MediaInputDigest || c.GetTaskResult(item.ID) == nil {
+			item.ExecutionReceipt.MediaInputDigest != item.MediaInputDigest || !c.nativeMediaAcceptedWork(item) {
 			continue
 		}
 		for _, selection := range item.MediaBinding.Selections {

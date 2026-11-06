@@ -28,6 +28,9 @@ func prepareMediaOccurrence(t *testing.T, c *Coordinator, ctx context.Context, t
 	id := c.taskTracker.TodoList().ReserveIDs(1)[0]
 	spec := TodoSpec{Agent: canonical.Agent, Desc: canonical.Goal, Goal: canonical.Goal, Model: canonical.Model, ExecutionTarget: canonical.ResolvedExecutionTarget,
 		MediaBinding: canonical.MediaBinding.Clone(), MediaInputDigest: canonical.MediaInputDigest, Execution: cloneExecutionContract(canonical.Execution)}
+	if len(canonical.ExecutionTopology) > 1 {
+		spec.ModelTopology, spec.ExecutionTopology = canonical.ModelTopology, canonical.ExecutionTopology
+	}
 	if err := c.finalizeMediaTaskSpec(ctx, &spec, id); err != nil {
 		t.Fatal(err)
 	}

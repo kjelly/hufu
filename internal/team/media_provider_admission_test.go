@@ -14,11 +14,19 @@ import (
 	"github.com/kjelly/hufu/internal/providerintrospection"
 )
 
-func nativeMediaProviderFixture(t *testing.T) (*Coordinator, context.Context, *TodoItem, agent.ProviderRequest) {
+func nativeMediaProviderFixture(t *testing.T, configure ...func(*TeamSession)) (*Coordinator, context.Context, *TodoItem, agent.ProviderRequest) {
 	t.Helper()
-	c := newMediaPolicyCoordinator(t)
+	c := newMediaPolicyCoordinatorWithTransport(t, "http://fixture.invalid/v1", nil, providerintrospection.CapabilityUnknown, func(session *TeamSession) {
+		for _, apply := range configure {
+			apply(session)
+		}
+	})
 	ctx := openMediaInvocation(t, c)
-	item := createMediaOccurrence(t, c, ctx, nativeInvocationTask(t, c, ctx, media.InvocationSingleTask))
+	task := nativeInvocationTask(t, c, ctx, media.InvocationSingleTask)
+	if def := c.session.Agents["worker"]; len(def.ExtraModels) > 0 {
+		task.ModelTopology = initialTaskModelTopology(def, def.Generation.Model)
+	}
+	item := createMediaOccurrence(t, c, ctx, task)
 	if err := c.CommitTaskTransition(ctx, item.ID, TaskPending, TaskInProgress, "running", "", nil); err != nil {
 		t.Fatal(err)
 	}

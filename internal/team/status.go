@@ -1884,6 +1884,9 @@ func cloneExecutionReceipt(receipt *ExecutionReceipt) ExecutionReceipt {
 	if receipt.SubmittedResult != nil {
 		copyR.SubmittedResult = cloneTaskResult(receipt.SubmittedResult)
 	}
+	if receipt.AcceptedResult != nil {
+		copyR.AcceptedResult = cloneTaskResult(receipt.AcceptedResult)
+	}
 	if receipt.RepairProvenance != nil {
 		copyRP := *receipt.RepairProvenance
 		copyRP.OperatorGrants = slices.Clone(receipt.RepairProvenance.OperatorGrants)

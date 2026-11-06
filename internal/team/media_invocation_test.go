@@ -238,9 +238,9 @@ func TestNativeMediaInvocationChecksCanonicalExecutionShape(t *testing.T) {
 		{"ordering", func(item *TodoItem) { item.OrderAfter = []string{"other"} }},
 		{"failure edge", func(item *TodoItem) { item.OnFailure = "other" }},
 		{"escalation", func(item *TodoItem) { item.Escalate = true }},
-		{"model fanout", func(item *TodoItem) { item.ModelTopology = []string{"fixture/vision", "fixture/other"} }},
-		{"target fanout", func(item *TodoItem) {
-			item.ExecutionTopology = []execution.ExecutionTarget{item.ExecutionTarget, item.ExecutionTarget}
+		{"untyped model fanout", func(item *TodoItem) { item.ModelTopology = []string{"fixture/vision", "fixture/other"} }},
+		{"unfrozen target fanout", func(item *TodoItem) {
+			item.ExecutionTopology = []execution.ExecutionTarget{item.ExecutionTarget, {Backend: "unfrozen", Model: "other"}}
 		}},
 		{"fallback", func(item *TodoItem) {
 			item.ExecutionRoute = &ExecutionRouteBinding{Candidates: []execution.ExecutionTarget{item.ExecutionTarget, item.ExecutionTarget}}

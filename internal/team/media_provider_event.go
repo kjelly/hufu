@@ -14,6 +14,7 @@ import (
 // not execution completion or reported provider usage. Canonical bindings
 // already own the ordered references, so no image bytes or paths are copied.
 type MediaProviderAdmittedPayload struct {
+	ModelFanout               MediaProviderFanoutGrant  `json:"model_fanout,omitzero"`
 	Version                   int                       `json:"version"`
 	ProviderInvocationID      string                    `json:"provider_invocation_id"`
 	OccurrenceRevision        int                       `json:"occurrence_revision"`
@@ -53,7 +54,8 @@ func (c *Coordinator) mediaProviderAdmissionPayload(ctx context.Context, request
 		Target: admission.Target, ProviderKey: admission.Grant.ProviderKey, ProviderConfigurationHash: admission.Grant.IdentityHash,
 		ImageCount: len(admission.Locations), ImageTokenUpperBound: admission.Grant.ImageTokenUpperBound, ImageTokens: admission.ImageTokens,
 		TextTokens: int64(tokens) - admission.ImageTokens, RequestTokens: int64(tokens), ContextWindow: int64(request.AdmissionContext.ContextWindow),
-		OutputReservation: int64(providerRequestOutputReservation(request)), SafetyMargin: int64(request.AdmissionContext.SafetyMarginTokens), EstimateSource: mediaOperatorEstimate}
+		OutputReservation: int64(providerRequestOutputReservation(request)), SafetyMargin: int64(request.AdmissionContext.SafetyMarginTokens), EstimateSource: mediaOperatorEstimate,
+		ModelFanout: admission.ModelFanout}
 	return admission, payload, validateMediaProviderEstimate(payload)
 }
 
@@ -72,6 +74,11 @@ func decodeMediaProviderEvent(event RunEvent) (MediaProviderAdmittedPayload, err
 	}
 	if err := payload.Target.Validate(); err != nil {
 		return payload, media.Reject(media.EgressDenied, "image provider admission target is invalid")
+	}
+	if payload.ModelFanout.present() {
+		if err := payload.ModelFanout.validate(); err != nil {
+			return payload, err
+		}
 	}
 	if err := validateMediaProviderEstimate(payload); err != nil {
 		return payload, err
