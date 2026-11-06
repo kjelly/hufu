@@ -1,0 +1,22 @@
+{
+  "observed_at_utc": "2026-11-06T14:22:43.708439+00:00",
+  "model": "deepseek-v4.1-flash:cloud",
+  "capabilities": [
+    "completion",
+    "thinking",
+    "tools",
+    "vision"
+  ],
+  "model_info": {
+    "deepseek_v41.context_length": 1048576,
+    "general.architecture": "deepseek_v41"
+  },
+  "details": {
+    "parent_model": "deepseek-v4.1-flash",
+    "format": "",
+    "family": "deepseek_v41",
+    "families": null,
+    "parameter_size": "763205315794",
+    "quantization_level": "FP8"
+  }
+}

@@ -1,0 +1,129 @@
+{
+  "invocation_id": "inv-20261106T143040.209131196Z-781063493356",
+  "run_id": "run-20261106T143040.363573942Z-ec502abd786d",
+  "run_ids": [
+    {
+      "team": "live-vision",
+      "run_id": "run-20261106T143040.363573942Z-ec502abd786d"
+    }
+  ],
+  "outcome": "partial",
+  "goal_satisfied": false,
+  "goal_mode": "exploratory",
+  "result": "",
+  "reason": "direct agent run did not complete successfully",
+  "stop_reason": "unresolved_tasks",
+  "recovery_disposition": "none",
+  "exit_code": 7,
+  "acceptance": {
+    "state": "not_configured",
+    "passed": false
+  },
+  "acceptance_advisory": true,
+  "unresolved_tasks": [
+    {
+      "id": "1",
+      "agent": "visual",
+      "desc": "Inspect all three supplied images in received order, including the repeated image. For each, read the four-digit code, count red squares and blue circles, and identify the triangle color. Submit observations using the required structured payload. Do not use external files or tools to obtain answers.",
+      "status": "error",
+      "error": "failure task_id=1 phase=execution class=execution disposition=none\nsummary: current=task agent=visual todo_id=1 attempt=1 | source=error | permission_blocked=false | safety_denied=false | error=token budget admission refused (106936 requested, 0 used, 0 reserved, limit 24000)\nnext_action: review the terminal failure; no automatic retry is authorized\ncommand: \nwork_dir: /tmp/codex-task.H5DN4t/project\nshell: sh\nexit_code: null\nstdout: \nstderr: \nfingerprint: ffp_e612adac15f812ea8cffa18cceb696a876b711df5d5884a01aee76c715794a29\nhint: The previous attempt failed with: current=task agent=visual todo_id=1 attempt=1 | source=error | permission_blocked=false | safety_denied=false | error=token budget admission refused (106936 requested, 0 used, 0 reserved, limit 24000). Change your approach rather than repeating the same actions.",
+      "failure_class": "execution",
+      "retry_disposition": "none",
+      "next_action": "review the terminal failure; no automatic retry is authorized"
+    }
+  ],
+  "stats": {
+    "tasks_total": 1,
+    "tasks_done": 0,
+    "tasks_unresolved": 1,
+    "attempts_total": 1,
+    "attempts_failed": 1
+  },
+  "metrics": {
+    "compactions": 0,
+    "context_window_telemetry": {
+      "admission_events": 1,
+      "admitted": 1,
+      "last_decision": "noop",
+      "last_model": "deepseek-v4.1-flash:cloud",
+      "last_requested_tokens": 102840,
+      "last_available_tokens": 256048,
+      "policy_digest": "45bc2500f47875a5c7a51d1548560066dc1be42d45f37c4cd7baf77096d3a54a"
+    }
+  },
+  "teams": [
+    {
+      "name": "live-vision",
+      "run_ids": [
+        "run-20261106T143040.363573942Z-ec502abd786d"
+      ],
+      "tokens": 0,
+      "tasks": [
+        {
+          "id": "1",
+          "agent": "visual",
+          "desc": "Inspect all three supplied images in received order, including the repeated image. For each, read the four-digit code, count red squares and blue circles, and identify the triangle color. Submit observations using the required structured payload. Do not use external files or tools to obtain answers.",
+          "status": "error",
+          "resource_scope": {
+            "version": 1,
+            "claims": [
+              {
+                "resource": "workspace:path:.",
+                "mode": "read"
+              }
+            ],
+            "source": "runtime_fallback",
+            "digest": "828334589a57439fe81da1f329aba0af9f0351f227f77b1cd61a78e4ae6533ea"
+          },
+          "retry_disposition": "none",
+          "next_action": "review the terminal failure; no automatic retry is authorized"
+        }
+      ],
+      "memory_learning": {
+        "mode": "off",
+        "policy_version": "memory-policy-v1",
+        "retrieval_count": 0,
+        "exposure_count": 0,
+        "applied_count": 0,
+        "outcome_count": 0,
+        "pending_repair_gaps": 0,
+        "event_counts_unavailable": true
+      },
+      "context_routing": {
+        "requests": 1,
+        "model_calls": 1,
+        "fallbacks": 0,
+        "included": 2,
+        "omitted": 0,
+        "included_tokens": 1056,
+        "omitted_tokens": 0,
+        "purposes": {
+          "task_execution": 1
+        }
+      },
+      "run_inputs": {
+        "snapshot_id": "run-inputs-a1adf9359f18d1bf5d0e1c09",
+        "snapshot_hash": "sha256:a1adf9359f18d1bf5d0e1c09f835c0533000277b484f881932f9c809efd8343b",
+        "inputs": []
+      }
+    }
+  ],
+  "failures": [
+    {
+      "task_id": "1",
+      "phase": "execution",
+      "failure_class": "execution",
+      "retry_disposition": "none",
+      "command": "",
+      "work_dir": "/tmp/codex-task.H5DN4t/project",
+      "shell": "sh",
+      "exit_code": null,
+      "stdout": "",
+      "stderr": "",
+      "fingerprint": "ffp_e612adac15f812ea8cffa18cceb696a876b711df5d5884a01aee76c715794a29",
+      "hint": "The previous attempt failed with: current=task agent=visual todo_id=1 attempt=1 | source=error | permission_blocked=false | safety_denied=false | error=token budget admission refused (106936 requested, 0 used, 0 reserved, limit 24000). Change your approach rather than repeating the same actions.",
+      "summary": "current=task agent=visual todo_id=1 attempt=1 | source=error | permission_blocked=false | safety_denied=false | error=token budget admission refused (106936 requested, 0 used, 0 reserved, limit 24000)",
+      "next_action": "review the terminal failure; no automatic retry is authorized"
+    }
+  ]
+}

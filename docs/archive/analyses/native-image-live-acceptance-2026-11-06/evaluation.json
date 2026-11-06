@@ -1,0 +1,47 @@
+{
+  "passed": true,
+  "result_id": "res-5b008cbdfad3cfafdcffc2a60e40d60b531c3847af183a7e442df9ef354b5d91",
+  "observed": {
+    "observations": [
+      {
+        "blue_circles": 3,
+        "code": "1593",
+        "red_squares": 2,
+        "triangle_color": "green"
+      },
+      {
+        "blue_circles": 1,
+        "code": "2812",
+        "red_squares": 4,
+        "triangle_color": "yellow"
+      },
+      {
+        "blue_circles": 3,
+        "code": "1593",
+        "red_squares": 2,
+        "triangle_color": "green"
+      }
+    ]
+  },
+  "expected_observations": [
+    {
+      "code": "1593",
+      "red_squares": 2,
+      "blue_circles": 3,
+      "triangle_color": "green"
+    },
+    {
+      "code": "2812",
+      "red_squares": 4,
+      "blue_circles": 1,
+      "triangle_color": "yellow"
+    },
+    {
+      "code": "1593",
+      "red_squares": 2,
+      "blue_circles": 3,
+      "triangle_color": "green"
+    }
+  ],
+  "visual_requests": 1
+}

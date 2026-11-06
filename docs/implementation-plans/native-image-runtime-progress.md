@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `6c119098`（M3 已提交基準；PR-07 程式與最終驗證紀錄隨本次階段 commit 提交；M0～M4 的 coding／離線驗證已完成）
+> Verified-Commit: `403d1905`（M0～M4 coding／離線驗證完成；2026-11-06 單次 Ollama 原生圖片 smoke acceptance 通過，完整範圍見文末）
 > Supersedes: —
 > Superseded-By: —
 
@@ -744,3 +744,18 @@ lint 排除或調高門檻。
 其他工作資料都保留。沒有 standalone executable。驗證紀錄摘要已寫入本文件，
 private task scratch（清理前 24,100,864 bytes）的草稿、暫存 log 與恢復點於提交
 完成後清除，沒有將暫存移往其他磁碟目錄。
+
+## Ollama 真實模型 smoke acceptance（2026-11-06）
+
+使用者指定並授權後，已在 `403d1905` 執行一次 `deepseek-v4.1-flash:cloud`
+真實視覺推論，另有一次純文字 synthesis；沒有模型替換或圖片分析重跑。
+兩張 640×480 自製 PNG 按 A／B／A 送出，數字、紅方塊／藍圓形數量、三角形
+顏色三筆全部符合固定答案，wire SHA／順序吻合。公開 inspect 確認
+`outcome=completed`、`acceptance=passed`、event chain verified、projection consistent；
+1 done、0 unresolved、1 attempt、0 retry。
+
+[完整紀錄與去敏證據](../archive/analyses/native-image-live-acceptance-2026-11-06.md)
+保留 run／result IDs、provider metadata、原圖、公開結果與獨立比對。初次啟動
+因驗收器 token 預算低於保守預留量而在模型前拒絕，0 inference；調整驗收設定後
+才執行唯一一次視覺請求。本次沒有修改原始碼、移動文件或將單一 smoke 結果
+擴大宣稱為 MCP／Codex 真實服務驗收或通用圖片準確率。

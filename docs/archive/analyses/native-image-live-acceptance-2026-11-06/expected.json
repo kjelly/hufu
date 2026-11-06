@@ -1,0 +1,27 @@
+{
+  "observations": [
+    {
+      "code": "1593",
+      "red_squares": 2,
+      "blue_circles": 3,
+      "triangle_color": "green"
+    },
+    {
+      "code": "2812",
+      "red_squares": 4,
+      "blue_circles": 1,
+      "triangle_color": "yellow"
+    },
+    {
+      "code": "1593",
+      "red_squares": 2,
+      "blue_circles": 3,
+      "triangle_color": "green"
+    }
+  ],
+  "image_sha256": [
+    "1149d26d6de674061aaf060c661ca97f22d894756603ea07b5ae826fa493da52",
+    "80c3067db0c2b2248c2c646264fc8cdd45b2194a2327561e09fd84c1e78c6c69",
+    "1149d26d6de674061aaf060c661ca97f22d894756603ea07b5ae826fa493da52"
+  ]
+}
