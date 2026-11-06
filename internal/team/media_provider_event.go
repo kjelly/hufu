@@ -15,6 +15,7 @@ import (
 // not execution completion or reported provider usage. Canonical bindings
 // already own the ordered references, so no image bytes or paths are copied.
 type MediaProviderAdmittedPayload struct {
+	Codex                     CodexImageAdmission       `json:"codex,omitzero"`
 	ConsumerHash              string                    `json:"consumer_hash,omitempty"`
 	ModelFanout               MediaProviderFanoutGrant  `json:"model_fanout,omitzero"`
 	Version                   int                       `json:"version"`

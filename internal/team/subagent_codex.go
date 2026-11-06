@@ -338,33 +338,7 @@ func acquireCodexHomeStateLock(ctx context.Context, home string) (func(), error)
 	if home == "" {
 		return func() {}, nil
 	}
-	lockPath := filepath.Join(home, ".hufu-app-server.lock")
-	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("open Codex state lock %q: %w", lockPath, err)
-	}
-	release := func() {
-		_ = unlockExclusiveFile(file)
-		_ = file.Close()
-	}
-	for {
-		if err := lockExclusiveFile(file); err == nil {
-			return sync.OnceFunc(release), nil
-		} else if !errors.Is(err, errFileLockHeld) {
-			release()
-			return nil, fmt.Errorf("lock Codex state %q: %w", home, err)
-		}
-		timer := time.NewTimer(25 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			release()
-			return nil, ctx.Err()
-		case <-timer.C:
-		}
-	}
+	return acquireCodexStateFileLock(ctx, filepath.Join(home, ".hufu-app-server.lock"))
 }
 
 func (p *CodexSubagentProvider) acquireSharedCodexStateLock(ctx context.Context) (func(), error) {
@@ -593,27 +567,8 @@ func (p *CodexSubagentProvider) finishCodexAttempt(
 // proposal against the actually-observed workspace delta, and always tear
 // the process down — on every exit path, success or failure.
 func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptRequest) (result AttemptResult, resultErr error) {
-	if p == nil || p.coordinator == nil {
-		return AttemptResult{}, fmt.Errorf("codex attempt requires a coordinator")
-	}
-	// RunAttempt is also a public provider entrypoint used by direct callers
-	// and focused integrations. It must establish the same event-first policy
-	// boundary as Coordinator.Run/ExecuteTasks before it validates a request,
-	// runs preflight, or can start a child process.
-	if err := p.coordinator.AdmitExecutionPolicy(); err != nil {
-		return AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("admit execution policy before Codex attempt: %w", err))
-	}
-	// ArtifactScope is the provider's immutable evidence capability for this
-	// exact attempt. Reject an absent or mismatched capability before even
-	// running preflight, resolving shared state, preparing an execution world,
-	// or starting the app-server. Otherwise a malformed request could still
-	// perform workspace/process side effects before canonicalization rejects
-	// its result.
-	if err := p.coordinator.rejectUnsupportedMediaAttempt(ctx, request); err != nil {
+	if err := p.validateAttemptEntry(ctx, request); err != nil {
 		return AttemptResult{}, err
-	}
-	if err := validateAttemptArtifactScope(request); err != nil {
-		return AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("codex attempt artifact scope: %w", err))
 	}
 	normalizedReasoningEffort, err := normalizeCodexReasoningEffort(request.ReasoningEffort)
 	if err != nil {
@@ -674,6 +629,11 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 		return p.finishCodexAttempt(transcript, artifactWorkspace, request, AttemptResult{}, codexFail(CodexFailureUnavailable, fmt.Errorf("acquire Codex shared state lock: %w", lockErr)))
 	}
 	defer stateLock()
+	imageInput, err := p.prepareImageAttempt(ctx, request, childEnvironment)
+	if err != nil {
+		return AttemptResult{}, err
+	}
+	defer imageInput.Close()
 
 	startupTimeout, interruptGrace, shutdownGrace := p.durations()
 	controlWorkspace := ""
@@ -702,6 +662,11 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		startCtx, startCancel = context.WithTimeout(ctx, startupTimeout)
 		defer startCancel()
+	}
+	if imageInput != nil {
+		if err := p.coordinator.validateCodexImageLease(ctx, request); err != nil {
+			return AttemptResult{}, err
+		}
 	}
 	proc, err := StartCodexAppServer(startCtx, NewProcessSupervisor(), CodexProcessConfig{
 		Argv: p.config.Command, Dir: workspace, Env: prepared.Environment,
@@ -785,12 +750,20 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 		}
 		reportCodexActivity(codexTurnActivity{Method: codexMethodTurnStart, Message: message})
 	}
+	if err := p.admitImageTurn(ctx, request, imageInput); err != nil {
+		return AttemptResult{}, err
+	}
+	var nativeInput []codexUserInput
+	if imageInput != nil {
+		nativeInput = imageInput.projection.Inputs(request.Prompt)
+	}
 	turnDone := make(chan struct{})
 	var turnResult CodexTurnResult
 	var turnErr error
 	go func() {
 		defer close(turnDone)
 		turnResult, turnErr = codexRunTurn(ctx, proc.Client, effective.ThreadID, request.Prompt, codexTurnOptions{
+			Input:            nativeInput,
 			ResultProjection: projectionForContract(request.resultContractSchema),
 			ReasoningEffort:  request.ReasoningEffort,
 			DetailedOutput:   p.coordinator.verbose,
@@ -1144,3 +1117,5 @@ func (o *codexStopOnce) do(f func()) {
 }
 
 var _ SubagentProvider = (*CodexSubagentProvider)(nil)
+
+func (*CodexSubagentProvider) SupportsNativeImageInput() bool { return true }

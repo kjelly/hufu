@@ -90,11 +90,17 @@ func validateNativeMediaInvocation(item *TodoItem, policy *ExecutionPolicySnapsh
 		return err
 	}
 	for _, backend := range policy.Backends {
-		if backend.Backend == item.ExecutionTarget.Backend && backend.Kind == string(execution.BackendKindLLM) {
+		if backend.Backend != item.ExecutionTarget.Backend {
+			continue
+		}
+		if backend.Kind == string(execution.BackendKindLLM) {
+			return nil
+		}
+		if backend.Kind == string(execution.BackendKindAgent) && !nativeMediaHasModelFanout(item) && (item.ExecutionRoute == nil || len(item.ExecutionRoute.Candidates) < 2) {
 			return nil
 		}
 	}
-	return media.Reject(media.Unsupported, "image invocation requires a native LLM backend")
+	return media.Reject(media.Unsupported, "image invocation requires a supported native backend")
 }
 
 // validateNativeMediaSourceScope keeps the M1 input turn attached to one root

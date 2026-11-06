@@ -313,7 +313,7 @@ admission 綁定本次 chosen target、profile、ordered media digest、policy �
 | History／repair | codec、`historyReferences`、`validateMediaHistoryLineage`、compaction 及 audit 都驗證 producer binding，不能把工具輸出當成無 task owner 的人類輸入。`projectHistoryToolPairs` 改展示用 call ID 時同步更新 carrier 的配對 ID，原 producer ID／receipt 不變；文字 repair view 移除圖片 carrier，保留文字、錯誤與 pairing |
 | Native action／結果 | 先沿 `canonicalizeRuntimeActionOutputs` 驗證完整 Outputs，再以 runtime publisher 綁定圖片；ordered media projection 與 Outputs 分開。擴充既有 runtime-owned result binding 的來源解析，從 canonical media projection 取值，不將 refs 塞入 Outputs 來冒充現有 output binding。local/external submission 都拒絕模型覆寫，replay 驗證原 receipt／binding，不重建成較新的來源 |
 
-PR-05 已完成上述 runtime 契約，離線 SDK、producer／consumer、失敗不重播、結果與 replay 的證據見[進度紀錄](native-image-runtime-progress.md#pr-05mcp-原生圖片與-runtime-owned-結果)。PR-06 已完成既有 results CLI 的原圖查詢／安全匯出與 report／JSONL／TUI 投影，最終 gates 與實際 CLI smoke 見[PR-06 紀錄](native-image-runtime-progress.md#pr-06圖片成果查詢安全匯出與介面)；操作方式見[原生圖片指南](../reference/native-images.md)。M3 已交付，M4 仍待 PR-07。
+PR-05 已完成上述 runtime 契約，離線 SDK、producer／consumer、失敗不重播、結果與 replay 的證據見[進度紀錄](native-image-runtime-progress.md#pr-05mcp-原生圖片與-runtime-owned-結果)。PR-06 已完成既有 results CLI 的原圖查詢／安全匯出與 report／JSONL／TUI 投影，最終 gates 與實際 CLI smoke 見[PR-06 紀錄](native-image-runtime-progress.md#pr-06圖片成果查詢安全匯出與介面)；操作方式見[原生圖片指南](../reference/native-images.md)。M3 已交付；M4 的 pinned Codex 接入亦已完成，見第 8.3 節。
 
 ### 8.3 Codex App Server
 
@@ -326,6 +326,8 @@ PR-05 已完成上述 runtime 契約，離線 SDK、producer／consumer、失敗
 - projection 位於 runtime 管理的 control root，供該 thread/attempt 生命週期使用；外部程序退出後才能回收無後續使用的副本。resume 先驗證既有 projection 或按相同已綁定 logical path 由 CAS 重建，不能偷換 source；不能維持路徑／sandbox 契約時拒絕 resume。
 - effective cwd/model/sandbox 繼續驗證；這不擴張第 4.3 節的 OS 隔離保證。result repair 不重新送圖分析；interrupt／timeout 先 drain child，再釋放 projection 與 quota。
 - SDK／app-server 自己的私有持久化屬外部 backend 的 trust boundary；Hufu 日誌／receipt 只保存 refs。禁止為診斷 dump 含圖 RPC payload。
+
+PR-07 已完成 pinned 0.166.0 localImage adapter、version／binary gate、受控 projection／retained-copy quota、原 thread／CAS 新程序恢復與文字 repair。最終 lint、contracts、vet、race、完整 suite 全部通過；實際 fake app-server 的 A／B／A 圖片 SHA／順序與拒絕邊界證據見[PR-07 進度紀錄](native-image-runtime-progress.md#pr-07codex-原生-localimage-接入)。M0～M4 的 coding／離線驗證已交付；真實視覺判斷驗收由使用者另行安排。
 
 ### 8.4 授權列出與匯出
 

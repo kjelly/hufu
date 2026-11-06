@@ -21,7 +21,12 @@ func createMediaOccurrence(t *testing.T, c *Coordinator, ctx context.Context, ta
 
 func prepareMediaOccurrence(t *testing.T, c *Coordinator, ctx context.Context, task TaskDef, configure ...func(*TodoSpec)) (TodoSpec, string) {
 	t.Helper()
-	canonical, err := c.canonicalizeTaskOccurrence(task, c.session.Agents["worker"], "fixture/vision")
+	return prepareMediaOccurrenceForModel(t, c, ctx, task, "fixture/vision", configure...)
+}
+
+func prepareMediaOccurrenceForModel(t *testing.T, c *Coordinator, ctx context.Context, task TaskDef, model string, configure ...func(*TodoSpec)) (TodoSpec, string) {
+	t.Helper()
+	canonical, err := c.canonicalizeTaskOccurrence(task, c.session.Agents["worker"], model)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -33,17 +33,6 @@ func (c *Coordinator) taskNeedsOwnMediaExecution(ctx context.Context, task TaskD
 	return taskHasMedia(task) || c.taskMayProduceToolMedia(ctx, task)
 }
 
-func (c *Coordinator) rejectUnsupportedMediaAttempt(ctx context.Context, request AttemptRequest) error {
-	item := c.todoItemByID(request.TaskID)
-	if !taskHasMedia(request.Task) && (item == nil || item.MediaBinding == nil && item.MediaInputDigest == "") {
-		return nil
-	}
-	if err := c.validateMediaAttempt(ctx, request.Task, request.TaskID); err != nil {
-		return err
-	}
-	return media.Reject(media.Unsupported, "native media provider attempts are not enabled")
-}
-
 func validateTaskMediaShape(item *TodoItem) error {
 	if item.MediaBinding == nil {
 		if item.MediaInputDigest != "" {

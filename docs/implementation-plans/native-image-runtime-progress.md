@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `171381da`（PR-05 已提交基準；PR-06 程式與最終證據隨本次階段提交；M4 尚未完成）
+> Verified-Commit: `6c119098`（M3 已提交基準；PR-07 程式與最終驗證紀錄隨本次階段 commit 提交；M0～M4 的 coding／離線驗證已完成）
 > Supersedes: —
 > Superseded-By: —
 
@@ -53,8 +53,8 @@
 | PR-04D2B fanout retry／repair／resume | 完成；`00dfc522` | 獨立 SDK retry／repair、新程序 CAS 恢復、blocked collector 拒絕、parent proxy ownership／文字 skeptic，以及最終 lint、contracts、vet、race、完整 suite 全部通過 |
 | PR-04 M2 coordinator/chat/DAG/routing | 完成；`00dfc522` | A／B／C／D1／D2A／D2B；支援明示的獨立 DAG、route 與 frozen LLM fanout；多候選 route＋fanout、blocked collector 追加 grant 維持明確拒絕 |
 | PR-05 M3 MCP/result binding | 完成；`171381da` | 真實 SDK＋fake MCP/provider、canonical producer/consumer、runtime-owned 結果／receipt／replay，以及 contracts、vet、lint、race、完整 suite 通過 |
-| PR-06 M3 inspect/export/docs | 完成；同本次階段 commit | CLI／原圖安全匯出、report／JSONL／TUI、指南與 bounded bench；最終 lint、contracts、vet、race、完整 suite 全部通過 |
-| PR-07 M4 Codex localImage | 私有草稿準備中，尚未驗證 | 不宣告支援；待套用、實際離線 RPC／恢復與所有 gates |
+| PR-06 M3 inspect/export/docs | 完成；`6c119098` | CLI／原圖安全匯出、report／JSONL／TUI、指南與 bounded bench；最終 lint、contracts、vet、race、完整 suite 全部通過 |
+| PR-07 M4 Codex localImage | 完成；同本次階段 commit | pinned union、實際子程序、SHA／順序、成本、額度、repair／timeout／world／跨程序 resume；最終 lint、contracts、vet、race、完整 suite 全部通過 |
 
 ## PR-00 entrypoint impact map
 
@@ -653,7 +653,7 @@ GOTMPDIR 約 14.4 MiB、private task scratch 約 34 MiB；沒有保留 executabl
 
 資源：本階段按來源回收 6,216,544,256 bytes，本工作累計回收 40,910,888,960 bytes。最終可辨識本工作產物 949,116,928 bytes，低於 2 GiB；共享 GOCACHE 21,247,168,512 bytes，GOTMPDIR 16,080,896 bytes，private task scratch 21,110,784 bytes。開發中曾出現約 2.34 GiB 的本工作 cache 峰值，已在下一個 heavyweight command 前清理。保留目前 normal／race exports、必要的來源／清理 manifests、gate logs 與後續匯出草稿；沒有保留 standalone executable。未變更 configured caches／GOTMPDIR，未清除共享 dependencies 或其他 session 產物。
 
-PR-05 完成不代表 M3／M4 全部交付；PR-06 的成果查詢／安全匯出／介面文件與 PR-07 的 Codex adapter 仍依序實作。未呼叫真實模型、登入、圖片外送或移動文件；Ollama deepseek-v4.1-flash:cloud 的真實驗收由使用者另行安排。
+PR-05 完成時仍未代表 M3／M4 全部交付；後續 PR-06／PR-07 的實作與最終驗證見下節。未呼叫真實模型、登入、圖片外送或移動文件；Ollama deepseek-v4.1-flash:cloud 的真實驗收由使用者另行安排。
 
 
 ## PR-06：圖片成果查詢、安全匯出與介面
@@ -682,4 +682,65 @@ PR-05 完成不代表 M3／M4 全部交付；PR-06 的成果查詢／安全匯�
 
 資源：本階段按來源清除 71 個過期工作產物，回收 1,262,211,072 bytes；本工作累計回收 42,173,100,032 bytes。最終可辨識本工作 cache 產物 1,190,174,720 bytes，低於 2 GiB；共享 GOCACHE 21,743,714,304 bytes，GOTMPDIR 119,455,744 bytes，private scratch 22,695,936 bytes。另有其他專案的 Go 程序使用相同 build temporary root，其資料與程序均保留。保留目前 normal／race exports、驗證與清理來源紀錄及 PR-07 草稿，未留下本工作 standalone executable，也未變更 configured caches。
 
-M3 的 PR-05／PR-06 已交付；M4 尚待 PR-07，不能將本節的完成視為整個圖片 I/O 計畫完成。
+PR-06 完成時，M3 的 PR-05／PR-06 已交付，M4 仍待 PR-07；後續 M4 的最終交付見下節。
+
+
+## PR-07：Codex 原生 localImage 接入
+
+實作明確 text／localImage union，只有已 pin schema 的 codex-cli 0.166.0 可以送圖。
+runtime 以實際 executable 的 version probe 與 SHA-256 驗證能力，不採用 userAgent；
+新版本不自動放行。既有純文字協定保持原序列化與版本支援。
+
+- 目的地沿 frozen agent backend／exact model／media grant 驗證；讀 CAS 前與啟動
+  app-server 前重驗 canonical journal lease，effective cwd／model／sandbox 通過後
+  才能發布圖片 turn。沒有為 Codex 製造 LLM capability profile。
+- 受控 projection 使用 binding／target logical ID、0700 目錄與 0400 圖檔，只投影
+  已授權 CAS bytes。每個 occurrence 的副本預留與全 control root 的 retained copies
+  都有上限；跨程序鎖涵蓋計量、使用與 drain 後回收。崩潰殘留的相同圖片副本也計數。
+- 缺少 projection 從原 CAS 按相同路徑重建，維持舊 thread／binding；竄改、版本／
+  binary identity 或執行環境不符時拒絕。結果修補只送文字；取消／timeout 先 drain
+  child，再釋放副本與預留。未擴張同 UID 的 OS 隔離保證。
+- context 採 exact target 的明示 CLI capacity，否則 agent／team 的 operator 宣告，
+  沒有容量或超出預留時拒絕。計量包含 input JSON／路徑、developer instructions、
+  結果 schema 與重複圖片上界；這是估計，不是 app-server 的實測用量。
+- 成本使用既有 opaque agent reservation，media admission 共用 invocation ID。
+  bounded price／budget 拒絕在 provider 前完成；未知 usage 保留 admission bound，
+  不當作免費或已量測 token 使用量。
+
+效益：既有 Codex worker 可在相同 task／receipt／驗收流程中使用原生圖片輸入；
+恢復工作不依賴使用者原圖仍存在，格式修補也不重新送圖分析。沒有新增生成圖片
+服務、team-specific launcher、登入或付費模型依賴。
+
+| 定向驗證／最終 gate | 結果 |
+|---|---|
+| 新圖片 workflow、成本、world、repair／timeout、quota、跨程序恢復 | PASS；team 50.564s（之後補 canonical lease 與 direct／有序不同圖片測試） |
+| Codex 新舊協定、agent economics、native-image 廣域回歸 | PASS；team 130.498s，包含 fresh journal lease／stale-memory 撤銷與 direct 入口 |
+| 最終兩張不同圖片加重複圖片的 direct／single wire | PASS；team 10.531s；子程序實際讀取 A／B／A、核對 SHA／順序、schema 與 admission 次數 |
+| mise run lint | PASS；exit 0，0 issues. |
+| mise run test-contracts | PASS；team 178.447s、CLI 77.366s、reviewgate 15.420s、reviewprep 28.029s、web 0.267s；inspect／operator／auditverify 通過 |
+| mise run vet | PASS；exit 0，無診斷 |
+| 定向 race | PASS；team 216.283s，無競態診斷；Codex 新舊流程／native images／agent cost boundary |
+| mise run test | PASS；exit 0；team 1069.116s、CLI 206.374s、evalharness 46.249s、improver 142.066s、tools 48.797s、TUI 6.697s、workspace 7.033s、web 0.290s；其餘套件通過，含既有 cache 命中 |
+
+較早的失敗已修正：agent backend 尚未套用明示 generation context 的優先序，
+導致合法工作被提前拒絕；fixture 也曾在 Coordinator 建立後變更已凍結設定，
+或用需要 live store 的 lineage API 查詢完成後結果。現在在建立前設定 fixture，
+完成後用已驗證的唯讀 journal audit。未放寬 unknown-capacity、world、version
+或授權檢查。
+
+最終 Go／工具設定以同一份 26 檔 SHA-256 固定；所有 heavyweight gates 依序執行。
+PR-07／M4 的 coding 與離線驗證已完成，整個 M0～M4 計畫沒有剩餘 coding 待辦。真實視覺模型驗收仍由使用者另行安排，未呼叫
+Ollama deepseek-v4.1-flash:cloud 或其他真實模型，未登入、圖片外送或移動文件。
+
+最初 lint 指出 RunAttempt 複雜度超過既有門檻，及兩個新錯誤字串大小寫；
+已將入口驗證原順序完整抽成 helper，並以 nil-safe image attempt cleanup 保持
+所有退出路徑的回收。重新固定 26 檔 source／設定後重跑最終 gates；沒有新增
+lint 排除或調高門檻。
+
+資源：PR-07 按來源清除 124 個過期 archives，回收 1,713,061,888 bytes；本工作
+累計回收 43,886,161,920 bytes。最終可辨識本工作 cache 產物 1,219,723,264 bytes，
+低於 2 GiB；保留目前 normal／race 編譯輸出與測試 cache metadata。共享 GOCACHE
+22,650,175,488 bytes，GOTMPDIR 16,400,384 bytes；configured paths、共享依賴及
+其他工作資料都保留。沒有 standalone executable。驗證紀錄摘要已寫入本文件，
+private task scratch（清理前 24,100,864 bytes）的草稿、暫存 log 與恢復點於提交
+完成後清除，沒有將暫存移往其他磁碟目錄。

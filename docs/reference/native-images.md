@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `171381da`（MCP runtime 基準；成果查詢與匯出隨本次階段提交）
+> Verified-Commit: `6c119098`（M3 已提交基準；Codex 圖片接入與最終驗證隨本次階段提交）
 > Supersedes: —
 > Superseded-By: —
 
@@ -20,7 +20,7 @@ context 與資源限額。歷史 ref 或已知 artifact ID 本身不授予送圖
 | MCP direct／dynamic gateway | text／image blocks 保留順序；下一模型回合以原生圖片送出 |
 | MCP native action | 完整 Outputs 先驗證，再發布圖片與收據綁定的 media projection |
 | `results images` | 列出已選歷史 task 結果的工具圖片；可匯出原始 bytes |
-| Codex App Server | 圖片 adapter 尚待後續階段；目前拒絕圖片，不降為純文字 |
+| Codex App Server | 原生 localImage 輸入；限已驗證 schema／binary version 的 0.166.0，見下節 |
 
 支援靜態 PNG、JPEG、WebP，檔案內容與 MIME 必須一致。其他 binary content、
 未授權目標或不明圖片能力會被拒絕。離線 fake-provider 測試證明封包與 runtime
@@ -29,7 +29,7 @@ context 與資源限額。歷史 ref 或已知 artifact ID 本身不授予送圖
 ## 政策與限額
 
 `hufu.yaml` 的 `media.enabled` 必須開啟，`allowed-targets` 明列 backend、
-provider-key 與 model。team 可以縮小 operator 政策，不能擴張它。
+provider-key 與 model；Codex agent target 的 provider-key 為空。team 可以縮小 operator 政策，不能擴張它。
 `image-token-upper-bound` 是每張圖片的保守 context 上界；每次出現都計數，
 不能因 CAS 去重而少算。這是 admission 估計，不是模型回報的精確使用量。
 
@@ -101,3 +101,43 @@ MCP `structuredContent` 存在時，Outputs 保持該完整 object；沒有 stru
   收據與 ordered media projection 不因修補而改寫成模型手抄的值。
 
 交付狀態與離線驗證記錄見[實作進度](../implementation-plans/native-image-runtime-progress.md)。
+
+
+## Codex App Server 圖片接入
+
+此階段的 adapter 使用 pinned `codex-cli 0.166.0` schema 的 `text`／`localImage` union。
+圖片工作會執行受限的 `--version` probe，核對實際 executable 的 SHA-256，
+不依 `userAgent` 推測能力。較新、較舊或未驗證版本都在圖片 turn 前拒絕；
+既有純文字 Codex 流程不增加這個版本要求。
+
+operator policy 必須明列 Codex backend 與 exact model，`provider-key` 為空，
+並提供正數的 `image-token-upper-bound`。context 容量必須明示：CLI 註冊的
+operator capacity 優先，否則採 agent／team 的 `context-window`；無容量或
+無法容納文字、每次圖片、輸出預留與 safety margin 時拒絕。token 計量包含
+已知的 input JSON、受控路徑、developer instructions 與結果 schema，屬保守估計。
+
+例如，已設定好 `example` team 的 Codex worker 後，可使用既有 CLI 語法：
+
+```bash
+hufu --agent-team example --context-window "$CONTEXT_WINDOW" --image ./photo.png '@worker 分析這張圖片'
+```
+
+`CONTEXT_WINDOW` 應先設定為該 backend 的明示容量；這個例子不安裝 CLI、登入
+或呼叫真實服務。backend 的模型設定、帳戶、endpoint 與私有持久化由已授權的
+外部 app-server 管理；Hufu 核對其 effective model／cwd／sandbox 後才送出圖片 turn。
+
+圖片只從本 task 的 canonical CAS 經當前 journal lease 投影到 control root 的
+私有目錄，檔名使用 logical content ID，檔案唯讀。Hufu 不把整個 CAS 暴露為
+native input，也不宣稱提供同 UID 的 OS 隔離。投影在子程序及 repair 程序排空
+之後回收；副本與每次 occurrence 的資源預留都計量。
+
+殘留 projection 也計入總容量與檔案數，上限沿 media policy 的 branch bytes／
+blobs 限制；同一 control root 的 copy 計量、使用與回收以跨程序鎖保護。
+這個限制包含相同圖片在不同工作下的副本，不因 CAS 去重而忽略崩潰殘留。
+resume 保持原 binding／thread 與 logical paths：遺失副本從原 CAS 重建，
+內容或權限竄改、既有 admission 的 binary identity 改變、world 不符時拒絕。原始使用者檔案不需存在。
+
+結果格式修補只送文字，不重送圖片或要求新分析。timeout／取消先 drain child
+才釋放副本與預留。成本沿既有 agent backend 的 opaque admission；有硬預算但
+缺少 bounded price 時在 provider 前拒絕，未知 usage 保留上限，不當作零成本。
+本 adapter 支援 canonical 圖片輸入；不增加 Codex 生成圖片 API 或 Hufu MCP 工具。

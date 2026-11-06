@@ -219,7 +219,11 @@ func (b *AgentExecutionBackend) Capabilities() execution.BackendCapabilities {
 		return execution.BackendCapabilities{}
 	}
 	caps := b.provider.Capabilities()
-	return execution.BackendCapabilities{StructuredResult: caps.SupportsTypedResult, WorkspaceRead: true, WorkspaceWrite: true, Resume: caps.SupportsResumeToken}
+	images := false
+	if provider, ok := b.provider.(interface{ SupportsNativeImageInput() bool }); ok {
+		images = provider.SupportsNativeImageInput()
+	}
+	return execution.BackendCapabilities{NativeImageInput: images, StructuredResult: caps.SupportsTypedResult, WorkspaceRead: true, WorkspaceWrite: true, Resume: caps.SupportsResumeToken}
 }
 
 func (b *AgentExecutionBackend) ValidateTarget(_ context.Context, target execution.ExecutionTarget) error {
@@ -259,6 +263,7 @@ func (b *AgentExecutionBackend) RunAttempt(ctx context.Context, request AttemptR
 		}
 		return AttemptResult{}, dispatchErr
 	}
+	callCtx = context.WithValue(callCtx, externalCostReservationKey{}, reservation)
 	result, err := b.provider.RunAttempt(callCtx, request)
 	if reservation.ProviderInvocationID != "" {
 		b.costBoundary.SettleAgentExecution(ctx, reservation, result, err)

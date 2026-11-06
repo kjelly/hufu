@@ -63,7 +63,11 @@ func verifyMediaProviderAdmission(event RunEvent, payload MediaProviderAdmittedP
 	if err := media.CheckBundle(refs, policy.Media.Policy.Image); err != nil {
 		return err
 	}
-	if err := verifyMediaProviderProfile(event, payload, prior); err != nil {
+	if payload.Codex != (CodexImageAdmission{}) {
+		if err := verifyCodexImageProfile(payload, item, prior); err != nil {
+			return err
+		}
+	} else if err := verifyMediaProviderProfile(event, payload, prior); err != nil {
 		return err
 	}
 	return verifyMediaProviderInvocationUniqueness(event, payload, prior)
@@ -174,7 +178,7 @@ func verifyMediaProviderInvocationUniqueness(event RunEvent, payload MediaProvid
 
 func verifyMediaProviderBackend(policy ExecutionPolicySnapshot, payload MediaProviderAdmittedPayload) error {
 	for _, backend := range policy.Backends {
-		if backend.Backend == payload.Target.Backend && backend.Kind == string(execution.BackendKindLLM) &&
+		if backend.Backend == payload.Target.Backend && ((backend.Kind == string(execution.BackendKindLLM) && payload.Codex == (CodexImageAdmission{})) || (backend.Kind == string(execution.BackendKindAgent) && payload.Codex != (CodexImageAdmission{}))) &&
 			backend.ProviderKey == payload.ProviderKey && backend.IdentityHash == payload.ProviderConfigurationHash {
 			return nil
 		}

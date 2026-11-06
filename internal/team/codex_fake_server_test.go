@@ -3,8 +3,10 @@ package team
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/kjelly/hufu/internal/media"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +33,7 @@ type fakeCodexNotification struct {
 // constructs its own client call sequence deterministically). Exactly one
 // of Result/ErrorMessage/RawLine/NoResponse/CloseAfter applies.
 type fakeCodexStep struct {
+	ImageHashes   []string                `json:"image_hashes,omitempty"`
 	Result        json.RawMessage         `json:"result,omitempty"`
 	ErrorMessage  string                  `json:"error_message,omitempty"`
 	RawLine       string                  `json:"raw_line,omitempty"`
@@ -50,8 +53,9 @@ type fakeCodexStep struct {
 // the exact call sequence (e.g. "thread/resume, not thread/start" or "no
 // turn/start after a persist failure").
 type fakeCodexScript struct {
-	LogPath string          `json:"log_path,omitempty"`
-	Steps   []fakeCodexStep `json:"steps"`
+	ImageProtocolVersion string          `json:"image_protocol_version,omitempty"`
+	LogPath              string          `json:"log_path,omitempty"`
+	Steps                []fakeCodexStep `json:"steps"`
 	// RawLogPath, when set, additionally records each inbound request's full
 	// raw JSON line (not just its method) — used by tests that need to
 	// assert on a specific request's params (e.g. the sandbox value a
@@ -73,6 +77,14 @@ func runFakeCodexAppServer(scriptPath string) {
 	if err := json.Unmarshal(data, &script); err != nil {
 		fmt.Fprintln(os.Stderr, "fake codex server: decode script:", err)
 		os.Exit(1)
+	}
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		version := script.ImageProtocolVersion
+		if version == "" {
+			version = codexImageProtocolVersion
+		}
+		fmt.Fprintln(os.Stdout, "codex-cli "+version)
+		os.Exit(0)
 	}
 	steps := script.Steps
 
@@ -139,6 +151,12 @@ func runFakeCodexAppServer(scriptPath string) {
 		step := steps[stepIndex]
 		stepIndex++
 
+		if step.ImageHashes != nil {
+			if err := verifyFakeCodexImages(line, step.ImageHashes); err != nil {
+				writeFakeLine(out, map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{"code": -32000, "message": err.Error()}})
+				continue
+			}
+		}
 		if step.WriteFile != "" {
 			if err := os.WriteFile(step.WriteFile, []byte(step.WriteFileContent), 0o644); err != nil {
 				fmt.Fprintln(os.Stderr, "fake codex server: write file:", err)
@@ -255,4 +273,44 @@ func rawJSON(t *testing.T, v any) json.RawMessage {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// The separate app-server process reads and decodes every supplied image.
+// Merely observing a localImage tag in the parent is insufficient wire proof.
+func verifyFakeCodexImages(line []byte, hashes []string) error {
+	var request struct {
+		Method string `json:"method"`
+		Params struct {
+			Input []codexUserInput `json:"input"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(line, &request); err != nil {
+		return err
+	}
+	if request.Method != codexMethodTurnStart || len(request.Params.Input) != len(hashes)+1 || request.Params.Input[0].Type != "text" {
+		return fmt.Errorf("unexpected Codex native image input shape")
+	}
+	for index, hash := range hashes {
+		input := request.Params.Input[index+1]
+		if input.Type != "localImage" || input.Text != "" {
+			return fmt.Errorf("expected localImage")
+		}
+		info, err := os.Lstat(input.Path)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || info.Mode().Perm() != 0o400 {
+			return fmt.Errorf("projection is not a private readonly image")
+		}
+		data, err := media.ReadFile(context.Background(), input.Path, media.Limits{})
+		if err != nil {
+			return err
+		}
+		ref, err := media.Validate(context.Background(), data, media.Limits{})
+		clear(data)
+		if err != nil || ref.SHA256 != hash {
+			return fmt.Errorf("app-server received wrong image bytes")
+		}
+	}
+	return nil
 }

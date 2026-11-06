@@ -51,7 +51,7 @@ func (c *Coordinator) PreviewNativeImageTask(ctx context.Context, agentName, goa
 	if err != nil {
 		return preview, err
 	}
-	backend, err := c.ExecutionRegistry().LanguageModelBackend(target)
+	backend, err := c.ExecutionRegistry().ResolveBackend(target.Backend)
 	if err != nil || !backend.Capabilities().NativeImageInput {
 		return preview, media.Reject(media.Unsupported, "image preview requires a native image backend")
 	}
@@ -61,6 +61,14 @@ func (c *Coordinator) PreviewNativeImageTask(ctx context.Context, agentName, goa
 	}
 	grant, err := policy.Policy.Allow(target.Backend, frozen.ProviderKey, target.Model)
 	if err != nil {
+		return preview, err
+	}
+	if backend.Kind() == execution.BackendKindAgent {
+		if grant.IdentityHash != frozen.IdentityHash {
+			return preview, media.Reject(media.EgressDenied, "image preview agent identity differs from frozen policy")
+		}
+		preview, err = previewMediaTurnFiles(ctx, request, policy.Policy.Image)
+		preview.Target = target
 		return preview, err
 	}
 	identity, err := c.providerManager.ResolveProviderExecutionIdentity(modelID)
