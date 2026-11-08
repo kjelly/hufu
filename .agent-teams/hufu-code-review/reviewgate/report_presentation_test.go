@@ -154,14 +154,14 @@ func TestHumanReportRendersOptionalSnapshotCoverage(t *testing.T) {
 	}
 	for _, mode := range []string{"legacy", "diff", "repository_snapshot"} {
 		t.Run(mode, func(t *testing.T) {
-			_, report := critiqueCoverageFixture(0)
+			_, report := reportV2CoverageFixture(0)
 			if mode != "legacy" {
 				report["snapshot_coverage"] = map[string]any{
 					"mode": mode, "snapshot_id": "sha256:" + strings.Repeat("a", 64),
 					"content_sha256": strings.Repeat("a", 64), "revision": "reviewed-commit",
 					"batch": 1, "batch_count": 2,
 					"expected": []any{"main.go", "next.go"}, "completed": []any{"main.go"},
-					"excluded": []any{map[string]any{"path": "vendor/lib.go", "reason": "dependency"}},
+					"excluded":    []any{map[string]any{"path": "vendor/lib.go", "reason": "dependency"}},
 					"uncompleted": []any{map[string]any{"path": "next.go", "reason": "outside_selected_batch"}},
 				}
 			}

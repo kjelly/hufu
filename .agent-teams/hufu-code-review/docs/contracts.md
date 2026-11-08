@@ -14,6 +14,56 @@ info findings. The native inventory and final audit independently recheck this
 relationship, so a worker rejection can be corrected on the same occurrence
 without weakening the whole-run gates.
 
+## Typed source gaps and one frozen supplement round
+
+All source-review schemas (including documentation escalation and every nested
+critic/report copy) require gap `description`, `missing_evidence`, `kind`,
+`requested_evidence`, and `limitations`. Kind is exactly `unread`, `truncated`,
+`missing_dependency`, or `semantic_uncertainty`. Requests are exact
+repository-relative `{path,ranges}` entries: ordered half-open source-file
+byte `{start,end}` spans; `ranges: []` requests the entire file. These are
+distinct from runtime `required_reads` artifact byte coordinates. An unknown
+path is a typed `unavailable_path` limitation, never guessed from prose.
+Other limitation kinds are `out_of_scope`, `version_mismatch`,
+`budget_exhausted`, and `invalid_request`; arrays are explicitly empty when
+not applicable. Semantic uncertainty can remain after complete observation.
+
+Before acceptance, ordinary workers must satisfy runtime-owned `required_reads`
+using successful built-in view response spans, including a successful read of
+an empty required artifact. Search scanning/matches do not attest full reading.
+Machine-readable missing spans are repaired in the same unaccepted task;
+collectors cannot satisfy another worker's read obligation.
+
+Accepted nonsemantic gaps require `inventory-review-supplement-requests`
+(`inventory_review_supplement_requests`, capability
+`inventory-review-handoffs`), followed by `prepare-review-supplement`
+(`prepare_review_supplement`, capability `prepare-review-supplement`) and the
+optional `review-supplement-workset` fan-out using `review-v1.json`. Dispatch
+the fan-out only when `item_count > 0`; empty manifests remain audit outputs.
+The native inventory derives original task/gap/hash identities from accepted
+records and emits receipt-bound runtime outputs. The producer consumes those
+outputs and the original hash-verified frozen manifest, never model-copied
+receipts, live checkout files, or historical storage mutation.
+
+Exactly one round is permitted, at most eight supplemental items and within
+the unchanged 32-review/64-evidence-source capacity. Original worksets are not
+redispatched. Each supplement binds the original task, gap, hash, revision,
+frozen manifest identity and requested paths. The native producer validates
+paths, ordered ranges, scope grants, source identity and byte limits before
+reading frozen bytes. Unavailable, excluded, stale, invalid or over-budget
+requests retain typed limitations. No missing source is evidence of absence.
+
+`inventory-review-handoffs` inventories both original and supplemental accepted
+reviews. Their findings all require the usual independent critic coverage.
+The final report runtime-binds `supplement_outcomes` from that inventory,
+including every typed producer limitation; the model must omit this field.
+The audit re-derives request identity, outcome membership, observed resolver
+evidence and supplemental source/critic coverage. A supplemental resolver must
+bind the exact original task and gap. Original accepted records, findings and
+severities remain immutable; every original gap stays visible even if resolved.
+Coverage attests bytes returned, not understanding or semantic correctness.
+
+
 1. Dispatch the workset producer and snapshot-pinned Go verifier together.
 2. Expand all three review routes, including their no-op children.
 3. Run `inventory-review-handoffs` after all review children complete. This

@@ -25,6 +25,32 @@ live checkout. Do not use shell, write files, run a repository-wide review,
 infer a range from Git, or call `load_skill`; the assigned review does not need
 dynamic skill loading.
 
+Before submission, satisfy every runtime `required_reads` span with successful
+bounded `view` calls. Search matches and failed/EOF probes do not cover unread
+bytes. If submission returns `required_reads_incomplete`, view the exact
+machine-readable missing spans and resubmit on this SAME task; do not turn
+missing reads into accepted gaps or restart a successful original review.
+Coverage proves returned bytes, never understanding.
+
+Every gap requires `description`, `missing_evidence`, lowercase `kind`,
+`requested_evidence`, and `limitations`. `kind` is exactly `unread`,
+`truncated`, `missing_dependency`, or `semantic_uncertainty`. Requested evidence
+is a bounded array of `{path,ranges}`: repository-relative exact paths, with
+ordered half-open SOURCE FILE byte `{start,end}` ranges; `ranges: []` requests
+the entire file. These are not snapshot-artifact offsets. Never infer paths or
+ranges from prose. An unknown path uses `requested_evidence: []` plus a typed
+limitation `{kind:"unavailable_path",detail:"..."}`. Other limitation kinds are
+`out_of_scope`, `version_mismatch`, `budget_exhausted`, and `invalid_request`.
+Use empty arrays when none apply. Semantic uncertainty may remain after every
+byte was read and does not require forced evidence or a forced conclusion.
+
+A `review-supplement-workset` task is an incremental review of one original
+accepted gap at the SAME frozen revision, not a replacement review. Read the
+supplement request/source inventory and all required source artifacts; preserve
+all accepted original findings, severities, and gaps in their source records.
+Report new findings and remaining gaps only in this supplemental record. There
+is no second supplement round. A limited/missing source never proves absence.
+
 If the assigned lens is `noop`, read the supplied no-op diff artifact and
 immediately submit a minimal successful result with no findings. Do not inspect
 the repository. If the lens is `documentation-risk`, read the supplied
@@ -223,8 +249,9 @@ The static workset contract also requires `structured_payload.record`:
   invariant_id. Use an explicit empty array when none apply. Keep summaries
   concise. A violated claim requires finding_index; other statuses omit it.
   Unknown requires missing_evidence, a concrete gap, and completed_with_gaps;
-- `gaps`: each local limitation or open question, with `description` and
-  `missing_evidence`. These describe this assigned boundary; do not claim the
+- `gaps`: each local limitation or open question, with `description`,
+  `missing_evidence`, `kind`, `requested_evidence`, and `limitations`.
+  These describe this assigned boundary; do not claim the
   evidence is absent from every other workset.
 Use `success` only with an empty `gaps` array; use `completed_with_gaps` with
 at least one concrete gap. Keep limitations in this array even if also

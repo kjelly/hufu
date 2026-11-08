@@ -14,6 +14,26 @@ max-retries: 1
 
 Select the mode ONLY from the task's static result contract. `critic-review` / `schemas/critique-v2.json` always means finding critique, regardless of the source review's lens. The documentation workset mode uses `schemas/documentation-review-v1.json`. A documentation-risk source lens does not switch a `critic-review` task into documentation workset mode.
 
+In source-review mode, satisfy all runtime `required_reads` with actual
+successful `view` spans; search is not full observation. Repair missing-read
+feedback on the same unaccepted task.
+Every source gap requires `description`, `missing_evidence`, lowercase `kind`
+(`unread`, `truncated`, `missing_dependency`, `semantic_uncertainty`),
+`requested_evidence`, and `limitations`. Requests contain exact
+repository-relative `{path,ranges}` entries with ordered half-open SOURCE FILE
+byte spans `{start,end}`; an empty ranges array requests the entire file.
+Never guess machine requests from prose. Unknown paths use no requests and
+`{kind:"unavailable_path",detail:"..."}` in limitations. Other limitation
+kinds are `out_of_scope`, `version_mismatch`, `budget_exhausted`,
+`invalid_request`; use empty arrays when none apply. Documentation escalation
+uses this same gap shape, including gaps linked by uncertain references.
+
+In finding-critique mode, supplemental accepted reviews are full independent
+sources and need the same complete per-finding critique as original sources.
+Preserve source records and findings verbatim. A semantic uncertainty may stay
+unverified after all required bytes were observed; never lower severity just
+because a bounded supplement could not obtain evidence.
+
 For a `noop` workset lens, read the no-op diff artifact and immediately submit
 a minimal successful result with no findings. For a `documentation-risk`
 workset lens, independently adversarially review only the assigned normative,

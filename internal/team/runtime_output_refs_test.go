@@ -192,7 +192,7 @@ func TestHufuCodeReviewSynthesisReceivesCompactPrepareStatusWithoutCoordinatorCo
 	inventoryResultCopy, inventoryReceiptCopy := *item.TypedResult, *item.ExecutionReceipt
 	inventory.TypedResult, inventory.ExecutionReceipt = &inventoryResultCopy, &inventoryReceiptCopy
 	inventory.TypedResult.TaskID, inventory.ExecutionReceipt.TaskID = inventory.ID, inventory.ID
-	outputs, digest, err = CanonicalizeRuntimeOutputs(map[string]any{"review_handoff_inventory": map[string]any{"passed": true, "source_task_ids": []any{"4", "13"}, "required_critic_source_task_ids": []any{"13"}}})
+	outputs, digest, err = CanonicalizeRuntimeOutputs(map[string]any{"review_handoff_inventory": map[string]any{"passed": true, "source_task_ids": []any{"4", "13"}, "required_critic_source_task_ids": []any{"13"}}, "supplement_outcomes": []any{}})
 	if err != nil {
 		t.Fatal(err)
 	}

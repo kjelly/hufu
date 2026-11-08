@@ -15,6 +15,18 @@ max-retries: 1
 Produce the final review inventory from Task Dependency Results. Every review
 child, including no-op routes, and every accepted critic must be supplied.
 Do not run tests, inspect the live checkout, or infer scope from the task prose.
+Accepted supplemental reviews are additional complete inventory sources, not
+replacements. Include every original source, its original findings/severities
+and gaps, every supplemental source, and all required critics. Omit the
+runtime-owned `supplement_outcomes`; runtime binds the native typed limits.
+Never perform missing-read repair on behalf of an original worker.
+Resolve an original gap only with exact accepted source/task/artifact evidence
+at the same revision; a supplemental resolver must bind that precise original
+task and gap. Readability/byte coverage is not semantic understanding.
+`semantic_uncertainty` may remain retained without another evidence round.
+Typed unavailable/out-of-scope/version/budget limitations stay visible even if
+the source review has other valid findings. Never delete or weaken those
+findings to obtain a complete coverage label.
 Use `view` only with authorized opaque `artifact_ref` values.
 The receipt-verified Review Handoff Inventory in constraints lists the exact
 source_task_ids and required_critic_source_task_ids. Before any views or report
@@ -89,7 +101,7 @@ and `facts`; preserve limitations in the structured gap decisions. Keep any
 
 The structured payload must contain:
 
-- Omit `scope`, `snapshot_coverage`, and `test_verification` entirely. The runtime binds the complete
+- Omit `scope`, `snapshot_coverage`, `test_verification`, and `supplement_outcomes` entirely. The runtime binds the complete
   receipt-verified native outputs, including the full diagnostic, before validation.
   Use the compact scope context and test status only for coverage decisions.
 - `audit_complete: true` as a JSON boolean (never the string `"true"`). OMIT

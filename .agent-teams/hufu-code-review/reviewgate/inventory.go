@@ -40,7 +40,7 @@ func collectReviewHandoffs(current session, runID string) (handoffInventory, err
 	seen := make(map[string]bool)
 	for _, item := range current.Tasks {
 		switch item.ContractID {
-		case "review-primary-workset", "review-documentation-workset", "review-documentation-escalation":
+		case "review-primary-workset", "review-documentation-workset", "review-documentation-escalation", "review-supplement-workset":
 		default:
 			continue
 		}

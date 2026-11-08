@@ -57,7 +57,7 @@ func TestEmbeddedReviewDefinitionsMatchAuthoritativeSchema(t *testing.T) {
 func schemaFixture() (map[string]any, map[string]any, map[string]any) {
 	review := map[string]any{"kind": "review", "review_revision": "frozen-head", "workset_key": "unit-0001", "lens": "general",
 		"reference_assessments": []any{}, "invariant_assessments": []any{}, "findings": []any{map[string]any{"summary": "Prompt-only URL protection", "detail": "A private URL can pass the configured tool restriction", "severity": "info", "location": "team.yaml:20", "evidence": []any{"sha256-" + strings.Repeat("b", 64)}, "requires_critique": true}},
-		"gaps": []any{map[string]any{"description": "Only this snapshot lacks the registry", "missing_evidence": "AllTools body"}},
+		"gaps": []any{map[string]any{"description": "Only this snapshot lacks the registry", "missing_evidence": "AllTools body", "kind": "semantic_uncertainty", "requested_evidence": []any{}, "limitations": []any{}}},
 	}
 	input := map[string]any{"task_id": "4", "payload_sha256": strings.Repeat("a", 64), "record": review}
 	critique := map[string]any{"kind": "critique", "input_review": []any{input}, "decisions": []any{map[string]any{
@@ -401,7 +401,7 @@ func TestCritiqueV2CanonicalCollectionsAndEvidence(t *testing.T) {
 func TestReportV2AcceptsEmptyCritiqueAndPreservesCoverage(t *testing.T) {
 	schema, _ := contractSchema(t, "report-v2.json")
 	for _, count := range []int{0, 1, 32} {
-		_, report := critiqueCoverageFixture(count)
+		_, report := reportV2CoverageFixture(count)
 		raw, err := json.Marshal(report)
 		if err != nil {
 			t.Fatal(err)
@@ -414,7 +414,7 @@ func TestReportV2AcceptsEmptyCritiqueAndPreservesCoverage(t *testing.T) {
 			t.Fatalf("count %d: %v", count, err)
 		}
 	}
-	_, report := critiqueCoverageFixture(2)
+	_, report := reportV2CoverageFixture(2)
 	critique := report["input_review"].([]any)[1].(map[string]any)["record"].(map[string]any)
 	critique["decisions"] = critique["decisions"].([]any)[:1]
 	raw, _ := json.Marshal(report)
@@ -429,7 +429,7 @@ func TestReportV2PreservesFailedTests(t *testing.T) {
 	schema, document := contractSchema(t, "report-v2.json")
 	for _, scenario := range []string{"failed", "claims_pass", "missing_diagnostic", "launch_error", "timeout", "truncated"} {
 		t.Run(scenario, func(t *testing.T) {
-			_, report := critiqueCoverageFixture(0)
+			_, report := reportV2CoverageFixture(0)
 			tests := report["test_verification"].(map[string]any)
 			tests["passed"], tests["exit_code"], tests["diagnostic"] = false, 1, "--- FAIL: TestSocketPath: bind: invalid argument"
 			switch scenario {
@@ -549,4 +549,11 @@ func TestDocumentationReviewContract(t *testing.T) {
 	if !reflect.DeepEqual(document, base) {
 		t.Fatal("documentation contract drifted from base review")
 	}
+}
+
+// Report-v1 remains a separate historical wire contract.
+func reportV2CoverageFixture(count int) (map[string]any, map[string]any) {
+	critique, report := critiqueCoverageFixture(count)
+	report["supplement_outcomes"] = []any{}
+	return critique, report
 }

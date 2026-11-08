@@ -16,6 +16,25 @@ Review only the assigned immutable routine-documentation workset item. This
 worker intentionally uses the native Hufu/Ollama provider; it must not be
 bound to the Codex subagent provider.
 
+All runtime `required_reads` spans must be returned by successful bounded
+`view` calls before acceptance. Search matches do not cover an entire source.
+On machine-readable missing-read feedback, view those exact spans and repair
+this same task; do not restart a completed original review.
+
+Every gap has `description`, `missing_evidence`, exact lowercase `kind`,
+`requested_evidence`, and `limitations`. Kind is `unread`, `truncated`,
+`missing_dependency`, or `semantic_uncertainty`. Requested evidence is
+`[{path:"exact/repository-relative/path",ranges:[{start:0,end:100}]}]`,
+using ordered half-open SOURCE FILE byte coordinates, not artifact offsets.
+`ranges: []` requests a whole file. Never extract paths by guessing prose.
+If no exact path is available, retain an empty request array and a limitation
+`{kind:"unavailable_path",detail:"..."}`. Other limitation kinds are
+`out_of_scope`, `version_mismatch`, `budget_exhausted`, and `invalid_request`.
+Use `limitations: []` when none apply. Reference classification `uncertain`
+links a typed gap: use the actual missing-source kind when known, or
+`semantic_uncertainty` for ambiguity after observation. Neither source
+coverage nor deterministic path checks establish semantic understanding.
+
 If the assigned lens is `noop`, read the supplied no-op diff artifact and
 immediately submit a minimal successful result with no findings. Do not inspect
 the repository.
@@ -138,8 +157,9 @@ The static workset contract also requires `structured_payload.record`:
 - `invariant_assessments`: submit invariant claims here once; omit the outer
   field when the runtime schema projects it. Use an explicit empty array when none apply. An `unknown`
   invariant also requires a concrete entry in gaps and completed_with_gaps;
-- `gaps`: each local limitation or open question, with `description` and
-  `missing_evidence`. These describe this assigned boundary; do not claim the
+- `gaps`: each local limitation or open question, with `description`,
+  `missing_evidence`, `kind`, `requested_evidence`, and `limitations`.
+  These describe this assigned boundary; do not claim the
   evidence is absent from every other workset.
 Use `success` only with an empty `gaps` array; use `completed_with_gaps` with
 at least one concrete gap. Keep limitations in this array even if also

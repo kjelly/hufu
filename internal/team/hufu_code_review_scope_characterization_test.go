@@ -41,8 +41,8 @@ func TestHufuCodeReviewChecksStatusAndGapsBeforeHandoff(t *testing.T) {
 			valid        bool
 		}{
 			{"success", `[]`, true},
-			{"completed_with_gaps", `[{"description":"bounded evidence","missing_evidence":"source"}]`, true},
-			{"success", `[{"description":"bounded evidence","missing_evidence":"source"}]`, false},
+			{"completed_with_gaps", `[{"description":"bounded evidence","missing_evidence":"source","kind":"semantic_uncertainty","requested_evidence":[],"limitations":[]}]`, true},
+			{"success", `[{"description":"bounded evidence","missing_evidence":"source","kind":"semantic_uncertainty","requested_evidence":[],"limitations":[]}]`, false},
 			{"completed_with_gaps", `[]`, false},
 		} {
 			candidate := &TaskResult{Status: tc.status, Summary: "reviewed", FilesRead: []FileRef{{Path: "sha256-observed"}},
@@ -85,7 +85,7 @@ func TestHufuCodeReviewChecksSourceFindingsBeforeHandoff(t *testing.T) {
 		contract := taskResultSubmissionContractForTask(task)
 		candidate := &TaskResult{Status: TaskResultStatusCompletedWithGaps, Summary: "coverage limitation", FilesRead: []FileRef{{Path: "sha256-observed"}},
 			Findings:          []Finding{{Summary: "gap", Detail: "cannot verify implementation", Severity: "info"}},
-			StructuredPayload: &ResultPayload{Value: json.RawMessage(`{"record":{"gaps":[{"description":"bounded evidence","missing_evidence":"source"}],"findings":[],"invariant_assessments":[]}}`)},
+			StructuredPayload: &ResultPayload{Value: json.RawMessage(`{"record":{"gaps":[{"description":"bounded evidence","missing_evidence":"source","kind":"semantic_uncertainty","requested_evidence":[],"limitations":[]}],"findings":[],"invariant_assessments":[]}}`)},
 		}
 		if err := contract.validateFinalizableResult(candidate); err == nil || !strings.Contains(err.Error(), "exactly 0 items") {
 			t.Fatalf("%s accepts unmirrored outer info finding: %v", task.ID, err)
@@ -141,7 +141,7 @@ func TestHufuCodeReviewChecksInvariantCopiesBeforeHandoff(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			candidate := &TaskResult{Status: TaskResultStatusCompletedWithGaps, Summary: "coverage limitation", FilesRead: []FileRef{{Path: "sha256-observed"}},
 				InvariantVerification: attested,
-				StructuredPayload:     &ResultPayload{Value: json.RawMessage(`{"record":{"gaps":[{"description":"bounded evidence","missing_evidence":"source"}],"findings":[],"invariant_assessments":` + tt.record + `}}`)},
+				StructuredPayload:     &ResultPayload{Value: json.RawMessage(`{"record":{"gaps":[{"description":"bounded evidence","missing_evidence":"source","kind":"semantic_uncertainty","requested_evidence":[],"limitations":[]}],"findings":[],"invariant_assessments":` + tt.record + `}}`)},
 			}
 			err := contract.validateFinalizableResult(candidate)
 			if tt.wantErr == "" {

@@ -73,7 +73,7 @@ func gateFixture(t *testing.T) session {
 	first := record{Kind: "review", Revision: "frozen-head", Key: "unit-0", Lens: "security-tool", Findings: []finding{
 		{Summary: "Output limit off by one", Severity: "warning", Evidence: []string{"snapshot-a"}, RequiresCritique: true},
 		{Summary: "Network classification", Severity: "info", Evidence: []string{"snapshot-a"}},
-	}, Gaps: []json.RawMessage{raw(t, map[string]string{"description": "Registry not in this snapshot", "missing_evidence": "AllTools"})}}
+	}, Gaps: []json.RawMessage{raw(t, map[string]any{"description": "Registry not in this snapshot", "missing_evidence": "AllTools", "kind": "semantic_uncertainty", "requested_evidence": []any{}, "limitations": []any{}})}}
 	second := record{Kind: "review", Revision: "frozen-head", Key: "unit-1", Lens: "general", Findings: []finding{
 		{Summary: "Prompt-only URL protection", Severity: "info", Evidence: []string{"snapshot-b"}, RequiresCritique: true},
 	}, Gaps: []json.RawMessage{}}
@@ -435,7 +435,7 @@ func TestReviewGateConservativeCriticStatusRequiresGroundedGaps(t *testing.T) {
 			review := record{Kind: "review", Findings: []finding{{Summary: "Observed claim", Severity: "info", Evidence: []string{"snapshot-a"}}}}
 			sourceStatus := "success"
 			if test.sourceGap {
-				review.Gaps = []json.RawMessage{raw(t, map[string]string{"description": "Caller absent", "missing_evidence": "Caller body"})}
+				review.Gaps = []json.RawMessage{raw(t, map[string]any{"description": "Caller absent", "missing_evidence": "Caller body", "kind": "semantic_uncertainty", "requested_evidence": []any{}, "limitations": []any{}})}
 				sourceStatus = "completed_with_gaps"
 			}
 			sourcePayload := payload{Record: raw(t, review)}

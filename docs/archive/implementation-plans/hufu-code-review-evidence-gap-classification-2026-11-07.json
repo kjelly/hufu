@@ -1,0 +1,4849 @@
+{
+  "invocation_id": "inv-20261107T175800.820093394Z-bd4e36bd2b4a",
+  "run_id": "run-20261107T175924.974731290Z-917e1a7e1182",
+  "review_revision": "a1fec596e09bc31eb0e45dc8cb6152f698b86001",
+  "rows": [
+    {
+      "task_id": "3",
+      "gap_index": 0,
+      "subject": ".mise 新選入的四個測試之實作未提供",
+      "source_artifact": "S3",
+      "source_range": "snapshot lines 1–70，尤其62附近",
+      "evidence": [
+        {
+          "transcript": "T3",
+          "call_line": 2,
+          "result_line": 4,
+          "observation": "完整 snapshot 僅1個 primary、0個 related；.mise 測試 selector 引用四個測試，但沒有對應 Go test bodies。"
+        }
+      ],
+      "cause": "配置改動的 snapshot 沒有攜帶被 selector 新選入的測試檔。",
+      "remedy": "取得這四個測試定義所在的公開 snapshot，再檢查 selector 與測試語意。",
+      "missing_evidence": "四個測試的完整實作及其所依賴 helper。",
+      "primary_category": "missing_file",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "3",
+      "gap_index": 1,
+      "subject": "沒有可支持測試已執行的證據",
+      "source_artifact": "S3",
+      "source_range": "snapshot lines 1–70；reference report lines 1–15",
+      "evidence": [
+        {
+          "transcript": "T3",
+          "call_line": 5,
+          "result_line": 6,
+          "observation": "reference report 的 passed=true 屬 review_scope；報告是 paths/symbols/candidates 分析，不是 Go test 執行結果。"
+        }
+      ],
+      "cause": "靜態 review 成功與測試執行成功混屬不同證據。",
+      "remedy": "如需驗證執行，引用既有公開測試結果；本次不執行測試。",
+      "missing_evidence": "包含命令、revision、exit status 與測試輸出的公開執行記錄。",
+      "primary_category": "unverified",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "4",
+      "gap_index": 0,
+      "subject": "cmd snapshot 未提供 internal TUI、team、media、inspect owners",
+      "source_artifact": "S4",
+      "source_range": "snapshot lines 1–2000 的 inventory；全 artifact header 搜尋",
+      "evidence": [
+        {
+          "transcript": "T4",
+          "call_line": 2,
+          "result_line": 3,
+          "observation": "snapshot inventory 為11個 primary、24個 related，檔案範圍為 cmd。"
+        },
+        {
+          "transcript": "T4",
+          "call_line": 17,
+          "result_line": 20,
+          "observation": "對整個 artifact 搜尋 internal 檔案 header，成功返回 no match；搜尋範圍不是返回內容量。"
+        }
+      ],
+      "cause": "跨 package owner 不在此 cmd-focused snapshot。",
+      "remedy": "取得相關 internal owners 的公開 snapshot，依 CLI caller 逐一連接。",
+      "missing_evidence": "對應 internal owners 的完整定義。",
+      "primary_category": "missing_file",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "4",
+      "gap_index": 1,
+      "subject": "CLI images hint 與 TUI 行為是否一致",
+      "source_artifact": "S4",
+      "source_range": "search excerpts [45854,46115)、[6026,6295)",
+      "evidence": [
+        {
+          "transcript": "T4",
+          "call_line": 13,
+          "result_line": 16,
+          "observation": "TaskResultIdentityMsg 只有 cmd 側引用 excerpt。"
+        },
+        {
+          "transcript": "T4",
+          "call_line": 10,
+          "result_line": 11,
+          "observation": "HistoricalResultImagesCommand 定義搜尋成功返回 no match；14/15另有 caller 命中。"
+        }
+      ],
+      "cause": "有 CLI 接線，但提供 TUI 行為的 renderer/command owner 未交付。",
+      "remedy": "補充 TUI command 與 renderer 定義，對照 images hint 的觸發與呈現契約。",
+      "missing_evidence": "TUI owner body 與相同行為的契約證據。",
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "semantic_uncertainty"
+      ]
+    },
+    {
+      "task_id": "4",
+      "gap_index": 2,
+      "subject": "image_count 的具體 int 型別及 producer/replay 契約",
+      "source_artifact": "S4",
+      "source_range": "returned byte window [128600,161368)",
+      "evidence": [
+        {
+          "transcript": "T4",
+          "call_line": 25,
+          "result_line": 28,
+          "observation": "result_identity.go 與相關測試可見 concrete int assertion；產生及 replay 該值的跨 package owner 不在 cmd inventory。"
+        }
+      ],
+      "cause": "consumer 的型別假設可見，但 producer/replay 的型別保證沒有提供。",
+      "remedy": "補充 producer 與序列化/replay owner，追蹤 image_count 的實際型別。",
+      "missing_evidence": "producer、解碼/replay 與 consumer 之間的型別契約。",
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "semantic_uncertainty"
+      ]
+    },
+    {
+      "task_id": "4",
+      "gap_index": 3,
+      "subject": "focused test source 不等同測試執行",
+      "source_artifact": "S4",
+      "source_range": "test windows [128600,161368)、[161368,189168)；reference report [0,727)",
+      "evidence": [
+        {
+          "transcript": "T4",
+          "call_line": 29,
+          "result_line": 30,
+          "observation": "返回的是測試原始碼。"
+        },
+        {
+          "transcript": "T4",
+          "call_line": 26,
+          "result_line": 27,
+          "observation": "reference report 是靜態分析資料，沒有 Go test 命令或執行結果。"
+        }
+      ],
+      "cause": "存在測試與執行測試不能互相替代。",
+      "remedy": "需要時引用既有公開執行記錄；不在本次重跑。",
+      "missing_evidence": "focused tests 的公開執行證據。",
+      "primary_category": "unverified",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "5",
+      "gap_index": 0,
+      "subject": "manifest 的16個 entries 僅9個同批檔案納入 snapshot",
+      "source_artifact": "S5",
+      "source_range": "完整 snapshot lines 1–344；manifest lines 98–120",
+      "evidence": [
+        {
+          "transcript": "T5",
+          "call_line": 2,
+          "result_line": 4,
+          "observation": "完整 snapshot 有11個 primary、0個 related；其中同批 artifacts 為9個，而 SHA256SUMS 列16個 entries。"
+        },
+        {
+          "transcript": "T5",
+          "call_line": 17,
+          "result_line": 18,
+          "observation": "primary paths 清單返回於 excerpt [73,601)，可與 manifest 對照。"
+        }
+      ],
+      "cause": "producer 選檔集合未覆蓋 manifest 全部同批 entries。",
+      "remedy": "提供其餘7個 entries 的公開內容與 hash 對應。",
+      "missing_evidence": "7個未納入的同批 metadata 檔案。",
+      "primary_category": "missing_file",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "5",
+      "gap_index": 1,
+      "subject": "usage、relay、invocation 與 payload hash 缺獨立 metadata 核對",
+      "source_artifact": "S5",
+      "source_range": "lines 35、54、58–62、98–120；excerpt [2794,3370)",
+      "evidence": [
+        {
+          "transcript": "T5",
+          "call_line": 2,
+          "result_line": 4,
+          "observation": "文件列出 usage 4816/408/5224/6156、relay 1.814/2.173，以及 invocation/payload hash；snapshot 同時缺少 manifest 中7個同批 entries。"
+        },
+        {
+          "transcript": "T5",
+          "call_line": 14,
+          "result_line": 15,
+          "observation": "payload hash 搜尋返回文件敘述 excerpt，並非獨立執行來源。"
+        }
+      ],
+      "cause": "claim 已交付，但可獨立對照的同批 metadata 未完整交付。",
+      "remedy": "補充 manifest 對應 metadata，逐欄核對 identity、usage、timing 與 hash。",
+      "missing_evidence": "獨立 producer metadata；不能僅以重複文件敘述作交叉佐證。",
+      "primary_category": "missing_file",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "5",
+      "gap_index": 2,
+      "subject": "frontmatter 的 Status/Authority 慣例",
+      "source_artifact": "S5",
+      "source_range": "snapshot lines 18–19",
+      "evidence": [
+        {
+          "transcript": "T5",
+          "call_line": 2,
+          "result_line": 4,
+          "observation": "實際 frontmatter 為 Status: active、Authority: reference；snapshot 沒有提供這兩欄的 repository 規範。"
+        }
+      ],
+      "cause": "值本身可見，未知的是正式分類語意及適用規則。",
+      "remedy": "引用公開文件慣例或 schema，判定此文件應屬的狀態與權威層級。",
+      "missing_evidence": "frontmatter 規範及可適用的對照案例。",
+      "primary_category": "semantic_uncertainty",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "6",
+      "gap_index": 0,
+      "subject": "progress 文件引用的 acceptance.md 不在本批 snapshot",
+      "source_artifact": "S6",
+      "source_range": "snapshot lines 2226–2295；inventory lines 1–2000",
+      "evidence": [
+        {
+          "transcript": "T6",
+          "call_line": 23,
+          "result_line": 24,
+          "observation": "progress 文件的 acceptance.md 連結可見；本 snapshot 是7個 metadata JSON 與4份文件，沒有該連結目標。"
+        },
+        {
+          "transcript": "T5",
+          "call_line": 2,
+          "result_line": 4,
+          "observation": "另一個公開 snapshot S5 已包含 acceptance 內容，屬跨 task 可補足證據。"
+        }
+      ],
+      "cause": "分區選檔切斷文件連結，並非已證明整份 export 缺檔。",
+      "remedy": "將 task5 的公開 acceptance snapshot 連回此 gap。",
+      "missing_evidence": "本 task 自身沒有連結目標；跨 task 證據已存在，但原 reader 未完成整合。",
+      "primary_category": "missing_file",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "6",
+      "gap_index": 1,
+      "subject": "文件中的 CLI flags、results 與 context-window 實作不在本批",
+      "source_artifact": "S6",
+      "source_range": "snapshot lines 1941–2000、2991–3190；inventory lines 1–2000",
+      "evidence": [
+        {
+          "transcript": "T6",
+          "call_line": 21,
+          "result_line": 22,
+          "observation": "返回文件中的相關描述，沒有對應 Go implementation。"
+        },
+        {
+          "transcript": "T6",
+          "call_line": 27,
+          "result_line": 28,
+          "observation": "native-images guide 內容可見，但 snapshot inventory 沒有 CLI owner。"
+        }
+      ],
+      "cause": "文件與實作被拆在不同 task snapshot。",
+      "remedy": "先以 task4 的 cmd snapshot 核對可涵蓋部分，再補必要 internal owners。",
+      "missing_evidence": "相關 CLI/context-window owners 的完整實作及逐項文件對應。",
+      "primary_category": "missing_file",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "6",
+      "gap_index": 2,
+      "subject": "assigned JSON batch 之外的 ground truth、PNG 與獨立比較",
+      "source_artifact": "S6",
+      "source_range": "inventory lines 1–2000；補充 S5 lines 122–247",
+      "evidence": [
+        {
+          "transcript": "T6",
+          "call_line": 2,
+          "result_line": 3,
+          "observation": "本批 primary 是7個 metadata JSON 與4份文件，沒有 PNG bodies 或 ground-truth 比較檔。"
+        },
+        {
+          "transcript": "T5",
+          "call_line": 2,
+          "result_line": 4,
+          "observation": "S5 lines 122–210已有 evaluation/expected 與觀察值比較；235–247的兩個 PNG 明確標記 binary_omitted，並列 bytes/hash。"
+        }
+      ],
+      "cause": "task 分區造成部分證據未連接；PNG 另有明確 binary omission。",
+      "remedy": "連接 S5 expected/evaluation；如需獨立視覺核對，提供相同 hash 的公開 PNG。",
+      "missing_evidence": "實際 PNG bytes 與獨立重新判讀；不是完全沒有 expected/evaluation。",
+      "primary_category": "missing_file",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "7",
+      "gap_index": 0,
+      "subject": "reader 未完成 snapshot，卻宣稱已到結尾及相關檔案缺失",
+      "source_artifact": "S7",
+      "source_range": "returned snapshot lines 1–4000；重讀3791–3910",
+      "evidence": [
+        {
+          "transcript": "T7",
+          "call_line": 7,
+          "result_line": 8,
+          "observation": "offset 3400、limit 600 返回3401–4000，恰達請求上限；第4000行仍在 assertNoDoubleRelease 函式內，沒有 artifact EOF 證據。"
+        },
+        {
+          "transcript": "T7",
+          "call_line": 19,
+          "result_line": 20,
+          "observation": "後續只返回3791–3910的重疊區間，沒有接續4001以後。"
+        },
+        {
+          "transcript": "T7",
+          "call_line": 15,
+          "result_line": 18,
+          "observation": "truncated 搜尋返回 budget ERROR；16/17的 related 搜尋同樣失敗，未成功重試。"
+        }
+      ],
+      "cause": "把單次 reader cap 當作 artifact 結尾，並把失敗搜尋當作缺檔證據。",
+      "remedy": "從4001行接續讀最小相關區段，或縮小搜尋參數成功取得 inventory；不得先沿用21檔缺失結論。",
+      "missing_evidence": "真正 EOF、完整 related inventory，以及4000行以後與該 gap 相關的內容。",
+      "primary_category": "partial_read",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "7",
+      "gap_index": 1,
+      "subject": "StageBase64Image、EncodeToolMediaMetadata 與 publisher/installer owners",
+      "source_artifact": "S7",
+      "source_range": "observed lines 1–4000；search excerpts [42870,43492)、[56989,57612)",
+      "evidence": [
+        {
+          "transcript": "T7",
+          "call_line": 11,
+          "result_line": 13,
+          "observation": "ExpandToolMediaRequest 搜尋僅返回局部 excerpt。"
+        },
+        {
+          "transcript": "T7",
+          "call_line": 12,
+          "result_line": 14,
+          "observation": "WithToolResultPublisher 搜尋返回局部定義/測試引用，沒有完成 host producer/installer 的整條追蹤。"
+        },
+        {
+          "transcript": "T7",
+          "call_line": 16,
+          "result_line": 17,
+          "observation": "related inventory 搜尋失敗，且 reader 沒有越過4000行，因此不能證明 owners 不在完整 artifact。"
+        }
+      ],
+      "cause": "目前 observation 不足以區分檔案未提供與 reader 尚未到達。",
+      "remedy": "先補完相關 inventory 與 owner 定位，再沿 host producer 到 publisher 的呼叫鏈讀取。",
+      "missing_evidence": "完整 owner inventory、host producer bodies 與 installer 接線。",
+      "qualification": "不採用『21個 related paths 缺失』作為既定事實。",
+      "primary_category": "unverified",
+      "secondary_categories": [
+        "partial_read",
+        "search_only"
+      ]
+    },
+    {
+      "task_id": "8",
+      "gap_index": 0,
+      "subject": "Codex child/processutil owners 不在提供集合",
+      "source_artifact": "S8",
+      "source_range": "inventory；returned windows [0,163840)、[198000,202449)",
+      "evidence": [
+        {
+          "transcript": "T8",
+          "call_line": 20,
+          "result_line": 22,
+          "observation": "header inventory 為16個 primary、24個 related，沒有所需 Codex child/processutil owner 檔案。"
+        }
+      ],
+      "cause": "本 task 的 snapshot 範圍沒有納入 process lifecycle owners。",
+      "remedy": "補充 Codex child 與 processutil 的公開 snapshot，追蹤 process 啟停與資源釋放。",
+      "missing_evidence": "child/processutil owner bodies。",
+      "primary_category": "missing_file",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "8",
+      "gap_index": 1,
+      "subject": "internal/media definitions、image export directory 與 reserve owners",
+      "source_artifact": "S8",
+      "source_range": "inventory；definition search scan [0,202449)",
+      "evidence": [
+        {
+          "transcript": "T8",
+          "call_line": 26,
+          "result_line": 28,
+          "observation": "imageExportDirectory 的函式定義搜尋成功返回 no match。"
+        },
+        {
+          "transcript": "T8",
+          "call_line": 20,
+          "result_line": 22,
+          "observation": "提供的檔案 inventory 沒有所需 internal/media owner 集合。"
+        }
+      ],
+      "cause": "使用端可見，跨 package definitions 與資源配置 owners 未納入。",
+      "remedy": "提供 media definitions、export directory 與 reserve 實作。",
+      "missing_evidence": "資源建立、保留與釋放的完整契約。",
+      "primary_category": "missing_file",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "8",
+      "gap_index": 2,
+      "subject": "compaction Version 3 的 writer 契約",
+      "source_artifact": "S8",
+      "source_range": "search excerpt [126155,126686)",
+      "evidence": [
+        {
+          "transcript": "T8",
+          "call_line": 33,
+          "result_line": 36,
+          "observation": "toolMediaCompactionStateVersion 附近的讀取規則可見，但沒有提供建立 Version 3 狀態的 writer owner。"
+        }
+      ],
+      "cause": "可觀察 reader 的接受規則，無法由此推導 writer 的產出與遷移保證。",
+      "remedy": "補充 writer 及狀態建立路徑，對照版本與欄位規則。",
+      "missing_evidence": "Version 3 writer body 與 migration/compatibility 契約。",
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "semantic_uncertainty"
+      ]
+    },
+    {
+      "task_id": "8",
+      "gap_index": 3,
+      "subject": "lockExclusiveFile owner 及 locking 契約",
+      "source_artifact": "S8",
+      "source_range": "definition search scan [0,202449)",
+      "evidence": [
+        {
+          "transcript": "T8",
+          "call_line": 34,
+          "result_line": 35,
+          "observation": "lockExclusiveFile 的函式定義搜尋成功返回 no match。"
+        }
+      ],
+      "cause": "lock 呼叫端不能提供跨程序互斥、解除與失敗語意的實作保證。",
+      "remedy": "提供 lock owner 及對應 release 路徑。",
+      "missing_evidence": "實際 locking 實作及其平台/錯誤契約。",
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "semantic_uncertainty"
+      ]
+    },
+    {
+      "task_id": "8",
+      "gap_index": 4,
+      "subject": "workspace、execution-world、artifact access 與 evidence-store 排除 owners",
+      "source_artifact": "S8",
+      "source_range": "inventory；projection-close excerpt [85668,85944)",
+      "evidence": [
+        {
+          "transcript": "T8",
+          "call_line": 20,
+          "result_line": 22,
+          "observation": "snapshot inventory 未提供這組跨 package owners。"
+        },
+        {
+          "transcript": "T8",
+          "call_line": 37,
+          "result_line": 38,
+          "observation": "可見 projection Close 的局部使用端，不能據此證明 workspace 或 evidence-store 的完整隔離/排除行為。"
+        }
+      ],
+      "cause": "投影使用端與安全/儲存邊界 owner 分離。",
+      "remedy": "取得公開 owner snapshots，逐一追蹤 access 與排除判斷。",
+      "missing_evidence": "workspace/execution-world 建立、artifact 授權與 evidence-store 排除實作。",
+      "primary_category": "missing_file",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "8",
+      "gap_index": 5,
+      "subject": "source/reference report 不提供 Go execution 證據",
+      "source_artifact": "S8",
+      "source_range": "reference report [0,1074)",
+      "evidence": [
+        {
+          "transcript": "T8",
+          "call_line": 6,
+          "result_line": 7,
+          "observation": "報告有6個 links、0個 symbols、空 candidates；不是 Go 測試命令及結果。"
+        }
+      ],
+      "cause": "靜態證據不足以確認 runtime/test 執行結果。",
+      "remedy": "如需執行層結論，引用既有公開執行證據，不在本次重跑。",
+      "missing_evidence": "Go execution 的命令、revision、exit status 與輸出。",
+      "primary_category": "unverified",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "9",
+      "gap_index": 0,
+      "subject": "internal/agent helper contracts 不在本 snapshot",
+      "source_artifact": "S9",
+      "source_range": "snapshot lines 1–2000；search excerpt [3798,4331)",
+      "evidence": [
+        {
+          "transcript": "T9",
+          "call_line": 38,
+          "result_line": 40,
+          "observation": "對整個 artifact 搜尋 internal/agent 檔案 header，成功返回 no match。"
+        },
+        {
+          "transcript": "T9",
+          "call_line": 10,
+          "result_line": 11,
+          "observation": "MessagesHaveToolMedia 的命中是使用端 excerpt，沒有 helper body。"
+        }
+      ],
+      "cause": "helper 契約落在 snapshot 之外的 package。",
+      "remedy": "連接 task7 的 ValidatePersistentMessages/MessagesHaveToolMedia 公開內容，再確認具體呼叫可達性。",
+      "missing_evidence": "本 task 的 helper definitions；跨 snapshot 內容到當前路徑的完整可達性證明。",
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "semantic_uncertainty"
+      ]
+    },
+    {
+      "task_id": "9",
+      "gap_index": 1,
+      "subject": "runtimeMediaHash 與 media typed contract",
+      "source_artifact": "S9",
+      "source_range": "search excerpt [155607,156135)",
+      "evidence": [
+        {
+          "transcript": "T9",
+          "call_line": 5,
+          "result_line": 8,
+          "observation": "runtimeMediaHash 命中僅為呼叫端。"
+        },
+        {
+          "transcript": "T9",
+          "call_line": 37,
+          "result_line": 39,
+          "observation": "internal/media 檔案 header 搜尋成功返回 no match。"
+        }
+      ],
+      "cause": "typed media/hash owner 未納入 snapshot，caller excerpt 無法代替其契約。",
+      "remedy": "提供 runtimeMediaHash 與 media types 定義。",
+      "missing_evidence": "hash 正規化、空值與 media identity 的實作契約。",
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "search_only"
+      ]
+    },
+    {
+      "task_id": "9",
+      "gap_index": 2,
+      "subject": "canonicalJournalOwner 外部寫入 caller",
+      "source_artifact": "S9",
+      "source_range": "search excerpt [98891,99424)",
+      "evidence": [
+        {
+          "transcript": "T9",
+          "call_line": 6,
+          "result_line": 7,
+          "observation": "可觀察 canonicalJournalOwner 定義及其自身路徑內引用，未提供外部 write caller 的完整上下文。"
+        }
+      ],
+      "cause": "局部 helper 與外部 write path 的證據斷開。",
+      "remedy": "提供呼叫 canonicalJournalOwner 的外部寫入 owners，檢查 ownership 值如何傳遞。",
+      "missing_evidence": "外部 write caller bodies 與實際 ownership 資料流。",
+      "qualification": "搜尋未展示外部 caller，不等同 repository 沒有外部 caller。",
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "search_only"
+      ]
+    },
+    {
+      "task_id": "9",
+      "gap_index": 3,
+      "subject": "compaction_state_test 部分省略，其他 related tests 有空 body",
+      "source_artifact": "S9",
+      "source_range": "header excerpt [188108,188633)；tail [253000,259071)",
+      "evidence": [
+        {
+          "transcript": "T9",
+          "call_line": 14,
+          "result_line": 15,
+          "observation": "compaction_state_test 宣告 bytes=74100、content_truncated=true、omitted_bytes=8564。"
+        },
+        {
+          "transcript": "T9",
+          "call_line": 27,
+          "result_line": 28,
+          "observation": "尾段保留部分 test body，並顯示其他 related entries 的空 body/省略資訊。"
+        }
+      ],
+      "cause": "producer 在形成 snapshot 時已省略 test bytes。",
+      "remedy": "另提供完整或按相關函式切片的公開 test snapshot；重讀現有空 body 無法恢復。",
+      "missing_evidence": "明確省略的 test 區段與其他空 body。",
+      "primary_category": "producer_truncated",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "9",
+      "gap_index": 4,
+      "subject": "diff 行號143與snapshot定位158及 unchanged block 差異",
+      "source_artifact": [
+        "D9",
+        "S9"
+      ],
+      "source_range": "D9 lines 1–79；S9 primary snapshot及[152500,164500)對照窗口",
+      "evidence": [
+        {
+          "transcript": "T9",
+          "call_line": 1,
+          "result_line": 4,
+          "observation": "zero-context diff 有 @@ -109,0 +114,28 @@、@@ -111 +143 @@、@@ -131 +163 @@ 等 hunks；unchanged block 不在這種 diff 的輸出範圍。"
+        },
+        {
+          "transcript": "T9",
+          "call_line": 17,
+          "result_line": 18,
+          "observation": "snapshot 提供另一種完整內容/定位表示，不能僅由行號不同判定 stale 或截斷。"
+        }
+      ],
+      "cause": "diff 表示與 snapshot 定位未建立同 revision 的逐行對齊。",
+      "remedy": "用 revision、檔案 identity 與完整上下文對齊，再判定是否真的內容不一致。",
+      "missing_evidence": "足以證明 stale 或 producer omission 的同 revision 內容差異。",
+      "qualification": "此 row 不分類 producer_truncated。",
+      "primary_category": "semantic_uncertainty",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "10",
+      "gap_index": 0,
+      "subject": "canonical helpers owners 多為 call-only",
+      "source_artifact": "S10",
+      "source_range": "definition searches；returned excerpt [212628,213453)",
+      "evidence": [
+        {
+          "transcript": "T10",
+          "call_line": 15,
+          "result_line": 16,
+          "observation": "finalizeTaskMedia、toolMediaFailureState、publishToolMediaResult 的 exact-definition 搜尋成功返回 no match。"
+        },
+        {
+          "transcript": "T10",
+          "call_line": 19,
+          "result_line": 20,
+          "observation": "withNativeProviderCounter 命中的是 runAgentWithStatusAndHistory body：安裝 counter、建立 publisher closure、呼叫 publishToolMediaResult 並記錄 failure；不是 counter helper 定義。"
+        }
+      ],
+      "cause": "本地接線已提供，但所依賴 helper owners 未提供。",
+      "remedy": "沿可見接線補入 helper definitions，不把 caller body 誤記為被呼叫者實作。",
+      "missing_evidence": "canonical media helpers 與 counter owner bodies。",
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "search_only"
+      ]
+    },
+    {
+      "task_id": "10",
+      "gap_index": 1,
+      "subject": "coordinator_media_test 完全省略",
+      "source_artifact": "S10",
+      "source_range": "returned tail [371500,377259)",
+      "evidence": [
+        {
+          "transcript": "T10",
+          "call_line": 23,
+          "result_line": 24,
+          "observation": "coordinator_media_test.go 宣告 bytes=13165、content_truncated=true、omitted_bytes=13165，body 為空。"
+        }
+      ],
+      "cause": "producer 省略整個 focused test body。",
+      "remedy": "提供該 test 檔的完整公開 snapshot 或相關測試函式切片。",
+      "missing_evidence": "全部13165 bytes 的 focused test body。",
+      "primary_category": "producer_truncated",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "10",
+      "gap_index": 2,
+      "subject": "native token counter definitions 與 cmd projections",
+      "source_artifact": "S10",
+      "source_range": "search excerpts [212628,213453)、[231511,232332)",
+      "evidence": [
+        {
+          "transcript": "T10",
+          "call_line": 19,
+          "result_line": 20,
+          "observation": "nativeWorkerStepTokens、nativeWorkerInput 的定義搜尋成功返回 no match；excerpt 顯示 counter 安裝，以及 MessagesHaveToolMedia 分支呼叫 nativeWorkerStepTokens。"
+        },
+        {
+          "transcript": "T10",
+          "call_line": 2,
+          "result_line": 4,
+          "observation": "snapshot 是1個 primary 加24個 related，沒有提供所需 cmd projection owners。"
+        }
+      ],
+      "cause": "counter 接線與 dispatch 可觀察，計算及外部投影實作未交付。",
+      "remedy": "提供 counter 定義與 cmd projection owners，分別核對計數和呈現。",
+      "missing_evidence": "counter body、輸入換算規則及 cmd 投影。",
+      "qualification": "不能因搜尋命中 counter 呼叫就宣稱 counter 演算法已觀察。",
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "search_only"
+      ]
+    },
+    {
+      "task_id": "10",
+      "gap_index": 3,
+      "subject": "publisher owner、同步語意與覆蓋範圍",
+      "source_artifact": "S10",
+      "source_range": "local wiring excerpt [212628,213453)；related search [306611,377259)",
+      "evidence": [
+        {
+          "transcript": "T10",
+          "call_line": 19,
+          "result_line": 20,
+          "observation": "publisher closure 呼叫 publishToolMediaResult 並記錄 error；owner body 未顯示。"
+        },
+        {
+          "transcript": "T10",
+          "call_line": 21,
+          "result_line": 22,
+          "observation": "related 區段的 RuntimeMedia/ToolResultPublisher 搜尋返回 no match；header 搜尋有8個結果上限與 next offset，不代表完整 related 內容已交付。"
+        }
+      ],
+      "cause": "只有 installer/caller 接線，沒有 publication owner 的同步與持久化契約。",
+      "remedy": "補充 publisher owner 與直接相關測試；不要從有限搜尋推導測試不存在。",
+      "missing_evidence": "publisher body、同步邊界與可用的完整 focused tests。",
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "search_only"
+      ]
+    },
+    {
+      "task_id": "11",
+      "gap_index": 0,
+      "subject": "media helper owners 缺失與 May/Needs 失敗搜尋",
+      "source_artifact": "S11",
+      "source_range": "definition searches；caller excerpts [3152,4176)、[28247,28863)、[31350,31980)",
+      "evidence": [
+        {
+          "transcript": "T11",
+          "call_line": 19,
+          "result_line": 22,
+          "observation": "runtimeMediaHash 定義搜尋成功返回 no match；20/21的 taskHasMedia 定義搜尋亦成功返回 no match。"
+        },
+        {
+          "transcript": "T11",
+          "call_line": 13,
+          "result_line": 16,
+          "observation": "May helper 定義搜尋返回 budget ERROR；14/15的 Needs helper 搜尋同樣失敗。"
+        },
+        {
+          "transcript": "T11",
+          "call_line": 24,
+          "result_line": 25,
+          "observation": "Needs 的可見證據是 caller excerpt，不是定義。"
+        }
+      ],
+      "cause": "成功的 exact-definition 無命中證明部分 owners 未提供；另兩項搜尋失敗，沒有足夠 observation。",
+      "remedy": "補入已確認缺失的 helper owners；縮小 May/Needs 搜尋並成功取得結果後再分類。",
+      "missing_evidence": "runtimeMediaHash/taskHasMedia bodies，以及 May/Needs 的成功定位結果。",
+      "qualification": "主類只由已證明的子集支撐；不把 May/Needs budget ERROR 當作不存在或 producer 截斷。",
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "search_only",
+        "unverified"
+      ]
+    },
+    {
+      "task_id": "11",
+      "gap_index": 1,
+      "subject": "cache、check_duplicate、cache_freshness tests 完全省略",
+      "source_artifact": "S11",
+      "source_range": "returned tail [80896,108113)，包含 artifact 結尾",
+      "evidence": [
+        {
+          "transcript": "T11",
+          "call_line": 29,
+          "result_line": 30,
+          "observation": "cache_freshness_test bytes/omitted_bytes 均21577；cache_test 均10605；check_duplicate_test 均10508，三者 body 皆空。"
+        }
+      ],
+      "cause": "producer 已完全省略三個相關 test bodies。",
+      "remedy": "另提供完整公開 test snapshot；不以重複搜尋空 body 補救。",
+      "missing_evidence": "三個 focused test 檔的完整內容。",
+      "primary_category": "producer_truncated",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "11",
+      "gap_index": 2,
+      "subject": "其他 TaskCache implementations 與 interface inventory",
+      "source_artifact": "S11",
+      "source_range": "primary windows [0,65536)；interface search scan [0,108113)",
+      "evidence": [
+        {
+          "transcript": "T11",
+          "call_line": 2,
+          "result_line": 3,
+          "observation": "default implementation 可見；本 task 沒有交付其他 TaskCache implementation inventory。"
+        },
+        {
+          "transcript": "T11",
+          "call_line": 32,
+          "result_line": 33,
+          "observation": "字面 TaskCache interface 搜尋成功返回 no match；這只約束該搜尋及 snapshot，不能證明 repository 沒有 interface。"
+        }
+      ],
+      "cause": "default implementation 的局部證據不足以代表所有 implementations。",
+      "remedy": "取得公開 interface 定義及其他 implementation 清單，再核對新契約的一致性。",
+      "missing_evidence": "完整 interface/implementation inventory 與其他實作 bodies。",
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "search_only"
+      ]
+    },
+    {
+      "task_id": "12",
+      "gap_index": 0,
+      "subject": "ordinary-worker receipt 與 manifestBinding builders 未提供",
+      "source_artifact": "S12",
+      "source_range": "snapshot inventory lines 1–2000；receipt excerpt [3142,3406)",
+      "evidence": [
+        {
+          "transcript": "T12",
+          "call_line": 2,
+          "result_line": 3,
+          "observation": "snapshot 只有2個 primary、24個 related，沒有 ordinary-worker receipt/manifestBinding builder owners。"
+        },
+        {
+          "transcript": "T12",
+          "call_line": 23,
+          "result_line": 24,
+          "observation": "receipt.RuntimeMediaHash 的命中是使用端 excerpt。"
+        },
+        {
+          "transcript": "T10",
+          "call_line": 6,
+          "result_line": 8,
+          "observation": "另一個公開 snapshot 的2021–2140行包含 worker receipt 路徑，可作跨 task 補充。"
+        }
+      ],
+      "cause": "receipt consumer 與 builder 的證據分區。",
+      "remedy": "先接上 task10 worker receipt 路徑，再補 manifestBinding builder owner。",
+      "missing_evidence": "完整 builder bodies，以及 media identity 如何寫入 receipt/binding 的資料流。",
+      "primary_category": "missing_file",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "12",
+      "gap_index": 1,
+      "subject": "focused tests 被省略，但不是所有 related bodies 都省略",
+      "source_artifact": "S12",
+      "source_range": "snapshot lines 2001–2784，尤其2018–2623、2626–2784",
+      "evidence": [
+        {
+          "transcript": "T12",
+          "call_line": 6,
+          "result_line": 8,
+          "observation": "context_query_provider_paths、context_window、contract_compile、coordinator_context_admission、coordinator_tool_errors、coordinator_tools、decision_discipline 等 entries 為全部省略。"
+        },
+        {
+          "transcript": "T12",
+          "call_line": 6,
+          "result_line": 8,
+          "observation": "blocked_continuation、blocked_retry、capability 三個 bodies 完整；context_artifact_capture bytes=10684、omitted_bytes=8872，仍保留部分 body。"
+        }
+      ],
+      "cause": "producer 對不同 related entries 採不同保留程度；原敘述過度概括。",
+      "remedy": "按檔案記錄完整/部分/全部省略，只補真正省略且與 gap 相關的 tests。",
+      "missing_evidence": "focused tests 被省略的 bodies；不包括已完整交付的三個 tests。",
+      "qualification": "『every other related body omitted』不成立。",
+      "primary_category": "producer_truncated",
+      "secondary_categories": []
+    },
+    {
+      "task_id": "12",
+      "gap_index": 2,
+      "subject": "decoder caller 搜尋未構成 package-wide inventory",
+      "source_artifact": "S12",
+      "source_range": "decoder definition/caller 搜尋結果；snapshot inventory lines 1–2000",
+      "evidence": [
+        {
+          "transcript": "T12",
+          "call_line": 15,
+          "result_line": 18,
+          "observation": "可見 decoder 定義與 runFull caller；提供集合只有2個 primary，未交付 package-wide caller inventory。"
+        }
+      ],
+      "cause": "局部定義及 caller 命中不足以建立所有解碼入口與相容性影響。",
+      "remedy": "取得同 revision 公開 package inventory，定位其他 caller 後只讀相關 body。",
+      "missing_evidence": "完整 caller 集合與其他入口的解碼/錯誤處理上下文。",
+      "qualification": "不由有限搜尋推定 runFull 是唯一 caller。",
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "search_only"
+      ]
+    },
+    {
+      "task_id": "12",
+      "gap_index": 3,
+      "subject": "RuntimeMedia/hash producer 與 empty-hash 可達性",
+      "source_artifact": "S12",
+      "source_range": "search excerpts [8074,8687)、[3116,3368)、[3142,3406)",
+      "evidence": [
+        {
+          "transcript": "T12",
+          "call_line": 10,
+          "result_line": 12,
+          "observation": "runtime_media 的 reject guard 可見。"
+        },
+        {
+          "transcript": "T12",
+          "call_line": 13,
+          "result_line": 14,
+          "observation": "RuntimeMedia 命中是局部使用端；23/24另顯示 receipt.RuntimeMediaHash 使用端。"
+        }
+      ],
+      "cause": "consumer guard 可見，但 media/hash producer 未提供，無法判定 empty-hash 狀態是否實際可達。",
+      "remedy": "補充 producer 與 receipt/binding builder，從建立到驗證追蹤 hash。",
+      "missing_evidence": "hash producer body、空值契約與實際資料流可達性。",
+      "qualification": "有 reject guard 不代表 empty-hash 已證明可達，也不代表不可能到達。",
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "semantic_uncertainty"
+      ]
+    },
+    {
+      "task_id": "13",
+      "gap_index": 0,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "Media helper definitions, receipt producer and MCP-contract implementation",
+      "source_artifact_ranges": [
+        "S13:[0,236587)",
+        "S13:[34302,34449)",
+        "S13:[35057,35204)",
+        "S13:[36789,36936)",
+        "S13:[65273,65410)",
+        "S13:[80889,81035)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C13",
+        "call_result_lines": [
+          [
+            21,
+            22
+          ],
+          [
+            23,
+            24
+          ]
+        ],
+        "observation": "The definition search for Coordinator.taskNeedsOwnMediaExecution returned no matches. A second batch returned three calls to that helper, no func runtimeMediaHash match, a PublishToolResult call, and a decodeToolMediaPublication validation call. The delivered snapshot does not supply all corresponding dependency implementations."
+      },
+      "main_cause": "Assigned snapshot dependency boundary, rather than failure to finish its returned bytes.",
+      "remedy": "Retrieve same-revision public snapshot sections containing the helper definitions, receipt producer and internal/mcpcontracts implementation.",
+      "missing_evidence": [
+        "Definitions of runtimeMediaHash and taskNeedsOwnMediaExecution",
+        "Receipt production and media decoder/validator implementations"
+      ]
+    },
+    {
+      "task_id": "13",
+      "gap_index": 1,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "Durable append producers for EventToolMediaPublished and EventMediaConsumerBound",
+      "source_artifact_ranges": [
+        "D13:[0,15074)",
+        "S13:[0,236587)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C13",
+        "call_result_lines": [
+          [
+            1,
+            3
+          ]
+        ],
+        "observation": "The returned diff adds event catalog/known-event/payload-validation handling. Those are consumers or declarations, not the durable append producer. The complete assigned snapshot does not provide the producer implementation needed for this claim."
+      },
+      "main_cause": "Event declaration and validation changes were provided without their cross-file append owner.",
+      "remedy": "Supply the same-revision event append implementation and transaction boundary from public snapshots.",
+      "missing_evidence": [
+        "Production append sites and atomicity ordering for both event types"
+      ]
+    },
+    {
+      "task_id": "13",
+      "gap_index": 2,
+      "primary_category": "producer_truncated",
+      "secondary_categories": [],
+      "subject": "Related evidence/event test bodies and scheduler negative-case coverage",
+      "source_artifact_ranges": [
+        "S13:[183840,216608)",
+        "S13:[216608,236587)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C13",
+        "call_result_lines": [
+          [
+            25,
+            26
+          ],
+          [
+            27,
+            28
+          ]
+        ],
+        "observation": "Related-file metadata records omitted test content: evidence_manifest_test.go 13299 bytes, evidence_store_media_test.go 11619 bytes, and event_payloads_test.go 14426 bytes. Empty or truncated source sections are producer omissions despite delivery of the snapshot itself."
+      },
+      "main_cause": "Snapshot production omitted related test bodies.",
+      "remedy": "Provide untruncated same-revision test sections, including the relevant scheduler no-media assertions.",
+      "missing_evidence": [
+        "Omitted related test bodies",
+        "Direct scheduler negative-case assertions needed by the gap"
+      ]
+    },
+    {
+      "task_id": "13",
+      "gap_index": 3,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "FileArtifactStore.Verify callers",
+      "source_artifact_ranges": [
+        "D13:[0,15074)",
+        "S13:[0,236587)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C13",
+        "call_result_lines": [
+          [
+            1,
+            3
+          ]
+        ],
+        "observation": "The returned change to Verify clears occurrence information in the reference. The assigned snapshot does not include the artifact_access.go, execution_world.go and inspect caller paths required to assess the changed contract end to end."
+      },
+      "main_cause": "Caller closure is outside the assigned immutable snapshot.",
+      "remedy": "Read the relevant same-revision public caller sections rather than infer compatibility from the changed method alone.",
+      "missing_evidence": [
+        "Artifact access, execution-world and inspection callers"
+      ]
+    },
+    {
+      "task_id": "13",
+      "gap_index": 4,
+      "primary_category": "unverified",
+      "secondary_categories": [],
+      "subject": "Independent executable verification",
+      "source_artifact_ranges": [
+        "R13:[0,676)",
+        "T13:1-31"
+      ],
+      "transcript_evidence": {
+        "call_result_lines": [
+          [
+            5,
+            7
+          ]
+        ],
+        "observation": "R13 is a revision/workset reference report with passed=true and touched paths. The review transcript supplies views/searches, not an executable-test command/result or a typed independent verifier receipt."
+      },
+      "main_cause": "Required execution observation is not supplied by the reviewed public transcript.",
+      "remedy": "Locate an already-exported verifier receipt tied to this revision and task; do not reinterpret reference validation as tests.",
+      "missing_evidence": [
+        "Independent executable verification receipt and its revision/task binding"
+      ]
+    },
+    {
+      "task_id": "14",
+      "gap_index": 0,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "MCP action media publication lifecycle callers",
+      "source_artifact_ranges": [
+        "S14:[146154,146980)",
+        "S14:[147686,148514)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C14",
+        "call_result_lines": [
+          [
+            15,
+            16
+          ]
+        ],
+        "observation": "Search excerpts show verifyMCPActionMediaSource and publishPendingMCPActionMedia definitions. They do not supply production callers or the receipt/lifecycle writers that drive commit and abort."
+      },
+      "main_cause": "Helpers are delivered without their lifecycle owner/caller closure.",
+      "remedy": "Supply public snapshot sections for production publication callers and receipt/commit/abort writers.",
+      "missing_evidence": [
+        "Production publication callers",
+        "Receipt and lifecycle write paths"
+      ]
+    },
+    {
+      "task_id": "14",
+      "gap_index": 1,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "TaskResult and RuntimeMediaProjection schema/validation definitions",
+      "source_artifact_ranges": [
+        "D14:lines 103-125",
+        "S14:lines 1-6696"
+      ],
+      "transcript_evidence": {
+        "coverage": "C14",
+        "call_result_lines": [
+          [
+            1,
+            3
+          ],
+          [
+            17,
+            18
+          ]
+        ],
+        "observation": "The returned diff shows ProjectHistoricalTaskResult checking task/attempt identity, calling RuntimeMedia.Validate and cloning preserved media. A search for type RuntimeMediaProjection returned no matches in the assigned source."
+      },
+      "main_cause": "Projection consumer changes are present, but the type/schema authority is outside the snapshot.",
+      "remedy": "Provide the same-revision TaskResult and RuntimeMediaProjection declarations and validation methods.",
+      "missing_evidence": [
+        "JSON tags, schema declarations and validation implementation"
+      ]
+    },
+    {
+      "task_id": "14",
+      "gap_index": 2,
+      "primary_category": "producer_truncated",
+      "secondary_categories": [
+        "unverified"
+      ],
+      "subject": "Related lifecycle tests and their execution evidence",
+      "source_artifact_ranges": [
+        "S14:lines 6488-6526",
+        "T14:1-29"
+      ],
+      "transcript_evidence": {
+        "coverage": "C14",
+        "call_result_lines": [
+          [
+            19,
+            20
+          ]
+        ],
+        "observation": "The returned metadata explicitly omits receipt_test.go 26419 bytes, historical_result_content_test.go 2987 bytes, mcp_action_binding_test.go 9291 bytes and mcp_action_provider_test.go 13790 bytes. Their sections are empty. The transcript also supplies no executable verification result."
+      },
+      "main_cause": "Producer omitted related tests; execution evidence is independently unavailable here.",
+      "remedy": "Provide untruncated exported test bodies and an existing revision-bound verifier receipt.",
+      "missing_evidence": [
+        "Four omitted test bodies",
+        "Independent executable verification receipt"
+      ]
+    },
+    {
+      "task_id": "14",
+      "gap_index": 3,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "canonicalJournalOwner and LoadSessionTree definitions",
+      "source_artifact_ranges": [
+        "S14:[97156,97977)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C14",
+        "call_result_lines": [
+          [
+            15,
+            16
+          ]
+        ],
+        "observation": "The excerpt contains the c.session != nil guard and LoadSessionTree(c.canonicalJournalOwner().session.Workspace) call. It does not provide the definitions needed to establish the ownership/nullability relationship."
+      },
+      "main_cause": "A guarded call site is present without the ownership helper and session-loader implementations.",
+      "remedy": "Retrieve those same-revision definitions from public evidence before judging the guard.",
+      "missing_evidence": [
+        "canonicalJournalOwner definition",
+        "LoadSessionTree definition and relevant contract"
+      ]
+    },
+    {
+      "task_id": "14",
+      "gap_index": 4,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "Subagent native-image capability and external cost reservation consumers",
+      "source_artifact_ranges": [
+        "S14:[20709,21333)",
+        "S14:[20770,21394)",
+        "S14:[22497,23123)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C14",
+        "call_result_lines": [
+          [
+            17,
+            18
+          ],
+          [
+            27,
+            28
+          ]
+        ],
+        "observation": "Returned excerpts show SupportsNativeImageInput probing and externalCostReservationKey production; the matching provider and reservation-consumer implementations are not supplied by this snapshot."
+      },
+      "main_cause": "Capability/context-key producers are separated from consumers by the workset boundary.",
+      "remedy": "Include public SubagentProvider capability implementation and the external reservation-key reader.",
+      "missing_evidence": [
+        "SubagentProvider capability implementation",
+        "External reservation context consumer"
+      ]
+    },
+    {
+      "task_id": "15",
+      "gap_index": 0,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "CommitProviderInvocation atomic event append implementation",
+      "source_artifact_ranges": [
+        "D15:[0,32768)",
+        "S15:[14555,15178)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C15",
+        "call_result_lines": [
+          [
+            1,
+            4
+          ],
+          [
+            15,
+            16
+          ]
+        ],
+        "observation": "The returned source includes a test using CommitProviderInvocation and asserting adjacent event ordering. The durable production append implementation establishing atomicity is outside the assigned snapshot."
+      },
+      "main_cause": "A test expectation is available, but its transaction owner is not.",
+      "remedy": "Supply the public same-revision CommitProviderInvocation implementation and append transaction boundary.",
+      "missing_evidence": [
+        "Production atomic append implementation"
+      ]
+    },
+    {
+      "task_id": "15",
+      "gap_index": 1,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "toolMediaOccurrence and canonicalJournalOwner definitions",
+      "source_artifact_ranges": [
+        "S15:[80309,80928)",
+        "S15:[22342,22963)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C15",
+        "call_result_lines": [
+          [
+            15,
+            16
+          ]
+        ],
+        "observation": "Search results provide a toolMediaOccurrence delegation call and a canonicalJournalOwner call, not the corresponding definitions."
+      },
+      "main_cause": "Cross-file occurrence and journal-ownership helpers are omitted from this workset.",
+      "remedy": "Retrieve their same-revision public definitions and inspect ownership/occurrence construction directly.",
+      "missing_evidence": [
+        "toolMediaOccurrence definition",
+        "canonicalJournalOwner definition"
+      ]
+    },
+    {
+      "task_id": "15",
+      "gap_index": 2,
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "semantic_uncertainty"
+      ],
+      "subject": "Media compaction version ordering and normalization",
+      "source_artifact_ranges": [
+        "D15:[0,32768)",
+        "S15:[0,169486)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C15",
+        "call_result_lines": [
+          [
+            1,
+            4
+          ]
+        ],
+        "observation": "Delivered code raises the state version to mediaCompactionStateVersion and assigns toolMediaCompactionStateVersion when tool media is present. The version constants and isMediaCompactionVersion definition needed to interpret ordering and accepted versions are not supplied."
+      },
+      "main_cause": "Missing version authority leaves the visible assignments semantically underdetermined.",
+      "remedy": "Supply constant values and normalization/version predicate definitions before evaluating upgrade or downgrade behavior.",
+      "missing_evidence": [
+        "Version constants",
+        "isMediaCompactionVersion implementation"
+      ]
+    },
+    {
+      "task_id": "15",
+      "gap_index": 3,
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "semantic_uncertainty"
+      ],
+      "subject": "Tool-media expansion, metadata decoding and TaskBinding.Clone",
+      "source_artifact_ranges": [
+        "D15:[0,32768)",
+        "S15:[0,169486)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C15",
+        "call_result_lines": [
+          [
+            1,
+            4
+          ],
+          [
+            17,
+            18
+          ]
+        ],
+        "observation": "The delivered history code calls media expansion/decoding helpers, skips malformed or nil decoded metadata, and appends image blocks. It does not supply the external expansion, decoder, MessagesHaveToolMedia or TaskBinding.Clone implementations."
+      },
+      "main_cause": "Visible call-site behavior cannot establish external aliasing, expansion and filtering semantics.",
+      "remedy": "Retrieve the public same-revision helper and clone definitions.",
+      "missing_evidence": [
+        "agentExpandToolMediaRequest and message expansion implementations",
+        "DecodeToolMediaMetadata and MessagesHaveToolMedia",
+        "media.TaskBinding.Clone"
+      ]
+    },
+    {
+      "task_id": "15",
+      "gap_index": 4,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "writeExclusiveImage callers, tests and pre-existing write ownership",
+      "source_artifact_ranges": [
+        "D15:[0,32768)",
+        "S15:[31579,32198)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C15",
+        "call_result_lines": [
+          [
+            1,
+            4
+          ],
+          [
+            15,
+            16
+          ]
+        ],
+        "observation": "writeExclusiveImage is defined in the delivered code, including pinned-directory/exclusive-open and cleanup behavior. The missing evidence is its caller/test and pre-existing write ownership closure, not the helper definition."
+      },
+      "main_cause": "Callers and ownership context are outside the assigned snapshot.",
+      "remedy": "Provide same-revision export callers and relevant ownership/error-path tests.",
+      "missing_evidence": [
+        "Production export callers",
+        "Relevant tests",
+        "Pre-existing write ownership context"
+      ]
+    },
+    {
+      "task_id": "16",
+      "gap_index": 0,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "verifyMediaConsumer and resolveNativeProviderMedia definitions",
+      "source_artifact_ranges": [
+        "S16:primary sections, lines 1-4198",
+        "S16:[171512,242090)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C16",
+        "call_result_lines": [
+          [
+            29,
+            30
+          ]
+        ],
+        "observation": "A function-definition search for verifyMediaConsumer returned no matches. The delivered snapshot exposes dependent runtime/media behavior but does not supply the two verification/resolution implementations."
+      },
+      "main_cause": "Missing dependency definitions rather than unfinished primary source reading.",
+      "remedy": "Retrieve the public same-revision consumer verifier and native-provider resolver definitions.",
+      "missing_evidence": [
+        "verifyMediaConsumer definition",
+        "resolveNativeProviderMedia definition"
+      ]
+    },
+    {
+      "task_id": "16",
+      "gap_index": 1,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "writeExclusiveImage implementation",
+      "source_artifact_ranges": [
+        "S16:[27452,27983)",
+        "S15:[31579,32198)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C16",
+        "call_result_lines": [
+          [
+            22,
+            23
+          ]
+        ],
+        "observation": "T16 returns a writeExclusiveImage call but not its implementation. The implementation is separately present in the public task-15 snapshot, so this is not a repository-wide or export-wide absence."
+      },
+      "main_cause": "Definition split across public workset partitions.",
+      "remedy": "Reuse the same-revision S15 helper evidence instead of reading live files.",
+      "missing_evidence": [
+        "Definition within task 16's assigned snapshot"
+      ],
+      "public_cross_partition_evidence": "T15 call/result lines 15/16, S15:[31579,32198)"
+    },
+    {
+      "task_id": "16",
+      "gap_index": 2,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "verifyRuntimeMediaTransition implementation",
+      "source_artifact_ranges": [
+        "S16:primary sections, lines 1-4198",
+        "S17:[9005,9273)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C16",
+        "call_result_lines": [
+          [
+            2,
+            3
+          ],
+          [
+            9,
+            10
+          ],
+          [
+            11,
+            12
+          ]
+        ],
+        "observation": "The delivered task-16 primary source lacks the transition verifier implementation. A definition excerpt is independently available in the public task-17 transcript."
+      },
+      "main_cause": "Verification owner is in another public workset partition.",
+      "remedy": "Connect task 16's call sites to the same-revision task-17 definition and its complete source section.",
+      "missing_evidence": [
+        "Transition verifier definition within the assigned task-16 snapshot"
+      ],
+      "public_cross_partition_evidence": "T17 call/result lines 24/28, S17:[9005,9273)"
+    },
+    {
+      "task_id": "16",
+      "gap_index": 3,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "CLI/TUI consumers of image count, result IDs and historical-image helpers",
+      "source_artifact_ranges": [
+        "S16:lines 3768-4198",
+        "S16:[156050,156591)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C16",
+        "call_result_lines": [
+          [
+            11,
+            12
+          ],
+          [
+            26,
+            27
+          ]
+        ],
+        "observation": "HistoricalResultImagesCommand is defined at source lines 3806-3808. RunReport.ImageResultIDs and its projection assignment are also delivered. Missing evidence concerns downstream consumers/callers, not these definitions or the report field."
+      },
+      "main_cause": "Consumer closure crosses the task's source boundary.",
+      "remedy": "Provide public CLI/TUI caller sections and result-ID/image-count consumption paths.",
+      "missing_evidence": [
+        "CLI/TUI consumers and helper call sites"
+      ]
+    },
+    {
+      "task_id": "16",
+      "gap_index": 4,
+      "primary_category": "unverified",
+      "secondary_categories": [],
+      "subject": "Executable verification of the runtime/report changes",
+      "source_artifact_ranges": [
+        "R16",
+        "T16:1-31"
+      ],
+      "transcript_evidence": {
+        "call_result_lines": [
+          [
+            5,
+            8
+          ]
+        ],
+        "observation": "The transcript returns a reference report and source views/searches, but no independent executable-test command/result or typed verifier receipt."
+      },
+      "main_cause": "Execution observation is unavailable in this reviewed transcript.",
+      "remedy": "Locate an existing exported verifier receipt bound to the reviewed revision and task.",
+      "missing_evidence": [
+        "Independent executable verification receipt"
+      ]
+    },
+    {
+      "task_id": "17",
+      "gap_index": 0,
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "unverified"
+      ],
+      "subject": "Codex image admission, attempt preparation and state-lock helper implementations",
+      "source_artifact_ranges": [
+        "S17:[48136,48456)",
+        "S17:[39538,39863)",
+        "S17:[51584,51903)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C17",
+        "call_result_lines": [
+          [
+            20,
+            21
+          ],
+          [
+            33,
+            36
+          ],
+          [
+            34,
+            35
+          ]
+        ],
+        "observation": "Returned searches expose calls to validateAttemptEntry, acquireCodexStateFileLock and prepareImageAttempt. The assigned production sections do not supply the helper closure including admitImageTurn and validateCodexImageLease. No executable verification receipt is supplied."
+      },
+      "main_cause": "Codex helper implementation files are outside the workset; execution claims remain unobserved.",
+      "remedy": "Provide public helper definitions and an already-exported revision-bound verifier receipt.",
+      "missing_evidence": [
+        "Five named Codex helper implementations",
+        "Independent executable verification receipt"
+      ]
+    },
+    {
+      "task_id": "17",
+      "gap_index": 1,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "finalizeTaskMedia and verifyRuntimeMediaTransition callers",
+      "source_artifact_ranges": [
+        "S17:[11724,11981)",
+        "S17:[9005,9273)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C17",
+        "call_result_lines": [
+          [
+            23,
+            27
+          ],
+          [
+            24,
+            28
+          ]
+        ],
+        "observation": "Both search results show definitions, not the production caller closure. verifyRuntimeMediaTransition visibly returns early for non-task_ sources; the caller/source-domain contract is not supplied."
+      },
+      "main_cause": "Definitions are present, but lifecycle callers and source-domain ownership are outside the assigned snapshot.",
+      "remedy": "Retrieve same-revision public finalization and transition-verifier callers.",
+      "missing_evidence": [
+        "Production callers",
+        "Source-domain contract for the non-task_ early return"
+      ]
+    },
+    {
+      "task_id": "17",
+      "gap_index": 2,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "Publication and redaction ownership",
+      "source_artifact_ranges": [
+        "S17:delivered primary source sections and related-file inventory"
+      ],
+      "transcript_evidence": {
+        "coverage": "C17",
+        "call_result_lines": [
+          [
+            2,
+            3
+          ],
+          [
+            5,
+            8
+          ],
+          [
+            9,
+            10
+          ],
+          [
+            11,
+            12
+          ],
+          [
+            15,
+            17
+          ]
+        ],
+        "observation": "The supplied primary sections cover runtime media, journal/result and Codex changes. Their source/inventory does not supply the external publication/redaction owners required by this gap."
+      },
+      "main_cause": "Cross-partition ownership boundary.",
+      "remedy": "Provide public same-revision publication and redaction owner sections, with their call paths.",
+      "missing_evidence": [
+        "Publication integration owner",
+        "Redaction implementation and ownership path"
+      ]
+    },
+    {
+      "task_id": "17",
+      "gap_index": 3,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "Event-store, command-report, JSON and inspection result sinks",
+      "source_artifact_ranges": [
+        "S17:delivered primary source sections and related-file inventory"
+      ],
+      "transcript_evidence": {
+        "coverage": "C17",
+        "call_result_lines": [
+          [
+            2,
+            3
+          ],
+          [
+            5,
+            8
+          ],
+          [
+            9,
+            10
+          ],
+          [
+            11,
+            12
+          ],
+          [
+            15,
+            17
+          ]
+        ],
+        "observation": "The assigned source shows result/journal-side changes but does not provide the downstream event decoder and CLI/JSON/inspect sink implementations named by the gap."
+      },
+      "main_cause": "Downstream consumer closure is excluded from the snapshot.",
+      "remedy": "Supply public sink/decoder sections and connect them to the delivered producer fields.",
+      "missing_evidence": [
+        "Event-store decoding",
+        "Command-report and JSON consumers",
+        "Inspection result sinks"
+      ]
+    },
+    {
+      "task_id": "17",
+      "gap_index": 4,
+      "primary_category": "producer_truncated",
+      "secondary_categories": [
+        "partial_read",
+        "search_only",
+        "unverified"
+      ],
+      "subject": "Truncated related tests, unread available Codex tests and verifier output",
+      "source_artifact_ranges": [
+        "S17:lines 3570-3813",
+        "S17:[138462,199327) approximately for the Codex test section",
+        "S17:[199408,199817)",
+        "S17:[204339,204748)",
+        "S17:[203000,209178)",
+        "S17:[141551,141964)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C17",
+        "call_result_lines": [
+          [
+            11,
+            12
+          ],
+          [
+            15,
+            17
+          ],
+          [
+            16,
+            18
+          ],
+          [
+            19,
+            22
+          ],
+          [
+            41,
+            44
+          ]
+        ],
+        "observation": "Producer metadata records task_journal_test.go omitted_bytes=5183 and task_result_test.go omitted_bytes=32656; the latter body is empty, with further related files omitted. Separately, subagent_codex_test.go is present with bytes=60816 and no producer-truncation marker. Its section starts at source line 3570; the sequential result stops at line 3813 inside rawCallMethods after t.Helper(), without an end-of-artifact marker. Later calls return headings, truncation excerpts, the tail, and one ArtifactScope excerpt rather than the remaining Codex test body."
+      },
+      "main_cause": "Mixed problem: real producer truncation plus reader failure to finish an available test section.",
+      "remedy": "Provide untruncated related tests; resume byte/line reads of the existing Codex test section after the last delivered position; locate an existing verifier receipt.",
+      "missing_evidence": [
+        "Producer-omitted related test content",
+        "Available but undelivered Codex test remainder",
+        "Independent executable verification receipt"
+      ]
+    },
+    {
+      "task_id": "18",
+      "gap_index": 0,
+      "primary_category": "semantic_uncertainty",
+      "secondary_categories": [],
+      "subject": "False claim that worker_memory.go diff tail is truncated",
+      "source_artifact_ranges": [
+        "D18:[32768,45550)",
+        "D18:[45300,45550)"
+      ],
+      "transcript_evidence": {
+        "call_result_lines": [
+          [
+            5,
+            8
+          ],
+          [
+            27,
+            28
+          ]
+        ],
+        "decisive_call_id": "call_3dd90065ea2f45e69da3f027",
+        "observation": "The hunk header is @@ -1159,0 +1160,5 @@ func (c *Coordinator) activeBranchID() string {. It contains exactly five added lines: two comments, an if statement, the parent activeBranchID return, and the closing brace of that if. The tail reread includes '+\\t}' and '[end of artifact]'. An unchanged function-closing brace need not appear in a zero-context diff."
+      },
+      "main_cause": "Misreading a complete zero-context unified-diff hunk as a truncated full function.",
+      "remedy": "Withdraw the producer-truncation allegation; count hunk lines and distinguish unchanged context from omitted changed content.",
+      "missing_evidence": [],
+      "disposition": "The specific truncation allegation is contradicted by the returned diff tail."
+    },
+    {
+      "task_id": "18",
+      "gap_index": 1,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "Tool-media publication integration and occurrence ownership",
+      "source_artifact_ranges": [
+        "S18:[36175,36801)",
+        "S18:[40660,41286)",
+        "S18:[33667,34286)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C18",
+        "call_result_lines": [
+          [
+            19,
+            20
+          ]
+        ],
+        "observation": "Returned excerpts show mediaPublicationOccurrence calls and a toolMediaOccurrence definition. They do not supply the external publication integration/owner closure required to establish end-to-end publication behavior."
+      },
+      "main_cause": "Occurrence-related local code is present without the external publication integration.",
+      "remedy": "Supply the public same-revision publication integration and owner implementation.",
+      "missing_evidence": [
+        "Publication integration and owner closure"
+      ]
+    },
+    {
+      "task_id": "18",
+      "gap_index": 2,
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "semantic_uncertainty",
+        "unverified"
+      ],
+      "subject": "Provider request expansion and media token estimation",
+      "source_artifact_ranges": [
+        "S18:[22151,22773)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C18",
+        "call_result_lines": [
+          [
+            19,
+            20
+          ]
+        ],
+        "observation": "The delivered CountProviderRequest excerpt assigns request.ModelID, expands tool media and tests ProviderRequestHasMedia. The agent/provider_request.go implementation that determines counting semantics is not supplied; the transcript provides no independent measured observation resolving the estimator question."
+      },
+      "main_cause": "Missing estimator implementation leaves a visible call sequence insufficient to establish counting correctness.",
+      "remedy": "Retrieve public provider_request.go evidence and an existing relevant counting/verifier observation.",
+      "missing_evidence": [
+        "Provider request/counting implementation",
+        "Independent evidence resolving the estimation behavior"
+      ]
+    },
+    {
+      "task_id": "18",
+      "gap_index": 3,
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "semantic_uncertainty"
+      ],
+      "subject": "Fanout repository/session and parent task-binding ownership",
+      "source_artifact_ranges": [
+        "D18:[45300,45550)",
+        "S18:[112420,112598)",
+        "S18:[112221,112379)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C18",
+        "call_result_lines": [
+          [
+            27,
+            28
+          ],
+          [
+            29,
+            30
+          ],
+          [
+            31,
+            32
+          ]
+        ],
+        "observation": "Returned code delegates activeBranchID to the fanout parent when present. It does not supply the fanout construction and repository/session/task-binding definitions needed to prove broader ownership consistency."
+      },
+      "main_cause": "A local delegation is visible, but the ownership construction contract is outside the snapshot.",
+      "remedy": "Provide public fanout construction, parent run/session binding and task-binding clone sections.",
+      "missing_evidence": [
+        "Fanout construction and Repo/session binding",
+        "Parent run/task-binding ownership definitions"
+      ]
+    },
+    {
+      "task_id": "18",
+      "gap_index": 4,
+      "primary_category": "unverified",
+      "secondary_categories": [],
+      "subject": "Executable verification",
+      "source_artifact_ranges": [
+        "R18:[0,756)",
+        "T18:1-33"
+      ],
+      "transcript_evidence": {
+        "call_result_lines": [
+          [
+            10,
+            11
+          ]
+        ],
+        "observation": "The returned report is workset/reference evidence. The transcript supplies no executable-test command/result or typed independent verifier receipt."
+      },
+      "main_cause": "Execution observation is absent from the reviewed evidence.",
+      "remedy": "Locate an existing exported verifier receipt bound to the task and revision.",
+      "missing_evidence": [
+        "Independent executable verification receipt"
+      ]
+    },
+    {
+      "task_id": "19",
+      "gap_index": 0,
+      "primary_category": "producer_truncated",
+      "secondary_categories": [],
+      "subject": "display.go identity helper and production message construction",
+      "source_artifact_ranges": [
+        "S19:[32768,65536)",
+        "S19:[65536,69472)",
+        "S19:[44797,46017)",
+        "S19:[2223,2365)",
+        "S19:[3199,3341)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C19",
+        "call_result_lines": [
+          [
+            5,
+            8
+          ],
+          [
+            9,
+            12
+          ],
+          [
+            15,
+            16
+          ],
+          [
+            19,
+            20
+          ]
+        ],
+        "observation": "The display.go related-file header records bytes=68311, content_truncated=true and omitted_bytes=38967. Returned code calls resultStatusIdentity in task_result_ready handling, but its definition is not delivered. TaskResultIdentityMsg{ searches return two test constructions, not production construction. Those two excerpts total 284 returned bytes; the 69472-byte search scope is not returned source."
+      },
+      "main_cause": "Producer truncated the large related display file containing the needed production closure.",
+      "remedy": "Provide the omitted same-revision display.go sections, especially resultStatusIdentity and production identity-message construction.",
+      "missing_evidence": [
+        "Omitted display.go content",
+        "Identity helper definition",
+        "Production TaskResultIdentityMsg construction"
+      ]
+    },
+    {
+      "task_id": "19",
+      "gap_index": 1,
+      "primary_category": "missing_file",
+      "secondary_categories": [],
+      "subject": "HistoricalResultImagesCommand definition",
+      "source_artifact_ranges": [
+        "S19:[1137,1466)",
+        "S19:[45570,45899)",
+        "R19:[0,426)",
+        "S16:[156050,156591)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C19",
+        "call_result_lines": [
+          [
+            6,
+            7
+          ],
+          [
+            17,
+            18
+          ]
+        ],
+        "observation": "Task 19's search returns calls to HistoricalResultImagesCommand. R19 reports six links but zero checked paths and zero checked symbols, so it does not verify the definition. The definition is publicly present in task 16's snapshot."
+      },
+      "main_cause": "Helper definition resides outside the assigned task-19 snapshot.",
+      "remedy": "Reuse the same-revision public task-16 definition rather than treat link checks as symbol verification.",
+      "missing_evidence": [
+        "Definition within the assigned snapshot"
+      ],
+      "public_cross_partition_evidence": "T16 call/result lines 26/27, S16:[156050,156591)"
+    },
+    {
+      "task_id": "19",
+      "gap_index": 2,
+      "primary_category": "unverified",
+      "secondary_categories": [],
+      "subject": "Executable UI/CLI verification",
+      "source_artifact_ranges": [
+        "R19:[0,426)",
+        "T19:1-21"
+      ],
+      "transcript_evidence": {
+        "call_result_lines": [
+          [
+            6,
+            7
+          ]
+        ],
+        "observation": "The transcript includes test source and a reference report, but no test execution result or independent verifier receipt. Reference-report passed=true does not establish that the UI tests ran."
+      },
+      "main_cause": "Execution observation is unavailable in the reviewed transcript.",
+      "remedy": "Locate an already-exported task/revision-bound verifier receipt.",
+      "missing_evidence": [
+        "Independent executable UI/CLI verification receipt"
+      ]
+    },
+    {
+      "task_id": "21",
+      "gap_index": 0,
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "unverified"
+      ],
+      "subject": "Seven backing JSON/JSONL files and independent synthesis evidence",
+      "source_artifact_ranges": [
+        "S21:[0,35435)",
+        "R21:[0,1268)",
+        "S21:[7525,7787)",
+        "S22:[0,8192)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C21",
+        "call_result_lines": [
+          [
+            5,
+            8
+          ],
+          [
+            13,
+            16
+          ]
+        ],
+        "observation": "Task 21's eleven-path inventory includes acceptance.md, SHA256SUMS, evaluation/expected/fixture/input/inspect/launch/payload files, but not the seven backing JSON/JSONL bodies. Its provider-metadata.json search excerpt is a SHA256SUMS reference, not that file's body. Task 22's public snapshot independently includes all seven backing paths and returns actual admission/provider/wire content in its initial view."
+      },
+      "main_cause": "Backing evidence is split across public partitions; independent synthesis/visual verification remains unobserved.",
+      "remedy": "Join the task-22 public backing-file evidence with task-21 acceptance evidence. Separately locate an existing synthesis/independent-comparison receipt if required.",
+      "missing_evidence": [
+        "Backing bodies within task 21's assigned snapshot",
+        "Independent synthesis/comparison receipt",
+        "Original binary image contents where required for visual verification"
+      ],
+      "public_cross_partition_evidence": {
+        "transcript": "T22",
+        "call_result_lines": [
+          [
+            2,
+            6
+          ],
+          [
+            3,
+            4
+          ]
+        ],
+        "paths": [
+          "docs/archive/analyses/native-image-live-acceptance-2026-11-06/pre-inference-admission.json",
+          "docs/archive/analyses/native-image-live-acceptance-2026-11-06/pre-inference-wire-metadata.jsonl",
+          "docs/archive/analyses/native-image-live-acceptance-2026-11-06/provider-metadata.json",
+          "docs/archive/analyses/native-image-live-acceptance-2026-11-06/provider-wire-metadata.jsonl",
+          "docs/archive/analyses/native-image-live-acceptance-2026-11-06/result.json",
+          "docs/archive/analyses/native-image-live-acceptance-2026-11-06/run.json",
+          "docs/archive/analyses/native-image-live-acceptance-2026-11-06/status.json"
+        ],
+        "returned_content_examples": [
+          "Admission: requested 106936, used 0, reserved 0, limit 24000, exit 7, tokens 0.",
+          "Provider metadata: completion/thinking/tools/vision capabilities and context 1048576.",
+          "Pre-inference wire metadata contains four show/ps entries."
+        ]
+      }
+    },
+    {
+      "task_id": "21",
+      "gap_index": 1,
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "semantic_uncertainty"
+      ],
+      "subject": "Metadata authority and status interpretation policy",
+      "source_artifact_ranges": [
+        "S21:[0,35435)",
+        "R21:[0,1268)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C21",
+        "call_result_lines": [
+          [
+            2,
+            3
+          ],
+          [
+            6,
+            7
+          ],
+          [
+            5,
+            8
+          ]
+        ],
+        "observation": "The complete supplied snapshot contains archived acceptance artifacts and references. Its eleven-file inventory does not include the runtime metadata authority or status-policy implementation needed to adjudicate competing field/status interpretations."
+      },
+      "main_cause": "Archived values are supplied without the implementation or policy establishing their authority.",
+      "remedy": "Retrieve public same-revision metadata/status policy definitions and map each disputed field to its producer.",
+      "missing_evidence": [
+        "Metadata authority implementation",
+        "Status interpretation policy"
+      ]
+    },
+    {
+      "task_id": "22",
+      "gap_index": 0,
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "unverified"
+      ],
+      "subject": "Acceptance document and independent image comparison",
+      "source_artifact_ranges": [
+        "R22:[0,1191)",
+        "S22:[0,8192)",
+        "S21:[0,35435)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C22",
+        "call_result_lines": [
+          [
+            3,
+            4
+          ],
+          [
+            2,
+            6
+          ]
+        ],
+        "observation": "Task 22's eleven-path report lists seven backing files plus progress.md, runtime.md, agent-format.md and native-images.md; acceptance.md is not included. The public task-21 snapshot does include acceptance.md. Image filenames and hashes do not establish binary image delivery or an independent visual comparison."
+      },
+      "main_cause": "Acceptance evidence is in a sibling public partition; independent image verification is not demonstrated.",
+      "remedy": "Reuse task 21's public acceptance document and locate an existing binary/comparison receipt if the claim requires it.",
+      "missing_evidence": [
+        "Acceptance document within task 22's assigned snapshot",
+        "Original binary images or independently recorded comparison evidence"
+      ],
+      "public_cross_partition_evidence": "T21 call/result lines 2/3, 6/7 and 5/8 establish acceptance.md in the sibling public snapshot."
+    },
+    {
+      "task_id": "22",
+      "gap_index": 1,
+      "primary_category": "missing_file",
+      "secondary_categories": [
+        "partial_read",
+        "search_only",
+        "semantic_uncertainty"
+      ],
+      "subject": "CLI/config implementation behind documentation and incomplete reading of available guides",
+      "source_artifact_ranges": [
+        "S22:[0,8192)",
+        "S22:[159199,165299)",
+        "S22:[171576,174976)",
+        "S22:[276442,276857)",
+        "S22:[276088,276502)",
+        "S22:[272601,272852)",
+        "S22:[276406,276689)"
+      ],
+      "transcript_evidence": {
+        "coverage": "C22",
+        "call_result_lines": [
+          [
+            3,
+            4
+          ],
+          [
+            24,
+            30
+          ],
+          [
+            26,
+            27
+          ],
+          [
+            35,
+            39
+          ],
+          [
+            41,
+            44
+          ],
+          [
+            42,
+            43
+          ],
+          [
+            49,
+            50
+          ],
+          [
+            51,
+            52
+          ]
+        ],
+        "observation": "The eleven-path snapshot is documentation/backing-evidence only and does not supply CLI/config implementation. Separately, native-images.md starts near byte 269975, but the transcript returns isolated context-window, results-list and example excerpts rather than its whole body. Searching the 278295-byte snapshot does not mean 278295 bytes were delivered."
+      },
+      "main_cause": "Implementation is outside the assigned snapshot, with an additional reader-side failure to finish relevant available documentation.",
+      "remedy": "Retrieve public CLI/config implementation; sequentially read the relevant available guide sections instead of relying only on matching excerpts.",
+      "missing_evidence": [
+        "CLI/config parsing and enforcement implementation",
+        "Undelivered relevant documentation surrounding the excerpts"
+      ]
+    }
+  ],
+  "early_source": {
+    "artifact_requested": "local://gap-evidence-early.json",
+    "artifact_written": false,
+    "artifact_write_blocker": "目前僅有讀取與搜尋工具；依父層最新指示直接交付完整 JSON，不再嘗試 writer。",
+    "input": "/tmp/hufu-gap-yl12Owqw/public-gaps.json",
+    "archive": "/tmp/hufu-gap-yl12Owqw/hufu-debug-run-20261107T175924.974731290Z-917e1a7e1182.tar.gz",
+    "run_id": "run-20261107T175924.974731290Z-917e1a7e1182",
+    "review_revision": "a1fec596e09bc31eb0e45dc8cb6152f698b86001",
+    "scope": {
+      "task_id_numeric_max": 12,
+      "gap_index_base": 0,
+      "row_count": 36,
+      "tasks_with_rows": [
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12"
+      ],
+      "manifest_read_before_members": true,
+      "live_storage_read": false,
+      "source_modified": false,
+      "checks_executed": false
+    },
+    "classification_rules": {
+      "missing_file": "所需檔案或 owner 定義不在指定 snapshot 的可觀測檔案集合；不表示 repository 或其他 task snapshot 不存在該檔案。",
+      "partial_read": "reader 未完成已提供 artifact 的相關讀取；不能由請求上限或沒有 continuation hint 推定 EOF。",
+      "search_only": "次類標記：證據僅為符號搜尋、有限 excerpts 或 caller 命中，未觀察所需完整 owner/body。",
+      "producer_truncated": "snapshot 有明確 content_truncated、omitted_bytes 或空 body 等 producer 層省略證據。",
+      "semantic_uncertainty": "內容已可觀察，但其意義、契約或兩種表示的對應仍不能由現有證據確定。",
+      "unverified": "缺少足以支持該主張的 observation；不把缺少觀察改寫為已證明不存在。",
+      "byte_accounting": "search 的 scan 範圍只代表搜尋範圍，不計為返回 bytes；列出的 excerpt 範圍也不代表已讀懂整個檔案。",
+      "completion_accounting": "canonical completed、acceptance passed、39 done 不構成每個 gap 已理解或已關閉的證據。"
+    },
+    "transcript_template": "logs/task-output/{task_id}-run-20261107T175924.974731290Z-917e1a7e1182-attempt-1.jsonl",
+    "source_prefix": "logs/artifacts/data/",
+    "sources": {
+      "S3": "sha256-4364f2e0ac046a5c3c87ccd5651a770c812b2230ea8e657b9c454727f3cc2157",
+      "S4": "sha256-129b70042b5a7b14a9ad449a684957ab341920253feb12af407319b63f93cf57",
+      "S5": "sha256-404fc2c83e60784c46250f8c84d8529c64d0bd6c3031ca922b0f870ed2774214",
+      "S6": "sha256-e76bfb50011494a552839bbe8378d29df6cc1b32ea2a12c7f0fd807ef6faed39",
+      "S7": "sha256-84e5de1b231f994d5f9be7da0ac83fedecdfcba308bc18a8108db3396f2de8b0",
+      "S8": "sha256-100625ea53905343c0868ba3a3f6d6b6b885cf7ac058aa3289bc4783e3237c94",
+      "S9": "sha256-96cbbc5df78f0269bb6e7db0c70f347c85469b83e198b4cb065e81ec7f058c51",
+      "S10": "sha256-4c2b94b44ab900ff57a96d265b20ff1411ecd922bf9689db4d7be778ddb1723a",
+      "S11": "sha256-064e07f7aead1d06477a2e275c1be213308d1b63137ac0ecbd786cd36dbaaf7b",
+      "S12": "sha256-1b389ea95eac977f4bb4c3c7e546914cbb1cbe1617411251060681917cb7b3b3",
+      "D9": "sha256-6796ece4a17974cc454cbf7d6eae316f8acc08ef752840efd6c552ba22b24667"
+    },
+    "primary_counts": {
+      "partial_read": 1,
+      "search_only": 0,
+      "producer_truncated": 4,
+      "missing_file": 25,
+      "semantic_uncertainty": 2,
+      "unverified": 4
+    },
+    "secondary_counts": {
+      "partial_read": 1,
+      "search_only": 9,
+      "producer_truncated": 0,
+      "missing_file": 0,
+      "semantic_uncertainty": 6,
+      "unverified": 1
+    },
+    "secondary_count_semantics": "只計 rows.secondary；不包含互斥主類，次類可重疊。",
+    "reader_cases": [
+      {
+        "task_id": "7",
+        "gap_index": 0,
+        "finding": "reader 停在其自行請求的第4000行，不是已證實 artifact EOF。",
+        "evidence": "T7 call/result 7/8：offset 3400、limit 600，返回3401–4000，末尾仍在 assertNoDoubleRelease 函式內；19/20只重讀3791–3910。",
+        "overclaim": "據此宣稱 snapshot 結束並有21個相關路徑缺失，證據不足。",
+        "additional_issue": "15/18與16/17兩次搜尋均 budget ERROR，沒有成功重試。"
+      },
+      {
+        "task_id": "11",
+        "gap_index": 0,
+        "finding": "May/Needs owner 搜尋失敗被混同為缺失或截斷。",
+        "evidence": "T11 13/16與14/15為 budget ERROR；只有 runtimeMediaHash、taskHasMedia 的 exact-definition 搜尋成功返回 no match。",
+        "overclaim": "不能將失敗搜尋當作 owner 不存在，也沒有 producer 截斷證據支持這部分說法。"
+      },
+      {
+        "task_id": "12",
+        "gap_index": 1,
+        "finding": "focused tests 確有 producer omission，但『其他 related bodies 全省略』不實。",
+        "evidence": "T12 6/8：blocked_continuation、blocked_retry、capability 三個 test bodies 完整；context_artifact_capture 部分保留，另有多個空 body。",
+        "overclaim": "應逐檔區分完整、部分省略與全部省略。"
+      },
+      {
+        "task_id": "9",
+        "gap_index": 4,
+        "finding": "zero-context diff 的行號差及未顯示 unchanged block，不等同 producer 截斷或 stale snapshot。",
+        "evidence": "T9 1/4 的 diff hunks 包含 +143；snapshot 對應定位不同。",
+        "overclaim": "需要同 revision 的完整檔案對齊，不能僅用 diff 表示差異判定內容缺失。"
+      },
+      {
+        "task_id": "10",
+        "gap_index": 0,
+        "finding": "withNativeProviderCounter 的搜尋命中不是其定義。",
+        "evidence": "T10 19/20 的 excerpt [212628,213453) 是 runAgentWithStatusAndHistory body，內含 withNativeProviderCounter 呼叫及 publisher closure。",
+        "qualification": "可確認本地接線，不能據此宣稱 counter owner body 已交付或已理解。"
+      }
+    ],
+    "missing_evidence_summary": [
+      "task3、task4、task8：reference report 與 test source 不是 Go 測試執行證據。",
+      "task5：manifest 中7個同批 metadata 未納入該 snapshot；usage、relay 與 identity/hash claim 缺少獨立來源交叉核對。",
+      "task6：部分缺口可由 task5 acceptance/expected/evaluation 及 task4 CLI snapshot 補足；PNG 在 task5 明確為 binary_omitted。",
+      "task7：尚未證明完整 artifact EOF 或 related inventory 缺檔；host producer/publisher owner 可達性仍未觀察。",
+      "task8至task12：多個跨 package owner、外部 caller、media/hash producer 與實際 runtime 可達性未提供。",
+      "task9、task10、task11、task12：明確省略的 test bodies 需要另外的公開完整 snapshot，重讀現有空 body 無法恢復。",
+      "task12 receipt builder 的部分上下文在 task10 worker receipt 路徑可見，但這不等同完成 manifestBinding builder 或 runtime-media hash producer 的追蹤。"
+    ],
+    "rows": [
+      {
+        "task_id": "3",
+        "gap_index": 0,
+        "subject": ".mise 新選入的四個測試之實作未提供",
+        "category": "missing_file",
+        "secondary": [],
+        "source_artifact": "S3",
+        "source_range": "snapshot lines 1–70，尤其62附近",
+        "evidence": [
+          {
+            "transcript": "T3",
+            "call_line": 2,
+            "result_line": 4,
+            "observation": "完整 snapshot 僅1個 primary、0個 related；.mise 測試 selector 引用四個測試，但沒有對應 Go test bodies。"
+          }
+        ],
+        "cause": "配置改動的 snapshot 沒有攜帶被 selector 新選入的測試檔。",
+        "remedy": "取得這四個測試定義所在的公開 snapshot，再檢查 selector 與測試語意。",
+        "missing_evidence": "四個測試的完整實作及其所依賴 helper。"
+      },
+      {
+        "task_id": "3",
+        "gap_index": 1,
+        "subject": "沒有可支持測試已執行的證據",
+        "category": "unverified",
+        "secondary": [],
+        "source_artifact": "S3",
+        "source_range": "snapshot lines 1–70；reference report lines 1–15",
+        "evidence": [
+          {
+            "transcript": "T3",
+            "call_line": 5,
+            "result_line": 6,
+            "observation": "reference report 的 passed=true 屬 review_scope；報告是 paths/symbols/candidates 分析，不是 Go test 執行結果。"
+          }
+        ],
+        "cause": "靜態 review 成功與測試執行成功混屬不同證據。",
+        "remedy": "如需驗證執行，引用既有公開測試結果；本次不執行測試。",
+        "missing_evidence": "包含命令、revision、exit status 與測試輸出的公開執行記錄。"
+      },
+      {
+        "task_id": "4",
+        "gap_index": 0,
+        "subject": "cmd snapshot 未提供 internal TUI、team、media、inspect owners",
+        "category": "missing_file",
+        "secondary": [],
+        "source_artifact": "S4",
+        "source_range": "snapshot lines 1–2000 的 inventory；全 artifact header 搜尋",
+        "evidence": [
+          {
+            "transcript": "T4",
+            "call_line": 2,
+            "result_line": 3,
+            "observation": "snapshot inventory 為11個 primary、24個 related，檔案範圍為 cmd。"
+          },
+          {
+            "transcript": "T4",
+            "call_line": 17,
+            "result_line": 20,
+            "observation": "對整個 artifact 搜尋 internal 檔案 header，成功返回 no match；搜尋範圍不是返回內容量。"
+          }
+        ],
+        "cause": "跨 package owner 不在此 cmd-focused snapshot。",
+        "remedy": "取得相關 internal owners 的公開 snapshot，依 CLI caller 逐一連接。",
+        "missing_evidence": "對應 internal owners 的完整定義。"
+      },
+      {
+        "task_id": "4",
+        "gap_index": 1,
+        "subject": "CLI images hint 與 TUI 行為是否一致",
+        "category": "missing_file",
+        "secondary": [
+          "semantic_uncertainty"
+        ],
+        "source_artifact": "S4",
+        "source_range": "search excerpts [45854,46115)、[6026,6295)",
+        "evidence": [
+          {
+            "transcript": "T4",
+            "call_line": 13,
+            "result_line": 16,
+            "observation": "TaskResultIdentityMsg 只有 cmd 側引用 excerpt。"
+          },
+          {
+            "transcript": "T4",
+            "call_line": 10,
+            "result_line": 11,
+            "observation": "HistoricalResultImagesCommand 定義搜尋成功返回 no match；14/15另有 caller 命中。"
+          }
+        ],
+        "cause": "有 CLI 接線，但提供 TUI 行為的 renderer/command owner 未交付。",
+        "remedy": "補充 TUI command 與 renderer 定義，對照 images hint 的觸發與呈現契約。",
+        "missing_evidence": "TUI owner body 與相同行為的契約證據。"
+      },
+      {
+        "task_id": "4",
+        "gap_index": 2,
+        "subject": "image_count 的具體 int 型別及 producer/replay 契約",
+        "category": "missing_file",
+        "secondary": [
+          "semantic_uncertainty"
+        ],
+        "source_artifact": "S4",
+        "source_range": "returned byte window [128600,161368)",
+        "evidence": [
+          {
+            "transcript": "T4",
+            "call_line": 25,
+            "result_line": 28,
+            "observation": "result_identity.go 與相關測試可見 concrete int assertion；產生及 replay 該值的跨 package owner 不在 cmd inventory。"
+          }
+        ],
+        "cause": "consumer 的型別假設可見，但 producer/replay 的型別保證沒有提供。",
+        "remedy": "補充 producer 與序列化/replay owner，追蹤 image_count 的實際型別。",
+        "missing_evidence": "producer、解碼/replay 與 consumer 之間的型別契約。"
+      },
+      {
+        "task_id": "4",
+        "gap_index": 3,
+        "subject": "focused test source 不等同測試執行",
+        "category": "unverified",
+        "secondary": [],
+        "source_artifact": "S4",
+        "source_range": "test windows [128600,161368)、[161368,189168)；reference report [0,727)",
+        "evidence": [
+          {
+            "transcript": "T4",
+            "call_line": 29,
+            "result_line": 30,
+            "observation": "返回的是測試原始碼。"
+          },
+          {
+            "transcript": "T4",
+            "call_line": 26,
+            "result_line": 27,
+            "observation": "reference report 是靜態分析資料，沒有 Go test 命令或執行結果。"
+          }
+        ],
+        "cause": "存在測試與執行測試不能互相替代。",
+        "remedy": "需要時引用既有公開執行記錄；不在本次重跑。",
+        "missing_evidence": "focused tests 的公開執行證據。"
+      },
+      {
+        "task_id": "5",
+        "gap_index": 0,
+        "subject": "manifest 的16個 entries 僅9個同批檔案納入 snapshot",
+        "category": "missing_file",
+        "secondary": [],
+        "source_artifact": "S5",
+        "source_range": "完整 snapshot lines 1–344；manifest lines 98–120",
+        "evidence": [
+          {
+            "transcript": "T5",
+            "call_line": 2,
+            "result_line": 4,
+            "observation": "完整 snapshot 有11個 primary、0個 related；其中同批 artifacts 為9個，而 SHA256SUMS 列16個 entries。"
+          },
+          {
+            "transcript": "T5",
+            "call_line": 17,
+            "result_line": 18,
+            "observation": "primary paths 清單返回於 excerpt [73,601)，可與 manifest 對照。"
+          }
+        ],
+        "cause": "producer 選檔集合未覆蓋 manifest 全部同批 entries。",
+        "remedy": "提供其餘7個 entries 的公開內容與 hash 對應。",
+        "missing_evidence": "7個未納入的同批 metadata 檔案。"
+      },
+      {
+        "task_id": "5",
+        "gap_index": 1,
+        "subject": "usage、relay、invocation 與 payload hash 缺獨立 metadata 核對",
+        "category": "missing_file",
+        "secondary": [],
+        "source_artifact": "S5",
+        "source_range": "lines 35、54、58–62、98–120；excerpt [2794,3370)",
+        "evidence": [
+          {
+            "transcript": "T5",
+            "call_line": 2,
+            "result_line": 4,
+            "observation": "文件列出 usage 4816/408/5224/6156、relay 1.814/2.173，以及 invocation/payload hash；snapshot 同時缺少 manifest 中7個同批 entries。"
+          },
+          {
+            "transcript": "T5",
+            "call_line": 14,
+            "result_line": 15,
+            "observation": "payload hash 搜尋返回文件敘述 excerpt，並非獨立執行來源。"
+          }
+        ],
+        "cause": "claim 已交付，但可獨立對照的同批 metadata 未完整交付。",
+        "remedy": "補充 manifest 對應 metadata，逐欄核對 identity、usage、timing 與 hash。",
+        "missing_evidence": "獨立 producer metadata；不能僅以重複文件敘述作交叉佐證。"
+      },
+      {
+        "task_id": "5",
+        "gap_index": 2,
+        "subject": "frontmatter 的 Status/Authority 慣例",
+        "category": "semantic_uncertainty",
+        "secondary": [],
+        "source_artifact": "S5",
+        "source_range": "snapshot lines 18–19",
+        "evidence": [
+          {
+            "transcript": "T5",
+            "call_line": 2,
+            "result_line": 4,
+            "observation": "實際 frontmatter 為 Status: active、Authority: reference；snapshot 沒有提供這兩欄的 repository 規範。"
+          }
+        ],
+        "cause": "值本身可見，未知的是正式分類語意及適用規則。",
+        "remedy": "引用公開文件慣例或 schema，判定此文件應屬的狀態與權威層級。",
+        "missing_evidence": "frontmatter 規範及可適用的對照案例。"
+      },
+      {
+        "task_id": "6",
+        "gap_index": 0,
+        "subject": "progress 文件引用的 acceptance.md 不在本批 snapshot",
+        "category": "missing_file",
+        "secondary": [],
+        "source_artifact": "S6",
+        "source_range": "snapshot lines 2226–2295；inventory lines 1–2000",
+        "evidence": [
+          {
+            "transcript": "T6",
+            "call_line": 23,
+            "result_line": 24,
+            "observation": "progress 文件的 acceptance.md 連結可見；本 snapshot 是7個 metadata JSON 與4份文件，沒有該連結目標。"
+          },
+          {
+            "transcript": "T5",
+            "call_line": 2,
+            "result_line": 4,
+            "observation": "另一個公開 snapshot S5 已包含 acceptance 內容，屬跨 task 可補足證據。"
+          }
+        ],
+        "cause": "分區選檔切斷文件連結，並非已證明整份 export 缺檔。",
+        "remedy": "將 task5 的公開 acceptance snapshot 連回此 gap。",
+        "missing_evidence": "本 task 自身沒有連結目標；跨 task 證據已存在，但原 reader 未完成整合。"
+      },
+      {
+        "task_id": "6",
+        "gap_index": 1,
+        "subject": "文件中的 CLI flags、results 與 context-window 實作不在本批",
+        "category": "missing_file",
+        "secondary": [],
+        "source_artifact": "S6",
+        "source_range": "snapshot lines 1941–2000、2991–3190；inventory lines 1–2000",
+        "evidence": [
+          {
+            "transcript": "T6",
+            "call_line": 21,
+            "result_line": 22,
+            "observation": "返回文件中的相關描述，沒有對應 Go implementation。"
+          },
+          {
+            "transcript": "T6",
+            "call_line": 27,
+            "result_line": 28,
+            "observation": "native-images guide 內容可見，但 snapshot inventory 沒有 CLI owner。"
+          }
+        ],
+        "cause": "文件與實作被拆在不同 task snapshot。",
+        "remedy": "先以 task4 的 cmd snapshot 核對可涵蓋部分，再補必要 internal owners。",
+        "missing_evidence": "相關 CLI/context-window owners 的完整實作及逐項文件對應。"
+      },
+      {
+        "task_id": "6",
+        "gap_index": 2,
+        "subject": "assigned JSON batch 之外的 ground truth、PNG 與獨立比較",
+        "category": "missing_file",
+        "secondary": [],
+        "source_artifact": "S6",
+        "source_range": "inventory lines 1–2000；補充 S5 lines 122–247",
+        "evidence": [
+          {
+            "transcript": "T6",
+            "call_line": 2,
+            "result_line": 3,
+            "observation": "本批 primary 是7個 metadata JSON 與4份文件，沒有 PNG bodies 或 ground-truth 比較檔。"
+          },
+          {
+            "transcript": "T5",
+            "call_line": 2,
+            "result_line": 4,
+            "observation": "S5 lines 122–210已有 evaluation/expected 與觀察值比較；235–247的兩個 PNG 明確標記 binary_omitted，並列 bytes/hash。"
+          }
+        ],
+        "cause": "task 分區造成部分證據未連接；PNG 另有明確 binary omission。",
+        "remedy": "連接 S5 expected/evaluation；如需獨立視覺核對，提供相同 hash 的公開 PNG。",
+        "missing_evidence": "實際 PNG bytes 與獨立重新判讀；不是完全沒有 expected/evaluation。"
+      },
+      {
+        "task_id": "7",
+        "gap_index": 0,
+        "subject": "reader 未完成 snapshot，卻宣稱已到結尾及相關檔案缺失",
+        "category": "partial_read",
+        "secondary": [],
+        "source_artifact": "S7",
+        "source_range": "returned snapshot lines 1–4000；重讀3791–3910",
+        "evidence": [
+          {
+            "transcript": "T7",
+            "call_line": 7,
+            "result_line": 8,
+            "observation": "offset 3400、limit 600 返回3401–4000，恰達請求上限；第4000行仍在 assertNoDoubleRelease 函式內，沒有 artifact EOF 證據。"
+          },
+          {
+            "transcript": "T7",
+            "call_line": 19,
+            "result_line": 20,
+            "observation": "後續只返回3791–3910的重疊區間，沒有接續4001以後。"
+          },
+          {
+            "transcript": "T7",
+            "call_line": 15,
+            "result_line": 18,
+            "observation": "truncated 搜尋返回 budget ERROR；16/17的 related 搜尋同樣失敗，未成功重試。"
+          }
+        ],
+        "cause": "把單次 reader cap 當作 artifact 結尾，並把失敗搜尋當作缺檔證據。",
+        "remedy": "從4001行接續讀最小相關區段，或縮小搜尋參數成功取得 inventory；不得先沿用21檔缺失結論。",
+        "missing_evidence": "真正 EOF、完整 related inventory，以及4000行以後與該 gap 相關的內容。"
+      },
+      {
+        "task_id": "7",
+        "gap_index": 1,
+        "subject": "StageBase64Image、EncodeToolMediaMetadata 與 publisher/installer owners",
+        "category": "unverified",
+        "secondary": [
+          "partial_read",
+          "search_only"
+        ],
+        "source_artifact": "S7",
+        "source_range": "observed lines 1–4000；search excerpts [42870,43492)、[56989,57612)",
+        "evidence": [
+          {
+            "transcript": "T7",
+            "call_line": 11,
+            "result_line": 13,
+            "observation": "ExpandToolMediaRequest 搜尋僅返回局部 excerpt。"
+          },
+          {
+            "transcript": "T7",
+            "call_line": 12,
+            "result_line": 14,
+            "observation": "WithToolResultPublisher 搜尋返回局部定義/測試引用，沒有完成 host producer/installer 的整條追蹤。"
+          },
+          {
+            "transcript": "T7",
+            "call_line": 16,
+            "result_line": 17,
+            "observation": "related inventory 搜尋失敗，且 reader 沒有越過4000行，因此不能證明 owners 不在完整 artifact。"
+          }
+        ],
+        "cause": "目前 observation 不足以區分檔案未提供與 reader 尚未到達。",
+        "remedy": "先補完相關 inventory 與 owner 定位，再沿 host producer 到 publisher 的呼叫鏈讀取。",
+        "missing_evidence": "完整 owner inventory、host producer bodies 與 installer 接線。",
+        "qualification": "不採用『21個 related paths 缺失』作為既定事實。"
+      },
+      {
+        "task_id": "8",
+        "gap_index": 0,
+        "subject": "Codex child/processutil owners 不在提供集合",
+        "category": "missing_file",
+        "secondary": [],
+        "source_artifact": "S8",
+        "source_range": "inventory；returned windows [0,163840)、[198000,202449)",
+        "evidence": [
+          {
+            "transcript": "T8",
+            "call_line": 20,
+            "result_line": 22,
+            "observation": "header inventory 為16個 primary、24個 related，沒有所需 Codex child/processutil owner 檔案。"
+          }
+        ],
+        "cause": "本 task 的 snapshot 範圍沒有納入 process lifecycle owners。",
+        "remedy": "補充 Codex child 與 processutil 的公開 snapshot，追蹤 process 啟停與資源釋放。",
+        "missing_evidence": "child/processutil owner bodies。"
+      },
+      {
+        "task_id": "8",
+        "gap_index": 1,
+        "subject": "internal/media definitions、image export directory 與 reserve owners",
+        "category": "missing_file",
+        "secondary": [],
+        "source_artifact": "S8",
+        "source_range": "inventory；definition search scan [0,202449)",
+        "evidence": [
+          {
+            "transcript": "T8",
+            "call_line": 26,
+            "result_line": 28,
+            "observation": "imageExportDirectory 的函式定義搜尋成功返回 no match。"
+          },
+          {
+            "transcript": "T8",
+            "call_line": 20,
+            "result_line": 22,
+            "observation": "提供的檔案 inventory 沒有所需 internal/media owner 集合。"
+          }
+        ],
+        "cause": "使用端可見，跨 package definitions 與資源配置 owners 未納入。",
+        "remedy": "提供 media definitions、export directory 與 reserve 實作。",
+        "missing_evidence": "資源建立、保留與釋放的完整契約。"
+      },
+      {
+        "task_id": "8",
+        "gap_index": 2,
+        "subject": "compaction Version 3 的 writer 契約",
+        "category": "missing_file",
+        "secondary": [
+          "semantic_uncertainty"
+        ],
+        "source_artifact": "S8",
+        "source_range": "search excerpt [126155,126686)",
+        "evidence": [
+          {
+            "transcript": "T8",
+            "call_line": 33,
+            "result_line": 36,
+            "observation": "toolMediaCompactionStateVersion 附近的讀取規則可見，但沒有提供建立 Version 3 狀態的 writer owner。"
+          }
+        ],
+        "cause": "可觀察 reader 的接受規則，無法由此推導 writer 的產出與遷移保證。",
+        "remedy": "補充 writer 及狀態建立路徑，對照版本與欄位規則。",
+        "missing_evidence": "Version 3 writer body 與 migration/compatibility 契約。"
+      },
+      {
+        "task_id": "8",
+        "gap_index": 3,
+        "subject": "lockExclusiveFile owner 及 locking 契約",
+        "category": "missing_file",
+        "secondary": [
+          "semantic_uncertainty"
+        ],
+        "source_artifact": "S8",
+        "source_range": "definition search scan [0,202449)",
+        "evidence": [
+          {
+            "transcript": "T8",
+            "call_line": 34,
+            "result_line": 35,
+            "observation": "lockExclusiveFile 的函式定義搜尋成功返回 no match。"
+          }
+        ],
+        "cause": "lock 呼叫端不能提供跨程序互斥、解除與失敗語意的實作保證。",
+        "remedy": "提供 lock owner 及對應 release 路徑。",
+        "missing_evidence": "實際 locking 實作及其平台/錯誤契約。"
+      },
+      {
+        "task_id": "8",
+        "gap_index": 4,
+        "subject": "workspace、execution-world、artifact access 與 evidence-store 排除 owners",
+        "category": "missing_file",
+        "secondary": [],
+        "source_artifact": "S8",
+        "source_range": "inventory；projection-close excerpt [85668,85944)",
+        "evidence": [
+          {
+            "transcript": "T8",
+            "call_line": 20,
+            "result_line": 22,
+            "observation": "snapshot inventory 未提供這組跨 package owners。"
+          },
+          {
+            "transcript": "T8",
+            "call_line": 37,
+            "result_line": 38,
+            "observation": "可見 projection Close 的局部使用端，不能據此證明 workspace 或 evidence-store 的完整隔離/排除行為。"
+          }
+        ],
+        "cause": "投影使用端與安全/儲存邊界 owner 分離。",
+        "remedy": "取得公開 owner snapshots，逐一追蹤 access 與排除判斷。",
+        "missing_evidence": "workspace/execution-world 建立、artifact 授權與 evidence-store 排除實作。"
+      },
+      {
+        "task_id": "8",
+        "gap_index": 5,
+        "subject": "source/reference report 不提供 Go execution 證據",
+        "category": "unverified",
+        "secondary": [],
+        "source_artifact": "S8",
+        "source_range": "reference report [0,1074)",
+        "evidence": [
+          {
+            "transcript": "T8",
+            "call_line": 6,
+            "result_line": 7,
+            "observation": "報告有6個 links、0個 symbols、空 candidates；不是 Go 測試命令及結果。"
+          }
+        ],
+        "cause": "靜態證據不足以確認 runtime/test 執行結果。",
+        "remedy": "如需執行層結論，引用既有公開執行證據，不在本次重跑。",
+        "missing_evidence": "Go execution 的命令、revision、exit status 與輸出。"
+      },
+      {
+        "task_id": "9",
+        "gap_index": 0,
+        "subject": "internal/agent helper contracts 不在本 snapshot",
+        "category": "missing_file",
+        "secondary": [
+          "semantic_uncertainty"
+        ],
+        "source_artifact": "S9",
+        "source_range": "snapshot lines 1–2000；search excerpt [3798,4331)",
+        "evidence": [
+          {
+            "transcript": "T9",
+            "call_line": 38,
+            "result_line": 40,
+            "observation": "對整個 artifact 搜尋 internal/agent 檔案 header，成功返回 no match。"
+          },
+          {
+            "transcript": "T9",
+            "call_line": 10,
+            "result_line": 11,
+            "observation": "MessagesHaveToolMedia 的命中是使用端 excerpt，沒有 helper body。"
+          }
+        ],
+        "cause": "helper 契約落在 snapshot 之外的 package。",
+        "remedy": "連接 task7 的 ValidatePersistentMessages/MessagesHaveToolMedia 公開內容，再確認具體呼叫可達性。",
+        "missing_evidence": "本 task 的 helper definitions；跨 snapshot 內容到當前路徑的完整可達性證明。"
+      },
+      {
+        "task_id": "9",
+        "gap_index": 1,
+        "subject": "runtimeMediaHash 與 media typed contract",
+        "category": "missing_file",
+        "secondary": [
+          "search_only"
+        ],
+        "source_artifact": "S9",
+        "source_range": "search excerpt [155607,156135)",
+        "evidence": [
+          {
+            "transcript": "T9",
+            "call_line": 5,
+            "result_line": 8,
+            "observation": "runtimeMediaHash 命中僅為呼叫端。"
+          },
+          {
+            "transcript": "T9",
+            "call_line": 37,
+            "result_line": 39,
+            "observation": "internal/media 檔案 header 搜尋成功返回 no match。"
+          }
+        ],
+        "cause": "typed media/hash owner 未納入 snapshot，caller excerpt 無法代替其契約。",
+        "remedy": "提供 runtimeMediaHash 與 media types 定義。",
+        "missing_evidence": "hash 正規化、空值與 media identity 的實作契約。"
+      },
+      {
+        "task_id": "9",
+        "gap_index": 2,
+        "subject": "canonicalJournalOwner 外部寫入 caller",
+        "category": "missing_file",
+        "secondary": [
+          "search_only"
+        ],
+        "source_artifact": "S9",
+        "source_range": "search excerpt [98891,99424)",
+        "evidence": [
+          {
+            "transcript": "T9",
+            "call_line": 6,
+            "result_line": 7,
+            "observation": "可觀察 canonicalJournalOwner 定義及其自身路徑內引用，未提供外部 write caller 的完整上下文。"
+          }
+        ],
+        "cause": "局部 helper 與外部 write path 的證據斷開。",
+        "remedy": "提供呼叫 canonicalJournalOwner 的外部寫入 owners，檢查 ownership 值如何傳遞。",
+        "missing_evidence": "外部 write caller bodies 與實際 ownership 資料流。",
+        "qualification": "搜尋未展示外部 caller，不等同 repository 沒有外部 caller。"
+      },
+      {
+        "task_id": "9",
+        "gap_index": 3,
+        "subject": "compaction_state_test 部分省略，其他 related tests 有空 body",
+        "category": "producer_truncated",
+        "secondary": [],
+        "source_artifact": "S9",
+        "source_range": "header excerpt [188108,188633)；tail [253000,259071)",
+        "evidence": [
+          {
+            "transcript": "T9",
+            "call_line": 14,
+            "result_line": 15,
+            "observation": "compaction_state_test 宣告 bytes=74100、content_truncated=true、omitted_bytes=8564。"
+          },
+          {
+            "transcript": "T9",
+            "call_line": 27,
+            "result_line": 28,
+            "observation": "尾段保留部分 test body，並顯示其他 related entries 的空 body/省略資訊。"
+          }
+        ],
+        "cause": "producer 在形成 snapshot 時已省略 test bytes。",
+        "remedy": "另提供完整或按相關函式切片的公開 test snapshot；重讀現有空 body 無法恢復。",
+        "missing_evidence": "明確省略的 test 區段與其他空 body。"
+      },
+      {
+        "task_id": "9",
+        "gap_index": 4,
+        "subject": "diff 行號143與snapshot定位158及 unchanged block 差異",
+        "category": "semantic_uncertainty",
+        "secondary": [],
+        "source_artifact": [
+          "D9",
+          "S9"
+        ],
+        "source_range": "D9 lines 1–79；S9 primary snapshot及[152500,164500)對照窗口",
+        "evidence": [
+          {
+            "transcript": "T9",
+            "call_line": 1,
+            "result_line": 4,
+            "observation": "zero-context diff 有 @@ -109,0 +114,28 @@、@@ -111 +143 @@、@@ -131 +163 @@ 等 hunks；unchanged block 不在這種 diff 的輸出範圍。"
+          },
+          {
+            "transcript": "T9",
+            "call_line": 17,
+            "result_line": 18,
+            "observation": "snapshot 提供另一種完整內容/定位表示，不能僅由行號不同判定 stale 或截斷。"
+          }
+        ],
+        "cause": "diff 表示與 snapshot 定位未建立同 revision 的逐行對齊。",
+        "remedy": "用 revision、檔案 identity 與完整上下文對齊，再判定是否真的內容不一致。",
+        "missing_evidence": "足以證明 stale 或 producer omission 的同 revision 內容差異。",
+        "qualification": "此 row 不分類 producer_truncated。"
+      },
+      {
+        "task_id": "10",
+        "gap_index": 0,
+        "subject": "canonical helpers owners 多為 call-only",
+        "category": "missing_file",
+        "secondary": [
+          "search_only"
+        ],
+        "source_artifact": "S10",
+        "source_range": "definition searches；returned excerpt [212628,213453)",
+        "evidence": [
+          {
+            "transcript": "T10",
+            "call_line": 15,
+            "result_line": 16,
+            "observation": "finalizeTaskMedia、toolMediaFailureState、publishToolMediaResult 的 exact-definition 搜尋成功返回 no match。"
+          },
+          {
+            "transcript": "T10",
+            "call_line": 19,
+            "result_line": 20,
+            "observation": "withNativeProviderCounter 命中的是 runAgentWithStatusAndHistory body：安裝 counter、建立 publisher closure、呼叫 publishToolMediaResult 並記錄 failure；不是 counter helper 定義。"
+          }
+        ],
+        "cause": "本地接線已提供，但所依賴 helper owners 未提供。",
+        "remedy": "沿可見接線補入 helper definitions，不把 caller body 誤記為被呼叫者實作。",
+        "missing_evidence": "canonical media helpers 與 counter owner bodies。"
+      },
+      {
+        "task_id": "10",
+        "gap_index": 1,
+        "subject": "coordinator_media_test 完全省略",
+        "category": "producer_truncated",
+        "secondary": [],
+        "source_artifact": "S10",
+        "source_range": "returned tail [371500,377259)",
+        "evidence": [
+          {
+            "transcript": "T10",
+            "call_line": 23,
+            "result_line": 24,
+            "observation": "coordinator_media_test.go 宣告 bytes=13165、content_truncated=true、omitted_bytes=13165，body 為空。"
+          }
+        ],
+        "cause": "producer 省略整個 focused test body。",
+        "remedy": "提供該 test 檔的完整公開 snapshot 或相關測試函式切片。",
+        "missing_evidence": "全部13165 bytes 的 focused test body。"
+      },
+      {
+        "task_id": "10",
+        "gap_index": 2,
+        "subject": "native token counter definitions 與 cmd projections",
+        "category": "missing_file",
+        "secondary": [
+          "search_only"
+        ],
+        "source_artifact": "S10",
+        "source_range": "search excerpts [212628,213453)、[231511,232332)",
+        "evidence": [
+          {
+            "transcript": "T10",
+            "call_line": 19,
+            "result_line": 20,
+            "observation": "nativeWorkerStepTokens、nativeWorkerInput 的定義搜尋成功返回 no match；excerpt 顯示 counter 安裝，以及 MessagesHaveToolMedia 分支呼叫 nativeWorkerStepTokens。"
+          },
+          {
+            "transcript": "T10",
+            "call_line": 2,
+            "result_line": 4,
+            "observation": "snapshot 是1個 primary 加24個 related，沒有提供所需 cmd projection owners。"
+          }
+        ],
+        "cause": "counter 接線與 dispatch 可觀察，計算及外部投影實作未交付。",
+        "remedy": "提供 counter 定義與 cmd projection owners，分別核對計數和呈現。",
+        "missing_evidence": "counter body、輸入換算規則及 cmd 投影。",
+        "qualification": "不能因搜尋命中 counter 呼叫就宣稱 counter 演算法已觀察。"
+      },
+      {
+        "task_id": "10",
+        "gap_index": 3,
+        "subject": "publisher owner、同步語意與覆蓋範圍",
+        "category": "missing_file",
+        "secondary": [
+          "search_only"
+        ],
+        "source_artifact": "S10",
+        "source_range": "local wiring excerpt [212628,213453)；related search [306611,377259)",
+        "evidence": [
+          {
+            "transcript": "T10",
+            "call_line": 19,
+            "result_line": 20,
+            "observation": "publisher closure 呼叫 publishToolMediaResult 並記錄 error；owner body 未顯示。"
+          },
+          {
+            "transcript": "T10",
+            "call_line": 21,
+            "result_line": 22,
+            "observation": "related 區段的 RuntimeMedia/ToolResultPublisher 搜尋返回 no match；header 搜尋有8個結果上限與 next offset，不代表完整 related 內容已交付。"
+          }
+        ],
+        "cause": "只有 installer/caller 接線，沒有 publication owner 的同步與持久化契約。",
+        "remedy": "補充 publisher owner 與直接相關測試；不要從有限搜尋推導測試不存在。",
+        "missing_evidence": "publisher body、同步邊界與可用的完整 focused tests。"
+      },
+      {
+        "task_id": "11",
+        "gap_index": 0,
+        "subject": "media helper owners 缺失與 May/Needs 失敗搜尋",
+        "category": "missing_file",
+        "secondary": [
+          "search_only",
+          "unverified"
+        ],
+        "source_artifact": "S11",
+        "source_range": "definition searches；caller excerpts [3152,4176)、[28247,28863)、[31350,31980)",
+        "evidence": [
+          {
+            "transcript": "T11",
+            "call_line": 19,
+            "result_line": 22,
+            "observation": "runtimeMediaHash 定義搜尋成功返回 no match；20/21的 taskHasMedia 定義搜尋亦成功返回 no match。"
+          },
+          {
+            "transcript": "T11",
+            "call_line": 13,
+            "result_line": 16,
+            "observation": "May helper 定義搜尋返回 budget ERROR；14/15的 Needs helper 搜尋同樣失敗。"
+          },
+          {
+            "transcript": "T11",
+            "call_line": 24,
+            "result_line": 25,
+            "observation": "Needs 的可見證據是 caller excerpt，不是定義。"
+          }
+        ],
+        "cause": "成功的 exact-definition 無命中證明部分 owners 未提供；另兩項搜尋失敗，沒有足夠 observation。",
+        "remedy": "補入已確認缺失的 helper owners；縮小 May/Needs 搜尋並成功取得結果後再分類。",
+        "missing_evidence": "runtimeMediaHash/taskHasMedia bodies，以及 May/Needs 的成功定位結果。",
+        "qualification": "主類只由已證明的子集支撐；不把 May/Needs budget ERROR 當作不存在或 producer 截斷。"
+      },
+      {
+        "task_id": "11",
+        "gap_index": 1,
+        "subject": "cache、check_duplicate、cache_freshness tests 完全省略",
+        "category": "producer_truncated",
+        "secondary": [],
+        "source_artifact": "S11",
+        "source_range": "returned tail [80896,108113)，包含 artifact 結尾",
+        "evidence": [
+          {
+            "transcript": "T11",
+            "call_line": 29,
+            "result_line": 30,
+            "observation": "cache_freshness_test bytes/omitted_bytes 均21577；cache_test 均10605；check_duplicate_test 均10508，三者 body 皆空。"
+          }
+        ],
+        "cause": "producer 已完全省略三個相關 test bodies。",
+        "remedy": "另提供完整公開 test snapshot；不以重複搜尋空 body 補救。",
+        "missing_evidence": "三個 focused test 檔的完整內容。"
+      },
+      {
+        "task_id": "11",
+        "gap_index": 2,
+        "subject": "其他 TaskCache implementations 與 interface inventory",
+        "category": "missing_file",
+        "secondary": [
+          "search_only"
+        ],
+        "source_artifact": "S11",
+        "source_range": "primary windows [0,65536)；interface search scan [0,108113)",
+        "evidence": [
+          {
+            "transcript": "T11",
+            "call_line": 2,
+            "result_line": 3,
+            "observation": "default implementation 可見；本 task 沒有交付其他 TaskCache implementation inventory。"
+          },
+          {
+            "transcript": "T11",
+            "call_line": 32,
+            "result_line": 33,
+            "observation": "字面 TaskCache interface 搜尋成功返回 no match；這只約束該搜尋及 snapshot，不能證明 repository 沒有 interface。"
+          }
+        ],
+        "cause": "default implementation 的局部證據不足以代表所有 implementations。",
+        "remedy": "取得公開 interface 定義及其他 implementation 清單，再核對新契約的一致性。",
+        "missing_evidence": "完整 interface/implementation inventory 與其他實作 bodies。"
+      },
+      {
+        "task_id": "12",
+        "gap_index": 0,
+        "subject": "ordinary-worker receipt 與 manifestBinding builders 未提供",
+        "category": "missing_file",
+        "secondary": [],
+        "source_artifact": "S12",
+        "source_range": "snapshot inventory lines 1–2000；receipt excerpt [3142,3406)",
+        "evidence": [
+          {
+            "transcript": "T12",
+            "call_line": 2,
+            "result_line": 3,
+            "observation": "snapshot 只有2個 primary、24個 related，沒有 ordinary-worker receipt/manifestBinding builder owners。"
+          },
+          {
+            "transcript": "T12",
+            "call_line": 23,
+            "result_line": 24,
+            "observation": "receipt.RuntimeMediaHash 的命中是使用端 excerpt。"
+          },
+          {
+            "transcript": "T10",
+            "call_line": 6,
+            "result_line": 8,
+            "observation": "另一個公開 snapshot 的2021–2140行包含 worker receipt 路徑，可作跨 task 補充。"
+          }
+        ],
+        "cause": "receipt consumer 與 builder 的證據分區。",
+        "remedy": "先接上 task10 worker receipt 路徑，再補 manifestBinding builder owner。",
+        "missing_evidence": "完整 builder bodies，以及 media identity 如何寫入 receipt/binding 的資料流。"
+      },
+      {
+        "task_id": "12",
+        "gap_index": 1,
+        "subject": "focused tests 被省略，但不是所有 related bodies 都省略",
+        "category": "producer_truncated",
+        "secondary": [],
+        "source_artifact": "S12",
+        "source_range": "snapshot lines 2001–2784，尤其2018–2623、2626–2784",
+        "evidence": [
+          {
+            "transcript": "T12",
+            "call_line": 6,
+            "result_line": 8,
+            "observation": "context_query_provider_paths、context_window、contract_compile、coordinator_context_admission、coordinator_tool_errors、coordinator_tools、decision_discipline 等 entries 為全部省略。"
+          },
+          {
+            "transcript": "T12",
+            "call_line": 6,
+            "result_line": 8,
+            "observation": "blocked_continuation、blocked_retry、capability 三個 bodies 完整；context_artifact_capture bytes=10684、omitted_bytes=8872，仍保留部分 body。"
+          }
+        ],
+        "cause": "producer 對不同 related entries 採不同保留程度；原敘述過度概括。",
+        "remedy": "按檔案記錄完整/部分/全部省略，只補真正省略且與 gap 相關的 tests。",
+        "missing_evidence": "focused tests 被省略的 bodies；不包括已完整交付的三個 tests。",
+        "qualification": "『every other related body omitted』不成立。"
+      },
+      {
+        "task_id": "12",
+        "gap_index": 2,
+        "subject": "decoder caller 搜尋未構成 package-wide inventory",
+        "category": "missing_file",
+        "secondary": [
+          "search_only"
+        ],
+        "source_artifact": "S12",
+        "source_range": "decoder definition/caller 搜尋結果；snapshot inventory lines 1–2000",
+        "evidence": [
+          {
+            "transcript": "T12",
+            "call_line": 15,
+            "result_line": 18,
+            "observation": "可見 decoder 定義與 runFull caller；提供集合只有2個 primary，未交付 package-wide caller inventory。"
+          }
+        ],
+        "cause": "局部定義及 caller 命中不足以建立所有解碼入口與相容性影響。",
+        "remedy": "取得同 revision 公開 package inventory，定位其他 caller 後只讀相關 body。",
+        "missing_evidence": "完整 caller 集合與其他入口的解碼/錯誤處理上下文。",
+        "qualification": "不由有限搜尋推定 runFull 是唯一 caller。"
+      },
+      {
+        "task_id": "12",
+        "gap_index": 3,
+        "subject": "RuntimeMedia/hash producer 與 empty-hash 可達性",
+        "category": "missing_file",
+        "secondary": [
+          "semantic_uncertainty"
+        ],
+        "source_artifact": "S12",
+        "source_range": "search excerpts [8074,8687)、[3116,3368)、[3142,3406)",
+        "evidence": [
+          {
+            "transcript": "T12",
+            "call_line": 10,
+            "result_line": 12,
+            "observation": "runtime_media 的 reject guard 可見。"
+          },
+          {
+            "transcript": "T12",
+            "call_line": 13,
+            "result_line": 14,
+            "observation": "RuntimeMedia 命中是局部使用端；23/24另顯示 receipt.RuntimeMediaHash 使用端。"
+          }
+        ],
+        "cause": "consumer guard 可見，但 media/hash producer 未提供，無法判定 empty-hash 狀態是否實際可達。",
+        "remedy": "補充 producer 與 receipt/binding builder，從建立到驗證追蹤 hash。",
+        "missing_evidence": "hash producer body、空值契約與實際資料流可達性。",
+        "qualification": "有 reject guard 不代表 empty-hash 已證明可達，也不代表不可能到達。"
+      }
+    ]
+  },
+  "late_source": {
+    "requested_artifact": "local://gap-evidence-late.json",
+    "artifact_written": false,
+    "artifact_blocker": "Available tools are read-only and provide no local-artifact writer. Complete JSON is supplied in this response for the parent to persist.",
+    "scope": {
+      "input": "/tmp/hufu-gap-yl12Owqw/public-gaps.json",
+      "filter": "numeric task_id > 12",
+      "row_count": 37,
+      "task_row_counts": {
+        "13": 5,
+        "14": 5,
+        "15": 5,
+        "16": 5,
+        "17": 5,
+        "18": 5,
+        "19": 3,
+        "21": 2,
+        "22": 2
+      },
+      "review_revision": "a1fec596e09bc31eb0e45dc8cb6152f698b86001",
+      "archive": "/tmp/hufu-gap-yl12Owqw/hufu-debug-run-20261107T175924.974731290Z-917e1a7e1182.tar.gz",
+      "manifest_member": "bundle-manifest.json",
+      "transcript_member_template": "logs/task-output/{task_id}-run-20261107T175924.974731290Z-917e1a7e1182-attempt-1.jsonl",
+      "evidence_access": "Exported archive members and public-gaps.json only; manifest consulted before member access.",
+      "classification_rules": [
+        "missing_file means absent from the assigned immutable snapshot, not absent from the repository or the entire public export.",
+        "Transcript line numbers identify call/result records; source byte ranges are half-open.",
+        "A search scan range is not a returned-source range.",
+        "Delivered source is not proof of comprehension.",
+        "unverified means the cited transcript does not supply the needed independent observation; it does not assert that verification never occurred elsewhere.",
+        "Reference-report passed=true is not an executable-test receipt.",
+        "Primary and secondary categories concern the stated gap, not every limitation of the task."
+      ]
+    },
+    "counts": {
+      "exclusive_primary": {
+        "partial_read": 0,
+        "search_only": 0,
+        "producer_truncated": 4,
+        "missing_file": 28,
+        "semantic_uncertainty": 1,
+        "unverified": 4,
+        "total": 37
+      },
+      "overlapping_secondary": {
+        "partial_read": 2,
+        "search_only": 2,
+        "producer_truncated": 0,
+        "missing_file": 0,
+        "semantic_uncertainty": 6,
+        "unverified": 6
+      },
+      "category_membership_including_primary": {
+        "partial_read": 2,
+        "search_only": 2,
+        "producer_truncated": 4,
+        "missing_file": 28,
+        "semantic_uncertainty": 7,
+        "unverified": 10
+      }
+    },
+    "source_artifacts": {
+      "D13": "sha256-8ed69a15495dbd70cf616cf5e2715bad7691c1ca7f49ba3cd6c98168b80579a4",
+      "S13": "sha256-9cfd01992583457b79a76e0c8dbcf1651d9aca28ac8998198cc58a4c34f72ad1",
+      "R13": "sha256-5cabdd9d791f0f5f4da46009664c99d5743c8b1d5cee7df8ddfcd924b50e0d4d",
+      "D14": "sha256-c509cd90013ec8519d141874cbebe9c0e00767c1a58210f6f1d180d4269686f4",
+      "S14": "sha256-6a0fc2de6b4e587e74b4cdd74ed192bdd57fe7b7e9d5ba46861a5e2d2af93eae",
+      "R14": "sha256-36efccd7d0d175d34ed0839d4a7329cbef43de9c0f6d6410404563669c75ddc5",
+      "D15": "sha256-bb9270c6ea6fdb01f13babfcb36371582c769ec1ee6d7f68f1088805dfd5b8d3",
+      "S15": "sha256-f90214142d86a9fa4c251831f8b6345fd10b3add7669382f3ff2340d3ccae4a6",
+      "R15": "sha256-e6458a7ac35482832af3eea322def3f4554a2df4bd062c86c827c8b120444506",
+      "D16": "sha256-8ecac4da4cf3a27a2800559dd901b839eba978727a03a5d95e1d97da50c99607",
+      "S16": "sha256-9906c022e1cff717d129e4e10261965db4f543ee0854c89e7bdf11eb77d66308",
+      "R16": "sha256-437ff97057902cc4c04be96cc93ce5630be59f604ed62f5592900255b1965bb8",
+      "D17": "sha256-e57b7e19a76e515e1df613db4d16c1f6e982517c422cf364266ea44ef3b0869d",
+      "S17": "sha256-c66b6ef08abaefd77d12ad6bed17060787274176e89bba9b7b822eb56e7f4f37",
+      "R17": "sha256-e6e16584b7858867e0b403e3abdb69f15e97d2e015e51c6f14da28402493112f",
+      "D18": "sha256-f48ee05afa87a29db73204f7a999417deaf4de6068896ecb904f9335a92dde02",
+      "S18": "sha256-444f4f3ed0b5ec5e8e295dacb3d67eb83f7c73ceda0420549ea47e863ea983c0",
+      "R18": "sha256-b6d42732edc125727616fe4b88541d6a6c8e433fb830f30d7a46c7b7407d7938",
+      "D19": "sha256-27ac459c80527c1f6bdf4ea5ffd3ebb3ba201490d33b32c502fdcf12dd9198af",
+      "S19": "sha256-d165f1c8adb0d053b8d6adcbd636213b54943020133fc1480f33b4669711a5a2",
+      "R19": "sha256-b44275768d3ddeb89f35979e203957aee493f10b7ad38b5db1c6a73352633704",
+      "D21": "sha256-045542ae165df756b712827489e4a5e3b72e1d28c8362a80dda36c067aae8290",
+      "S21": "sha256-2c6dd67b7b6e4953259449b186db59db5ccbcefa48e32d7f48af4b6d5bf5481e",
+      "R21": "sha256-642945ce2722df8d9dfc706db22fc35a025ee112518c3ac673330ad314eea06f",
+      "D22": "sha256-aec038292eae961d3d7b839900b21cbdbdea2260562197840ba8c2542333267d",
+      "S22": "sha256-f0aaec1522a5b10a05f0bc2a563059c5806c92f61673d210cbb785fe7dad498b",
+      "R22": "sha256-7d665a3430e16f279c3b2c9d9d26b13ee72719ac56010bb0ddf7e80229313767"
+    },
+    "coverage": {
+      "C13": {
+        "transcript": "T13",
+        "source": "S13",
+        "returned_source_bytes": "[0,236587)",
+        "call_result_lines": [
+          [
+            2,
+            4
+          ],
+          [
+            6,
+            8
+          ],
+          [
+            9,
+            10
+          ],
+          [
+            15,
+            16
+          ],
+          [
+            17,
+            18
+          ],
+          [
+            25,
+            26
+          ],
+          [
+            27,
+            28
+          ]
+        ],
+        "note": "Continuous delivery assembled from successful views, not inferred from search scope."
+      },
+      "C14": {
+        "transcript": "T14",
+        "source": "S14",
+        "returned_source_lines": "1-6696",
+        "call_result_lines": [
+          [
+            2,
+            4
+          ],
+          [
+            6,
+            7
+          ],
+          [
+            9,
+            10
+          ],
+          [
+            11,
+            12
+          ],
+          [
+            19,
+            20
+          ]
+        ]
+      },
+      "C15": {
+        "transcript": "T15",
+        "source": "S15",
+        "returned_source_bytes": "[0,169486)",
+        "call_result_lines": [
+          [
+            6,
+            7
+          ],
+          [
+            9,
+            10
+          ],
+          [
+            11,
+            12
+          ],
+          [
+            13,
+            14
+          ]
+        ],
+        "note": "Complete snapshot delivery; producer omissions inside the snapshot remain separate."
+      },
+      "C16": {
+        "transcript": "T16",
+        "source": "S16",
+        "returned_source": "Source lines 1-4198 cover primary sections; related tail bytes [171512,242090) was also returned.",
+        "call_result_lines": [
+          [
+            2,
+            3
+          ],
+          [
+            9,
+            10
+          ],
+          [
+            11,
+            12
+          ],
+          [
+            17,
+            18
+          ],
+          [
+            19,
+            20
+          ],
+          [
+            21,
+            24
+          ]
+        ]
+      },
+      "C17": {
+        "transcript": "T17",
+        "source": "S17",
+        "returned_source": "Sequential source lines 1-3813; later searches and tail [203000,209178).",
+        "call_result_lines": [
+          [
+            2,
+            3
+          ],
+          [
+            5,
+            8
+          ],
+          [
+            9,
+            10
+          ],
+          [
+            11,
+            12
+          ],
+          [
+            15,
+            17
+          ],
+          [
+            16,
+            18
+          ],
+          [
+            19,
+            22
+          ]
+        ],
+        "note": "The available Codex test section continues after line 3813; later search scope does not establish delivery of its remainder."
+      },
+      "C18": {
+        "transcript": "T18",
+        "source": "S18",
+        "returned_source_bytes": "[0,192304)",
+        "artifact_total_bytes": 192310,
+        "call_result_lines": [
+          [
+            2,
+            3
+          ],
+          [
+            6,
+            7
+          ],
+          [
+            9,
+            12
+          ],
+          [
+            17,
+            18
+          ],
+          [
+            21,
+            22
+          ]
+        ],
+        "note": "Do not claim full byte delivery: six terminal bytes were not covered by these sequential views."
+      },
+      "C19": {
+        "transcript": "T19",
+        "source": "S19",
+        "returned_source_bytes": "[0,69472)",
+        "call_result_lines": [
+          [
+            2,
+            3
+          ],
+          [
+            5,
+            8
+          ],
+          [
+            9,
+            12
+          ]
+        ],
+        "note": "Complete delivery of an artifact containing a producer-truncated related file."
+      },
+      "C21": {
+        "transcript": "T21",
+        "source": "S21",
+        "returned_source_bytes": "[0,35435)",
+        "call_result_lines": [
+          [
+            2,
+            3
+          ],
+          [
+            6,
+            7
+          ]
+        ]
+      },
+      "C22": {
+        "transcript": "T22",
+        "source": "S22",
+        "artifact_total_bytes": 278295,
+        "sequential_source_ranges": [
+          "[0,8192)",
+          "[159199,162699)",
+          "[162699,165299)",
+          "[171576,174976)"
+        ],
+        "call_result_lines": [
+          [
+            2,
+            6
+          ],
+          [
+            35,
+            39
+          ],
+          [
+            41,
+            44
+          ],
+          [
+            49,
+            50
+          ]
+        ],
+        "note": "Additional literal-search excerpts were returned. Neither these excerpts nor a full-artifact search delivered the whole snapshot."
+      }
+    },
+    "rows": [
+      {
+        "task_id": 13,
+        "gap_index": 0,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "Media helper definitions, receipt producer and MCP-contract implementation",
+        "source_artifact_ranges": [
+          "S13:[0,236587)",
+          "S13:[34302,34449)",
+          "S13:[35057,35204)",
+          "S13:[36789,36936)",
+          "S13:[65273,65410)",
+          "S13:[80889,81035)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C13",
+          "call_result_lines": [
+            [
+              21,
+              22
+            ],
+            [
+              23,
+              24
+            ]
+          ],
+          "observation": "The definition search for Coordinator.taskNeedsOwnMediaExecution returned no matches. A second batch returned three calls to that helper, no func runtimeMediaHash match, a PublishToolResult call, and a decodeToolMediaPublication validation call. The delivered snapshot does not supply all corresponding dependency implementations."
+        },
+        "main_cause": "Assigned snapshot dependency boundary, rather than failure to finish its returned bytes.",
+        "remedy": "Retrieve same-revision public snapshot sections containing the helper definitions, receipt producer and internal/mcpcontracts implementation.",
+        "missing_evidence": [
+          "Definitions of runtimeMediaHash and taskNeedsOwnMediaExecution",
+          "Receipt production and media decoder/validator implementations"
+        ]
+      },
+      {
+        "task_id": 13,
+        "gap_index": 1,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "Durable append producers for EventToolMediaPublished and EventMediaConsumerBound",
+        "source_artifact_ranges": [
+          "D13:[0,15074)",
+          "S13:[0,236587)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C13",
+          "call_result_lines": [
+            [
+              1,
+              3
+            ]
+          ],
+          "observation": "The returned diff adds event catalog/known-event/payload-validation handling. Those are consumers or declarations, not the durable append producer. The complete assigned snapshot does not provide the producer implementation needed for this claim."
+        },
+        "main_cause": "Event declaration and validation changes were provided without their cross-file append owner.",
+        "remedy": "Supply the same-revision event append implementation and transaction boundary from public snapshots.",
+        "missing_evidence": [
+          "Production append sites and atomicity ordering for both event types"
+        ]
+      },
+      {
+        "task_id": 13,
+        "gap_index": 2,
+        "primary_category": "producer_truncated",
+        "secondary_categories": [],
+        "subject": "Related evidence/event test bodies and scheduler negative-case coverage",
+        "source_artifact_ranges": [
+          "S13:[183840,216608)",
+          "S13:[216608,236587)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C13",
+          "call_result_lines": [
+            [
+              25,
+              26
+            ],
+            [
+              27,
+              28
+            ]
+          ],
+          "observation": "Related-file metadata records omitted test content: evidence_manifest_test.go 13299 bytes, evidence_store_media_test.go 11619 bytes, and event_payloads_test.go 14426 bytes. Empty or truncated source sections are producer omissions despite delivery of the snapshot itself."
+        },
+        "main_cause": "Snapshot production omitted related test bodies.",
+        "remedy": "Provide untruncated same-revision test sections, including the relevant scheduler no-media assertions.",
+        "missing_evidence": [
+          "Omitted related test bodies",
+          "Direct scheduler negative-case assertions needed by the gap"
+        ]
+      },
+      {
+        "task_id": 13,
+        "gap_index": 3,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "FileArtifactStore.Verify callers",
+        "source_artifact_ranges": [
+          "D13:[0,15074)",
+          "S13:[0,236587)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C13",
+          "call_result_lines": [
+            [
+              1,
+              3
+            ]
+          ],
+          "observation": "The returned change to Verify clears occurrence information in the reference. The assigned snapshot does not include the artifact_access.go, execution_world.go and inspect caller paths required to assess the changed contract end to end."
+        },
+        "main_cause": "Caller closure is outside the assigned immutable snapshot.",
+        "remedy": "Read the relevant same-revision public caller sections rather than infer compatibility from the changed method alone.",
+        "missing_evidence": [
+          "Artifact access, execution-world and inspection callers"
+        ]
+      },
+      {
+        "task_id": 13,
+        "gap_index": 4,
+        "primary_category": "unverified",
+        "secondary_categories": [],
+        "subject": "Independent executable verification",
+        "source_artifact_ranges": [
+          "R13:[0,676)",
+          "T13:1-31"
+        ],
+        "transcript_evidence": {
+          "call_result_lines": [
+            [
+              5,
+              7
+            ]
+          ],
+          "observation": "R13 is a revision/workset reference report with passed=true and touched paths. The review transcript supplies views/searches, not an executable-test command/result or a typed independent verifier receipt."
+        },
+        "main_cause": "Required execution observation is not supplied by the reviewed public transcript.",
+        "remedy": "Locate an already-exported verifier receipt tied to this revision and task; do not reinterpret reference validation as tests.",
+        "missing_evidence": [
+          "Independent executable verification receipt and its revision/task binding"
+        ]
+      },
+      {
+        "task_id": 14,
+        "gap_index": 0,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "MCP action media publication lifecycle callers",
+        "source_artifact_ranges": [
+          "S14:[146154,146980)",
+          "S14:[147686,148514)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C14",
+          "call_result_lines": [
+            [
+              15,
+              16
+            ]
+          ],
+          "observation": "Search excerpts show verifyMCPActionMediaSource and publishPendingMCPActionMedia definitions. They do not supply production callers or the receipt/lifecycle writers that drive commit and abort."
+        },
+        "main_cause": "Helpers are delivered without their lifecycle owner/caller closure.",
+        "remedy": "Supply public snapshot sections for production publication callers and receipt/commit/abort writers.",
+        "missing_evidence": [
+          "Production publication callers",
+          "Receipt and lifecycle write paths"
+        ]
+      },
+      {
+        "task_id": 14,
+        "gap_index": 1,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "TaskResult and RuntimeMediaProjection schema/validation definitions",
+        "source_artifact_ranges": [
+          "D14:lines 103-125",
+          "S14:lines 1-6696"
+        ],
+        "transcript_evidence": {
+          "coverage": "C14",
+          "call_result_lines": [
+            [
+              1,
+              3
+            ],
+            [
+              17,
+              18
+            ]
+          ],
+          "observation": "The returned diff shows ProjectHistoricalTaskResult checking task/attempt identity, calling RuntimeMedia.Validate and cloning preserved media. A search for type RuntimeMediaProjection returned no matches in the assigned source."
+        },
+        "main_cause": "Projection consumer changes are present, but the type/schema authority is outside the snapshot.",
+        "remedy": "Provide the same-revision TaskResult and RuntimeMediaProjection declarations and validation methods.",
+        "missing_evidence": [
+          "JSON tags, schema declarations and validation implementation"
+        ]
+      },
+      {
+        "task_id": 14,
+        "gap_index": 2,
+        "primary_category": "producer_truncated",
+        "secondary_categories": [
+          "unverified"
+        ],
+        "subject": "Related lifecycle tests and their execution evidence",
+        "source_artifact_ranges": [
+          "S14:lines 6488-6526",
+          "T14:1-29"
+        ],
+        "transcript_evidence": {
+          "coverage": "C14",
+          "call_result_lines": [
+            [
+              19,
+              20
+            ]
+          ],
+          "observation": "The returned metadata explicitly omits receipt_test.go 26419 bytes, historical_result_content_test.go 2987 bytes, mcp_action_binding_test.go 9291 bytes and mcp_action_provider_test.go 13790 bytes. Their sections are empty. The transcript also supplies no executable verification result."
+        },
+        "main_cause": "Producer omitted related tests; execution evidence is independently unavailable here.",
+        "remedy": "Provide untruncated exported test bodies and an existing revision-bound verifier receipt.",
+        "missing_evidence": [
+          "Four omitted test bodies",
+          "Independent executable verification receipt"
+        ]
+      },
+      {
+        "task_id": 14,
+        "gap_index": 3,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "canonicalJournalOwner and LoadSessionTree definitions",
+        "source_artifact_ranges": [
+          "S14:[97156,97977)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C14",
+          "call_result_lines": [
+            [
+              15,
+              16
+            ]
+          ],
+          "observation": "The excerpt contains the c.session != nil guard and LoadSessionTree(c.canonicalJournalOwner().session.Workspace) call. It does not provide the definitions needed to establish the ownership/nullability relationship."
+        },
+        "main_cause": "A guarded call site is present without the ownership helper and session-loader implementations.",
+        "remedy": "Retrieve those same-revision definitions from public evidence before judging the guard.",
+        "missing_evidence": [
+          "canonicalJournalOwner definition",
+          "LoadSessionTree definition and relevant contract"
+        ]
+      },
+      {
+        "task_id": 14,
+        "gap_index": 4,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "Subagent native-image capability and external cost reservation consumers",
+        "source_artifact_ranges": [
+          "S14:[20709,21333)",
+          "S14:[20770,21394)",
+          "S14:[22497,23123)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C14",
+          "call_result_lines": [
+            [
+              17,
+              18
+            ],
+            [
+              27,
+              28
+            ]
+          ],
+          "observation": "Returned excerpts show SupportsNativeImageInput probing and externalCostReservationKey production; the matching provider and reservation-consumer implementations are not supplied by this snapshot."
+        },
+        "main_cause": "Capability/context-key producers are separated from consumers by the workset boundary.",
+        "remedy": "Include public SubagentProvider capability implementation and the external reservation-key reader.",
+        "missing_evidence": [
+          "SubagentProvider capability implementation",
+          "External reservation context consumer"
+        ]
+      },
+      {
+        "task_id": 15,
+        "gap_index": 0,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "CommitProviderInvocation atomic event append implementation",
+        "source_artifact_ranges": [
+          "D15:[0,32768)",
+          "S15:[14555,15178)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C15",
+          "call_result_lines": [
+            [
+              1,
+              4
+            ],
+            [
+              15,
+              16
+            ]
+          ],
+          "observation": "The returned source includes a test using CommitProviderInvocation and asserting adjacent event ordering. The durable production append implementation establishing atomicity is outside the assigned snapshot."
+        },
+        "main_cause": "A test expectation is available, but its transaction owner is not.",
+        "remedy": "Supply the public same-revision CommitProviderInvocation implementation and append transaction boundary.",
+        "missing_evidence": [
+          "Production atomic append implementation"
+        ]
+      },
+      {
+        "task_id": 15,
+        "gap_index": 1,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "toolMediaOccurrence and canonicalJournalOwner definitions",
+        "source_artifact_ranges": [
+          "S15:[80309,80928)",
+          "S15:[22342,22963)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C15",
+          "call_result_lines": [
+            [
+              15,
+              16
+            ]
+          ],
+          "observation": "Search results provide a toolMediaOccurrence delegation call and a canonicalJournalOwner call, not the corresponding definitions."
+        },
+        "main_cause": "Cross-file occurrence and journal-ownership helpers are omitted from this workset.",
+        "remedy": "Retrieve their same-revision public definitions and inspect ownership/occurrence construction directly.",
+        "missing_evidence": [
+          "toolMediaOccurrence definition",
+          "canonicalJournalOwner definition"
+        ]
+      },
+      {
+        "task_id": 15,
+        "gap_index": 2,
+        "primary_category": "missing_file",
+        "secondary_categories": [
+          "semantic_uncertainty"
+        ],
+        "subject": "Media compaction version ordering and normalization",
+        "source_artifact_ranges": [
+          "D15:[0,32768)",
+          "S15:[0,169486)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C15",
+          "call_result_lines": [
+            [
+              1,
+              4
+            ]
+          ],
+          "observation": "Delivered code raises the state version to mediaCompactionStateVersion and assigns toolMediaCompactionStateVersion when tool media is present. The version constants and isMediaCompactionVersion definition needed to interpret ordering and accepted versions are not supplied."
+        },
+        "main_cause": "Missing version authority leaves the visible assignments semantically underdetermined.",
+        "remedy": "Supply constant values and normalization/version predicate definitions before evaluating upgrade or downgrade behavior.",
+        "missing_evidence": [
+          "Version constants",
+          "isMediaCompactionVersion implementation"
+        ]
+      },
+      {
+        "task_id": 15,
+        "gap_index": 3,
+        "primary_category": "missing_file",
+        "secondary_categories": [
+          "semantic_uncertainty"
+        ],
+        "subject": "Tool-media expansion, metadata decoding and TaskBinding.Clone",
+        "source_artifact_ranges": [
+          "D15:[0,32768)",
+          "S15:[0,169486)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C15",
+          "call_result_lines": [
+            [
+              1,
+              4
+            ],
+            [
+              17,
+              18
+            ]
+          ],
+          "observation": "The delivered history code calls media expansion/decoding helpers, skips malformed or nil decoded metadata, and appends image blocks. It does not supply the external expansion, decoder, MessagesHaveToolMedia or TaskBinding.Clone implementations."
+        },
+        "main_cause": "Visible call-site behavior cannot establish external aliasing, expansion and filtering semantics.",
+        "remedy": "Retrieve the public same-revision helper and clone definitions.",
+        "missing_evidence": [
+          "agentExpandToolMediaRequest and message expansion implementations",
+          "DecodeToolMediaMetadata and MessagesHaveToolMedia",
+          "media.TaskBinding.Clone"
+        ]
+      },
+      {
+        "task_id": 15,
+        "gap_index": 4,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "writeExclusiveImage callers, tests and pre-existing write ownership",
+        "source_artifact_ranges": [
+          "D15:[0,32768)",
+          "S15:[31579,32198)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C15",
+          "call_result_lines": [
+            [
+              1,
+              4
+            ],
+            [
+              15,
+              16
+            ]
+          ],
+          "observation": "writeExclusiveImage is defined in the delivered code, including pinned-directory/exclusive-open and cleanup behavior. The missing evidence is its caller/test and pre-existing write ownership closure, not the helper definition."
+        },
+        "main_cause": "Callers and ownership context are outside the assigned snapshot.",
+        "remedy": "Provide same-revision export callers and relevant ownership/error-path tests.",
+        "missing_evidence": [
+          "Production export callers",
+          "Relevant tests",
+          "Pre-existing write ownership context"
+        ]
+      },
+      {
+        "task_id": 16,
+        "gap_index": 0,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "verifyMediaConsumer and resolveNativeProviderMedia definitions",
+        "source_artifact_ranges": [
+          "S16:primary sections, lines 1-4198",
+          "S16:[171512,242090)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C16",
+          "call_result_lines": [
+            [
+              29,
+              30
+            ]
+          ],
+          "observation": "A function-definition search for verifyMediaConsumer returned no matches. The delivered snapshot exposes dependent runtime/media behavior but does not supply the two verification/resolution implementations."
+        },
+        "main_cause": "Missing dependency definitions rather than unfinished primary source reading.",
+        "remedy": "Retrieve the public same-revision consumer verifier and native-provider resolver definitions.",
+        "missing_evidence": [
+          "verifyMediaConsumer definition",
+          "resolveNativeProviderMedia definition"
+        ]
+      },
+      {
+        "task_id": 16,
+        "gap_index": 1,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "writeExclusiveImage implementation",
+        "source_artifact_ranges": [
+          "S16:[27452,27983)",
+          "S15:[31579,32198)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C16",
+          "call_result_lines": [
+            [
+              22,
+              23
+            ]
+          ],
+          "observation": "T16 returns a writeExclusiveImage call but not its implementation. The implementation is separately present in the public task-15 snapshot, so this is not a repository-wide or export-wide absence."
+        },
+        "main_cause": "Definition split across public workset partitions.",
+        "remedy": "Reuse the same-revision S15 helper evidence instead of reading live files.",
+        "missing_evidence": [
+          "Definition within task 16's assigned snapshot"
+        ],
+        "public_cross_partition_evidence": "T15 call/result lines 15/16, S15:[31579,32198)"
+      },
+      {
+        "task_id": 16,
+        "gap_index": 2,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "verifyRuntimeMediaTransition implementation",
+        "source_artifact_ranges": [
+          "S16:primary sections, lines 1-4198",
+          "S17:[9005,9273)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C16",
+          "call_result_lines": [
+            [
+              2,
+              3
+            ],
+            [
+              9,
+              10
+            ],
+            [
+              11,
+              12
+            ]
+          ],
+          "observation": "The delivered task-16 primary source lacks the transition verifier implementation. A definition excerpt is independently available in the public task-17 transcript."
+        },
+        "main_cause": "Verification owner is in another public workset partition.",
+        "remedy": "Connect task 16's call sites to the same-revision task-17 definition and its complete source section.",
+        "missing_evidence": [
+          "Transition verifier definition within the assigned task-16 snapshot"
+        ],
+        "public_cross_partition_evidence": "T17 call/result lines 24/28, S17:[9005,9273)"
+      },
+      {
+        "task_id": 16,
+        "gap_index": 3,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "CLI/TUI consumers of image count, result IDs and historical-image helpers",
+        "source_artifact_ranges": [
+          "S16:lines 3768-4198",
+          "S16:[156050,156591)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C16",
+          "call_result_lines": [
+            [
+              11,
+              12
+            ],
+            [
+              26,
+              27
+            ]
+          ],
+          "observation": "HistoricalResultImagesCommand is defined at source lines 3806-3808. RunReport.ImageResultIDs and its projection assignment are also delivered. Missing evidence concerns downstream consumers/callers, not these definitions or the report field."
+        },
+        "main_cause": "Consumer closure crosses the task's source boundary.",
+        "remedy": "Provide public CLI/TUI caller sections and result-ID/image-count consumption paths.",
+        "missing_evidence": [
+          "CLI/TUI consumers and helper call sites"
+        ]
+      },
+      {
+        "task_id": 16,
+        "gap_index": 4,
+        "primary_category": "unverified",
+        "secondary_categories": [],
+        "subject": "Executable verification of the runtime/report changes",
+        "source_artifact_ranges": [
+          "R16",
+          "T16:1-31"
+        ],
+        "transcript_evidence": {
+          "call_result_lines": [
+            [
+              5,
+              8
+            ]
+          ],
+          "observation": "The transcript returns a reference report and source views/searches, but no independent executable-test command/result or typed verifier receipt."
+        },
+        "main_cause": "Execution observation is unavailable in this reviewed transcript.",
+        "remedy": "Locate an existing exported verifier receipt bound to the reviewed revision and task.",
+        "missing_evidence": [
+          "Independent executable verification receipt"
+        ]
+      },
+      {
+        "task_id": 17,
+        "gap_index": 0,
+        "primary_category": "missing_file",
+        "secondary_categories": [
+          "unverified"
+        ],
+        "subject": "Codex image admission, attempt preparation and state-lock helper implementations",
+        "source_artifact_ranges": [
+          "S17:[48136,48456)",
+          "S17:[39538,39863)",
+          "S17:[51584,51903)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C17",
+          "call_result_lines": [
+            [
+              20,
+              21
+            ],
+            [
+              33,
+              36
+            ],
+            [
+              34,
+              35
+            ]
+          ],
+          "observation": "Returned searches expose calls to validateAttemptEntry, acquireCodexStateFileLock and prepareImageAttempt. The assigned production sections do not supply the helper closure including admitImageTurn and validateCodexImageLease. No executable verification receipt is supplied."
+        },
+        "main_cause": "Codex helper implementation files are outside the workset; execution claims remain unobserved.",
+        "remedy": "Provide public helper definitions and an already-exported revision-bound verifier receipt.",
+        "missing_evidence": [
+          "Five named Codex helper implementations",
+          "Independent executable verification receipt"
+        ]
+      },
+      {
+        "task_id": 17,
+        "gap_index": 1,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "finalizeTaskMedia and verifyRuntimeMediaTransition callers",
+        "source_artifact_ranges": [
+          "S17:[11724,11981)",
+          "S17:[9005,9273)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C17",
+          "call_result_lines": [
+            [
+              23,
+              27
+            ],
+            [
+              24,
+              28
+            ]
+          ],
+          "observation": "Both search results show definitions, not the production caller closure. verifyRuntimeMediaTransition visibly returns early for non-task_ sources; the caller/source-domain contract is not supplied."
+        },
+        "main_cause": "Definitions are present, but lifecycle callers and source-domain ownership are outside the assigned snapshot.",
+        "remedy": "Retrieve same-revision public finalization and transition-verifier callers.",
+        "missing_evidence": [
+          "Production callers",
+          "Source-domain contract for the non-task_ early return"
+        ]
+      },
+      {
+        "task_id": 17,
+        "gap_index": 2,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "Publication and redaction ownership",
+        "source_artifact_ranges": [
+          "S17:delivered primary source sections and related-file inventory"
+        ],
+        "transcript_evidence": {
+          "coverage": "C17",
+          "call_result_lines": [
+            [
+              2,
+              3
+            ],
+            [
+              5,
+              8
+            ],
+            [
+              9,
+              10
+            ],
+            [
+              11,
+              12
+            ],
+            [
+              15,
+              17
+            ]
+          ],
+          "observation": "The supplied primary sections cover runtime media, journal/result and Codex changes. Their source/inventory does not supply the external publication/redaction owners required by this gap."
+        },
+        "main_cause": "Cross-partition ownership boundary.",
+        "remedy": "Provide public same-revision publication and redaction owner sections, with their call paths.",
+        "missing_evidence": [
+          "Publication integration owner",
+          "Redaction implementation and ownership path"
+        ]
+      },
+      {
+        "task_id": 17,
+        "gap_index": 3,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "Event-store, command-report, JSON and inspection result sinks",
+        "source_artifact_ranges": [
+          "S17:delivered primary source sections and related-file inventory"
+        ],
+        "transcript_evidence": {
+          "coverage": "C17",
+          "call_result_lines": [
+            [
+              2,
+              3
+            ],
+            [
+              5,
+              8
+            ],
+            [
+              9,
+              10
+            ],
+            [
+              11,
+              12
+            ],
+            [
+              15,
+              17
+            ]
+          ],
+          "observation": "The assigned source shows result/journal-side changes but does not provide the downstream event decoder and CLI/JSON/inspect sink implementations named by the gap."
+        },
+        "main_cause": "Downstream consumer closure is excluded from the snapshot.",
+        "remedy": "Supply public sink/decoder sections and connect them to the delivered producer fields.",
+        "missing_evidence": [
+          "Event-store decoding",
+          "Command-report and JSON consumers",
+          "Inspection result sinks"
+        ]
+      },
+      {
+        "task_id": 17,
+        "gap_index": 4,
+        "primary_category": "producer_truncated",
+        "secondary_categories": [
+          "partial_read",
+          "search_only",
+          "unverified"
+        ],
+        "subject": "Truncated related tests, unread available Codex tests and verifier output",
+        "source_artifact_ranges": [
+          "S17:lines 3570-3813",
+          "S17:[138462,199327) approximately for the Codex test section",
+          "S17:[199408,199817)",
+          "S17:[204339,204748)",
+          "S17:[203000,209178)",
+          "S17:[141551,141964)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C17",
+          "call_result_lines": [
+            [
+              11,
+              12
+            ],
+            [
+              15,
+              17
+            ],
+            [
+              16,
+              18
+            ],
+            [
+              19,
+              22
+            ],
+            [
+              41,
+              44
+            ]
+          ],
+          "observation": "Producer metadata records task_journal_test.go omitted_bytes=5183 and task_result_test.go omitted_bytes=32656; the latter body is empty, with further related files omitted. Separately, subagent_codex_test.go is present with bytes=60816 and no producer-truncation marker. Its section starts at source line 3570; the sequential result stops at line 3813 inside rawCallMethods after t.Helper(), without an end-of-artifact marker. Later calls return headings, truncation excerpts, the tail, and one ArtifactScope excerpt rather than the remaining Codex test body."
+        },
+        "main_cause": "Mixed problem: real producer truncation plus reader failure to finish an available test section.",
+        "remedy": "Provide untruncated related tests; resume byte/line reads of the existing Codex test section after the last delivered position; locate an existing verifier receipt.",
+        "missing_evidence": [
+          "Producer-omitted related test content",
+          "Available but undelivered Codex test remainder",
+          "Independent executable verification receipt"
+        ]
+      },
+      {
+        "task_id": 18,
+        "gap_index": 0,
+        "primary_category": "semantic_uncertainty",
+        "secondary_categories": [],
+        "subject": "False claim that worker_memory.go diff tail is truncated",
+        "source_artifact_ranges": [
+          "D18:[32768,45550)",
+          "D18:[45300,45550)"
+        ],
+        "transcript_evidence": {
+          "call_result_lines": [
+            [
+              5,
+              8
+            ],
+            [
+              27,
+              28
+            ]
+          ],
+          "decisive_call_id": "call_3dd90065ea2f45e69da3f027",
+          "observation": "The hunk header is @@ -1159,0 +1160,5 @@ func (c *Coordinator) activeBranchID() string {. It contains exactly five added lines: two comments, an if statement, the parent activeBranchID return, and the closing brace of that if. The tail reread includes '+\\t}' and '[end of artifact]'. An unchanged function-closing brace need not appear in a zero-context diff."
+        },
+        "main_cause": "Misreading a complete zero-context unified-diff hunk as a truncated full function.",
+        "remedy": "Withdraw the producer-truncation allegation; count hunk lines and distinguish unchanged context from omitted changed content.",
+        "missing_evidence": [],
+        "disposition": "The specific truncation allegation is contradicted by the returned diff tail."
+      },
+      {
+        "task_id": 18,
+        "gap_index": 1,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "Tool-media publication integration and occurrence ownership",
+        "source_artifact_ranges": [
+          "S18:[36175,36801)",
+          "S18:[40660,41286)",
+          "S18:[33667,34286)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C18",
+          "call_result_lines": [
+            [
+              19,
+              20
+            ]
+          ],
+          "observation": "Returned excerpts show mediaPublicationOccurrence calls and a toolMediaOccurrence definition. They do not supply the external publication integration/owner closure required to establish end-to-end publication behavior."
+        },
+        "main_cause": "Occurrence-related local code is present without the external publication integration.",
+        "remedy": "Supply the public same-revision publication integration and owner implementation.",
+        "missing_evidence": [
+          "Publication integration and owner closure"
+        ]
+      },
+      {
+        "task_id": 18,
+        "gap_index": 2,
+        "primary_category": "missing_file",
+        "secondary_categories": [
+          "semantic_uncertainty",
+          "unverified"
+        ],
+        "subject": "Provider request expansion and media token estimation",
+        "source_artifact_ranges": [
+          "S18:[22151,22773)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C18",
+          "call_result_lines": [
+            [
+              19,
+              20
+            ]
+          ],
+          "observation": "The delivered CountProviderRequest excerpt assigns request.ModelID, expands tool media and tests ProviderRequestHasMedia. The agent/provider_request.go implementation that determines counting semantics is not supplied; the transcript provides no independent measured observation resolving the estimator question."
+        },
+        "main_cause": "Missing estimator implementation leaves a visible call sequence insufficient to establish counting correctness.",
+        "remedy": "Retrieve public provider_request.go evidence and an existing relevant counting/verifier observation.",
+        "missing_evidence": [
+          "Provider request/counting implementation",
+          "Independent evidence resolving the estimation behavior"
+        ]
+      },
+      {
+        "task_id": 18,
+        "gap_index": 3,
+        "primary_category": "missing_file",
+        "secondary_categories": [
+          "semantic_uncertainty"
+        ],
+        "subject": "Fanout repository/session and parent task-binding ownership",
+        "source_artifact_ranges": [
+          "D18:[45300,45550)",
+          "S18:[112420,112598)",
+          "S18:[112221,112379)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C18",
+          "call_result_lines": [
+            [
+              27,
+              28
+            ],
+            [
+              29,
+              30
+            ],
+            [
+              31,
+              32
+            ]
+          ],
+          "observation": "Returned code delegates activeBranchID to the fanout parent when present. It does not supply the fanout construction and repository/session/task-binding definitions needed to prove broader ownership consistency."
+        },
+        "main_cause": "A local delegation is visible, but the ownership construction contract is outside the snapshot.",
+        "remedy": "Provide public fanout construction, parent run/session binding and task-binding clone sections.",
+        "missing_evidence": [
+          "Fanout construction and Repo/session binding",
+          "Parent run/task-binding ownership definitions"
+        ]
+      },
+      {
+        "task_id": 18,
+        "gap_index": 4,
+        "primary_category": "unverified",
+        "secondary_categories": [],
+        "subject": "Executable verification",
+        "source_artifact_ranges": [
+          "R18:[0,756)",
+          "T18:1-33"
+        ],
+        "transcript_evidence": {
+          "call_result_lines": [
+            [
+              10,
+              11
+            ]
+          ],
+          "observation": "The returned report is workset/reference evidence. The transcript supplies no executable-test command/result or typed independent verifier receipt."
+        },
+        "main_cause": "Execution observation is absent from the reviewed evidence.",
+        "remedy": "Locate an existing exported verifier receipt bound to the task and revision.",
+        "missing_evidence": [
+          "Independent executable verification receipt"
+        ]
+      },
+      {
+        "task_id": 19,
+        "gap_index": 0,
+        "primary_category": "producer_truncated",
+        "secondary_categories": [],
+        "subject": "display.go identity helper and production message construction",
+        "source_artifact_ranges": [
+          "S19:[32768,65536)",
+          "S19:[65536,69472)",
+          "S19:[44797,46017)",
+          "S19:[2223,2365)",
+          "S19:[3199,3341)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C19",
+          "call_result_lines": [
+            [
+              5,
+              8
+            ],
+            [
+              9,
+              12
+            ],
+            [
+              15,
+              16
+            ],
+            [
+              19,
+              20
+            ]
+          ],
+          "observation": "The display.go related-file header records bytes=68311, content_truncated=true and omitted_bytes=38967. Returned code calls resultStatusIdentity in task_result_ready handling, but its definition is not delivered. TaskResultIdentityMsg{ searches return two test constructions, not production construction. Those two excerpts total 284 returned bytes; the 69472-byte search scope is not returned source."
+        },
+        "main_cause": "Producer truncated the large related display file containing the needed production closure.",
+        "remedy": "Provide the omitted same-revision display.go sections, especially resultStatusIdentity and production identity-message construction.",
+        "missing_evidence": [
+          "Omitted display.go content",
+          "Identity helper definition",
+          "Production TaskResultIdentityMsg construction"
+        ]
+      },
+      {
+        "task_id": 19,
+        "gap_index": 1,
+        "primary_category": "missing_file",
+        "secondary_categories": [],
+        "subject": "HistoricalResultImagesCommand definition",
+        "source_artifact_ranges": [
+          "S19:[1137,1466)",
+          "S19:[45570,45899)",
+          "R19:[0,426)",
+          "S16:[156050,156591)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C19",
+          "call_result_lines": [
+            [
+              6,
+              7
+            ],
+            [
+              17,
+              18
+            ]
+          ],
+          "observation": "Task 19's search returns calls to HistoricalResultImagesCommand. R19 reports six links but zero checked paths and zero checked symbols, so it does not verify the definition. The definition is publicly present in task 16's snapshot."
+        },
+        "main_cause": "Helper definition resides outside the assigned task-19 snapshot.",
+        "remedy": "Reuse the same-revision public task-16 definition rather than treat link checks as symbol verification.",
+        "missing_evidence": [
+          "Definition within the assigned snapshot"
+        ],
+        "public_cross_partition_evidence": "T16 call/result lines 26/27, S16:[156050,156591)"
+      },
+      {
+        "task_id": 19,
+        "gap_index": 2,
+        "primary_category": "unverified",
+        "secondary_categories": [],
+        "subject": "Executable UI/CLI verification",
+        "source_artifact_ranges": [
+          "R19:[0,426)",
+          "T19:1-21"
+        ],
+        "transcript_evidence": {
+          "call_result_lines": [
+            [
+              6,
+              7
+            ]
+          ],
+          "observation": "The transcript includes test source and a reference report, but no test execution result or independent verifier receipt. Reference-report passed=true does not establish that the UI tests ran."
+        },
+        "main_cause": "Execution observation is unavailable in the reviewed transcript.",
+        "remedy": "Locate an already-exported task/revision-bound verifier receipt.",
+        "missing_evidence": [
+          "Independent executable UI/CLI verification receipt"
+        ]
+      },
+      {
+        "task_id": 21,
+        "gap_index": 0,
+        "primary_category": "missing_file",
+        "secondary_categories": [
+          "unverified"
+        ],
+        "subject": "Seven backing JSON/JSONL files and independent synthesis evidence",
+        "source_artifact_ranges": [
+          "S21:[0,35435)",
+          "R21:[0,1268)",
+          "S21:[7525,7787)",
+          "S22:[0,8192)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C21",
+          "call_result_lines": [
+            [
+              5,
+              8
+            ],
+            [
+              13,
+              16
+            ]
+          ],
+          "observation": "Task 21's eleven-path inventory includes acceptance.md, SHA256SUMS, evaluation/expected/fixture/input/inspect/launch/payload files, but not the seven backing JSON/JSONL bodies. Its provider-metadata.json search excerpt is a SHA256SUMS reference, not that file's body. Task 22's public snapshot independently includes all seven backing paths and returns actual admission/provider/wire content in its initial view."
+        },
+        "main_cause": "Backing evidence is split across public partitions; independent synthesis/visual verification remains unobserved.",
+        "remedy": "Join the task-22 public backing-file evidence with task-21 acceptance evidence. Separately locate an existing synthesis/independent-comparison receipt if required.",
+        "missing_evidence": [
+          "Backing bodies within task 21's assigned snapshot",
+          "Independent synthesis/comparison receipt",
+          "Original binary image contents where required for visual verification"
+        ],
+        "public_cross_partition_evidence": {
+          "transcript": "T22",
+          "call_result_lines": [
+            [
+              2,
+              6
+            ],
+            [
+              3,
+              4
+            ]
+          ],
+          "paths": [
+            "docs/archive/analyses/native-image-live-acceptance-2026-11-06/pre-inference-admission.json",
+            "docs/archive/analyses/native-image-live-acceptance-2026-11-06/pre-inference-wire-metadata.jsonl",
+            "docs/archive/analyses/native-image-live-acceptance-2026-11-06/provider-metadata.json",
+            "docs/archive/analyses/native-image-live-acceptance-2026-11-06/provider-wire-metadata.jsonl",
+            "docs/archive/analyses/native-image-live-acceptance-2026-11-06/result.json",
+            "docs/archive/analyses/native-image-live-acceptance-2026-11-06/run.json",
+            "docs/archive/analyses/native-image-live-acceptance-2026-11-06/status.json"
+          ],
+          "returned_content_examples": [
+            "Admission: requested 106936, used 0, reserved 0, limit 24000, exit 7, tokens 0.",
+            "Provider metadata: completion/thinking/tools/vision capabilities and context 1048576.",
+            "Pre-inference wire metadata contains four show/ps entries."
+          ]
+        }
+      },
+      {
+        "task_id": 21,
+        "gap_index": 1,
+        "primary_category": "missing_file",
+        "secondary_categories": [
+          "semantic_uncertainty"
+        ],
+        "subject": "Metadata authority and status interpretation policy",
+        "source_artifact_ranges": [
+          "S21:[0,35435)",
+          "R21:[0,1268)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C21",
+          "call_result_lines": [
+            [
+              2,
+              3
+            ],
+            [
+              6,
+              7
+            ],
+            [
+              5,
+              8
+            ]
+          ],
+          "observation": "The complete supplied snapshot contains archived acceptance artifacts and references. Its eleven-file inventory does not include the runtime metadata authority or status-policy implementation needed to adjudicate competing field/status interpretations."
+        },
+        "main_cause": "Archived values are supplied without the implementation or policy establishing their authority.",
+        "remedy": "Retrieve public same-revision metadata/status policy definitions and map each disputed field to its producer.",
+        "missing_evidence": [
+          "Metadata authority implementation",
+          "Status interpretation policy"
+        ]
+      },
+      {
+        "task_id": 22,
+        "gap_index": 0,
+        "primary_category": "missing_file",
+        "secondary_categories": [
+          "unverified"
+        ],
+        "subject": "Acceptance document and independent image comparison",
+        "source_artifact_ranges": [
+          "R22:[0,1191)",
+          "S22:[0,8192)",
+          "S21:[0,35435)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C22",
+          "call_result_lines": [
+            [
+              3,
+              4
+            ],
+            [
+              2,
+              6
+            ]
+          ],
+          "observation": "Task 22's eleven-path report lists seven backing files plus progress.md, runtime.md, agent-format.md and native-images.md; acceptance.md is not included. The public task-21 snapshot does include acceptance.md. Image filenames and hashes do not establish binary image delivery or an independent visual comparison."
+        },
+        "main_cause": "Acceptance evidence is in a sibling public partition; independent image verification is not demonstrated.",
+        "remedy": "Reuse task 21's public acceptance document and locate an existing binary/comparison receipt if the claim requires it.",
+        "missing_evidence": [
+          "Acceptance document within task 22's assigned snapshot",
+          "Original binary images or independently recorded comparison evidence"
+        ],
+        "public_cross_partition_evidence": "T21 call/result lines 2/3, 6/7 and 5/8 establish acceptance.md in the sibling public snapshot."
+      },
+      {
+        "task_id": 22,
+        "gap_index": 1,
+        "primary_category": "missing_file",
+        "secondary_categories": [
+          "partial_read",
+          "search_only",
+          "semantic_uncertainty"
+        ],
+        "subject": "CLI/config implementation behind documentation and incomplete reading of available guides",
+        "source_artifact_ranges": [
+          "S22:[0,8192)",
+          "S22:[159199,165299)",
+          "S22:[171576,174976)",
+          "S22:[276442,276857)",
+          "S22:[276088,276502)",
+          "S22:[272601,272852)",
+          "S22:[276406,276689)"
+        ],
+        "transcript_evidence": {
+          "coverage": "C22",
+          "call_result_lines": [
+            [
+              3,
+              4
+            ],
+            [
+              24,
+              30
+            ],
+            [
+              26,
+              27
+            ],
+            [
+              35,
+              39
+            ],
+            [
+              41,
+              44
+            ],
+            [
+              42,
+              43
+            ],
+            [
+              49,
+              50
+            ],
+            [
+              51,
+              52
+            ]
+          ],
+          "observation": "The eleven-path snapshot is documentation/backing-evidence only and does not supply CLI/config implementation. Separately, native-images.md starts near byte 269975, but the transcript returns isolated context-window, results-list and example excerpts rather than its whole body. Searching the 278295-byte snapshot does not mean 278295 bytes were delivered."
+        },
+        "main_cause": "Implementation is outside the assigned snapshot, with an additional reader-side failure to finish relevant available documentation.",
+        "remedy": "Retrieve public CLI/config implementation; sequentially read the relevant available guide sections instead of relying only on matching excerpts.",
+        "missing_evidence": [
+          "CLI/config parsing and enforcement implementation",
+          "Undelivered relevant documentation surrounding the excerpts"
+        ]
+      }
+    ],
+    "concrete_cases": [
+      {
+        "row": "18/0",
+        "kind": "false_producer_truncation_report",
+        "evidence": "T18:27/28, D18:[45300,45550), complete +5 zero-context hunk and explicit end-of-artifact.",
+        "conclusion": "The gap confuses omitted unchanged function context with truncated changed content."
+      },
+      {
+        "row": "17/4",
+        "kind": "available_source_not_finished",
+        "evidence": "T17:11/12 stops at S17 line 3813 inside a present 60816-byte Codex test section; later views provide only excerpts and the artifact tail.",
+        "conclusion": "Real truncation of other test files does not explain the unread available Codex test remainder."
+      },
+      {
+        "row": "22/1",
+        "kind": "search_scope_mistaken_for_source_delivery",
+        "evidence": "T22 native-images.md queries return bounded excerpts such as [276442,276857) and [272601,272852), not the complete guide or snapshot.",
+        "conclusion": "A full-snapshot scan cannot establish observation or understanding of the surrounding documentation."
+      },
+      {
+        "rows": [
+          "21/0",
+          "22/0"
+        ],
+        "kind": "public_cross_partition_evidence_available",
+        "evidence": "S22 contains the seven backing files missing from S21; S21 contains acceptance.md missing from S22.",
+        "conclusion": "These are assigned-snapshot omissions, not evidence that the files are absent from the public export."
+      },
+      {
+        "row": "16/3",
+        "kind": "missing_consumer_not_missing_definition",
+        "evidence": "T16:11/12 contains HistoricalResultImagesCommand, RunReport.ImageResultIDs and its assignment.",
+        "conclusion": "The missing evidence is downstream usage, not those delivered definitions."
+      }
+    ],
+    "remaining_evidence_limits": [
+      "No typed independent executable-verifier receipts were observed for the rows tagged unverified; this is not a claim that tests never ran globally.",
+      "Original image filenames/hashes and archived JSON do not independently establish binary image content, visual correctness or comprehension.",
+      "Exported CAS members use redacted data/meta identities; no trustworthy original-artifact-to-exported-CAS mapping was established. Transcript-embedded returned snapshots are the cited source evidence.",
+      "No live-storage access, recovery, source edits, build, lint, tests or formatters were performed.",
+      "The requested local JSON artifact could not be persisted because no writer tool is available."
+    ]
+  }
+}

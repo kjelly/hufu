@@ -262,13 +262,9 @@ func prepareRepositorySnapshot(ctx context.Context, repo, artifactRoot, outputDi
 		if file.Disposition == "excluded" {
 			continue
 		}
-		// Leave room for framing and bounded caller/test context. Large files stay
-		// visible as unfinished coverage instead of being truncated or excluded.
-		if file.Bytes > int64(maxSnapshotContentBytes) || file.Bytes+96*1024 > int64(config.MaxSourceSnapshotBytes) || estimateReviewInputTokens(int(file.Bytes)+96*1024) > config.MaxReviewInputTokens {
-			file.Disposition, file.Reason = "unreviewed", "source_exceeds_item_budget"
-		} else {
-			candidates = append(candidates, file.Path)
-		}
+		// The shared source-budget partitioner splits large primary files at
+		// declaration/line boundaries; size alone must not hide them from review.
+		candidates = append(candidates, file.Path)
 	}
 	batches, err := buildSnapshotBatches(ctx, repo, resolution.Range, candidates, config)
 	if err != nil {
@@ -319,8 +315,7 @@ func prepareRepositorySnapshot(ctx context.Context, repo, artifactRoot, outputDi
 			file.Disposition, file.Reason = "unreviewed", "outside_selected_batch"
 		}
 	}
-	// An all-oversized inventory is still an honest, empty review with coverage
-	// gaps; route noops preserve the inventory rather than declaring it clean.
+	// Empty eligible inventories retain their exclusions through the no-op routes.
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return actionResult{}, err
 	}

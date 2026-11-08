@@ -376,6 +376,7 @@
         "produce-workset",
         "verify-review-tests",
         "inventory-review-handoffs",
+        "prepare-review-supplement",
         "verify-review-report"
       ]
     },
@@ -500,6 +501,28 @@
     {
       "id": "critic-review",
       "agent": "critic",
+      "phase": "VERIFY",
+      "optional": true
+    },
+    {
+      "id": "inventory-review-supplement-requests",
+      "agent": "reviewer",
+      "phase": "VERIFY",
+      "side_effect": "none",
+      "recovery": "retry",
+      "optional": true
+    },
+    {
+      "id": "prepare-review-supplement",
+      "agent": "reviewer",
+      "phase": "VERIFY",
+      "side_effect": "none",
+      "recovery": "retry",
+      "optional": true
+    },
+    {
+      "id": "review-supplement-workset",
+      "agent": "reviewer",
       "phase": "VERIFY",
       "optional": true
     },

@@ -67,8 +67,24 @@ Dispatch the fixed contracts in this order:
    Preserve the bound inventory: required missing targets become findings;
    historical/deleted/example mentions need grounded rationales; uncertainty
    remains a gap. Never treat PREPARE success as semantic reference approval.
-5. After all review children finish, dispatch `reviewer` with
-   `contract_id="inventory-review-handoffs"` exactly once. This static native
+5. After all original review children finish, inspect their typed gap kinds
+   without reconstructing paths, receipt IDs, hashes, or snapshot grants.
+   If any accepted gap is `unread`, `truncated`, or `missing_dependency`,
+   dispatch exactly one `reviewer` action with
+   `contract_id="inventory-review-supplement-requests"`, then exactly one
+   `reviewer` action with `contract_id="prepare-review-supplement"`, then
+   `reviewer` with `contract_id="review-supplement-workset"` only when preparation
+   reports `item_count > 0`. An empty manifest is never dispatched. The runtime
+   expands the native manifest; never manually select items or copy request
+   identities. This is at most ONE round, at most EIGHT supplement items,
+   within the existing 32-review/64-source bound and frozen scope. Never
+   redispatch an already successful original task. Missing-read rejection on
+   an unaccepted worker is repaired by that worker's actual views, not by a
+   coordinator/collector read. Semantic-only gaps do not require supplementation.
+   Typed path/scope/version/budget limitations remain accepted visible gaps.
+   Finish all materialized supplement children
+   before dispatching `reviewer` with `contract_id="inventory-review-handoffs"`
+   exactly once. This static native
    action validates every source and returns `review_handoff_inventory`, with
    `source_task_ids` and `required_critic_source_task_ids`. Treat these exact
    runtime-owned arrays as the dispatch checklist. Do not derive that checklist
@@ -108,7 +124,7 @@ Dispatch the fixed contracts in this order:
    one `synthesizer` with `contract_id="synthesize-review"` AND the static
    `reviewer` audit with `contract_id="verify-review-report"` in the SAME batch. Its
    `evidence_from` must list EVERY completed primary, routine documentation,
-   documentation escalation, and critic todo ID, including no-op children.
+   documentation escalation, supplemental review, and critic todo ID, including no-op children.
    Do not pass expansion-parent IDs or PREPARE action IDs. The runtime hands
    over full accepted structured payloads and authorized reviewed artifacts.
    Report input_review is runtime-owned: the synthesizer omits that field;
@@ -116,7 +132,7 @@ Dispatch the fixed contracts in this order:
    This static contract permits up to 64 evidence sources (32 review children
    plus at most one critic per child). Do not omit or summarize sources to fit
    the default eight-source limit of other contracts.
-   Report-v2 declares scope, snapshot_coverage and test_verification through x-hufu-runtime-inputs.
+   Report-v2 declares scope, snapshot_coverage, test_verification, and supplement_outcomes through x-hufu-runtime-inputs.
    The runtime binds the producer's complete scope and verifier's complete
    targeted_go_tests outputs after checking their current-run receipts and input
    snapshot. The synthesizer must omit both fields. Constraints provide scope

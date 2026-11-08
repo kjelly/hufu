@@ -28,7 +28,7 @@ func TestHufuCodeReviewRuntimeOwnsAll51GapIdentities(t *testing.T) {
 		}
 		gaps := make([]any, 0, count)
 		for j := range count {
-			gaps = append(gaps, map[string]any{"description": fmt.Sprintf("local limitation %d/%d", i, j), "missing_evidence": "independent evidence"})
+			gaps = append(gaps, map[string]any{"description": fmt.Sprintf("local limitation %d/%d", i, j), "missing_evidence": "independent evidence", "kind": "semantic_uncertainty", "requested_evidence": []any{}, "limitations": []any{}})
 		}
 		record := map[string]any{"kind": "review", "review_revision": "head", "workset_key": fmt.Sprintf("unit-%04d", i), "lens": lens, "findings": []any{}, "gaps": gaps, "invariant_assessments": []any{}, "reference_assessments": []any{}}
 		raw, err := json.Marshal(map[string]any{"record": record})
@@ -110,7 +110,7 @@ func TestHufuCodeReviewRuntimeOwnsAll51GapIdentities(t *testing.T) {
 	}
 	tool := &submitResultTool{coordinator: c, todoID: item.ID}
 	shape := tool.Info().Parameters["structured_payload"].(map[string]any)
-	for _, field := range []string{"input_review", "scope", "test_verification", "snapshot_coverage"} {
+	for _, field := range []string{"input_review", "scope", "test_verification", "snapshot_coverage", "supplement_outcomes"} {
 		if _, advertised := shape["properties"].(map[string]any)[field]; advertised {
 			t.Fatalf("runtime-owned %s advertised as model output", field)
 		}
@@ -257,6 +257,7 @@ func bindHufuCodeReviewReceiptFixture(t *testing.T, c *Coordinator, report map[s
 	test["diagnostic"] = strings.Repeat("FAIL snapshot α: expected {suffix}\n", 1000)
 	expected := map[string]any{
 		"scope": report["scope"], "test_verification": test,
+		"supplement_outcomes": []any{},
 		"snapshot_coverage": map[string]any{
 			"mode": "diff", "snapshot_id": "", "content_sha256": "", "revision": "",
 			"batch": 0, "batch_count": 0, "expected": []any{}, "completed": []any{}, "excluded": []any{}, "uncompleted": []any{},
@@ -279,7 +280,12 @@ func bindHufuCodeReviewReceiptFixture(t *testing.T, c *Coordinator, report map[s
 		if field == "test_verification" {
 			output = "targeted_go_tests"
 		}
-		outputs, digest, err := CanonicalizeRuntimeOutputs(map[string]any{output: expected[field]})
+		nativeOutputs := map[string]any{output: expected[field]}
+		if field == "snapshot_coverage" {
+			nativeOutputs["supplement_outcomes"] = expected["supplement_outcomes"]
+			delete(report, "supplement_outcomes")
+		}
+		outputs, digest, err := CanonicalizeRuntimeOutputs(nativeOutputs)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -430,7 +436,7 @@ func TestReviewContractSourcesReachCritiqueAndReport(t *testing.T) {
 				for i := range count {
 					findings[i] = map[string]any{"summary": fmt.Sprintf("finding %d", i), "detail": "bounded observation", "severity": "info", "location": "doc.md:1", "evidence": []any{"sha256-" + strings.Repeat("a", 64)}, "requires_critique": false}
 				}
-				raw, err := json.Marshal(map[string]any{"record": map[string]any{"kind": "review", "review_revision": "head", "workset_key": "unit-0000", "lens": lens, "findings": findings, "gaps": []any{map[string]any{"description": "bounded review", "missing_evidence": "caller"}}, "invariant_assessments": []any{}, "reference_assessments": []any{}}})
+				raw, err := json.Marshal(map[string]any{"record": map[string]any{"kind": "review", "review_revision": "head", "workset_key": "unit-0000", "lens": lens, "findings": findings, "gaps": []any{map[string]any{"description": "bounded review", "missing_evidence": "caller", "kind": "semantic_uncertainty", "requested_evidence": []any{}, "limitations": []any{}}}, "invariant_assessments": []any{}, "reference_assessments": []any{}}})
 				if err != nil {
 					t.Fatal(err)
 				}
