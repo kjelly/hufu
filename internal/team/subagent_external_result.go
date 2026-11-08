@@ -260,7 +260,7 @@ func (defaultExternalResultCanonicalizer) Canonicalize(ctx context.Context, requ
 	}
 	findings := boundedFindings(proposal.Findings)
 	if request.resultContractSchema != nil && request.resultContractSchema.claimsProjection != nil && structuredPayload != nil {
-		projected, err := projectClaimsInput(SubmitResultInput{StructuredPayload: structuredPayload.Value}, request.resultContractSchema.claimsProjection)
+		projected, err := projectClaimsInput(SubmitResultInput{StructuredPayload: structuredPayload.Value}, request.resultContractSchema)
 		if err != nil {
 			return nil, err
 		}

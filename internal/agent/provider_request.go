@@ -25,10 +25,13 @@ import (
 type ProviderRequest struct {
 	ModelID      string
 	InvocationID string
-	Call         *fantasy.Call
-	ObjectCall   *fantasy.ObjectCall
-	Messages     []fantasy.Message
-	Tools        []fantasy.AgentTool
+	// TransientRetries counts resends of this model step, not worker attempts.
+	// It is recovery metadata and is never serialized into the provider body.
+	TransientRetries int
+	Call             *fantasy.Call
+	ObjectCall       *fantasy.ObjectCall
+	Messages         []fantasy.Message
+	Tools            []fantasy.AgentTool
 	// AdmissionContext is copied into each provider request by the admitted
 	// language-model wrapper. A zero context preserves legacy direct
 	// constructors, which use the compatibility registry in the consumer.
@@ -616,7 +619,7 @@ func (m *admittedLanguageModel) Model() string { return m.inner.Model() }
 
 // recover retries only a rejected provider request. The single-call methods
 // settle and release every invocation before this policy can wait or resend.
-func (m *admittedLanguageModel) recover[T any](ctx context.Context, request ProviderRequest, once func() (T, bool, error)) (T, error) {
+func (m *admittedLanguageModel) recover[T any](ctx context.Context, request ProviderRequest, state *providerRetryState, once func() (T, bool, error)) (T, error) {
 	if m.protocolErr != nil {
 		var zero T
 		return zero, m.protocolErr
@@ -629,6 +632,7 @@ func (m *admittedLanguageModel) recover[T any](ctx context.Context, request Prov
 	}
 	recovery, _ := m.admission.(ProviderRequestRecovery)
 	for {
+		request.TransientRetries = state.transientRetries
 		var zero T
 		if err := ctx.Err(); err != nil {
 			return zero, err
@@ -674,7 +678,7 @@ func (m *admittedLanguageModel) recover[T any](ctx context.Context, request Prov
 		if !rejected {
 			return response, err
 		}
-		retry, recoveryErr := recovery.RecoverProviderRequest(ctx, request, rejection.cause)
+		retry, recoveryErr := m.recoverRejectedRequest(ctx, request, state, rejection.cause)
 		if recoveryErr != nil {
 			return zero, recoveryErr
 		}
@@ -690,7 +694,7 @@ func (m *admittedLanguageModel) Generate(ctx context.Context, call fantasy.Call)
 		return nil, err
 	}
 	call.Prompt = sanitizeToolCallHistory(prompt)
-	return m.recover(ctx, m.request(ProviderRequest{Call: &call}), func() (*fantasy.Response, bool, error) {
+	return m.recover(ctx, m.request(ProviderRequest{Call: &call}), &providerRetryState{}, func() (*fantasy.Response, bool, error) {
 		response, err := m.generateOnce(ctx, call)
 		return response, response != nil, err
 	})
@@ -701,10 +705,27 @@ func (m *admittedLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 		return nil, err
 	}
 	call.Prompt = sanitizeToolCallHistory(prompt)
-	return m.recover(ctx, m.request(ProviderRequest{Call: &call}), func() (fantasy.StreamResponse, bool, error) {
-		response, err := m.streamOnce(ctx, call)
+	request := m.request(ProviderRequest{Call: &call})
+	state := &providerRetryState{}
+	open := func() (fantasy.StreamResponse, error) {
+		stream, err := m.streamOnce(ctx, call)
+		if err == nil && ctx.Value(structuredResponseStreamKey{}) == true {
+			stream = bufferStructuredResponseStream(call, stream, structuredResponseBufferLimit)
+		}
+		return stream, err
+	}
+	stream, err := m.recover(ctx, request, state, func() (fantasy.StreamResponse, bool, error) {
+		response, err := open()
 		return response, response != nil, err
 	})
+	if err != nil {
+		return nil, err
+	}
+	return m.recoverRejectedStream(ctx, request, state, stream, open,
+		func(part fantasy.StreamPart) error { return part.Error },
+		func(err error) fantasy.StreamPart {
+			return fantasy.StreamPart{Type: fantasy.StreamPartTypeError, Error: err}
+		}), nil
 }
 func (m *admittedLanguageModel) GenerateObject(ctx context.Context, call fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
 	prompt, err := ExpandToolMediaMessages(call.Prompt)
@@ -712,7 +733,7 @@ func (m *admittedLanguageModel) GenerateObject(ctx context.Context, call fantasy
 		return nil, err
 	}
 	call.Prompt = sanitizeToolCallHistory(prompt)
-	return m.recover(ctx, m.request(ProviderRequest{ObjectCall: &call}), func() (*fantasy.ObjectResponse, bool, error) {
+	return m.recover(ctx, m.request(ProviderRequest{ObjectCall: &call}), &providerRetryState{}, func() (*fantasy.ObjectResponse, bool, error) {
 		response, err := m.generateObjectOnce(ctx, call)
 		return response, response != nil, err
 	})
@@ -723,20 +744,31 @@ func (m *admittedLanguageModel) StreamObject(ctx context.Context, call fantasy.O
 		return nil, err
 	}
 	call.Prompt = sanitizeToolCallHistory(prompt)
-	return m.recover(ctx, m.request(ProviderRequest{ObjectCall: &call}), func() (fantasy.ObjectStreamResponse, bool, error) {
+	request := m.request(ProviderRequest{ObjectCall: &call})
+	state := &providerRetryState{}
+	open := func() (fantasy.ObjectStreamResponse, error) { return m.streamObjectOnce(ctx, call) }
+	stream, err := m.recover(ctx, request, state, func() (fantasy.ObjectStreamResponse, bool, error) {
 		response, err := m.streamObjectOnce(ctx, call)
 		return response, response != nil, err
 	})
+	if err != nil {
+		return nil, err
+	}
+	return m.recoverRejectedStream(ctx, request, state, stream, open,
+		func(part fantasy.ObjectStreamPart) error { return part.Error },
+		func(err error) fantasy.ObjectStreamPart {
+			return fantasy.ObjectStreamPart{Type: fantasy.ObjectStreamPartTypeError, Error: err}
+		}), nil
 }
 
 // providerRejection marks only an actual rejected transport call. A reservation
-// or admission error wrapping an HTTP error must never trigger quota retries.
+// or admission error wrapping a provider error must never trigger resends.
 type providerRejection struct{ cause error }
 
 func (e *providerRejection) Error() string { return e.cause.Error() }
 func (e *providerRejection) Unwrap() error { return e.cause }
 func wrapProviderRejection(err error, observed bool) error {
-	if failure, ok := errors.AsType[*fantasy.ProviderError](err); ok && failure.StatusCode == 429 && !observed {
+	if isRecoverableProviderRejection(err) && !observed {
 		return &providerRejection{cause: err}
 	}
 	return err

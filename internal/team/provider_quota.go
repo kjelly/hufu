@@ -19,7 +19,7 @@ func (c *Coordinator) ProviderQuotaWaiting() bool {
 }
 
 func (a providerRequestAdmission) CanRecoverProviderRequest(request agent.ProviderRequest) bool {
-	return a.c != nil && a.c.providerManager.SupportsProviderQuota(request.ModelID)
+	return a.c != nil
 }
 
 func (a providerRequestAdmission) WaitProviderRequest(ctx context.Context, request agent.ProviderRequest) (func(bool) error, error) {
@@ -36,11 +36,29 @@ func (a providerRequestAdmission) WaitProviderRequest(ctx context.Context, reque
 }
 
 func (a providerRequestAdmission) RecoverProviderRequest(ctx context.Context, request agent.ProviderRequest, cause error) (bool, error) {
-	if a.c == nil || a.c.providerManager == nil {
+	if a.c == nil {
 		return false, nil
 	}
 	waitCtx, cancel := a.quotaWaitContext(ctx)
 	defer cancel()
+	if agent.IsTransientProviderError(cause) {
+		if request.TransientRetries < 0 || request.TransientRetries >= agent.ProviderTransientRetryLimit {
+			return false, nil
+		}
+		delay := time.Second << request.TransientRetries
+		a.c.report(a.c.newEvent("step").withMessage(fmt.Sprintf("transient provider failure; retrying model %s (%d/%d) in %s", request.ModelID, request.TransientRetries+1, agent.ProviderTransientRetryLimit, delay)))
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-waitCtx.Done():
+			return false, waitCtx.Err()
+		case <-timer.C:
+			return true, nil
+		}
+	}
+	if a.c.providerManager == nil {
+		return false, nil
+	}
 	return a.c.providerManager.RecoverProviderQuota(waitCtx, request.ModelID, cause, providerQuotaJournal(a))
 }
 

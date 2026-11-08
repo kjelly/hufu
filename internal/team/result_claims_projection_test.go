@@ -14,6 +14,8 @@ func TestResultClaimsProjectionBindsInvariantSeverity(t *testing.T) {
 		valid      bool
 	}{
 		{"single semantic source", `{"findings":[{"summary":"boundary defect"}],"assessments":[{"invariant_id":"safe","status":"violated","summary":"observed violation","finding_index":0}]}`, true},
+		{"numeric string index", `{"findings":[{"summary":"boundary defect"}],"assessments":[{"invariant_id":"safe","status":"violated","summary":"observed violation","finding_index":"0"}]}`, true},
+		{"malformed numeric string index", `{"findings":[{"summary":"boundary defect"}],"assessments":[{"invariant_id":"safe","status":"violated","summary":"observed violation","finding_index":"00"}]}`, false},
 		{"override", `{"findings":[{"summary":"boundary defect","severity":"error"}],"assessments":[{"invariant_id":"safe","status":"violated","summary":"observed violation","finding_index":0}]}`, false},
 		{"foreign invariant", `{"findings":[{"summary":"boundary defect"}],"assessments":[{"invariant_id":"foreign","status":"violated","summary":"observed violation","finding_index":0}]}`, false},
 	} {
@@ -65,7 +67,7 @@ func TestResultClaimsProjectionBindsInvariantSeverity(t *testing.T) {
 func TestResultClaimsProjectionRejectsEnvelopeCopies(t *testing.T) {
 	spec := &resultClaimsProjection{Findings: "/findings"}
 	for _, findings := range [][]Finding{{}, {{Summary: "copied"}}} {
-		if _, err := projectClaimsInput(SubmitResultInput{Findings: findings, StructuredPayload: []byte(`{"findings":[]}`)}, spec); err == nil {
+		if _, err := projectClaimsInput(SubmitResultInput{Findings: findings, StructuredPayload: []byte(`{"findings":[]}`)}, &CompiledResultContract{claimsProjection: spec}); err == nil {
 			t.Fatal("accepted model envelope copy")
 		}
 	}
@@ -136,7 +138,7 @@ func TestResultClaimsProjectionExternalAndLocalUseOnePayload(t *testing.T) {
 	}
 	ref := compiled.ref(true)
 	raw := `{"findings":[{"summary":"` + strings.Repeat("long ", 900) + `","severity":"warning"}],"assessments":[]}`
-	local, err := projectClaimsInput(SubmitResultInput{StructuredPayload: []byte(raw)}, compiled.claimsProjection)
+	local, err := projectClaimsInput(SubmitResultInput{StructuredPayload: []byte(raw)}, compiled)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,5 +261,40 @@ func TestResultClaimsProjectionRejectsNativeRewritingOverlap(t *testing.T) {
 	_, err = CompileResultContractDocument("overlap.json", mustProjectionJSON(t, document))
 	if err == nil || !strings.Contains(err.Error(), "tool-evidence rewriting") {
 		t.Fatalf("native rewrite can change projected claims: %v", err)
+	}
+}
+
+func TestResultClaimsProjectionNormalizesScalarsAcrossTransports(t *testing.T) {
+	schema := strings.ReplaceAll(projectionTestSchema, `,"bind_invariant_severity":true`, ``)
+	schema = strings.Replace(schema, `"finding_index":{"type":"integer"}`, `"finding_index":{"type":"integer","minimum":0,"maximum":31}`, 1)
+	compiled, err := CompileResultContractDocument("claims.json", []byte(schema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := compiled.ref(true)
+	request := AttemptRequest{Task: TaskDef{ResultContract: &ref}, resultContractSchema: compiled}
+	for _, index := range []string{`0`, `"0"`, `"00"`, `"32"`, `"-1"`, `"9007199254740993"`} {
+		t.Run(index, func(t *testing.T) {
+			raw := `{"findings":[{"summary":"observed","severity":"error"}],"assessments":[{"invariant_id":"safe","status":"violated","summary":"observed","finding_index":` + index + `}]}`
+			local, localErr := projectClaimsInput(SubmitResultInput{StructuredPayload: []byte(raw)}, compiled)
+			var payload *ResultPayload
+			if localErr == nil {
+				payload, localErr = validateStructuredResultPayload(compiled, ref, local.StructuredPayload)
+			}
+			external, externalErr := canonicalExternalStructuredPayload(request, &WorkerResultProposal{StructuredPayloadJSON: &raw}, nil)
+			valid := index == `0` || index == `"0"`
+			if (localErr == nil) != valid || (externalErr == nil) != valid {
+				t.Fatalf("local=%v external=%v", localErr, externalErr)
+			}
+			if !valid {
+				return
+			}
+			if payload.SHA256 != external.SHA256 || string(payload.Value) != string(external.Value) {
+				t.Fatal("transport canonical payloads differ")
+			}
+			if local.InvariantAssessments == nil || (*local.InvariantAssessments)[0].FindingIndex == nil || *(*local.InvariantAssessments)[0].FindingIndex != 0 {
+				t.Fatal("canonical finding index lost")
+			}
+		})
 	}
 }

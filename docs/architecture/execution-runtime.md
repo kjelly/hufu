@@ -141,10 +141,13 @@ claims schema and require the provider's `return_result` function response
 unless the immutable model profile explicitly rules out tool support.
 This is a data channel with no executable handler: admission counts its actual
 wire schema, while the collector retains zero work-tool authority. The adapter
-passes its exact argument bytes to strict JSON decoding and shared result
-admission; separate explanatory text cannot become claims. Unknown or multiple
-function responses are denied before any handler runs. Older endpoints that
-ignore the requested function may still supply a bare JSON object, subject to
+requires a single `result` object argument and passes that object's exact bytes
+to strict JSON decoding and shared result admission. Keeping claims nested
+avoids function transports that turn empty top-level array arguments into
+objects; the adapter never coerces those values. Duplicate or extra envelope
+members, non-object results, unknown or multiple function responses are denied
+before any handler runs. Separate explanatory text cannot become claims. Older
+endpoints that ignore the requested function may still supply a bare JSON object, subject to
 the same strict validation and bounded repair. Explicitly text-only models and
 historical frozen text requests retain their original text transport.
 The accepted source is `collected`, with the same contract, evidence, verifier,
@@ -973,7 +976,8 @@ agent, and a coordinator cannot pick another model for such an agent.
 A route-bound attempt that fails with a provider error may fall back to the
 next candidate. The failure is classified structurally
 (`ClassifyProviderError`): HTTP 429 is `rate_limited`; 500/502/503/504, a
-refused or reset connection, DNS, and TLS failures are `provider_unavailable`;
+refused or reset connection, DNS, TLS failures, and SDK-typed transient SSE
+errors without an HTTP failure status are `provider_unavailable`;
 404 (or a documented "model not found" body) is `model_unavailable`; a
 transport timeout is `transport_timeout`; 401/403 (`auth_failed`) and context
 overflow (`context_length_exceeded`) never fall back. A fallback happens only
@@ -1004,13 +1008,49 @@ receipt records the target it ran on, its `candidate_index`, and on a fallback
 attempt `fallback_from` and `fallback_failure_class`; an attempt whose
 provider failure did not fall back records `fallback_denied_reason`.
 
+## Transient provider requests
+
+Coordinator-managed model calls recover temporary provider failures at the
+shared request-admission boundary before failing a worker or collector. Hufu
+uses Fantasy's typed retryability signal, including `TransientError` on SSE
+errors inside an HTTP 200 stream; it never infers HTTP 500 from error text.
+Authentication and context-capacity rejections do not enter transient recovery.
+
+One logical model step permits at most two transient resends, with one- and
+two-second delays. Opening failures and deferred iterator errors share this
+limit. A deferred error is eligible only before **any** stream part reaches
+the caller. After a partial text, reasoning, tool, or other event is delivered,
+the error follows ordinary task recovery instead of restarting the stream.
+SDK retries remain disabled.
+
+The forced, data-only structured-response channel buffers each complete stream
+before publishing it to its parser. A private capability, installed only after
+excluding executable tools, permits discarding uncommitted reasoning and partial
+function arguments on a typed transient rejection. The same two-resend limit
+applies; fragments from different attempts never combine. Buffering includes
+framing and reasoning and stops at 32 MiB, independently of the smaller claims
+limit. Unexpected tools, tool results, or provider-executed events fail closed
+without a resend. Normal worker streams retain the partial-delivery restriction.
+
+Every resend uses the same model and step input, preserving previous tool
+results. The failed invocation settles and releases its provider slot before
+the delay; the next invocation gets a new ID and repeats admission, capacity
+and cost checks. Resending a model request does not restart a worker, repeat
+completed tools, consume a collector format-repair turn, or reset its saved
+work receipt. Delays honor cancellation and model/run wall-clock budgets.
+Persistent failures still stop truthfully at the ordinary recovery boundary.
+This policy covers normal workers, collectors, coordinators, direct agents,
+extra models and sidecars using coordinator admission; standalone transports
+retain their own policy.
+
 ## Ollama Cloud quota waits
 
 Coordinator-managed model calls automatically wait after an Ollama Cloud HTTP
 429 that rejected the request before any response was observed. This covers
 coordinator, worker, direct-agent, extra-model and sidecar calls through the
 shared provider admission boundary. Other providers retain their existing
-retry/fallback behavior. Standalone native System One decision transports and
+quota/fallback behavior, alongside the transient-request policy above.
+Standalone native System One decision transports and
 commands that do not use coordinator admission retain their own error policy.
 
 Hufu queries the official [balance API](https://docs.ollama.com/api/balance).

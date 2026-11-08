@@ -1288,7 +1288,7 @@ retryLoop:
 					// one receipt/verification/completion pipeline.
 					if attemptResult.CanonicalResult != nil && runErr == nil {
 						if compiledResult != nil && compiledResult.claimsProjection != nil && compiledResult.claimsProjection.Invariants != "" && attemptResult.CanonicalResult.StructuredPayload != nil {
-							projected, projectionErr := projectClaimsInput(SubmitResultInput{StructuredPayload: attemptResult.CanonicalResult.StructuredPayload.Value}, compiledResult.claimsProjection)
+							projected, projectionErr := projectClaimsInput(SubmitResultInput{StructuredPayload: attemptResult.CanonicalResult.StructuredPayload.Value}, compiledResult)
 							if projectionErr != nil {
 								runErr = withFailureClassOverride(projectionErr, FailureProtocol)
 								attemptResult.CanonicalResult = nil

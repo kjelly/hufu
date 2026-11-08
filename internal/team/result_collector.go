@@ -192,9 +192,9 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 		}
 		response, usage, err := c.runCollectionInvocation(invocation, def, checkpoint)
 		if errors.Is(err, errCollectionToolCall) {
-			// The callback rejected it before any handler could run. Preserve
-			// the denial as invalid JSON evidence for the same bounded repair.
-			response += "\ncollector_tool_call: no tools are authorized"
+			// The data channel or callback rejected it before any handler could
+			// run. Preserve the diagnostic for the same bounded format repair.
+			response += "\ncollector_response_invalid: " + err.Error()
 			err = nil
 		}
 		if err != nil {

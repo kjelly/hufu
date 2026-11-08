@@ -93,6 +93,47 @@ func TestProviderQuotaJournalFailsClosed(t *testing.T) {
 	}
 }
 
+func TestProviderTransientRecoveryHonorsBudgetAndRetryLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		retries   int
+		cancelled bool
+		wantRetry bool
+		wantDelay time.Duration
+	}{
+		{name: "first resend", wantRetry: true, wantDelay: time.Second},
+		{name: "second resend", retries: 1, wantRetry: true, wantDelay: 2 * time.Second},
+		{name: "exhausted", retries: agent.ProviderTransientRetryLimit},
+		{name: "invalid counter", retries: -1},
+		{name: "cancelled", cancelled: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestCoordinator(t)
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				if tc.cancelled {
+					cancel()
+				}
+				start := time.Now()
+				retry, err := (providerRequestAdmission{c}).RecoverProviderRequest(ctx, agent.ProviderRequest{ModelID: "fixture/model", TransientRetries: tc.retries}, &fantasy.ProviderError{TransientError: true})
+				if retry != tc.wantRetry || errors.Is(err, context.Canceled) != tc.cancelled || time.Since(start) != tc.wantDelay {
+					t.Fatalf("retry=%v err=%v elapsed=%s", retry, err, time.Since(start))
+				}
+			})
+		})
+	}
+	c := newTestCoordinator(t)
+	c.SetBudget(1, 0)
+	synctest.Test(t, func(t *testing.T) {
+		c.sessionTime = time.Now()
+		retry, err := (providerRequestAdmission{c}).RecoverProviderRequest(t.Context(), agent.ProviderRequest{TransientRetries: 1}, &fantasy.ProviderError{TransientError: true})
+		if retry || !errors.Is(err, context.DeadlineExceeded) || time.Since(c.sessionTime) != time.Second {
+			t.Fatalf("wall budget bypassed: retry=%v err=%v elapsed=%s", retry, err, time.Since(c.sessionTime))
+		}
+	})
+}
+
 func TestInvocationWatchdogAllowsKnownQuotaWait(t *testing.T) {
 	t.Setenv("OLLAMA_API_KEY", "")
 	c := newTestCoordinator(t)

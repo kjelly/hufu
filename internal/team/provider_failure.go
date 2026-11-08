@@ -80,6 +80,10 @@ func ClassifyProviderError(err error) ProviderFailureClass {
 			return ProviderContextExceeded
 		case providerErr.AuthError || providerErr.StatusCode == http.StatusUnauthorized || providerErr.StatusCode == http.StatusForbidden:
 			return ProviderAuthFailed
+		case providerErr.TransientError && providerErr.StatusCode == 0:
+			// A typed SSE server error has no failed HTTP status. Preserve that
+			// observation rather than inventing HTTP 500 or reading message text.
+			return ProviderUnavailable
 		case providerErr.StatusCode == http.StatusTooManyRequests:
 			return ProviderRateLimited
 		case providerErr.StatusCode == http.StatusNotFound:

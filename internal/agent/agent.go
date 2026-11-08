@@ -1844,11 +1844,10 @@ func CreateAgent(ctx context.Context, provider *OpenAICompatibleProvider, cfg Ag
 	opts := []fantasy.AgentOption{
 		fantasy.WithSystemPrompt(cfg.Def.System),
 		fantasy.WithTools(providerToolsWithOwnedSchemas(agentTools)...),
-		// Hufu owns retries at the task level so it can apply the configured
-		// attempt budget, recovery policy, escalation, and reporting. Fantasy
-		// 0.41 retries failed transports by default with multi-second backoff;
-		// leaving that enabled would hide those attempts and can exceed Hufu's
-		// deadline before the coordinator receives the failure.
+		// Hufu owns provider-request resends and task retries so every attempt
+		// passes admission, accounting, deadlines and the recovery policy.
+		// SDK retries would hide requests from those boundaries or replay a
+		// partially observed stream outside Hufu's explicit safety checks.
 		fantasy.WithMaxRetries(0),
 		// Recovers tool calls whose arguments got corrupted by a streaming
 		// provider concatenating two parallel tool calls' JSON deltas into one

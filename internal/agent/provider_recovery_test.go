@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 type toolRecoveryModel struct {
 	rejectedModel
 	requests [][]byte
+	failure  error
 }
 
 func (m *toolRecoveryModel) Generate(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {
@@ -26,6 +28,9 @@ func (m *toolRecoveryModel) Generate(_ context.Context, call fantasy.Call) (*fan
 	case 1:
 		return &fantasy.Response{FinishReason: fantasy.FinishReasonToolCalls, Content: []fantasy.Content{fantasy.ToolCallContent{ToolCallID: "write-once", ToolName: "effect", Input: `{}`}}}, nil
 	case 2:
+		if m.failure != nil {
+			return nil, m.failure
+		}
 		return nil, &fantasy.ProviderError{StatusCode: 429}
 	default:
 		return &fantasy.Response{FinishReason: fantasy.FinishReasonStop, Content: []fantasy.Content{fantasy.TextContent{Text: "done"}}}, nil
@@ -33,33 +38,41 @@ func (m *toolRecoveryModel) Generate(_ context.Context, call fantasy.Call) (*fan
 }
 
 func TestProviderRecoveryContinuesAgentWithoutReplayingTools(t *testing.T) {
-	limiter := newCapacityLimiter(1)
-	admission := &recoveryAdmission{settlingAdmission: &settlingAdmission{recordingAdmission: &recordingAdmission{limiter: limiter}}, limiter: limiter, t: t}
-	inner := &toolRecoveryModel{}
-	effects := 0
-	tool := fantasy.NewAgentTool("effect", "Record one effect", func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
-		effects++
-		return fantasy.NewTextResponse("recorded"), nil
-	})
-	ag := fantasy.NewAgent(NewAdmittedLanguageModel("test", inner, admission), fantasy.WithTools(tool), fantasy.WithMaxRetries(0), fantasy.WithStopConditions(fantasy.StepCountIs(4)))
-	if _, err := ag.Generate(t.Context(), fantasy.AgentCall{Prompt: "perform effect and report"}); err != nil {
-		t.Fatal(err)
-	}
-	if effects != 1 || inner.calls != 3 || admission.recoveries != 1 {
-		t.Fatalf("effects=%d calls=%d recoveries=%d", effects, inner.calls, admission.recoveries)
-	}
-	if !bytes.Equal(inner.requests[1], inner.requests[2]) {
-		t.Fatal("quota resend changed the rejected request or lost tool history")
+	for _, transient := range []bool{false, true} {
+		t.Run(fmt.Sprint(transient), func(t *testing.T) {
+			limiter := newCapacityLimiter(1)
+			admission := &recoveryAdmission{settlingAdmission: &settlingAdmission{recordingAdmission: &recordingAdmission{limiter: limiter}}, limiter: limiter, t: t, allowTransient: transient}
+			inner := &toolRecoveryModel{}
+			if transient {
+				inner.failure = &fantasy.ProviderError{TransientError: true, ErrorType: "api_error"}
+			}
+			effects := 0
+			tool := fantasy.NewAgentTool("effect", "Record one effect", func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+				effects++
+				return fantasy.NewTextResponse("recorded"), nil
+			})
+			ag := fantasy.NewAgent(NewAdmittedLanguageModel("test", inner, admission), fantasy.WithTools(tool), fantasy.WithMaxRetries(0), fantasy.WithStopConditions(fantasy.StepCountIs(4)))
+			if _, err := ag.Generate(t.Context(), fantasy.AgentCall{Prompt: "perform effect and report"}); err != nil {
+				t.Fatal(err)
+			}
+			if effects != 1 || inner.calls != 3 || admission.recoveries != 1 {
+				t.Fatalf("effects=%d calls=%d recoveries=%d", effects, inner.calls, admission.recoveries)
+			}
+			if !bytes.Equal(inner.requests[1], inner.requests[2]) {
+				t.Fatal("quota resend changed the rejected request or lost tool history")
+			}
+		})
 	}
 }
 
 type recoveryAdmission struct {
 	*settlingAdmission
-	recoveries int
-	waits      int
-	waitErr    error
-	limiter    *capacityLimiter
-	t          *testing.T
+	recoveries     int
+	waits          int
+	waitErr        error
+	limiter        *capacityLimiter
+	t              *testing.T
+	allowTransient bool
 }
 
 func (*recoveryAdmission) CanRecoverProviderRequest(ProviderRequest) bool { return true }
@@ -77,6 +90,9 @@ func (a *recoveryAdmission) RecoverProviderRequest(_ context.Context, _ Provider
 		a.t.Fatal("provider slot held after rejection")
 	}
 	failure, ok := errors.AsType[*fantasy.ProviderError](err)
+	if a.allowTransient && IsTransientProviderError(err) {
+		return true, nil
+	}
 	return ok && failure.StatusCode == 429 && a.recoveries == 1, nil
 }
 
@@ -114,6 +130,11 @@ func (m *rejectedModel) Stream(context.Context, fantasy.Call) (fantasy.StreamRes
 		return nil, err
 	}
 	return func(yield func(fantasy.StreamPart) bool) {
+		if m.partial {
+			if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolInputDelta, Delta: "partial"}) {
+				return
+			}
+		}
 		if err != nil {
 			yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeError, Error: err})
 		}
@@ -197,7 +218,7 @@ func TestProviderRecoveryReAdmitsAndSettlesEveryRejectedCall(t *testing.T) {
 }
 
 func TestProviderRecoveryNeverReplaysObservedOrLocallyRejectedCalls(t *testing.T) {
-	for _, scenario := range []string{"partial response", "stream error", "admission", "commit", "other provider error", "cancelled wait"} {
+	for _, scenario := range []string{"partial response", "stream error", "admission", "commit", "other provider error", "auth error", "context rejection", "cancelled wait"} {
 		t.Run(scenario, func(t *testing.T) {
 			limiter := newCapacityLimiter(1)
 			failure := &fantasy.ProviderError{StatusCode: 429}
@@ -212,6 +233,7 @@ func TestProviderRecoveryNeverReplaysObservedOrLocallyRejectedCalls(t *testing.T
 			case "stream error":
 				method = "stream"
 				inner.streamError = true
+				inner.partial = true
 			case "admission":
 				base.err = failure
 				wantCalls = 0
@@ -220,6 +242,10 @@ func TestProviderRecoveryNeverReplaysObservedOrLocallyRejectedCalls(t *testing.T
 				wantCalls = 0
 			case "other provider error":
 				inner.failure = errors.New("transport failed")
+			case "auth error":
+				inner.failure = &fantasy.ProviderError{StatusCode: 401, TransientError: true}
+			case "context rejection":
+				inner.failure = &fantasy.ProviderError{ContextTooLargeErr: true, TransientError: true}
 			case "cancelled wait":
 				admission.waitErr = context.Canceled
 				wantCalls = 0

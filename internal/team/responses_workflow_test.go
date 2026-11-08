@@ -35,11 +35,11 @@ func TestResponsesWorkerCollectionRepairAndReplay(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			usage := &scripted.Usage{InputTokens: 10, OutputTokens: 2}
 			steps := []scripted.Step{{Content: "complete original review", Usage: usage},
-				{ToolCall: &scripted.ToolCall{Name: agent.StructuredResponseFunctionName, Arguments: tc.first}, Usage: usage}}
+				{ToolCall: &scripted.ToolCall{Name: agent.StructuredResponseFunctionName, Arguments: `{"result":` + tc.first + `}`}, Usage: usage}}
 			if tc.transport == agent.ResultTransportTool {
 				steps = []scripted.Step{{ToolCall: &scripted.ToolCall{Name: submitResultToolName, Arguments: valid}, Usage: usage}}
 			} else if tc.wantCalls == 3 {
-				steps = append(steps, scripted.Step{ToolCall: &scripted.ToolCall{Name: agent.StructuredResponseFunctionName, Arguments: valid}, Usage: usage})
+				steps = append(steps, scripted.Step{ToolCall: &scripted.ToolCall{Name: agent.StructuredResponseFunctionName, Arguments: `{"result":` + valid + `}`}, Usage: usage})
 			}
 			fixture := &responsesWorkflowFixture{t: t, provider: scripted.NewProvider("test", steps), transport: tc.transport}
 			var c *Coordinator

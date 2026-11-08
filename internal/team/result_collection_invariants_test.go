@@ -32,6 +32,7 @@ func TestResultCollectionRepairsInvariantClaimsWithOriginalLimits(t *testing.T) 
 		repeat       bool
 		projection   bool
 		singleSource bool
+		quotedIndex  bool
 		wantCalls    int32
 		wantAccepted bool
 		wantDone     bool
@@ -39,6 +40,7 @@ func TestResultCollectionRepairsInvariantClaimsWithOriginalLimits(t *testing.T) 
 		{name: "severity", mode: InvariantVerificationReport, summary: "violation", severity: "warning", wantCalls: 2, wantAccepted: true, wantDone: true},
 		{name: "severity_with_payload_projections", mode: InvariantVerificationReport, summary: "violation", severity: "warning", projection: true, wantCalls: 2, wantAccepted: true, wantDone: true},
 		{name: "single_source_runtime_severity", mode: InvariantVerificationReport, summary: "violation", severity: "warning", projection: true, singleSource: true, wantCalls: 2, wantAccepted: true, wantDone: true},
+		{name: "single_source_numeric_string_index", mode: InvariantVerificationReport, summary: "violation", severity: "warning", projection: true, singleSource: true, quotedIndex: true, wantCalls: 2, wantAccepted: true, wantDone: true},
 		{name: "single_source_gate", mode: InvariantVerificationGate, summary: "violation", severity: "warning", projection: true, singleSource: true, wantCalls: 2, wantAccepted: true},
 		{name: "gate_stays_blocked", mode: InvariantVerificationGate, summary: "violation", severity: "warning", wantCalls: 2, wantAccepted: true},
 		{name: "summary_limit", mode: InvariantVerificationReport, summary: collectionInvariantSummary(1000), severity: "error", wantCalls: 1, wantAccepted: true, wantDone: true},
@@ -112,6 +114,9 @@ func TestResultCollectionRepairsInvariantClaimsWithOriginalLimits(t *testing.T) 
 						return
 					}
 					body = string(encoded)
+				}
+				if tc.quotedIndex {
+					body = strings.ReplaceAll(body, `"finding_index":0`, `"finding_index":"0"`)
 				}
 				w.Header().Set("Content-Type", "text/event-stream")
 				_, _ = fmt.Fprintf(w, "data: {\"id\":\"invariants\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", body)

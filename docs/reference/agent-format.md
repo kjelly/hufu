@@ -293,8 +293,11 @@ leaf 也一樣。
 不需要呼叫 `submit_result`；runtime 先保存工作輸出與 transcript，再以同一個已核准
 模型 target 收集 strict JSON。新收集 request 封存完整 claims schema，並要求 provider
 透過 `return_result` 資料回傳函式交付 JSON 參數。這個函式沒有執行 handler，也不授予
-任何工作工具；實際 wire schema 仍經 provider admission。Runtime 保留原始參數 bytes，
-與額外推理文字分離後再做完整驗證；未知、多個或宣稱已執行的函式一律拒絕。
+任何工作工具；實際 wire schema 仍經 provider admission。函式參數只有一個 `result`
+物件，裡面才是符合 claims schema 的完整結果，以避免部分 provider 將第一層空陣列
+參數轉成物件。Adapter 只移除這層封裝，保留 claims 物件的原始 bytes，不會把 `{}`
+改成 `[]`；未知、重複或額外的封裝欄位、非物件 result、多個或宣稱已執行的函式
+一律拒絕。額外推理文字不會成為結果。
 若舊 endpoint 忽略函式選擇，回傳文字仍須是合法 JSON，不會從前言抽取物件。
 已確認不支援工具的模型，以及未宣告 claims schema 的歷史 frozen request，維持
 原文字傳輸。通常增加一次模型呼叫；格式或 schema

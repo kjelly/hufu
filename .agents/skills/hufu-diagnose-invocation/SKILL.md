@@ -1,6 +1,6 @@
 ---
 name: hufu-diagnose-invocation
-description: Diagnose failed, stalled, or ongoing Hufu invocations through public interfaces. When asked to fix a failure, correct confirmed runtime or agent-team defects, validate recovery preflight, and provide exact recovery commands.
+description: Diagnose failed, stalled, or ongoing Hufu invocations through public interfaces, tracing collector/model failures to the earliest evidenced divergence. When asked to fix a failure, correct confirmed defects and assess recovery when requested.
 ---
 
 # Hufu Diagnose Invocation
@@ -16,9 +16,9 @@ interfaces. Treat their scoped, canonical output as the evidence boundary.
   source changes or execution of recovery.
 - **Full repair mode:** When the user requests necessary fixes, diagnose first,
   correct confirmed defects within the authorized scope, complete validation,
-  then reassess the original session and provide recovery commands. An existing
-  authorization covering those fixes is sufficient; do not repeatedly ask for
-  permission to complete the same source changes.
+  then reassess the original session and provide commands when recovery is in
+  scope. An existing authorization covering those fixes is sufficient; do not
+  repeatedly ask for permission to complete the same source changes.
 
 Source repair and live recovery are separate actions. By default, hand the
 recovery commands to the user to execute. Execute a retry, recovery publication,
@@ -44,9 +44,14 @@ $hufu-diagnose-invocation 修正 inv-...
 
 - Start with `hufu status`, `hufu inspect`, and `hufu results`. Use JSON output
   for filtering, counting, and comparison; confirm flags with `--help` or
-  full command help, such as `hufu help --all inspect run`. Diagnose with the
-  same Hufu version used for the run when
-  available; a binary on PATH may differ from the checkout being investigated.
+  full command help, such as `hufu help --all inspect run`. Resolve the diagnostic
+  executable from the launch record before attributing failures. For a launch
+  through `mise exec -- go run ./cmd/hufu`, use that checkout through mise or
+  one reusable scratch binary built from it, rather than silently using PATH's
+  `hufu`. Record revision/dirty state when available; `version dev` does not
+  establish equivalence. Today's checkout may also differ from the launch.
+  Recheck version-sensitive errors with the matching implementation before
+  treating them as session corruption, policy drift, or a runtime defect.
 - Obtain workspace, team, run, session, branch, and result identities from CLI
   output or the user's launch record. Do not reconstruct managed paths from
   project slugs or inspect process file descriptors to locate runtime storage.
@@ -189,6 +194,12 @@ member names or reach back into live storage for omitted content. Treat export
 errors and omissions explicitly, keep its redaction intact, and do not upload
 or share the bundle without authorization.
 
+For collector/result-format failures, especially repeated rejection across
+tasks, follow [collector root-cause tracing](references/collector-root-cause.md)
+before assigning responsibility. Use the exported request, response and repair
+evidence to locate the first divergence; the terminal diagnostic alone is not
+the root cause. Inspect only the source paths needed to explain that boundary.
+
 ## 4. Attribute the cause
 
 | Layer | Evidence to establish |
@@ -220,7 +231,13 @@ responses when available. Distinguish a model violating a valid contract from
 contradictory team guidance or a runtime defect in schema presentation,
 validation, or recovery. Multiple layers may contribute; explain the evidence
 for each rather than assigning all responsibility to the layer that rejected
-the result. Record unavailable artifacts as limitations.
+the result. A correctly rejecting validator does not exonerate the runtime's
+request construction or response handling. Conversely, a stored invalid
+collector response does not by itself prove the model generated those bytes:
+identify whether it is raw transport data or an SDK/runtime projection.
+Report the earliest demonstrated divergence, tested alternatives, and the exact
+missing observation when upstream attribution remains unresolved. Do not label
+an error message or an untested prompt improvement a confirmed root cause.
 
 ## 5. Correct confirmed defects when authorized
 
@@ -251,13 +268,21 @@ tests; they do not authorize running the user's live workflow.
 
 A timeout, unavailable website, model violating a valid schema, or a gate
 correctly rejecting invalid claims does not by itself establish a code defect.
-If none is demonstrated, explain why no source change is needed and assess
-recovery. Do not manufacture a fix by increasing budgets, changing models,
-weakening evidence requirements, or altering judgments merely to obtain success.
+If none is demonstrated, state that no source repair is justified yet and name
+any evidence still needed; unresolved attribution is not proof that no defect
+exists. Assess recovery when in scope. Do not manufacture a fix by increasing
+budgets, changing models, weakening evidence requirements, or altering judgments
+merely to obtain success.
 Never edit historical events, checkpoints, receipts, or accepted payloads to
 repair the source code's behavior.
 
 ## 6. Validate recovery and prepare commands
+
+When the user only wants the cause and explicitly does not need the existing
+work retained, keep the investigation focused on attribution and prevention;
+skip recovery previews and commands unless they explain the failure itself.
+Recovery limitations must not replace investigation of the original trigger.
+The recovery requirements below apply when recovery is in scope.
 
 For each confirmed cause or contributing factor, identify the owning layer,
 the concrete change, why it addresses the observed failure, and how to verify
@@ -320,13 +345,18 @@ Scale the report to the question. Include:
 - Current or terminal status, target identities and scope, and observation time.
 - The decisive task/attempt transitions, immediate cause, and contributing
   factors, with an explicit assessment of Hufu runtime and agent team
-  responsibility and any unresolved attribution.
+  responsibility and any unresolved attribution. For collector failures, state
+  which request/response boundary first contains the defect and whether the
+  evidence distinguishes model output from provider/SDK transformations.
 - Reproducible CLI commands and their relevant output, with code/file links
   where they establish the cause. Use normal Markdown file links.
 - Concrete improvements with their owning layer and validation criteria,
   changed files when applicable, separate from run-recovery steps and
   prerequisites. State what was actually tested or assessed versus what
   remains a recommendation.
+- For an authorized execute-and-fix request, verify the original command with
+  the final repaired source. If it fails again, diagnose that exact new run
+  rather than closing the request on offline validation alone.
 - Separate source-fix validation, recovery-preflight eligibility, and actual
   workflow success. Explicitly state whether live recovery was executed; a
   passing test or preview is not a successful resumed run.

@@ -23,12 +23,18 @@ func withProviderRejectionObservation(ctx context.Context) context.Context {
 // SSE error text and model output cannot populate this observation.
 func observeProviderRejection(ctx context.Context, response *http.Response) {
 	observation, _ := ctx.Value(providerRejectionKey{}).(*providerRejectionObservation)
-	if observation == nil || response == nil || response.StatusCode != http.StatusTooManyRequests {
+	if observation == nil || response == nil {
+		return
+	}
+	failure := &fantasy.ProviderError{StatusCode: response.StatusCode}
+	if response.StatusCode != http.StatusTooManyRequests && !IsTransientProviderError(failure) {
 		return
 	}
 	observation.mu.Lock()
 	defer observation.mu.Unlock()
-	observation.err = &fantasy.ProviderError{StatusCode: http.StatusTooManyRequests, Message: "provider rejected request: HTTP 429", ResponseHeaders: map[string]string{"Retry-After": response.Header.Get("Retry-After")}}
+	failure.Message = http.StatusText(response.StatusCode)
+	failure.ResponseHeaders = map[string]string{"Retry-After": response.Header.Get("Retry-After")}
+	observation.err = failure
 }
 
 func observedProviderRejection(ctx context.Context) error {

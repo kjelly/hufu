@@ -70,7 +70,8 @@ func compileResultClaimsProjection(root map[string]any) (*resultClaimsProjection
 	return &spec, nil
 }
 
-func projectClaimsInput(input SubmitResultInput, spec *resultClaimsProjection) (SubmitResultInput, error) {
+func projectClaimsInput(input SubmitResultInput, compiled *CompiledResultContract) (SubmitResultInput, error) {
+	spec := projectionForContract(compiled)
 	if spec == nil || input.projectionBound {
 		return input, nil
 	}
@@ -78,6 +79,14 @@ func projectClaimsInput(input SubmitResultInput, spec *resultClaimsProjection) (
 		return input, fmt.Errorf("projected envelope fields are runtime-owned; submit claims only in structured_payload")
 	}
 	value, err := decodeUniqueJSON(input.StructuredPayload)
+	if err != nil {
+		return input, err
+	}
+	// Provider schemas advertise exact scalar strings. Normalize against the
+	// original contract before decoding typed envelope claims, just as final
+	// payload admission does. Full schema and evidence validation still follow.
+	value = canonicalResultScalars(value, compiled.schema, 0)
+	input.StructuredPayload, err = json.Marshal(value, json.Deterministic(true))
 	if err != nil {
 		return input, err
 	}
@@ -150,7 +159,7 @@ func (c *Coordinator) projectResultClaims(ctx context.Context, id string, input 
 	// Bind severities before canonical payload validation and hashing. Definitions
 	// come from this original work occurrence's verified context manifest.
 	if spec.InvariantSeverity {
-		probe, err := projectClaimsInput(input, spec)
+		probe, err := projectClaimsInput(input, compiled)
 		if err != nil {
 			return input, err
 		}
@@ -244,7 +253,7 @@ func (c *Coordinator) projectResultClaims(ctx context.Context, id string, input 
 			return input, err
 		}
 	}
-	return projectClaimsInput(input, spec)
+	return projectClaimsInput(input, compiled)
 }
 
 func omitProjectedEnvelope(info map[string]any, required []string, spec *resultClaimsProjection) []string {
@@ -344,7 +353,7 @@ func resultProjectionMatchesAccepted(result *TaskResult, compiled *CompiledResul
 	if result == nil || result.StructuredPayload == nil {
 		return false
 	}
-	projected, err := projectClaimsInput(SubmitResultInput{StructuredPayload: result.StructuredPayload.Value}, spec)
+	projected, err := projectClaimsInput(SubmitResultInput{StructuredPayload: result.StructuredPayload.Value}, compiled)
 	if err != nil {
 		return false
 	}

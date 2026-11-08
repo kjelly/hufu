@@ -119,7 +119,7 @@ func TestResponsesReasoningOptionsSurviveWrappers(t *testing.T) {
 		if err = json.Unmarshal(raw, &captured); err != nil {
 			return nil, err
 		}
-		return sdkJSONResponse(`{"status":"completed","output":[{"type":"function_call","id":"fc","call_id":"c","name":"return_result","arguments":"{\"value\":\"ok\"}"}]}`, 200), nil
+		return sdkJSONResponse(`{"status":"completed","output":[{"type":"function_call","id":"fc","call_id":"c","name":"return_result","arguments":"{\"result\":{\"value\":\"ok\"}}"}]}`, 200), nil
 	})
 	admitted := NewAdmittedLanguageModel("remote/gpt-5", inner, &recordingAdmission{})
 	wrapped, err := newStructuredResponseModel(admitted, &StructuredResponseConfig{Schema: map[string]any{"type": "object"}, MaxBytes: 1024})

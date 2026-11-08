@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -44,10 +45,10 @@ func TestNativeMediaRouteFallbackPreservesCASAndChecksEachCandidate(t *testing.T
 		wantCalls   int
 		wantFailure bool
 	}{
-		{"authorized vision fallback", http.StatusServiceUnavailable, providerintrospection.CapabilityYes, true, 2, false},
-		{"text fallback", http.StatusServiceUnavailable, providerintrospection.CapabilityNo, true, 1, true},
-		{"unknown fallback", http.StatusServiceUnavailable, providerintrospection.CapabilityUnknown, true, 1, true},
-		{"ungranted fallback", http.StatusServiceUnavailable, providerintrospection.CapabilityYes, false, 1, true},
+		{"authorized vision fallback", http.StatusServiceUnavailable, providerintrospection.CapabilityYes, true, agent.ProviderTransientRetryLimit + 2, false},
+		{"text fallback", http.StatusServiceUnavailable, providerintrospection.CapabilityNo, true, agent.ProviderTransientRetryLimit + 1, true},
+		{"unknown fallback", http.StatusServiceUnavailable, providerintrospection.CapabilityUnknown, true, agent.ProviderTransientRetryLimit + 1, true},
+		{"ungranted fallback", http.StatusServiceUnavailable, providerintrospection.CapabilityYes, false, agent.ProviderTransientRetryLimit + 1, true},
 		{"auth failure does not fall back", http.StatusUnauthorized, providerintrospection.CapabilityYes, true, 1, true},
 		{"successful primary", http.StatusOK, providerintrospection.CapabilityYes, true, 1, false},
 	} {
@@ -60,6 +61,7 @@ func TestNativeMediaRouteFallbackPreservesCASAndChecksEachCandidate(t *testing.T
 			}
 			requests := make(chan wireRequest, 4)
 			paths := make(chan []string, 1)
+			var removedSources atomic.Bool
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodGet && r.URL.Path == "/v1/models" {
 					w.Header().Set("Content-Type", "application/json")
@@ -78,16 +80,18 @@ func TestNativeMediaRouteFallbackPreservesCASAndChecksEachCandidate(t *testing.T
 					return
 				}
 				if request.Model == "vision" {
-					var sourcePaths []string
-					select {
-					case sourcePaths = <-paths:
-					default:
-						http.Error(w, "primary repeated outside the declared route", http.StatusBadRequest)
-						return
-					}
-					for _, path := range sourcePaths {
-						if err := os.Remove(path); err != nil {
-							t.Error(err)
+					if removedSources.CompareAndSwap(false, true) {
+						var sourcePaths []string
+						select {
+						case sourcePaths = <-paths:
+						default:
+							http.Error(w, "source paths were not supplied", http.StatusBadRequest)
+							return
+						}
+						for _, path := range sourcePaths {
+							if err := os.Remove(path); err != nil {
+								t.Error(err)
+							}
 						}
 					}
 					if test.firstStatus != http.StatusOK {
@@ -150,7 +154,7 @@ func TestNativeMediaRouteFallbackPreservesCASAndChecksEachCandidate(t *testing.T
 			for index := range test.wantCalls {
 				request := <-requests
 				wantModel := "vision"
-				if index == 1 {
+				if index == agent.ProviderTransientRetryLimit+1 {
 					wantModel = "next"
 				}
 				if request.Model != wantModel {

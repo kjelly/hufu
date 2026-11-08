@@ -17,13 +17,22 @@ func TestStructuredResponsePreservesArgumentsAndAdmission(t *testing.T) {
 		want  string
 		bad   bool
 	}{
-		{name: "native arguments", text: "Let me analyze this task.\n", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{ "ok": true }`}}, want: `{ "ok": true }`},
-		{name: "invalid arguments stay unchanged", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"ok":true,"ok":false}`}}, want: `{"ok":true,"ok":false}`},
+		{name: "native arguments", text: "Let me analyze this task.\n", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":{ "ok": true }}`}}, want: `{ "ok": true }`},
+		{name: "invalid arguments stay unchanged", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":{"ok":true,"ok":false}}`}}, want: `{"ok":true,"ok":false}`},
+		{name: "empty arrays stay arrays", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":{ "items": [], "nested": {"items":[]} }}`}}, want: `{ "items": [], "nested": {"items":[]} }`},
+		{name: "invalid field types stay unchanged", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":{"items":{}}}`}}, want: `{"items":{}}`},
+		{name: "namesake result is preserved", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":{"result":{"items":[]}}}`}}, want: `{"result":{"items":[]}}`},
 		{name: "text endpoint", text: `{"ok":true}`, want: `{"ok":true}`},
 		{name: "prose is not extracted", text: "Let me analyze.\n{\"ok\":true}", want: "Let me analyze.\n{\"ok\":true}"},
 		{name: "work tool denied", calls: []fantasy.ToolCallContent{{ToolName: "write", Input: `{}`}}, bad: true},
 		{name: "multiple responses denied", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{}`}, {ToolName: StructuredResponseFunctionName, Input: `{}`}}, bad: true},
 		{name: "provider execution denied", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{}`, ProviderExecuted: true}}, bad: true},
+		{name: "missing envelope denied", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"ok":true}`}}, bad: true},
+		{name: "duplicate envelope denied", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":{},"result":{}}`}}, bad: true},
+		{name: "extra envelope member denied", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":{},"extra":true}`}}, bad: true},
+		{name: "nonobject result denied", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":[]}`}}, bad: true},
+		{name: "trailing response denied", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":{}} {}`}}, bad: true},
+		{name: "incomplete envelope denied", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":{}`}}, bad: true},
 	} {
 		for _, streaming := range []bool{false, true} {
 			method := "generate"
@@ -115,6 +124,12 @@ func TestStructuredResponsePreservesArgumentsAndAdmission(t *testing.T) {
 				if actual == nil || len(actual.Tools) != 1 || actual.Tools[0].GetName() != StructuredResponseFunctionName || actual.ToolChoice == nil || *actual.ToolChoice != fantasy.SpecificToolChoice(StructuredResponseFunctionName) {
 					t.Fatalf("admission did not see the complete response channel: %+v", actual)
 				}
+				function := actual.Tools[0].(fantasy.FunctionTool)
+				properties, _ := function.InputSchema["properties"].(map[string]any)
+				claims, _ := properties["result"].(map[string]any)
+				if len(properties) != 1 || claims["type"] != "object" || function.InputSchema["additionalProperties"] != false {
+					t.Fatalf("response schema lost its single object boundary: %v", function.InputSchema)
+				}
 				wire, err := SerializeProviderRequest(admission.commits[0])
 				if err != nil || strings.Contains(string(wire), "injected") {
 					t.Fatalf("caller mutated the frozen schema: %s %v", wire, err)
@@ -132,6 +147,10 @@ func TestStructuredResponseRejectsMissingFinishAndOversizedData(t *testing.T) {
 		{name: "missing finish", parts: []fantasy.StreamPart{{Type: fantasy.StreamPartTypeTextDelta, Delta: `{}`}}},
 		{name: "oversized text", parts: []fantasy.StreamPart{{Type: fantasy.StreamPartTypeTextDelta, Delta: strings.Repeat("x", 17)}}},
 		{name: "oversized arguments", parts: []fantasy.StreamPart{{Type: fantasy.StreamPartTypeToolInputDelta, Delta: strings.Repeat("x", 17)}}},
+		{name: "oversized complete arguments", parts: []fantasy.StreamPart{
+			{Type: fantasy.StreamPartTypeToolCall, ToolCallName: StructuredResponseFunctionName, ToolCallInput: `{"result":{"items":[]}}`},
+			{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls},
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			base := &streamLanguageModel{streamFn: func(context.Context) fantasy.StreamResponse {

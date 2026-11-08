@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"charm.land/fantasy"
@@ -17,7 +19,7 @@ var ErrStructuredResponseTool = errors.New("unexpected structured response tool"
 
 // StructuredResponseConfig requests data through a forced function response.
 // No handler is registered, and the admitted model sees the complete wire
-// schema before transport. The caller still validates the exact argument bytes.
+// schema before transport. The caller still validates the exact claims bytes.
 type StructuredResponseConfig struct {
 	Schema   map[string]any
 	MaxBytes int
@@ -27,6 +29,9 @@ type structuredResponseModel struct {
 	fantasy.LanguageModel
 	config StructuredResponseConfig
 }
+
+// This private capability is installed only after executable tools are excluded.
+type structuredResponseStreamKey struct{}
 
 func newStructuredResponseModel(model fantasy.LanguageModel, config *StructuredResponseConfig) (fantasy.LanguageModel, error) {
 	if config.Schema["type"] != "object" || config.MaxBytes <= 0 {
@@ -41,9 +46,18 @@ func (m *structuredResponseModel) responseCall(call fantasy.Call) (fantasy.Call,
 	if len(call.Tools) != 0 {
 		return call, errors.New("structured response cannot expose executable tools")
 	}
+	// Some function-call transports encode empty top-level array arguments as
+	// objects. A single object argument preserves those arrays inside the claims
+	// without changing their schema or repairing provider-generated values.
 	call.Tools = []fantasy.Tool{fantasy.FunctionTool{
-		Name: StructuredResponseFunctionName, Description: "Return the complete result as JSON data. This response function has no executable handler.",
-		InputSchema: cloneProviderSchemaValue(m.config.Schema).(map[string]any),
+		Name: StructuredResponseFunctionName, Description: "Return the complete JSON claims object in the result property. This response function has no executable handler.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"result": cloneProviderSchemaValue(m.config.Schema),
+			},
+			"required": []string{"result"}, "additionalProperties": false,
+		},
 	}}
 	call.ToolChoice = new(fantasy.SpecificToolChoice(StructuredResponseFunctionName))
 	return call, nil
@@ -57,7 +71,10 @@ func (m *structuredResponseModel) responseText(text string, calls []fantasy.Tool
 		if calls[0].ToolName != StructuredResponseFunctionName || calls[0].ProviderExecuted {
 			return "", fmt.Errorf("%w: only the data response function is permitted", ErrStructuredResponseTool)
 		}
-		text = calls[0].Input
+		if len(calls[0].Input) > m.config.MaxBytes {
+			return "", errors.New("structured response exceeds its byte limit")
+		}
+		return structuredResponseClaims(calls[0].Input)
 	}
 	// Older endpoints may ignore tool_choice and send text. Preserve that text
 	// verbatim for the caller's strict validation and bounded format repair.
@@ -65,6 +82,35 @@ func (m *structuredResponseModel) responseText(text string, calls []fantasy.Tool
 		return "", errors.New("structured response exceeds its byte limit")
 	}
 	return text, nil
+}
+
+// Remove only the transport's single result member. Keep the claims bytes,
+// including invalid field types and duplicate names, for the caller's strict
+// validation and bounded repair. Envelope duplicates/extras remain forbidden.
+func structuredResponseClaims(arguments string) (string, error) {
+	decoder := jsontext.NewDecoder(strings.NewReader(arguments), jsontext.AllowDuplicateNames(true))
+	start, err := decoder.ReadToken()
+	if err != nil || start.Kind() != '{' {
+		return "", fmt.Errorf("%w: expected a result object envelope", ErrStructuredResponseTool)
+	}
+	name, err := decoder.ReadToken()
+	if err != nil || name.Kind() != '"' || name.String() != "result" {
+		return "", fmt.Errorf("%w: expected the result member", ErrStructuredResponseTool)
+	}
+	value, err := decoder.ReadValue()
+	if err != nil || value.Kind() != '{' {
+		return "", fmt.Errorf("%w: result must be a JSON object", ErrStructuredResponseTool)
+	}
+	// ReadValue aliases decoder storage; copy before reading another token.
+	claims := string(value)
+	end, err := decoder.ReadToken()
+	if err != nil || end.Kind() != '}' {
+		return "", fmt.Errorf("%w: result must be the only envelope member", ErrStructuredResponseTool)
+	}
+	if _, err := decoder.ReadToken(); !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("%w: trailing response data", ErrStructuredResponseTool)
+	}
+	return claims, nil
 }
 
 func (m *structuredResponseModel) Generate(ctx context.Context, call fantasy.Call) (*fantasy.Response, error) {
@@ -102,6 +148,7 @@ func (m *structuredResponseModel) Stream(ctx context.Context, call fantasy.Call)
 	if err != nil {
 		return nil, err
 	}
+	ctx = context.WithValue(ctx, structuredResponseStreamKey{}, true)
 	stream, err := m.LanguageModel.Stream(ctx, call)
 	if err != nil {
 		return nil, err

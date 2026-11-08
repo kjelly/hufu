@@ -37,8 +37,10 @@ func assertCollectorResponseChannel(t *testing.T, request map[string]any) {
 		t.Errorf("collector exposed a work tool or did not require its response channel: %v %v", functions, choice)
 	}
 	parameters, _ := function["parameters"].(map[string]any)
-	if parameters["type"] != "object" {
-		t.Error("collector response schema is not an object")
+	properties, _ := parameters["properties"].(map[string]any)
+	claims, _ := properties["result"].(map[string]any)
+	if parameters["type"] != "object" || len(properties) != 1 || claims["type"] != "object" || parameters["additionalProperties"] != false {
+		t.Errorf("collector response lost its single result object envelope: %v", parameters)
 	}
 }
 

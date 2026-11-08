@@ -605,7 +605,7 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 		} else if spec.InvariantSeverity {
 			return nil, fmt.Errorf("invariant projections require verified work context")
 		} else {
-			input, err = projectClaimsInput(input, spec)
+			input, err = projectClaimsInput(input, request.resultContractSchema)
 		}
 		if err != nil {
 			return nil, err

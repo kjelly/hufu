@@ -64,7 +64,7 @@ func TestContextDeliveryExtraModelsUseAdmittedTargetsAndParentManifests(t *testi
 	for _, mode := range []string{"legacy", "active"} {
 		t.Run(mode, func(t *testing.T) { testExtraModelProviderDelivery(t, mode, false) })
 	}
-	t.Run("active_retry", func(t *testing.T) { testExtraModelProviderDelivery(t, "active", true) })
+	t.Run("active_request_retry", func(t *testing.T) { testExtraModelProviderDelivery(t, "active", true) })
 }
 
 func testExtraModelProviderDelivery(t *testing.T, mode string, retry bool) {
@@ -178,18 +178,17 @@ func testExtraModelProviderDelivery(t *testing.T, mode string, retry bool) {
 		t.Fatal("two concurrent leaves did not execute")
 	}
 	if retry {
-		var initial, retried *ContextRequestMetrics
+		var resends []*ContextRequestMetrics
 		for index := range result.Metrics.ContextDelivery.Requests {
 			request := &result.Metrics.ContextDelivery.Requests[index]
-			if request.ModelID == "qwen3:14b" && request.Attempt == 1 {
-				initial = request
-			}
-			if request.ModelID == "qwen3:14b" && request.Attempt == 2 {
-				retried = request
+			if request.ModelID == "qwen3:14b" {
+				resends = append(resends, request)
 			}
 		}
-		if initial == nil || retried == nil || initial.ModelExecutionID != retried.ModelExecutionID || !retried.ManifestMatched {
-			t.Fatal("extra retry lost admitted target or model identity")
+		if len(resends) != 2 || resends[0].Attempt != 1 || resends[1].Attempt != 1 ||
+			resends[0].ModelExecutionID != resends[1].ModelExecutionID || !resends[0].ManifestMatched || !resends[1].ManifestMatched ||
+			!slices.Equal(resends[0].DeliveredIDs, resends[1].DeliveredIDs) {
+			t.Fatal("provider resend changed the worker attempt, admitted target or manifest")
 		}
 	}
 	if mode == "active" && (left.ManifestSchema != 3 || right.ManifestSchema != 3 || left.QueryAttribution == nil || right.QueryAttribution == nil) {
