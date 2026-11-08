@@ -49,7 +49,7 @@ spec:
       # coordinator's model, which answers this question directly.
       backend: sidecar
       model: ollama/minimax-m3:cloud
-      version: "1"
+      version: "2"
       kind: choice
       agents: [critic]
       timeout: 60s
@@ -62,6 +62,15 @@ spec:
         content or tests ran. Confirm a demonstrated issue, downgrade an issue
         whose demonstrated severity is lower, reject a disproven issue, or use
         unverified when the supplied evidence cannot establish a verdict.
+        A workset snapshot is only a subset of the reviewed repository.
+        A path, caller, verifier or artifact omitted from it is not proven
+        absent at the reviewed revision. Missing from a diff is not missing
+        from the tree. Do not confirm a repository-wide absence or behavioral
+        claim from those omissions, even at info severity; use unverified.
+        A differing payload hash is not proof of corrupt data unless both
+        hashes cover the same representation. A synthesis disclaimer does
+        not disprove an independent acceptance comparison outside its scope.
+        Confirm only the demonstrated impact, not the source's speculation.
         Select the resulting severity error, warning, or info. Do not dismiss
         concurrency, lifecycle, receipt or authorization invariants merely
         because code appears sequential or compiles. Select exactly one option.

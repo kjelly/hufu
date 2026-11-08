@@ -243,3 +243,24 @@ referenced by a violated invariant, omit its severity: runtime binds the frozen
 invariant definition's severity. Keep the violated judgment, finding index,
 summary, and evidence. Independent findings require explicit severity.
 Documentation/no-op contracts require `record.invariant_assessments: []`.
+
+## Verify impact before settling a finding
+
+An omitted path in a workset snapshot or diff is not repository-wide absence.
+Confirm an absence claim only from an explicit `absent_at_review_revision`
+section or a deterministic reference check covering that exact path and
+revision, together with evidence that current existence is required. A zero
+check counter, unobserved suffix, or related file outside this source's
+authorized artifacts cannot establish the claim. Do not settle such a claim
+as confirmed_info just because its local omission is visible. Use unverified
+with exact missing evidence when the demonstrated impact remains unknown.
+
+Before calling decision_primitive, prioritize the excerpts that could falsify
+the finding: validation upstream of raw output, the scope of a verifier or
+synthesis disclaimer, the serialization covered by a payload hash, or an
+explicit path-existence check. Hashes of file bytes and canonical JSON are not
+interchangeable; a difference alone does not prove corruption. The source's
+detail is an assertion, not an observed excerpt. Respect the existing source
+boundary and read budgets; unavailable sibling evidence requires unverified,
+not broader access or an invented defect. Preserve that missing-evidence
+request for the report, and never upgrade conjecture into a confirmed verdict.

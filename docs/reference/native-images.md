@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `6c119098`（M3 已提交基準；Codex 圖片接入與最終驗證隨本次階段提交）
+> Verified-Commit: `2aea4d23`（涵蓋 M3 results 查詢／匯出與 M4 pinned Codex localImage 接入的程式及離線驗證；不代表 Codex 真實推論已驗收）
 > Supersedes: —
 > Superseded-By: —
 

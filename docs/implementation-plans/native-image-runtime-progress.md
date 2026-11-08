@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `403d1905`（M0～M4 coding／離線驗證完成；2026-11-06 單次 Ollama 原生圖片 smoke acceptance 通過，完整範圍見文末）
+> Verified-Commit: `2aea4d23`（M0～M4 已交付程式／離線驗證基準；各階段及 Ollama smoke acceptance 的實際執行版本與範圍見對應紀錄）
 > Supersedes: —
 > Superseded-By: —
 
@@ -759,3 +759,53 @@ private task scratch（清理前 24,100,864 bytes）的草稿、暫存 log 與�
 因驗收器 token 預算低於保守預留量而在模型前拒絕，0 inference；調整驗收設定後
 才執行唯一一次視覺請求。本次沒有修改原始碼、移動文件或將單一 smoke 結果
 擴大宣稱為 MCP／Codex 真實服務驗收或通用圖片準確率。
+
+## Codex projection 並行調查（2026-11-08）
+
+本節記錄 2026-11-08 工作樹的後續修正與調查；首頁 Verified-Commit 指先前已提交的交付基準。
+
+調查範圍是本機 kernel lock 與 projection 的持有／回收邊界，不是模型吞吐量
+或真實 Codex 多帳戶推論驗收。`acquireCodexHomeStateLock` 以 resolved
+`CODEX_HOME` 序列化 app-server lifetime；圖片 projection 另以同一 control
+workspace 下的 `logs/media-projections/.hufu-projections.lock` 保護 retained-copy
+配額及清理。後者由 `newCodexImageProjection` 取得，直到 child drain 後的
+`Close` 才釋放。不同 home 不會解除同一 workspace 的 projection 競爭。
+
+離線 regression `TestCodexProjectionLockScopeAcrossIndependentHomes` 同時持有
+兩個不同 home 的 state locks，再檢查共用 workspace 的 projection lock
+會等候至 deadline、owner 釋放後可重取，而不同 workspace 可各自取得。
+`TestCodexStateLockContentionHonorsCancellation` 檢查取消 waiter 不會破壞 owner
+或遺留鎖。這是 lock boundary 驗證，沒有啟動兩個真實 app-server，也沒有測量
+模型延遲；不能據此宣稱所有並行 task lifecycle 已驗收。
+
+後續縮小鎖範圍的設計候選：
+
+1. 保留每個 home 的 app-server lifetime lock。以短期 workspace lock 原子檢查
+   所有 retained copies、預留配額及發布 projection；未發布的預留也必須計費。
+2. 另以 projection hash 的 consumer lease 保護使用中的 bytes。相同 hash 的
+   使用者不得由其中一方提早刪檔；不同 hash 才有機會並行。釋放、重新檢查
+   配額與清理也必須在 workspace lock 內完成。
+3. crash／新程序 resume 必須辨識 live consumers 與 retained reservations，
+   繼續計入孤立副本；不得只靠 process-local counter 或 timeout 猜測安全刪除。
+4. 實作前補齊兩個獨立 fake app-server、不同 task／相同與不同 hash、配額
+   競爭、取消／drain、owner crash 及新程序 resume 的整合驗證，再比較等待時間。
+
+本次保留既有 projection 鎖範圍；以上是後續設計與驗證項目，尚未實作並行
+配額／consumer lease。鎖檔的 umask 修正只處理安全建立，不變更生命週期。
+
+本節工作樹的離線驗證結果：
+
+- 新增 umask regression 在舊實作的 `0277`／`0777` 情境重現失敗；修正後的
+  建立／同 inode 重用、quota、既有檔案保護及取消／不同 home 鎖邊界測試通過。
+- `mise run test` 通過，`internal/team` 1175.011 秒；`mise run test-contracts`
+  通過，包含 reviewprep／reviewgate；定向鎖檔／projection／shared-home race 通過。
+- `mise run vet` 通過；`mise run lint` 為 0 issues。
+- 本次來源建置的 CLI：team validate、list、explain 及 dry-run 通過；dry-run
+  明示 no LLM calls。team lint 的 error gate 通過；warning gate 仍會指出原有
+  `subagent-providers` legacy 欄位，未將它記成沒有警告。
+
+完整測試最初在禁止本機 socket 的 sandbox 遇到 `httptest` listen 拒絕；停止該輪
+並確認程序退出後，在允許本機測試 socket 的環境重跑上述 gates。沒有為此放寬
+runtime 的 media／quota／acceptance 契約，也沒有執行真實 Codex／Ollama 推論或
+重播歷史 collector 請求。跨 workset 指引與判定問題已做離線契約驗證；真實模型
+finding 準確率仍需後續新 invocation 的審查結果，不能由這些測試推定。

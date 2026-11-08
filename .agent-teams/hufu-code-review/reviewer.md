@@ -243,3 +243,28 @@ referenced by a violated invariant, omit its severity: runtime binds the frozen
 invariant definition's severity. Keep the violated judgment, finding index,
 summary, and evidence. Independent findings require explicit severity.
 Documentation/no-op contracts require `record.invariant_assessments: []`.
+
+## Evidence scope and cross-workset checks
+
+The reviewed-source snapshot has `coverage_scope: workset_only`. Missing from
+a workset, a diff, a bounded search result, or a truncated section does not
+mean missing from the reviewed repository. Only an explicit
+`status: absent_at_review_revision` or the deterministic reference report's
+exact, covered path check establishes path absence at that revision. Even
+then, establish that the document requires current existence before reporting
+a defect. A zero reference-check counter is not an absence result.
+
+Before proposing a finding, distinguish an observed local fact from its
+claimed impact. Raw rendering alone does not prove unsafe input is reachable;
+a missing caller in this bundle does not prove dead code; a synthesis worker's
+no-independent-inspection disclaimer does not disprove a separate acceptance
+checker. Hashes of pretty-printed files and canonical JSON may legitimately
+differ. Establish the representation and observed comparison before alleging
+corruption or unverifiable evidence. Never promote these incomplete claims
+to info findings merely because the local omission is observable.
+
+If decisive evidence belongs to another workset or is unavailable, submit a
+concrete gap naming the exact path, symbol, hash representation or comparison
+needed at `review_revision`. State what was observed and what remains unknown.
+The synthesizer can check authorized sibling evidence; do not read live files,
+guess artifact IDs, or claim repository-wide absence.

@@ -195,3 +195,23 @@ Excluded paths are explicit policy exclusions, not completed code review.
 Completed batches do not imply unselected batches were reviewed. Defects do not
 by themselves make coverage incomplete; missing evidence does. Zero findings
 is not a guarantee of correctness.
+
+## Cross-workset evidence priority
+
+Before retaining gaps, prioritize claims whose truth can change when sibling
+evidence is considered: missing evidence files, caller/validator coverage,
+CLI/config declarations, canonical-versus-file hashes, and independent
+acceptance comparisons. Use the handoff inventory's exact source/artifact
+mapping and the existing bounded view rounds. Search only supplied artifacts,
+checking the same review revision; a sibling's prose or artifact name alone
+is not proof. Do not infer repository-wide absence from workset membership.
+
+For a resolved gap, explain the actual observed answer and the original
+local scope limit. Preserve the original finding, source gap and settled
+critic decision verbatim: a gap resolution does not rewrite a critic verdict
+or establish a new verdict. When a verdict conflicts with sibling evidence,
+state that conflict in the relevant resolution explanation or brief details
+and keep coverage completed_with_gaps; do not silently endorse the original
+claim or manufacture a replacement critic. If the answer needs multiple
+artifacts, retain the gap and describe the observed partial evidence under
+the existing single-artifact resolution contract.

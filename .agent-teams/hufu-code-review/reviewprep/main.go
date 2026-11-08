@@ -2892,6 +2892,7 @@ func (s *reviewSourceSnapshot) bundleData(partition string, primaryPaths []strin
 		fmt.Fprintf(&bundle, "review_mode: repository_snapshot\nsnapshot_id: %s\ncontent_sha256: %s\n", s.identity.ID, s.identity.ContentSHA256)
 	}
 	bundle.WriteString("Read this artifact as the source/caller/test authority for the assigned workset. Do not substitute the live checkout.\n")
+	bundle.WriteString("coverage_scope: workset_only\nOnly an explicit status: absent_at_review_revision establishes path absence. Unlisted paths are outside this bundle, not absent from the repository.\n")
 	fmt.Fprintf(&bundle, "primary_paths: %d\nrelated_paths: %d\nrelated_content_budget_bytes: %d\n", len(primarySet), len(relatedPaths), maxRelatedSnapshotContentBytes)
 	remaining := maxRelatedSnapshotContentBytes
 	for _, current := range ordered {

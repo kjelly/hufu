@@ -531,3 +531,30 @@ The complete native output is bounded below the adapter's 1 MiB output cap. An
 inventory that exceeds that limit fails with `snapshot_inventory_too_large`; it
 is not silently truncated. Automatic aggregation across repositories/modules is
 not implemented.
+
+## Workset evidence boundaries and cross-workset reconciliation
+
+Source bundles explicitly declare `coverage_scope: workset_only`. Their path
+list and diff membership are not a repository inventory. An explicit
+`status: absent_at_review_revision` or a deterministic reference check covering
+that path can establish absence; an unlisted path or an unobserved byte range
+cannot. Required-current-reference interpretation remains model-owned.
+Reviewers record concrete gaps rather than turn omitted callers, files or
+validators into findings. File-byte hashes and canonical payload hashes must
+be compared under the same representation before claiming corruption.
+
+Each critic still audits exactly one accepted source, with the same bounded
+artifact access and runtime-owned decision receipts. The version 2
+`critique_assessment` question requires `unverified` when the claimed impact
+needs unavailable evidence, even if a local omission is observable. It does
+not authorize consulting another source or the live checkout.
+
+The synthesizer uses its authorized sibling records and snapshots to resolve
+source gaps, prioritizing evidence-file availability, callers/validators,
+CLI/config declarations, hash representation and independent acceptance.
+The existing one-artifact/one-resolver rule and bounded view rounds remain.
+A resolution preserves all original source records and settled critic
+verdicts; contradictory sibling evidence must be explained, not used to
+silently rewrite a verdict. This remains semantic model work, not a new
+native assertion that code is correct. Historical invocations are unchanged;
+team policy changes require a fresh invocation under ordinary resume rules.
