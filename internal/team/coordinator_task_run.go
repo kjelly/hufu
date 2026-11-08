@@ -1487,6 +1487,7 @@ retryLoop:
 					stopReason = "deprecated_result_transport"
 				}
 				collectionCtx = context.WithValue(collectionCtx, resultCollectionStopKey{}, stopReason)
+				collectionCtx = withInvocationMetadata(collectionCtx, invocationMetadataFromManifest(&contextManifest))
 				err = c.collectReturnedWork(collectionCtx, agentDef, receipt, output, currentPrompt)
 				// Collector usage has its own admission/accounting. Later
 				// work receipt projections must retain the original total.

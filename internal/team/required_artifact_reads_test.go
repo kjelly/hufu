@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"charm.land/fantasy"
@@ -308,5 +312,82 @@ func TestRequiredArtifactReadsExcludeWithheldDecisionResponses(t *testing.T) {
 		if event.Type == string(EventArtifactReadCoverageObserved) {
 			t.Fatal("withheld source earned delivery coverage")
 		}
+	}
+}
+
+func TestRequiredArtifactReadsSurviveWorkerToCollectorHandoff(t *testing.T) {
+	var collections atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			_, _ = fmt.Fprint(w, `{"model":"test","parameters":"num_ctx 131072","model_info":{"general.architecture":"qwen2","qwen2.context_length":131072},"capabilities":["completion","tools"]}`)
+			return
+		}
+		var request map[string]any
+		if err := json.UnmarshalRead(r.Body, &request); err != nil {
+			t.Error(err)
+			return
+		}
+		assertCollectorResponseChannel(t, request)
+		collections.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "data: {\"id\":\"collection\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", `{"status":"success","summary":"complete read-backed work"}`)
+	}))
+	t.Cleanup(server.Close)
+	c, producer, _, _ := resultCollectionProviderFixture(t, server.URL+"/v1", true, func(c *Coordinator) {
+		c.session.Agents["worker"].Tools = "view"
+		c.coreTools = []fantasy.AgentTool{tools.NewViewTool(tools.WithArtifactOpener(c.openArtifactRef))}
+	})
+	c.providerBoundaryStart = func(context.Context, string) error { return nil }
+	c.delegatedTasks = make(map[string]int)
+	testTaskCache(c).entries = make(map[string][]cachedTaskEntry)
+	store, err := NewFileArtifactStore(c.session.Workspace, c.projectDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.Put(t.Context(), PutArtifactRequest{Kind: "source", Path: "source.txt", Content: []byte("read before collection"), RunID: c.executionRunID, TaskID: producer.ID, Attempt: 1, Agent: producer.Agent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared := &TaskResult{TaskID: producer.ID, Attempt: 1, Agent: producer.Agent, Status: TaskResultStatusSuccess, Summary: "prepared source", Source: "runtime", Artifacts: []ArtifactRef{source.ArtifactRef}}
+	if err := c.taskTracker.TodoList().SetTypedResult(producer.ID, prepared); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.CommitTaskTransition(t.Context(), producer.ID, TaskInProgress, TaskDone, "prepared", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	input := `{"artifact_ref":"` + source.ID + `","byte_offset":0}`
+	worker := scriptWorker(scriptedTurn{stream: func(ctx context.Context, _ fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
+		view := c.gatePolicyTools(c.coreTools)[0]
+		response, err := view.Run(ctx, fantasy.ToolCall{ID: "work-read", Name: "view", Input: input})
+		if err != nil || response.IsError {
+			return nil, fmt.Errorf("read failed: %v %s", err, response.Content)
+		}
+		return textAgentResult("Completed work using the returned source."), nil
+	}})
+	c.workerAgentOverride = worker
+	manifest := WorksetManifest{SchemaVersion: WorksetSchemaVersion, Items: []WorksetItem{{Key: "one", Bindings: map[string]string{"name": "one"}, Inputs: []ArtifactRef{source.ArtifactRef}, RequiredReads: []tools.ArtifactReadCoverage{{ArtifactID: source.ID, SHA256: source.SHA256, ByteSize: source.ByteSize, Ranges: []tools.ArtifactByteRange{{Start: 0, End: source.ByteSize}}}}}}}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeWorksetManifest(t, c.session.Workspace, string(data))
+	_, err = c.ExecuteTasks(t.Context(), []TaskDef{{ID: "reviews", Agent: "worker", Model: "ollama/test", SideEffect: SideEffectNone, Execution: ExecutionContract{RequiresResult: true}, FanOut: &FanOutSpec{Source: "manifest.json", GoalTemplate: "Review {name}"}}})
+	if err != nil {
+		for _, item := range c.taskTracker.TodoList().Items()[1:] {
+			t.Logf("child %s status=%s detail=%s output=%s", item.ID, item.Status, item.Detail, item.Output)
+		}
+		t.Fatal(err)
+	}
+	items := c.taskTracker.TodoList().Items()[1:]
+	if len(items) != 1 || items[0].Status != TaskDone || items[0].TypedResult == nil || items[0].TypedResult.Source != "collected" || worker.Calls() != 1 || collections.Load() != 1 {
+		t.Fatalf("handoff incomplete: items=%+v work=%d collection=%d", items, worker.Calls(), collections.Load())
+	}
+	events, err := c.EventJournal().ReadEvents(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay := ReduceToTodoList(events)
+	if len(replay) != 2 || replay[1].TypedResult == nil || replay[1].TypedResult.Source != "collected" {
+		t.Fatal("replay lost read-backed collected result")
 	}
 }
