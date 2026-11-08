@@ -118,6 +118,11 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 	if err := validateTaskResourceScopeSnapshot(item.ResourceScopeSnapshot, item.SideEffect); err != nil {
 		return TaskOccurrenceProjection{}, err
 	}
+	if item.WorksetBinding != nil {
+		if err := validateRequiredArtifactReads(item.WorksetBinding.Inputs, item.WorksetBinding.RequiredReads); err != nil {
+			return TaskOccurrenceProjection{}, fmt.Errorf("required_reads_invalid: %w", err)
+		}
+	}
 	model := item.Model
 	modelTopology := cloneModelTopology(item.ModelTopology)
 	provider := item.SubagentProvider

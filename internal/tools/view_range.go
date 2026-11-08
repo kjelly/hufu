@@ -62,7 +62,18 @@ func executeViewArtifactRange(ctx context.Context, args viewItemArgs, cfg ToolCo
 	} else {
 		b.WriteString("[end of artifact]")
 	}
-	return artifactViewResponse(b.String(), args.ArtifactRef), nil
+	var ranges []ArtifactByteRange
+	if end > int64(offset) {
+		ranges = []ArtifactByteRange{{Start: int64(offset), End: end}}
+	}
+	coverage, err := artifactCoverageForReader(seeker, args.ArtifactRef, size, ranges)
+	if err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
+	}
+	if err := ctx.Err(); err != nil {
+		return fantasy.NewTextErrorResponse("cancelled artifact read"), nil
+	}
+	return artifactViewResponse(b.String(), args.ArtifactRef, coverage), nil
 }
 
 // readArtifactRange returns at most limit bytes starting at offset, cut back

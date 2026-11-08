@@ -10,6 +10,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 const (
@@ -34,10 +36,11 @@ type WorksetManifest struct {
 }
 
 type WorksetItem struct {
-	Key          string            `json:"key" yaml:"key"`
-	Bindings     map[string]string `json:"bindings,omitempty" yaml:"bindings,omitempty"`
-	Inputs       []ArtifactRef     `json:"inputs,omitempty" yaml:"inputs,omitempty"`
-	TouchedPaths []string          `json:"touched_paths,omitempty" yaml:"touched-paths,omitempty"`
+	Key           string                       `json:"key" yaml:"key"`
+	Bindings      map[string]string            `json:"bindings,omitempty" yaml:"bindings,omitempty"`
+	Inputs        []ArtifactRef                `json:"inputs,omitempty" yaml:"inputs,omitempty"`
+	RequiredReads []tools.ArtifactReadCoverage `json:"required_reads,omitempty" yaml:"required-reads,omitempty"`
+	TouchedPaths  []string                     `json:"touched_paths,omitempty" yaml:"touched-paths,omitempty"`
 }
 
 // WorksetExpansionReceipt is immutable evidence that one source generation
@@ -59,15 +62,16 @@ type WorksetExpansionReceipt struct {
 // creation. Inputs remain opaque artifact references; a path is never used as
 // the binding identity.
 type WorksetBinding struct {
-	WorksetID        string            `json:"workset_id"`
-	ParentTaskID     string            `json:"parent_task_id,omitempty"`
-	ItemKey          string            `json:"item_key"`
-	Bindings         map[string]string `json:"bindings,omitempty"`
-	Inputs           []ArtifactRef     `json:"inputs,omitempty"`
-	TouchedPaths     []string          `json:"touched_paths,omitempty" yaml:"touched-paths,omitempty"`
-	SourceArtifactID string            `json:"source_artifact_id"`
-	SourceSHA256     string            `json:"source_sha256"`
-	SourceArtifact   ArtifactRef       `json:"source_artifact"`
+	WorksetID        string                       `json:"workset_id"`
+	ParentTaskID     string                       `json:"parent_task_id,omitempty"`
+	ItemKey          string                       `json:"item_key"`
+	Bindings         map[string]string            `json:"bindings,omitempty"`
+	Inputs           []ArtifactRef                `json:"inputs,omitempty"`
+	RequiredReads    []tools.ArtifactReadCoverage `json:"required_reads,omitempty"`
+	TouchedPaths     []string                     `json:"touched_paths,omitempty" yaml:"touched-paths,omitempty"`
+	SourceArtifactID string                       `json:"source_artifact_id"`
+	SourceSHA256     string                       `json:"source_sha256"`
+	SourceArtifact   ArtifactRef                  `json:"source_artifact"`
 }
 
 // WorksetGroupState is the bounded, content-free projection used by
@@ -114,6 +118,7 @@ func cloneWorksetBinding(src *WorksetBinding) *WorksetBinding {
 		}
 	}
 	copyBinding.Inputs = append([]ArtifactRef(nil), src.Inputs...)
+	copyBinding.RequiredReads = cloneArtifactReadCoverage(src.RequiredReads)
 	copyBinding.TouchedPaths = append([]string(nil), src.TouchedPaths...)
 	return &copyBinding
 }
@@ -225,6 +230,9 @@ func validateWorksetManifest(manifest WorksetManifest) error {
 				return fmt.Errorf("workset item %q input %d must have an opaque id and sha256", key, inputIndex)
 			}
 		}
+		if err := validateRequiredArtifactReads(item.Inputs, item.RequiredReads); err != nil {
+			return fmt.Errorf("workset item %q required_reads: %w", key, err)
+		}
 		normalizedPaths := make(map[string]struct{}, len(item.TouchedPaths))
 		for pathIndex, rawPath := range item.TouchedPaths {
 			normalizedPath, err := NormalizeTouchedPath(rawPath)
@@ -267,6 +275,11 @@ func worksetItemKeysDigest(items []WorksetItem) string {
 	for _, item := range items {
 		_, _ = h.Write([]byte(item.Key))
 		_, _ = h.Write([]byte{'\n'})
+		if len(item.RequiredReads) != 0 {
+			encoded, _ := json.Marshal(item.RequiredReads)
+			_, _ = h.Write(encoded)
+			_, _ = h.Write([]byte{'\n'})
+		}
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

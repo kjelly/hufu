@@ -107,6 +107,8 @@ func validateCurrentEventPayload(event RunEvent) error {
 		return err
 	}
 	switch EventType(event.Type) {
+	case EventArtifactReadCoverageObserved:
+		return validateArtifactReadObservationEvent(event)
 	case EventMediaInputAdmitted:
 		_, err := decodeMediaInputEvent(event)
 		return err

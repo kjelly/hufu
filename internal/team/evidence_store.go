@@ -309,11 +309,17 @@ func (s *FileArtifactStore) Open(ctx context.Context, id string) (io.ReadCloser,
 			if err != nil {
 				return nil, err
 			}
-			return io.NopCloser(bytes.NewReader(data)), nil
+			return &memoryArtifactReader{Reader: bytes.NewReader(data)}, nil
 		}
 	}
 	return os.Open(path)
 }
+
+// Bounded reads have already charged their bytes; retain seeking so view can
+// return exact source ranges without bypassing the artifact read budget.
+type memoryArtifactReader struct{ *bytes.Reader }
+
+func (*memoryArtifactReader) Close() error { return nil }
 
 // Get resolves immutable artifact metadata by opaque ID. Callers that already
 // hold an artifact reference must use this instead of interpreting the ID as a

@@ -84,6 +84,7 @@ func executeViewArtifactSearch(ctx context.Context, args viewItemArgs, cfg ToolC
 	out.WriteString("[literal search: only the shown match excerpts were returned; other scanned content is not observed source evidence]\n")
 	needle := []byte(args.SearchText)
 	position, count := 0, 0
+	var ranges []ArtifactByteRange
 	for count < matches && position < len(data) {
 		relative := bytes.Index(data[position:], needle)
 		if relative < 0 {
@@ -97,6 +98,9 @@ func executeViewArtifactSearch(ctx context.Context, args viewItemArgs, cfg ToolC
 		snippet := trimIncompleteRune(data[start:end])
 		fmt.Fprintf(&out, "<match byte_offset=%d bytes=[%d,%d)>\n", offset+found, offset+start, offset+start+len(snippet))
 		out.Write(snippet)
+		if len(snippet) > 0 {
+			ranges = append(ranges, ArtifactByteRange{Start: int64(offset + start), End: int64(offset + start + len(snippet))})
+		}
 		out.WriteString("\n</match>\n")
 		count++
 		position = found + len(needle)
@@ -128,5 +132,12 @@ func executeViewArtifactSearch(ctx context.Context, args viewItemArgs, cfg ToolC
 	if out.Len() > outputBudget {
 		return reject("search output budget exceeded; reduce max_matches or context_bytes")
 	}
-	return artifactViewResponse(out.String(), args.ArtifactRef), nil
+	coverage, err := artifactCoverageForReader(seeker, args.ArtifactRef, size, ranges)
+	if err != nil {
+		return reject(err.Error())
+	}
+	if err := ctx.Err(); err != nil {
+		return reject("cancelled artifact search")
+	}
+	return artifactViewResponse(out.String(), args.ArtifactRef, coverage), nil
 }

@@ -218,6 +218,7 @@ func executeBatchView(ctx context.Context, items []viewItemArgs, workDir string,
 	skipped := 0
 	successfulBytes := 0
 	var artifactReads []string
+	var artifactCoverage []ArtifactReadCoverage
 	artifactOnly := true
 	for _, item := range items {
 		if item.FilePath != "" {
@@ -253,6 +254,7 @@ func executeBatchView(ctx context.Context, items []viewItemArgs, workDir string,
 		}
 
 		artifactReads = append(artifactReads, ViewArtifactReads(response)...)
+		artifactCoverage = append(artifactCoverage, ViewArtifactReadCoverage(response)...)
 		writeBatchViewItem(&body, i, "ok", response.Content)
 		successfulBytes += len(response.Content)
 		succeeded++
@@ -273,7 +275,7 @@ func executeBatchView(ctx context.Context, items []viewItemArgs, workDir string,
 		return fantasy.NewTextErrorResponse(result.String()), nil
 	}
 	response := fantasy.NewTextResponse(result.String())
-	setViewArtifactReads(&response, artifactReads, artifactOnly)
+	setViewArtifactReads(&response, artifactReads, artifactOnly, artifactCoverage...)
 	return response, nil
 }
 
@@ -398,7 +400,49 @@ func executeViewArtifact(ctx context.Context, args viewItemArgs, cfg ToolConfig)
 	if hasMore {
 		fmt.Fprintf(&b, "\n[showing lines %d-%d of %d total. Use offset=%d to continue reading]", offset, offset+limit-1, totalLines, offset+limit)
 	}
-	return artifactViewResponse(b.String(), args.ArtifactRef), nil
+	coverage := ArtifactReadCoverage{
+		ArtifactID: args.ArtifactRef, SHA256: artifactContentSHA256(data), ByteSize: int64(len(data)),
+		Ranges: artifactLineByteRanges(data, offset, limit),
+	}
+	return artifactViewResponse(b.String(), args.ArtifactRef, coverage), nil
+}
+
+// Match the source tokens rendered by readTextFile. Scanner strips CR and LF;
+// the renderer restores LF, but omitted CR and truncated line tails are not
+// returned bytes. In particular, merely scanning skipped lines grants nothing.
+func artifactLineByteRanges(data []byte, offset, limit int) []ArtifactByteRange {
+	var ranges []ArtifactByteRange
+	lineNum := 0
+	for start := 0; start < len(data) && lineNum-offset < limit; lineNum++ {
+		newline := bytes.IndexByte(data[start:], '\n')
+		end := len(data)
+		if newline >= 0 {
+			end = start + newline
+		}
+		tokenEnd := end
+		if tokenEnd > start && data[tokenEnd-1] == '\r' {
+			tokenEnd--
+		}
+		if lineNum >= offset && utf8.Valid(data[start:tokenEnd]) {
+			shownEnd, runes := start, 0
+			for shownEnd < tokenEnd && runes < maxLineLength {
+				_, size := utf8.DecodeRune(data[shownEnd:tokenEnd])
+				shownEnd += size
+				runes++
+			}
+			if shownEnd > start {
+				ranges = append(ranges, ArtifactByteRange{Start: int64(start), End: int64(shownEnd)})
+			}
+			if shownEnd == tokenEnd && newline >= 0 {
+				ranges = append(ranges, ArtifactByteRange{Start: int64(end), End: int64(end + 1)})
+			}
+		}
+		if newline < 0 {
+			break
+		}
+		start = end + 1
+	}
+	return mergeArtifactByteRanges(ranges)
 }
 
 type lineScanner struct {

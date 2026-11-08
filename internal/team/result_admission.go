@@ -84,16 +84,13 @@ func (a *localResultAdmission) validateClaims(ctx context.Context, input SubmitR
 		}
 	}
 	res := input.taskResult()
-	if res.Summary == "" {
-		return nil, errors.New("summary is required")
-	}
-	switch strings.ToLower(strings.TrimSpace(res.Status)) {
-	case TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps, TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked:
-		res.Status = strings.ToLower(strings.TrimSpace(res.Status))
-	default:
-		return nil, errors.New("status must be success, completed_with_gaps, partial, failed, or blocked")
+	if err := validateResultSummaryAndStatus(&res); err != nil {
+		return nil, err
 	}
 	reason = RepairFailureContract
+	if err := a.coordinator.validateRequiredArtifactReadSubmission(ctx, a.todoID); err != nil {
+		return nil, err
+	}
 	if decision, blocked := a.coordinator.decisionBlock(ctx); blocked && res.Status != TaskResultStatusBlocked {
 		return nil, errors.New(decisionBlockResultDenial(decision, res.Status))
 	}
@@ -390,4 +387,17 @@ func rejectProjectedClaims(err error) error {
 		return err
 	}
 	return rejectLocalResult(RepairFailureInvalidSchema, err)
+}
+
+func validateResultSummaryAndStatus(res *TaskResult) error {
+	if res.Summary == "" {
+		return errors.New("summary is required")
+	}
+	switch strings.ToLower(strings.TrimSpace(res.Status)) {
+	case TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps, TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked:
+		res.Status = strings.ToLower(strings.TrimSpace(res.Status))
+	default:
+		return errors.New("status must be success, completed_with_gaps, partial, failed, or blocked")
+	}
+	return nil
 }

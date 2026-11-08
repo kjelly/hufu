@@ -194,7 +194,23 @@ func (c *Coordinator) openArtifactRef(ctx context.Context, id string) (io.ReadCl
 	if err != nil {
 		return nil, fmt.Errorf("artifact reference %q could not be opened", id)
 	}
-	return reader, nil
+	seeker, ok := reader.(io.ReadSeekCloser)
+	if !ok {
+		_ = reader.Close()
+		return nil, fmt.Errorf("artifact reference %q does not support immutable reads", id)
+	}
+	return &verifiedArtifactReader{ReadSeekCloser: seeker, sha256: ref.SHA256, byteSize: ref.ByteSize}, nil
+}
+
+// Identity is exposed only after the store has verified the authorized version.
+type verifiedArtifactReader struct {
+	io.ReadSeekCloser
+	sha256   string
+	byteSize int64
+}
+
+func (r *verifiedArtifactReader) ArtifactReadIdentity() (string, int64) {
+	return r.sha256, r.byteSize
 }
 
 func (c *Coordinator) authorizedArtifactRef(ctx context.Context, id string) (ArtifactRef, string, bool) {

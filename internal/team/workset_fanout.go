@@ -61,6 +61,7 @@ func (c *Coordinator) expandStructuredFanOutTask(task TaskDef) ([]TaskDef, error
 			ItemKey:          item.Key,
 			Bindings:         cloneStringMap(item.Bindings),
 			Inputs:           append([]ArtifactRef(nil), item.Inputs...),
+			RequiredReads:    cloneArtifactReadCoverage(item.RequiredReads),
 			TouchedPaths:     append([]string(nil), item.TouchedPaths...),
 			SourceArtifactID: source.ID,
 			SourceSHA256:     source.SHA256,
@@ -240,6 +241,9 @@ func (c *Coordinator) validateWorksetInputs(manifest WorksetManifest, producerTa
 				resolved = artifactContentWithCurrentOccurrence(resolved, declaredRef)
 			}
 			manifest.Items[itemIndex].Inputs[inputIndex] = resolved
+		}
+		if err := validateRequiredArtifactReads(manifest.Items[itemIndex].Inputs, manifest.Items[itemIndex].RequiredReads); err != nil {
+			return WorksetManifest{}, fmt.Errorf("workset item %q required_reads: %w", manifest.Items[itemIndex].Key, err)
 		}
 	}
 	return manifest, nil

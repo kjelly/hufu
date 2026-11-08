@@ -26,6 +26,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/actionstate"
 	"github.com/kjelly/hufu/internal/processutil"
+	"github.com/kjelly/hufu/internal/tools"
 	"github.com/traefik/yaegi/interp"
 	"github.com/traefik/yaegi/stdlib"
 	"github.com/traefik/yaegi/stdlib/unrestricted"
@@ -41,11 +42,15 @@ const (
 	defaultErrorLimit  = 16 * 1024
 )
 
-// actionStateSymbols lends trusted actions read-only runtime state under the
-// import path normal Go builds of the same source use.
+// actionStateSymbols lends trusted actions read-only runtime state and shared
+// artifact coverage contracts under their normal Go import paths.
 var actionStateSymbols = interp.Exports{
 	"github.com/kjelly/hufu/internal/actionstate/actionstate": {
 		"SessionCheckpoint": reflect.ValueOf(actionstate.SessionCheckpoint),
+	},
+	"github.com/kjelly/hufu/internal/tools/tools": {
+		"ArtifactByteRange":    reflect.ValueOf((*tools.ArtifactByteRange)(nil)),
+		"ArtifactReadCoverage": reflect.ValueOf((*tools.ArtifactReadCoverage)(nil)),
 	},
 }
 

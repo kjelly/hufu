@@ -399,6 +399,42 @@ Collection 恢復沿用原工作觀測，不重跑工具；接受結果保留完
 後來的讀取重新產生它。新的執行重試使用新的 lifecycle occurrence，歷史 collection
 與收據保留供稽核，但不能代替新工作。既有 schema 未啟用此選項時維持原提交契約。
 
+### Workset 必要 artifact 讀取範圍
+
+Producer 可在每個 workset item 宣告 `required_reads`，以 immutable artifact
+identity 與半開 byte ranges `[start,end)` 定義必須交付給 worker 的內容：
+
+```json
+{
+  "required_reads": [{
+    "artifact_id": "sha256-<content hash>",
+    "sha256": "<content hash>",
+    "byte_size": 4096,
+    "ranges": [{"start": 0, "end": 4096}]
+  }]
+}
+```
+
+每筆 identity 必須精確對應該 item 的一筆 `inputs`；非空 artifact 必須宣告
+有效且有界的 ranges。空 artifact 使用 `byte_size: 0`、`ranges: []`，仍須一次
+成功讀取。Runtime 將宣告複製至 durable `WorksetBinding`，納入原 workset 收據與
+occurrence 的完整性驗證。未宣告的既有任務維持原契約。
+
+只有授權的 built-in `view` 成功回傳內容才計入覆蓋；連續讀取與重疊區間取聯集，
+搜尋只計實際回傳片段，不計內部掃描範圍。失敗、未交付、內容或 artifact identity
+不符的回應不算已讀。Local worker 以外或無原生 `view`／durable journal 的執行
+方式，以及 closed tool sequence／structured execution steps，在執行前拒絕此契約，
+不以模型自述或 external tool metadata 替代。
+
+提交時若仍有缺口，runtime 回傳 `artifact_read_coverage_incomplete` 與
+`missing_reads`（artifact identity、`byte_size`、尚缺 `ranges`），由 team
+決定補讀與後續流程。讀取觀測綁定 task occurrence、dispatch、model execution、
+branch 與 workset 契約；持久化的原始回應及收據供 collection 恢復與重播核對，
+不能用新 attempt 或其他 worker 的讀取代替。
+
+此契約只證明指定 bytes 已交付給模型，不保證理解、判斷正確或證據充分；
+必要內容的選擇、任務拆分與語意不確定性仍由 team 負責。
+
 ### 靜態依賴結果視圖（dependency-result-view）
 
 `dependency-result-view` 只接受在 team.yaml 的靜態 `contracts:` 任務宣告，

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -558,6 +559,9 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 		return t.payloadRejectionReason(call.Input)
 	})
 	if err != nil {
+		if missing, ok := errors.AsType[*artifactReadCoverageIncomplete](err); ok {
+			return fantasy.NewTextErrorResponse(missing.Error()), nil
+		}
 		return submissionFailureResponse(localResultRejectionReason(err), err.Error()), nil
 	}
 	return fantasy.NewTextResponse("Task result submitted successfully."), nil

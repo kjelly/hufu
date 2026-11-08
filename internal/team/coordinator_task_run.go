@@ -280,6 +280,9 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 			}
 		}
 	}
+	if len(taskRequiredArtifactReads(task)) != 0 && (task.Sidecar || task.Action != nil || len(task.Execution.Steps) != 0 || len(task.Execution.ToolSequence) != 0 || len(task.ExecutionTopology) > 1 || leafExecution) {
+		return "", fmt.Errorf("required_reads_unsupported_execution: use a single normal worker with built-in view")
+	}
 	// The worker-agent override is a deterministic test seam whose agents may
 	// return plain text. Keep the fanout topology tests focused on parallel
 	// leaf execution; production workers still receive the normal required
@@ -2733,6 +2736,9 @@ func runtimeActionGateName(action *Action) string {
 }
 
 func (c *Coordinator) executeRuntimeAction(ctx context.Context, task TaskDef, todoID string) (output string, returnErr error) {
+	if len(taskRequiredArtifactReads(task)) != 0 {
+		return "", fmt.Errorf("required_reads_unsupported_execution: runtime actions cannot satisfy required reads")
+	}
 	if taskHasMedia(task) {
 		return "", c.rejectMediaTaskExecution(todoID)
 	}
@@ -3820,6 +3826,9 @@ func isTaskTimeout(err error) bool {
 }
 
 func (c *Coordinator) executeSidecarTask(ctx context.Context, task TaskDef, todoID string) (string, error) {
+	if len(taskRequiredArtifactReads(task)) != 0 {
+		return "", fmt.Errorf("required_reads_unsupported_execution: sidecars cannot satisfy required reads")
+	}
 	if taskHasMedia(task) {
 		return "", c.rejectMediaTaskExecution(todoID)
 	}
@@ -4507,6 +4516,17 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				directive := fantasy.NewUserMessage(stepBudgetCheckpoint)
 				preparedMessages = append(append([]fantasy.Message(nil), preparedMessages...), directive)
 				runtimeRequiredMessages = append(runtimeRequiredMessages, directive)
+			}
+			if collector, _ := ctx.Value(resultCollectionInvocationKey{}).(string); collector == "" {
+				if readErr := c.validateRequiredArtifactReadSubmission(ctx, todoID); readErr != nil {
+					if _, missing := readErr.(*artifactReadCoverageIncomplete); !missing {
+						return ctx, fantasy.PrepareStepResult{}, readErr
+					}
+					directive := fantasy.NewUserMessage("## Required artifact delivery\nBefore finalizing, use the built-in view tool to deliver these missing source bytes. Ranges are half-open source bytes, not history/output offsets. Coverage proves delivery only, not understanding.\n" + readErr.Error())
+					preparedMessages = append(append([]fantasy.Message(nil), preparedMessages...), directive)
+					runtimeRequiredMessages = append(runtimeRequiredMessages, directive)
+					terminalOnly = false
+				}
 			}
 			recoveryMu.Lock()
 			if pendingRecovery != "" {

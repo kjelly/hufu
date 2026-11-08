@@ -24,6 +24,9 @@ func (c *Coordinator) beginResultCollection(ctx context.Context, taskID string, 
 	if err != nil {
 		return nil, err
 	}
+	if err := c.validateRequiredArtifactReadSubmission(ctx, taskID); err != nil {
+		return nil, err
+	}
 	c.taskProjectionMu.Lock()
 	defer c.taskProjectionMu.Unlock()
 	controller := c.occurrenceController(taskID)

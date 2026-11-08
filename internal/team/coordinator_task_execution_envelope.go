@@ -119,6 +119,9 @@ func (c *Coordinator) resolveTaskExecutionEnvelope(ctx context.Context, task Tas
 			return TaskExecutionEnvelope{}, err
 		}
 	}
+	if err := c.validateRequiredArtifactReadExecution(ctx, task, todo, tools); err != nil {
+		return TaskExecutionEnvelope{}, err
+	}
 	root, err := c.taskMutableRoot()
 	if err != nil {
 		return TaskExecutionEnvelope{}, fmt.Errorf("resource_scope_unreproducible: %w", err)
@@ -204,6 +207,9 @@ func (c *Coordinator) resolveAttemptWorkerTools(ctx context.Context, task TaskDe
 	resolved, err := c.ToolResolver().ResolveTaskTools(ctx, agentDef, WorkerToolResolutionRequest{
 		Task: task, TodoID: todoID, Mode: workerToolResolutionModeForTask(task),
 	})
+	if err == nil {
+		err = c.validateRequiredArtifactReadExecution(ctx, task, c.todoItemByID(todoID), resolved)
+	}
 	if err == nil {
 		return resolved, nil
 	}
