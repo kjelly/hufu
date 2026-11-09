@@ -31,6 +31,9 @@ func TestStructuredResponsePreservesArgumentsAndAdmission(t *testing.T) {
 		{name: "duplicate envelope denied", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":{},"result":{}}`}}, bad: true},
 		{name: "extra envelope member denied", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":{},"extra":true}`}}, bad: true},
 		{name: "nonobject result denied", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":[]}`}}, bad: true},
+		{name: "encoded result denied", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":"{\"ok\":true}"}`}}, bad: true},
+		{name: "null result denied", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":null}`}}, bad: true},
+		{name: "malformed result denied", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":`}}, bad: true},
 		{name: "trailing response denied", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":{}} {}`}}, bad: true},
 		{name: "incomplete envelope denied", calls: []fantasy.ToolCallContent{{ToolName: StructuredResponseFunctionName, Input: `{"result":{}`}}, bad: true},
 	} {
@@ -111,6 +114,12 @@ func TestStructuredResponsePreservesArgumentsAndAdmission(t *testing.T) {
 				if tc.bad {
 					if !errors.Is(err, ErrStructuredResponseTool) {
 						t.Fatalf("unexpected response was not denied: %v", err)
+					}
+					if len(tc.calls) == 1 && tc.calls[0].ToolName == StructuredResponseFunctionName && !tc.calls[0].ProviderExecuted {
+						failure, ok := errors.AsType[*StructuredResponseError](err)
+						if !ok || failure.Arguments != tc.calls[0].Input || failure.Issue.Validate() != nil {
+							t.Fatalf("rejected SDK arguments or typed diagnostic lost: %v", err)
+						}
 					}
 				} else if err != nil || text != tc.want || observed.TotalTokens != usage.TotalTokens {
 					t.Fatalf("text=%q usage=%+v error=%v", text, observed, err)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 
 	"charm.land/fantasy"
@@ -78,10 +79,14 @@ func (c *Coordinator) decodeCollectionClaims(taskID string, raw []byte) (SubmitR
 }
 
 func (c *Coordinator) prepareCollectionClaims(ctx context.Context, expected *ResultCollectionCheckpoint) (*ResultCollectionCheckpoint, error) {
-	raw, err := c.readCollectionBlob(ctx, expected, "response", expected.Response)
+	response, err := c.readCollectionBlobRecord(ctx, expected, "response", expected.Response)
 	if err != nil {
 		return nil, err
 	}
+	if response.ResponseIssue != nil {
+		return nil, rejectLocalResult(RepairFailureInvalidSchema, errors.New(response.ResponseIssue.Diagnostic()))
+	}
+	raw := response.Data
 	// Normalize framing before strict submission decoding. Keep Response bound
 	// to the exact received bytes and persist the validated JSON as Claims.
 	raw, _ = collectionResponseJSON(raw)

@@ -191,16 +191,22 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 			return &resultCollectionFailure{Reason: RepairFailureCommit, Checkpoint: checkpoint, Cause: err}
 		}
 		response, usage, err := c.runCollectionInvocation(invocation, def, checkpoint)
+		var responseIssue *agent.StructuredResponseIssue
 		if errors.Is(err, errCollectionToolCall) {
 			// The data channel or callback rejected it before any handler could
-			// run. Preserve the diagnostic for the same bounded format repair.
-			response += "\ncollector_response_invalid: " + err.Error()
+			// run. Preserve SDK arguments independently of the typed diagnostic;
+			// they are evidence, never an admitted claims response.
+			if failure, ok := errors.AsType[*agent.StructuredResponseError](err); ok {
+				response, responseIssue = failure.Arguments, new(failure.Issue)
+			} else {
+				response += "\ncollector_response_invalid: " + err.Error()
+			}
 			err = nil
 		}
 		if err != nil {
 			return c.collectionFailure(ctx, checkpoint, repairFailureCollectionUnavailable, err)
 		}
-		checkpoint, err = c.recordCollectionResponseUsage(ctx, checkpoint, []byte(response), usage)
+		checkpoint, err = c.recordCollectionResponseUsage(ctx, checkpoint, []byte(response), usage, responseIssue)
 		if err != nil {
 			return &resultCollectionFailure{Reason: RepairFailureCommit, Checkpoint: checkpoint, Cause: err}
 		}

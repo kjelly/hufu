@@ -541,10 +541,11 @@ func (c *Coordinator) assessRecoveryClaims(ctx context.Context, item *TodoItem, 
 		}
 		return
 	}
-	raw, err := c.readCollectionBlob(ctx, cp, kind, ref)
+	blob, err := c.readCollectionBlobRecord(ctx, cp, kind, ref)
 	if !check("claims_integrity", err) {
 		return
 	}
+	raw := blob.Data
 	inspection, _ := collectionResponseJSON(raw)
 	resolved, err := c.resolveResultEvidenceKeys(ctx, taskID, string(inspection))
 	if !check("evidence_keys", err) {
@@ -555,6 +556,9 @@ func (c *Coordinator) assessRecoveryClaims(ctx context.Context, item *TodoItem, 
 	}
 	claims := []byte(resolved)
 	input, err := c.decodeCollectionClaims(taskID, claims)
+	if blob.ResponseIssue != nil {
+		err = rejectLocalResult(RepairFailureInvalidSchema, errors.New(blob.ResponseIssue.Diagnostic()))
+	}
 	if err == nil {
 		input, err = c.projectResultClaims(ctx, taskID, input)
 		if err != nil {

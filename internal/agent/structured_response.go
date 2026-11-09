@@ -88,27 +88,42 @@ func (m *structuredResponseModel) responseText(text string, calls []fantasy.Tool
 // including invalid field types and duplicate names, for the caller's strict
 // validation and bounded repair. Envelope duplicates/extras remain forbidden.
 func structuredResponseClaims(arguments string) (string, error) {
+	reject := func(code, pointer, actual string) (string, error) {
+		return "", &StructuredResponseError{Issue: StructuredResponseIssue{Code: code, Pointer: pointer, Expected: "object", Actual: actual}, Arguments: arguments}
+	}
 	decoder := jsontext.NewDecoder(strings.NewReader(arguments), jsontext.AllowDuplicateNames(true))
 	start, err := decoder.ReadToken()
-	if err != nil || start.Kind() != '{' {
-		return "", fmt.Errorf("%w: expected a result object envelope", ErrStructuredResponseTool)
+	if err != nil {
+		return reject("invalid_json", "", "invalid_json")
+	}
+	if start.Kind() != '{' {
+		return reject("type", "", responseValueType(start.Kind()))
 	}
 	name, err := decoder.ReadToken()
-	if err != nil || name.Kind() != '"' || name.String() != "result" {
-		return "", fmt.Errorf("%w: expected the result member", ErrStructuredResponseTool)
+	if err != nil {
+		return reject("invalid_json", "/result", "invalid_json")
+	}
+	if name.Kind() != '"' || name.String() != "result" {
+		return reject("missing_property", "/result", "missing")
 	}
 	value, err := decoder.ReadValue()
-	if err != nil || value.Kind() != '{' {
-		return "", fmt.Errorf("%w: result must be a JSON object", ErrStructuredResponseTool)
+	if err != nil {
+		return reject("invalid_json", "/result", "invalid_json")
+	}
+	if value.Kind() != '{' {
+		return reject("type", "/result", responseValueType(value.Kind()))
 	}
 	// ReadValue aliases decoder storage; copy before reading another token.
 	claims := string(value)
 	end, err := decoder.ReadToken()
-	if err != nil || end.Kind() != '}' {
-		return "", fmt.Errorf("%w: result must be the only envelope member", ErrStructuredResponseTool)
+	if err != nil {
+		return reject("invalid_json", "", "invalid_json")
+	}
+	if end.Kind() != '}' {
+		return reject("additional_property", "", "object")
 	}
 	if _, err := decoder.ReadToken(); !errors.Is(err, io.EOF) {
-		return "", fmt.Errorf("%w: trailing response data", ErrStructuredResponseTool)
+		return reject("trailing_data", "", "invalid_json")
 	}
 	return claims, nil
 }

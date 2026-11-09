@@ -117,12 +117,13 @@ type resultCollectionWork struct {
 }
 
 type resultCollectionBlob struct {
-	Version         int    `json:"version"`
-	WorkSHA256      string `json:"work_sha256"`
-	InvocationID    string `json:"invocation_id"`
-	InvocationRunID string `json:"invocation_run_id"`
-	Kind            string `json:"kind"`
-	Data            []byte `json:"data"`
+	ResponseIssue   *agent.StructuredResponseIssue `json:"response_issue,omitempty"`
+	Version         int                            `json:"version"`
+	WorkSHA256      string                         `json:"work_sha256"`
+	InvocationID    string                         `json:"invocation_id"`
+	InvocationRunID string                         `json:"invocation_run_id"`
+	Kind            string                         `json:"kind"`
+	Data            []byte                         `json:"data"`
 }
 
 type resultCollectionEvent struct {

@@ -80,17 +80,26 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 		return "", nil, nil, err
 	}
 	var previous []byte
+	var responseIssue *agent.StructuredResponseIssue
 	if checkpoint.Response != nil {
-		previous, err = c.readCollectionBlob(ctx, checkpoint, "response", checkpoint.Response)
+		var response *resultCollectionBlob
+		response, err = c.readCollectionBlobRecord(ctx, checkpoint, "response", checkpoint.Response)
 		if err != nil {
 			return "", nil, nil, err
 		}
+		previous, responseIssue = response.Data, response.ResponseIssue
 	}
 	workInput, err := c.historicalResultCollectionInput(ctx, checkpoint.TaskID, work.Input)
 	if err != nil {
 		return "", nil, nil, err
 	}
 	feedback := resultCollectionFormatFeedback(previous, info)
+	if responseIssue != nil {
+		// This pointer addresses the response envelope, not the claims schema.
+		// Never analyze rejected envelope arguments as if they were claims.
+		feedback = &collectionFormatFeedback{Stage: "response_envelope", Issues: []ResultSubmissionIssue{{Code: responseIssue.Code, Pointer: responseIssue.Pointer, Expected: []string{responseIssue.Expected}}}}
+		diagnostic = responseIssue.Diagnostic()
+	}
 	if checkpoint.RepairIssue != nil {
 		if feedback == nil {
 			feedback = &collectionFormatFeedback{}
@@ -99,17 +108,18 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 	}
 	claimsSchema := map[string]any{"type": "object", "properties": info.Parameters, "required": info.Required, "additionalProperties": false}
 	data, err := json.Marshal(struct {
-		Schema           map[string]any            `json:"claims_schema"`
-		Assertions       []TaskResultAssertion     `json:"result_assertions,omitempty"`
-		WorkInput        string                    `json:"work_input"`
-		WorkReport       string                    `json:"work_report"`
-		Transcript       string                    `json:"work_transcript"`
-		PreviousResponse string                    `json:"previous_response,omitempty"`
-		Diagnostic       string                    `json:"format_diagnostic,omitempty"`
-		Feedback         *collectionFormatFeedback `json:"format_feedback,omitempty"`
+		Schema           map[string]any                 `json:"claims_schema"`
+		Assertions       []TaskResultAssertion          `json:"result_assertions,omitempty"`
+		WorkInput        string                         `json:"work_input"`
+		WorkReport       string                         `json:"work_report"`
+		Transcript       string                         `json:"work_transcript"`
+		PreviousResponse string                         `json:"previous_response,omitempty"`
+		Diagnostic       string                         `json:"format_diagnostic,omitempty"`
+		Feedback         *collectionFormatFeedback      `json:"format_feedback,omitempty"`
+		ResponseIssue    *agent.StructuredResponseIssue `json:"response_channel_failure,omitempty"`
 	}{claimsSchema,
 		localResultSubmissionContract(c, checkpoint.TaskID).SubmissionTaskResultAssertions,
-		workInput, string(work.Report), string(transcript), string(previous), schemaRepairDiagnostic(diagnostic), feedback}, json.Deterministic(true))
+		workInput, string(work.Report), string(transcript), string(previous), schemaRepairDiagnostic(diagnostic), feedback, responseIssue}, json.Deterministic(true))
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -229,17 +239,17 @@ func (c *Coordinator) runCollectionInvocation(ctx context.Context, def *agent.Ag
 	c.report(c.newEvent("step").withAgent(checkpoint.Agent).withTodoID(checkpoint.TaskID).withMessage("collecting the saved work result"))
 	output, steps, err := c.runAgentWithStatusAndHistory(ctx, ag, checkpoint.Agent, request.Prompt, nil, timing, fantasy.StepCountIs(1))
 	if errors.Is(err, agent.ErrStructuredResponseTool) {
-		err = fmt.Errorf("%w: %v", errCollectionToolCall, err)
+		err = fmt.Errorf("%w: %w", errCollectionToolCall, err)
 	}
 	return output, usageFromSteps(steps), err
 }
 
-func (c *Coordinator) recordCollectionResponseUsage(ctx context.Context, expected *ResultCollectionCheckpoint, response []byte, usage ExecutionUsage) (*ResultCollectionCheckpoint, error) {
+func (c *Coordinator) recordCollectionResponseUsage(ctx context.Context, expected *ResultCollectionCheckpoint, response []byte, usage ExecutionUsage, issue *agent.StructuredResponseIssue) (*ResultCollectionCheckpoint, error) {
 	return c.updateResultCollection(ctx, expected, func(next *ResultCollectionCheckpoint, _ *ExecutionReceipt) error {
 		if next.State != ResultCollectionInFlight || next.InvocationRunID != c.executionRunID {
 			return errResultCollectionStale
 		}
-		ref, err := c.putCollectionBlob(ctx, next, "response", response)
+		ref, err := c.putCollectionBlobWithIssue(ctx, next, "response", response, issue)
 		if err != nil {
 			return err
 		}

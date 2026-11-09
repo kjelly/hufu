@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/utils"
 )
@@ -141,6 +142,18 @@ func (c *Coordinator) readCollectionBytes(ctx context.Context, ref ResultCollect
 }
 
 func (c *Coordinator) putCollectionBlob(ctx context.Context, checkpoint *ResultCollectionCheckpoint, kind string, data []byte) (*ResultCollectionRef, error) {
+	return c.putCollectionBlobWithIssue(ctx, checkpoint, kind, data, nil)
+}
+
+func (c *Coordinator) putCollectionBlobWithIssue(ctx context.Context, checkpoint *ResultCollectionCheckpoint, kind string, data []byte, issue *agent.StructuredResponseIssue) (*ResultCollectionRef, error) {
+	if issue != nil {
+		if kind != "response" {
+			return nil, fmt.Errorf("response issue requires response evidence")
+		}
+		if err := issue.Validate(); err != nil {
+			return nil, err
+		}
+	}
 	limit := resultCollectionResponseMaxBytes
 	if kind == "request" {
 		limit = resultCollectionWorkMaxBytes
@@ -164,7 +177,7 @@ func (c *Coordinator) putCollectionBlob(ctx context.Context, checkpoint *ResultC
 	default:
 		return nil, fmt.Errorf("unknown result collection blob kind %q", kind)
 	}
-	body, err := json.Marshal(resultCollectionBlob{Version: resultCollectionVersion, WorkSHA256: checkpoint.Work.SHA256, InvocationID: checkpoint.InvocationID, InvocationRunID: checkpoint.InvocationRunID, Kind: kind, Data: redacted}, json.Deterministic(true))
+	body, err := json.Marshal(resultCollectionBlob{ResponseIssue: issue, Version: resultCollectionVersion, WorkSHA256: checkpoint.Work.SHA256, InvocationID: checkpoint.InvocationID, InvocationRunID: checkpoint.InvocationRunID, Kind: kind, Data: redacted}, json.Deterministic(true))
 	if err != nil {
 		return nil, err
 	}
@@ -176,6 +189,14 @@ func (c *Coordinator) putCollectionBlob(ctx context.Context, checkpoint *ResultC
 }
 
 func (c *Coordinator) readCollectionBlob(ctx context.Context, checkpoint *ResultCollectionCheckpoint, kind string, ref *ResultCollectionRef) ([]byte, error) {
+	blob, err := c.readCollectionBlobRecord(ctx, checkpoint, kind, ref)
+	if err != nil {
+		return nil, err
+	}
+	return blob.Data, nil
+}
+
+func (c *Coordinator) readCollectionBlobRecord(ctx context.Context, checkpoint *ResultCollectionCheckpoint, kind string, ref *ResultCollectionRef) (*resultCollectionBlob, error) {
 	if ref == nil {
 		return nil, fmt.Errorf("result collection %s evidence is missing", kind)
 	}
@@ -197,5 +218,13 @@ func (c *Coordinator) readCollectionBlob(ctx context.Context, checkpoint *Result
 	if blob.Version != resultCollectionVersion || blob.WorkSHA256 != checkpoint.Work.SHA256 || blob.InvocationID != checkpoint.InvocationID || blob.InvocationRunID != checkpoint.InvocationRunID || blob.Kind != kind || len(blob.Data) > limit {
 		return nil, fmt.Errorf("result collection %s binding mismatch: %w", kind, errResultCollectionStale)
 	}
-	return blob.Data, nil
+	if blob.ResponseIssue != nil {
+		if kind != "response" {
+			return nil, fmt.Errorf("response issue requires response evidence")
+		}
+		if err := blob.ResponseIssue.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return &blob, nil
 }

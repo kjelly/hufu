@@ -19,6 +19,7 @@ type collectionSchemaHint struct {
 }
 
 type collectionFormatFeedback struct {
+	Stage     string                  `json:"stage,omitempty"`
 	Issues    []ResultSubmissionIssue `json:"issues"`
 	Objects   []collectionSchemaHint  `json:"objects,omitempty"`
 	Truncated bool                    `json:"truncated"`

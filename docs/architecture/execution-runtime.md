@@ -153,6 +153,21 @@ historical frozen text requests retain their original text transport.
 The accepted source is `collected`, with the same contract, evidence, verifier,
 terminal and workspace integration gates as a tool submission. Runtime-owned
 fields are still assembled from verified sources; the model cannot override them.
+When a bounded `return_result` argument envelope is rejected, its complete
+SDK-delivered arguments are redacted and retained in the immutable response
+blob, alongside a runtime-owned `response_issue` with the JSON Pointer,
+expected type, actual type and rejection code. These are SDK arguments, not a
+capture of the provider's raw HTTP response. The issue prevents those bytes
+from entering claims admission, even when they resemble valid claims. Repair
+prompts retain the rejected arguments as untrusted evidence and report
+`response_channel_failure` plus `format_feedback.stage: response_envelope`;
+for example `/result` expects `object` but received `string`. No automatic
+JSON-string decoding, type coercion or executable tool call is permitted.
+The original work receipt, turn budget and source checks remain authoritative
+through persistence, recovery previews and result-only repair. Legacy response
+blobs retain their original interpretation; missing historical arguments cannot
+be reconstructed from an old diagnostic. Oversized response arguments remain
+rejected by the existing byte limit without silently retaining a truncated value.
 Declared string entries in `files_read` and `files_modified` are converted
 losslessly to `{path: ...}` before DTO decoding. Duplicate keys, unknown fields
 and unsupported shorthand remain invalid.
