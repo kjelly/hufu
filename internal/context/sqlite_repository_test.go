@@ -554,6 +554,9 @@ func TestSQLiteRepositoryAppendReducerMergesEvidenceOnDuplicate(t *testing.T) {
 }
 
 func TestSQLiteRepositoryTenThousandItems(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
 	if err != nil {
 		t.Fatal(err)

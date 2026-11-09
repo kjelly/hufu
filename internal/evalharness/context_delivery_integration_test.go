@@ -17,6 +17,9 @@ import (
 // Reuse the canonical scripts instead of duplicating their task, verification,
 // recovery and durable-evidence contracts in a second eval framework.
 func TestContextDeliveryExistingLifecycleSuites(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	for _, suite := range []string{"core-lifecycle", "retry-recovery", "memory-learning", "memory-fresh-session", "memory-fresh-session-off", "plan-first-dependency", "verbatim-dependency", "legacy-execution-replay"} {
 		t.Run(suite, func(t *testing.T) {
 			fixture, err := LoadSuiteFixture(filepath.Join(repoRoot(t), "evals", suite, "cases.yaml"))

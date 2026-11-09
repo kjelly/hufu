@@ -22,6 +22,8 @@ import (
 
 const defaultSSHTimeout = 30 * time.Second
 
+var sshCommandContext = exec.CommandContext
+
 type sshArgs struct {
 	Host            string  `json:"host"`
 	User            string  `json:"user,omitempty"`
@@ -342,16 +344,16 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 			), nil
 		}
 		// Use password from environment variable for security
-		cmd = exec.CommandContext(cmdCtx, "sshpass", "-e", "ssh")
+		cmd = sshCommandContext(cmdCtx, "sshpass", "-e", "ssh")
 		cmd.Env = utils.SanitizeSubprocessEnv(append(os.Environ(), "SSHPASS="+args.Password))
 		cmd.Args = append(cmd.Args, sshArgList...)
 	} else if args.Interactive {
 		// Interactive mode: run SSH and handle password prompts
-		cmd = exec.CommandContext(cmdCtx, "ssh", sshArgList...)
+		cmd = sshCommandContext(cmdCtx, "ssh", sshArgList...)
 		cmd.Env = utils.SanitizeSubprocessEnv(os.Environ())
 	} else {
 		// Non-interactive mode (BatchMode)
-		cmd = exec.CommandContext(cmdCtx, "ssh", sshArgList...)
+		cmd = sshCommandContext(cmdCtx, "ssh", sshArgList...)
 		cmd.Env = utils.SanitizeSubprocessEnv(os.Environ())
 	}
 
@@ -407,7 +409,7 @@ func executeSSH(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRespons
 			defer cancel2()
 
 			// Build sshpass command using environment variable
-			sshpassCmd := exec.CommandContext(cmdCtx2, "sshpass", "-e", "ssh")
+			sshpassCmd := sshCommandContext(cmdCtx2, "sshpass", "-e", "ssh")
 			sshpassCmd.Env = utils.SanitizeSubprocessEnv(append(os.Environ(), "SSHPASS="+password))
 			sshpassCmd.Args = append(sshpassCmd.Args, sshArgList...)
 			redactEnv = sshpassCmd.Env

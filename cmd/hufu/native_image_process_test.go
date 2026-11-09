@@ -115,6 +115,9 @@ func (f nativeCLIProcessFixture) run(t *testing.T, args []string) ([]byte, error
 }
 
 func TestNativeImageCLIUsesOrderedImagesWithoutReplanning(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildTestBinary(t)
 	for _, facade := range []string{"canonical", "legacy", "failed acceptance", "accepted"} {
 		t.Run(facade, func(t *testing.T) {
@@ -158,6 +161,9 @@ func TestNativeImageCLIUsesOrderedImagesWithoutReplanning(t *testing.T) {
 }
 
 func TestNativeImageCLIPreflightKeepsFixtureProjectAcrossAncestorGitChanges(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildTestBinary(t)
 	requests := make(chan nativeCLIRequest, 8)
 	server := nativeCLIProvider(t, requests)

@@ -66,6 +66,9 @@ func TestBoundedRunErrorDiagnosticRedactsAndLimitsOutput(t *testing.T) {
 // test` automatically without a new hand-written test function -- this is
 // the Go-level equivalent of `hufu eval run ./evals/<name>` per suite.
 func TestRunAllEvalSuites(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	// Tool authorization must behave the same on developer terminals and CI.
 	t.Setenv("CI", "true")
 	evalsRoot := filepath.Join(repoRoot(t), "evals")

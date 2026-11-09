@@ -115,6 +115,9 @@ func classifyContractRequest(request contractChatRequest) contractRequestPurpose
 }
 
 func TestCLIProcessExitContract(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildProcessContractBinary(t)
 
 	t.Run("successful command", func(t *testing.T) {
@@ -324,6 +327,9 @@ func TestCLIProcessExitContract(t *testing.T) {
 }
 
 func TestDefaultExploratoryResponseProcessExitContract(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildProcessContractBinary(t)
 	var calls atomic.Int64
 	server := newContractTextServer(t, &calls)
@@ -348,6 +354,9 @@ func TestDefaultExploratoryResponseProcessExitContract(t *testing.T) {
 }
 
 func TestCanonicalRunMatchesLegacyExecutionEffects(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildProcessContractBinary(t)
 	var chatCalls atomic.Int64
 	server := newContractTextServer(t, &chatCalls)
@@ -411,6 +420,9 @@ func TestCanonicalRunMatchesLegacyExecutionEffects(t *testing.T) {
 }
 
 func TestEventFormatJSONLStderrContainsOnlyStatusEvents(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildProcessContractBinary(t)
 	var chatCalls atomic.Int64
 	server := newContractTextServer(t, &chatCalls)

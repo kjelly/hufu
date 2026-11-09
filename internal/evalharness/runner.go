@@ -20,6 +20,7 @@ import (
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/improve"
+	"github.com/kjelly/hufu/internal/providerproxy"
 	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/tools"
@@ -175,6 +176,9 @@ func runCaseWithExecution(ctx context.Context, fixture *SuiteFixture, c CaseFixt
 		nil,   // forcedSkillNames
 		plan,  // planMode: plan-first delegation, as `hufu --plan`
 		false, // autoSkillsMode
+		team.WithProviderBoundaryFactory(func(ctx context.Context, _ string, cfg providerproxy.Config) (providerproxy.Boundary, error) {
+			return providerproxy.StartInProcess(ctx, cfg)
+		}),
 	)
 	if err != nil {
 		return EvalCaseResult{}, fmt.Errorf("construct coordinator: %w", err)

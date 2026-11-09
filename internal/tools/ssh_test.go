@@ -5,6 +5,7 @@ package tools
 
 import (
 	"context"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -140,6 +141,14 @@ func TestGetSSHErrorTitle(t *testing.T) {
 }
 
 func TestSSH_ConnectionReuse(t *testing.T) {
+	orig := sshCommandContext
+	defer func() { sshCommandContext = orig }()
+	var capturedArgs []string
+	sshCommandContext = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
+		capturedArgs = append([]string{name}, arg...)
+		return exec.CommandContext(ctx, "true")
+	}
+
 	tool := NewSshTool()
 	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
 
@@ -153,10 +162,22 @@ func TestSSH_ConnectionReuse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
+	joined := strings.Join(capturedArgs, " ")
+	if !strings.Contains(joined, "ControlMaster=auto") {
+		t.Fatalf("expected ControlMaster in args, got: %s", joined)
+	}
 	t.Log("Connection reuse parameter accepted")
 }
 
 func TestSSH_ControlPath(t *testing.T) {
+	orig := sshCommandContext
+	defer func() { sshCommandContext = orig }()
+	var capturedArgs []string
+	sshCommandContext = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
+		capturedArgs = append([]string{name}, arg...)
+		return exec.CommandContext(ctx, "true")
+	}
+
 	tool := NewSshTool()
 	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
 
@@ -170,6 +191,10 @@ func TestSSH_ControlPath(t *testing.T) {
 	_, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
+	}
+	joined := strings.Join(capturedArgs, " ")
+	if !strings.Contains(joined, "ControlPath=/tmp/custom-ssh-socket") {
+		t.Fatalf("expected ControlPath in args, got: %s", joined)
 	}
 	t.Log("Custom control path parameter accepted")
 }
@@ -234,6 +259,12 @@ func TestExecuteSSH_IPAddress_Warning(t *testing.T) {
 }
 
 func TestExecuteSSH_Hostname_Allowed(t *testing.T) {
+	orig := sshCommandContext
+	defer func() { sshCommandContext = orig }()
+	sshCommandContext = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "true")
+	}
+
 	tool := NewSshTool()
 	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
 
@@ -251,6 +282,12 @@ func TestExecuteSSH_Hostname_Allowed(t *testing.T) {
 }
 
 func TestSSH_UserParameter(t *testing.T) {
+	orig := sshCommandContext
+	defer func() { sshCommandContext = orig }()
+	sshCommandContext = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "true")
+	}
+
 	tool := NewSshTool()
 	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
 
@@ -268,6 +305,12 @@ func TestSSH_UserParameter(t *testing.T) {
 }
 
 func TestSSH_UserAtHostFormat(t *testing.T) {
+	orig := sshCommandContext
+	defer func() { sshCommandContext = orig }()
+	sshCommandContext = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "true")
+	}
+
 	tool := NewSshTool()
 	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
 
@@ -285,6 +328,12 @@ func TestSSH_UserAtHostFormat(t *testing.T) {
 }
 
 func TestSSH_UserParameterOverridesUserAtHost(t *testing.T) {
+	orig := sshCommandContext
+	defer func() { sshCommandContext = orig }()
+	sshCommandContext = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "true")
+	}
+
 	tool := NewSshTool()
 	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
 

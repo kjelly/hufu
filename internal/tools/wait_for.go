@@ -25,7 +25,6 @@ import (
 
 const (
 	defaultWaitForInterval = 5 * time.Second
-	minWaitForInterval     = 1 * time.Second
 	defaultWaitForTimeout  = 120 * time.Second
 	maxWaitForTimeout      = 30 * time.Minute
 	// unfalsifiablePollLimit is how many consecutive silent polls are allowed
@@ -36,6 +35,8 @@ const (
 	// the polled path did not exist and its error was being discarded.
 	unfalsifiablePollLimit = 3
 )
+
+var minWaitForInterval = 1 * time.Second
 
 // stderrSuppressionRe matches the shell idioms that discard a polled command's
 // error output. Inside a poller they are actively harmful: a wrong path or a

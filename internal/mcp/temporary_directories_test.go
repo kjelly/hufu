@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bufio"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -37,8 +38,15 @@ func TestTemporaryDirectoryServerHelper(t *testing.T) {
 	if os.Getenv("HUFU_MCP_TEMP_BLOCK_INIT") == "1" {
 		_, _ = io.Copy(io.Discard, os.Stdin)
 	} else if os.Getenv("HUFU_MCP_TEMP_BAD_INIT") == "1" {
-		fmt.Fprintln(os.Stdout, `{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"fixture initialization rejected"}}`)
-		_, _ = io.Copy(io.Discard, os.Stdin)
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			var msg struct {
+				ID any `json:"id"`
+			}
+			if err := json.Unmarshal(scanner.Bytes(), &msg); err == nil && msg.ID != nil {
+				fmt.Fprintf(os.Stdout, "{\"jsonrpc\":\"2.0\",\"id\":%v,\"error\":{\"code\":-32600,\"message\":\"fixture initialization rejected\"}}\n", msg.ID)
+			}
+		}
 	} else {
 		s := server.NewMCPServer("temporary-output-fixture", "1.0", server.WithToolCapabilities(false))
 		s.AddTool(mcpgo.NewTool("probe"), func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -136,7 +144,7 @@ func TestManagedMCPTemporaryDirectoriesCleanFailedInitializationAndDuplicate(t *
 			manager := NewMCPToolManager("", "")
 			t.Cleanup(func() { _ = manager.Close() })
 			cfg, start, stop := temporaryServerFixture(t)
-			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			if mode == "missing_command" {
 				cfg.Command = []string{filepath.Join(base, "missing-executable")}

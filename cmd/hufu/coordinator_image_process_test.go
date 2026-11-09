@@ -12,6 +12,9 @@ import (
 )
 
 func TestCoordinatorImageCLISelectsNativeWorker(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildTestBinary(t)
 	for _, facade := range []string{"canonical", "legacy"} {
 		t.Run(facade, func(t *testing.T) {

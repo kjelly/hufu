@@ -24,6 +24,13 @@ func runWaitFor(t *testing.T, input string) fantasy.ToolResponse {
 	return resp
 }
 
+func fastWaitForInterval(t *testing.T) {
+	t.Helper()
+	orig := minWaitForInterval
+	minWaitForInterval = 10 * time.Millisecond
+	t.Cleanup(func() { minWaitForInterval = orig })
+}
+
 func TestWaitForValidation(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -114,11 +121,12 @@ func TestWaitForImmediateSuccess(t *testing.T) {
 }
 
 func TestWaitForSucceedsAfterRetries(t *testing.T) {
+	fastWaitForInterval(t)
 	// The command fails until its counter file accumulates 3 lines, so the
 	// tool must poll exactly 3 times before succeeding.
 	counter := filepath.Join(t.TempDir(), "count")
 	cmd := fmt.Sprintf(`echo x >> %[1]s; [ "$(wc -l < %[1]s)" -ge 3 ] && echo done`, counter)
-	input := fmt.Sprintf(`{"command":%q,"interval_seconds":1,"timeout_seconds":30}`, cmd)
+	input := fmt.Sprintf(`{"command":%q,"interval_seconds":0.02,"timeout_seconds":30}`, cmd)
 
 	start := time.Now()
 	resp := runWaitFor(t, input)
@@ -128,18 +136,19 @@ func TestWaitForSucceedsAfterRetries(t *testing.T) {
 	if !strings.Contains(resp.Content, "condition met after 3 attempt(s)") {
 		t.Errorf("expected 3 attempts, got: %s", resp.Content)
 	}
-	if elapsed := time.Since(start); elapsed < 2*time.Second {
+	if elapsed := time.Since(start); elapsed < 30*time.Millisecond {
 		t.Errorf("expected at least 2 interval waits, finished in %s", elapsed)
 	}
 }
 
 func TestWaitForUntilFailure(t *testing.T) {
+	fastWaitForInterval(t)
 	// A process-existence check exits 0 while the process exists and non-zero
 	// after it exits. until:failure must therefore wait for the second poll,
 	// rather than treating the first successful check as completion.
 	counter := filepath.Join(t.TempDir(), "count")
 	cmd := fmt.Sprintf(`echo x >> %[1]s; [ "$(wc -l < %[1]s)" -lt 2 ]`, counter)
-	input := fmt.Sprintf(`{"command":%q,"until":"failure","interval_seconds":1,"timeout_seconds":30}`, cmd)
+	input := fmt.Sprintf(`{"command":%q,"until":"failure","interval_seconds":0.02,"timeout_seconds":30}`, cmd)
 
 	start := time.Now()
 	resp := runWaitFor(t, input)
@@ -149,7 +158,7 @@ func TestWaitForUntilFailure(t *testing.T) {
 	if !strings.Contains(resp.Content, "condition met after 2 attempt(s)") {
 		t.Errorf("expected 2 attempts, got: %s", resp.Content)
 	}
-	if elapsed := time.Since(start); elapsed < time.Second {
+	if elapsed := time.Since(start); elapsed < 15*time.Millisecond {
 		t.Errorf("expected an interval wait, finished in %s", elapsed)
 	}
 }
@@ -175,7 +184,8 @@ func TestWaitForReportsTimeoutCap(t *testing.T) {
 }
 
 func TestWaitForUntilFailureDoesNotTreatDeadlineAsCondition(t *testing.T) {
-	resp := runWaitFor(t, `{"command":"sleep 2","until":"failure","timeout_seconds":1}`)
+	fastWaitForInterval(t)
+	resp := runWaitFor(t, `{"command":"sleep 0.1","until":"failure","timeout_seconds":0.03}`)
 	if !resp.IsError {
 		t.Fatalf("expected the polling deadline to fail the wait, got: %s", resp.Content)
 	}
@@ -185,6 +195,7 @@ func TestWaitForUntilFailureDoesNotTreatDeadlineAsCondition(t *testing.T) {
 }
 
 func TestWaitForSuccessPattern(t *testing.T) {
+	fastWaitForInterval(t)
 	tests := []struct {
 		name    string
 		input   string
@@ -198,7 +209,7 @@ func TestWaitForSuccessPattern(t *testing.T) {
 		},
 		{
 			name:    "exit 0 with non-matching pattern times out",
-			input:   `{"command":"echo state: booting","interval_seconds":1,"timeout_seconds":2,"success_pattern":"state:\\s*running"}`,
+			input:   `{"command":"echo state: booting","interval_seconds":10,"timeout_seconds":5,"success_pattern":"state:\\s*running"}`,
 			wantOK:  false,
 			wantSub: "state: booting",
 		},
@@ -220,11 +231,13 @@ func TestWaitForSuccessPattern(t *testing.T) {
 }
 
 func TestWaitForTimeoutIncludesLastOutput(t *testing.T) {
-	resp := runWaitFor(t, `{"command":"echo still booting; exit 1","interval_seconds":1,"timeout_seconds":2}`)
+	// Leave enough time for the command to finish, but no budget for a second
+	// interval. A deadline-aborted retry would correctly report exit code -1.
+	resp := runWaitFor(t, `{"command":"echo still booting; exit 1","interval_seconds":10,"timeout_seconds":5}`)
 	if !resp.IsError {
 		t.Fatalf("expected timeout error, got success: %s", resp.Content)
 	}
-	for _, want := range []string{"timed out", "still booting", "exit code 1", "Condition never met"} {
+	for _, want := range []string{"timed out", "1 attempt(s)", "still booting", "exit code 1", "Condition never met"} {
 		if !strings.Contains(resp.Content, want) {
 			t.Errorf("timeout error missing %q: %s", want, resp.Content)
 		}
@@ -232,7 +245,9 @@ func TestWaitForTimeoutIncludesLastOutput(t *testing.T) {
 }
 
 func TestWaitForStderrVisibleInOutput(t *testing.T) {
-	resp := runWaitFor(t, `{"command":"echo warn >&2; exit 1","interval_seconds":1,"timeout_seconds":2}`)
+	// This checks captured stderr, so finish after one completed poll instead
+	// of racing a second command against the polling deadline.
+	resp := runWaitFor(t, `{"command":"echo warn >&2; exit 1","interval_seconds":10,"timeout_seconds":5}`)
 	if !resp.IsError {
 		t.Fatalf("expected timeout error, got success: %s", resp.Content)
 	}
@@ -244,12 +259,12 @@ func TestWaitForStderrVisibleInOutput(t *testing.T) {
 func TestWaitForParentCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(30 * time.Millisecond)
 		cancel()
 	}()
 	start := time.Now()
 	resp, err := executeWaitFor(ctx, fantasy.ToolCall{ID: "1", Name: "wait_for",
-		Input: `{"command":"exit 1","interval_seconds":2,"timeout_seconds":60}`}, ToolConfig{})
+		Input: `{"command":"exit 1","interval_seconds":0.05,"timeout_seconds":60}`}, ToolConfig{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -199,6 +199,9 @@ func (f historicalRunProcessFixture) run(t *testing.T, binary string, flags []st
 }
 
 func TestHistoricalResultRunBinaryAdmissionAndDelivery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	for _, variant := range []string{"single", "fallback", "extra_model", "derived_fork"} {
 		t.Run(variant, func(t *testing.T) { historicalResultRunBinaryAdmissionAndDelivery(t, variant) })
 	}
@@ -337,6 +340,9 @@ func historicalResultRunBinaryAdmissionAndDelivery(t *testing.T, variant string)
 }
 
 func TestHistoricalResultRunBinaryRefusesBeforeModelStartup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)

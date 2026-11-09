@@ -21,6 +21,9 @@ import (
 )
 
 func TestResponsesRunBinaryAndProtocolDrift(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	f := newVersionedCLIFixture(t)
 	provider := scripted.NewProvider("test", []scripted.Step{{ToolCall: &scripted.ToolCall{Name: "finish", Arguments: `{"response":"Responses CLI verified"}`}, Usage: &scripted.Usage{InputTokens: 10, OutputTokens: 2}}})
 	var calls atomic.Int32

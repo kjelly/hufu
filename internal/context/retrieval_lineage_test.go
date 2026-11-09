@@ -9,6 +9,9 @@ import (
 )
 
 func TestSearchLineageAllowsLargeSetsBeforeLimit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	repo := lineageRetrievalFixture(t, 100_002, true)
 	scope := lineageRetrievalScope()
 	foreign := scope
