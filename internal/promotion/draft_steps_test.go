@@ -65,7 +65,7 @@ func TestValidateDraftRequiresBodySteps(t *testing.T) {
 
 func newSkillPromotionFixture(t *testing.T) (*contextstore.SQLiteRepository, string) {
 	t.Helper()
-	repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

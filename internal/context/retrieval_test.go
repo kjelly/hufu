@@ -31,7 +31,7 @@ func TestHybridRetrieveGoldenQueries(t *testing.T) {
 	if err := json.Unmarshal(raw, &fixture); err != nil {
 		t.Fatal(err)
 	}
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestHybridRetrieveGoldenQueries(t *testing.T) {
 }
 
 func BenchmarkHybridRetrieveGoldenQuery(b *testing.B) {
-	repo, err := OpenSQLite(filepath.Join(b.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(b.TempDir())
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestRRFAndMMRAreDeterministicAndDiverse(t *testing.T) {
 }
 
 func TestHybridRetrieveMarksLowRankResultsInsufficient(t *testing.T) {
-	repo, err := OpenSQLite(t.TempDir() + "/context.sqlite")
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestRankForScopePrefersNearestScopeOnTie(t *testing.T) {
 }
 
 func TestHybridRetrievePrefersExactAndScopesResults(t *testing.T) {
-	repo, err := OpenSQLite(t.TempDir() + "/context.sqlite")
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestHybridRetrievePrefersExactAndScopesResults(t *testing.T) {
 }
 
 func TestHybridRetrieveFusesLexicalAndVectorResultsAfterExactHit(t *testing.T) {
-	repo, err := OpenSQLite(t.TempDir() + "/context.sqlite")
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestHybridRetrieveFusesLexicalAndVectorResultsAfterExactHit(t *testing.T) {
 }
 
 func TestHybridRetrieveUsesRRFAndDeduplicatesContent(t *testing.T) {
-	repo, err := OpenSQLite(t.TempDir() + "/context.sqlite")
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

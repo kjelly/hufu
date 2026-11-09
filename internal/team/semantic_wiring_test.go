@@ -20,7 +20,7 @@ import (
 func semanticRouterFixture(t *testing.T) (*Coordinator, *contextstore.SQLiteRepository, *conceptOllama) {
 	t.Helper()
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

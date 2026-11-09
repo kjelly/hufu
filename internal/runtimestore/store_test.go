@@ -205,7 +205,7 @@ func TestPreReportReadOnlySchemaStillRejectsInvalidMigrations(t *testing.T) {
 }
 
 func TestRuntimeDocuments(t *testing.T) {
-	store, err := Open(context.Background(), t.TempDir())
+	store, err := openMemoryTestStore(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestRuntimeDocuments(t *testing.T) {
 }
 
 func TestWithTxRollsBackEveryWriteOnError(t *testing.T) {
-	store, err := Open(context.Background(), t.TempDir())
+	store, err := openMemoryTestStore(t)
 	if err != nil {
 		t.Fatal(err)
 	}

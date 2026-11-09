@@ -6,7 +6,6 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 
@@ -164,7 +163,7 @@ func lineageRetrievalScope() Scope {
 
 func lineageRetrievalFixture(tb testing.TB, count int, allMatch bool) *SQLiteRepository {
 	tb.Helper()
-	repo, err := OpenSQLite(filepath.Join(tb.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(tb.TempDir())
 	if err != nil {
 		tb.Fatal(err)
 	}

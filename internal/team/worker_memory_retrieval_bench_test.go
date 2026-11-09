@@ -3,7 +3,6 @@ package team
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -51,7 +50,7 @@ func BenchmarkWorkerAncestorRecall(b *testing.B) {
 
 func workerAncestorRetrievalFixture(tb testing.TB, count int, allMatch bool) (*contextstore.SQLiteRepository, contextstore.Scope, map[string]bool) {
 	tb.Helper()
-	repo, err := contextstore.OpenSQLite(filepath.Join(tb.TempDir(), "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(tb.TempDir())
 	if err != nil {
 		tb.Fatal(err)
 	}

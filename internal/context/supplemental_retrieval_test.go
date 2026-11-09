@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -60,7 +59,7 @@ func TestSupplementalRetrievalBoundsActualCallsAndSourceRows(t *testing.T) {
 }
 
 func TestSupplementalRetrievalUsesSQLAuthorizationBeforeLimit(t *testing.T) {
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

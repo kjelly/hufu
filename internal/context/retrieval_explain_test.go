@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -17,7 +16,7 @@ func (v fixedVector) SearchVector(context.Context, SearchRequest) ([]SearchResul
 }
 
 func TestRetrievalObserverDoesNotChangeResults(t *testing.T) {
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +76,7 @@ func TestRetrievalObserverDoesNotChangeResults(t *testing.T) {
 // BUG-01: rrf starts from the first list's raw score, so on a realistic
 // corpus the carried BM25 score dominates the reciprocal-rank term.
 func TestRetrievalObserverExposesCarriedLexicalScore(t *testing.T) {
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

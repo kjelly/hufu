@@ -2,7 +2,6 @@ package context
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 )
 
@@ -67,7 +66,7 @@ func TestFTSQueryQuotesTermsAndDropsOperators(t *testing.T) {
 // must be found and ranked above one that shares fewer of them, and one
 // that shares no term must not be found.
 func TestSearchLexicalMatchesLongGoalsBySharedTerms(t *testing.T) {
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

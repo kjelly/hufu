@@ -68,7 +68,7 @@ func TestSQLiteRepositoryPersistsScopeSearchAndProjection(t *testing.T) {
 
 func TestSQLiteRepositoryRebuildProjectionLeavesLegacyMemoryFilesUntouched(t *testing.T) {
 	dir := t.TempDir()
-	r, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	r, err := OpenSQLiteInMemory(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestSQLiteRepositoryRebuildProjectionLeavesLegacyMemoryFilesUntouched(t *te
 }
 
 func TestSQLiteRepositorySearchExactFiltersBeforeLimit(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestSQLiteRepositoryRedactsAllRequiredSecretClassesInDBAndProjection(t *tes
 }
 
 func TestSQLiteRepositorySearchLexicalRejectsOtherTeams(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestSQLiteRepositorySearchLexicalRejectsOtherTeams(t *testing.T) {
 }
 
 func TestSQLiteRepositoryRebuildLexicalRestoresFTSIndex(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestSQLiteRepositoryRebuildLexicalRestoresFTSIndex(t *testing.T) {
 }
 
 func TestSQLiteRepositorySearchExcludesItemsOutsideValidityWindow(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestSQLiteRepositorySearchExcludesItemsOutsideValidityWindow(t *testing.T) 
 }
 
 func TestSQLiteRepositoryDeduplicatesAndExpires(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestSQLiteRepositoryDeduplicatesAndExpires(t *testing.T) {
 }
 
 func TestSQLiteRepositoryGeneratedIDIncludesDedupeScope(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +363,7 @@ func TestSQLiteRepositoryGeneratedIDIncludesDedupeScope(t *testing.T) {
 }
 
 func TestSQLiteRepositoryRevisionAdvancesOnEveryMutation(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,7 +426,7 @@ func TestSQLiteRepositoryRevisionAdvancesOnEveryMutation(t *testing.T) {
 }
 
 func TestSQLiteRepositoryDeleteExpiredRemovesFTSRow(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +456,7 @@ func TestSQLiteRepositoryDeleteExpiredRemovesFTSRow(t *testing.T) {
 }
 
 func TestSQLiteRepositoryPreservesExplicitZeroConfidence(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +476,7 @@ func TestSQLiteRepositoryPreservesExplicitZeroConfidence(t *testing.T) {
 }
 
 func TestSQLiteRepositoryAppendReducerDeduplicatesByExecutionIdentity(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -519,7 +519,7 @@ func TestSQLiteRepositoryAppendReducerDeduplicatesByExecutionIdentity(t *testing
 }
 
 func TestSQLiteRepositoryAppendReducerMergesEvidenceOnDuplicate(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -557,7 +557,7 @@ func TestSQLiteRepositoryTenThousandItems(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration: mise run test-integration")
 	}
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

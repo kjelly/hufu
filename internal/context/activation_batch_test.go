@@ -4,13 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"reflect"
 	"testing"
 )
 
 func TestBatchActivationMatchesSingleProjectionAcrossBoundaries(t *testing.T) {
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

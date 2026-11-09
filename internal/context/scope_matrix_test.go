@@ -9,7 +9,6 @@ package context
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -20,7 +19,7 @@ import (
 func scopeMatrixFixture(t *testing.T) (*SQLiteRepository, Scope) {
 	t.Helper()
 	dir := t.TempDir()
-	repo, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(dir)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -400,7 +399,7 @@ func TestScopeMatrix_TaskScopedItemVisibleToAgentA(t *testing.T) {
 // isolation is intact: items from team-a are invisible to a team-b query.
 func TestScopeMatrix_DifferentTeamIsolated(t *testing.T) {
 	dir := t.TempDir()
-	repo, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(dir)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}

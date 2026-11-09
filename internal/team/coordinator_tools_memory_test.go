@@ -42,7 +42,7 @@ func TestCompatibilityMemoryMutationsFailClosedWithoutCanonicalRepository(t *tes
 
 func TestMemorySavePreservesExplicitZeroConfidence(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestMemorySaveSchemaAdvertisesAtomicSupersedes(t *testing.T) {
 
 func TestMemorySaveRejectsUnknownCategory(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestMemorySaveRejectsUnknownCategory(t *testing.T) {
 
 func TestCanonicalMemorySavePreservesContractFieldsAndQueryFilters(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestCanonicalMemorySavePreservesContractFieldsAndQueryFilters(t *testing.T)
 
 func TestMemorySaveProjectionRebuildFailureRetainsCanonicalWriteAndNoDuplicateCandidate(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

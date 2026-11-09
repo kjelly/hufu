@@ -2,7 +2,6 @@ package context
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -10,7 +9,7 @@ import (
 func TestContextDeliveryChineseSyntaxAndFakeEmbeddingContract(t *testing.T) {
 	dir := t.TempDir()
 	ctx := WithEvaluationTime(t.Context(), time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
-	repo, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

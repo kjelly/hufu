@@ -24,7 +24,7 @@ func insertGrantEvent(t *testing.T, q Queryer, sequence int, ref HistoricalGrant
 }
 
 func TestHistoricalGrantCyclePreservesFirstAdmission(t *testing.T) {
-	store, err := Open(t.Context(), t.TempDir())
+	store, err := openMemoryTestStore(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestHistoricalGrantCyclePreservesFirstAdmission(t *testing.T) {
 }
 
 func TestHistoricalGrantCycleRejectsMismatchedSources(t *testing.T) {
-	store, err := Open(t.Context(), t.TempDir())
+	store, err := openMemoryTestStore(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestHistoricalGrantCycleRejectsMismatchedSources(t *testing.T) {
 }
 
 func TestHistoricalGrantCycleUsesFirstJournalAdmission(t *testing.T) {
-	store, err := Open(t.Context(), t.TempDir())
+	store, err := openMemoryTestStore(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestHistoricalGrantCycleUsesFirstJournalAdmission(t *testing.T) {
 }
 
 func TestHistoricalGrantCycleRollsBackWithSourceEvent(t *testing.T) {
-	store, err := Open(t.Context(), t.TempDir())
+	store, err := openMemoryTestStore(t)
 	if err != nil {
 		t.Fatal(err)
 	}

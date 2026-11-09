@@ -507,7 +507,7 @@ func TestMigrationEightToNineCreatesBackupAndPreservesCanonicalData(t *testing.T
 
 func openProjectionTestRepository(t *testing.T) *SQLiteRepository {
 	t.Helper()
-	repository, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repository, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

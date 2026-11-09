@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -149,7 +148,7 @@ func conceptSettings(t *testing.T, fake *conceptOllama, mode semantic.Mode, twea
 
 func openSemanticTestRepo(t *testing.T) *contextstore.SQLiteRepository {
 	t.Helper()
-	repo := openMigratedContextTestDB(t, filepath.Join(t.TempDir(), "context.sqlite"))
+	repo := openMemoryContextTestDB(t, t.TempDir())
 	return repo
 }
 

@@ -3,7 +3,6 @@ package team
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -69,7 +68,7 @@ func TestInheritExperience(t *testing.T) {
 func TestPromotedRecordInheritsSessionEvidence(t *testing.T) {
 	ctx := context.Background()
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

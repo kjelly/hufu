@@ -10,15 +10,14 @@ import (
 	"time"
 )
 
-func openConflictTestRepository(t *testing.T) (*SQLiteRepository, string) {
+func openConflictTestRepository(t *testing.T) *SQLiteRepository {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "context.sqlite")
-	repo, err := OpenSQLite(path)
+	repo, err := OpenSQLiteInMemory("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = repo.Close() })
-	return repo, path
+	return repo
 }
 
 func appendConflictItem(t *testing.T, repo *SQLiteRepository, id, content string) ContextItem {
@@ -54,7 +53,12 @@ func pendingEventTypes(t *testing.T, repo *SQLiteRepository) []string {
 }
 
 func TestMigration11CreatesPairJudgments(t *testing.T) {
-	repo, path := openConflictTestRepository(t)
+	path := filepath.Join(t.TempDir(), "context.sqlite")
+	repo, err := OpenSQLite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
 	a := appendConflictItem(t, repo, "a", "Use SQLite for storage.")
 	b := appendConflictItem(t, repo, "b", "Use PostgreSQL for storage.")
 	j := newTestJudgment(a, b, PairVerdictContradicts, CurrentConflictJudgePolicyVersion)
@@ -75,7 +79,7 @@ func TestMigration11CreatesPairJudgments(t *testing.T) {
 }
 
 func TestSchemaCheckRejectsInvalidVerdictStatus(t *testing.T) {
-	repo, _ := openConflictTestRepository(t)
+	repo := openConflictTestRepository(t)
 	cases := []struct {
 		name    string
 		a, b    string
@@ -130,7 +134,7 @@ func TestPairJudgmentIDIsDeterministic(t *testing.T) {
 
 func TestSavePairJudgmentKeepsExistingRowAndReplacesUndeterminedOnlyWhenAsked(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := openConflictTestRepository(t)
+	repo := openConflictTestRepository(t)
 	a := appendConflictItem(t, repo, "a", "Use SQLite for storage.")
 	b := appendConflictItem(t, repo, "b", "Use PostgreSQL for storage.")
 	undetermined := newTestJudgment(a, b, PairVerdictUndetermined, CurrentConflictJudgePolicyVersion)
@@ -158,7 +162,7 @@ func TestSavePairJudgmentKeepsExistingRowAndReplacesUndeterminedOnlyWhenAsked(t 
 
 func TestNewContradictionInheritsDismissalAcrossJudgeVersions(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := openConflictTestRepository(t)
+	repo := openConflictTestRepository(t)
 	a := appendConflictItem(t, repo, "a", "Use SQLite for storage.")
 	b := appendConflictItem(t, repo, "b", "Use PostgreSQL for storage.")
 	first := newTestJudgment(a, b, PairVerdictContradicts, CurrentConflictJudgePolicyVersion)
@@ -184,7 +188,7 @@ func TestNewContradictionInheritsDismissalAcrossJudgeVersions(t *testing.T) {
 
 func TestSavePairJudgmentSanitizesRationale(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := openConflictTestRepository(t)
+	repo := openConflictTestRepository(t)
 	a := appendConflictItem(t, repo, "a", "Use SQLite for storage.")
 	b := appendConflictItem(t, repo, "b", "Use PostgreSQL for storage.")
 	j := newTestJudgment(a, b, PairVerdictCompatible, CurrentConflictJudgePolicyVersion)
@@ -243,7 +247,7 @@ func TestConflictStateDerivation(t *testing.T) {
 
 func TestDismissConflictStateMachine(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := openConflictTestRepository(t)
+	repo := openConflictTestRepository(t)
 	a := appendConflictItem(t, repo, "a", "Use SQLite for storage.")
 	b := appendConflictItem(t, repo, "b", "Use PostgreSQL for storage.")
 	c := appendConflictItem(t, repo, "c", "Use MySQL for storage.")
@@ -297,7 +301,7 @@ func TestDismissConflictStateMachine(t *testing.T) {
 
 func TestListConflictsAndOpenConflictsForItems(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := openConflictTestRepository(t)
+	repo := openConflictTestRepository(t)
 	a := appendConflictItem(t, repo, "a", "Use SQLite for storage.")
 	b := appendConflictItem(t, repo, "b", "Use PostgreSQL for storage.")
 	c := appendConflictItem(t, repo, "c", "Deploy on Fridays.")
@@ -326,7 +330,7 @@ func TestListConflictsAndOpenConflictsForItems(t *testing.T) {
 
 func TestOpenConflictsForItemsChunksLargeInput(t *testing.T) {
 	ctx := context.Background()
-	repo, _ := openConflictTestRepository(t)
+	repo := openConflictTestRepository(t)
 	a := appendConflictItem(t, repo, "a", "Use SQLite for storage.")
 	b := appendConflictItem(t, repo, "zz", "Use PostgreSQL for storage.")
 	j := newTestJudgment(a, b, PairVerdictContradicts, CurrentConflictJudgePolicyVersion)

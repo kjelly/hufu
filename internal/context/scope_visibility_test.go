@@ -30,7 +30,7 @@ import (
 // --- Migration 3: schema and backfill ---
 
 func TestWP1_MigrationAddsBranchIDAndLifecycleColumns(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestWP1_MigrationPreservesExistingData(t *testing.T) {
 // --- Lifecycle filter ---
 
 func TestWP1_LifecycleFilterExcludesCandidatesByDefault(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestWP1_LifecycleFilterExcludesCandidatesByDefault(t *testing.T) {
 }
 
 func TestWP1_LifecycleFilterIncludesCandidatesWhenRequested(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestWP1_LifecycleFilterIncludesCandidatesWhenRequested(t *testing.T) {
 }
 
 func TestWP1_LifecycleFilterAppliesToSearchExact(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestWP1_LifecycleFilterAppliesToSearchExact(t *testing.T) {
 }
 
 func TestWP1_LifecycleFilterAppliesToSearchLexical(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestWP1_LifecycleFilterAppliesToSearchLexical(t *testing.T) {
 
 func TestWP1_LifecycleFilterAppliesToVector(t *testing.T) {
 	dir := t.TempDir()
-	repo, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(dir)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestWP1_LifecycleFilterAppliesToVector(t *testing.T) {
 // --- VisibilityExact ---
 
 func TestWP1_VisibilityExactRequiresNullForEmptyFields(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestWP1_VisibilityExactRequiresNullForEmptyFields(t *testing.T) {
 }
 
 func TestWP1_VisibilityExactMatchesNonEmptyFieldsExactly(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -363,7 +363,7 @@ func TestWP1_VisibilityExactMatchesNonEmptyFieldsExactly(t *testing.T) {
 // --- VisibilitySubtree (maintenance) ---
 
 func TestWP1_VisibilitySubtreeActsAsWildcard(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -394,7 +394,7 @@ func TestWP1_VisibilitySubtreeActsAsWildcard(t *testing.T) {
 // --- QuerySharedProjection ---
 
 func TestWP1_QuerySharedProjectionReturnsOnlySharedItems(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestWP1_QuerySharedProjectionReturnsOnlySharedItems(t *testing.T) {
 
 func TestWP1_PrivateAppendDoesNotLeakToProjection(t *testing.T) {
 	dir := t.TempDir()
-	r, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	r, err := OpenSQLiteInMemory(dir)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -502,7 +502,7 @@ func TestWP1_AllPathsAgentASeesSharedAndOwn(t *testing.T) {
 // --- BranchID scope isolation ---
 
 func TestWP1_BranchIDIsolation(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -560,7 +560,7 @@ func TestWP1_PendingWriteBackwardCompatMissingBranchID(t *testing.T) {
 // --- Default lifecycle on append ---
 
 func TestWP1_AppendDefaultsLifecycleToConfirmed(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -581,7 +581,7 @@ func TestWP1_AppendDefaultsLifecycleToConfirmed(t *testing.T) {
 // --- Rejected lifecycle excluded ---
 
 func TestWP1_RejectedLifecycleExcludedFromDefaultQuery(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -613,7 +613,7 @@ func TestWP1_RejectedLifecycleExcludedFromDefaultQuery(t *testing.T) {
 // --- Scope with BranchID in ancestor visibility ---
 
 func TestWP1_AncestorVisibilityWithBranchID(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -646,7 +646,7 @@ func TestWP1_AncestorVisibilityWithBranchID(t *testing.T) {
 // --- Temporal validity still works with new columns ---
 
 func TestWP1_TemporalValidityWithNewSchema(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}

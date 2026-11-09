@@ -89,7 +89,7 @@ func TestFailedDirectRunUsesExperienceProcessor(t *testing.T) {
 
 func TestDefaultExperienceProcessorIgnoresStaleMarkdownAndIsIdempotent(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestDefaultExperienceProcessorIgnoresStaleMarkdownAndIsIdempotent(t *testin
 
 func TestDefaultExperienceProcessorDoesNotPromotePreviousFailedRunRecord(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestDefaultExperienceProcessorDoesNotPromotePreviousFailedRunRecord(t *test
 // persistent candidates.
 func TestFailedRunSharedContextIsNeitherPromptVisibleNorPromotable(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestFailedRunSharedContextIsNeitherPromptVisibleNorPromotable(t *testing.T)
 // knowledge bound to the evidence manifest.
 func TestAcceptedRunSharedContextIsPromotedAndVisibleToItsOwnRun(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +326,7 @@ func TestAcceptedRunSharedContextIsPromotedAndVisibleToItsOwnRun(t *testing.T) {
 
 func TestFinalizeRunRejectsAsyncReflexionCandidateBarrier(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +390,7 @@ func TestFinalizeRunRejectsAsyncReflexionCandidateBarrier(t *testing.T) {
 func TestFinalizeRunRejectionAppendFailurePreservesOutcomeAndWarns(t *testing.T) {
 	workspace := t.TempDir()
 	dbPath := filepath.Join(workspace, "context.sqlite")
-	baseRepo, err := contextstore.OpenSQLite(dbPath)
+	baseRepo, err := contextstore.OpenSQLiteInMemory(filepath.Dir(dbPath))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,7 +15,7 @@ func editTrackingProposal() PromotionProposal {
 
 func TestCreatePromotionRecordsGeneratedDraftHash(t *testing.T) {
 	ctx := context.Background()
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestReadOnlyPromotionsBeforeMigration10(t *testing.T) {
 
 func TestListAppliedSkillPromotionsFiltersTypeAndStatus(t *testing.T) {
 	ctx := context.Background()
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

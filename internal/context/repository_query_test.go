@@ -12,7 +12,7 @@ import (
 )
 
 func TestRepositoryQueryTypedPredicates(t *testing.T) {
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestRepositoryQueryTypedPredicates(t *testing.T) {
 }
 
 func TestRepositoryQueryTypedPredicateValidation(t *testing.T) {
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestRepositoryQueryTypedPredicateValidation(t *testing.T) {
 }
 
 func TestRepositoryIterateHasNoImplicitLimitAndPreservesOrder(t *testing.T) {
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestRepositoryIterateHasNoImplicitLimitAndPreservesOrder(t *testing.T) {
 }
 
 func TestRepositoryIterateContract(t *testing.T) {
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestReadOnlyRepositoryUsesTypedPredicateAndIterationContracts(t *testing.T)
 }
 
 func TestCandidateSettlementQueryPlanUsesCanonicalScopeIndex(t *testing.T) {
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

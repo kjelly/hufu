@@ -152,7 +152,7 @@ func TestBaseline_DefaultProfileDoesNotSuppressMemory(t *testing.T) {
 
 func TestBaseline_AppendCanonicalContextWritesSharedScope(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestBaseline_AppendCanonicalContextWritesSharedScope(t *testing.T) {
 
 func TestBaseline_AutoWriteSTMRecordsSharedScope(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestBaseline_DirectPathMemoryIsShared(t *testing.T) {
 
 func TestBaseline_CanonicalContextScopeHasNoBranchID(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestBaseline_CanonicalContextScopeHasNoBranchID(t *testing.T) {
 
 func TestBaseline_ShadowContextAppendWritesSharedScope(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -332,7 +332,7 @@ func TestBaseline_ShadowContextAppendWritesSharedScope(t *testing.T) {
 // enables per-worker private ingestion via SaveSessionMemory. The canonical
 // store now supports writing private items with a non-empty AgentID.
 func TestBaselineContract_PerWorkerIngestionImplemented(t *testing.T) {
-	repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}

@@ -28,7 +28,7 @@ func (f *failingContextRepo) Append(ctx context.Context, items ...contextstore.C
 
 func TestShadowContextAppendDoesNotNeedLegacyPromptPath(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestShadowContextAppendDoesNotNeedLegacyPromptPath(t *testing.T) {
 
 func TestCanonicalMemoryIngestionGeneratesLegacySTMProjection(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestCanonicalMemoryIngestionGeneratesLegacySTMProjection(t *testing.T) {
 
 func TestCanonicalPromptMemoryDoesNotReadLegacyMarkdown(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestCanonicalPromptMemoryDoesNotReadLegacyMarkdown(t *testing.T) {
 
 func TestArchiveSessionSummaryUsesCanonicalContext(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestArchiveSessionSummaryUsesCanonicalContext(t *testing.T) {
 
 func TestShadowContextAppendAndLegacyAppendsPreserveAllSTMAndLTMEntries(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestShadowContextAppendAndLegacyAppendsPreserveAllSTMAndLTMEntries(t *testi
 
 func TestShadowContextAppendFailureIsRepairable(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestShadowContextAppendFailureIsRepairable(t *testing.T) {
 
 func TestAutoExtractLTMUsesCanonicalItemsAndNeverImportsMarkdown(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestAutoExtractLTMUsesCanonicalItemsAndNeverImportsMarkdown(t *testing.T) {
 
 func TestCanonicalProgressNeverPromotesToPersistentKnowledge(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func (secretLeakingContextRepo) Append(context.Context, ...contextstore.ContextI
 
 func TestShadowContextAppendRedactsFailureCauseEverywhere(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

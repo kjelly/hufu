@@ -2,7 +2,6 @@ package context
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 )
 
@@ -11,7 +10,7 @@ import (
 // each session record it cites that exists in the same project.
 func TestListExperienceLineageOnlyLinksConfirmedPromotions(t *testing.T) {
 	ctx := context.Background()
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

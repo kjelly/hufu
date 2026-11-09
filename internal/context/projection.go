@@ -115,6 +115,9 @@ func atomicWrite(path, content string) error {
 // are intentionally queried by different scope lifetimes: session records
 // cannot appear in LTM and persistent records cannot appear in STM.
 func (r *SQLiteRepository) RebuildProjection(ctx context.Context, scope Scope) error {
+	if r.inMemory && r.path == "" {
+		return fmt.Errorf("rebuild context projection: in-memory repository has no projection directory")
+	}
 	stmItems, err := r.QuerySharedSessionProjection(ctx, scope)
 	if err != nil {
 		return err

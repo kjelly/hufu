@@ -2,7 +2,6 @@ package team
 
 import (
 	"context"
-	"path/filepath"
 	"slices"
 	"testing"
 
@@ -38,7 +37,7 @@ func (v *lineageRequestVector) SearchVector(_ context.Context, req contextstore.
 func TestWorkerMemoryPassesAncestorConstraintToEverySource(t *testing.T) {
 	for _, empty := range []bool{false, true} {
 		t.Run(map[bool]string{false: "authorized ancestor", true: "restricted empty"}[empty], func(t *testing.T) {
-			repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+			repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}

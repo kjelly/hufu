@@ -2,7 +2,6 @@ package promotion
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -28,7 +27,7 @@ func TestEligibleSourcesRequireRecentStrongEvidence(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+			repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}

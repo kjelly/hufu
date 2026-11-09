@@ -353,7 +353,7 @@ func configureSemanticWorkerMemory(
 	definition *agent.AgentDef,
 ) (*contextstore.SQLiteRepository, *workerSemanticVector) {
 	t.Helper()
-	repo, err := contextstore.OpenSQLite(coordinator.session.Workspace + "/context.sqlite")
+	repo, err := contextstore.OpenSQLiteInMemory(coordinator.session.Workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

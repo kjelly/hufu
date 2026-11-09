@@ -4,7 +4,6 @@ package team
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -14,7 +13,7 @@ import (
 
 func wp3SetupRepo(t *testing.T) contextstore.Repository {
 	t.Helper()
-	repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}

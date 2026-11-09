@@ -2,7 +2,6 @@ package team
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +20,7 @@ import (
 func TestWorkerManifestQueryHashMatchesRetrievalQuery(t *testing.T) {
 	workspace := t.TempDir()
 
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,7 +3,6 @@ package sqlmigrate
 import (
 	"context"
 	"database/sql"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,10 +17,11 @@ var baseMigrations = []Migration{
 
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "test.db"))
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
+	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }

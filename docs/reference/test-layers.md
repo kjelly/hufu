@@ -31,6 +31,36 @@ sharding is enabled. The inventory lists top-level `Test` functions, while
 example/fuzz execution is retained separately. The inventory shows the tests active for the current GOOS/GOARCH, including external test
 packages, rather than inventing coverage for inactive platform files.
 
+## SQLite test backends
+
+Data-operation tests use private in-memory SQLite databases, not a map-based
+repository fake. `context.OpenSQLiteInMemory(projectionDir)` shares the durable
+adapter's schema migrations, FTS, foreign-key enforcement and immediate write
+transactions. Each call owns one connection and independent state, even when
+calls use the same projection directory. Register cleanup after opening; closing
+the last connection destroys the database. Do not enable shared-cache mode or
+increase the connection count: another private in-memory connection is another
+database.
+
+The optional projection directory anchors Markdown output only. It contains no
+`context.sqlite`, WAL or SHM for that handle. Pass an empty string for tests that
+need no files; projection generation then fails explicitly instead of writing
+into the current directory. Memory diagnostics report journal mode `memory`.
+The ordinary `OpenSQLite(path)` entry remains file-backed and uses WAL.
+
+Service, retrieval, scope, promotion and pure migration-engine tests use memory
+where their assertions depend only on SQL state. Pure runtime-store document,
+rollback and grant-index tests also use an isolated memory fixture with the
+runtime schema. The former copied-database service fixture is no longer needed.
+
+File-backed tests remain necessary for close/reopen persistence, recovery across
+processes, WAL and writer contention, read-only snapshots, schema-upgrade backups,
+file permissions and replacement detection, and CLI/inspection flows that locate
+a database by workspace path. Keep these on the production adapter: replacing
+their databases with memory would remove the behavior being tested. Optional
+on-disk profiling fixtures also retain their storage semantics. Test layering and
+required CI gates are unchanged by the backend switch.
+
 ## Stable CI shards
 
 The team short/race job exceeded its 30-minute package deadline in

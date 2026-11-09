@@ -3,7 +3,6 @@ package team
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -210,7 +209,7 @@ func TestFreeTextResultCannotClaimAppliedMemory(t *testing.T) {
 
 func memoryValidationCoordinator(t *testing.T) (*Coordinator, MemoryInjectionManifest) {
 	t.Helper()
-	repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -68,46 +68,11 @@ func migrationChecksum(sql string) string {
 type SQLiteRepository struct {
 	db          *sql.DB
 	path        string
+	inMemory    bool
 	busyRetries atomic.Int64
 	// schemaVersion is the newest applied migration: always the latest for a
 	// writable open, and the store's recorded version for a read-only open.
 	schemaVersion int
-}
-
-func OpenSQLite(path string) (*SQLiteRepository, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	absolute, err := filepath.Abs(path)
-	if err != nil {
-		return nil, fmt.Errorf("open context database: resolve path: %w", err)
-	}
-	dsn := &url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}
-	query := dsn.Query()
-	// Most writable transactions read before they write. In a deferred transaction
-	// that holds a read snapshot, SQLite returns SQLITE_BUSY at once when
-	// another connection holds the write lock, without applying busy_timeout.
-	// IMMEDIATE takes the write lock at BEGIN, so busy_timeout waits for the
-	// other writer and the transaction reads its committed state. The driver
-	// keeps read-only transactions (sql.TxOptions{ReadOnly: true}) deferred.
-	query.Set("_txlock", "immediate")
-	dsn.RawQuery = query.Encode()
-	db, err := sql.Open("sqlite", dsn.String())
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(1) // SQLite supports concurrent processes; serialize this handle's writers.
-	r := &SQLiteRepository{db: db, path: path}
-	if _, err = db.Exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON"); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err = r.migrate(context.Background()); err != nil {
-		db.Close()
-		return nil, err
-	}
-	r.schemaVersion = latestSchemaVersion()
-	return r, nil
 }
 
 // OpenSQLiteReadOnly opens an existing context database in SQLite read-only
@@ -181,7 +146,7 @@ func (r *SQLiteRepository) StorageDiagnostics(ctx context.Context) (StorageDiagn
 			return StorageDiagnostics{}, fmt.Errorf("read storage %s: %w", query.name, err)
 		}
 	}
-	journalMode, err := sqliteJournalModeFromHeader(r.path)
+	journalMode, err := r.journalMode(ctx)
 	if err != nil {
 		return StorageDiagnostics{}, fmt.Errorf("read storage journal mode: %w", err)
 	}
@@ -283,6 +248,9 @@ func (r *SQLiteRepository) migrate(ctx context.Context) error {
 // files) to a timestamped path before schema changes are applied, so a
 // failed or bad migration has a recoverable copy to restore from.
 func (r *SQLiteRepository) backupBeforeMigration() error {
+	if r.inMemory {
+		return nil // An ephemeral database has no durable pre-migration image.
+	}
 	data, err := os.ReadFile(r.path)
 	if err != nil {
 		if os.IsNotExist(err) {

@@ -3,7 +3,6 @@ package team
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"testing"
@@ -168,7 +167,7 @@ func BenchmarkContextQuerySupplementalScopes(b *testing.B) {
 func queryBenchmarkStore(b *testing.B, count int, private bool) (context.Context, *contextstore.SQLiteRepository, contextstore.Scope, []contextstore.ContextItem) {
 	b.Helper()
 	ctx := contextstore.WithEvaluationTime(b.Context(), time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
-	repo, err := contextstore.OpenSQLite(filepath.Join(b.TempDir(), "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(b.TempDir())
 	if err != nil {
 		b.Fatal(err)
 	}

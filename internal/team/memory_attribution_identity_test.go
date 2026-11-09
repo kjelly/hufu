@@ -3,7 +3,6 @@ package team
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -232,7 +231,7 @@ func TestTerminalTransitionRecordsMemoryOutcome(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			workspace := t.TempDir()
-			repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+			repo, err := contextstore.OpenSQLiteInMemory(workspace)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -39,7 +39,7 @@ func TestContextQueryQualityFixesFourSignalMissesAtSameBudget(t *testing.T) {
 	for _, test := range fixture.Cases {
 		t.Run(test.ID, func(t *testing.T) {
 			ctx := contextstore.WithEvaluationTime(t.Context(), time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))
-			repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+			repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}

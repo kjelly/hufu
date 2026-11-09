@@ -93,7 +93,7 @@ func TestFormatReflexionLesson(t *testing.T) {
 
 func TestPersistReflexionLessonRequiresCanonicalContext(t *testing.T) {
 	ws := t.TempDir()
-	repo, err := contextstore.OpenSQLite(ws + "/context.sqlite")
+	repo, err := contextstore.OpenSQLiteInMemory(ws)
 	if err != nil {
 		t.Fatal(err)
 	}

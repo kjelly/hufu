@@ -2,12 +2,11 @@ package context
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 )
 
 func TestRepositoryQueryIDsFilterBeforeLimit(t *testing.T) {
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

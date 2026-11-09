@@ -13,7 +13,7 @@ import (
 
 func sharedMemoryTestRepo(t *testing.T) contextstore.Repository {
 	t.Helper()
-	repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestSharedMemoryProposalPreservesExplicitZeroConfidence(t *testing.T) {
 
 func TestCoordinatorSharedKnowledgeDoesNotWriteLegacyJSONL(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -31,7 +31,7 @@ func (f *failThenSucceedRepo) Append(ctx context.Context, items ...ContextItem) 
 
 func TestAppendPendingWriteThenRepairRecoversAndRedacts(t *testing.T) {
 	dir := t.TempDir()
-	repo, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestAppendPendingWriteThenRepairRecoversAndRedacts(t *testing.T) {
 
 func TestRepairPendingWritesLeavesStillFailingRecords(t *testing.T) {
 	dir := t.TempDir()
-	repo, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestAppendPendingWriteRedactsSecretInFailureCause(t *testing.T) {
 
 func TestRepairPendingWritesRedactsSecretInUpdatedFailureCause(t *testing.T) {
 	dir := t.TempDir()
-	repo, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func (s secretLeakingRepairRepo) Append(context.Context, ...ContextItem) error {
 
 func TestRepairPendingWritesNoFileIsANoop(t *testing.T) {
 	dir := t.TempDir()
-	repo, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,7 +13,7 @@ import (
 
 func TestTaskResultReducerPreservesTypedSharedMemoryKinds(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestTaskResultReducerPreservesTypedSharedMemoryKinds(t *testing.T) {
 
 func TestTaskResultReducerUsesProgressOnlyForUntypedOutput(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestTaskResultReducerUsesProgressOnlyForUntypedOutput(t *testing.T) {
 
 func TestTaskResultReducerKeepsDistinctProvenanceForSameContentAcrossTasks(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestTaskResultReducerKeepsDistinctProvenanceForSameContentAcrossTasks(t *te
 
 func TestTaskResultReducerPopulatesArtifactAndVerificationEvidence(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func hasEvidenceType(evidence []contextstore.EvidenceRef, typ, ref string) bool 
 
 func TestRecordVerificationFailureWritesContextError(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
