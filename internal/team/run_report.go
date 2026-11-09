@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/buildinfo"
 	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/runtimestore"
@@ -29,6 +30,7 @@ var ErrRunReportUnavailable = errors.New("saved run report unavailable")
 // Tasks includes occurrences touched by this run, with contracts replayed from
 // its ancestors; it excludes untouched tasks from earlier runs.
 type RunReport struct {
+	HufuBuild             *buildinfo.Info                    `json:"hufu_build,omitempty"`
 	StatsAvailable        bool                               `json:"stats_available"`
 	MetricsAvailable      bool                               `json:"metrics_available"`
 	DeprecatedMemory      []DeprecatedMemoryToolUsage        `json:"deprecated_memory,omitempty"`
@@ -158,6 +160,7 @@ func projectRunReport(events []RunEvent, tree *SessionTree, terminal RunEvent) (
 		return nil, errors.New("canonical run cannot be projected")
 	}
 	report.Result = scoped.RunResult
+	report.HufuBuild = scoped.RunResult.HufuBuild
 	if manifest := report.Result.EvidenceManifest; manifest != nil {
 		sealed := *manifest
 		if manifest.RunID != terminal.RunID || manifest.ManifestHash == "" {

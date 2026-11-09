@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/kjelly/hufu/internal/buildinfo"
 	"github.com/kjelly/hufu/internal/llmtimeout"
 	"github.com/kjelly/hufu/internal/waitbudget"
 )
@@ -37,6 +38,7 @@ type agentTaskResult struct {
 
 // cachedTaskEntry stores a previously completed task and its output for dedup.
 type cachedTaskEntry struct {
+	hufuBuild    *buildinfo.Info
 	taskDesc     string
 	verify       string
 	verifyMode   string
@@ -281,7 +283,7 @@ func (tc *defaultTaskCache) Store(req TaskCacheStoreRequest) {
 	tc.entries[req.AgentKey] = append(tc.entries[req.AgentKey], cachedTaskEntry{
 		taskDesc: req.Task, verify: req.Verify, verifyMode: normalizeVerifyMode(req.VerifyMode),
 		verifySpec: cloneVerificationSpecPtr(normalizedSpec), verification: cloneVerificationResult(req.Verification),
-		output: req.Output, generation: tc.generation.Load(), identity: identity,
+		hufuBuild: new(buildinfo.Current()), output: req.Output, generation: tc.generation.Load(), identity: identity,
 	})
 	if len(tc.entries[req.AgentKey]) > maxTaskCacheEntries {
 		tc.entries[req.AgentKey] = tc.entries[req.AgentKey][1:]
@@ -289,7 +291,7 @@ func (tc *defaultTaskCache) Store(req TaskCacheStoreRequest) {
 	tc.mu.Unlock()
 
 	tc.appendJournal(journalRecord{
-		Op: "put", Agent: req.AgentKey, Desc: req.Task, Verify: req.Verify,
+		HufuBuild: new(buildinfo.Current()), Op: "put", Agent: req.AgentKey, Desc: req.Task, Verify: req.Verify,
 		VerifyMode: normalizeVerifyMode(req.VerifyMode), VerifySpec: cloneVerificationSpecPtr(normalizedSpec),
 		Verification: cloneVerificationResult(req.Verification), Output: req.Output,
 		TS: time.Now().Format(time.RFC3339), RepoCommit: identity.RepoCommit,

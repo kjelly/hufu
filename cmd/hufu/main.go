@@ -20,8 +20,6 @@ type errInterrupted struct{}
 
 func (errInterrupted) Error() string { return "interrupted" }
 
-var version = "dev"
-
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == providerproxy.ChildArg {
 		os.Exit(providerproxy.RunChild(os.Stdin, os.Stdout))

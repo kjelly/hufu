@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kjelly/hufu/internal/buildinfo"
 	"github.com/kjelly/hufu/internal/cost"
 	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	operatorpkg "github.com/kjelly/hufu/internal/operator"
@@ -507,6 +508,9 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 }
 
 func renderInspectTaskText(writer io.Writer, branchID string, data inspectpkg.TaskData) error {
+	if err := renderInspectBuild(writer, data.HufuBuild); err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintf(writer, "Run: %s\nTask: %s\nBranch: %s\nStatus: %s\nPhase: %s\nAgent: %s\nExecution target: %s\n",
 		data.RunID, data.TaskID, branchID, data.Status, valueOrUnavailable(data.Phase),
 		valueOrUnavailable(data.AgentID), valueOrUnavailable(data.ExecutionTarget)); err != nil {
@@ -680,6 +684,9 @@ func renderStorageText(writer io.Writer, data inspectpkg.StorageData) error {
 }
 
 func renderInspectRunText(writer io.Writer, branchID string, data inspectpkg.RunData) error {
+	if err := renderInspectBuild(writer, data.HufuBuild); err != nil {
+		return err
+	}
 	_, err := fmt.Fprintf(writer, "Run: %s\nBranch: %s\nOutcome: %s\nAcceptance: %s\nCompletion: %s\nTasks: %d total, %d done, %d unresolved\nAttempts: %d total, %d failed\nEvidence refs: %s\n",
 		data.RunID, branchID, valueOrUnavailable(data.Outcome), data.Acceptance, data.Completion,
 		data.TaskSummary.Total, data.TaskSummary.Done, data.TaskSummary.Unresolved,
@@ -733,5 +740,14 @@ func renderInspectOverviewText(writer io.Writer, data inspectpkg.OverviewData) e
 		}
 	}
 	_, err := io.WriteString(writer, operatorpkg.RenderObservationSummary(snapshot.Observations))
+	return err
+}
+
+func renderInspectBuild(writer io.Writer, info *buildinfo.Info) error {
+	label := "not recorded"
+	if info != nil {
+		label = fmt.Sprintf("%s (source: %s, Go: %s)", info.String(), info.Source, info.GoVersion)
+	}
+	_, err := fmt.Fprintf(writer, "Hufu: %s\n", label)
 	return err
 }

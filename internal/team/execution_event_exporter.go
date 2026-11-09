@@ -24,6 +24,7 @@ func ExecutionEventFromRunEvent(event RunEvent) (ExecutionEvent, bool) {
 		out.Status = "run_started"
 		var payload LifecycleEventPayload
 		if json.Unmarshal(event.Payload, &payload) == nil {
+			out.HufuBuild = payload.HufuBuild
 			out.Team = payload.Team
 			out.TeamRevision = payload.TeamRevision
 		}

@@ -618,6 +618,12 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		snapshotState = "confirmed"
 	}
 	b.WriteString("## Run Snapshot\n\n")
+	if data.RunResult != nil && data.RunResult.HufuBuild != nil {
+		info := data.RunResult.HufuBuild
+		fmt.Fprintf(&b, "- **Hufu:** `%s` (source: `%s`, Go: `%s`)\n", reportSafeMetadata(info.String(), 160), reportSafeMetadata(info.Source, 40), reportSafeMetadata(info.GoVersion, 80))
+	} else {
+		b.WriteString("- **Hufu:** not recorded\n")
+	}
 	if data.InvocationID != "" {
 		fmt.Fprintf(&b, "- **Invocation ID:** `%s`\n", reportSafeMetadata(data.InvocationID, 160))
 	}

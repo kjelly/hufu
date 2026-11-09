@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/buildinfo"
 	"github.com/kjelly/hufu/internal/execution"
 )
 
@@ -69,6 +70,7 @@ func todoReplayWorksetConflictError(conflicts todoReplayWorksetConflicts) error 
 func ReduceToSessionData(events []RunEvent) *SessionData {
 	events = normalizeReplayEvents(events)
 	session := NewSession()
+	builds := make(map[string]*buildinfo.Info)
 	for _, e := range events {
 		switch e.Type {
 		case string(EventArtifactReadCoverageObserved):
@@ -85,6 +87,10 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 				session.RecoveryReason = "invalid decision primitive event"
 			}
 		case "run_started":
+			var started LifecycleEventPayload
+			if json.Unmarshal(e.Payload, &started) == nil {
+				builds[e.RunID] = started.HufuBuild
+			}
 			if session.CreatedAt == "" && e.Timestamp != "" {
 				session.CreatedAt = e.Timestamp
 			}
@@ -278,7 +284,7 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 					session.PendingWrapUp = nil
 				}
 				session.RunResult = &RunResult{
-					RunID: runID, Outcome: payload.Outcome, GoalSatisfied: payload.GoalSatisfied,
+					HufuBuild: builds[e.RunID], RunID: runID, Outcome: payload.Outcome, GoalSatisfied: payload.GoalSatisfied,
 					GoalMode: payload.GoalMode, Response: payload.Response, Reason: payload.Reason,
 					Warnings:   slices.Clone(payload.Warnings),
 					StopReason: payload.StopReason, ExitCode: payload.ExitCode,

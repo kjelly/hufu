@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kjelly/hufu/internal/buildinfo"
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -37,7 +38,7 @@ For scripts, pass --team or a profile that names a team.
 Set the model with --model <name> (highest priority), in team.yaml, or in hufu.yaml.`,
 		Args:         cobra.MaximumNArgs(1),
 		RunE:         runTeam,
-		Version:      version,
+		Version:      buildinfo.Current().String(),
 		SilenceUsage: true,
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {
 			configureOutputRendering()

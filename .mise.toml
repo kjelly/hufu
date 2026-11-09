@@ -13,7 +13,7 @@ run = "go build -p 2 ./cmd/hufu"
 
 [tasks.run]
 description = "Run hufu; forward additional arguments to the CLI"
-run = "go run -p 2 ./cmd/hufu"
+run = "go run -buildvcs=true -p 2 ./cmd/hufu"
 raw = true
 
 [tasks.test]

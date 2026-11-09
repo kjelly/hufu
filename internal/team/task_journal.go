@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kjelly/hufu/internal/buildinfo"
 	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/utils"
 )
@@ -31,6 +32,7 @@ const (
 )
 
 type journalRecord struct {
+	HufuBuild           *buildinfo.Info            `json:"hufu_build,omitempty"`
 	MediaBinding        *MediaTaskBinding          `json:"media_binding,omitempty"`
 	MediaInputDigest    string                     `json:"media_input_digest,omitempty"`
 	Op                  string                     `json:"op"` // "put", "del", "err", or "progress" (diagnostic only)
@@ -177,7 +179,7 @@ func (c *Coordinator) recordTerminalTypedTaskResult(todoID string) {
 		if runID == "" {
 			runID = c.taskTracker.TodoList().RunID()
 		}
-		_ = c.journal.append(journalRecord{Op: "result", MediaBinding: item.MediaBinding.Clone(), MediaInputDigest: item.MediaInputDigest, Agent: item.Agent, TaskID: item.ID, RunID: runID, Desc: item.Desc, TypedResult: copyResult, ContextManifests: normalizeContextManifests(item.ContextManifests), DynamicToolAuthorization: cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization), ResourceScopeSnapshot: cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot), ResultContract: item.ResultContract.clone(), DependencyResultView: item.DependencyResultView.clone(), WorkerWorkspace: item.WorkerWorkspace.clone(), ExecutionRoute: item.ExecutionRoute.clone(), CatalogAction: item.CatalogAction.clone(), TS: time.Now().Format(time.RFC3339)})
+		_ = c.journal.append(journalRecord{HufuBuild: new(buildinfo.Current()), Op: "result", MediaBinding: item.MediaBinding.Clone(), MediaInputDigest: item.MediaInputDigest, Agent: item.Agent, TaskID: item.ID, RunID: runID, Desc: item.Desc, TypedResult: copyResult, ContextManifests: normalizeContextManifests(item.ContextManifests), DynamicToolAuthorization: cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization), ResourceScopeSnapshot: cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot), ResultContract: item.ResultContract.clone(), DependencyResultView: item.DependencyResultView.clone(), WorkerWorkspace: item.WorkerWorkspace.clone(), ExecutionRoute: item.ExecutionRoute.clone(), CatalogAction: item.CatalogAction.clone(), TS: time.Now().Format(time.RFC3339)})
 		return
 	}
 }
@@ -191,6 +193,7 @@ func (c *Coordinator) recordTaskFailureWithEventAndOutput(agentName, taskDesc, d
 		runID = c.taskTracker.TodoList().RunID()
 	}
 	record := journalRecord{
+		HufuBuild:     new(buildinfo.Current()),
 		Op:            "err",
 		Agent:         agentName,
 		TaskID:        eventTaskID(event),
@@ -302,6 +305,7 @@ func replayTaskJournal(records [][]byte, now time.Time, maxAge time.Duration, pe
 				id.ProjectFingerprint = rec.ProjectFingerprint
 			}
 			out[rec.Agent] = append(out[rec.Agent], cachedTaskEntry{
+				hufuBuild:    rec.HufuBuild,
 				taskDesc:     rec.Desc,
 				verify:       rec.Verify,
 				verifyMode:   normalizeVerifyMode(rec.VerifyMode),
@@ -366,6 +370,7 @@ func compactTaskJournalIfNeeded(workspace string, maxBytes int64, now time.Time)
 			for _, agentKey := range slices.Sorted(maps.Keys(survivors)) {
 				for _, e := range survivors[agentKey] {
 					data, err := json.Marshal(journalRecord{
+						HufuBuild:          e.hufuBuild,
 						Op:                 "put",
 						Agent:              agentKey,
 						Desc:               e.taskDesc,

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"github.com/kjelly/hufu/internal/buildinfo"
 )
 
 const (
@@ -63,6 +64,7 @@ func (u ExecutionUsage) PromptTokens() int {
 // identify the unit of work; RunID separates successive invocations that share
 // a workspace.
 type ExecutionEvent struct {
+	HufuBuild            *buildinfo.Info `json:"hufu_build,omitempty"`
 	Version              int             `json:"version"`
 	Timestamp            string          `json:"timestamp"`
 	InvocationID         string          `json:"invocation_id,omitempty"`
@@ -112,12 +114,13 @@ func (event ExecutionEvent) MarshalJSON() ([]byte, error) {
 // LifecycleEventPayload defines the canonical observability envelope required for all
 // run and phase events to guarantee a consistent schema for telemetry.
 type LifecycleEventPayload struct {
-	RunID            string        `json:"run_id,omitempty"`
-	Phase            string        `json:"phase"`
-	Agent            string        `json:"agent"`
-	Provider         string        `json:"provider"`
-	Artifacts        []ArtifactRef `json:"artifacts"`
-	FailureSignature string        `json:"failure_signature"`
+	HufuBuild        *buildinfo.Info `json:"hufu_build,omitempty"`
+	RunID            string          `json:"run_id,omitempty"`
+	Phase            string          `json:"phase"`
+	Agent            string          `json:"agent"`
+	Provider         string          `json:"provider"`
+	Artifacts        []ArtifactRef   `json:"artifacts"`
+	FailureSignature string          `json:"failure_signature"`
 
 	// Extended fields used for specific events (e.g. run_started, run_finished, reliability_eval)
 	Team string `json:"team,omitempty"`
@@ -348,7 +351,7 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 	}
 	runStartedDurable := c.eventStore != nil
 	if err := c.emitEvent("run_started", "coordinator", "", LifecycleEventPayload{
-		Team: teamName, TeamRevision: teamRevision,
+		Team: teamName, TeamRevision: teamRevision, HufuBuild: new(buildinfo.Current()),
 	}); err == nil && runStartedDurable {
 		c.clearSupersededPendingWrapUp(runID)
 	}

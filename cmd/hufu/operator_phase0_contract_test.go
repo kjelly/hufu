@@ -6,10 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/kjelly/hufu/internal/buildinfo"
 	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/spf13/cobra"
@@ -156,7 +158,20 @@ func TestOperatorPhase0RootJSONGolden(t *testing.T) {
 			t.Fatalf("printResultJSON() error = %v", err)
 		}
 	})
-	assertOperatorGolden(t, "root_completed.golden.json", []byte(got))
+	var output jsonRunOutput
+	if err := json.Unmarshal([]byte(got), &output); err != nil {
+		t.Fatal(err)
+	}
+	if output.HufuBuild == nil || !reflect.DeepEqual(*output.HufuBuild, buildinfo.Current()) {
+		t.Fatalf("JSON build identity = %+v", output.HufuBuild)
+	}
+	// Keep the golden portable while separately checking the actual process identity.
+	output.HufuBuild = &buildinfo.Info{Version: "1.2.3", Revision: "0123456789abcdef", Modified: new(false), GoVersion: "go1.27.2", Source: "build_info"}
+	normalized, err := json.MarshalIndent(output, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOperatorGolden(t, "root_completed.golden.json", append(normalized, '\n'))
 }
 
 func TestOperatorPhase0InspectJSONGolden(t *testing.T) {
