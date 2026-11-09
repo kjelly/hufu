@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
-	"github.com/kjelly/hufu/internal/waitbudget"
 )
 
 var _ agent.ProviderRequestRecovery = providerRequestAdmission{}
@@ -62,14 +61,14 @@ func (a providerRequestAdmission) RecoverProviderRequest(ctx context.Context, re
 	return a.c.providerManager.RecoverProviderQuota(waitCtx, request.ModelID, cause, providerQuotaJournal(a))
 }
 
-// A working-time pause must never extend the operator's wall-clock budget.
-// The usual budget checks run at step boundaries, so a long quota wait needs
-// its own ordinary deadline rather than waiting for the next model step.
+// Provider cooldowns consume run duration, while explicit runtime idle (page
+// dwell and browser verification) does not. Long quota waits need a timer in
+// addition to the usual step-boundary budget checks.
 func (a providerRequestAdmission) quotaWaitContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	owner := a.c.tokenBudgetRoot()
 	if owner != nil {
 		if limit := owner.Budget().Limits().MaxWallClock; limit > 0 {
-			return waitbudget.WithWallDeadline(ctx, owner.sessionTime.Add(limit))
+			return owner.runIdle.WithTimeout(ctx, limit-owner.runBudgetElapsed())
 		}
 	}
 	return ctx, func() {}

@@ -853,6 +853,26 @@ Unknown counts and turns are omitted from JSON and shown as unknown in text. Pre
 `--repair-model`, `--report`, `--tui`, or new input assignments. A blocked preview
 is a successful inspection with `disposition: blocked`; no grant is created.
 
+Assessment revision 5 also permits sequential result-only repairs when all
+unresolved tasks belong to the same failed phase and each phase error matches a
+recoverable collection task. Select one task per command and reassess the next
+task after each repair. Already repaired tasks retain their accepted results and
+original receipts; no peer task receives authority from another task's grant.
+The failed phase and its original errors remain unchanged while any task is
+unresolved (`continues_workflow: false`). Only after every failed collection has
+a canonically verified accepted result and recovery grant can the phase reopen
+and ordinary verification and downstream work continue. Completion and reopening
+remain recoverable across process restarts. Unrelated failures, other phases,
+uncertain effects and missing recovery proof remain blocked. Stored earlier
+assessment revisions retain their original validation rules.
+When a later phase also needs collection repair, earlier successful phases keep
+their verified results and grants. Those historical blocked snapshots do not
+participate in reopening the later failed phase; its own authorized snapshot
+must still match the current workflow exactly.
+After an individual repair, the command can still exit unsuccessfully because
+peer tasks remain unresolved. Inspect the selected task's accepted result before
+repairing the next task; that run outcome does not undo the completed repair.
+
 Recovery applies the same single-block transport normalization before verifying
 claims. If the enclosed object passes the complete schema, source, receipt and
 decision checks, `commit_local` can publish it without another model call or an
@@ -1604,3 +1624,15 @@ worker replay. Legacy responses without this metadata retain their historical
 classification. Candidate storage failures are explicit `commit_failed` tool
 responses, so the provider adapter cannot discard their classification as an
 untyped execution error. External worker proposal protocols are unchanged.
+
+### Native browser interaction boundary
+
+`browser_interaction` tasks may use explicitly granted native Chrome button
+controls while retaining read-only project roots and read claims. This is a
+state-changing, non-replayable side-effect class with manual recovery by default;
+failed or interrupted clicks must not be repeated as read-only tool calls.
+Ordinary MCP observation policies stay `none`. A `browser_interaction` worker
+policy is valid only for native `chrome-cdp` `browser_click`, not external
+servers or same-name handlers. Frozen catalogs, task authority, normal denies,
+network restrictions and artifact scope still apply. Result-only repair cannot
+acquire this interaction authority. See [native Chrome controls](../reference/chrome-cdp.md#button-interaction-and-popup-handling).

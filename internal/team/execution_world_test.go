@@ -27,6 +27,7 @@ func TestExecutionWorldSideEffectMapping(t *testing.T) {
 		wantRejected bool
 	}{
 		{name: "none", effect: SideEffectNone, wantReadOnly: true},
+		{name: "browser interaction retains read-only project", effect: SideEffectBrowserInteraction, wantReadOnly: true},
 		{name: "empty defaults like none", effect: "", wantReadOnly: true},
 		{name: "workspace_write", effect: SideEffectWorkspaceWrite, wantWritable: true},
 		{name: "external_write maps to workspace-write only", effect: SideEffectExternalWrite, wantWritable: true},

@@ -151,7 +151,7 @@ managed workspace for the discovered project and selected team.`,
 	flags.StringSliceVar(&options.allowPath, "allow-path", nil, "Additional allowed filesystem path")
 	flags.BoolVar(&options.autoApprove, "auto-approve", false, "Choose clearly safe ask_user options automatically")
 	flags.BoolVar(&options.unattended, "unattended", false, "Run without human interaction")
-	flags.Int64Var(&options.maxDuration, "max-duration", 0, "Maximum total wall-clock seconds")
+	flags.Int64Var(&options.maxDuration, "max-duration", 0, "Maximum run seconds excluding browser dwell and verification waits")
 	flags.Int64Var(&options.maxTotalTokens, "max-total-tokens", 0, "Maximum cumulative LLM tokens")
 	flags.BoolVar(&options.requestAcceptance, "request-acceptance", false, "Freeze explicit request requirements and require evidence before successful completion")
 	flags.BoolVar(&options.plan, "plan", false, "Require plan-first execution")

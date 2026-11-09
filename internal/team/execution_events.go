@@ -249,6 +249,7 @@ func hasInterruptedRecoveryRun(tracker *TaskTracker) bool {
 }
 
 func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Context, lease *invocationLease) (context.Context, func()) {
+	parent = c.tokenBudgetRoot().runIdle.Context(parent)
 	parent = c.withContextQueryPolicy(parent)
 	owner := newInvocationOwnerWithLease(c, parent, lease)
 	handoff := false

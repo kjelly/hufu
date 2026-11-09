@@ -17,6 +17,7 @@ func TestTaskResourceScopeSnapshotFallbackAndRoundTrip(t *testing.T) {
 		mode   ResourceClaimMode
 	}{
 		{name: "reader", effect: SideEffectNone, mode: ResourceRead},
+		{name: "browser", effect: SideEffectBrowserInteraction, mode: ResourceRead},
 		{name: "writer", effect: SideEffectWorkspaceWrite, mode: ResourceExclusive},
 		{name: "external", effect: SideEffectExternalWrite, mode: ResourceExclusive},
 	} {

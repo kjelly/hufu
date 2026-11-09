@@ -254,7 +254,7 @@ func (c *Coordinator) commitGateDenial(ctx context.Context, todoID, toolName, to
 	}
 	// A proposal records a recommendation and commits nothing, but it is not
 	// a read-only call for retry and fallback purposes.
-	if isReadOnlyToolCall(toolName, toolInput) || normalizedToolName(toolName) == teamActionProposeToolName {
+	if c.readOnlyToolCall(toolName, toolInput) || normalizedToolName(toolName) == teamActionProposeToolName {
 		return ""
 	}
 	tool := normalizedToolName(toolName)

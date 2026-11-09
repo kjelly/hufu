@@ -156,7 +156,7 @@ type AgentDef struct {
 	Requirements ContractRequirements
 	ProviderURL  string
 	// SideEffect is the default side-effect classification for tasks delegated
-	// to this agent (none/workspace_write/external_write/infra_mutation/
+	// to this agent (none/browser_interaction/workspace_write/external_write/infra_mutation/
 	// credential_mutation). Empty = infer from Tools at task creation time.
 	SideEffect string
 	// Recovery is the default interrupted-task recovery policy for this agent

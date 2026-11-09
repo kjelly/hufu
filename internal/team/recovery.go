@@ -11,17 +11,22 @@ import (
 type SideEffectClass string
 
 const (
-	SideEffectNone           SideEffectClass = "none"
-	SideEffectWorkspaceWrite SideEffectClass = "workspace_write"
-	SideEffectExternalWrite  SideEffectClass = "external_write"
-	SideEffectInfraMutation  SideEffectClass = "infra_mutation"
-	SideEffectCredential     SideEffectClass = "credential_mutation"
-	SideEffectUnknown        SideEffectClass = "unknown"
+	SideEffectNone               SideEffectClass = "none"
+	SideEffectBrowserInteraction SideEffectClass = "browser_interaction"
+	SideEffectWorkspaceWrite     SideEffectClass = "workspace_write"
+	SideEffectExternalWrite      SideEffectClass = "external_write"
+	SideEffectInfraMutation      SideEffectClass = "infra_mutation"
+	SideEffectCredential         SideEffectClass = "credential_mutation"
+	SideEffectUnknown            SideEffectClass = "unknown"
 )
+
+func readOnlyProjectSideEffect(class SideEffectClass) bool {
+	return class == SideEffectNone || class == SideEffectBrowserInteraction
+}
 
 func nonReplayableSideEffect(class SideEffectClass) bool {
 	switch class {
-	case SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential, SideEffectUnknown:
+	case SideEffectBrowserInteraction, SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential, SideEffectUnknown:
 		return true
 	default:
 		return false
@@ -222,7 +227,7 @@ func DefaultRecoveryPolicy(class SideEffectClass, isUnattended bool) RecoveryPol
 		return RecoveryReconcile
 	case SideEffectInfraMutation:
 		return RecoveryManual
-	case SideEffectCredential, SideEffectUnknown:
+	case SideEffectBrowserInteraction, SideEffectCredential, SideEffectUnknown:
 		return RecoveryManual
 	default:
 		// Backward compatibility: unspecified/empty side effect maintains existing behavior (retry).

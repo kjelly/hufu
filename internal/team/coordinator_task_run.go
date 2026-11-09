@@ -1149,7 +1149,7 @@ retryLoop:
 			if allowedPaths := c.runtimeAllowedPaths(agentDef.AllowedPaths); len(allowedPaths) > 0 {
 				taskCtx = context.WithValue(taskCtx, tools.AgentAllowedPathsKey, allowedPaths)
 			}
-			if resolvedSideEffect == SideEffectNone {
+			if readOnlyProjectSideEffect(resolvedSideEffect) {
 				taskCtx = context.WithValue(taskCtx, tools.AgentReadOnlyExecutionKey, true)
 			}
 			if writePaths := c.runtimeAllowedWritePaths(); len(writePaths) > 0 {
@@ -4071,6 +4071,7 @@ func (c *Coordinator) withEffectiveToolsAllowed(ctx context.Context, def *agent.
 // mirror selectWorkerToolsForTask: exposing a granted tool without allowing it
 // here makes the worker's first permitted call fail at the runtime gate.
 func (c *Coordinator) withEffectiveToolsAllowedForTask(ctx context.Context, def *agent.AgentDef, exposedToolNames []string, task TaskDef) context.Context {
+	ctx = withBrowserInteractionAuthority(ctx, def, task)
 	if c == nil || c.session == nil {
 		return ctx
 	}

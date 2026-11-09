@@ -1,9 +1,11 @@
-# web-research：搜尋與 Playwright MCP
+# web-research：搜尋與原生 Chrome CDP
 
-團隊使用 Hufu 內建 `web_search` 發現來源，以 `@playwright/mcp@latest`
-開啟公開網頁，再用 `browser_snapshot` 的文字回傳綁定引文。
-researcher、countercheck、verifier 各使用獨立 headless Chromium context，
-各 worker 僅獲授權存取自己的兩個 browser 工具。
+團隊使用 Hufu 內建 `web_search` 發現來源，再由 runtime 原生 CDP 連接
+本機 `http://127.0.0.1:9222` 的 Chrome。researcher、countercheck、verifier
+各自使用獨立分頁，僅獲授權導覽、快照與人工驗證等待三個 browser 工具。
+三個分頁共享研究用 Chrome profile 的 cookies，但不共用目前頁面或工具觀察。
+`playwright_<角色>` 名稱是沿用的邏輯識別碼，保留現有引文契約的工具 ID；
+實作已不啟動 Playwright MCP。啟動方式見 [setup.md](setup.md)。
 
 ## 研究、查核與綜合
 
@@ -54,37 +56,47 @@ runtime 以 `x-hufu-evidence-inputs` 的 `runtime_owned: true` 綁定完整查�
 5. runtime 以本 task attempt 的 runner 紀錄覆寫 call ID 與證據狀態。
    verifier 必須重新開啟來源，不能借用其他 worker 的工具紀錄。
 
-每個 worker 的 browser context 有一個目前頁面。對每個來源依序完成
+每個 worker 各有一個專用 Chrome 分頁。對每個來源依序完成
 `browser_navigate({"url":"…"})` → 等待導覽結果 → `browser_snapshot({})`
 → 讀取內容，再處理下一個網址。不可先批次導覽多個網址，再嘗試按 URL
-取快照；snapshot 沒有 URL 選擇功能。平行研究由不同 worker 的獨立 context
+取快照；snapshot 沒有 URL 選擇功能。平行研究由不同 worker 的獨立分頁
 提供。同一來源的導覽與快照也不可放在同一批工具呼叫中。
 
-若模型只看到 `use_dynamic_tool`，先 inspect 自己的兩個 target，確認
+若模型只看到 `use_dynamic_tool`，先 inspect 自己實際要使用的 target，確認
 `input_schema` 與 `worker_input_schema`，再依各 worker prompt 的範例逐步呼叫。
 snapshot 的 `arguments` 必須是 `{}`；`url`、`filename` 等欄位均不接受。
 參數被拒絕時，若目前頁面仍是預期來源，只需修正 snapshot 參數；若其間
 已導覽其他來源，先重新導覽。快照的 `Page URL` 應與預期來源及實際觀察到的
 重新導向一致，不能把別頁引文掛在原本想查的網址下。
 
-`--snapshot-mode none` 避免導覽自動輸出 snapshot 檔案；明確的
-`browser_snapshot` 仍回傳 inline YAML。`--codegen none` 與 `--no-webmcp`
-減少非來源內容。metadata、搜尋摘要、snapshot 檔案連結與失敗回傳皆不能
-通過引文綁定。團隊禁止內建 fetch、download 與 shell 執行工具。
+三個角色皆設定 `page-dwell: {min-seconds: 300, max-seconds: 600}`。
+導覽載入完成即回傳；第一次 `browser_snapshot` 先擷取原文與按鈕，
+再隨機停留 5–10 分鐘，結束才回傳等待前擷取的快照與擷取時間。
+後續快照讀取當前內容，不重複停留。這段停留不計入 worker／coordinator 的工作 timeout，
+亦不計入 `--max-duration` 總時間預算；取消與外部操作期限仍生效。不要再加另一段閱讀等待，亦不可把停留
+完成當作頁面已讀取或主張已驗證的證據。調整範圍會改變 frozen policy。
 
-這些旗標不會停用 browser console 日誌。本機 fixture 使用已安裝的
-`@playwright/mcp` 0.0.83 驗證：僅導覽帶有 console error 的頁面，仍產生
-`console-*.log`。三個 server 都以通用 `temporary-directory-env` 宣告
-`PLAYWRIGHT_MCP_OUTPUT_DIR`，由 Hufu 為各次 server 啟動配置獨立 `0700`
-目錄，關閉 server 後清理；不共用固定 `/tmp/hufu-playwright/<role>`。
-chat 的同一個 server instance 在多輪間保留目錄，直到 team context 關閉。
-server 內部日誌不是引用證據，也不開放 filename、export 等模型參數。
+遇到明確的驗證頁或需要人工處理的頁面問題時，呼叫自己的
+`playwright_<角色>__browser_wait_for_user({"reason":"請完成公開頁面的人工驗證"})`。
+使用 dynamic gateway 時先 inspect 該 target，再以相同 `reason` 欄位呼叫。
+Hufu 會切到該角色的分頁並等待 CLI／TUI 回答；等待期間不計入 worker 與
+coordinator 的工作 timeout 與 `--max-duration` 總時間預算，重疊等待只扣一次。
+取消、Ctrl+C 與外部操作期限仍有效。人工確認後必須再次 `browser_snapshot({})`，確認實際 URL 與原文；
+確認本身不是證據，也不能修復 404 或引文不符。無人值守、使用者取消或
+驗證後仍無法讀取時，保留缺口並尋找替代來源，不反覆要求相同的人工驗證。
+
+快照的網址由 Chrome frame metadata 綁定，擷取前後的文件身分必須一致。
+固定的隔離觀察程式讀取主文與連結，回傳 inline YAML。metadata、搜尋摘要、
+人工確認與失敗回傳皆不能通過引文綁定。團隊禁止內建 fetch、download 與
+shell 工具。此設定沒有外部 MCP 程序或 Playwright 暫存目錄；Hufu 正常關閉
+時只關閉自己建立的分頁，Chrome 與研究用 profile 由操作員管理。
 
 ## 通用 runtime 支援
 
 `toolPolicies` 是團隊維護者對受信任 MCP server 的明確宣告，搭配 worker
-literal 工具 grant 才能解除 unbound worker 的外部工具與 `side_effect: none`
-限制；參數 schema 在送出 MCP request 前驗證。
+literal 工具 grant 才能授權 unbound worker 的 MCP 工具；參數 schema 在送出
+MCP request 前驗證。唯讀快照使用 `sideEffect: none`；原生點擊另需
+`browser_interaction` task 與同類工具 policy，不會藉由唯讀例外授權點擊。
 此宣告不接受 server 自稱 readonly，也不允許同名自訂 handler 繼承授權。
 `--no-net`、team deny、session deny、工作階段與封閉工具順序限制仍生效；
 bound workset 仍拒絕不支援 artifact path enforcement 的 MCP 工具。
@@ -109,17 +121,13 @@ session 狀態由受信任 server 管理。HTTP(S) 格式驗證不會阻擋私�
   模型不在或尚未載入時自動退回 lexical。設定會釘在 execution policy snapshot，
   變更後既有 session 要用 `--new` 重新開始。詳見
   [Semantic memory retrieval](../../../docs/reference/semantic-retrieval.md)。
-- 安裝 Node.js 18 以上版本及 npm，讓 `npx` 可在 PATH 中找到。
-- 首次啟動需要取得 npm 套件與相容 Chromium。
-  執行 `npx -y --package=@playwright/mcp@latest playwright-core install chromium`，
-  讓 browser 與 MCP 當次使用的 `playwright-core` 版本相符，
-  並讓安裝與執行使用同一個 `PLAYWRIGHT_BROWSERS_PATH`（若有設定）。
-  `@latest` 可能包含預發行版，單獨安裝 stable Playwright 的 browser 不保證相容。
-- `@latest` 依使用者要求保留；更新可能改變工具描述、回傳格式與 browser 需求。
-  工具描述或 schema 變更會觸發 frozen catalog 檢查；不符既有文字格式時，
-  引文驗證會降級。此檢查不會驗證 npm 套件程式碼本身。
+- 使用支援原生 CDP 的 Hufu，並依 [setup.md](setup.md) 啟動有畫面的 Chrome。
+  Chrome 與 Hufu 在同一台 Ubuntu，除錯網址固定為 `http://127.0.0.1:9222`。
+  執行環境不需要 Node.js、npm 或 Playwright；人工驗證需要互動式 CLI／TUI。
+- 三個角色目前共享研究用 profile 的 cookies；若需要 cookie 隔離，應使用
+  不同 Chrome profile／port，並同步修改對應宣告的 `url`。
 
-啟動參數參考 [Playwright MCP 官方說明](https://github.com/microsoft/playwright-mcp)。
+原生連線設定見 [Chrome CDP](../../../docs/reference/chrome-cdp.md)。
 通用設定參見 [MCP worker policy](../../../docs/reference/mcp-worker-policy.md)。
 
 ## 驗證與執行
@@ -134,10 +142,13 @@ session 狀態由受信任 server 管理。HTTP(S) 格式驗證不會阻擋私�
 hufu team validate --team web-research
 hufu list web-research
 hufu --agent-team web-research --dry-run '查核一項公開事實並列出來源'
-hufu --agent-team web-research --new '查核一項公開事實並列出來源'
+hufu run --team web-research --workspace /path/to/a/new-workspace '查核一項公開事實並列出來源'
 ```
 
-使用包含新 runtime 支援的 Hufu binary。既有相容 session 使用
+此次 Chrome CDP 的 server 設定與新增工具授權會改變 frozen policy。
+請使用新的 workspace；既有 Playwright 任務若仍需恢復，必須使用原本的
+team 定義，不能直接以 CDP 設定繞過 drift 檢查。歷史結果與收據不會重寫。
+以下恢復方式只適用於政策相容的 session。使用包含新 runtime 支援的 Hufu binary，並以
 `resume --team web-research --branch <來源分支> --model <原 worker model>`
 接續；先透過 `session list`、`inspect task --branch` 核對來源。已完成的
 researcher、countercheck 結果保留原 task ID、run ID 與 payload hash，後續
@@ -168,7 +179,8 @@ browser 啟動、網站可達性或供應商 API。
 - 依實際回傳區分驗證頁、主文缺失、快照截斷和引文不符。
   只有頁面明確識別 Cloudflare 時才作此歸因；403、console errors 或
   `unusable_response` 本身都不足以確認原因。
-- 同一不可用頁面最多重試一次，再找公開原始資料或出版者授權轉載。
+- 遇到驗證頁先使用自己的人工等待工具，確認後重新快照；不要自動化驗證。
+  仍不可用的頁面最多重試一次，再找公開原始資料或出版者授權轉載。
   替代來源必須重新導覽與取得快照，引用其實際 URL；轉載共享同一來源群組。
   不可用替代報導證明未取得原文的精確措辭或缺少的觀察時點。
 - verifier 以自己的回傳判斷存取缺口，不直接沿用研究員的網站阻擋描述。
@@ -259,3 +271,18 @@ GOMAXPROCS=2 mise exec -- go test -p 2 ./.agent-teams/web-research/tests
 候選保存與局部修復仍使用通用 runtime 能力。修復承接原收據與已接受
 來源，不重跑研究或瀏覽；修復時依當前工具 schema 修改被拒絕欄位。
 新增綜合階段不會修復歷史失敗任務，也不會改寫已保存的證據。
+
+## 彈窗處理
+
+快照的 Buttons 區段列出按鈕名稱、disabled 狀態與該次快照專用 ref。
+研究員可用 `playwright_<角色>__browser_click({"ref":"快照中的識別碼"})`
+點擊明確的關閉／拒絕非必要 Cookie 控制。runtime 檢查文件與按鈕是否仍有效，
+拒絕失效、停用、被遮蔽、連結或表單控制；不接受 selector、座標或 JavaScript。
+點擊後自動重新擷取，研究員須確認實際 URL 與原文，再呼叫 `browser_snapshot({})`
+取得可綁定引文的證據。Buttons 與 click 回傳不直接作為引文來源。
+無法確定按鈕用途或三次嘗試後仍被遮蔽時，改用人工等待。
+
+三個瀏覽角色／task contracts 使用 `side_effect: browser_interaction` 與
+`recovery: manual`，專案檔案仍唯讀，但不把點擊當成可自動重播的觀察。
+不得自動登入、送出表單、購買、授予權限或處理 CAPTCHA。
+變更會影響 frozen policy；既有執行的歷史資料與 checkpoint 不可改寫。

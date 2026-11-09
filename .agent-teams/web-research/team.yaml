@@ -27,13 +27,14 @@ requires:
 semantic-retrieval:
   mode: active
   fusion: score_normalized
-# Each track has its own browser context so parallel research stays independent.
+# Each declaration owns a dedicated Chrome tab; profile cookies are shared.
+# Legacy logical names keep existing snapshot evidence identifiers stable.
 mcp-servers:
   playwright_researcher:
-    type: local
-    temporary-directory-env: [PLAYWRIGHT_MCP_OUTPUT_DIR]
-    command: [npx, -y, '@playwright/mcp@0.0.84', --headless, --isolated, --browser, chromium, --image-responses, omit, --snapshot-mode, none, --codegen, none, --no-webmcp]
-    allowedTools: [browser_navigate, browser_snapshot]
+    type: chrome-cdp
+    url: http://127.0.0.1:9222
+    page-dwell: {min-seconds: 300, max-seconds: 600}
+    allowedTools: [browser_navigate, browser_snapshot, browser_click, browser_wait_for_user]
     toolPolicies:
       browser_navigate:
         sideEffect: none
@@ -48,11 +49,29 @@ mcp-servers:
         sideEffect: none
         filesystem: none
         inputSchema: {type: object, additionalProperties: false, properties: {}}
+      browser_click:
+        sideEffect: browser_interaction
+        filesystem: none
+        inputSchema:
+          type: object
+          additionalProperties: false
+          required: [ref]
+          properties:
+            ref: {type: string, minLength: 1, maxLength: 128}
+      browser_wait_for_user:
+        sideEffect: none
+        filesystem: none
+        inputSchema:
+          type: object
+          additionalProperties: false
+          required: [reason]
+          properties:
+            reason: {type: string, minLength: 1, maxLength: 2000}
   playwright_countercheck:
-    type: local
-    temporary-directory-env: [PLAYWRIGHT_MCP_OUTPUT_DIR]
-    command: [npx, -y, '@playwright/mcp@0.0.84', --headless, --isolated, --browser, chromium, --image-responses, omit, --snapshot-mode, none, --codegen, none, --no-webmcp]
-    allowedTools: [browser_navigate, browser_snapshot]
+    type: chrome-cdp
+    url: http://127.0.0.1:9222
+    page-dwell: {min-seconds: 300, max-seconds: 600}
+    allowedTools: [browser_navigate, browser_snapshot, browser_click, browser_wait_for_user]
     toolPolicies:
       browser_navigate:
         sideEffect: none
@@ -67,11 +86,29 @@ mcp-servers:
         sideEffect: none
         filesystem: none
         inputSchema: {type: object, additionalProperties: false, properties: {}}
+      browser_click:
+        sideEffect: browser_interaction
+        filesystem: none
+        inputSchema:
+          type: object
+          additionalProperties: false
+          required: [ref]
+          properties:
+            ref: {type: string, minLength: 1, maxLength: 128}
+      browser_wait_for_user:
+        sideEffect: none
+        filesystem: none
+        inputSchema:
+          type: object
+          additionalProperties: false
+          required: [reason]
+          properties:
+            reason: {type: string, minLength: 1, maxLength: 2000}
   playwright_verifier:
-    type: local
-    temporary-directory-env: [PLAYWRIGHT_MCP_OUTPUT_DIR]
-    command: [npx, -y, '@playwright/mcp@0.0.84', --headless, --isolated, --browser, chromium, --image-responses, omit, --snapshot-mode, none, --codegen, none, --no-webmcp]
-    allowedTools: [browser_navigate, browser_snapshot]
+    type: chrome-cdp
+    url: http://127.0.0.1:9222
+    page-dwell: {min-seconds: 300, max-seconds: 600}
+    allowedTools: [browser_navigate, browser_snapshot, browser_click, browser_wait_for_user]
     toolPolicies:
       browser_navigate:
         sideEffect: none
@@ -86,6 +123,24 @@ mcp-servers:
         sideEffect: none
         filesystem: none
         inputSchema: {type: object, additionalProperties: false, properties: {}}
+      browser_click:
+        sideEffect: browser_interaction
+        filesystem: none
+        inputSchema:
+          type: object
+          additionalProperties: false
+          required: [ref]
+          properties:
+            ref: {type: string, minLength: 1, maxLength: 128}
+      browser_wait_for_user:
+        sideEffect: none
+        filesystem: none
+        inputSchema:
+          type: object
+          additionalProperties: false
+          required: [reason]
+          properties:
+            reason: {type: string, minLength: 1, maxLength: 2000}
 delegation:
   bind-task-goal-contracts: true
   allowed-workers: [researcher, countercheck, verifier, synthesizer]
@@ -103,9 +158,9 @@ contracts:
   - id: primary-research
     agent: researcher
     phase: prepare
-    side_effect: none
-    recovery: retry
-    max_retries: 1
+    side_effect: browser_interaction
+    recovery: manual
+    max_retries: 0
     execution:
       requires-result: true
       requires-grounded-result: true
@@ -117,9 +172,9 @@ contracts:
   - id: counter-research
     agent: countercheck
     phase: prepare
-    side_effect: none
-    recovery: retry
-    max_retries: 1
+    side_effect: browser_interaction
+    recovery: manual
+    max_retries: 0
     execution:
       requires-result: true
       requires-grounded-result: true
@@ -131,9 +186,9 @@ contracts:
   - id: evidence-audit
     agent: verifier
     phase: audit
-    side_effect: none
-    recovery: retry
-    max_retries: 1
+    side_effect: browser_interaction
+    recovery: manual
+    max_retries: 0
     execution:
       requires-result: true
       requires-grounded-result: true

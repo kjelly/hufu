@@ -19,19 +19,22 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
 type MCPTool struct {
-	Name              string
-	Description       string
-	InputSchema       map[string]any
-	Parameters        map[string]any
-	Required          []string
-	ServerName        string
-	OrigName          string
-	WorkerPolicy      *WorkerToolPolicy
-	workerInputSchema *jsonschema.Schema
+	Name                     string
+	Description              string
+	InputSchema              map[string]any
+	Parameters               map[string]any
+	Required                 []string
+	ServerName               string
+	OrigName                 string
+	WorkerPolicy             *WorkerToolPolicy
+	workerInputSchema        *jsonschema.Schema
+	pausableTimeout          bool
+	nativeBrowserInteraction bool
 }
 
 // ToolAuthorizer is injected by the coordinator at the execution boundary so
@@ -78,16 +81,17 @@ func toolAuthorizerFromContext(ctx context.Context) ToolAuthorizer {
 }
 
 type MCPToolManager struct {
-	mu           sync.RWMutex
-	tools        []MCPTool
-	clients      map[string]*client.Client
-	toolMap      map[string]MCPTool
-	agentServers map[string]*AgentMCPServer
-	localServers map[*client.Client]*localServerResources
-	closed       bool
-	loads        sync.WaitGroup
-	shutdown     context.Context
-	stopLoads    context.CancelFunc
+	mu            sync.RWMutex
+	tools         []MCPTool
+	clients       map[string]*client.Client
+	toolMap       map[string]MCPTool
+	agentServers  map[string]*AgentMCPServer
+	localServers  map[*client.Client]*localServerResources
+	nativeClosers map[*client.Client]func() error
+	closed        bool
+	loads         sync.WaitGroup
+	shutdown      context.Context
+	stopLoads     context.CancelFunc
 	// loadErrors keeps each server's LoadTools failure so a runtime binding
 	// can report why a tool it needs is missing.
 	loadErrors map[string]error
@@ -224,6 +228,8 @@ func (m *MCPToolManager) loadServer(ctx context.Context, name string, cfg MCPSer
 		return m.loadLocalServer(ctx, name, cfg)
 	case "remote":
 		return m.loadRemoteServer(ctx, name, cfg)
+	case "chrome-cdp":
+		return m.loadChromeCDP(ctx, name, cfg)
 	default:
 		return nil, nil, fmt.Errorf("unsupported MCP server type: %s", cfg.Type)
 	}
@@ -331,7 +337,9 @@ func initializeServerTools(ctx context.Context, name string, cfg MCPServerConfig
 			seenPolicies[t.Name] = true
 		}
 		tools = append(tools, MCPTool{
-			WorkerPolicy: workerPolicy, workerInputSchema: workerSchema,
+			nativeBrowserInteraction: cfg.Type == "chrome-cdp" && t.Name == "browser_click",
+			pausableTimeout:          cfg.Type == "chrome-cdp" && (t.Name == "browser_wait_for_user" || (t.Name == "browser_snapshot" && cfg.PageDwell != nil)),
+			WorkerPolicy:             workerPolicy, workerInputSchema: workerSchema,
 			Name:        prefixedName,
 			Description: t.Description,
 			InputSchema: inputSchema,
@@ -491,12 +499,17 @@ func executeMCPTool(ctx context.Context, t MCPTool, cli *client.Client, args str
 	return textOnlyToolResult(typed)
 }
 
-// callMCPTool sends one CallTool request. Without a caller deadline the call
-// is bounded by mcpDefaultTimeout.
+// callMCPTool sends one CallTool request. Without a caller deadline, ordinary
+// calls have a fixed default timeout; native human/dwell calls use the same
+// amount of working time while excluding their explicitly supported waits.
 func callMCPTool(ctx context.Context, t MCPTool, cli *client.Client, args string) (*mcp.CallToolResult, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, mcpDefaultTimeout)
+		if t.pausableTimeout {
+			ctx, cancel = tools.WithInteractiveAwareTimeout(ctx, mcpDefaultTimeout)
+		} else {
+			ctx, cancel = context.WithTimeout(ctx, mcpDefaultTimeout)
+		}
 		defer cancel()
 	}
 
@@ -674,4 +687,13 @@ func (t *mcpAgentTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 	return PublishToolResult(ctx, t.tool, call, result)
+}
+
+// IsBrowserInteractionTool authenticates the native state-changing browser
+// capability; external servers and same-name adapters cannot earn this grant.
+func (m *MCPToolManager) IsBrowserInteractionTool(name string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	tool, ok := m.toolMap[name]
+	return ok && tool.nativeBrowserInteraction && tool.WorkerPolicy != nil && tool.WorkerPolicy.SideEffect == "browser_interaction" && tool.WorkerPolicy.Filesystem == "none"
 }

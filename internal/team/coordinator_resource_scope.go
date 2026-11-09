@@ -182,7 +182,7 @@ func validateTaskResourceScopeSnapshot(snapshot *TaskResourceScopeSnapshot, side
 		mode := ResourceExclusive
 		// A read-only task, or a writer confined to its own attempt world,
 		// only reads the canonical project while it runs.
-		if sideEffect == "" || sideEffect == SideEffectNone || snapshot.Isolation == resourceScopeIsolationCopy {
+		if sideEffect == "" || readOnlyProjectSideEffect(sideEffect) || snapshot.Isolation == resourceScopeIsolationCopy {
 			mode = ResourceRead
 		}
 		root, _ := NewWorkspacePathResourceClaim(".", mode)
@@ -245,7 +245,7 @@ func (c *Coordinator) resolveNewTaskResourceScope(task TaskDef, todo *TodoItem, 
 
 func wholeRootTaskResourceScope(claims []ResourceClaim, effect SideEffectClass) (*TaskResourceScopeSnapshot, error) {
 	mode := ResourceExclusive
-	if effect == SideEffectNone {
+	if readOnlyProjectSideEffect(effect) {
 		mode = ResourceRead
 	}
 	root, err := NewWorkspacePathResourceClaim(".", mode)

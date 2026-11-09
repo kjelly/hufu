@@ -209,7 +209,7 @@ func normalizedExternalEffectState(item *team.TodoItem) string {
 		return ""
 	}
 	switch item.SideEffect {
-	case team.SideEffectExternalWrite, team.SideEffectInfraMutation, team.SideEffectCredential, team.SideEffectUnknown:
+	case team.SideEffectBrowserInteraction, team.SideEffectExternalWrite, team.SideEffectInfraMutation, team.SideEffectCredential, team.SideEffectUnknown:
 		switch item.RecoveryState {
 		case team.RecoveryStateComplete, team.RecoveryStateNotStarted, team.RecoveryStatePartial:
 			return item.RecoveryState

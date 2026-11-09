@@ -256,7 +256,7 @@ func riskForSideEffect(effect SideEffectClass) RiskLevel {
 		return RiskCritical
 	case SideEffectInfraMutation:
 		return RiskHigh
-	case SideEffectExternalWrite:
+	case SideEffectBrowserInteraction, SideEffectExternalWrite:
 		return RiskHigh
 	case SideEffectWorkspaceWrite:
 		return RiskMedium

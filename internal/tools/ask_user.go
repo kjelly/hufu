@@ -434,6 +434,9 @@ func executeAskUser(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRes
 	// Instead return a safe default and fire a needs-human notification so an
 	// operator can follow up out-of-band.
 	if IsUnattended(ctx) || !IsInteractiveEnvironment() {
+		if verification, _ := ctx.Value(humanVerificationKey{}).(bool); verification {
+			return fantasy.NewTextErrorResponse("browser verification needs an interactive human; no answer was supplied"), nil
+		}
 		return unattendedAskUserResponse(ctx, args, questionType)
 	}
 

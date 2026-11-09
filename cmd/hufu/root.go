@@ -153,7 +153,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().IntVar(&opts.compactionDiagnosticMaxLines, "compaction-diagnostic-max-lines", 0, "Override preserved diagnostic line cap; zero keeps the safety default")
 	rootCmd.Flags().IntVar(&opts.compactionDiagnosticMaxTokens, "compaction-diagnostic-max-tokens", 0, "Override preserved diagnostic token cap; zero keeps the safety default")
 	rootCmd.Flags().BoolVar(&opts.unattended, "unattended", false, "Run with no human present: ask_user returns safe defaults instead of blocking, --steps/--tui are disabled, and only allowlisted tools may run")
-	rootCmd.Flags().Int64Var(&opts.maxDuration, "max-duration", 0, "Budget: max total wall-clock seconds before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
+	rootCmd.Flags().Int64Var(&opts.maxDuration, "max-duration", 0, "Budget: max run seconds excluding browser dwell and verification waits before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
 	rootCmd.Flags().Int64Var(&opts.maxTotalTokens, "max-total-tokens", 0, "Budget: max cumulative LLM tokens before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
 	rootCmd.Flags().BoolVar(&opts.autoTeam, "auto-team", false, "Auto-select the team best suited to the prompt through a structured sidecar decision instead of prompting")
 	rootCmd.Flags().StringVar(&opts.routeMode, "route", "auto", "Execution route selection mode: auto, fast, or team")

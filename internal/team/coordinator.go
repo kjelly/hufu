@@ -205,7 +205,7 @@ type TaskDef struct {
 	// the task succeeds; a majority refutation fails the task into the retry
 	// path with the refutation as feedback.
 	AdversarialVerify int `json:"adversarial_verify,omitempty"`
-	// SideEffect classifies the task's side-effect risk (none, workspace_write, external_write, infra_mutation, credential_mutation).
+	// SideEffect classifies the task's side-effect risk (none, browser_interaction, workspace_write, external_write, infra_mutation, credential_mutation).
 	SideEffect SideEffectClass `json:"side_effect,omitempty" yaml:"side_effect,omitempty"`
 	// Recovery controls interrupted task recovery behavior (retry, reconcile, manual, never).
 	Recovery RecoveryPolicy `json:"recovery,omitempty" yaml:"recovery,omitempty"`
@@ -1331,7 +1331,7 @@ func (c *Coordinator) budgetExceeded() (bool, string) {
 	if owner == nil {
 		return false, ""
 	}
-	return owner.budgetLedger.Exceeded(time.Since(owner.sessionTime))
+	return owner.budgetLedger.Exceeded(owner.runBudgetElapsed())
 }
 
 type taskTiming struct {

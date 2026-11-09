@@ -86,6 +86,7 @@ func expandPipelineDeps(tasks []TaskDef) []TaskDef {
 }
 
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ string, retErr error) {
+	ctx = c.tokenBudgetRoot().runIdle.Context(ctx)
 	tasks = withoutEmptyCollections(tasks)
 	if err := validateNativeMediaBatch(tasks); err != nil {
 		return "", err

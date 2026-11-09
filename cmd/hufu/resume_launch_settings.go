@@ -95,7 +95,7 @@ func registerResumeLaunchFlags(f *pflag.FlagSet) {
 	f.IntVar(&opts.maxRoundsOverride, "max-rounds", 0, "Override coordinator round limit")
 	f.IntVar(&opts.maxConcurrentOverride, "max-concurrent", 0, "Override worker concurrency")
 	f.IntVar(&opts.maxStepsOverride, "max-steps", 0, "Override worker step budget")
-	f.Int64Var(&opts.maxDuration, "max-duration", 0, "Override total duration budget in seconds")
+	f.Int64Var(&opts.maxDuration, "max-duration", 0, "Override run duration budget in seconds (excluding browser dwell and verification waits)")
 	f.Int64Var(&opts.maxTotalTokens, "max-total-tokens", 0, "Override total generation budget")
 	f.BoolVar(&opts.rbashMode, "rbash", false, "Use restricted bash")
 	f.BoolVar(&opts.planMode, "plan", false, "Require a plan before execution")

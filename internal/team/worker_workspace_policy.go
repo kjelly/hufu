@@ -123,7 +123,7 @@ func (c *Coordinator) admittedWorkerWorkspace(task TaskDef, def *agent.AgentDef)
 	}
 	policy := &WorkerWorkspacePolicy{Mode: spec.Mode, Integrate: spec.Integrate, EffectiveMode: agent.WorkerWorkspaceIsolated}
 	switch task.SideEffect {
-	case "", SideEffectNone:
+	case "", SideEffectNone, SideEffectBrowserInteraction:
 		policy.EffectiveMode = agent.WorkerWorkspaceShared
 		return policy, nil
 	case SideEffectWorkspaceWrite:

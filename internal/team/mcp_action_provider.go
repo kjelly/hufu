@@ -65,8 +65,11 @@ func newMCPActionProvider(capability string, config agent.ActionProviderConfig, 
 	if !ok {
 		return nil, fmt.Errorf("action provider %q names MCP server %q, which mcp-servers does not declare", capability, server)
 	}
+	if serverConfig.Type == "chrome-cdp" && tool == "browser_click" {
+		return nil, fmt.Errorf("native browser_click requires a browser_interaction worker, not an MCP runtime action")
+	}
 	switch serverConfig.Type {
-	case "", "local", "remote":
+	case "", "local", "remote", "chrome-cdp":
 	default:
 		return nil, fmt.Errorf("action provider %q: MCP server %q has unsupported type %q", capability, server, serverConfig.Type)
 	}
@@ -113,7 +116,8 @@ func mcpServerConfigHash(config mcp.MCPServerConfig) string {
 		Environment           []environmentValue              `json:"environment,omitempty"`
 		ToolPolicies          map[string]mcp.WorkerToolPolicy `json:"tool_policies,omitempty"`
 		TemporaryDirectoryEnv []string                        `json:"temporary_directory_env,omitempty"`
-	}{serverType, config.Command, config.URL, allowed, excluded, config.NoOAuth, environment, config.ToolPolicies, temporaryDirectoryEnv})
+		PageDwell             *mcp.ChromePageDwellConfig      `json:"page_dwell,omitempty"`
+	}{serverType, config.Command, config.URL, allowed, excluded, config.NoOAuth, environment, config.ToolPolicies, temporaryDirectoryEnv, config.PageDwell})
 	if err != nil {
 		return ""
 	}

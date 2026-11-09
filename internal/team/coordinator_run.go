@@ -72,7 +72,7 @@ func (c *Coordinator) buildDirectAgentTaskContext(ctx context.Context, agentDef 
 	if allowedPaths := c.runtimeAllowedPaths(agentDef.AllowedPaths); len(allowedPaths) > 0 {
 		taskCtx = context.WithValue(taskCtx, tools.AgentAllowedPathsKey, allowedPaths)
 	}
-	if strings.EqualFold(strings.TrimSpace(agentDef.SideEffect), string(SideEffectNone)) {
+	if readOnlyProjectSideEffect(SideEffectClass(strings.ToLower(strings.TrimSpace(agentDef.SideEffect)))) {
 		taskCtx = context.WithValue(taskCtx, tools.AgentReadOnlyExecutionKey, true)
 	}
 	if writePaths := c.runtimeAllowedWritePaths(); len(writePaths) > 0 {

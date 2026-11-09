@@ -985,6 +985,15 @@ userinfo、`localhost` 或非公開 IP 字面值。一般 hostname 的遠端 DNS
 工具保留來源 URL 供引用，但不保證模型會產生正確引用。對 hosted service
 的請求也可能消耗其配額。
 
+### 原生瀏覽器按鈕互動
+
+使用原生 Chrome `browser_click` 的 worker 與 task contract 必須明確宣告
+`side_effect: browser_interaction` 與 `recovery: manual`。此類別保留專案檔案
+唯讀與一般網路／工具限制，但允許已明確授權的原生頁面按鈕互動；它不是
+`none`，中斷或失敗時不會自動重播點擊。MCP 工具另須同類的 maintainer-owned
+`toolPolicies`，外部 MCP server 不能自稱此能力。詳見
+[Chrome 按鈕與彈窗](chrome-cdp.md#button-interaction-and-popup-handling)。
+
 ### 同一對話的歷史觀測結果
 
 Worker 必須在 `tools` 明確列出 `recall_observation` 才能保存及查詢自己的

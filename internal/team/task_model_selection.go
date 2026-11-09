@@ -96,7 +96,7 @@ func taskComplexityProfile(task TaskDef) TaskComplexityProfile {
 	}
 	if profile.MutationSteps == 0 {
 		switch task.SideEffect {
-		case SideEffectWorkspaceWrite, SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential:
+		case SideEffectBrowserInteraction, SideEffectWorkspaceWrite, SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential:
 			profile.MutationSteps = 1
 		}
 	}

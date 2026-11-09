@@ -34,7 +34,7 @@ func validateDerivedForkTaskSafety(item *TodoItem) error {
 	switch item.SideEffect {
 	case SideEffectNone, SideEffectWorkspaceWrite:
 		return nil
-	case "", SideEffectUnknown, SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential:
+	case "", SideEffectBrowserInteraction, SideEffectUnknown, SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential:
 		if item.RecoveryState == RecoveryStateNotStarted || item.RecoveryState == RecoveryStateComplete {
 			return nil
 		}

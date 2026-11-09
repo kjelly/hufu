@@ -168,6 +168,7 @@ func (c *Coordinator) resolveNewTaskToolAuthorization(ctx context.Context, task 
 	if c == nil || def == nil {
 		return nil, fmt.Errorf("resolve new task tool authorization: agent definition is required")
 	}
+	ctx = withBrowserInteractionAuthority(ctx, def, task)
 	descriptors := c.managerMCPDescriptors()
 	baseNames := agentToolNames(c.selectWorkerToolsForTask(def, task))
 	names := make([]string, 0, len(descriptors))

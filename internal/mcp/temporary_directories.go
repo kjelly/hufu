@@ -84,6 +84,10 @@ type localServerResources struct {
 // Caller holds m.mu. Close waits for the SDK-owned subprocess before deleting
 // its outputs. An unconfirmed close retains them and reports their exact path.
 func (m *MCPToolManager) closeClientLocked(cli *client.Client) error {
+	if closeNative := m.nativeClosers[cli]; closeNative != nil {
+		delete(m.nativeClosers, cli)
+		return errors.Join(cli.Close(), closeNative())
+	}
 	resources := m.localServers[cli]
 	if resources != nil && resources.closed {
 		return resources.closeErr

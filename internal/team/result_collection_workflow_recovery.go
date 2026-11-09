@@ -7,10 +7,67 @@ import (
 )
 
 // Failed workflows remain closed to delegation. An explicit collection repair
-// can only settle the failed phase's sole remaining protocol task. Match typed
+// settles only the explicitly selected protocol task. Match typed
 // failure provenance rather than message text, which can change during repair.
 func resultRepairWorkflowPhase(session *SessionData, taskID string) (Phase, error) {
-	return blockedCollectionWorkflowPhase(session, taskID, validateCollectionRecoveryTarget)
+	if session == nil || session.WorkflowState != PhaseFailed {
+		return blockedCollectionWorkflowPhase(session, taskID, validateCollectionRecoveryTarget)
+	}
+	item := todoItemByID(session.Tasks, taskID)
+	if err := validateCollectionRecoveryTarget(item); err != nil {
+		return "", err
+	}
+	var failed []*TodoItem
+	for _, candidate := range session.Tasks {
+		if candidate == nil {
+			continue
+		}
+		if isUnresolvedTaskStatus(candidate.Status) {
+			if candidate.Phase != item.Phase || validateCollectionRecoveryTarget(candidate) != nil {
+				return "", fmt.Errorf("failed workflow contains an unrelated unresolved task")
+			}
+			failed = append(failed, candidate)
+		} else if candidate.Phase == item.Phase && hasCommittedWorkflowCollectionRepair(candidate) {
+			failed = append(failed, candidate)
+		}
+	}
+	if !collectionFailuresMatchTasks(session.PhaseResults[item.Phase], item.Phase, failed) {
+		return "", fmt.Errorf("workflow failure is not attributable to its collection tasks")
+	}
+	return item.Phase, nil
+}
+
+func hasCommittedWorkflowCollectionRepair(item *TodoItem) bool {
+	if item.Status != TaskDone {
+		return false
+	}
+	cp := currentResultCollection(item)
+	if cp == nil || cp.State != ResultCollectionCommitted {
+		return false
+	}
+	return slices.ContainsFunc(collectionRepairGrants(item.ExecutionReceipt), func(grant ResultRepairGrant) bool {
+		return grant.Recovery != nil && grant.Recovery.ValidatorRevision >= 4 && validateStoredRecoveryGrant(grant, cp) == nil
+	})
+}
+
+// Match as a multiset: observe may record only the first blocked task, and
+// parallel tasks may have the same agent and category. Every recorded failure
+// must match a distinct task; additional tasks still need independent repair.
+func collectionFailuresMatchTasks(result PhaseResult, phase Phase, items []*TodoItem) bool {
+	if result.Status != PhaseStatusBlocked || len(result.Errors) == 0 || len(result.Errors) > len(items) {
+		return false
+	}
+	remaining := slices.Clone(items)
+	for _, failure := range result.Errors {
+		i := slices.IndexFunc(remaining, func(item *TodoItem) bool {
+			return failure.Category == blockedTaskFailureCategory(item.Optional) && failure.Phase == phase && failure.Component == item.Agent && failure.Source == item.Agent
+		})
+		if i < 0 {
+			return false
+		}
+		remaining = slices.Delete(remaining, i, i+1)
+	}
+	return true
 }
 
 func blockedCollectionWorkflowPhase(session *SessionData, taskID string, validateTarget func(*TodoItem) error) (Phase, error) {
@@ -98,15 +155,20 @@ func (c *Coordinator) completedCollectionWorkflowProof(ctx context.Context) (*co
 	if current.WorkflowState != PhaseFailed {
 		return nil, nil
 	}
+	// A repair grant never authorizes the other blocked tasks or delegation.
+	// Keep the original phase failure intact across partial repairs and crashes.
+	if len(UnresolvedTaskReferences(current.Tasks)) != 0 {
+		return nil, nil
+	}
 	items := current.Tasks
+	var proof *collectionWorkflowProof
+	var completed []*TodoItem
+	required := make(map[string]bool)
 	for _, item := range items {
-		if item == nil {
+		if item == nil || !hasCommittedWorkflowCollectionRepair(item) {
 			continue
 		}
 		cp := currentResultCollection(item)
-		if item.Status != TaskDone || cp == nil || cp.State != ResultCollectionCommitted {
-			continue
-		}
 		for _, grant := range collectionRepairGrants(item.ExecutionReceipt) {
 			if grant.Recovery == nil || grant.Recovery.ValidatorRevision < 4 || validateStoredRecoveryGrant(grant, cp) != nil {
 				continue
@@ -138,8 +200,18 @@ func (c *Coordinator) completedCollectionWorkflowProof(ctx context.Context) (*co
 				return nil, errResultCollectionStale
 			}
 			source := ReduceToSessionData(events[:i+1])
-			phase, err := resultRepairWorkflowPhase(source, item.ID)
+			var phase Phase
+			if grant.Recovery.ValidatorRevision < 5 {
+				phase, err = blockedCollectionWorkflowPhase(source, item.ID, validateCollectionRecoveryTarget)
+			} else {
+				phase, err = resultRepairWorkflowPhase(source, item.ID)
+			}
 			if err != nil || phase == "" {
+				continue
+			}
+			// Earlier recovered phases keep their accepted work and grants.
+			// Their old blocked snapshot cannot reopen a later failed phase.
+			if current.PhaseResults[phase].Status == PhaseStatusSuccess {
 				continue
 			}
 			if !sameCanonicalEvidence(current.PhaseResults, source.PhaseResults) {
@@ -148,8 +220,27 @@ func (c *Coordinator) completedCollectionWorkflowProof(ctx context.Context) (*co
 			if err := c.validateAcceptedDependencyPayload(item); err != nil {
 				return nil, err
 			}
-			return &collectionWorkflowProof{taskID: item.ID, phase: phase, results: source.PhaseResults}, nil
+			for _, peer := range source.Tasks {
+				if peer != nil && peer.Phase == phase && (isUnresolvedTaskStatus(peer.Status) || hasCommittedWorkflowCollectionRepair(peer)) {
+					required[peer.ID] = true
+				}
+			}
+			if proof != nil && proof.phase != phase {
+				return nil, errResultCollectionStale
+			}
+			proof = &collectionWorkflowProof{taskID: item.ID, phase: phase, results: source.PhaseResults}
+			completed = append(completed, item)
+			break
 		}
 	}
-	return nil, nil
+	if proof == nil || !collectionFailuresMatchTasks(current.PhaseResults[proof.phase], proof.phase, completed) {
+		return nil, nil
+	}
+	for _, item := range completed {
+		delete(required, item.ID)
+	}
+	if len(required) != 0 {
+		return nil, nil
+	}
+	return proof, nil
 }

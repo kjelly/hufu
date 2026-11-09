@@ -776,6 +776,7 @@ func (r *defaultToolResolver) ResolveTaskTools(ctx context.Context, def *agent.A
 		return ResolvedWorkerTools{}, fmt.Errorf("resolve task tools: agent definition is required")
 	}
 	task := req.Task
+	ctx = withBrowserInteractionAuthority(ctx, def, task)
 	mode := req.Mode
 	if mode == "" {
 		mode = WorkerToolResolutionNormal

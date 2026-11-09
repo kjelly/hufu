@@ -192,3 +192,9 @@ func GetPathReviewerFromContext(ctx context.Context) PathReviewer {
 	}
 	return nil
 }
+
+// BrowserInteractionAllowedKey is runtime-owned authority for native browser
+// controls. It never confers filesystem write or arbitrary MCP authority.
+var BrowserInteractionAllowedKey = browserInteractionAllowedKeyType{}
+
+type browserInteractionAllowedKeyType struct{}
