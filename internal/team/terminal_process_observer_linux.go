@@ -3,8 +3,10 @@
 package team
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -35,10 +37,14 @@ func observeTerminalLeader(pid int) (terminalLeaderObservation, error) {
 // retain terminal resources. The leader is explicitly excluded because it is
 // intentionally still waitable until containment is proven.
 func terminalProcessGroupContained(pgid, leaderPID int) (bool, error) {
+	return terminalProcessGroupContainedInProc("/proc", pgid, leaderPID, os.ReadFile)
+}
+
+func terminalProcessGroupContainedInProc(procRoot string, pgid, leaderPID int, readFile func(string) ([]byte, error)) (bool, error) {
 	if pgid <= 0 || leaderPID <= 0 {
 		return false, fmt.Errorf("invalid terminal group identity")
 	}
-	entries, err := os.ReadDir("/proc")
+	entries, err := os.ReadDir(procRoot)
 	if err != nil {
 		return false, err
 	}
@@ -47,9 +53,9 @@ func terminalProcessGroupContained(pgid, leaderPID int) (bool, error) {
 		if parseErr != nil || pid == leaderPID {
 			continue
 		}
-		data, readErr := os.ReadFile("/proc/" + entry.Name() + "/stat")
+		data, readErr := readFile(filepath.Join(procRoot, entry.Name(), "stat"))
 		if readErr != nil {
-			if os.IsNotExist(readErr) || readErr == syscall.ESRCH {
+			if os.IsNotExist(readErr) || errors.Is(readErr, syscall.ESRCH) {
 				continue
 			}
 			return false, readErr
