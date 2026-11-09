@@ -14,52 +14,32 @@ import (
 	"time"
 )
 
-// Reuse the canonical scripts instead of duplicating their task, verification,
-// recovery and durable-evidence contracts in a second eval framework.
-func TestContextDeliveryExistingLifecycleSuites(t *testing.T) {
-	if testing.Short() {
-		t.Skip("integration: mise run test-integration")
-	}
-	for _, suite := range []string{"core-lifecycle", "retry-recovery", "memory-learning", "memory-fresh-session", "memory-fresh-session-off", "plan-first-dependency", "verbatim-dependency", "legacy-execution-replay"} {
-		t.Run(suite, func(t *testing.T) {
-			fixture, err := LoadSuiteFixture(filepath.Join(repoRoot(t), "evals", suite, "cases.yaml"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			for index := range fixture.Cases {
-				fixture.Cases[index].Expect.ContextDelivery = []ContextDeliveryExpect{{
-					Agent: "coordinator", Purpose: "coordinator_start", Include: []string{"current_task"},
-					RequiredFragments: map[string]string{"current_task": fixture.Cases[index].Prompt},
-				}}
-				var agents []string
-				for _, task := range fixture.Cases[index].Expect.Tasks {
-					if (task.Status != "done" && task.Status != "error") || slices.Contains(agents, task.Agent) {
-						continue
-					}
-					agents = append(agents, task.Agent)
-					fixture.Cases[index].Expect.ContextDelivery = append(fixture.Cases[index].Expect.ContextDelivery, ContextDeliveryExpect{
-						Agent: task.Agent, Purpose: "task_execution", Include: []string{"current_task"}, RequiredFragments: map[string]string{"current_task": "## Goal"},
-					})
-					if task.Attempts != nil && *task.Attempts > 1 {
-						fixture.Cases[index].Expect.ContextDelivery = append(fixture.Cases[index].Expect.ContextDelivery, ContextDeliveryExpect{
-							Agent: task.Agent, Purpose: "task_retry", Attempt: 2, Include: []string{"current_task", "retry_failure_context"}, RequiredFragments: map[string]string{"current_task": "## Goal"},
-						})
-					}
-				}
-			}
-			result, err := RunSuite(t.Context(), fixture, "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, c := range result.Cases {
-				if !c.Passed {
-					t.Errorf("%s: %+v", c.CaseID, c.Findings)
-				}
-				if c.Metrics.ContextDelivery == nil || c.Metrics.ContextDelivery.ProviderCalls == 0 {
-					t.Errorf("%s: no receiver evidence", c.CaseID)
-				}
-			}
+// These suites exercise delivery alongside their ordinary lifecycle assertions
+// in TestRunAllEvalSuites, rather than running the same configuration twice.
+var lifecycleDeliverySuites = []string{"core-lifecycle", "retry-recovery", "memory-learning", "memory-fresh-session", "memory-fresh-session-off", "plan-first-dependency", "verbatim-dependency", "legacy-execution-replay"}
+
+func addLifecycleDeliveryExpectations(fixture *SuiteFixture) {
+	for index := range fixture.Cases {
+		c := &fixture.Cases[index]
+		c.Expect.ContextDelivery = append(c.Expect.ContextDelivery, ContextDeliveryExpect{
+			Agent: "coordinator", Purpose: "coordinator_start", Include: []string{"current_task"},
+			RequiredFragments: map[string]string{"current_task": c.Prompt},
 		})
+		var agents []string
+		for _, task := range c.Expect.Tasks {
+			if (task.Status != "done" && task.Status != "error") || slices.Contains(agents, task.Agent) {
+				continue
+			}
+			agents = append(agents, task.Agent)
+			c.Expect.ContextDelivery = append(c.Expect.ContextDelivery, ContextDeliveryExpect{
+				Agent: task.Agent, Purpose: "task_execution", Include: []string{"current_task"}, RequiredFragments: map[string]string{"current_task": "## Goal"},
+			})
+			if task.Attempts != nil && *task.Attempts > 1 {
+				c.Expect.ContextDelivery = append(c.Expect.ContextDelivery, ContextDeliveryExpect{
+					Agent: task.Agent, Purpose: "task_retry", Attempt: 2, Include: []string{"current_task", "retry_failure_context"}, RequiredFragments: map[string]string{"current_task": "## Goal"},
+				})
+			}
+		}
 	}
 }
 

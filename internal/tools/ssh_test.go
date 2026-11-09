@@ -6,6 +6,7 @@ package tools
 import (
 	"context"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 
@@ -140,63 +141,56 @@ func TestGetSSHErrorTitle(t *testing.T) {
 	}
 }
 
-func TestSSH_ConnectionReuse(t *testing.T) {
-	orig := sshCommandContext
-	defer func() { sshCommandContext = orig }()
-	var capturedArgs []string
-	sshCommandContext = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
-		capturedArgs = append([]string{name}, arg...)
+// Each tool owns its command factory; no process-wide override can leak to
+// another test or invocation. The harmless child still exercises pipe handling.
+func newSSHTestTool(t *testing.T) (fantasy.AgentTool, *[][]string) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	var calls [][]string
+	tool := newSshTool(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		calls = append(calls, append([]string{name}, args...))
 		return exec.CommandContext(ctx, "true")
-	}
-
-	tool := NewSshTool()
-	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
-
-	input := `{
-		"host": "user@example.com",
-		"command": "uptime",
-		"connection_reuse": true
-	}`
-
-	_, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
-	if err != nil {
-		t.Fatalf("Run() error: %v", err)
-	}
-	joined := strings.Join(capturedArgs, " ")
-	if !strings.Contains(joined, "ControlMaster=auto") {
-		t.Fatalf("expected ControlMaster in args, got: %s", joined)
-	}
-	t.Log("Connection reuse parameter accepted")
+	})
+	return tool, &calls
 }
 
-func TestSSH_ControlPath(t *testing.T) {
-	orig := sshCommandContext
-	defer func() { sshCommandContext = orig }()
-	var capturedArgs []string
-	sshCommandContext = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
-		capturedArgs = append([]string{name}, arg...)
-		return exec.CommandContext(ctx, "true")
+func TestSSHCommandArguments(t *testing.T) {
+	cases := []struct {
+		name        string
+		input       string
+		wantHost    string
+		wantOptions []string
+	}{
+		{name: "hostname", input: `{"host":"offline-test-gpu","command":"uptime"}`, wantHost: "offline-test-gpu"},
+		{name: "explicit user", input: `{"host":"server.example.com","user":"admin","command":"uptime"}`, wantHost: "admin@server.example.com"},
+		{name: "user at host", input: `{"host":"admin@server.example.com","command":"uptime"}`, wantHost: "admin@server.example.com"},
+		{name: "explicit user wins", input: `{"host":"admin@server.example.com","user":"root","command":"uptime"}`, wantHost: "root@server.example.com"},
+		{name: "reuse", input: `{"host":"user@example.com","command":"uptime","connection_reuse":true}`, wantHost: "user@example.com", wantOptions: []string{"ControlMaster=auto", "ControlPersist=600"}},
+		{name: "custom control path", input: `{"host":"user@example.com","command":"uptime","connection_reuse":true,"control_path":"custom-socket"}`, wantHost: "user@example.com", wantOptions: []string{"ControlPath=custom-socket"}},
+		{name: "explicit port", input: `{"host":"example.com","command":"uptime","port":2222}`, wantHost: "example.com", wantOptions: []string{"-p", "2222"}},
 	}
-
-	tool := NewSshTool()
-	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
-
-	input := `{
-		"host": "user@example.com",
-		"command": "uptime",
-		"connection_reuse": true,
-		"control_path": "/tmp/custom-ssh-socket"
-	}`
-
-	_, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
-	if err != nil {
-		t.Fatalf("Run() error: %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tool, calls := newSSHTestTool(t)
+			ctx := SetToolsAllowed(t.Context(), []string{"ssh"})
+			result, err := tool.Run(ctx, fantasy.ToolCall{Input: tc.input})
+			if err != nil || result.IsError {
+				t.Fatalf("SSH failed: %v %s", err, result.Content)
+			}
+			if len(*calls) != 1 {
+				t.Fatalf("command calls = %v, want one", *calls)
+			}
+			args := (*calls)[0]
+			if args[0] != "ssh" || !slices.Equal(args[len(args)-2:], []string{tc.wantHost, "uptime"}) {
+				t.Fatalf("command = %v, want ssh ending with [%s uptime]", args, tc.wantHost)
+			}
+			for _, option := range append([]string{"BatchMode=yes"}, tc.wantOptions...) {
+				if !slices.Contains(args, option) {
+					t.Errorf("command %v missing argument %q", args, option)
+				}
+			}
+		})
 	}
-	joined := strings.Join(capturedArgs, " ")
-	if !strings.Contains(joined, "ControlPath=/tmp/custom-ssh-socket") {
-		t.Fatalf("expected ControlPath in args, got: %s", joined)
-	}
-	t.Log("Custom control path parameter accepted")
 }
 
 func TestLooksLikeIP(t *testing.T) {
@@ -255,98 +249,6 @@ func TestExecuteSSH_IPAddress_Warning(t *testing.T) {
 	}
 	if !strings.Contains(result.Content, "hostname") {
 		t.Errorf("Expected mention of hostname, got: %s", result.Content)
-	}
-}
-
-func TestExecuteSSH_Hostname_Allowed(t *testing.T) {
-	orig := sshCommandContext
-	defer func() { sshCommandContext = orig }()
-	sshCommandContext = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "true")
-	}
-
-	tool := NewSshTool()
-	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
-
-	// Test with hostname - should not return IP warning
-	input := `{"host": "offline-test-gpu", "command": "uptime"}`
-	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
-
-	if err != nil {
-		t.Fatalf("Run() error: %v", err)
-	}
-	// Should not be an error about IP address
-	if result.IsError && strings.Contains(result.Content, "IP address") {
-		t.Errorf("Unexpected IP warning for hostname: %s", result.Content)
-	}
-}
-
-func TestSSH_UserParameter(t *testing.T) {
-	orig := sshCommandContext
-	defer func() { sshCommandContext = orig }()
-	sshCommandContext = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "true")
-	}
-
-	tool := NewSshTool()
-	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
-
-	// Test with explicit user parameter
-	input := `{"host": "server.example.com", "user": "admin", "command": "uptime"}`
-	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
-
-	if err != nil {
-		t.Fatalf("Run() error: %v", err)
-	}
-	// Should not be an error about IP address (server.example.com is not an IP)
-	if result.IsError && strings.Contains(result.Content, "IP address") {
-		t.Errorf("Unexpected IP warning: %s", result.Content)
-	}
-}
-
-func TestSSH_UserAtHostFormat(t *testing.T) {
-	orig := sshCommandContext
-	defer func() { sshCommandContext = orig }()
-	sshCommandContext = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "true")
-	}
-
-	tool := NewSshTool()
-	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
-
-	// Test with user@host format
-	input := `{"host": "admin@server.example.com", "command": "uptime"}`
-	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
-
-	if err != nil {
-		t.Fatalf("Run() error: %v", err)
-	}
-	// Should not be an error about IP address
-	if result.IsError && strings.Contains(result.Content, "IP address") {
-		t.Errorf("Unexpected IP warning: %s", result.Content)
-	}
-}
-
-func TestSSH_UserParameterOverridesUserAtHost(t *testing.T) {
-	orig := sshCommandContext
-	defer func() { sshCommandContext = orig }()
-	sshCommandContext = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "true")
-	}
-
-	tool := NewSshTool()
-	ctx := SetToolsAllowed(context.Background(), []string{"ssh"})
-
-	// Test that explicit user parameter overrides user@host format
-	input := `{"host": "admin@server.example.com", "user": "root", "command": "uptime"}`
-	result, err := tool.Run(ctx, fantasy.ToolCall{Input: input})
-
-	if err != nil {
-		t.Fatalf("Run() error: %v", err)
-	}
-	// Should not be an error about IP address
-	if result.IsError && strings.Contains(result.Content, "IP address") {
-		t.Errorf("Unexpected IP warning: %s", result.Content)
 	}
 }
 

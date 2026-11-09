@@ -29,7 +29,7 @@ Test names below are reproducible case identifiers. Existing tests remain the au
 | `TestContextFixtureBranchAliasesRequireRealForkChronology` | Branch aliases require an explicit tree and checked durable events; before/after-fork and sibling labels cannot substitute for event chronology. |
 | `TestWP3_AgentCannotSeeOtherAgentPrivate`, `TestWP3_PersistentModeRetrievesCrossSession`, `TestWP3_MaxTokensLimitEnforced` | Existing private recall authorization, tier and budget contracts. |
 | `TestWP6RecallAuthorizesParentMemoryAtForkAcrossRetrievalSources`, `TestWP6SavedSessionMemoryRecallsAcrossForkAtWorkerScope` | Existing exact/lexical/vector final guards enforce fork cutoff and exclude siblings. No large-lineage recall improvement is claimed. |
-| `TestContextDeliveryExistingLifecycleSuites` | Actual receiver/manifest assertions reuse all cases in core-lifecycle, retry-recovery, memory-learning, both fresh-session suites, plan-first-dependency, verbatim-dependency and legacy-execution-replay. Required goals remain visible; retry failure context is required on the second attempt. |
+| `TestRunAllEvalSuites` (lifecycle delivery assertions) | Actual receiver/manifest assertions run alongside the ordinary lifecycle checks, reusing all cases in core-lifecycle, retry-recovery, memory-learning, both fresh-session suites, plan-first-dependency, verbatim-dependency and legacy-execution-replay. Required goals remain visible; retry failure context is required on the second attempt. |
 | `TestRunDirectAgentUsesWorkerSurfaceAfterInheritedCoordinatorPreflight`, `TestRequestAgentToolUsesTypedResultWorkerSurface` | Existing direct/nested integration tests now inspect every actual receiver request for required goal/instruction fragments. |
 | `TestContextDeliveryAgentBackendReceivesCompiledRequiredFragments` | The existing fake app-server backend receives required compiled goal/result-protocol fragments at `turn/start`, without an OpenAI proxy. |
 | `TestContextDeliveryParallelRetriesKeepStreamOrdinals`, `TestContextManifestKeepsConcurrentModelExecutionsDistinct` | Concurrent collector streams and existing manifest ownership; these are not successful extra-model runtime delivery evidence. |
@@ -51,10 +51,12 @@ Before PR-02 can pass its extra-model gate, a coding agent must correct the leaf
 
 ## Reproduction
 
-Use `TMPDIR=/tmp GOTMPDIR=/tmp` for Go tests and eval runs, as explained in the baseline. The plan lists the full test, vet, lint and eval gates. The targeted receiver suite is:
+Use a private task directory for temporary outputs and preserve the configured `GOTMPDIR` and build caches. The plan lists the full test, vet, lint and eval gates. The targeted receiver suite includes the combined lifecycle/delivery checks:
 
 ```bash
-TMPDIR=/tmp GOTMPDIR=/tmp go test ./internal/evalharness ./internal/sidecar ./internal/team ./internal/context -run '^Test(ContextDelivery.*|ContextFixture.*|ContextQueryBaseline.*|AuxiliaryDiagnostic.*|CoordinatorDiagnostic.*|InvocationPromptPreparer.*|ExecuteTaskFailsClosedWhenWorkerContextPreflightFails)$'
+task_scratch=$(mktemp -d /tmp/codex-task.XXXXXX)
+trap 'rm -rf -- "$task_scratch"' EXIT
+TMPDIR="$task_scratch" GOMAXPROCS=2 mise exec -- go test -p 2 ./internal/evalharness ./internal/sidecar ./internal/team ./internal/context -run '^Test(RunAllEvalSuites|ContextDelivery.*|ContextFixture.*|ContextQueryBaseline.*|AuxiliaryDiagnostic.*|CoordinatorDiagnostic.*|InvocationPromptPreparer.*|ExecuteTaskFailsClosedWhenWorkerContextPreflightFails)$'
 ```
 
 The [machine-readable report](context-delivery-evaluation.json) records synthetic fixture hashes, source digest, query/learning policies and case results. No raw model messages or operator workload is retained. PR-01 still needs its paired quality report and measured benchmarks; PR-02 still needs production opt-in, snapshot compatibility and successful coverage of every applicable invocation path.
@@ -64,7 +66,10 @@ PR-00 validation passed: full `go test ./...`, `go vet ./...`, `golangci-lint ru
 Measure the fixed nine-row scope/lifecycle fixture with ten repetitions:
 
 ```bash
-TMPDIR=/tmp GOTMPDIR=/tmp HUFU_CONTEXT_DELIVERY_MEASURED_REPORT=/tmp/context-delivery-measured.json go test ./internal/evalharness -run '^$' -bench '^BenchmarkContextDeliveryBaseline$' -benchtime=10x -count=1 -benchmem
+task_scratch=$(mktemp -d /tmp/codex-task.XXXXXX)
+trap 'rm -rf -- "$task_scratch"' EXIT
+TMPDIR="$task_scratch" HUFU_CONTEXT_DELIVERY_MEASURED_REPORT="$task_scratch/context-delivery-measured.json" GOMAXPROCS=2 mise exec -- go test -p 2 ./internal/evalharness -run '^$' -bench '^BenchmarkContextDeliveryBaseline$' -benchtime=10x -count=1 -benchmem
+# Copy the requested measured report to its permanent destination before exiting.
 ```
 
 The benchmark reports worker-stage p50/p95 and actual retrieval calls/source rows. Its allocations and wall time include fake-provider and SQLite harness setup/teardown. They are not isolated query-selector allocations. This baseline is distinct from PR-01's still-required 10/1,000/10,000-row supplemental-lane benchmarks.

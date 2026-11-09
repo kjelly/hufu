@@ -170,6 +170,25 @@ elapsed values and command wall time are not added into this ratio. Ratios above
 reported as unavailable/incomplete, including failed discovery. A warning does
 not replace the existing test exit status or mask failures.
 
+The same report includes per-test timings and the 20 slowest top-level tests.
+A parent's duration includes its subtests, so child durations are not added to
+it. Repeated executions report their mean duration and run count; a failed
+execution remains visible even if a later repetition passes. Missing elapsed
+values remain unavailable.
+
+To compare two archived reports from the same test layer, race settings and
+comparable runners, pass the older `package-budget.json` explicitly:
+
+```bash
+python3 scripts/test-package-budget.py --timeout 30m \
+  --evidence <current-evidence-directory> --summary <summary-file> \
+  --baseline <previous-package-budget.json> --top 20
+```
+
+The JSON retains all observed top-level tests; `--top` only limits the summary.
+Deltas are unavailable when no matching baseline measurement exists. CI emits
+rankings automatically; it does not silently choose a historical comparison.
+
 CI pins setup-go v5.6.0, which bundles the cache v4 client instead of v5.0.0's
 cache v3 client. Each short race scope and integration uses a distinct `GOCACHE`
 path: cache archive paths participate in the cache version, preventing a normal

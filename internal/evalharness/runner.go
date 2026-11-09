@@ -27,12 +27,9 @@ import (
 	"github.com/kjelly/hufu/internal/utils"
 )
 
-// defaultCaseTimeout bounds a single case's wall-clock time so a stuck
-// scripted run (e.g. a fixture that never triggers the coordinator's
-// natural stop) cannot hang CI indefinitely (§13 "per-case timeout"). A
-// package-level var, not a const, so tests can shrink it instead of
-// waiting out the real default -- see TestEvalTimeout.
-var defaultCaseTimeout = 60 * time.Second
+// defaultCaseTimeout bounds each scripted run without sharing mutable timeout
+// settings between independent evaluations.
+const defaultCaseTimeout = 60 * time.Second
 
 const maxRunErrorDiagnosticRunes = 500
 
@@ -95,6 +92,10 @@ func runCaseWithHandler(ctx context.Context, fixture *SuiteFixture, c CaseFixtur
 // Keep one setup, receiver, persistence and assertion boundary for tests that
 // exercise public entry points other than a single Run.
 func runCaseWithExecution(ctx context.Context, fixture *SuiteFixture, c CaseFixture, handler http.Handler, scriptFindings func() []EvalFinding, execute func(context.Context, *team.Coordinator, string) error) (EvalCaseResult, error) {
+	return runCaseWithExecutionTimeout(ctx, fixture, c, handler, scriptFindings, execute, defaultCaseTimeout)
+}
+
+func runCaseWithExecutionTimeout(ctx context.Context, fixture *SuiteFixture, c CaseFixture, handler http.Handler, scriptFindings func() []EvalFinding, execute func(context.Context, *team.Coordinator, string) error, timeout time.Duration) (EvalCaseResult, error) {
 	started := time.Now()
 	// Scripted evals have no operator. Honor explicit tool grants without
 	// depending on the invoking terminal or changing process-wide permissions.
@@ -221,7 +222,7 @@ func runCaseWithExecution(ctx context.Context, fixture *SuiteFixture, c CaseFixt
 		events = append(events, e)
 	})
 
-	caseCtx, cancel := context.WithTimeout(ctx, defaultCaseTimeout)
+	caseCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	runErr := execute(caseCtx, coordinator, c.Prompt)
 	runResult := coordinator.LastRunResult()
@@ -261,7 +262,7 @@ func runCaseWithExecution(ctx context.Context, fixture *SuiteFixture, c CaseFixt
 	if errors.Is(caseCtx.Err(), context.DeadlineExceeded) {
 		findings = append(findings, EvalFinding{
 			Dimension: "timeout",
-			Expected:  fmt.Sprintf("run to finish within %s", defaultCaseTimeout),
+			Expected:  fmt.Sprintf("run to finish within %s", timeout),
 			Actual:    "deadline exceeded",
 		})
 	}

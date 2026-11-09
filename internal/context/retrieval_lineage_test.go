@@ -13,50 +13,63 @@ func TestSearchLineageAllowsLargeSetsBeforeLimit(t *testing.T) {
 		t.Skip("integration: mise run test-integration")
 	}
 	repo := lineageRetrievalFixture(t, 100_002, true)
-	scope := lineageRetrievalScope()
-	foreign := scope
-	foreign.BranchID = "sibling"
-	if err := repo.Append(t.Context(), ContextItem{ID: "sibling", Kind: ContextObservation, Content: "anchor", Scope: foreign}); err != nil {
-		t.Fatal(err)
-	}
 	allowed := make([]string, 40_000)
 	for i := range allowed {
 		allowed[i] = fmt.Sprintf("missing-%06d", i)
 	}
 	allowed = append(allowed, "item-000000", "item-000000")
+	t.Run("unrestricted beyond the former query cap", func(t *testing.T) {
+		assertLineageSearchResults(t, repo, nil, []string{"item-100001"})
+	})
+	t.Run("allowance exceeds SQLite variable limit", func(t *testing.T) {
+		assertLineageSearchResults(t, repo, allowed, []string{"item-000000"})
+	})
+}
+
+func TestSearchLineagePreservesAuthorization(t *testing.T) {
+	repo := lineageRetrievalFixture(t, 16, true)
+	foreign := lineageRetrievalScope()
+	foreign.BranchID = "sibling"
+	if err := repo.Append(t.Context(), ContextItem{ID: "sibling", Kind: ContextObservation, Content: "anchor", Scope: foreign}); err != nil {
+		t.Fatal(err)
+	}
 	cases := []struct {
 		name string
 		ids  []string
 		want []string
 	}{
-		{name: "unrestricted", want: []string{"item-100001"}},
 		{name: "restricted empty", ids: []string{}, want: nil},
-		{name: "larger than SQLite variable limit", ids: allowed, want: []string{"item-000000"}},
 		{name: "opaque IDs are not trimmed or folded", ids: []string{" ITEM-000000 "}, want: nil},
 		{name: "SQL text is only data", ids: []string{"') OR 1=1 --"}, want: nil},
 		{name: "allowance cannot widen canonical scope", ids: []string{"sibling"}, want: nil},
+		{name: "duplicate IDs do not duplicate results", ids: []string{"item-000000", "item-000000"}, want: []string{"item-000000"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := SearchRequest{Query: "anchor", Scope: scope, Limit: 1}.WithAllowedItemIDs(tc.ids)
-			for name, search := range map[string]func(context.Context, SearchRequest) ([]SearchResult, error){
-				"exact": repo.SearchExact, "FTS": repo.SearchLexical,
-			} {
-				rows, err := search(t.Context(), req)
-				if err != nil {
-					t.Fatalf("%s: %v", name, err)
-				}
-				if tc.ids == nil && name == "FTS" {
-					if len(rows) != 1 {
-						t.Fatalf("unrestricted FTS returned %d rows", len(rows))
-					}
-					continue
-				}
-				if ids := searchResultIDs(rows); !slices.Equal(ids, tc.want) {
-					t.Fatalf("%s IDs = %v, want %v", name, ids, tc.want)
-				}
-			}
+			assertLineageSearchResults(t, repo, tc.ids, tc.want)
 		})
+	}
+}
+
+func assertLineageSearchResults(t *testing.T, repo *SQLiteRepository, ids, want []string) {
+	t.Helper()
+	req := SearchRequest{Query: "anchor", Scope: lineageRetrievalScope(), Limit: 1}.WithAllowedItemIDs(ids)
+	for name, search := range map[string]func(context.Context, SearchRequest) ([]SearchResult, error){
+		"exact": repo.SearchExact, "FTS": repo.SearchLexical,
+	} {
+		rows, err := search(t.Context(), req)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if ids == nil && name == "FTS" {
+			if len(rows) != 1 {
+				t.Fatalf("unrestricted FTS returned %d rows", len(rows))
+			}
+			continue
+		}
+		if got := searchResultIDs(rows); !slices.Equal(got, want) {
+			t.Fatalf("%s IDs = %v, want %v", name, got, want)
+		}
 	}
 }
 

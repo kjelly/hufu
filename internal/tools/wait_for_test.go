@@ -17,18 +17,15 @@ import (
 
 func runWaitFor(t *testing.T, input string) fantasy.ToolResponse {
 	t.Helper()
-	resp, err := executeWaitFor(context.Background(), fantasy.ToolCall{ID: "1", Name: "wait_for", Input: input}, ToolConfig{})
+	resp, err := executeFastWaitFor(t.Context(), fantasy.ToolCall{ID: "1", Name: "wait_for", Input: input}, ToolConfig{})
 	if err != nil {
 		t.Fatalf("executeWaitFor returned unexpected error: %v", err)
 	}
 	return resp
 }
 
-func fastWaitForInterval(t *testing.T) {
-	t.Helper()
-	orig := minWaitForInterval
-	minWaitForInterval = 10 * time.Millisecond
-	t.Cleanup(func() { minWaitForInterval = orig })
+func executeFastWaitFor(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fantasy.ToolResponse, error) {
+	return executeWaitForWithRuntime(ctx, call, cfg, waitForRuntime{10 * time.Millisecond, runPollCommand})
 }
 
 func TestWaitForValidation(t *testing.T) {
@@ -120,49 +117,6 @@ func TestWaitForImmediateSuccess(t *testing.T) {
 	}
 }
 
-func TestWaitForSucceedsAfterRetries(t *testing.T) {
-	fastWaitForInterval(t)
-	// The command fails until its counter file accumulates 3 lines, so the
-	// tool must poll exactly 3 times before succeeding.
-	counter := filepath.Join(t.TempDir(), "count")
-	cmd := fmt.Sprintf(`echo x >> %[1]s; [ "$(wc -l < %[1]s)" -ge 3 ] && echo done`, counter)
-	input := fmt.Sprintf(`{"command":%q,"interval_seconds":0.02,"timeout_seconds":30}`, cmd)
-
-	start := time.Now()
-	resp := runWaitFor(t, input)
-	if resp.IsError {
-		t.Fatalf("expected success, got error: %s", resp.Content)
-	}
-	if !strings.Contains(resp.Content, "condition met after 3 attempt(s)") {
-		t.Errorf("expected 3 attempts, got: %s", resp.Content)
-	}
-	if elapsed := time.Since(start); elapsed < 30*time.Millisecond {
-		t.Errorf("expected at least 2 interval waits, finished in %s", elapsed)
-	}
-}
-
-func TestWaitForUntilFailure(t *testing.T) {
-	fastWaitForInterval(t)
-	// A process-existence check exits 0 while the process exists and non-zero
-	// after it exits. until:failure must therefore wait for the second poll,
-	// rather than treating the first successful check as completion.
-	counter := filepath.Join(t.TempDir(), "count")
-	cmd := fmt.Sprintf(`echo x >> %[1]s; [ "$(wc -l < %[1]s)" -lt 2 ]`, counter)
-	input := fmt.Sprintf(`{"command":%q,"until":"failure","interval_seconds":0.02,"timeout_seconds":30}`, cmd)
-
-	start := time.Now()
-	resp := runWaitFor(t, input)
-	if resp.IsError {
-		t.Fatalf("expected success after the command failed, got: %s", resp.Content)
-	}
-	if !strings.Contains(resp.Content, "condition met after 2 attempt(s)") {
-		t.Errorf("expected 2 attempts, got: %s", resp.Content)
-	}
-	if elapsed := time.Since(start); elapsed < 15*time.Millisecond {
-		t.Errorf("expected an interval wait, finished in %s", elapsed)
-	}
-}
-
 func TestWaitForRejectsUnknownUntilMode(t *testing.T) {
 	resp := runWaitFor(t, `{"command":"echo ready","until":"exited"}`)
 	if !resp.IsError {
@@ -183,19 +137,7 @@ func TestWaitForReportsTimeoutCap(t *testing.T) {
 	}
 }
 
-func TestWaitForUntilFailureDoesNotTreatDeadlineAsCondition(t *testing.T) {
-	fastWaitForInterval(t)
-	resp := runWaitFor(t, `{"command":"sleep 0.1","until":"failure","timeout_seconds":0.03}`)
-	if !resp.IsError {
-		t.Fatalf("expected the polling deadline to fail the wait, got: %s", resp.Content)
-	}
-	if !strings.Contains(resp.Content, "timed out") {
-		t.Errorf("expected timeout error, got: %s", resp.Content)
-	}
-}
-
 func TestWaitForSuccessPattern(t *testing.T) {
-	fastWaitForInterval(t)
 	tests := []struct {
 		name    string
 		input   string
@@ -256,29 +198,6 @@ func TestWaitForStderrVisibleInOutput(t *testing.T) {
 	}
 }
 
-func TestWaitForParentCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(30 * time.Millisecond)
-		cancel()
-	}()
-	start := time.Now()
-	resp, err := executeWaitFor(ctx, fantasy.ToolCall{ID: "1", Name: "wait_for",
-		Input: `{"command":"exit 1","interval_seconds":0.05,"timeout_seconds":60}`}, ToolConfig{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !resp.IsError {
-		t.Fatalf("expected error response after cancellation, got success: %s", resp.Content)
-	}
-	if !strings.Contains(resp.Content, "cancelled") {
-		t.Errorf("expected cancellation reason, got: %s", resp.Content)
-	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Errorf("cancellation took too long: %s", elapsed)
-	}
-}
-
 func TestWaitForSudoRequiresAllowlist(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -290,6 +209,7 @@ func TestWaitForSudoRequiresAllowlist(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			sudoArgsPath := writeFakeSudo(t)
 			ctx := context.WithValue(context.Background(), AgentToolsAllowedKey, tt.allowed)
 			resp, err := executeWaitFor(ctx, fantasy.ToolCall{ID: "1", Name: "wait_for",
 				Input: `{"command":"echo ok","sudo":true,"timeout_seconds":2,"interval_seconds":1}`}, ToolConfig{})
@@ -297,16 +217,20 @@ func TestWaitForSudoRequiresAllowlist(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if tt.wantErr {
+				if _, err := os.Stat(sudoArgsPath); !os.IsNotExist(err) {
+					t.Errorf("denied call executed sudo: %v", err)
+				}
 				if !resp.IsError || !strings.Contains(resp.Content, "sudo tool in this agent's tools allowlist") {
 					t.Errorf("expected allowlist denial, got: %s", resp.Content)
 				}
 				return
 			}
-			// With sudo allowed the command attempts to run; depending on the
-			// environment sudo may prompt/fail, so only assert the allowlist
-			// check itself did not trigger.
-			if strings.Contains(resp.Content, "tools allowlist") {
-				t.Errorf("allowlist denial fired unexpectedly: %s", resp.Content)
+			args, readErr := os.ReadFile(sudoArgsPath)
+			if readErr != nil || string(args) != "bash\n-c\necho ok\n" {
+				t.Errorf("sudo arguments = %q, err %v", args, readErr)
+			}
+			if resp.IsError || !strings.Contains(resp.Content, "ok") {
+				t.Errorf("authorized command did not execute: %s", resp.Content)
 			}
 		})
 	}

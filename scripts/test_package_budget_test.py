@@ -80,6 +80,55 @@ class PackageBudgetTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
                 budget.timeout_seconds(value)
 
+    def test_test_timings_rank_parents_without_double_counting_subtests(self):
+        events = [
+            {'Action': 'run', 'Package': 'p', 'Test': 'TestSlow'},
+            {'Action': 'pass', 'Package': 'p', 'Test': 'TestSlow/child', 'Elapsed': 4},
+            {'Action': 'fail', 'Package': 'p', 'Test': 'TestSlow', 'Elapsed': 6},
+            {'Action': 'run', 'Package': 'p', 'Test': 'TestSlow'},
+            {'Action': 'pass', 'Package': 'p', 'Test': 'TestSlow', 'Elapsed': 4},
+            {'Action': 'skip', 'Package': 'p', 'Test': 'TestSkipped', 'Elapsed': 0},
+            {'Action': 'run', 'Package': 'p', 'Test': 'TestInterrupted'},
+            {'Action': 'pass', 'Package': 'p', 'Elapsed': 12},
+        ]
+        samples = {}
+        packages, malformed = budget.packages_from_jsonl(map(json.dumps, events), 1200, samples)
+        rows = budget.test_timings(samples, {'tests': [
+            {'package': 'p', 'test': 'TestSlow', 'elapsed_seconds': 4},
+            {'package': 'p', 'test': 'TestSkipped', 'elapsed_seconds': 0},
+        ]})
+        self.assertEqual(malformed, 0)
+        self.assertEqual(packages[0]['elapsed_seconds'], 12)
+        self.assertEqual([row['test'] for row in rows], ['TestSlow', 'TestSkipped', 'TestInterrupted'])
+        self.assertEqual(rows[0]['status'], 'fail')
+        self.assertEqual(rows[0]['runs'], 2)
+        self.assertEqual(rows[0]['elapsed_seconds'], 5)
+        self.assertEqual(rows[0]['delta_seconds'], 1)
+        self.assertEqual(rows[0]['delta_ratio'], 0.25)
+        self.assertIsNone(rows[1]['delta_ratio'])
+        self.assertIsNone(rows[2]['elapsed_seconds'])
+        summary = budget.render_tests(rows, 1)
+        self.assertIn('TestSlow', summary)
+        self.assertIn('+1.000', summary)
+        self.assertNotIn('TestSkipped', summary)
+
+    def test_cli_compares_an_explicit_baseline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            event = {'Action': 'pass', 'Package': 'p', 'Test': 'TestRun', 'Elapsed': 2}
+            (root / 'tests.jsonl').write_text(json.dumps(event) + '\n')
+            baseline = root / 'previous.json'
+            baseline.write_text(json.dumps({'tests': [
+                {'package': 'p', 'test': 'TestRun', 'elapsed_seconds': 1}]}))
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), '--timeout', '30m', '--evidence', str(root),
+                 '--summary', str(root / 'summary'), '--baseline', str(baseline)],
+                capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads((root / 'package-budget.json').read_text())
+            self.assertEqual(report['tests'][0]['delta_seconds'], 1)
+            self.assertIn('Slowest top-level tests', (root / 'summary').read_text())
+
     def test_cli_preserves_summary_and_creates_evidence_even_before_discovery(self):
         for has_results in [False, True]:
             with self.subTest(has_results=has_results), tempfile.TemporaryDirectory() as directory:
