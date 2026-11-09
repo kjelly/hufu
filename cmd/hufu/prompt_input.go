@@ -79,25 +79,14 @@ func defaultHistoryPath() string {
 	return filepath.Join(dir, "prompt_history")
 }
 
+// Retry without history or completion when the configured reader is unavailable.
 func askUserForPromptFallback() (string, error) {
-	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Enter Prompt ───"))
-	fmt.Fprintf(os.Stderr, "Describe the task (use @team-name or @agent-name in the prompt):\n")
-	prompt := promptui.Prompt{
-		Label: "Prompt",
-	}
-	result, err := prompt.Run()
+	pr, err := readline.NewPromptReader("")
 	if err != nil {
-		if err == promptui.ErrInterrupt {
-			return "", errInterrupted{}
-		}
-		return "", err
+		return "", fmt.Errorf("initialize task input: %w", err)
 	}
-	promptVal := strings.TrimSpace(result)
-	if promptVal == "" {
-		fmt.Fprintf(os.Stderr, "%s No prompt provided.\n", errStyle.Render("✗"))
-		return "", fmt.Errorf("no prompt provided")
-	}
-	return promptVal, nil
+	defer func() { _ = pr.Close() }()
+	return askUserForPrompt(pr)
 }
 
 func readStdin() string {
@@ -111,8 +100,8 @@ func readStdin() string {
 
 func askUserForPrompt(pr *readline.PromptReader) (string, error) {
 	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Enter Prompt ───"))
-	fmt.Fprintf(os.Stderr, "Describe the task (use @team-name or @agent-name in the prompt):\n")
-	prompt, err := pr.ReadLine(boldStyle.Render("> "))
+	fmt.Fprintf(os.Stderr, "Describe the task (use @team-name or @agent-name in the prompt):\n%s\n", taskPromptHint)
+	prompt, err := readTaskPrompt(pr.ReadLine, boldStyle.Render("> "))
 	if err != nil {
 		if err == ergoreadline.ErrInterrupt || err == io.EOF {
 			fmt.Fprintf(os.Stderr, "\n")

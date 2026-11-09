@@ -528,6 +528,8 @@ func TestIntegration_PromptInput(t *testing.T) {
 	// is not guaranteed to appear contiguously in the output stream; the
 	// submitted prompt below is the authoritative check.
 	tm.Type("fix the bug")
+	tm.Send(tea.KeyPressMsg{Code: 'j', Mod: tea.ModCtrl})
+	tm.Send(tea.PasteMsg{Content: "保留換行\n\n  add tests"})
 
 	// Enter submits — the dialog should close.
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -538,8 +540,8 @@ func TestIntegration_PromptInput(t *testing.T) {
 	// The prompt should have been handed to SubmitPrompt.
 	select {
 	case injected := <-submitted:
-		if injected != "fix the bug" {
-			t.Errorf("expected injected prompt 'fix the bug', got %q", injected)
+		if injected != "fix the bug\n保留換行\n\n  add tests" {
+			t.Errorf("multiline prompt changed: %q", injected)
 		}
 	case <-time.After(3 * time.Second):
 		t.Error("expected prompt to be passed to SubmitPrompt")

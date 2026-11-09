@@ -21,6 +21,7 @@ func (s *chatSession) runPlain() error {
 	fmt.Fprintf(os.Stderr, "\n%s Chatting with team %s. Type %s to leave, %s to clear context.\n\n",
 		boldStyle.Render("💬"), teamStyle.Render(s.teamName),
 		dimStyle.Render("/exit"), dimStyle.Render("/reset"))
+	fmt.Fprintln(os.Stderr, taskPromptHint)
 	turns := chatTurnSequencer{images: s.pendingImageState()}
 	fmt.Fprintln(os.Stderr, "Pending images start empty in this process. Use /image to list them.")
 	for {

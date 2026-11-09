@@ -1780,6 +1780,23 @@ hufu chat --default --ui chat --theme light --display-preset epaper
 `--tui`) the task dashboard. See
 [docs/architecture/chat-tui.md](docs/architecture/chat-tui.md).
 
+The runtime dashboard's `c` prompt also supports multiline text: `Ctrl+J`,
+`Alt+Enter` or `Shift+Enter` inserts a newline, `Enter` submits, and `Esc`
+cancels. Multiline paste preserves line breaks, and long drafts scroll.
+
+For CLI task entry, additional prompts and plain `hufu chat`, end a line with
+`\` to continue on the next line. To enter a block with blank lines,
+type `/multiline` first, then finish with `/end` on its own line. Use `\/end`
+to include a literal `/end` line. `Ctrl+C` or EOF cancels the entire draft.
+
+```text
+hufu> /multiline
+... Inspect the runtime input UI.
+...
+... Preserve line breaks in the task.
+... /end
+```
+
 ### Interactive PTY takeover (experimental)
 
 The stateful `terminal` tool starts the local PTY broker automatically when an
