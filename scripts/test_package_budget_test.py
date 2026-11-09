@@ -20,11 +20,24 @@ class PackageBudgetTests(unittest.TestCase):
         workflow = (SCRIPT.parents[1] / '.github/workflows/ci.yml').read_text()
         test_job = workflow.split('\n  test:\n', 1)[1].split('\n  integration:\n', 1)[0]
         integration = workflow.split('\n  integration:\n', 1)[1].split('\n  build:\n', 1)[0]
+        vet_job = workflow.split('\n  vet:\n', 1)[1].split('\n  test:\n', 1)[0]
+        self.assertIn('run: mise exec -- go mod tidy -diff', vet_job)
+        self.assertNotIn('|| true', vet_job)
+        self.assertNotIn('Only the known x/sys', vet_job)
         self.assertIn('scope: team\n            package-timeout: 30m\n            job-timeout: 40', test_job)
         self.assertIn('scope: improver\n            package-timeout: 30m\n            job-timeout: 40', test_job)
         self.assertEqual(test_job.count('package-timeout: 20m'), 2)
         self.assertIn('timeout-minutes: ${{ matrix.job-timeout }}', test_job)
-        self.assertIn('-layer short -scope "$TEST_SCOPE" -- -race -json -timeout "$PACKAGE_TIMEOUT"', test_job)
+        self.assertEqual(test_job.count('scope: team\n'), 3)
+        self.assertEqual(test_job.count('shard-count: 3'), 3)
+        for index in range(3):
+            self.assertIn(f'partition: team-{index}\n            shard-index: {index}\n            shard-count: 3', test_job)
+        self.assertIn('TEST_SHARD_INDEX: ${{ matrix.shard-index }}', test_job)
+        self.assertIn('TEST_SHARD_COUNT: ${{ matrix.shard-count }}', test_job)
+        self.assertIn('name: short-${{ matrix.partition }}', test_job)
+        self.assertIn('.cache/go-race-${{ matrix.partition }}', test_job)
+        self.assertIn('-shard-count "$TEST_SHARD_COUNT" -list > work/ci-tests/shard-inventory.json', test_job)
+        self.assertIn('-layer short -scope "$TEST_SCOPE" -shard-index "$TEST_SHARD_INDEX" -shard-count "$TEST_SHARD_COUNT" -- -race -json -timeout "$PACKAGE_TIMEOUT"', test_job)
         self.assertIn('-layer integration -- -race -json -timeout "$PACKAGE_TIMEOUT"', integration)
         for job in [test_job, integration]:
             self.assertIn('if: always()\n        env:\n          GO_CACHE_HIT:', job)

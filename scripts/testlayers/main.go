@@ -39,15 +39,20 @@ type suite struct {
 func main() {
 	layer := flag.String("layer", "short", "short, integration, or full")
 	scope := flag.String("scope", "all", "all, cli, team, improver, or other")
-	list := flag.Bool("list", false, "print active top-level Test inventory as JSON without executing tests")
+	list := flag.Bool("list", false, "print selected active top-level Test inventory as JSON without executing tests")
+	shardIndex := flag.Int("shard-index", 0, "zero-based test shard index")
+	shardCount := flag.Int("shard-count", 1, "number of deterministic test shards")
 	flag.Parse()
-	if err := run(*layer, *scope, *list, flag.Args()); err != nil {
+	if err := run(*layer, *scope, *list, flag.Args(), testShard{Index: *shardIndex, Count: *shardCount}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(layer, scope string, list bool, extra []string) error {
+func run(layer, scope string, list bool, extra []string, shard testShard) error {
+	if err := shard.validate(); err != nil {
+		return err
+	}
 	if !slices.Contains([]string{"short", "integration", "full"}, layer) ||
 		!slices.Contains([]string{"all", "cli", "team", "improver", "other"}, scope) {
 		return fmt.Errorf("invalid layer %q or scope %q", layer, scope)
@@ -66,11 +71,14 @@ func run(layer, scope string, list bool, extra []string) error {
 		return fmt.Errorf("no packages selected for %s", scope)
 	}
 	if list {
-		return json.NewEncoder(os.Stdout).Encode(selected)
+		return json.NewEncoder(os.Stdout).Encode(shard.inventory(selected))
 	}
-	commands, err := testCommands(layer, selected, extra)
+	commands, err := shard.commands(layer, selected, extra)
 	if err != nil {
 		return err
+	}
+	if len(commands) == 0 {
+		fmt.Fprintf(os.Stderr, "no tests assigned to shard %d/%d\n", shard.Index, shard.Count)
 	}
 	for _, command := range commands {
 		if err := execute(command); err != nil {
@@ -105,39 +113,13 @@ func testCommands(layer string, selected []suite, extra []string) ([][]string, e
 		}
 		return [][]string{base}, nil
 	}
-	var active []suite
-	var names []string
+	names := make(map[string][]string, len(selected))
 	for _, entry := range selected {
-		if len(entry.Integration) != 0 {
-			active = append(active, entry)
-			names = append(names, entry.Integration...)
-		}
+		names[entry.Package] = entry.Integration
 	}
-	if len(active) == 0 {
+	commands := matchingTestCommands(base, selected, names, false)
+	if len(commands) == 0 {
 		return nil, fmt.Errorf("no integration tests selected")
-	}
-	slices.Sort(names)
-	names = slices.Compact(names)
-	// A shared filter is safe only when it cannot select a short test in any
-	// participating package. Otherwise keep exact per-package filters.
-	collision := false
-	for _, entry := range active {
-		for _, name := range entry.Short {
-			if _, found := slices.BinarySearch(names, name); found {
-				collision = true
-			}
-		}
-	}
-	if !collision {
-		command := append(slices.Clone(base), "-run", exactPattern(names))
-		for _, entry := range active {
-			command = append(command, entry.Package)
-		}
-		return [][]string{command}, nil
-	}
-	var commands [][]string
-	for _, entry := range active {
-		commands = append(commands, append(slices.Clone(base), "-run", exactPattern(entry.Integration), entry.Package))
 	}
 	return commands, nil
 }

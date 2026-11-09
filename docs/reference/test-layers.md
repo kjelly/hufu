@@ -16,7 +16,7 @@ promise that every short test is a pure unit test.
 
 | Entry | Local command | Required CI coverage |
 | --- | --- | --- |
-| Short, including pure unit tests | `mise run test-short` | Four existing race package groups: cli, team, improver, other |
+| Short, including pure unit tests | `mise run test-short` | Four race package groups: cli, team (three shards), improver, other |
 | Reviewed process/PTY, persistence, architecture/generator cases | `mise run test-integration` | Separate `integration` job, with race and no short flag |
 | Complete offline regression | `mise exec -- go run ./scripts/testlayers -layer full` | Unchanged `cgo-free` job executes all tests with `CGO_ENABLED=0` and no short flag |
 | Active test inventory | `mise run test-inventory` | Every short/integration invocation validates the same discovered sources |
@@ -26,10 +26,49 @@ promise that every short test is a pure unit test.
 entry additionally includes diagnostic-pilot. Live smoke keeps its existing
 opt-in guard; moving it cannot accelerate default CI because it was already
 skipped there. All entry points retain normal Go build tags. Example tests and
-fuzz seed corpora remain in the unfiltered short/full package executions. The
-inventory lists top-level `Test` functions; it does not filter examples or fuzz
-seeds out of execution. The inventory shows the tests active for the current GOOS/GOARCH, including external test
+fuzz seed corpora remain in short/full execution; shard zero owns them when
+sharding is enabled. The inventory lists top-level `Test` functions, while
+example/fuzz execution is retained separately. The inventory shows the tests active for the current GOOS/GOARCH, including external test
 packages, rather than inventing coverage for inactive platform files.
+
+## Stable CI shards
+
+The team short/race job exceeded its 30-minute package deadline in
+[run 42594298674](https://github.com/kjelly/hufu/actions/runs/42594298674).
+The timeout occurred during a newly started recovery subtest after many earlier
+cases had completed. It did not identify that recovery subtest as a hang.
+
+CI now uses three team partitions, with zero-based indices 0, 1 and 2. Each keeps
+the 30-minute package and 40-minute job limits. Other package groups use one
+partition. Every matrix partition must pass for the existing `ci-success` gate.
+No test or integration guard was removed, and no timeout was increased.
+
+`-shard-index` and `-shard-count` also work locally. The runner assigns each
+package/test-name pair using FNV-1a 64-bit modulo the shard count. Assignment is
+independent of discovery order and unrelated test additions. Changing the count
+can repartition tests. Default count 1 preserves the original unfiltered
+short/full commands and integration selection.
+
+Sharded commands use exact test-name filters. Examples and fuzz seeds run only
+on shard zero for short/full layers, including packages with no assigned `Test`
+function. Integration continues to select only its declared tests. Shared
+filters fall back to separate package commands when a name could select a test
+assigned to another layer or shard. Tests verify disjoint/complete assignment
+and run a real Go fixture to check example and fuzz-seed execution.
+
+For example, execute the second team partition from the repository root:
+
+```bash
+mise exec -- go run ./scripts/testlayers -layer short -scope team -shard-index 1 -shard-count 3 -- -race -timeout 30m
+```
+
+Each CI partition uploads the complete `inventory.json` plus its selected
+`shard-inventory.json` and actual JSONL results. Artifact and build-cache names
+include the partition, preventing upload collisions and shared immutable cache
+saves between shards. Package elapsed/deadline ratios describe the selected
+partition. The two additional team runners can increase compilation, cache
+transfers and total runner seconds; the workflow cost report remains the source
+for observed cost, rather than assuming CPU savings from a shorter job.
 
 ## Membership and coverage
 

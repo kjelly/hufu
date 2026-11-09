@@ -1,5 +1,11 @@
 # Native Chrome CDP
 
+> Status: active
+> Authority: reference
+> Verified-Commit: `1fae4079` (native Chrome implementation base)
+> Supersedes: —
+> Superseded-By: —
+
 Hufu connects directly to an operator-owned Chrome on the same host. No Node.js,
 Playwright or external MCP server is needed. `chrome-cdp` is implemented inside
 Hufu, using the ordinary MCP catalog, authorization, observation and receipt
