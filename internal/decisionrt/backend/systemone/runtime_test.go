@@ -14,18 +14,34 @@ import (
 // result validation stays authoritative after mapping.
 func TestRuntimeAcceptsMappedResults(t *testing.T) {
 	tests := []struct {
-		name    string
-		request decisionrt.Request
-		body    string
-		policy  decisionrt.AcceptancePolicy
-		status  decisionrt.Status
-		reason  string
+		name          string
+		request       decisionrt.Request
+		body          string
+		policy        decisionrt.AcceptancePolicy
+		status        decisionrt.Status
+		reason        string
+		probabilities []float64
 	}{
 		{name: "choice", request: choiceRequest(21), body: choiceResponse(opaqueKeys("o", 21), "o00", 0.8, 0.1), status: decisionrt.StatusDecided},
 		{name: "large choice domain", request: choiceRequest(101), body: choiceResponse(opaqueKeys("o", 101), "o100", 0.8, 0.1), status: decisionrt.StatusDecided},
 		{name: "integer", request: integerRequest(-10, 10), body: choiceResponse(opaqueKeys("i", 21), "i00", 0.4, 0.1), status: decisionrt.StatusDecided},
 		{name: "boolean certain false", request: booleanRequest(), body: noulResponse("0"), status: decisionrt.StatusDecided},
 		{name: "boolean certain true", request: booleanRequest(), body: noulResponse("1"), status: decisionrt.StatusDecided},
+		{
+			name: "rounded distribution", request: choiceRequest(4),
+			body:   `{"answers":{"decision":{"type":"choice","choice":"o00","probabilities":{"o00":0.9857,"o01":0.0046,"o02":0.0046,"o03":0.005},"confidence":0.9623}}}`,
+			status: decisionrt.StatusDecided, probabilities: []float64{0.9857, 0.0046, 0.0046, 0.005},
+		},
+		{
+			name: "lower sum boundary", request: choiceRequest(2),
+			body:   `{"answers":{"decision":{"type":"choice","choice":"o00","probabilities":{"o00":0.7,"o01":0.299},"confidence":0.5}}}`,
+			status: decisionrt.StatusDecided, probabilities: []float64{0.7, 0.299},
+		},
+		{
+			name: "upper sum boundary", request: choiceRequest(2),
+			body:   `{"answers":{"decision":{"type":"choice","choice":"o00","probabilities":{"o00":0.7,"o01":0.301},"confidence":0.5}}}`,
+			status: decisionrt.StatusDecided, probabilities: []float64{0.7, 0.301},
+		},
 		{
 			name: "below minimum confidence", request: choiceRequest(2), body: choiceResponse(opaqueKeys("o", 2), "o00", 0.55, 0.9),
 			policy: decisionrt.AcceptancePolicy{MinConfidence: new(0.6)}, status: decisionrt.StatusAbstained, reason: "low_confidence",
@@ -60,6 +76,14 @@ func TestRuntimeAcceptsMappedResults(t *testing.T) {
 			}
 			if receipt.Backend != "systemone" || receipt.Model != testModel || receipt.Status != test.status {
 				t.Fatalf("receipt = %#v", receipt)
+			}
+			for i, probability := range test.probabilities {
+				if result.Candidates[i].Probability != probability {
+					t.Fatalf("adapter changed original probability %d: %+v", i, result.Candidates)
+				}
+			}
+			if err := decisionrt.ValidateResult(test.request.Spec, result); err != nil {
+				t.Fatalf("persisted result validation rejected accepted distribution: %v", err)
 			}
 		})
 	}

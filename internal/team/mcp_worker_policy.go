@@ -155,7 +155,7 @@ func executionPolicyMCPWorkerPolicies(session *TeamSession) []ExecutionMCPWorker
 	}
 	var result []ExecutionMCPWorkerPolicySnapshot
 	for server, config := range session.MCPServers {
-		if len(config.ToolPolicies) > 0 {
+		if len(config.ToolPolicies) > 0 || config.PageVerification {
 			result = append(result, ExecutionMCPWorkerPolicySnapshot{Server: server, Hash: mcpServerConfigHash(config)})
 		}
 	}

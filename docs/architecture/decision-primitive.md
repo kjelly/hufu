@@ -519,7 +519,8 @@ const (
 - `Candidates` 非空時一律代表完整 distribution；必須恰好包含
   domain 的每個合法值一次，不多也不少。
 - 完整 distribution 的 probability 總和必須滿足
-  `abs(sum-1) <= 1e-6`。
+  `abs(sum-1) <= 0.001`（邊界另容許浮點累加誤差 `1e-12`），
+  以接受服務端的小數位捨入；保留原始機率，不重新正規化。
 - backend 無法提供可靠 probability 時，必須回傳 nil/empty
   `Candidates`；不支援 partial distribution。
 - 不得偽造 uniform probability。
@@ -1129,7 +1130,7 @@ Response：
 - `answers` 必須恰好只有 `decision` 一個 key；未知 extension fields 忽略。
 - `choice`：`type` 為 `choice`；`choice` 是已宣告 key；`probabilities` 恰好
   涵蓋所有已宣告 key，每個值是 `[0,1]` 內的 finite number，總和與 1 相差不
-  超過 `1e-6`（不得 renormalize）；provider `confidence` 必須存在且在
+  超過 `0.001`（邊界另容許浮點累加誤差 `1e-12`；不得 renormalize）；provider `confidence` 必須存在且在
   `[0,1]`，但不作為 hufu confidence（它與選中機率不同，例如 0.507/0.493 的
   二選一 confidence 只有 0.00014）。
 - `noul`：`type` 為 `noul`；`noul` 是 P(true)，必須存在且在 `[0,1]`；只有

@@ -13,7 +13,6 @@ import (
 
 const (
 	maximumJSONDepth      = 32
-	probabilityTolerance  = 1e-6
 	invalidResponseReason = "invalid response"
 )
 
@@ -103,7 +102,7 @@ func decodeChoice(answer map[string]json.RawMessage, candidates []candidate) (de
 	if !selected {
 		return decisionrt.BackendResult{}, invalidOutput("choice is not a declared candidate")
 	}
-	if math.Abs(total-1) > probabilityTolerance {
+	if !decisionrt.ValidProbabilitySum(total) {
 		return decisionrt.BackendResult{}, invalidOutput("candidate probabilities do not sum to one")
 	}
 	return result, nil

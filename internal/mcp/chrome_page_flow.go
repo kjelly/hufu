@@ -23,6 +23,9 @@ type chromePageFlow struct {
 	dwell         *ChromePageDwellConfig
 	pendingDwell  bool
 	captureFailed bool
+	verification  bool
+	humanRequests map[string]bool
+	waitForHuman  func(context.Context) error
 }
 
 func (f *chromePageFlow) navigate(ctx context.Context, url string) (string, error) {
@@ -45,6 +48,9 @@ func (f *chromePageFlow) read(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if f.verification {
+		return f.verifyPage(ctx, page, false)
+	}
 	return formatChromeSnapshot(page)
 }
 
@@ -53,15 +59,30 @@ func (f *chromePageFlow) snapshot(ctx context.Context) (string, error) {
 	if f.pendingDwell {
 		delay = f.dwell
 	}
+	var captured browser.Snapshot
 	text, err := snapshotChromeWithDwell(ctx, func(ctx context.Context) (string, error) {
-		text, err := f.read(ctx)
+		page, err := f.page.Snapshot(ctx)
 		f.captureFailed = err != nil
-		return text, err
+		if err != nil {
+			return "", err
+		}
+		captured = page
+		return formatChromeSnapshot(page)
 	}, delay)
 	if err == nil || ctx.Err() != nil {
 		// A cancelled call may belong to a finished chat turn while the
 		// manager remains alive. Do not carry its idle debt into the next turn.
 		f.pendingDwell = false
+	}
+	if err == nil && f.verification {
+		verified, verifyErr := f.verifyPage(ctx, captured, delay != nil)
+		if verifyErr != nil {
+			return "", verifyErr
+		}
+		// Keep the capture-before-dwell receipt for readable initial pages.
+		if verified != "" {
+			text = verified
+		}
 	}
 	return text, err
 }

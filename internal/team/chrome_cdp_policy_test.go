@@ -11,9 +11,9 @@ func TestChromeCDPPolicyPinsBrowserSettingsAcrossResume(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())
 	workspace := t.TempDir()
-	start := func(endpoint string, dwell *mcp.ChromePageDwellConfig) *Coordinator {
+	start := func(endpoint string, dwell *mcp.ChromePageDwellConfig, verification bool) *Coordinator {
 		c := newExecutionPolicySnapshotCoordinator(t, workspace, 2, 3)
-		cfg := mcp.MCPServerConfig{Type: "chrome-cdp", URL: endpoint, PageDwell: dwell, AllowedTools: []string{"browser_snapshot"}, ToolPolicies: map[string]mcp.WorkerToolPolicy{
+		cfg := mcp.MCPServerConfig{Type: "chrome-cdp", URL: endpoint, PageDwell: dwell, PageVerification: verification, AllowedTools: []string{"browser_snapshot", "browser_wait_for_user"}, ToolPolicies: map[string]mcp.WorkerToolPolicy{
 			"browser_snapshot": {SideEffect: "none", Filesystem: "none", InputSchema: map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}},
 		}}
 		c.session.MCPServers = map[string]mcp.MCPServerConfig{"chrome": cfg}
@@ -22,7 +22,7 @@ func TestChromeCDPPolicyPinsBrowserSettingsAcrossResume(t *testing.T) {
 		}
 		return c
 	}
-	first := start("http://127.0.0.1:9222", &mcp.ChromePageDwellConfig{MinSeconds: 300, MaxSeconds: 600})
+	first := start("http://127.0.0.1:9222", &mcp.ChromePageDwellConfig{MinSeconds: 300, MaxSeconds: 600}, false)
 	first.initEventStore()
 	if err := first.checkRunAdmission(); err != nil {
 		t.Fatal(err)
@@ -32,7 +32,7 @@ func TestChromeCDPPolicyPinsBrowserSettingsAcrossResume(t *testing.T) {
 	if checkpoint == nil || len(checkpoint.ExecutionPolicySnapshot.MCPWorkerPolicies) != 1 {
 		t.Fatal("missing native browser policy checkpoint")
 	}
-	for _, scenario := range []string{"same", "endpoint", "min_seconds", "max_seconds", "disabled"} {
+	for _, scenario := range []string{"same", "endpoint", "min_seconds", "max_seconds", "disabled", "verification"} {
 		t.Run(scenario, func(t *testing.T) {
 			endpoint := "http://127.0.0.1:9222"
 			dwell := &mcp.ChromePageDwellConfig{MinSeconds: 300, MaxSeconds: 600}
@@ -46,7 +46,7 @@ func TestChromeCDPPolicyPinsBrowserSettingsAcrossResume(t *testing.T) {
 			case "disabled":
 				dwell = nil
 			}
-			second := start(endpoint, dwell)
+			second := start(endpoint, dwell, scenario == "verification")
 			second.SetSessionData(checkpoint)
 			matches, err := second.executionPolicySnapshotMatchesCurrent(checkpoint.ExecutionPolicySnapshot)
 			if err != nil || matches != (scenario == "same") {

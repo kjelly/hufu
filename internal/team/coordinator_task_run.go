@@ -4268,6 +4268,7 @@ func (c *Coordinator) taskFinalizationBinding(todoID string, freeText bool) stri
 }
 
 func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fantasy.Agent, agentName, prompt string, history []fantasy.Message, timing *taskTiming, extraStop ...fantasy.StopCondition) (string, []fantasy.StepResult, error) {
+	ctx = c.withChromePageVerification(ctx)
 	toolMediaFailure := new(toolMediaFailureState)
 	ctx = withNativeProviderCounter(ctx, c)
 	ctx = mcp.WithToolResultPublisher(ctx, func(callCtx context.Context, tool mcp.MCPTool, call fantasy.ToolCall, result mcp.RuntimeToolResult) (fantasy.ToolResponse, error) {

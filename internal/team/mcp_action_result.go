@@ -94,6 +94,7 @@ func runtimeActionMCPAuthorizerFromContext(ctx context.Context) mcp.ToolAuthoriz
 // on behalf of the task's agent, through the coordinator's authorization
 // policy; the native tool is never exposed to that agent.
 func (c *Coordinator) withRuntimeActionMCPAuthorization(ctx context.Context, task TaskDef) context.Context {
+	ctx = c.withChromePageVerification(ctx)
 	return context.WithValue(ctx, runtimeActionMCPAuthorizerKey{}, mcp.ToolAuthorizer(func(callCtx context.Context, server, tool, _ string) error {
 		canonical := server + ":" + tool
 		decision, err := c.AuthorizeMCPCall(callCtx, MCPAuthorizationRequest{

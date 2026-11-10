@@ -32,6 +32,7 @@ semantic-retrieval:
 mcp-servers:
   playwright_researcher:
     type: chrome-cdp
+    page-verification: true
     url: http://127.0.0.1:9222
     page-dwell: {min-seconds: 300, max-seconds: 600}
     allowedTools: [browser_navigate, browser_snapshot, browser_click, browser_wait_for_user]
@@ -69,6 +70,7 @@ mcp-servers:
             reason: {type: string, minLength: 1, maxLength: 2000}
   playwright_countercheck:
     type: chrome-cdp
+    page-verification: true
     url: http://127.0.0.1:9222
     page-dwell: {min-seconds: 300, max-seconds: 600}
     allowedTools: [browser_navigate, browser_snapshot, browser_click, browser_wait_for_user]
@@ -106,6 +108,7 @@ mcp-servers:
             reason: {type: string, minLength: 1, maxLength: 2000}
   playwright_verifier:
     type: chrome-cdp
+    page-verification: true
     url: http://127.0.0.1:9222
     page-dwell: {min-seconds: 300, max-seconds: 600}
     allowedTools: [browser_navigate, browser_snapshot, browser_click, browser_wait_for_user]

@@ -107,6 +107,8 @@ team prompt 應明訂遇到 `abstained` 或 technical error 時請求澄清、�
 
 `systemone` 重用既有 native protocol adapter；模型必須由服務端提供。
 其 confidence 是選中候選的 raw probability，**不是校準過的正確率**。
+完整候選機率的總和容許與 1 相差最多 `0.001`（邊界另容許 `1e-12` 浮點累加誤差）。
+保留原始機率，不重新正規化；缺漏／重複候選、非 finite 或超出 `[0,1]` 的機率仍會被拒絕。
 `rule` 目前永遠 abstain，適合離線驗證 contract，不會自行猜測 domain 答案。
 `backend: sidecar` 用語言模型決策：模型從候選中挑一個 token,不回報信心值。
 

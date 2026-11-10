@@ -23,6 +23,17 @@ const (
 	maxModelBytes          = 256
 )
 
+// ProbabilitySumTolerance permits rounded provider distributions without
+// changing their original probabilities or the selected candidate.
+const ProbabilitySumTolerance = 0.001
+
+// ValidProbabilitySum is shared by native adapters and persisted-result
+// validation. The small roundoff allowance keeps the tolerance inclusive after
+// floating-point addition of the bounded candidate domain.
+func ValidProbabilitySum(total float64) bool {
+	return math.Abs(total-1) <= ProbabilitySumTolerance+1e-12
+}
+
 // Context value types recorded in the canonical context entries that Digest
 // hashes. CanonicalContextValues maps each type back to a JSON value.
 const (
@@ -340,7 +351,7 @@ func validateCandidates(spec Spec, selected Value, candidates []Candidate, confi
 			selectedProbability = candidate.Probability
 		}
 	}
-	if math.Abs(total-1) > 1e-6 {
+	if !ValidProbabilitySum(total) {
 		return invalidBackendOutput("candidate probabilities do not sum to one")
 	}
 	if semantics != ConfidenceNone && math.Abs(selectedProbability-confidence) > 1e-6 {

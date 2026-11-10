@@ -5,7 +5,7 @@ golangci-lint = "2.14.0"
 [env]
 # mise owns toolchain selection; Go must not download/select another version.
 GOTOOLCHAIN = "local"
-GOMAXPROCS = "2"
+GOMAXPROCS = "4"
 
 [tasks.build]
 description = "Build hufu with the pinned Go toolchain"

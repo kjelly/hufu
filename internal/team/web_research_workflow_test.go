@@ -47,6 +47,9 @@ func TestWebResearchWorkflowRetainsSearchAndDedicatedChromeTools(t *testing.T) {
 	c.mcpManager = mcp.NewMCPToolManager("", "")
 	t.Cleanup(func() { _ = c.mcpManager.Close() })
 	for name, cfg := range session.MCPServers {
+		if !cfg.PageVerification {
+			t.Fatalf("%s lost runtime page verification", name)
+		}
 		if cfg.PageDwell == nil || cfg.PageDwell.MinSeconds != 300 || cfg.PageDwell.MaxSeconds != 600 {
 			t.Fatalf("%s lost the required random page dwell", name)
 		}

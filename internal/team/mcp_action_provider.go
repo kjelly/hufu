@@ -117,7 +117,8 @@ func mcpServerConfigHash(config mcp.MCPServerConfig) string {
 		ToolPolicies          map[string]mcp.WorkerToolPolicy `json:"tool_policies,omitempty"`
 		TemporaryDirectoryEnv []string                        `json:"temporary_directory_env,omitempty"`
 		PageDwell             *mcp.ChromePageDwellConfig      `json:"page_dwell,omitempty"`
-	}{serverType, config.Command, config.URL, allowed, excluded, config.NoOAuth, environment, config.ToolPolicies, temporaryDirectoryEnv, config.PageDwell})
+		PageVerification      bool                            `json:"page_verification,omitzero"`
+	}{serverType, config.Command, config.URL, allowed, excluded, config.NoOAuth, environment, config.ToolPolicies, temporaryDirectoryEnv, config.PageDwell, config.PageVerification})
 	if err != nil {
 		return ""
 	}

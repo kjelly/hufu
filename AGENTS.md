@@ -34,7 +34,7 @@ mise run lint                           # Required lint gate for code changes
 mise exec -- go test -p 2 ./internal/inspect -run TestBindReadTarget
 ```
 
-The project defaults to `GOMAXPROCS=2`; Go build/test/vet tasks also use `-p 2`.
+The project defaults to `GOMAXPROCS=4`; Go build/test/vet tasks retain `-p 2`.
 Run heavyweight validation tasks sequentially, not as parallel mise tasks.
 
 ### Codex build-cache lifecycle

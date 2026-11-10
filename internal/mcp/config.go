@@ -15,6 +15,7 @@ type MCPServerConfig struct {
 	ToolPolicies          map[string]WorkerToolPolicy `json:"toolPolicies,omitempty" yaml:"toolPolicies,omitempty"`
 	NoOAuth               bool                        `json:"noOAuth,omitempty"           yaml:"noOAuth,omitempty"`
 	PageDwell             *ChromePageDwellConfig      `json:"page-dwell,omitempty" yaml:"page-dwell,omitempty"`
+	PageVerification      bool                        `json:"page-verification,omitzero" yaml:"page-verification,omitempty"`
 }
 
 func (s *MCPServerConfig) UnmarshalJSON(data []byte) error {
@@ -29,6 +30,7 @@ func (s *MCPServerConfig) UnmarshalJSON(data []byte) error {
 		ToolPolicies          map[string]WorkerToolPolicy `json:"toolPolicies,omitempty"`
 		NoOAuth               bool                        `json:"noOAuth,omitempty"`
 		PageDwell             *ChromePageDwellConfig      `json:"page-dwell,omitempty"`
+		PageVerification      bool                        `json:"page-verification,omitzero"`
 	}
 
 	var nc newFormat
@@ -45,6 +47,7 @@ func (s *MCPServerConfig) UnmarshalJSON(data []byte) error {
 	s.NoOAuth = nc.NoOAuth
 	s.ToolPolicies = nc.ToolPolicies
 	s.PageDwell = nc.PageDwell
+	s.PageVerification = nc.PageVerification
 
 	if s.Type == "" && len(s.Command) > 0 {
 		s.Type = "local"

@@ -76,7 +76,17 @@ snapshot 的 `arguments` 必須是 `{}`；`url`、`filename` 等欄位均不接�
 亦不計入 `--max-duration` 總時間預算；取消與外部操作期限仍生效。不要再加另一段閱讀等待，亦不可把停留
 完成當作頁面已讀取或主張已驗證的證據。調整範圍會改變 frozen policy。
 
-遇到明確的驗證頁或需要人工處理的頁面問題時，呼叫自己的
+三個角色同時啟用 `page-verification: true`。快照工具由 runtime 呼叫既有
+decision runtime 判斷頁面；可沿用 sidecar，或透過 `decision-runtime` 設定
+System One。只有明確判定為安全／機器人驗證頁時，工具內才要求人工接手，確認後
+重新擷取與判斷，只有正文可讀才回傳成功。即使沒有按鈕、來源只是備援副本，
+也會進入此流程。設定的初次快照與停留順序仍保留；若挑戰在停留時自行解除，
+runtime 會以新快照確認後繼續。同一未解決網址不反覆要求人工處理。
+模型判斷故障、不確定或存取錯誤會回報工具錯誤，不要求人工確認。
+直接呼叫 `browser_wait_for_user` 也須通過新快照的驗證頁判定，並共用同一網址的請求次數限制；
+不能用人工確認修復分類器故障。使用者取消或無人模式不會被當成讀取成功。
+
+若仍遇到需要人工處理的頁面問題，可呼叫自己的
 `playwright_<角色>__browser_wait_for_user({"reason":"請完成公開頁面的人工驗證"})`。
 使用 dynamic gateway 時先 inspect 該 target，再以相同 `reason` 欄位呼叫。
 Hufu 會切到該角色的分頁並等待 CLI／TUI 回答；等待期間不計入 worker 與

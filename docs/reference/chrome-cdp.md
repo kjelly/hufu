@@ -102,6 +102,65 @@ also pauses the run duration budget (`--max-duration`).
 Manager shutdown cancels native calls before closing its own tabs; Chrome stays
 running.
 
+### Runtime page verification
+
+Set `page-verification: true` on a `chrome-cdp` declaration to classify snapshots
+through Hufu's durable decision runtime. It is off by default. The declaration
+must allow both `browser_snapshot` and `browser_wait_for_user`, and the worker
+must retain its explicit tool grants and policies. For example:
+
+```yaml
+mcp-servers:
+  chrome:
+    type: chrome-cdp
+    url: http://127.0.0.1:9222
+    page-verification: true
+    # Retain allowedTools, toolPolicies and agent grants from the example above.
+```
+
+The runtime passes the actual URL, title, text, controls, capture time and
+truncation flag to `runtime_browser_page`. Its fixed choices are `readable`,
+`needs_human_verification`, `access_error` and `uncertain`. It uses the existing
+`decision-runtime` configuration: select `backend: systemone` and configure its
+model/endpoint as described in [control decisions](control-decisions.md), or
+use the existing sidecar backend. Adding this browser option does not select a
+new model or configure credentials. Decisions and failures use the ordinary
+primitive journal, inference admission and replay; result-only repair cannot
+launch new classification calls. Page content is evidence, never instructions.
+
+The first capture still precedes any configured page dwell. After the dwell,
+a non-readable initial classification causes a fresh capture and classification
+before asking for help, so a challenge that cleared itself need not interrupt
+the operator. Only a `needs_human_verification` decision enters the existing
+human prompt inside the snapshot call. Classifier errors fail immediately;
+`uncertain` and `access_error` decisions return tool errors without prompting.
+These states do not establish a security challenge and cannot be repaired by
+human confirmation. Explicit `browser_wait_for_user` calls on a declaration
+with page verification enabled also classify a fresh capture and require a
+confirmed challenge; they share the automatic wait's per-URL request limit.
+The tab's
+operation gate stays held, preventing navigation while waiting. The wait is
+separately authorized as `browser_wait_for_user`; snapshot authority alone does
+not grant it, including for native action providers and closed tool sequences.
+Closed tool sequences, result-only repairs, `force-mcp` and denial of the
+decision primitive reject automatic classification without inference or a
+fallback human prompt; they cannot acquire hidden calls through this option.
+
+After a real `continue` answer, the runtime captures and classifies the page
+again. Only a `readable` result is returned as successful source evidence.
+Cancellation, unavailable human input, persistent challenges, access errors and
+failed classifications return tool errors with the observed page and gap; they
+never treat confirmation as proof of content. Repeated captures or navigation
+to the same unresolved URL do not repeat the automatic human request. A readable
+capture clears that URL's request marker. The marker is local to the loaded
+browser declaration; it is not a durable approval across process restarts.
+The owning team decides how to report gaps or choose substitute sources.
+
+Page verification is included in the frozen server policy and snapshot tool
+descriptor. Enabling it for an existing run is policy drift, not permission to
+silently change that run's execution contract. It does not retroactively repair
+an already completed invocation.
+
 ### Automatic page dwell
 
 A maintainer can require a random dwell on the first successful snapshot after each navigation:

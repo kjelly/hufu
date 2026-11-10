@@ -338,7 +338,7 @@ func initializeServerTools(ctx context.Context, name string, cfg MCPServerConfig
 		}
 		tools = append(tools, MCPTool{
 			nativeBrowserInteraction: cfg.Type == "chrome-cdp" && t.Name == "browser_click",
-			pausableTimeout:          cfg.Type == "chrome-cdp" && (t.Name == "browser_wait_for_user" || (t.Name == "browser_snapshot" && cfg.PageDwell != nil)),
+			pausableTimeout:          cfg.Type == "chrome-cdp" && (t.Name == "browser_wait_for_user" || (t.Name == "browser_snapshot" && (cfg.PageDwell != nil || cfg.PageVerification)) || (t.Name == "browser_click" && cfg.PageVerification)),
 			WorkerPolicy:             workerPolicy, workerInputSchema: workerSchema,
 			Name:        prefixedName,
 			Description: t.Description,
