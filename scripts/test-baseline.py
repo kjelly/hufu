@@ -92,6 +92,10 @@ def main():
     parser.add_argument('--mode', choices=('normal', 'race', 'cgo-free'), default='normal')
     parser.add_argument('--cache-state', choices=('cold', 'warm', 'result', 'all'), default='warm')
     parser.add_argument('--repetitions', type=int, default=3)
+    parser.add_argument('--sample-index', type=int,
+                        help='capture one indexed sample for a separately aggregated experiment')
+    parser.add_argument('--timeout-seconds', type=int, default=1200,
+                        help='common explicit package deadline; recorded in environment.json')
     parser.add_argument('--package', action='append', help='repeat to replace the default full suite')
     parser.add_argument('--run', help='optional Go test filter; changes the measured case set')
     parser.add_argument('--full', action='store_true', help='omit -short (required for full release-contract validation)')
@@ -99,6 +103,10 @@ def main():
     args = parser.parse_args()
     if args.repetitions < 3:
         parser.error('at least three repetitions are required')
+    if args.sample_index is not None and not 1 <= args.sample_index <= args.repetitions:
+        parser.error('sample-index must be within the declared repetitions')
+    if args.timeout_seconds < 1200:
+        parser.error('measurement deadlines cannot be shorter than the original 20 minutes')
     env = os.environ.copy()
     if args.mode == 'cgo-free':
         env['CGO_ENABLED'] = '0'
@@ -112,7 +120,8 @@ def main():
     directory = args.output.resolve()
     directory.mkdir(parents=True, exist_ok=False)
     packages = args.package or DEFAULT_PACKAGES
-    flags = ['-json', '-timeout', '20m']
+    flags = ['-p', '2', '-json', '-timeout', f'{args.timeout_seconds // 60}m'
+             if args.timeout_seconds % 60 == 0 else f'{args.timeout_seconds}s']
     if not args.full:
         flags += ['-short']
     if args.mode == 'race':
@@ -130,6 +139,7 @@ def main():
                 'runner': {key: env.get(key) for key in ('CI', 'RUNNER_OS', 'RUNNER_ARCH')},
                 'gomaxprocs_configured': env.get('GOMAXPROCS', 'runtime default'), 'go': goenv,
                 'mode': args.mode, 'packages': packages, 'flags': flags,
+                'repetitions_required': args.repetitions, 'sample_index': args.sample_index,
                 'cache_scope': 'private build cache; module, OS page and filesystem caches remain warm'}
     # Ask the selected toolchain for its container-aware runtime default.
     with tempfile.TemporaryDirectory(prefix='gomaxprocs-', dir=directory) as temporary:
@@ -138,7 +148,8 @@ def main():
         metadata['gomaxprocs_effective'] = int(output(['go', 'run', str(probe)], env))
     write_json(directory / 'environment.json', metadata)
     groups, failed = {}, False
-    for iteration in range(1, args.repetitions + 1):
+    iterations = [args.sample_index] if args.sample_index is not None else range(1, args.repetitions + 1)
+    for iteration in iterations:
         with tempfile.TemporaryDirectory(prefix='build-cache-', dir=directory) as cache:
             runenv = {**env, 'GOCACHE': cache}
             # One private cache per repetition. Always execute the preceding states
@@ -156,7 +167,7 @@ def main():
                 if state == args.cache_state:
                     break
     if args.profile:
-        profile_flags = ['-count=1', '-timeout', '20m'] + (['-short'] if not args.full else [])
+        profile_flags = ['-p', '2', '-count=1', '-timeout', f'{args.timeout_seconds}s'] + (['-short'] if not args.full else [])
         if args.mode == 'race':
             profile_flags += ['-race']
         if args.run:
