@@ -8,7 +8,7 @@ import re
 import statistics
 import zipfile
 
-from issue26_acceptance import FIX, NATIVE_GREP, SOURCES
+from issue26_acceptance import FIX, NATIVE_GREP, PATCH_SHA256, SOURCES, VARIANTS
 
 PACKAGES = ['./...', './.agent-teams/hufu-dev/diagnostic-pilot/...']
 
@@ -86,7 +86,8 @@ def inspect_archive(path):
         for label, original in SOURCES.items():
             source = manifest['sources'][label]
             if source['original_revision'] != original or source['fixture_fix'] != FIX \
-                    or source['measured_revision'] == original or source['exit_code'] != 0 \
+                    or source['measured_revision'] != VARIANTS[label] \
+                    or source['patch_sha256'] != PATCH_SHA256 or source['exit_code'] != 0 \
                     or source['native_grep']['passed'] is not True:
                 raise ValueError('invalid source identity, failed capture or missing native grep coverage')
             base = prefix + label + '/'

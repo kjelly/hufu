@@ -36,9 +36,10 @@ class ReportTests(unittest.TestCase):
                     'run_id': 'run', 'run_attempt': '1', 'sources': {}}
         members = {}
         for label, original in report.SOURCES.items():
-            measured = 'measured-' + label
+            measured = report.VARIANTS[label]
             manifest['sources'][label] = {'original_revision': original, 'fixture_fix': report.FIX,
-                                         'measured_revision': measured, 'exit_code': 0,
+                                         'measured_revision': measured, 'patch_sha256': report.PATCH_SHA256,
+                                         'exit_code': 0,
                                          'native_grep': {'passed': True}}
             env = {'commit': measured, 'dirty': False, 'sample_index': sample, 'mode': mode,
                    'repetitions_required': 3, 'flags': flags, 'gomaxprocs_configured': '2',
@@ -102,6 +103,19 @@ class ReportTests(unittest.TestCase):
         def missing_log(members):
             del members['before/warm-1.jsonl']
 
+        def substituted_variant(members):
+            manifest = json.loads(members['capture.json'])
+            manifest['sources']['before']['measured_revision'] = 'unreviewed-variant'
+            members['capture.json'] = json.dumps(manifest)
+            env = json.loads(members['before/environment.json'])
+            env['commit'] = 'unreviewed-variant'
+            members['before/environment.json'] = json.dumps(env)
+
+        def substituted_patch(members):
+            manifest = json.loads(members['capture.json'])
+            manifest['sources']['before']['patch_sha256'] = 'unreviewed-patch'
+            members['capture.json'] = json.dumps(manifest)
+
         def zero_exit_failed_package(members):
             members['before/warm-1.jsonl'] += json.dumps({'Package': 'p', 'Action': 'fail'}) + '\n'
 
@@ -114,7 +128,8 @@ class ReportTests(unittest.TestCase):
             members['before/warm-1.jsonl'] += json.dumps(
                 {'Action': 'pass', 'Package': 'p', 'Test': 'TestNotInRecordedObservation'}) + '\n'
 
-        for mutation in (wrong_head, missing_log, zero_exit_failed_package, narrowed_packages, unbound_extra_case):
+        for mutation in (wrong_head, substituted_variant, substituted_patch, missing_log,
+                         zero_exit_failed_package, narrowed_packages, unbound_extra_case):
             with self.subTest(mutation=mutation.__name__), tempfile.TemporaryDirectory() as temporary:
                 path = Path(temporary) / 'capture.zip'
                 self.archive(path, corrupt=mutation)
