@@ -2,7 +2,7 @@
 
 > Status: historical
 > Authority: analysis
-> Verified-Commit: `fbf8faaa55d0ea66bdda446a17ebf0a0eedc6b22` (Go tree unchanged across the three completed observations)
+> Verified-Commit: `fbf8faaa55d0ea66bdda446a17ebf0a0eedc6b22` (Go tree unchanged across the four pre-fix observations)
 > Supersedes: —
 > Superseded-By: —
 
@@ -15,8 +15,9 @@ These are observed correctness-CI costs, separate from the historical, paired-pi
 | [CI 42735101109](https://github.com/kjelly/hufu/actions/runs/42735101109) / `cd836428` | 1 / 15 | 6046 | 1012 |
 | [CI 42743592641](https://github.com/kjelly/hufu/actions/runs/42743592641) / `9758ec40` | 1 / 15 | 6274 | 1278 |
 | [CI 42750634547](https://github.com/kjelly/hufu/actions/runs/42750634547) / `fbf8faaa` | 1 / 15 | 5849 | 1485 |
+| [CI 42773558940](https://github.com/kjelly/hufu/actions/runs/42773558940) / `d22ae604`, failed | 1 / 13 of 15 (integration and aggregate failed) | 6740 | 1274 |
 
-Every completed attempt and job above is included. The span excludes the initial queue before the first job; runner seconds include each job’s setup, tests and cleanup. It is not child CPU time. The Go source, Go tests, module files and correctness workflow are unchanged between these heads; Python tooling counts are 20, 27 and 38 respectively. Builds also carry distinct VCS identities. Hardware/cache/queue variation and that tooling difference prevent a causal CI-improvement claim.
+Every completed attempt and job above is included. The span excludes the initial queue before the first job; runner seconds include each job’s setup, tests and cleanup. It is not child CPU time. The Go source, Go tests, module files and correctness workflow are unchanged between these heads; Python tooling counts are 20, 27, 38 and 38 respectively. Builds also carry distinct VCS identities. Hardware/cache/queue variation and that tooling difference prevent a causal CI-improvement claim.
 
 ## Timed commands and cache allocation (CI 42735101109)
 
@@ -50,7 +51,7 @@ Total reported archive payload: 2594233770 bytes across seven runners. Every sel
 
 The performance workflow disables Actions cache restore/save and removes each intentional private build cache after its observation. Module downloads are outside timed test commands and remain in job cost. There is no performance-build-cache upload/restore operation to compare with the correctness archives. No transfer savings are inferred from disk KiB.
 
-## Coverage and current native grep regression
+## Pre-fix coverage and native grep regression
 
 Independent parsing of all seven raw `tests.jsonl` streams against their complete inventory found:
 
@@ -59,7 +60,7 @@ Independent parsing of all seven raw `tests.jsonl` streams against their complet
 - Short and integration inventory sets are disjoint. Example/fuzz and parent/subtest events remain raw evidence and are not substituted for top-level Test counts.
 - Skip is not coverage. Native grep prerequisites are explicitly exercised by the separate performance captures; opt-in live/interactive boundaries remain limitations.
 
-On the current Go tree at `fbf8faaa`, `TMPDIR=<private task directory> GOMAXPROCS=2 mise exec -- go test -p 2 -race -count=1 -timeout 10m ./internal/tools -run '^TestGrep' -json` exited zero: 21 top-level tests, 40 terminal test events including subtests, zero failures/skips. Package elapsed was 1.277 seconds; this is correctness evidence, not a performance sample. Raw JSONL SHA-256: `575ba5b3856d9ea3b6afef645ee92203c1b99f4244a3691197afd52fae371bd5`.
+On the pre-fix Go tree at `fbf8faaa`, `TMPDIR=<private task directory> GOMAXPROCS=2 mise exec -- go test -p 2 -race -count=1 -timeout 10m ./internal/tools -run '^TestGrep' -json` exited zero: 21 top-level tests, 40 terminal test events including subtests, zero failures/skips. Package elapsed was 1.277 seconds; this is correctness evidence, not a performance sample. Raw JSONL SHA-256: `575ba5b3856d9ea3b6afef645ee92203c1b99f4244a3691197afd52fae371bd5`.
 
 ## Raw correctness artifact provenance
 
@@ -77,4 +78,4 @@ All seven ZIP digests were checked against the Actions API before parsing.
 
 ## Interpretation and current CI limits
 
-Three passing correctness runs are bounded observations, not proof of a zero flake probability. The [completed same-runner acceptance report](issue26-performance-acceptance-2026-11-10.md) records all nine groups, every attempt cost and raw outcome/case consistency. Final published-head CI and review/rules checks remain PR readiness gates; these three selected runs are the completed observations available before report publication. The current three team shards already exist in main; integration is the longest timed command in the first run. These data do not justify another package split or additional sharding. The older October decision remains historical rather than a restriction on subsequent measured CI repairs.
+Three passing correctness runs followed by a failed fourth run demonstrate why passing observations do not prove a zero flake probability. The fourth run fails `TestHistoricalResultRunBinaryAdmissionAndDelivery/extra_model`: concurrent local event writes repeatedly invalidate a filesystem-based read-only WAL snapshot. This is a diagnosed runtime defect, not a reason to discard the failed run or blindly retry. Its raw integration ZIP is artifact `13744395119`, 135917 bytes, SHA-256 `2c944bf8e73b7d12af36eef540d0e8b5956e990b6520e2089fbd8db8365babb0`; all attempt jobs and cost above are retained. The [completed same-runner acceptance report](issue26-performance-acceptance-2026-11-10.md) records all nine groups, every attempt cost and raw outcome/case consistency. Final published-head CI and review/rules checks remain PR readiness gates; the four selected runs above cover the pre-fix publication observations. The subsequent runtime fix changes the current Go tree and requires fresh validation; it does not rewrite any frozen performance variant or relabel the failed CI. The current three team shards already exist in main; integration is the longest timed command in the first run. These data do not justify another package split or additional sharding. The older October decision remains historical rather than a restriction on subsequent measured CI repairs.

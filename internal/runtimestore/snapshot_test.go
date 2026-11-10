@@ -96,9 +96,6 @@ func TestReadOnlySnapshotsDuringConcurrentWrites(t *testing.T) {
 	successfulReads := 0
 	for range 20 {
 		reader, err := OpenReadOnly(t.Context(), workspace)
-		if errors.Is(err, errSnapshotChanged) {
-			continue
-		}
 		if err != nil {
 			t.Errorf("concurrent snapshot: %v", err)
 			break
@@ -119,8 +116,56 @@ func TestReadOnlySnapshotsDuringConcurrentWrites(t *testing.T) {
 		t.Fatalf("concurrent writer: %v", err)
 	default:
 	}
-	if successfulReads == 0 {
-		t.Fatal("no read-only snapshot succeeded")
+	if successfulReads != 20 {
+		t.Fatalf("local writer interrupted snapshots: %d of 20 succeeded", successfulReads)
+	}
+}
+
+func TestReadOnlySnapshotWaitsForLocalWriterAndCancelsWithoutLeaking(t *testing.T) {
+	workspace := t.TempDir()
+	writer, err := Open(t.Context(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = writer.Close() })
+	if err := writer.PutDocument(t.Context(), DocumentSession, []byte("before")); err != nil {
+		t.Fatal(err)
+	}
+	db := writer.DB()
+	connection, err := db.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	reader, err := OpenReadOnly(ctx, workspace)
+	if reader != nil {
+		_ = reader.Close()
+		t.Fatal("snapshot bypassed an in-flight local writer connection")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("queued snapshot cancellation = %v", err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reader, err = OpenReadOnly(t.Context(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	if err := writer.PutDocument(t.Context(), DocumentSession, []byte("after")); err != nil {
+		t.Fatal(err)
+	}
+	if body, exists, err := reader.GetDocument(t.Context(), DocumentSession); err != nil || !exists || string(body) != "before" {
+		t.Fatalf("private snapshot changed after releasing the writer: %q, %v, %v", body, exists, err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PingContext(t.Context()); err == nil {
+		t.Fatal("cancelled or completed snapshot leaked the writable store reference")
 	}
 }
 
