@@ -1,8 +1,8 @@
 # Issue 26 removed-case reconciliation
 
-> Status: draft
+> Status: historical
 > Authority: analysis
-> Verified-Commit: `9758ec401d320daf5cdd8569575b8c6f271e126d` (experiment controller; hosted outcomes pending)
+> Verified-Commit: `fbf8faaa55d0ea66bdda446a17ebf0a0eedc6b22` (measurement controller; immutable comparison sources below)
 > Supersedes: —
 > Superseded-By: —
 
@@ -77,6 +77,6 @@ All 29 removed identities are accounted for, but the whole revision pair is
 **not a token-equivalent assertion workload**. The 183 additions and modified
 shared tests remain part of the after workload. No six-refactor whole-project
 speedup or full old-protocol assertion equivalence follows from these data.
-Full hosted results, skip/outcome checks and timing medians must be reconciled
-with this map before an acceptance decision. A map alone does not execute a
-contract or make a missing observation pass.
+The [completed hosted report](issue26-performance-acceptance-2026-11-10.md) reconciles
+this map with all raw skip/outcome inventories, native execution and timing
+medians. A map alone does not execute a contract or make a missing observation pass.

@@ -1,5 +1,7 @@
 # Issue #26 performance acceptance — 2026-10-30
 
+> Historical snapshot: the incomplete decision and original failures below are preserved. The [2026-11-10 acceptance report](issue26-performance-acceptance-2026-11-10.md) records the separate, explicitly fixture-remediated comparison and current decision.
+
 **Acceptance is incomplete. Do not close #26 or publish an overall speedup.**
 This report distinguishes completed observations, historical focused comparisons,
 and the new full-suite capture. No missing observation is estimated.

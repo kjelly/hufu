@@ -1,8 +1,8 @@
 # Issue 26 correctness CI cost and coverage observations
 
-> Status: draft
+> Status: historical
 > Authority: analysis
-> Verified-Commit: `fbf8faaa55d0ea66bdda446a17ebf0a0eedc6b22` (Go tree unchanged from the two completed observations)
+> Verified-Commit: `fbf8faaa55d0ea66bdda446a17ebf0a0eedc6b22` (Go tree unchanged across the three completed observations)
 > Supersedes: —
 > Superseded-By: —
 
@@ -14,8 +14,9 @@ These are observed correctness-CI costs, separate from the historical, paired-pi
 | --- | ---: | ---: | ---: |
 | [CI 42735101109](https://github.com/kjelly/hufu/actions/runs/42735101109) / `cd836428` | 1 / 15 | 6046 | 1012 |
 | [CI 42743592641](https://github.com/kjelly/hufu/actions/runs/42743592641) / `9758ec40` | 1 / 15 | 6274 | 1278 |
+| [CI 42750634547](https://github.com/kjelly/hufu/actions/runs/42750634547) / `fbf8faaa` | 1 / 15 | 5849 | 1485 |
 
-Every completed attempt and job above is included. The span excludes the initial queue before the first job; runner seconds include each job’s setup, tests and cleanup. It is not child CPU time. The Go source, Go tests, module files and correctness workflow are unchanged between these heads; Python tooling counts change from 20 to 27. Builds also carry distinct VCS identities. Hardware/cache/queue variation and that tooling difference prevent a causal CI-improvement claim.
+Every completed attempt and job above is included. The span excludes the initial queue before the first job; runner seconds include each job’s setup, tests and cleanup. It is not child CPU time. The Go source, Go tests, module files and correctness workflow are unchanged between these heads; Python tooling counts are 20, 27 and 38 respectively. Builds also carry distinct VCS identities. Hardware/cache/queue variation and that tooling difference prevent a causal CI-improvement claim.
 
 ## Timed commands and cache allocation (CI 42735101109)
 
@@ -74,6 +75,6 @@ All seven ZIP digests were checked against the Actions API before parsing.
 | short-team-1 | 13727920433 | `d84819e859cbf317a6a099b9fbd0ec2e4ee22aa2ea1b89ed3748af2959c40b06` |
 | short-team-2 | 13726951962 | `6df544f4cafac368d9320ce269170270b59fc72a83e0aadeabfc0eadba6fd88f` |
 
-## Interpretation pending the full matrix
+## Interpretation and current CI limits
 
-Two passing correctness runs are bounded observations, not proof of a zero flake probability. The same-runner performance matrix must finish, and all attempt costs and outcome/case inventories must be audited before #26 closes or PR #53 becomes ready. The current three team shards already exist in main; integration is the longest timed command in the first run. These data do not justify another package split or additional sharding. The older October decision remains historical rather than a restriction on subsequent measured CI repairs.
+Three passing correctness runs are bounded observations, not proof of a zero flake probability. The [completed same-runner acceptance report](issue26-performance-acceptance-2026-11-10.md) records all nine groups, every attempt cost and raw outcome/case consistency. Final published-head CI and review/rules checks remain PR readiness gates; these three selected runs are the completed observations available before report publication. The current three team shards already exist in main; integration is the longest timed command in the first run. These data do not justify another package split or additional sharding. The older October decision remains historical rather than a restriction on subsequent measured CI repairs.

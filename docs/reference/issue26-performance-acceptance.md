@@ -1,14 +1,14 @@
 # Issue 26 performance acceptance experiment
 
-> Status: draft
+> Status: active
 > Authority: reference
-> Verified-Commit: `cd836428850103d5aaf83b944303d822db6f0a60` (correctness baseline; experiment results pending)
+> Verified-Commit: `fbf8faaa55d0ea66bdda446a17ebf0a0eedc6b22` (frozen measurement controller)
 > Supersedes: —
 > Superseded-By: —
 
 This is the new experiment protocol for [#26](https://github.com/kjelly/hufu/issues/26),
 not a rewrite of the [original failed capture](../archive/analyses/issue26-performance-acceptance-2026-10-30.md).
-PR #53 now includes full acceptance, rather than evidence archival alone.
+PR #53 includes full acceptance. The [2026-11-10 report](../archive/analyses/issue26-performance-acceptance-2026-11-10.md) records all nine successful co-located cohorts, three observations per source/group, raw audits, workload reconciliation and complete experiment costs. It makes no overall or causal speedup claim.
 
 ## Comparison identity and the known historical race
 
@@ -112,5 +112,6 @@ changes GOTMPDIR. Do not run this experiment locally by bypassing admission.
 
 Raw artifacts are retained for 30 days. Completion requires a committed report
 with run/job/artifact identifiers, digests, reproduction and limitations. A
-running workflow or a passing parser is not acceptance; #26 stays open and
-PR #53 stays draft until the full evidence gate is satisfied.
+running workflow or a passing parser is not acceptance. The report completes
+the measurement/contract evidence gate; PR #53 additionally requires successful
+final published-head CI and review/rules checks before ready. Merge remains separate.
