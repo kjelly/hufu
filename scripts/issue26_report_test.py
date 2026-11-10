@@ -2,6 +2,7 @@
 
 import io
 import copy
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -56,6 +57,10 @@ class ReportTests(unittest.TestCase):
                 members[f'{label}/{name}.json'] = json.dumps(observation)
                 events = [{'Package': 'github.com/kjelly/hufu/internal/tools', 'Test': test, 'Action': 'pass'}
                           for test in sorted(report.NATIVE_GREP)]
+                observation['case_set_sha256'] = hashlib.sha256(json.dumps(sorted(
+                    (event['Package'], event['Test']) for event in events)).encode()).hexdigest()
+                observation['test_counts'] = {'pass': len(events), 'fail': 0, 'skip': 0}
+                members[f'{label}/{name}.json'] = json.dumps(observation)
                 members[f'{label}/{name}.jsonl'] = ''.join(json.dumps(event) + '\n' for event in events)
                 members[f'{label}/{name}.stderr'] = ''
         members['capture.json'] = json.dumps(manifest)
@@ -105,7 +110,11 @@ class ReportTests(unittest.TestCase):
             env['packages'] = ['./internal/tools']
             members['before/environment.json'] = json.dumps(env)
 
-        for mutation in (wrong_head, missing_log, zero_exit_failed_package, narrowed_packages):
+        def unbound_extra_case(members):
+            members['before/warm-1.jsonl'] += json.dumps(
+                {'Action': 'pass', 'Package': 'p', 'Test': 'TestNotInRecordedObservation'}) + '\n'
+
+        for mutation in (wrong_head, missing_log, zero_exit_failed_package, narrowed_packages, unbound_extra_case):
             with self.subTest(mutation=mutation.__name__), tempfile.TemporaryDirectory() as temporary:
                 path = Path(temporary) / 'capture.zip'
                 self.archive(path, corrupt=mutation)

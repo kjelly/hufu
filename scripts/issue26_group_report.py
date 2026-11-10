@@ -76,13 +76,18 @@ def inspect_group(path):
                         if not cases['top_level'] or cases['failed_packages'] or cases['failed_tests'] \
                                 or not cases['native_grep_passed']:
                             raise ValueError('raw outcomes contradict successful sample')
+                        if observation.get('case_set_sha256') != cases['case_set_sha256'] \
+                                or observation.get('test_counts') != cases['test_counts']:
+                            raise ValueError('raw outcomes disagree with their recorded observation')
                     else:
                         cases = None
                     evidence[name] = {'observation': observation, 'inventory': cases}
                 samples.append({'sample': sample, 'environment': env, 'evidence': evidence,
                                 'measured': evidence[f'{state}-{sample}']})
-            if len({row['measured']['inventory']['normalized_case_outcome_sha256'] for row in samples}) != 1:
-                raise ValueError('full case/outcome inventory differs between co-located samples')
+            signatures = {item['inventory']['normalized_case_outcome_sha256']
+                          for row in samples for item in row['evidence'].values() if item['inventory'] is not None}
+            if len(signatures) != 1:
+                raise ValueError('full case/outcome inventory differs between seeds or co-located samples')
             rows[label] = {'identity': source, 'samples': samples,
                            'statistics': {key: stats([row['measured']['observation'][key] for row in samples])
                                           for key in ('wall_seconds', 'cpu_user_seconds', 'cpu_system_seconds')}}

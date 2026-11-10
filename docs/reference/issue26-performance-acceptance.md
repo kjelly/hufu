@@ -63,11 +63,16 @@ Result-cache samples first execute a separately recorded full unfiltered seed
 on their private cache, then measure the identical command's result replay.
 Seeds are never counted as measured samples. Compile-only warm seeds are not
 correctness evidence and do not suppress any case in the measured full run.
+The warm seed primes the static test/CLI compilation graph; runtime-generated
+helper builds remain part of measured work. This seed protocol is not pooled
+with the pilot's full-run-primed warm observations.
 This avoids redundant full-suite warm-up executions while keeping each group
 within the six-hour hosted deadline. All seed logs, commands and CPU/wall costs
 are retained and source/sample/cache identities remain explicit.
-All Go build/test commands use mise's Go 1.27.2,
-GOTOOLCHAIN=local, GOMAXPROCS=2 and explicit package parallelism two.
+Controller build/test commands use mise's Go 1.27.2, GOTOOLCHAIN=local,
+GOMAXPROCS=2 and explicit package parallelism two. Historical fixtures retain
+their original nested commands and inherit that toolchain and GOMAXPROCS;
+their sources are not rewritten to add flags.
 
 The common package timeout is **30 minutes** on both sources and in every mode.
 The previous 20-minute race deadline expired at the package boundary; current

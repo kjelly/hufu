@@ -1,6 +1,7 @@
 """Verify co-located sampling, seed evidence and full-suite admission."""
 
 import json
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -51,6 +52,11 @@ class GroupReportTests(unittest.TestCase):
                         'wall_seconds': sample, 'cpu_user_seconds': sample, 'cpu_system_seconds': sample / 2})
                     events = [{'Package': 'github.com/kjelly/hufu/internal/tools', 'Test': test, 'Action': 'pass'}
                               for test in sorted(NATIVE_GREP)] if full else []
+                    recorded = json.loads(members[base + name + '.json'])
+                    recorded['case_set_sha256'] = hashlib.sha256(json.dumps(sorted(
+                        (event['Package'], event['Test']) for event in events)).encode()).hexdigest()
+                    recorded['test_counts'] = {'pass': len(events), 'fail': 0, 'skip': 0}
+                    members[base + name + '.json'] = json.dumps(recorded)
                     members[base + name + '.jsonl'] = ''.join(json.dumps(event) + '\n' for event in events)
                     members[base + name + '.stderr'] = ''
         members['capture.json'] = json.dumps(manifest)
@@ -99,7 +105,11 @@ class GroupReportTests(unittest.TestCase):
             row['command'] += ['-run', '^$']
             members[key] = json.dumps(row)
 
-        for mutation in (missing_sample, changed_hardware, failed_seed, filtered_measurement):
+        def unbound_extra_case(members):
+            members['before/sample-1/warm-1.jsonl'] += json.dumps(
+                {'Action': 'pass', 'Package': 'p', 'Test': 'TestNotInRecordedObservation'}) + '\n'
+
+        for mutation in (missing_sample, changed_hardware, failed_seed, filtered_measurement, unbound_extra_case):
             with self.subTest(mutation=mutation.__name__), tempfile.TemporaryDirectory() as temporary:
                 path = Path(temporary) / 'warm.zip'
                 self.archive(path, 'normal', 'warm', mutation)

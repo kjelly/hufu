@@ -52,6 +52,9 @@ def inventory(stream):
         raise ValueError('normalization collapsed distinct observed cases')
     native = {name: terminal.get(('github.com/kjelly/hufu/internal/tools', name)) for name in NATIVE_GREP}
     return {'top_level': top, 'all_case_count': len(nested),
+            'case_set_sha256': hashlib.sha256(json.dumps(sorted(terminal)).encode()).hexdigest(),
+            'test_counts': {status: sum(value == status for value in terminal.values())
+                            for status in ('pass', 'fail', 'skip')},
             'all_case_outcome_sha256': hashlib.sha256(json.dumps(nested).encode()).hexdigest(),
             'normalized_case_outcome_sha256': hashlib.sha256(json.dumps(normalized).encode()).hexdigest(),
             'normalizations': [[name, normalize_case(name)] for _, name, _ in nested if name != normalize_case(name)],
@@ -113,6 +116,9 @@ def inspect_archive(path):
                 if not cases['top_level'] or cases['failed_packages'] or cases['failed_tests'] \
                         or not cases['native_grep_passed']:
                     raise ValueError('raw outcomes contradict successful observation')
+                if observation.get('case_set_sha256') != cases['case_set_sha256'] \
+                        or observation.get('test_counts') != cases['test_counts']:
+                    raise ValueError('raw outcomes do not match their recorded observation')
                 if base + name + '.stderr' not in names:
                     raise ValueError('missing raw stderr evidence')
                 observations[state] = {'observation': observation, 'inventory': cases}
