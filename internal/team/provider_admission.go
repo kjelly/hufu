@@ -12,6 +12,7 @@ import (
 	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/modelprofile"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 // providerRequestAdmission is the team-owned policy adapter for the agent
@@ -110,11 +111,19 @@ func (a providerRequestAdmission) AcquireProviderInvocation(ctx context.Context,
 	if a.c == nil {
 		return nil, nil
 	}
-	slot, err := acquireSem(ctx, a.c.providerSemaphore(modelID))
+	ctx, leaveCapacity, err := tools.EnterCapacityTool(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return slot.release, nil
+	slot, err := acquireSem(ctx, a.c.providerSemaphore(modelID))
+	if err != nil {
+		leaveCapacity()
+		return nil, err
+	}
+	return func() {
+		slot.release()
+		leaveCapacity()
+	}, nil
 }
 
 // CommitProviderInvocation is the durable profile commit used by the agent

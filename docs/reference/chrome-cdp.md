@@ -87,6 +87,13 @@ The tool focuses its dedicated tab and opens the normal CLI/TUI question. Only
 an actual `continue` answer resumes it. Auto-approval, unattended defaults and
 model-selected answers cannot confirm manual verification. Without an interactive
 human the tool returns an error instead of waiting forever.
+Within a DAG, the human prompt yields the task’s team concurrency slot once
+other parallel tools and model requests are idle, allowing independent queued work to run. The tab
+lock and declared resource claims remain held. After confirmation the task
+reacquires a slot before taking the fresh snapshot; dependent work still waits
+for the task result. Calls waiting for the same tab lock also yield their
+slots, preventing a circular wait between tab ownership and task admission.
+
 The prompt obtains its URL from browser-owned target metadata, so a failed
 document snapshot does not prevent asking for manual intervention.
 

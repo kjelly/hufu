@@ -54,14 +54,6 @@ func (m *MCPToolManager) loadChromeCDP(ctx context.Context, name string, cfg MCP
 	m.mu.RLock()
 	shutdown := m.shutdown
 	m.mu.RUnlock()
-	acquire := func(ctx context.Context) error {
-		select {
-		case gate <- struct{}{}:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
 	s := server.NewMCPServer("hufu-chrome-cdp", "1.0.0", server.WithToolCapabilities(false))
 	add := func(tool mcpgo.Tool, run func(context.Context, mcpgo.CallToolRequest) (string, error)) {
 		tool.InputSchema.AdditionalProperties = false
@@ -73,7 +65,7 @@ func (m *MCPToolManager) loadChromeCDP(ctx context.Context, name string, cfg MCP
 				defer cancel()
 				ctx = active
 			}
-			if err := acquire(ctx); err != nil {
+			if err := tools.AcquireTaskResource(ctx, gate); err != nil {
 				return nil, err
 			}
 			defer func() { <-gate }()

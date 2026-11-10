@@ -235,6 +235,11 @@ func (c *Coordinator) validateBoundWorkerToolPolicy(ctx context.Context, resolve
 
 //nolint:gocyclo // this is the single ordered policy/sequence/receipt gate.
 func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (response fantasy.ToolResponse, runErr error) {
+	ctx, leaveCapacity, capacityErr := tools.EnterCapacityTool(ctx)
+	if capacityErr != nil {
+		return fantasy.ToolResponse{}, capacityErr
+	}
+	defer leaveCapacity()
 	// Preserve native denial identity even on coordinator/auxiliary paths
 	// without a worker attempt receipt. Chain the existing receipt reporter.
 	denials := &attemptToolDispositions{}

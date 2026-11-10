@@ -381,7 +381,7 @@ func normalizeAskUserResponse(resp AskUserResponse, args askUserArgs, questionTy
 	return AskUserResponse{Answers: valid, Free: strings.TrimSpace(resp.Free)}, true
 }
 
-func executeAskUser(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+func executeAskUser(ctx context.Context, call fantasy.ToolCall) (response fantasy.ToolResponse, runErr error) {
 	if IsInteractiveAbortRequested() {
 		return fantasy.NewTextErrorResponse("ask_user cancelled during shutdown"), nil
 	}
@@ -416,6 +416,21 @@ func executeAskUser(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolRes
 				return marshalAskUserResponse(normalized)
 			}
 		}
+	}
+
+	// Only a real interactive wait yields scheduling capacity. Auto-approval
+	// and unattended defaults above/below must not suspend a task.
+	if !IsUnattended(ctx) && (onAskUserTUI != nil || IsInteractiveEnvironment()) {
+		resume, err := BeginCapacityWait(ctx)
+		if err != nil {
+			return fantasy.ToolResponse{}, err
+		}
+		defer func() {
+			if err := resume(); err != nil {
+				response = fantasy.ToolResponse{}
+				runErr = err
+			}
+		}()
 	}
 
 	// TUI mode: use the native dialog — no terminal release or stdin needed.

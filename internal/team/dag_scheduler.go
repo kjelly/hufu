@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -51,6 +52,15 @@ func budgetAdmissionErrorFor(c *Coordinator) error {
 // acquireSem blocks until a slot on ch is available or ctx is done. A nil ch
 // (no limit configured) is always immediately available.
 func acquireSem(ctx context.Context, ch chan struct{}) (semSlot, error) {
+	if err := tools.AcquireTaskResource(ctx, ch); err != nil {
+		return semSlot{}, err
+	}
+	return semSlot{ch: ch}, nil
+}
+
+// acquireSemUnmanaged is only for task-slot re-entry. Yielding that same lease
+// recursively would deadlock the task capacity controller.
+func acquireSemUnmanaged(ctx context.Context, ch chan struct{}) (semSlot, error) {
 	if ch == nil {
 		return semSlot{}, nil
 	}
@@ -116,7 +126,8 @@ type dagScheduler struct {
 	eventCh              chan agentTaskResult
 	inProgress           int
 	activeResources      map[int][]ResourceClaim
-	teamSlots            map[int]semSlot
+	teamSlots            map[int]*taskCapacity
+	capacityWake         chan struct{}
 	running              bool
 	dispatchStopped      bool
 
@@ -149,7 +160,8 @@ func newDAGScheduler(c *Coordinator, tasks []TaskDef, todoItems []*TodoItem, env
 		eventCh:              make(chan agentTaskResult, len(tasks)),
 		inflight:             make(map[string]chan agentTaskResult),
 		activeResources:      make(map[int][]ResourceClaim),
-		teamSlots:            make(map[int]semSlot),
+		teamSlots:            make(map[int]*taskCapacity),
+		capacityWake:         make(chan struct{}, 1),
 		sem:                  sem,
 	}
 	for i := range envelopes {
@@ -204,6 +216,8 @@ func (s *dagScheduler) run(ctx context.Context) ([]agentTaskResult, error) {
 			return nil, err
 		}
 		select {
+		case <-s.capacityWake:
+			s.launchReady(ctx)
 		case res := <-s.eventCh:
 			if err := ctx.Err(); err != nil {
 				s.dispatchStopped = true
@@ -294,8 +308,10 @@ func (s *dagScheduler) launchReady(ctx context.Context) {
 		s.states[i] = TaskInProgress
 		s.inProgress++
 		s.activeResources[i] = slices.Clone(s.envelopes[i].ResourceScope.Claims)
-		s.teamSlots[i] = teamSlot
-		go s.runTask(ctx, t, s.todoItems[i].ID, i, s.duplicates[i])
+		capacity := &taskCapacity{parent: ctx, slot: teamSlot, wake: s.capacityWake}
+		s.teamSlots[i] = capacity
+		taskCtx := tools.WithTaskCapacity(ctx, capacity)
+		go s.runTask(taskCtx, t, s.todoItems[i].ID, i, s.duplicates[i])
 	}
 }
 

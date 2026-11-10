@@ -454,6 +454,25 @@ scheduler may run disjoint bounded writers concurrently; malformed, unknown,
 or unenforceable scopes fail closed or retain the conservative whole-root
 claim instead of claiming unsafe parallelism.
 
+Interactive `ask_user` waits, including Chrome manual verification, yield the
+DAG task's team concurrency slot once its other parallel tool calls and model
+requests have stopped working. The scheduler can then admit independent pending tasks. The waiting
+occurrence remains `in_progress`: its dependency edges, attempt lease and resource
+claims stay intact. Browser adapters retain their tab lock throughout the wait.
+A real answer must reacquire a team slot before returning to the worker; queued
+re-entry excludes working-time timeout consumption and remains cancellable.
+New tool calls from that task also require a slot. Contended Chrome tab locks and runtime semaphore waits (including backend,
+provider and media limits) yield capacity too, so another worker cannot hold the
+last slot while waiting for a resource owned by a human-waiting task. Re-entry
+into the team slot uses a separate unmanaged wait to avoid recursive yielding. Nested tool gateway wrappers
+count as one call, and overlapping waits release capacity only once.
+
+This is process-local capacity accounting, not a durable task suspension or a
+checkpoint. Ordinary crash/resume and side-effect recovery policies still apply.
+Direct-agent and coordinator calls outside a DAG have no team slot to release.
+Unattended defaults and automatic answers do not yield capacity. Waiting does
+not free provider/backend limits held by independently running requests.
+
 Mutations in one batch whose claims conflict run in batch order. The runtime
 records that order on each task as `order_after`, separate from `depends_on`.
 A task waits until every task in its `order_after` has finished, whatever the
