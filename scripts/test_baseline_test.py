@@ -12,6 +12,35 @@ spec.loader.exec_module(baseline)
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_separate_cache_groups_have_explicit_nonmeasured_seeds(self):
+        for state, flag, names in (
+                ('warm', '--build-seed-only', ['build-seed-tests-1', 'build-seed-cli-1', 'warm-1']),
+                ('result', '--direct-result-seed', ['result-seed-1', 'result-1'])):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as temporary:
+                target = Path(temporary) / 'capture'
+
+                def output(command, env=None):
+                    if command[:2] == ['go', 'env']:
+                        return json.dumps({'GOVERSION': 'go1.27.2', 'GOFLAGS': '', 'CGO_ENABLED': '1'})
+                    if command[:2] == ['go', 'run']:
+                        return '2'
+                    return '' if command[:2] == ['git', 'status'] else 'source'
+
+                argv = ['baseline', '--output', str(target), '--full', '--cache-state', state,
+                        '--sample-index', '1', flag]
+                row = {'wall_seconds': 1, 'exit_code': 0, 'packages': []}
+                with patch('sys.argv', argv), patch.object(baseline, 'output', side_effect=output), \
+                     patch.object(baseline, 'measure', return_value=row) as measured:
+                    self.assertEqual(baseline.main(), 0)
+                self.assertEqual([call.args[1] for call in measured.call_args_list], names)
+                self.assertEqual(set(json.loads((target / 'summary.json').read_text())), {state})
+                if state == 'warm':
+                    self.assertIn('^$', measured.call_args_list[0].args[2])
+                    self.assertEqual(measured.call_args_list[1].args[2][-3:], ['-o', '/dev/null', './cmd/hufu'])
+                    self.assertIn('-count=1', measured.call_args_list[-1].args[2])
+                else:
+                    self.assertTrue(all('-count=1' not in call.args[2] for call in measured.call_args_list))
+
     def test_indexed_sample_keeps_fresh_and_result_cache_commands_distinct(self):
         def output(command, env=None):
             if command[:2] == ['go', 'env']:
@@ -42,7 +71,9 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(json.loads((target / 'summary.json').read_text())['cold']['samples'], 1)
 
     def test_invalid_sampling_or_shortened_deadline_fails_before_measurement(self):
-        for args in (['--sample-index', '0'], ['--sample-index', '4'], ['--timeout-seconds', '1199']):
+        for args in (['--sample-index', '0'], ['--sample-index', '4'], ['--timeout-seconds', '1199'],
+                     ['--cache-state', 'cold', '--build-seed-only'],
+                     ['--cache-state', 'warm', '--direct-result-seed']):
             with self.subTest(args=args), patch('sys.argv', ['baseline', '--output', 'unused', *args]), \
                  patch.object(baseline, 'output') as output:
                 with self.assertRaises(SystemExit) as failure:

@@ -12,6 +12,21 @@ import issue26_report as report
 
 
 class ReportTests(unittest.TestCase):
+    def test_only_audited_ephemeral_names_are_normalized_and_collisions_fail(self):
+        family = 'TestWarmModelProfilesNoNetAllowsLoopbackAndRejectsRemote/'
+        a, b = family + 'http://127.0.0.1:12345/v1', family + 'http://127.0.0.1:54321/v1'
+        self.assertEqual(report.normalize_case(a), report.normalize_case(b))
+        unrelated = 'TestAnother/http://127.0.0.1:12345/v1'
+        self.assertEqual(report.normalize_case(unrelated), unrelated)
+        suffix = 'a' * 64
+        name = 'TestReviewBundleIndependentReadOnlyRoundTrip/tamper_objects/' + suffix
+        self.assertTrue(report.normalize_case(name).endswith('/<object-hash>'))
+        unrelated_hash = 'TestAnother/' + suffix
+        self.assertEqual(report.normalize_case(unrelated_hash), unrelated_hash)
+        rows = [dict(Action='pass', Package='p', Test=name) for name in (a, b)]
+        with self.assertRaises(ValueError):
+            report.inventory(io.BytesIO(''.join(json.dumps(row) + '\n' for row in rows).encode()))
+
     def archive(self, path, mode='normal', sample=1, corrupt=None):
         flags = ['-p', '2', '-json', '-timeout', '30m'] + (['-race'] if mode == 'race' else [])
         manifest = {'experiment': 'issue26-fixture-remediated-v1', 'mode': mode, 'sample_index': sample,

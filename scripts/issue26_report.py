@@ -4,12 +4,26 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import statistics
 import zipfile
 
 from issue26_acceptance import FIX, NATIVE_GREP, SOURCES
 
 PACKAGES = ['./...', './.agent-teams/hufu-dev/diagnostic-pilot/...']
+
+
+def normalize_case(name):
+    # These exact three fixture families were audited in the original report.
+    # Preserve the raw name and reject normalization collisions below.
+    if name.startswith('TestWarmModelProfilesNoNetAllowsLoopbackAndRejectsRemote/'):
+        return re.sub(r'(http://(?:127\.0\.0\.1|localhost):)[0-9]+(?=/v1$)', r'\1<port>', name)
+    if re.fullmatch(r'TestReviewBundleIndependentReadOnlyRoundTrip/tamper_objects/[0-9a-f]{64}', name):
+        return name.rsplit('/', 1)[0] + '/<object-hash>'
+    if name.startswith('TestIngestActionProviderArtifactsRejectsMissingAndEscapedPaths/'):
+        return re.sub(r'(/tmp/TestIngestActionProviderArtifactsRejectsMissingAndEscapedPaths)[0-9]+(?=/001/stable\.json$)',
+                      r'\1<temp-id>', name)
+    return name
 
 
 def digest_file(path):
@@ -33,9 +47,14 @@ def inventory(stream):
             failed_packages.add(event['Package'])
     top = sorted([package, name, outcome] for (package, name), outcome in terminal.items() if '/' not in name)
     nested = sorted([package, name, outcome] for (package, name), outcome in terminal.items())
+    normalized = sorted([package, normalize_case(name), outcome] for package, name, outcome in nested)
+    if len({(row[0], row[1]) for row in normalized}) != len(nested):
+        raise ValueError('normalization collapsed distinct observed cases')
     native = {name: terminal.get(('github.com/kjelly/hufu/internal/tools', name)) for name in NATIVE_GREP}
     return {'top_level': top, 'all_case_count': len(nested),
             'all_case_outcome_sha256': hashlib.sha256(json.dumps(nested).encode()).hexdigest(),
+            'normalized_case_outcome_sha256': hashlib.sha256(json.dumps(normalized).encode()).hexdigest(),
+            'normalizations': [[name, normalize_case(name)] for _, name, _ in nested if name != normalize_case(name)],
             'skipped': [row for row in nested if row[2] == 'skip'],
             'failed_packages': sorted(failed_packages),
             'failed_tests': [row for row in nested if row[2] == 'fail'],
@@ -135,6 +154,8 @@ def aggregate(captures):
                 inventories = [json.dumps(row['inventory']['top_level']) for row in rows]
                 if len(set(inventories)) != 1:
                     raise ValueError('top-level case/outcome set changed between samples')
+                if len({row['inventory']['normalized_case_outcome_sha256'] for row in rows}) != 1:
+                    raise ValueError('nested case/outcome set changed beyond the audited ephemeral names')
                 groups[f'{label}/{mode}/{state}'] = {
                     key: stats([row['observation'][key] for row in rows])
                     for key in ('wall_seconds', 'cpu_user_seconds', 'cpu_system_seconds')}

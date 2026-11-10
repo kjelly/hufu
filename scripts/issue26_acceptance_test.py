@@ -4,6 +4,7 @@ import os
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -13,6 +14,49 @@ import issue26_acceptance as acceptance
 
 
 class VariantTests(unittest.TestCase):
+    def test_cohort_counterbalances_all_samples_and_stops_on_missing_native_evidence(self):
+        for fail_native in (False, True):
+            with self.subTest(fail_native=fail_native), tempfile.TemporaryDirectory() as temporary:
+                output = Path(temporary) / 'capture'
+                calls = []
+
+                def remediate(source, sha):
+                    source.mkdir()
+                    label = next(name for name, value in acceptance.SOURCES.items() if value == sha)
+                    return {'original_revision': sha, 'measured_revision': acceptance.VARIANTS[label],
+                            'patch_sha256': acceptance.PATCH_SHA256, 'fixture_fix': acceptance.FIX}
+
+                def main():
+                    target = Path(sys.argv[sys.argv.index('--output') + 1])
+                    sample = int(sys.argv[sys.argv.index('--sample-index') + 1])
+                    calls.append((target.parent.name, sample))
+                    self.assertIn('--direct-result-seed', sys.argv)
+                    self.assertNotIn('--build-seed-only', sys.argv)
+                    return 0
+
+                module = SimpleNamespace(main=main)
+                spec = SimpleNamespace(loader=SimpleNamespace(exec_module=lambda _: None))
+                with patch.object(acceptance, 'admit_capture'), \
+                     patch.object(acceptance, 'git', side_effect=lambda *args, **_: '' if args[:2] == ('status', '--porcelain') else 'controller'), \
+                     patch.object(acceptance, 'remediate', side_effect=remediate), \
+                     patch.object(acceptance.subprocess, 'run'), \
+                     patch.object(acceptance.subprocess, 'check_output', return_value='ripgrep 14\n'), \
+                     patch.object(acceptance.importlib.util, 'spec_from_file_location', return_value=spec), \
+                     patch.object(acceptance.importlib.util, 'module_from_spec', return_value=module), \
+                     patch.object(acceptance, 'native_grep_coverage', return_value={'passed': not fail_native}), \
+                     patch.dict(os.environ, {'GITHUB_RUN_ID': 'run', 'GITHUB_RUN_ATTEMPT': '1'}), \
+                     patch.object(sys, 'argv', list(sys.argv)):
+                    result = acceptance.run_group(SimpleNamespace(output=output, mode='race', cache_state='result'))
+                manifest = json.loads((output / 'capture.json').read_text())
+                self.assertEqual(result, 1 if fail_native else 0)
+                if fail_native:
+                    self.assertEqual(calls, [('before', 1)])
+                    self.assertFalse(manifest['sources']['before']['samples']['1']['native_grep']['passed'])
+                else:
+                    self.assertEqual(calls, [('before', 1), ('after-32', 1), ('after-32', 2),
+                                             ('before', 2), ('before', 3), ('after-32', 3)])
+                    self.assertEqual(set(manifest['sources']['after-32']['samples']), {'1', '2', '3'})
+
     def test_native_grep_gate_requires_actual_passes_in_every_command(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

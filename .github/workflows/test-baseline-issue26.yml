@@ -13,15 +13,15 @@ permissions:
 jobs:
   capture:
     if: github.event_name == 'workflow_dispatch'
-    name: paired (${{ matrix.mode }}, sample ${{ matrix.sample }})
+    name: cohort (${{ matrix.mode }}, ${{ matrix.cache_state }}, three samples)
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      # Each sample compares both sources on one runner. Modes never share timings.
+      # All three samples of each mode/cache group share one physical runner.
       matrix:
         mode: [normal, race, cgo-free]
-        sample: [1, 2, 3]
+        cache_state: [cold, warm, result]
     env:
       GOMAXPROCS: '2'
       GOTOOLCHAIN: local
@@ -52,17 +52,17 @@ jobs:
       - name: Capture both fixture-remediated sources without retries
         env:
           BASELINE_MODE: ${{ matrix.mode }}
-          BASELINE_SAMPLE: ${{ matrix.sample }}
+          BASELINE_CACHE: ${{ matrix.cache_state }}
         run: |
           mkdir -p work
           mise exec -- python3 scripts/issue26_acceptance.py \
-            --mode "$BASELINE_MODE" --sample "$BASELINE_SAMPLE" \
-            --output "$PWD/work/acceptance-${BASELINE_MODE}-${BASELINE_SAMPLE}"
+            --mode "$BASELINE_MODE" --cache-state "$BASELINE_CACHE" \
+            --output "$PWD/work/acceptance-${BASELINE_MODE}-${BASELINE_CACHE}"
       - name: Upload raw evidence including failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: issue26-paired-${{ matrix.mode }}-${{ matrix.sample }}-attempt-${{ github.run_attempt }}
+          name: issue26-cohort-${{ matrix.mode }}-${{ matrix.cache_state }}-attempt-${{ github.run_attempt }}
           path: work/acceptance-*/
           retention-days: 30
           if-no-files-found: error

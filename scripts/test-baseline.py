@@ -96,6 +96,11 @@ def main():
                         help='capture one indexed sample for a separately aggregated experiment')
     parser.add_argument('--timeout-seconds', type=int, default=1200,
                         help='common explicit package deadline; recorded in environment.json')
+    seed = parser.add_mutually_exclusive_group()
+    seed.add_argument('--build-seed-only', action='store_true',
+                      help='warm group: compile tests and CLI before each fresh observation')
+    seed.add_argument('--direct-result-seed', action='store_true',
+                      help='result group: populate each private cache with one full result seed')
     parser.add_argument('--package', action='append', help='repeat to replace the default full suite')
     parser.add_argument('--run', help='optional Go test filter; changes the measured case set')
     parser.add_argument('--full', action='store_true', help='omit -short (required for full release-contract validation)')
@@ -107,6 +112,10 @@ def main():
         parser.error('sample-index must be within the declared repetitions')
     if args.timeout_seconds < 1200:
         parser.error('measurement deadlines cannot be shorter than the original 20 minutes')
+    if args.build_seed_only and args.cache_state != 'warm':
+        parser.error('build-seed-only requires cache-state warm')
+    if args.direct_result_seed and args.cache_state != 'result':
+        parser.error('direct-result-seed requires cache-state result')
     env = os.environ.copy()
     if args.mode == 'cgo-free':
         env['CGO_ENABLED'] = '0'
@@ -132,14 +141,17 @@ def main():
     metadata = {'started_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 'commit': output(['git', 'rev-parse', 'HEAD']),
                 'dirty': bool(output(['git', 'status', '--porcelain'])),
-                'os': platform.platform(), 'machine': platform.machine(), 'logical_cpus': os.cpu_count(),
+                'os': platform.platform(), 'machine': platform.machine(), 'hostname': platform.node(),
+                'logical_cpus': os.cpu_count(),
                 'cpu': next((line.split(':', 1)[1].strip() for line in Path('/proc/cpuinfo').read_text().splitlines()
                              if line.startswith('model name')), 'unknown') if Path('/proc/cpuinfo').exists() else platform.processor(),
                 'cpu_quota': Path('/sys/fs/cgroup/cpu.max').read_text().strip() if Path('/sys/fs/cgroup/cpu.max').exists() else None,
-                'runner': {key: env.get(key) for key in ('CI', 'RUNNER_OS', 'RUNNER_ARCH')},
+                'runner': {key: env.get(key) for key in ('CI', 'RUNNER_OS', 'RUNNER_ARCH', 'RUNNER_NAME', 'RUNNER_ENVIRONMENT')},
                 'gomaxprocs_configured': env.get('GOMAXPROCS', 'runtime default'), 'go': goenv,
                 'mode': args.mode, 'packages': packages, 'flags': flags,
                 'repetitions_required': args.repetitions, 'sample_index': args.sample_index,
+                'seed_protocol': 'compile_only_warm' if args.build_seed_only else
+                                 'direct_full_result_seed' if args.direct_result_seed else 'full_cold_warm',
                 'cache_scope': 'private build cache; module, OS page and filesystem caches remain warm'}
     # Ask the selected toolchain for its container-aware runtime default.
     with tempfile.TemporaryDirectory(prefix='gomaxprocs-', dir=directory) as temporary:
@@ -152,9 +164,21 @@ def main():
     for iteration in iterations:
         with tempfile.TemporaryDirectory(prefix='build-cache-', dir=directory) as cache:
             runenv = {**env, 'GOCACHE': cache}
+            states = ('cold', 'warm', 'result-seed', 'result')
+            if args.build_seed_only:
+                seeds = [
+                    (f'build-seed-tests-{iteration}', [*command, '-count=1', '-run', '^$', *packages]),
+                    (f'build-seed-cli-{iteration}', ['go', 'build', '-p', '2', '-o', os.devnull, './cmd/hufu']),
+                ]
+                for name, seed_command in seeds:
+                    if measure(directory, name, seed_command, runenv)['exit_code']:
+                        return 1
+                states = ('warm',)
+            elif args.direct_result_seed:
+                states = ('result-seed', 'result')
             # One private cache per repetition. Always execute the preceding states
             # so that warm/result observations have an explicit, reproducible seed.
-            for state in ('cold', 'warm', 'result-seed', 'result'):
+            for state in states:
                 name = f'{state}-{iteration}'
                 count = [] if state.startswith('result') else ['-count=1']
                 row = measure(directory, name, [*command, *count, *packages], runenv)

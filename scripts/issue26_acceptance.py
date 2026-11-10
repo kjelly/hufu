@@ -18,6 +18,9 @@ SOURCES = {
 }
 FIX = '300041b84e45e7c53549bd53c753b6b0ac6ad860'
 FIX_PATH = 'internal/team/dag_test.go'
+VARIANTS = {'before': 'f1faec1b407ba8205b0fdf5bff80d9f254820401',
+            'after-32': 'c6c0d0b0017b860a80844eb18bf44c80cba7893e'}
+PATCH_SHA256 = '809adc693dacf1bc6c880ec600dbb2167872b8f776bf0ee54d1f25358c25ff55'
 NATIVE_GREP = {
     'TestGrepPolicySubtractsFromNativeRgSelection',
     'TestGrepNoPolicyPreservesNativeDirectorySelection',
@@ -36,10 +39,12 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
 
 
-def native_grep_coverage(directory):
+def native_grep_coverage(directory, expected_commands=4):
     """Installation alone does not prove execution of the six native contracts."""
     checked = {}
     for path in sorted(directory.glob('*.jsonl')):
+        if path.name.startswith('build-seed-'):
+            continue
         outcomes = {}
         with path.open() as stream:
             for line in stream:
@@ -50,7 +55,7 @@ def native_grep_coverage(directory):
                     outcomes[event['Test']] = event['Action']
         missing = sorted(name for name in NATIVE_GREP if outcomes.get(name) != 'pass')
         checked[path.name] = {'passed': not missing, 'missing_or_not_passed': missing}
-    return {'passed': len(checked) == 4 and all(row['passed'] for row in checked.values()),
+    return {'passed': len(checked) == expected_commands and all(row['passed'] for row in checked.values()),
             'commands': checked}
 
 
@@ -80,16 +85,20 @@ def remediate(source, sha):
             'patch_sha256': hashlib.sha256(patch.encode()).hexdigest(), 'tree': tree}
 
 
-def run_capture(args):
+def admit_capture(output):
     if not shutil.which('rg'):
         raise ValueError('ripgrep is required; native grep contracts must not silently skip')
     # The private cold caches are an intentional experiment on a hosted disk.
     # Never place those caches on this Codex machine's tmpfs or alter shared caches.
     if not os.environ.get('GITHUB_ACTIONS') == 'true':
         raise ValueError('full captures require the dedicated hosted workflow')
-    disk = subprocess.check_output(['stat', '-f', '-c', '%T', str(args.output.parent)], text=True).strip()
+    disk = subprocess.check_output(['stat', '-f', '-c', '%T', str(output.parent)], text=True).strip()
     if disk in ('tmpfs', 'ramfs'):
         raise ValueError('measurement build caches require disk-backed storage')
+
+
+def run_capture(args):
+    admit_capture(args.output)
     args.output.mkdir(parents=True, exist_ok=False)
     started = time.time()
     manifest = {'experiment': 'issue26-fixture-remediated-v1', 'mode': args.mode,
@@ -135,12 +144,78 @@ def run_capture(args):
     return 0
 
 
+def run_group(args):
+    """Three observations per cache group on one runner, not three CPU models."""
+    admit_capture(args.output)
+    args.output.mkdir(parents=True, exist_ok=False)
+    manifest = {'experiment': 'issue26-co-located-v2', 'mode': args.mode,
+                'cache_state': args.cache_state, 'samples_required': 3,
+                'controller_revision': git('rev-parse', 'HEAD'),
+                'harness_sha256': hashlib.sha256((ROOT / 'scripts/test-baseline.py').read_bytes()).hexdigest(),
+                'timeout_seconds': 1800, 'full_suite': True, 'sources': {},
+                'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+                'ripgrep': subprocess.check_output(['rg', '--version'], text=True).splitlines()[0],
+                'source_order': {str(i): ['before', 'after-32'] if i % 2 else ['after-32', 'before']
+                                 for i in (1, 2, 3)}}
+    sources = {}
+    write_json(args.output / 'capture.json', manifest)
+    try:
+        for label, sha in SOURCES.items():
+            source = args.output.parent / f'source-{args.mode}-{args.cache_state}-{label}'
+            sources[label] = source
+            manifest['sources'][label] = {**remediate(source, sha), 'samples': {}}
+            identity = manifest['sources'][label]
+            if identity['measured_revision'] != VARIANTS[label] or identity['patch_sha256'] != PATCH_SHA256:
+                raise ValueError('fixture variant differs from the reviewed reproducible identity')
+            with (args.output / f'{label}-modules.log').open('w') as log:
+                subprocess.run(['mise', 'exec', '--', 'go', 'mod', 'download'], cwd=source,
+                               stdout=log, stderr=subprocess.STDOUT, check=True)
+        for sample in (1, 2, 3):
+            for label in manifest['source_order'][str(sample)]:
+                if git('status', '--porcelain', cwd=sources[label]):
+                    raise ValueError('measurement source changed before sample execution')
+                print(f'{args.mode}/{args.cache_state}/{label}/sample-{sample}', flush=True)
+                spec = importlib.util.spec_from_file_location('baseline', ROOT / 'scripts/test-baseline.py')
+                baseline = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(baseline)
+                baseline.ROOT = sources[label]
+                target = args.output / label / f'sample-{sample}'
+                target.parent.mkdir(exist_ok=True)
+                sys.argv = [str(ROOT / 'scripts/test-baseline.py'), '--output', str(target), '--mode', args.mode,
+                            '--cache-state', args.cache_state, '--full', '--sample-index', str(sample),
+                            '--timeout-seconds', '1800']
+                if args.cache_state == 'warm':
+                    sys.argv.append('--build-seed-only')
+                elif args.cache_state == 'result':
+                    sys.argv.append('--direct-result-seed')
+                status = baseline.main()
+                if git('status', '--porcelain', cwd=sources[label]):
+                    raise ValueError('sample execution changed the measurement source')
+                native = native_grep_coverage(target, 2 if args.cache_state == 'result' else 1)
+                manifest['sources'][label]['samples'][str(sample)] = {'exit_code': status, 'native_grep': native}
+                write_json(args.output / 'capture.json', manifest)
+                if status or not native['passed']:
+                    return 1
+        return 0
+    except Exception as error:
+        manifest['error'] = {'type': type(error).__name__, 'detail': str(error)}
+        raise
+    finally:
+        write_json(args.output / 'capture.json', manifest)
+        for source in sources.values():
+            if source.exists():
+                subprocess.run(['git', 'worktree', 'remove', str(source)], cwd=ROOT, check=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--mode', choices=('normal', 'race', 'cgo-free'), required=True)
-    parser.add_argument('--sample', type=int, choices=(1, 2, 3), required=True)
-    return run_capture(parser.parse_args())
+    scope = parser.add_mutually_exclusive_group(required=True)
+    scope.add_argument('--sample', type=int, choices=(1, 2, 3), help='historical pilot protocol')
+    scope.add_argument('--cache-state', choices=('cold', 'warm', 'result'), help='co-located three-sample group')
+    args = parser.parse_args()
+    return run_group(args) if args.cache_state else run_capture(args)
 
 
 if __name__ == '__main__':
