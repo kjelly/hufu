@@ -163,9 +163,13 @@ func TestRequestAcceptanceContractAuditVetoesBeforeFreeze(t *testing.T) {
 	}{
 		{`{"faithful":false,"reason":"Requested original material was weakened into related coverage."}`, 3},
 		{`{"faithful":false,"reason":"The original task requests opinions; primary-source acquisition was invented."}`, 3},
-		{`{"reason":"Missing verdict"}`, 2},
-		{`{"faithful":true,"reason":"ok","command":"unexpected"}`, 2},
-		{`{"faithful":true,"reason":""}`, 2},
+		{`{"reason":"Missing verdict"}`, 3},
+		{`{"faithful":true,"reason":"ok","command":"unexpected"}`, 3},
+		{`{"faithful":true,"reason":""}`, 3},
+		{`{"faithful":"true","reason":"ok"}`, 3},
+		{`{"faithful":"false","reason":"Rejected"}`, 2},
+		{`{"reason":42,"faithful":false}`, 2},
+		{`{"command":"unexpected","faithful":false,"reason":"Rejected"}`, 2},
 		{"provider unavailable", 2},
 	} {
 		verdict := test.verdict
@@ -196,6 +200,119 @@ func TestRequestAcceptanceContractAuditVetoesBeforeFreeze(t *testing.T) {
 			}
 			if c.RunInputSnapshot() != nil || len(c.taskTracker.TodoList().Items()) != 0 {
 				t.Fatal("rejected contract was frozen or dispatched")
+			}
+		})
+	}
+}
+
+func TestRequestAcceptanceContractAuditRepairsFormatBeforeFreeze(t *testing.T) {
+	for _, raw := range []string{
+		`{"faithful":"true","reason":"The contract preserves the request."}`,
+		`{"reason":"The contract preserves the request."}`,
+		`{"faithful":true,"reason":"The contract preserves the request.","extra":true}`,
+		`{"faithful":true,"reason":null}`,
+		`{"faithful":true,"reason":"The contract preserves the request."`,
+	} {
+		t.Run(raw, func(t *testing.T) {
+			c := requestAcceptanceFixture(t)
+			const request = "Explain the tradeoffs"
+			extractions, audits := 0, 0
+			var originalPrompt string
+			c.SetRequestAcceptanceModel(requestAcceptanceModelFunc(func(_ context.Context, operation, prompt string) ([]byte, error) {
+				if c.RunInputSnapshot() != nil || len(c.taskTracker.TodoList().Items()) != 0 {
+					t.Fatal("audit response was frozen or dispatched before validation")
+				}
+				if operation == "extract" {
+					extractions++
+					return requestExtraction(request, request, "response"), nil
+				}
+				if operation != "contract" {
+					t.Fatalf("unexpected operation %q", operation)
+				}
+				audits++
+				if audits == 1 {
+					originalPrompt = prompt
+					return []byte(raw), nil
+				}
+				if audits != 2 || !strings.HasPrefix(prompt, originalPrompt) || !strings.Contains(prompt, raw) || !strings.Contains(prompt, "untrusted data") || !strings.Contains(prompt, "JSON boolean") {
+					t.Fatal("repair changed the candidate or omitted rejected response and protocol feedback")
+				}
+				return faithfulRequestContract(), nil
+			}))
+			ctx := beginRequestRevisionFixture(t, c)
+			if err := c.resolveRunInputsForInvocation(ctx, request); err != nil {
+				t.Fatal(err)
+			}
+			snapshot := c.RunInputSnapshot()
+			if extractions != 1 || audits != 2 || snapshot == nil {
+				t.Fatalf("extracts=%d audits=%d snapshot=%#v", extractions, audits, snapshot)
+			}
+			events, err := c.EventJournal().ReadEvents(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reviewed, resolved := 0, 0
+			for _, event := range events {
+				switch event.Type {
+				case "request_acceptance_contract_reviewed":
+					var review requestAcceptanceContractReview
+					if err := json.Unmarshal(event.Payload, &review); err != nil || review.Faithful == nil || !*review.Faithful {
+						t.Fatalf("invalid approval persisted: review=%#v error=%v", review, err)
+					}
+					reviewed++
+				case string(EventRunInputsResolved):
+					resolved++
+				}
+			}
+			replayed := ReduceToSessionData(events)
+			if reviewed != 1 || resolved != 1 || len(replayed.RunInputSnapshots) != 1 || replayed.RunInputSnapshots[0].SnapshotHash != snapshot.SnapshotHash {
+				t.Fatalf("repair did not persist one approved snapshot: reviewed=%d resolved=%d", reviewed, resolved)
+			}
+		})
+	}
+}
+
+func TestRequestAcceptanceContractAuditRepairFailuresStayUnfrozen(t *testing.T) {
+	for _, scenario := range []string{"provider error", "canceled", "oversized", "invalid repair", "repair provider error", "repair canceled", "repair oversized", "repair veto"} {
+		t.Run(scenario, func(t *testing.T) {
+			c := requestAcceptanceFixture(t)
+			const request = "Explain the tradeoffs"
+			audits := 0
+			ctx, cancel := context.WithCancel(beginRequestRevisionFixture(t, c))
+			defer cancel()
+			c.SetRequestAcceptanceModel(requestAcceptanceModelFunc(func(_ context.Context, operation, _ string) ([]byte, error) {
+				if operation == "extract" {
+					return requestExtraction(request, request, "response"), nil
+				}
+				audits++
+				phase := scenario
+				if strings.HasPrefix(scenario, "repair ") {
+					if audits == 1 {
+						return []byte(`{"faithful":"true","reason":"ok"}`), nil
+					}
+					phase = strings.TrimPrefix(scenario, "repair ")
+				}
+				switch phase {
+				case "provider error":
+					return nil, errors.New("provider unavailable")
+				case "canceled":
+					cancel()
+					return faithfulRequestContract(), nil
+				case "oversized":
+					return []byte(strings.Repeat(" ", maxRunInputValueBytes+1)), nil
+				case "veto":
+					return []byte(`{"faithful":false,"reason":"The contract omits a requested outcome."}`), nil
+				default:
+					return []byte(`{"faithful":"true","reason":"ok"}`), nil
+				}
+			}))
+			err := c.resolveRunInputsForInvocation(ctx, request)
+			wantAudits := 1
+			if strings.HasPrefix(scenario, "repair ") || scenario == "invalid repair" {
+				wantAudits = 2
+			}
+			if err == nil || audits != wantAudits || c.RunInputSnapshot() != nil || len(c.taskTracker.TodoList().Items()) != 0 {
+				t.Fatalf("audit repair escaped: audits=%d error=%v", audits, err)
 			}
 		})
 	}

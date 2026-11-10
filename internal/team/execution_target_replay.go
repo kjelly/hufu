@@ -65,6 +65,9 @@ func ReplayTodoList(events []RunEvent) ([]*TodoItem, error) {
 		if item == nil {
 			continue
 		}
+		if err := validateHistoricalResultTaskBindingReplay(events, item); err != nil {
+			return nil, fmt.Errorf("replay task %s historical results: %w", item.ID, err)
+		}
 		if err := validateExecutionIdentity(item.ExecutionTarget, item.ExecutionTopology, item.BackendBinding); err != nil {
 			return nil, &ExecutionIdentityConflictError{TaskID: item.ID, Reason: err.Error()}
 		}

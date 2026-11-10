@@ -31,6 +31,10 @@ func RetrieveSupplemental(ctx context.Context, repo RetrievalRepository, request
 	if err := ctx.Err(); err != nil {
 		return out, err
 	}
+	if err := validateAllowedItemIDs(request.AllowedItemIDs); err != nil {
+		return out, err
+	}
+	request = request.WithAllowedItemIDs(request.AllowedItemIDs)
 	parts := DecomposeQuery(request.Query)
 	var terms []string
 	for _, values := range [][]string{parts.Quoted, parts.Paths, parts.Symbols, parts.Commands, parts.SHAs, parts.ErrorCodes, parts.TaskIDs, parts.AttemptIDs, parts.ToolNames, parts.IPs, parts.Ports, parts.ArtifactIDs} {
@@ -50,9 +54,6 @@ func RetrieveSupplemental(ctx context.Context, repo RetrievalRepository, request
 			if !isRetrievable(row.Item, request, EvaluationTime(ctx)) {
 				continue
 			}
-			if request.AllowedItemIDs != nil && !slices.Contains(request.AllowedItemIDs, row.Item.ID) {
-				continue
-			}
 			result = append(result, row)
 		}
 		return CloneSearchResults(result)
@@ -64,7 +65,7 @@ func RetrieveSupplemental(ctx context.Context, repo RetrievalRepository, request
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
-		query := request
+		query := request.WithAllowedItemIDs(request.AllowedItemIDs)
 		query.Query, query.Limit = term, remaining
 		out.Work.ExactCalls++
 		rows, err := repo.SearchExact(ctx, query)
@@ -83,7 +84,7 @@ func RetrieveSupplemental(ctx context.Context, repo RetrievalRepository, request
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
-		query := request
+		query := request.WithAllowedItemIDs(request.AllowedItemIDs)
 		query.Limit = remaining
 		out.Work.LexicalCalls++
 		search := repo.SearchLexical

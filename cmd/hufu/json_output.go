@@ -8,12 +8,14 @@ import (
 	"sort"
 	"time"
 
+	"github.com/kjelly/hufu/internal/buildinfo"
 	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
 // jsonRunOutput is the machine-readable shape emitted by --output json.
 type jsonRunOutput struct {
+	HufuBuild           *buildinfo.Info            `json:"hufu_build,omitempty"`
 	InvocationID        string                     `json:"invocation_id,omitempty"`
 	RunID               string                     `json:"run_id,omitempty"`
 	RunIDs              []cliRunIdentity           `json:"run_ids,omitempty"`
@@ -93,7 +95,7 @@ func printResultJSONWithPrior(result string, loadedTeams map[string]*teamContext
 }
 
 func printResultJSONForInvocation(result string, loadedTeams map[string]*teamContext, skills []team.SkillUsageEntry, priorUnresolved map[string]map[string]time.Time, identities []cliRunIdentity) error {
-	out := jsonRunOutput{InvocationID: opts.invocationID, Result: result, RunIDs: slices.Clone(identities)}
+	out := jsonRunOutput{HufuBuild: new(buildinfo.Current()), InvocationID: opts.invocationID, Result: result, RunIDs: slices.Clone(identities)}
 	if len(identities) > 0 {
 		// Within one team, allocation order is execution order, so the last ID is
 		// the terminal/latest invocation and the most useful singular handle.

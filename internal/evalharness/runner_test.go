@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,9 @@ func TestBoundedRunErrorDiagnosticRedactsAndLimitsOutput(t *testing.T) {
 // test` automatically without a new hand-written test function -- this is
 // the Go-level equivalent of `hufu eval run ./evals/<name>` per suite.
 func TestRunAllEvalSuites(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	// Tool authorization must behave the same on developer terminals and CI.
 	t.Setenv("CI", "true")
 	evalsRoot := filepath.Join(repoRoot(t), "evals")
@@ -91,11 +95,18 @@ func TestRunAllEvalSuites(t *testing.T) {
 				if err != nil {
 					t.Fatalf("LoadSuiteFixture(%s): %v", path, err)
 				}
+				checkDelivery := slices.Contains(lifecycleDeliverySuites, fixture.Name)
+				if checkDelivery {
+					addLifecycleDeliveryExpectations(fixture)
+				}
 				result, err := RunSuite(t.Context(), fixture, "")
 				if err != nil {
 					t.Fatalf("RunSuite(%s): %v", path, err)
 				}
 				for _, c := range result.Cases {
+					if checkDelivery && (c.Metrics.ContextDelivery == nil || c.Metrics.ContextDelivery.ProviderCalls == 0) {
+						t.Errorf("%s: no receiver evidence", c.CaseID)
+					}
 					if !c.Passed {
 						t.Errorf("case %s/%s did not pass; findings: %+v", fixture.Name, c.CaseID, c.Findings)
 					}
@@ -116,10 +127,6 @@ func (blockingHandler) ServeHTTP(_ http.ResponseWriter, r *http.Request) {
 }
 
 func TestEvalTimeout(t *testing.T) {
-	original := defaultCaseTimeout
-	defaultCaseTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { defaultCaseTimeout = original })
-
 	fixturePath := filepath.Join(repoRoot(t), "evals", "core-lifecycle", "cases.yaml")
 	fixture, err := LoadSuiteFixture(fixturePath)
 	if err != nil {
@@ -127,7 +134,10 @@ func TestEvalTimeout(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(10 * time.Second)
-	result, err := runCaseWithHandler(context.Background(), fixture, fixture.Cases[0], blockingHandler{}, nil)
+	result, err := runCaseWithExecutionTimeout(t.Context(), fixture, fixture.Cases[0], blockingHandler{}, nil, func(ctx context.Context, coordinator *team.Coordinator, prompt string) error {
+		_, err := coordinator.Run(ctx, prompt)
+		return err
+	}, 200*time.Millisecond)
 	if err != nil {
 		t.Fatalf("runCaseWithHandler: %v", err)
 	}

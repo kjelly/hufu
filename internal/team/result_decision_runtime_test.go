@@ -172,6 +172,135 @@ func TestBoundDecisionCoverageReplayAndAssembly(t *testing.T) {
 	}
 }
 
+func TestBoundDecisionContractRevalidationPreservesOriginalRequest(t *testing.T) {
+	for _, name := range []string{"valid", "missing_proof", "wrong_original", "changed_mapping", "new_submission"} {
+		t.Run(name, func(t *testing.T) {
+			f := newBoundDecisionFixture(t, 1)
+			if response := f.call(t, 0, "original"); response.IsError {
+				t.Fatal(response.Content)
+			}
+			payload, rejection := f.c.structuredPayloadForSubmission(f.item.ID, f.submission(t, nil))
+			if rejection != "" {
+				t.Fatal(rejection)
+			}
+			original := *f.item.ResultContract
+			old := f.c.session.ResultContracts[original.ID]
+			root, err := decodeResultContractJSON(old.CanonicalSchema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root.(map[string]any)["$comment"] = "revalidated contract"
+			if name == "changed_mapping" {
+				spec := root.(map[string]any)["x-hufu-fixed-collections"].([]any)[0].(map[string]any)
+				group := spec["decision_groups"].([]any)[0].(map[string]any)
+				group["value_map"].(map[string]any)["b"].(map[string]any)["state"] = "accept"
+			}
+			raw, err := json.Marshal(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			compiled, err := CompileResultContractDocument(original.ID, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ref := compiled.ref(true)
+			f.c.session.ResultContracts[ref.ID] = compiled
+			f.item.ResultContract = &ref
+			payload.Contract = ref
+			f.item.TypedResult = &TaskResult{TaskID: f.item.ID, Status: TaskResultStatusSuccess, StructuredPayload: payload}
+			f.item.ExecutionReceipt = &ExecutionReceipt{ResultContractID: original.ID, ResultContractSHA256: original.SchemaSHA256, ResultPayloadSHA256: payload.SHA256}
+			f.item.ContractRevalidation = &ContractRevalidation{Original: original, Accepted: ref, PayloadSHA256: payload.SHA256, SourceTaskSHA256: strings.Repeat("a", 64)}
+			switch name {
+			case "missing_proof":
+				f.item.ContractRevalidation = nil
+			case "wrong_original":
+				f.item.ContractRevalidation.Original.SchemaSHA256 = strings.Repeat("b", 64)
+			}
+			if name == "new_submission" {
+				if _, rejection := f.c.structuredPayloadForSubmission(f.item.ID, f.submission(t, nil)); rejection == "" {
+					t.Fatal("new submission reused an old-schema decision")
+				}
+			} else if err := f.c.validateAcceptedDependencyPayload(f.item); (err == nil) != (name == "valid") {
+				t.Fatalf("revalidation error=%v", err)
+			}
+			if f.calls.Load() != 1 {
+				t.Fatal("revalidation repeated model execution")
+			}
+		})
+	}
+}
+
+func TestBoundDecisionContractRevalidationPreservesAncestorScope(t *testing.T) {
+	for _, name := range []string{"retained", "forged_event", "forged_digest", "sibling_event"} {
+		t.Run(name, func(t *testing.T) {
+			f := newBoundDecisionFixture(t, 1)
+			if response := f.call(t, 0, "original"); response.IsError {
+				t.Fatal(response.Content)
+			}
+			payload, rejection := f.c.structuredPayloadForSubmission(f.item.ID, f.submission(t, nil))
+			if rejection != "" {
+				t.Fatal(rejection)
+			}
+			f.item.Status = TaskDone
+			f.item.TypedResult = &TaskResult{TaskID: f.item.ID, Agent: f.item.Agent, Status: TaskResultStatusSuccess, StructuredPayload: payload}
+			tree := NewSessionTree()
+			if err := SaveSessionTree(f.c.session.Workspace, tree); err != nil {
+				t.Fatal(err)
+			}
+			forkTarget := "main"
+			if name == "sibling_event" {
+				// Fork before the decision: the valid event exists globally but
+				// is not in the child's admitted ancestor prefix.
+				events, err := f.c.eventStore.ReadEvents()
+				if err != nil {
+					t.Fatal(err)
+				}
+				forkTarget = events[0].ID
+			}
+			branch, err := tree.CreateBranch("recovered", forkTarget, f.c.eventStore)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tree.ActiveBranch = branch.ID
+			if err := SaveSessionTree(f.c.session.Workspace, tree); err != nil {
+				t.Fatal(err)
+			}
+			f.c.recoveryBranch = branch.ID
+			f.c.eventStore.SetBranchID(branch.ID)
+			before := mustReadEvents(t, f.c.eventStore)
+			if name == "forged_event" {
+				payload.CollectionBindings[0].Decisions[0].EventID = "forged"
+			}
+			if name == "forged_digest" {
+				payload.CollectionBindings[0].Decisions[0].BindingDigest = strings.Repeat("a", 64)
+			}
+			err = f.c.validateCompletedEvidenceDeliveries()
+			if (err == nil) != (name == "retained") {
+				t.Fatalf("completed evidence revalidation: %v", err)
+			}
+			// The strict admission path must never import that ancestor decision
+			// into a new submission, even if its payload is byte-for-byte equal.
+			if err := f.c.validateSubmittedEvidenceInputs(f.item.ID, payload); err == nil {
+				t.Fatal("new submission imported an ancestor decision")
+			}
+			if _, rejection := f.c.structuredPayloadForSubmission(f.item.ID, f.submission(t, nil)); rejection == "" {
+				t.Fatal("new claims reused an ancestor decision")
+			}
+			if f.calls.Load() != 1 {
+				t.Fatal("revalidation repeated a settled inference")
+			}
+			// Claim rejection may append diagnostics; retained validation itself
+			// must leave the original decision event and receipt unchanged.
+			after := mustReadEvents(t, f.c.eventStore)
+			for i, original := range before {
+				if !sameCanonicalEvidence(original, after[i]) {
+					t.Fatal("revalidation changed original history")
+				}
+			}
+		})
+	}
+}
+
 func TestBoundDecisionRejectsInvalidSubmission(t *testing.T) {
 	f := newBoundDecisionFixture(t, 2)
 	if r := f.call(t, 0, "first"); r.IsError {
@@ -479,7 +608,8 @@ func TestBoundDecisionConditionalClaimsAreRepairable(t *testing.T) {
 	}
 	compiled := f.c.session.ResultContracts["decisions.json"]
 	invalidSource := []byte(`{"decisions":[{"origin":5,"position":0,"asset":"a","state":"reject","reason":""}]}`)
-	if collectionDecisionSchemaFailure(compiled, invalidSource, f.plans) {
+	_, sourceErr := validateStructuredResultPayload(compiled, compiled.ref(true), invalidSource)
+	if sourceErr == nil || collectionModelSchemaFailure(compiled, f.plans, sourceErr) {
 		t.Fatal("trusted source error must not trigger model repair")
 	}
 }

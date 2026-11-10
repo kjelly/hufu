@@ -30,6 +30,10 @@ func HistoricalResultCommand(resultID, teamName string) string {
 	return command
 }
 
+func HistoricalResultImagesCommand(resultID, teamName string) string {
+	return strings.Replace(HistoricalResultCommand(resultID, teamName), "hufu results show ", "hufu results images ", 1)
+}
+
 func (c *Coordinator) reportHistoricalResult(event RunEvent) {
 	if event.TaskID == "" || HistoricalResultID(event) == "" {
 		return
@@ -40,9 +44,13 @@ func (c *Coordinator) reportHistoricalResult(event RunEvent) {
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
 		return
 	}
-	c.report(c.newEvent("task_result_ready").withTodoID(event.TaskID).withAgent(event.Actor).withMessage("saved task result").withData(map[string]any{
+	data := map[string]any{
 		"schema_version": 1, "result_id": HistoricalResultID(event), "invocation_id": event.InvocationID,
 		"run_id": event.RunID, "task_id": event.TaskID, "attempt": max(event.Attempt, payload.Attempt),
 		"branch_id": event.BranchID, "source_event_id": event.ID,
-	}))
+	}
+	if refs, err := resultEventImageRefs(event); err == nil && len(refs) > 0 {
+		data["image_count"] = len(refs)
+	}
+	c.report(c.newEvent("task_result_ready").withTodoID(event.TaskID).withAgent(event.Actor).withMessage("saved task result").withData(data))
 }

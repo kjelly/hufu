@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func blockedRecoveryFixture(t *testing.T, body string, prepared bool, reason RepairFailureReason) (*Coordinator, string, *ResultCollectionCheckpoint) {
@@ -39,6 +40,265 @@ func blockedRecoveryFixture(t *testing.T, body string, prepared bool, reason Rep
 	c.recordCollectionStopReceipt(item.ID, &resultCollectionFailure{Reason: reason, Checkpoint: cp, Cause: errors.New("historical collection rejection")})
 	c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "historical collection rejection", NeedsHuman, FailureProtocol, TaskBlocked, "original report with limitations")
 	return c, item.ID, cp
+}
+
+func TestResultCollectionRecoveryResumesCancelledCollection(t *testing.T) {
+	for _, state := range []ResultCollectionState{ResultCollectionPending, ResultCollectionReceived, ResultCollectionPrepared} {
+		t.Run(string(state), func(t *testing.T) {
+			c, item, ctx, cp := beginCollectionFixture(t)
+			var err error
+			if state != ResultCollectionPending {
+				cp, err = c.reserveResultCollection(ctx, cp, "collector", []byte(`{"tools":[]}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				cp, err = c.recordCollectionResponse(ctx, cp, []byte(`{"status":"success","summary":"saved original work"}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if state == ResultCollectionPrepared {
+					cp, err = c.prepareCollectionClaims(ctx, cp)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "collection cancelled", NeedsHuman, FailureCancelled, TaskError, "")
+			c = reopenRecoveryCoordinator(t, c)
+			a, err := c.AssessResultCollectionRecovery(t.Context(), item.ID)
+			if err != nil || validateRecoveryAssessment(a) != nil || a.Checkpoint.Work != cp.Work {
+				t.Fatalf("assessment=%+v error=%v", a, err)
+			}
+			c.executionRunID = "cancelled-collection-recovery"
+			if err := c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), item.ID)); err != nil {
+				t.Fatal(err)
+			}
+			c = reopenRecoveryCoordinator(t, c)
+			if state == ResultCollectionPending {
+				if a.Disposition != RecoveryResumeCollection || currentResultCollection(c.todoItemByID(item.ID)).Work != cp.Work {
+					t.Fatal("pending recovery lost original work")
+				}
+				return
+			}
+			worker := scriptWorker(textTurn("must never replay work"))
+			c.workerAgentOverride = worker
+			if _, err := c.executeTask(WithSessionResume(t.Context()), taskDefFromTodoItem(c.todoItemByID(item.ID)), item.ID); err != nil {
+				t.Fatal(err)
+			}
+			done := c.todoItemByID(item.ID)
+			if done.Status != TaskDone || worker.Calls() != 0 || currentResultCollection(done).TurnsUsed != cp.TurnsUsed || currentResultCollection(done).Work != cp.Work {
+				t.Fatal("recovery repeated work, changed sealed evidence, or consumed another turn")
+			}
+		})
+	}
+}
+
+func TestResultCollectionRecoveryRejectsUnsafeCancelledTargets(t *testing.T) {
+	c, item, _, _ := beginCollectionFixture(t)
+	c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "cancelled", NeedsHuman, FailureCancelled, TaskError, "")
+	base := c.todoItemByID(item.ID)
+	for _, kind := range []string{"execution_failure", "unfinished_work", "failed_work", "unknown_exit", "blocked_collection", "source_failure", "unknown_side_effect", "partial_side_effect", "checkpoint_pause"} {
+		t.Run(kind, func(t *testing.T) {
+			candidate := cloneTodoItem(base)
+			switch kind {
+			case "execution_failure":
+				candidate.FailureEvent.FailureClass = FailureExecution
+			case "unfinished_work":
+				candidate.ExecutionReceipt.FinishedAt = time.Time{}
+			case "failed_work":
+				candidate.ExecutionReceipt.ExitCode = new(1)
+			case "unknown_exit":
+				candidate.ExecutionReceipt.ExitCode = nil
+			case "blocked_collection":
+				candidate.ExecutionReceipt.ResultCollection.State = ResultCollectionBlocked
+			case "source_failure":
+				candidate.ExecutionReceipt.ResultCollection.FailureReason = RepairFailureSource
+			case "unknown_side_effect":
+				candidate.RecoveryState = RecoveryStateUnknown
+			case "partial_side_effect":
+				candidate.RecoveryState = RecoveryStatePartial
+			case "checkpoint_pause":
+				candidate.CheckpointPause = true
+			}
+			if err := validateCollectionRecoveryTarget(candidate); err == nil {
+				t.Fatal("unsafe cancelled target passed result-only admission")
+			}
+		})
+	}
+}
+
+func TestResultCollectionRecoveryNormalizesOnlyVerifiedJSONFrames(t *testing.T) {
+	const schema = `{"type":"object","additionalProperties":false,"required":["findings"],"properties":{"findings":{"type":"array","items":{"type":"object","properties":{"summary":{"type":"string"}}}},"evidence":{"type":"array","items":{"type":"string"}}},"x-hufu-evidence-keys":{"pointers":["/evidence/*"]}}`
+	// Exercise key-aware JSON decoding while keeping the prose marker inert.
+	valid := `{"status":"success","summary":"saved ev_ marker","structured_payload":{"findings":[]}}`
+	for _, tc := range []struct {
+		name, body  string
+		disposition ResultCollectionRecoveryDisposition
+	}{
+		{"plain", valid, RecoveryCommitLocal},
+		{"fenced", "```json\n" + valid + "\n```", RecoveryCommitLocal},
+		{"fenced invalid claims", "```json\n" + strings.Replace(valid, `"status":"success"`, `"status":42`, 1) + "\n```", RecoveryRepairClaims},
+		{"empty fence", "```json\n```", RecoveryRepairClaims},
+		{"fenced forged receipt", "```json\n" + strings.Replace(valid, `"summary":`, `"receipt_ids":["forged"],"summary":`, 1) + "\n```", RecoveryBlocked},
+		{"fenced unknown key", "```json\n" + strings.Replace(valid, `"findings":[]`, `"findings":[],"evidence":["ev_000000000000"]`, 1) + "\n```", RecoveryBlocked},
+		{"leading prose", "result:\n```json\n" + valid + "\n```", RecoveryBlocked},
+		{"trailing prose", "```json\n" + valid + "\n```\nextra", RecoveryBlocked},
+		{"duplicate keys", "```json\n" + strings.Replace(valid, `"status":`, `"status":"success","status":`, 1) + "\n```", RecoveryBlocked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, item, ctx, cp := receivedCollectionClaimsFixture(t, schema, tc.body)
+			cp, err := c.blockResultCollection(ctx, cp, RepairFailureInvalidSchema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.recordCollectionStopReceipt(item.ID, &resultCollectionFailure{Reason: RepairFailureInvalidSchema, Checkpoint: cp, Cause: errors.New("rejected format")})
+			c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "rejected format", NeedsHuman, FailureProtocol, TaskBlocked, "")
+			c = reopenRecoveryCoordinator(t, c)
+			a, err := c.AssessResultCollectionRecovery(t.Context(), item.ID)
+			if err != nil || a.Disposition != tc.disposition || a.Checkpoint.Work != cp.Work || *a.Checkpoint.Response != *cp.Response {
+				t.Fatalf("assessment=%+v error=%v", a, err)
+			}
+			if tc.disposition == RecoveryRepairClaims {
+				if _, err := c.decodeCollectionClaims(item.ID, []byte(tc.body)); err == nil || a.AdditionalTurns != 2 || validateRecoveryAssessment(a) != nil {
+					t.Fatal("inspection accepted the wrapper or lost bounded repair authority")
+				}
+			}
+			if tc.name == "fenced" && (a.AdditionalTurns != 0 || validateRecoveryAssessment(a) != nil) {
+				t.Fatal("valid framed claims required another model turn")
+			}
+			if tc.name == "fenced" {
+				if _, err := c.decodeCollectionClaims(item.ID, []byte(tc.body)); err == nil {
+					t.Fatal("strict claims decoding accepted a transport envelope")
+				}
+				c.executionRunID = "framed-local-recovery"
+				if err := c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), item.ID)); err != nil {
+					t.Fatal(err)
+				}
+				c = reopenRecoveryCoordinator(t, c)
+				c.executionRunID = "framed-local-recovery"
+				worker := scriptWorker(textTurn("must never repeat original work"))
+				c.workerAgentOverride = worker
+				if _, err := c.executeTask(WithSessionResume(t.Context()), taskDefFromTodoItem(c.todoItemByID(item.ID)), item.ID); err != nil {
+					t.Fatal(err)
+				}
+				done := c.todoItemByID(item.ID)
+				committed := currentResultCollection(done)
+				if done.Status != TaskDone || worker.Calls() != 0 || committed.State != ResultCollectionCommitted || committed.TurnsUsed != cp.TurnsUsed || committed.TurnLimit != cp.TurnLimit || committed.Work != cp.Work || *committed.Response != *cp.Response {
+					t.Fatal("local framed recovery changed evidence, replayed work or extended the budget")
+				}
+			}
+		})
+	}
+}
+
+func TestResultCollectionRecoveryRepairsHistoricalCanonicalSchemaFailure(t *testing.T) {
+	for _, originalReason := range []RepairFailureReason{RepairFailureSource, RepairFailureInvalidSchema} {
+		t.Run(string(originalReason), func(t *testing.T) {
+			invalid := `{"status":"success","summary":"original uncertainty retained","structured_payload":{"findings":[{"summary":"observed","status":"unknown","finding_index":0}]}}`
+			valid := strings.Replace(invalid, `,"finding_index":0`, "", 1)
+			c, item, ctx, cp := preparedCollectionClaimsFixture(t, collectedConditionalFindingSchema, invalid)
+			cp, err := c.blockResultCollection(ctx, cp, originalReason)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.recordCollectionStopReceipt(item.ID, &resultCollectionFailure{Reason: originalReason, Checkpoint: cp, Cause: errors.New("historical canonical schema rejection")})
+			c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "collection blocked", NeedsHuman, FailureProtocol, TaskBlocked, "")
+			c = reopenRecoveryCoordinator(t, c)
+			before := cloneTodoItem(c.todoItemByID(item.ID))
+			eventsBefore, err := c.EventJournal().ReadEvents(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			assessment, err := c.AssessResultCollectionRecovery(t.Context(), item.ID)
+			if err != nil || assessment.Disposition != RecoveryRepairClaims || assessment.AdditionalTurns != 2 || assessment.TurnsUsed != 1 || assessment.RemainingTurns != 1 || assessment.OriginalReason != originalReason {
+				t.Fatalf("assessment=%+v error=%v", assessment, err)
+			}
+			eventsAfter, err := c.EventJournal().ReadEvents(t.Context())
+			if err != nil || !reflect.DeepEqual(eventsBefore, eventsAfter) || !reflect.DeepEqual(before, c.todoItemByID(item.ID)) || len(c.resultValidationFailures) != 0 {
+				t.Fatal("read-only preview changed durable evidence or counters")
+			}
+			c.executionRunID = "schema-recovery"
+			if err := c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), item.ID)); err != nil {
+				t.Fatal(err)
+			}
+			// Restart after the grant, then persist a corrected collector response.
+			// No worker or model is needed to accept that already durable response.
+			c = reopenRecoveryCoordinator(t, c)
+			c.executionRunID = "schema-recovery"
+			granted := currentResultCollection(c.todoItemByID(item.ID))
+			ctx, err = c.restoreCollectionContext(WithSessionResume(t.Context()), granted)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reserved, err := c.reserveResultCollection(ctx, granted, "corrected-collector", []byte(`{"tools":[]}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.recordCollectionResponse(ctx, reserved, []byte(valid)); err != nil {
+				t.Fatal(err)
+			}
+			c = reopenRecoveryCoordinator(t, c)
+			c.executionRunID = "schema-recovery"
+			worker := scriptWorker(textTurn("must never repeat original work"))
+			c.workerAgentOverride = worker
+			if _, err := c.executeTask(WithSessionResume(t.Context()), taskDefFromTodoItem(c.todoItemByID(item.ID)), item.ID); err != nil {
+				t.Fatal(err)
+			}
+			done := c.todoItemByID(item.ID)
+			current := currentResultCollection(done)
+			if worker.Calls() != 0 || done.Status != TaskDone || current.State != ResultCollectionCommitted || current.TurnsUsed != 2 || current.TurnLimit != 3 || current.Work != cp.Work || done.TypedResult == nil || done.TypedResult.Summary != "original uncertainty retained" {
+				t.Fatal("recovery replayed work, reset the budget, or changed original evidence")
+			}
+			replayed, err := c.EventJournal().ReadEvents(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, task := range ReduceToTodoList(replayed) {
+				if task.ID == item.ID && (task.Status != TaskDone || task.TypedResult == nil || string(task.TypedResult.StructuredPayload.Value) != string(done.TypedResult.StructuredPayload.Value)) {
+					t.Fatal("replay changed the repaired result")
+				}
+			}
+		})
+	}
+}
+
+func TestResultCollectionRecoverySchemaFailureCannotHideInvalidSources(t *testing.T) {
+	for _, scenario := range []string{"receipt", "policy", "contract", "work"} {
+		t.Run(scenario, func(t *testing.T) {
+			body := `{"status":"success","summary":"review complete","structured_payload":{"findings":[{"summary":"observed","status":"unknown","finding_index":0}]}}`
+			if scenario == "receipt" {
+				body = strings.Replace(body, `"status":"success"`, `"status":"success","receipt_ids":["forged-receipt"]`, 1)
+			}
+			c, item, ctx, cp := preparedCollectionClaimsFixture(t, collectedConditionalFindingSchema, body)
+			cp, err := c.blockResultCollection(ctx, cp, RepairFailureSource)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.recordCollectionStopReceipt(item.ID, &resultCollectionFailure{Reason: RepairFailureSource, Checkpoint: cp, Cause: errors.New("historical rejection")})
+			c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "collection blocked", NeedsHuman, FailureProtocol, TaskBlocked, "")
+			switch scenario {
+			case "policy":
+				c.executionPolicy.snapshot.ConfigurationHash = strings.Repeat("a", 64)
+			case "contract":
+				delete(c.session.ResultContracts, "claims.json")
+			case "work":
+				task := c.todoItemByID(item.ID)
+				task.ExecutionReceipt.ResultCollection.Work.ArtifactID = "sha256-" + strings.Repeat("a", 64)
+				task.ExecutionReceipt.ResultCollection.Work.SHA256 = strings.Repeat("a", 64)
+				if err := c.taskTracker.TodoList().TryApplyProjectedItem(task); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := cloneTodoItem(c.todoItemByID(item.ID))
+			assessment, err := c.AssessResultCollectionRecovery(t.Context(), item.ID)
+			if err == nil && (assessment.Disposition != RecoveryBlocked || assessment.AdditionalTurns != 0) {
+				t.Fatalf("invalid source earned repair authority: %+v", assessment)
+			}
+			if !reflect.DeepEqual(before, c.todoItemByID(item.ID)) {
+				t.Fatal("rejected preview changed the task")
+			}
+		})
+	}
 }
 
 func TestResultCollectionRecoveryAssessmentPreservesEvidence(t *testing.T) {

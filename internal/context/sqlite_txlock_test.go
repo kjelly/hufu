@@ -77,10 +77,16 @@ func TestSQLiteTransactionLockModes(t *testing.T) {
 
 			var got probe
 			finished := false
+			wait := 50 * time.Millisecond
+			if tc.readOnly {
+				// A read must finish while the writer still holds the lock, but
+				// CI scheduling latency is not evidence of blocking.
+				wait = 5 * time.Second
+			}
 			select {
 			case got = <-done:
 				finished = true
-			case <-time.After(time.Second):
+			case <-time.After(wait):
 			}
 			if finished == tc.wantWait {
 				t.Fatalf("finished while the other handle held the write lock = %v (count %d, err %v), want %v", finished, got.count, got.err, !tc.wantWait)

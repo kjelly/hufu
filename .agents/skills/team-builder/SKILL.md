@@ -131,6 +131,11 @@ goal → risk classification → choose preset/topology → generate → compile
    tools/side-effects with their source) and `hufu list <team-name>`. Fix all
    errors before a model call. Run `hufu doctor` when provider, verifier
    executable, and workspace preflight are in scope.
+   For changes to an existing result pipeline, add an offline regression that
+   exercises producer, inventory, consumer and final verification/acceptance
+   with empty/mixed sources and a rejected-then-corrected submission. In this
+   repository run `mise run test-contracts`; static schema checks alone cannot
+   establish that a downstream handoff works.
 6. **Run a safe preview.** Use `hufu --agent-team <team-name> --dry-run
    "<representative prompt>"` to inspect the resolved team without model calls.
    Run a real smoke test only for a read-only team or with explicit permission
@@ -192,6 +197,9 @@ files:
 
 Treat a model's prose as a claim, not evidence. A `success` result must mean
 the declared outcome and its required verification are both complete.
+Native adapters consuming retained results after resume use the runtime-owned
+`HUFU_RECOVERED_TASK_RUNS` mapping with matching task/snapshot receipts. Test a
+different invocation ID; never relabel an original receipt as the new run.
 
 ### Fixed collections and finite choices
 
@@ -206,6 +214,20 @@ output before its input list has been established.
 - Let deterministic code produce known identities, indices, ordering, copied
   input text, counts, and observed command outcomes. Use model choices only
   for semantic judgments, with explicit uncertainty and evidence requirements.
+- Declare `source_task_contracts` alongside accepted `source_contracts` so
+  `hufu team lint --team <name> --fail-on warning` can check every configured
+  producer against the consumer's array pointer. Include empty-source routes.
+- Write findings/invariant claims once. Use `x-hufu-result-projections` for
+  envelope copies and invariant-bound severity; omit those runtime-owned
+  fields in prompts and examples. Keep semantic judgments and evidence intact
+  during representation repair. See the authoring guide linked above.
+- Keep pinned task goals stable for submission-format changes whose canonical
+  outcome is unchanged. Put runtime/model ownership instructions in the agent
+  prompt and schema; changing a fan-out goal template is execution-contract drift.
+- For read-only recovery, resolve inherited agent side effects with the normal
+  admission rules. Verify the actual run's upgrade preview before recommending
+  apply; metadata-only is explicit, shares project files, and cannot bypass
+  recorded workspace versioning or later read-only checks.
 - Bind an accepted upstream structured array by exact `source_contracts` and
   `source_pointer`. Default `source_scope: evidence_from` reads explicit Todo
   IDs. Use `source_scope: dependency_results` for a same-batch DAG consumer:

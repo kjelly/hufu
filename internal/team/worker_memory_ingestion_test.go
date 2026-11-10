@@ -26,7 +26,7 @@ import (
 
 func wp4SetupRepo(t *testing.T) contextstore.Repository {
 	t.Helper()
-	repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -474,7 +474,7 @@ func TestWP4_PrivateItemNotInSharedProjection(t *testing.T) {
 
 func wp4SetupCoordinator(t *testing.T, workspace string) (*Coordinator, contextstore.Repository) {
 	t.Helper()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}

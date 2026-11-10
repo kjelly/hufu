@@ -56,8 +56,9 @@ func normalizeCollectionFileRefs(raw []byte) ([]byte, error) {
 	return json.Marshal(fields, json.Deterministic(true))
 }
 
-// Only duplicate representations of findings and attested invariant claims
-// qualify as format repair. Other assertion failures remain contract failures.
+// Only declared representation checks qualify as format repair: duplicate
+// findings/invariants, or a successful status label derived from payload items.
+// Other assertion failures remain contract failures.
 // Never retry admission that may already have materialized artifact declarations.
 func collectionProjectionFormatFailure(contract taskResultSubmissionContract, result *TaskResult) bool {
 	if result == nil || len(result.Artifacts) != 0 {
@@ -72,14 +73,26 @@ func collectionProjectionFormatFailure(contract taskResultSubmissionContract, re
 		if len(evaluateTaskResultAssertions(document, []TaskResultAssertion{assertion})) == 0 {
 			continue
 		}
-		if assertion.Op != "equals_projection" || (assertion.Pointer != "/findings" && assertion.Pointer != "/invariant_verification/assessments") {
-			return false
-		}
-		projection, err := decodeTaskResultProjection(assertion.Value)
-		if err != nil || taskResultAssertionRootField(projection.Pointer) != "structured_payload" {
+		if !collectionRepairableRepresentation(assertion) {
 			return false
 		}
 		found = true
 	}
 	return found
+}
+
+func collectionRepairableRepresentation(assertion TaskResultAssertion) bool {
+	if taskResultAssertionRootField(taskResultAssertionReferencePointer(assertion)) != "structured_payload" {
+		return false
+	}
+	switch assertion.Op {
+	case "equals_projection":
+		return assertion.Pointer == "/findings" || assertion.Pointer == "/invariant_verification/assessments"
+	case "equals_by_items":
+		projection, err := decodeTaskResultItemsProjection(assertion.Value)
+		return err == nil && assertion.Pointer == "/status" &&
+			taskResultStatusIsSuccessful(*projection.Empty) && taskResultStatusIsSuccessful(*projection.NonEmpty)
+	default:
+		return false
+	}
 }

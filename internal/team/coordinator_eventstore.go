@@ -149,6 +149,10 @@ func (c *Coordinator) initEventStore() {
 	es.SetBranchID(activeBranch)
 	c.eventStore = es
 	c.SetEventJournal(eventStoreJournal{store: es})
+	if err := c.rebindDecisionJournalForInvocation(); err != nil {
+		c.markSessionRecovery("decision journal rebind failed: " + utils.RedactSecrets(err.Error()))
+		return
+	}
 	c.resetContextWindowTelemetrySummary()
 	c.resetTeamActionProposals()
 	// Hydrate the active branch during every normal startup. Pending terminal
@@ -340,8 +344,21 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 		c.markSessionRecovery("event-store read failed: " + utils.RedactSecrets(err.Error()))
 		return
 	}
-	lineage := FilterEventsForBranch(events, st, activeBranch)
+	lineage, err := ProjectValidatedEventsForBranch(events, st, activeBranch)
+	if err != nil {
+		c.markSessionRecovery("canonical branch replay rejected: " + utils.RedactSecrets(err.Error()))
+		return
+	}
+	if _, err := c.eventStore.validateHistoricalResultGrantProjection(context.Background(), lineage); err != nil {
+		c.markSessionRecovery("canonical historical result grants rejected: " + utils.RedactSecrets(err.Error()))
+		return
+	}
 	if !hasCurrentCanonicalProjectionEvents(lineage) {
+		var hasCheckpointGrant bool
+		c.viewSessionData(func(sd *SessionData) { hasCheckpointGrant = sd.HistoricalResultGrants != nil })
+		if hasCheckpointGrant {
+			c.markSessionRecovery("checkpoint historical result grant has no canonical event")
+		}
 		return
 	}
 	if _, err := executionPolicySnapshotFromEvents(lineage); err != nil {
@@ -350,10 +367,24 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 	}
 
 	replayedSD := ReduceToSessionData(lineage)
+	var grantsMismatch bool
+	c.viewSessionData(func(sd *SessionData) {
+		grantsMismatch = sd.WorkflowCycleID == replayedSD.WorkflowCycleID && sd.HistoricalResultGrants != nil &&
+			!reflect.DeepEqual(sd.HistoricalResultGrants, replayedSD.HistoricalResultGrants)
+	})
+	if grantsMismatch {
+		c.markSessionRecovery("checkpoint historical result grant differs from its canonical cycle")
+		return
+	}
 	replayedTasks, err := ReplayTodoList(lineage)
 	if err != nil {
 		c.markSessionRecovery("canonical execution replay rejected: " + utils.RedactSecrets(err.Error()))
 		return
+	}
+	if st != nil {
+		if branch := st.GetBranch(activeBranch); branch != nil {
+			restoreLegacyCollectionEvidence(replayedTasks, branch.State.TaskPlan)
+		}
 	}
 
 	var emptyProjection bool
@@ -388,6 +419,7 @@ func (c *Coordinator) checkCanonicalProjectionShadow(st *SessionTree, activeBran
 		liveTasks = append([]*TodoItem(nil), sd.Tasks...)
 	})
 	if comparisonErr == nil {
+		c.clearMatchedProjectionRecovery(lineage, replayedSD)
 		if len(liveTasks) > 0 && (c.taskTracker == nil || len(c.taskTracker.TodoList().Items()) == 0) {
 			c.applyLiveTaskProjection(liveTasks)
 		}
@@ -440,9 +472,18 @@ func (c *Coordinator) replaceCanonicalProjection(replayedSD *SessionData, replay
 	if replayedSD == nil {
 		return
 	}
-	cycleChanged := c.workflowCycleID() != replayedSD.WorkflowCycleID
+	var liveDerived *DerivedForkRef
+	c.viewSessionData(func(sd *SessionData) { liveDerived = cloneDerivedForkRef(sd.DerivedFork) })
+	derivedChanged := !sameDerivedForkLineage(liveDerived, replayedSD.DerivedFork)
+	cycleChanged := c.workflowCycleID() != replayedSD.WorkflowCycleID || derivedChanged
 	_ = c.mutateSessionData(func(sd *SessionData) error {
+		if derivedChanged {
+			carryWorkspaceSessionState(replayedSD, sd)
+			*sd = *replayedSD
+		}
 		sd.WorkflowCycleID, sd.WorkflowTaskIDFloor = replayedSD.WorkflowCycleID, replayedSD.WorkflowTaskIDFloor
+		sd.DerivedFork = cloneDerivedForkRef(replayedSD.DerivedFork)
+		sd.HistoricalResultGrants = cloneHistoricalGrantCycleRef(replayedSD.HistoricalResultGrants)
 		sd.WorkflowState, sd.PhaseResults, sd.RetryState = replayedSD.WorkflowState, replayedSD.PhaseResults, replayedSD.RetryState
 		if cycleChanged {
 			sd.RunResult, sd.ContinuationCheckpoint = replayedSD.RunResult, replayedSD.ContinuationCheckpoint
@@ -452,6 +493,7 @@ func (c *Coordinator) replaceCanonicalProjection(replayedSD *SessionData, replay
 		// Run inputs are compared by the shadow check, so a repair must
 		// replace them too or every start reports the same mismatch again.
 		sd.RunInputSnapshots = append([]RunInputSnapshot(nil), replayedSD.RunInputSnapshots...)
+		sd.MediaInputSnapshots = cloneMediaInputSnapshots(replayedSD.MediaInputSnapshots)
 		sd.ActiveRunInputSnapshotID = replayedSD.ActiveRunInputSnapshotID
 		sd.Entries = replayedSD.Entries
 		sd.Tasks = replayedTasks
@@ -487,6 +529,9 @@ func (c *Coordinator) replaceCanonicalProjection(replayedSD *SessionData, replay
 func isProjectionPrefixOrRecoverable(live, replayedSD *SessionData, replayedTasks []*TodoItem) bool {
 	if live == nil || replayedSD == nil {
 		return false
+	}
+	if !sameDerivedForkLineage(live.DerivedFork, replayedSD.DerivedFork) {
+		return false // Native fork recovery owns this cross-lineage reset.
 	}
 	// The event journal is canonical. It may safely repair a missing or stale
 	// checkpoint snapshot only when it actually contains a valid policy; a
@@ -525,6 +570,9 @@ func isProjectionPrefixOrRecoverable(live, replayedSD *SessionData, replayedTask
 			}
 		}
 		return true
+	}
+	if live.HistoricalResultGrants != nil && !reflect.DeepEqual(live.HistoricalResultGrants, replayedSD.HistoricalResultGrants) {
+		return false
 	}
 	if len(live.Tasks) > len(replayedTasks) {
 		return false
@@ -580,6 +628,9 @@ func (c *Coordinator) hydrateEmittedEventKeys(branchOpts ...any) {
 	for _, event := range lineage {
 		if event.IdempotencyKey != "" {
 			c.emittedTaskTransitions[event.IdempotencyKey] = true
+		}
+		if key := taskCreationCheckpointKey(event); key != "" {
+			c.emittedTaskTransitions[key] = true
 		}
 	}
 	c.eventOnceMu.Unlock()
@@ -676,7 +727,7 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) error {
 	c.eventOnceMu.Unlock()
 
 	for _, item := range tasks {
-		if item == nil {
+		if item == nil || c.isModelFanoutLeaf(item.ID) {
 			continue
 		}
 		eventType, err := taskTransitionEventType(item)
@@ -690,6 +741,12 @@ func (c *Coordinator) emitTaskEventsFromCheckpoint(tasks []*TodoItem) error {
 		transitionKey := taskTransitionEventKey(item)
 		c.eventOnceMu.Lock()
 		alreadyEmitted := c.emittedTaskTransitions[transitionKey]
+		if eventType == string(EventTaskCreated) && c.emittedTaskTransitions[fmt.Sprintf("%s:%s:%d", item.ID, TaskPending, item.Retries)] {
+			// Canonical creation is already durable. Metadata such as failure
+			// fingerprints must not backfill a second creation before the real
+			// failure transition commits; that would redefine the occurrence.
+			alreadyEmitted = true
+		}
 		c.eventOnceMu.Unlock()
 
 		if alreadyEmitted {
@@ -749,6 +806,11 @@ func (c *Coordinator) CommitTaskTransition(ctx context.Context, taskID string, e
 // Explicit callers retain compare-and-swap semantics; cancellation and worker
 // finalization using FromCurrent cannot race between reading and committing.
 func (c *Coordinator) commitTaskTransition(ctx context.Context, taskID string, expected *TaskStatus, next TaskStatus, detail, output string, metadata map[string]interface{}) error {
+	for _, key := range []string{"media_binding", "media_input_digest"} {
+		if _, override := metadata[key]; override {
+			return fmt.Errorf("task media inputs are immutable")
+		}
+	}
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return fmt.Errorf("commit task transition: task tracker is unavailable")
 	}
@@ -793,6 +855,9 @@ func (c *Coordinator) commitTaskTransition(ctx context.Context, taskID string, e
 	projected := *current
 	if repairGrant != nil {
 		receipt := cloneExecutionReceipt(current.ExecutionReceipt)
+		if receipt.RepairProvenance == nil {
+			receipt.RepairProvenance = &RepairProvenance{Attempted: true, FailureReason: repairGrant.Recovery.OriginalReason, RepairAttempts: repairGrant.AfterAttempts}
+		}
 		receipt.RepairProvenance.OperatorGrants = append(receipt.RepairProvenance.OperatorGrants, *repairGrant)
 		projected.ExecutionReceipt = &receipt
 		// The previous blocked transition remains in the journal. This grant
@@ -969,6 +1034,8 @@ func (c *Coordinator) appendTaskTransition(ctx context.Context, item *TodoItem, 
 			return RunEvent{}, fmt.Errorf("recovery requires conditional event append")
 		}
 		durable, err = journal.AppendAtHead(ctx, event, grant.Recovery.JournalHeadID)
+	} else if item.MediaBinding != nil && event.Type == string(EventTaskCreated) {
+		durable, err = c.appendMediaTaskReset(appendCtx, event)
 	} else {
 		durable, err = c.EventJournal().Append(appendCtx, event)
 	}
@@ -1072,13 +1139,19 @@ func (c *Coordinator) commitTaskResetForRetry(ctx context.Context, taskID string
 	}
 	key := taskTransitionEventKey(&projected)
 	appendCtx := context.WithoutCancel(ctx)
-	if _, err := c.EventJournal().Append(appendCtx, RunEvent{
+	resetEvent := RunEvent{
 		Type:           string(EventTaskCreated),
 		Actor:          projected.Agent,
 		TaskID:         projected.ID,
 		IdempotencyKey: key,
 		Payload:        rawPayload,
-	}); err != nil {
+	}
+	if projected.MediaBinding != nil {
+		_, err = c.appendMediaTaskReset(appendCtx, resetEvent)
+	} else {
+		_, err = c.EventJournal().Append(appendCtx, resetEvent)
+	}
+	if err != nil {
 		return fmt.Errorf("commit task reset for retry append: %w", err)
 	}
 	c.eventOnceMu.Lock()
@@ -1209,8 +1282,16 @@ func (c *Coordinator) CommitTaskCreationResolved(ctx context.Context, specs []To
 	items := make([]*TodoItem, len(specs))
 	for i, spec := range specs {
 		items[i] = todoItemFromSpec(spec, ids[i])
+		if err := c.validateTaskMediaCreation(ctx, items[i]); err != nil {
+			return nil, err
+		}
 	}
 	if !c.hasDurableEventJournal() {
+		for _, item := range items {
+			if err := c.validateTaskHistoricalResultBinding(context.WithoutCancel(ctx), item); err != nil {
+				return nil, err
+			}
+		}
 		tl.AddReserved(items)
 		c.markAdmittedTodoIDs(items)
 		return items, nil
@@ -1230,13 +1311,13 @@ func (c *Coordinator) CommitTaskCreationResolved(ctx context.Context, specs []To
 			return created, fmt.Errorf("commit task creation payload: %w", err)
 		}
 		key := taskTransitionEventKey(item)
-		if _, err := c.EventJournal().Append(appendCtx, RunEvent{
+		if err := c.appendMediaTaskCreation(appendCtx, RunEvent{
 			Type:           string(EventTaskCreated),
 			Actor:          item.Agent,
 			TaskID:         item.ID,
 			IdempotencyKey: key,
 			Payload:        rawPayload,
-		}); err != nil {
+		}, item); err != nil {
 			// created items were already added incrementally below; they are
 			// durable AND visible, so return them as the explicit partial result.
 			return created, fmt.Errorf("commit task creation append: %w", err)
@@ -1593,6 +1674,7 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 	if item.RemediationContext != nil {
 		payload["remediation_context"] = item.RemediationContext
 	}
+	addTaskMediaPayload(payload, item)
 	failureTransition := item.Status == TaskError || item.Status == TaskBlocked || item.Status == TaskProtocolIncomplete
 	if !failureTransition {
 		payload["desc"] = item.Desc
@@ -1620,6 +1702,7 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 		payload["summary"] = failureSummary(item)
 		payload["output"] = utils.TruncateString(utils.RedactSecrets(item.Output), 2000)
 	}
+	projectTaskActiveFailure(payload, item, failureTransition)
 	if item.Verify != "" {
 		payload["verify"] = item.Verify
 		payload["verify_mode"] = item.VerifyMode
@@ -1646,6 +1729,12 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 	}
 	if item.ResultContract != nil {
 		payload["result_contract"] = item.ResultContract.clone()
+	}
+	if item.DependencyResultView != nil {
+		payload["dependency_result_view"] = item.DependencyResultView.clone()
+	}
+	if item.HistoricalResultBinding != nil {
+		payload["historical_result_binding"] = item.HistoricalResultBinding.clone()
 	}
 	if item.WorkerWorkspace != nil {
 		payload["worker_workspace"] = item.WorkerWorkspace.clone()
@@ -1700,6 +1789,11 @@ func taskTransitionEventKey(item *TodoItem) string {
 		return ""
 	}
 	base := fmt.Sprintf("%s:%s:%d", item.ID, item.Status, item.Retries)
+	// An unchanged status/body can begin a new attempt. Keep legacy keys for
+	// lease-less projections, but never deduplicate a new occurrence lease.
+	if item.OccurrenceRevision > 0 || item.DispatchID != "" {
+		base += fmt.Sprintf(":lease-%d:%s", item.OccurrenceRevision, item.DispatchID)
+	}
 	shadow := toCanonicalTaskShadow(item)
 	// Observations have their own canonical action_progress event. A heartbeat
 	// must not synthesize another task lifecycle transition at checkpoint time.

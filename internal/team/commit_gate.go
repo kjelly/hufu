@@ -22,6 +22,7 @@ import (
 // recovery.go: exactly the mutations a crash cannot simply replay.
 func defaultCommitGateClasses() []SideEffectClass {
 	return []SideEffectClass{
+		SideEffectBrowserInteraction,
 		SideEffectExternalWrite,
 		SideEffectInfraMutation,
 		SideEffectCredential,

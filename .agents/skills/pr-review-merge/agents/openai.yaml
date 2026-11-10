@@ -1,0 +1,4 @@
+interface:
+  display_name: "PR Review Merge"
+  short_description: "直接審查 PR 與歷史回歸風險，品質可接受則合併，否則轉草稿"
+  default_prompt: "使用 $pr-review-merge 直接審查指定 PR，品質可接受且必要檢查通過就合併，否則轉草稿；不執行 hufu-code-review 程式。"

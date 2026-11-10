@@ -10,16 +10,39 @@ import (
 )
 
 func TestCompareCanonicalProjectionMatchesCurrentTaskEvent(t *testing.T) {
-	item := &TodoItem{ID: "task-1", Agent: "worker", Desc: "write report", Status: TaskDone, Detail: "done", Output: "report", Model: "model", Execution: ExecutionContract{Kind: ExecutionKindExternal}}
-	payload, err := taskTransitionPayloadJSON(item)
-	if err != nil {
-		t.Fatal(err)
-	}
-	live := NewSession()
-	live.Tasks = []*TodoItem{item}
-	events := []RunEvent{{SchemaVersion: eventStoreSchemaVersion, Type: string(EventTaskCompleted), TaskID: item.ID, Payload: payload}}
-	if err := CompareCanonicalProjection(live, events); err != nil {
-		t.Fatalf("matching projection rejected: %v", err)
+	for _, status := range []TaskStatus{TaskProtocolIncomplete, TaskVerifying, TaskDone} {
+		for _, activeFailure := range []bool{false, true} {
+			t.Run(string(status)+"/"+map[bool]string{false: "cleared", true: "active"}[activeFailure], func(t *testing.T) {
+				failure := &FailureEventPayload{TaskID: "task-1", FailureClass: FailureProtocol, Summary: "original failure"}
+				prior, err := json.Marshal(map[string]any{"id": "task-1", "desc": "write report", "output": "report", "failure_event": failure})
+				if err != nil {
+					t.Fatal(err)
+				}
+				item := &TodoItem{ID: "task-1", Agent: "worker", Desc: "write report", Status: status, Detail: "updated", Output: "report", Model: "model", Execution: ExecutionContract{Kind: ExecutionKindExternal}}
+				if status == TaskVerifying {
+					item.Output = ""
+				}
+				if activeFailure {
+					item.FailureEvent = failure
+				}
+				if status == TaskProtocolIncomplete {
+					item.ExecutionReceipt = &ExecutionReceipt{RepairProvenance: &RepairProvenance{OperatorGrants: []ResultRepairGrant{{RunID: "repair"}}}}
+				}
+				payload, err := taskTransitionPayloadJSON(item)
+				if err != nil {
+					t.Fatal(err)
+				}
+				live := NewSession()
+				live.Tasks = []*TodoItem{item}
+				events := []RunEvent{
+					{SchemaVersion: eventStoreSchemaVersion, Type: "task_started", TaskID: item.ID, Payload: prior},
+					{SchemaVersion: eventStoreSchemaVersion, Type: eventTypeForTaskStatus(status), TaskID: item.ID, Payload: payload},
+				}
+				if err := CompareCanonicalProjection(live, events); err != nil {
+					t.Fatalf("matching projection rejected: %v", err)
+				}
+			})
+		}
 	}
 }
 

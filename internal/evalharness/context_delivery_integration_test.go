@@ -14,49 +14,32 @@ import (
 	"time"
 )
 
-// Reuse the canonical scripts instead of duplicating their task, verification,
-// recovery and durable-evidence contracts in a second eval framework.
-func TestContextDeliveryExistingLifecycleSuites(t *testing.T) {
-	for _, suite := range []string{"core-lifecycle", "retry-recovery", "memory-learning", "memory-fresh-session", "memory-fresh-session-off", "plan-first-dependency", "verbatim-dependency", "legacy-execution-replay"} {
-		t.Run(suite, func(t *testing.T) {
-			fixture, err := LoadSuiteFixture(filepath.Join(repoRoot(t), "evals", suite, "cases.yaml"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			for index := range fixture.Cases {
-				fixture.Cases[index].Expect.ContextDelivery = []ContextDeliveryExpect{{
-					Agent: "coordinator", Purpose: "coordinator_start", Include: []string{"current_task"},
-					RequiredFragments: map[string]string{"current_task": fixture.Cases[index].Prompt},
-				}}
-				var agents []string
-				for _, task := range fixture.Cases[index].Expect.Tasks {
-					if (task.Status != "done" && task.Status != "error") || slices.Contains(agents, task.Agent) {
-						continue
-					}
-					agents = append(agents, task.Agent)
-					fixture.Cases[index].Expect.ContextDelivery = append(fixture.Cases[index].Expect.ContextDelivery, ContextDeliveryExpect{
-						Agent: task.Agent, Purpose: "task_execution", Include: []string{"current_task"}, RequiredFragments: map[string]string{"current_task": "## Goal"},
-					})
-					if task.Attempts != nil && *task.Attempts > 1 {
-						fixture.Cases[index].Expect.ContextDelivery = append(fixture.Cases[index].Expect.ContextDelivery, ContextDeliveryExpect{
-							Agent: task.Agent, Purpose: "task_retry", Attempt: 2, Include: []string{"current_task", "retry_failure_context"}, RequiredFragments: map[string]string{"current_task": "## Goal"},
-						})
-					}
-				}
-			}
-			result, err := RunSuite(t.Context(), fixture, "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, c := range result.Cases {
-				if !c.Passed {
-					t.Errorf("%s: %+v", c.CaseID, c.Findings)
-				}
-				if c.Metrics.ContextDelivery == nil || c.Metrics.ContextDelivery.ProviderCalls == 0 {
-					t.Errorf("%s: no receiver evidence", c.CaseID)
-				}
-			}
+// These suites exercise delivery alongside their ordinary lifecycle assertions
+// in TestRunAllEvalSuites, rather than running the same configuration twice.
+var lifecycleDeliverySuites = []string{"core-lifecycle", "retry-recovery", "memory-learning", "memory-fresh-session", "memory-fresh-session-off", "plan-first-dependency", "verbatim-dependency", "legacy-execution-replay"}
+
+func addLifecycleDeliveryExpectations(fixture *SuiteFixture) {
+	for index := range fixture.Cases {
+		c := &fixture.Cases[index]
+		c.Expect.ContextDelivery = append(c.Expect.ContextDelivery, ContextDeliveryExpect{
+			Agent: "coordinator", Purpose: "coordinator_start", Include: []string{"current_task"},
+			RequiredFragments: map[string]string{"current_task": c.Prompt},
 		})
+		var agents []string
+		for _, task := range c.Expect.Tasks {
+			if (task.Status != "done" && task.Status != "error") || slices.Contains(agents, task.Agent) {
+				continue
+			}
+			agents = append(agents, task.Agent)
+			c.Expect.ContextDelivery = append(c.Expect.ContextDelivery, ContextDeliveryExpect{
+				Agent: task.Agent, Purpose: "task_execution", Include: []string{"current_task"}, RequiredFragments: map[string]string{"current_task": "## Goal"},
+			})
+			if task.Attempts != nil && *task.Attempts > 1 {
+				c.Expect.ContextDelivery = append(c.Expect.ContextDelivery, ContextDeliveryExpect{
+					Agent: task.Agent, Purpose: "task_retry", Attempt: 2, Include: []string{"current_task", "retry_failure_context"}, RequiredFragments: map[string]string{"current_task": "## Goal"},
+				})
+			}
+		}
 	}
 }
 
@@ -64,7 +47,7 @@ func TestContextDeliveryExtraModelsUseAdmittedTargetsAndParentManifests(t *testi
 	for _, mode := range []string{"legacy", "active"} {
 		t.Run(mode, func(t *testing.T) { testExtraModelProviderDelivery(t, mode, false) })
 	}
-	t.Run("active_retry", func(t *testing.T) { testExtraModelProviderDelivery(t, "active", true) })
+	t.Run("active_request_retry", func(t *testing.T) { testExtraModelProviderDelivery(t, "active", true) })
 }
 
 func testExtraModelProviderDelivery(t *testing.T, mode string, retry bool) {
@@ -178,18 +161,17 @@ func testExtraModelProviderDelivery(t *testing.T, mode string, retry bool) {
 		t.Fatal("two concurrent leaves did not execute")
 	}
 	if retry {
-		var initial, retried *ContextRequestMetrics
+		var resends []*ContextRequestMetrics
 		for index := range result.Metrics.ContextDelivery.Requests {
 			request := &result.Metrics.ContextDelivery.Requests[index]
-			if request.ModelID == "qwen3:14b" && request.Attempt == 1 {
-				initial = request
-			}
-			if request.ModelID == "qwen3:14b" && request.Attempt == 2 {
-				retried = request
+			if request.ModelID == "qwen3:14b" {
+				resends = append(resends, request)
 			}
 		}
-		if initial == nil || retried == nil || initial.ModelExecutionID != retried.ModelExecutionID || !retried.ManifestMatched {
-			t.Fatal("extra retry lost admitted target or model identity")
+		if len(resends) != 2 || resends[0].Attempt != 1 || resends[1].Attempt != 1 ||
+			resends[0].ModelExecutionID != resends[1].ModelExecutionID || !resends[0].ManifestMatched || !resends[1].ManifestMatched ||
+			!slices.Equal(resends[0].DeliveredIDs, resends[1].DeliveredIDs) {
+			t.Fatal("provider resend changed the worker attempt, admitted target or manifest")
 		}
 	}
 	if mode == "active" && (left.ManifestSchema != 3 || right.ManifestSchema != 3 || left.QueryAttribution == nil || right.QueryAttribution == nil) {

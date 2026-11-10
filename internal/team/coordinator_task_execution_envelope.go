@@ -119,6 +119,9 @@ func (c *Coordinator) resolveTaskExecutionEnvelope(ctx context.Context, task Tas
 			return TaskExecutionEnvelope{}, err
 		}
 	}
+	if err := c.validateRequiredArtifactReadExecution(ctx, task, todo, tools); err != nil {
+		return TaskExecutionEnvelope{}, err
+	}
 	root, err := c.taskMutableRoot()
 	if err != nil {
 		return TaskExecutionEnvelope{}, fmt.Errorf("resource_scope_unreproducible: %w", err)
@@ -205,6 +208,9 @@ func (c *Coordinator) resolveAttemptWorkerTools(ctx context.Context, task TaskDe
 		Task: task, TodoID: todoID, Mode: workerToolResolutionModeForTask(task),
 	})
 	if err == nil {
+		err = c.validateRequiredArtifactReadExecution(ctx, task, c.todoItemByID(todoID), resolved)
+	}
+	if err == nil {
 		return resolved, nil
 	}
 	item := c.todoItemByID(todoID)
@@ -281,6 +287,12 @@ func validateTaskExecutionEnvelopeBinding(item *TodoItem, envelope TaskExecution
 func (c *Coordinator) prepareNewTaskExecutionEnvelopes(ctx context.Context, tasks []TaskDef, specs []TodoSpec, ids []string, freezeScopes bool) ([]TaskExecutionEnvelope, error) {
 	if len(tasks) != len(specs) || len(tasks) != len(ids) {
 		return nil, fmt.Errorf("task envelope input count mismatch: %d/%d/%d", len(tasks), len(specs), len(ids))
+	}
+	// The scheduler still projects pre-cancelled work as a typed failure.
+	// Finish these metadata-only bindings so that cancellation reaches that
+	// boundary; tool and model execution retain the original cancelled context.
+	if err := c.freezeHistoricalResultTaskBindings(context.WithoutCancel(ctx), specs, ids); err != nil {
+		return nil, err
 	}
 	envelopes := make([]TaskExecutionEnvelope, len(tasks))
 	prospectiveItems := make([]*TodoItem, len(tasks))

@@ -110,7 +110,7 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 
 func providerSafeWorkflowTaskProperties(properties map[string]any) map[string]any {
 	compact := make(map[string]any, 4)
-	for _, name := range []string{"agent", "goal", "constraints", "contract_id", "evidence_from"} {
+	for _, name := range []string{"agent", "goal", "constraints", "contract_id", "evidence_from", "image_inputs"} {
 		if value, ok := properties[name]; ok {
 			compact[name] = value
 		}
@@ -141,6 +141,7 @@ func portableProviderTaskProperties(properties map[string]any) map[string]any {
 }
 
 var portableProviderTaskFields = []string{
+	"image_inputs",
 	"agent",
 	"goal",
 	"constraints",
@@ -220,7 +221,11 @@ func (t *runAgentsTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy
 // silently drop; rejecting them explicitly tells the coordinator its request
 // was not honored instead of quietly running without it.
 var modelTaskRuntimeOwnedFields = []string{
+	"media_binding", "media-binding", "mediabinding",
+	"media_input_digest", "media-input-digest", "mediainputdigest",
 	"workset_binding", "workset_receipt",
+	"dependency_result_view", "dependency-result-view", "dependencyresultview",
+	"historical_result_binding", "historical-result-binding", "historicalresultbinding",
 	"result_contract", "result-contract", "structured_payload",
 	"worker_workspace", "worker-workspace",
 	"execution_route", "execution-route", "execution_candidates", "fallback_on",
@@ -269,6 +274,9 @@ func decodeModelTaskDefsForMode(data []byte, workflowMode bool) ([]TaskDef, erro
 			return nil, fmt.Errorf("tasks[%d]: %w", index, err)
 		}
 		for key := range fields {
+			if err := validateModelImageInputField(key, fields[key]); err != nil {
+				return nil, fmt.Errorf("tasks[%d]: %w", index, err)
+			}
 			for _, field := range modelTaskRuntimeOwnedFields {
 				if strings.EqualFold(key, field) {
 					return nil, fmt.Errorf("tasks[%d] cannot provide runtime-owned %s", index, field)
@@ -384,6 +392,9 @@ func (t *finishTool) run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	prof := t.coordinator.ExecutionProfile()
 	if len(pendingTasks) > 0 {
 		return fantasy.NewTextErrorResponse("cannot finish while worker tasks are unresolved or still running:\n" + formatPendingTasks(pendingTasks) + "\nWait for the workers to reach a terminal state before calling finish."), nil
+	}
+	if err := t.coordinator.requireCoordinatorImageWork(ctx); err != nil {
+		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 	if err := t.coordinator.validateCompletedEvidenceDeliveries(); err != nil {
 		return fantasy.NewTextErrorResponse("cannot finish: " + err.Error()), nil
@@ -1129,13 +1140,17 @@ func (t *todoTool) handleCreate(ctx context.Context, callerName string, items []
 			ExecutionTarget: occurrence.ResolvedExecutionTarget, ExecutionTopology: cloneExecutionTopology(occurrence.ExecutionTopology),
 			Source: TaskSourceAgent, ParentID: parentID, SideEffect: occurrence.SideEffect,
 			Recovery: occurrence.Recovery, ReconcileTool: occurrence.ReconcileTool,
-			ResultContract:  occurrence.ResultContract.clone(),
-			WorkerWorkspace: occurrence.WorkerWorkspace.clone(),
-			ExecutionRoute:  occurrence.ExecutionRoute.clone(),
+			ResultContract:       occurrence.ResultContract.clone(),
+			DependencyResultView: occurrence.DependencyResultView.clone(),
+			WorkerWorkspace:      occurrence.WorkerWorkspace.clone(),
+			ExecutionRoute:       occurrence.ExecutionRoute.clone(),
 		}
 		if err := t.coordinator.freezeTodoSpecDynamicAuthorization(ctx, occurrence, agentDef, &batch[i]); err != nil {
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to freeze tool authorization: %v", err)), nil
 		}
+	}
+	if err := t.coordinator.freezeHistoricalResultTaskBindings(ctx, batch, ids); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to bind historical results: %v", err)), nil
 	}
 	if t.coordinator.hasDurableEventJournal() {
 		for i := range batch {

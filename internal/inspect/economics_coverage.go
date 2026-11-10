@@ -50,7 +50,7 @@ func economicsCompleteness(runID string, events []team.RunEvent, policy *team.Ex
 func economicsHistoricalCoverage(runID string, events []team.RunEvent, policy *team.ExecutionPolicySnapshot,
 	ledger cost.Projection, routes RoutesData,
 ) bool {
-	if policy == nil || policy.Version != 5 || policy.Cost == nil {
+	if !policy.SupportsInvocationAccounting() || policy.Cost == nil {
 		return false
 	}
 	profiles := map[string]bool{}
@@ -66,7 +66,7 @@ func economicsHistoricalCoverage(runID string, events []team.RunEvent, policy *t
 			if json.Unmarshal(event.Payload, &snapshot) != nil {
 				return false
 			}
-			admitted = snapshot.Version == 5 && snapshot.Cost != nil
+			admitted = snapshot.SupportsInvocationAccounting() && snapshot.Cost != nil
 		}
 		if event.RunID != runID {
 			continue
@@ -78,7 +78,7 @@ func economicsHistoricalCoverage(runID string, events []team.RunEvent, policy *t
 			}
 		case string(team.EventModelProfileResolved):
 			var profile modelprofile.TelemetryProjection
-			if !admitted || json.Unmarshal(event.Payload, &profile) != nil || profile.SchemaVersion != 1 ||
+			if !admitted || json.Unmarshal(event.Payload, &profile) != nil || (profile.SchemaVersion != 1 && profile.SchemaVersion != 2) ||
 				profile.InvocationID == "" || strings.HasPrefix(profile.InvocationID, "legacy-profile-") {
 				return false
 			}

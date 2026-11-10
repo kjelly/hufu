@@ -28,14 +28,15 @@ const (
 // Every top-level field is classified explicitly. Nested fields inherit fixed
 // semantics; the recursive schema fixture additionally catches nested changes.
 var policyFields = map[string]policyFieldClass{
-	"Version": fixedPolicy, "TeamMaxConcurrent": fixedPolicy, "DefaultLLMBackend": fixedPolicy,
+	"Media":   fixedPolicy,
+	"Version": fixedPolicy, "Launch": fixedPolicy, "TeamMaxConcurrent": fixedPolicy, "DefaultLLMBackend": fixedPolicy,
 	"Backends": fixedPolicy, "ModelRoutes": fixedPolicy, "ExecutionWorlds": logicalWorld,
 	"RunInputSchemaHash": fixedPolicy, "RunInputPolicyHash": fixedPolicy, "ResultContracts": fixedPolicy, "ResultCollection": fixedPolicy,
 	"StaticWorkflowHash": fixedPolicy, "ExecutionRoutes": fixedPolicy, "ActionCatalogHash": fixedPolicy,
 	"DecisionRuntimeHash": fixedPolicy, "DecisionPrimitiveHash": fixedPolicy, "ControlDecisionHash": fixedPolicy, "SemanticRetrievalHash": fixedPolicy,
 	"Belief": fixedPolicy, "DiagnosticLoop": fixedPolicy, "MCPActionProviders": fixedPolicy,
 	"MCPWorkerPolicies": fixedPolicy, "ContextArtifacts": fixedPolicy, "ContextQuery": fixedPolicy,
-	"Cost": fixedPolicy, "ConfigurationHash": derivedPolicyHash,
+	"Cost": fixedPolicy, "DependencyResultViewsHash": fixedPolicy, "ConfigurationHash": derivedPolicyHash,
 }
 
 var agentFields = map[string]policyFieldClass{
@@ -99,8 +100,8 @@ func ProjectPolicy(snapshot *team.ExecutionPolicySnapshot, roots RegisteredRoots
 	if err := team.ValidateExecutionPolicySnapshot(snapshot); err != nil {
 		return PolicyProjection{}, err
 	}
-	if snapshot.Version != 5 {
-		return PolicyProjection{}, errors.New("strict comparison requires execution policy version 5")
+	if !snapshot.SupportsInvocationAccounting() {
+		return PolicyProjection{}, errors.New("strict comparison requires an execution policy with invocation accounting")
 	}
 	copySnapshot := *snapshot
 	copySnapshot.ConfigurationHash = ""

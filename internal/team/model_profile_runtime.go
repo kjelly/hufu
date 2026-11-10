@@ -38,6 +38,7 @@ type ResolvedModelProfile struct {
 
 type providerBoundInvocationContext struct {
 	ModelID           string
+	SupportsTools     modelprofile.CapabilityState
 	AdmissionContext  agent.ProviderAdmissionContext
 	ModelContext      ModelContextSpec
 	ProfileResolution modelprofile.TelemetryProjection
@@ -233,7 +234,17 @@ func (r *ModelProfileRuntime) ResolveAdmission(ctx context.Context, modelID stri
 	} else {
 		result.Admission = admissionContextFromProfile(modelID, ref, profile, safetyMargin)
 	}
+	if protocol, protocolErr := r.manager.ResolveAPIProtocol(modelID); protocolErr == nil && protocol.Requested != "" {
+		result.Admission.APIProtocol = protocol
+	}
+	if identity, identityErr := r.manager.ResolveProviderExecutionIdentity(modelID); identityErr == nil && identity.ProviderKey == ref.Provider {
+		result.Admission.ProviderConfigurationHash = identity.ConfigurationHash
+	}
 	result.ProfileResolution = modelprofile.TelemetryFromProfile(profile)
+	if result.Admission.APIProtocol.Requested != "" {
+		result.ProfileResolution.SchemaVersion = 2
+		result.ProfileResolution.APIProtocol = result.Admission.APIProtocol
+	}
 	if result.Admission.IsBound() {
 		telemetry, _ := json.Marshal(result.ProfileResolution)
 		result.Admission.ProfileTelemetryJSON = string(telemetry)
@@ -251,6 +262,8 @@ func admissionContextFromProfile(modelID string, ref providerintrospection.Provi
 		ContextWindowSource:  string(profile.Sources.EffectiveContext.Source),
 		IsEstimated:          profile.Sources.EffectiveContext.Confidence == "estimated",
 		ProfileTelemetryJSON: string(telemetry),
+		ImageInputCapability: providerintrospection.CapabilityState(profile.SupportsImageInput),
+		ImageInputSource:     string(profile.Sources.Capabilities.ImageInput.Source),
 	}
 }
 
@@ -417,6 +430,7 @@ func (c *Coordinator) resolveProviderBoundInvocationContextWithOutputAndTelemetr
 	}
 	invocation := providerBoundInvocationContext{
 		ModelID:           modelID,
+		SupportsTools:     resolved.Profile.SupportsTools,
 		AdmissionContext:  bound,
 		ModelContext:      modelContextSpecForProviderRequest(agent.ProviderRequest{ModelID: modelID, AdmissionContext: bound}),
 		ProfileResolution: resolved.ProfileResolution,

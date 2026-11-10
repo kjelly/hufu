@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: guide
-> Verified-Commit: 2026-09-14
+> Verified-Commit: 2026-10-30
 > Supersedes: —
 > Superseded-By: —
 
@@ -27,6 +27,40 @@ SQLite or JSONL files:
 Confirm `Workspace`, `Team`, `Run`, and `Branch` in the overview. Use
 `hufu session status` with the same exact selectors. Do not guess a sibling
 branch or combine `--workspace` with `--workspace-root`.
+
+## Result collection recovery
+
+```sh
+hufu status --team dev-team
+hufu status --team dev-team --json
+```
+
+Plain `hufu status` also shows recovery hints for the canonically selected
+run, without requiring `--workers`. `--json` includes the same information
+under `recovery`: unresolved task IDs, scoped inspection actions, and, for a
+blocked result collection, an `assess-result-repair` action for each affected
+task. The complete command has this form:
+
+```sh
+hufu resume --workspace ./workspace/dev-team --team dev-team \
+  --run <run-id> --branch <branch-id> --execution-profile default \
+  --repair-result <task-id> --dry-run
+```
+
+Copy the complete suggested argv, including its workspace, run, branch, task,
+and execution profile, and use its working directory. The current action
+builder explicitly selects `--execution-profile default` for this read-only
+preview. This does not replace the source run's frozen policy; incompatible
+profiles remain subject to ordinary resume preflight. These repair-preview flags
+belong to `hufu resume`; `hufu session resume` does not accept them.
+Each blocked collection has its own
+preview, even when the primary action prioritizes another task's unknown
+external effect. The primary action retains that safety priority. Availability
+describes the read-only assessment command, not permission or a guarantee that
+repair will succeed. Run the preview from the original project directory with the original
+configuration and model overrides; it may still report policy drift, stale
+sources, or exhausted recovery authority. Status itself does not call a model,
+assess live repair eligibility, grant turns, or resume execution.
 
 ## Interrupted work with known-safe effects
 

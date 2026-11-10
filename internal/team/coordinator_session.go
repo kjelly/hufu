@@ -16,6 +16,7 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/sidecar"
 )
 
@@ -95,6 +96,12 @@ func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepRes
 			nextSourceIndex++
 		}
 	}
+	projected, err := projectHistoryToolPairs(history)
+	if err != nil {
+		log.Printf("warning: durable conversation checkpoint has invalid tool pairs: %v; retaining prior history", err)
+		return
+	}
+	history = projected
 	sourceCounts := sourceCountsForRanges(sourceRanges)
 	policy := c.compactionPolicy()
 	maxHistory := policy.MaxHistoryMessages
@@ -167,10 +174,10 @@ func (c *Coordinator) appendHistory(ctx context.Context, steps []fantasy.StepRes
 		return
 	}
 	resultingHistory := append(cloneMessages(projection.messages), history[compactCount:]...)
-	resultingRanges := append([][]CompactionRange{flattenSourceRanges(compactedRanges)}, cloneSourceRanges(sourceRanges[compactCount:])...)
+	resultingRanges := append(projectionHistoryRanges(projection, compactedRanges), cloneSourceRanges(sourceRanges[compactCount:])...)
 	resultingCounts := sourceCountsForRanges(resultingRanges)
 	if workspace := c.sessionWorkspace(); workspace != "" {
-		record, err := c.commitCompactionCheckpointWithProvenance(ctx, resultingHistory, sourceOffset, resultingCounts, flattenSourceRanges(compactedRanges), resultingRanges, nextSourceIndex, projection)
+		record, err := c.commitCompactionCheckpointWithProvenance(ctx, resultingHistory, sourceOffset, resultingCounts, projectionCompactedRanges(projection, compactedRanges), resultingRanges, nextSourceIndex, projection)
 		if err != nil && record.ID == "" {
 			log.Printf("warning: durable compaction checkpoint failed before commit: %v; retaining original history", err)
 			return
@@ -220,6 +227,9 @@ func trimHistoryPreservingHead(msgs []fantasy.Message, sourceCounts []int, max i
 }
 
 func trimHistoryPreservingHeadWithProvenance(msgs []fantasy.Message, sourceRanges [][]CompactionRange, max int) ([]fantasy.Message, [][]CompactionRange, int) {
+	if agent.MessagesHaveMedia(msgs) {
+		return msgs, cloneSourceRanges(sourceRanges), 0
+	}
 	if max <= 0 {
 		return nil, nil, len(msgs)
 	}
@@ -288,13 +298,15 @@ func trimHistoryPreservingHeadWithProvenance(msgs []fantasy.Message, sourceRange
 }
 
 type compactionProjection struct {
-	messages     []fantasy.Message
-	summary      *StructuredSummary
-	err          error
-	tokensBefore int
-	tokensAfter  int
-	sourceOffset int
-	sourceCount  int
+	compactedStart int
+	compactedEnd   int
+	messages       []fantasy.Message
+	summary        *StructuredSummary
+	err            error
+	tokensBefore   int
+	tokensAfter    int
+	sourceOffset   int
+	sourceCount    int
 }
 
 type transientSidecarCompacter struct {
@@ -320,6 +332,16 @@ func (c *Coordinator) buildTransientCompactionProjection(ctx context.Context, me
 }
 
 func (c *Coordinator) buildCompactionProjection(ctx context.Context, messages []fantasy.Message, sourceOffset int, sourceCounts []int, predecessor *StructuredSummary, compacter SidecarCompacter) compactionProjection {
+	if err := ctx.Err(); err != nil {
+		return compactionProjection{messages: messages, err: err}
+	}
+	if agent.MessagesHaveMedia(messages) {
+		return c.buildMediaCompactionProjection(ctx, messages, sourceOffset, sourceCounts, predecessor, compacter)
+	}
+	return c.buildTextCompactionProjection(ctx, messages, sourceOffset, sourceCounts, predecessor, compacter, "")
+}
+
+func (c *Coordinator) buildTextCompactionProjection(ctx context.Context, messages []fantasy.Message, sourceOffset int, sourceCounts []int, predecessor *StructuredSummary, compacter SidecarCompacter, originalGoal string) compactionProjection {
 	if err := ctx.Err(); err != nil {
 		return compactionProjection{messages: messages, err: err}
 	}
@@ -350,7 +372,9 @@ func (c *Coordinator) buildCompactionProjection(ctx context.Context, messages []
 	}
 
 	// Invariant 2: Original user goal
-	originalGoal := c.initialPrompt
+	if originalGoal == "" {
+		originalGoal = c.initialPrompt
+	}
 	if originalGoal == "" && prevSummary != nil {
 		originalGoal = prevSummary.Goal
 	}
@@ -429,8 +453,10 @@ func (c *Coordinator) compactMessages(ctx context.Context, messages []fantasy.Me
 	}
 
 	if workspace != "" {
-		checkpointCounts := []int{sumSourceCounts(sourceCounts)}
-		record, err := c.commitCompactionCheckpoint(ctx, projection.messages, sourceOffset, checkpointCounts, sourceCounts, projection)
+		originalRanges := historySourceRanges(len(messages), sourceOffset, sourceCounts, nil)
+		projectedRanges := projectionHistoryRanges(projection, originalRanges)
+		checkpointCounts := sourceCountsForRanges(projectedRanges)
+		record, err := c.commitCompactionCheckpointWithProvenance(ctx, projection.messages, sourceOffset, checkpointCounts, projectionCompactedRanges(projection, originalRanges), projectedRanges, maxSourceIndex(originalRanges), projection)
 		if err != nil && record.ID == "" {
 			log.Printf("warning: failed to save compaction record before canonical commit: %v", err)
 			return messages
@@ -630,7 +656,10 @@ func (c *Coordinator) SetFreshSession(v bool) {
 // context from an earlier session. --new retains that session as a durable
 // archive, but it must not influence the fresh run that created the archive.
 func (c *Coordinator) historicalMemoryDisabled() bool {
-	return c == nil || c.ExecutionProfile().DisableHistoricalMemory || c.freshSessionMemory.Load()
+	if c == nil || c.ExecutionProfile().DisableHistoricalMemory || c.freshSessionMemory.Load() {
+		return true
+	}
+	return c.initialDerivedCycle()
 }
 
 // canonicalMemoryDisabled reports whether canonical context (this session's
@@ -651,6 +680,11 @@ func (c *Coordinator) applyLiveTaskProjection(tasks []*TodoItem) {
 	if c == nil {
 		return
 	}
+	// Canonical replay may replace the repaired checkpoint with a legacy
+	// task projection that omitted this hash-covered static contract field.
+	if c.session != nil {
+		restoreLegacyBoundInvariantVerification(tasks, c.session.ContractTasks)
+	}
 	c.setRestoredTodoIDs(tasks)
 	prof := c.ExecutionProfile()
 	if c.workflowCycleID() != "" && !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore && c.taskTracker != nil {
@@ -668,7 +702,7 @@ func (c *Coordinator) applyLiveTaskProjection(tasks []*TodoItem) {
 	if !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
 		seeds := make([]TaskCacheSeed, 0, len(tasks))
 		for _, t := range tasks {
-			if t != nil && t.Status == TaskDone && t.Output != "" {
+			if t != nil && t.MediaBinding == nil && t.MediaInputDigest == "" && runtimeMediaHash(t.TypedResult) == "" && t.Status == TaskDone && t.Output != "" {
 				seeds = append(seeds, TaskCacheSeed{
 					AgentKey: strings.ToLower(t.Agent), Task: t.Desc, Output: t.Output,
 					VerifySpec: t.VerifySpec, Verify: t.Verify, VerifyMode: t.VerifyMode,
@@ -787,6 +821,12 @@ func (c *Coordinator) syncConversationHistoryStateToSessionData() {
 // through sessionMu: mutate under the write lock, snapshot under the read
 // lock, then persist the snapshot and update the branch state outside the lock.
 func (c *Coordinator) saveCheckpoint() {
+	// A private leaf does not own the parent task or session projection.
+	// Collection progress has its own durable events; ordinary leaf receipts
+	// are merged by the parent dispatcher before its checkpoint is published.
+	if c.modelFanout != nil {
+		return
+	}
 	var hasSessionData bool
 	c.viewSessionData(func(*SessionData) {
 		hasSessionData = true
@@ -1351,7 +1391,7 @@ func taskDefFromTodoItem(it *TodoItem) TaskDef {
 	id := it.PlanTaskID
 	return TaskDef{
 		ID: id, Phase: it.Phase, Action: cloneActionPtr(it.Action), ActionInputBindings: append([]ActionInputBinding(nil), it.ActionInputBindings...), RunInputSnapshotID: it.RunInputSnapshotID,
-		RunInputSnapshotHash: it.RunInputSnapshotHash, MaterializedActionPayloadHash: it.MaterializedActionPayloadHash,
+		RunInputSnapshotHash: it.RunInputSnapshotHash, MediaBinding: it.MediaBinding.Clone(), MediaInputDigest: it.MediaInputDigest, MaterializedActionPayloadHash: it.MaterializedActionPayloadHash,
 		BoundInputs: cloneStringMap(it.BoundInputs), InvariantVerification: it.InvariantVerification, PlanFirst: it.PlanFirst, PlanID: it.PlanID, ContractID: it.ContractID, ContractHash: it.ContractHash, ContractRevision: it.ContractRevision,
 		Agent: it.Agent, Goal: goal, Constraints: it.Constraints, Model: it.Model, ModelTopology: cloneModelTopology(it.ModelTopology),
 		ResolvedExecutionTarget: it.ExecutionTarget, ExecutionTopology: cloneExecutionTopology(it.ExecutionTopology),
@@ -1368,12 +1408,13 @@ func taskDefFromTodoItem(it *TodoItem) TaskDef {
 		DecisionProfile: it.DecisionProfile, DecisionOptions: append([]DecisionOption(nil), it.DecisionOptions...),
 		DecisionAssumptions: cloneDecisionAssumptions(it.DecisionAssumptions), DecisionFacts: cloneDecisionFacts(it.DecisionFacts),
 		DecisionArtifacts: append([]ArtifactRef(nil), it.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(it.DecisionBaseRates),
-		DecisionProvenance: cloneEvidenceProvenance(it.DecisionProvenance),
-		SubagentProvider:   it.SubagentProvider,
-		ResultContract:     it.ResultContract.clone(),
-		WorkerWorkspace:    it.WorkerWorkspace.clone(),
-		ExecutionRoute:     it.ExecutionRoute.clone(),
-		CatalogAction:      it.CatalogAction.clone(),
+		DecisionProvenance:   cloneEvidenceProvenance(it.DecisionProvenance),
+		SubagentProvider:     it.SubagentProvider,
+		ResultContract:       it.ResultContract.clone(),
+		DependencyResultView: it.DependencyResultView.clone(),
+		WorkerWorkspace:      it.WorkerWorkspace.clone(),
+		ExecutionRoute:       it.ExecutionRoute.clone(),
+		CatalogAction:        it.CatalogAction.clone(),
 	}
 }
 
@@ -1382,7 +1423,10 @@ func (c *Coordinator) SessionData() *SessionData {
 	c.viewSessionData(func(sd *SessionData) {
 		copySD := *sd
 		copySD.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(sd.ExecutionPolicySnapshot)
+		copySD.HistoricalResultGrants = cloneHistoricalGrantCycleRef(sd.HistoricalResultGrants)
+		copySD.DerivedFork = cloneDerivedForkRef(sd.DerivedFork)
 		copySD.RunInputSnapshots = CloneRunInputSnapshots(sd.RunInputSnapshots)
+		copySD.MediaInputSnapshots = cloneMediaInputSnapshots(sd.MediaInputSnapshots)
 		copySD.DecisionPrimitiveResults = slices.Clone(sd.DecisionPrimitiveResults)
 		copySD.Entries = append([]SessionEntry(nil), sd.Entries...)
 		copySD.Tasks = append([]*TodoItem(nil), sd.Tasks...)

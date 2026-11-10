@@ -2,10 +2,67 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"charm.land/fantasy"
 )
+
+func TestProviderErrorOutcomeSurvivesConsumerStop(t *testing.T) {
+	for _, object := range []bool{false, true} {
+		for _, stop := range []bool{false, true} {
+			for _, cancelled := range []bool{false, true} {
+				t.Run(fmt.Sprintf("object_%t/stop_%t/cancel_%t", object, stop, cancelled), func(t *testing.T) {
+					ctx, cancel := context.WithCancel(t.Context())
+					defer cancel()
+					admission := &settlingAdmission{recordingAdmission: &recordingAdmission{}}
+					failure := errors.New("provider fixture error")
+					inner := &streamLanguageModel{
+						streamFn: func(context.Context) fantasy.StreamResponse {
+							return func(yield func(fantasy.StreamPart) bool) {
+								yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeError, Error: failure})
+							}
+						},
+						objectStreamFn: func(context.Context) fantasy.ObjectStreamResponse {
+							return func(yield func(fantasy.ObjectStreamPart) bool) {
+								yield(fantasy.ObjectStreamPart{Type: fantasy.ObjectStreamPartTypeError, Error: failure})
+							}
+						},
+					}
+					model := NewAdmittedLanguageModel("fixture", inner, admission)
+					consume := func() bool {
+						if cancelled {
+							cancel()
+						}
+						return !stop
+					}
+					if object {
+						stream, err := model.StreamObject(ctx, fantasy.ObjectCall{})
+						if err != nil {
+							t.Fatal(err)
+						}
+						stream(func(fantasy.ObjectStreamPart) bool { return consume() })
+					} else {
+						stream, err := model.Stream(ctx, fantasy.Call{})
+						if err != nil {
+							t.Fatal(err)
+						}
+						stream(func(fantasy.StreamPart) bool { return consume() })
+					}
+					want := ProviderInvocationProviderError
+					if cancelled {
+						want = ProviderInvocationCancelled
+					}
+					results := admission.snapshotSettlements()
+					if len(results) != 1 || results[0].result.Outcome != want {
+						t.Fatalf("settlements=%v want outcome %s", results, want)
+					}
+				})
+			}
+		}
+	}
+}
 
 type usageObservingModel struct {
 	resultLanguageModel

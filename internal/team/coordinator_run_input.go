@@ -26,6 +26,12 @@ func (c *Coordinator) SetRunInputAssignments(assignments []RunInputAssignment) {
 // prepareInvocationInputs admits frozen recovery evidence before any provider
 // transport, while new invocations retain semantic input resolution ordering.
 func (c *Coordinator) prepareInvocationInputs(ctx context.Context, prompt string) error {
+	if err := c.ValidateHistoricalResultCycleSources(ctx); err != nil {
+		return err
+	}
+	if c.semanticRuntime != nil {
+		c.semanticRuntime.start()
+	}
 	if err := c.startSemanticRunInputBoundary(ctx); err != nil {
 		return err
 	}

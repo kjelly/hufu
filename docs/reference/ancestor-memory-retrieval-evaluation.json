@@ -1,0 +1,3011 @@
+{
+  "baseline_commit": "825ff68675d845e8d4a29855c4d757a5f4f28e3d",
+  "go_version": "go1.27.2",
+  "gomaxprocs": 2,
+  "fixture_seed": "fixed sequential IDs; frozen worker normalization time=Unix(200000)",
+  "sampling": {
+    "samples_per_case": 5,
+    "small_iterations_per_sample": 100,
+    "large_iterations_per_sample": 5,
+    "packages_serialized_by_go_benchmark_runner": true
+  },
+  "small_gate_max_ratio": 1.2,
+  "source_sha256": {
+    "go.mod": "9abc675a08afe1625b393fe93c866c0f99bdf034ed0be8bd1bac5cfc8d3b79f2",
+    "go.sum": "bb92505b74744713c6d69aec94b47b53aaad3dc22f2e945c670f798c33a1a317",
+    ".mise.toml": "7c97c427cb65ef259d3bc58a63bd791c98362e58a63df00d7ea327cf4ff67a87",
+    "internal/context/model.go": "bdaaf40371c230bc7e5f72977cb0d5f0b6b3aaa4417b29ea407cbb254f89726d",
+    "internal/context/allowed_item_ids.go": "49a0566a582a0d07202097c941328adb58b8caf6d1d0556f0e5ef3967add0a1d",
+    "internal/context/sqlite_repository.go": "f952b075768bfe29b1b465c153dfb7a1d9d029aa4eee5f9e5e5d6f4137ec49ed",
+    "internal/context/retrieval.go": "8fff66c26c8830358aa70ec0642ea5f7629738582e09b681ae3704223f0e91ec",
+    "internal/context/supplemental_retrieval.go": "a3460f6319125b0d7a334d44ee26ffccf9cd612ba54f1a415170eab168707240",
+    "internal/context/semantic_index.go": "1c89be989cd60e3fe823e83021af5e9ba4b08595d5e6d70af5d0bdfb865f3483",
+    "internal/context/retrieval_lineage_test.go": "f57b74db54f504a6e338f28b53aab70b98421e04bd03aa27d2dfb5df3414e6aa",
+    "internal/context/retrieval_lineage_bench_test.go": "fad7859b0ef399b2e8b054833df21589088af723a41999d78919ba45c7b3d4dc",
+    "internal/context/semantic_projection_test.go": "35f918a62f7d8973d6f5146e9f489f0ddc01c8a751169a386210f6849af673ce",
+    "internal/context/semantic_index_test.go": "5f4a79395bff6144976ad442a1718455f52c8f9ce21bd52ce6a17ad685371be4",
+    "internal/team/worker_memory.go": "4da987143c6ebf6f2ddc0c94b223bfbb445bf41c0d6368b9ce800075f29d0bd6",
+    "internal/team/worker_memory_retrieval.go": "93e5ccc112c550abba58ca4669bdd99ce5d86155ca5083b4219e9a31d684c85b",
+    "internal/team/worker_memory_retrieval_test.go": "915c23025b35a5e9adba8507371eb6979dced817bf72c92b848c24c3e61ed405",
+    "internal/team/worker_memory_retrieval_bench_test.go": "15bbe662faa559aec8e94d40339a5b6964c14a3c51068d5a96d47a0522b354d1"
+  },
+  "all_ordered_ids_identical": true,
+  "all_small_gates_passed": true,
+  "comparisons": [
+    {
+      "benchmark": "BenchmarkLineageRetrieval/rows=1000/exact",
+      "rows": 1000,
+      "baseline": {
+        "samples": [
+          {
+            "ns/op": 1524206.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18431.0,
+            "allocs/op": 377.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 1244621.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18395.0,
+            "allocs/op": 377.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 1239542.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18506.0,
+            "allocs/op": 377.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 1304798.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18426.0,
+            "allocs/op": 377.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 1444602.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18464.0,
+            "allocs/op": 377.0,
+            "iterations": 100
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ]
+        ]
+      },
+      "current": {
+        "samples": [
+          {
+            "ns/op": 513868.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18393.0,
+            "allocs/op": 374.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 524045.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18396.0,
+            "allocs/op": 374.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 475018.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18440.0,
+            "allocs/op": 374.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 426370.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18367.0,
+            "allocs/op": 374.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 458566.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18372.0,
+            "allocs/op": 374.0,
+            "iterations": 100
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ]
+        ]
+      },
+      "baseline_median": {
+        "ns/op": 1304798.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 18431.0,
+        "allocs/op": 377.0
+      },
+      "current_median": {
+        "ns/op": 475018.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 18393.0,
+        "allocs/op": 374.0
+      },
+      "latency_change_percent": -63.59451807866046,
+      "allocated_bytes_change_percent": -0.20617438012044964,
+      "small_fixture_gate_applies": true,
+      "gate_passed": true
+    },
+    {
+      "benchmark": "BenchmarkLineageRetrieval/rows=1000/fts",
+      "rows": 1000,
+      "baseline": {
+        "samples": [
+          {
+            "ns/op": 762668.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23918.0,
+            "allocs/op": 401.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 680268.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23893.0,
+            "allocs/op": 401.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 745000.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23948.0,
+            "allocs/op": 401.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 799031.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23922.0,
+            "allocs/op": 401.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 812658.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23926.0,
+            "allocs/op": 401.0,
+            "iterations": 100
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ]
+        ]
+      },
+      "current": {
+        "samples": [
+          {
+            "ns/op": 605879.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23940.0,
+            "allocs/op": 406.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 549068.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23983.0,
+            "allocs/op": 406.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 520483.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23916.0,
+            "allocs/op": 406.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 792861.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 24030.0,
+            "allocs/op": 406.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 725299.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23974.0,
+            "allocs/op": 406.0,
+            "iterations": 100
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ]
+        ]
+      },
+      "baseline_median": {
+        "ns/op": 762668.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 23922.0,
+        "allocs/op": 401.0
+      },
+      "current_median": {
+        "ns/op": 605879.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 23974.0,
+        "allocs/op": 406.0
+      },
+      "latency_change_percent": -20.557962311254695,
+      "allocated_bytes_change_percent": 0.21737312933700625,
+      "small_fixture_gate_applies": true,
+      "gate_passed": true
+    },
+    {
+      "benchmark": "BenchmarkLineageRetrieval/rows=1000/vector",
+      "rows": 1000,
+      "baseline": {
+        "samples": [
+          {
+            "ns/op": 16946849.0,
+            "canonical_rows/op": 1000.0,
+            "rows_returned/op": 4.0,
+            "B/op": 2105018.0,
+            "allocs/op": 64725.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 17095617.0,
+            "canonical_rows/op": 1000.0,
+            "rows_returned/op": 4.0,
+            "B/op": 2105060.0,
+            "allocs/op": 64725.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 12442914.0,
+            "canonical_rows/op": 1000.0,
+            "rows_returned/op": 4.0,
+            "B/op": 2104949.0,
+            "allocs/op": 64725.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 12520012.0,
+            "canonical_rows/op": 1000.0,
+            "rows_returned/op": 4.0,
+            "B/op": 2104848.0,
+            "allocs/op": 64725.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 12766875.0,
+            "canonical_rows/op": 1000.0,
+            "rows_returned/op": 4.0,
+            "B/op": 2105214.0,
+            "allocs/op": 64725.0,
+            "iterations": 100
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ]
+        ]
+      },
+      "current": {
+        "samples": [
+          {
+            "ns/op": 560612.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28869.0,
+            "allocs/op": 490.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 408671.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28827.0,
+            "allocs/op": 490.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 481999.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28858.0,
+            "allocs/op": 490.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 486509.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28901.0,
+            "allocs/op": 490.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 482475.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28842.0,
+            "allocs/op": 490.0,
+            "iterations": 100
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ]
+        ]
+      },
+      "baseline_median": {
+        "ns/op": 12766875.0,
+        "canonical_rows/op": 1000.0,
+        "rows_returned/op": 4.0,
+        "B/op": 2105018.0,
+        "allocs/op": 64725.0
+      },
+      "current_median": {
+        "ns/op": 482475.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 28858.0,
+        "allocs/op": 490.0
+      },
+      "latency_change_percent": -96.22088412395358,
+      "allocated_bytes_change_percent": -98.62908535698982,
+      "small_fixture_gate_applies": true,
+      "gate_passed": true
+    },
+    {
+      "benchmark": "BenchmarkWorkerAncestorRecall/rows=1000",
+      "rows": 1000,
+      "baseline": {
+        "samples": [
+          {
+            "ns/op": 3619271.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 305149.0,
+            "allocs/op": 3609.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 3437360.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 306291.0,
+            "allocs/op": 3609.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 3777893.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 305670.0,
+            "allocs/op": 3608.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 3096077.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 305229.0,
+            "allocs/op": 3609.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 3258394.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 304319.0,
+            "allocs/op": 3608.0,
+            "iterations": 100
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ]
+        ]
+      },
+      "current": {
+        "samples": [
+          {
+            "ns/op": 1739943.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 151369.0,
+            "allocs/op": 1479.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 1735913.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 150986.0,
+            "allocs/op": 1478.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 1811646.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 150598.0,
+            "allocs/op": 1478.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 2084401.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 150226.0,
+            "allocs/op": 1478.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 1826702.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 151294.0,
+            "allocs/op": 1478.0,
+            "iterations": 100
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ]
+        ]
+      },
+      "baseline_median": {
+        "ns/op": 3437360.0,
+        "items_returned/op": 8.0,
+        "source_rows/op": 32.0,
+        "B/op": 305229.0,
+        "allocs/op": 3609.0
+      },
+      "current_median": {
+        "ns/op": 1811646.0,
+        "items_returned/op": 8.0,
+        "source_rows/op": 16.0,
+        "B/op": 150986.0,
+        "allocs/op": 1478.0
+      },
+      "latency_change_percent": -47.29542439546629,
+      "allocated_bytes_change_percent": -50.53353383852779,
+      "small_fixture_gate_applies": true,
+      "gate_passed": true
+    },
+    {
+      "benchmark": "BenchmarkLineageRetrieval/rows=10000/exact",
+      "rows": 10000,
+      "baseline": {
+        "samples": [
+          {
+            "ns/op": 11583338.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18419.0,
+            "allocs/op": 377.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 12709824.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18480.0,
+            "allocs/op": 377.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 12481119.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18431.0,
+            "allocs/op": 377.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 12972289.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18433.0,
+            "allocs/op": 377.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 12782072.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18445.0,
+            "allocs/op": 377.0,
+            "iterations": 100
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ]
+        ]
+      },
+      "current": {
+        "samples": [
+          {
+            "ns/op": 585411.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18431.0,
+            "allocs/op": 374.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 589252.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18398.0,
+            "allocs/op": 374.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 516883.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18379.0,
+            "allocs/op": 374.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 554939.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18389.0,
+            "allocs/op": 374.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 504027.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18395.0,
+            "allocs/op": 374.0,
+            "iterations": 100
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ]
+        ]
+      },
+      "baseline_median": {
+        "ns/op": 12709824.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 18433.0,
+        "allocs/op": 377.0
+      },
+      "current_median": {
+        "ns/op": 554939.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 18395.0,
+        "allocs/op": 374.0
+      },
+      "latency_change_percent": -95.63377903580727,
+      "allocated_bytes_change_percent": -0.20615200998209682,
+      "small_fixture_gate_applies": true,
+      "gate_passed": true
+    },
+    {
+      "benchmark": "BenchmarkLineageRetrieval/rows=10000/fts",
+      "rows": 10000,
+      "baseline": {
+        "samples": [
+          {
+            "ns/op": 849249.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23943.0,
+            "allocs/op": 401.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 826519.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23923.0,
+            "allocs/op": 401.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 702071.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23948.0,
+            "allocs/op": 401.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 813708.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23908.0,
+            "allocs/op": 401.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 628211.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23882.0,
+            "allocs/op": 401.0,
+            "iterations": 100
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ]
+        ]
+      },
+      "current": {
+        "samples": [
+          {
+            "ns/op": 873687.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23981.0,
+            "allocs/op": 406.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 680964.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23963.0,
+            "allocs/op": 406.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 430353.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23962.0,
+            "allocs/op": 406.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 488554.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23918.0,
+            "allocs/op": 406.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 478670.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23921.0,
+            "allocs/op": 406.0,
+            "iterations": 100
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ]
+        ]
+      },
+      "baseline_median": {
+        "ns/op": 813708.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 23923.0,
+        "allocs/op": 401.0
+      },
+      "current_median": {
+        "ns/op": 488554.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 23962.0,
+        "allocs/op": 406.0
+      },
+      "latency_change_percent": -39.959543226808634,
+      "allocated_bytes_change_percent": 0.1630230322283932,
+      "small_fixture_gate_applies": true,
+      "gate_passed": true
+    },
+    {
+      "benchmark": "BenchmarkLineageRetrieval/rows=10000/vector",
+      "rows": 10000,
+      "baseline": {
+        "samples": [
+          {
+            "ns/op": 141268360.0,
+            "canonical_rows/op": 10000.0,
+            "rows_returned/op": 4.0,
+            "B/op": 20912470.0,
+            "allocs/op": 649761.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 137099750.0,
+            "canonical_rows/op": 10000.0,
+            "rows_returned/op": 4.0,
+            "B/op": 20912880.0,
+            "allocs/op": 649762.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 138113427.0,
+            "canonical_rows/op": 10000.0,
+            "rows_returned/op": 4.0,
+            "B/op": 20912336.0,
+            "allocs/op": 649762.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 135869950.0,
+            "canonical_rows/op": 10000.0,
+            "rows_returned/op": 4.0,
+            "B/op": 20913083.0,
+            "allocs/op": 649762.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 142328313.0,
+            "canonical_rows/op": 10000.0,
+            "rows_returned/op": 4.0,
+            "B/op": 20912204.0,
+            "allocs/op": 649761.0,
+            "iterations": 100
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ]
+        ]
+      },
+      "current": {
+        "samples": [
+          {
+            "ns/op": 352286.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28869.0,
+            "allocs/op": 490.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 388621.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28829.0,
+            "allocs/op": 490.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 557676.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28925.0,
+            "allocs/op": 490.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 565251.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28872.0,
+            "allocs/op": 490.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 516775.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28862.0,
+            "allocs/op": 490.0,
+            "iterations": 100
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ]
+        ]
+      },
+      "baseline_median": {
+        "ns/op": 138113427.0,
+        "canonical_rows/op": 10000.0,
+        "rows_returned/op": 4.0,
+        "B/op": 20912470.0,
+        "allocs/op": 649762.0
+      },
+      "current_median": {
+        "ns/op": 516775.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 28869.0,
+        "allocs/op": 490.0
+      },
+      "latency_change_percent": -99.62583290327015,
+      "allocated_bytes_change_percent": -99.86195317913187,
+      "small_fixture_gate_applies": true,
+      "gate_passed": true
+    },
+    {
+      "benchmark": "BenchmarkWorkerAncestorRecall/rows=10000",
+      "rows": 10000,
+      "baseline": {
+        "samples": [
+          {
+            "ns/op": 16605897.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 304365.0,
+            "allocs/op": 3608.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 13898578.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 304636.0,
+            "allocs/op": 3608.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 14481461.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 304410.0,
+            "allocs/op": 3608.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 13551200.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 304318.0,
+            "allocs/op": 3608.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 14010801.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 302874.0,
+            "allocs/op": 3608.0,
+            "iterations": 100
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ]
+        ]
+      },
+      "current": {
+        "samples": [
+          {
+            "ns/op": 1467886.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 150458.0,
+            "allocs/op": 1478.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 1654095.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 150218.0,
+            "allocs/op": 1478.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 1543030.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 150595.0,
+            "allocs/op": 1478.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 1953293.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 149666.0,
+            "allocs/op": 1478.0,
+            "iterations": 100
+          },
+          {
+            "ns/op": 2800293.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 150787.0,
+            "allocs/op": 1478.0,
+            "iterations": 100
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ]
+        ]
+      },
+      "baseline_median": {
+        "ns/op": 14010801.0,
+        "items_returned/op": 8.0,
+        "source_rows/op": 32.0,
+        "B/op": 304365.0,
+        "allocs/op": 3608.0
+      },
+      "current_median": {
+        "ns/op": 1654095.0,
+        "items_returned/op": 8.0,
+        "source_rows/op": 16.0,
+        "B/op": 150458.0,
+        "allocs/op": 1478.0
+      },
+      "latency_change_percent": -88.19414393224199,
+      "allocated_bytes_change_percent": -50.5665894567378,
+      "small_fixture_gate_applies": true,
+      "gate_passed": true
+    },
+    {
+      "benchmark": "BenchmarkLineageRetrieval/rows=100000/exact",
+      "rows": 100000,
+      "baseline": {
+        "samples": [
+          {
+            "ns/op": 121980501.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 19494.0,
+            "allocs/op": 379.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 132534483.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18465.0,
+            "allocs/op": 377.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 137983183.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18446.0,
+            "allocs/op": 377.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 125167913.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18446.0,
+            "allocs/op": 377.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 128663166.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18401.0,
+            "allocs/op": 377.0,
+            "iterations": 5
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ]
+        ]
+      },
+      "current": {
+        "samples": [
+          {
+            "ns/op": 812184.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18360.0,
+            "allocs/op": 374.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 925266.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18408.0,
+            "allocs/op": 375.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 434533.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18363.0,
+            "allocs/op": 374.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 853051.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18398.0,
+            "allocs/op": 374.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1021340.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18427.0,
+            "allocs/op": 375.0,
+            "iterations": 5
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ]
+        ]
+      },
+      "baseline_median": {
+        "ns/op": 128663166.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 18446.0,
+        "allocs/op": 377.0
+      },
+      "current_median": {
+        "ns/op": 853051.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 18398.0,
+        "allocs/op": 374.0
+      },
+      "latency_change_percent": -99.33698895610885,
+      "allocated_bytes_change_percent": -0.2602190176732133,
+      "small_fixture_gate_applies": false,
+      "gate_passed": null
+    },
+    {
+      "benchmark": "BenchmarkLineageRetrieval/rows=100000/fts",
+      "rows": 100000,
+      "baseline": {
+        "samples": [
+          {
+            "ns/op": 711549.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23876.0,
+            "allocs/op": 401.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 735480.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23905.0,
+            "allocs/op": 401.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 627544.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23857.0,
+            "allocs/op": 401.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 950001.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23880.0,
+            "allocs/op": 401.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 738112.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23880.0,
+            "allocs/op": 401.0,
+            "iterations": 5
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ]
+        ]
+      },
+      "current": {
+        "samples": [
+          {
+            "ns/op": 1239576.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23924.0,
+            "allocs/op": 406.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1928951.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23924.0,
+            "allocs/op": 406.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1838138.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23924.0,
+            "allocs/op": 406.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1399704.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23924.0,
+            "allocs/op": 406.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1034546.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23924.0,
+            "allocs/op": 406.0,
+            "iterations": 5
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ]
+        ]
+      },
+      "baseline_median": {
+        "ns/op": 735480.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 23880.0,
+        "allocs/op": 401.0
+      },
+      "current_median": {
+        "ns/op": 1399704.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 23924.0,
+        "allocs/op": 406.0
+      },
+      "latency_change_percent": 90.31163321912221,
+      "allocated_bytes_change_percent": 0.1842546063651529,
+      "small_fixture_gate_applies": false,
+      "gate_passed": null
+    },
+    {
+      "benchmark": "BenchmarkLineageRetrieval/rows=100000/vector",
+      "rows": 100000,
+      "baseline": {
+        "samples": [
+          {
+            "ns/op": 1451063256.0,
+            "canonical_rows/op": 100000.0,
+            "rows_returned/op": 4.0,
+            "B/op": 208846411.0,
+            "allocs/op": 6499796.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1348895950.0,
+            "canonical_rows/op": 100000.0,
+            "rows_returned/op": 4.0,
+            "B/op": 208842270.0,
+            "allocs/op": 6499790.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1306139914.0,
+            "canonical_rows/op": 100000.0,
+            "rows_returned/op": 4.0,
+            "B/op": 208841198.0,
+            "allocs/op": 6499789.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1414345686.0,
+            "canonical_rows/op": 100000.0,
+            "rows_returned/op": 4.0,
+            "B/op": 208842166.0,
+            "allocs/op": 6499789.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1319729708.0,
+            "canonical_rows/op": 100000.0,
+            "rows_returned/op": 4.0,
+            "B/op": 208846590.0,
+            "allocs/op": 6499797.0,
+            "iterations": 5
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ]
+        ]
+      },
+      "current": {
+        "samples": [
+          {
+            "ns/op": 503673.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28824.0,
+            "allocs/op": 490.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 491760.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28862.0,
+            "allocs/op": 490.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 541651.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28798.0,
+            "allocs/op": 490.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 634880.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28865.0,
+            "allocs/op": 490.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 580170.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28872.0,
+            "allocs/op": 490.0,
+            "iterations": 5
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ]
+        ]
+      },
+      "baseline_median": {
+        "ns/op": 1348895950.0,
+        "canonical_rows/op": 100000.0,
+        "rows_returned/op": 4.0,
+        "B/op": 208842270.0,
+        "allocs/op": 6499790.0
+      },
+      "current_median": {
+        "ns/op": 541651.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 28862.0,
+        "allocs/op": 490.0
+      },
+      "latency_change_percent": -99.95984486423879,
+      "allocated_bytes_change_percent": -99.98618000082071,
+      "small_fixture_gate_applies": false,
+      "gate_passed": null
+    },
+    {
+      "benchmark": "BenchmarkWorkerAncestorRecall/rows=100000",
+      "rows": 100000,
+      "baseline": {
+        "samples": [
+          {
+            "ns/op": 190797573.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 303395.0,
+            "allocs/op": 3612.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 164865608.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 301184.0,
+            "allocs/op": 3608.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 133380626.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 301206.0,
+            "allocs/op": 3608.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 142720696.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 301184.0,
+            "allocs/op": 3608.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 125492682.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 301206.0,
+            "allocs/op": 3608.0,
+            "iterations": 5
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ]
+        ]
+      },
+      "current": {
+        "samples": [
+          {
+            "ns/op": 2876608.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 150641.0,
+            "allocs/op": 1482.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 2412210.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 149492.0,
+            "allocs/op": 1480.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 2382428.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 158088.0,
+            "allocs/op": 1483.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 2417979.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 158075.0,
+            "allocs/op": 1483.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1544288.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 149457.0,
+            "allocs/op": 1480.0,
+            "iterations": 5
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ]
+        ]
+      },
+      "baseline_median": {
+        "ns/op": 142720696.0,
+        "items_returned/op": 8.0,
+        "source_rows/op": 32.0,
+        "B/op": 301206.0,
+        "allocs/op": 3608.0
+      },
+      "current_median": {
+        "ns/op": 2412210.0,
+        "items_returned/op": 8.0,
+        "source_rows/op": 16.0,
+        "B/op": 150641.0,
+        "allocs/op": 1482.0
+      },
+      "latency_change_percent": -98.30983867959837,
+      "allocated_bytes_change_percent": -49.98738404945453,
+      "small_fixture_gate_applies": false,
+      "gate_passed": null
+    },
+    {
+      "benchmark": "BenchmarkLineageRetrieval/rows=100002/exact",
+      "rows": 100002,
+      "baseline": {
+        "samples": [
+          {
+            "ns/op": 113518654.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18462.0,
+            "allocs/op": 377.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 123511385.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 19452.0,
+            "allocs/op": 378.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 146815258.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18440.0,
+            "allocs/op": 377.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 208452792.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18420.0,
+            "allocs/op": 377.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 140284238.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18468.0,
+            "allocs/op": 378.0,
+            "iterations": 5
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ]
+        ]
+      },
+      "current": {
+        "samples": [
+          {
+            "ns/op": 360046.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18369.0,
+            "allocs/op": 374.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 433656.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18337.0,
+            "allocs/op": 374.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 459284.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18382.0,
+            "allocs/op": 374.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 542431.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18353.0,
+            "allocs/op": 374.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 315479.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 18324.0,
+            "allocs/op": 374.0,
+            "iterations": 5
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ],
+          [
+            "item-000006",
+            "item-000004",
+            "item-000002",
+            "item-000000"
+          ]
+        ]
+      },
+      "baseline_median": {
+        "ns/op": 140284238.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 18462.0,
+        "allocs/op": 377.0
+      },
+      "current_median": {
+        "ns/op": 433656.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 18353.0,
+        "allocs/op": 374.0
+      },
+      "latency_change_percent": -99.69087332534107,
+      "allocated_bytes_change_percent": -0.590401906618998,
+      "small_fixture_gate_applies": false,
+      "gate_passed": null
+    },
+    {
+      "benchmark": "BenchmarkLineageRetrieval/rows=100002/fts",
+      "rows": 100002,
+      "baseline": {
+        "samples": [
+          {
+            "ns/op": 853647.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23934.0,
+            "allocs/op": 402.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 890079.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23924.0,
+            "allocs/op": 401.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 819657.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23921.0,
+            "allocs/op": 401.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1049207.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23947.0,
+            "allocs/op": 402.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1026087.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 25004.0,
+            "allocs/op": 403.0,
+            "iterations": 5
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ]
+        ]
+      },
+      "current": {
+        "samples": [
+          {
+            "ns/op": 552792.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23880.0,
+            "allocs/op": 406.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 655529.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 25081.0,
+            "allocs/op": 408.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 528217.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23924.0,
+            "allocs/op": 406.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 635242.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23928.0,
+            "allocs/op": 406.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 709222.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 23924.0,
+            "allocs/op": 406.0,
+            "iterations": 5
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ]
+        ]
+      },
+      "baseline_median": {
+        "ns/op": 890079.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 23934.0,
+        "allocs/op": 402.0
+      },
+      "current_median": {
+        "ns/op": 635242.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 23924.0,
+        "allocs/op": 406.0
+      },
+      "latency_change_percent": -28.63082939828937,
+      "allocated_bytes_change_percent": -0.04178156597309801,
+      "small_fixture_gate_applies": false,
+      "gate_passed": null
+    },
+    {
+      "benchmark": "BenchmarkLineageRetrieval/rows=100002/vector",
+      "rows": 100002,
+      "baseline": {
+        "samples": [
+          {
+            "ns/op": 1312399157.0,
+            "canonical_rows/op": 100002.0,
+            "rows_returned/op": 4.0,
+            "B/op": 208851707.0,
+            "allocs/op": 6499928.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1323332031.0,
+            "canonical_rows/op": 100002.0,
+            "rows_returned/op": 4.0,
+            "B/op": 208846523.0,
+            "allocs/op": 6499921.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1456861573.0,
+            "canonical_rows/op": 100002.0,
+            "rows_returned/op": 4.0,
+            "B/op": 208845572.0,
+            "allocs/op": 6499921.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1351052514.0,
+            "canonical_rows/op": 100002.0,
+            "rows_returned/op": 4.0,
+            "B/op": 208847619.0,
+            "allocs/op": 6499923.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1470901516.0,
+            "canonical_rows/op": 100002.0,
+            "rows_returned/op": 4.0,
+            "B/op": 208851644.0,
+            "allocs/op": 6499927.0,
+            "iterations": 5
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ]
+        ]
+      },
+      "current": {
+        "samples": [
+          {
+            "ns/op": 536191.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28948.0,
+            "allocs/op": 491.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 582849.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28888.0,
+            "allocs/op": 491.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 618804.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28888.0,
+            "allocs/op": 491.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 533528.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28865.0,
+            "allocs/op": 490.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 546999.0,
+            "canonical_rows/op": 4.0,
+            "rows_returned/op": 4.0,
+            "B/op": 28865.0,
+            "allocs/op": 490.0,
+            "iterations": 5
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ],
+          [
+            "item-000000",
+            "item-000002",
+            "item-000004",
+            "item-000006"
+          ]
+        ]
+      },
+      "baseline_median": {
+        "ns/op": 1351052514.0,
+        "canonical_rows/op": 100002.0,
+        "rows_returned/op": 4.0,
+        "B/op": 208847619.0,
+        "allocs/op": 6499923.0
+      },
+      "current_median": {
+        "ns/op": 546999.0,
+        "canonical_rows/op": 4.0,
+        "rows_returned/op": 4.0,
+        "B/op": 28888.0,
+        "allocs/op": 491.0
+      },
+      "latency_change_percent": -99.9595131207461,
+      "allocated_bytes_change_percent": -99.98616790551009,
+      "small_fixture_gate_applies": false,
+      "gate_passed": null
+    },
+    {
+      "benchmark": "BenchmarkWorkerAncestorRecall/rows=100002",
+      "rows": 100002,
+      "baseline": {
+        "samples": [
+          {
+            "ns/op": 118867676.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 303395.0,
+            "allocs/op": 3612.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 174782658.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 301049.0,
+            "allocs/op": 3607.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 180519625.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 301180.0,
+            "allocs/op": 3608.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 165249960.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 301206.0,
+            "allocs/op": 3608.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 126617722.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 32.0,
+            "B/op": 301184.0,
+            "allocs/op": 3608.0,
+            "iterations": 5
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ]
+        ]
+      },
+      "current": {
+        "samples": [
+          {
+            "ns/op": 1811247.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 149412.0,
+            "allocs/op": 1479.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1969436.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 158011.0,
+            "allocs/op": 1483.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1685735.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 149368.0,
+            "allocs/op": 1479.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1309596.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 157966.0,
+            "allocs/op": 1482.0,
+            "iterations": 5
+          },
+          {
+            "ns/op": 1358370.0,
+            "items_returned/op": 8.0,
+            "source_rows/op": 16.0,
+            "B/op": 149368.0,
+            "allocs/op": 1479.0,
+            "iterations": 5
+          }
+        ],
+        "ordered_ids": [
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ],
+          [
+            "item-000000",
+            "item-000001",
+            "item-000002",
+            "item-000003",
+            "item-000004",
+            "item-000005",
+            "item-000006",
+            "item-000007"
+          ]
+        ]
+      },
+      "baseline_median": {
+        "ns/op": 165249960.0,
+        "items_returned/op": 8.0,
+        "source_rows/op": 32.0,
+        "B/op": 301184.0,
+        "allocs/op": 3608.0
+      },
+      "current_median": {
+        "ns/op": 1685735.0,
+        "items_returned/op": 8.0,
+        "source_rows/op": 16.0,
+        "B/op": 149412.0,
+        "allocs/op": 1479.0
+      },
+      "latency_change_percent": -98.9798878014857,
+      "allocated_bytes_change_percent": -50.39178708032299,
+      "small_fixture_gate_applies": false,
+      "gate_passed": null
+    }
+  ],
+  "validation": {
+    "full_test": {
+      "command": "TMPDIR=<task> GOMAXPROCS=2 mise exec -- go test -p 2 ./... -timeout 30m",
+      "exit_code": 0,
+      "package_seconds": {
+        "cmd/hufu": 158.332,
+        "internal/context": 72.495,
+        "internal/team": 656.382
+      }
+    },
+    "targeted_race": {
+      "command": "TMPDIR=<task> GOMAXPROCS=2 mise exec -- go test -timeout 60m -race -p 2 ./internal/context ./internal/team ./cmd/hufu -run 'Test(SearchLineage|HybridLineage|AllowedItemIDs|LineageConstraint|WorkerMemoryPassesAncestor|WorkerMemoryRecallsAncestor|SemanticIndexAllowed|Supplemental|RepositoryQueryIDs|WP6|CLIInvocationsDoNotRetainHelp|ResumeCommandActivatesVersionedBranchBeforeProvider)' -count=1",
+      "exit_code": 0,
+      "package_seconds": {
+        "internal/context": 308.485,
+        "internal/team": 1018.747,
+        "cmd/hufu": 12.875
+      }
+    },
+    "vet": {
+      "command": "mise run vet",
+      "exit_code": 0
+    },
+    "lint": {
+      "command": "mise run lint",
+      "exit_code": 0,
+      "issues": 0,
+      "cache_persistence": "sandbox read-only warnings; analysis completed"
+    },
+    "scope": "working tree, preserving pre-existing unrelated edits; not an immutable new HEAD claim"
+  }
+}

@@ -187,6 +187,59 @@ func TestOperatorSnapshotCostIsOptionalAndCloned(t *testing.T) {
 	}
 }
 
+func TestSnapshotValidatesPerTaskAssessmentScopeAndGeneralActionBound(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		mutate    func(*testing.T, *OperatorSnapshot)
+		wantError bool
+	}{
+		{"four assessments", func(*testing.T, *OperatorSnapshot) {}, false},
+		{"duplicate task", func(_ *testing.T, s *OperatorSnapshot) {
+			s.SecondaryActions = append(s.SecondaryActions, s.SecondaryActions[0])
+		}, true},
+		{"foreign run", func(_ *testing.T, s *OperatorSnapshot) { s.SecondaryActions[0].Target.RunID = "other" }, true},
+		{"foreign branch", func(_ *testing.T, s *OperatorSnapshot) { s.SecondaryActions[0].Target.BranchID = "other" }, true},
+		{"foreign workspace", func(_ *testing.T, s *OperatorSnapshot) { s.SecondaryActions[0].Target.Workspace = "/other" }, true},
+		{"three general actions", func(t *testing.T, s *OperatorSnapshot) {
+			for range 3 {
+				action, err := BuildAction(ActionWaitRuntime, ActionBuildInput{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				s.SecondaryActions = append(s.SecondaryActions, action)
+			}
+		}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := testSnapshot()
+			for _, taskID := range []string{"4", "3", "2", "1"} {
+				action, err := BuildAction(ActionAssessResultRepair, ActionBuildInput{Target: ActionTarget{
+					Workspace: snapshot.Scope.WorkspaceExact, RunID: snapshot.Scope.RunID, BranchID: snapshot.Scope.BranchID, TaskID: taskID,
+				}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				snapshot.SecondaryActions = append(snapshot.SecondaryActions, action)
+			}
+			test.mutate(t, &snapshot)
+			for index, action := range snapshot.SecondaryActions {
+				if action.ID != ActionAssessResultRepair {
+					continue
+				}
+				updated, err := BuildAction(action.ID, ActionBuildInput{Target: action.Target})
+				if err != nil {
+					t.Fatal(err)
+				}
+				snapshot.SecondaryActions[index] = updated
+			}
+			_, err := FinalizeSnapshot(snapshot)
+			if (err != nil) != test.wantError {
+				t.Fatalf("snapshot validation error = %v", err)
+			}
+		})
+	}
+}
+
 func testSnapshot() OperatorSnapshot {
 	return OperatorSnapshot{
 		SchemaVersion: SchemaVersion,

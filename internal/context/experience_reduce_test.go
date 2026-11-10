@@ -1,7 +1,6 @@
 package context
 
 import (
-	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -18,7 +17,7 @@ func TestReduceExperienceAggregatesMatchesRepositoryRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

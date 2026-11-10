@@ -115,6 +115,9 @@ func classifyContractRequest(request contractChatRequest) contractRequestPurpose
 }
 
 func TestCLIProcessExitContract(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildProcessContractBinary(t)
 
 	t.Run("successful command", func(t *testing.T) {
@@ -131,10 +134,22 @@ func TestCLIProcessExitContract(t *testing.T) {
 	})
 
 	t.Run("failed run emits JSON and nonzero exit", func(t *testing.T) {
+		// Use a permanent provider rejection: a refused connection is transient
+		// and its bounded resend delay can legitimately hit the duration limit.
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.URL.Path == "/v1/models" {
+				_, _ = fmt.Fprint(w, `{"data":[{"id":"test"}]}`)
+				return
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprint(w, `{"error":{"message":"permanent fixture rejection","type":"invalid_request_error"}}`)
+		}))
+		t.Cleanup(server.Close)
 		code, stdout, stderr := runProcessContract(t, binary,
 			"--default", "--temp", "--unattended", "--model", "test",
 			"--coordinator-model", "test",
-			"--provider-url", "http://127.0.0.1:1", "--output", "json",
+			"--provider-url", server.URL+"/v1", "--context-window", "32768", "--output", "json",
 			"--max-rounds", "1", "--max-steps", "1", "--max-duration", "2",
 			"contract failure")
 		if code != 1 {
@@ -312,6 +327,9 @@ func TestCLIProcessExitContract(t *testing.T) {
 }
 
 func TestDefaultExploratoryResponseProcessExitContract(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildProcessContractBinary(t)
 	var calls atomic.Int64
 	server := newContractTextServer(t, &calls)
@@ -336,6 +354,9 @@ func TestDefaultExploratoryResponseProcessExitContract(t *testing.T) {
 }
 
 func TestCanonicalRunMatchesLegacyExecutionEffects(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildProcessContractBinary(t)
 	var chatCalls atomic.Int64
 	server := newContractTextServer(t, &chatCalls)
@@ -399,6 +420,9 @@ func TestCanonicalRunMatchesLegacyExecutionEffects(t *testing.T) {
 }
 
 func TestEventFormatJSONLStderrContainsOnlyStatusEvents(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	binary := buildProcessContractBinary(t)
 	var chatCalls atomic.Int64
 	server := newContractTextServer(t, &chatCalls)

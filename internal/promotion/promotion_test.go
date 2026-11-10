@@ -54,7 +54,7 @@ func writeTeam(t *testing.T, root string) {
 }
 
 func TestEligibilityHardGatesAndScope(t *testing.T) {
-	repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestEligibilityHardGatesAndScope(t *testing.T) {
 func TestAnalyzeApproveApplyPolicyAndRetry(t *testing.T) {
 	ctx := context.Background()
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestAnalyzeApproveApplyPolicyAndRetry(t *testing.T) {
 
 func TestApplyRecoversFileWrittenBeforeStatusCommit(t *testing.T) {
 	ctx := context.Background()
-	repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestApplyRecoversFileWrittenBeforeStatusCommit(t *testing.T) {
 func TestApplyMarksStaleEvidenceWithoutWriting(t *testing.T) {
 	ctx := context.Background()
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ func TestJSONDraftGeneratorFailsClosed(t *testing.T) {
 
 func TestAnalyzeApproveApplySkill(t *testing.T) {
 	ctx := context.Background()
-	repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +307,7 @@ func TestAnalyzeApproveApplySkill(t *testing.T) {
 func TestAnalyzeApproveApplyTemplatedTeam(t *testing.T) {
 	ctx := context.Background()
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +396,7 @@ Coordinator for {@ .project_name @} targeting {@ .target_env @}.
 func TestAnalyzeApproveApplyAgentPolicy(t *testing.T) {
 	ctx := context.Background()
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -483,7 +483,7 @@ func TestAnalyzeApproveApplyAgentPolicy(t *testing.T) {
 func TestRejectPreservesSourceAndTarget(t *testing.T) {
 	ctx := context.Background()
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -571,7 +571,7 @@ func TestRejectPreservesSourceAndTarget(t *testing.T) {
 func TestApplyFailsOnManualTargetDrift(t *testing.T) {
 	ctx := context.Background()
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -645,7 +645,7 @@ func TestApplyFailsOnManualTargetDrift(t *testing.T) {
 func TestPathTraversalAndSymlinkEscapeRefused(t *testing.T) {
 	ctx := context.Background()
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -741,7 +741,7 @@ func TestPathTraversalAndSymlinkEscapeRefused(t *testing.T) {
 func TestExistingSkillRefusal(t *testing.T) {
 	ctx := context.Background()
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -800,7 +800,7 @@ func TestExistingSkillRefusal(t *testing.T) {
 func TestPolicyApplyPreservesFullFrontmatter(t *testing.T) {
 	ctx := context.Background()
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -907,7 +907,7 @@ memory:
 func TestInvalidOrSecretDraftNotPersisted(t *testing.T) {
 	ctx := context.Background()
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

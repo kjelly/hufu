@@ -48,6 +48,10 @@ func rejectLocalResultPersistence(err error) error {
 // model-facing payload shape error from failure to bind trusted source data.
 // It cannot grant authority or replace the canonical payload validator.
 func (a *localResultAdmission) admit(ctx context.Context, input SubmitResultInput, contract taskResultSubmissionContract, classifyPayloadRejection func() RepairFailureReason) error {
+	input, err := a.coordinator.projectResultClaims(ctx, a.todoID, input)
+	if err != nil {
+		return rejectProjectedClaims(err)
+	}
 	res, err := a.validateClaims(ctx, input, contract, classifyPayloadRejection, true)
 	if err != nil {
 		return err
@@ -72,21 +76,32 @@ func (a *localResultAdmission) validateClaims(ctx context.Context, input SubmitR
 			}
 		}
 	}()
-	res := input.taskResult()
-	if res.Summary == "" {
-		return nil, errors.New("summary is required")
+	if a.coordinator != nil {
+		var err error
+		input, err = a.coordinator.projectResultClaims(ctx, a.todoID, input)
+		if err != nil {
+			return nil, rejectProjectedClaims(err)
+		}
 	}
-	switch strings.ToLower(strings.TrimSpace(res.Status)) {
-	case TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps, TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked:
-		res.Status = strings.ToLower(strings.TrimSpace(res.Status))
-	default:
-		return nil, errors.New("status must be success, completed_with_gaps, partial, failed, or blocked")
+	res := input.taskResult()
+	if err := validateResultSummaryAndStatus(&res); err != nil {
+		return nil, err
 	}
 	reason = RepairFailureContract
+	if err := a.coordinator.validateRequiredArtifactReadSubmission(ctx, a.todoID); err != nil {
+		return nil, err
+	}
 	if decision, blocked := a.coordinator.decisionBlock(ctx); blocked && res.Status != TaskResultStatusBlocked {
 		return nil, errors.New(decisionBlockResultDenial(decision, res.Status))
 	}
-	if err := contract.validateWorkerClaims(&res); err != nil {
+	workerContract := contract
+	if contract.RuntimeOwnedFilesRead {
+		if input.FilesRead != nil {
+			return nil, errors.New("files_read is runtime-owned; omit it entirely")
+		}
+		workerContract.FilesReadMinItems = 0
+	}
+	if err := workerContract.validateWorkerClaims(&res); err != nil {
 		return nil, errors.New("submit_result contract violation: " + err.Error())
 	}
 	if err := validateFindingSeverities(res.Findings); err != nil {
@@ -109,12 +124,12 @@ func (a *localResultAdmission) validateClaims(ctx context.Context, input SubmitR
 			}
 		}
 		if res.Status != TaskResultStatusBlocked || len(bytes.TrimSpace(input.StructuredPayload)) != 0 || !hasResultDecisions(compiled) {
-			payload, rejection, decisionFormat := a.coordinator.validateStructuredPayloadClaims(a.todoID, input.StructuredPayload, recordFailure, observations)
+			payload, rejection, payloadFormat := a.coordinator.validateStructuredPayloadClaims(a.todoID, input.StructuredPayload, recordFailure, observations)
 			if rejection != "" {
 				payloadReason := RepairFailureSource
 				if classifyPayloadRejection != nil {
 					payloadReason = classifyPayloadRejection()
-					if decisionFormat {
+					if payloadFormat {
 						payloadReason = RepairFailureInvalidSchema
 					}
 				}
@@ -124,6 +139,9 @@ func (a *localResultAdmission) validateClaims(ctx context.Context, input SubmitR
 			if payload != nil && payload.EvidenceDowngrades > 0 {
 				res.Summary = "Result includes claims without matching successful tool evidence; consult the structured payload for downgraded findings."
 			}
+		}
+		if err := a.bindResultEnvelope(ctx, compiled, input, &res, contract, recordFailure); err != nil {
+			return nil, err
 		}
 	} else if len(bytes.TrimSpace(input.StructuredPayload)) > 0 {
 		return nil, errors.New("structured_payload is not accepted for this task because it has no result contract; omit the field")
@@ -360,6 +378,26 @@ func (a *localResultAdmission) materializeSubmittedArtifacts(ctx context.Context
 	}
 	if tx != nil {
 		tx.addMaterialized(res.Artifacts)
+	}
+	return nil
+}
+
+func rejectProjectedClaims(err error) error {
+	if _, ok := errors.AsType[*localResultAdmissionError](err); ok {
+		return err
+	}
+	return rejectLocalResult(RepairFailureInvalidSchema, err)
+}
+
+func validateResultSummaryAndStatus(res *TaskResult) error {
+	if res.Summary == "" {
+		return errors.New("summary is required")
+	}
+	switch strings.ToLower(strings.TrimSpace(res.Status)) {
+	case TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps, TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked:
+		res.Status = strings.ToLower(strings.TrimSpace(res.Status))
+	default:
+		return errors.New("status must be success, completed_with_gaps, partial, failed, or blocked")
 	}
 	return nil
 }

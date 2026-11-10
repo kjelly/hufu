@@ -3,9 +3,13 @@ package team
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -331,31 +335,6 @@ func TestLookupTaskCacheAllGenerations(t *testing.T) {
 			newTask:   "do something",
 			wantFound: true,
 		},
-		{
-			name: "limits to last 100 entries",
-			cacheSetup: func() map[string][]cachedTaskEntry {
-				entries := make([]cachedTaskEntry, 150)
-				for i := 0; i < 150; i++ {
-					entries[i] = cachedTaskEntry{
-						taskDesc:   "task " + string(rune('A'+i%26)),
-						output:     "result",
-						generation: int64(i / 50),
-					}
-				}
-				// The match should be in the last 100
-				entries[149] = cachedTaskEntry{
-					taskDesc:   "find me",
-					output:     "found!",
-					generation: 2,
-				}
-				return map[string][]cachedTaskEntry{
-					"agent1": entries,
-				}
-			},
-			agentKey:  "agent1",
-			newTask:   "find me",
-			wantFound: true,
-		},
 	}
 
 	for _, tt := range tests {
@@ -373,6 +352,37 @@ func TestLookupTaskCacheAllGenerations(t *testing.T) {
 			}
 			if tt.wantFound && gotDesc == "" {
 				t.Error("lookupTaskCacheAllGenerations() should return non-empty task description on hit")
+			}
+		})
+	}
+}
+
+func TestLookupTaskCacheAllGenerationsSemanticCandidateLimit(t *testing.T) {
+	for _, count := range []int{99, 100, 101, 150} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			c := newTestCoordinator(t)
+			cache := testTaskCache(c)
+			entries := make([]cachedTaskEntry, count)
+			for i := range entries {
+				entries[i] = cachedTaskEntry{taskDesc: fmt.Sprintf("task %d", i), output: fmt.Sprintf("result %d", i)}
+			}
+			cache.entries["worker"] = entries
+			calls := 0
+			cache.deps.SimilarTask = func(_ context.Context, task string, candidates []string, _ time.Duration) (int, error) {
+				calls++
+				want := make([]string, min(count, 100))
+				for i := range want {
+					want[i] = entries[max(0, count-100)+i].taskDesc
+				}
+				if task != "unmatched request" || !slices.Equal(candidates, want) {
+					t.Fatalf("semantic request = %q, candidates = %v, want %v", task, candidates, want)
+				}
+				return 0, nil
+			}
+			output, desc, found := c.lookupTaskCacheAllGenerations(t.Context(), "worker", "unmatched request")
+			first := entries[max(0, count-100)]
+			if calls != 1 || !found || output != first.output || desc != first.taskDesc {
+				t.Fatalf("lookup = (%q,%q,%t), calls = %d", output, desc, found, calls)
 			}
 		})
 	}
@@ -430,12 +440,11 @@ func TestStoreTaskCacheMaxEntries(t *testing.T) {
 // TestCheckDuplicateTasksComprehensive tests comprehensive duplicate detection scenarios
 func TestCheckDuplicateTasksComprehensive(t *testing.T) {
 	tests := []struct {
-		name              string
-		previousTasks     map[string]int
-		batchTasks        []TaskDef
-		expectExactDup    bool
-		expectBatchDup    bool
-		expectSemanticDup bool
+		name           string
+		previousTasks  map[string]int
+		batchTasks     []TaskDef
+		expectExactDup bool
+		expectBatchDup bool
 	}{
 		{
 			name:          "exact duplicate from previous round",
@@ -519,19 +528,24 @@ func TestCheckDuplicateTasksComprehensive(t *testing.T) {
 				}
 			}
 
-			if tt.expectExactDup && !hasExactDup {
+			if hasExactDup != tt.expectExactDup {
 				t.Errorf("expected exact duplicate warning, got: %v", warnings)
 			}
-			if tt.expectBatchDup && !hasBatchDup {
+			if hasBatchDup != tt.expectBatchDup {
 				t.Errorf("expected batch duplicate warning, got: %v", warnings)
 			}
 
-			// Verify duplicates map is populated correctly
-			if tt.expectExactDup || tt.expectBatchDup {
-				if len(duplicates) == 0 {
-					t.Error("duplicates map should contain entries")
-				}
+			wantDuplicates := make(map[int]bool)
+			if tt.expectExactDup {
+				wantDuplicates[0] = true
 			}
+			if tt.expectBatchDup {
+				wantDuplicates[1] = true
+			}
+			if !reflect.DeepEqual(duplicates, wantDuplicates) {
+				t.Errorf("duplicates = %v, want %v", duplicates, wantDuplicates)
+			}
+
 			if len(suppressed) != 0 {
 				t.Errorf("expected no suppressed duplicates, got %d", len(suppressed))
 			}
@@ -609,70 +623,40 @@ func TestTaskTimingReset(t *testing.T) {
 	}
 }
 
-// TestTaskTimingSnapshot tests the taskTiming snapshot functionality
-func TestTaskTimingSnapshot(t *testing.T) {
-	tt := &taskTiming{}
-	tt.reset()
-
-	// Let some time pass
-	time.Sleep(10 * time.Millisecond)
-
-	duration, modelTime, _ := tt.snapshot()
-
-	if duration == 0 {
-		t.Error("duration should be non-zero after reset and sleep")
-	}
-	// modelTime is duration - toolTime, so it should be around 10ms if counting
-	if modelTime == 0 {
-		t.Errorf("modelTime = %v, want > 0 (counting is on by default)", modelTime)
-	}
-}
-
-// TestTaskTimingBeginEndTool tests tool timing tracking
-func TestTaskTimingBeginEndTool(t *testing.T) {
-	tt := &taskTiming{}
-	tt.reset()
-
-	tt.beginTool()
-	time.Sleep(10 * time.Millisecond)
-	tt.endTool()
-
-	_, _, toolTime := tt.snapshot()
-
-	if toolTime == 0 {
-		t.Error("toolTime should be non-zero after beginTool/endTool")
-	}
-}
-
-// TestTaskTimingBeginToolWhenNotCounting tests that beginTool is ignored when not counting
-func TestTaskTimingBeginToolWhenNotCounting(t *testing.T) {
-	tt := &taskTiming{counting: false}
-	tt.beginTool()
-	time.Sleep(10 * time.Millisecond)
-	tt.endTool()
-
-	_, _, toolTime := tt.snapshot()
-
-	if toolTime != 0 {
-		t.Errorf("toolTime = %v, want 0 (not counting)", toolTime)
-	}
-}
-
-// TestTaskTimingMultipleTools tests multiple tool calls
-func TestTaskTimingMultipleTools(t *testing.T) {
-	tt := &taskTiming{}
-	tt.reset()
-
-	for i := 0; i < 3; i++ {
-		tt.beginTool()
-		time.Sleep(5 * time.Millisecond)
-		tt.endTool()
-	}
-
-	_, _, toolTime := tt.snapshot()
-
-	if toolTime == 0 {
-		t.Error("toolTime should accumulate across multiple tool calls")
+func TestTaskTimingAccounting(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		counting bool
+		tools    int
+	}{
+		{"model only", true, 0}, {"one tool", true, 1}, {"multiple tools", true, 3}, {"disabled", false, 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				timing := &taskTiming{}
+				timing.reset()
+				timing.counting = tt.counting
+				time.Sleep(10 * time.Millisecond)
+				for range tt.tools {
+					timing.beginTool()
+					time.Sleep(5 * time.Millisecond)
+					timing.endTool()
+				}
+				duration, model, tool := timing.snapshot()
+				wantDuration := 10*time.Millisecond + time.Duration(tt.tools)*5*time.Millisecond
+				var wantTool, wantModel time.Duration
+				if tt.counting {
+					wantTool = time.Duration(tt.tools) * 5 * time.Millisecond
+					wantModel = 10 * time.Millisecond
+				}
+				if duration != wantDuration || model != wantModel || tool != wantTool {
+					t.Fatalf("snapshot = (%v,%v,%v), want (%v,%v,%v)", duration, model, tool, wantDuration, wantModel, wantTool)
+				}
+				if !timing.toolStart.IsZero() {
+					t.Fatal("tool start retained after endTool")
+				}
+			})
+		})
 	}
 }
 
@@ -708,8 +692,8 @@ func TestFormatTaskResults(t *testing.T) {
 		{
 			name: "failed tasks",
 			results: []agentTaskResult{
-				{agentName: "agent1", todoID: "7", err: newTestError("error1")},
-				{agentName: "agent2", err: newTestError("error2")},
+				{agentName: "agent1", todoID: "7", err: errors.New("error1")},
+				{agentName: "agent2", err: errors.New("error2")},
 			},
 			total:   2,
 			wantErr: true,
@@ -726,7 +710,7 @@ func TestFormatTaskResults(t *testing.T) {
 			name: "mixed results",
 			results: []agentTaskResult{
 				{agentName: "agent1", output: "result1"},
-				{agentName: "agent2", err: newTestError("error2")},
+				{agentName: "agent2", err: errors.New("error2")},
 			},
 			total:   2,
 			wantErr: false,
@@ -809,8 +793,4 @@ func TestFormatTaskResultsSeparators(t *testing.T) {
 	if !strings.Contains(output, "## Agent: agent1") {
 		t.Error("output should contain agent headers")
 	}
-}
-
-func newTestError(msg string) error {
-	return errors.New(msg)
 }

@@ -5,6 +5,8 @@ package tools
 
 import (
 	"context"
+	"encoding/json/v2"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,90 @@ import (
 
 	"charm.land/fantasy"
 )
+
+func TestArtifactPathDenialEmitsNativeDisposition(t *testing.T) {
+	for _, test := range []struct {
+		name, pathKey string
+		build         func(...ToolOption) fantasy.AgentTool
+		directory     bool
+		defaultRoot   bool
+		alias         bool
+	}{
+		{name: "view", pathKey: "file_path", build: NewViewTool},
+		{name: "view symlink", pathKey: "file_path", build: NewViewTool, alias: true},
+		{name: "write", pathKey: "file_path", build: NewWriteTool},
+		{name: "edit", pathKey: "file_path", build: NewEditTool},
+		{name: "ls", pathKey: "path", build: NewLsTool, directory: true},
+		{name: "glob", pathKey: "path", build: NewGlobTool, directory: true},
+		{name: "grep", pathKey: "path", build: NewGrepTool, directory: true},
+		{name: "default search root", build: NewGlobTool, directory: true, defaultRoot: true},
+		{name: "bash directory", pathKey: "working_directory", build: NewBashTool, directory: true},
+		{name: "bash operand", build: NewBashTool},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			blocked := filepath.Join(root, "artifacts")
+			if err := os.Mkdir(blocked, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(blocked, "evidence.txt")
+			if err := os.WriteFile(file, []byte("original evidence"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			target := file
+			if test.directory {
+				target = blocked
+			}
+			if test.alias {
+				target = filepath.Join(root, "alias")
+				if err := os.Symlink(file, target); err != nil {
+					t.Fatal(err)
+				}
+			}
+			workDir := root
+			if test.defaultRoot {
+				workDir = blocked
+			}
+			tool := test.build(WithWorkDir(workDir), WithAllowedPaths([]string{root}))
+			name := tool.Info().Name
+			args := map[string]any{}
+			if test.pathKey != "" {
+				args[test.pathKey] = target
+			}
+			switch name {
+			case "write":
+				args["content"] = "replacement"
+			case "edit":
+				args["old_string"], args["new_string"] = "original", "replacement"
+			case "glob", "grep":
+				args["pattern"] = "evidence"
+			case "bash":
+				args["command"] = fmt.Sprintf("touch %q; cat %q", filepath.Join(root, "executed"), file)
+			}
+			input, err := json.Marshal(args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := SetToolsAllowed(t.Context(), []string{name})
+			ctx = context.WithValue(ctx, ArtifactPathPolicyKey, ArtifactPathPolicy{BlockedPaths: []string{blocked}})
+			var got []ToolExecutionDisposition
+			ctx = context.WithValue(ctx, ToolExecutionDispositionReporterKey, ToolExecutionDispositionReporter(func(d ToolExecutionDisposition) { got = append(got, d) }))
+			response, err := tool.Run(ctx, fantasy.ToolCall{ID: "artifact-call", Name: name, Input: string(input)})
+			if err != nil || !response.IsError {
+				t.Fatalf("denial = %#v, %v", response, err)
+			}
+			if len(got) != 1 || got[0].Kind != "policy_denied" || got[0].ReasonCode != "path_out_of_scope" || got[0].ToolName != name || got[0].ToolCallID != "artifact-call" || got[0].Executed {
+				t.Fatalf("native disposition = %#v", got)
+			}
+			if _, err := os.Stat(filepath.Join(root, "executed")); !os.IsNotExist(err) {
+				t.Fatalf("denied command ran: %v", err)
+			}
+			if data, err := os.ReadFile(file); err != nil || string(data) != "original evidence" {
+				t.Fatalf("denied tool changed evidence: %q, %v", data, err)
+			}
+		})
+	}
+}
 
 func TestArtifactScopeFallbackTraversalMatchesPolicy(t *testing.T) {
 	root := t.TempDir()

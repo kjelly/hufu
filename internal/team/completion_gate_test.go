@@ -3,7 +3,6 @@ package team
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -25,7 +24,7 @@ func acceptedGateInput() CompletionGateInput {
 
 func TestApplyCompletionGatePromotesCanonicalSharedCandidates(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +164,7 @@ func TestApplyCompletionGateDowngradesMissingEvidence(t *testing.T) {
 
 func TestApplyCompletionGateDoesNotDowngradeSuccessfulTaskForReportedRisk(t *testing.T) {
 	ws := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(ws, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(ws)
 	if err != nil {
 		t.Fatal(err)
 	}

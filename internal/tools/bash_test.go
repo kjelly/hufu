@@ -378,14 +378,17 @@ func TestRunShellCommandBackgroundedProcessReturnsPromptly(t *testing.T) {
 // arguments unprivileged, so forwarding tests can assert on routing without
 // depending on the test machine's real sudo configuration (password prompt,
 // NOPASSWD policy, etc).
-func writeFakeSudo(t *testing.T) {
+func writeFakeSudo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	script := "#!/bin/sh\nexec \"$@\"\n"
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$HUFU_TEST_SUDO_ARGS\"\nexec \"$@\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "sudo"), []byte(script), 0o755); err != nil {
 		t.Fatalf("writing fake sudo: %v", err)
 	}
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	argsPath := filepath.Join(dir, "sudo-args")
+	t.Setenv("HUFU_TEST_SUDO_ARGS", argsPath)
+	return argsPath
 }
 
 func bashCallCtx(allowedTools []string) context.Context {

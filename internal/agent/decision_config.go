@@ -621,6 +621,7 @@ type EvidenceIndependencePolicy struct {
 // keeps using the typed constants.
 var knownSideEffectClasses = map[string]bool{
 	"none":                true,
+	"browser_interaction": true,
 	"workspace_write":     true,
 	"external_write":      true,
 	"infra_mutation":      true,

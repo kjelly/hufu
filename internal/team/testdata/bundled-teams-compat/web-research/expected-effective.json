@@ -93,9 +93,9 @@
     {
       "name": "countercheck",
       "role": "worker",
-      "tools": "web_search,recall_observation,playwright_countercheck__browser_navigate,playwright_countercheck__browser_snapshot",
-      "side_effect": "none",
-      "recovery": "retry",
+      "tools": "web_search,recall_observation,playwright_countercheck__browser_navigate,playwright_countercheck__browser_snapshot,playwright_countercheck__browser_click,playwright_countercheck__browser_wait_for_user",
+      "side_effect": "browser_interaction",
+      "recovery": "manual",
       "max_retries": -1
     },
     {
@@ -107,9 +107,9 @@
     {
       "name": "researcher",
       "role": "worker",
-      "tools": "web_search,recall_observation,playwright_researcher__browser_navigate,playwright_researcher__browser_snapshot",
-      "side_effect": "none",
-      "recovery": "retry",
+      "tools": "web_search,recall_observation,playwright_researcher__browser_navigate,playwright_researcher__browser_snapshot,playwright_researcher__browser_click,playwright_researcher__browser_wait_for_user",
+      "side_effect": "browser_interaction",
+      "recovery": "manual",
       "max_retries": -1
     },
     {
@@ -123,9 +123,9 @@
     {
       "name": "verifier",
       "role": "worker",
-      "tools": "web_search,playwright_verifier__browser_navigate,playwright_verifier__browser_snapshot",
-      "side_effect": "none",
-      "recovery": "retry",
+      "tools": "web_search,playwright_verifier__browser_navigate,playwright_verifier__browser_snapshot,playwright_verifier__browser_click,playwright_verifier__browser_wait_for_user",
+      "side_effect": "browser_interaction",
+      "recovery": "manual",
       "max_retries": -1
     }
   ],
@@ -134,22 +134,22 @@
       "id": "primary-research",
       "agent": "researcher",
       "phase": "PREPARE",
-      "side_effect": "none",
-      "recovery": "retry"
+      "side_effect": "browser_interaction",
+      "recovery": "manual"
     },
     {
       "id": "counter-research",
       "agent": "countercheck",
       "phase": "PREPARE",
-      "side_effect": "none",
-      "recovery": "retry"
+      "side_effect": "browser_interaction",
+      "recovery": "manual"
     },
     {
       "id": "evidence-audit",
       "agent": "verifier",
       "phase": "AUDIT",
-      "side_effect": "none",
-      "recovery": "retry"
+      "side_effect": "browser_interaction",
+      "recovery": "manual"
     },
     {
       "id": "research-synthesis",

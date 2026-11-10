@@ -1,7 +1,9 @@
 package team
 
 import (
+	"bytes"
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -14,21 +16,203 @@ import (
 
 const collectedFindingSchema = `{"type":"object","additionalProperties":false,"required":["findings"],"properties":{"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["summary"],"properties":{"summary":{"type":"string"}}}}}}`
 
+const collectedConditionalFindingSchema = `{"type":"object","additionalProperties":false,"required":["findings"],"properties":{"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["summary","status"],"properties":{"summary":{"type":"string"},"status":{"type":"string","enum":["unknown","violated"]},"finding_index":{"type":"integer","minimum":0}},"allOf":[{"if":{"properties":{"status":{"const":"unknown"}}},"then":{"not":{"required":["finding_index"]}}}]}}}}`
+
+func TestResultCollectionPreparesStandaloneJSONFrames(t *testing.T) {
+	const valid = "{\"status\":\"success\",\"summary\":\"original ``` text preserved\",\"structured_payload\":{\"findings\":[]}}"
+	for _, tc := range []struct {
+		name, body string
+		accepted   bool
+	}{
+		{"plain", valid, true},
+		{"json block", "```json\n" + valid + "\n```", true},
+		{"unlabelled block", "```\n" + valid + "\n```", true},
+		{"crlf block", "```json\r\n" + valid + "\r\n```", true},
+		{"outer whitespace", " \t\n```json\n" + valid + "\n```\n ", true},
+		{"leading prose", "result:\n```json\n" + valid + "\n```", false},
+		{"trailing prose", "```json\n" + valid + "\n```\nextra", false},
+		{"multiple blocks", "```json\n" + valid + "\n```\n```json\n" + valid + "\n```", false},
+		{"multiple objects", "```json\n" + valid + "\n" + valid + "\n```", false},
+		{"duplicate key", "```json\n" + strings.Replace(valid, `"status":`, `"status":"success","status":`, 1) + "\n```", false},
+		{"duplicate nested key", "```json\n" + strings.Replace(valid, `"findings":[]`, `"findings":[],"findings":[]`, 1) + "\n```", false},
+		{"wrong label", "```python\n" + valid + "\n```", false},
+		{"empty block", "```json\n```", false},
+		{"malformed JSON", "```json\n{\n```", false},
+		{"array", "```json\n[]\n```", false},
+		{"null", "```json\nnull\n```", false},
+		{"invalid claims", "```json\n" + strings.Replace(valid, `"status":"success"`, `"status":42`, 1) + "\n```", false},
+		{"unknown field", "```json\n" + strings.Replace(valid, `"status":`, `"unpublished":true,"status":`, 1) + "\n```", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, item, ctx, before := receivedCollectionClaimsFixture(t, collectedFindingSchema, tc.body)
+			prepared, err := c.prepareCollectionClaims(ctx, before)
+			if !tc.accepted {
+				if err == nil || localResultRejectionReason(err) != RepairFailureInvalidSchema || currentResultCollection(c.todoItemByID(item.ID)).Prepared != nil {
+					t.Fatalf("ambiguous or invalid claims were prepared: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			claims, err := c.readCollectionBlob(ctx, prepared, "claims", prepared.Prepared)
+			if err != nil || string(claims) != valid {
+				t.Fatal("transport normalization changed the JSON object")
+			}
+			response, err := c.readCollectionBlob(ctx, prepared, "response", prepared.Response)
+			if err != nil || !bytes.Equal(response, []byte(tc.body)) || prepared.Work != before.Work || *prepared.Response != *before.Response {
+				t.Fatal("normalization changed original response or work evidence")
+			}
+			// Prepared claims survive a new coordinator and remain locally
+			// committable without any worker or additional collection turn.
+			c = reopenRecoveryCoordinator(t, c)
+			if err := c.commitPreparedCollection(WithSessionResume(t.Context()), prepared); err != nil {
+				t.Fatal(err)
+			}
+			result := c.todoItemByID(item.ID)
+			committed := currentResultCollection(result)
+			if committed.State != ResultCollectionCommitted || committed.TurnsUsed != before.TurnsUsed || committed.Work != before.Work || *committed.Response != *before.Response || result.TypedResult == nil {
+				t.Fatal("replay changed evidence or consumed another collection turn")
+			}
+		})
+	}
+}
+
+func TestResultCollectionJSONFramePreservesRawByteLimit(t *testing.T) {
+	raw := []byte("```json\n" + strings.Repeat(" ", resultCollectionResponseMaxBytes) + `{"status":"success","summary":"original"}` + "\n```")
+	if normalized, wrapped := collectionResponseJSON(raw); wrapped || !bytes.Equal(normalized, raw) {
+		t.Fatal("normalization bypassed the original response size limit")
+	}
+	c := newTestCoordinator(t)
+	if _, err := c.decodeCollectionClaims("1", raw); err == nil || localResultRejectionReason(err) != RepairFailureInvalidSchema {
+		t.Fatal("oversized wrapped claims were accepted")
+	}
+}
+
+func preparedCollectionClaimsFixture(t *testing.T, schema, body string) (*Coordinator, *TodoItem, context.Context, *ResultCollectionCheckpoint) {
+	t.Helper()
+	c, item, ctx, cp := receivedCollectionClaimsFixture(t, schema, body)
+	cp, err := c.prepareCollectionClaims(ctx, cp)
+	if err != nil {
+		t.Fatalf("portable schema should accept this representation: %v", err)
+	}
+	return c, item, ctx, cp
+}
+
+func receivedCollectionClaimsFixture(t *testing.T, schema, body string) (*Coordinator, *TodoItem, context.Context, *ResultCollectionCheckpoint) {
+	t.Helper()
+	compiled, err := CompileResultContractDocument("claims.json", []byte(schema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, item, ctx, receipt := resultCollectionTaskFixture(t, "http://127.0.0.1:1/v1", false, func(spec *TodoSpec) {
+		spec.ResultContract = new(compiled.ref(true))
+	}, func(c *Coordinator) {
+		c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
+	})
+	cp, err := c.beginResultCollection(ctx, item.ID, receipt, "completed original work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp, err = c.reserveResultCollection(ctx, cp, "original-collector", []byte(`{"tools":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp, err = c.recordCollectionResponse(ctx, cp, []byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, item, ctx, cp
+}
+
+func TestResultCollectionClassifiesCanonicalSchemaFailures(t *testing.T) {
+	for _, tc := range []struct{ name, schema, payload string }{
+		{"conditional not", collectedConditionalFindingSchema, `{"findings":[{"summary":"observed","status":"unknown","finding_index":0}]}`},
+		{"allOf", `{"type":"object","properties":{"value":{"type":"string","allOf":[{"minLength":2},{"pattern":"^a"}]}}}`, `{"value":"b"}`},
+		{"anyOf", `{"type":"object","properties":{"value":{"type":"string","anyOf":[{"pattern":"^a"},{"pattern":"^b"}]}}}`, `{"value":"c"}`},
+		{"oneOf", `{"type":"object","properties":{"value":{"type":"string","oneOf":[{"pattern":"^a"},{"pattern":"a$"}]}}}`, `{"value":"a"}`},
+		{"conditional else", `{"type":"object","properties":{"kind":{"type":"string"},"value":{"type":"string"}},"if":{"properties":{"kind":{"const":"large"}}},"then":{"properties":{"value":{"minLength":5}}},"else":{"properties":{"value":{"maxLength":2}}}}`, `{"kind":"small","value":"long"}`},
+		{"length", `{"type":"object","properties":{"value":{"type":"string","maxLength":2}}}`, `{"value":"long"}`},
+		{"pattern", `{"type":"object","properties":{"value":{"type":"string","pattern":"^ok$"}}}`, `{"value":"wrong"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"status":"success","summary":"completed original work","structured_payload":` + tc.payload + `}`
+			c, item, ctx, cp := preparedCollectionClaimsFixture(t, tc.schema, body)
+			err := c.commitPreparedCollection(ctx, cp)
+			if err == nil || localResultRejectionReason(err) != RepairFailureInvalidSchema {
+				t.Fatalf("canonical schema failure classified as %s: %v", localResultRejectionReason(err), err)
+			}
+			if c.todoItemByID(item.ID).TypedResult != nil || currentResultCollection(c.todoItemByID(item.ID)).TurnsUsed != 1 {
+				t.Fatal("rejection published a result or changed the collector budget")
+			}
+		})
+	}
+}
+
+func TestCollectionModelSchemaFailureProtectsRuntimeOwnedValues(t *testing.T) {
+	for _, tc := range []struct {
+		name, schema, payload string
+		want                  bool
+	}{
+		{"model constraint", `{"type":"object","properties":{"bound":{"type":"string"},"model":{"type":"string","minLength":1}}}`, `{"bound":"trusted","model":""}`, true},
+		{"runtime constraint", `{"type":"object","properties":{"bound":{"type":"string","minLength":10},"model":{"type":"string"}}}`, `{"bound":"trusted","model":"ok"}`, false},
+		{"ancestor constraint", `{"type":"object","properties":{"bound":{"type":"string"}},"not":{"required":["bound"]}}`, `{"bound":"trusted"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			compiled, err := CompileResultContractDocument("claims.json", []byte(tc.schema))
+			if err != nil {
+				t.Fatal(err)
+			}
+			compiled.runtimeInputs = []resultRuntimeInputSpec{{Target: "/bound"}}
+			_, err = validateStructuredResultPayload(compiled, compiled.ref(true), []byte(tc.payload))
+			if err == nil || collectionModelSchemaFailure(compiled, nil, err) != tc.want {
+				t.Fatalf("repairability=%t want=%t error=%v", collectionModelSchemaFailure(compiled, nil, err), tc.want, err)
+			}
+			if collectionModelSchemaFailure(compiled, nil, errors.New(err.Error())) {
+				t.Fatal("untyped error text earned schema repair authority")
+			}
+		})
+	}
+}
+
 func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 	valid := `{"status":"success","summary":"review complete","findings":[{"summary":"observed finding"}],"structured_payload":{"findings":[{"summary":"observed finding"}]}}`
+	conditionalValid := strings.Replace(valid, `"structured_payload":{"findings":[{"summary":"observed finding"}]}`, `"structured_payload":{"findings":[{"summary":"observed finding","status":"unknown"}]}`, 1)
+	conditionalInvalid := strings.Replace(conditionalValid, `"status":"unknown"`, `"status":"unknown","finding_index":0`, 1)
 	mismatch := strings.Replace(valid, `"findings":[{"summary":"observed finding"}]`, `"findings":[{"summary":"different wording"}]`, 1)
+	richSchema := strings.Replace(collectedFindingSchema, `"summary":{"type":"string"}`, `"summary":{"type":"string"},"location":{"type":"string"},"evidence":{"type":"array","items":{"type":"string"}}`, 1)
+	richValid := `{"status":"success","summary":"review complete","findings":[{"summary":"one"},{"summary":"two"},{"summary":"three"}],"structured_payload":{"findings":[{"summary":"one","location":"a.go:1","evidence":["source-a"]},{"summary":"two","location":"b.go:2","evidence":["source-b"]},{"summary":"three","location":"c.go:3","evidence":["source-c"]}]}}`
+	var invalid map[string]any
+	if err := json.Unmarshal([]byte(richValid), &invalid); err != nil {
+		t.Fatal(err)
+	}
+	invalid["gaps"] = []any{}
+	for _, finding := range invalid["findings"].([]any) {
+		finding.(map[string]any)["location"] = "wrong layer"
+	}
+	richInvalid, err := json.Marshal(invalid)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name            string
 		first           string
 		second          string
+		schema          string
 		contractFailure bool
+		sourceFailure   bool
+		failureReason   RepairFailureReason
 	}{
+		{name: "multiple_wrong_layers", first: string(richInvalid), second: richValid, schema: richSchema},
 		{name: "empty_response", second: valid},
 		{name: "ordinary_invariant_field", first: strings.Replace(valid, `"status"`, `"invariant_assessments":[],"status"`, 1), second: valid},
 		{name: "unknown_field", first: strings.Replace(valid, `"status"`, `"assumptions":[],"status"`, 1), second: valid},
 		{name: "projection_mismatch", first: mismatch, second: valid},
 		{name: "projection_budget_exhausted", first: mismatch, second: mismatch},
 		{name: "acceptance_failure", first: valid, contractFailure: true},
+		{name: "canonical_conditional", first: conditionalInvalid, second: conditionalValid, schema: collectedConditionalFindingSchema},
+		{name: "canonical_conditional_budget", first: conditionalInvalid, second: conditionalInvalid, schema: collectedConditionalFindingSchema, failureReason: RepairFailureInvalidSchema},
+		{name: "forged_receipt_with_conditional", first: strings.Replace(conditionalInvalid, `"status":"success"`, `"receipt_ids":["forged-receipt"],"status":"success"`, 1), schema: collectedConditionalFindingSchema, sourceFailure: true, failureReason: RepairFailureSource},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls atomic.Int32
@@ -42,11 +226,9 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				if exposed, _ := request["tools"].([]any); len(exposed) != 0 {
-					t.Error("collector exposed tools")
-				}
+				assertCollectorResponseChannel(t, request)
 				n := calls.Add(1)
-				if n > 2 || (tc.contractFailure && n > 1) {
+				if n > 2 || ((tc.contractFailure || tc.sourceFailure) && n > 1) {
 					t.Error("unexpected repair turn")
 					http.Error(w, "extra call", 400)
 					return
@@ -54,6 +236,31 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 				body := tc.first
 				if n == 2 {
 					body = tc.second
+					if tc.schema == richSchema {
+						var feedback *collectionFormatFeedback
+						for _, message := range request["messages"].([]any) {
+							content, _ := message.(map[string]any)["content"].(string)
+							_, suffix, ok := strings.Cut(content, `{"claims_schema":`)
+							if !ok {
+								continue
+							}
+							raw, readErr := jsontext.NewDecoder(strings.NewReader(`{"claims_schema":` + suffix)).ReadValue()
+							if readErr != nil {
+								t.Error(readErr)
+								continue
+							}
+							var data struct {
+								Feedback *collectionFormatFeedback `json:"format_feedback"`
+							}
+							if decodeErr := json.Unmarshal(raw, &data); decodeErr != nil {
+								t.Error(decodeErr)
+							}
+							feedback = data.Feedback
+						}
+						if feedback == nil || len(feedback.Issues) != 4 || feedback.Truncated {
+							t.Errorf("incomplete repair feedback: %+v", feedback)
+						}
+					}
 					if prompt := fmt.Sprint(request["messages"]); !strings.Contains(prompt, "format_diagnostic") || (tc.first != "" && !strings.Contains(prompt, "previous_response")) {
 						t.Error("repair lost rejected claims or diagnostic")
 					}
@@ -62,7 +269,11 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 				_, _ = fmt.Fprintf(w, "data: {\"id\":\"claims\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", body)
 			}))
 			t.Cleanup(server.Close)
-			compiled, err := CompileResultContractDocument("findings.json", []byte(collectedFindingSchema))
+			schema := collectedFindingSchema
+			if tc.schema != "" {
+				schema = tc.schema
+			}
+			compiled, err := CompileResultContractDocument("findings.json", []byte(schema))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -82,12 +293,12 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 			_, err = c.ExecuteTasks(t.Context(), []TaskDef{{ID: "review", Agent: "worker", Model: "ollama/test", Goal: "Review findings", SideEffect: SideEffectNone,
 				Execution: ExecutionContract{RequiresResult: true, ForbidArtifacts: true}, VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: assertions}}})
 			item := c.taskTracker.TodoList().Items()[1]
-			wantSuccess := tc.second == valid
+			wantSuccess := tc.second == valid || tc.second == richValid || tc.second == conditionalValid
 			if (err == nil) != wantSuccess {
 				t.Fatalf("status=%s detail=%s error=%v", item.Status, item.Detail, err)
 			}
 			wantCalls := int32(2)
-			if tc.contractFailure {
+			if tc.contractFailure || tc.sourceFailure {
 				wantCalls = 1
 			}
 			checkpoint := currentResultCollection(item)
@@ -100,6 +311,14 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 			if !wantSuccess && (item.TypedResult != nil || checkpoint.State != ResultCollectionBlocked) {
 				t.Fatal("rejected claims published success")
 			}
+			if tc.failureReason != "" && checkpoint.FailureReason != tc.failureReason {
+				t.Fatalf("failure reason=%s want=%s", checkpoint.FailureReason, tc.failureReason)
+			}
+			if tc.schema == richSchema {
+				if item.TypedResult == nil || !strings.Contains(string(item.TypedResult.StructuredPayload.Value), `"source-c"`) || len(item.TypedResult.Findings) != 3 {
+					t.Fatal("repair lost legal nested evidence or findings")
+				}
+			}
 			events, readErr := c.EventJournal().ReadEvents(t.Context())
 			if readErr != nil {
 				t.Fatal(readErr)
@@ -107,6 +326,9 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 			replayed := ReduceToTodoList(events)[1]
 			if replayed.Status != item.Status || currentResultCollection(replayed).TurnsUsed != checkpoint.TurnsUsed {
 				t.Fatal("replay changed completion or budget")
+			}
+			if wantSuccess && (replayed.TypedResult == nil || string(replayed.TypedResult.StructuredPayload.Value) != string(item.TypedResult.StructuredPayload.Value)) {
+				t.Fatal("replay changed nested findings or evidence")
 			}
 		})
 	}

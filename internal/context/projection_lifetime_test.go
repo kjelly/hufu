@@ -10,7 +10,7 @@ import (
 
 func TestRebuildProjectionSeparatesSessionAndPersistentKnowledge(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,7 +16,8 @@ const evidenceKeyPattern = "^ev_[0-9a-f]{12}$"
 // assembly. A wildcard selects an array element or an issued row key. The
 // canonical schema and public stored result continue to require full IDs.
 type resultEvidenceKeysSpec struct {
-	Pointers []string `json:"pointers"`
+	Pointers              []string `json:"pointers"`
+	RuntimeOwnedFilesRead bool     `json:"runtime_owned_files_read,omitzero"`
 }
 
 func compileResultEvidenceKeys(root map[string]any, schema *jsonschema.Schema) (*resultEvidenceKeysSpec, error) {

@@ -24,6 +24,11 @@ type cliBinaryCache struct {
 
 var cliTestBinary cliBinaryCache
 
+// Capture the toolchain environment before fixtures replace HOME or change
+// cache variables. Otherwise a lazy build can download modules into a test's
+// disposable HOME instead of reusing the operator's configured caches.
+var cliBuildEnvironment = os.Environ()
+
 func TestMain(m *testing.M) {
 	// In-process CLI fixtures use the same invocation-owned provider proxy
 	// as production. Dispatch its child mode before test flag parsing.
@@ -71,6 +76,7 @@ func (binary *cliBinaryCache) build(ctx context.Context, moduleRoot string) (str
 		path := filepath.Join(binary.root, name)
 		command := exec.CommandContext(ctx, "go", "build", "-p", "2", "-o", path, "./cmd/hufu")
 		command.Dir = moduleRoot
+		command.Env = cliBuildEnvironment
 		if output, err := command.CombinedOutput(); err != nil {
 			binary.err = fmt.Errorf("build CLI test binary: %w\n%s", err, output)
 			return

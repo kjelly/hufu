@@ -31,6 +31,10 @@ to re-create an abstraction that already exists in the runtime.
 
 ### Architecture and normative contracts
 
+- [Responses API integration](architecture/responses-api.md) — explicit protocol
+  configuration, provider boundaries, admission, accounting,
+  durable binding and offline acceptance gates.
+
 - [Execution runtime](architecture/execution-runtime.md) — canonical
   `ExecutionTarget` / `ExecutionBackend` model, admission, replay, and legacy
   compatibility.
@@ -50,7 +54,7 @@ to re-create an abstraction that already exists in the runtime.
   `EvaluateRunOutcome` and `CompletionGate`.
 - [Unified observability inspector](architecture/unified-observability-inspector.md)
   — read-only run, task, evidence, context, trace, and replay projections.
-- [Operator experience](architecture/operator-experience.md) — implementation-ready
+- [Operator experience](architecture/operator-experience.md) — explicit protocol contract with offline validation;
   scope, overview snapshot, deterministic next-action, CLI/TUI presentation,
   compatibility, and incremental delivery contract.
 - [Model metadata](architecture/model-metadata.md) — model profile evidence,
@@ -80,6 +84,12 @@ to re-create an abstraction that already exists in the runtime.
   authoritative for implementation status.
 
 ### Guides and references
+
+- [Provider API protocol](reference/api-protocol.md) — explicit Chat/Responses
+  selection, content/option limits, context accounting and resume diagnostics.
+
+- [Responses API implementation evidence](reference/responses-api-validation.md) —
+  baseline validation and incremental offline implementation results.
 
 - [Test layers](reference/test-layers.md) — short/integration entry points, automatic
   membership, moved-case inventory and conservative parallelization for issue #32.
@@ -165,6 +175,7 @@ to re-create an abstraction that already exists in the runtime.
   — paired structured-result probes, durable budgets, bounded proposals and
   review bundles, with offline acceptance.
 
+- [Native image runtime](implementation-plans/native-image-runtime.md) — staged native image I/O, scope, persistence, offline validation and [implementation evidence](implementation-plans/native-image-runtime-progress.md).
 - `implementation-plans/` contains active, versioned delivery plans. Plans are
   reference material subordinate to code, tests, and normative contracts;
   completed or superseded plans belong in `archive/implementation-plans/`.

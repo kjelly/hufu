@@ -35,32 +35,38 @@ type resultsCLIOptions struct {
 	quiet, noColor                                                                                 bool
 	pickTasks                                                                                      bool
 	pickView, exportPath                                                                           string
+	imageID                                                                                        string
 }
 
 type resultsDeps struct {
-	report    func(context.Context, string, string) (*team.RunReport, error)
-	workspace workspaceCommandDeps
-	load      func(context.Context, inspectpkg.HistoricalResultScope) (inspectpkg.HistoricalSnapshot, error)
-	generate  func(context.Context, *operatorpkg.OperatorSnapshot, string, string, string, sidecar.Profile) (explainAIResult, error)
-	now       func() time.Time
-	pick      func(context.Context, io.Reader, io.Writer, []inspectpkg.HistoricalResult, string) (int, error)
+	images      func(context.Context, string, team.ResultImageScope) ([]team.ResultImage, error)
+	exportImage func(context.Context, string, team.ResultImageScope, string, string) error
+	deliverable func(context.Context, inspectpkg.HistoricalResult) (string, bool, error)
+	report      func(context.Context, string, string) (*team.RunReport, error)
+	workspace   workspaceCommandDeps
+	load        func(context.Context, inspectpkg.HistoricalResultScope) (inspectpkg.HistoricalSnapshot, error)
+	generate    func(context.Context, *operatorpkg.OperatorSnapshot, string, string, string, sidecar.Profile) (explainAIResult, error)
+	now         func() time.Time
+	pick        func(context.Context, io.Reader, io.Writer, []inspectpkg.HistoricalResult, string) (int, error)
 }
 
 type resultsEnvelope struct {
-	Report         *team.RunReport                 `json:"report,omitempty"`
-	ReportMarkdown string                          `json:"report_markdown,omitempty"`
-	SchemaVersion  int                             `json:"schema_version"`
-	Kind           string                          `json:"kind"`
-	Team           string                          `json:"team_scope,omitempty"`
-	Operation      string                          `json:"operation"`
-	Coverage       []inspectpkg.HistoricalCoverage `json:"coverage"`
-	Matched        int                             `json:"matched_count"`
-	Results        []inspectpkg.HistoricalResult   `json:"results"`
-	NextCursor     string                          `json:"next_cursor,omitempty"`
-	Query          *resultquery.Result             `json:"query,omitempty"`
-	Model          string                          `json:"model,omitempty"`
-	Error          string                          `json:"error,omitempty"`
-	Usage          resultsAnalysisUsage            `json:"usage"`
+	Deliverable     string                          `json:"deliverable,omitempty"`
+	SourceRunStatus string                          `json:"source_run_status,omitempty"`
+	Report          *team.RunReport                 `json:"report,omitempty"`
+	ReportMarkdown  string                          `json:"report_markdown,omitempty"`
+	SchemaVersion   int                             `json:"schema_version"`
+	Kind            string                          `json:"kind"`
+	Team            string                          `json:"team_scope,omitempty"`
+	Operation       string                          `json:"operation"`
+	Coverage        []inspectpkg.HistoricalCoverage `json:"coverage"`
+	Matched         int                             `json:"matched_count"`
+	Results         []inspectpkg.HistoricalResult   `json:"results"`
+	NextCursor      string                          `json:"next_cursor,omitempty"`
+	Query           *resultquery.Result             `json:"query,omitempty"`
+	Model           string                          `json:"model,omitempty"`
+	Error           string                          `json:"error,omitempty"`
+	Usage           resultsAnalysisUsage            `json:"usage"`
 }
 
 type resultsAnalysisUsage struct {
@@ -107,9 +113,14 @@ func newResultsCommandWithDeps(deps resultsDeps) *cobra.Command {
 	registerStaticFlagCompletion(command, "output", []string{"text", "json"})
 	registerStaticFlagCompletion(command, "status", []string{"done", "error", "blocked", "skipped", "protocol_incomplete"})
 	command.RunE = func(cmd *cobra.Command, _ []string) error { return runResults(cmd, options, deps, "read", "") }
-	for _, operation := range []string{"runs", "list", "search", "latest", "show", "final", "invocation", "query", "pick", "report"} {
+	for _, operation := range []string{"runs", "list", "search", "latest", "show", "images", "final", "invocation", "query", "pick", "report", "deliverable"} {
 		child := &cobra.Command{Use: operation, ValidArgsFunction: cobra.NoFileCompletions, Args: cobra.NoArgs}
 		switch operation {
+		case "deliverable":
+			child.Use += " [result-id]"
+			child.Short = "Read the latest accepted report deliverable without a model"
+			child.Args = cobra.MaximumNArgs(1)
+			child.Flags().StringVar(&options.exportPath, "export", "", "Export the rendered deliverable as Markdown to this path")
 		case "report":
 			child.Use += " [result-id]"
 			child.Short = "Read an immutable execution report for a saved result (default: latest run)"
@@ -132,6 +143,12 @@ func newResultsCommandWithDeps(deps resultsDeps) *cobra.Command {
 			child.Use += " <text>"
 			child.Short = "Search saved result text offline, including Unicode"
 			child.Args = cobra.ExactArgs(1)
+		case "images":
+			child.Use += " <result-id>"
+			child.Short = "List published tool images or export one original image to a new file"
+			child.Args = cobra.ExactArgs(1)
+			child.Flags().StringVar(&options.imageID, "artifact", "", "Exact published image artifact ID")
+			child.Flags().StringVar(&options.exportPath, "export", "", "Export original image bytes to a new path (requires --artifact)")
 		case "show":
 			child.Use += " <result-id>"
 			child.Short = "Read one exact saved result or unique ID prefix"
@@ -224,7 +241,7 @@ func runResults(command *cobra.Command, options *resultsCLIOptions, deps results
 		plan.SearchTerms = []string{value}
 	}
 	rows := resultquery.Retrieve(all, plan, request)
-	if operation == "show" {
+	if operation == "show" || operation == "images" {
 		// A result locator may also address a run_response; all explicit scope
 		// and time/status filters still apply.
 		rows = findHistoricalResult(all, request, value)
@@ -235,11 +252,17 @@ func runResults(command *cobra.Command, options *resultsCLIOptions, deps results
 			return resultsExit(2, errors.New("result ID prefix is ambiguous; use the full result-id"))
 		}
 	}
+	if operation == "images" {
+		return presentResultImages(command, options, deps, rows[0])
+	}
 	if isFinalResultsOperation(operation) {
 		rows, err = selectFinalResults(all, request, value)
 		if err != nil {
 			return resultsExit(2, err)
 		}
+	}
+	if operation == "deliverable" {
+		return presentAcceptedDeliverable(command, options, deps, request, all, rows, response, options.run != "" || value != "")
 	}
 	response.Matched = len(rows)
 	limit := options.limit
@@ -270,11 +293,11 @@ func runResults(command *cobra.Command, options *resultsCLIOptions, deps results
 }
 
 func resultsReadFull(operation string) bool {
-	return slices.Contains([]string{"show", "latest", "final", "read", "report"}, operation)
+	return slices.Contains([]string{"show", "latest", "final", "read", "report", "deliverable"}, operation)
 }
 
 func isFinalResultsOperation(operation string) bool {
-	return slices.Contains([]string{"read", "final", "overview", "report"}, operation)
+	return slices.Contains([]string{"read", "final", "overview", "report", "deliverable"}, operation)
 }
 
 func validateResultsOptions(options *resultsCLIOptions, now time.Time) (resultquery.Request, error) {

@@ -7,6 +7,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -43,9 +44,10 @@ const (
 )
 
 var (
-	errResultCollectionStale   = errors.New("result collection checkpoint is stale")
-	errResultCollectionBudget  = errors.New("result collection model-turn budget exhausted")
-	errResultCollectionBlocked = errors.New("result collection requires an explicit result-only grant")
+	errResultCollectionStale      = errors.New("result collection checkpoint is stale")
+	errResultCollectionBudget     = errors.New("result collection model-turn budget exhausted")
+	errResultCollectionNoProgress = errors.New("result collection repeated identical rejected claims; operator review required")
+	errResultCollectionBlocked    = errors.New("result collection requires an explicit result-only grant")
 )
 
 // ResultCollectionRef names immutable CAS evidence. It carries no filesystem
@@ -60,6 +62,9 @@ type ResultCollectionRef struct {
 // binding never changes; revision, progress and collector invocations advance
 // through event-first compare-and-swap updates, independently of Todo status.
 type ResultCollectionCheckpoint struct {
+	RepairIssue             *ResultSubmissionIssue    `json:"repair_issue,omitempty"`
+	LastRejectedSHA256      string                    `json:"last_rejected_sha256,omitempty"`
+	LastRejectedTurn        int                       `json:"last_rejected_turn,omitzero"`
 	Version                 int                       `json:"version"`
 	Revision                int                       `json:"revision"`
 	State                   ResultCollectionState     `json:"state"`
@@ -81,6 +86,7 @@ type ResultCollectionCheckpoint struct {
 	InputsID                string                    `json:"inputs_id,omitempty"`
 	InputsSHA256            string                    `json:"inputs_sha256,omitempty"`
 	EvidenceSHA256          string                    `json:"evidence_sha256"`
+	EvidenceRevision        int                       `json:"evidence_revision,omitzero"`
 	WorkspaceIdentitySHA256 string                    `json:"workspace_identity_sha256"`
 	CollectorSchemaRevision int                       `json:"collector_schema_revision"`
 	Work                    ResultCollectionRef       `json:"work"`
@@ -111,12 +117,13 @@ type resultCollectionWork struct {
 }
 
 type resultCollectionBlob struct {
-	Version         int    `json:"version"`
-	WorkSHA256      string `json:"work_sha256"`
-	InvocationID    string `json:"invocation_id"`
-	InvocationRunID string `json:"invocation_run_id"`
-	Kind            string `json:"kind"`
-	Data            []byte `json:"data"`
+	ResponseIssue   *agent.StructuredResponseIssue `json:"response_issue,omitempty"`
+	Version         int                            `json:"version"`
+	WorkSHA256      string                         `json:"work_sha256"`
+	InvocationID    string                         `json:"invocation_id"`
+	InvocationRunID string                         `json:"invocation_run_id"`
+	Kind            string                         `json:"kind"`
+	Data            []byte                         `json:"data"`
 }
 
 type resultCollectionEvent struct {
@@ -129,6 +136,10 @@ func cloneResultCollectionCheckpoint(value *ResultCollectionCheckpoint) *ResultC
 		return nil
 	}
 	clone := *value
+	if value.RepairIssue != nil {
+		clone.RepairIssue = new(*value.RepairIssue)
+		clone.RepairIssue.Expected = slices.Clone(value.RepairIssue.Expected)
+	}
 	if value.ObservedUsage != nil {
 		clone.ObservedUsage = new(*value.ObservedUsage)
 	}
@@ -193,7 +204,7 @@ func validateResultCollectionBinding(value *ResultCollectionCheckpoint) error {
 		value.BranchID == "" || value.SourceRunID == "" || value.TaskID == "" || value.Agent == "" || value.Attempt < 1 || value.ModelExecutionID == "" ||
 		value.WorkOccurrenceRevision < 1 || value.WorkDispatchID == "" || value.SubmissionRevision < value.WorkOccurrenceRevision || value.SubmissionDispatchID == "" ||
 		!validCollectionDigest(value.PolicySHA256) || !validCollectionDigest(value.TaskContractSHA256) || !validCollectionDigest(value.EvidenceSHA256) || !validCollectionDigest(value.WorkspaceIdentitySHA256) ||
-		value.ExecutionTarget.Validate() != nil ||
+		value.ExecutionTarget.Validate() != nil || value.EvidenceRevision < 0 || value.EvidenceRevision > 1 ||
 		value.TurnLimit < resultCollectionDefaultTurns || value.TurnsUsed < 0 || value.TurnsUsed > value.TurnLimit {
 		return fmt.Errorf("invalid result collection binding")
 	}
@@ -228,6 +239,9 @@ func validateResultCollectionCheckpoint(value *ResultCollectionCheckpoint) error
 	if err := validateResultCollectionBinding(value); err != nil {
 		return err
 	}
+	if err := validateCollectionRepairFeedback(value); err != nil {
+		return err
+	}
 	switch value.State {
 	case ResultCollectionPending:
 		if value.TurnsUsed != 0 || value.InvocationID != "" || value.InvocationRunID != "" || value.Request != nil || value.Response != nil || value.Prepared != nil || value.Accepted != nil {
@@ -250,5 +264,20 @@ func validateResultCollectionCheckpoint(value *ResultCollectionCheckpoint) error
 	default:
 		return fmt.Errorf("unknown result collection state %q", value.State)
 	}
+	return nil
+}
+
+func validateCollectionRepairFeedback(value *ResultCollectionCheckpoint) error {
+	if value.LastRejectedSHA256 != "" {
+		if !validCollectionDigest(value.LastRejectedSHA256) || value.LastRejectedTurn < 1 || value.LastRejectedTurn > value.TurnsUsed {
+			return fmt.Errorf("invalid collection rejection fingerprint")
+		}
+	} else if value.LastRejectedTurn != 0 {
+		return fmt.Errorf("collection rejection turn requires a fingerprint")
+	}
+	if value.RepairIssue != nil && (value.RepairIssue.Code != "runtime_owned" || validateJSONPointer(value.RepairIssue.Pointer) != nil) {
+		return fmt.Errorf("invalid collection field repair diagnostic")
+	}
+
 	return nil
 }

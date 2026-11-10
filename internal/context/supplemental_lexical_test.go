@@ -2,14 +2,13 @@ package context
 
 import (
 	"fmt"
-	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 )
 
 func TestSupplementalLexicalJoinPreservesScoresAndAuthorization(t *testing.T) {
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +66,7 @@ func TestSupplementalLexicalJoinPreservesScoresAndAuthorization(t *testing.T) {
 }
 
 func TestSupplementalLexicalScopeVisibilityParity(t *testing.T) {
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

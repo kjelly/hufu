@@ -16,7 +16,7 @@ promise that every short test is a pure unit test.
 
 | Entry | Local command | Required CI coverage |
 | --- | --- | --- |
-| Short, including pure unit tests | `mise run test-short` | Four existing race package groups: cli, team, improver, other |
+| Short, including pure unit tests | `mise run test-short` | Four race package groups: cli, team (three shards), improver, other |
 | Reviewed process/PTY, persistence, architecture/generator cases | `mise run test-integration` | Separate `integration` job, with race and no short flag |
 | Complete offline regression | `mise exec -- go run ./scripts/testlayers -layer full` | Unchanged `cgo-free` job executes all tests with `CGO_ENABLED=0` and no short flag |
 | Active test inventory | `mise run test-inventory` | Every short/integration invocation validates the same discovered sources |
@@ -26,10 +26,79 @@ promise that every short test is a pure unit test.
 entry additionally includes diagnostic-pilot. Live smoke keeps its existing
 opt-in guard; moving it cannot accelerate default CI because it was already
 skipped there. All entry points retain normal Go build tags. Example tests and
-fuzz seed corpora remain in the unfiltered short/full package executions. The
-inventory lists top-level `Test` functions; it does not filter examples or fuzz
-seeds out of execution. The inventory shows the tests active for the current GOOS/GOARCH, including external test
+fuzz seed corpora remain in short/full execution; shard zero owns them when
+sharding is enabled. The inventory lists top-level `Test` functions, while
+example/fuzz execution is retained separately. The inventory shows the tests active for the current GOOS/GOARCH, including external test
 packages, rather than inventing coverage for inactive platform files.
+
+## SQLite test backends
+
+Data-operation tests use private in-memory SQLite databases, not a map-based
+repository fake. `context.OpenSQLiteInMemory(projectionDir)` shares the durable
+adapter's schema migrations, FTS, foreign-key enforcement and immediate write
+transactions. Each call owns one connection and independent state, even when
+calls use the same projection directory. Register cleanup after opening; closing
+the last connection destroys the database. Do not enable shared-cache mode or
+increase the connection count: another private in-memory connection is another
+database.
+
+The optional projection directory anchors Markdown output only. It contains no
+`context.sqlite`, WAL or SHM for that handle. Pass an empty string for tests that
+need no files; projection generation then fails explicitly instead of writing
+into the current directory. Memory diagnostics report journal mode `memory`.
+The ordinary `OpenSQLite(path)` entry remains file-backed and uses WAL.
+
+Service, retrieval, scope, promotion and pure migration-engine tests use memory
+where their assertions depend only on SQL state. Pure runtime-store document,
+rollback and grant-index tests also use an isolated memory fixture with the
+runtime schema. The former copied-database service fixture is no longer needed.
+
+File-backed tests remain necessary for close/reopen persistence, recovery across
+processes, WAL and writer contention, read-only snapshots, schema-upgrade backups,
+file permissions and replacement detection, and CLI/inspection flows that locate
+a database by workspace path. Keep these on the production adapter: replacing
+their databases with memory would remove the behavior being tested. Optional
+on-disk profiling fixtures also retain their storage semantics. Test layering and
+required CI gates are unchanged by the backend switch.
+
+## Stable CI shards
+
+The team short/race job exceeded its 30-minute package deadline in
+[run 42594298674](https://github.com/kjelly/hufu/actions/runs/42594298674).
+The timeout occurred during a newly started recovery subtest after many earlier
+cases had completed. It did not identify that recovery subtest as a hang.
+
+CI now uses three team partitions, with zero-based indices 0, 1 and 2. Each keeps
+the 30-minute package and 40-minute job limits. Other package groups use one
+partition. Every matrix partition must pass for the existing `ci-success` gate.
+No test or integration guard was removed, and no timeout was increased.
+
+`-shard-index` and `-shard-count` also work locally. The runner assigns each
+package/test-name pair using FNV-1a 64-bit modulo the shard count. Assignment is
+independent of discovery order and unrelated test additions. Changing the count
+can repartition tests. Default count 1 preserves the original unfiltered
+short/full commands and integration selection.
+
+Sharded commands use exact test-name filters. Examples and fuzz seeds run only
+on shard zero for short/full layers, including packages with no assigned `Test`
+function. Integration continues to select only its declared tests. Shared
+filters fall back to separate package commands when a name could select a test
+assigned to another layer or shard. Tests verify disjoint/complete assignment
+and run a real Go fixture to check example and fuzz-seed execution.
+
+For example, execute the second team partition from the repository root:
+
+```bash
+mise exec -- go run ./scripts/testlayers -layer short -scope team -shard-index 1 -shard-count 3 -- -race -timeout 30m
+```
+
+Each CI partition uploads the complete `inventory.json` plus its selected
+`shard-inventory.json` and actual JSONL results. Artifact and build-cache names
+include the partition, preventing upload collisions and shared immutable cache
+saves between shards. Package elapsed/deadline ratios describe the selected
+partition. The two additional team runners can increase compilation, cache
+transfers and total runner seconds; the workflow cost report remains the source
+for observed cost, rather than assuming CPU savings from a shorter job.
 
 ## Membership and coverage
 
@@ -169,6 +238,25 @@ elapsed values and command wall time are not added into this ratio. Ratios above
 75% emit a workflow warning; missing terminal results or truncated JSONL are
 reported as unavailable/incomplete, including failed discovery. A warning does
 not replace the existing test exit status or mask failures.
+
+The same report includes per-test timings and the 20 slowest top-level tests.
+A parent's duration includes its subtests, so child durations are not added to
+it. Repeated executions report their mean duration and run count; a failed
+execution remains visible even if a later repetition passes. Missing elapsed
+values remain unavailable.
+
+To compare two archived reports from the same test layer, race settings and
+comparable runners, pass the older `package-budget.json` explicitly:
+
+```bash
+python3 scripts/test-package-budget.py --timeout 30m \
+  --evidence <current-evidence-directory> --summary <summary-file> \
+  --baseline <previous-package-budget.json> --top 20
+```
+
+The JSON retains all observed top-level tests; `--top` only limits the summary.
+Deltas are unavailable when no matching baseline measurement exists. CI emits
+rankings automatically; it does not silently choose a historical comparison.
 
 CI pins setup-go v5.6.0, which bundles the cache v4 client instead of v5.0.0's
 cache v3 client. Each short race scope and integration uses a distinct `GOCACHE`

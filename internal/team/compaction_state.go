@@ -75,6 +75,7 @@ type CompactionCheckpointReference struct {
 // Summary and replacement contents are retained in canonical state so a
 // restart can restore exactly the same projection without replaying a model.
 type CompactionGeneration struct {
+	Kind              string            `json:"kind,omitempty"`
 	ID                string            `json:"id"`
 	BranchID          string            `json:"branch_id"`
 	PredecessorID     string            `json:"predecessor_id,omitempty"`
@@ -112,6 +113,9 @@ func newCompactionState() *ConversationCompactionState {
 
 func cloneCompactionState(state *ConversationCompactionState) *ConversationCompactionState {
 	if state == nil {
+		return nil
+	}
+	if _, err := validateCompactionMedia(state); err != nil {
 		return nil
 	}
 	data, err := json.Marshal(state)
@@ -300,9 +304,19 @@ func retainReachableCompactionState(workspace string, state *ConversationCompact
 }
 
 func redactedCompactionState(state *ConversationCompactionState) (*ConversationCompactionState, error) {
+	hasReferences, err := validateCompactionMedia(state)
+	if err != nil {
+		return nil, err
+	}
 	clone := cloneCompactionState(state)
 	if clone == nil {
 		return nil, errors.New("clone canonical compaction state")
+	}
+	if hasReferences {
+		clone.Version = max(clone.Version, mediaCompactionStateVersion)
+		if compactionHasToolMedia(clone) {
+			clone.Version = toolMediaCompactionStateVersion
+		}
 	}
 	data, err := json.Marshal(clone)
 	if err != nil {
@@ -582,8 +596,8 @@ func validateCompactionState(state *ConversationCompactionState) error {
 	if state == nil {
 		return errors.New("state is nil")
 	}
-	if state.Version != conversationCompactionStateVersion {
-		return fmt.Errorf("unsupported version %d", state.Version)
+	if err := validateCompactionStateVersion(state); err != nil {
+		return err
 	}
 	if state.Branches == nil || state.Generations == nil || state.Checkpoints == nil {
 		return errors.New("branches, generations, and immutable checkpoints are required")
@@ -600,8 +614,8 @@ func validateCompactionState(state *ConversationCompactionState) error {
 			return fmt.Errorf("duplicate generation %q", id)
 		}
 		seen[id] = true
-		if strings.TrimSpace(generation.BranchID) == "" || strings.TrimSpace(generation.ModelID) == "" {
-			return fmt.Errorf("generation %q has incomplete branch/model identity", id)
+		if err := validateCompactionGenerationOrigin(generation, state.Version); err != nil {
+			return fmt.Errorf("generation %q: %w", id, err)
 		}
 		if generation.PredecessorID != "" {
 			predecessor, ok := state.Generations[generation.PredecessorID]
@@ -611,9 +625,6 @@ func validateCompactionState(state *ConversationCompactionState) error {
 		}
 		if err := validateCompactionRanges(generation.SourceRanges); err != nil {
 			return fmt.Errorf("generation %q: %w", id, err)
-		}
-		if len(generation.SourceRanges) == 0 {
-			return fmt.Errorf("generation %q has no source provenance", id)
 		}
 		if !toolPairsIntact(generation.Replacement) {
 			return fmt.Errorf("generation %q replacement splits tool pairs", id)
@@ -692,7 +703,7 @@ func validateCompactionCheckpoint(state *ConversationCompactionState, branchID s
 	if checkpoint.EventID != compactionCheckpointEventID(checkpoint) {
 		return fmt.Errorf("checkpoint %q has an identity-mismatched attestation event", branchID)
 	}
-	if len(checkpoint.History) == 0 || !toolPairsIntact(checkpoint.History) {
+	if len(checkpoint.History) == 0 && generation.Kind != nativeResetGenerationKind || !toolPairsIntact(checkpoint.History) {
 		return fmt.Errorf("checkpoint %q splits tool pairs", branchID)
 	}
 	if checkpoint.HistoryDigest != digestMessages(checkpoint.History) {
@@ -1156,6 +1167,9 @@ func (c *Coordinator) commitCompactionCheckpointWithProvenance(ctx context.Conte
 	if projection.summary == nil || len(projection.messages) == 0 {
 		return CompactionRecord{}, errors.New("compaction projection is incomplete")
 	}
+	if err := validatePersistentHistories(history, projection.messages); err != nil {
+		return CompactionRecord{}, err
+	}
 	if !toolPairsIntact(history) || !toolPairsIntact(projection.messages) {
 		return CompactionRecord{}, errors.New("compaction projection splits tool pairs")
 	}
@@ -1280,11 +1294,14 @@ func (c *Coordinator) publishCommittedCompaction(state *ConversationCompactionSt
 	c.compactionMu.Lock()
 	c.compactionState = state
 	c.compactionBranchID = branchID
-	c.lastCompactionSummary = cloneStructuredSummary(&generation.Summary)
+	c.lastCompactionSummary = compactionGenerationSummary(generation)
 	c.compactionMu.Unlock()
 }
 
 func (c *Coordinator) persistConversationCheckpointWithProvenance(history []fantasy.Message, sourceOffset int, sourceCounts []int, provenance [][]CompactionRange, nextSourceIndex int) error {
+	if err := validatePersistentHistories(history); err != nil {
+		return err
+	}
 	workspace := c.sessionWorkspace()
 	if workspace == "" {
 		return nil
@@ -1427,6 +1444,9 @@ func (c *Coordinator) restoreCanonicalCompactionForBranch(branchID string) error
 		return nil
 	}
 	generation := state.Generations[checkpoint.GenerationID]
+	if err := validateMediaHistoryMetadata(context.Background(), c.session.Workspace, branchID, checkpoint.History); err != nil {
+		return err
+	}
 	c.conversationHistoryMu.Lock()
 	c.conversationHistory = cloneMessages(checkpoint.History)
 	c.conversationHistorySourceCounts = append([]int(nil), checkpoint.SourceCounts...)
@@ -1437,7 +1457,7 @@ func (c *Coordinator) restoreCanonicalCompactionForBranch(branchID string) error
 	c.compactionMu.Lock()
 	c.compactionState = state
 	c.compactionBranchID = branchID
-	c.lastCompactionSummary = cloneStructuredSummary(&generation.Summary)
+	c.lastCompactionSummary = compactionGenerationSummary(generation)
 	c.compactionMu.Unlock()
 	return nil
 }
@@ -1627,6 +1647,9 @@ func (c *Coordinator) reconcileCompactionState(ctx context.Context, branchID str
 	if _, ok := state.Branches[branchID]; !ok {
 		return nil
 	}
+	if err := validateMediaHistoryMetadata(ctx, c.session.Workspace, branchID, state.Branches[branchID].History); err != nil {
+		return err
+	}
 	if c.eventStore == nil {
 		return errors.New("cannot reconcile canonical compaction without an event store")
 	}
@@ -1746,6 +1769,27 @@ func indexCompactionAttestations(state *ConversationCompactionState, lineage []R
 	if limit < 0 {
 		limit = 0
 	}
+	// Retention removes superseded bodies, while the append-only event log
+	// retains their attestations. Only an exactly attested retained snapshot
+	// in the same branch proves that an earlier body is no longer required.
+	retainedFloor := make(map[string]int)
+	for index, event := range lineage[:limit] {
+		if event.Type != compactionCheckpointEventType {
+			continue
+		}
+		ref, err := compactionCheckpointReferenceFromEvent(event)
+		if err != nil {
+			continue
+		}
+		checkpoint, ok := findCompactionCheckpoint(state, ref)
+		generation, generationExists := state.Generations[ref.GenerationID]
+		if !ok || !generationExists || !compactionCheckpointAttestationMatches(event, checkpoint, generation) {
+			continue
+		}
+		if _, exists := retainedFloor[ref.BranchID]; !exists {
+			retainedFloor[ref.BranchID] = index
+		}
+	}
 	for index, event := range lineage[:limit] {
 		if event.Type != compactionGenerationEventType {
 			if event.Type != compactionCheckpointEventType {
@@ -1758,11 +1802,17 @@ func indexCompactionAttestations(state *ConversationCompactionState, lineage []R
 			if effectiveEventBranchID(event) != ref.BranchID {
 				return nil, nil, errors.New("compaction checkpoint attestation has cross-branch event identity")
 			}
-			generation, ok := state.Generations[ref.GenerationID]
-			if !ok || generation.BranchID != ref.BranchID || ref.GenerationChecksum != generation.Checksum {
+			generation, generationExists := state.Generations[ref.GenerationID]
+			if generationExists && (generation.BranchID != ref.BranchID || ref.GenerationChecksum != generation.Checksum) {
 				return nil, nil, fmt.Errorf("compaction checkpoint attestation for generation %q does not match canonical generation", ref.GenerationID)
 			}
 			checkpoint, ok := findCompactionCheckpoint(state, ref)
+			if !ok {
+				floor, retained := retainedFloor[ref.BranchID]
+				if retained && index < floor && event.ID == "compaction-checkpoint-event-"+ref.CheckpointDigest && validCompactionDigest(ref.CheckpointDigest) && validCompactionDigest(ref.GenerationChecksum) {
+					continue
+				}
+			}
 			if !ok || checkpointAttestationMode(checkpoint) != compactionCheckpointAttestationMode {
 				return nil, nil, fmt.Errorf("compaction checkpoint attestation %q does not match canonical checkpoint", event.ID)
 			}
@@ -1778,6 +1828,10 @@ func indexCompactionAttestations(state *ConversationCompactionState, lineage []R
 		}
 		generation, ok := state.Generations[ref.GenerationID]
 		if !ok {
+			floor, retained := retainedFloor[ref.BranchID]
+			if retained && index < floor && effectiveEventBranchID(event) == ref.BranchID && event.ID == compactionGenerationEventID(ref.GenerationID) && validCompactionDigest(ref.Checksum) {
+				continue
+			}
 			return nil, nil, fmt.Errorf("compaction generation %q attestation references an unknown generation", ref.GenerationID)
 		}
 		if effectiveEventBranchID(event) != ref.BranchID {
@@ -1792,6 +1846,11 @@ func indexCompactionAttestations(state *ConversationCompactionState, lineage []R
 		generationEvents[ref.GenerationID] = append(generationEvents[ref.GenerationID], compactionIndexedEvent{event: event, index: index})
 	}
 	return generationEvents, checkpointEvents, nil
+}
+
+func validCompactionDigest(value string) bool {
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == sha256.Size && value == strings.ToLower(value)
 }
 
 func validateCompactionCheckpointContext(state *ConversationCompactionState, branchID string, checkpoint ConversationCompactionCheckpoint, lineageIndexes map[string]int, allEventsByID map[string]RunEvent, generationEvents map[string][]compactionIndexedEvent, checkpointEvents map[string]RunEvent, throughEventID string, cutoff int) (compactionAttestationGap, bool, error) {
@@ -1829,7 +1888,7 @@ func validateCompactionCheckpointContext(state *ConversationCompactionState, bra
 
 	matchedGeneration := false
 	for _, candidate := range generationEvents[generation.ID] {
-		if candidate.index > checkpointIndex || (candidate.event.BranchID != checkpoint.BranchID && effectiveEventBranchID(candidate.event) != checkpoint.BranchID) {
+		if exists && candidate.index > checkpointIndex || (candidate.event.BranchID != checkpoint.BranchID && effectiveEventBranchID(candidate.event) != checkpoint.BranchID) {
 			continue
 		}
 		if candidate.event.ID != compactionGenerationEventID(generation.ID) {

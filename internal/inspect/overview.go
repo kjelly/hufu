@@ -25,7 +25,7 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidQuery, err)
 	}
-	bound, err := BindReadTarget(ctx, operatorpkg.BindingRequest{
+	bound, err := bindOverviewReadTarget(ctx, operatorpkg.BindingRequest{
 		Workspace: workspace,
 		SessionID: query.SessionID,
 		RunID:     query.RunID,
@@ -39,6 +39,9 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 	resolvedQuery.RunID = bound.Scope.RunID
 	resolvedQuery.SessionID = bound.Scope.SessionID
 	resolvedQuery.BranchID = bound.Scope.BranchID
+	if bound.DerivedFork != nil && bound.DerivedFork.AwaitingNewRequest {
+		return pendingDerivedForkOverview(ctx, resolvedQuery, bound)
+	}
 	runData, selected, err := projectRunData(ctx, resolvedQuery, bound.Lineage)
 	if err != nil {
 		return nil, err
@@ -99,6 +102,7 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 		Blockers:         blockers,
 		LatestChanges:    latestChanges(bound.Lineage.Events, bound.Scope.RunID, 3),
 		RoleTargets:      roleTargetsFromTasks(tasks),
+		DerivedFork:      bound.DerivedFork,
 		Learning:         learning,
 		SecondaryActions: []operatorpkg.ActionSuggestion{},
 	}
@@ -116,9 +120,20 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 		snapshot.Attention = operatorpkg.DeriveAttention(activity.State, runData.Outcome, "valid", recovery.ExternalEffectState)
 	}
 	sessionRevision, sessionRefs := SessionRecoveryRevision(bound.Session, bound.Scope.BranchID)
+	var collectionRecoveries []*operatorpkg.RecoveryEligibility
+	for _, item := range tasks {
+		if item == nil || (item.Status != team.TaskBlocked && item.Status != team.TaskError) {
+			continue
+		}
+		candidate := RecoveryEligibilityForTask(item, bound.Lineage.Events, bound.Scope.RunID, activity.State == operatorpkg.ActivityInterrupted)
+		if candidate.HasCollectionRecovery() {
+			collectionRecoveries = append(collectionRecoveries, candidate)
+		}
+	}
 	snapshot.PrimaryAction, snapshot.SecondaryActions, err = operatorpkg.SelectActions(operatorpkg.ActionSelectionFacts{
 		Snapshot: snapshot, Recovery: recovery, SessionExpectedRevision: sessionRevision, SessionSourceRefs: sessionRefs,
-		MutationFacadeAvailable: true,
+		ResultCollectionRecoveries: collectionRecoveries,
+		MutationFacadeAvailable:    true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: select operator action: %v", ErrIntegrity, err)

@@ -66,6 +66,7 @@ func (m Model) updateColumns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.inPromptInput = true
 			m.promptNotice = ""
 			m.promptInput.SetValue("")
+			m.layoutPromptInput()
 			m.promptInput.Focus()
 			return m, m.blinkCmd()
 		}
@@ -402,10 +403,31 @@ func (m Model) updatePromptInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.promptInput.Blur()
 		return m, nil
 	default:
-		var cmd tea.Cmd
-		m.promptInput, cmd = m.promptInput.Update(msg)
-		return m, cmd
+		return m.editPromptInput(msg)
 	}
+}
+
+// layoutPromptInput leaves room for the border, heading, hints and notice.
+func (m *Model) layoutPromptInput() {
+	m.promptInput.MaxHeight = max(1, min(10, m.height-10))
+	m.promptInput.SetWidth(max(m.width-8, 1))
+}
+
+func (m Model) editPromptInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.promptSubmitting {
+		return m, nil
+	}
+	if paste, ok := msg.(tea.PasteMsg); ok {
+		lines := strings.Count(m.promptInput.Value(), "\n") + strings.Count(paste.Content, "\n") + 1
+		if lines > maxComposerLines {
+			m.promptNotice = "paste refused: the prompt would exceed 10000 lines"
+			return m, nil
+		}
+	}
+	m.layoutPromptInput()
+	var cmd tea.Cmd
+	m.promptInput, cmd = m.promptInput.Update(msg)
+	return m, cmd
 }
 
 func (m Model) handlePromptSubmitted(msg promptSubmittedMsg) (tea.Model, tea.Cmd) {

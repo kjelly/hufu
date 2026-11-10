@@ -1,8 +1,11 @@
 package inspect
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	jsonv1 "encoding/json"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"maps"
@@ -37,6 +40,9 @@ type HistoricalResult struct {
 	Summary               string           `json:"summary,omitempty"`
 	Output                string           `json:"output,omitempty"`
 	TypedResult           *team.TaskResult `json:"typed_result,omitempty"`
+	PayloadSHA256         string           `json:"payload_sha256,omitempty"`
+	TypedResultJSON       []byte           `json:"-"`
+	SourceBranchID        string           `json:"source_branch_id"`
 	SourceEventID         string           `json:"source_event_id"`
 	SourceHash            string           `json:"source_hash"`
 	Branches              []string         `json:"branches"`
@@ -202,6 +208,7 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 	teams := map[string]string{}
 	states := make(map[string]*historicalTaskState)
 	known := make(map[string]bool)
+	var grant *team.RunEvent
 	for _, indexed := range events {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
@@ -226,6 +233,12 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 			teams[event.RunID] = metadata.Team
 			known[metadata.Team] = true
 		}
+		switch team.EventType(event.Type) {
+		case team.EventWorkflowCycleStarted, team.EventDerivedForkCreated:
+			grant = nil
+		case team.EventHistoricalResultsGranted:
+			grant = &event
+		}
 		if event.Type == string(team.EventRunFinished) && (scope.Team == "" || teams[event.RunID] == scope.Team) {
 			row, err := historicalRunResponse(indexed, branch, scope.Workspace, teams[event.RunID])
 			if err != nil {
@@ -248,6 +261,12 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 		newOccurrence := event.Type == string(team.EventTaskCreated) && !metadata.ResetForRetry && !metadata.ResetForResume && state != nil && state.originRun != event.RunID
 		if state == nil || newOccurrence {
 			state = &historicalTaskState{originRun: event.RunID}
+			// Per-task replay still needs the original cycle's grant before
+			// task_created. Keep that immutable authority with this occurrence
+			// across later cycles, without replaying unrelated tasks or bodies.
+			if grant != nil {
+				state.events = append(state.events, *grant)
+			}
 			states[key] = state
 		}
 		state.events = append(state.events, event)
@@ -257,13 +276,7 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 			}
 		}
 		if event.Type == string(team.EventTaskRemoved) || metadata.ResetForRetry || metadata.ResetForResume {
-			for _, index := range state.rows {
-				rows[index].Validity = "invalidated"
-				rows[index].CurrentStatus = "pending"
-				if event.Type == string(team.EventTaskRemoved) {
-					rows[index].CurrentStatus = "removed"
-				}
-			}
+			invalidateHistoricalRows(rows, state.rows, event.Type == string(team.EventTaskRemoved))
 		}
 		if !team.IsTerminalEvent(event.Type) {
 			continue
@@ -298,6 +311,15 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 	return rows, slices.Sorted(maps.Keys(known)), nil
 }
 
+func invalidateHistoricalRows(rows []HistoricalResult, indices []int, removed bool) {
+	for _, index := range indices {
+		rows[index].Validity, rows[index].CurrentStatus = "invalidated", "pending"
+		if removed {
+			rows[index].CurrentStatus = "removed"
+		}
+	}
+}
+
 func historicalRunResponse(indexed IndexedEvent, branch, workspace, teamName string) (HistoricalResult, error) {
 	event := indexed.Event
 	var payload team.RunFinishedEventPayload
@@ -310,7 +332,7 @@ func historicalRunResponse(indexed IndexedEvent, branch, workspace, teamName str
 		RunID: event.RunID, OriginRunID: event.RunID, InvocationID: event.InvocationID,
 		SessionID: event.SessionID, Status: string(payload.Outcome), CurrentStatus: string(payload.Outcome), Validity: "accepted",
 		CompletedAt: completed, Output: utils.RedactSecrets(payload.Response), Summary: utils.RedactSecrets(payload.Reason),
-		SourceEventID: event.ID, SourceHash: event.Hash, Branches: []string{branch}, Workspace: workspace, Ordinal: indexed.Ordinal,
+		SourceBranchID: cmp.Or(event.BranchID, "main"), SourceEventID: event.ID, SourceHash: event.Hash, Branches: []string{branch}, Workspace: workspace, Ordinal: indexed.Ordinal,
 	}, nil
 }
 
@@ -324,29 +346,28 @@ func historicalResultFromItem(indexed IndexedEvent, item *team.TodoItem, branch,
 		Attempt: max(event.Attempt, item.Retries+1), Status: string(item.Status), CurrentStatus: string(item.Status),
 		Validity: "accepted", CompletedAt: completed, Description: utils.RedactSecrets(item.Desc),
 		Summary: utils.RedactSecrets(item.Detail), Output: utils.RedactSecrets(item.Output),
-		SourceEventID: event.ID, SourceHash: event.Hash, Branches: []string{branch}, Workspace: workspace, Ordinal: indexed.Ordinal,
+		SourceBranchID: cmp.Or(event.BranchID, "main"), SourceEventID: event.ID, SourceHash: event.Hash, Branches: []string{branch}, Workspace: workspace, Ordinal: indexed.Ordinal,
 	}
 	var content struct {
-		TypedResult *team.TaskResult `json:"typed_result"`
+		TypedResult jsontext.Value `json:"typed_result"`
 	}
 	if err := unmarshalHistoricalJSON(event.Payload, &content); err != nil {
 		return HistoricalResult{}, fmt.Errorf("%w: decode terminal result content: %v", ErrIntegrity, err)
 	}
-	if content.TypedResult != nil {
-		// Canonical result bytes are never changed: redact a detached view.
-		encoded, err := marshalHistoricalJSON(content.TypedResult)
-		if err != nil {
-			return HistoricalResult{}, fmt.Errorf("%w: encode historical content: %v", ErrIntegrity, err)
-		}
-		redacted, err := utils.RedactJSON(encoded)
+	if len(content.TypedResult) != 0 && !bytes.Equal(bytes.TrimSpace(content.TypedResult), []byte("null")) {
+		redacted, payloadHash, err := team.ProjectHistoricalTaskResult(content.TypedResult)
 		if err != nil {
 			return HistoricalResult{}, fmt.Errorf("%w: redact historical content: %v", ErrIntegrity, err)
 		}
 		var detached team.TaskResult
-		if err := unmarshalHistoricalJSON(redacted, &detached); err != nil {
+		decoder := jsonv1.NewDecoder(bytes.NewReader(redacted))
+		decoder.UseNumber()
+		if err := decoder.Decode(&detached); err != nil {
 			return HistoricalResult{}, fmt.Errorf("%w: decode historical content: %v", ErrIntegrity, err)
 		}
 		row.TypedResult = &detached
+		row.TypedResultJSON = redacted
+		row.PayloadSHA256 = payloadHash
 		row.Summary = detached.Summary
 	}
 	return row, nil

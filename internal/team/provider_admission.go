@@ -10,6 +10,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/cost"
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/modelprofile"
 )
 
@@ -38,6 +39,34 @@ func (a providerRequestAdmission) AdmitProviderRequest(ctx context.Context, requ
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Every media-bearing request must independently prove its canonical
+	// worker lease, frozen destination, supported capabilities and full input.
+	if providerRequestHasMedia(request) {
+		messages, err := providerMediaMessages(request)
+		if err != nil {
+			return err
+		}
+		if _, err := agent.ValidatePersistentMessages(messages); err != nil {
+			return err
+		}
+		if a.c == nil {
+			return media.Reject(media.AccessDenied, "native media request has no runtime owner")
+		}
+		metadata, err := a.c.resolveProviderReferenceMetadata(ctx, request)
+		if err != nil {
+			return err
+		}
+		if !metadata {
+			if _, err := a.c.resolveNativeProviderMedia(ctx, request); err != nil {
+				return err
+			}
+		}
+		ctx = withNativeProviderCounter(ctx, a.c)
+	}
+	return admitProviderRequestCapacity(ctx, request)
+}
+
+func admitProviderRequestCapacity(ctx context.Context, request agent.ProviderRequest) error {
 	if err := requireInvocationBinding(ctx); err != nil {
 		return err
 	}
@@ -99,19 +128,40 @@ func (a providerRequestAdmission) CommitProviderInvocation(ctx context.Context, 
 	if !request.AdmissionContext.IsBound() {
 		return fmt.Errorf("provider profile commit context is not provider-bound")
 	}
+	if err := a.c.validateInvocationProtocol(request); err != nil {
+		return err
+	}
 	if request.InvocationID == "" {
 		return fmt.Errorf("provider profile commit invocation ID is empty")
 	}
 	if request.AdmissionContext.ProfileTelemetryJSON == "" {
 		return fmt.Errorf("provider profile commit projection is unavailable")
 	}
+	metadata, err := a.c.resolveProviderReferenceMetadata(ctx, request)
+	if err != nil {
+		return err
+	}
 	var projection modelprofile.TelemetryProjection
 	if err := json.Unmarshal([]byte(request.AdmissionContext.ProfileTelemetryJSON), &projection); err != nil {
 		return fmt.Errorf("decode provider profile commit projection: %w", err)
 	}
 	projection.InvocationID = request.InvocationID
+	if projection.APIProtocol != request.AdmissionContext.APIProtocol {
+		return fmt.Errorf("provider profile API protocol differs from invocation binding")
+	}
 	if err := a.c.commitModelProfileResolved(ctx, projection); err != nil {
 		return err
+	}
+	if providerRequestHasMedia(request) {
+		ctx = withNativeProviderCounter(ctx, a.c)
+		// Media permission is durable before cost reservation and transport.
+		// A media append failure therefore cannot strand a cost reservation;
+		// a later cost denial still leaves an admission record, not execution.
+		if !metadata {
+			if err := a.c.commitMediaProviderAdmission(ctx, request); err != nil {
+				return err
+			}
+		}
 	}
 	if a.c.costManager == nil {
 		return nil

@@ -1,6 +1,7 @@
 package team
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/buildinfo"
 	"github.com/kjelly/hufu/internal/execution"
 )
 
@@ -68,8 +70,14 @@ func todoReplayWorksetConflictError(conflicts todoReplayWorksetConflicts) error 
 func ReduceToSessionData(events []RunEvent) *SessionData {
 	events = normalizeReplayEvents(events)
 	session := NewSession()
+	builds := make(map[string]*buildinfo.Info)
 	for _, e := range events {
 		switch e.Type {
+		case string(EventArtifactReadCoverageObserved):
+			if err := validateArtifactReadObservationEvent(e); err != nil {
+				session.RecoveryRequired = true
+				session.RecoveryReason = "invalid artifact read observation event"
+			}
 		case string(EventDecisionPrimitiveSettled):
 			var payload decisionPrimitivePayload
 			if err := validateDecisionPrimitiveEvent(e); err == nil && decodeStrictDecisionPayload(e.Payload, &payload) == nil {
@@ -79,6 +87,10 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 				session.RecoveryReason = "invalid decision primitive event"
 			}
 		case "run_started":
+			var started LifecycleEventPayload
+			if json.Unmarshal(e.Payload, &started) == nil {
+				builds[e.RunID] = started.HufuBuild
+			}
 			if session.CreatedAt == "" && e.Timestamp != "" {
 				session.CreatedAt = e.Timestamp
 			}
@@ -91,6 +103,14 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			if payload, err := decodeWorkflowCycleStarted(e); err == nil {
 				resetWorkflowCycleProjection(session, e.RunID, payload.TaskIDFloor)
 				session.addEntryAt("user", payload.Request, e.Timestamp)
+			}
+		case string(EventContractRecovery):
+			if plan, err := decodeContractRecovery(e); err == nil {
+				applyContractRecoverySession(session, plan)
+			}
+		case string(EventDerivedForkCreated):
+			if payload, err := decodeDerivedForkCreated(e); err == nil {
+				resetDerivedForkProjection(session, e, payload)
 			}
 		case "acceptance_contract_modified":
 			reduceAcceptanceContractModified(session, e)
@@ -113,6 +133,14 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			var snapshot ExecutionPolicySnapshot
 			if err := json.Unmarshal(e.Payload, &snapshot); err == nil && validateExecutionPolicySnapshot(&snapshot) == nil {
 				session.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(&snapshot)
+			}
+		case string(EventMediaInputAdmitted):
+			snapshot, err := decodeMediaInputEvent(e)
+			if err != nil {
+				session.RecoveryRequired = true
+				session.RecoveryReason = "invalid media input event"
+			} else {
+				session.MediaInputSnapshots = appendMediaInputSnapshot(session.MediaInputSnapshots, snapshot)
 			}
 		case string(EventRunInputsResolved):
 			var snapshot RunInputSnapshot
@@ -256,7 +284,7 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 					session.PendingWrapUp = nil
 				}
 				session.RunResult = &RunResult{
-					RunID: runID, Outcome: payload.Outcome, GoalSatisfied: payload.GoalSatisfied,
+					HufuBuild: builds[e.RunID], RunID: runID, Outcome: payload.Outcome, GoalSatisfied: payload.GoalSatisfied,
 					GoalMode: payload.GoalMode, Response: payload.Response, Reason: payload.Reason,
 					Warnings:   slices.Clone(payload.Warnings),
 					StopReason: payload.StopReason, ExitCode: payload.ExitCode,
@@ -366,6 +394,13 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 	} else {
 		session.DelegationPhase = DelegationPhaseInitialPending
 	}
+	grants, _, err := historicalResultGrantProjection(events)
+	if err != nil {
+		session.RecoveryRequired = true
+		session.RecoveryReason = "invalid historical result grant lineage"
+	} else {
+		session.HistoricalResultGrants = grants
+	}
 	return session
 }
 
@@ -404,6 +439,12 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 	// Earlier cycles remain in the journal for historical run inspection, but
 	// cannot establish tasks or verification evidence in the active cycle.
 	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type == string(EventDerivedForkCreated) {
+			if _, err := decodeDerivedForkCreated(events[i]); err == nil {
+				events = events[i+1:]
+				break
+			}
+		}
 		if events[i].Type == string(EventWorkflowCycleStarted) {
 			if _, err := decodeWorkflowCycleStarted(events[i]); err == nil {
 				events = events[i+1:]
@@ -422,6 +463,12 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 	frozenContracts := make(map[string]bool)
 
 	for _, e := range events {
+		if e.Type == string(EventContractRecovery) {
+			if plan, err := decodeContractRecovery(e); err == nil {
+				_ = applyContractRecoveryTasks(taskMap, plan)
+			}
+			continue
+		}
 		if e.Type == string(EventTaskResultCollectionCheckpointed) {
 			var payload resultCollectionEvent
 			if validateResultCollectionEvent(e) == nil && json.Unmarshal(e.Payload, &payload) == nil {
@@ -678,6 +725,9 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			}
 			continue
 		}
+		if e.Type == string(EventTaskMediaBound) {
+			continue
+		}
 		if !strings.HasPrefix(e.Type, "task_") {
 			continue
 		}
@@ -690,6 +740,8 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			ActionInputBindings           []ActionInputBinding        `json:"action_input_bindings"`
 			RunInputSnapshotID            string                      `json:"run_input_snapshot_id"`
 			RunInputSnapshotHash          string                      `json:"run_input_snapshot_hash"`
+			MediaBinding                  *MediaTaskBinding           `json:"media_binding,omitempty"`
+			MediaInputDigest              string                      `json:"media_input_digest,omitempty"`
 			MaterializedActionPayloadHash string                      `json:"materialized_action_payload_hash"`
 			BoundInputs                   map[string]string           `json:"bound_inputs"`
 			PlanTaskID                    string                      `json:"plan_task_id"`
@@ -780,6 +832,8 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization"`
 			ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot"`
 			ResultContract           *ResultContractRef                `json:"result_contract"`
+			HistoricalResultBinding  *HistoricalResultTaskBinding      `json:"historical_result_binding"`
+			DependencyResultView     *DependencyResultViewSpec         `json:"dependency_result_view,omitempty"`
 			WorkerWorkspace          *WorkerWorkspacePolicy            `json:"worker_workspace"`
 			ExecutionRoute           *ExecutionRouteBinding            `json:"execution_route"`
 			CatalogAction            *CatalogActionBinding             `json:"catalog_action"`
@@ -809,6 +863,9 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		}
 
 		item, exists := taskMap[taskID]
+		// Ordinary worker retries reopen a failed occurrence through a new
+		// attempt-start transition. Decide before applying its projected lease.
+		retryStart := isReplayRetryStart(item, e, payload.Status, payload.OccurrenceRevision, payload.DispatchID)
 		var priorContract *TodoItem
 		if exists && frozenContracts[taskID] {
 			priorContract = cloneTodoItem(item)
@@ -816,13 +873,14 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		failureEvent, hasFailureEvent := mergeFailureEventJSON(nil, e.Payload)
 		if !exists {
 			item = &TodoItem{
-				ID:                            taskID,
-				Phase:                         payload.Phase,
-				Action:                        payload.Action,
-				ActionProgress:                cloneActionProgress(payload.ActionProgress),
-				ActionInputBindings:           append([]ActionInputBinding(nil), payload.ActionInputBindings...),
-				RunInputSnapshotID:            payload.RunInputSnapshotID,
-				RunInputSnapshotHash:          payload.RunInputSnapshotHash,
+				ID:                   taskID,
+				Phase:                payload.Phase,
+				Action:               payload.Action,
+				ActionProgress:       cloneActionProgress(payload.ActionProgress),
+				ActionInputBindings:  append([]ActionInputBinding(nil), payload.ActionInputBindings...),
+				RunInputSnapshotID:   payload.RunInputSnapshotID,
+				RunInputSnapshotHash: payload.RunInputSnapshotHash,
+				MediaBinding:         payload.MediaBinding.Clone(), MediaInputDigest: payload.MediaInputDigest,
 				MaterializedActionPayloadHash: payload.MaterializedActionPayloadHash,
 				BoundInputs:                   cloneStringMap(payload.BoundInputs),
 				PlanTaskID:                    payload.PlanTaskID,
@@ -894,6 +952,8 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(payload.DynamicToolAuthorization),
 				ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(payload.ResourceScopeSnapshot),
 				ResultContract:                payload.ResultContract.clone(),
+				HistoricalResultBinding:       payload.HistoricalResultBinding.clone(),
+				DependencyResultView:          payload.DependencyResultView.clone(),
 				WorkerWorkspace:               payload.WorkerWorkspace.clone(),
 				ExecutionRoute:                payload.ExecutionRoute.clone(),
 				CatalogAction:                 payload.CatalogAction.clone(),
@@ -1141,6 +1201,12 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 		if payload.ResultContract != nil {
 			item.ResultContract = payload.ResultContract.clone()
 		}
+		if payload.HistoricalResultBinding != nil {
+			item.HistoricalResultBinding = payload.HistoricalResultBinding.clone()
+		}
+		if payload.DependencyResultView != nil {
+			item.DependencyResultView = payload.DependencyResultView.clone()
+		}
 		if payload.WorkerWorkspace != nil {
 			item.WorkerWorkspace = payload.WorkerWorkspace.clone()
 		}
@@ -1218,7 +1284,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 				}
 			}
 		case "task_started":
-			if !isReducerTerminalTaskStatus(item.Status) {
+			if !isReducerTerminalTaskStatus(item.Status) || retryStart {
 				item.Status = TaskInProgress
 			}
 		case "task_verifying":
@@ -1235,6 +1301,12 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 			}
 		case "task_completed":
 			item.Status = TaskDone
+			// Older lifecycle snapshots omitted a cleared active failure. A
+			// committed operator result repair proves that its submission stop
+			// was released; the original failure remains in the event history.
+			if !hasFailureEvent && completedOperatorResultRepair(item.ExecutionReceipt) {
+				item.FailureEvent = nil
+			}
 			if payload.Output != "" {
 				item.Output = payload.Output
 			}
@@ -1323,7 +1395,7 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 }
 
 // normalizeReplayEvents gives reducers deterministic duplicate semantics:
-// the first occurrence of an event ID or durable idempotency key wins. Input
+// the first occurrence of an event ID or branch-scoped idempotency key wins. Input
 // order is retained because the hash chain is the authoritative ordering; an
 // out-of-order slice remains replayable without allowing a late non-terminal
 // transition to reopen a terminal task.
@@ -1333,7 +1405,7 @@ func normalizeReplayEvents(events []RunEvent) []RunEvent {
 	}
 	result := make([]RunEvent, 0, len(events))
 	seenIDs := make(map[string]struct{}, len(events))
-	seenKeys := make(map[string]struct{}, len(events))
+	seenKeys := make(map[eventIdempotencyIdentity]struct{}, len(events))
 	for _, event := range events {
 		if event.ID != "" {
 			if _, seen := seenIDs[event.ID]; seen {
@@ -1342,10 +1414,11 @@ func normalizeReplayEvents(events []RunEvent) []RunEvent {
 			seenIDs[event.ID] = struct{}{}
 		}
 		if event.IdempotencyKey != "" {
-			if _, seen := seenKeys[event.IdempotencyKey]; seen {
+			identity := newEventIdempotencyIdentity(event.BranchID, event.IdempotencyKey)
+			if _, seen := seenKeys[identity]; seen {
 				continue
 			}
-			seenKeys[event.IdempotencyKey] = struct{}{}
+			seenKeys[identity] = struct{}{}
 		}
 		result = append(result, event)
 	}
@@ -1375,13 +1448,17 @@ func appendExecutionReceipt(receipts []ExecutionReceipt, receipt ExecutionReceip
 		}
 	}
 	res := append(receipts, receipt)
-	sort.SliceStable(res, func(i, j int) bool {
-		if res[i].Attempt != res[j].Attempt {
-			return res[i].Attempt < res[j].Attempt
-		}
-		return res[i].StartedAt.Before(res[j].StartedAt)
-	})
+	sortTaskExecutionReceipts(res)
 	return res
+}
+
+func sortTaskExecutionReceipts(receipts []ExecutionReceipt) {
+	slices.SortStableFunc(receipts, func(left, right ExecutionReceipt) int {
+		if order := cmp.Compare(left.Attempt, right.Attempt); order != 0 {
+			return order
+		}
+		return left.StartedAt.Compare(right.StartedAt)
+	})
 }
 
 func sameExecutionReceiptProjection(left, right ExecutionReceipt) bool {

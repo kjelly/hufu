@@ -84,6 +84,9 @@ func hasResultDecisions(compiled *CompiledResultContract) bool {
 }
 
 func validateResultDecisionCatalog(session *TeamSession, def *agent.AgentDef, compiled *CompiledResultContract) error {
+	if runtimeOwnsFilesRead(compiled) && (def == nil || agentUsesExternalBackend(session, def) || def.ForceMCP || session.Config.ForceMCP || !explicitlyDeclaresTool(def.Tools, "view") || slices.Contains(session.Config.ToolsDenied, "view")) {
+		return fmt.Errorf("runtime-owned files_read requires a local worker with native view")
+	}
 	if !hasResultDecisions(compiled) {
 		return nil
 	}

@@ -21,6 +21,9 @@ import (
 )
 
 func validateResultsPresentation(options *resultsCLIOptions, operation string) error {
+	if operation == "images" && options.render == "markdown" {
+		return errors.New("images supports --output text or json")
+	}
 	if operation == "pick" && options.displayMode == "plain" {
 		return errors.New("pick requires an interactive terminal display; use runs/list/search with --display-mode plain")
 	}
@@ -56,6 +59,8 @@ func presentResults(command *cobra.Command, options *resultsCLIOptions, operatio
 	var body bytes.Buffer
 	var err error
 	switch {
+	case operation == "deliverable" && options.output == "text":
+		_, err = body.WriteString(utils.SanitizeTerminalText(utils.RedactSecrets(response.Deliverable)))
 	case operation == "report" && options.output == "text":
 		_, err = body.WriteString(utils.SanitizeTerminalText(response.ReportMarkdown))
 	case operation == "overview" && options.output == "text":
@@ -76,7 +81,12 @@ func presentResults(command *cobra.Command, options *resultsCLIOptions, operatio
 		}
 	}
 	if full && options.output == "text" && !options.quiet {
-		if err := writeResultsSource(command.ErrOrStderr(), response, operation == "read" || operation == "final"); err != nil {
+		if operation == "deliverable" {
+			if _, err := fmt.Fprintf(command.ErrOrStderr(), "Accepted task deliverable · source run status: %s\n", safeResultsText(response.SourceRunStatus)); err != nil {
+				return err
+			}
+		}
+		if err := writeResultsSource(command.ErrOrStderr(), response, operation == "read" || operation == "final" || operation == "deliverable"); err != nil {
 			return err
 		}
 	}

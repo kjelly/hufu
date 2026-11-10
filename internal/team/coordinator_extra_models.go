@@ -19,6 +19,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/execution"
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/utils"
 )
@@ -49,6 +50,12 @@ func (c *Coordinator) executeTaskWithExtraModels(
 		if err := c.validateExtraModelExecutionTopology(task); err != nil {
 			return "", err
 		}
+	}
+	// The parent owns the public watchdog and provider proxy. Private leaves
+	// cannot acquire that ownership when constructing their worker agents.
+	// Establish it before any leaf can create a client against the upstream.
+	if err := c.providerBoundaryRequired(parentCtx); err != nil {
+		return "", fmt.Errorf("start fanout provider boundary: %w", err)
 	}
 	// Fanout is a parent-owned lifecycle boundary. Open the single runtime
 	// occurrence once before any leaf starts; isolated leaves below receive
@@ -142,6 +149,12 @@ func (c *Coordinator) executeTaskWithExtraModels(
 		return "", err
 	}
 
+	if item := c.todoItemByID(todoID); item != nil && item.MediaBinding != nil && !c.nativeMediaAcceptedWork(item) {
+		err := media.Reject(media.DurabilityRequired, "image fanout requires accepted terminal results from every launched leaf")
+		c.PersistFailureWithClass(agentName, taskDesc, todoID, c.FailureDetail(err, FailureSourceError), RetryNone, FailureProtocol)
+		return "", err
+	}
+
 	// Judge the candidates when a judge model is configured; otherwise (or
 	// if the judge fails) fall back to the plain concatenation merge.
 	judged, err := c.judgeAgentResults(parentCtx, taskDesc, todoID, allResults)
@@ -175,6 +188,15 @@ func executionTopologySelectors(task TaskDef) []string {
 		return modelTopologyFromExecutionTargets(task.ExecutionTopology)
 	}
 	return cloneModelTopology(task.ModelTopology)
+}
+
+// Private leaves share the parent's canonical media journal, branch tree,
+// invocation and snapshot projection; their workspaces contain worker files.
+func (c *Coordinator) canonicalJournalOwner() *Coordinator {
+	if c != nil && c.modelFanout != nil && c.modelFanout.parent != nil {
+		return c.modelFanout.parent.canonicalJournalOwner()
+	}
+	return c
 }
 
 // cloneAgentDef creates a deep copy of an AgentDef to prevent data races
@@ -395,8 +417,11 @@ func (c *Coordinator) executeSingleAgentWithModel(
 	// full topology because all leaves share its lifecycle record.
 	task.ModelTopology = []string{task.Model}
 	task.ExecutionTopology = []execution.ExecutionTarget{leafTarget}
-	isolationIdentity := strings.Join([]string{c.contextRunID(), todoID, agentName, agentDef.Generation.Model, slot}, "\x00")
-	isolatedCoord.modelExecutionID = "model-execution-" + hashContentKey(isolationIdentity)
+	parentRetries := 0
+	if parentItem := c.todoItemByID(todoID); parentItem != nil {
+		parentRetries = parentItem.Retries
+	}
+	isolatedCoord.modelExecutionID = modelFanoutExecutionID(c.contextRunID(), todoID, agentName, agentDef.Generation.Model, slot, parentRetries)
 	if resumeCheckpoint != nil {
 		isolatedCoord.modelExecutionID = resumeCheckpoint.ModelExecutionID
 	}
@@ -409,6 +434,10 @@ func (c *Coordinator) executeSingleAgentWithModel(
 		}
 		for i := range leafItem.ExecutionReceipts {
 			receipt := leafItem.ExecutionReceipts[i]
+			if err == nil && leafItem.Status == TaskDone && leafItem.ExecutionReceipt != nil &&
+				receipt.ModelExecutionID == isolatedCoord.modelExecutionID && receipt.Attempt == leafItem.ExecutionReceipt.Attempt {
+				receipt.AcceptedResult = cloneTaskResult(isolatedCoord.GetTaskResult(todoID))
+			}
 			if mergeErr := c.setAttemptReceipt(todoID, &receipt); mergeErr != nil {
 				if err == nil {
 					err = fmt.Errorf("merge %s leaf receipt: %w", slot, mergeErr)
@@ -692,6 +721,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		providerManager:                    orig.providerManager,
 		mcpManager:                         orig.mcpManager,
 		coreTools:                          coreToolsClone,
+		historicalTaskReader:               orig.HistoricalTaskReader(),
 		ollamaWebKeyPresent:                orig.ollamaWebKeyPresent,
 		secretRegistry:                     orig.secretRegistry,
 		decisionPrimitives:                 orig.decisionPrimitives,

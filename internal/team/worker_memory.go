@@ -287,15 +287,9 @@ func (s *defaultWorkerMemoryService) Recall(ctx context.Context, req WorkerMemor
 		if branch.BranchID == "" {
 			continue
 		}
-		sessionScope := req.Scope
-		sessionScope.BranchID = branch.BranchID
-		// Lineage filtering happens after every HybridRetrieve source has been
-		// scope-authorized (exact, FTS, and vector). Fetching all eligible
-		// branch records prevents post-fork matches from crowding out a valid
-		// pre-fork parent record before the provenance filter is applied.
-		sessionResults, _, retrievedSemantic, err := s.retrieve(ctx, options, contextstore.SearchRequest{
-			Query: query, SemanticQuery: req.SemanticQuery, Scope: sessionScope, Limit: 100000,
-		})
+		search := workerMemorySessionSearch(req, branch, query)
+		sessionScope := search.Scope
+		sessionResults, _, retrievedSemantic, err := s.retrieve(ctx, options, search)
 		if err != nil {
 			if isContextCancellation(err) {
 				return WorkerMemoryBundle{}, fmt.Errorf("recall worker session memory: %w", err)
@@ -1163,6 +1157,11 @@ func (c *Coordinator) recallWorkerMemory(ctx context.Context, agentDef *agent.Ag
 // (that is WP-6). The method exists so WP-6 can wire it to the session tree
 // without changing call sites.
 func (c *Coordinator) activeBranchID() string {
+	// A model leaf has a disposable workspace and no independent branch tree.
+	// Its memory, policy and evidence belong to the parent's canonical branch.
+	if c != nil && c.modelFanout != nil && c.modelFanout.parent != nil {
+		return c.modelFanout.parent.activeBranchID()
+	}
 	if c != nil && c.recoveryBranch != "" {
 		return c.recoveryBranch
 	}

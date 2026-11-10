@@ -161,7 +161,8 @@ func (p *promptInjector) promptAndEnqueue() {
 	}
 
 	stderrLog("\n%s\n", boldStyle.Render("─── Additional Prompt ───"))
-	line, err := p.promptReader.ReadLine(boldStyle.Render("> "))
+	stderrLog("%s\n", taskPromptHint)
+	line, err := readTaskPrompt(p.promptReader.ReadLine, boldStyle.Render("> "))
 	if err != nil {
 		if err == ergoreadline.ErrInterrupt || err == io.EOF {
 			return

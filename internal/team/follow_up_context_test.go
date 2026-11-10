@@ -27,6 +27,20 @@ func appendPriorReport(t *testing.T, c *Coordinator, report string) RunEvent {
 	return event
 }
 
+func TestPreviousResponsePreservesReportWithNativeVerificationDuration(t *testing.T) {
+	finished := RunEvent{ID: "completed-report", Type: string(EventRunFinished),
+		Payload: []byte(`{"outcome":"completed","response":"complete verified response","acceptance":{"verification_evidence":[{"duration":1500000000}]}}`)}
+	item, err := PreviousResponseContextItem(finished)
+	if err != nil || !strings.Contains(item.Content, "complete verified response") {
+		t.Fatalf("native report response: %v", err)
+	}
+	boundary := RunEvent{ID: "new-boundary", Type: string(EventWorkflowCycleStarted), RunID: "new-cycle"}
+	previous, err := previousWorkflowResponse([]RunEvent{finished, boundary}, "new-cycle")
+	if err != nil || previous.Content != item.Content || previous.ID != item.ID {
+		t.Fatalf("follow-up lost native report response: %v", err)
+	}
+}
+
 func followUpWorkerInput(c *Coordinator, name string, phase Phase, trigger ContextTrigger) WorkerContextInput {
 	def := &agent.AgentDef{Name: name, Role: "researcher"}
 	task := TaskDef{Agent: name, Goal: "Investigate the charging details mentioned above", Phase: phase}

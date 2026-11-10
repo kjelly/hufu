@@ -8,6 +8,9 @@ import (
 	"github.com/kjelly/hufu/internal/utils"
 )
 
+// FailureTypeResultCollection identifies protocol failures after work completed.
+const FailureTypeResultCollection = "collection"
+
 // FailureEventPayload is the self-contained diagnostic contract for a task
 // failure event (§9). It deliberately contains bounded evidence rather than a
 // copy of the task prompt/description.
@@ -266,7 +269,7 @@ func (c *Coordinator) failureEventForItem(item *TodoItem, class TaskFailureClass
 		event.WorkDir, event.Shell = "", ""
 		event.ExitCode = nil
 		event.Stderr = diagnostic
-		event.FailureType = "collection"
+		event.FailureType = FailureTypeResultCollection
 		event.Hint = "Result collection stopped after the work returned: " + diagnostic
 		return RedactedFailureEvent(event)
 	}
@@ -360,6 +363,9 @@ func mergeFailureEventJSON(existing *FailureEventPayload, payload json.RawMessag
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &top); err != nil {
 		return existing, false
+	}
+	if raw, present := top["failure_event"]; present && string(raw) == "null" {
+		return nil, true
 	}
 	fields := top
 	hasExplicitFailure := false

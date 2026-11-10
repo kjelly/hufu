@@ -27,6 +27,36 @@ func loadHufuCodeReviewTeam(t *testing.T) *TeamSession {
 	return session
 }
 
+func TestHufuCodeReviewChecksStatusAndGapsBeforeHandoff(t *testing.T) {
+	session := loadHufuCodeReviewTeam(t)
+	checked := 0
+	for _, task := range session.ContractTasks {
+		if task.ID != "review-primary-workset" && task.ID != "review-documentation-workset" && task.ID != "review-documentation-escalation" {
+			continue
+		}
+		checked++
+		contract := taskResultSubmissionContractForTask(task)
+		for _, tc := range []struct {
+			status, gaps string
+			valid        bool
+		}{
+			{"success", `[]`, true},
+			{"completed_with_gaps", `[{"description":"bounded evidence","missing_evidence":"source","kind":"semantic_uncertainty","requested_evidence":[],"limitations":[]}]`, true},
+			{"success", `[{"description":"bounded evidence","missing_evidence":"source","kind":"semantic_uncertainty","requested_evidence":[],"limitations":[]}]`, false},
+			{"completed_with_gaps", `[]`, false},
+		} {
+			candidate := &TaskResult{Status: tc.status, Summary: "reviewed", FilesRead: []FileRef{{Path: "sha256-observed"}},
+				StructuredPayload: &ResultPayload{Value: json.RawMessage(`{"record":{"findings":[],"invariant_assessments":[],"gaps":` + tc.gaps + `}}`)}}
+			if err := contract.validateFinalizableResult(candidate); (err == nil) != tc.valid {
+				t.Fatalf("%s status=%s gaps=%s: %v", task.ID, tc.status, tc.gaps, err)
+			}
+		}
+	}
+	if checked != 3 {
+		t.Fatalf("checked %d review contracts, want 3", checked)
+	}
+}
+
 func TestHufuCodeReviewChecksSourceFindingsBeforeHandoff(t *testing.T) {
 	session := loadHufuCodeReviewTeam(t)
 	checked := 0
@@ -55,7 +85,7 @@ func TestHufuCodeReviewChecksSourceFindingsBeforeHandoff(t *testing.T) {
 		contract := taskResultSubmissionContractForTask(task)
 		candidate := &TaskResult{Status: TaskResultStatusCompletedWithGaps, Summary: "coverage limitation", FilesRead: []FileRef{{Path: "sha256-observed"}},
 			Findings:          []Finding{{Summary: "gap", Detail: "cannot verify implementation", Severity: "info"}},
-			StructuredPayload: &ResultPayload{Value: json.RawMessage(`{"record":{"findings":[],"invariant_assessments":[]}}`)},
+			StructuredPayload: &ResultPayload{Value: json.RawMessage(`{"record":{"gaps":[{"description":"bounded evidence","missing_evidence":"source","kind":"semantic_uncertainty","requested_evidence":[],"limitations":[]}],"findings":[],"invariant_assessments":[]}}`)},
 		}
 		if err := contract.validateFinalizableResult(candidate); err == nil || !strings.Contains(err.Error(), "exactly 0 items") {
 			t.Fatalf("%s accepts unmirrored outer info finding: %v", task.ID, err)
@@ -111,7 +141,7 @@ func TestHufuCodeReviewChecksInvariantCopiesBeforeHandoff(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			candidate := &TaskResult{Status: TaskResultStatusCompletedWithGaps, Summary: "coverage limitation", FilesRead: []FileRef{{Path: "sha256-observed"}},
 				InvariantVerification: attested,
-				StructuredPayload:     &ResultPayload{Value: json.RawMessage(`{"record":{"findings":[],"invariant_assessments":` + tt.record + `}}`)},
+				StructuredPayload:     &ResultPayload{Value: json.RawMessage(`{"record":{"gaps":[{"description":"bounded evidence","missing_evidence":"source","kind":"semantic_uncertainty","requested_evidence":[],"limitations":[]}],"findings":[],"invariant_assessments":` + tt.record + `}}`)},
 			}
 			err := contract.validateFinalizableResult(candidate)
 			if tt.wantErr == "" {
@@ -361,22 +391,32 @@ func TestHufuCodeReviewCharacterizesPromptCannotRewriteStaticScope(t *testing.T)
 		Goal:       "Produce workset for the last 7 commits.",
 		ContractID: "produce-workset",
 		Action:     &Action{Payload: `{"max_commits":7}`},
+	}, {
+		Agent:      "reviewer",
+		Goal:       "Verify the workset for the last 7 commits.",
+		ContractID: "verify-targeted-go-tests",
+		Action:     &Action{Payload: `{"max_commits":7}`},
 	}}
 	bound, _, err := CompileTaskGoalContracts(session, requested)
 	if err != nil {
 		t.Fatalf("CompileTaskGoalContracts: %v", err)
 	}
-	if len(bound) != 1 || bound[0].Action == nil {
+	if len(bound) != 2 || bound[0].Action == nil || bound[1].Action == nil {
 		t.Fatalf("bound tasks = %#v", bound)
 	}
-	var payload struct {
-		Scope map[string]any `json:"scope"`
+	if len(bound[1].DependsOn) != 1 || bound[1].DependsOn[0] != 0 {
+		t.Fatalf("verifier lost its producer dependency: %#v", bound[1].DependsOn)
 	}
-	if err := json.Unmarshal([]byte(bound[0].Action.Payload), &payload); err != nil {
-		t.Fatalf("decode bound payload: %v", err)
-	}
-	if payload.Scope["count"] != float64(10) {
-		t.Fatalf("prompt/model payload changed static scope to %#v, want configured default 10", payload.Scope)
+	for _, task := range bound {
+		var payload struct {
+			Scope map[string]any `json:"scope"`
+		}
+		if err := json.Unmarshal([]byte(task.Action.Payload), &payload); err != nil {
+			t.Fatalf("decode bound payload: %v", err)
+		}
+		if payload.Scope["count"] != float64(10) {
+			t.Fatalf("prompt/model payload changed %s static scope to %#v, want configured default 10", task.ContractID, payload.Scope)
+		}
 	}
 }
 
@@ -528,6 +568,40 @@ func TestHufuCodeReviewReferenceScopeReachesWorkerPromptAndSubmission(t *testing
 				if _, message := c.structuredPayloadForSubmission(item.ID, makePayload(i == 1)); message != "" {
 					t.Fatalf("corrected item scope rejected: %s", message)
 				}
+			}
+		})
+	}
+}
+
+func TestDocumentationReviewContractsRejectInvariantClaims(t *testing.T) {
+	session := loadHufuCodeReviewTeam(t)
+	for _, id := range []string{"review-documentation-workset", "review-documentation-escalation"} {
+		t.Run(id, func(t *testing.T) {
+			var ref *ResultContractRef
+			for _, task := range session.ContractTasks {
+				if task.ID == id {
+					ref = task.ResultContract
+				}
+			}
+			if ref == nil || ref.ID != "schemas/documentation-review-v1.json" {
+				t.Fatalf("unexpected contract: %#v", ref)
+			}
+			compiled := session.ResultContracts[ref.ID]
+			value := map[string]any{"record": map[string]any{"kind": "review", "review_revision": "head", "workset_key": "unit-0000", "lens": "documentation-risk", "findings": []any{}, "gaps": []any{}, "reference_assessments": []any{}, "invariant_assessments": []any{}}}
+			raw, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := validateStructuredResultPayload(compiled, *ref, raw); err != nil {
+				t.Fatal(err)
+			}
+			value["record"].(map[string]any)["invariant_assessments"] = []any{map[string]any{"invariant_id": "invented", "status": "preserved", "summary": "unsupported"}}
+			raw, err = json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := validateStructuredResultPayload(compiled, *ref, raw); err == nil {
+				t.Fatal("accepted invented invariant claim")
 			}
 		})
 	}

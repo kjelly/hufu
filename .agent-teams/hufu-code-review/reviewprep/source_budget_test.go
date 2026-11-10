@@ -75,9 +75,9 @@ func TestPrepareSourceBudgetFailsBeforePublishingOversizedItems(t *testing.T) {
 			want := "workset_item_too_large"
 			switch limit {
 			case "single_source":
-				config.MaxSourceSnapshotBytes = 1000
+				config.MaxSourceSnapshotBytes = 400
 			case "single_hunk":
-				config.MaxReviewInputTokens = 1000
+				config.MaxReviewInputTokens = 300
 			case "total_items":
 				config.MaxSourceSnapshotBytes = 20_000
 				config.MaxWorksetItems = 1
@@ -173,7 +173,11 @@ func TestSourceBudgetSplitsSinglePathHunksWithoutLosingDiff(t *testing.T) {
 		data := []byte("@@ " + marker + " @@\n" + strings.Repeat("+payload\n", 100))
 		current.add("source.txt", data, bytes.Count(data, []byte("\n")))
 	}
-	config := Config{MaxSourceSnapshotBytes: 10_000, MaxReviewInputTokens: 800}
+	source, inventory, err := snapshot.bundleDataWithScopes("out/batches/unit-0000", current.paths, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := Config{MaxSourceSnapshotBytes: 10_000, MaxReviewInputTokens: estimateReviewInputTokens(len(source)) + estimateReviewInputTokens(len(inventory)) + estimateReviewInputTokens(len(current.parts[0].diff)) + 16}
 	result, err := boundReviewBatches(root, filepath.Join(root, "out"), []*batch{current}, snapshot, config, "", nil)
 	if err != nil {
 		t.Fatal(err)

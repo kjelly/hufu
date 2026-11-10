@@ -77,7 +77,7 @@ func (c *Coordinator) validateSidecarTaskContract(task TaskDef) error {
 	case SideEffectNone:
 		// Pure analysis: prose is the deliverable and there is nothing to prove.
 		return nil
-	case SideEffectWorkspaceWrite, SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential:
+	case SideEffectBrowserInteraction, SideEffectWorkspaceWrite, SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential:
 		if hasVerifier {
 			// An objective verifier, not the model's answer, decides the
 			// outcome — so the tool-less call cannot fake a success.

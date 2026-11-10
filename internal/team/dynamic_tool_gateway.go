@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -19,6 +20,8 @@ import (
 	"github.com/kjelly/hufu/internal/utils"
 )
 
+var errDynamicTargetUnavailable = errors.New("dynamic target descriptor is unavailable or changed")
+
 const (
 	dynamicToolGatewayName          = "use_dynamic_tool"
 	dynamicToolGatewaySchemaVersion = 1
@@ -31,6 +34,11 @@ const (
 
 type dynamicToolExecutor interface {
 	ExecuteAuthorizedTool(context.Context, string, string, string) (string, bool, error)
+}
+
+type dynamicTypedToolExecutor interface {
+	ExecuteAuthorizedToolResult(context.Context, string, string, string) (internalmcp.RuntimeToolResult, error)
+	SnapshotToolDescriptors() []internalmcp.MCPTool
 }
 
 type DynamicToolInvocationEvent struct {
@@ -326,12 +334,12 @@ func (g *dynamicToolGateway) call(ctx context.Context, callID string, request dy
 	}
 	reportDynamicToolInvocation(ctx, dynamicInvocation(target, callID, "authorized", ""), input, "")
 	reportDynamicToolInvocation(ctx, dynamicInvocation(target, callID, "started", ""), "", "")
-	content, isError, err := g.executor.ExecuteAuthorizedTool(ctx, target.Name, target.DescriptorSHA256, input)
+	published, err := g.executeResult(ctx, target, callID, input)
 	if err != nil {
 		code := "dynamic_transport_error"
 		if internalmcp.IsToolAuthorizationError(err) {
 			code = "dynamic_policy_denied"
-		} else if internalmcp.IsToolDescriptorMismatchError(err) {
+		} else if internalmcp.IsToolDescriptorMismatchError(err) || errors.Is(err, errDynamicTargetUnavailable) {
 			code = "dynamic_target_unavailable"
 		}
 		event := dynamicInvocation(target, callID, "finished", code)
@@ -339,6 +347,7 @@ func (g *dynamicToolGateway) call(ctx context.Context, callID string, request dy
 		reportDynamicToolInvocation(ctx, event, "", err.Error())
 		return dynamicGatewayError(code, err.Error()), nil
 	}
+	content, isError := published.Content, published.IsError
 	if !isError {
 		g.coordinator.captureToolObservation(ctx, fantasy.ToolCall{ID: callID}, target.Name, input, content)
 	}
@@ -346,6 +355,7 @@ func (g *dynamicToolGateway) call(ctx context.Context, callID string, request dy
 		ToolName: dynamicToolGatewayName, Content: content, IsError: isError,
 		LegacyWouldTruncate: len(content) > maxDynamicGatewayOutputBytes,
 	}); ok {
+		response.Metadata, response.StopTurn = published.Metadata, published.StopTurn
 		// The model sees a preview, so the invocation is recorded as
 		// truncated; the publication event binds the full digest.
 		event := dynamicInvocation(target, callID, "finished", "")
@@ -357,10 +367,38 @@ func (g *dynamicToolGateway) call(ctx context.Context, callID string, request dy
 	event := dynamicInvocation(target, callID, "finished", "")
 	event.IsError, event.Truncated, event.OriginalBytes = isError, truncated, originalBytes
 	reportDynamicToolInvocation(ctx, event, "", bounded)
-	if isError {
-		return fantasy.NewTextErrorResponse(bounded), nil
+	published.Content = bounded
+	return published, nil
+}
+
+// Resolve the complete manager-owned descriptor before executing the typed
+// call. The manager independently checks the same digest at its RPC boundary.
+func (g *dynamicToolGateway) executeResult(ctx context.Context, target DynamicToolTarget, callID, input string) (fantasy.ToolResponse, error) {
+	if executor, ok := g.executor.(dynamicTypedToolExecutor); ok {
+		for _, descriptor := range executor.SnapshotToolDescriptors() {
+			if descriptor.Name != target.Name {
+				continue
+			}
+			digest, err := internalmcp.MCPToolDescriptorSHA256(descriptor)
+			if err != nil || digest != target.DescriptorSHA256 {
+				return fantasy.ToolResponse{}, errDynamicTargetUnavailable
+			}
+			result, err := executor.ExecuteAuthorizedToolResult(ctx, target.Name, digest, input)
+			if err != nil {
+				return fantasy.ToolResponse{}, err
+			}
+			return internalmcp.PublishToolResult(ctx, descriptor, fantasy.ToolCall{ID: callID, Name: target.Name, Input: input}, result)
+		}
+		return fantasy.ToolResponse{}, errDynamicTargetUnavailable
 	}
-	return fantasy.NewTextResponse(bounded), nil
+	content, isError, err := g.executor.ExecuteAuthorizedTool(ctx, target.Name, target.DescriptorSHA256, input)
+	if err != nil {
+		return fantasy.ToolResponse{}, err
+	}
+	if isError {
+		return fantasy.NewTextErrorResponse(content), nil
+	}
+	return fantasy.NewTextResponse(content), nil
 }
 
 func dynamicInvocation(target DynamicToolTarget, callID, phase, reason string) DynamicToolInvocationEvent {

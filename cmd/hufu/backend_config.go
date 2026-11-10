@@ -48,7 +48,7 @@ func applyConfiguredBackends(session *team.TeamSession, global *config.Config) e
 	backends := map[string]config.BackendConfig{}
 	if global != nil {
 		maps.Copy(backends, global.Backends)
-		if session.Config.DefaultLLMBackend == "" && global.DefaultLLMBackend != "" {
+		if !session.RestoredLaunchSettings && session.Config.DefaultLLMBackend == "" && global.DefaultLLMBackend != "" {
 			session.Config.DefaultLLMBackend = execution.CanonicalTargetBackendName(global.DefaultLLMBackend)
 		}
 	}
@@ -79,16 +79,27 @@ func applyConfiguredBackends(session *team.TeamSession, global *config.Config) e
 		}
 		switch strings.ToLower(strings.TrimSpace(backend.Kind)) {
 		case "llm":
+			if backend.Has("protocol") {
+				return fmt.Errorf("LLM backend %q uses api-protocol; protocol is reserved for agent backends", name)
+			}
+			apiProtocol, err := config.NormalizeAPIProtocol(backend.APIProtocol)
+			if err != nil {
+				return fmt.Errorf("LLM backend %q: %w", name, err)
+			}
 			if backend.Type != "" && backend.Type != "openai-compatible" && backend.Type != "ollama" {
 				return fmt.Errorf("LLM backend %q has unsupported type %q", name, backend.Type)
 			}
 			providers[name] = config.ProviderConfig{
 				ProviderURL:       backend.BaseURL,
 				ProviderAPIKey:    backend.ProviderAPIKey,
+				APIProtocol:       apiProtocol,
 				IntrospectionType: backend.Type,
 				MaxConcurrent:     backend.MaxConcurrent,
 			}
 		case "agent":
+			if backend.Has("api-protocol") {
+				return fmt.Errorf("agent backend %q cannot set api-protocol", name)
+			}
 			if backend.Type != "codex-app-server" {
 				return fmt.Errorf("agent backend %q has unsupported type %q", name, backend.Type)
 			}
@@ -130,6 +141,10 @@ func canonicalLegacyProviders(source map[string]config.ProviderConfig) (map[stri
 		if _, exists := result[name]; exists {
 			return nil, fmt.Errorf("provider aliases resolve to the same canonical backend name %q", name)
 		}
+		if err := provider.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid provider %q: %w", name, err)
+		}
+		provider.APIProtocol, _ = config.NormalizeAPIProtocol(provider.APIProtocol)
 		result[name] = provider
 	}
 	return result, nil

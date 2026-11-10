@@ -75,6 +75,10 @@ type ContextItem struct {
 	// ConflictIDs are open memory conflicts for this item. They only change
 	// manifest attribution (knowledge_state=conflicting), never the prompt.
 	ConflictIDs []string
+	// DependencyResultView is runtime-authenticated presentation attribution;
+	// canonical dependency results remain separate compiler inputs.
+	DependencyResultView *DependencyResultViewAttribution    `json:"dependency_result_view,omitempty"`
+	HistoricalResult     *HistoricalResultContextAttribution `json:"historical_result,omitempty"`
 }
 
 type CoordinatorContextInput struct {
@@ -129,6 +133,8 @@ type WorkerContextInput struct {
 	ContextFiles         map[string]string // filename -> content
 	ConcurrentTasks      string
 	DependencyResults    []TaskResult
+	DependencyView       *dependencyResultView    `json:"-"`
+	HistoricalResults    *historicalResultContext `json:"-"`
 	ModelContext         ModelContextSpec
 	SystemTokens         int
 	ToolsTokens          int
@@ -855,6 +861,9 @@ func workerNormativeContextItems(input WorkerContextInput) []ContextItem {
 
 // CompileWorkerContext collects all worker context sources and executes the pipeline.
 func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (CompiledContext, error) {
+	if err := validateDependencyResultViewInput(input); err != nil {
+		return CompiledContext{}, err
+	}
 	ctx = contextstore.WithEvaluationTime(ctx, contextEvaluationTime(ctx, input.CanonicalMemory))
 	if finish := startContextStage(ctx, input.Request.RequestID, input.Request.ModelExecutionID, "compilation"); finish != nil {
 		defer finish()
@@ -894,6 +903,9 @@ func CompileWorkerContext(ctx context.Context, input WorkerContextInput) (Compil
 		compiled.Semantic = mergeSemanticRetrievalIdentity(compiled.Semantic, input.CanonicalMemory.SharedPersistentSemantic)
 	}
 	if err := validateRequiredEvidenceContext(input, compiled); err != nil {
+		return CompiledContext{}, err
+	}
+	if err := validateHistoricalResultContext(input, compiled); err != nil {
 		return CompiledContext{}, err
 	}
 	return compiled, nil
@@ -941,10 +953,18 @@ func workerProjectAndDependencyItems(input WorkerContextInput) []ContextItem {
 		}
 		items = append(items, ContextItem{ID: "file:" + fileName, Kind: "project_instructions", Content: fmt.Sprintf("### %s\n```\n%s\n```", fileName, fileContent), Priority: PriorityProjectInstructions, Compressible: true, DedupKey: hashContentKey(fileContent)})
 	}
-	if depsFormatted := FormatDependencyResults(input.DependencyResults); depsFormatted != "" {
-		items = append(items, ContextItem{ID: "dependency_results", Kind: "dependency_result", Content: depsFormatted, Priority: PriorityDependencyTaskResults, DedupKey: hashContentKey(depsFormatted), Required: true})
+	var depsFormatted string
+	var attribution *DependencyResultViewAttribution
+	if input.DependencyView != nil {
+		depsFormatted = input.DependencyView.content
+		attribution = input.DependencyView.attribution.Clone()
+	} else {
+		depsFormatted = FormatDependencyResults(input.DependencyResults)
 	}
-	return items
+	if depsFormatted != "" {
+		items = append(items, ContextItem{ID: "dependency_results", Kind: "dependency_result", Content: depsFormatted, Priority: PriorityDependencyTaskResults, DedupKey: hashContentKey(depsFormatted), Required: true, DependencyResultView: attribution})
+	}
+	return append(items, historicalResultCompilerItems(input.HistoricalResults)...)
 }
 
 func appendWorkerHistoricalContext(ctx context.Context, input WorkerContextInput, items []ContextItem) []ContextItem {

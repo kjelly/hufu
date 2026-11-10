@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -11,6 +13,37 @@ import (
 	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/providerintrospection"
 )
+
+func TestProviderExecutionIdentityAPIProtocol(t *testing.T) {
+	legacyInput := "local\x00ollama\x00https://fixture.invalid/v1\x00secret\x00false"
+	legacyHash := fmt.Sprintf("%x", sha256.Sum256([]byte(legacyInput)))
+	var explicitHash string
+	for _, raw := range []string{"", "chat-completions", " CHAT-COMPLETIONS "} {
+		pm, err := NewProviderManager("https://fixture.invalid/v1", "secret", map[string]config.ProviderConfig{"local": {APIProtocol: raw}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, model := range []string{"test", "ollama/other", "unknown/fallback"} {
+			identity, err := pm.ResolveProviderExecutionIdentity(model)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if raw == "" {
+				if identity.ConfigurationHash != legacyHash {
+					t.Fatal("legacy hash input changed")
+				}
+			} else {
+				if identity.ConfigurationHash == legacyHash {
+					t.Fatal("explicit protocol identity not bound")
+				}
+				if explicitHash != "" && explicitHash != identity.ConfigurationHash {
+					t.Fatal("canonical protocol identity changed")
+				}
+				explicitHash = identity.ConfigurationHash
+			}
+		}
+	}
+}
 
 func TestProviderManagerResolvesMatchingAndDefaultProviderRefs(t *testing.T) {
 	manager, err := NewProviderManager("http://127.0.0.1:11434/v1", "default-secret", map[string]config.ProviderConfig{

@@ -52,25 +52,28 @@ func cloneResultCandidate(c *ResultCandidate) *ResultCandidate {
 }
 
 func (c *Coordinator) resultCandidateEvidenceHash(item *TodoItem) (string, error) {
+	sources, err := c.resultCandidateEvidenceSources(item)
+	if err != nil {
+		return "", err
+	}
+	return collectionDigest(sources)
+}
+
+func (c *Coordinator) resultCandidateEvidenceSources(item *TodoItem) ([]*TodoItem, error) {
 	// Hash the actual accepted results, including bindings/receipts, rather
 	// than accepting a model-supplied list of source hashes.
 	var sources []*TodoItem
 	for _, id := range resultDependencyIDs(item) {
 		source := c.todoItemByID(id)
 		if source == nil || source.Status != TaskDone || source.TypedResult == nil {
-			return "", fmt.Errorf("candidate source %s is unavailable", id)
+			return nil, fmt.Errorf("candidate source %s is unavailable", id)
 		}
 		if err := c.validateAcceptedDependencyPayload(source); err != nil {
-			return "", err
+			return nil, err
 		}
 		sources = append(sources, source)
 	}
-	data, err := json.Marshal(sources, json.Deterministic(true))
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
+	return sources, nil
 }
 
 func (c *Coordinator) saveResultCandidate(ctx context.Context, taskID, raw string, issues []ResultSubmissionIssue, truncated bool, base *ResultCandidate) (*ResultCandidate, error) {

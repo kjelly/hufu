@@ -23,7 +23,7 @@ func (c *Coordinator) workflowMCPToolAllowed(ctx context.Context, def *agent.Age
 		return false
 	}
 	ctx = context.WithValue(ctx, tools.AgentNameKey, def.Name)
-	return c.workerMCPObservationGrant(ctx, name, inner)
+	return c.workerMCPObservationGrant(ctx, name, inner) || c.workerMCPBrowserInteractionGrant(ctx, name, inner)
 }
 
 func (c *Coordinator) filterWorkflowMCPTools(ctx context.Context, def *agent.AgentDef, candidates []fantasy.AgentTool) []fantasy.AgentTool {
@@ -93,7 +93,7 @@ func (c *Coordinator) readOnlyToolCall(toolName, input string) bool {
 
 func (c *Coordinator) workerArtifactToolDenial(ctx context.Context, name string, inner fantasy.AgentTool) string {
 	policy, _ := ctx.Value(tools.ArtifactPathPolicyKey).(tools.ArtifactPathPolicy)
-	granted := c.workerMCPObservationGrant(ctx, name, inner)
+	granted := c.workerMCPObservationGrant(ctx, name, inner) || c.workerMCPBrowserInteractionGrant(ctx, name, inner)
 	// A missing artifact/read-only marker must not create authority for a
 	// policy-enabled tool (including coordinator or future execution paths).
 	if c != nil && c.mcpManager != nil {
@@ -108,7 +108,7 @@ func (c *Coordinator) workerArtifactToolDenial(ctx context.Context, name string,
 }
 
 func (c *Coordinator) workerReadOnlyToolMutation(ctx context.Context, name, input string, inner fantasy.AgentTool) bool {
-	if c.workerMCPObservationGrant(ctx, name, inner) {
+	if c.workerMCPObservationGrant(ctx, name, inner) || c.workerMCPBrowserInteractionGrant(ctx, name, inner) {
 		return false
 	}
 	return readOnlyToolMutation(name, input)
@@ -170,4 +170,28 @@ func validateExecutionMCPWorkerPolicies(entries []ExecutionMCPWorkerPolicySnapsh
 		}
 	}
 	return nil
+}
+
+// withBrowserInteractionAuthority resets inherited authority for each task.
+func withBrowserInteractionAuthority(ctx context.Context, def *agent.AgentDef, task TaskDef) context.Context {
+	effect, _, _ := resolveTaskRecovery(def, task)
+	ctx = context.WithValue(ctx, tools.BrowserInteractionAllowedKey, effect == SideEffectBrowserInteraction && task.WorksetBinding == nil)
+	if effect == SideEffectBrowserInteraction {
+		ctx = context.WithValue(ctx, tools.AgentReadOnlyExecutionKey, true)
+	}
+	return ctx
+}
+
+func (c *Coordinator) workerMCPBrowserInteractionGrant(ctx context.Context, name string, inner fantasy.AgentTool) bool {
+	allowed, _ := ctx.Value(tools.BrowserInteractionAllowedKey).(bool)
+	if !allowed || c == nil || c.session == nil || c.mcpManager == nil || !c.mcpManager.IsBrowserInteractionTool(name) {
+		return false
+	}
+	agentName, _ := ctx.Value(tools.AgentNameKey).(string)
+	def := c.session.Agents[strings.ToLower(agentName)]
+	noNet, _ := ctx.Value(tools.AgentNetworkBlockKey).(bool)
+	if def == nil || c.toolDeniedByTeam(name) || c.noNet || def.NoNet || noNet || !explicitlyDeclaresTool(def.Tools, name) {
+		return false
+	}
+	return inner == nil || c.mcpManager.OwnsAgentTool(inner)
 }

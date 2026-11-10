@@ -239,7 +239,7 @@ func compileRoutedContextForTool(ctx context.Context, c *Coordinator, request Co
 		return CompiledContext{}, fmt.Errorf("provider-bound context unavailable for context tool")
 	}
 	input := WorkerContextInput{Request: request, Goal: request.Goal, CanonicalMemory: &route.Bundle, ModelContext: invocation.ModelContext}
-	return c.ContextCompiler().CompileWorkerContext(ctx, input)
+	return c.compileWorkerContext(ctx, input)
 }
 
 func (c *Coordinator) toolFailureRecoveryGoal(ctx context.Context) string {

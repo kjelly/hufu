@@ -473,7 +473,7 @@ func (c *Coordinator) serializeMutationTasks(tasks []TaskDef) []TaskDef {
 	lastMutation := -1
 	for i := range out {
 		switch c.effectiveSideEffect(out[i]) {
-		case SideEffectWorkspaceWrite, SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential:
+		case SideEffectBrowserInteraction, SideEffectWorkspaceWrite, SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential:
 			if lastMutation >= 0 && !containsInt(out[i].DependsOn, lastMutation) {
 				out[i].DependsOn = append(append([]int(nil), out[i].DependsOn...), lastMutation)
 			}
@@ -510,7 +510,7 @@ func serializeConflictingMutationTasks(tasks []TaskDef, envelopes []TaskExecutio
 
 func isMutationSideEffect(effect SideEffectClass) bool {
 	switch effect {
-	case SideEffectWorkspaceWrite, SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential, SideEffectUnknown:
+	case SideEffectBrowserInteraction, SideEffectWorkspaceWrite, SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential, SideEffectUnknown:
 		return true
 	default:
 		return false

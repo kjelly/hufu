@@ -10,10 +10,12 @@ type providerUsageKey struct{}
 // providerUsageObservation belongs to one admitted provider invocation. A
 // transport can preserve usage presence that an SDK's value fields erase.
 type providerUsageObservation struct {
-	mu       sync.Mutex
-	reported bool
-	conflict bool
-	usage    *ProviderInvocationUsage
+	mu               sync.Mutex
+	wireReported     bool
+	responseObserved bool
+	reported         bool
+	conflict         bool
+	usage            *ProviderInvocationUsage
 }
 
 func withProviderUsageObservation(ctx context.Context) context.Context {
@@ -49,6 +51,9 @@ func observedProviderUsage(ctx context.Context, result ProviderInvocationResult)
 	}
 	observation.mu.Lock()
 	defer observation.mu.Unlock()
+	if observation.responseObserved {
+		result.ResponseObserved = true
+	}
 	if observation.reported {
 		result.Usage = nil
 		result.UsageReported = false

@@ -1,9 +1,40 @@
 package team
 
 import (
+	"reflect"
+	"slices"
 	"strconv"
 	"testing"
+	"time"
 )
+
+func TestExecutionReceiptProjectionPreservesOutOfOrderCompletions(t *testing.T) {
+	list := NewTaskTracker().TodoList()
+	id := list.AddBatch([]TodoSpec{{Agent: "worker", Desc: "parallel models"}})[0].ID
+	started := time.Unix(100, 0)
+	slow := ExecutionReceipt{RunID: "run", TaskID: id, Attempt: 1, ModelExecutionID: "slow",
+		StartedAt: started, FinishedAt: started.Add(3 * time.Second), TranscriptRef: "slow-transcript", ExitCode: new(0)}
+	fast := ExecutionReceipt{RunID: "run", TaskID: id, Attempt: 1, ModelExecutionID: "fast",
+		StartedAt: started.Add(time.Second), FinishedAt: started.Add(2 * time.Second), TranscriptRef: "fast-transcript", ExitCode: new(7)}
+	for _, receipt := range []ExecutionReceipt{fast, slow} {
+		if err := list.SetExecutionReceipt(id, &receipt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	item := list.Items()[0]
+	if !reflect.DeepEqual(item.ExecutionReceipts, []ExecutionReceipt{slow, fast}) || !reflect.DeepEqual(item.ExecutionReceipt, &slow) {
+		t.Fatal("completion order changed receipt bytes or the latest completion")
+	}
+	legacy := cloneTodoItem(item)
+	slices.Reverse(legacy.ExecutionReceipts)
+	if err := compareSingleTaskProjection(legacy, item); err != nil {
+		t.Fatalf("legacy completion order differs from canonical replay: %v", err)
+	}
+	legacy.ExecutionReceipts[0].TranscriptRef = "changed-evidence"
+	if err := compareSingleTaskProjection(legacy, item); err == nil {
+		t.Fatal("chronological normalization hid changed receipt evidence")
+	}
+}
 
 // receiptVerifyResult returns the verify result attached to the receipt for
 // (runID, attempt), or nil when no such receipt exists.
@@ -106,5 +137,32 @@ func TestTodoListItemsDeepCopyReceiptVerifyResult(t *testing.T) {
 	snapshot.Stderr = "mutated-by-snapshot"
 	if got := receiptVerifyResult(t, tl, todoID, "r", 1); got == nil || got.Stderr != "original" {
 		t.Errorf("canonical receipt verify result = %#v, want Stderr %q", got, "original")
+	}
+}
+
+func TestTodoListVerificationSelectsActiveModelExecution(t *testing.T) {
+	for _, lifecycle := range []int{1, 2} {
+		t.Run(strconv.Itoa(lifecycle), func(t *testing.T) {
+			list := NewTaskTracker().TodoList()
+			id := list.AddBatch([]TodoSpec{{Agent: "worker", Desc: "verify accepted result"}})[0].ID
+			old := ExecutionReceipt{RunID: "run", TaskID: id, Attempt: 1, OccurrenceAttempt: 1, ModelExecutionID: "original", VerifyResult: &VerificationResult{ExitCode: 0, Fingerprint: "original-verifier"}}
+			current := ExecutionReceipt{RunID: "run", TaskID: id, Attempt: 1, OccurrenceAttempt: lifecycle, ModelExecutionID: "active"}
+			for _, r := range []ExecutionReceipt{old, current} {
+				if err := list.SetExecutionReceipt(id, &r); err != nil {
+					t.Fatal(err)
+				}
+			}
+			list.UpdateReceiptVerifyResult("run", id, 1, &VerificationResult{ExitCode: 1, Fingerprint: "new-verifier"})
+			item := list.Items()[0]
+			for _, r := range item.ExecutionReceipts {
+				want := "original-verifier"
+				if r.ModelExecutionID == "active" {
+					want = "new-verifier"
+				}
+				if r.VerifyResult == nil || r.VerifyResult.Fingerprint != want {
+					t.Fatal("verification overwrote another execution's evidence")
+				}
+			}
+		})
 	}
 }

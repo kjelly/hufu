@@ -23,18 +23,19 @@ const (
 // model supplies only schema-declared decisions for runtime-issued row keys.
 // All domain vocabulary, including the finite choices, stays in the schema.
 type resultFixedCollectionSpec struct {
-	DecisionGroups  []resultDecisionGroup `json:"decision_groups,omitempty"`
-	ItemsPointer    string                `json:"items_pointer"`
-	SourceContracts []string              `json:"source_contracts"`
-	SourceScope     string                `json:"source_scope,omitempty"`
-	SourcePointer   string                `json:"source_pointer"`
-	TaskIDField     string                `json:"task_id_field,omitempty"`
-	IndexField      string                `json:"index_field,omitempty"`
-	ValueBindings   map[string]string     `json:"value_bindings,omitempty"`
-	ChoiceFields    []string              `json:"choice_fields"`
-	decisionSchema  map[string]any
-	itemSchema      map[string]any
-	arraySchema     *jsonschema.Schema
+	SourceTaskContracts []string              `json:"source_task_contracts,omitempty"`
+	DecisionGroups      []resultDecisionGroup `json:"decision_groups,omitempty"`
+	ItemsPointer        string                `json:"items_pointer"`
+	SourceContracts     []string              `json:"source_contracts"`
+	SourceScope         string                `json:"source_scope,omitempty"`
+	SourcePointer       string                `json:"source_pointer"`
+	TaskIDField         string                `json:"task_id_field,omitempty"`
+	IndexField          string                `json:"index_field,omitempty"`
+	ValueBindings       map[string]string     `json:"value_bindings,omitempty"`
+	ChoiceFields        []string              `json:"choice_fields"`
+	decisionSchema      map[string]any
+	itemSchema          map[string]any
+	arraySchema         *jsonschema.Schema
 }
 
 // ResultCollectionBinding is runtime-owned provenance for an assembled array.
@@ -117,6 +118,9 @@ func (s *resultFixedCollectionSpec) compile(root map[string]any) error {
 			return fmt.Errorf("source_contracts requires unique, non-empty schema IDs")
 		}
 		seen[id] = true
+	}
+	if err := validateCollectionSourceTasks(s.SourceTaskContracts); err != nil {
+		return err
 	}
 	array, err := fixedCollectionSchemaAt(root, s.ItemsPointer)
 	if err != nil || array["type"] != "array" {
@@ -458,6 +462,20 @@ func validateResultFixedCollections(value any, bindings []ResultCollectionBindin
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func validateCollectionSourceTasks(ids []string) error {
+	if len(ids) > maxConfiguredEvidenceSources {
+		return fmt.Errorf("source_task_contracts exceeds source limit")
+	}
+	seenTasks := make(map[string]bool)
+	for _, id := range ids {
+		if strings.TrimSpace(id) != id || id == "" || len(id) > maxTaskResultPointerBytes || seenTasks[id] {
+			return fmt.Errorf("source_task_contracts requires unique bounded task contract IDs")
+		}
+		seenTasks[id] = true
 	}
 	return nil
 }

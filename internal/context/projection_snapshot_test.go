@@ -28,7 +28,7 @@ import (
 
 func TestProjectionSnapshot_RebuildWritesAllItemsInScope(t *testing.T) {
 	dir := t.TempDir()
-	repo, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(dir)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestProjectionSnapshot_RebuildWritesAllItemsInScope(t *testing.T) {
 
 func TestProjectionSnapshot_RebuildDoesNotOverwriteLegacyFiles(t *testing.T) {
 	dir := t.TempDir()
-	repo, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(dir)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestProjectionSnapshot_LegacySTMRespectsMetadataSection(t *testing.T) {
 
 func TestProjectionSnapshot_RedactedContentInProjection(t *testing.T) {
 	dir := t.TempDir()
-	repo, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(dir)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestProjectionSnapshot_CanonicalProjectionHeader(t *testing.T) {
 
 func TestProjectionSnapshot_RebuildProjectionIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
-	repo, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(dir)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestProjectionSnapshot_RebuildProjectionIsIdempotent(t *testing.T) {
 // include agent-scoped private items in the projection.
 func TestProjectionSnapshot_Contract_SharedOnlyProjection(t *testing.T) {
 	dir := t.TempDir()
-	repo, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(dir)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}

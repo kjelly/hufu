@@ -127,6 +127,16 @@ func composeJudgedOutput(candidates []*agentResult, v judgeVerdict) string {
 // its response parsing fails — in all cases the caller falls back to
 // mergeAgentResults.
 func (c *Coordinator) judgeAgentResults(ctx context.Context, goal, todoID string, results []*agentResult) (string, error) {
+	ctx = withInvocationMetadata(ctx, InvocationMetadata{RunID: c.executionRunID, TaskID: todoID, Attempt: c.taskAttempt(todoID),
+		AgentName: "judge", AgentRole: "auxiliary", Purpose: "judge"})
+	// A RunTask fanout may have started providers only through private leaves.
+	// The parent must acquire its own invocation boundary before constructing
+	// its configured judge, just as the coordinator planning path does.
+	if c.judgeModel != "" && c.providerManager != nil {
+		if err := c.startProviderExecutionBoundary(ctx); err != nil {
+			return "", fmt.Errorf("start judge provider boundary: %w", err)
+		}
+	}
 	s := c.AgentPool().JudgeSidecar()
 	if s == nil {
 		if err := c.recordAuxiliaryFallback(ctx, "judge", "no_model_fallback"); err != nil {

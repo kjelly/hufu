@@ -4,11 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"charm.land/fantasy"
+	"charm.land/fantasy/schema"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/modelprofile"
 )
@@ -338,5 +346,129 @@ func providerAdmissionTestContext(t *testing.T, modelID string) agent.ProviderAd
 	return agent.ProviderAdmissionContext{
 		ModelID: modelID, ProviderIdentity: "ollama", ProviderBaseURL: "http://localhost:11434/v1", Bound: true,
 		ContextWindow: 8_192, MaxOutputTokens: 64, SafetyMarginTokens: 32, ProfileTelemetryJSON: string(encoded),
+	}
+}
+
+func TestResponsesAdmissionCapacityBoundary(t *testing.T) {
+	resolution, _ := agent.ResolveAPIProtocol("responses")
+	for _, object := range []bool{false, true} {
+		for _, delta := range []int{-1, 0} {
+			name := "call"
+			if object {
+				name = "object"
+			}
+			if delta < 0 {
+				name += "/over_capacity"
+			} else {
+				name += "/exact_capacity"
+			}
+			t.Run(name, func(t *testing.T) {
+				prompt := fantasy.Prompt{fantasy.NewUserMessage(strings.Repeat("中文🙂", 200))}
+				request := agent.ProviderRequest{ModelID: "remote/custom", AdmissionContext: agent.ProviderAdmissionContext{ModelID: "remote/custom", APIProtocol: resolution, Bound: true, MaxOutputTokens: 64, SafetyMarginTokens: 32}}
+				if object {
+					request.ObjectCall = &fantasy.ObjectCall{Prompt: prompt, MaxOutputTokens: new(int64(64)), Schema: schema.Generate(reflect.TypeFor[struct {
+						Value string `json:"value"`
+					}]())}
+				} else {
+					request.Call = &fantasy.Call{Prompt: prompt, MaxOutputTokens: new(int64(64)), Tools: []fantasy.Tool{fantasy.FunctionTool{Name: "lookup", Description: strings.Repeat("schema description", 100), InputSchema: map[string]any{"type": "object"}}}}
+				}
+				tokens, err := defaultCounter.CountProviderRequest(t.Context(), request.ModelID, request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				floor, err := agent.CountProviderRequestTokens(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tokens < floor {
+					t.Fatalf("counter=%d conservative floor=%d", tokens, floor)
+				}
+				request.AdmissionContext.ContextWindow = tokens + 64 + 32 + delta
+				err = (providerRequestAdmission{}).AdmitProviderRequest(t.Context(), request)
+				var fit *CannotFitError
+				if delta < 0 {
+					if !errors.As(err, &fit) || !fit.ProvenNoSend {
+						t.Fatalf("admission=%v", err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}
+
+func TestResponsesWireUsageSettlesCostLedger(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw, status           string
+		known                       bool
+		input, cache, output, total int64
+	}{
+		{"cache and reasoning", `{"input_tokens":10,"input_tokens_details":{"cached_tokens":4},"output_tokens":6,"output_tokens_details":{"reasoning_tokens":2},"total_tokens":16}`, "completed", true, 6, 4, 6, 16},
+		{"explicit zero", `{"input_tokens":0,"output_tokens":0,"total_tokens":0}`, "completed", true, 0, 0, 0, 0},
+		{"unknown", "null", "completed", false, 0, 0, 0, 0},
+		{"inconsistent", `{"input_tokens":10,"output_tokens":2,"total_tokens":1}`, "completed", false, 0, 0, 0, 0},
+		{"failed with usage", `{"input_tokens":10,"output_tokens":2,"total_tokens":12}`, "failed", true, 10, 0, 2, 12},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/responses" {
+					http.NotFound(w, r)
+					return
+				}
+				calls.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprintf(w, `{"id":"usage-response","object":"response","model":"test","status":%q,"output":[{"type":"message","id":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"done","annotations":[]}]}],"usage":%s}`, tc.status, tc.raw)
+			}))
+			t.Cleanup(server.Close)
+			c := newTestCoordinator(t)
+			store, err := NewEventStore(c.session.Workspace, "run-test", "session-usage")
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.eventStore = store
+			pm, err := agent.NewProviderManager(server.URL+"/v1", "", map[string]config.ProviderConfig{"local": {APIProtocol: "responses"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.providerManager = pm
+			c.costManager = newProviderAdmissionCostManager(t, "ollama/test", cost.UnknownPriceDeny)
+			runtime := NewModelProfileRuntimeWithCatalog(pm, true, nil)
+			bound := runtime.ResolveAdmission(t.Context(), "ollama/test", 8192, 32, 0).Admission
+			inner, err := pm.GetProvider("ollama/test").LanguageModel(t.Context(), "ollama/test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			model := agent.NewAdmittedLanguageModelWithContext("ollama/test", inner, c.providerAdmission(), bound)
+			_, err = model.Generate(t.Context(), fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("review")}, MaxOutputTokens: new(int64(32))})
+			if (err != nil) != (tc.status == "failed") {
+				t.Fatalf("generation error=%v", err)
+			}
+			events, err := store.ReadEvents()
+			if err != nil {
+				t.Fatal(err)
+			}
+			ledger := newProviderAdmissionCostManager(t, "ollama/test", cost.UnknownPriceDeny)
+			if err := ledger.Rehydrate(events); err != nil {
+				t.Fatal(err)
+			}
+			projection := ledger.Projection()
+			if calls.Load() != 1 || len(projection.Invocations) != 1 {
+				t.Fatal("invocation was lost or repeated")
+			}
+			for _, invocation := range projection.Invocations {
+				settled := invocation.Settlement
+				if settled == nil || (settled.Usage != nil) != tc.known {
+					t.Fatal("usage presence changed through settlement or replay")
+				}
+				if tc.known && (settled.Usage.InputTokens != tc.input || settled.Usage.CacheReadTokens != tc.cache || settled.Usage.OutputTokens != tc.output || settled.Usage.TotalTokens != tc.total) {
+					t.Fatalf("settled usage=%+v", settled.Usage)
+				}
+				if tc.status == "failed" && settled.Outcome != cost.OutcomeProviderError {
+					t.Fatal("failed response was reported as success")
+				}
+			}
+		})
 	}
 }

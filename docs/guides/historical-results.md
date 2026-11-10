@@ -97,7 +97,38 @@ hufu results final <result-id> --team <team>
 
 `final` 使用原本保存的 run response，不重新執行 LLM，也不會自行拼湊 worker 結果。多 team invocation 的各 run response 仍是個別回覆，不代表 CLI 聚合輸出的完整副本。run outcome 可能是 partial 或失敗，應一起閱讀。`--agent` 和 `--status` 是 worker filters，不能搭配 `final`；可先找 worker 的 result-id，再交給 `final`。
 
+## 團隊綜合成果（deliverable）
+
+若要直接閱讀團隊宣告的綜合成果，可使用通用的 `deliverable` 指令：
+
+```bash
+hufu results deliverable --team <team>
+hufu results deliverable --team <team> --run <run-id>
+hufu results deliverable <result-id> --team <team>
+hufu results deliverable --team <team> --export deliverable.md
+```
+
+不指定 ID 時，依 run 保存時間尋找範圍內最近一份已接受、且 schema 宣告
+`x-hufu-final-report` 的完成任務。後來一次沒有成果的失敗恢復不會遮住既有
+報告；來源提示會列出報告原始問題、run 與狀態。不依賴 worker 名稱或特定
+payload 欄位；同一 run 多份報告、沒有報告或結果已被取代時明確拒絕。
+指定 `--run` 或 result-id 後，只讀該 run，不會改選另一個 run。
+`--branch` 與 `--all-branches` 沿用其他 results 指令的範圍規則。
+
+這是已接受任務的成果呈現，不會將原 run 的 partial／失敗狀態改成成功。
+文字來源提示與 JSON 的 `source_run_status` 會保留原 run 狀態；JSON 的
+`deliverable` 是報告正文。可加 `--render markdown` 閱讀或以 `--export` 匯出，
+全程不呼叫模型、啟動 MCP 或恢復工作流程。`results report` 仍讀取已保存的
+run 層級執行報告，`results final` 仍只讀取原來保存的最終回覆。
+
+渲染使用本機原團隊 schema，必須與結果所綁定的 schema SHA-256 完全相符，
+並重驗 payload 雜湊與 schema。原 schema 已改變或缺失時，請還原原 schema，
+或使用 `results show --payload` 讀取保存資料；指令不會套用不同版本的模板。
+原始 payload、來源與收據不會因渲染或匯出而改寫。
+
 ## 離線列表與結果閱讀
+
+下列指令列出、搜尋或讀取已保存的任務結果：
 
 ```bash
 hufu results list --team <team> --limit 20
@@ -217,3 +248,26 @@ Markdown 由版本化結構快照渲染；未保存 Markdown 的舊版排版副�
 或舊 `report.md` 補成歷史報告，也不會在查詢時寫入／遷移 DB。
 每份快照上限 8 MiB；超限或無法投影時記錄 unavailable，保留原本 run outcome。
 真正的 SQLite 寫入失敗會使整筆 transaction 回滾，沿用 terminal persistence 的恢復流程。
+
+## Worker 的 canonical 歷史讀取
+
+`team_info` 的 `task_history` 與 `task_result(agent)` fallback 只讀取
+目前 runtime 綁定的 control workspace、team 與 branch lineage。它們不再
+掃描 `tasks/<team>/<agent>/*.md`；只有 Markdown 的資料標成
+`legacy_unverified`，不能作為 Worker 的可信成果。
+
+`task_result(task_id)` 仍查當前 active cycle 的 typed result。歷史精確查詢
+使用完整 `result_id`，不得與其他 selector 混用，也不接受 ID prefix。
+歷史 description selector 有多個命中時會列出可見 Result IDs，要求明確選取。
+模型不能指定另一個 workspace、team、branch 或 all-branches scope。
+
+歷史內容以 fenced JSON 標成 reference/untrusted data；explicit ID 可閱讀
+已失效結果，但會保留 validity，不能當成 fresh verification。一般 agent
+fallback 只選仍有效的 accepted/done 結果。超過 1 MiB 的單一回應會拒絕，
+不回傳裁切的結果。禁用 historical task reuse 的 profile 同時限制歷史 ID
+與 restored task selector；本次建立的 task lookup 保留。Extra-model clone
+沿用父層 canonical control root 與 branch journal，不把 disposable leaf
+workspace 當成歷史來源。
+
+Operator results JSON 新增 `source_branch_id`，指出 source event 的原始
+branch；`branches` 仍代表結果在哪些查詢 lineage 中可見，兩者用途不同。

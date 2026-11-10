@@ -142,12 +142,15 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 			if err == nil {
 				return nil
 			}
-			if localResultRejectionReason(err) != RepairFailureInvalidSchema || checkpoint.TurnsUsed >= checkpoint.TurnLimit {
+			if localResultRejectionReason(err) != RepairFailureInvalidSchema {
 				return c.collectionFailure(ctx, checkpoint, localResultRejectionReason(err), err)
 			}
 			diagnostic = err.Error()
-			checkpoint, err = c.recordCollectionFormatFailure(ctx, checkpoint)
+			checkpoint, err = c.recordCollectionFormatFailure(ctx, checkpoint, err)
 			if err != nil {
+				if errors.Is(err, errResultCollectionNoProgress) {
+					return c.collectionFailure(ctx, checkpoint, RepairFailureInvalidSchema, errors.Join(err, errors.New(diagnostic)))
+				}
 				return &resultCollectionFailure{Reason: RepairFailureCommit, Cause: err}
 			}
 		case ResultCollectionReceived:
@@ -160,11 +163,11 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 				return c.collectionFailure(ctx, checkpoint, localResultRejectionReason(err), err)
 			}
 			diagnostic = err.Error()
-			if checkpoint.TurnsUsed >= checkpoint.TurnLimit {
-				return c.collectionFailure(ctx, checkpoint, localResultRejectionReason(err), err)
-			}
-			checkpoint, err = c.recordCollectionSchemaFailure(ctx, checkpoint)
+			checkpoint, err = c.recordCollectionFormatFailure(ctx, checkpoint, err)
 			if err != nil {
+				if errors.Is(err, errResultCollectionNoProgress) {
+					return c.collectionFailure(ctx, checkpoint, RepairFailureInvalidSchema, errors.Join(err, errors.New(diagnostic)))
+				}
 				return &resultCollectionFailure{Reason: RepairFailureCommit, Cause: err}
 			}
 		case ResultCollectionBlocked:
@@ -173,6 +176,9 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 			}
 		}
 		if checkpoint.TurnsUsed >= checkpoint.TurnLimit {
+			if diagnostic != "" {
+				return c.collectionFailure(ctx, checkpoint, RepairFailureInvalidSchema, errors.New(diagnostic))
+			}
 			return c.collectionFailure(ctx, checkpoint, repairFailureCollectionBudget, errResultCollectionBudget)
 		}
 		id := "result-collection-" + rand.Text()
@@ -185,16 +191,22 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 			return &resultCollectionFailure{Reason: RepairFailureCommit, Checkpoint: checkpoint, Cause: err}
 		}
 		response, usage, err := c.runCollectionInvocation(invocation, def, checkpoint)
+		var responseIssue *agent.StructuredResponseIssue
 		if errors.Is(err, errCollectionToolCall) {
-			// The callback rejected it before any handler could run. Preserve
-			// the denial as invalid JSON evidence for the same bounded repair.
-			response += "\ncollector_tool_call: no tools are authorized"
+			// The data channel or callback rejected it before any handler could
+			// run. Preserve SDK arguments independently of the typed diagnostic;
+			// they are evidence, never an admitted claims response.
+			if failure, ok := errors.AsType[*agent.StructuredResponseError](err); ok {
+				response, responseIssue = failure.Arguments, new(failure.Issue)
+			} else {
+				response += "\ncollector_response_invalid: " + err.Error()
+			}
 			err = nil
 		}
 		if err != nil {
 			return c.collectionFailure(ctx, checkpoint, repairFailureCollectionUnavailable, err)
 		}
-		checkpoint, err = c.recordCollectionResponseUsage(ctx, checkpoint, []byte(response), usage)
+		checkpoint, err = c.recordCollectionResponseUsage(ctx, checkpoint, []byte(response), usage, responseIssue)
 		if err != nil {
 			return &resultCollectionFailure{Reason: RepairFailureCommit, Checkpoint: checkpoint, Cause: err}
 		}
@@ -211,6 +223,7 @@ type frozenCollectionRequest struct {
 	Generation          agent.GenerationParams `json:"generation"`
 	TeamGeneration      agent.GenerationParams `json:"team_generation"`
 	Tools               []any                  `json:"tools"`
+	ClaimsSchema        map[string]any         `json:"claims_schema,omitempty"`
 }
 
 func decodeFrozenCollectionRequest(data []byte, checkpoint *ResultCollectionCheckpoint) (frozenCollectionRequest, error) {
@@ -223,6 +236,9 @@ func decodeFrozenCollectionRequest(data []byte, checkpoint *ResultCollectionChec
 		return request, errResultCollectionStale
 	}
 	if request.Version != resultCollectionVersion || request.InvocationID != checkpoint.InvocationID || request.Prompt == "" || len(request.Tools) != 0 {
+		return request, errResultCollectionStale
+	}
+	if request.ClaimsSchema != nil && request.ClaimsSchema["type"] != "object" {
 		return request, errResultCollectionStale
 	}
 	return request, nil

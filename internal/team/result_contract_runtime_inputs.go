@@ -14,7 +14,8 @@ import (
 type resultRuntimeInputSpec struct {
 	Target      string `json:"target"`
 	SourceTask  string `json:"source_task"`
-	Output      string `json:"output"`
+	Output      string `json:"output,omitempty"`
+	SourceKind  string `json:"source_kind,omitempty"`
 	valueSchema *jsonschema.Schema
 }
 
@@ -38,8 +39,20 @@ func compileResultRuntimeInputs(root map[string]any) ([]resultRuntimeInputSpec, 
 		spec := &specs[i]
 		spec.SourceTask = strings.TrimSpace(spec.SourceTask)
 		spec.Output = strings.TrimSpace(spec.Output)
-		if spec.SourceTask == "" || spec.Output == "" || len(spec.SourceTask) > maxTaskResultPointerBytes || len(spec.Output) > maxTaskResultPointerBytes {
+		if spec.SourceTask == "" || len(spec.SourceTask) > maxTaskResultPointerBytes || len(spec.Output) > maxTaskResultPointerBytes {
 			return nil, fmt.Errorf("runtime input %d requires bounded source_task and output names", i)
+		}
+		switch spec.SourceKind {
+		case "", "runtime_output":
+			if spec.Output == "" {
+				return nil, fmt.Errorf("runtime input %d requires an output name", i)
+			}
+		case "runtime_media":
+			if spec.Output != "" {
+				return nil, fmt.Errorf("runtime media input %d must omit output", i)
+			}
+		default:
+			return nil, fmt.Errorf("runtime input %d has an unsupported source_kind", i)
 		}
 		if spec.Target == "" || len(spec.Target) > maxTaskResultPointerBytes {
 			return nil, fmt.Errorf("runtime input %d requires a bounded nonempty target pointer", i)
@@ -105,7 +118,13 @@ func (c *Coordinator) resultRuntimeInputValues(compiled *CompiledResultContract)
 	}
 	values := make(map[string]any, len(compiled.runtimeInputs))
 	for _, spec := range compiled.runtimeInputs {
-		value, err := c.resolveRuntimeOutputValue(FactRef{Name: spec.Target, TaskID: spec.SourceTask, RuntimeOutput: spec.Output}, spec.Output)
+		var value any
+		var err error
+		if spec.SourceKind == "runtime_media" {
+			value, err = c.resolveRuntimeMediaValue(spec.SourceTask)
+		} else {
+			value, err = c.resolveRuntimeOutputValue(FactRef{Name: spec.Target, TaskID: spec.SourceTask, RuntimeOutput: spec.Output}, spec.Output)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("runtime input %s: %w", spec.Target, err)
 		}

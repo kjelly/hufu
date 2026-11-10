@@ -105,12 +105,20 @@ func (c *Controller) admitLocked(cmd Command) Ack {
 		}
 		c.port.RequestWrapUp()
 		return Ack{CommandID: cmd.ID, TurnID: c.active.turnID, Status: AckAccepted}
-	case CommandResetContext, CommandSwitchTeam:
+	case CommandResetContext, CommandSwitchTeam, CommandImages:
 		if c.active != nil || len(c.queue) > 0 {
 			return reject(cmd, "busy: finish or cancel the active turn first")
 		}
 		if cmd.Kind == CommandSwitchTeam && strings.TrimSpace(cmd.Target) == "" {
 			return reject(cmd, "team name is required")
+		}
+		if cmd.Kind == CommandImages {
+			if _, ok := c.port.(ImageRuntimePort); !ok {
+				return reject(cmd, "image inputs are unavailable in this session")
+			}
+			if err := cmd.Image.Validate(); err != nil {
+				return reject(cmd, err.Error())
+			}
 		}
 		c.activateLocked(&work{cmd: cmd})
 		return Ack{CommandID: cmd.ID, Status: AckAccepted}
@@ -128,15 +136,16 @@ func (c *Controller) admitPromptLocked(cmd Command) Ack {
 	case len(cmd.Text) > c.cfg.MaxPromptBytes:
 		return reject(cmd, fmt.Sprintf("prompt is %d bytes; the limit is %d bytes", len(cmd.Text), c.cfg.MaxPromptBytes))
 	}
+	includePending := len(c.queue) == 0 && (c.active == nil || !c.active.isPrompt())
 	if c.active == nil && len(c.queue) == 0 {
-		w := &work{cmd: cmd, turnID: c.cfg.NewTurnID()}
+		w := &work{cmd: cmd, turnID: c.cfg.NewTurnID(), includePending: includePending}
 		c.activateLocked(w)
 		return Ack{CommandID: cmd.ID, TurnID: w.turnID, Status: AckAccepted}
 	}
 	if len(c.queue) >= c.cfg.QueueCapacity {
 		return Ack{CommandID: cmd.ID, Status: AckBusy, Reason: fmt.Sprintf("prompt queue is full (%d waiting)", len(c.queue))}
 	}
-	w := &work{cmd: cmd, turnID: c.cfg.NewTurnID()}
+	w := &work{cmd: cmd, turnID: c.cfg.NewTurnID(), includePending: includePending}
 	c.queue = append(c.queue, w)
 	return Ack{CommandID: cmd.ID, TurnID: w.turnID, Status: AckQueued, Position: len(c.queue)}
 }
@@ -219,17 +228,34 @@ func (c *Controller) execute(w *work) Event {
 	case CommandSubmitPrompt:
 		defer w.cancel()
 		started := c.cfg.Now()
-		c.emit(TurnStarted{TurnID: w.turnID, CommandID: w.cmd.ID, Prompt: w.cmd.Text, StartedAt: started})
-		result := c.port.RunTurn(w.ctx, w.turnID, w.cmd.Text)
+		c.emit(TurnStarted{TurnID: w.turnID, CommandID: w.cmd.ID, Prompt: w.cmd.Text, StartedAt: started, IncludePending: w.includePending})
+		var result TurnResult
+		if port, ok := c.port.(InputRuntimePort); ok {
+			result = port.RunInputTurn(w.ctx, TurnRequest{TurnID: w.turnID, Prompt: w.cmd.Text, IncludePending: w.includePending}, c.inputObserver(w.turnID))
+		} else {
+			result = c.port.RunTurn(w.ctx, w.turnID, w.cmd.Text)
+		}
 		result.TurnID = w.turnID
 		result.Elapsed = c.cfg.Now().Sub(started)
 		return TurnSettled{Result: result}
 	case CommandResetContext:
+		count := c.pendingImageCount()
 		err := c.port.ResetContext(c.sessionCtx)
-		return ControlDone{CommandID: w.cmd.ID, Kind: w.cmd.Kind, Err: err}
+		if err != nil {
+			count = 0
+		}
+		return ControlDone{CommandID: w.cmd.ID, Kind: w.cmd.Kind, Err: err, ClearedImages: count}
+	case CommandImages:
+		port := c.port.(ImageRuntimePort)
+		status, err := port.ManageImageInputs(c.sessionCtx, w.cmd.Image)
+		return ControlDone{CommandID: w.cmd.ID, Kind: w.cmd.Kind, Images: &status, ImageOperation: w.cmd.Image.Operation, Err: err}
 	default: // CommandSwitchTeam; admission rejects every other kind
+		count := c.pendingImageCount()
 		err := c.port.SwitchTeam(c.sessionCtx, w.cmd.Target)
-		return ControlDone{CommandID: w.cmd.ID, Kind: w.cmd.Kind, Target: w.cmd.Target, Err: err}
+		if err != nil {
+			count = 0
+		}
+		return ControlDone{CommandID: w.cmd.ID, Kind: w.cmd.Kind, Target: w.cmd.Target, Err: err, ClearedImages: count}
 	}
 }
 

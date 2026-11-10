@@ -150,6 +150,7 @@ func ParseOllamaShow(raw map[string]any) (RuntimeModelInfo, error) {
 	info.Capabilities = parsedCapabilities
 	explicitEvidence = mergeExplicitCapabilityFields(explicitEvidence, raw)
 	info.CapabilityEvidence = reduceCapabilityEvidence(info.Capabilities, explicitEvidence)
+	info.ImageInput = ImageInputEvidence(info.Capabilities, raw)
 	if details, present := raw["details"]; present {
 		parsed, ok := details.(map[string]any)
 		if !ok {
@@ -233,6 +234,11 @@ func capabilityStateFromName(name string) CapabilityState {
 }
 
 func canonicalCapabilityName(name string) (string, bool) {
+	canonical, ok := capabilityFieldNames[normalizedCapabilityName(name)]
+	return canonical, ok
+}
+
+func normalizedCapabilityName(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	name = strings.TrimPrefix(name, "no-")
 	name = strings.TrimPrefix(name, "no_")
@@ -241,8 +247,7 @@ func canonicalCapabilityName(name string) (string, bool) {
 	name = strings.ReplaceAll(name, " ", "_")
 	name = strings.TrimSuffix(name, ":true")
 	name = strings.TrimSuffix(name, ":false")
-	canonical, ok := capabilityFieldNames[name]
-	return canonical, ok
+	return name
 }
 
 func mergeExplicitCapabilityFields(evidence map[string]CapabilityState, raw map[string]any) map[string]CapabilityState {
@@ -319,6 +324,7 @@ func ParseOllamaPS(raw map[string]any, requestedModel string) (RuntimeModelInfo,
 		info.Capabilities = names
 		explicitEvidence := mergeExplicitCapabilityFields(nil, model)
 		info.CapabilityEvidence = reduceCapabilityEvidence(info.Capabilities, explicitEvidence)
+		info.ImageInput = ImageInputEvidence(info.Capabilities, model)
 		if modelName, ok := model["name"].(string); ok && modelName != "" {
 			info.ModelID = modelName
 		} else if modelName, ok := model["model"].(string); ok && modelName != "" {
@@ -363,6 +369,7 @@ func ParseOpenAIModels(raw map[string]any, requestedModel string) (RuntimeModelI
 		info.Capabilities = names
 		explicitEvidence := mergeExplicitCapabilityFields(nil, model)
 		info.CapabilityEvidence = reduceCapabilityEvidence(info.Capabilities, explicitEvidence)
+		info.ImageInput = ImageInputEvidence(info.Capabilities, model)
 		for _, key := range []string{"context_length", "max_context_window", "max_input_tokens"} {
 			if candidate, ok := intValue(model[key]); ok {
 				info.ModelMaxContext = candidate

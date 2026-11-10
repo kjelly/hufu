@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hufu Recent Commit Review"
+  short_description: "Review the latest commits with hufu-code-review within its limits"
+  default_prompt: "Use $hufu-review-recent-commits to review the most recent commits."

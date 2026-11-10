@@ -125,13 +125,13 @@ func TestGolangActionProviderUsesWireContractAndActionEnvironment(t *testing.T) 
 			if err := json.Unmarshal(input, &action); err != nil {
 				t.Fatal(err)
 			}
-			if action.Type != "apply" || !slices.Contains(env, "HUFU_REPOSITORY=/repo") {
+			if action.Type != "apply" || !slices.Contains(env, "HUFU_REPOSITORY=/repo") || !slices.Contains(env, `HUFU_RECOVERED_TASK_RUNS={"1":"source-run"}`) {
 				t.Fatalf("action=%#v env=%#v", action, env)
 			}
 			return golangruntime.Result{Stdout: []byte(`{"status":"ok"}`)}, nil
 		},
 	}
-	ctx := WithActionEnvironment(t.Context(), ActionEnvironment{Repository: "/repo"})
+	ctx := WithActionEnvironment(t.Context(), ActionEnvironment{Repository: "/repo", RecoveredTaskRuns: map[string]string{"1": "source-run"}})
 	result, err := provider.Execute(ctx, Action{Capability: "demo", Type: "apply", Payload: `{}`})
 	if err != nil {
 		t.Fatal(err)

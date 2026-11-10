@@ -65,8 +65,11 @@ func newMCPActionProvider(capability string, config agent.ActionProviderConfig, 
 	if !ok {
 		return nil, fmt.Errorf("action provider %q names MCP server %q, which mcp-servers does not declare", capability, server)
 	}
+	if serverConfig.Type == "chrome-cdp" && tool == "browser_click" {
+		return nil, fmt.Errorf("native browser_click requires a browser_interaction worker, not an MCP runtime action")
+	}
 	switch serverConfig.Type {
-	case "", "local", "remote":
+	case "", "local", "remote", "chrome-cdp":
 	default:
 		return nil, fmt.Errorf("action provider %q: MCP server %q has unsupported type %q", capability, server, serverConfig.Type)
 	}
@@ -113,7 +116,8 @@ func mcpServerConfigHash(config mcp.MCPServerConfig) string {
 		Environment           []environmentValue              `json:"environment,omitempty"`
 		ToolPolicies          map[string]mcp.WorkerToolPolicy `json:"tool_policies,omitempty"`
 		TemporaryDirectoryEnv []string                        `json:"temporary_directory_env,omitempty"`
-	}{serverType, config.Command, config.URL, allowed, excluded, config.NoOAuth, environment, config.ToolPolicies, temporaryDirectoryEnv})
+		PageDwell             *mcp.ChromePageDwellConfig      `json:"page_dwell,omitempty"`
+	}{serverType, config.Command, config.URL, allowed, excluded, config.NoOAuth, environment, config.ToolPolicies, temporaryDirectoryEnv, config.PageDwell})
 	if err != nil {
 		return ""
 	}
@@ -182,7 +186,16 @@ func (p *mcpActionProvider) Execute(ctx context.Context, action Action) (interfa
 	result, err := binding.manager.ExecuteRuntimeTool(ctx, binding.logicalName, binding.descriptorSHA256, action.Payload, authorize)
 	switch {
 	case err == nil:
-		return mcpActionResult(result)
+		envelope, err := mcpActionResult(result)
+		if err != nil {
+			return nil, err
+		}
+		if envelope.mcpMedia != nil {
+			envelope.mcpMedia.tool = binding.descriptor
+			envelope.mcpMedia.capability = p.capability
+			envelope.mcpMedia.actionID = ActionEnvironmentFromContext(ctx).ActionInvocationID
+		}
+		return envelope, nil
 	case mcp.IsToolDescriptorMismatchError(err):
 		return nil, fmt.Errorf("%s: %w", mcpActionDescriptorMismatch, err)
 	case mcp.IsToolAuthorizationError(err):

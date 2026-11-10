@@ -879,7 +879,7 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 
 	// In-flight dedup: the first task with a given key runs; identical
 	// concurrent tasks release their slot and wait to share its result.
-	if td.InvariantVerification == "" {
+	if td.InvariantVerification == "" && !c.taskNeedsOwnMediaExecution(ctx, td) {
 		s.inflightMu.Lock()
 		if ch, ok := s.inflight[cacheKey]; ok {
 			s.inflightMu.Unlock()
@@ -899,7 +899,7 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 	// Check the task result cache before running. Sidecar tasks, summarized
 	// tasks, and verbatim-output tasks always run fresh: a cached prose result
 	// cannot satisfy a new runner-owned transcript contract.
-	if td.InvariantVerification == "" && td.Action == nil && !td.Sidecar && !td.Summarize && !taskUsesVerbatimTranscript(td) {
+	if !c.taskNeedsOwnMediaExecution(ctx, td) && td.InvariantVerification == "" && td.Action == nil && !td.Sidecar && !td.Summarize && !taskUsesVerbatimTranscript(td) {
 		lookup, ok := c.TaskCache().Lookup(ctx, TaskCacheLookupRequest{
 			Scope: TaskCacheLookupExecution, AgentKey: agentKey, Task: desc,
 			VerifySpec: td.VerifySpec, Verify: td.Verify, VerifyMode: td.VerifyMode,
@@ -937,7 +937,7 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 		taskCtx := withResourceClaimsReported(withTaskExecutionEnvelope(ctx, envelope))
 		output, err = c.executeTask(taskCtx, td, tid)
 	}
-	if err == nil && td.Action == nil && td.InvariantVerification == "" {
+	if err == nil && !c.taskNeedsOwnMediaExecution(ctx, td) && td.Action == nil && td.InvariantVerification == "" {
 		c.TaskCache().Store(TaskCacheStoreRequest{
 			AgentKey: agentKey, Task: desc, Output: output, VerifySpec: td.VerifySpec,
 			Verify: td.Verify, VerifyMode: td.VerifyMode,
@@ -963,6 +963,9 @@ func (s *dagScheduler) runTask(ctx context.Context, td TaskDef, tid string, idx 
 }
 
 func taskExecutionInputCacheIdentity(task TaskDef) string {
+	if task.MediaInputDigest != "" {
+		return "\nmedia_input_digest:" + task.MediaInputDigest
+	}
 	if task.RunInputSnapshotHash == "" && task.MaterializedActionPayloadHash == "" {
 		return ""
 	}

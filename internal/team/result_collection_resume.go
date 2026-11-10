@@ -15,7 +15,11 @@ func currentResultCollection(item *TodoItem) *ResultCollectionCheckpoint {
 		return nil
 	}
 	checkpoint := item.ExecutionReceipt.ResultCollection
-	if checkpoint == nil || checkpoint.Attempt != item.ExecutionReceipt.Attempt {
+	// Missing legacy occurrence provenance must not authorize repeating work.
+	// Keep its existing recovery path; modern receipts distinguish lifecycle
+	// retries from the work counter that restarts at each dispatch.
+	occurrence := item.ExecutionReceipt.OccurrenceAttempt
+	if checkpoint == nil || checkpoint.Attempt != item.ExecutionReceipt.Attempt || (occurrence > 0 && occurrence != item.Retries+1) {
 		return nil
 	}
 	return cloneResultCollectionCheckpoint(checkpoint)

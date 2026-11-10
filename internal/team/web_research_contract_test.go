@@ -31,6 +31,8 @@ func TestWebResearchReportRetainsSourcesAndPreciseGaps(t *testing.T) {
 				body = "different punctuation and words"
 			}
 			output := fmt.Sprintf("### Page\n- Page URL: %s\n### Snapshot\n```yaml\n- paragraph: %s\n```\n", url, body)
+			// A control label must never turn a mismatched article quote into evidence.
+			output += "### Buttons (controls, not source quotations)\n```yaml\n- ref: control\n  name: exact words\n```\n"
 			records = append(records,
 				taskTranscriptRecord{Event: "tool_call", Tool: contract.toolEvidence.Tools[0], ToolCallID: name, Input: `{}`},
 				taskTranscriptRecord{Event: "tool_result", Tool: contract.toolEvidence.Tools[0], ToolCallID: name, Output: output, Error: name == "failed"},

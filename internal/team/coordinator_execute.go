@@ -86,7 +86,11 @@ func expandPipelineDeps(tasks []TaskDef) []TaskDef {
 }
 
 func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ string, retErr error) {
+	ctx = c.tokenBudgetRoot().runIdle.Context(ctx)
 	tasks = withoutEmptyCollections(tasks)
+	if err := validateNativeMediaBatch(tasks); err != nil {
+		return "", err
+	}
 	if err := c.AdmitExecutionPolicy(); err != nil {
 		return "", markCoordinatorFatal(err)
 	}
@@ -94,6 +98,13 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 		return "", err
 	}
 	var err error
+	tasks, err = c.bindDelegatedImageInputs(ctx, tasks)
+	if err != nil {
+		return "", err
+	}
+	if err := validateNativeMediaBatch(tasks); err != nil {
+		return "", err
+	}
 	// Bind once before expansion so a static contract can contribute its
 	// artifact-backed FanOut definition to the coordinator's minimal goal
 	// request. A second binding pass below preserves the historical behavior of
@@ -361,14 +372,15 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 		}
 		tasks[i] = t
 		todoBatch[i] = TodoSpec{
-			PlanTaskID:                    t.ID,
-			PlanFirst:                     t.PlanFirst,
-			PlanID:                        t.PlanID,
-			Phase:                         t.Phase,
-			Action:                        cloneActionPtr(t.Action),
-			ActionInputBindings:           append([]ActionInputBinding(nil), t.ActionInputBindings...),
-			RunInputSnapshotID:            t.RunInputSnapshotID,
-			RunInputSnapshotHash:          t.RunInputSnapshotHash,
+			PlanTaskID:           t.ID,
+			PlanFirst:            t.PlanFirst,
+			PlanID:               t.PlanID,
+			Phase:                t.Phase,
+			Action:               cloneActionPtr(t.Action),
+			ActionInputBindings:  append([]ActionInputBinding(nil), t.ActionInputBindings...),
+			RunInputSnapshotID:   t.RunInputSnapshotID,
+			RunInputSnapshotHash: t.RunInputSnapshotHash,
+			MediaBinding:         t.MediaBinding.Clone(), MediaInputDigest: t.MediaInputDigest,
 			MaterializedActionPayloadHash: t.MaterializedActionPayloadHash,
 			BoundInputs:                   cloneStringMap(t.BoundInputs),
 			InvariantVerification:         t.InvariantVerification,
@@ -384,6 +396,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 			ExecutionTarget:               t.ResolvedExecutionTarget,
 			ExecutionTopology:             cloneExecutionTopology(t.ExecutionTopology),
 			ResultContract:                t.ResultContract.clone(),
+			DependencyResultView:          t.DependencyResultView.clone(),
 			WorkerWorkspace:               t.WorkerWorkspace.clone(),
 			ExecutionRoute:                t.ExecutionRoute.clone(),
 			CatalogAction:                 t.CatalogAction.clone(),
@@ -436,8 +449,16 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	// initial event must carry the complete execution contract (PR-05): a
 	// dependent task must not be replayed as independent pending work, and an
 	// on_failure loop must not be lost on restart or branch replay.
+	if err := validateNativeMediaBatch(tasks); err != nil {
+		return "", err
+	}
 	ids := c.taskTracker.TodoList().ReserveIDs(len(todoBatch))
 	for i := range todoBatch {
+		if err := c.finalizeMediaTaskSpec(ctx, &todoBatch[i], ids[i]); err != nil {
+			return "", err
+		}
+		tasks[i].MediaBinding = todoBatch[i].MediaBinding.Clone()
+		tasks[i].MediaInputDigest = todoBatch[i].MediaInputDigest
 		agentDef, _, resolveErr := c.AgentPool().ResolveAgentName(tasks[i].Agent)
 		if resolveErr != nil {
 			if advancedPhase && c.sessionData != nil {

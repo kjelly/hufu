@@ -618,6 +618,12 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		snapshotState = "confirmed"
 	}
 	b.WriteString("## Run Snapshot\n\n")
+	if data.RunResult != nil && data.RunResult.HufuBuild != nil {
+		info := data.RunResult.HufuBuild
+		fmt.Fprintf(&b, "- **Hufu:** `%s` (source: `%s`, Go: `%s`)\n", reportSafeMetadata(info.String(), 160), reportSafeMetadata(info.Source, 40), reportSafeMetadata(info.GoVersion, 80))
+	} else {
+		b.WriteString("- **Hufu:** not recorded\n")
+	}
 	if data.InvocationID != "" {
 		fmt.Fprintf(&b, "- **Invocation ID:** `%s`\n", reportSafeMetadata(data.InvocationID, 160))
 	}
@@ -906,6 +912,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 				t.ID, statusIcon, t.Agent, reportExecutionTarget(t), reportProviderIdentity(t), t.Desc, detail, verify, dur)
 		}
 		b.WriteString("\n")
+		writeImageResultReport(&b, data)
 		writeTaskResourceScopeReport(&b, data.Todos)
 		writeResultCollectionReport(&b, data.Todos)
 		writeSemanticRetrievalRuntimeReport(&b, data.SemanticRetrieval)
@@ -1163,11 +1170,13 @@ func writeMemoryLearningReport(b *strings.Builder, report team.MemoryLearningRep
 }
 
 func writeContextRoutingReport(b *strings.Builder, summary team.ContextManifestSummary) {
-	if summary.Requests == 0 {
+	if summary.Requests == 0 && len(summary.HistoricalGrants) == 0 && summary.HistoricalGrantsError == "" {
 		return
 	}
 	b.WriteString("## Context Routing\n\n")
 	fmt.Fprintf(b, "- **Requests:** %d\n- **Model calls:** %d\n- **Deterministic fallbacks:** %d\n- **Included items:** %d (%d tokens)\n- **Omitted items:** %d (%d tokens)\n", summary.Requests, summary.ModelCalls, summary.Fallbacks, summary.Included, summary.IncludedTokens, summary.Omitted, summary.OmittedTokens)
+	writeDependencyResultViewReport(b, summary)
+	writeHistoricalResultReport(b, summary)
 	if len(summary.OmitReasons) > 0 {
 		b.WriteString("- **Omission reasons:**\n")
 		keys := make([]string, 0, len(summary.OmitReasons))

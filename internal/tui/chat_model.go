@@ -80,21 +80,23 @@ type ChatModel struct {
 	overlayBody  string
 	overlayLines int // scroll offset inside a text overlay
 
-	transcript    chatTranscript
-	activeTurn    string
-	stages        map[string]turnStage
-	turnCount     int
-	queued        int
-	submitting    string // ID of the prompt command awaiting its Ack
-	notice        string
-	lastResult    *team.RunResult
-	lastTurnID    string
-	lastRunIDs    []string
-	selection     *cardSelection
-	turnStartedAt time.Time
-	now           time.Time
-	palette       paletteState
-	closeReport   *conversation.CloseReport
+	transcript             chatTranscript
+	activeTurn             string
+	stages                 map[string]turnStage
+	turnCount              int
+	queued                 int
+	submitting             string // ID of the prompt command awaiting its Ack
+	notice                 string
+	lastResult             *team.RunResult
+	lastTurnID             string
+	lastRunIDs             []string
+	selection              *cardSelection
+	turnStartedAt          time.Time
+	now                    time.Time
+	palette                paletteState
+	closeReport            *conversation.CloseReport
+	pendingImages          *conversation.ImageStatus
+	lastImageAdmissionTurn string
 
 	width  int
 	height int
@@ -126,6 +128,14 @@ func NewChatModel(opts ChatOptions) ChatModel {
 	applyComposerStyles(&m.composer, dash.styles)
 	m.composer.Focus()
 	m.restoreHistory(opts.History, opts.LastResult)
+	if opts.PendingImages != nil {
+		m.setPendingImages(*opts.PendingImages)
+		text := "Pending images start empty; unsubmitted attachments are not restored after restart."
+		if len(opts.PendingImages.Images) > 0 {
+			text = fmt.Sprintf("Pending images: %d. Submit a message to attach them.", len(opts.PendingImages.Images))
+		}
+		m.transcript.add(chatItem{kind: itemNotice, body: text})
+	}
 	return m
 }
 
@@ -377,6 +387,7 @@ func (m ChatModel) markTurn(turnID string, stage turnStage) ChatModel {
 func (m ChatModel) handleEvent(ev conversation.Event) ChatModel {
 	switch ev := ev.(type) {
 	case conversation.TurnStarted:
+		m.markPendingImagesSubmitting(ev.IncludePending)
 		m = m.markTurn(ev.TurnID, turnStarted)
 		m.phase = phaseRunning
 		m.activeTurn = ev.TurnID
@@ -396,6 +407,9 @@ func (m ChatModel) handleEvent(ev conversation.Event) ChatModel {
 		card.refresh(m.dash.tasks, m.dash.logs)
 		m.transcript.add(chatItem{kind: itemProgress, turnID: ev.TurnID, card: card})
 	case conversation.TurnSettled:
+		if ev.Result.Images != nil {
+			m.setPendingImages(*ev.Result.Images)
+		}
 		m = m.markTurn(ev.Result.TurnID, turnSettled)
 		m = m.settleTurn(ev.Result)
 	case conversation.QueueDropped:
@@ -409,6 +423,8 @@ func (m ChatModel) handleEvent(ev conversation.Event) ChatModel {
 		m.queued = 0
 	case conversation.ControlDone:
 		m = m.handleControlDone(ev)
+	case conversation.TurnInputAdmission:
+		m = m.handleImageAdmission(ev)
 	case conversation.Closed:
 		m.phase = phaseClosing
 	}

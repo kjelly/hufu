@@ -1,5 +1,7 @@
 # MCP worker observation policy
 
+For Hufu's in-process Chrome implementation, see [native Chrome CDP](chrome-cdp.md).
+
 > Status: active
 > Authority: reference
 > Verified-Commit: —（本次工作樹，尚未提交）
@@ -30,7 +32,10 @@ mcp-servers:
 ```
 
 The agent declares `tools: documents__read_document`. Only `sideEffect: none`
-and `filesystem: none` are supported. `inputSchema` must be a closed object
+and `filesystem: none` are supported for observation tools. The native Chrome
+`browser_click` capability additionally supports `sideEffect: browser_interaction`,
+only for an explicitly authorized `browser_interaction` task; it remains a
+state-changing call for recovery. See [native browser controls](chrome-cdp.md#button-interaction-and-popup-handling). `inputSchema` must be a closed object
 schema (`type: object`, `additionalProperties: false`), at most 64 KiB, using
 Draft 2020-12 without external resource loading. Arguments are bounded to
 64 KiB, reject duplicate keys and excessive nesting, and must satisfy this

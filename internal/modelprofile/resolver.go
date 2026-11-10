@@ -172,6 +172,7 @@ func ResolveModelProfile(input ModelProfileInput) ModelProfile {
 
 	tools := ResolveCapability(input.Capabilities.Tools)
 	attachments := ResolveCapability(input.Capabilities.Attachments)
+	imageInput := ResolveCapability(input.Capabilities.ImageInput)
 	reasoning := ResolveCapability(input.Capabilities.Reasoning)
 	temperature := ResolveCapability(input.Capabilities.Temperature)
 	estimator := ResolveEstimator(input.Estimator)
@@ -221,6 +222,7 @@ func ResolveModelProfile(input ModelProfileInput) ModelProfile {
 		EffectiveContext:    resolvedContext.Effective.Value,
 		SupportsTools:       tools.Value,
 		SupportsAttachments: attachments.Value,
+		SupportsImageInput:  imageInput.Value,
 		SupportsReasoning:   reasoning.Value,
 		SupportsTemperature: temperature.Value,
 		Sources: ModelProfileSources{
@@ -238,6 +240,7 @@ func ResolveModelProfile(input ModelProfileInput) ModelProfile {
 			Capabilities: CapabilitySources{
 				Tools:       tools,
 				Attachments: attachments,
+				ImageInput:  imageInput,
 				Reasoning:   reasoning,
 				Temperature: temperature,
 			},

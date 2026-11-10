@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 
 	"charm.land/fantasy"
@@ -19,6 +20,25 @@ func collectionSubmissionInfo(c *Coordinator, taskID string) fantasy.ToolInfo {
 		delete(info.Parameters, "invariant_assessments")
 	}
 	return info
+}
+
+// The collector receives JSON as prompt text, not a provider tool schema.
+// Show validation bounds and use the same shape for exhaustive repair feedback.
+// Admission still validates the original pinned contract after binding sources.
+func collectionGuidanceInfo(c *Coordinator, taskID string) (fantasy.ToolInfo, error) {
+	info := collectionSubmissionInfo(c, taskID)
+	ref, compiled, err := c.boundResultContract(taskID)
+	if err != nil || compiled == nil {
+		return info, err
+	}
+	plans, err := c.fixedCollectionPlans(taskID)
+	if err != nil {
+		return info, err
+	}
+	schema := fixedCollectionPayloadSchema(*ref, compiled, plans, false, true)
+	advertiseResultEvidenceKeys(schema, compiled.evidenceKeys)
+	info.Parameters["structured_payload"] = providerResultIntegerStrings(schema, 0)
+	return info, nil
 }
 
 // decodeCollectionClaims accepts exactly the published model claims schema.
@@ -59,10 +79,17 @@ func (c *Coordinator) decodeCollectionClaims(taskID string, raw []byte) (SubmitR
 }
 
 func (c *Coordinator) prepareCollectionClaims(ctx context.Context, expected *ResultCollectionCheckpoint) (*ResultCollectionCheckpoint, error) {
-	raw, err := c.readCollectionBlob(ctx, expected, "response", expected.Response)
+	response, err := c.readCollectionBlobRecord(ctx, expected, "response", expected.Response)
 	if err != nil {
 		return nil, err
 	}
+	if response.ResponseIssue != nil {
+		return nil, rejectLocalResult(RepairFailureInvalidSchema, errors.New(response.ResponseIssue.Diagnostic()))
+	}
+	raw := response.Data
+	// Normalize framing before strict submission decoding. Keep Response bound
+	// to the exact received bytes and persist the validated JSON as Claims.
+	raw, _ = collectionResponseJSON(raw)
 	if _, err := c.decodeCollectionClaims(expected.TaskID, raw); err != nil {
 		return nil, err
 	}
@@ -91,7 +118,8 @@ func (c *Coordinator) commitPreparedCollection(ctx context.Context, expected *Re
 		return rejectLocalResult(RepairFailureSource, err)
 	}
 	item := c.todoItemByID(expected.TaskID)
-	if _, err := c.loadCollectionWork(ctx, item, expected); err != nil {
+	work, err := c.loadCollectionWork(ctx, item, expected)
+	if err != nil {
 		return rejectLocalResult(RepairFailureSource, err)
 	}
 	raw, err := c.readCollectionBlob(ctx, expected, "claims", expected.Prepared)
@@ -111,13 +139,23 @@ func (c *Coordinator) commitPreparedCollection(ctx context.Context, expected *Re
 	if err != nil {
 		return err
 	}
+	// A malformed model field must not conceal forged receipts or artifact
+	// claims and earn a new model turn before those sources are checked.
+	claims := input.taskResult()
+	claims.Attempt = expected.Attempt
+	if err := c.validateTaskResultReceiptClaims(item.ID, &claims); err != nil {
+		return rejectLocalResult(RepairFailureSource, err)
+	}
+	if len(claims.Artifacts) > 0 {
+		if err := validateSubmittedArtifactClaims(ctx, work.Workspace, claims.Artifacts); err != nil {
+			return rejectLocalResult(RepairFailureSource, err)
+		}
+	}
 	ctx = context.WithValue(ctx, resultCollectionAdmissionKey{}, expected)
 	admission := localResultAdmission{coordinator: c, todoID: item.ID}
 	return admission.admit(ctx, input, localResultSubmissionContract(c, item.ID), func() RepairFailureReason {
-		issues, _, err := resultSubmissionIssues(resolved, localResultCandidateValidationInfo(c, item.ID))
-		if err == nil && len(issues) > 0 {
-			return RepairFailureInvalidSchema
-		}
+		// validateStructuredPayloadClaims classifies canonical model-schema
+		// failures after independent source checks. Other failures stay closed.
 		return RepairFailureSource
 	})
 }

@@ -47,7 +47,9 @@ type workspaceStatus struct {
 	Skipped      int    `json:"skipped"`
 	Pending      int    `json:"pending"`
 	// Workers is present only with --workers.
-	Workers *inspectpkg.WorkerAttempts `json:"workers,omitempty"`
+	Workers     *inspectpkg.WorkerAttempts   `json:"workers,omitempty"`
+	Recovery    *workspaceRecovery           `json:"recovery,omitempty"`
+	DerivedFork *operatorpkg.DerivedForkView `json:"derived_fork,omitempty"`
 }
 
 func init() {
@@ -107,10 +109,12 @@ func runStatus(command *cobra.Command, _ []string) error {
 	_, _ = fmt.Fprintf(command.OutOrStdout(), "Run:        %s\n", safeOverviewValue(valueOrUnavailable(status.RunID)))
 	_, _ = fmt.Fprintf(command.OutOrStdout(), "Invocation: %s\n", safeOverviewValue(valueOrUnavailable(status.InvocationID)))
 	_, _ = fmt.Fprintf(command.OutOrStdout(), "Branch:     %s\n", safeOverviewValue(valueOrUnavailable(status.BranchID)))
+	writeDerivedForkStatus(command.OutOrStdout(), status.DerivedFork)
 	_, _ = fmt.Fprintf(command.OutOrStdout(), "Session:    %s\n", status.Session)
 	_, _ = fmt.Fprintf(command.OutOrStdout(), "Updated:    %s\n", status.UpdatedAt)
 	_, _ = fmt.Fprintf(command.OutOrStdout(), "Rounds:     %d\n", status.Rounds)
 	_, _ = fmt.Fprintf(command.OutOrStdout(), "Tasks:      %d done · %d error · %d skipped · %d pending (%d total)\n", status.Done, status.Error, status.Skipped, status.Pending, status.Total)
+	writeWorkspaceRecovery(command.OutOrStdout(), status.Recovery)
 	if status.Workers != nil {
 		writeWorkerAttempts(command.OutOrStdout(), *status.Workers, statusVerbose)
 	}
@@ -130,6 +134,8 @@ func attachCanonicalWorkspaceStatus(ctx context.Context, workspace string, statu
 		return fmt.Errorf("resolve canonical status identity: overview snapshot is unavailable")
 	}
 	applyWorkspaceStatusScope(status, data.Snapshot.Scope)
+	status.Recovery = workspaceRecoveryFromSnapshot(*data.Snapshot)
+	status.DerivedFork = data.Snapshot.DerivedFork
 	return nil
 }
 

@@ -2,7 +2,10 @@ package team
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -10,6 +13,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/kjelly/hufu/internal/execution"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func compiledReviewContract(t *testing.T, requireStructured bool) (*CompiledResultContract, ResultContractRef) {
@@ -21,6 +25,114 @@ func compiledReviewContract(t *testing.T, requireStructured bool) (*CompiledResu
 		t.Fatal(err)
 	}
 	return compiled, compiled.ref(requireStructured)
+}
+
+func TestResultPayloadJSONRoundTrip(t *testing.T) {
+	compiled, ref := compiledReviewContract(t, true)
+	original, err := validateStructuredResultPayload(compiled, ref, []byte(`{"verdict":"approve","max_tokens":9007199254740993,"findings":[{"summary":"retained <&>\n世界"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newTestCoordinator(t)
+	c.session.ResultContracts = map[string]*CompiledResultContract{ref.ID: compiled}
+	for _, format := range []string{"compact", "indented", "checkpoint", "legacy_checkpoint"} {
+		t.Run(format, func(t *testing.T) {
+			var restored ResultPayload
+			if strings.HasSuffix(format, "checkpoint") {
+				workspace := t.TempDir()
+				snapshot, err := ResolveRunInputSnapshot([]RunInputDefinition{{Name: "scope", Schema: RunInputSchema{Type: "object", Properties: map[string]RunInputSchema{"count": {Type: "integer"}}}, Default: json.RawMessage(`{"count":3}`)}}, nil, "run", "invocation", "demo")
+				if err != nil {
+					t.Fatal(err)
+				}
+				session := NewSession()
+				session.RunInputSnapshots = []RunInputSnapshot{*snapshot}
+				session.ActiveRunInputSnapshotID = snapshot.ID
+				outputs, outputsHash, err := CanonicalizeRuntimeOutputs(map[string]any{"diagnostics": strings.Repeat("complete diagnostic\n", 100), "passed": false})
+				if err != nil {
+					t.Fatal(err)
+				}
+				receipt := &ExecutionReceipt{RunID: "run", TaskID: "3", Attempt: 1, RunInputSnapshotID: snapshot.ID, RunInputSnapshotHash: snapshot.SnapshotHash, RuntimeOutputsHash: outputsHash, ResultContractID: ref.ID, ResultContractSHA256: ref.SchemaSHA256, ResultPayloadSHA256: original.SHA256, ResultValidation: ResultValidationValid, ExitCode: new(0)}
+				session.Tasks = []*TodoItem{{ID: "3", Status: TaskDone, ResultContract: ref.clone(), ExecutionReceipt: receipt, TypedResult: &TaskResult{TaskID: "3", Status: TaskResultStatusSuccess, Source: "runtime", RuntimeOutputs: outputs, RuntimeOutputsHash: outputsHash, StructuredPayload: original}}}
+				if format == "legacy_checkpoint" {
+					data, err := json.MarshalIndent(session, "", "  ")
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := workspaceDocs(workspace).putDocument(runtimestore.DocumentSession, data); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := SaveSession(workspace, session); err != nil {
+					t.Fatal(err)
+				}
+				stored, exists, err := workspaceDocs(workspace).getDocument(runtimestore.DocumentSession)
+				if err != nil || !exists {
+					t.Fatalf("read persisted document: %v", err)
+				}
+				// Use a plain wire probe so typed normalization cannot hide a
+				// writer that reindents a newly stored canonical payload.
+				var probe struct {
+					Tasks []struct {
+						TypedResult struct {
+							Payload struct{ Value json.RawMessage } `json:"structured_payload"`
+						} `json:"typed_result"`
+					} `json:"tasks"`
+				}
+				if err := json.Unmarshal(stored, &probe); err != nil {
+					t.Fatal(err)
+				}
+				sum := sha256.Sum256(probe.Tasks[0].TypedResult.Payload.Value)
+				if matches := hex.EncodeToString(sum[:]) == original.SHA256; matches != (format == "checkpoint") {
+					t.Fatal("new persistence changed canonical bytes or legacy fixture lost its indentation")
+				}
+				loaded, exists, err := LoadSessionReadOnly(workspace)
+				if err != nil || !exists || loaded == nil || len(loaded.Tasks) != 1 {
+					t.Fatalf("load canonical checkpoint: %v", err)
+				}
+				if err := ValidateRunInputSnapshot(&loaded.RunInputSnapshots[0]); err != nil || loaded.RunInputSnapshots[0].SnapshotHash != snapshot.SnapshotHash {
+					t.Fatalf("checkpoint changed frozen inputs: %v", err)
+				}
+				if !reflect.DeepEqual(loaded.Tasks[0].ExecutionReceipt, receipt) || !reflect.DeepEqual(loaded.Tasks[0].TypedResult.RuntimeOutputs, outputs) || loaded.Tasks[0].TypedResult.RuntimeOutputsHash != outputsHash {
+					t.Fatal("persistence changed canonical receipts or truncated runtime diagnostics")
+				}
+				restored = *loaded.Tasks[0].TypedResult.StructuredPayload
+			} else {
+				var data []byte
+				if format == "indented" {
+					data, err = json.MarshalIndent(original, "", "  ")
+				} else {
+					data, err = json.Marshal(original)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(data, &restored); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if restored.SHA256 != original.SHA256 || restored.Contract != original.Contract || !bytes.Equal(restored.Value, original.Value) {
+				t.Fatal("JSON formatting changed the accepted payload or its identity")
+			}
+			source := &TodoItem{ID: "3", ResultContract: ref.clone(), TypedResult: &TaskResult{StructuredPayload: &restored}}
+			if err := c.validateAcceptedDependencyPayload(source); err != nil {
+				t.Fatalf("accepted payload failed dependency admission after persistence: %v", err)
+			}
+		})
+	}
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tampered ResultPayload
+	if err := json.Unmarshal(bytes.Replace(data, []byte("retained"), []byte("changed"), 1), &tampered); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(tampered.Value)
+	if tampered.SHA256 != original.SHA256 || hex.EncodeToString(sum[:]) == original.SHA256 {
+		t.Fatal("decoding rewrote or concealed an invalid hash")
+	}
+	if err := c.validateAcceptedDependencyPayload(&TodoItem{ID: "3", ResultContract: ref.clone(), TypedResult: &TaskResult{StructuredPayload: &tampered}}); err == nil {
+		t.Fatal("dependency admission accepted a changed payload")
+	}
 }
 
 func TestValidateStructuredResultPayload(t *testing.T) {

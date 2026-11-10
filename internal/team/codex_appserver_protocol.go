@@ -281,14 +281,6 @@ func codexStartOrResumeThread(ctx context.Context, client *CodexRPCClient, exist
 	return effective, nil
 }
 
-// codexUserInput is one element of turn/start's input array. Hufu only ever
-// sends a single plain-text element — the real schema's other variants
-// (image/audio/local file references) have no v1 use case.
-type codexUserInput struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
 type codexTurnStartParams struct {
 	ThreadID     string           `json:"threadId"`
 	Input        []codexUserInput `json:"input"`
@@ -297,10 +289,12 @@ type codexTurnStartParams struct {
 }
 
 type codexTurnOptions struct {
-	ReasoningEffort string
-	DetailedOutput  bool
-	OnTurnStarted   func(turnID string)
-	OnActivity      func(codexTurnActivity)
+	Input            []codexUserInput
+	ResultProjection *resultClaimsProjection
+	ReasoningEffort  string
+	DetailedOutput   bool
+	OnTurnStarted    func(turnID string)
+	OnActivity       func(codexTurnActivity)
 }
 
 // codexTurnActivity is intentionally a safe summary rather than a raw JSON-
@@ -435,7 +429,7 @@ func codexRunTurn(ctx context.Context, client *CodexRPCClient, threadID, prompt 
 	if err != nil {
 		return CodexTurnResult{}, fmt.Errorf("codex turn/start: %w", err)
 	}
-	schema, err := json.Marshal(codexWorkerResultProposalSchema())
+	schema, err := json.Marshal(codexWorkerResultProposalSchemaForProjection(options.ResultProjection))
 	if err != nil {
 		return CodexTurnResult{}, fmt.Errorf("codex turn/start: marshal output schema: %w", err)
 	}
@@ -445,6 +439,9 @@ func codexRunTurn(ctx context.Context, client *CodexRPCClient, threadID, prompt 
 		Input:        []codexUserInput{{Type: "text", Text: prompt}},
 		OutputSchema: schema,
 		Effort:       effort,
+	}
+	if len(options.Input) > 0 {
+		params.Input = options.Input
 	}
 	if err := client.Call(ctx, codexMethodTurnStart, params, &startResult); err != nil {
 		return CodexTurnResult{}, fmt.Errorf("codex turn/start: %w", err)

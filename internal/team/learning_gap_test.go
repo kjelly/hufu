@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -95,7 +94,7 @@ func TestNonMemoryAppendFailureIsNotCountedAsAutomaticRepair(t *testing.T) {
 
 func TestLearningGapRepairWritesToTheBranchThatFailed(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

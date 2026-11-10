@@ -21,6 +21,9 @@ import (
 
 // executeDryRun handles dry run path for the CLI.
 func executeDryRun(ctx context.Context, segments []team.PromptSegment, prompt string, loadedTeams map[string]*teamContext) error {
+	if len(opts.imagePaths) > 0 {
+		return executeNativeImageDryRun(ctx, segments, loadedTeams)
+	}
 	var dryRunTeamName string
 	for _, seg := range segments {
 		if seg.Type == team.SegmentSwitchTeam {

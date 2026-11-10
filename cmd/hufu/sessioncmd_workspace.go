@@ -14,9 +14,11 @@ import (
 )
 
 var sessionMetadataOnly bool
+var sessionNewTask bool
 
 // sessionForkOutput is the --json output of `session fork`.
 type sessionForkOutput struct {
+	team.WorkspaceSnapshotProvenance
 	BranchID              string `json:"branch_id"`
 	ParentBranchID        string `json:"parent_branch_id"`
 	ForkEventID           string `json:"fork_event_id,omitempty"`
@@ -25,10 +27,13 @@ type sessionForkOutput struct {
 	WorkspaceState        string `json:"workspace_state,omitempty"`
 	Materialized          bool   `json:"materialized,omitempty"`
 	MetadataOnly          bool   `json:"metadata_only"`
+	NewTask               bool   `json:"new_task,omitempty"`
+	InitialState          string `json:"initial_state,omitempty"`
 }
 
 // sessionCheckoutOutput is the --json output of `session checkout`.
 type sessionCheckoutOutput struct {
+	team.WorkspaceSnapshotProvenance
 	BranchID               string `json:"branch_id"`
 	PreviousBranchID       string `json:"previous_branch_id"`
 	CheckoutSaveSnapshotID string `json:"checkout_save_snapshot_id,omitempty"`
@@ -97,44 +102,106 @@ func defaultForkName(target string) string {
 
 func runSessionFork(cmd *cobra.Command, args []string) error {
 	ctx := commandContext(cmd)
+	if sessionNewTask && (sessionMetadataOnly || !versionstore.PlatformSupported()) {
+		return fmt.Errorf("--new-task requires Linux workspace versioning and cannot be combined with --metadata-only")
+	}
 	vs, err := openVersionedSession(ctx, true, "fork")
 	if err != nil {
 		return err
 	}
 	defer func() { _ = vs.Close() }()
+	if sessionNewTask && !vs.version.Required() {
+		return fmt.Errorf("--new-task requires a managed workspace in required versioning mode")
+	}
+	target := ""
+	if len(args) > 0 {
+		target = args[0]
+	}
+	if sessionNewTask {
+		if err := preflightSessionNewTask(ctx, vs, target); err != nil {
+			return err
+		}
+	}
 	st, es, err := openSessionStores(vs.workspace)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = es.Close() }()
-	target := ""
-	if len(args) > 0 {
-		target = args[0]
-	}
 	name := defaultForkName(target)
 	if vs.version.Required() && !sessionMetadataOnly {
-		ops, closeStore, opsErr := workspaceOps(ctx, vs, st, es)
+		ops, closeStore, opsErr := sessionForkOps(ctx, vs, st, es)
 		if opsErr != nil {
 			return opsErr
 		}
 		defer closeStore()
-		result, forkErr := ops.Fork(ctx, name, target)
+		var result team.WorkspaceForkResult
+		var forkErr error
+		if sessionNewTask {
+			result, forkErr = ops.ForkNewTask(ctx, name, target)
+		} else {
+			result, forkErr = ops.Fork(ctx, name, target)
+		}
 		if forkErr != nil {
 			return forkErr
 		}
+		provenance, err := ops.SnapshotProvenance(ctx, result.Snapshot)
+		if err != nil {
+			return err
+		}
 		output := sessionForkOutput{
-			BranchID: result.Branch.ID, ParentBranchID: result.Branch.ParentID, ForkEventID: result.Branch.ForkEventID,
+			WorkspaceSnapshotProvenance: provenance,
+			BranchID:                    result.Branch.ID, ParentBranchID: result.Branch.ParentID, ForkEventID: result.Branch.ForkEventID,
 			WorkspaceSnapshotID: string(result.Snapshot.ID), WorkspaceRootTreeHash: result.Snapshot.RootTreeHash,
 			WorkspaceState: "available", Materialized: result.Materialized,
+		}
+		if sessionNewTask {
+			output.NewTask, output.InitialState = true, "awaiting_new_request"
 		}
 		if sessionJSON {
 			return writeJSON(output)
 		}
 		fmt.Printf("✓ Forked new branch %q (ID: %s) from %q and checked out.\n", result.Branch.Name, result.Branch.ID, result.Branch.ParentID)
 		fmt.Printf("  workspace: %s (tree %s)\n", result.Snapshot.ID, shortHash(result.Snapshot.RootTreeHash))
+		printSnapshotProvenance(provenance)
+		if sessionNewTask {
+			fmt.Println("  state: awaiting_new_request; use run with a new request for the same team")
+		}
 		return nil
 	}
 	return forkMetadataOnly(vs, st, es, name, target)
+}
+
+func preflightSessionNewTask(ctx context.Context, vs *versionedSession, target string) error {
+	st, err := team.LoadSessionTreeContext(ctx, vs.workspace)
+	if err != nil {
+		return err
+	}
+	es, err := team.OpenEventStoreReadOnly(vs.workspace)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = es.Close() }()
+	store, err := versionstore.Open(ctx, versionstore.Options{StateDir: vs.version.StateDir, ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+	ops := team.WorkspaceSessionOps{Version: vs.version, Workspace: vs.workspace, Tree: st, Events: es, Store: store}
+	_, err = ops.PrepareDerivedFork(ctx, target)
+	return err
+}
+
+// Derived admission must observe unsettled effects before any recovery action.
+func sessionForkOps(ctx context.Context, vs *versionedSession, st *team.SessionTree, es *team.EventStore) (*team.WorkspaceSessionOps, func(), error) {
+	if !sessionNewTask {
+		return workspaceOps(ctx, vs, st, es)
+	}
+	store, err := vs.version.OpenStore(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &team.WorkspaceSessionOps{Version: vs.version, Workspace: vs.workspace, Tree: st, Events: es, Store: store},
+		func() { _ = store.Close() }, nil
 }
 
 // forkMetadataOnly is the pre-versioning fork: session lineage only.
@@ -193,8 +260,13 @@ func runSessionCheckout(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	provenance, err := ops.SnapshotProvenance(ctx, result.Head)
+	if err != nil {
+		return err
+	}
 	output := sessionCheckoutOutput{
-		BranchID: result.Branch.ID, PreviousBranchID: result.PreviousID,
+		WorkspaceSnapshotProvenance: provenance,
+		BranchID:                    result.Branch.ID, PreviousBranchID: result.PreviousID,
 		WorkspaceSnapshotID: string(result.Head.ID), WorkspaceRootTreeHash: result.Head.RootTreeHash,
 		FilesWritten: result.Materialized.FilesWritten, FilesDeleted: result.Materialized.FilesDeleted,
 	}
@@ -206,6 +278,7 @@ func runSessionCheckout(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("✓ Checked out branch %q (%s).\n", result.Branch.Name, result.Branch.ID)
 	fmt.Printf("  workspace: %s (%d written, %d deleted)\n", result.Head.ID, result.Materialized.FilesWritten, result.Materialized.FilesDeleted)
+	printSnapshotProvenance(provenance)
 	return nil
 }
 
@@ -305,4 +378,11 @@ func shortHash(hash string) string {
 		return hash[:12]
 	}
 	return hash
+}
+
+func printSnapshotProvenance(source team.WorkspaceSnapshotProvenance) {
+	fmt.Printf("  snapshot event: %s (reason: %s); capture origin: %s\n", source.SnapshotEventID, source.SnapshotReason, source.CaptureState)
+	if source.CaptureState == "known" {
+		fmt.Printf("  captured tree: %s at %s; files reflect this snapshot boundary\n", source.CaptureSnapshot, source.CaptureEventID)
+	}
 }

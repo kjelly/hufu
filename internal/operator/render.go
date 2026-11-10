@@ -96,7 +96,7 @@ func summaryNext(action ActionSuggestion, shell string) (string, bool) {
 	if action.Kind == "wait" {
 		return "Wait for the runtime; do not retry while execution is active.", false
 	}
-	if action.Availability != "available" {
+	if action.Availability != ActionAvailabilityAvailable {
 		return fmt.Sprintf("%s is %s (%s); no executable command is available", action.ID, action.Availability, valueOrUnknown(action.ReasonCode)), false
 	}
 	if rendered, ok := RenderArgv(action.Argv, shell); ok {

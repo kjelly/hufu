@@ -3,11 +3,45 @@ package team
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/runtimestore"
 )
+
+func TestJournalSessionTreeUsesOriginalReadOnlySnapshot(t *testing.T) {
+	c := newTestCoordinator(t)
+	workspace := c.session.Workspace
+	tree := NewSessionTree()
+	tree.Labels["frozen"] = "main"
+	if err := SaveSessionTree(workspace, tree); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenEventStoreReadOnly(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	c.eventStore = store
+	tree.Labels["newer"] = "main"
+	if err := SaveSessionTree(workspace, tree); err != nil {
+		t.Fatal(err)
+	}
+	// A second immutable snapshot cannot be created under this missing root.
+	// Branch checks must use the same already-open snapshot as the journal.
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	for range 2 {
+		got, err := c.loadJournalSessionTree(t.Context(), workspace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Labels["frozen"] != "main" || got.Labels["newer"] != "" || got.Labels["local"] != "" {
+			t.Fatalf("branch metadata escaped the journal snapshot: %v", got.Labels)
+		}
+		got.Labels["local"] = "main"
+	}
+}
 
 func TestSessionTree_DefaultMain(t *testing.T) {
 	st := NewSessionTree()

@@ -16,6 +16,19 @@ type ConditionalEventJournal interface {
 	AppendAtHead(context.Context, RunEvent, string) (RunEvent, error)
 }
 
+// AtomicEventJournal binds related canonical transitions to one durable commit.
+type AtomicEventJournal interface {
+	ConditionalEventJournal
+	AppendBatchAtHead(context.Context, []RunEvent, string) ([]RunEvent, error)
+}
+
+func (j eventStoreJournal) AppendBatchAtHead(ctx context.Context, events []RunEvent, headID string) ([]RunEvent, error) {
+	if j.store == nil {
+		return nil, errors.New("event journal is unavailable")
+	}
+	return j.store.AppendPersistedBatchAtHead(ctx, events, headID)
+}
+
 func (j eventStoreJournal) AppendAtHead(ctx context.Context, event RunEvent, headID string) (RunEvent, error) {
 	if j.store == nil {
 		return RunEvent{}, errors.New("event journal is unavailable")

@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: normative
-> Verified-Commit: 2026-09-14
+> Verified-Commit: `3130bac0557ce31b096cc1b4a3dd9f3cb750a4cd`（2026-11-04；僅 §6.2 修復評估契約，見[局部核對紀錄](#section-1-verification)）
 > Supersedes: —
 > Superseded-By: —
 > Implementation-Ready: yes（依 §1.3 的 PR 邊界與 phase gates 漸進實作）
@@ -114,6 +114,26 @@ contract inventory，不改 production behavior。最低交付：
 可並行。HF-UX-012A 必須等 HF-UX-010B 與 HF-UX-011B 完成。不需要再做 package
 ownership、schema 名稱或 MVP 範圍選擇。真人 usability 與電子紙實機驗收是 release gate，
 不阻擋前置工程 PR 合併。
+
+<a id="section-1-verification"></a>
+
+### 1.5 2026-11-04 修復評估契約局部核對
+
+原始查核基準仍為 `ba30643754d8d6cd85f91624a3f9bedf9d32457a`；
+2026-09-14 的環境、測試結果與 phase gate 紀錄保留其歷史意義。
+原 header 的 `2026-10-30` 戳記未附對應 revision、命令與結果，不能據此延伸原始
+基準的驗證範圍。本次以可追溯的局部核對取代該戳記。
+
+本次核對的程式碼版本為 `3130bac0557ce31b096cc1b4a3dd9f3cb750a4cd`，
+環境為 Linux x86_64／Go 1.27.2。範圍限於 §6.2 的 `assess-result-repair`：
+blocked／interrupted collection 候選、scope／integrity gate、唯讀 argv、
+snapshot 契約、逐任務評估及既有 primary action 的安全優先順序。
+五項既有測試以 `-count=1` 重跑並通過；版本、UTC 時間、來源雜湊、完整命令與
+原始輸出見[本次驗證紀錄](../archive/analyses/operator-experience-verification-2026-11-04.md)。
+
+Header 的 Verified-Commit 指向本次核對的程式碼版本；本次文件更正及紀錄是其後的
+文件變更。其餘功能、完整 runtime／CLI 流程、其他平台與真人 usability 驗收仍依
+各自的歷史證據與 phase gate 狀態，不納入本次局部通過結論。
 
 ---
 
@@ -578,7 +598,8 @@ type ActionPreconditions struct {
 | 8 | run terminal 且無 blocker | review result / none；「無須操作」是成功體驗 |
 | 9 | 條件不足 | inspect/unknown；絕不為湊出建議建立寫入命令 |
 
-多個 blockers 同時存在：顯示 highest-priority action 與「另有 N 個待處理」，最多展開兩個 secondary actions；不能把安全 blocker 隱藏在裝飾性摘要下。
+多個 blockers 同時存在：顯示 highest-priority action 與「另有 N 個待處理」，最多展開兩個一般 secondary actions；不能把安全 blocker 隱藏在裝飾性摘要下。
+`secondary_actions` 的 `assess-result-repair` 評估動作僅在下方 [v1 action registry](#v1-action-registry) 中該條目的完整條件成立時產生。候選任務包括 result-collection 失敗且 task status 為 `blocked`，以及 collection 已中斷且 task status 為 `error`；每個符合條件的任務各提供一個唯讀評估，不計入一般動作上限。每個評估必須綁定同一 workspace/run/branch 中不同的 task；排序依 action ID、task ID，避免同種評估順序不穩定。這些入口不改變 primary action 的安全優先順序，也不授予修復、重試或工具重播權限。
 
 #### v1 action registry
 
@@ -587,6 +608,7 @@ type ActionPreconditions struct {
 | `select-scope` | binding ambiguous/conflict | inspect/read-only | `[]`；由 TTY selector 或錯誤訊息處理 | HF-UX-011B |
 | `inspect-integrity` | event/projection invalid 或 degraded | inspect/read-only | `hufu inspect replay RUN --workspace WS [--branch B]`；沒有唯一 RUN 時為 blocked | HF-UX-012A |
 | `inspect-task-recovery` | external effect unknown | inspect/read-only | `hufu inspect task TASK --run RUN --workspace WS [--branch B] [--attempt N]` | HF-UX-020A |
+| `assess-result-repair` | scope verified、integrity valid/degraded、projection consistent、event chain verified、runtime 不要求 wait；每個 blocked collection 或 interrupted collection 各一個 | inspect/read-only | `hufu resume --workspace WS --run RUN --branch B --execution-profile default --repair-result TASK --dry-run [--team TEAM]` | 已實作（result-collection recovery） |
 | `provide-input` | pending input gate | provide_input/approval | owner TUI 使用 typed intent；CLI v1 無 argv | HF-UX-020A |
 | `review-approval` | pending approval gate | review/approval | owner TUI 使用 typed intent；不產生 approve argv | HF-UX-020A |
 | `wait-runtime` | planning/executing/verifying/wrapping_up | wait/read-only | `[]` | HF-UX-020A |
@@ -596,9 +618,18 @@ type ActionPreconditions struct {
 | `review-result` | terminal run，且 outcome 需人工查看 | inspect/read-only | `hufu inspect run RUN --workspace WS [--branch B]` | HF-UX-020A |
 | `none-required` | terminal completed 且無 blocker | none/read-only | `[]` | HF-UX-020A |
 
-argv 的 flag 順序固定為 command path、`--workspace`、`--team`、`--run`、`--branch`、
-`--task`、`--attempt`；空 selector 不輸出。Registry 只生成已註冊且已有 contract test 的命令。
-在對應 façade 落地前，必須保留相同 ID/reason，但 `availability=blocked`、`argv=[]`。
+一般 argv 的 flag 順序固定為 command path、`--workspace`、`--team`、`--run`、`--branch`、
+`--task`、`--attempt`；空 selector 不輸出。`assess-result-repair` 使用表中既有 `resume`
+preview 的專用順序，選用的 `--team` 放在最後。Registry 只生成已註冊且已有 contract test
+的命令。在對應 façade 落地前，必須保留相同 ID/reason，但 `availability=blocked`、`argv=[]`。
+
+`assess-result-repair` 的 actor 為 `user`、reason code 為
+`result_collection_assessment_required`、confirmation 為 `none`，CWD 使用所選 scope 的
+project directory。Target、preconditions 與 source refs 由既有 `BuildAction` facts 建構；
+作為 read-only action，其 RevalidationKey 可為空。Workspace、run、branch、task 任一缺少時
+為 blocked 且無 argv；完整 target 可提供 available preview，仍由 preview 判定是否能修復。
+此入口已實作，不等待 `session` mutation façade，也不授予修復權限。Builder 目前固定選用
+`--execution-profile default`；這不會改寫來源 run 的 frozen policy，仍須通過普通 resume 檢查。
 
 ### 6.3 指令安全與 freshness
 

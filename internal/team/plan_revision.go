@@ -265,7 +265,7 @@ func ValidatePlanRevision(revision PlanRevision, parent *PlanRevision, ctx PlanV
 }
 
 func isHighRiskSideEffect(effect SideEffectClass) bool {
-	return effect == SideEffectExternalWrite || effect == SideEffectInfraMutation || effect == SideEffectCredential
+	return effect == SideEffectBrowserInteraction || effect == SideEffectExternalWrite || effect == SideEffectInfraMutation || effect == SideEffectCredential
 }
 
 func pathAllowed(path string, allowed []string) bool {
@@ -852,7 +852,7 @@ func (c *Coordinator) planValidationContext(revision PlanRevision) (PlanValidati
 		ctx.DurationBudgetConfigured = true
 		elapsed := time.Duration(0)
 		if !c.sessionTime.IsZero() {
-			elapsed = time.Since(c.sessionTime)
+			elapsed = c.runBudgetElapsed()
 		}
 		ctx.RemainingSeconds = int64((c.maxWallClock - elapsed) / time.Second)
 		ctx.EstimatedSecondsPerAttempt = 60

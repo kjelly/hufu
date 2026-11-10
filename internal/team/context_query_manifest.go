@@ -21,8 +21,11 @@ func cloneContextQueryAttribution(query *ContextQueryAttribution) *ContextQueryA
 // WithContextQueryAttribution creates schema3 without recomputing the v1
 // request identity or applying a newer fingerprint to a legacy manifest.
 func WithContextQueryAttribution(manifest ContextInjectionManifest, attribution ContextQueryAttribution) (ContextInjectionManifest, error) {
-	if manifest.SchemaVersion != ContextManifestSchemaVersion {
+	if manifest.SchemaVersion != ContextManifestSchemaVersion && manifest.SchemaVersion != DependencyResultViewManifestSchemaVersion && manifest.SchemaVersion != HistoricalResultManifestSchemaVersion {
 		return manifest, fmt.Errorf("query attribution requires a schema2 compiler manifest")
+	}
+	if manifest.Query != nil {
+		return manifest, fmt.Errorf("context manifest already carries query attribution")
 	}
 	if err := ValidateContextQueryManifest(manifest); err != nil {
 		return manifest, err
@@ -32,9 +35,16 @@ func WithContextQueryAttribution(manifest ContextInjectionManifest, attribution 
 	}
 	manifest = *cloneContextInjectionManifest(&manifest)
 	attribution.Sources = slices.Clone(attribution.Sources)
-	manifest.SchemaVersion = ContextQueryManifestSchemaVersion
 	manifest.Query = &attribution
-	manifest.Fingerprint = queryContextManifestFingerprint(manifest)
+	switch manifest.SchemaVersion {
+	case HistoricalResultManifestSchemaVersion:
+		manifest.Fingerprint = historicalResultManifestFingerprint(manifest)
+	case DependencyResultViewManifestSchemaVersion:
+		manifest.Fingerprint = dependencyResultViewManifestFingerprint(manifest)
+	default:
+		manifest.SchemaVersion = ContextQueryManifestSchemaVersion
+		manifest.Fingerprint = queryContextManifestFingerprint(manifest)
+	}
 	return manifest, nil
 }
 
@@ -49,6 +59,14 @@ func queryContextManifestFingerprint(manifest ContextInjectionManifest) string {
 }
 
 func ValidateContextQueryManifest(manifest ContextInjectionManifest) error {
+	if manifest.SchemaVersion != HistoricalResultManifestSchemaVersion && hasHistoricalResultManifestItems(manifest) {
+		return fmt.Errorf("legacy context manifest cannot carry historical result attribution")
+	}
+	if manifest.SchemaVersion != DependencyResultViewManifestSchemaVersion && manifest.SchemaVersion != HistoricalResultManifestSchemaVersion {
+		if err := rejectLegacyDependencyResultView(manifest); err != nil {
+			return err
+		}
+	}
 	switch manifest.SchemaVersion {
 	case 1, ContextManifestSchemaVersion:
 		if manifest.Query != nil {
@@ -67,6 +85,10 @@ func ValidateContextQueryManifest(manifest ContextInjectionManifest) error {
 		if manifest.Fingerprint != queryContextManifestFingerprint(manifest) {
 			return fmt.Errorf("query context manifest fingerprint mismatch")
 		}
+	case DependencyResultViewManifestSchemaVersion:
+		return validateDependencyResultViewManifest(manifest)
+	case HistoricalResultManifestSchemaVersion:
+		return validateHistoricalResultManifest(manifest)
 	default:
 		return fmt.Errorf("unsupported context manifest schema %d", manifest.SchemaVersion)
 	}
@@ -74,5 +96,5 @@ func ValidateContextQueryManifest(manifest ContextInjectionManifest) error {
 }
 
 func supportedDeliveryContextManifest(manifest ContextInjectionManifest) bool {
-	return (manifest.SchemaVersion == ContextManifestSchemaVersion || manifest.SchemaVersion == ContextQueryManifestSchemaVersion) && ValidateContextQueryManifest(manifest) == nil
+	return (manifest.SchemaVersion == ContextManifestSchemaVersion || manifest.SchemaVersion == ContextQueryManifestSchemaVersion || manifest.SchemaVersion == DependencyResultViewManifestSchemaVersion || manifest.SchemaVersion == HistoricalResultManifestSchemaVersion) && ValidateContextQueryManifest(manifest) == nil
 }

@@ -1,6 +1,7 @@
 package team
 
 import (
+	jsonv1 "encoding/json"
 	"encoding/json/v2"
 	"fmt"
 )
@@ -56,7 +57,7 @@ func validateTerminalInputOrigins(events []RunEvent) error {
 				continue
 			}
 			var payload RunFinishedEventPayload
-			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			if err := json.Unmarshal(event.Payload, &payload, jsonv1.DefaultOptionsV1()); err != nil {
 				return err
 			}
 			if payload.RunInputOriginRunID == "" {

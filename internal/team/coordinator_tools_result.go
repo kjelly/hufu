@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,6 +28,7 @@ type SubmitArtifactInput struct {
 // claims and descriptive handoff data; runtime-owned TaskResult identity,
 // outputs, and transcript references cannot be decoded through this boundary.
 type SubmitResultInput struct {
+	projectionBound      bool
 	Status               string                      `json:"status"`
 	Summary              string                      `json:"summary"`
 	Details              string                      `json:"details,omitempty"`
@@ -99,6 +101,19 @@ func decodeSubmitResultInput(raw []byte, contract taskResultSubmissionContract) 
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(normalized, &fields); err == nil {
+		if _, present := fields["runtime_media"]; present {
+			return SubmitResultInput{}, fmt.Errorf("runtime_media is runtime-owned; omit it entirely")
+		}
+		if _, present := fields["files_read"]; present && contract.RuntimeOwnedFilesRead {
+			return SubmitResultInput{}, fmt.Errorf("files_read is runtime-owned; omit it entirely")
+		}
+		if contract.claimsProjection != nil {
+			for name, p := range map[string]string{"findings": contract.claimsProjection.Findings, "invariant_assessments": contract.claimsProjection.Invariants} {
+				if _, present := fields[name]; present && p != "" {
+					return SubmitResultInput{}, fmt.Errorf("%s is runtime-owned; omit it entirely", name)
+				}
+			}
+		}
 		if !contract.AllowEvidence {
 			if _, ok := fields["evidence"]; ok {
 				return SubmitResultInput{}, fmt.Errorf("evidence is not a legal field for this task; report observed files in files_read")
@@ -199,6 +214,10 @@ func localResultSubmissionContract(coordinator *Coordinator, todoID string) task
 		// A drifted contract still advertises the property; the submission
 		// itself is then rejected by structuredPayloadForSubmission.
 		compiled, _ := coordinator.compiledResultContract(item.ResultContract)
+		if compiled != nil {
+			contract.claimsProjection = compiled.claimsProjection
+		}
+		contract.RuntimeOwnedFilesRead = runtimeOwnsFilesRead(compiled)
 		contract.ResultContract = item.ResultContract.clone()
 		contract.resultPayloadSchema = coordinator.fixedCollectionSubmissionSchema(todoID, *item.ResultContract, compiled)
 	}
@@ -443,6 +462,9 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 			filesRead["minItems"] = contract.FilesReadMinItems
 		}
 	}
+	if contract.RuntimeOwnedFilesRead {
+		delete(info.Parameters, "files_read")
+	}
 	if contract.InvariantVerification != "" && !slices.Contains(info.Required, "invariant_assessments") {
 		info.Required = append(info.Required, "invariant_assessments")
 	}
@@ -458,6 +480,8 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 		}
 		info.Required = append(info.Required, field)
 	}
+	info.Required = omitProjectedEnvelope(info.Parameters, info.Required, contract.claimsProjection)
+
 	return info
 }
 
@@ -535,6 +559,9 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 		return t.payloadRejectionReason(call.Input)
 	})
 	if err != nil {
+		if missing, ok := errors.AsType[*artifactReadCoverageIncomplete](err); ok {
+			return fantasy.NewTextErrorResponse(missing.Error()), nil
+		}
 		return submissionFailureResponse(localResultRejectionReason(err), err.Error()), nil
 	}
 	return fantasy.NewTextResponse("Task result submitted successfully."), nil

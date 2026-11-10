@@ -3,9 +3,66 @@ package inspect
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/kjelly/hufu/internal/team"
 )
+
+func TestRecoveryEligibilityOffersAssessmentForCancelledCollection(t *testing.T) {
+	finished := time.Unix(10, 0)
+	for _, tc := range []struct {
+		name       string
+		exit       *int
+		finished   time.Time
+		occurrence int
+		want       bool
+	}{
+		{"saved work", new(0), finished, 1, true},
+		{"failed work", new(1), finished, 1, false},
+		{"unfinished work", new(0), time.Time{}, 1, false},
+		{"historical receipt", new(0), finished, 2, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			item := &team.TodoItem{ID: "22", Status: team.TaskError, Recovery: team.RecoveryRetry, SideEffect: team.SideEffectNone, MaxRetries: 3,
+				Execution: team.ExecutionContract{AllowsReplay: new(true)}, FailureEvent: &team.FailureEventPayload{FailureClass: team.FailureCancelled},
+				ExecutionReceipt: &team.ExecutionReceipt{Attempt: 1, OccurrenceAttempt: tc.occurrence, FinishedAt: tc.finished, ExitCode: tc.exit,
+					ResultCollection: &team.ResultCollectionCheckpoint{Attempt: 1, State: team.ResultCollectionReceived}},
+			}
+			got := RecoveryEligibilityForTask(item, nil, "run", true)
+			if got.ResultCollectionInterrupted != tc.want || (tc.want && (got.RetryEligible || got.ResumeEligible || !got.HasCollectionRecovery())) {
+				t.Fatalf("eligibility=%+v", got)
+			}
+		})
+	}
+}
+
+func TestRecoveryEligibilityRecognizesBlockedCollection(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		status     team.TaskStatus
+		class      team.TaskFailureClass
+		kind       string
+		checkpoint bool
+		want       bool
+	}{
+		{"collection", team.TaskBlocked, team.FailureProtocol, team.FailureTypeResultCollection, true, true},
+		{"missing checkpoint", team.TaskBlocked, team.FailureProtocol, team.FailureTypeResultCollection, false, false},
+		{"tool submission", team.TaskBlocked, team.FailureProtocol, "submission", true, false},
+		{"execution failure", team.TaskBlocked, team.FailureExecution, team.FailureTypeResultCollection, true, false},
+		{"completed", team.TaskDone, team.FailureProtocol, team.FailureTypeResultCollection, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			item := &team.TodoItem{ID: "11", Status: tc.status, FailureEvent: &team.FailureEventPayload{FailureClass: tc.class, FailureType: tc.kind}}
+			if tc.checkpoint {
+				item.ExecutionReceipt = &team.ExecutionReceipt{ResultCollection: &team.ResultCollectionCheckpoint{State: team.ResultCollectionBlocked}}
+			}
+			got := RecoveryEligibilityForTask(item, nil, "run", false)
+			if got == nil || got.ResultCollectionBlocked != tc.want || got.RetryEligible {
+				t.Fatalf("eligibility=%+v", got)
+			}
+		})
+	}
+}
 
 func TestRecoveryEligibilityReusesRepairPolicyWithoutExecuting(t *testing.T) {
 	item := &team.TodoItem{

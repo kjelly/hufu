@@ -59,6 +59,41 @@ func Run(ctx context.Context, _ io.Reader, out io.Writer) error {
 	}
 }
 
+func TestExecuteTrustedProgramUsesSharedArtifactCoverageTypes(t *testing.T) {
+	teamDir := t.TempDir()
+	source := filepath.Join(teamDir, "action")
+	if err := os.Mkdir(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSource(t, source, `package main
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"github.com/kjelly/hufu/internal/tools"
+)
+func Run(_ context.Context, in io.Reader, out io.Writer) error {
+	var reads []tools.ArtifactReadCoverage
+	if err := json.NewDecoder(in).Decode(&reads); err != nil { return err }
+	reads[0].Ranges = append(reads[0].Ranges, tools.ArtifactByteRange{Start: 4, End: 6})
+	return json.NewEncoder(out).Encode(reads)
+}
+`)
+	program, err := Prepare(teamDir, "action")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := []byte(`[{"artifact_id":"source","sha256":"digest","byte_size":6,"ranges":[{"start":0,"end":4}]}]`)
+	result, err := Execute(t.Context(), "", program, input, os.Environ(), 1024, 1024)
+	if err != nil {
+		t.Fatalf("Execute: %v; stderr=%s", err, result.Stderr)
+	}
+	want := `[{"artifact_id":"source","sha256":"digest","byte_size":6,"ranges":[{"start":0,"end":4},{"start":4,"end":6}]}]`
+	if got := strings.TrimSpace(string(result.Stdout)); got != want {
+		t.Fatalf("stdout=%q want %q", got, want)
+	}
+}
+
 func TestExecuteRejectsSourceChangedAfterPrepare(t *testing.T) {
 	teamDir := t.TempDir()
 	source := filepath.Join(teamDir, "action")

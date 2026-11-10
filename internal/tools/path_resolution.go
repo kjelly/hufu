@@ -267,7 +267,7 @@ func canonicalPathForAuthorization(path string) string {
 
 func enforceArtifactPathPolicy(canonicalPath string, cfg ToolConfig) error {
 	if isArtifactPathBlocked(canonicalPath, cfg.ArtifactPathPolicy) {
-		return fmt.Errorf("path %q is a runtime-managed artifact path; use the authorized opaque artifact_ref instead", canonicalPath)
+		return pathDenied(cfg, fmt.Errorf("path %q is a runtime-managed artifact path; use the authorized opaque artifact_ref instead", canonicalPath))
 	}
 	return nil
 }

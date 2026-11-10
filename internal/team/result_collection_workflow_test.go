@@ -33,9 +33,7 @@ func TestResultCollectionCompletesBoundWorksetWithResultContract(t *testing.T) {
 		body := "Review complete; there are no assigned rows."
 		if strings.Contains(fmt.Sprint(request["messages"]), resultCollectorSystem) {
 			collectionCalls.Add(1)
-			if exposed, _ := request["tools"].([]any); len(exposed) != 0 {
-				t.Error("collector exposed execution tools")
-			}
+			assertCollectorResponseChannel(t, request)
 			body = `{"status":"success","summary":"review complete","structured_payload":{"rows":[]}}`
 		} else {
 			workCalls.Add(1)
@@ -117,9 +115,7 @@ func TestResultCollectionHandsValidatedPayloadsToDependentWorkers(t *testing.T) 
 					http.Error(w, "bad request", 400)
 					return
 				}
-				if tools, _ := request["tools"].([]any); len(tools) != 0 {
-					t.Errorf("collector tools=%v", tools)
-				}
+				assertCollectorResponseChannel(t, request)
 				collections.Add(1)
 				w.Header().Set("Content-Type", "text/event-stream")
 				body := `{"status":"success","summary":"accepted evidence","structured_payload":{"marker":"validated-handoff"}}`
@@ -211,7 +207,7 @@ func TestResultCollectionDefaultDryRunMakesNoProviderOrWorkerCalls(t *testing.T)
 }
 
 func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
-	for _, scenario := range []string{"valid", "string_refs", "unknown", "corrupt"} {
+	for _, scenario := range []string{"valid", "string_refs", "unknown", "corrupt", "runtime_owned", "runtime_full_id"} {
 		t.Run(scenario, func(t *testing.T) {
 			var workCalls, collectionCalls atomic.Int32
 			var source ArtifactRef
@@ -245,6 +241,12 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 						}
 					}
 					body = fmt.Sprintf(`{"status":"success","summary":"reviewed","files_read":[{"path":%q}],"structured_payload":{"claims":[{"evidence":[%q]}]}}`, key, key)
+					if scenario == "runtime_owned" || scenario == "runtime_full_id" {
+						if scenario == "runtime_full_id" {
+							key = source.ID
+						}
+						body = fmt.Sprintf(`{"status":"success","summary":"reviewed","structured_payload":{"claims":[{"evidence":[%q]}]}}`, key)
+					}
 					if scenario == "string_refs" {
 						body = fmt.Sprintf(`{"status":"success","summary":"reviewed","files_read":[%q],"structured_payload":{"claims":[{"evidence":[%q]}]}}`, key, key)
 					}
@@ -259,7 +261,11 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 				_, _ = fmt.Fprintf(w, "data: {\"id\":\"review\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", body)
 			}))
 			t.Cleanup(server.Close)
-			compiled, err := CompileResultContractDocument("keys.json", []byte(artifactKeysTestSchema))
+			schema := artifactKeysTestSchema
+			if scenario == "runtime_owned" || scenario == "runtime_full_id" {
+				schema = observedFilesTestSchema()
+			}
+			compiled, err := CompileResultContractDocument("keys.json", []byte(schema))
 			if err != nil {
 				t.Fatal(err)
 			}

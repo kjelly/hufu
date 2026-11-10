@@ -22,6 +22,7 @@ import (
 	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/utils"
@@ -71,7 +72,7 @@ func (c *Coordinator) buildDirectAgentTaskContext(ctx context.Context, agentDef 
 	if allowedPaths := c.runtimeAllowedPaths(agentDef.AllowedPaths); len(allowedPaths) > 0 {
 		taskCtx = context.WithValue(taskCtx, tools.AgentAllowedPathsKey, allowedPaths)
 	}
-	if strings.EqualFold(strings.TrimSpace(agentDef.SideEffect), string(SideEffectNone)) {
+	if readOnlyProjectSideEffect(SideEffectClass(strings.ToLower(strings.TrimSpace(agentDef.SideEffect)))) {
 		taskCtx = context.WithValue(taskCtx, tools.AgentReadOnlyExecutionKey, true)
 	}
 	if writePaths := c.runtimeAllowedWritePaths(); len(writePaths) > 0 {
@@ -358,7 +359,13 @@ func (c *Coordinator) createDirectAgent(ctx context.Context, agentDef *agent.Age
 }
 
 //nolint:gocyclo // direct-agent execution is the canonical closed lifecycle path.
-func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task string) (directResult *DirectAgentResult, err error) {
+func (c *Coordinator) runDirectAgent(ctx context.Context, agentName string, task string, input *MediaTurnRequest, synthesizeResult bool) (directResult *DirectAgentResult, err error) {
+	if err := c.rejectPendingDerivedFork(); err != nil {
+		return nil, err
+	}
+	if pendingHistoricalResultRequest(ctx) != nil {
+		return nil, fmt.Errorf("historical result intake requires a new coordinator Run")
+	}
 	ctx = withDirectAgentInvocation(ctx)
 	originalCancellation := invocationContextError(ctx)
 	executionParent := ctx
@@ -373,6 +380,9 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return nil, err
 	}
 	defer endExecutionRun()
+	// Keep the invocation authority before adding the worker's task envelope.
+	// A result consumer never inherits its producer's execution/read grant.
+	presentationCtx := ctx
 	defer func() {
 		if errors.Is(context.Cause(ctx), ErrInvocationStalled) {
 			err = ErrInvocationStalled
@@ -448,7 +458,16 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 	directTask.ModelTopology = []string{directTask.Model}
 	directTask.ExecutionTopology = []execution.ExecutionTarget{directTask.ResolvedExecutionTarget}
 	directModel = directTask.Model
+	if input != nil {
+		directTask, err = c.prepareTaskMedia(ctx, directTask, *input, media.InvocationDirectAgent)
+		if err != nil {
+			c.finalizePublicInvocationFailure(err)
+			return nil, err
+		}
+	}
 	directSpec := TodoSpec{
+		MediaBinding:         directTask.MediaBinding.Clone(),
+		MediaInputDigest:     directTask.MediaInputDigest,
 		RunInputSnapshotID:   directTask.RunInputSnapshotID,
 		RunInputSnapshotHash: directTask.RunInputSnapshotHash,
 		Agent:                directTask.Agent,
@@ -459,6 +478,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		ExecutionTarget:      directTask.ResolvedExecutionTarget,
 		ExecutionTopology:    cloneExecutionTopology(directTask.ExecutionTopology),
 		ResultContract:       directTask.ResultContract.clone(),
+		DependencyResultView: directTask.DependencyResultView.clone(),
 		WorkerWorkspace:      directTask.WorkerWorkspace.clone(),
 		ExecutionRoute:       directTask.ExecutionRoute.clone(),
 		Source:               TaskSourceCoordinator,
@@ -468,6 +488,11 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		Recovery:             directTask.Recovery,
 		ReconcileTool:        directTask.ReconcileTool,
 	}
+	if err := c.finalizeMediaTaskSpec(ctx, &directSpec, todoID); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return nil, err
+	}
+	directTask.MediaBinding, directTask.MediaInputDigest = directSpec.MediaBinding.Clone(), directSpec.MediaInputDigest
 	if err := c.freezeTodoSpecDynamicAuthorization(ctx, directTask, agentDef, &directSpec); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return nil, err
@@ -534,12 +559,23 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return nil, transportErr
 	}
 	if _, directLLMErr := c.ExecutionRegistry().LanguageModelBackend(directTask.ResolvedExecutionTarget); directLLMErr != nil || directTransport == agent.ResultTransportRuntime || directTask.WorkerWorkspace.isolated() ||
-		(directTask.ExecutionRoute != nil && len(directTask.ExecutionRoute.Candidates) > 1) || c.requestAcceptanceEnabled() {
+		(directTask.ExecutionRoute != nil && len(directTask.ExecutionRoute.Candidates) > 1) || c.requestAcceptanceEnabled() || taskHasMedia(directTask) {
+		if taskHasMedia(directTask) {
+			ctx = withProviderCostContext(ctx, providerCostContext{Agent: resolvedName, Role: agentDef.Role, Purpose: cost.PurposeDirectAgent})
+		}
 		output, execErr := c.executeTask(ctx, directTask, todoID)
+		if execErr == nil && synthesizeResult {
+			presented, presentationErr := c.synthesizeNativeDirectResult(presentationCtx, todoID, output)
+			if presentationErr != nil {
+				execErr = presentationErr
+			} else {
+				output = presented
+			}
+		}
 		// Runtime collection delegates work to executeTask, but the direct
 		// invocation still owns run finalization. Without it, an otherwise
 		// recoverable collection failure leaves an uncertain terminal commit.
-		if c.requestAcceptanceEnabled() || directTransport == agent.ResultTransportRuntime {
+		if c.requestAcceptanceEnabled() || directTransport == agent.ResultTransportRuntime || taskHasMedia(directTask) {
 			runResult := c.finalizeDirectRun(ctx, todoID, execErr == nil, output)
 			if execErr == nil && (runResult == nil || !IsRunOutcomeSuccess(runResult.Outcome) || !runResult.GoalSatisfied) {
 				return directRunNotAcceptedResult(resolvedName, output, runResult, 0), nil
@@ -744,7 +780,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		return &DirectAgentResult{AgentName: resolvedName, Error: failure}, nil
 	}
 	workerInput.WorkerMemory = memBundle
-	compiled, compileErr := c.ContextCompiler().CompileWorkerContext(taskCtx, workerInput)
+	compiled, compileErr := c.compileWorkerContext(taskCtx, workerInput)
 	c.recordShadowTrace(taskCtx, "direct_worker", prompt, request, routeDecisions, workerInput.ModelContext, compiled, compileErr)
 	if compileErr != nil {
 		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{
@@ -785,6 +821,7 @@ func (c *Coordinator) RunDirectAgent(ctx context.Context, agentName string, task
 		c.finalizeDirectAgentTerminalFailure(ctx, directAgentTerminalFailure{todoID: todoID, agent: resolvedName, agentDef: agentDef, task: task, directModel: directModel, attemptStarted: attemptStarted, roundCancel: roundCancel, err: fmt.Errorf("direct-agent context manifest preflight failed: %w", manifestErr)})
 		return &DirectAgentResult{AgentName: resolvedName, Error: fmt.Errorf("direct-agent context manifest preflight failed: %w", manifestErr)}, nil
 	}
+	taskCtx = c.bindDependencyViewCall(taskCtx, &contextManifest)
 	taskCtx = withInvocationMetadata(taskCtx, invocationMetadataFromRequest(request, contextManifest))
 	runID := c.executionRunID
 	if runID == "" && c.taskTracker != nil && c.taskTracker.TodoList() != nil {
@@ -992,22 +1029,23 @@ func (c *Coordinator) persistPreCancelledDirectAgentWithDef(ctx context.Context,
 	occurrence.ExecutionTopology = []execution.ExecutionTarget{occurrence.ResolvedExecutionTarget}
 	spec := TodoSpec{
 		RunInputSnapshotID: occurrence.RunInputSnapshotID, RunInputSnapshotHash: occurrence.RunInputSnapshotHash,
-		Agent:             occurrence.Agent,
-		Desc:              occurrence.Goal,
-		Goal:              occurrence.Goal,
-		Model:             occurrence.Model,
-		ModelTopology:     cloneModelTopology(occurrence.ModelTopology),
-		ExecutionTarget:   occurrence.ResolvedExecutionTarget,
-		ExecutionTopology: cloneExecutionTopology(occurrence.ExecutionTopology),
-		ResultContract:    occurrence.ResultContract.clone(),
-		WorkerWorkspace:   occurrence.WorkerWorkspace.clone(),
-		ExecutionRoute:    occurrence.ExecutionRoute.clone(),
-		Source:            TaskSourceCoordinator,
-		ParentID:          "",
-		Execution:         cloneExecutionContract(occurrence.Execution),
-		SideEffect:        occurrence.SideEffect,
-		Recovery:          occurrence.Recovery,
-		ReconcileTool:     occurrence.ReconcileTool,
+		Agent:                occurrence.Agent,
+		Desc:                 occurrence.Goal,
+		Goal:                 occurrence.Goal,
+		Model:                occurrence.Model,
+		ModelTopology:        cloneModelTopology(occurrence.ModelTopology),
+		ExecutionTarget:      occurrence.ResolvedExecutionTarget,
+		ExecutionTopology:    cloneExecutionTopology(occurrence.ExecutionTopology),
+		ResultContract:       occurrence.ResultContract.clone(),
+		DependencyResultView: occurrence.DependencyResultView.clone(),
+		WorkerWorkspace:      occurrence.WorkerWorkspace.clone(),
+		ExecutionRoute:       occurrence.ExecutionRoute.clone(),
+		Source:               TaskSourceCoordinator,
+		ParentID:             "",
+		Execution:            cloneExecutionContract(occurrence.Execution),
+		SideEffect:           occurrence.SideEffect,
+		Recovery:             occurrence.Recovery,
+		ReconcileTool:        occurrence.ReconcileTool,
 	}
 	if err := c.freezeTodoSpecDynamicAuthorization(ctx, occurrence, agentDef, &spec); err != nil {
 		return errors.Join(cancellation, fmt.Errorf("freeze pre-cancelled direct task tools: %w", err))
@@ -1355,11 +1393,28 @@ func (c *Coordinator) runOrchestrator(ctx context.Context, orchDef *agent.AgentD
 	if err != nil {
 		return "", nil, fmt.Errorf("resolve coordinator provider context: %w", err)
 	}
+	if agent.MessagesHaveMedia(historySnapshot) {
+		metadata, _ := invocationMetadataFromContext(orchCtx)
+		metadata.RunID, metadata.TaskID, metadata.AgentName, metadata.AgentRole = c.executionRunID, CoordTodoID, orchDef.Name, orchDef.Role
+		metadata.Attempt, metadata.Purpose, metadata.ModelExecutionID = executionAttempt, "coordinator", ""
+		orchCtx = withInvocationMetadata(orchCtx, metadata)
+		orchCtx, err = c.withCoordinatorReferenceMetadata(orchCtx, orchInvocation.AdmissionContext)
+		if err != nil {
+			return "", nil, err
+		}
+		copy := *orchDef
+		copy.System += coordinatorImageMetadataGuide
+		orchDef = &copy
+	}
 	gatedBackend, executionTarget, backendErr := c.gatedAgentBackendForModel(orchModelID)
 	if backendErr != nil {
 		return "", nil, fmt.Errorf("resolve coordinator execution backend: %w", backendErr)
 	}
-	preflight := newCoordinatorRequestPreflightWithAdmission(orchModelID, prompt, orchDef.System, orchTools, orchInvocation.AdmissionContext)
+	preflightPrompt := prompt
+	if coordinatorMediaPromptCommitted(orchCtx, prompt, historySnapshot) {
+		preflightPrompt = ""
+	}
+	preflight := newCoordinatorRequestPreflightWithAdmission(orchModelID, preflightPrompt, orchDef.System, orchTools, orchInvocation.AdmissionContext)
 	if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {
 		preflight.refreshSystem = c.refreshWorkflowPrompt
 	}
@@ -2180,6 +2235,13 @@ func (c *Coordinator) buildSystemPrompt(ctx context.Context, orchDef *agent.Agen
 		coreText.WriteString("\n\n" + reminder)
 	}
 	systemPrompt = utils.RedactSecrets(systemPrompt)
+	routing, err := c.historicalResultRoutingMetadata(ctx)
+	if err != nil {
+		return "", err
+	}
+	if routing != "" {
+		coreText.WriteString("\n\n" + routing)
+	}
 	coordInput.CorePrompt = utils.RedactSecrets(coreText.String())
 	compiled, compileErr := c.ContextCompiler().CompileCoordinatorContext(ctx, coordInput)
 	c.recordShadowTrace(ctx, "coordinator", systemPrompt, contextRequest, routeDecisions, coordInput.ModelContext, compiled, compileErr)
@@ -2231,6 +2293,30 @@ func compactProjectContext(ctx context.Context, compacter textCompacter, project
 }
 
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
+	if err := c.ValidateDerivedForkRequest(ctx, userPrompt); err != nil {
+		return "", err
+	}
+	intake, err := c.claimHistoricalResultRequest(ctx, userPrompt)
+	if err != nil {
+		return "", err
+	}
+	if intake != nil {
+		defer intake.state.Store(2)
+	}
+	return c.runRequest(ctx, userPrompt)
+}
+
+func (c *Coordinator) validateInvocationWorkspace(ctx context.Context) error {
+	if err := c.ValidateWorkspaceIsolation(); err != nil {
+		return err
+	}
+	if err := c.ValidateResourceLocks(ctx); err != nil {
+		return err
+	}
+	return c.ValidateRequiredResourceLocks(ctx, c.projectDir)
+}
+
+func (c *Coordinator) runRequest(ctx context.Context, userPrompt string) (string, error) {
 	ctx, endExecutionRun, err := c.beginPublicInvocationExecutionRun(ctx)
 	if err != nil {
 		return "", err
@@ -2246,15 +2332,12 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 	if err := c.admitWorkspaceVersion(ctx); err != nil {
 		return "", c.finalizePublicInvocationFailureError(err)
 	}
-	if err := c.ValidateWorkspaceIsolation(); err != nil {
+	if err := c.validateInvocationWorkspace(ctx); err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}
-	if err := c.ValidateResourceLocks(ctx); err != nil {
-		c.finalizePublicInvocationFailure(err)
-		return "", err
-	}
-	if err := c.ValidateRequiredResourceLocks(ctx, c.projectDir); err != nil {
+	ctx, userPrompt, err = c.admitCoordinatorMediaInput(ctx, userPrompt)
+	if err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}
@@ -2305,10 +2388,16 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 
 	_ = EnsureWorkspaceDirs(c.session.Workspace)
 	if c.phaseWorkflow != nil {
-		if err := c.phaseWorkflow.Start(); err != nil {
+		var startErr error
+		if c.phaseWorkflow.State() == PhaseFailed {
+			startErr = c.admitFailedWorkflowResultRepair(ctx)
+		} else {
+			startErr = c.phaseWorkflow.Start()
+		}
+		if startErr != nil {
 			c.saveCheckpoint()
-			c.finalizePublicInvocationFailure(err)
-			return "", err
+			c.finalizePublicInvocationFailure(startErr)
+			return "", startErr
 		}
 		c.saveCheckpoint()
 	}
@@ -2426,6 +2515,12 @@ func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error
 }
 
 func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt string) (string, error) {
+	if err := c.rejectPendingDerivedFork(); err != nil {
+		return "", err
+	}
+	if pendingHistoricalResultRequest(ctx) != nil {
+		return "", fmt.Errorf("historical result intake requires a new coordinator Run")
+	}
 	ctx, endExecutionRun, err := c.beginPublicInvocationExecutionRun(ctx)
 	if err != nil {
 		return "", err
@@ -2438,6 +2533,11 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		return "", c.finalizePublicInvocationFailureError(err)
 	}
 	if err := c.ValidateRequiredResourceLocks(ctx, c.projectDir); err != nil {
+		c.finalizePublicInvocationFailure(err)
+		return "", err
+	}
+	ctx, additionalPrompt, err = c.admitCoordinatorMediaInput(ctx, additionalPrompt)
+	if err != nil {
 		c.finalizePublicInvocationFailure(err)
 		return "", err
 	}
@@ -2488,7 +2588,13 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 		additionalPrompt = "wrap up now"
 		c.report(c.newEvent("wrap_up_phase").withMessage("coordinator summarizing").withTodoID(CoordTodoID))
 	} else {
-		continuationPrompt = fmt.Sprintf(continuationPromptTemplate, additionalPrompt)
+		if _, committed := ctx.Value(coordinatorCommittedMediaKey{}).(media.InputSnapshot); committed {
+			// The mixed turn already owns its original text. Put continuation
+			// guidance in the system message instead of duplicating user input.
+			continuationPrompt = additionalPrompt
+		} else {
+			continuationPrompt = fmt.Sprintf(continuationPromptTemplate, additionalPrompt)
+		}
 		c.report(c.newEvent("step").withMessage("coordinator preparing").withTodoID(CoordTodoID))
 	}
 	ctx, _, err = c.resolveProviderBoundInvocationContext(ctx, c.resolveAgentModel(orchDef, ""), orchDef)
@@ -2506,6 +2612,9 @@ func (c *Coordinator) ContinueWithPrompt(ctx context.Context, additionalPrompt s
 	orchDefCopy.System = systemPrompt
 
 	if !newWorkflowCycle {
+		if _, committed := ctx.Value(coordinatorCommittedMediaKey{}).(media.InputSnapshot); committed {
+			orchDefCopy.System += coordinatorMediaContinuationGuide
+		}
 		c.addSessionUserMessage(additionalPrompt)
 	}
 

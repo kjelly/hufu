@@ -83,8 +83,14 @@ validation: the extractor receives the original request, rejected candidate and
 independent feedback, and the revised candidate must pass validation and a new
 independent audit. An unchanged rejected candidate cannot be re-audited; a
 second rejection fails closed. This never revises a frozen contract or retries
-a completion verdict. An unavailable or malformed audit fails immediately. A
-`request_acceptance_contract_reviewed` event records each valid verdict,
+a completion verdict. A malformed audit receives at most one format-only repair
+with the same original request and candidate contract, the rejected response,
+and deterministic feedback. `faithful` must be a JSON boolean, never a quoted
+string; invalid responses are not coerced or persisted as verdicts. A negative
+verdict (including a quoted `"false"` in an otherwise invalid review) cannot be
+rerolled by format repair. Provider errors, cancellation, oversized responses,
+and a second invalid response fail closed. A `request_acceptance_contract_reviewed`
+event records each valid verdict,
 reason and candidate-contract digest. The audit cannot rewrite the contract.
 
 Extraction and completion-review responses must contain one JSON value. A
@@ -174,6 +180,13 @@ Literal quotations from older integrations remain strictly validated.
 
 A review with faithful request coverage whose proof data fails validation receives at most one
 protocol-only repair with the same contract, sources and proposed answer.
+An undeclared JSON member can also trigger that single repair when a separate
+read of the known fields establishes positive coverage, every required verdict,
+and valid delivery assessments without admitted shortfalls. This read only
+decides repair eligibility; the replacement still passes strict decoding,
+evidence binding and the independent material review. Unknown fields are never
+silently removed to accept the original response. Malformed or incomplete known
+verdicts, duplicate JSON members and additional JSON documents fail closed.
 Exact quote and source-kind validation still apply. A repair cannot upgrade a
 `missing` or `blocked` verdict. Negative coverage or a missing/blocked required
 item is not retried. Provider failures do

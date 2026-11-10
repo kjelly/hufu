@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/semantic"
 	"io"
 	"os"
@@ -29,8 +30,16 @@ import (
 )
 
 type TeamSession struct {
+	// MediaPolicy is the trusted host policy; the team can only restrict it.
+	MediaPolicy                     *media.Policy
 	requestAcceptanceInputInstalled bool
 	compositionSources              map[string]compositionAgentSource // Process-local, never part of runtime policy.
+	// LaunchOptions opts command-created coordinators into restorable startup
+	// settings. Credentials and arbitrary command/environment text are excluded.
+	LaunchOptions *LaunchOptions
+	// RestoredLaunchSettings distinguishes saved empty selectors from a
+	// request to inherit today's host defaults.
+	RestoredLaunchSettings bool
 
 	Config            agent.TeamConfig
 	DecisionAuthoring DecisionAuthoringMetadata
@@ -848,6 +857,12 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 		return cfg, DecisionAuthoringMetadata{}, err
 	}
 
+	if yc.Media != nil {
+		if _, err := yc.Media.Resolve(); err != nil {
+			return cfg, authoringMetadata, err
+		}
+		cfg.Media = yc.Media.Clone()
+	}
 	if yc.Name != "" {
 		cfg.Name = yc.Name
 	}

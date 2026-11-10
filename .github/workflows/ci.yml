@@ -22,7 +22,7 @@ env:
 
 jobs:
   # Parallel jobs: each gates independently, so a lint config bug no longer
-  # hides test or build results, and the merge gate is the aggregate of eight
+  # hides test or build results, and the merge gate is the aggregate of nine
   # independent required job groups.
   lint:
     # NOTE: jobs.<id>.name cannot reference the env context (workflow-level
@@ -43,7 +43,7 @@ jobs:
         uses: golangci/golangci-lint-action@a4f60bb28d35aeee14e6880718e0c85ff1882e64 # v6.0.1
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
-          args: --timeout 5m ./... ./.agent-teams/hufu-dev/diagnostic-pilot/...
+          args: --timeout 5m ./... ./.agent-teams/hufu-dev/diagnostic-pilot/... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/... ./.agent-teams/web-research/tests
           only-new-issues: true
 
   vet:
@@ -53,64 +53,69 @@ jobs:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
-      - name: Set up Go ${{ env.GO_VERSION }}
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
 
       - name: go mod tidy -diff
-        # Fails if go.mod / go.sum drift from the source tree. The x/sys
-        # line is allowed to flip between `// indirect` and direct; that
-        # depends on whether the test binary that imports golang.org/x/sys/unix
-        # (cmd/hufu/pty_e2e_test.go, build-tagged linux/darwin/freebsd) is
-        # in the build set, which is itself go-version dependent. Run
-        # `go mod tidy` locally and commit the result when this fails for
-        # any other reason.
-        run: |
-          go mod tidy -diff > /tmp/tidy.diff 2>&1 || true
-          unexpected=$(grep -E "^[+-]" /tmp/tidy.diff | grep -vE "golang\.org/x/sys v0\.43\.0" || true)
-          if [ -n "$unexpected" ]; then
-            echo "go mod tidy -diff has unexpected drift:"
-            cat /tmp/tidy.diff
-            exit 1
-          fi
-          # Mirror the original gate: an empty diff means CI passes.
-          if [ -s /tmp/tidy.diff ] && [ -z "$unexpected" ]; then
-            echo "Only the known x/sys indirect/direct flip is present; OK."
-          fi
+        # The pinned toolchain must produce an empty diff. Preserve tidy's
+        # exit status for dependency drift and command/download failures alike.
+        run: mise exec -- go mod tidy -diff
 
       - name: go vet
-        run: go vet ./... ./.agent-teams/hufu-dev/diagnostic-pilot/...
+        run: mise exec -- go vet -p 2 ./... ./.agent-teams/hufu-dev/diagnostic-pilot/... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/... ./.agent-teams/web-research/tests
 
   test:
-    name: test (${{ matrix.scope }}; race, short, timeout ${{ matrix.package-timeout }})
+    name: test (${{ matrix.partition }}; race, short, timeout ${{ matrix.package-timeout }})
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.job-timeout }}
     strategy:
-      # Report every group even when another fails. ci-success needs all four.
+      # Report every partition even when another fails. ci-success needs all six.
       fail-fast: false
       matrix:
         include:
           - scope: cli
             package-timeout: 20m
             job-timeout: 30
+            partition: cli
+            shard-index: 0
+            shard-count: 1
           - scope: team
             package-timeout: 30m
             job-timeout: 40
+            partition: team-0
+            shard-index: 0
+            shard-count: 3
+          - scope: team
+            package-timeout: 30m
+            job-timeout: 40
+            partition: team-1
+            shard-index: 1
+            shard-count: 3
+          - scope: team
+            package-timeout: 30m
+            job-timeout: 40
+            partition: team-2
+            shard-index: 2
+            shard-count: 3
           - scope: improver
             package-timeout: 30m
             job-timeout: 40
+            partition: improver
+            shard-index: 0
+            shard-count: 1
           - scope: other
             package-timeout: 20m
             job-timeout: 30
+            partition: other
+            shard-index: 0
+            shard-count: 1
     env:
       GOMAXPROCS: "2"
       GOTOOLCHAIN: local
       PACKAGE_TIMEOUT: ${{ matrix.package-timeout }}
       # Cache versions include the archived paths. Distinct race paths keep
       # immutable non-race caches and other scopes from winning the save race.
-      GOCACHE: ${{ github.workspace }}/.cache/go-race-${{ matrix.scope }}
+      GOCACHE: ${{ github.workspace }}/.cache/go-race-${{ matrix.partition }}
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
@@ -129,16 +134,19 @@ jobs:
       - name: Run tests
         env:
           TEST_SCOPE: ${{ matrix.scope }}
+          TEST_SHARD_INDEX: ${{ matrix.shard-index }}
+          TEST_SHARD_COUNT: ${{ matrix.shard-count }}
         # Discovery preserves all four existing package groups. The integration
         # job below runs every whole-test short guard without -short.
         run: |
           set -o pipefail
           mkdir -p work/ci-tests
           go run ./scripts/testlayers -list > work/ci-tests/inventory.json
+          go run ./scripts/testlayers -scope "$TEST_SCOPE" -shard-index "$TEST_SHARD_INDEX" -shard-count "$TEST_SHARD_COUNT" -list > work/ci-tests/shard-inventory.json
           du -sk "$(go env GOCACHE)" > work/ci-tests/cache-before.txt
           /usr/bin/time -f 'wall_seconds=%e\nuser_seconds=%U\nsystem_seconds=%S' \
             -o work/ci-tests/time.txt \
-            go run ./scripts/testlayers -layer short -scope "$TEST_SCOPE" -- -race -json -timeout "$PACKAGE_TIMEOUT" \
+            go run ./scripts/testlayers -layer short -scope "$TEST_SCOPE" -shard-index "$TEST_SHARD_INDEX" -shard-count "$TEST_SHARD_COUNT" -- -race -json -timeout "$PACKAGE_TIMEOUT" \
             | tee work/ci-tests/tests.jsonl
 
       - name: Record timing and cache cost
@@ -172,7 +180,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: short-${{ matrix.scope }}
+          name: short-${{ matrix.partition }}
           path: work/ci-tests/
           retention-days: 14
 
@@ -183,7 +191,9 @@ jobs:
     env:
       GOMAXPROCS: "2"
       GOTOOLCHAIN: local
-      PACKAGE_TIMEOUT: 20m
+      # The 100k-row SQLite fixture can take about 19m with the race detector;
+      # leave room for the remaining integration tests in the same package.
+      PACKAGE_TIMEOUT: 30m
       GOCACHE: ${{ github.workspace }}/.cache/go-race-integration
     steps:
       - name: Checkout
@@ -299,7 +309,7 @@ jobs:
         run: CGO_ENABLED=0 go build -v ./cmd/hufu
 
       - name: CGO_ENABLED=0 test
-        run: CGO_ENABLED=0 go test ./... ./.agent-teams/hufu-dev/diagnostic-pilot/...
+        run: CGO_ENABLED=0 go test ./... ./.agent-teams/hufu-dev/diagnostic-pilot/... ./.agent-teams/web-research/tests
 
   # Offline deterministic workflow regression harness. All ten critical
   # semantic cases plus the core lifecycle baseline are implemented, so this
@@ -344,15 +354,32 @@ jobs:
           path: eval-reports/*.json
           retention-days: 14
 
+  contracts:
+    name: contracts (offline result pipeline and recovery)
+    runs-on: ubuntu-latest
+    # Allow the sequential package checks and cold compilation to complete.
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+      - name: Exercise contracts without live models
+        run: |
+          task_tmp=$(mktemp -d /tmp/codex-task.XXXXXX)
+          trap 'rm -rf -- "$task_tmp"' EXIT
+          export TMPDIR="$task_tmp" GOMAXPROCS=2
+          mise run test-contracts
+
   # Aggregate gate. Required by branch protection so PRs cannot merge with
-  # any of the eight parallel checks red.
+  # any of the nine parallel checks red.
   ci-success:
     name: ci-success
     permissions:
       actions: read
       contents: read
     runs-on: ubuntu-latest
-    needs: [lint, vet, test, integration, build, cgo-free, docs, eval-core]
+    needs: [lint, vet, test, integration, build, cgo-free, docs, eval-core, contracts]
     if: always()
     steps:
       - name: Checkout

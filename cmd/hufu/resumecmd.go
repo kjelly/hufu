@@ -15,12 +15,18 @@ import (
 )
 
 var (
-	resumeTeamName     string
-	resumeSearch       string
-	resumeBranch       string
-	resumeRun          string
-	resumeRepairResult string
-	resumeRepairModel  string
+	resumeTeamName           string
+	resumeSearch             string
+	resumeBranch             string
+	resumeRun                string
+	resumeRepairResult       string
+	resumeRetryWork          string
+	resumeRepairModel        string
+	resumeUpgradeContracts   bool
+	resumeUpgradeInputPolicy bool
+	resumeMetadataOnly       bool
+	resumeRecoveryBranch     string
+	resumeRecoveryPlan       string
 )
 
 var resumeCmd = &cobra.Command{
@@ -31,6 +37,15 @@ var resumeCmd = &cobra.Command{
 The command restores session state, re-drives only interrupted tasks according
 to their recovery policy, and then returns control to the coordinator. It does
 not create a new session or replay completed tasks automatically.
+
+New sessions save secret-free launch settings in runtime.sqlite. Resume restores
+them before applying explicit CLI/profile overrides and checking policy drift.
+Older sessions without these settings still require the original configuration.
+
+--run checks membership in the selected branch lineage; it does not rewind to
+that run. To start from a saved event, use session fork <event-id>.
+Required workspace versioning switches the managed files and checkpoint together.
+Off/observe mode restores session metadata only, without rewinding project files.
 
 Examples:
   hufu resume --workspace ./workspace/my-team
@@ -65,6 +80,14 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 			runErr = errors.Join(runErr, binding.Lease.Close())
 		}
 	}()
+	promoted, registeredTeam, err := bindManagedResumeWorkspace(commandContext(cmd), binding, cmp.Or(resumeTeamName, opts.agentTeamName), opts.dryRun)
+	if err != nil {
+		return err
+	}
+	binding = promoted
+	if registeredTeam != "" {
+		teamName = registeredTeam
+	}
 	workspace := binding.Resolution.ControlRoot
 	if !team.HasSession(workspace) {
 		return fmt.Errorf("no session found in %s; resume requires an existing session checkpoint", workspace)
@@ -86,40 +109,42 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	if err != nil {
 		return err
 	}
-	if err := validateResumeProfile(teamName, registry, vars); err != nil {
-		return err
-	}
 	source, err := team.ReadResumeSource(workspace, resumeBranch, resumeRun)
 	if err != nil {
 		return err
 	}
-	if resumeRepairResult != "" {
-		found := false
-		for _, item := range source.Session.Tasks {
-			if item != nil && item.ID == resumeRepairResult && item.Status == team.TaskBlocked && item.FailureEvent != nil && item.FailureEvent.FailureClass == team.FailureProtocol {
-				found = true
-			}
-		}
-		if !found {
-			return team.ResumeSourceError(workspace, fmt.Errorf("branch %q has no blocked protocol task %q", source.BranchID, resumeRepairResult))
-		}
+	restoreResumeLaunchDefaults(cmd, source)
+	// Saved unattended defaults must disable interactive flags just as they
+	// would when supplied on the command line.
+	if err := validateRunFlags(); err != nil {
+		return err
+	}
+	if err := validateResumeProfile(teamName, registry, vars); err != nil {
+		return err
+	}
+	if resumeBranchRecoveryRequested() {
+		return runContractRecoveryCommand(cmd, source, teamName, binding, registry, vars)
+	}
+	if err := validateResumeRepairTarget(source, resumeRepairResult); err != nil {
+		return team.ResumeSourceError(workspace, err)
 	}
 	if opts.dryRun {
-		tc, err := loadTeamByNameWithWorkspaceBinding(context.Background(), teamName, binding, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, false, false)
+		tc, err := loadTeamByNameWithWorkspaceBinding(withResumeLaunchPolicy(context.Background(), source), teamName, binding, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
 		if err != nil {
 			return err
 		}
 		defer func() { runErr = errors.Join(runErr, tc.Close()) }()
+		if resumeRepairResult == "" {
+			return runResumeSourcePreflight(cmd, tc.session, tc.coordinator, source)
+		}
 		assessment, err := tc.coordinator.AssessResumeResultCollection(cmd.Context(), source, resumeRepairResult)
 		if err != nil {
 			return err
 		}
 		return printResultRecoveryAssessment(cmd, assessment)
 	}
-	if err := team.ActivateResumeSource(context.Background(), workspace, source); err != nil {
-		return team.ResumeSourceError(workspace, err)
-	}
-	tc, err := loadTeamByNameWithWorkspaceBinding(context.Background(), teamName, binding, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
+	activationCtx := withResumeActivation(withResumeLaunchPolicy(commandContext(cmd), source), source)
+	tc, err := loadTeamByNameWithWorkspaceBinding(activationCtx, teamName, binding, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
 	if err != nil {
 		return team.ResumeSourceError(workspace, fmt.Errorf("failed to load team %q: %w", teamName, err))
 	}
@@ -194,9 +219,16 @@ func validateResumeProfile(teamName string, registry *team.TeamRegistry, vars ma
 
 func init() {
 	f := resumeCmd.Flags()
+	registerResumeLaunchFlags(f)
 	f.StringVar(&resumeBranch, "branch", "", "Exact existing branch ID, name, or label to resume (defaults to active)")
 	f.StringVar(&resumeRun, "run", "", "Require the source run to belong to the selected branch")
-	f.StringVar(&resumeRepairResult, "repair-result", "", "Authorize two result-only repair turns for one blocked protocol task; never replay worker tools")
+	f.BoolVar(&resumeUpgradeContracts, "upgrade-contracts", false, "Preview or create a recovery child for changed result schemas; never bypass ordinary resume policy checks")
+	f.BoolVar(&resumeUpgradeInputPolicy, "upgrade-input-policy", false, "Explicitly include resolver/provider policy changes in --upgrade-contracts; preserves verified frozen inputs and requires read-only contracts")
+	f.BoolVar(&resumeMetadataOnly, "metadata-only", false, "Explicit lineage-only recovery for an unversioned read-only team; project files remain shared")
+	f.StringVar(&resumeRecoveryBranch, "recovery-branch", "", "New child branch name for an explicitly previewed recovery")
+	f.StringVar(&resumeRecoveryPlan, "plan-hash", "", "Exact SHA-256 from the recovery preview")
+	f.StringVar(&resumeRepairResult, "repair-result", "", "Authorize bounded result-only recovery for a blocked protocol task or cancelled collection; never replay worker tools")
+	f.StringVar(&resumeRetryWork, "retry-work", "", "Preview or fork a controlled retry of one completed read-only work attempt whose required decisions never started")
 	f.StringVar(&resumeRepairModel, "repair-model", "", "Auxiliary result submission model (must already be frozen in the source policy); preserves the original worker target")
 	registerTeamSelectionFlags(f, &resumeTeamName, "Agent team name (inferred from --workspace when omitted)")
 	f.StringVar(&resumeSearch, "agent-team-search-path", "", "Comma-separated team search paths")
@@ -213,7 +245,7 @@ func init() {
 	f.StringArrayVar(&opts.inputFlags, "input", nil, "Set a typed run input (name=value; repeatable)")
 	f.StringArrayVar(&opts.inputFiles, "input-file", nil, "Read typed run inputs from JSON or YAML (repeatable)")
 	f.StringArrayVar(&opts.forcedSkills, "skill", nil, "Force-load specific skills (repeatable)")
-	f.BoolVar(&opts.dryRun, "dry-run", false, "Read-only result repair assessment; no branch activation, tools or model calls")
+	f.BoolVar(&opts.dryRun, "dry-run", false, "Read-only resume, result repair or contract recovery preflight; no branch activation, tools or model calls")
 	f.BoolVar(&opts.verbose, "verbose", false, "Show full agent text output in real-time")
 	f.BoolVar(&opts.quietMode, "quiet", false, "Suppress status output")
 	f.StringVar(&opts.outputFormat, "output", "", "Final-result format: text or json")
@@ -280,12 +312,38 @@ func printResultRecoveryAssessment(cmd *cobra.Command, a *team.ResultCollectionR
 	return nil
 }
 
+func resumeBranchRecoveryRequested() bool {
+	return resumeUpgradeContracts || resumeRetryWork != ""
+}
+
 func validateResumeRepairFlags() error {
+	if resumeRetryWork != "" && (strings.TrimSpace(resumeRetryWork) != resumeRetryWork || resumeUpgradeContracts || resumeUpgradeInputPolicy) {
+		return fmt.Errorf("--retry-work requires an exact task ID and cannot combine with contract or input policy upgrades")
+	}
+	if resumeBranchRecoveryRequested() {
+		if resumeRepairResult != "" || resumeRepairModel != "" || opts.reportMode || opts.tuiMode || len(opts.inputFlags) > 0 || len(opts.inputFiles) > 0 {
+			return fmt.Errorf("recovery branching cannot combine with result repair, report, tui or input assignments")
+		}
+		if opts.dryRun {
+			if resumeRecoveryBranch != "" || resumeRecoveryPlan != "" {
+				return fmt.Errorf("preview cannot apply a recovery plan")
+			}
+			return nil
+		}
+		if strings.TrimSpace(resumeRecoveryBranch) == "" || len(resumeRecoveryPlan) != 64 {
+			return fmt.Errorf("preview with --upgrade-contracts or --retry-work and --dry-run, then supply --recovery-branch and --plan-hash")
+		}
+		return nil
+	}
+	if resumeRecoveryBranch != "" || resumeRecoveryPlan != "" || resumeMetadataOnly || resumeUpgradeInputPolicy {
+		return fmt.Errorf("branch recovery options require --upgrade-contracts or --retry-work; --upgrade-input-policy requires --upgrade-contracts")
+	}
+
 	if resumeRepairModel != "" && resumeRepairResult == "" {
 		return fmt.Errorf("--repair-model requires --repair-result")
 	}
-	if opts.dryRun && (resumeRepairResult == "" || resumeRepairModel != "" || opts.reportMode || opts.tuiMode || len(opts.inputFlags) > 0 || len(opts.inputFiles) > 0) {
-		return fmt.Errorf("resume --dry-run requires --repair-result and cannot use --repair-model, --report, --tui, or input assignments")
+	if opts.dryRun && (resumeRepairModel != "" || opts.reportMode || opts.tuiMode || len(opts.inputFlags) > 0 || len(opts.inputFiles) > 0) {
+		return fmt.Errorf("resume --dry-run cannot use --repair-model, --report, --tui, or input assignments")
 	}
 	return nil
 }

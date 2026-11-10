@@ -25,6 +25,30 @@ func LoadSessionTree(workspace string) (*SessionTree, error) {
 	return LoadSessionTreeContext(context.Background(), workspace)
 }
 
+// Reuse the journal's connection when reading its branch metadata. In
+// particular, a read-only journal already owns an immutable SQLite snapshot;
+// reopening the workspace for every artifact check copies the entire database
+// again and can mix its event snapshot with newer branch metadata.
+func (c *Coordinator) loadJournalSessionTree(ctx context.Context, workspace string) (*SessionTree, error) {
+	store := c.EventStore()
+	if !store.servesWorkspace(workspace) {
+		return LoadSessionTreeContext(ctx, workspace)
+	}
+	store.lock()
+	defer store.release()
+	if store.closed || store.store == nil || !store.stateValid {
+		return nil, fmt.Errorf("session tree journal is unavailable")
+	}
+	tree, exists, err := loadSessionTreeFrom(ctx, store.store.DB())
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return NewSessionTree(), nil
+	}
+	return tree, nil
+}
+
 // LoadSessionTreeContext is the cancellable read-only session-tree reader.
 func LoadSessionTreeContext(ctx context.Context, workspace string) (*SessionTree, error) {
 	if ctx == nil {
@@ -152,7 +176,15 @@ func loadSessionTreeFrom(ctx context.Context, q runtimestore.Queryer) (*SessionT
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, false, fmt.Errorf("read active branch: %w", err)
 	}
-	rows, err := q.QueryContext(ctx, `SELECT id, name, parent_id, fork_event_id, created_at, state FROM session_branches`)
+	var schemaVersion int
+	if err := q.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&schemaVersion); err != nil {
+		return nil, false, fmt.Errorf("read session branch schema: %w", err)
+	}
+	derivationColumn := "NULL"
+	if schemaVersion >= 6 {
+		derivationColumn = "derivation"
+	}
+	rows, err := q.QueryContext(ctx, `SELECT id, name, parent_id, fork_event_id, created_at, state, `+derivationColumn+` FROM session_branches`)
 	if err != nil {
 		return nil, false, fmt.Errorf("read session branches: %w", err)
 	}
@@ -160,11 +192,16 @@ func loadSessionTreeFrom(ctx context.Context, q runtimestore.Queryer) (*SessionT
 	for rows.Next() {
 		branch := &SessionBranch{}
 		var state []byte
-		if err := rows.Scan(&branch.ID, &branch.Name, &branch.ParentID, &branch.ForkEventID, &branch.CreatedAt, &state); err != nil {
+		var derivation []byte
+		if err := rows.Scan(&branch.ID, &branch.Name, &branch.ParentID, &branch.ForkEventID, &branch.CreatedAt, &state, &derivation); err != nil {
 			return nil, false, fmt.Errorf("decode session branch: %w", err)
 		}
 		if err := json.Unmarshal(state, &branch.State); err != nil {
 			return nil, false, fmt.Errorf("decode state of session branch %q: %w", branch.ID, err)
+		}
+		branch.Derivation, err = decodeDerivedForkIntent(derivation, branch)
+		if err != nil {
+			return nil, false, fmt.Errorf("decode derivation of session branch %q: %w", branch.ID, err)
 		}
 		hash, err := sessionTreeHash(branch)
 		if err != nil {
@@ -286,15 +323,25 @@ func putSessionBranch(ctx context.Context, q runtimestore.Queryer, id string, br
 	if err := redactInto(branch, &redacted); err != nil {
 		return fmt.Errorf("redact session branch %q: %w", id, err)
 	}
+	if err := validateDerivedForkIntent(redacted.Derivation, &redacted); err != nil {
+		return err
+	}
+	if err := validateStoredDerivedForkIntent(ctx, q, id, redacted.Derivation); err != nil {
+		return err
+	}
 	state, err := json.Marshal(redacted.State)
 	if err != nil {
 		return fmt.Errorf("marshal state of session branch %q: %w", id, err)
 	}
-	_, err = q.ExecContext(ctx, `INSERT INTO session_branches(id, name, parent_id, fork_event_id, created_at, state)
-VALUES(?, ?, ?, ?, ?, ?)
+	derivation, err := encodeDerivedForkIntent(redacted.Derivation)
+	if err != nil {
+		return err
+	}
+	_, err = q.ExecContext(ctx, `INSERT INTO session_branches(id, name, parent_id, fork_event_id, created_at, state, derivation)
+VALUES(?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET name = excluded.name, parent_id = excluded.parent_id,
   fork_event_id = excluded.fork_event_id, created_at = excluded.created_at, state = excluded.state`,
-		id, redacted.Name, redacted.ParentID, redacted.ForkEventID, redacted.CreatedAt, state)
+		id, redacted.Name, redacted.ParentID, redacted.ForkEventID, redacted.CreatedAt, state, derivation)
 	if err != nil {
 		return fmt.Errorf("write session branch %q: %w", id, err)
 	}

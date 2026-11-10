@@ -27,8 +27,14 @@ func CompareCanonicalProjection(live *SessionData, events []RunEvent) error {
 	if _, err := executionPolicySnapshotFromEvents(events); err != nil {
 		return err
 	}
+	if _, _, err := historicalResultGrantProjection(events); err != nil {
+		return err
+	}
 	replayed := ReduceToSessionData(events)
 	if err := compareExecutionPolicySnapshotProjection(live.ExecutionPolicySnapshot, replayed.ExecutionPolicySnapshot); err != nil {
+		return err
+	}
+	if err := compareMediaInputSnapshotProjection(live.MediaInputSnapshots, replayed.MediaInputSnapshots); err != nil {
 		return err
 	}
 	if err := compareRunInputSnapshotProjection(live.RunInputSnapshots, live.ActiveRunInputSnapshotID, replayed.RunInputSnapshots, replayed.ActiveRunInputSnapshotID); err != nil {
@@ -39,6 +45,12 @@ func CompareCanonicalProjection(live *SessionData, events []RunEvent) error {
 	}
 	if live.WorkflowCycleID != replayed.WorkflowCycleID || live.WorkflowTaskIDFloor != replayed.WorkflowTaskIDFloor {
 		return fmt.Errorf("workflow cycle projection differs")
+	}
+	if !reflect.DeepEqual(live.HistoricalResultGrants, replayed.HistoricalResultGrants) {
+		return fmt.Errorf("historical result grant projection differs")
+	}
+	if !reflect.DeepEqual(live.DerivedFork, replayed.DerivedFork) {
+		return fmt.Errorf("derived fork projection differs")
 	}
 	if err := compareTaskProjection(live.Tasks, replayed.Tasks); err != nil {
 		return err
@@ -82,6 +94,17 @@ func executionPolicySnapshotFromEvents(events []RunEvent) (*ExecutionPolicySnaps
 			continue
 		}
 		switch EventType(event.Type) {
+		case EventContractRecovery:
+			plan, err := validateContractRecoveryLineage(event, events[:index], admitted)
+			if err != nil {
+				return nil, err
+			}
+			admitted = cloneExecutionPolicySnapshot(plan.Policy)
+		case EventDerivedForkCreated:
+			if _, err := decodeDerivedForkCreated(event); err != nil {
+				return nil, err
+			}
+			admitted = nil
 		case EventExecutionPolicySnapshot:
 			var candidate ExecutionPolicySnapshot
 			if err := json.Unmarshal(event.Payload, &candidate); err != nil {
@@ -222,6 +245,7 @@ type canonicalReceipt struct {
 	BoundInputs                   map[string]string          `json:"bound_inputs,omitempty"`
 	ActionInvocationID            string                     `json:"action_invocation_id,omitempty"`
 	RuntimeOutputsHash            string                     `json:"runtime_outputs_hash,omitempty"`
+	RuntimeMediaHash              string                     `json:"runtime_media_hash,omitempty"`
 	Backend                       string                     `json:"backend,omitempty"`
 	ExitCode                      *int                       `json:"exit_code,omitempty"`
 	ProducerID                    string                     `json:"producer_id,omitempty"`
@@ -251,6 +275,9 @@ func toCanonicalReceipts(receipts []ExecutionReceipt, single *ExecutionReceipt) 
 	if len(merged) == 0 {
 		return nil
 	}
+	// Older checkpoints can retain fanout completion order. Compare the same
+	// chronological projection as replay without rewriting any saved receipt.
+	sortTaskExecutionReceipts(merged)
 	out := make([]canonicalReceipt, 0, len(merged))
 	for _, r := range merged {
 		out = append(out, canonicalReceipt{
@@ -263,6 +290,7 @@ func toCanonicalReceipts(receipts []ExecutionReceipt, single *ExecutionReceipt) 
 			BoundInputs:                   cloneStringMap(r.BoundInputs),
 			ActionInvocationID:            r.ActionInvocationID,
 			RuntimeOutputsHash:            r.RuntimeOutputsHash,
+			RuntimeMediaHash:              r.RuntimeMediaHash,
 			Backend:                       r.Backend,
 			ExitCode:                      r.ExitCode,
 			ProducerID:                    r.ProducerID,
@@ -408,6 +436,8 @@ type canonicalTaskShadow struct {
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization,omitempty"`
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot,omitempty"`
 	ResultContract           *ResultContractRef                `json:"result_contract,omitempty"`
+	HistoricalResultBinding  *HistoricalResultTaskBinding      `json:"historical_result_binding,omitempty"`
+	DependencyResultView     *DependencyResultViewSpec         `json:"dependency_result_view,omitempty"`
 	WorkerWorkspace          *WorkerWorkspacePolicy            `json:"worker_workspace,omitempty"`
 	ExecutionRoute           *ExecutionRouteBinding            `json:"execution_route,omitempty"`
 	CatalogAction            *CatalogActionBinding             `json:"catalog_action,omitempty"`
@@ -484,6 +514,8 @@ func toCanonicalTaskShadow(item *TodoItem) canonicalTaskShadow {
 		DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		ResultContract:                item.ResultContract.clone(),
+		HistoricalResultBinding:       item.HistoricalResultBinding.clone(),
+		DependencyResultView:          item.DependencyResultView.clone(),
 		WorkerWorkspace:               item.WorkerWorkspace.clone(),
 		ExecutionRoute:                item.ExecutionRoute.clone(),
 		CatalogAction:                 item.CatalogAction.clone(),
@@ -552,7 +584,7 @@ func hasCurrentCanonicalProjectionEvents(events []RunEvent) bool {
 			continue
 		}
 		switch EventType(event.Type) {
-		case EventExecutionPolicySnapshot, EventRunInputsResolved, EventUserMessageAdded, EventAssistantMessageAdded, EventWorkflowCycleStarted, EventTaskCreated, EventTaskStarted, EventTaskVerifying, EventTaskCompleted, EventTaskFailed, EventTaskBlocked, EventTaskSkipped, EventTaskProtocolIncomplete:
+		case EventExecutionPolicySnapshot, EventRunInputsResolved, EventUserMessageAdded, EventAssistantMessageAdded, EventWorkflowCycleStarted, EventDerivedForkCreated, EventHistoricalResultsGranted, EventTaskCreated, EventTaskStarted, EventTaskVerifying, EventTaskCompleted, EventTaskFailed, EventTaskBlocked, EventTaskSkipped, EventTaskProtocolIncomplete:
 			return true
 		}
 	}

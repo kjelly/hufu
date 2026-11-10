@@ -16,6 +16,14 @@ This changes result transport only: workset source identity, receipt binding,
 whole-group verification and accepted-result requirements remain authoritative.
 A failed collector retains completed child work instead of expanding it again.
 
+An ordinary static downstream task may opt into a selected dependency-result
+presentation only after the normal workset and source restrictions have been
+applied. This view never changes workset bindings, canonical results, artifact
+access or whole-group verification. Structured source payloads and tasks
+requiring complete evidence are excluded; missing or stale source occurrences
+fail before the downstream worker call. See
+[dependency-result-view](../reference/agent-format.md#靜態依賴結果視圖dependency-result-view).
+
 ## Canonical flow
 
 ```text

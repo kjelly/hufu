@@ -15,13 +15,18 @@ import (
 var ErrScopeConflict = errors.New("inspect scope conflicts with persisted binding")
 
 type BoundReadTarget struct {
-	Scope   operatorpkg.ResolvedScope
-	Lineage Lineage
-	Session *team.SessionData
+	Scope       operatorpkg.ResolvedScope
+	Lineage     Lineage
+	Session     *team.SessionData
+	DerivedFork *operatorpkg.DerivedForkView
 }
 
 func BindReadTarget(ctx context.Context, request operatorpkg.BindingRequest) (BoundReadTarget, error) {
-	return bindReadTarget(ctx, request, 0, 0, true)
+	return bindReadTarget(ctx, request, 0, 0, true, false)
+}
+
+func bindOverviewReadTarget(ctx context.Context, request operatorpkg.BindingRequest) (BoundReadTarget, error) {
+	return bindReadTarget(ctx, request, 0, 0, true, true)
 }
 
 // BindReadTargetWithLimits binds an explicitly selected historical run without
@@ -32,7 +37,7 @@ func BindReadTargetWithLimits(ctx context.Context, request operatorpkg.BindingRe
 		strings.TrimSpace(request.BranchID) == "" || maxEvents <= 0 || maxPayloadBytes <= 0 {
 		return BoundReadTarget{}, fmt.Errorf("%w: bounded binding requires explicit scope and positive limits", ErrInvalidQuery)
 	}
-	bound, err := bindReadTarget(ctx, request, maxEvents, maxPayloadBytes, false)
+	bound, err := bindReadTarget(ctx, request, maxEvents, maxPayloadBytes, false, false)
 	if err != nil {
 		return BoundReadTarget{}, err
 	}
@@ -42,7 +47,7 @@ func BindReadTargetWithLimits(ctx context.Context, request operatorpkg.BindingRe
 	return bound, nil
 }
 
-func bindReadTarget(ctx context.Context, request operatorpkg.BindingRequest, maxEvents, maxPayloadBytes int, includeSession bool) (BoundReadTarget, error) {
+func bindReadTarget(ctx context.Context, request operatorpkg.BindingRequest, maxEvents, maxPayloadBytes int, includeSession, allowPending bool) (BoundReadTarget, error) {
 	query := InspectQuery{
 		Workspace: request.Workspace.WorkspaceExact,
 		BranchID:  strings.TrimSpace(request.BranchID),
@@ -63,6 +68,17 @@ func bindReadTarget(ctx context.Context, request operatorpkg.BindingRequest, max
 		}
 	}
 
+	var derived *operatorpkg.DerivedForkView
+	if allowPending && request.RunID == "" {
+		var canonical *team.SessionData
+		derived, canonical, err = derivedForkBranchView(lineage)
+		if err != nil {
+			return BoundReadTarget{}, err
+		}
+		if derived != nil && derived.AwaitingNewRequest {
+			return bindPendingDerivedFork(request, lineage, derived, canonical, session)
+		}
+	}
 	runID, selection, err := selectBindingRun(lineage, request, session)
 	if err != nil {
 		return BoundReadTarget{}, err
@@ -111,8 +127,9 @@ func bindReadTarget(ctx context.Context, request operatorpkg.BindingRequest, max
 			SelectionSource:    selection,
 			BindingStatus:      "verified",
 		},
-		Lineage: lineage,
-		Session: session,
+		Lineage:     lineage,
+		Session:     session,
+		DerivedFork: derived,
 	}, nil
 }
 

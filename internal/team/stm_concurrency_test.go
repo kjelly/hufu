@@ -85,7 +85,7 @@ func TestSTMWriterConcurrentAppendKeepsParseableDocument(t *testing.T) {
 
 func TestSTMWriteTool_Concurrency(t *testing.T) {
 	tmpDir := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(tmpDir, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(tmpDir)
 	if err != nil {
 		t.Fatal(err)
 	}

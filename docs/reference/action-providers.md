@@ -345,6 +345,7 @@ Hufu adds invocation identity to the adapter environment when available:
 | `HUFU_TASK_ID` | Todo/task ID |
 | `HUFU_ATTEMPT` | Current task attempt |
 | `HUFU_ACTION_INVOCATION_ID` | Action invocation ID. It changes on every attempt, so it is not an idempotency key |
+| `HUFU_RECOVERED_TASK_RUNS` | JSON object mapping retained task IDs to their original receipt run IDs, admitted against the selected canonical lineage and frozen inputs. Local command/Go adapters receive at most 64 KiB; inherited values are replaced, including with `{}` when no source is admitted |
 
 The adapter should use the supplied action workspace for transient outputs.
 Declared artifacts are copied into Hufu's workspace and receive verified

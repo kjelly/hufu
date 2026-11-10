@@ -84,6 +84,56 @@ func resultDependencyIDs(item *TodoItem) []string {
 	return ids
 }
 
+// dependencyResultsForTask supplies the worker view, including separately
+// authorized inputs reviewed by direct evidence sources.
+func (c *Coordinator) dependencyResultsForTask(todoID string) []TaskResult {
+	return c.dependencyResultViews(todoID, true)
+}
+
+// dependencyResultsForBinding supplies accepted result data without adding
+// worker input capabilities. Payload bindings never consume those extra
+// artifacts; re-authorizing them here repeatedly replays historical receipts
+// for every source in a large fan-in.
+func (c *Coordinator) dependencyResultsForBinding(todoID string) []TaskResult {
+	return c.dependencyResultViews(todoID, false)
+}
+
+func (c *Coordinator) dependencyResultViews(todoID string, includeReviewedInputs bool) []TaskResult {
+	if c.taskTracker == nil || c.taskTracker.TodoList() == nil {
+		return nil
+	}
+	var currentTodo *TodoItem
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if item.ID == todoID {
+			currentTodo = item
+			break
+		}
+	}
+	dependencies := resultDependencyIDs(currentTodo)
+	if len(dependencies) == 0 {
+		return nil
+	}
+	depSet := make(map[string]bool, len(dependencies))
+	for _, depID := range dependencies {
+		depSet[depID] = true
+	}
+	var depResults []TaskResult
+	for _, item := range c.taskTracker.TodoList().Items() {
+		if depSet[item.ID] && item.Status == TaskDone {
+			if res := c.GetTaskResult(item.ID); res != nil {
+				projected := projectDependencyResultForWorker(res, currentTodo.WorksetBinding)
+				if includeReviewedInputs && currentTodo.WorksetBinding == nil && slices.Contains(currentTodo.EvidenceFrom, item.ID) {
+					// Name the inputs the evidence task reviewed so the worker
+					// can open them by artifact_ref; its scope authorizes them.
+					projected.Artifacts = appendMissingArtifactRefs(projected.Artifacts, c.dependencyReviewedInputs(item))
+				}
+				depResults = append(depResults, projected)
+			}
+		}
+	}
+	return depResults
+}
+
 // dependencyReviewedInputs returns the workset inputs a bound dependency was
 // given, each re-authorized against that dependency's committed workset
 // receipt. An unbound dependent that checks the dependency's result, such as a

@@ -68,7 +68,7 @@ func TestSQLiteRepositoryPersistsScopeSearchAndProjection(t *testing.T) {
 
 func TestSQLiteRepositoryRebuildProjectionLeavesLegacyMemoryFilesUntouched(t *testing.T) {
 	dir := t.TempDir()
-	r, err := OpenSQLite(filepath.Join(dir, "context.sqlite"))
+	r, err := OpenSQLiteInMemory(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestSQLiteRepositoryRebuildProjectionLeavesLegacyMemoryFilesUntouched(t *te
 }
 
 func TestSQLiteRepositorySearchExactFiltersBeforeLimit(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestSQLiteRepositoryRedactsAllRequiredSecretClassesInDBAndProjection(t *tes
 }
 
 func TestSQLiteRepositorySearchLexicalRejectsOtherTeams(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestSQLiteRepositorySearchLexicalRejectsOtherTeams(t *testing.T) {
 }
 
 func TestSQLiteRepositoryRebuildLexicalRestoresFTSIndex(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestSQLiteRepositoryRebuildLexicalRestoresFTSIndex(t *testing.T) {
 }
 
 func TestSQLiteRepositorySearchExcludesItemsOutsideValidityWindow(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestSQLiteRepositorySearchExcludesItemsOutsideValidityWindow(t *testing.T) 
 }
 
 func TestSQLiteRepositoryDeduplicatesAndExpires(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestSQLiteRepositoryDeduplicatesAndExpires(t *testing.T) {
 }
 
 func TestSQLiteRepositoryGeneratedIDIncludesDedupeScope(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +363,7 @@ func TestSQLiteRepositoryGeneratedIDIncludesDedupeScope(t *testing.T) {
 }
 
 func TestSQLiteRepositoryRevisionAdvancesOnEveryMutation(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,7 +426,7 @@ func TestSQLiteRepositoryRevisionAdvancesOnEveryMutation(t *testing.T) {
 }
 
 func TestSQLiteRepositoryDeleteExpiredRemovesFTSRow(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +456,7 @@ func TestSQLiteRepositoryDeleteExpiredRemovesFTSRow(t *testing.T) {
 }
 
 func TestSQLiteRepositoryPreservesExplicitZeroConfidence(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,45 +476,50 @@ func TestSQLiteRepositoryPreservesExplicitZeroConfidence(t *testing.T) {
 }
 
 func TestSQLiteRepositoryAppendReducerDeduplicatesByExecutionIdentity(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
 	scope := Scope{ProjectID: "p", TeamID: "team", SessionID: "session"}
 	base := ContextItem{Kind: ContextObservation, Content: "same finding", Scope: scope, Authority: AuthorityAgent, TrustLevel: TrustInternal, Confidence: 1, Lifecycle: LifecycleConfirmed}
-	// Two distinct tasks report the same finding content. They must not
+	// Multiple distinct tasks report the same finding content. They must not
 	// collapse into one item because their execution identity differs.
 	itemA := base
 	itemA.Metadata = map[string]string{"run_id": "run-1", "task_id": "task-a", "attempt": "1"}
 	itemB := base
 	itemB.Metadata = map[string]string{"run_id": "run-1", "task_id": "task-b", "attempt": "1"}
-	if err := r.AppendReducer(ctx, itemA, itemB); err != nil {
+	itemC := base
+	itemC.Metadata = map[string]string{"run_id": "run-2", "task_id": "task-a", "attempt": "1"}
+	itemD := base
+	itemD.Metadata = map[string]string{"run_id": "run-2", "task_id": "task-b", "attempt": "2"}
+	if err := r.AppendReducer(ctx, itemA, itemB, itemC, itemD); err != nil {
 		t.Fatal(err)
 	}
 	items, err := r.Query(ctx, RepositoryQuery{Scope: scope, Visibility: VisibilityExact})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 2 {
+	if len(items) != 4 {
 		t.Fatalf("AppendReducer collapsed distinct execution identities: %#v", items)
 	}
 	// Re-appending the same execution identity is a no-op (idempotent).
-	if err := r.AppendReducer(ctx, itemA); err != nil {
+	if err := r.AppendReducer(ctx, itemA, itemB, itemC, itemD); err != nil {
 		t.Fatal(err)
 	}
 	items, err = r.Query(ctx, RepositoryQuery{Scope: scope, Visibility: VisibilityExact})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 2 {
+	if len(items) != 4 {
 		t.Fatalf("AppendReducer was not idempotent for the same execution identity: %#v", items)
 	}
 }
 
 func TestSQLiteRepositoryAppendReducerMergesEvidenceOnDuplicate(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -549,7 +554,10 @@ func TestSQLiteRepositoryAppendReducerMergesEvidenceOnDuplicate(t *testing.T) {
 }
 
 func TestSQLiteRepositoryTenThousandItems(t *testing.T) {
-	r, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
+	r, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+
+	"github.com/kjelly/hufu/internal/buildinfo"
 )
 
 // ExecutionEventProjector derives the execution-event telemetry stream from
@@ -35,6 +37,7 @@ type ExecutionEventProjector struct {
 }
 
 type projectedRun struct {
+	hufuBuild    *buildinfo.Info
 	team         string
 	teamRevision string
 }
@@ -106,9 +109,12 @@ func (p *ExecutionEventProjector) Add(event RunEvent) {
 		return
 	}
 	run := p.runs[mapped.RunID]
+	if mapped.Status != "run_started" {
+		mapped.HufuBuild = run.hufuBuild
+	}
 	switch mapped.Status {
 	case "run_started":
-		p.runs[mapped.RunID] = projectedRun{team: mapped.Team, teamRevision: mapped.TeamRevision}
+		p.runs[mapped.RunID] = projectedRun{hufuBuild: mapped.HufuBuild, team: mapped.Team, teamRevision: mapped.TeamRevision}
 		p.rows = append(p.rows, mapped)
 		return
 	case "run_finished":

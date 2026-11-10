@@ -66,6 +66,9 @@ func TestExposePollErrorsStripsStderrSuppression(t *testing.T) {
 // from a slow one. It then repeated the same mistake three more times.
 func TestWaitForReportsWhyASilentPollFailed(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "never-created.log")
+	// The stalled-observation diagnostic needs at least two completed polls;
+	// leave a full second for each command and no budget for a third poll that
+	// could be aborted by the deadline and change the final observation.
 	resp := runWaitFor(t, `{"command":"tail -5 `+missing+` 2>/dev/null","interval_seconds":1,"timeout_seconds":2}`)
 
 	if !resp.IsError {
@@ -87,7 +90,7 @@ func TestWaitForReportsWhyASilentPollFailed(t *testing.T) {
 // success_pattern that therefore can never match. That combination burned a full
 // 30-minute cap twice.
 func TestWaitForAbortsUnfalsifiableSuccessPattern(t *testing.T) {
-	resp := runWaitFor(t, `{"command":"true","success_pattern":"PLAY RECAP","interval_seconds":1,"timeout_seconds":600}`)
+	resp := runWaitFor(t, `{"command":"true","success_pattern":"PLAY RECAP","interval_seconds":0.01,"timeout_seconds":600}`)
 
 	if !resp.IsError {
 		t.Fatalf("a silent poll with a success_pattern must fail, not wait: %q", resp.Content)
@@ -113,7 +116,7 @@ func TestWaitForStillWaitsWhenOutputAppears(t *testing.T) {
 	// Poll 1 prints nothing; a later poll prints the marker after the file has
 	// been created by the same command's side effect.
 	command := "if [ -f " + marker + " ]; then echo PLAY RECAP ok; else touch " + marker + "; fi"
-	resp := runWaitFor(t, `{"command":"`+command+`","success_pattern":"PLAY RECAP","interval_seconds":1,"timeout_seconds":20}`)
+	resp := runWaitFor(t, `{"command":"`+command+`","success_pattern":"PLAY RECAP","interval_seconds":0.02,"timeout_seconds":20}`)
 
 	if resp.IsError {
 		t.Fatalf("a poll that becomes non-silent must still succeed: %q", resp.Content)
@@ -130,7 +133,7 @@ func TestWaitForStillWaitsWhenOutputAppears(t *testing.T) {
 func TestWaitForFileAppearsIsNotAbortedAsSilent(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "appears")
 	command := "test -f " + marker + " || { touch " + marker + "; false; }"
-	resp := runWaitFor(t, `{"command":"`+command+`","interval_seconds":1,"timeout_seconds":20}`)
+	resp := runWaitFor(t, `{"command":"`+command+`","interval_seconds":0.02,"timeout_seconds":20}`)
 
 	if resp.IsError {
 		t.Fatalf("a silent predicate with no success_pattern must keep waiting: %q", resp.Content)
@@ -160,7 +163,7 @@ func TestWaitForAbandonsWaitOnDeadTerminal(t *testing.T) {
 	}))
 
 	started := time.Now()
-	resp, err := executeWaitFor(ctx, fantasy.ToolCall{ID: "1", Name: "wait_for", Input: `{"command":"tail -200 logs/terminal/term-6f6a0856c7be1193795c0674.log","interval_seconds":1,"timeout_seconds":600}`}, ToolConfig{})
+	resp, err := executeFastWaitFor(ctx, fantasy.ToolCall{ID: "1", Name: "wait_for", Input: `{"command":"tail -200 logs/terminal/term-6f6a0856c7be1193795c0674.log","interval_seconds":1,"timeout_seconds":600}`}, ToolConfig{})
 	if err != nil {
 		t.Fatalf("executeWaitFor: %v", err)
 	}
@@ -195,7 +198,7 @@ func TestWaitForGivesOneGracePollWhenTerminalDiesMidWait(t *testing.T) {
 	// Poll 1 fails and creates the marker; the grace poll then succeeds, which
 	// is exactly the late-flush case that must not be aborted.
 	command := "test -f " + marker + " || { touch " + marker + "; false; }"
-	resp, err := executeWaitFor(ctx, fantasy.ToolCall{ID: "1", Name: "wait_for", Input: `{"command":"` + command + `","terminal_id":"` + sessionID + `","interval_seconds":1,"timeout_seconds":30}`}, ToolConfig{})
+	resp, err := executeFastWaitFor(ctx, fantasy.ToolCall{ID: "1", Name: "wait_for", Input: `{"command":"` + command + `","terminal_id":"` + sessionID + `","interval_seconds":0.02,"timeout_seconds":30}`}, ToolConfig{})
 	if err != nil {
 		t.Fatalf("executeWaitFor: %v", err)
 	}
@@ -210,7 +213,7 @@ func TestWaitForGivesOneGracePollWhenTerminalDiesMidWait(t *testing.T) {
 // TestWaitForIgnoresTerminalsWithoutAProbe keeps the feature inert where no
 // terminal manager is attached, so a plain tool invocation behaves as before.
 func TestWaitForIgnoresTerminalsWithoutAProbe(t *testing.T) {
-	resp := runWaitFor(t, `{"command":"test -f /definitely/not/here/term-6f6a0856c7be1193795c0674","interval_seconds":1,"timeout_seconds":2}`)
+	resp := runWaitFor(t, `{"command":"test -f /definitely/not/here/term-6f6a0856c7be1193795c0674","interval_seconds":0.02,"timeout_seconds":0.05}`)
 	if !resp.IsError {
 		t.Fatalf("the condition is never met, so this must still time out: %q", resp.Content)
 	}

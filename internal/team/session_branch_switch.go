@@ -108,6 +108,7 @@ func cloneSessionTree(st *SessionTree) *SessionTree {
 		}
 		copied := *branch
 		copied.State = copyBranchState(branch.State)
+		copied.Derivation = branch.Derivation.clone()
 		clone.Branches[id] = &copied
 	}
 	return clone

@@ -11,6 +11,24 @@ import (
 	"github.com/kjelly/hufu/internal/team"
 )
 
+func TestApplyConfiguredBackendsPreservesRestoredDefault(t *testing.T) {
+	for _, restored := range []bool{false, true} {
+		session := &team.TeamSession{RestoredLaunchSettings: restored}
+		if err := applyConfiguredBackends(session, &config.Config{DefaultLLMBackend: "remote"}); err != nil {
+			t.Fatal(err)
+		}
+		want := "remote"
+		if restored {
+			// A saved empty selector means the built-in ollama default; it
+			// must not inherit a default introduced after the original run.
+			want = ""
+		}
+		if session.Config.DefaultLLMBackend != want {
+			t.Fatalf("restored=%t backend=%q, want %q", restored, session.Config.DefaultLLMBackend, want)
+		}
+	}
+}
+
 func TestApplyConfiguredBackendsMapsLLMAndCodex(t *testing.T) {
 	session := &team.TeamSession{Config: agent.TeamConfig{Backends: map[string]config.BackendConfig{
 		"lemonade": {Kind: "llm", Type: "openai-compatible", BaseURL: "http://127.0.0.1:8000/v1"},
@@ -140,5 +158,65 @@ func TestApplyConfiguredBackendsRejectsLegacyAliasCollision(t *testing.T) {
 	}}}, &config.Config{})
 	if err == nil || !strings.Contains(err.Error(), "aliases resolve") {
 		t.Fatalf("applyConfiguredBackends() error = %v, want alias collision", err)
+	}
+}
+
+func TestApplyConfiguredBackendsAPIProtocol(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		backend config.BackendConfig
+		want    string
+		invalid bool
+	}{
+		{name: "legacy", backend: config.BackendConfig{Kind: "llm"}},
+		{name: "explicit chat", backend: config.BackendConfig{Kind: "llm", APIProtocol: " CHAT-COMPLETIONS "}, want: config.APIProtocolChatCompletions},
+		{name: "responses", backend: config.BackendConfig{Kind: "llm", APIProtocol: " Responses "}, want: config.APIProtocolResponses},
+		{name: "auto", backend: config.BackendConfig{Kind: "llm", APIProtocol: "auto"}, invalid: true},
+		{name: "wrong llm field", backend: config.BackendConfig{Kind: "llm", Protocol: "responses"}, invalid: true},
+		{name: "agent field", backend: config.BackendConfig{Kind: "agent", Type: "codex-app-server", APIProtocol: "responses"}, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session := &team.TeamSession{Config: agent.TeamConfig{Backends: map[string]config.BackendConfig{"remote": tc.backend}}}
+			err := applyConfiguredBackends(session, &config.Config{})
+			if (err != nil) != tc.invalid {
+				t.Fatalf("error=%v", err)
+			}
+			if !tc.invalid && session.Config.Providers["remote"].APIProtocol != tc.want {
+				t.Fatalf("provider=%+v", session.Config.Providers["remote"])
+			}
+		})
+	}
+	t.Run("explicit empty agent field", func(t *testing.T) {
+		var backend config.BackendConfig
+		if err := yaml.Unmarshal([]byte("kind: agent\ntype: codex-app-server\napi-protocol: ''\n"), &backend); err != nil {
+			t.Fatal(err)
+		}
+		session := &team.TeamSession{Config: agent.TeamConfig{Backends: map[string]config.BackendConfig{"remote": backend}}}
+		if err := applyConfiguredBackends(session, &config.Config{}); err == nil {
+			t.Fatal("accepted explicit agent api-protocol")
+		}
+	})
+}
+
+func TestApplyConfiguredBackendsAPIProtocolOverrides(t *testing.T) {
+	for _, canonical := range []bool{false, true} {
+		t.Run(map[bool]string{false: "legacy providers", true: "canonical backends"}[canonical], func(t *testing.T) {
+			global := &config.Config{}
+			session := &team.TeamSession{}
+			if canonical {
+				global.Backends = map[string]config.BackendConfig{"remote": {Kind: "llm", BaseURL: "https://fixture.invalid/v1", APIProtocol: "responses"}}
+				session.Config.Backends = map[string]config.BackendConfig{"remote": {Kind: "llm", APIProtocol: " CHAT-COMPLETIONS "}}
+			} else {
+				global.Providers = map[string]config.ProviderConfig{"remote": {ProviderURL: "https://fixture.invalid/v1", APIProtocol: "responses"}}
+				session.Config.Providers = map[string]config.ProviderConfig{"remote": {APIProtocol: " CHAT-COMPLETIONS "}}
+			}
+			if err := applyConfiguredBackends(session, global); err != nil {
+				t.Fatal(err)
+			}
+			got := session.Config.Providers["remote"]
+			if got.APIProtocol != config.APIProtocolChatCompletions || got.ProviderURL != "" {
+				t.Fatalf("override=%+v", got)
+			}
+		})
 	}
 }

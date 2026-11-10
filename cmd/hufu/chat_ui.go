@@ -56,6 +56,8 @@ func (s *chatSession) runChatUI() error {
 	defer cancelSession()
 
 	adapter := newChatRuntimeAdapter(s.tc, s.teamName)
+	adapter.seq.images = s.pendingImageState()
+	pendingImages := adapter.seq.images.status()
 	ctrl := conversation.New(adapter, conversation.Config{})
 	closeCtrl := func() conversation.CloseReport { return ctrl.Close(gracefulTimeout) }
 	model := tuipkg.NewChatModel(tuipkg.ChatOptions{
@@ -65,6 +67,7 @@ func (s *chatSession) runChatUI() error {
 		CommandPrefix: fmt.Sprintf("chat-%d", os.Getpid()),
 		History:       chatHistory(s.tc.sessionData),
 		LastResult:    s.tc.coordinator.LastRunResult(),
+		PendingImages: &pendingImages,
 	})
 	programOptions := []tea.ProgramOption{tea.WithoutSignalHandler()}
 	if presentation.DisplayPreset == tuipkg.DisplayEpaper {
@@ -149,9 +152,8 @@ func renderChatCost(workspace, runID string) (string, error) {
 // installChatTeamHooks implements /reset and /team for the chat TUI. Both
 // run on the controller's actor goroutine while no turn is active.
 func (s *chatSession) installChatTeamHooks(adapter *chatRuntimeAdapter, display *chatDisplay, send func(tea.Msg)) {
-	adapter.resetHook = func(_ context.Context, tc *teamContext) error {
-		tc.coordinator.ResetConversation()
-		return nil
+	adapter.resetHook = func(ctx context.Context, tc *teamContext) error {
+		return tc.coordinator.ResetConversationChecked(ctx)
 	}
 	adapter.switchHook = func(ctx context.Context, current *teamContext, name string) (*teamContext, error) {
 		next, err := switchChatTeamByName(ctx, name, s.registry)

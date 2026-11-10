@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -225,7 +224,7 @@ func TestEmptyQueryNeverDropsMustKeepForInjectLimit(t *testing.T) {
 
 func TestExplainMemoryScoreUsesAdoptedRuntimePolicy(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +316,7 @@ func TestRetrievalIDForItemBindsPolicyAndQuery(t *testing.T) {
 
 func TestLoadMemoryPolicyResolvesRequestedVersion(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +375,7 @@ func TestLoadMemoryPolicyResolvesRequestedVersion(t *testing.T) {
 func rankingTestCoordinator(t *testing.T, mode agent.MemoryLearningMode) (*Coordinator, *contextstore.SQLiteRepository) {
 	t.Helper()
 	workspace := t.TempDir()
-	repo := openMigratedContextTestDB(t, filepath.Join(workspace, "context.sqlite"))
+	repo := openMemoryContextTestDB(t, workspace)
 	for _, item := range []contextstore.ContextItem{rankingItem("a", 10), rankingItem("b", 20), rankingItem("base-a", 10), rankingItem("base-b", 20)} {
 		if err := repo.Append(context.Background(), item); err != nil {
 			t.Fatal(err)

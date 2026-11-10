@@ -1,7 +1,6 @@
 package team
 
 import (
-	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -10,7 +9,7 @@ import (
 )
 
 func TestCandidateSettlementTypedQueriesPreserveCallerResults(t *testing.T) {
-	repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

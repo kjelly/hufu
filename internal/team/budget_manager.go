@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/kjelly/hufu/internal/waitbudget"
 )
 
 // Budget ownership for the decision-aware runtime
@@ -20,7 +22,7 @@ import (
 // BudgetLimits are the configured caps. Zero means unlimited, matching the
 // long-standing convention of TeamConfig.MaxWallClock / MaxTotalTokens.
 type BudgetLimits struct {
-	MaxWallClock time.Duration
+	MaxWallClock time.Duration // Run duration excluding explicit runtime idle.
 	MaxTokens    int64
 }
 
@@ -36,7 +38,8 @@ type BudgetManager interface {
 	Limits() BudgetLimits
 	// Exceeded reports whether any configured budget is exhausted, with a
 	// human-readable reason. elapsed is supplied by the caller because the
-	// ledger owns counters, not the session's start time.
+	// ledger owns counters, not the session's start time. elapsed excludes the
+	// run's explicit runtime idle intervals.
 	Exceeded(elapsed time.Duration) (bool, string)
 	// Snapshot returns a durable view for events and diagnostics. Attempt and
 	// diagnostic-task fields are owned by the caller, not the ledger.
@@ -47,11 +50,23 @@ type BudgetManager interface {
 // lived directly on Coordinator so promotion keeps every existing reference,
 // including tests, resolving to this one storage.
 type budgetLedger struct {
+	runIdle           waitbudget.RunIdleClock
 	maxWallClock      time.Duration // 0 = unlimited
 	tokenBudget       int64         // 0 = unlimited; cumulative LLM tokens
 	tokensUsed        atomic.Int64
 	tokenBudgetMu     sync.Mutex
 	tokenReservations int64
+}
+
+// runBudgetElapsed is the single elapsed-duration view used by run admission,
+// provider recovery deadlines and plan revision. Runtime idle is shared across
+// concurrent workers and extra models through the run's budget owner.
+func (c *Coordinator) runBudgetElapsed() time.Duration {
+	owner := c.tokenBudgetRoot()
+	if owner == nil {
+		return 0
+	}
+	return max(0, time.Since(owner.sessionTime)-owner.runIdle.Elapsed())
 }
 
 // Budget returns the run-wide ledger. Extra-model coordinators share the parent

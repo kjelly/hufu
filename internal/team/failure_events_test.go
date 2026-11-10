@@ -398,6 +398,32 @@ func TestFailureEventReducerSupportsLegacyFullAndSparsePayloads(t *testing.T) {
 	}
 }
 
+func TestFailureEventReducerDistinguishesClearedAndOmittedFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name, update string
+		cleared      bool
+	}{
+		{"omitted", `{"id":"1","status":"verifying"}`, false},
+		{"empty object", `{"id":"1","status":"verifying","failure_event":{}}`, false},
+		{"explicit null", `{"id":"1","status":"verifying","failure_event":null}`, true},
+		{"null overrides diagnostic fields", `{"id":"1","status":"verifying","failure_event":null,"failure_class":"protocol"}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			events := []RunEvent{
+				{Type: "task_blocked", TaskID: "1", Payload: []byte(`{"id":"1","failure_event":{"task_id":"1","failure_class":"protocol","summary":"original failure","fingerprint":"original"}}`)},
+				{Type: "task_verifying", TaskID: "1", Payload: []byte(tc.update)},
+			}
+			items := ReduceToTodoList(events)
+			if len(items) != 1 || (items[0].FailureEvent == nil) != tc.cleared {
+				t.Fatalf("active failure not replayed correctly: %#v", items)
+			}
+			if !tc.cleared && items[0].FailureEvent.Fingerprint != "original" {
+				t.Fatal("omitted failure evidence was overwritten")
+			}
+		})
+	}
+}
+
 func TestFailureEventIsSelfContainedAndBounded(t *testing.T) {
 	c, store := failureEventCoordinator(t, "bounded", "bash")
 	workspace := c.session.Workspace

@@ -307,6 +307,9 @@ func bindEvidenceResult(runID string, item *TodoItem, receipt *ExecutionReceipt,
 		receipt.RuntimeOutputsHash != item.TypedResult.RuntimeOutputsHash {
 		return fmt.Errorf("receipt runtime output digest conflicts with task result")
 	}
+	if receipt.RuntimeMediaHash != runtimeMediaHash(item.TypedResult) {
+		return fmt.Errorf("receipt runtime media digest conflicts with task result")
+	}
 	ids := make([]string, 0, len(result.ArtifactRefs))
 	for _, ref := range result.ArtifactRefs {
 		if ref.ID == "" {
@@ -321,6 +324,7 @@ func bindEvidenceResult(runID string, item *TodoItem, receipt *ExecutionReceipt,
 		RunInputSnapshotID: receipt.RunInputSnapshotID, RunInputSnapshotHash: receipt.RunInputSnapshotHash,
 		MaterializedActionPayloadHash: receipt.MaterializedActionPayloadHash, BoundInputs: cloneStringMap(receipt.BoundInputs),
 		ActionInvocationID: receipt.ActionInvocationID, RuntimeOutputsHash: receipt.RuntimeOutputsHash,
+		RuntimeMediaHash: receipt.RuntimeMediaHash,
 	}
 	return nil
 }

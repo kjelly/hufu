@@ -25,7 +25,7 @@ import (
 
 const (
 	defaultWaitForInterval = 5 * time.Second
-	minWaitForInterval     = 1 * time.Second
+	minWaitForInterval     = time.Second
 	defaultWaitForTimeout  = 120 * time.Second
 	maxWaitForTimeout      = 30 * time.Minute
 	// unfalsifiablePollLimit is how many consecutive silent polls are allowed
@@ -36,6 +36,13 @@ const (
 	// the polled path did not exist and its error was being discarded.
 	unfalsifiablePollLimit = 3
 )
+
+// Execution dependencies are invocation-local. Normal calls always use the
+// production interval floor and subprocess runner.
+type waitForRuntime struct {
+	minInterval time.Duration
+	poll        func(context.Context, string, []string, string, bool) (string, int, error)
+}
 
 // stderrSuppressionRe matches the shell idioms that discard a polled command's
 // error output. Inside a poller they are actively harmful: a wrong path or a
@@ -110,6 +117,10 @@ func NewWaitForTool(opts ...ToolOption) fantasy.AgentTool {
 }
 
 func executeWaitFor(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) (fantasy.ToolResponse, error) {
+	return executeWaitForWithRuntime(ctx, call, cfg, waitForRuntime{minWaitForInterval, runPollCommand})
+}
+
+func executeWaitForWithRuntime(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig, runtime waitForRuntime) (fantasy.ToolResponse, error) {
 	var args waitForArgs
 	if err := parseArgs(call.Input, &args); err != nil {
 		return fantasy.NewTextErrorResponse("command parameter is required"), nil
@@ -176,8 +187,8 @@ func executeWaitFor(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) 
 	interval := defaultWaitForInterval
 	if args.IntervalSeconds > 0 {
 		interval = time.Duration(args.IntervalSeconds * float64(time.Second))
-		if interval < minWaitForInterval {
-			interval = minWaitForInterval
+		if interval < runtime.minInterval {
+			interval = runtime.minInterval
 		}
 	}
 	timeout := defaultWaitForTimeout
@@ -255,7 +266,7 @@ func executeWaitFor(ctx context.Context, call fantasy.ToolCall, cfg ToolConfig) 
 	var firstObservation string
 	for {
 		attempt++
-		output, exitCode, err := runPollCommand(waitCtx, name, cmdArgs, effCfg.WorkDir, effCfg.NetworkBlock)
+		output, exitCode, err := runtime.poll(waitCtx, name, cmdArgs, effCfg.WorkDir, effCfg.NetworkBlock)
 		if err != nil {
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("wait_for: %v", err)), nil
 		}

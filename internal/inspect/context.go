@@ -22,20 +22,22 @@ type ContextOptions struct {
 }
 
 type ContextManifestItemData struct {
-	ContextItemID       string                        `json:"context_item_id"`
-	ManifestFingerprint string                        `json:"manifest_fingerprint"`
-	RequestID           string                        `json:"request_id"`
-	Agent               string                        `json:"agent,omitempty"`
-	Attempt             int                           `json:"attempt"`
-	ModelExecutionID    string                        `json:"model_execution_id,omitempty"`
-	Kind                string                        `json:"kind,omitempty"`
-	Source              string                        `json:"source,omitempty"`
-	ContentHash         string                        `json:"content_hash,omitempty"`
-	Included            bool                          `json:"included"`
-	Tokens              int                           `json:"tokens,omitzero"`
-	Reason              string                        `json:"reason"`
-	Query               *team.ContextQueryAttribution `json:"context_query,omitempty"`
-	QueryStatus         string                        `json:"query_status,omitempty"`
+	ContextItemID        string                                `json:"context_item_id"`
+	ManifestFingerprint  string                                `json:"manifest_fingerprint"`
+	RequestID            string                                `json:"request_id"`
+	Agent                string                                `json:"agent,omitempty"`
+	Attempt              int                                   `json:"attempt"`
+	ModelExecutionID     string                                `json:"model_execution_id,omitempty"`
+	Kind                 string                                `json:"kind,omitempty"`
+	Source               string                                `json:"source,omitempty"`
+	ContentHash          string                                `json:"content_hash,omitempty"`
+	Included             bool                                  `json:"included"`
+	Tokens               int                                   `json:"tokens,omitzero"`
+	Reason               string                                `json:"reason"`
+	Query                *team.ContextQueryAttribution         `json:"context_query,omitempty"`
+	QueryStatus          string                                `json:"query_status,omitempty"`
+	DependencyResultView *team.DependencyResultViewAttribution `json:"dependency_result_view,omitempty"`
+	ModelCalled          *bool                                 `json:"model_called,omitempty"`
 }
 
 type MemoryManifestItemData struct {
@@ -140,6 +142,10 @@ func inspectContext(ctx context.Context, query InspectQuery, options ContextOpti
 		}
 		data.Attempts = append(data.Attempts, manifest.Attempt)
 		for _, item := range manifest.Items {
+			var modelCalled *bool
+			if item.DependencyResultView != nil {
+				modelCalled = new(manifest.ModelCalled)
+			}
 			itemID := strings.TrimPrefix(item.ID, "context:")
 			itemIDs[itemID] = struct{}{}
 			data.Manifests = append(data.Manifests, ContextManifestItemData{
@@ -148,6 +154,8 @@ func inspectContext(ctx context.Context, query InspectQuery, options ContextOpti
 				Kind: item.Kind, Source: contextstore.RedactSecrets(item.Source), ContentHash: item.ContentHash, Included: item.Included,
 				Tokens: item.Tokens, Reason: string(item.Reason),
 				Query: manifest.Query, QueryStatus: historicalQueryStatus(manifest.Query),
+				DependencyResultView: item.DependencyResultView.Clone(),
+				ModelCalled:          modelCalled,
 			})
 		}
 	}

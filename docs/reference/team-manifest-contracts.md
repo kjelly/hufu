@@ -51,6 +51,32 @@ Team Preset、inline 與 Markdown 只允許不同名組合；同名不提供 pat
 Static contracts、delegation、action catalog 與 team worker defaults 可引用這些 worker；per-agent 進階契約及 coordinator 仍以 Markdown 宣告。
 完整欄位、工具限制與模板時序見 [inline worker 規格](agent-format.md#inline-worker)。
 
+## Native image policy (M0)
+
+`hufu.yaml` 的 `media` 是 operator 授權；flat team manifest 的 `media` 或版本化 manifest 的 `spec.media` 只能加嚴。未設定 operator 授權時，team 不能自行啟用。此階段提供私有圖片入庫、canonical turn／task binding 與配額；含圖任務會明確 blocked，尚未提供 CLI `--image` 或模型圖片傳輸。
+
+```yaml
+media:
+  enabled: true
+  image:
+    max-count: 2
+  allowed-targets:
+    - backend: fixture_backend
+      provider-key: fixture_provider
+      model: fixture_vision
+      image-token-upper-bound: 8192
+```
+
+這是離線 fixture 配置，實際 target 必須存在於 frozen execution policy；不是可直接使用的 provider。完整 limits 與 ceiling 見[圖片實作規格](../implementation-plans/native-image-runtime.md#72-明示目標授權不猜測-localremote)。限制及 token upper bound 必須是 YAML 整數，不接受會被截斷的小數。未知欄位、wildcard、重複 target、超出 ceiling 的值均拒絕。operator 各配置層與 team 取交集；停用不可被後續層重新啟用，target 陣列省略代表繼承，明示 `[]` 代表拒絕所有目標。每張圖片 token upper bound 取較大值，不能以縮小估算放寬容量。
+
+授權凍結 backend／provider／model、實際 backend identity hash 與 limits。圖片內容留在同一 ArtifactStore 的 private namespace；source paths 不寫入 binding。重複圖片保留 part 順序，但 branch storage 配額按 unique blobs 計算；fork 繼承祖先的 admitted 使用量，重新開始 invocation 不會重設配額。含圖任務停用自動結果 cache、歷史結果自動重用與 inflight 合併。
+
+圖片 conversation 只保存有序的 `media_ref`，不保存原始 bytes、Base64 或來源路徑。canonical conversation checkpoint 使用 version 2；`session_history` 的圖片 envelope 只是引用 checkpoint 的相容投影，遺失 canonical state 時不能用它恢復授權。載入 references 不讀取圖片內容；resume 與獨立 audit 會驗證 admitted source、分支 lineage、metadata 與 CAS 內容，缺圖或竄改會拒絕。
+
+壓縮只處理圖片訊息之間完整、連續的文字區段，保留圖片引用與重複順序。`/reset` 先提交空的 canonical context 再回報成功，來源索引持續遞增，既有 branch 圖片配額不會釋放。輸入與 reset checkpoint 不算模型壓縮，也不產生虛構 summary 或 token usage。
+
+Migration：未啟用 media 的舊文字 policy hash、conversation state version 1 與 artifact layout 不變；新增欄位為 optional，不改寫歷史 events／receipts。`--no-journal` 只停用 task-result journal，仍須具備 durable event journal 與 private CAS 才能接收圖片。這些持久化與驗證能力不代表已開放模型圖片傳輸；M1 入口仍待後續階段。
+
 ## Fixed batch contract graphs
 
 Static contracts can own a fixed batch graph using contract IDs:
@@ -86,6 +112,42 @@ duplicate groups fail before creating tasks. Existing failure-class checks,
 retry limits, remediation context, and recovery behavior still apply. Contract
 hashes and the execution policy snapshot pin the declarations and retry policy;
 changing them requires a new run rather than resuming an older policy.
+
+## Dependency result view: configuration foundation
+
+`dependency-result-view` is static contract policy, available only with static
+contract binding and same-batch dependencies. The configuration and persistence
+foundation is installed; selected execution currently fails explicitly before
+provider startup until the delivery integration is installed. It does not fall
+back to full. See the [implementation plan](../implementation-plans/dependency-result-projection-and-contract-regressions.md).
+
+```yaml
+contracts:
+  - id: produce
+    agent: producer
+  - id: consume
+    agent: worker
+    depends-on-contracts: [produce]
+    dependency-result-view:
+      mode: selected
+      fields: [summary, findings, artifacts, files_modified, verification]
+```
+
+Omission and `mode: full` use the existing formatter, policy version 5 and
+contract revision 1 without changing their bytes or hashes. Full must not
+include `fields`. Selected requires nonempty, unique fields from the five shown
+above; mode and field names are lowercase. Unknown keys and null policies fail
+loading. Field order is canonicalized in the order shown.
+
+Selected is rejected with required evidence, `evidence_from`, result contracts,
+native actions, sidecar execution, plan-first or closed tool sequences. Dynamic
+`agent` task input cannot set this field. Selected contracts use revision 2 and
+policy version 6, pinning the normalized policy in the configuration hash and
+immutable occurrence admission. Task events, checkpoints, replay, clones and
+manifest migration preserve it. Existing sessions cannot acquire selected
+policy through resume or configuration edits. Binaries supporting only policy
+versions through 5 must reject version 6; there is no policy down-migration.
+This version distinction is separate from the [runtime-store schema upgrade](runtime-grant-storage.md).
 
 ## Authoring
 

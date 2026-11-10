@@ -186,7 +186,7 @@ func TestPreReportReadOnlySchemaStillRejectsInvalidMigrations(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = store.Close() })
-			if _, err := store.DB().Exec(`DROP TABLE run_reports; DELETE FROM schema_migrations WHERE version=4`); err != nil {
+			if _, err := store.DB().Exec(`DROP TABLE historical_grant_cycles; DROP TABLE run_reports; DELETE FROM schema_migrations WHERE version>=4`); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := store.DB().Exec(mutation); err != nil {
@@ -205,7 +205,7 @@ func TestPreReportReadOnlySchemaStillRejectsInvalidMigrations(t *testing.T) {
 }
 
 func TestRuntimeDocuments(t *testing.T) {
-	store, err := Open(context.Background(), t.TempDir())
+	store, err := openMemoryTestStore(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestRuntimeDocuments(t *testing.T) {
 }
 
 func TestWithTxRollsBackEveryWriteOnError(t *testing.T) {
-	store, err := Open(context.Background(), t.TempDir())
+	store, err := openMemoryTestStore(t)
 	if err != nil {
 		t.Fatal(err)
 	}

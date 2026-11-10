@@ -8,8 +8,10 @@ import (
 	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +45,9 @@ type Action struct {
 type ActionResult struct {
 	Outputs   map[string]any `json:"outputs,omitempty"`
 	Artifacts []ArtifactRef  `json:"artifacts,omitempty"`
+	// Only the in-process MCP adapter can supply this transient publication
+	// input. It is never decoded from provider JSON or persisted as a result.
+	mcpMedia *pendingMCPActionMedia
 }
 
 func decodeActionResult(value interface{}) (ActionResult, error) {
@@ -348,10 +353,14 @@ type ActionEnvironment struct {
 	// CatalogInvocationID is stable across attempts and resumes of one
 	// catalog task, so a provider can use it as an idempotency key.
 	CatalogInvocationID string
+	// RecoveredTaskRuns contains only canonical input-bound source receipts
+	// admitted by the coordinator for this invocation.
+	RecoveredTaskRuns map[string]string
 }
 
 // WithActionEnvironment attaches ActionEnvironment to a context.
 func WithActionEnvironment(ctx context.Context, env ActionEnvironment) context.Context {
+	env.RecoveredTaskRuns = maps.Clone(env.RecoveredTaskRuns)
 	return context.WithValue(ctx, actionEnvironmentKey{}, env)
 }
 
@@ -361,6 +370,7 @@ func ActionEnvironmentFromContext(ctx context.Context) ActionEnvironment {
 		return ActionEnvironment{}
 	}
 	val, _ := ctx.Value(actionEnvironmentKey{}).(ActionEnvironment)
+	val.RecoveredTaskRuns = maps.Clone(val.RecoveredTaskRuns)
 	return val
 }
 
@@ -559,6 +569,15 @@ func (p *golangActionProvider) run(ctx context.Context, payload []byte, outputLi
 func actionCommandEnvironment(ctx context.Context) []string {
 	env := os.Environ()
 	actionEnv := ActionEnvironmentFromContext(ctx)
+	// Never inherit a caller-supplied recovery grant. Even an empty runtime
+	// grant replaces the parent process's value for every local adapter.
+	env = slices.DeleteFunc(env, func(entry string) bool { return strings.HasPrefix(entry, "HUFU_RECOVERED_TASK_RUNS=") })
+	origins := actionEnv.RecoveredTaskRuns
+	if origins == nil {
+		origins = map[string]string{}
+	}
+	encoded, _ := jsonv2.Marshal(origins, jsonv2.Deterministic(true))
+	env = append(env, "HUFU_RECOVERED_TASK_RUNS="+string(encoded))
 	if actionEnv.Workspace != "" {
 		env = append(env, "HUFU_WORKSPACE="+actionEnv.Workspace)
 	}

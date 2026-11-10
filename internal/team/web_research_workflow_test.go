@@ -1,13 +1,10 @@
 package team
 
 import (
-	"context"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
-
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/kjelly/hufu/internal/mcp"
 )
@@ -42,7 +39,7 @@ func webResearchWorkflow(t *testing.T) (*TeamSession, *runtimeWorkflow, []TaskDe
 	return session, w, bound
 }
 
-func TestWebResearchWorkflowRetainsSearchAndIsolatedBrowserTools(t *testing.T) {
+func TestWebResearchWorkflowRetainsSearchAndDedicatedChromeTools(t *testing.T) {
 	session, w, bound := webResearchWorkflow(t)
 	c := newDirectTypedCoordinator(t, "view", nil, nil)
 	c.session, c.phaseWorkflow = session, w
@@ -50,11 +47,16 @@ func TestWebResearchWorkflowRetainsSearchAndIsolatedBrowserTools(t *testing.T) {
 	c.mcpManager = mcp.NewMCPToolManager("", "")
 	t.Cleanup(func() { _ = c.mcpManager.Close() })
 	for name, cfg := range session.MCPServers {
-		fake := newMCPActionFake(mcpgo.NewTool("browser_navigate", mcpgo.WithString("url", mcpgo.Required())))
-		fake.server.AddTool(mcpgo.NewTool("browser_snapshot"), func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-			return mcpgo.NewToolResultText("offline snapshot"), nil
-		})
-		attachMCPActionFake(t, c.mcpManager, name, cfg, fake)
+		if cfg.PageDwell == nil || cfg.PageDwell.MinSeconds != 300 || cfg.PageDwell.MaxSeconds != 600 {
+			t.Fatalf("%s lost the required random page dwell", name)
+		}
+		if cfg.Type != "chrome-cdp" || cfg.URL != "http://127.0.0.1:9222" || len(cfg.Command) != 0 || len(cfg.TemporaryDirectoryEnv) != 0 {
+			t.Fatalf("%s is not a native local Chrome declaration: %+v", name, cfg)
+		}
+	}
+	// Native catalogs load in-process, without opening Chrome or calling a model.
+	if err := c.mcpManager.LoadTools(t.Context(), session.MCPServers); err != nil {
+		t.Fatal(err)
 	}
 	for _, task := range bound[:3] {
 		if task.Phase == PhaseAudit {
@@ -64,6 +66,9 @@ func TestWebResearchWorkflowRetainsSearchAndIsolatedBrowserTools(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
+		}
+		if task.SideEffect != SideEffectBrowserInteraction || task.Recovery != RecoveryManual {
+			t.Fatal("browser task lost explicit interaction/recovery policy")
 		}
 		def := session.Agents[task.Agent]
 		def.Generation.Model = "test"
@@ -79,7 +84,7 @@ func TestWebResearchWorkflowRetainsSearchAndIsolatedBrowserTools(t *testing.T) {
 		if !slices.Contains(resolved.Names, "web_search") || !slices.Contains(resolved.Names, submitResultToolName) {
 			t.Fatalf("%s lost search/result tools: %v", task.Agent, resolved.Names)
 		}
-		want := []string{"playwright_" + task.Agent + "__browser_navigate", "playwright_" + task.Agent + "__browser_snapshot"}
+		want := []string{"playwright_" + task.Agent + "__browser_navigate", "playwright_" + task.Agent + "__browser_snapshot", "playwright_" + task.Agent + "__browser_click", "playwright_" + task.Agent + "__browser_wait_for_user"}
 		if len(snapshot.Targets) != len(want) {
 			t.Fatalf("%s browser authority = %#v", task.Agent, snapshot.Targets)
 		}

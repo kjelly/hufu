@@ -30,6 +30,7 @@ import (
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/mcp"
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/ollamaweb"
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/skill"
@@ -90,7 +91,10 @@ type taskRequiresResultKey struct{}
 type delegationChainKey struct{}
 
 type TaskDef struct {
-	ID string `json:"id,omitempty"`
+	MediaBinding     *MediaTaskBinding          `json:"-" yaml:"-"`
+	MediaInputDigest string                     `json:"-" yaml:"-"`
+	ImageInputs      []media.ImageInputSelector `json:"image_inputs,omitempty" yaml:"-"`
+	ID               string                     `json:"id,omitempty"`
 	// WhenGoalContains is retained only so legacy manifests fail with a focused
 	// validation finding. Runtime contract selection never reads goal prose.
 	WhenGoalContains string `json:"-" yaml:"when-goal-contains,omitempty"`
@@ -138,7 +142,8 @@ type TaskDef struct {
 	ResultContractSpec *agent.ResultContractSpec `json:"-" yaml:"result-contract,omitempty"`
 	// ResultContract is the compiled contract identity bound at admission.
 	// It is runtime-owned and frozen into the TodoItem.
-	ResultContract *ResultContractRef `json:"-" yaml:"-"`
+	ResultContract       *ResultContractRef        `json:"-" yaml:"-"`
+	DependencyResultView *DependencyResultViewSpec `json:"-" yaml:"dependency-result-view,omitempty"`
 	// ExecutionRoute is the execution route frozen at admission for a
 	// route-bound worker. It is runtime-owned and never coordinator JSON.
 	ExecutionRoute *ExecutionRouteBinding `json:"-" yaml:"-"`
@@ -200,7 +205,7 @@ type TaskDef struct {
 	// the task succeeds; a majority refutation fails the task into the retry
 	// path with the refutation as feedback.
 	AdversarialVerify int `json:"adversarial_verify,omitempty"`
-	// SideEffect classifies the task's side-effect risk (none, workspace_write, external_write, infra_mutation, credential_mutation).
+	// SideEffect classifies the task's side-effect risk (none, browser_interaction, workspace_write, external_write, infra_mutation, credential_mutation).
 	SideEffect SideEffectClass `json:"side_effect,omitempty" yaml:"side_effect,omitempty"`
 	// Recovery controls interrupted task recovery behavior (retry, reconcile, manual, never).
 	Recovery RecoveryPolicy `json:"recovery,omitempty" yaml:"recovery,omitempty"`
@@ -424,8 +429,10 @@ type backendSemaphoreState struct {
 }
 
 type Coordinator struct {
+	mediaAdmissionGate chan struct{}
 	// recoveryBranch selects a read-only source without checking it out.
-	recoveryBranch string
+	recoveryBranch       string
+	historicalTaskReader HistoricalTaskReader
 
 	mu                    sync.RWMutex
 	observationCaptureMu  sync.Mutex
@@ -1324,7 +1331,7 @@ func (c *Coordinator) budgetExceeded() (bool, string) {
 	if owner == nil {
 		return false, ""
 	}
-	return owner.budgetLedger.Exceeded(time.Since(owner.sessionTime))
+	return owner.budgetLedger.Exceeded(owner.runBudgetElapsed())
 }
 
 type taskTiming struct {
@@ -1414,11 +1421,21 @@ type coordinatorParams struct {
 	AutoSkillsMode          bool
 	OllamaWebTransport      http.RoundTripper // test-only seam; production always uses the default verified transport
 	ProviderBoundaryFactory agent.ProviderBoundaryFactory
+	DeferSemanticRetrieval  bool
 }
 
 // CoordinatorOption injects trusted construction dependencies. Options cannot
 // be supplied through authored team configuration or changed during a run.
 type CoordinatorOption func(*coordinatorParams) error
+
+// WithDeferredSemanticRetrieval keeps background model work behind request
+// admission. CLI callers use it while validating restored or new authorizations.
+func WithDeferredSemanticRetrieval() CoordinatorOption {
+	return func(params *coordinatorParams) error {
+		params.DeferSemanticRetrieval = true
+		return nil
+	}
+}
 
 func WithProviderBoundaryFactory(factory agent.ProviderBoundaryFactory) CoordinatorOption {
 	return func(params *coordinatorParams) error {
@@ -1723,7 +1740,7 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 	if err := c.loadAdoptedMemoryPolicy(context.Background()); err != nil {
 		return nil, fmt.Errorf("load adopted memory policy: %w", err)
 	}
-	if err := c.initSemanticRetrieval(repo, noNet); err != nil {
+	if err := c.initSemanticRetrieval(repo, noNet, params.DeferSemanticRetrieval); err != nil {
 		return nil, err
 	}
 	c.sharedMemorySvc = NewSharedMemoryService(repo)
@@ -1792,25 +1809,7 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 
 	canonicalCompaction := initializeCoordinatorCompaction(c, session)
 	if !planMode && !canonicalCompaction {
-		if history := LoadConversationHistory(session.Workspace); len(history) > 0 {
-			c.conversationHistory = history
-			c.conversationHistorySourceRanges = historySourceRanges(len(history), 0, nil, nil)
-			c.conversationHistorySourceCounts = sourceCountsForRanges(c.conversationHistorySourceRanges)
-			c.conversationHistoryNextSourceIndex = maxSourceIndex(c.conversationHistorySourceRanges)
-
-			if persisted := LoadSession(session.Workspace); persisted != nil {
-				c.conversationHistorySourceRanges = historySourceRanges(len(history), persisted.ConversationHistorySourceOffset, persisted.ConversationHistorySourceCounts, persisted.ConversationHistorySourceRanges)
-				c.conversationHistorySourceCounts = sourceCountsForRanges(c.conversationHistorySourceRanges)
-				c.conversationHistorySourceOffset = persisted.ConversationHistorySourceOffset
-				c.conversationHistoryNextSourceIndex = persisted.ConversationHistoryNextSourceIndex
-				if c.conversationHistoryNextSourceIndex < maxSourceIndex(c.conversationHistorySourceRanges) {
-					c.conversationHistoryNextSourceIndex = maxSourceIndex(c.conversationHistorySourceRanges)
-				}
-				if c.conversationHistorySourceOffset < 0 {
-					c.conversationHistorySourceOffset = 0
-				}
-			}
-		}
+		restoreLegacyConversationProjection(c, session)
 	}
 
 	if pathConsent != nil {
@@ -1911,23 +1910,41 @@ func RegisterProviderSecretsGlobally(session *TeamSession, defaultKey string) {
 // ResetConversation clears the accumulated coordinator conversation history so
 // the next Run/ContinueWithPrompt starts fresh. Used by the chat REPL's /reset.
 func (c *Coordinator) ResetConversation() {
+	_ = c.ResetConversationChecked(context.Background())
+}
+
+// ResetConversationChecked persists media-aware context removal before
+// reporting reset success. The legacy wrapper keeps its existing signature.
+func (c *Coordinator) ResetConversationChecked(ctx context.Context) error {
+	if err := c.persistMediaConversationReset(ctx); err != nil {
+		c.markCompactionRecovery(err)
+		return err
+	}
+	nextSource := c.resetConversationSourceIndex()
 	c.conversationHistoryMu.Lock()
 	c.conversationHistory = nil
 	c.conversationHistorySourceCounts = nil
 	c.conversationHistorySourceRanges = nil
-	c.conversationHistorySourceOffset = 0
-	c.conversationHistoryNextSourceIndex = 0
+	c.conversationHistorySourceOffset = nextSource
+	c.conversationHistoryNextSourceIndex = nextSource
 	c.conversationHistoryMu.Unlock()
-	_ = c.mutateSessionData(func(sd *SessionData) error {
+	if err := c.mutateSessionData(func(sd *SessionData) error {
 		sd.ConversationHistorySourceCounts = nil
 		sd.ConversationHistorySourceRanges = nil
-		sd.ConversationHistorySourceOffset = 0
-		sd.ConversationHistoryNextSourceIndex = 0
+		sd.ConversationHistorySourceOffset = nextSource
+		sd.ConversationHistoryNextSourceIndex = nextSource
 		return nil
-	})
-	_ = c.persistSession("persist reset conversation")
+	}); err != nil {
+		c.markCompactionRecovery(err)
+		return err
+	}
+	if err := c.persistSession("persist reset conversation"); err != nil {
+		c.markCompactionRecovery(err)
+		return err
+	}
 
 	c.resetRoundState()
+	return nil
 }
 
 // totalRounds returns the round count across the whole session, including
@@ -2169,6 +2186,18 @@ func buildAgentTaskProperties(workerNames []string, hasModelList bool, sharedDir
 		contextFilesDesc = fmt.Sprintf("Optional files from the shared directory (%s) to provide as context", sharedDirPath)
 	}
 	props := map[string]any{
+		"image_inputs": map[string]any{
+			"type": "array", "minItems": 1, "maxItems": media.MaxCount,
+			"description": "Ordered image occurrences selected only from this invocation's authorized image metadata. Each entry requires turn_id and part_index. Repeated selections are preserved. Omit this field for text-only work; paths, CAS identifiers and media bindings are not accepted.",
+			"items": map[string]any{
+				"type": "object", "additionalProperties": false,
+				"properties": map[string]any{
+					"turn_id":    map[string]any{"type": "string", "minLength": 1},
+					"part_index": map[string]any{"type": "integer", "minimum": 0},
+				},
+				"required": []string{"turn_id", "part_index"},
+			},
+		},
 		"agent":         map[string]any{"type": "string", "enum": workerNames, "description": "Agent name for a new task. Do not select a worker whose prior task is already successful; retrieve its result with team_info/task_result instead."},
 		"goal":          map[string]any{"type": "string", "description": "The desired OUTCOME — what should be achieved. Do NOT include implementation details (file paths, function names, step-by-step instructions). Workers are specialists who determine their own approach."},
 		"constraints":   map[string]any{"type": "string", "description": "Non-obvious constraints the worker MUST respect (e.g., 'must use Python 3.11', 'cannot modify the public API'). Do NOT include obvious project conventions."},

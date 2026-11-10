@@ -49,7 +49,7 @@ spec:
       # coordinator's model, which answers this question directly.
       backend: sidecar
       model: ollama/minimax-m3:cloud
-      version: "1"
+      version: "2"
       kind: choice
       agents: [critic]
       timeout: 60s
@@ -62,6 +62,15 @@ spec:
         content or tests ran. Confirm a demonstrated issue, downgrade an issue
         whose demonstrated severity is lower, reject a disproven issue, or use
         unverified when the supplied evidence cannot establish a verdict.
+        A workset snapshot is only a subset of the reviewed repository.
+        A path, caller, verifier or artifact omitted from it is not proven
+        absent at the reviewed revision. Missing from a diff is not missing
+        from the tree. Do not confirm a repository-wide absence or behavioral
+        claim from those omissions, even at info severity; use unverified.
+        A differing payload hash is not proof of corrupt data unless both
+        hashes cover the same representation. A synthesis disclaimer does
+        not disprove an independent acceptance comparison outside its scope.
+        Confirm only the demonstrated impact, not the source's speculation.
         Select the resulting severity error, warning, or info. Do not dismiss
         concurrency, lifecycle, receipt or authorization invariants merely
         because code appears sequential or compiles. Select exactly one option.
@@ -201,7 +210,7 @@ spec:
     # Permit only the declared, bounded report-verification repair edge.
     fail_fast: false
   capabilities:
-    required: [produce-workset, verify-review-tests, inventory-review-handoffs, verify-review-report]
+    required: [produce-workset, verify-review-tests, inventory-review-handoffs, prepare-review-supplement, verify-review-report]
   verification:
     required: true
   retry:
@@ -226,6 +235,11 @@ spec:
       source: ./reviewprep
       mode: trusted-static
       timeout: 1200
+    prepare-review-supplement:
+      runtime: golang
+      source: ./reviewprep
+      mode: trusted-static
+      timeout: 300
 
     verify-review-report:
       runtime: golang
@@ -369,7 +383,7 @@ spec:
         capability: produce-workset
         type: prepare_review_workset
         payload: >-
-          {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"},"routing":"documentation","max_total_diff_bytes":2097152,"max_total_diff_lines":30000,"max_changed_paths":256,"max_workset_items":64,"max_diff_bytes":96000,"max_diff_lines":2000,"max_paths":32,"max_source_snapshot_bytes":393216,"max_review_input_tokens":200000}
+          {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"},"routing":"documentation","max_total_diff_bytes":2097152,"max_total_diff_lines":30000,"max_changed_paths":256,"max_workset_items":32,"max_diff_bytes":96000,"max_diff_lines":2000,"max_paths":32,"max_source_snapshot_bytes":393216,"max_review_input_tokens":200000}
         input-bindings:
           - input: review.scope
             target: /scope
@@ -423,6 +437,13 @@ spec:
       verify-spec:
         type: task_result_assert
         task-result-assertions:
+          - &review-status-by-gaps
+            pointer: /status
+            op: equals_by_items
+            value:
+              pointer: /structured_payload/value/record/gaps
+              empty: success
+              non_empty: completed_with_gaps
           - { pointer: /summary, op: non_empty }
           - { pointer: /files_read, op: min_items, value: 1 }
           - pointer: /findings
@@ -449,7 +470,7 @@ spec:
       advances: [documentation-reviews-complete]
       agent: documentation-reviewer
       phase: verify
-      result-contract: { schema: schemas/review-v1.json, require-structured: true }
+      result-contract: { schema: schemas/documentation-review-v1.json, require-structured: true }
       fan_out:
         source-artifact:
           task_id: produce-workset
@@ -462,6 +483,7 @@ spec:
       verify-spec:
         type: task_result_assert
         task-result-assertions:
+          - *review-status-by-gaps
           - { pointer: /summary, op: non_empty }
           - { pointer: /files_read, op: min_items, value: 1 }
           - pointer: /findings
@@ -476,7 +498,7 @@ spec:
       advances: [documentation-escalation-complete]
       agent: critic
       phase: verify
-      result-contract: { schema: schemas/review-v1.json, require-structured: true }
+      result-contract: { schema: schemas/documentation-review-v1.json, require-structured: true }
       fan_out:
         source-artifact:
           task_id: produce-workset
@@ -489,6 +511,7 @@ spec:
       verify-spec:
         type: task_result_assert
         task-result-assertions:
+          - *review-status-by-gaps
           - { pointer: /summary, op: non_empty }
           - { pointer: /files_read, op: min_items, value: 1 }
           - pointer: /findings
@@ -517,6 +540,83 @@ spec:
         type: task_result_assert
         task-result-assertions:
           - { pointer: /summary, op: non_empty }
+
+    - id: inventory-review-supplement-requests
+      kind: outcome
+      advances: [review-handoffs-inventoried]
+      agent: reviewer
+      phase: verify
+      optional: true
+      side_effect: none
+      recovery: retry
+      action:
+        capability: inventory-review-handoffs
+        type: inventory_review_supplement_requests
+        payload: '{"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}}'
+        input-bindings:
+          - { input: review.scope, target: /scope }
+      verify-spec:
+        type: task_result_assert
+        task-result-assertions:
+          - { pointer: /runtime_outputs/review_supplement_requests/round, op: equals, value: 1 }
+
+    - id: prepare-review-supplement
+      depends-on-contracts: [inventory-review-supplement-requests]
+      kind: outcome
+      advances: [review-handoffs-inventoried]
+      agent: reviewer
+      phase: verify
+      optional: true
+      side_effect: none
+      recovery: retry
+      action:
+        capability: prepare-review-supplement
+        type: prepare_review_supplement
+        payload: '{"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}}'
+        input-bindings:
+          - { input: review.scope, target: /scope }
+      verify-spec:
+        type: task_result_assert
+        task-result-assertions:
+          - { pointer: /runtime_outputs/supplement_prepared, op: equals, value: true }
+          - { pointer: /runtime_outputs/supplement_round, op: equals, value: 1 }
+
+    - id: review-supplement-workset
+      kind: outcome
+      advances: [review-handoffs-inventoried]
+      agent: reviewer
+      phase: verify
+      optional: true
+      invariant-verification: report
+      result-contract: { schema: schemas/review-v1.json, require-structured: true }
+      fan_out:
+        source-artifact:
+          task_id: prepare-review-supplement
+          artifact: supplemental review workset manifest
+        goal-template: 'Review supplemental workset item {key} for original task {source_task_id} gap {source_gap_index} ({supplement_kind}); this is the only supplement round. Result identity: record.workset_key="{key}", record.review_revision="{review_revision}", record.lens="{lens}". Read all required source artifact ranges. Assigned reference_candidate_ids={reference_candidate_ids}. Preserve original accepted findings and gaps; provide only this incremental review. Byte coverage is not semantic understanding.'
+      execution:
+        requires-result: true
+        requires-grounded-result: true
+        forbid-artifacts: true
+      verify-spec:
+        type: task_result_assert
+        task-result-assertions:
+          - *review-status-by-gaps
+          - { pointer: /summary, op: non_empty }
+          - { pointer: /files_read, op: min_items, value: 1 }
+          - pointer: /findings
+            op: equals_projection
+            value:
+              pointer: /structured_payload/value/record/findings
+              fields: [summary, detail, severity]
+              allow_missing: true
+          - pointer: /invariant_verification/assessments
+            op: equals_projection
+            value:
+              pointer: /structured_payload/value/record/invariant_assessments
+              fields: [invariant_id, status, summary]
+              optional_fields: [finding_index, missing_evidence]
+              allow_missing: true
 
     # These follow-up contracts are optional to the phase batch scheduler;
     # the blocking report audit acceptance makes their results mandatory.
@@ -553,6 +653,8 @@ spec:
       result-contract: { schema: schemas/report-v2.json, require-structured: true }
       constraints: |-
         Scope, snapshot_coverage and test_verification are runtime-owned result fields. Omit them from your submission; runtime binding supplies the complete receipt-verified values, including the full diagnostic.
+        supplement_outcomes is runtime-owned; omit it. Preserve all typed source kinds and limitations. The inventory includes accepted supplemental reviews as full review sources, with the same critic coverage rules.
+        Supplemental evidence outcomes (for analysis only): {supplement_outcomes}
         Scope context (for analysis only): {scope_attestation}
         Test status (for analysis only): {test_status}
         Review Handoff Inventory (receipt-verified; every listed required source must have a critic-review dependency):
@@ -563,6 +665,7 @@ spec:
         - { name: scope_attestation, task_id: produce-workset, runtime_output: scope_context }
         - { name: test_status, task_id: verify-targeted-go-tests, runtime_output: targeted_go_test_status }
         - { name: handoff_inventory, task_id: inventory-review-handoffs, runtime_output: review_handoff_inventory }
+        - { name: supplement_outcomes, task_id: inventory-review-handoffs, runtime_output: supplement_outcomes }
       execution:
         requires-result: true
         requires-grounded-result: true
@@ -586,6 +689,8 @@ spec:
       recovery: retry
       max_retries: 1
       depends-on-contracts: [synthesize-review]
+      # Only report-owned verification failures may return to synthesis.
+      # Invalid accepted sources fail the native action and require source repair.
       on-failure-contract: synthesize-review
       on-failure-classes: [verification]
       action:

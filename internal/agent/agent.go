@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"charm.land/fantasy"
-	"charm.land/fantasy/providers/openaicompat"
 
 	"github.com/kjelly/hufu/internal/config"
 	contextstore "github.com/kjelly/hufu/internal/context"
@@ -23,6 +22,7 @@ import (
 	"github.com/kjelly/hufu/internal/decisionrt/control"
 	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/llmtimeout"
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/ollamaquota"
 	"github.com/kjelly/hufu/internal/providerintrospection"
@@ -156,7 +156,7 @@ type AgentDef struct {
 	Requirements ContractRequirements
 	ProviderURL  string
 	// SideEffect is the default side-effect classification for tasks delegated
-	// to this agent (none/workspace_write/external_write/infra_mutation/
+	// to this agent (none/browser_interaction/workspace_write/external_write/infra_mutation/
 	// credential_mutation). Empty = infer from Tools at task creation time.
 	SideEffect string
 	// Recovery is the default interrupted-task recovery policy for this agent
@@ -296,6 +296,7 @@ func DefaultMemoryLearningPolicy() MemoryLearningPolicy {
 }
 
 type TeamConfig struct {
+	Media *media.Policy `yaml:"media" json:"media,omitempty"`
 	// RequestAcceptance freezes explicit invocation requirements and checks them at finish.
 	RequestAcceptance bool `yaml:"request-acceptance" json:"request_acceptance,omitzero"`
 	Name              string
@@ -1028,8 +1029,9 @@ type ToolCallAssertion struct {
 // TaskResultAssertion declares a bounded assertion against the canonical
 // structured TaskResult produced by the worker. Pointer uses RFC 6901 JSON
 // Pointer syntax; Op is one of exists, non_empty, equals, min_items, or
-// contains_scalar or equals_projection. equals_projection takes a bounded
+// contains_scalar, equals_projection or equals_by_items. equals_projection takes a bounded
 // object value with pointer, fields, and optional allow_missing.
+// equals_by_items takes {pointer, empty, non_empty} with explicit string labels.
 type TaskResultAssertion struct {
 	Pointer string `json:"pointer" yaml:"pointer"`
 	Op      string `json:"op" yaml:"op"`
@@ -1062,11 +1064,12 @@ type AcceptanceCriterion struct {
 }
 
 // OpenAICompatibleProvider is a provider backed by an OpenAI-compatible
-// /v1/chat/completions endpoint. It deliberately has no vendor-specific
+// chat-completions or Responses endpoint. It has no vendor-specific
 // behavior, so it can connect to Ollama, Lemonade, llama.cpp, LM Studio,
 // vLLM, or another compatible local server.
 type OpenAICompatibleProvider struct {
 	provider        fantasy.Provider
+	apiProtocol     APIProtocolResolution
 	baseURL         string
 	apiKey          string
 	name            string
@@ -1077,29 +1080,12 @@ type OpenAICompatibleProvider struct {
 }
 
 func NewOpenAICompatibleProvider(baseURL, apiKey, name string) (*OpenAICompatibleProvider, error) {
-	if baseURL == "" {
-		baseURL = config.DefaultProviderURL
-	}
-	if name == "" {
-		name = "local"
-	}
-	provider, err := newOpenAICompatProvider(baseURL, apiKey, name, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create OpenAI-compatible provider: %w", err)
-	}
-	return &OpenAICompatibleProvider{provider: provider, baseURL: baseURL, apiKey: apiKey, name: name}, nil
+	return newConfiguredOpenAICompatibleProvider(baseURL, apiKey, name, "")
 }
 
 func newOpenAICompatProvider(baseURL, apiKey, name string, client *http.Client) (fantasy.Provider, error) {
-	providerOptions := []openaicompat.Option{
-		openaicompat.WithBaseURL(baseURL),
-		openaicompat.WithName(name),
-	}
-	if apiKey != "" {
-		providerOptions = append(providerOptions, openaicompat.WithAPIKey(apiKey))
-	}
-	providerOptions = append(providerOptions, openaicompat.WithHTTPClient(withToolCallIndexes(client)))
-	return openaicompat.New(providerOptions...)
+	resolution, _ := ResolveAPIProtocol("")
+	return newOpenAICompatProviderWithProtocol(baseURL, apiKey, name, client, resolution)
 }
 
 // OllamaProvider is retained as a source-compatible alias for integrations
@@ -1116,14 +1102,23 @@ func NewOllamaProvider(baseURL, apiKey, name string) (*OpenAICompatibleProvider,
 func (p *OpenAICompatibleProvider) LanguageModel(ctx context.Context, modelID string) (fantasy.LanguageModel, error) {
 	model := p.modelName(modelID)
 	baseURL, client, boundary := p.effectiveBaseURL()
-	if !boundary {
-		return p.provider.LanguageModel(ctx, model)
+	resolution := p.apiProtocol
+	if resolution.Effective == "" {
+		resolution, _ = ResolveAPIProtocol("")
 	}
-	proxyProvider, err := newOpenAICompatProvider(baseURL, p.apiKey, p.name, client)
+	provider := p.provider
+	if boundary {
+		var err error
+		provider, err = newOpenAICompatProviderWithProtocol(baseURL, p.apiKey, p.name, client, resolution)
+		if err != nil {
+			return nil, err
+		}
+	}
+	inner, err := provider.LanguageModel(ctx, model)
 	if err != nil {
 		return nil, err
 	}
-	return proxyProvider.LanguageModel(ctx, model)
+	return &protocolLanguageModel{LanguageModel: inner, resolution: resolution}, nil
 }
 
 func (p *OpenAICompatibleProvider) modelName(modelID string) string {
@@ -1409,6 +1404,7 @@ type providerTarget struct {
 type providerConfigEquivalence struct {
 	providerURL       string
 	providerAPIKey    string
+	apiProtocol       string
 	introspectionType string
 	insecure          bool
 	maxConcurrent     int
@@ -1422,6 +1418,7 @@ func providerConfigEquivalenceOf(providerConfig config.ProviderConfig) providerC
 	return providerConfigEquivalence{
 		providerURL:       providerURL,
 		providerAPIKey:    providerConfig.ProviderAPIKey,
+		apiProtocol:       providerConfig.APIProtocol,
 		introspectionType: providerConfig.IntrospectionType,
 		insecure:          providerConfig.Insecure,
 		maxConcurrent:     providerConfig.MaxConcurrent,
@@ -1470,6 +1467,7 @@ func NewProviderManager(defaultURL, defaultKey string, providerConfigs map[strin
 		if err := providerConfig.Validate(); err != nil {
 			return nil, fmt.Errorf("invalid provider %q: %w", name, err)
 		}
+		providerConfig.APIProtocol, _ = config.NormalizeAPIProtocol(providerConfig.APIProtocol)
 		canonicalName := canonicalProviderName(name)
 		providerConfig.IntrospectionType = strings.ToLower(strings.TrimSpace(providerConfig.IntrospectionType))
 		if providerConfig.IntrospectionType == "" {
@@ -1537,7 +1535,7 @@ func NewProviderManager(defaultURL, defaultKey string, providerConfigs map[strin
 			localTarget.apiKey = cfg.ProviderAPIKey
 		}
 	}
-	defaultProv, err := NewOpenAICompatibleProvider(localTarget.upstreamURL, localTarget.apiKey, "local")
+	defaultProv, err := newConfiguredOpenAICompatibleProvider(localTarget.upstreamURL, localTarget.apiKey, "local", canonicalConfigs["local"].APIProtocol)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create canonical local provider: %w", err)
 	}
@@ -1763,7 +1761,7 @@ func (pm *ProviderManager) GetProvider(modelID string) *OpenAICompatibleProvider
 	_, hasCfg := pm.configs[name]
 	if hasCfg {
 		target := pm.effectiveProviderTargetLocked(name)
-		p, err := NewOpenAICompatibleProvider(target.upstreamURL, target.apiKey, target.name)
+		p, err := newConfiguredOpenAICompatibleProvider(target.upstreamURL, target.apiKey, target.name, pm.configs[name].APIProtocol)
 		if err == nil {
 			if boundary, ok := pm.invocationProxies[name]; ok {
 				p.setBoundary(boundary.URL(), boundary.HTTPClient())
@@ -1798,6 +1796,8 @@ type AgentConfig struct {
 	PrepareStep      fantasy.PrepareStepFunction
 	Admission        RequestAdmission
 	AdmissionContext ProviderAdmissionContext
+	// StructuredResponse uses a data-only provider function instead of work tools.
+	StructuredResponse *StructuredResponseConfig
 	// InvocationModelID is the selected model for this concrete agent
 	// invocation. It may differ from Def.Generation.Model during retry,
 	// repair, rescue, direct, or subagent execution.
@@ -1831,15 +1831,23 @@ func CreateAgent(ctx context.Context, provider *OpenAICompatibleProvider, cfg Ag
 		return nil, fmt.Errorf("failed to create language model for %q: %w", cfg.Def.Name, err)
 	}
 	lm = NewAdmittedLanguageModelWithContext(modelStr, lm, cfg.Admission, cfg.AdmissionContext)
+	if cfg.StructuredResponse != nil {
+		if len(agentTools) != 0 {
+			return nil, fmt.Errorf("structured response cannot register executable tools")
+		}
+		lm, err = newStructuredResponseModel(lm, cfg.StructuredResponse)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	opts := []fantasy.AgentOption{
 		fantasy.WithSystemPrompt(cfg.Def.System),
 		fantasy.WithTools(providerToolsWithOwnedSchemas(agentTools)...),
-		// Hufu owns retries at the task level so it can apply the configured
-		// attempt budget, recovery policy, escalation, and reporting. Fantasy
-		// 0.41 retries failed transports by default with multi-second backoff;
-		// leaving that enabled would hide those attempts and can exceed Hufu's
-		// deadline before the coordinator receives the failure.
+		// Hufu owns provider-request resends and task retries so every attempt
+		// passes admission, accounting, deadlines and the recovery policy.
+		// SDK retries would hide requests from those boundaries or replay a
+		// partially observed stream outside Hufu's explicit safety checks.
 		fantasy.WithMaxRetries(0),
 		// Recovers tool calls whose arguments got corrupted by a streaming
 		// provider concatenating two parallel tool calls' JSON deltas into one

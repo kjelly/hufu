@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -13,7 +12,7 @@ import (
 func BenchmarkCandidateSettlementQuery(b *testing.B) {
 	for _, rows := range []int{10_000, 100_000} {
 		b.Run(fmt.Sprintf("rows=%d", rows), func(b *testing.B) {
-			repo, err := OpenSQLite(filepath.Join(b.TempDir(), "context.sqlite"))
+			repo, err := OpenSQLiteInMemory(b.TempDir())
 			if err != nil {
 				b.Fatal(err)
 			}

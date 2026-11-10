@@ -21,14 +21,15 @@ import (
 )
 
 type doctorCheck struct {
-	ID         string `json:"id"`
-	Subject    string `json:"subject,omitempty"`
-	Status     string `json:"status"`
-	Message    string `json:"message"`
-	Count      *int   `json:"count,omitempty"`
-	ReasonCode string `json:"reason_code,omitempty"`
-	HTTPStatus int    `json:"http_status,omitzero"`
-	ModelState string `json:"model_state,omitempty"`
+	APIProtocol *apiProtocolDiagnostic `json:"api_protocol,omitempty"`
+	ID          string                 `json:"id"`
+	Subject     string                 `json:"subject,omitempty"`
+	Status      string                 `json:"status"`
+	Message     string                 `json:"message"`
+	Count       *int                   `json:"count,omitempty"`
+	ReasonCode  string                 `json:"reason_code,omitempty"`
+	HTTPStatus  int                    `json:"http_status,omitzero"`
+	ModelState  string                 `json:"model_state,omitempty"`
 }
 
 type doctorReport struct {
@@ -126,6 +127,7 @@ func renderDoctorReportText(writer io.Writer, report doctorReport) error {
 func collectDoctorReport(ctx context.Context) doctorReport {
 	report := doctorReport{SchemaVersion: 1, Checks: []doctorCheck{}}
 	cfg := config.LoadConfig()
+	collectDoctorAPIProtocols(&report, cfg)
 	providerURL := config.ResolveProviderURL(opts.providerURL, "", "")
 	models, err := fetchModelsContext(ctx, providerURL, config.ResolveProviderAPIKey(opts.providerAPIKey, ""))
 	switch {
@@ -217,6 +219,7 @@ func collectDoctorTeams(report *doctorReport, cfg *config.Config) map[string]sem
 			findings++
 			continue
 		}
+		appendDoctorAPIProtocols(report, name, session.Config.Providers)
 		for _, finding := range collectDoctorContractFindings(session, projectDir) {
 			status := "warning"
 			if finding.Finding.Severity == team.FindingSeverityError {

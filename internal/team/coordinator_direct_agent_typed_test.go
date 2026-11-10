@@ -404,7 +404,7 @@ func TestRunDirectAgentRejectsProseWithoutSubmittedResult(t *testing.T) {
 // downstream retrieval manifest has nothing to bind.
 func TestDirectAgentTypedSubmitReducesContextItems(t *testing.T) {
 	c := newDirectTypedCoordinator(t, "", nil, nil)
-	repo, err := contextstore.OpenSQLite(filepath.Join(c.session.Workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(c.session.Workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

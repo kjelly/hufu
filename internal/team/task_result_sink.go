@@ -12,6 +12,9 @@ import (
 type coordinatorTaskResultSink struct{ coordinator *Coordinator }
 
 func (s coordinatorTaskResultSink) Submit(ctx context.Context, taskID string, result TaskResult) error {
+	if result.RuntimeMedia != nil {
+		return fmt.Errorf("runtime media result fields are coordinator-owned")
+	}
 	if s.coordinator == nil {
 		return fmt.Errorf("task result sink has no coordinator")
 	}

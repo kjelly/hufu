@@ -1,10 +1,12 @@
 package team
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 
+	"charm.land/fantasy"
 	"github.com/kjelly/hufu/internal/agent"
 )
 
@@ -126,22 +128,23 @@ func TestFailureDiagnosticSurvivesSQLiteReplayAndWorkerDispatch(t *testing.T) {
 	// Reconstruct a new worker runtime from replayed tasks, then capture the
 	// actual model input. Rendering a synthetic remediation string alone
 	// would not prove dispatch reads the persisted occurrence.
-	c := &Coordinator{
-		session: &TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "retry-replay", Timeout: 30}, Agents: map[string]*agent.AgentDef{
-			"coder": {Name: "coder", Role: "worker", Generation: agent.GenerationParams{Model: "test"}},
-		}},
-		sessionData: NewSession(), taskTracker: NewTaskTracker(), reportStatus: func(StatusEvent) {},
-		taskCache: newDefaultTaskCache(taskCacheDependencies{}), executionRunID: "run-retry",
-	}
+	c := newTestCoordinator(t)
+	c.session.Config.Name = "retry-replay"
+	c.session.Agents = map[string]*agent.AgentDef{"coder": {Name: "coder", Role: "worker", Generation: agent.GenerationParams{Model: "test"}}}
+	c.sessionData = NewSession()
+	c.executionRunID = "run-retry"
 	c.taskTracker.TodoList().Restore(replayed)
-	var calls int
-	var prompts []string
-	c.workerAgentOverride = &scriptedRepairAgent{calls: &calls, prompts: &prompts, onCall: func(int) {
+	worker := scriptWorker(scriptedTurn{stream: func(_ context.Context, _ fantasy.AgentStreamCall) (*fantasy.AgentResult, error) {
 		c.storeSubmittedTaskResult(producer.ID, &TaskResult{TaskID: producer.ID, Agent: "coder", Status: TaskResultStatusSuccess, Summary: "corrected the report", Source: "submitted"})
-	}}
+		return textAgentResult("corrected the report"), nil
+	}})
+	c.workerAgentOverride = worker
 	_, err = c.executeTask(withTestProtocolRepairInvocationContext(t.Context()), taskDefFromTodoItem(producer), producer.ID)
-	if err != nil || calls != 1 || len(prompts) != 1 || !strings.Contains(prompts[0], retryRoutingDiagnostic) {
-		t.Fatalf("restored worker did not receive rejection: calls=%d err=%v prompts=%v", calls, err, prompts)
+	if err != nil || worker.Calls() != 1 {
+		t.Fatalf("restored worker dispatch: calls=%d err=%v", worker.Calls(), err)
+	}
+	if prompt := worker.Prompt(t, 1); !strings.Contains(prompt, retryRoutingDiagnostic) {
+		t.Fatalf("restored worker did not receive rejection: %s", prompt)
 	}
 }
 

@@ -57,8 +57,13 @@ func applyNamedProfile(cmd *cobra.Command, profileName string) error {
 		if cmd.Flags().Lookup(name) != nil {
 			return cmd.Flags()
 		}
-		if root := cmd.Root(); root != nil && root.Flags().Lookup(name) != nil {
-			return root.Flags()
+		if root := cmd.Root(); root != nil {
+			if flag := root.Flags().Lookup(name); flag != nil {
+				if len(flag.Annotations[profileCommandLocalFlag]) > 0 {
+					return nil
+				}
+				return root.Flags()
+			}
 		}
 		return nil
 	}
@@ -116,6 +121,9 @@ func applyNamedProfile(cmd *cobra.Command, profileName string) error {
 	}
 	return nil
 }
+
+// Command-local root flags cannot be set by profiles of unrelated subcommands.
+const profileCommandLocalFlag = "hufu.profile.command-local"
 
 const workerModelFlag = "worker-model"
 

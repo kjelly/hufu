@@ -28,8 +28,8 @@ func (denyWorkerPolicySchemaLoader) Load(url string) (any, error) {
 }
 
 func compileWorkerPolicy(policy WorkerToolPolicy) (*jsonschema.Schema, error) {
-	if policy.SideEffect != "none" || policy.Filesystem != "none" {
-		return nil, fmt.Errorf("MCP worker policy requires sideEffect: none and filesystem: none")
+	if (policy.SideEffect != "none" && policy.SideEffect != "browser_interaction") || policy.Filesystem != "none" {
+		return nil, fmt.Errorf("MCP worker policy requires sideEffect: none or native browser_interaction, and filesystem: none")
 	}
 	if policy.InputSchema["type"] != "object" || policy.InputSchema["additionalProperties"] != false {
 		return nil, fmt.Errorf("MCP worker policy inputSchema requires type: object and additionalProperties: false")
@@ -57,10 +57,20 @@ func compileWorkerPolicy(policy WorkerToolPolicy) (*jsonschema.Schema, error) {
 
 // ValidateWorkerToolPolicies performs offline validation without starting MCP.
 func ValidateWorkerToolPolicies(config MCPServerConfig) error {
+	if err := validateChromeCDP(config); err != nil {
+		return err
+	}
 	if err := validateTemporaryDirectoryEnv(config); err != nil {
 		return err
 	}
 	for name, policy := range config.ToolPolicies {
+		if policy.SideEffect == "browser_interaction" && (config.Type != "chrome-cdp" || name != "browser_click") {
+			return fmt.Errorf("browser_interaction policy is restricted to native Chrome browser_click")
+		}
+		if config.Type == "chrome-cdp" && name == "browser_click" && policy.SideEffect != "browser_interaction" {
+			return fmt.Errorf("native browser_click must declare browser_interaction, never none")
+		}
+
 		if strings.TrimSpace(name) == "" || name != strings.TrimSpace(name) || !IsToolAllowed(name, config.AllowedTools, config.ExcludedTools) {
 			return fmt.Errorf("MCP worker policy tool %q is not admitted by allowedTools/excludedTools", name)
 		}

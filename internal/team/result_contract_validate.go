@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -53,6 +52,19 @@ type ResultPayload struct {
 	CollectionBindings []ResultCollectionBinding `json:"collection_bindings,omitempty"`
 }
 
+// Keep the canonical validator's cause without exposing its unbounded error
+// text. Portable provider schemas are guidance, not failure classifiers.
+type resultPayloadSchemaError struct {
+	contract string
+	cause    error
+}
+
+func (e *resultPayloadSchemaError) Error() string {
+	return fmt.Sprintf("%s: structured_payload does not satisfy result contract %q:\n%s", structuredPayloadInvalidCode, e.contract, formatResultPayloadValidationError(e.cause))
+}
+
+func (e *resultPayloadSchemaError) Unwrap() error { return e.cause }
+
 func (p *ResultPayload) clone() *ResultPayload {
 	if p == nil {
 		return nil
@@ -96,7 +108,7 @@ func validateStructuredResultPayload(compiled *CompiledResultContract, ref Resul
 		value = canonicalResultScalars(value, compiled.schema, 0)
 	}
 	if err := compiled.schema.Validate(value); err != nil {
-		return nil, fmt.Errorf("%s: structured_payload does not satisfy result contract %q:\n%s", structuredPayloadInvalidCode, ref.ID, formatResultPayloadValidationError(err))
+		return nil, &resultPayloadSchemaError{contract: ref.ID, cause: err}
 	}
 	var records []taskTranscriptRecord
 	if len(observations) > 0 {
@@ -274,7 +286,7 @@ func (c *Coordinator) validateStructuredPayloadClaims(todoID string, raw json.Ra
 	plans, err := c.fixedCollectionPlans(todoID)
 	if err == nil {
 		item := c.todoItemByID(todoID)
-		results := c.dependencyResultsForTask(todoID)
+		results := c.dependencyResultsForBinding(todoID)
 		if compiled.evidenceInputs != nil && compiled.evidenceInputs.runtimeOwned() {
 			err = c.validateDependencyPayloads(results)
 			if err == nil {
@@ -313,7 +325,7 @@ func (c *Coordinator) validateStructuredPayloadClaims(todoID string, raw json.Ra
 	if err == nil {
 		payload, err = validateStructuredResultPayload(compiled, *ref, assembled, observations...)
 		if err != nil {
-			repairable = collectionDecisionSchemaFailure(compiled, assembled, plans)
+			repairable = collectionModelSchemaFailure(compiled, plans, err)
 		}
 	}
 	if err == nil {
@@ -393,6 +405,10 @@ func (c *Coordinator) applyResultContractReceipt(todoID string, result *TaskResu
 // property stays open and names the contract. validateStructuredResultPayload is the
 // trust boundary, not the provider.
 func providerVisibleResultPayloadSchema(ref ResultContractRef, compiled *CompiledResultContract) map[string]any {
+	return visibleResultPayloadSchema(ref, compiled, false)
+}
+
+func visibleResultPayloadSchema(ref ResultContractRef, compiled *CompiledResultContract, guidance bool) map[string]any {
 	description := fmt.Sprintf("Structured payload that must satisfy result contract %s (sha256 %s).", ref.ID, shortResultContractHash(ref.SchemaSHA256))
 	if compiled != nil {
 		if value, err := decodeResultContractJSON(compiled.CanonicalSchema); err == nil {
@@ -400,6 +416,18 @@ func providerVisibleResultPayloadSchema(ref ResultContractRef, compiled *Compile
 				omitRuntimeEvidenceInputs(schema, compiled.evidenceInputs)
 				omitRuntimeResultInputs(schema, compiled.runtimeInputs)
 				delete(schema, "$schema")
+				if guidance {
+					if projected := projectResultGuidanceSchema(schema); projected != nil {
+						projectedPayloadSchema(projected, compiled.claimsProjection)
+						projected["description"] = description
+						return projected
+					}
+				}
+				if projected := projectProviderResultSchema(schema); compiled.claimsProjection != nil && projected != nil {
+					projectedPayloadSchema(projected, compiled.claimsProjection)
+					projected["description"] = description
+					return projected
+				}
 				if dynamicSchemaEligible(schema) {
 					if _, described := schema["description"]; !described {
 						schema["description"] = description
@@ -449,7 +477,9 @@ func resultContractPromptSection(ref *ResultContractRef, compiled *CompiledResul
 		fmt.Fprintf(b, " Include %s that satisfies the schema below when you can.\n", field)
 	}
 	b.WriteString("Do not put credentials, authentication tokens, or secret API keys in the payload; a payload containing them is rejected.\n")
-	if compiled != nil && compiled.evidenceKeys != nil && !external {
+	if runtimeOwnsFilesRead(compiled) {
+		b.WriteString("The runtime supplies outer files_read from successful native view observations in this work attempt. Omit files_read entirely, even when empty or null. Evidence references at the declared x-hufu-evidence-keys paths must name artifacts actually observed by this task, not merely authorized dependencies. This mode requires the local native runtime.\n")
+	} else if compiled != nil && compiled.evidenceKeys != nil && !external {
 		b.WriteString("Successful runtime view calls issue short ev_ evidence keys. Use these keys only in files_read.path (or string entries) and the x-hufu-evidence-keys pointers below. The runtime resolves them to full artifact IDs before all canonical validation and hashing. Keys are task/attempt/branch/model-execution scoped; never invent or borrow keys. They attest a successful bounded read, not full artifact coverage or support for a semantic claim.\n")
 	}
 	if compiled != nil && len(compiled.fixedCollections) > 0 {
@@ -460,16 +490,33 @@ func resultContractPromptSection(ref *ResultContractRef, compiled *CompiledResul
 	}
 	if compiled != nil {
 		schema := compiled.CanonicalSchema
-		runtimeOwned := len(compiled.runtimeInputs) > 0
+		if len(compiled.envelopeDocument) > 0 {
+			fmt.Fprintf(b, "The following JSON Schema validates {status, structured_payload} AFTER runtime-owned fields and decisions are bound. Preserve those decisions; correct only inconsistent reporting fields.\n%s\n", compiled.envelopeDocument)
+		}
+		runtimeOwned := len(compiled.runtimeInputs) > 0 || compiled.claimsProjection != nil
+		if spec := compiled.claimsProjection; spec != nil {
+			for name, pointer := range map[string]string{"findings": spec.Findings, "invariant_assessments": spec.Invariants} {
+				if pointer != "" {
+					fmt.Fprintf(b, "Submit %s only at structured_payload%s; omit outer %s entirely, even when empty or null. Runtime projects its exact canonical claims.\n", name, pointer, name)
+				}
+			}
+			if spec.InvariantSeverity {
+				b.WriteString("For findings referenced by violated invariant claims, omit severity: runtime binds it from the original work context. Preserve the judgment and finding index. Independent findings require severity.\n")
+			}
+		}
 		for _, binding := range compiled.runtimeInputs {
-			fmt.Fprintf(b, "The runtime supplies `%s` from receipt-verified native task `%s` output `%s`. Omit this field entirely; never copy or summarize its value in the submission.\n", binding.Target, binding.SourceTask, binding.Output)
+			if binding.SourceKind == "runtime_media" {
+				fmt.Fprintf(b, "The runtime supplies `%s` from the receipt-verified media projection of native task `%s`. Omit this field entirely; never copy or summarize its value in the submission.\n", binding.Target, binding.SourceTask)
+			} else {
+				fmt.Fprintf(b, "The runtime supplies `%s` from receipt-verified native task `%s` output `%s`. Omit this field entirely; never copy or summarize its value in the submission.\n", binding.Target, binding.SourceTask, binding.Output)
+			}
 		}
 		if spec := compiled.evidenceInputs; spec != nil && spec.runtimeOwned() {
 			fmt.Fprintf(b, "The runtime supplies `%s` from every accepted evidence_from source. Omit this field entirely; the stored result retains all complete source records and hashes.\n", spec.ItemsPointer)
 			runtimeOwned = true
 		}
 		if runtimeOwned {
-			schema, _ = json.Marshal(providerVisibleResultPayloadSchema(*ref, compiled))
+			schema, _ = json.Marshal(visibleResultPayloadSchema(*ref, compiled, true))
 		}
 		if len(schema) <= resultContractPromptSchemaMaxBytes {
 			fmt.Fprintf(b, "\n```json\n%s\n```\n", schema)
@@ -511,6 +558,9 @@ func (c *Coordinator) attemptResultContractSchema(task TaskDef) *CompiledResultC
 // canonicalExternalStructuredPayload applies the local submit_result payload
 // rules to an external provider's proposal, through the same validator.
 func canonicalExternalStructuredPayload(request AttemptRequest, proposal *WorkerResultProposal, filesRead []FileRef) (*ResultPayload, error) {
+	if runtimeOwnsFilesRead(request.resultContractSchema) {
+		return nil, fmt.Errorf("runtime-owned files_read requires native observations from the local runtime")
+	}
 	if hasResultDecisions(request.resultContractSchema) {
 		return nil, fmt.Errorf("bound decisions require the local runtime")
 	}
@@ -525,14 +575,42 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 		}
 		return nil, nil
 	}
+	if request.resultContractSchema == nil {
+		return nil, fmt.Errorf("%s: result contract is not loaded", resultContractDriftCode)
+	}
 	if raw == "" {
 		if ref.RequireStructured {
 			return nil, fmt.Errorf("%s: result contract %q requires structured_payload_json", structuredPayloadMissingCode, ref.ID)
 		}
-		return nil, nil
+		status := ""
+		if proposal != nil {
+			status = proposal.Status
+		}
+		return nil, validateResultEnvelope(request.resultContractSchema, &TaskResult{Status: status})
 	}
-	if request.resultContractSchema == nil {
-		return nil, fmt.Errorf("%s: result contract is not loaded", resultContractDriftCode)
+	if spec := request.resultContractSchema.claimsProjection; spec != nil {
+		for name, p := range map[string]string{"findings": spec.Findings, "invariant_assessments": spec.Invariants} {
+			if _, supplied := proposal.suppliedFields[name]; p != "" && supplied {
+				return nil, fmt.Errorf("projected %s is runtime-owned; omit it entirely", name)
+			}
+		}
+		input := SubmitResultInput{StructuredPayload: []byte(raw)}
+		if proposal != nil {
+			input.Findings = proposal.Findings
+			input.InvariantAssessments = proposal.InvariantAssessments
+		}
+		var err error
+		if request.resultProjectClaims != nil {
+			input, err = request.resultProjectClaims(input)
+		} else if spec.InvariantSeverity {
+			return nil, fmt.Errorf("invariant projections require verified work context")
+		} else {
+			input, err = projectClaimsInput(input, request.resultContractSchema)
+		}
+		if err != nil {
+			return nil, err
+		}
+		raw = string(input.StructuredPayload)
 	}
 	plans, err := buildResultFixedCollections(request.resultContractSchema.fixedCollections, request.Task.EvidenceFrom, request.resultEvidenceInputs)
 	if err != nil {
@@ -581,24 +659,46 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 	if err := validateResultEvidenceReferences(value, request.resultContractSchema.evidenceReferences, request.Task.EvidenceFrom, request.resultEvidenceInputs, &filesRead); err != nil {
 		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
 	}
+	if err := validateResultEnvelope(request.resultContractSchema, &TaskResult{Status: proposal.Status, StructuredPayload: payload}); err != nil {
+		return nil, err
+	}
 	return payload, nil
 }
 
-// collectionDecisionSchemaFailure identifies canonical schema errors confined
-// to model-authored fields of bound decision rows. Trusted source, identity,
-// and runtime-owned fields must never be repaired by another model turn.
-func collectionDecisionSchemaFailure(compiled *CompiledResultContract, assembled []byte, plans []resultFixedCollectionPlan) bool {
-	if compiled == nil || len(plans) == 0 {
+// collectionModelSchemaFailure runs only after source assembly and independent
+// provenance validation. Canonical JSON Schema errors in model-owned fields
+// are repairable even when portability projection omitted their constraints.
+// Runtime-owned values and parent-level constraints involving them stay blocked.
+func collectionModelSchemaFailure(compiled *CompiledResultContract, plans []resultFixedCollectionPlan, err error) bool {
+	failure, ok := errors.AsType[*resultPayloadSchemaError](err)
+	if !ok || compiled == nil {
 		return false
 	}
-	value, err := decodeUniqueJSON(assembled)
-	if err != nil {
-		return false
-	}
-	value = canonicalResultScalars(value, compiled.schema, 0)
-	validation, ok := errors.AsType[*jsonschema.ValidationError](compiled.schema.Validate(value))
+	validation, ok := errors.AsType[*jsonschema.ValidationError](failure.cause)
 	if !ok {
 		return false
+	}
+	var protected []string
+	for _, input := range compiled.runtimeInputs {
+		protected = append(protected, input.Target)
+	}
+	if compiled.evidenceInputs.runtimeOwned() {
+		protected = append(protected, compiled.evidenceInputs.ItemsPointer)
+	}
+	for _, plan := range plans {
+		fields := plan.spec.fixedFields()
+		fields["key"] = true
+		for _, group := range plan.spec.DecisionGroups {
+			for _, field := range group.Outputs {
+				fields[field] = true
+			}
+		}
+		for index := range plan.rows {
+			row := plan.spec.ItemsPointer + "/" + strconv.Itoa(index)
+			for field := range fields {
+				protected = append(protected, row+"/"+escapeJSONPointerToken(field))
+			}
+		}
 	}
 	var visit func(*jsonschema.ValidationError) bool
 	visit = func(node *jsonschema.ValidationError) bool {
@@ -610,25 +710,16 @@ func collectionDecisionSchemaFailure(compiled *CompiledResultContract, assembled
 			}
 			return true
 		}
-		for _, plan := range plans {
-			if len(plan.spec.DecisionGroups) == 0 {
-				continue
-			}
-			prefix := fixedCollectionPointerTokens(plan.spec.ItemsPointer)
-			location := node.InstanceLocation
-			if len(location) < len(prefix)+2 || !slices.Equal(location[:len(prefix)], prefix) {
-				continue
-			}
-			index, err := strconv.Atoi(location[len(prefix)])
-			if err != nil || index < 0 || index >= len(plan.rows) {
-				continue
-			}
-			properties, _ := plan.spec.decisionSchema["properties"].(map[string]any)
-			if _, exists := properties[location[len(prefix)+1]]; exists {
-				return true
+		pointer := ""
+		for _, token := range node.InstanceLocation {
+			pointer += "/" + escapeJSONPointerToken(token)
+		}
+		for _, owned := range protected {
+			if resultPointersOverlap(pointer, owned) {
+				return false
 			}
 		}
-		return false
+		return true
 	}
 	return visit(validation)
 }

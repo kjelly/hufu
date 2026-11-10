@@ -2,6 +2,7 @@ package team
 
 import (
 	"bytes"
+	"context"
 	jsonv1 "encoding/json"
 	"encoding/json/v2"
 	"fmt"
@@ -30,7 +31,7 @@ func (c *Coordinator) bindRecoveredEvidence(req *EvidenceBuildRequest) error {
 	if err != nil {
 		return err
 	}
-	tree, err := LoadSessionTree(req.Workspace)
+	tree, err := c.loadJournalSessionTree(context.Background(), req.Workspace)
 	if err != nil {
 		return err
 	}

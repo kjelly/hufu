@@ -21,6 +21,11 @@ func compatibleUnusedExecutionEnvironment(frozen, current *ExecutionPolicySnapsh
 
 func normalizeUnusedExecutionEnvironment(frozen, current *ExecutionPolicySnapshot) *ExecutionPolicySnapshot {
 	normalized := cloneExecutionPolicySnapshot(current)
+	// Old policies have no restorable launch values. Keep their original hash
+	// shape; all of their existing generation/route/authority checks still apply.
+	if frozen.Launch == nil {
+		normalized.Launch = nil
+	}
 	for i := range normalized.ExecutionWorlds {
 		world := &normalized.ExecutionWorlds[i]
 		if policySnapshotUsesBackend(frozen, world.Backend) || policySnapshotUsesBackend(current, world.Backend) {

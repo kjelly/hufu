@@ -13,20 +13,21 @@ run = "go build -p 2 ./cmd/hufu"
 
 [tasks.run]
 description = "Run hufu; forward additional arguments to the CLI"
-run = "go run -p 2 ./cmd/hufu"
+run = "go run -buildvcs=true -p 2 ./cmd/hufu"
 raw = true
 
 [tasks.test]
-description = "Run the Go test suite"
-run = "go test -p 2 ./..."
+description = "Run the Go test suite (30m per package)"
+# The complete persistence/protocol suite needs more headroom than focused gates.
+run = "go test -p 2 -timeout 30m ./... ./.agent-teams/web-research/tests"
 
 [tasks.vet]
 description = "Run Go static analysis"
-run = "go vet -p 2 ./..."
+run = "go vet -p 2 ./... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/... ./.agent-teams/web-research/tests"
 
 [tasks.lint]
 description = "Run the pinned golangci-lint"
-run = "golangci-lint run"
+run = "golangci-lint run ./... ./.agent-teams/hufu-code-review/reviewprep/... ./.agent-teams/hufu-code-review/reviewgate/... ./.agent-teams/web-research/tests"
 
 [tasks.test-short]
 description = "Run short tests; heavier tests have a separate required integration gate"
@@ -39,3 +40,15 @@ run = "go run ./scripts/testlayers -layer integration"
 [tasks.test-inventory]
 description = "List the complete platform-active short/integration test partition"
 run = "go run ./scripts/testlayers -list"
+
+[tasks.test-contracts]
+description = "Offline result projection, repair, recovery and review handoff regressions"
+run = [
+  "go test -p 2 -timeout 20m ./internal/team -run '^(TestRequiredArtifact|TestCodexNativeImage|TestRuntimeMedia|TestRuntimeResultInputs|TestMCPActionPublishesImagesAfterOutputsValidation|TestBoundDecisionContractRevalidation|TestTaskContextRequest|TestTodoListVerificationSelectsActiveModelExecution|TestResultEnvelope|TestResultClaimsProjection|TestContractRecovery|TestRecoveredArtifact|TestResumePreflight|TestRestoreLegacyBoundInvariantVerification|TestTaskOutputAssert|TestResolveFactRefs|TestStructuredFanOut|TestWorksetArtifact|TestContractDataflow|TestHufuCodeReview|TestResultCollection|TestDependencyResultViewFanoutLeafDelivery|TestDependencyBinding|TestJournalSessionTree|TestDispatchIDsDoNotRepeatAcrossProcesses|TestRunInputSnapshotJSONRoundTrip|TestResultPayloadJSONRoundTrip|TestWorkflowCycleRecoveryAfterDurableBoundary|TestResponsesWorkerCollectionRepairAndReplay|TestResponsesWireUsageSettlesCostLedger|TestModelCallChokepoint|TestModelCallAudit)' -count=1",
+  "go test -p 2 -timeout 20m ./internal/inspect ./internal/operator -run '^(TestRecoveryEligibility|TestSelectActions(OffersOnly|AssessesEvery))' -count=1",
+  "go test -p 2 -timeout 20m ./internal/auditverify -run '^(TestVerifyRunInputBinding|TestReplayInputBoundAssertions)' -count=1",
+  "go test -p 2 -timeout 20m ./cmd/hufu -run '^(TestBindResumePreflightVersion|TestResumeContractRecovery|TestResumeRecoveryPreviewThenExecute|TestHistoricalResultRunBinaryAdmissionAndDelivery|TestResponsesRunBinaryAndProtocolDrift)' -count=1",
+  "go test -p 2 -timeout 20m ./.agent-teams/hufu-code-review/reviewgate -count=1",
+  "go test -p 2 -timeout 20m ./.agent-teams/hufu-code-review/reviewprep -count=1",
+  "go test -p 2 -timeout 20m ./.agent-teams/web-research/tests -count=1",
+]

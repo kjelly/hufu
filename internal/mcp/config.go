@@ -14,6 +14,7 @@ type MCPServerConfig struct {
 	ExcludedTools         []string                    `json:"excludedTools,omitempty"    yaml:"excludedTools,omitempty"`
 	ToolPolicies          map[string]WorkerToolPolicy `json:"toolPolicies,omitempty" yaml:"toolPolicies,omitempty"`
 	NoOAuth               bool                        `json:"noOAuth,omitempty"           yaml:"noOAuth,omitempty"`
+	PageDwell             *ChromePageDwellConfig      `json:"page-dwell,omitempty" yaml:"page-dwell,omitempty"`
 }
 
 func (s *MCPServerConfig) UnmarshalJSON(data []byte) error {
@@ -27,6 +28,7 @@ func (s *MCPServerConfig) UnmarshalJSON(data []byte) error {
 		ExcludedTools         []string                    `json:"excludedTools,omitempty"`
 		ToolPolicies          map[string]WorkerToolPolicy `json:"toolPolicies,omitempty"`
 		NoOAuth               bool                        `json:"noOAuth,omitempty"`
+		PageDwell             *ChromePageDwellConfig      `json:"page-dwell,omitempty"`
 	}
 
 	var nc newFormat
@@ -42,6 +44,7 @@ func (s *MCPServerConfig) UnmarshalJSON(data []byte) error {
 	s.ExcludedTools = nc.ExcludedTools
 	s.NoOAuth = nc.NoOAuth
 	s.ToolPolicies = nc.ToolPolicies
+	s.PageDwell = nc.PageDwell
 
 	if s.Type == "" && len(s.Command) > 0 {
 		s.Type = "local"

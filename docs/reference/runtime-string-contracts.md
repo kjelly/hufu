@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `2100b1b227f27ecc11790b49b8fe8915920e4f9a`
+> Verified-Commit: `39756d921c5b847ccf8a4a0087da52287113c9c3`（2026-11-02 固定快照複驗；歷史紀錄與驗證範圍見下文）
 > Supersedes: —
 > Superseded-By: —
 
@@ -39,16 +39,36 @@ Runtime 的控制訊號應來自原生執行資料、型別化錯誤與已驗證
 壓縮已完整保留結構化 error output；普通文字中的英文診斷關鍵字仍作補充保留規則。
 完整工具證據與 artifact 參照仍由既有儲存機制負責。這些補充規則不是任務成敗依據。
 
-## 本次驗證（2026-10-30）
+## 原始變更驗證（2026-10-30，`2100b1b2`）
 
 `mise run vet`、`mise run lint`（0 issues）及相關分類、拒絕、重試、修復與
 evalharness 回歸測試均通過。最終執行
 `mise exec -- go test -p 2 -timeout 30m ./...`，只有以下四個測試失敗；
 四者也已在未修改 HEAD 的獨立 archive snapshot 重現：
 
-- `TestHufuCodeReviewRuntimeOwnsAll51GapIdentities`：缺少 snapshot coverage 的來源 occurrence。
-- `TestHufuCodeReviewEmptyCritiqueOwnsSource`：同樣缺少 snapshot coverage 的來源 occurrence。
-- `TestHufuCodeReviewCharacterizesPromptCannotRewriteStaticScope`：靜態 workflow edge 的同批契約不完整。
-- `TestHufuCodeReviewSynthesisReceivesCompactPrepareStatusWithoutCoordinatorConstraints`：缺少 `scope_context` runtime output。
+- [Go function: TestHufuCodeReviewRuntimeOwnsAll51GapIdentities](../../internal/team/hufu_code_review_fixed_collection_test.go)：缺少 snapshot coverage 的來源 occurrence。
+- [Go function: TestHufuCodeReviewEmptyCritiqueOwnsSource](../../internal/team/hufu_code_review_fixed_collection_test.go)：同樣缺少 snapshot coverage 的來源 occurrence。
+- [Go function: TestHufuCodeReviewCharacterizesPromptCannotRewriteStaticScope](../../internal/team/hufu_code_review_scope_characterization_test.go)：靜態 workflow edge 的同批契約不完整。
+- [Go function: TestHufuCodeReviewSynthesisReceivesCompactPrepareStatusWithoutCoordinatorConstraints](../../internal/team/runtime_output_refs_test.go)：缺少 `scope_context` runtime output。
 
-因此完整測試並非全綠；上述既有團隊契約 fixture 問題未納入本次修改。
+因此原始變更的完整測試並非全綠；上述既有團隊契約 fixture 問題未納入該次修改。
+
+## 後續 fixture 修正紀錄（2026-10-30，`8ae68eda`）
+
+上述四個 fixture 的修正在
+[`8ae68eda281654273981a23717a343a91174bac7`](https://github.com/kjelly/hufu/commit/8ae68eda281654273981a23717a343a91174bac7)：report fixture 補齊 inventory action 的完整
+`snapshot_coverage` 與來源 receipt；靜態 scope fixture 補上同批的
+`verify-targeted-go-tests`；synthesis fixture 使用現行 `scope_context` 輸出。
+原有證據保存、防覆寫與範圍斷言均保留，runtime 驗證規則未放寬。
+
+當時交付紀錄記載 `mise exec -- go test -p 2 -timeout 30m ./...`、
+`mise run vet` 與 `mise run lint`（0 issues）通過。此段是歷史執行敘述；
+原始命令輸出與 CI artifact 未附於該 commit，不能據此獨立核實當時執行，
+也不代表其他 commit 或目前工作樹通過。
+
+## 固定版本複驗（2026-11-02）
+
+[驗證紀錄與命令輸出](../archive/analyses/runtime-string-contracts-validation-2026-11-02.md)
+分別記載 `5736a4a2` 審查所保存的失敗，以及 `39756d92` 隔離快照的新驗證。
+這兩組證據的 revision 與執行時間不同；後續通過不會改寫歷史失敗，
+歷史失敗也不能直接視為現行版本缺陷。複驗保留既有測試與 runtime 驗證規則。

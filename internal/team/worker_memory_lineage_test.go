@@ -3,7 +3,6 @@ package team
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -108,7 +107,7 @@ func TestWP6CoordinatorUsesCheckedOutBranchAndForkMemoryIDs(t *testing.T) {
 
 func TestWP6SavedSessionMemoryRecallsAcrossForkAtWorkerScope(t *testing.T) {
 	workspace := t.TempDir()
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +267,7 @@ func TestWP6ContextShadowWriteRemainsBranchNeutral(t *testing.T) {
 	if err := SaveSessionTree(workspace, tree); err != nil {
 		t.Fatal(err)
 	}
-	repo, err := contextstore.OpenSQLite(filepath.Join(workspace, "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -70,6 +70,9 @@ type RuntimeModelInfo struct {
 	MaxOutputTokens   int
 
 	Capabilities []string
+	// ImageInput is independent of generic attachment support. Empty means
+	// absent evidence; explicit unknown remains a provider claim.
+	ImageInput CapabilityState
 	// CapabilityEvidence contains only explicit provider claims. Missing
 	// fields are absent (and therefore unknown), never false.
 	CapabilityEvidence map[string]CapabilityState
@@ -148,6 +151,11 @@ func (i *OllamaIntrospector) InspectModel(ctx context.Context, provider Provider
 }
 
 func mergeRuntimeCapabilities(info *RuntimeModelInfo, runtime RuntimeModelInfo) {
+	if imageInput := runtime.ImageInput; imageInput != "" {
+		info.ImageInput = imageInput
+	} else if imageInput := ImageInputEvidence(runtime.Capabilities, runtime.Raw); imageInput != "" {
+		info.ImageInput = imageInput
+	}
 	info.Capabilities = appendUniqueCapabilities(info.Capabilities, runtime.Capabilities)
 	runtimeEvidence := reduceCapabilityEvidence(runtime.Capabilities, runtime.CapabilityEvidence)
 	if len(runtimeEvidence) == 0 {

@@ -14,7 +14,7 @@ func TestResultIdentityUpdateIsPureAndPreservesTaskState(t *testing.T) {
 	m.tasks = []*team.TodoItem{item}
 	m.width = 40
 	id := "res-" + strings.Repeat("a", 64)
-	updated, _ := m.Update(TaskResultIdentityMsg{TodoID: "1", ResultID: id, Team: "review"})
+	updated, _ := m.Update(TaskResultIdentityMsg{TodoID: "1", ResultID: id, Team: "review", ImageCount: 1})
 	next := updated.(Model)
 	if len(m.resultIdentities) != 0 {
 		t.Fatal("Update mutated prior model identity map")
@@ -32,6 +32,9 @@ func TestResultIdentityUpdateIsPureAndPreservesTaskState(t *testing.T) {
 	header := next.renderDetailHeader(item)
 	if !strings.Contains(header, "Result ID:") || !strings.Contains(header, "review") || !strings.Contains(header, "hufu results show") {
 		t.Fatalf("missing result reference: %s", header)
+	}
+	if !strings.Contains(header, "hufu results images") {
+		t.Fatal("image result has no export/query command")
 	}
 }
 

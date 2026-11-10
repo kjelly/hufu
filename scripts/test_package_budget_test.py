@@ -20,18 +20,31 @@ class PackageBudgetTests(unittest.TestCase):
         workflow = (SCRIPT.parents[1] / '.github/workflows/ci.yml').read_text()
         test_job = workflow.split('\n  test:\n', 1)[1].split('\n  integration:\n', 1)[0]
         integration = workflow.split('\n  integration:\n', 1)[1].split('\n  build:\n', 1)[0]
+        vet_job = workflow.split('\n  vet:\n', 1)[1].split('\n  test:\n', 1)[0]
+        self.assertIn('run: mise exec -- go mod tidy -diff', vet_job)
+        self.assertNotIn('|| true', vet_job)
+        self.assertNotIn('Only the known x/sys', vet_job)
         self.assertIn('scope: team\n            package-timeout: 30m\n            job-timeout: 40', test_job)
         self.assertIn('scope: improver\n            package-timeout: 30m\n            job-timeout: 40', test_job)
         self.assertEqual(test_job.count('package-timeout: 20m'), 2)
         self.assertIn('timeout-minutes: ${{ matrix.job-timeout }}', test_job)
-        self.assertIn('-layer short -scope "$TEST_SCOPE" -- -race -json -timeout "$PACKAGE_TIMEOUT"', test_job)
+        self.assertEqual(test_job.count('scope: team\n'), 3)
+        self.assertEqual(test_job.count('shard-count: 3'), 3)
+        for index in range(3):
+            self.assertIn(f'partition: team-{index}\n            shard-index: {index}\n            shard-count: 3', test_job)
+        self.assertIn('TEST_SHARD_INDEX: ${{ matrix.shard-index }}', test_job)
+        self.assertIn('TEST_SHARD_COUNT: ${{ matrix.shard-count }}', test_job)
+        self.assertIn('name: short-${{ matrix.partition }}', test_job)
+        self.assertIn('.cache/go-race-${{ matrix.partition }}', test_job)
+        self.assertIn('-shard-count "$TEST_SHARD_COUNT" -list > work/ci-tests/shard-inventory.json', test_job)
+        self.assertIn('-layer short -scope "$TEST_SCOPE" -shard-index "$TEST_SHARD_INDEX" -shard-count "$TEST_SHARD_COUNT" -- -race -json -timeout "$PACKAGE_TIMEOUT"', test_job)
         self.assertIn('-layer integration -- -race -json -timeout "$PACKAGE_TIMEOUT"', integration)
         for job in [test_job, integration]:
             self.assertIn('if: always()\n        env:\n          GO_CACHE_HIT:', job)
             self.assertIn('scripts/test-package-budget.py --timeout "$PACKAGE_TIMEOUT"', job)
             self.assertIn('path: work/ci-tests/', job)
         self.assertIn('CGO_ENABLED=0 go test ./... ./.agent-teams/hufu-dev/diagnostic-pilot/...', workflow)
-        self.assertIn('needs: [lint, vet, test, integration, build, cgo-free, docs, eval-core]', workflow)
+        self.assertIn('needs: [lint, vet, test, integration, build, cgo-free, docs, eval-core, contracts]', workflow)
 
     def test_package_elapsed_not_sum_of_test_or_command_elapsed(self):
         events = [
@@ -79,6 +92,55 @@ class PackageBudgetTests(unittest.TestCase):
         for value in ['0s', '-1m', '30', '20mgarbage', '']:
             with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
                 budget.timeout_seconds(value)
+
+    def test_test_timings_rank_parents_without_double_counting_subtests(self):
+        events = [
+            {'Action': 'run', 'Package': 'p', 'Test': 'TestSlow'},
+            {'Action': 'pass', 'Package': 'p', 'Test': 'TestSlow/child', 'Elapsed': 4},
+            {'Action': 'fail', 'Package': 'p', 'Test': 'TestSlow', 'Elapsed': 6},
+            {'Action': 'run', 'Package': 'p', 'Test': 'TestSlow'},
+            {'Action': 'pass', 'Package': 'p', 'Test': 'TestSlow', 'Elapsed': 4},
+            {'Action': 'skip', 'Package': 'p', 'Test': 'TestSkipped', 'Elapsed': 0},
+            {'Action': 'run', 'Package': 'p', 'Test': 'TestInterrupted'},
+            {'Action': 'pass', 'Package': 'p', 'Elapsed': 12},
+        ]
+        samples = {}
+        packages, malformed = budget.packages_from_jsonl(map(json.dumps, events), 1200, samples)
+        rows = budget.test_timings(samples, {'tests': [
+            {'package': 'p', 'test': 'TestSlow', 'elapsed_seconds': 4},
+            {'package': 'p', 'test': 'TestSkipped', 'elapsed_seconds': 0},
+        ]})
+        self.assertEqual(malformed, 0)
+        self.assertEqual(packages[0]['elapsed_seconds'], 12)
+        self.assertEqual([row['test'] for row in rows], ['TestSlow', 'TestSkipped', 'TestInterrupted'])
+        self.assertEqual(rows[0]['status'], 'fail')
+        self.assertEqual(rows[0]['runs'], 2)
+        self.assertEqual(rows[0]['elapsed_seconds'], 5)
+        self.assertEqual(rows[0]['delta_seconds'], 1)
+        self.assertEqual(rows[0]['delta_ratio'], 0.25)
+        self.assertIsNone(rows[1]['delta_ratio'])
+        self.assertIsNone(rows[2]['elapsed_seconds'])
+        summary = budget.render_tests(rows, 1)
+        self.assertIn('TestSlow', summary)
+        self.assertIn('+1.000', summary)
+        self.assertNotIn('TestSkipped', summary)
+
+    def test_cli_compares_an_explicit_baseline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            event = {'Action': 'pass', 'Package': 'p', 'Test': 'TestRun', 'Elapsed': 2}
+            (root / 'tests.jsonl').write_text(json.dumps(event) + '\n')
+            baseline = root / 'previous.json'
+            baseline.write_text(json.dumps({'tests': [
+                {'package': 'p', 'test': 'TestRun', 'elapsed_seconds': 1}]}))
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), '--timeout', '30m', '--evidence', str(root),
+                 '--summary', str(root / 'summary'), '--baseline', str(baseline)],
+                capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads((root / 'package-budget.json').read_text())
+            self.assertEqual(report['tests'][0]['delta_seconds'], 1)
+            self.assertIn('Slowest top-level tests', (root / 'summary').read_text())
 
     def test_cli_preserves_summary_and_creates_evidence_even_before_discovery(self):
         for has_results in [False, True]:

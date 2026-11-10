@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"charm.land/fantasy/providers/openai"
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/decisionrt"
@@ -677,5 +678,23 @@ func TestParseReviewToolCallResponse(t *testing.T) {
 				t.Errorf("Reason = %q, want %q", result.Reason, tt.wantReason)
 			}
 		})
+	}
+}
+
+type protocolProfileModel struct{ fantasy.LanguageModel }
+
+func (protocolProfileModel) APIProtocol() agent.APIProtocolResolution {
+	resolution, _ := agent.ResolveAPIProtocol("responses")
+	return resolution
+}
+
+func TestProfilePreservesResponsesOptions(t *testing.T) {
+	old := &openai.ResponsesProviderOptions{Store: new(false), ReasoningSummary: new("auto")}
+	call := fantasy.AgentCall{ProviderOptions: fantasy.ProviderOptions{openai.Name: old}}
+	profile := Profile{ReasoningEffort: "medium"}
+	profile.apply(&call, protocolProfileModel{})
+	options, ok := call.ProviderOptions[openai.Name].(*openai.ResponsesProviderOptions)
+	if !ok || options == old || old.ReasoningEffort != nil || options.ReasoningEffort == nil || *options.ReasoningEffort != openai.ReasoningEffortMedium || options.ReasoningSummary != old.ReasoningSummary || options.Store != old.Store {
+		t.Fatalf("options=%+v original=%+v", options, old)
 	}
 }

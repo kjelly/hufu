@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/conversation"
+	"github.com/kjelly/hufu/internal/media"
 )
 
 func newFakeChatAdapter(coord *fakeChatCoordinator) *chatRuntimeAdapter {
@@ -15,6 +16,44 @@ func newFakeChatAdapter(coord *fakeChatCoordinator) *chatRuntimeAdapter {
 		return fakeChatTurnDeps(coord, &persisted)
 	}
 	return adapter
+}
+
+func TestChatRuntimeControlsReleasePendingOnlyAfterSuccessfulChange(t *testing.T) {
+	for _, operation := range []string{"reset", "team"} {
+		t.Run(operation, func(t *testing.T) {
+			path, stage := chatImageFixture(t)
+			adapter := newFakeChatAdapter(&fakeChatCoordinator{})
+			adapter.stageImage = stage
+			t.Cleanup(func() { adapter.seq.images.close() })
+			if _, err := adapter.ManageImageInputs(t.Context(), conversation.ImageCommand{Operation: conversation.ImageAdd, Path: path}); err != nil {
+				t.Fatal(err)
+			}
+			staged := adapter.seq.images.images[0].image
+			failure := errors.New("control failed")
+			var controlFailure error = failure
+			adapter.resetHook = func(context.Context, *teamContext) error { return controlFailure }
+			adapter.switchHook = func(_ context.Context, _ *teamContext, name string) (*teamContext, error) {
+				return &teamContext{teamName: name}, controlFailure
+			}
+			apply := func() error {
+				if operation == "reset" {
+					return adapter.ResetContext(t.Context())
+				}
+				return adapter.SwitchTeam(t.Context(), "beta")
+			}
+			if err := apply(); !errors.Is(err, failure) || adapter.PendingImageCount() != 1 {
+				t.Fatal("failed control consumed pending input", err)
+			}
+			if err := staged.WithBytes(t.Context(), func([]byte, media.Ref) error { return nil }); err != nil {
+				t.Fatal("failed control released bytes", err)
+			}
+			controlFailure = nil
+			if err := apply(); err != nil || adapter.PendingImageCount() != 0 {
+				t.Fatal("successful control retained pending input", err)
+			}
+			requireChatMediaCode(t, staged.WithBytes(t.Context(), func([]byte, media.Ref) error { return nil }), media.InputMissing)
+		})
+	}
 }
 
 var _ conversation.RuntimePort = (*chatRuntimeAdapter)(nil)

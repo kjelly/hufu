@@ -5,7 +5,8 @@ import (
 )
 
 type PromptReader struct {
-	instance *ergoreadline.Instance
+	instance      *ergoreadline.Instance
+	historyFilter func(string) bool
 }
 
 // AutoCompleter is implemented by callers that want to provide tab
@@ -24,6 +25,12 @@ func NewPromptReader(historyFile string) (*PromptReader, error) {
 // NewPromptReaderWithCompleter creates a PromptReader with optional tab
 // completion. Pass nil for completer to disable.
 func NewPromptReaderWithCompleter(historyFile string, completer AutoCompleter) (*PromptReader, error) {
+	return NewPromptReaderWithHistoryFilter(historyFile, completer, nil)
+}
+
+// NewPromptReaderWithHistoryFilter excludes rejected lines from both in-memory
+// and persisted history. The caller still receives the original input.
+func NewPromptReaderWithHistoryFilter(historyFile string, completer AutoCompleter, filter func(string) bool) (*PromptReader, error) {
 	cfg := &ergoreadline.Config{
 		Prompt:          "> ",
 		HistoryFile:     historyFile,
@@ -36,12 +43,19 @@ func NewPromptReaderWithCompleter(historyFile string, completer AutoCompleter) (
 		},
 	}
 
+	return newPromptReaderFromConfig(cfg, filter)
+}
+
+func newPromptReaderFromConfig(cfg *ergoreadline.Config, filter func(string) bool) (*PromptReader, error) {
+	if filter != nil {
+		cfg.DisableAutoSaveHistory = true
+	}
 	instance, err := ergoreadline.NewFromConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	return &PromptReader{instance: instance}, nil
+	return &PromptReader{instance: instance, historyFilter: filter}, nil
 }
 
 func (r *PromptReader) ReadLine(prompt string) (string, error) {
@@ -49,6 +63,11 @@ func (r *PromptReader) ReadLine(prompt string) (string, error) {
 	line, err := r.instance.ReadLine()
 	if err != nil {
 		return "", err
+	}
+	if r.historyFilter != nil && r.historyFilter(line) {
+		// Match readline's ordinary autosave behavior: a history-write failure
+		// does not discard the user's successfully read prompt.
+		_ = r.instance.SaveToHistory(line)
 	}
 	return line, nil
 }

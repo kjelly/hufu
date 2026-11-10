@@ -13,6 +13,7 @@ import (
 	"github.com/kjelly/hufu/internal/decisionrt/control"
 	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/llmtimeout"
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/semantic"
 	"github.com/kjelly/hufu/internal/yamlutil"
@@ -39,6 +40,9 @@ type ModelEntry struct {
 type ProviderConfig struct {
 	ProviderURL    string `yaml:"provider-url"`
 	ProviderAPIKey string `yaml:"provider-api-key"`
+	// APIProtocol is independent of metadata introspection. Empty preserves
+	// the legacy chat-completions transport and its durable identity.
+	APIProtocol string `yaml:"api-protocol,omitempty" json:"api_protocol,omitempty"`
 	// IntrospectionType selects the provider-owned runtime metadata adapter.
 	// Named providers default to openai-compatible when omitted; the local
 	// provider retains its historical Ollama adapter compatibility.
@@ -62,6 +66,7 @@ type BackendConfig struct {
 	ProviderAPIKey string   `yaml:"provider-api-key"`
 	Command        []string `yaml:"command"`
 	Protocol       string   `yaml:"protocol"`
+	APIProtocol    string   `yaml:"api-protocol,omitempty" json:"api_protocol,omitempty"`
 	StartupTimeout string   `yaml:"startup-timeout"`
 	InterruptGrace string   `yaml:"interrupt-grace"`
 	ShutdownGrace  string   `yaml:"shutdown-grace"`
@@ -111,6 +116,8 @@ func (b BackendConfig) Has(field string) bool {
 		return b.Command != nil
 	case "protocol":
 		return b.Protocol != ""
+	case "api-protocol":
+		return b.APIProtocol != ""
 	case "startup-timeout":
 		return b.StartupTimeout != ""
 	case "interrupt-grace":
@@ -132,6 +139,9 @@ func (b BackendConfig) Has(field string) bool {
 // selection. An omitted type is valid because named providers have an
 // explicit openai-compatible default.
 func (p ProviderConfig) Validate() error {
+	if _, err := NormalizeAPIProtocol(p.APIProtocol); err != nil {
+		return err
+	}
 	switch strings.ToLower(strings.TrimSpace(p.IntrospectionType)) {
 	case "", "ollama", "openai-compatible":
 		return nil
@@ -141,6 +151,9 @@ func (p ProviderConfig) Validate() error {
 }
 
 type Config struct {
+	Media                 *media.Policy `yaml:"media"`
+	mediaPolicies         []*media.Policy
+	mediaPolicyError      error
 	ProviderURL           string                    `yaml:"provider-url"`
 	ProviderAPIKey        string                    `yaml:"provider-api-key"`
 	Providers             map[string]ProviderConfig `yaml:"providers"`
@@ -255,6 +268,9 @@ func (c *Config) mergeFromFile(path string) {
 	}
 	var fileCfg Config
 	if err := yaml.Unmarshal(data, &fileCfg); err != nil {
+		if c.Media != nil || fileCfg.Media != nil {
+			c.mediaPolicyError = err
+		}
 		fmt.Fprintf(os.Stderr, "warning: failed to parse %s: %v\n", path, err)
 		return
 	}
@@ -307,6 +323,10 @@ func (c *Config) mergeFromFile(path string) {
 }
 
 func (c *Config) mergeScalarFields(fileCfg *Config) {
+	if fileCfg.Media != nil {
+		c.Media = fileCfg.Media.Clone()
+		c.mediaPolicies = append(c.mediaPolicies, fileCfg.Media.Clone())
+	}
 	for _, field := range []struct{ dst, src *string }{
 		{&c.ProviderURL, &fileCfg.ProviderURL}, {&c.ProviderAPIKey, &fileCfg.ProviderAPIKey},
 		{&c.Model, &fileCfg.Model},
@@ -405,6 +425,9 @@ func (c *Config) mergeProviders(providers map[string]ProviderConfig) {
 		}
 		if v.IntrospectionType != "" {
 			existing.IntrospectionType = v.IntrospectionType
+		}
+		if strings.TrimSpace(v.APIProtocol) != "" {
+			existing.APIProtocol = v.APIProtocol
 		}
 		c.Providers[k] = existing
 	}
@@ -647,6 +670,9 @@ func MergeProviderConfigs(hufuProviders, teamProviders map[string]ProviderConfig
 		}
 		if v.IntrospectionType != "" {
 			existing.IntrospectionType = v.IntrospectionType
+		}
+		if strings.TrimSpace(v.APIProtocol) != "" {
+			existing.APIProtocol = v.APIProtocol
 		}
 		result[k] = existing
 	}

@@ -133,6 +133,16 @@ func validateResultEvidenceInputs(value any, spec *resultEvidenceInputsSpec, ids
 }
 
 func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *ResultPayload) error {
+	return c.validateEvidenceInputBindings(todoID, payload, false)
+}
+
+// Accepted results retain their recorded decision provenance across forks.
+// New submissions must still resolve decisions only in the current scope.
+func (c *Coordinator) validateAcceptedEvidenceInputs(todoID string, payload *ResultPayload) error {
+	return c.validateEvidenceInputBindings(todoID, payload, true)
+}
+
+func (c *Coordinator) validateEvidenceInputBindings(todoID string, payload *ResultPayload, accepted bool) error {
 	item := c.todoItemByID(todoID)
 	if item == nil || item.ResultContract == nil {
 		return nil
@@ -161,7 +171,7 @@ func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *Re
 	if err := validateResultRuntimeInputs(value, compiled.runtimeInputs, runtimeInputs); err != nil {
 		return err
 	}
-	results := c.dependencyResultsForTask(todoID)
+	results := c.dependencyResultsForBinding(todoID)
 	if err := c.validateDependencyPayloads(results); err != nil {
 		return err
 	}
@@ -169,7 +179,11 @@ func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *Re
 	if err != nil {
 		return err
 	}
-	plans, err = c.resolveDecisionCollectionPlans(context.Background(), todoID, plans)
+	if accepted {
+		plans, err = c.resolveDecisionPlans(context.Background(), todoID, plans, payload.CollectionBindings)
+	} else {
+		plans, err = c.resolveDecisionCollectionPlans(context.Background(), todoID, plans)
+	}
 	if err != nil {
 		return err
 	}
@@ -178,6 +192,9 @@ func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *Re
 	}
 	if err := validateResultEvidenceInputs(value, compiled.evidenceInputs, item.EvidenceFrom, results); err != nil {
 		return err
+	}
+	if compiled.evidenceReferences != nil {
+		results = c.dependencyResultsForTask(todoID)
 	}
 	return validateResultEvidenceReferences(value, compiled.evidenceReferences, item.EvidenceFrom, results, nil)
 }

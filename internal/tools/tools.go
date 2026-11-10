@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/term"
 
 	"github.com/kjelly/hufu/internal/audit"
+	"github.com/kjelly/hufu/internal/waitbudget"
 )
 
 var askUserActive atomic.Int32
@@ -102,46 +103,68 @@ func NotifyAskUserDone() {
 }
 
 func SetAskUserActive(active bool) {
-	interactiveWait.mu.Lock()
-	if active {
-		askUserActive.Store(1)
-		if interactiveWait.start.IsZero() {
-			interactiveWait.start = time.Now()
-		}
-	} else {
-		askUserActive.Store(0)
-		if !interactiveWait.start.IsZero() {
-			interactiveWait.total += time.Since(interactiveWait.start)
-			interactiveWait.start = time.Time{}
-		}
-	}
-	interactiveWait.mu.Unlock()
+	trackInteractiveWait(active)
 	if !active {
 		NotifyAskUserDone()
 	}
 }
 
+// trackInteractiveWait accounts for overlapping CLI/TUI prompts once. Only
+// terminal-owning callers use SetAskUserActive's terminal restoration hook.
+func trackInteractiveWait(active bool) {
+	interactiveWait.mu.Lock()
+	defer interactiveWait.mu.Unlock()
+	count := askUserActive.Load()
+	if active {
+		askUserActive.Store(count + 1)
+		if count == 0 {
+			for ctx := range interactiveWait.budgets {
+				interactiveWait.budgets[ctx] = waitbudget.Pause(ctx)
+			}
+		}
+		if interactiveWait.start.IsZero() {
+			interactiveWait.start = time.Now()
+		}
+	} else {
+		askUserActive.Store(max(count-1, 0))
+		if count == 1 {
+			for ctx, resume := range interactiveWait.budgets {
+				if resume != nil {
+					resume()
+				}
+				interactiveWait.budgets[ctx] = nil
+			}
+		}
+		if count <= 1 && !interactiveWait.start.IsZero() {
+			interactiveWait.total += time.Since(interactiveWait.start)
+			interactiveWait.start = time.Time{}
+		}
+	}
+}
+
 func IsAskUserActive() bool {
-	return askUserActive.Load() == 1
+	return askUserActive.Load() > 0
 }
 
 // interactiveWait accumulates time this process has spent blocked on
 // interactive prompts (ask_user, path consent). total is the completed wait
 // and start is the in-flight prompt's start, or zero when none is active;
-// prompts are serialized on StdinMu so at most one runs at a time. The mutex
+// CLI prompts are serialized on StdinMu; overlapping TUI requests are counted
+// until the last request returns. The mutex
 // keeps both fields one snapshot: reading them independently could briefly
 // drop a finished prompt's wait and expire a compensated deadline. time.Time
 // keeps the monotonic clock reading, so wall-clock jumps do not skew it.
 var interactiveWait struct {
-	mu    sync.Mutex
-	start time.Time
-	total time.Duration
+	mu      sync.Mutex
+	start   time.Time
+	total   time.Duration
+	budgets map[context.Context]func()
 }
 
 // InteractiveWaitTotal returns the cumulative time spent waiting on
-// interactive prompts, including the currently active one. Task deadlines
-// take the delta of this value so human response time does not count
-// against an agent's time budget (see WithInteractiveAwareTimeout).
+// interactive prompts, including the currently active one. Working-time
+// deadlines use the same pause clock as provider waits to avoid double-counting
+// overlaps (see WithInteractiveAwareTimeout).
 func InteractiveWaitTotal() time.Duration {
 	interactiveWait.mu.Lock()
 	defer interactiveWait.mu.Unlock()
@@ -179,6 +202,8 @@ func TryAskUserTUI(ctx context.Context, question, qtype string, opts []AskUserTU
 	if onAskUserTUI == nil {
 		return "", false
 	}
+	trackInteractiveWait(true)
+	defer trackInteractiveWait(false)
 	return onAskUserTUI(ctx, question, qtype, opts, allowAny)
 }
 

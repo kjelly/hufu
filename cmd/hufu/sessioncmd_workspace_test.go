@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
@@ -80,13 +82,41 @@ func (f versionedCLIFixture) read(t *testing.T, rel string) string {
 func runCLI(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	sessionWorkspace, sessionJSON, sessionMetadataOnly, sessionForkName = "", false, false, ""
+	sessionNewTask = false
 	var runErr error
 	out := captureStdout(t, func() {
 		root := newRootCommand()
+		// Subcommands are package globals, so Cobra's lazily added help flag
+		// survives a previous invocation even though this root is fresh.
+		var resetHelp func(*cobra.Command)
+		resetHelp = func(command *cobra.Command) {
+			if flag := command.Flags().Lookup("help"); flag != nil {
+				if err := flag.Value.Set("false"); err != nil {
+					t.Fatal(err)
+				}
+				flag.Changed = false
+			}
+			for _, child := range command.Commands() {
+				resetHelp(child)
+			}
+		}
+		resetHelp(root)
 		root.SetArgs(args)
 		runErr = root.Execute()
 	})
 	return out, runErr
+}
+
+func TestCLIInvocationsDoNotRetainHelp(t *testing.T) {
+	previous := opts
+	t.Cleanup(func() { opts = previous })
+	opts = runOptions{}
+	if _, err := runCLI(t, "resume", "--help"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, "resume", "--workspace", filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("a prior help invocation suppressed resume validation")
+	}
 }
 
 func TestCLISessionWorkspaceVersioningEndToEnd(t *testing.T) {
@@ -101,7 +131,7 @@ func TestCLISessionWorkspaceVersioningEndToEnd(t *testing.T) {
 	if err = json.Unmarshal([]byte(out), &fork); err != nil {
 		t.Fatalf("fork output %q: %v", out, err)
 	}
-	if fork.BranchID != "exp" || fork.WorkspaceSnapshotID == "" || fork.MetadataOnly || fork.WorkspaceState != "available" {
+	if fork.BranchID != "exp" || fork.WorkspaceSnapshotID == "" || fork.MetadataOnly || fork.WorkspaceState != "available" || fork.SnapshotEventID == "" || fork.SnapshotReason != string(versionstore.SnapshotFork) || fork.CaptureState != "known" || fork.CaptureEventID == "" {
 		t.Fatalf("fork = %#v", fork)
 	}
 

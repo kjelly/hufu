@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+
+	"github.com/kjelly/hufu/internal/media"
 )
 
 func validateResultCollectionEvent(event RunEvent) error {
@@ -44,6 +46,9 @@ func validateResultCollectionEvent(event RunEvent) error {
 // returned event is compared because Append may acknowledge a competing writer's
 // idempotent operation instead of the supplied payload.
 func (c *Coordinator) appendCollectionCheckpointLocked(ctx context.Context, item *TodoItem, original *ExecutionReceipt, checkpoint *ResultCollectionCheckpoint, result *TaskResult) error {
+	if original == nil || original.MediaInputDigest != item.MediaInputDigest {
+		return media.Reject(media.BindingConflict, "collection checkpoint differs from canonical image input")
+	}
 	if err := validateResultCollectionCheckpoint(checkpoint); err != nil {
 		return err
 	}

@@ -129,14 +129,46 @@ For runtime changes, add or update tests covering the applicable layers:
 Use existing fixtures and test seams. Do not make Hufu tests depend on a Pilot
 checkout, external binary, live provider, or consumer-specific fixture.
 
+For result contracts, exercise the complete producer → inventory → consumer →
+verification/acceptance path offline, with empty and mixed source schemas and a
+rejected submission followed by a bounded field repair. Test local and external
+submissions, runtime-owned override rejection, original receipt preservation,
+and canonical replay. Run `mise run test-contracts` after changing these surfaces.
+
+For contract recovery, keep the parent immutable. Bind a preview to the exact
+source head and old/new policies; revalidate retained payload bytes, invalidate
+impacted consumers and reopen verification/acceptance. Refuse changes in scope,
+execution authority and unsafe replay. Test stale plans, partial publication,
+new-process replay and ordinary resume after publication. A successful branch
+creation is not evidence that the resumed task or acceptance passed.
+Exercise receipt-bound worksets under a different invocation ID after publication:
+build the worker's artifact scope, read its assigned CAS input, and verify the
+workset source and completion. Preserve original artifact occurrence identities;
+reject substituted results, inputs, receipts and unrelated branch sources.
+Include native output fact/result bindings, acceptance assertions and offline
+audit replay; they must use the same admitted origin runs as artifact access.
+Native adapters that validate receipt run IDs also need the runtime-owned
+`HUFU_RECOVERED_TASK_RUNS` grant. Test its propagation, rejection without a grant,
+and replacement of inherited values instead of weakening adapter checks.
+Include actions bound to frozen run inputs: compare the materialized occurrence
+contract, preserve its payload and receipts, and reject changed input snapshots,
+bindings and payloads. An unbound static-template fixture cannot cover this path.
+Keep normal resume, result-only collection and contract-upgrade policy checks
+consistent. Test unused-backend environment compatibility without replacing the
+original policy hash, and reject environment drift on reachable backends.
+Metadata-only recovery needs explicit operator selection, managed versioning-off
+state with no version history, static goal binding and only read-only source and
+future contracts. Test source immutability, shared files, mode/hash mismatch and
+ordinary child resume; never use it to bypass native workspace protections.
+
 ### 7. Validate and report
 
 Run each required command separately after the change:
 
 ```bash
-go test ./...
-go vet ./...
-golangci-lint run
+mise run test
+mise run vet
+mise run lint
 ```
 
 For integration or infrastructure mutation, run only with explicit

@@ -250,6 +250,8 @@ func (t *TaskTracker) TodoList() *TodoList {
 }
 
 type TodoItem struct {
+	MediaBinding                  *MediaTaskBinding `json:"media_binding,omitempty"`
+	MediaInputDigest              string            `json:"media_input_digest,omitempty"`
 	ID                            string
 	Phase                         Phase                      `json:"phase,omitempty"`
 	Action                        *Action                    `json:"action,omitempty"`
@@ -390,7 +392,10 @@ type TodoItem struct {
 
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization,omitempty"`
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot,omitempty"`
+	ContractRevalidation     *ContractRevalidation             `json:"contract_revalidation,omitempty"`
 	ResultContract           *ResultContractRef                `json:"result_contract,omitempty"`
+	HistoricalResultBinding  *HistoricalResultTaskBinding      `json:"historical_result_binding,omitempty"`
+	DependencyResultView     *DependencyResultViewSpec         `json:"dependency_result_view,omitempty"`
 	WorkerWorkspace          *WorkerWorkspacePolicy            `json:"worker_workspace,omitempty"`
 	ExecutionRoute           *ExecutionRouteBinding            `json:"execution_route,omitempty"`
 	CatalogAction            *CatalogActionBinding             `json:"catalog_action,omitempty"`
@@ -450,6 +455,8 @@ func (tl *TodoList) RunID() string {
 
 // TodoSpec describes a todo item to be created via AddBatch.
 type TodoSpec struct {
+	MediaBinding                  *MediaTaskBinding
+	MediaInputDigest              string
 	PlanTaskID                    string
 	PlanFirst                     bool
 	PlanID                        string
@@ -529,6 +536,8 @@ type TodoSpec struct {
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot
 	ResultContract           *ResultContractRef
+	HistoricalResultBinding  *HistoricalResultTaskBinding `json:"-"`
+	DependencyResultView     *DependencyResultViewSpec    `json:"dependency_result_view,omitempty"`
 	WorkerWorkspace          *WorkerWorkspacePolicy
 	ExecutionRoute           *ExecutionRouteBinding
 	CatalogAction            *CatalogActionBinding
@@ -574,15 +583,16 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		providerBinding = nil
 	}
 	return &TodoItem{
-		ID:                            id,
-		PlanTaskID:                    item.PlanTaskID,
-		PlanFirst:                     item.PlanFirst,
-		PlanID:                        item.PlanID,
-		Phase:                         item.Phase,
-		Action:                        action,
-		ActionInputBindings:           actionInputBindings,
-		RunInputSnapshotID:            item.RunInputSnapshotID,
-		RunInputSnapshotHash:          item.RunInputSnapshotHash,
+		ID:                   id,
+		PlanTaskID:           item.PlanTaskID,
+		PlanFirst:            item.PlanFirst,
+		PlanID:               item.PlanID,
+		Phase:                item.Phase,
+		Action:               action,
+		ActionInputBindings:  actionInputBindings,
+		RunInputSnapshotID:   item.RunInputSnapshotID,
+		RunInputSnapshotHash: item.RunInputSnapshotHash,
+		MediaBinding:         item.MediaBinding.Clone(), MediaInputDigest: item.MediaInputDigest,
 		MaterializedActionPayloadHash: item.MaterializedActionPayloadHash,
 		BoundInputs:                   cloneStringMap(item.BoundInputs),
 		InvariantVerification:         item.InvariantVerification,
@@ -613,6 +623,8 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		ResultContract:                item.ResultContract.clone(),
+		HistoricalResultBinding:       item.HistoricalResultBinding.clone(),
+		DependencyResultView:          item.DependencyResultView.clone(),
 		WorkerWorkspace:               item.WorkerWorkspace.clone(),
 		ExecutionRoute:                item.ExecutionRoute.clone(),
 		CatalogAction:                 item.CatalogAction.clone(),
@@ -1348,13 +1360,14 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		contextManifests[i] = *cloneContextInjectionManifest(&item.ContextManifests[i])
 	}
 	cloned := &TodoItem{
-		ID:                            item.ID,
-		Phase:                         item.Phase,
-		Action:                        cloneActionPtr(item.Action),
-		ActionProgress:                cloneActionProgress(item.ActionProgress),
-		ActionInputBindings:           append([]ActionInputBinding(nil), item.ActionInputBindings...),
-		RunInputSnapshotID:            item.RunInputSnapshotID,
-		RunInputSnapshotHash:          item.RunInputSnapshotHash,
+		ID:                   item.ID,
+		Phase:                item.Phase,
+		Action:               cloneActionPtr(item.Action),
+		ActionProgress:       cloneActionProgress(item.ActionProgress),
+		ActionInputBindings:  append([]ActionInputBinding(nil), item.ActionInputBindings...),
+		RunInputSnapshotID:   item.RunInputSnapshotID,
+		RunInputSnapshotHash: item.RunInputSnapshotHash,
+		MediaBinding:         item.MediaBinding.Clone(), MediaInputDigest: item.MediaInputDigest,
 		MaterializedActionPayloadHash: item.MaterializedActionPayloadHash,
 		BoundInputs:                   cloneStringMap(item.BoundInputs),
 		PlanTaskID:                    item.PlanTaskID,
@@ -1400,7 +1413,10 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		WorksetReceipt:                cloneWorksetReceipt(item.WorksetReceipt),
 		DynamicToolAuthorization:      cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		ResourceScopeSnapshot:         cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
+		ContractRevalidation:          cloneContractRevalidation(item.ContractRevalidation),
 		ResultContract:                item.ResultContract.clone(),
+		HistoricalResultBinding:       item.HistoricalResultBinding.clone(),
+		DependencyResultView:          item.DependencyResultView.clone(),
 		WorkerWorkspace:               item.WorkerWorkspace.clone(),
 		ExecutionRoute:                item.ExecutionRoute.clone(),
 		CatalogAction:                 item.CatalogAction.clone(),
@@ -1584,6 +1600,8 @@ func restoreTodoOccurrenceContract(dst, src *TodoItem) {
 	dst.DynamicToolAuthorization = cloneDynamicToolAuthorizationSnapshot(src.DynamicToolAuthorization)
 	dst.ResourceScopeSnapshot = cloneTaskResourceScopeSnapshot(src.ResourceScopeSnapshot)
 	dst.ResultContract = src.ResultContract.clone()
+	dst.HistoricalResultBinding = src.HistoricalResultBinding.clone()
+	dst.DependencyResultView = src.DependencyResultView.clone()
 	dst.WorkerWorkspace = src.WorkerWorkspace.clone()
 	dst.ExecutionRoute = src.ExecutionRoute.clone()
 	dst.CatalogAction = src.CatalogAction.clone()
@@ -1731,6 +1749,11 @@ func (tl *TodoList) SetExecutionReceipt(id string, receipt *ExecutionReceipt) er
 				ti.ExecutionReceipt = nil
 			} else {
 				copyR := cloneExecutionReceipt(receipt)
+				if copyR.MediaInputDigest != "" && copyR.MediaInputDigest != ti.MediaInputDigest {
+					tl.mu.Unlock()
+					return fmt.Errorf("receipt media input digest conflicts with task")
+				}
+				copyR.MediaInputDigest = ti.MediaInputDigest
 				if err := normalizeExecutionReceiptSemantic(&copyR); err != nil {
 					tl.mu.Unlock()
 					return err
@@ -1761,21 +1784,10 @@ func (tl *TodoList) SetExecutionReceipt(id string, receipt *ExecutionReceipt) er
 				preserveResultCollection(&copyR, ti.ExecutionReceipt)
 				ti.ExecutionReceipt = &copyR
 
-				// A repair updates the durable record for the same execution
-				// attempt. Keep one receipt per attempt rather than appending a
-				// second receipt when provenance is completed after repair.
-				replaced := false
-				for i := range ti.ExecutionReceipts {
-					existing := &ti.ExecutionReceipts[i]
-					if existing.RunID == copyR.RunID && existing.TaskID == copyR.TaskID && existing.Attempt == copyR.Attempt && existing.ModelExecutionID == copyR.ModelExecutionID {
-						ti.ExecutionReceipts[i] = copyR
-						replaced = true
-						break
-					}
-				}
-				if !replaced {
-					ti.ExecutionReceipts = append(ti.ExecutionReceipts, copyR)
-				}
+				// Use replay's identity and chronological order. Fanout leaves
+				// can complete in the reverse of their start order; that must not
+				// make the next startup reject this checkpoint's evidence.
+				ti.ExecutionReceipts = appendExecutionReceipt(ti.ExecutionReceipts, copyR)
 			}
 			updated = true
 			break
@@ -1801,6 +1813,9 @@ func (tl *TodoList) SetExecutionReceipt(id string, receipt *ExecutionReceipt) er
 // no-op. RunID is required: after crash-resume a todo can carry receipts from
 // a prior run with the same attempt number, so matching on attempt alone
 // would misattribute evidence to the wrong run.
+// When the current receipt matches, its model execution identity also selects
+// history: DAG retries restart the work counter and must not rewrite the prior
+// lifecycle's verification evidence.
 func (tl *TodoList) UpdateReceiptVerifyResult(runID, taskID string, attempt int, vr *VerificationResult) {
 	if tl == nil || taskID == "" || attempt < 1 || vr == nil {
 		return
@@ -1812,12 +1827,16 @@ func (tl *TodoList) UpdateReceiptVerifyResult(runID, taskID string, attempt int,
 		}
 		copyVR := *vr
 		copyVR.Spec = cloneVerificationSpecPtr(vr.Spec)
+		var active *ExecutionReceipt
+		if ti.ExecutionReceipt != nil && ti.ExecutionReceipt.RunID == runID && ti.ExecutionReceipt.Attempt == attempt {
+			active = ti.ExecutionReceipt
+		}
 		// Update the durable per-attempt history. Match on (RunID, Attempt)
 		// so a crash-resumed run with a fresh executionRunID does not overwrite
 		// a prior run's receipt that happens to share the attempt number.
 		for i := range ti.ExecutionReceipts {
 			r := &ti.ExecutionReceipts[i]
-			if r.Attempt == attempt && r.RunID == runID {
+			if r.Attempt == attempt && r.RunID == runID && (active == nil || sameExecutionReceiptProjection(*r, *active)) {
 				r.VerifyResult = &copyVR
 				break
 			}
@@ -1864,6 +1883,9 @@ func cloneExecutionReceipt(receipt *ExecutionReceipt) ExecutionReceipt {
 	}
 	if receipt.SubmittedResult != nil {
 		copyR.SubmittedResult = cloneTaskResult(receipt.SubmittedResult)
+	}
+	if receipt.AcceptedResult != nil {
+		copyR.AcceptedResult = cloneTaskResult(receipt.AcceptedResult)
 	}
 	if receipt.RepairProvenance != nil {
 		copyRP := *receipt.RepairProvenance

@@ -30,6 +30,14 @@ func (c *Coordinator) canonicalizeTaskOccurrence(task TaskDef, def *agent.AgentD
 	if task.CatalogAction == nil {
 		task.ResultContract = c.admittedResultContract(task, def)
 	}
+	view, viewErr := task.DependencyResultView.normalized()
+	if viewErr != nil {
+		return task, viewErr
+	}
+	task.DependencyResultView = view
+	if err := validateDependencyResultViewTask(task, def, true); err != nil {
+		return task, err
+	}
 	legacyProvider := strings.TrimSpace(task.SubagentProvider)
 	if legacyProvider == "" && def != nil {
 		legacyProvider = strings.TrimSpace(def.SubagentProvider)
@@ -74,7 +82,7 @@ func (c *Coordinator) canonicalizeTaskOccurrence(task TaskDef, def *agent.AgentD
 		if err != nil {
 			return task, err
 		}
-		if hasResultDecisions(compiled) {
+		if hasResultDecisions(compiled) || runtimeOwnsFilesRead(compiled) {
 			if err := validateResultDecisionCatalog(c.session, def, compiled); err != nil {
 				return task, err
 			}
@@ -88,7 +96,7 @@ func (c *Coordinator) canonicalizeTaskOccurrence(task TaskDef, def *agent.AgentD
 					return task, err
 				}
 				if backend.Kind() != execution.BackendKindLLM {
-					return task, fmt.Errorf("bound decisions require a direct language-model execution target")
+					return task, fmt.Errorf("bound decisions and native observations require a direct language-model execution target")
 				}
 			}
 		}

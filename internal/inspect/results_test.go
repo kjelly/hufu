@@ -1,9 +1,13 @@
 package inspect
 
 import (
+	"bytes"
 	"crypto/sha256"
+	jsonv1 "encoding/json"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +16,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 func appendHistoricalFixture(t *testing.T, store *team.EventStore, event team.RunEvent, payload any) team.RunEvent {
@@ -82,6 +87,63 @@ func TestHistoricalResultsPreserveFollowUpCycleRequest(t *testing.T) {
 		if row.TaskID == "1" && row.OriginalPrompt != "original investigation" {
 			t.Fatalf("previous request overwritten: %#v", row)
 		}
+	}
+}
+
+func TestHistoricalResultsPreserveCanonicalTypedPayloadIdentity(t *testing.T) {
+	workspace, store := newHistoricalFixture(t)
+	const collision = "historical-inspect-runtime-collision-86b3da1f"
+	outputs, outputHash, err := team.CanonicalizeRuntimeOutputs(map[string]any{"receipt": map[string]any{
+		"diagnostic": collision, "count": jsonv1.Number("9007199254740993"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendHistoricalFixture(t, store, team.RunEvent{Type: "task_created", TaskID: "1"}, map[string]any{"id": "1", "agent": "helper", "status": "pending"})
+	data, err := jsonv1.Marshal(map[string]any{"id": "1", "agent": "helper", "status": "done", "retries": 1,
+		"typed_result": &team.TaskResult{TaskID: "1", Agent: "helper", Attempt: 1, Status: team.TaskResultStatusSuccess,
+			Summary: collision, Source: "runtime", RuntimeOutputs: outputs, RuntimeOutputsHash: outputHash}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	durable, err := store.AppendPersisted(team.RunEvent{Type: "task_completed", TaskID: "1", Actor: "helper", Attempt: 2, Payload: data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var terminal map[string]jsontext.Value
+	if err := json.Unmarshal(durable.Payload, &terminal); err != nil {
+		t.Fatal(err)
+	}
+	payloadHash := sha256.Sum256(terminal["typed_result"])
+	utils.RedactSecrets("api_token: " + collision)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(runtimestore.Path(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := LoadHistoricalResults(t.Context(), HistoricalResultScope{Workspace: workspace, Team: "review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Results) != 1 {
+		t.Fatalf("lost typed result: %+v", snapshot.Results)
+	}
+	row := snapshot.Results[0]
+	if row.PayloadSHA256 != fmt.Sprintf("%x", payloadHash) || row.SourceHash != durable.Hash || row.Attempt != 2 || row.TypedResult.Attempt != 1 {
+		t.Fatalf("canonical source identity was replaced by its redacted view: %+v", row)
+	}
+	if strings.Contains(row.Summary, collision) || !bytes.Contains(row.TypedResultJSON, []byte(collision)) {
+		t.Fatal("prose redaction and canonical runtime output preservation were conflated")
+	}
+	receipt := row.TypedResult.RuntimeOutputs["receipt"].(map[string]any)
+	if receipt["count"] != jsonv1.Number("9007199254740993") || receipt["diagnostic"] != collision || row.TypedResult.RuntimeOutputsHash != outputHash {
+		t.Fatal("historical reader changed receipt-bound values or rounded a number")
+	}
+	after, err := os.ReadFile(runtimestore.Path(workspace))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("historical projection rewrote the canonical database")
 	}
 }
 

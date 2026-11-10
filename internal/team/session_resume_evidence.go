@@ -22,11 +22,19 @@ func (c *Coordinator) validateResumeSources(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := c.validateResumeRecoveryMode(ctx, source); err != nil {
+		return fail(err)
+	}
+	if err := validateResumeConversation(ctx, workspace, source.BranchID); err != nil {
+		return fail(fmt.Errorf("coordinator conversation for branch %q: %w", source.BranchID, err))
+	}
 	items := c.taskTracker.TodoList().Items()
 	canonical := make(map[string]*TodoItem, len(source.Session.Tasks))
 	for _, item := range source.Session.Tasks {
 		if !IsPrimaryOccurrence(item) {
-			canonical[item.ID] = item
+			verified := cloneTodoItem(item)
+			restoreLegacyBoundInvariantVerification([]*TodoItem{verified}, c.session.ContractTasks)
+			canonical[item.ID] = verified
 		}
 	}
 	for _, item := range items {
@@ -55,8 +63,8 @@ func (c *Coordinator) validateResumeSources(ctx context.Context) error {
 		if item == nil || IsPrimaryOccurrence(item) {
 			continue
 		}
-		if _, _, err := c.boundResultContract(item.ID); err != nil {
-			return fail(fmt.Errorf("task %s contract: %w", item.ID, err))
+		if err := c.validateResumeResultContract(item); err != nil {
+			return fail(err)
 		}
 		if item.RunInputSnapshotID != snapshot.ID || item.RunInputSnapshotHash != snapshot.SnapshotHash {
 			return fail(fmt.Errorf("task %s frozen inputs differ from the selected recovery snapshot", item.ID))
@@ -90,12 +98,42 @@ func (c *Coordinator) validateResumeSources(ctx context.Context) error {
 			return fail(err)
 		}
 	}
+	for _, item := range items {
+		if item != nil && isInterruptedStatus(item.Status) && !IsPrimaryOccurrence(item) {
+			if _, err := c.buildArtifactAccessScope(item.ID, 1); err != nil {
+				return fail(fmt.Errorf("task %s artifact scope: %w", item.ID, err))
+			}
+		}
+	}
 	if taskID, _ := ctx.Value(resultOnlyRepairKey{}).(string); taskID != "" {
 		if err := c.validateResumeRepairSources(ctx, taskID); err != nil {
 			return fail(err)
 		}
 	}
 
+	return nil
+}
+
+func (c *Coordinator) validateResumeResultContract(item *TodoItem) error {
+	_, compiled, err := c.boundResultContract(item.ID)
+	if err != nil {
+		return fmt.Errorf("task %s contract: %w", item.ID, err)
+	}
+	if projection := projectionForContract(compiled); projection != nil && projection.Invariants != "" && item.InvariantVerification == "" {
+		return fmt.Errorf("task %s projects invariant claims but its invariant-verification mode cannot be restored from the frozen contract", item.ID)
+	}
+	return nil
+}
+
+func (c *Coordinator) validateResumeRecoveryMode(ctx context.Context, source *ResumeSource) error {
+	if source.metadataOnly {
+		if err := c.validateMetadataContractRecovery(ctx, source.Session); err != nil {
+			return err
+		}
+	}
+	if source.inputPolicyRecovery {
+		return c.validateInputPolicyRecoveryContracts(source.Session)
+	}
 	return nil
 }
 
@@ -113,7 +151,7 @@ func (c *Coordinator) validateCompletedResumeEvidence(ctx context.Context, item 
 	if item.TypedResult.StructuredPayload != nil && receipt.ResultPayloadSHA256 != item.TypedResult.StructuredPayload.SHA256 {
 		return fmt.Errorf("task %s receipt payload hash differs from its accepted result", item.ID)
 	}
-	if ref := item.ResultContract; ref != nil && (receipt.ResultContractID != ref.ID || receipt.ResultContractSHA256 != ref.SchemaSHA256) {
+	if ref := item.ResultContract; ref != nil && (receipt.ResultContractID != ref.ID || receipt.ResultContractSHA256 != ref.SchemaSHA256) && !validContractRevalidation(item, receipt) {
 		return fmt.Errorf("task %s receipt does not match the frozen result contract", item.ID)
 	}
 	if item.TypedResult.StructuredPayload != nil && receipt.ResultValidation != ResultValidationValid {
@@ -130,10 +168,10 @@ func sameResumeTaskEvidence(stored, loaded *TodoItem) bool {
 		stored.ContractID == loaded.ContractID && stored.ContractHash == loaded.ContractHash && stored.Retries == loaded.Retries &&
 		stored.ExecutionTarget == loaded.ExecutionTarget && sameCanonicalEvidence(stored.ExecutionTopology, loaded.ExecutionTopology) &&
 		stored.RunInputSnapshotID == loaded.RunInputSnapshotID && stored.RunInputSnapshotHash == loaded.RunInputSnapshotHash &&
-		sameCanonicalEvidence(stored.ResultCandidate, loaded.ResultCandidate) && sameCanonicalEvidence(stored.ResultContract, loaded.ResultContract) && sameCanonicalEvidence(stored.TypedResult, loaded.TypedResult) &&
+		sameCanonicalEvidence(stored.ContractRevalidation, loaded.ContractRevalidation) && sameCanonicalEvidence(stored.ResultCandidate, loaded.ResultCandidate) && sameCanonicalEvidence(stored.ResultContract, loaded.ResultContract) && sameCanonicalEvidence(stored.TypedResult, loaded.TypedResult) &&
 		sameCanonicalEvidence(stored.ExecutionReceipt, loaded.ExecutionReceipt) && sameCanonicalEvidence(stored.ExecutionReceipts, loaded.ExecutionReceipts) &&
 		sameCanonicalEvidence(stored.VerifyResult, loaded.VerifyResult) && sameCanonicalEvidence(stored.EvidenceFrom, loaded.EvidenceFrom) &&
-		sameCanonicalEvidence(stored.DependsOn, loaded.DependsOn) && sameCanonicalEvidence(stored.WorksetBinding, loaded.WorksetBinding) &&
+		sameCanonicalEvidence(stored.DependsOn, loaded.DependsOn) && sameCanonicalEvidence(stored.WorksetBinding, loaded.WorksetBinding) && sameCanonicalEvidence(stored.WorksetReceipt, loaded.WorksetReceipt) &&
 		sameCanonicalEvidence(taskDefFromTodoItem(stored), taskDefFromTodoItem(loaded))
 }
 

@@ -187,6 +187,157 @@ func TestRequestAcceptanceProofRepairIsBoundedAndCannotUpgradeVerdicts(t *testin
 	}
 }
 
+func TestRequestAcceptanceUnknownMemberRepairPreservesVerdictsAndEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		mutate       func(string) string
+		second       string
+		optional     bool
+		wantCalls    int
+		wantPassed   bool
+		materialVeto bool
+	}{
+		{name: "extra delivery member", wantCalls: 2, wantPassed: true},
+		{name: "extra top level member", mutate: func(raw string) string {
+			return `{"extra":true,` + strings.TrimPrefix(strings.Replace(raw, `"evidence_placeholder":true,`, "", 1), "{")
+		}, wantCalls: 2, wantPassed: true},
+		{name: "still invalid", second: "unknown", wantCalls: 2},
+		{name: "invalid repaired proof", second: "invented", wantCalls: 2},
+		{name: "independent material veto", wantCalls: 2, materialVeto: true},
+		{name: "negative coverage", mutate: func(raw string) string {
+			return strings.Replace(raw, `"request_covered":true`, `"request_covered":false`, 1)
+		}, wantCalls: 1},
+		{name: "missing coverage", mutate: func(raw string) string {
+			return strings.Replace(raw, `"request_covered":true`, `"unknown_coverage":true`, 1)
+		}, wantCalls: 1},
+		{name: "wrong coverage type", mutate: func(raw string) string {
+			return strings.Replace(raw, `"request_covered":true`, `"request_covered":"true"`, 1)
+		}, wantCalls: 1},
+		{name: "missing required", mutate: func(raw string) string {
+			return strings.Replace(raw, `"status":"satisfied"`, `"status":"missing"`, 1)
+		}, wantCalls: 1},
+		{name: "blocked required", mutate: func(raw string) string {
+			return strings.Replace(raw, `"status":"satisfied"`, `"status":"blocked"`, 1)
+		}, wantCalls: 1},
+		{name: "optional negative cannot upgrade", optional: true, mutate: func(raw string) string {
+			return strings.Replace(raw, `"status":"satisfied"`, `"status":"missing"`, 1)
+		}, wantCalls: 2},
+		{name: "optional negative preserved", optional: true, second: "missing", mutate: func(raw string) string {
+			return strings.Replace(raw, `"status":"satisfied"`, `"status":"missing"`, 1)
+		}, wantCalls: 2, wantPassed: true},
+		{name: "admitted gap", mutate: func(raw string) string {
+			return strings.Replace(raw, `"gaps":[]`, `"gaps":["Required material unavailable"]`, 1)
+		}, wantCalls: 1},
+		{name: "unmatched target", mutate: func(raw string) string {
+			return strings.Replace(raw, `"match":"requested"`, `"match":"none"`, 1)
+		}, wantCalls: 1},
+		{name: "unauthorized substitute", mutate: func(raw string) string {
+			return strings.Replace(raw, `"match":"requested"`, `"match":"allowed_substitute","substitute_index":0`, 1)
+		}, wantCalls: 1},
+		{name: "insufficient extent", mutate: func(raw string) string {
+			return strings.Replace(raw, `"extent":"relevant_parts"`, `"extent":"partial"`, 1)
+		}, wantCalls: 1},
+		{name: "unknown provenance", mutate: func(raw string) string {
+			return strings.Replace(raw, `"source":"secondary"`, `"source":"unknown"`, 1)
+		}, wantCalls: 1},
+		{name: "missing delivery", mutate: func(raw string) string {
+			return strings.Replace(raw, `"match":"requested"`, `"match":""`, 1)
+		}, wantCalls: 1},
+		{name: "duplicate JSON member", mutate: func(raw string) string {
+			return strings.Replace(raw, `"status":"satisfied"`, `"status":"satisfied","status":"blocked"`, 1)
+		}, wantCalls: 1},
+		{name: "unknown requirement", mutate: func(raw string) string {
+			return strings.Replace(raw, `"id":"requirement-1"`, `"id":"requirement-2"`, 1)
+		}, wantCalls: 1},
+		{name: "extra JSON document", mutate: func(raw string) string { return raw + `{}` }, wantCalls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := requestAcceptanceFixture(t)
+			const request = "Explain the observed finding"
+			if tc.optional {
+				c.SetRequestAcceptanceModel(requestAcceptanceModelFunc(func(_ context.Context, operation, _ string) ([]byte, error) {
+					if operation == "contract" {
+						return faithfulRequestContract(), nil
+					}
+					return []byte(strings.Replace(string(requestExtraction(request, request, "observed")), `"required":true`, `"required":false`, 1)), nil
+				}))
+				ctx, end := c.beginInvocationExecutionRun(t.Context())
+				t.Cleanup(end)
+				if err := c.checkRunAdmission(); err != nil {
+					t.Fatal(err)
+				}
+				if err := c.resolveRunInputsForInvocation(ctx, request); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				freezeRequestFixture(t, c, request, "observed")
+			}
+			snapshot := c.RunInputSnapshot()
+			const finding = "The requested finding is explained."
+			item := completedRequestEvidence(t, c, finding, false)
+			sources, err := c.requestAcceptanceSources(t.Context(), snapshot)
+			if err != nil || len(sources) == 0 {
+				t.Fatalf("sources=%#v error=%v", sources, err)
+			}
+			valid := string(passingRequestReview(sources[0], finding))
+			rejected := strings.Replace(valid, `"delivery":{`, `"delivery":{"evidence_placeholder":true,`, 1)
+			if tc.mutate != nil {
+				rejected = tc.mutate(rejected)
+			}
+			calls, materialCalls := 0, 0
+			model := withRequestMaterialReview(requestAcceptanceModelFunc(func(_ context.Context, operation, prompt string) ([]byte, error) {
+				calls++
+				if operation != "review" || !strings.Contains(prompt, finding) || !strings.Contains(prompt, request) {
+					t.Fatal("repair lost its frozen request or evidence")
+				}
+				if calls == 1 {
+					return []byte(rejected), nil
+				}
+				if !strings.Contains(prompt, "Rejected review") || !strings.Contains(prompt, "evidence_placeholder") && tc.name != "extra top level member" {
+					t.Fatal("repair omitted the rejected protocol data")
+				}
+				switch tc.second {
+				case "unknown":
+					return []byte(rejected), nil
+				case "invented":
+					return []byte(strings.Replace(valid, finding, "Invented evidence", 1)), nil
+				case "missing":
+					return []byte(strings.Replace(valid, `"status":"satisfied"`, `"status":"missing"`, 1)), nil
+				default:
+					return []byte(valid), nil
+				}
+			}))
+			c.SetRequestAcceptanceModel(requestAcceptanceModelFunc(func(ctx context.Context, operation, prompt string) ([]byte, error) {
+				if operation == "evidence" {
+					materialCalls++
+					if tc.materialVeto {
+						return []byte(`{"checks":[{"id":"requirement-1","adequate":false,"form":"unknown","reason":"Requested material was not acquired."}]}`), nil
+					}
+				}
+				return model.Resolve(ctx, operation, prompt)
+			}))
+			acceptance, err := c.runAcceptance(t.Context(), finding)
+			if calls != tc.wantCalls || acceptance.IsPassed() != tc.wantPassed || (err == nil) != tc.wantPassed {
+				t.Fatalf("calls=%d acceptance=%#v error=%v", calls, acceptance, err)
+			}
+			if (tc.wantPassed && !tc.optional || tc.materialVeto) && materialCalls != 1 {
+				t.Fatalf("independent material review calls=%d", materialCalls)
+			}
+			if tc.wantPassed {
+				store, err := OpenFileArtifactStoreReadOnly(c.session.Workspace, c.session.Workspace)
+				if err != nil {
+					t.Fatal(err)
+				}
+				result := &RunResult{RunID: c.executionRunID, Outcome: RunOutcomeCompleted, GoalSatisfied: true,
+					Response: finding + FormatRequestAcceptance(acceptance.RequestAcceptance), RunInputs: snapshot, Acceptance: acceptance}
+				if err := ValidateRequestAcceptanceBinding(t.Context(), result, []*TodoItem{item}, store); err != nil {
+					t.Fatalf("repaired evidence failed offline audit: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestRequestAcceptanceProofRepairSelectsCorrectSourceKind(t *testing.T) {
 	c := requestAcceptanceFixture(t)
 	snapshot := freezeRequestFixture(t, c, "Retrieve the source document", "observed")

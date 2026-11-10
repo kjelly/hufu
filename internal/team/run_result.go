@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/buildinfo"
 )
 
 type RunOutcome string
@@ -888,6 +889,7 @@ func (s RunStats) IsZero() bool {
 }
 
 type RunResult struct {
+	HufuBuild            *buildinfo.Info              `json:"hufu_build,omitempty"`
 	RunID                string                       `json:"run_id,omitempty"`
 	Outcome              RunOutcome                   `json:"outcome"`
 	GoalSatisfied        bool                         `json:"goal_satisfied"`

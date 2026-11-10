@@ -171,6 +171,9 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if err := ensureSessionWorkspaceScope(session); err != nil {
 		return nil, err
 	}
+	if err := restoreResumeLaunchSettings(ctx, session); err != nil {
+		return nil, fmt.Errorf("restore saved launch settings: %w", err)
+	}
 	// Apply CLI model overrides as the highest-priority model config layer.
 	cliModelOverrides, err := applyCLIRuntimeOverrides(session)
 	if err != nil {
@@ -199,7 +202,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	resolvedProviderAPIKey := config.ResolveProviderAPIKey(defaultProviderAPIKey, session.Config.ProviderAPIKey)
 	team.RegisterProviderSecretsGlobally(session, resolvedProviderAPIKey)
 
-	if !opts.dryRun {
+	if !opts.dryRun && !contractRecoverySetup(ctx) {
 		displayTeamHeader(session, cliModelOverrides.WorkerModels)
 	}
 
@@ -209,6 +212,11 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		return nil, fmt.Errorf("resolve cost catalog: %w", err)
 	}
 	session.CostCatalog = costCatalog
+	operatorMedia, err := cfg.ResolveMediaPolicy()
+	if err != nil {
+		return nil, fmt.Errorf("resolve media policy: %w", err)
+	}
+	session.MediaPolicy = operatorMedia
 	if err := applyConfiguredBackends(session, cfg); err != nil {
 		return nil, err
 	}
@@ -235,11 +243,15 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	resolvedJudgeModel := roleModels.Judge
 	resolvedPlanReviewerModel := roleModels.PlanReviewer
 	startsFresh := opts.newSession || execProfile.DisableHistoricalTaskReuse
+	if err := validateDerivedRunEntry(ctx, session, startsFresh); err != nil {
+		return nil, err
+	}
 	resolvedMaxConcurrent := cfg.ResolveMaxConcurrent(session.Config.MaxConcurrent)
 	if resolvedMaxConcurrent <= 0 {
 		resolvedMaxConcurrent = 8
 	}
-	if opts.dryRun {
+	session.LaunchOptions = captureLaunchOptions(session, execProfile, gate, planMode, autoSkillsMode)
+	if opts.dryRun || contractRecoverySetup(ctx) {
 		coordinator, err := team.NewDryRunCoordinator(team.DryRunCoordinatorParams{
 			Session: session, Profile: execProfile,
 			DefaultProviderURL: resolvedProviderURL, DefaultProviderAPIKey: resolvedProviderAPIKey,
@@ -252,6 +264,9 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		return &teamContext{teamName: teamName, session: session, coordinator: coordinator, roleSources: roleSources}, nil
 	}
 	if err := bindRunWorkspaceVersioning(ctx, session, cfg); err != nil {
+		return nil, err
+	}
+	if err := activateResumeSession(ctx, session); err != nil {
 		return nil, err
 	}
 	// Read the durable checkpoint before any lifecycle mutation. A resumed
@@ -320,10 +335,11 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		}
 	}
 
-	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, resolvedModelList, roleModels, resolvedMaxConcurrent, opts.verbose, opts.think, opts.direnv, allowedPaths, teamPathConsent, hookRegistry, opts.rbashMode, resolvedRestrictedPath, resolvedNoNet, resolvedForceMCP, forcedSkills, planMode, autoSkillsMode)
+	coordinator, err := team.NewCoordinator(session, resolvedProviderURL, resolvedProviderAPIKey, mcpManager, resolvedModelList, roleModels, resolvedMaxConcurrent, opts.verbose, opts.think, opts.direnv, allowedPaths, teamPathConsent, hookRegistry, opts.rbashMode, resolvedRestrictedPath, resolvedNoNet, resolvedForceMCP, forcedSkills, planMode, autoSkillsMode, team.WithDeferredSemanticRetrieval())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create coordinator: %w", err)
 	}
+	coordinator.SetHistoricalTaskReader(canonicalHistoricalTaskReader{})
 	if err := startTeamCoordinator(ctx, coordinator, session, cfg, execProfile, startsFresh, sessionData, models); err != nil {
 		return nil, errors.Join(err, coordinator.Close())
 	}

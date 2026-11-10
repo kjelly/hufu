@@ -1,4 +1,11 @@
 {
+  "hufu_build": {
+    "version": "1.2.3",
+    "revision": "0123456789abcdef",
+    "modified": false,
+    "go_version": "go1.27.2",
+    "source": "build_info"
+  },
   "outcome": "completed",
   "goal_satisfied": true,
   "goal_mode": "outcome",

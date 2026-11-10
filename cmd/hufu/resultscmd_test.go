@@ -321,7 +321,7 @@ func TestResultIdentityTerminalAndJSONLPresentation(t *testing.T) {
 	previous := opts
 	t.Cleanup(func() { opts = previous })
 	id := "res-" + strings.Repeat("a", 64)
-	event := team.StatusEvent{Type: "task_result_ready", TeamName: "review", TodoID: "7", Data: map[string]any{"result_id": id, "run_id": "run-1", "source_event_id": "evt-1", "branch_id": "main", "attempt": 1}}
+	event := team.StatusEvent{Type: "task_result_ready", TeamName: "review", TodoID: "7", Data: map[string]any{"result_id": id, "run_id": "run-1", "source_event_id": "evt-1", "branch_id": "main", "attempt": 1, "image_count": 2}}
 	writer := &testStatusWriter{}
 	dispatchStatusEvent(writer, &reporterState{}, event)
 	if !strings.Contains(writer.b.String(), id) || !strings.Contains(writer.b.String(), "--team 'review'") {
@@ -337,5 +337,8 @@ func TestResultIdentityTerminalAndJSONLPresentation(t *testing.T) {
 	data := resultsTestJSON(t, encoded)
 	if !bytes.Contains(data, []byte(`"result_id":"`+id)) || !bytes.Contains(data, []byte(`"schema_version":1`)) {
 		t.Fatalf("missing JSONL identity: %s", data)
+	}
+	if !bytes.Contains(data, []byte(`"image_count":2`)) {
+		t.Fatal("JSONL omitted published image metadata")
 	}
 }

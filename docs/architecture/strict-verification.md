@@ -31,6 +31,12 @@
 > 本文歷史 `submit_result` 工具修復案例適用於明確 `result-transport: tool`、舊 session
 > 或宣告該工具的 closed sequence。runtime 模式保留相同驗收門檻，收集失敗只恢復
 > 結果階段，不重播已完成工作；詳見 [execution runtime](execution-runtime.md)。
+>
+> 依賴視圖現況：`dependency-result-view: selected` 僅縮小普通靜態 Worker 的
+> presentation，不是完整證據。`requires-evidence`、`evidence_from`、下游
+> result-contract、closed sequence 與 structured 上游結果均不適用；設定衝突
+> 必須在該下游 Worker 呼叫前拒絕。選定欄位仍須完整交付，不得為 budget 截斷。
+> 詳見 [正式設定參考](../reference/agent-format.md#靜態依賴結果視圖dependency-result-view)。
 
 ## 1. 執行摘要
 

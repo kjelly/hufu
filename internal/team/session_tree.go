@@ -22,12 +22,13 @@ type BranchState struct {
 
 // SessionBranch represents a single branch in the session tree.
 type SessionBranch struct {
-	ID          string      `json:"id"`
-	Name        string      `json:"name"`
-	ParentID    string      `json:"parent_id,omitempty"`
-	ForkEventID string      `json:"fork_event_id,omitempty"`
-	CreatedAt   string      `json:"created_at"`
-	State       BranchState `json:"state"`
+	ID          string             `json:"id"`
+	Name        string             `json:"name"`
+	ParentID    string             `json:"parent_id,omitempty"`
+	ForkEventID string             `json:"fork_event_id,omitempty"`
+	CreatedAt   string             `json:"created_at"`
+	State       BranchState        `json:"state"`
+	Derivation  *DerivedForkIntent `json:"derivation,omitempty"`
 }
 
 // SessionTree manages session branches, fork points, checkpoints, and time travel.
@@ -104,6 +105,10 @@ func (st *SessionTree) ResolveTarget(target string, es *EventStore) (branchID st
 
 // CreateBranch creates a new branch forked from target (branch name/ID, label, or event ID).
 func (st *SessionTree) CreateBranch(name string, forkTarget string, es *EventStore) (*SessionBranch, error) {
+	return st.createBranch(name, forkTarget, es, true)
+}
+
+func (st *SessionTree) createBranch(name string, forkTarget string, es *EventStore, inheritState bool) (*SessionBranch, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fmt.Errorf("branch name cannot be empty")
@@ -147,7 +152,7 @@ func (st *SessionTree) CreateBranch(name string, forkTarget string, es *EventSto
 	}
 
 	var initialState BranchState
-	if parentBranch != nil {
+	if inheritState && parentBranch != nil {
 		initialState = copyBranchState(parentBranch.State)
 	}
 
@@ -415,6 +420,9 @@ func ProjectValidatedEventsForBranch(events []RunEvent, st *SessionTree, targetB
 		return nil, err
 	}
 	if err := validateTerminalInputOrigins(lineage); err != nil {
+		return nil, err
+	}
+	if err := validateDerivedForkLineage(lineage, st, targetBranchID); err != nil {
 		return nil, err
 	}
 	return lineage, nil

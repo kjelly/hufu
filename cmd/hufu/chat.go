@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"sort"
 	"strings"
 
-	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 
 	"github.com/kjelly/hufu/internal/config"
@@ -159,6 +157,8 @@ func chatHelpText(teamName string) string {
 	return fmt.Sprintf(`%s Chatting with team %s
 
 Commands:
+  /multiline          enter multiple lines; /end on its own line sends
+  trailing \          continue the task on the next line
   /help, help, ?       show this help
   /reset               clear the conversation context (start fresh)
   /team [name]         switch teams (no name opens the picker)
@@ -166,6 +166,10 @@ Commands:
   /skills              list loaded skills
   /config              show current team settings
   /save <path>         export the current conversation
+  /image add <path>    stage an image for the next message
+  /image list         list pending images
+  /image remove <n>   remove a displayed 1-based index
+  /image clear        release all pending images
   /exit, /quit, :q     leave the chat
 
 Prompt features:
@@ -176,6 +180,7 @@ Prompt features:
 Tips:
   - Type your message and press Enter to send it
   - Each turn is independently cancellable with Ctrl+C
+  - Uncommitted pending images are not restored after restart
   - Use ↑/↓ to recall previous prompts
   - Run with --ui chat for the full-screen chat interface,
     or --ui dashboard (--tui) for the task dashboard
@@ -281,17 +286,15 @@ func pickChatTeam(pr *readline.PromptReader) (string, *team.TeamRegistry, error)
 }
 
 func readChatLine(pr *readline.PromptReader) (string, error) {
-	if pr != nil {
-		return pr.ReadLine(boldStyle.Render("hufu> "))
+	if pr == nil {
+		var err error
+		pr, err = readline.NewPromptReader("")
+		if err != nil {
+			return "", fmt.Errorf("initialize chat input: %w", err)
+		}
+		defer func() { _ = pr.Close() }()
 	}
-	prompt := promptui.Prompt{
-		Label: "hufu",
-	}
-	res, err := prompt.Run()
-	if err != nil {
-		return "", io.EOF
-	}
-	return res, nil
+	return readTaskPrompt(pr.ReadLine, boldStyle.Render("hufu> "))
 }
 
 // buildVars resolves template variables the same way the root command does:

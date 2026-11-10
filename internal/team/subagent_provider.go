@@ -59,6 +59,7 @@ type AttemptRequest struct {
 	// Hufu-owned lookup rechecks native receipts at proposal canonicalization,
 	// just like local submit_result. It never crosses the provider JSON boundary.
 	resultRuntimeInputs func() (map[string]any, error)
+	resultProjectClaims func(SubmitResultInput) (SubmitResultInput, error)
 	// Provider and ProviderBinding remain adapter-only compatibility fields for
 	// legacy SubagentProvider implementations. ExecutionRegistry adapters fill
 	// them from the canonical fields immediately before invoking that interface.
@@ -170,6 +171,7 @@ func (c *Coordinator) canonicalWorkerAttemptContextForID(taskID string) (*canoni
 
 func workerToolResolutionTaskProjection(task TaskDef) workerToolResolutionTaskProjectionValue {
 	return workerToolResolutionTaskProjectionValue{
+		MediaBinding: task.MediaBinding.Clone(), MediaInputDigest: task.MediaInputDigest,
 		Agent:          strings.ToLower(strings.TrimSpace(task.Agent)),
 		ContractID:     task.ContractID,
 		PlanFirst:      task.PlanFirst,
@@ -180,12 +182,14 @@ func workerToolResolutionTaskProjection(task TaskDef) workerToolResolutionTaskPr
 }
 
 type workerToolResolutionTaskProjectionValue struct {
-	Agent          string
-	ContractID     string
-	PlanFirst      bool
-	PlanID         string
-	Execution      ExecutionContract
-	WorksetBinding *WorksetBinding
+	MediaBinding     *MediaTaskBinding
+	MediaInputDigest string
+	Agent            string
+	ContractID       string
+	PlanFirst        bool
+	PlanID           string
+	Execution        ExecutionContract
+	WorksetBinding   *WorksetBinding
 }
 
 func workerToolResolutionTaskMatches(left, right TaskDef) bool {

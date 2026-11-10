@@ -555,9 +555,10 @@ func TestPrepareProducesGoldenManifestAndDiffs(t *testing.T) {
 	}
 	got := goldenSummary{SchemaVersion: manifest.SchemaVersion, CommitCount: manifest.Range.CommitCount, ChangedFiles: manifest.ChangedFiles}
 	for _, entry := range manifest.Items {
-		if len(entry.Inputs) != 2 || !strings.HasPrefix(entry.Inputs[0].ID, "sha256-") || entry.Inputs[0].Description != "bounded workset diff" || entry.Inputs[1].Kind != "review_source_snapshot" {
-			t.Fatalf("item %s lacks opaque diff and source-snapshot inputs: %#v", entry.Key, entry.Inputs)
+		if len(entry.Inputs) != 3 || !strings.HasPrefix(entry.Inputs[0].ID, "sha256-") || entry.Inputs[0].Description != "bounded workset diff" || entry.Inputs[1].Kind != "review_source_snapshot" || entry.Inputs[2].Kind != "review_evidence_inventory" {
+			t.Fatalf("item %s lacks opaque diff, source snapshot, or evidence inventory: %#v", entry.Key, entry.Inputs)
 		}
+		assertRequiredArtifactInputs(t, repo, entry)
 		got.Items = append(got.Items, goldenItem{Key: entry.Key, Lens: entry.Lens, Paths: entry.TouchedPaths, DiffPath: entry.DiffPath})
 		patch, err := os.ReadFile(filepath.Join(repo, "out", filepath.FromSlash(entry.DiffPath)))
 		if err != nil {
@@ -660,11 +661,12 @@ func TestPrepareDocumentationRoutingProducesVerifiedWorksets(t *testing.T) {
 	assertManifestPaths(t, primary, []string{"docs/architecture/execution.md", "internal/team/runtime.go"})
 	assertManifestPaths(t, documentation, []string{"README.md", "docs/tutorials/start.md"})
 	assertManifestPaths(t, escalation, []string{"docs/architecture/execution.md"})
-	if escalation.Items[0].Lens != "documentation-risk" || len(escalation.Items[0].Inputs) != 3 {
-		t.Fatalf("escalation item = %#v, want risk lens plus diff, source snapshot, and verifier inputs", escalation.Items[0])
+	if escalation.Items[0].Lens != "documentation-risk" || len(escalation.Items[0].Inputs) != 4 {
+		t.Fatalf("escalation item lacks risk lens and required source/inventory/verifier inputs: %#v", escalation.Items[0])
 	}
 	for route, value := range map[string]manifest{"primary": primary, "documentation": documentation, "documentation-escalation": escalation} {
 		for _, entry := range value.Items {
+			assertRequiredArtifactInputs(t, repo, entry)
 			if entry.Bindings["route"] != route {
 				t.Fatalf("%s item route binding = %q", route, entry.Bindings["route"])
 			}
@@ -1044,9 +1046,10 @@ func TestPrepareSourceSnapshotPinsChangedSourceCallerAndFocusedTest(t *testing.T
 		t.Fatal(err)
 	}
 	manifest := readManifest(t, filepath.Join(repo, "out", "workset-manifest.json"))
-	if len(manifest.Items) != 1 || len(manifest.Items[0].Inputs) != 2 {
+	if len(manifest.Items) != 1 || len(manifest.Items[0].Inputs) != 3 {
 		t.Fatalf("source snapshot inputs = %#v", manifest.Items)
 	}
+	assertRequiredArtifactInputs(t, repo, manifest.Items[0])
 	snapshot := manifest.Items[0].Inputs[1]
 	if snapshot.Kind != "review_source_snapshot" || manifest.Items[0].Bindings["review_revision"] != manifest.Range.End {
 		t.Fatalf("snapshot identity = %#v bindings=%#v range=%#v", snapshot, manifest.Items[0].Bindings, manifest.Range)
@@ -1103,9 +1106,10 @@ func TestGenericWorksetShadowProjectionPreservesKeysDigestsAndOrdering(t *testin
 	}
 	rows := make([]shadowRow, 0, len(manifest.Items))
 	for _, entry := range manifest.Items {
-		if len(entry.Inputs) != 2 || entry.Inputs[1].Kind != "review_source_snapshot" {
-			t.Fatalf("item %s inputs = %#v, want diff plus reviewed source snapshot", entry.Key, entry.Inputs)
+		if len(entry.Inputs) != 3 || entry.Inputs[1].Kind != "review_source_snapshot" || entry.Inputs[2].Kind != "review_evidence_inventory" {
+			t.Fatalf("item %s lacks diff, reviewed source, or evidence inventory: %#v", entry.Key, entry.Inputs)
 		}
+		assertRequiredArtifactInputs(t, repo, entry)
 		rows = append(rows, shadowRow{Key: entry.Key, Lens: entry.Lens, Digest: entry.Inputs[0].SHA256})
 	}
 	if len(rows) != len(manifest.Items) {
@@ -1133,9 +1137,10 @@ func TestPrepareArtifactRootMatchesRuntimeWorkspace(t *testing.T) {
 		t.Fatalf("manifest_path = %v, want runtime-workspace-relative path", result.Outputs["manifest_path"])
 	}
 	manifest := readManifest(t, filepath.Join(repo, "workspace", filepath.FromSlash(manifestPath)))
-	if len(manifest.Items) != 1 || len(manifest.Items[0].Inputs) != 2 {
-		t.Fatalf("manifest items = %#v, want diff and source snapshot inputs", manifest.Items)
+	if len(manifest.Items) != 1 || len(manifest.Items[0].Inputs) != 3 {
+		t.Fatalf("manifest items lack diff, source snapshot, or evidence inventory: %#v", manifest.Items)
 	}
+	assertRequiredArtifactInputs(t, filepath.Join(repo, "workspace"), manifest.Items[0])
 	if got := manifest.Items[0].Inputs[0].Path; got != "hufu-code-review/workset/batches/unit-0000/diff.patch" {
 		t.Fatalf("input artifact path = %q, want path relative to runtime workspace", got)
 	}

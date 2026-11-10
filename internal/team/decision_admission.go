@@ -173,6 +173,8 @@ func decisionOccurrenceInputDigest(task TaskOccurrenceProjection) (string, error
 		DynamicToolAuthorization                                             *DynamicToolAuthorizationSnapshot `json:"dynamic_tool_authorization,omitempty"`
 		ResourceScopeSnapshot                                                *TaskResourceScopeSnapshot        `json:"resource_scope_snapshot,omitempty"`
 		CatalogAction                                                        *CatalogActionBinding             `json:"catalog_action,omitempty"`
+		HistoricalResultBinding                                              *HistoricalResultTaskBinding      `json:"historical_result_binding,omitempty"`
+		DependencyResultView                                                 *DependencyResultViewSpec         `json:"dependency_result_view,omitempty"`
 	}{
 		ID: task.ID, PlanTaskID: task.PlanTaskID, Phase: string(task.Phase), Agent: task.Agent, Desc: task.Desc, Goal: task.Goal, Constraints: task.Constraints, Model: task.Model, Source: task.Source, PlanFirst: task.PlanFirst, ModelTopology: task.ModelTopology,
 		Sidecar: task.Sidecar, Summarize: task.Summarize, OutputMode: task.OutputMode, ContextFiles: task.ContextFiles, Requires: task.Requires,
@@ -187,6 +189,8 @@ func decisionOccurrenceInputDigest(task TaskOccurrenceProjection) (string, error
 		DynamicToolAuthorization: task.DynamicToolAuthorization,
 		ResourceScopeSnapshot:    task.ResourceScopeSnapshot,
 		CatalogAction:            task.CatalogAction,
+		HistoricalResultBinding:  task.HistoricalResultBinding.clone(),
+		DependencyResultView:     task.DependencyResultView.clone(),
 	}
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -350,6 +354,9 @@ func (c *Coordinator) validateTaskOccurrenceAdmission(ctx context.Context, task 
 	// particular, do not reconstruct it from TaskDef: TaskDef.ID is a logical
 	// PlanTaskID and loses the runtime Todo identity and finalized batch edges.
 	item := c.todoItemByID(taskID)
+	if err := c.validateTaskHistoricalResultBinding(ctx, item); err != nil {
+		return DecisionAdmission{}, false, fmt.Errorf("validate task %s historical results: %w", taskID, err)
+	}
 	if !IsPrimaryOccurrence(item) {
 		if err := c.validateTaskRunInputs(item); err != nil {
 			return DecisionAdmission{}, false, fmt.Errorf("validate task %s frozen inputs: %w", taskID, err)

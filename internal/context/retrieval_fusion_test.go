@@ -4,13 +4,12 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"path/filepath"
 	"testing"
 )
 
 func fusionTestRepo(t *testing.T) *SQLiteRepository {
 	t.Helper()
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

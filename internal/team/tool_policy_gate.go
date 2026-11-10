@@ -486,7 +486,13 @@ func (t *policyGatedTool) Run(ctx context.Context, call fantasy.ToolCall) (respo
 	response, err := t.inner.Run(ctx, call)
 	var captureErr error
 	if err == nil && !response.IsError {
+		sourceResponse := response
 		captureErr = t.coordinator.captureDecisionArtifactRead(ctx, t.inner, call, &response)
+		if captureErr == nil && !response.IsError {
+			// Decision admission may withhold the entire response. Only delivered
+			// source bytes earn coverage; appended runtime guidance adds no bytes.
+			captureErr = t.coordinator.captureRequiredArtifactRead(ctx, t.inner, call, sourceResponse)
+		}
 		if captureErr != nil {
 			// The read ran, but its result must not escape without the required
 			// evidence. Account for the failed call before ending this dispatch.

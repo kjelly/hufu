@@ -20,8 +20,9 @@ import (
 )
 
 // executionPolicySnapshotVersion is incremented only when the canonical
-// fingerprint input changes. New snapshots use version 5; versions 3 and 4
-// remain read-compatible. The append-only compatibility materializer may
+// fingerprint input changes. Full-view snapshots use version 5; selected
+// dependency views use version 6. Explicit API protocol bindings use versions
+// 7 and 8 respectively. Versions 3 and 4 remain read-compatible. The append-only compatibility materializer may
 // replace a v3 snapshot with the current canonical version.
 const (
 	executionPolicyLegacySnapshotVersion   = 3
@@ -37,7 +38,9 @@ const (
 // digest. The actual allowlisted child environment remains process-local and is
 // never written to the session checkpoint or the event store.
 type ExecutionPolicySnapshot struct {
+	Media              *MediaPolicySnapshot             `json:"media,omitempty"`
 	Version            int                              `json:"version"`
+	Launch             *LaunchSettings                  `json:"launch,omitempty"`
 	TeamMaxConcurrent  int                              `json:"team_max_concurrent"`
 	DefaultLLMBackend  string                           `json:"default_llm_backend"`
 	Backends           []ExecutionBackendPolicySnapshot `json:"backends"`
@@ -82,8 +85,9 @@ type ExecutionPolicySnapshot struct {
 	ContextQuery *ExecutionContextQueryPolicySnapshot `json:"context_query,omitempty"`
 	// Cost pins explicit generation-price entries used by this team and the
 	// effective team policy. It is omitted when neither is configured.
-	Cost              *cost.PolicySnapshot `json:"cost,omitempty"`
-	ConfigurationHash string               `json:"configuration_hash"`
+	Cost                      *cost.PolicySnapshot `json:"cost,omitempty"`
+	DependencyResultViewsHash string               `json:"dependency_result_views_hash,omitempty"`
+	ConfigurationHash         string               `json:"configuration_hash"`
 }
 
 // ExecutionBackendPolicySnapshot records one canonical backend limiter.
@@ -97,7 +101,8 @@ type ExecutionBackendPolicySnapshot struct {
 	// upstream/type/credential revision or a Codex app-server's launch and
 	// protocol configuration without retaining raw endpoint, credential, or
 	// command values in durable state.
-	IdentityHash string `json:"identity_hash"`
+	IdentityHash string                      `json:"identity_hash"`
+	APIProtocol  agent.APIProtocolResolution `json:"api_protocol,omitzero"`
 }
 
 // ExecutionModelRouteSnapshot records the resolved target for every configured
@@ -108,7 +113,8 @@ type ExecutionModelRouteSnapshot struct {
 	ProviderKey string `json:"provider_key,omitempty"`
 	// LegacyProvider is retained only to decode and verify v3 snapshots. New
 	// v4 and newer writers leave it empty, so it is omitted from new state.
-	LegacyProvider string `json:"legacy_provider,omitempty"`
+	LegacyProvider string                      `json:"legacy_provider,omitempty"`
+	APIProtocol    agent.APIProtocolResolution `json:"api_protocol,omitzero"`
 }
 
 // ExecutionWorldPolicySnapshot records the execution-world and allowlisted
@@ -265,7 +271,17 @@ func (c *Coordinator) executionPolicyModelInputs() []executionPolicyModelInput {
 }
 
 func newExecutionPolicyState(c *Coordinator) (*executionPolicyState, error) {
-	return newExecutionPolicyStateForVersion(c, executionPolicySnapshotVersion)
+	version := executionPolicySnapshotVersion
+	if c != nil && c.session != nil {
+		hash, err := dependencyResultViewsHash(c.session)
+		if err != nil {
+			return nil, err
+		}
+		if hash != "" {
+			version = selectedDependencyPolicyVersion
+		}
+	}
+	return newExecutionPolicyStateForVersion(c, explicitProtocolPolicyVersion(c, version))
 }
 
 func populateRunContractPolicySnapshot(snapshot *ExecutionPolicySnapshot, session *TeamSession) error {
@@ -289,16 +305,21 @@ func populateRunContractPolicySnapshot(snapshot *ExecutionPolicySnapshot, sessio
 	return nil
 }
 
-// newExecutionPolicyStateForVersion is used only to compare a v3 durable
-// snapshot with the current admission inputs during the compatibility window.
-// Production writers always call newExecutionPolicyState and therefore emit
-// the current canonical version.
+// newExecutionPolicyStateForVersion reconstructs the durable version for resume
+// comparison. Production writers select the version through newExecutionPolicyState.
 func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionPolicyState, error) {
 	if c == nil || c.session == nil || c.providerManager == nil {
 		return nil, fmt.Errorf("execution policy snapshot requires an initialized coordinator")
 	}
 	if !supportedExecutionPolicySnapshotVersion(version) {
 		return nil, fmt.Errorf("execution policy snapshot version %d is unsupported", version)
+	}
+	if version < explicitProtocolFullPolicyVersion && explicitProtocolPolicyVersion(c, executionPolicySnapshotVersion) != executionPolicySnapshotVersion {
+		return nil, fmt.Errorf("historical execution policy cannot admit explicit API protocol configuration")
+	}
+	viewsHash, err := dependencyResultViewsHashForVersion(c.session, version)
+	if err != nil {
+		return nil, err
 	}
 	if err := c.session.Config.ContextRouting.Validate(); err != nil {
 		return nil, err
@@ -308,9 +329,14 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 		defaultBackend = configured
 	}
 	snapshot := &ExecutionPolicySnapshot{
-		Version:           version,
-		TeamMaxConcurrent: c.maxConcurrent,
-		DefaultLLMBackend: defaultBackend,
+		Version:                   version,
+		DependencyResultViewsHash: viewsHash,
+		TeamMaxConcurrent:         c.maxConcurrent,
+		DefaultLLMBackend:         defaultBackend,
+	}
+	snapshot.Launch, err = captureLaunchSettings(c, version)
+	if err != nil {
+		return nil, err
 	}
 	runtimeHash, runtimeErr := settings.Merge(c.session.GlobalDecisionRuntime, c.session.Config.DecisionRuntime).Fingerprint("sidecar")
 	if runtimeErr != nil {
@@ -350,25 +376,8 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 	}
 	relevantCostTargets := make(map[string]struct{})
 
-	for _, ref := range c.providerManager.EffectiveProviderRefs() {
-		backend := execution.CanonicalTargetBackendName(ref.Name)
-		if backend == "" {
-			continue
-		}
-		policy, err := c.providerManager.ResolveProviderExecutionPolicy(backend + "/execution-policy")
-		if err != nil {
-			return nil, fmt.Errorf("resolve execution policy for backend %q: %w", backend, err)
-		}
-		identity, err := c.providerManager.ResolveProviderExecutionIdentity(backend + "/execution-policy")
-		if err != nil {
-			return nil, fmt.Errorf("resolve execution identity for backend %q: %w", backend, err)
-		}
-		if identity.ProviderKey != policy.ProviderKey {
-			return nil, fmt.Errorf("execution identity provider mismatch for backend %q: identity=%q policy=%q", backend, identity.ProviderKey, policy.ProviderKey)
-		}
-		state.backendByName[backend] = ExecutionBackendPolicySnapshot{
-			Backend: backend, Kind: string(execution.BackendKindLLM), ProviderKey: policy.ProviderKey, MaxConcurrent: policy.MaxConcurrent, IdentityHash: identity.ConfigurationHash,
-		}
+	if err := freezeProviderBackendPolicies(c, state, version); err != nil {
+		return nil, err
 	}
 
 	for backend, cfg := range configuredCodexProviderConfigs(c) {
@@ -421,13 +430,17 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 				return nil, fmt.Errorf("resolve execution policy provider for %q: %w", input.model, resolveErr)
 			}
 			route.ProviderKey = policy.ProviderKey
+			route.APIProtocol, resolveErr = frozenProviderProtocol(c, providerModel, version)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
 		}
 		if input.backendHint == "" {
 			state.modelRouteByModel[input.model] = route
 		}
 		snapshot.ModelRoutes = append(snapshot.ModelRoutes, route)
 	}
-	if version == executionPolicySnapshotVersion {
+	if version >= executionPolicySnapshotVersion {
 		prices := make([]cost.PriceSnapshot, 0, len(relevantCostTargets))
 		for _, target := range slices.Sorted(maps.Keys(relevantCostTargets)) {
 			if price, ok := c.session.CostCatalog.Resolve(target); ok {
@@ -475,7 +488,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 			return snapshot.ExecutionWorlds[i].InheritEnv[j].Name < snapshot.ExecutionWorlds[i].InheritEnv[k].Name
 		})
 	}
-	configurationHash, err := executionPolicyConfigurationHash(snapshot)
+	configurationHash, err := c.mediaExecutionPolicyConfigurationHash(snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -626,6 +639,8 @@ func cloneExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) *ExecutionP
 		return nil
 	}
 	clone := *snapshot
+	clone.Launch = cloneLaunchSettings(snapshot.Launch)
+	clone.Media = snapshot.Media.clone()
 	clone.Backends = slices.Clone(snapshot.Backends)
 	clone.ModelRoutes = slices.Clone(snapshot.ModelRoutes)
 	clone.ResultContracts = slices.Clone(snapshot.ResultContracts)
@@ -666,6 +681,13 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	if !supportedExecutionPolicySnapshotVersion(snapshot.Version) {
 		return fmt.Errorf("execution policy snapshot version %d is unsupported", snapshot.Version)
 	}
+	if isSelectedDependencyPolicyVersion(snapshot.Version) {
+		if !validFullContentHash(snapshot.DependencyResultViewsHash) {
+			return fmt.Errorf("selected dependency policy hash is missing or invalid")
+		}
+	} else if snapshot.DependencyResultViewsHash != "" {
+		return fmt.Errorf("historical execution policy cannot contain selected dependency views")
+	}
 	if snapshot.ResultCollection != nil && snapshot.Version < executionPolicySnapshotVersion {
 		return fmt.Errorf("legacy execution policy cannot contain result collection")
 	}
@@ -678,7 +700,7 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	if err := validateExecutionDiagnosticSnapshot(snapshot.DiagnosticLoop); err != nil {
 		return err
 	}
-	if err := validateOptionalPolicyHashes(snapshot); err != nil {
+	if err := validateOptionalPolicyFields(snapshot); err != nil {
 		return err
 	}
 	if len(snapshot.Backends) == 0 {
@@ -688,6 +710,9 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 		if strings.TrimSpace(backend.Backend) == "" || strings.TrimSpace(backend.IdentityHash) == "" {
 			return fmt.Errorf("execution policy snapshot backend identity is incomplete")
 		}
+	}
+	if err := validateExecutionProtocolPolicy(snapshot); err != nil {
+		return err
 	}
 	if snapshot.Version >= executionPolicyPreviousSnapshotVersion {
 		for _, route := range snapshot.ModelRoutes {
@@ -720,20 +745,11 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	if err := cost.ValidatePolicySnapshot(snapshot.Cost); err != nil {
 		return fmt.Errorf("execution policy snapshot cost: %w", err)
 	}
-	for _, world := range snapshot.ExecutionWorlds {
-		if strings.TrimSpace(world.Backend) == "" || strings.TrimSpace(world.ProjectRootHash) == "" {
-			return fmt.Errorf("execution policy snapshot execution world is incomplete")
-		}
-		seenAgents := make(map[string]struct{}, len(world.AgentNetworkPolicies))
-		for _, policy := range world.AgentNetworkPolicies {
-			if strings.TrimSpace(policy.Agent) == "" {
-				return fmt.Errorf("execution policy snapshot agent network policy is incomplete")
-			}
-			if _, duplicate := seenAgents[policy.Agent]; duplicate {
-				return fmt.Errorf("execution policy snapshot repeats network policy for agent %q", policy.Agent)
-			}
-			seenAgents[policy.Agent] = struct{}{}
-		}
+	if err := validateExecutionPolicyWorlds(snapshot.ExecutionWorlds); err != nil {
+		return err
+	}
+	if err := validateMediaPolicySnapshot(snapshot.Media, snapshot); err != nil {
+		return err
 	}
 	if strings.TrimSpace(snapshot.ConfigurationHash) == "" {
 		return fmt.Errorf("execution policy snapshot configuration hash is missing")
@@ -748,8 +764,27 @@ func validateExecutionPolicySnapshot(snapshot *ExecutionPolicySnapshot) error {
 	return nil
 }
 
+func validateExecutionPolicyWorlds(worlds []ExecutionWorldPolicySnapshot) error {
+	for _, world := range worlds {
+		if strings.TrimSpace(world.Backend) == "" || strings.TrimSpace(world.ProjectRootHash) == "" {
+			return fmt.Errorf("execution policy snapshot execution world is incomplete")
+		}
+		seenAgents := make(map[string]struct{}, len(world.AgentNetworkPolicies))
+		for _, policy := range world.AgentNetworkPolicies {
+			if strings.TrimSpace(policy.Agent) == "" {
+				return fmt.Errorf("execution policy snapshot agent network policy is incomplete")
+			}
+			if _, duplicate := seenAgents[policy.Agent]; duplicate {
+				return fmt.Errorf("execution policy snapshot repeats network policy for agent %q", policy.Agent)
+			}
+			seenAgents[policy.Agent] = struct{}{}
+		}
+	}
+	return nil
+}
+
 func supportedExecutionPolicySnapshotVersion(version int) bool {
-	return version == executionPolicyLegacySnapshotVersion || version == executionPolicyPreviousSnapshotVersion || version == executionPolicySnapshotVersion
+	return version == executionPolicyLegacySnapshotVersion || version == executionPolicyPreviousSnapshotVersion || version == executionPolicySnapshotVersion || version == selectedDependencyPolicyVersion || version == explicitProtocolFullPolicyVersion || version == explicitProtocolSelectedPolicyVersion
 }
 
 func (s *executionPolicyState) teamMaxConcurrent() int {
@@ -1010,6 +1045,13 @@ func (c *Coordinator) executionPolicySnapshotForComparison(snapshot *ExecutionPo
 	if err != nil {
 		return nil, fmt.Errorf("resolve execution policy snapshot compatibility: %w", err)
 	}
+	if snapshot.Launch == nil {
+		current.snapshot.Launch = nil
+		current.snapshot.ConfigurationHash, err = executionPolicyConfigurationHash(current.snapshot)
+		if err != nil {
+			return nil, err
+		}
+	}
 	// The absence of this field is itself historical tool policy. Compare
 	// the original serialization shape only when no authored transport change
 	// exists; the current new-session default cannot migrate a live session.
@@ -1036,7 +1078,7 @@ func (c *Coordinator) canonicalExecutionPolicySnapshot() (*ExecutionPolicySnapsh
 	}
 	var tree *SessionTree
 	if c.session != nil {
-		tree, err = LoadSessionTree(c.session.Workspace)
+		tree, err = LoadSessionTree(c.canonicalJournalOwner().session.Workspace)
 		if err != nil {
 			return nil, fmt.Errorf("load execution policy session tree: %w", err)
 		}
@@ -1054,7 +1096,7 @@ func activeSemanticRetrievalHash(settings semantic.Settings) string {
 	return settings.Hash()
 }
 
-func validateOptionalPolicyHashes(snapshot *ExecutionPolicySnapshot) error {
+func validateOptionalPolicyFields(snapshot *ExecutionPolicySnapshot) error {
 	if snapshot.DecisionRuntimeHash != "" && !decisionDigestPattern.MatchString(snapshot.DecisionRuntimeHash) {
 		return fmt.Errorf("invalid decision runtime hash")
 	}
@@ -1069,6 +1111,12 @@ func validateOptionalPolicyHashes(snapshot *ExecutionPolicySnapshot) error {
 	}
 	if snapshot.SemanticRetrievalHash != "" && !decisionDigestPattern.MatchString(snapshot.SemanticRetrievalHash) {
 		return fmt.Errorf("invalid semantic retrieval policy hash")
+	}
+	if snapshot.Launch != nil {
+		if snapshot.Version < executionPolicySnapshotVersion {
+			return fmt.Errorf("historical execution policy cannot contain launch settings")
+		}
+		return snapshot.Launch.validate()
 	}
 	return nil
 }

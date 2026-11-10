@@ -74,7 +74,8 @@ func ValidateEventPayload(event RunEvent) error {
 	// Schema v1 intentionally allowed sparse events. Preserve those old
 	// workspaces (and their hash chains); v2 is the current event-first
 	// contract and requires complete durable identity.
-	if event.SchemaVersion >= eventStoreSchemaVersion && (strings.TrimSpace(event.ID) == "" || strings.TrimSpace(event.RunID) == "" || strings.TrimSpace(event.SessionID) == "" || strings.TrimSpace(event.Actor) == "" || strings.TrimSpace(event.Timestamp) == "") {
+	missingRun := strings.TrimSpace(event.RunID) == "" && event.Type != string(EventDerivedForkCreated)
+	if event.SchemaVersion >= eventStoreSchemaVersion && (strings.TrimSpace(event.ID) == "" || missingRun || strings.TrimSpace(event.SessionID) == "" || strings.TrimSpace(event.Actor) == "" || strings.TrimSpace(event.Timestamp) == "") {
 		return fmt.Errorf("event identity is incomplete")
 	}
 	if len(event.Payload) > 0 && !json.Valid(event.Payload) {
@@ -83,6 +84,18 @@ func ValidateEventPayload(event RunEvent) error {
 	if IsTerminalEvent(event.Type) && IsEmptyPayload(event.Payload) {
 		return fmt.Errorf("terminal event %q has empty payload", event.Type)
 	}
+	if event.Type == string(EventContractRecovery) {
+		_, err := decodeContractRecovery(event)
+		return err
+	}
+	if event.Type == string(EventHistoricalResultsGranted) {
+		_, err := decodeHistoricalResultGrants(event)
+		return err
+	}
+	if event.Type == string(EventDerivedForkCreated) {
+		_, err := decodeDerivedForkCreated(event)
+		return err
+	}
 	if event.SchemaVersion == eventStoreLegacySchemaVersion {
 		return nil
 	}
@@ -90,6 +103,33 @@ func ValidateEventPayload(event RunEvent) error {
 }
 
 func validateCurrentEventPayload(event RunEvent) error {
+	if err := validateTaskMediaEventFields(event); err != nil {
+		return err
+	}
+	switch EventType(event.Type) {
+	case EventArtifactReadCoverageObserved:
+		return validateArtifactReadObservationEvent(event)
+	case EventMediaInputAdmitted:
+		_, err := decodeMediaInputEvent(event)
+		return err
+	case EventTaskMediaBound:
+		_, err := decodeTaskMediaEvent(event)
+		return err
+	case EventMediaProviderAdmitted:
+		_, err := decodeMediaProviderEvent(event)
+		return err
+	case EventToolMediaPublished:
+		_, err := decodeToolMediaPublication(event)
+		return err
+	case EventMediaConsumerBound:
+		_, err := decodeMediaConsumerEvent(event)
+		return err
+	default:
+		return validateNonMediaEventPayload(event)
+	}
+}
+
+func validateNonMediaEventPayload(event RunEvent) error {
 	switch EventType(event.Type) {
 	case EventDecisionArtifactObserved, EventArtifactEvidenceObserved:
 		return validateDecisionObservationEvent(event)

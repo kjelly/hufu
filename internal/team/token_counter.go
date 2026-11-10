@@ -476,12 +476,20 @@ func (tc *DefaultTokenCounter) estimatorForAdmission(modelID string, admission a
 
 func (tc *DefaultTokenCounter) CountProviderRequest(ctx context.Context, modelID string, request agent.ProviderRequest) (int, error) {
 	request.ModelID = modelID
+	var err error
+	request, err = agent.ExpandToolMediaRequest(request)
+	if err != nil {
+		return 0, err
+	}
+	if agent.ProviderRequestHasMedia(request) {
+		return tc.countNativeProviderRequest(ctx, modelID, request)
+	}
 	data, err := agent.SerializeProviderRequest(request)
 	if err != nil {
 		return 0, err
 	}
 	estimator := tc.estimatorForAdmission(modelID, request.AdmissionContext)
-	return estimateTextTokens(string(data), estimator), nil
+	return max(estimateTextTokens(string(data), estimator), agent.ProviderRequestTokenFloor(request, data)), nil
 }
 
 // estimateTextTokens calculates tokens using character density and model-family heuristics with conservative safety margin.

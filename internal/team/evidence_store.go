@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/fsutil"
+	"github.com/kjelly/hufu/internal/media"
 )
 
 // PutArtifactRequest describes an immutable artifact to persist. Content is
@@ -33,6 +34,7 @@ type PutArtifactRequest struct {
 	RetrievalURL    string
 	ParentSourceIDs []string
 	CreatedAt       time.Time
+	MediaLimits     media.Limits
 }
 
 type ArtifactStore interface {
@@ -89,8 +91,9 @@ type TrustedArtifactMetadataResolver interface {
 
 type immutableArtifactMetadata struct {
 	ArtifactRef
-	RetrievalURL    string   `json:"retrieval_url,omitempty"`
-	ParentSourceIDs []string `json:"parent_source_ids,omitempty"`
+	Image           *media.Ref `json:"image,omitempty"`
+	RetrievalURL    string     `json:"retrieval_url,omitempty"`
+	ParentSourceIDs []string   `json:"parent_source_ids,omitempty"`
 }
 
 // ArtifactPutResult contains the immutable reference plus diagnostic creation
@@ -143,12 +146,15 @@ func OpenFileArtifactStoreReadOnly(workspace, sourceDir string) (*FileArtifactSt
 	return &FileArtifactStore{root: root, sourceDir: sourceDir, readOnly: true}, nil
 }
 
-func (s *FileArtifactStore) Put(_ context.Context, req PutArtifactRequest) (ArtifactPutResult, error) {
+func (s *FileArtifactStore) Put(ctx context.Context, req PutArtifactRequest) (ArtifactPutResult, error) {
 	if s == nil {
 		return ArtifactPutResult{}, fmt.Errorf("artifact store is nil")
 	}
 	if s.readOnly {
 		return ArtifactPutResult{}, fmt.Errorf("artifact store is read-only")
+	}
+	if strings.HasPrefix(req.ID, "media-") || req.Kind == "image" || req.Role == "media" || strings.HasPrefix(req.MediaType, "image/") {
+		return s.putMedia(ctx, req)
 	}
 	data := req.Content
 	if req.SourcePath != "" {
@@ -275,6 +281,9 @@ func (s *FileArtifactStore) Verify(ctx context.Context, ref ArtifactRef) error {
 	if s == nil || !validArtifactID(ref.ID) {
 		return fmt.Errorf("artifact reference has no id")
 	}
+	if isMediaArtifactID(ref.ID) {
+		return s.verifyMedia(ctx, ref)
+	}
 	b, err := readArtifactFile(ctx, filepath.Join(s.root, "data", ref.ID))
 	if err != nil {
 		return fmt.Errorf("read artifact %q: %w", ref.ID, err)
@@ -290,6 +299,9 @@ func (s *FileArtifactStore) Open(ctx context.Context, id string) (io.ReadCloser,
 	if s == nil || !validArtifactID(id) {
 		return nil, fmt.Errorf("artifact id is required")
 	}
+	if isMediaArtifactID(id) {
+		return s.openMedia(ctx, id)
+	}
 	path := filepath.Join(s.root, "data", id)
 	if ctx != nil {
 		if _, bounded := ctx.Value(artifactReadBudgetKey{}).(*ArtifactReadBudget); bounded {
@@ -297,11 +309,17 @@ func (s *FileArtifactStore) Open(ctx context.Context, id string) (io.ReadCloser,
 			if err != nil {
 				return nil, err
 			}
-			return io.NopCloser(bytes.NewReader(data)), nil
+			return &memoryArtifactReader{Reader: bytes.NewReader(data)}, nil
 		}
 	}
 	return os.Open(path)
 }
+
+// Bounded reads have already charged their bytes; retain seeking so view can
+// return exact source ranges without bypassing the artifact read budget.
+type memoryArtifactReader struct{ *bytes.Reader }
+
+func (*memoryArtifactReader) Close() error { return nil }
 
 // Get resolves immutable artifact metadata by opaque ID. Callers that already
 // hold an artifact reference must use this instead of interpreting the ID as a
@@ -309,6 +327,10 @@ func (s *FileArtifactStore) Open(ctx context.Context, id string) (io.ReadCloser,
 func (s *FileArtifactStore) Get(ctx context.Context, id string) (ArtifactRef, error) {
 	if s == nil || !validArtifactID(id) {
 		return ArtifactRef{}, fmt.Errorf("artifact id is required")
+	}
+	if isMediaArtifactID(id) {
+		metadata, err := s.mediaMetadata(ctx, id)
+		return metadata.ArtifactRef, err
 	}
 	b, err := readArtifactFile(ctx, filepath.Join(s.root, "meta", id+".json"))
 	if err != nil {
@@ -331,6 +353,10 @@ func (s *FileArtifactStore) Get(ctx context.Context, id string) (ArtifactRef, er
 func (s *FileArtifactStore) TrustedArtifactMetadata(ctx context.Context, supplied ArtifactRef) (ArtifactOriginMetadata, error) {
 	if s == nil || !validArtifactID(supplied.ID) {
 		return ArtifactOriginMetadata{}, fmt.Errorf("artifact reference has no id")
+	}
+	if isMediaArtifactID(supplied.ID) {
+		_, err := s.mediaMetadata(ctx, supplied.ID)
+		return ArtifactOriginMetadata{}, err
 	}
 	b, err := readArtifactFile(ctx, filepath.Join(s.root, "meta", supplied.ID+".json"))
 	if err != nil {
@@ -378,6 +404,15 @@ func (s *FileArtifactStore) Resolve(ctx context.Context, supplied ArtifactRef) (
 	canonical, err := s.Get(ctx, supplied.ID)
 	if err != nil {
 		return ArtifactRef{}, err
+	}
+	if isMediaArtifactID(supplied.ID) {
+		if err := checkMediaArtifactClaims(supplied, canonical); err != nil {
+			return ArtifactRef{}, err
+		}
+		if err := s.Verify(ctx, canonical); err != nil {
+			return ArtifactRef{}, err
+		}
+		return canonical, nil
 	}
 	if err := s.authorizeReferencePath(canonical.Path); err != nil {
 		return ArtifactRef{}, err
@@ -494,6 +529,11 @@ func (s *FileArtifactStore) ListByTask(ctx context.Context, taskID string) ([]Ar
 			refs = append(refs, ref)
 		}
 	}
+	images, err := s.listTaskMedia(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	refs = append(refs, images...)
 	sort.Slice(refs, func(i, j int) bool { return refs[i].ID < refs[j].ID })
 	return refs, nil
 }
@@ -544,6 +584,7 @@ type EvidenceBinding struct {
 	BoundInputs                   map[string]string `json:"bound_inputs,omitempty"`
 	ActionInvocationID            string            `json:"action_invocation_id,omitempty"`
 	RuntimeOutputsHash            string            `json:"runtime_outputs_hash,omitempty"`
+	RuntimeMediaHash              string            `json:"runtime_media_hash,omitempty"`
 }
 
 type EvidenceManifest struct {
@@ -654,6 +695,9 @@ func verifyEvidenceBinding(manifest EvidenceManifest, result EvidenceResult) err
 		if strings.TrimSpace(b.ActionInvocationID) == "" || !runInputHashPattern.MatchString(b.RuntimeOutputsHash) {
 			return fmt.Errorf("evidence requirement %q has incomplete runtime output binding", result.RequirementID)
 		}
+	}
+	if b.RuntimeMediaHash != "" && !runInputHashPattern.MatchString(b.RuntimeMediaHash) {
+		return fmt.Errorf("evidence requirement %q has an invalid runtime media binding", result.RequirementID)
 	}
 	wantIDs := make([]string, 0, len(result.ArtifactRefs))
 	if len(result.ArtifactRefs) == 0 {

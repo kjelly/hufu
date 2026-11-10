@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/kjelly/hufu/internal/auditverify"
+	"github.com/kjelly/hufu/internal/buildinfo"
 	"github.com/kjelly/hufu/internal/team"
 )
 
@@ -24,6 +25,7 @@ type AttemptSummary struct {
 }
 
 type RunData struct {
+	HufuBuild         *buildinfo.Info           `json:"hufu_build,omitempty"`
 	RequestAcceptance *RequestAcceptanceSummary `json:"request_acceptance,omitempty"`
 	RunID             string                    `json:"run_id"`
 	TerminalEventID   string                    `json:"terminal_event_id,omitempty"`
@@ -153,6 +155,7 @@ type ReplanData struct {
 }
 
 type TaskData struct {
+	HufuBuild         *buildinfo.Info           `json:"hufu_build,omitempty"`
 	ResultCandidate   *ResultCandidateData      `json:"result_candidate,omitempty"`
 	RunID             string                    `json:"run_id"`
 	TaskID            string                    `json:"task_id"`
@@ -232,6 +235,7 @@ func projectRunData(ctx context.Context, query InspectQuery, lineage Lineage) (R
 	}
 
 	data := RunData{
+		HufuBuild:      runBuild(selected.raw, query.RunID),
 		RunID:          query.RunID,
 		Acceptance:     "unavailable",
 		Completion:     "unavailable",
@@ -406,6 +410,7 @@ func projectTask(item *team.TodoItem, query InspectQuery) TaskData {
 
 func projectTaskWithEvents(item *team.TodoItem, query InspectQuery, events []IndexedEvent) TaskData {
 	data := TaskData{
+		HufuBuild:         indexedRunBuild(events, query.RunID),
 		RunID:             query.RunID,
 		TaskID:            item.ID,
 		Status:            string(item.Status),
@@ -634,4 +639,24 @@ func attemptRecoveryByReceipt(events []IndexedEvent) map[string]*AttemptRecovery
 		out[attemptReceiptKey(observation.RunID, observation.TaskID, observation.Attempt, observation.ModelExecutionID)] = data
 	}
 	return out
+}
+
+// runBuild reads only recorded identity; legacy runs remain unknown.
+func runBuild(events []team.RunEvent, runID string) *buildinfo.Info {
+	for _, event := range events {
+		if event.RunID == runID && event.Type == string(team.EventRunStarted) {
+			var payload team.LifecycleEventPayload
+			if json.Unmarshal(event.Payload, &payload) == nil {
+				return payload.HufuBuild
+			}
+		}
+	}
+	return nil
+}
+func indexedRunBuild(events []IndexedEvent, runID string) *buildinfo.Info {
+	raw := make([]team.RunEvent, 0, len(events))
+	for _, event := range events {
+		raw = append(raw, event.Event)
+	}
+	return runBuild(raw, runID)
 }

@@ -70,7 +70,7 @@ func attachMCPActionFake(t *testing.T, manager *mcp.MCPToolManager, name string,
 // newHTTPMCPActionManager serves fake over streamable HTTP. Unlike the
 // in-process transport, which calls the server synchronously, it honors the
 // caller's deadline, so it is the transport for timeout tests.
-func newHTTPMCPActionManager(t *testing.T, fake *mcpActionFake) *mcp.MCPToolManager {
+func newHTTPMCPActionManager(t *testing.T, fake *mcpActionFake, configure ...func(*mcp.MCPServerConfig)) *mcp.MCPToolManager {
 	t.Helper()
 	httpServer := httptest.NewServer(mcpserver.NewStreamableHTTPServer(fake.server))
 	t.Cleanup(httpServer.Close)
@@ -82,7 +82,11 @@ func newHTTPMCPActionManager(t *testing.T, fake *mcpActionFake) *mcp.MCPToolMana
 		t.Fatal(err)
 	}
 	manager := mcp.NewMCPToolManager("", "")
-	if err := manager.AttachClient(t.Context(), "diagnostics", mcp.MCPServerConfig{Type: "remote", URL: httpServer.URL}, cli); err != nil {
+	config := mcp.MCPServerConfig{Type: "remote", URL: httpServer.URL}
+	for _, apply := range configure {
+		apply(&config)
+	}
+	if err := manager.AttachClient(t.Context(), "diagnostics", config, cli); err != nil {
 		t.Fatalf("AttachClient: %v", err)
 	}
 	t.Cleanup(func() { _ = manager.Close() })

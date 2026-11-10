@@ -186,6 +186,9 @@ func (m ChatModel) statusText() string {
 		"last: " + last,
 		"theme:" + string(m.dash.themeMode),
 	}
+	if m.pendingImages != nil {
+		parts = append([]string{m.imageStatusText()}, parts...)
+	}
 	if activity := m.activityText(); activity != "" {
 		parts = append([]string{"⟳ " + activity}, parts...)
 	}

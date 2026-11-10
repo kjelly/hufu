@@ -595,10 +595,7 @@ func (w *runtimeWorkflow) observe(items []*TodoItem) error {
 			if VerifiedTaskResolution(item, items, resolutionRunID(items, item)) != nil {
 				continue
 			}
-			if optionalContracts[item.ContractID] {
-				return w.failLocked(item.ID, item.Agent, item.Agent, "OPTIONAL_TASK_BLOCKED", item.Detail, false, PhaseStatusBlocked)
-			}
-			return w.failLocked(item.ID, item.Agent, item.Agent, "TASK_BLOCKED", item.Detail, false, PhaseStatusBlocked)
+			return w.failLocked(item.ID, item.Agent, item.Agent, blockedTaskFailureCategory(optionalContracts[item.ContractID]), item.Detail, false, PhaseStatusBlocked)
 		}
 	}
 	for contractID := range expectedContracts {
@@ -724,6 +721,10 @@ func (w *runtimeWorkflow) reconcileFailure(taskID string) bool {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.reconcileFailureLocked(taskID)
+}
+
+func (w *runtimeWorkflow) reconcileFailureLocked(taskID string) bool {
 	if w.state != PhaseFailed || w.failedTaskID == "" || w.failedTaskID != taskID {
 		return false
 	}
@@ -736,6 +737,16 @@ func (w *runtimeWorkflow) reconcileFailure(taskID string) bool {
 		Agent: "", Provider: "", FailureSignature: "", Artifacts: []ArtifactRef{},
 	})
 	return true
+}
+
+func (w *runtimeWorkflow) reconcileCollectedFailure(taskID string, phase Phase, original map[Phase]PhaseResult) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.state != PhaseFailed || taskID == "" || original[phase].Status != PhaseStatusBlocked || !sameCanonicalEvidence(w.results, original) {
+		return false
+	}
+	w.failedTaskID, w.failedFromPhase = taskID, phase
+	return w.reconcileFailureLocked(taskID)
 }
 
 func (w *runtimeWorkflow) fail(component, source, category, message string, retryable bool) error {

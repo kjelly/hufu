@@ -230,3 +230,47 @@ func TestWithToolCallIndexesLeavesNonStreamResponses(t *testing.T) {
 		t.Fatalf("body = %s, want it unchanged", raw)
 	}
 }
+
+func TestToolCallIndexTransportOnlyRewritesChatPost(t *testing.T) {
+	// Include a Chat-shaped payload even on /responses: routing, rather than
+	// accidentally absent keys, must protect all non-Chat event bytes.
+	original := sseToolChunk(sseToolCall(0, "first", "a", "{}"), sseToolCall(0, "second", "b", "{}"))
+	for _, tc := range []struct {
+		method, path string
+		rewrite      bool
+	}{
+		{http.MethodPost, "/v1/chat/completions", true},
+		{http.MethodPost, "/.hufu-provider/cap/v1/chat/completions", true},
+		{http.MethodPost, "/v1/responses", false},
+		{http.MethodGet, "/v1/chat/completions", false},
+		{http.MethodPost, "/other", false},
+	} {
+		t.Run(tc.method+tc.path, func(t *testing.T) {
+			client := withToolCallIndexes(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(original))}, nil
+			})})
+			request, err := http.NewRequestWithContext(t.Context(), tc.method, "https://fixture.invalid"+tc.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := client.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			raw, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (string(raw) != original) != tc.rewrite {
+				t.Fatalf("rewrite=%t body=%s", tc.rewrite, raw)
+			}
+			if tc.rewrite {
+				calls := streamToolCalls(t, string(raw))
+				if len(calls) != 1 || len(calls[0]) != 2 || calls[0][1].Index != 1 {
+					t.Fatalf("calls=%+v", calls)
+				}
+			}
+		})
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 
 	"path/filepath"
 	"strings"
@@ -91,9 +92,10 @@ type PendingWrapUp struct {
 }
 
 type SessionData struct {
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
-	Rounds    int    `json:"rounds"`
+	MediaInputSnapshots []MediaInputSnapshot `json:"media_input_snapshots,omitempty"`
+	CreatedAt           string               `json:"created_at"`
+	UpdatedAt           string               `json:"updated_at"`
+	Rounds              int                  `json:"rounds"`
 	// ExecutionPolicySnapshot is the durable, redacted admission record that
 	// freezes scheduler limits, model routing, execution worlds, and inherited
 	// environment values before any task or provider call can begin.
@@ -136,6 +138,7 @@ type SessionData struct {
 	// history so a resumed run cannot infer a completed phase from model text.
 	WorkflowState               Phase                      `json:"workflow_state,omitempty"`
 	WorkflowCycleID             string                     `json:"workflow_cycle_id,omitempty"`
+	DerivedFork                 *DerivedForkRef            `json:"derived_fork,omitempty"`
 	WorkflowTaskIDFloor         int                        `json:"workflow_task_id_floor,omitzero"`
 	PhaseResults                map[Phase]PhaseResult      `json:"phase_results,omitempty"`
 	RuntimeWorkspace            string                     `json:"runtime_workspace,omitempty"`
@@ -146,6 +149,9 @@ type SessionData struct {
 	PendingTerminalCommit       *PendingTerminalCommit     `json:"pending_terminal_commit,omitempty"`
 	PendingWrapUp               *PendingWrapUp             `json:"pending_wrap_up,omitempty"`
 	CoordinatorContextManifests []ContextInjectionManifest `json:"coordinator_context_manifests,omitempty"`
+	// HistoricalResultGrants is a disposable reference to the cycle's immutable
+	// grant event. Only the canonical event and its index establish authority.
+	HistoricalResultGrants *runtimestore.HistoricalGrantCycleRef `json:"historical_result_grants,omitempty"`
 	// DecisionProjections is a disposable presentation projection rebuilt from
 	// the canonical decision events when needed. It is persisted so a resumed
 	// session can surface assumption invalidation before the index is opened.
@@ -286,12 +292,18 @@ func (s *SessionData) addEntryAt(role, content, timestamp string) {
 // so isolated coordinators cannot accidentally alias catalog state.
 func cloneSession(orig *TeamSession, newWorkspace string) *TeamSession {
 	clone := *orig
+	if orig.LaunchOptions != nil {
+		clone.LaunchOptions = new(*orig.LaunchOptions)
+		clone.LaunchOptions.ForcedSkills = slices.Clone(orig.LaunchOptions.ForcedSkills)
+	}
 	clone.Workspace = newWorkspace
 	clone.InvariantCatalog = cloneInvariantCatalog(orig.InvariantCatalog)
 	clone.RunInputDefinitions = cloneRunInputDefinitions(orig.RunInputDefinitions)
 	clone.ActionCatalog = orig.ActionCatalog.clone()
 	clone.GlobalDecisionRuntime = orig.GlobalDecisionRuntime.Clone()
 	clone.Config.DecisionRuntime = orig.Config.DecisionRuntime.Clone()
+	clone.MediaPolicy = orig.MediaPolicy.Clone()
+	clone.Config.Media = orig.Config.Media.Clone()
 	clone.GlobalControlDecisions = orig.GlobalControlDecisions.Clone()
 	clone.Config.ControlDecisions = orig.Config.ControlDecisions.Clone()
 	clone.GlobalSemanticRetrieval = orig.GlobalSemanticRetrieval.Clone()

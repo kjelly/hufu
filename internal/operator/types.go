@@ -8,10 +8,19 @@ import "github.com/kjelly/hufu/internal/cost"
 
 const SchemaVersion = 1
 
+const ActionKindInspect = "inspect"
+
+const (
+	ActionAvailabilityAvailable = "available"
+	ActionAvailabilityBlocked   = "blocked"
+	ActionAvailabilityUnknown   = "unknown"
+)
+
 const (
 	ActionSelectScope         = "select-scope"
 	ActionInspectIntegrity    = "inspect-integrity"
 	ActionInspectTaskRecovery = "inspect-task-recovery"
+	ActionAssessResultRepair  = "assess-result-repair"
 	ActionProvideInput        = "provide-input"
 	ActionReviewApproval      = "review-approval"
 	ActionWaitRuntime         = "wait-runtime"
@@ -62,6 +71,7 @@ type OperatorSnapshot struct {
 	Learning         LearningView        `json:"learning"`
 	Cost             *cost.View          `json:"cost,omitempty"`
 	Observations     *ObservationSummary `json:"observations,omitempty"`
+	DerivedFork      *DerivedForkView    `json:"derived_fork,omitempty"`
 	PrimaryAction    *ActionSuggestion   `json:"primary_action"`
 	SecondaryActions []ActionSuggestion  `json:"secondary_actions"`
 }
@@ -209,30 +219,40 @@ type ActionPreconditions struct {
 // RecoveryEligibility is a read-only projection of the existing runtime
 // recovery and policy decision. It does not grant permission to mutate.
 type RecoveryEligibility struct {
-	TaskID              string
-	Attempt             int
-	TaskStatus          string
-	ExpectedEventID     string
-	ExpectedEventHash   string
-	ExternalEffectState string
-	EffectivePolicy     string
-	PolicyRevision      string
-	ExpectedRevision    string
-	PolicyDenied        bool
-	ResumeEligible      bool
-	ReconcileEligible   bool
-	RetryEligible       bool
-	CapabilityKnown     bool
-	ReasonCode          string
-	SourceRefs          []string
+	ResultCollectionBlocked     bool
+	ResultCollectionInterrupted bool
+	TaskID                      string
+	Attempt                     int
+	TaskStatus                  string
+	ExpectedEventID             string
+	ExpectedEventHash           string
+	ExternalEffectState         string
+	EffectivePolicy             string
+	PolicyRevision              string
+	ExpectedRevision            string
+	PolicyDenied                bool
+	ResumeEligible              bool
+	ReconcileEligible           bool
+	RetryEligible               bool
+	CapabilityKnown             bool
+	ReasonCode                  string
+	SourceRefs                  []string
+}
+
+// HasCollectionRecovery selects a read-only assessment, never a worker retry.
+func (r *RecoveryEligibility) HasCollectionRecovery() bool {
+	return r != nil && ((r.ResultCollectionBlocked && r.TaskStatus == "blocked") ||
+		(r.ResultCollectionInterrupted && r.TaskStatus == "error"))
 }
 
 type ActionSelectionFacts struct {
-	Snapshot                OperatorSnapshot
-	Recovery                *RecoveryEligibility
-	SessionExpectedRevision string
-	SessionSourceRefs       []string
-	MutationFacadeAvailable bool
+	Snapshot OperatorSnapshot
+	Recovery *RecoveryEligibility
+	// ResultCollectionRecoveries are per-task previews, independent of the primary safety target.
+	ResultCollectionRecoveries []*RecoveryEligibility
+	SessionExpectedRevision    string
+	SessionSourceRefs          []string
+	MutationFacadeAvailable    bool
 }
 
 type OperatorSummary struct {

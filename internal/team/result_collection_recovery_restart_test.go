@@ -1,6 +1,7 @@
 package team
 
 import (
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"testing"
 
@@ -120,6 +121,45 @@ func TestResultCollectionRecoveryRestartsAtDurableBoundaries(t *testing.T) {
 			if failures == 0 {
 				t.Fatal("historical failure disappeared")
 			}
+			if item.FailureEvent != nil {
+				t.Fatal("successful result repair retained an active failure")
+			}
+			for _, replayed := range ReduceToTodoList(events) {
+				if replayed.ID == id {
+					if err := compareSingleTaskProjection(item, replayed); err != nil {
+						t.Fatalf("successful repair differs after replay: %v", err)
+					}
+				}
+			}
+			// Historical writers omitted nil on success and synthesized a
+			// failure packet for the reopened protocol state. Keep those bytes
+			// immutable in storage; replay must still restore the cleared stop.
+			legacy := append([]RunEvent(nil), events...)
+			for i := range legacy {
+				if legacy[i].TaskID != id {
+					continue
+				}
+				var payload map[string]jsontext.Value
+				if err := json.Unmarshal(legacy[i].Payload, &payload); err != nil {
+					t.Fatal(err)
+				}
+				if legacy[i].Type == "task_protocol_incomplete" {
+					payload["failure_event"] = jsontext.Value(`{"task_id":"` + id + `","failure_class":"protocol","summary":"reopened collection"}`)
+				} else if legacy[i].Type == "task_completed" || legacy[i].Type == "task_verifying" {
+					delete(payload, "failure_event")
+				}
+				legacy[i].Payload, err = json.Marshal(payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, replayed := range ReduceToTodoList(legacy) {
+				if replayed.ID == id {
+					if err := compareSingleTaskProjection(item, replayed); err != nil {
+						t.Fatalf("historical repair differs after replay: %v", err)
+					}
+				}
+			}
 		})
 	}
 }
@@ -148,26 +188,38 @@ func TestResultCollectionRecoveryIndependentClaims(t *testing.T) {
 	}
 }
 
-// Ensure the new optional scope fields do not invalidate persisted v1 grants.
+// Historical grants keep the proof rules saved by their evaluator revision.
 func TestResultCollectionRecoveryLegacyAssessmentFingerprint(t *testing.T) {
 	c, id, _ := blockedRecoveryFixture(t, `{"status":"success","summary":"report"}`, true, RepairFailureSource)
-	a, err := c.AssessResultCollectionRecovery(t.Context(), id)
+	original, err := c.AssessResultCollectionRecovery(t.Context(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.TaskID, a.BranchID, a.SourceRunID = "", "", ""
-	a.ValidatorRevision = 1
-	a.Fingerprint, err = recoveryAssessmentFingerprint(a)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := json.Marshal(a)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var restored ResultCollectionRecoveryAssessment
-	if err := json.Unmarshal(body, &restored, collectionDurationFormat); err != nil || validateRecoveryAssessment(&restored) != nil {
-		t.Fatal("legacy assessment no longer validates", err)
+	for _, revision := range []int{1, 2} {
+		a := cloneRecoveryAssessment(original)
+		a.ValidatorRevision = revision
+		if revision == 1 {
+			a.TaskID, a.BranchID, a.SourceRunID = "", "", ""
+		}
+		var checks []ResultCollectionRecoveryCheck
+		for _, check := range a.Checks {
+			if check.Code != "execution_ended" {
+				checks = append(checks, check)
+			}
+		}
+		a.Checks = checks
+		a.Fingerprint, err = recoveryAssessmentFingerprint(a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := json.Marshal(a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var restored ResultCollectionRecoveryAssessment
+		if err := json.Unmarshal(body, &restored, collectionDurationFormat); err != nil || validateRecoveryAssessment(&restored) != nil {
+			t.Fatal("legacy assessment no longer validates", revision, err)
+		}
 	}
 }
 

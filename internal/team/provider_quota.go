@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
-	"github.com/kjelly/hufu/internal/waitbudget"
 )
 
 var _ agent.ProviderRequestRecovery = providerRequestAdmission{}
@@ -19,7 +18,7 @@ func (c *Coordinator) ProviderQuotaWaiting() bool {
 }
 
 func (a providerRequestAdmission) CanRecoverProviderRequest(request agent.ProviderRequest) bool {
-	return a.c != nil && a.c.providerManager.SupportsProviderQuota(request.ModelID)
+	return a.c != nil
 }
 
 func (a providerRequestAdmission) WaitProviderRequest(ctx context.Context, request agent.ProviderRequest) (func(bool) error, error) {
@@ -36,22 +35,40 @@ func (a providerRequestAdmission) WaitProviderRequest(ctx context.Context, reque
 }
 
 func (a providerRequestAdmission) RecoverProviderRequest(ctx context.Context, request agent.ProviderRequest, cause error) (bool, error) {
-	if a.c == nil || a.c.providerManager == nil {
+	if a.c == nil {
 		return false, nil
 	}
 	waitCtx, cancel := a.quotaWaitContext(ctx)
 	defer cancel()
+	if agent.IsTransientProviderError(cause) {
+		if request.TransientRetries < 0 || request.TransientRetries >= agent.ProviderTransientRetryLimit {
+			return false, nil
+		}
+		delay := time.Second << request.TransientRetries
+		a.c.report(a.c.newEvent("step").withMessage(fmt.Sprintf("transient provider failure; retrying model %s (%d/%d) in %s", request.ModelID, request.TransientRetries+1, agent.ProviderTransientRetryLimit, delay)))
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-waitCtx.Done():
+			return false, waitCtx.Err()
+		case <-timer.C:
+			return true, nil
+		}
+	}
+	if a.c.providerManager == nil {
+		return false, nil
+	}
 	return a.c.providerManager.RecoverProviderQuota(waitCtx, request.ModelID, cause, providerQuotaJournal(a))
 }
 
-// A working-time pause must never extend the operator's wall-clock budget.
-// The usual budget checks run at step boundaries, so a long quota wait needs
-// its own ordinary deadline rather than waiting for the next model step.
+// Provider cooldowns consume run duration, while explicit runtime idle (page
+// dwell and browser verification) does not. Long quota waits need a timer in
+// addition to the usual step-boundary budget checks.
 func (a providerRequestAdmission) quotaWaitContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	owner := a.c.tokenBudgetRoot()
 	if owner != nil {
 		if limit := owner.Budget().Limits().MaxWallClock; limit > 0 {
-			return waitbudget.WithWallDeadline(ctx, owner.sessionTime.Add(limit))
+			return owner.runIdle.WithTimeout(ctx, limit-owner.runBudgetElapsed())
 		}
 	}
 	return ctx, func() {}

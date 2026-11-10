@@ -184,6 +184,12 @@ func TestTaskOccurrenceDigestBindsEveryImmutableField(t *testing.T) {
 		{"ContractID", func(p *TaskOccurrenceProjection) { p.ContractID = "other-contract" }},
 		{"ContractHash", func(p *TaskOccurrenceProjection) { p.ContractHash = "other-hash" }},
 		{"ContractRevision", func(p *TaskOccurrenceProjection) { p.ContractRevision++ }},
+		{"DependencyResultView", func(p *TaskOccurrenceProjection) {
+			p.DependencyResultView = &DependencyResultViewSpec{Mode: "selected", Fields: []string{"summary"}}
+		}},
+		{"HistoricalResultBinding", func(p *TaskOccurrenceProjection) {
+			p.HistoricalResultBinding = &HistoricalResultTaskBinding{TaskID: "another-task"}
+		}},
 		{"Agent", func(p *TaskOccurrenceProjection) { p.Agent = "other-agent" }},
 		{"Desc", func(p *TaskOccurrenceProjection) { p.Desc = "changed description" }},
 		{"Goal", func(p *TaskOccurrenceProjection) { p.Goal = "changed goal" }},

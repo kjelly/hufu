@@ -1,12 +1,60 @@
 package team
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 )
+
+func TestResultCollectionResumesOnlyOriginalArtifactCapabilities(t *testing.T) {
+	c, item, ctx, receipt := resultCollectionFixture(t)
+	ref, err := mustArtifactStore(t, c.session.Workspace).Put(t.Context(), PutArtifactRequest{Kind: "evidence", Path: "source.txt", Content: []byte("verified original evidence")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalScope := &ArtifactAccessScope{RunID: c.executionRunID, TaskID: item.ID, Attempt: 1, StoreRoot: c.artifactStoreRootPath(), AuthorizedRefs: []ArtifactRef{ref.ArtifactRef}}
+	receipt.ArtifactScope = originalScope
+	before, err := collectionDigest(originalScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp, err := c.beginResultCollection(ctx, item.ID, receipt, "completed original work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.revokeTaskOccurrence(item.ID)
+	c.executionRunID = "new-result-recovery"
+	stale := context.WithValue(ctx, artifactAccessScopeKey, originalScope)
+	if _, ok := c.authorizedDecisionEvidence(stale, ref.ID); ok {
+		t.Fatal("old invocation scope gained authority without sealed-work recovery")
+	}
+	restored, err := c.restoreCollectionContext(WithSessionResume(t.Context()), cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current, ok := c.authorizedDecisionEvidence(restored, ref.ID); !ok || current.SHA256 != ref.SHA256 {
+		t.Fatal("recovered scope lost original artifact authority")
+	}
+	for _, bad := range []context.Context{context.WithValue(restored, todoIDKey{}, "different-task"), context.WithValue(restored, executionAttemptKey{}, 2)} {
+		if _, ok := c.authorizedDecisionEvidence(bad, ref.ID); ok {
+			t.Fatal("recovered scope escaped its task or attempt")
+		}
+	}
+	if _, ok := c.authorizedDecisionEvidence(restored, "unknown"); ok {
+		t.Fatal("recovery added an artifact capability")
+	}
+	after, err := collectionDigest(originalScope)
+	if err != nil || before != after || originalScope.RunID == c.executionRunID {
+		t.Fatal("recovery rewrote the sealed original scope", err)
+	}
+}
 
 func TestResultCollectionResumeCompletesDurableClaimsWithoutWorkerOrProvider(t *testing.T) {
 	for _, state := range []ResultCollectionState{ResultCollectionReceived, ResultCollectionPrepared, ResultCollectionCommitted} {
@@ -213,5 +261,107 @@ func TestResultCollectionCommittedGrantFinalizesWithoutReadmission(t *testing.T)
 	current = c.todoItemByID(item.ID)
 	if current.Status != TaskDone || current.ExecutionReceipt.ResultCollection.TurnsUsed != 1 {
 		t.Fatal("accepted result was not finalized locally")
+	}
+}
+
+func TestCurrentResultCollectionMatchesLifecycleOccurrence(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		retries, work, occurrence int
+		current                   bool
+	}{
+		{"initial", 0, 1, 1, true}, {"execution retry", 1, 1, 1, false}, {"new dispatch", 1, 1, 2, true},
+		{"in-dispatch retry", 0, 2, 1, true}, {"legacy current", 0, 1, 0, true}, {"legacy unknown", 1, 1, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			item := &TodoItem{Retries: tc.retries, ExecutionReceipt: &ExecutionReceipt{Attempt: tc.work, OccurrenceAttempt: tc.occurrence, ResultCollection: &ResultCollectionCheckpoint{Attempt: tc.work}}}
+			if (currentResultCollection(item) != nil) != tc.current {
+				t.Fatal("collection selected across lifecycle occurrences")
+			}
+		})
+	}
+}
+
+func TestResultCollectionDAGRetryExecutesFreshWork(t *testing.T) {
+	for _, replay := range []bool{false, true} {
+		t.Run(fmt.Sprint(replay), func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/chat/completions" {
+					_, _ = fmt.Fprint(w, `{"model":"test","parameters":"num_ctx 131072","capabilities":["completion","tools"]}`)
+					return
+				}
+				calls.Add(1)
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprint(w, "data: {\"id\":\"fresh\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"{\\\"status\\\":\\\"success\\\",\\\"summary\\\":\\\"corrected work\\\"}\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+			}))
+			t.Cleanup(server.Close)
+			c, item, ctx, receipt := resultCollectionTaskFixture(t, server.URL+"/v1", true, func(spec *TodoSpec) {
+				spec.SideEffect = SideEffectNone
+				spec.Recovery = RecoveryRetry
+				spec.VerifySpec = &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: []TaskResultAssertion{{Pointer: "/summary", Op: "non_empty"}}}
+			})
+			// Exercise the same model execution identity used by real dispatches,
+			// rather than the fixture's unrelated work-execution-1 placeholder.
+			receipt.ModelExecutionID = c.newTaskContextRequest(taskDefFromTodoItem(item), item.ID, 1, ContextTriggerTaskDispatch, item.Agent, "worker", nil).ModelExecutionID
+			cp, err := c.beginResultCollection(ctx, item.ID, receipt, "original work")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cp, err = c.reserveResultCollection(ctx, cp, "first-collector", []byte(`{"tools":[]}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cp, err = c.recordCollectionResponse(ctx, cp, []byte(`{"status":"success","summary":"original work"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cp, err = c.prepareCollectionClaims(ctx, cp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.commitPreparedCollection(ctx, cp); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.executeTask(WithSessionResume(t.Context()), taskDefFromTodoItem(item), item.ID); err != nil {
+				t.Fatal(err)
+			}
+			task := taskDefFromTodoItem(item)
+			originalReceipt := cloneExecutionReceipt(collectionReceipt(c.todoItemByID(item.ID), cp))
+			scheduler := mustNewDAGScheduler(t, c, []TaskDef{task}, []*TodoItem{item}, nil)
+			scheduler.states[0] = TaskDone
+			if err := scheduler.resetTaskWithRemediation(t.Context(), 0, "verifier requires corrected work", &RemediationContext{FailureClass: FailureVerify, Summary: "correct the report"}); err != nil {
+				t.Fatal(err)
+			}
+			item = c.todoItemByID(item.ID)
+			if item.Retries != 1 || currentResultCollection(item) != nil || item.ExecutionReceipt.ResultCollection.State != ResultCollectionCommitted {
+				t.Fatal("reset reused or erased historical collection")
+			}
+			if replay {
+				events, err := c.EventJournal().ReadEvents(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				c.taskTracker = NewTaskTracker()
+				c.taskTracker.TodoList().AddReserved(ReduceToTodoList(events))
+				item = c.todoItemByID(item.ID)
+			}
+			worker := scriptWorker(textTurn("corrected work after verifier feedback"))
+			c.workerAgentOverride = worker
+			c.providerBoundaryStart = func(context.Context, string) error { return nil }
+			c.delegatedTasks = make(map[string]int)
+			testTaskCache(c).entries = make(map[string][]cachedTaskEntry)
+			if _, err := c.executeTask(t.Context(), taskDefFromTodoItem(item), item.ID); err != nil {
+				t.Fatal(err)
+			}
+			current := c.todoItemByID(item.ID)
+			fresh := currentResultCollection(current)
+			if worker.Calls() != 1 || calls.Load() != 1 || current.Status != TaskDone || fresh == nil || fresh.Work == cp.Work || fresh.ModelExecutionID == cp.ModelExecutionID || current.ExecutionReceipt.OccurrenceAttempt != 2 || current.TypedResult.Summary != "corrected work" {
+				t.Fatalf("work=%d collection=%d status=%s", worker.Calls(), calls.Load(), current.Status)
+			}
+			if !sameCanonicalEvidence(&originalReceipt, collectionReceipt(current, cp)) {
+				t.Fatal("DAG retry rewrote the prior lifecycle's receipt or verification")
+			}
+		})
 	}
 }

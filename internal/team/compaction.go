@@ -1134,6 +1134,9 @@ func LoadCompactionHistory(workspace string) ([]CompactionRecord, error) {
 		})
 		history := make([]CompactionRecord, 0, len(ids))
 		for _, id := range ids {
+			if state.Generations[id].Kind == nativeInputGenerationKind || state.Generations[id].Kind == nativeResetGenerationKind {
+				continue
+			}
 			history = append(history, compactionRecordFromGeneration(state.Generations[id]))
 		}
 		return history, nil

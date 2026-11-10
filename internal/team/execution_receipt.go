@@ -168,6 +168,7 @@ type ToolInvocationReceipt struct {
 
 // ExecutionReceipt represents the execution provenance and metadata for a single task run attempt.
 type ExecutionReceipt struct {
+	MediaInputDigest              string            `json:"media_input_digest,omitempty"`
 	RunID                         string            `json:"run_id"`
 	TaskID                        string            `json:"task_id"`
 	Attempt                       int               `json:"attempt"`
@@ -177,6 +178,7 @@ type ExecutionReceipt struct {
 	BoundInputs                   map[string]string `json:"bound_inputs,omitempty"`
 	ActionInvocationID            string            `json:"action_invocation_id,omitempty"`
 	RuntimeOutputsHash            string            `json:"runtime_outputs_hash,omitempty"`
+	RuntimeMediaHash              string            `json:"runtime_media_hash,omitempty"`
 	CatalogRuntimeFields
 	// OccurrenceAttempt is the occurrence-level attempt number (Retries+1),
 	// the same value lifecycle event payloads carry as "attempt". Attempt is
@@ -246,7 +248,11 @@ type ExecutionReceipt struct {
 	// SubmittedResult retains a structurally valid but non-terminal worker
 	// handoff for this exact attempt. It is evidence for a bounded replay and
 	// must never satisfy the next attempt's requires-result contract.
-	SubmittedResult  *TaskResult       `json:"submitted_result,omitempty"`
+	SubmittedResult *TaskResult `json:"submitted_result,omitempty"`
+	// AcceptedResult preserves the complete terminal result of an isolated
+	// fanout leaf after its verification and completion gates passed. It is
+	// runtime-owned evidence, distinct from a non-terminal SubmittedResult.
+	AcceptedResult   *TaskResult       `json:"accepted_result,omitempty"`
 	RepairProvenance *RepairProvenance `json:"repair_provenance,omitempty"`
 	// ResultCollection preserves work and collection progress independently of
 	// terminal outcome. Its absence retains the historical tool protocol.

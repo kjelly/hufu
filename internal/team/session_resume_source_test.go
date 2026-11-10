@@ -38,7 +38,7 @@ func TestResumeSourceSelectsCanonicalBranchWithoutFallback(t *testing.T) {
 	if !before.equal(snapshotRuntimeState(t, workspace)) {
 		t.Fatal("reading original branch changed active results")
 	}
-	if err := ActivateResumeSource(t.Context(), workspace, source); err != nil {
+	if err := ActivateVersionedResumeSource(t.Context(), workspace, source, WorkspaceVersionContext{}); err != nil {
 		t.Fatal(err)
 	}
 	loaded, _, err := LoadSessionReadOnly(workspace)

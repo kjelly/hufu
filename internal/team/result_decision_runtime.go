@@ -164,7 +164,7 @@ func (c *Coordinator) runBoundDecision(ctx context.Context, metadata InvocationM
 	if err := validateResultDecisionCatalog(c.session, c.session.Agents[metadata.AgentName], compiled); err != nil {
 		return reject(err)
 	}
-	results := c.dependencyResultsForTask(metadata.TaskID)
+	results := c.dependencyResultsForBinding(metadata.TaskID)
 	if err := c.validateDependencyPayloads(results); err != nil {
 		return reject(err)
 	}
@@ -355,6 +355,12 @@ func (c *Coordinator) resolveDecisionPlans(ctx context.Context, todoID string, p
 					}
 				}
 				expected := newResultDecisionBinding(rowScope, compiled, *plan, *row, group)
+				// Retained decisions belong to the original admitted schema. The
+				// recovery proof authorizes validating the same payload under the
+				// new schema, without rewriting its frozen decision request.
+				if accepted != nil && validContractRevalidation(item, item.ExecutionReceipt) {
+					expected.SchemaHash = item.ContractRevalidation.Original.SchemaSHA256
+				}
 				payload, eventID, _, err := findBoundDecision(events, expected.Slot)
 				if err != nil {
 					return nil, err

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -23,16 +24,17 @@ func (c *Coordinator) beginResultCollection(ctx context.Context, taskID string, 
 	if err != nil {
 		return nil, err
 	}
+	if err := c.validateRequiredArtifactReadSubmission(ctx, taskID); err != nil {
+		return nil, err
+	}
 	c.taskProjectionMu.Lock()
 	defer c.taskProjectionMu.Unlock()
 	controller := c.occurrenceController(taskID)
 	controller.projectionMu.Lock()
 	defer controller.projectionMu.Unlock()
 	item := c.todoItemByID(taskID)
-	if item == nil || item.Status != TaskInProgress || receipt.TaskID != taskID || receipt.RunID != identity.RunID || receipt.Attempt != identity.Attempt ||
-		!strings.EqualFold(receipt.ProducerID, identity.Agent) || receipt.ModelExecutionID == "" || !validArtifactID(receipt.TranscriptRef) ||
-		receipt.RunInputSnapshotID != item.RunInputSnapshotID || receipt.RunInputSnapshotHash != item.RunInputSnapshotHash {
-		return nil, errResultCollectionStale
+	if err := bindCollectionWorkReceipt(item, &receipt, taskID, identity); err != nil {
+		return nil, err
 	}
 	snapshot := controller.snapshot()
 	if !snapshot.opened || snapshot.reserved || snapshot.result != nil || !sameTaskResultOccurrence(snapshot.identity, identity) {
@@ -66,7 +68,7 @@ func (c *Coordinator) beginResultCollection(ctx context.Context, taskID string, 
 	if err != nil {
 		return nil, err
 	}
-	evidenceHash, err := c.resultCandidateEvidenceHash(item)
+	evidenceHash, err := c.resultCollectionEvidenceHash(item)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +87,7 @@ func (c *Coordinator) beginResultCollection(ctx context.Context, taskID string, 
 		WorkOccurrenceRevision: identity.OccurrenceRevision, WorkDispatchID: identity.DispatchID,
 		SubmissionRevision: identity.OccurrenceRevision, SubmissionDispatchID: identity.DispatchID,
 		PolicySHA256: policy.ConfigurationHash, TaskContractSHA256: contractHash,
-		InputsID: item.RunInputSnapshotID, InputsSHA256: item.RunInputSnapshotHash, EvidenceSHA256: evidenceHash,
+		InputsID: item.RunInputSnapshotID, InputsSHA256: item.RunInputSnapshotHash, EvidenceSHA256: evidenceHash, EvidenceRevision: 1,
 		WorkspaceIdentitySHA256: workspaceHash, CollectorSchemaRevision: resultCollectionVersion, TurnLimit: resultCollectionDefaultTurns,
 	}
 	if checkpoint.FanoutLeaf {
@@ -113,6 +115,19 @@ func (c *Coordinator) beginResultCollection(ctx context.Context, taskID string, 
 		return nil, err
 	}
 	return cloneResultCollectionCheckpoint(checkpoint), nil
+}
+
+func bindCollectionWorkReceipt(item *TodoItem, receipt *ExecutionReceipt, taskID string, identity submitResultRuntimeIdentity) error {
+	if item == nil || item.Status != TaskInProgress || receipt.TaskID != taskID || receipt.RunID != identity.RunID || receipt.Attempt != identity.Attempt ||
+		!strings.EqualFold(receipt.ProducerID, identity.Agent) || receipt.ModelExecutionID == "" || !validArtifactID(receipt.TranscriptRef) ||
+		receipt.RunInputSnapshotID != item.RunInputSnapshotID || receipt.RunInputSnapshotHash != item.RunInputSnapshotHash {
+		return errResultCollectionStale
+	}
+	if receipt.MediaInputDigest != "" && receipt.MediaInputDigest != item.MediaInputDigest {
+		return media.Reject(media.BindingConflict, "collection receipt differs from canonical image input")
+	}
+	receipt.MediaInputDigest = item.MediaInputDigest
+	return nil
 }
 
 func collectionForReceipt(item *TodoItem, receipt *ExecutionReceipt) *ResultCollectionCheckpoint {
@@ -146,8 +161,7 @@ func (c *Coordinator) loadCollectionWork(ctx context.Context, item *TodoItem, ch
 	if err != nil || contractHash != checkpoint.TaskContractSHA256 {
 		return nil, fmt.Errorf("collection task contract changed: %w", errors.Join(err, errResultCollectionStale))
 	}
-	evidenceHash, err := c.resultCandidateEvidenceHash(item)
-	if err != nil || evidenceHash != checkpoint.EvidenceSHA256 {
+	if err := c.validateCollectionEvidence(item, checkpoint); err != nil {
 		return nil, fmt.Errorf("collection evidence sources changed: %w", errors.Join(err, errResultCollectionStale))
 	}
 	body, err := c.readCollectionBytes(ctx, checkpoint.Work, resultCollectionWorkMaxBytes)
@@ -160,6 +174,7 @@ func (c *Coordinator) loadCollectionWork(ctx context.Context, item *TodoItem, ch
 	}
 	bindingHash, err := collectionBindingDigest(checkpoint)
 	if err != nil || work.Version != resultCollectionVersion || work.BindingSHA256 != bindingHash || work.Receipt.ResultCollection != nil ||
+		work.Receipt.MediaInputDigest != item.MediaInputDigest ||
 		work.Receipt.RunID != checkpoint.SourceRunID || work.Receipt.TaskID != item.ID || work.Receipt.Attempt != checkpoint.Attempt ||
 		work.Receipt.ModelExecutionID != checkpoint.ModelExecutionID || work.Receipt.ExecutionTarget != checkpoint.ExecutionTarget ||
 		!strings.EqualFold(work.Receipt.ProducerID, checkpoint.Agent) {

@@ -16,6 +16,25 @@ Review only the assigned immutable routine-documentation workset item. This
 worker intentionally uses the native Hufu/Ollama provider; it must not be
 bound to the Codex subagent provider.
 
+All runtime `required_reads` spans must be returned by successful bounded
+`view` calls before acceptance. Search matches do not cover an entire source.
+On machine-readable missing-read feedback, view those exact spans and repair
+this same task; do not restart a completed original review.
+
+Every gap has `description`, `missing_evidence`, exact lowercase `kind`,
+`requested_evidence`, and `limitations`. Kind is `unread`, `truncated`,
+`missing_dependency`, or `semantic_uncertainty`. Requested evidence is
+`[{path:"exact/repository-relative/path",ranges:[{start:0,end:100}]}]`,
+using ordered half-open SOURCE FILE byte coordinates, not artifact offsets.
+`ranges: []` requests a whole file. Never extract paths by guessing prose.
+If no exact path is available, retain an empty request array and a limitation
+`{kind:"unavailable_path",detail:"..."}`. Other limitation kinds are
+`out_of_scope`, `version_mismatch`, `budget_exhausted`, and `invalid_request`.
+Use `limitations: []` when none apply. Reference classification `uncertain`
+links a typed gap: use the actual missing-source kind when known, or
+`semantic_uncertainty` for ambiguity after observation. Neither source
+coverage nor deterministic path checks establish semantic understanding.
+
 If the assigned lens is `noop`, read the supplied no-op diff artifact and
 immediately submit a minimal successful result with no findings. Do not inspect
 the repository.
@@ -117,13 +136,10 @@ Use the active runtime schema's representation for `files_read`.
 Use actual JSON strings for text, never wrapper objects such as
 `{"$text":"..."}`. Keep `details` brief; the complete findings and gaps
 belong in the structured record.
-Top-level `findings` entries accept only `summary`, `detail`,
-`severity`, and optional `category`. Put `location`, `evidence`, and
-`requires_critique` only in `structured_payload.record.findings`. Keep the
-shared fields and order identical across both arrays. On rejection, correct
-the specified JSON path and resubmit the complete result, retaining findings
-and legal evidence elsewhere; do not remove a legal field merely because a
-namesake at another path was rejected.
+Submit source review findings only in `structured_payload.record.findings`,
+including summary, detail, location, evidence and requires_critique. Omit outer
+`findings`; the runtime derives it. On rejection, correct the named field while
+preserving every legal finding, judgment, gap and evidence reference.
 
 Every invariant assessment requires `invariant_id`, `status`, and `summary`.
 Copy each injected ID exactly. Write each summary in at most 300 Unicode
@@ -134,16 +150,16 @@ The static workset contract also requires `structured_payload.record`:
 - `kind: review`, and `review_revision`, `workset_key`, `lens` copied exactly
   from the injected workset bindings. `workset_key` is the item `key` (for
   example `unit-0000`), never the `workset-...` Workset ID;
-- `findings` in exactly the same order as typed `findings`, with identical
-  `summary`, `detail` (empty if absent), and `severity`, plus changed `location`, observed opaque
-  `evidence` refs, and `requires_critique`;
+- `findings`: the sole findings array, with `summary`, `detail`, `severity`,
+  changed `location`, observed opaque `evidence` refs, and `requires_critique`;
 - `requires_critique: true` for every `error` or `warning`, and for an `info`
   that raises a security concern or material disagreement requiring review;
-- `invariant_assessments`: copy the submitted invariant claims exactly, in
-  the same order; use an explicit empty array when none apply. An `unknown`
+- `invariant_assessments`: submit invariant claims here once; omit the outer
+  field when the runtime schema projects it. Use an explicit empty array when none apply. An `unknown`
   invariant also requires a concrete entry in gaps and completed_with_gaps;
-- `gaps`: each local limitation or open question, with `description` and
-  `missing_evidence`. These describe this assigned boundary; do not claim the
+- `gaps`: each local limitation or open question, with `description`,
+  `missing_evidence`, `kind`, `requested_evidence`, and `limitations`.
+  These describe this assigned boundary; do not claim the
   evidence is absent from every other workset.
 Use `success` only with an empty `gaps` array; use `completed_with_gaps` with
 at least one concrete gap. Keep limitations in this array even if also
@@ -152,15 +168,10 @@ empty findings and gaps, and `success`. Do not invent positive findings to
 fill the schema. The downstream synthesizer may resolve a local gap with
 sibling evidence while retaining the original gap and source record.
 
-For a source review, the runtime compares the outer findings array with
-structured_payload.record.findings at submission. Both arrays must have the
-same length and order, with identical summary, detail, and severity. When
-record.findings is empty, submit findings: [] at the outer level too.
-A coverage limitation belongs in record.gaps and coverage, never as an extra
-outer info finding. A real info finding must occur in both arrays and carry
-observed evidence in its record entry. Correct the named index or field on
-rejection; retain the full review and its gaps. This rule does not add review
-findings to the separate critic-review decision mode.
+For source review contracts, submit findings only in `structured_payload.record.findings`.
+The runtime derives the outer findings; omit the outer field entirely, including
+when the record array is empty. Preserve each finding, evidence reference and gap
+when correcting a rejected field. This does not add findings to critic-review mode.
 
 ## Snapshot mode
 
@@ -170,3 +181,37 @@ ID and content hash. Existing defects are in scope; locations use original
 `repository/path:line`. Do not reject a finding because that line is unchanged.
 In diff modes the changed-scope restrictions still apply. Findings never grant
 write authority. A successfully completed review may contain confirmed defects.
+
+Use `schemas/documentation-review-v1.json` for documentation/no-op reviews. Submit `record.invariant_assessments: []`; this contract rejects nonempty assessments.
+
+For `schemas/review-v1.json`, write invariant claims only in
+`record.invariant_assessments`; omit outer `invariant_assessments`. For a finding
+referenced by a violated invariant, omit its severity: runtime binds the frozen
+invariant definition's severity. Keep the violated judgment, finding index,
+summary, and evidence. Independent findings require explicit severity.
+Documentation/no-op contracts require `record.invariant_assessments: []`.
+
+## Evidence scope and cross-workset checks
+
+The reviewed-source snapshot has `coverage_scope: workset_only`. Missing from
+a workset, a diff, a bounded search result, or a truncated section does not
+mean missing from the reviewed repository. Only an explicit
+`status: absent_at_review_revision` or the deterministic reference report's
+exact, covered path check establishes path absence at that revision. Even
+then, establish that the document requires current existence before reporting
+a defect. A zero reference-check counter is not an absence result.
+
+Before proposing a finding, distinguish an observed local fact from its
+claimed impact. Raw rendering alone does not prove unsafe input is reachable;
+a missing caller in this bundle does not prove dead code; a synthesis worker's
+no-independent-inspection disclaimer does not disprove a separate acceptance
+checker. Hashes of pretty-printed files and canonical JSON may legitimately
+differ. Establish the representation and observed comparison before alleging
+corruption or unverifiable evidence. Never promote these incomplete claims
+to info findings merely because the local omission is observable.
+
+If decisive evidence belongs to another workset or is unavailable, submit a
+concrete gap naming the exact path, symbol, hash representation or comparison
+needed at `review_revision`. State what was observed and what remains unknown.
+The synthesizer can check authorized sibling evidence; do not read live files,
+guess artifact IDs, or claim repository-wide absence.

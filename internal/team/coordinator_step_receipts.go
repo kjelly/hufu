@@ -42,7 +42,8 @@ func (c *Coordinator) taskResultOccurrenceForAttempt(todoID string, attempt int)
 	for _, item := range c.taskTracker.TodoList().Items() {
 		if item != nil && item.ID == todoID {
 			agentName := strings.ToLower(strings.TrimSpace(item.Agent))
-			return submitResultRuntimeIdentity{RunID: runID, TaskID: todoID, Attempt: attempt, Agent: agentName}, runID != "" && agentName != ""
+			return submitResultRuntimeIdentity{RunID: runID, TaskID: todoID, Attempt: attempt, Agent: agentName,
+				OccurrenceRevision: item.OccurrenceRevision}, runID != "" && agentName != ""
 		}
 	}
 	return submitResultRuntimeIdentity{}, false

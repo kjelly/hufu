@@ -126,7 +126,12 @@ With workspace versioning in required mode the fork also carries the
 workspace: forking the active branch reuses its snapshot (no files change),
 and forking an earlier branch or event first saves the live files and then
 restores the snapshot recorded at that point. --metadata-only forks only the
-session lineage (for legacy events without a workspace snapshot).`,
+session lineage (for legacy events without a workspace snapshot).
+
+--new-task requires a managed Linux workspace in required versioning mode and
+a settled, materializable source. It preserves the source as history and
+creates a child awaiting a new run request for the same team. It never resumes
+the parent's tasks and cannot be combined with --metadata-only.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runSessionFork,
 }
@@ -243,6 +248,7 @@ func init() {
 	sessionCmd.PersistentFlags().BoolVar(&sessionJSON, "json", false, "Write output as JSON")
 
 	sessionForkCmd.Flags().StringVar(&sessionForkName, "name", "", "Name of the new branch")
+	sessionForkCmd.Flags().BoolVar(&sessionNewTask, "new-task", false, "Create a derived branch awaiting a new request for the same team")
 	sessionForkCmd.Flags().BoolVar(&sessionMetadataOnly, "metadata-only", false, "Fork only the session lineage; the workspace state is unavailable")
 	sessionCheckoutCmd.Flags().BoolVar(&sessionMetadataOnly, "metadata-only", false, "Switch only the session projection (legacy branches without a workspace snapshot)")
 

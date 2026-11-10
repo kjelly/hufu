@@ -1,0 +1,98 @@
+{
+  "invocation_id": "inv-20261106T143111.143659714Z-cc7391ec5e16",
+  "run_id": "run-20261106T143111.272879080Z-4e693433b7d6",
+  "run_ids": [
+    {
+      "team": "live-vision",
+      "run_id": "run-20261106T143111.272879080Z-4e693433b7d6"
+    }
+  ],
+  "outcome": "completed",
+  "goal_satisfied": true,
+  "goal_mode": "exploratory",
+  "result": "## Agent: @visual (team: live-vision)\nAccepted worker result (source material; no independent image inspection performed):\n\nSummary: All three supplied images were inspected in received order; image 3 is a repeat of image 1. Each image reportedly contains a four-digit black number, red squares, blue circles, and a colored triangle.\n\nStructured Payload (`contract schemas/observations.json`, sha256 `bb4ddf79896650dc18302f087aeed04089eb6736d92a00ed06a29cba717bf2db`):\n\n```json\n{\"observations\":[{\"blue_circles\":3,\"code\":\"1593\",\"red_squares\":2,\"triangle_color\":\"green\"},{\"blue_circles\":1,\"code\":\"2812\",\"red_squares\":4,\"triangle_color\":\"yellow\"},{\"blue_circles\":3,\"code\":\"1593\",\"red_squares\":2,\"triangle_color\":\"green\"}]}\n```\n\nResult Source: submitted (confidence: 0.97)\n\nFindings:\n- [image_observation] Third supplied image is identical to the first (code 1593, 2 red squares, 3 blue circles, green triangle)\n- [image_observation] Second image differs: code 2812, 4 red squares, 1 blue circle, yellow triangle\n\nLimitations: These observations are presented solely from the supplied accepted worker result. No image access or tools are available in this response, so the values were not independently re-inspected or verified.",
+  "stop_reason": "completed",
+  "acceptance": {
+    "state": "passed",
+    "passed": true
+  },
+  "completed_review": true,
+  "findings_present": true,
+  "acceptance_advisory": true,
+  "stats": {
+    "tasks_total": 1,
+    "tasks_done": 1,
+    "tasks_unresolved": 0,
+    "attempts_total": 1,
+    "attempts_failed": 0
+  },
+  "metrics": {
+    "compactions": 0,
+    "context_window_telemetry": {
+      "admission_events": 2,
+      "admitted": 2,
+      "last_decision": "noop",
+      "last_model": "ollama/deepseek-v4.1-flash:cloud",
+      "last_requested_tokens": 531,
+      "last_available_tokens": 256048,
+      "policy_digest": "45bc2500f47875a5c7a51d1548560066dc1be42d45f37c4cd7baf77096d3a54a"
+    }
+  },
+  "teams": [
+    {
+      "name": "live-vision",
+      "run_ids": [
+        "run-20261106T143111.272879080Z-4e693433b7d6"
+      ],
+      "tokens": 6156,
+      "tasks": [
+        {
+          "id": "1",
+          "agent": "visual",
+          "desc": "Inspect all three supplied images in received order, including the repeated image. For each, read the four-digit code, count red squares and blue circles, and identify the triangle color. Submit observations using the required structured payload. Do not use external files or tools to obtain answers.",
+          "status": "done",
+          "no_objective_verifier": true,
+          "findings_present": true,
+          "resource_scope": {
+            "version": 1,
+            "claims": [
+              {
+                "resource": "workspace:path:.",
+                "mode": "read"
+              }
+            ],
+            "source": "runtime_fallback",
+            "digest": "828334589a57439fe81da1f329aba0af9f0351f227f77b1cd61a78e4ae6533ea"
+          }
+        }
+      ],
+      "memory_learning": {
+        "mode": "off",
+        "policy_version": "memory-policy-v1",
+        "retrieval_count": 0,
+        "exposure_count": 0,
+        "applied_count": 0,
+        "outcome_count": 0,
+        "pending_repair_gaps": 0,
+        "event_counts_unavailable": true
+      },
+      "context_routing": {
+        "requests": 1,
+        "model_calls": 1,
+        "fallbacks": 0,
+        "included": 2,
+        "omitted": 0,
+        "included_tokens": 1058,
+        "omitted_tokens": 0,
+        "purposes": {
+          "task_execution": 1
+        }
+      },
+      "run_inputs": {
+        "snapshot_id": "run-inputs-791eb3bbe3d91b0414641b86",
+        "snapshot_hash": "sha256:791eb3bbe3d91b0414641b864e89f315ea0f759a0b1c9415c8b7d7ae853c3d11",
+        "inputs": []
+      }
+    }
+  ]
+}

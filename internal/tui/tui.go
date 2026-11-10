@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -226,7 +227,7 @@ type Model struct {
 	ask       askState
 
 	inPromptInput    bool
-	promptInput      textinput.Model
+	promptInput      textarea.Model
 	promptSubmitting bool
 	promptNotice     string
 	// SubmitPrompt offers an additional prompt to the runtime. It must not
@@ -284,10 +285,8 @@ func New(prompt string, teamInfo TeamInfo) Model {
 func NewWithOptions(prompt string, teamInfo TeamInfo, options Options) Model {
 	options = options.normalized()
 	teamInfo.Decisions = team.RedactedDecisionIndexEntries(teamInfo.Decisions)
-	ti := textinput.New()
-	ti.Prompt = "> "
+	ti := newChatComposer(options.DisplayPreset, 6)
 	ti.Placeholder = "Type additional prompt..."
-	ti.CharLimit = 500
 
 	si := textinput.New()
 	si.Prompt = "/"
@@ -298,7 +297,6 @@ func NewWithOptions(prompt string, teamInfo TeamInfo, options Options) Model {
 	dsi.Placeholder = "Search task log..."
 	dsi.CharLimit = 200
 	if options.DisplayPreset == DisplayEpaper {
-		staticCursor(&ti)
 		staticCursor(&si)
 		staticCursor(&dsi)
 	}
@@ -342,7 +340,7 @@ func NewWithOptions(prompt string, teamInfo TeamInfo, options Options) Model {
 func (m Model) Init() tea.Cmd {
 	var commands []tea.Cmd
 	if m.IsChat && m.inPromptInput && m.displayPreset != DisplayEpaper {
-		commands = append(commands, textinput.Blink)
+		commands = append(commands, textarea.Blink)
 	}
 	if command := m.watchThemeCmd(); command != nil {
 		commands = append(commands, command)
@@ -367,6 +365,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.layoutPromptInput()
 		m.detailSearchInput.SetWidth(max(msg.Width-30, 10))
 		if m.inAskUser {
 			m.ask.ti.SetWidth(askTIWidth(msg.Width))
@@ -704,11 +703,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	// Forward non-key messages to the prompt input textinput when active.
+	// Forward non-key messages to the multiline prompt input when active.
 	if m.inPromptInput {
-		var cmd tea.Cmd
-		m.promptInput, cmd = m.promptInput.Update(msg)
-		return m, cmd
+		return m.editPromptInput(msg)
 	}
 
 	return m, nil

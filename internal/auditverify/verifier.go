@@ -109,6 +109,9 @@ func runLineageAudit(ctx context.Context, workspace, runID string, lineage []tea
 		result.finalizeVerdict()
 		return result, nil, nil
 	}
+	if err := verifyRunMedia(ctx, workspace, runID, lineage, terminals); err != nil {
+		return mediaIntegrityFailure(runID, err), nil, nil
+	}
 	if len(terminals) == 0 {
 		result.Integrity = AuditDimensionResult{Status: AuditDimensionPass, Reason: fmt.Sprintf("event chain verified (%d events); run has no terminal event yet", chain.Events)}
 		reason := fmt.Sprintf("run %q has no canonical run_finished event yet", runID)
@@ -363,6 +366,19 @@ func verifyInvocationBoundTask(runID string, item *team.TodoItem, snapshot *team
 }
 
 func replayInputBoundAssertions(runID string, runResult *team.RunResult, tasks []*team.TodoItem, snapshot *team.RunInputSnapshot) (int, string, error) {
+	origins := make(map[string]string)
+	if manifest := runResult.EvidenceManifest; manifest != nil {
+		if manifest.RunID != runID || team.ValidateEvidenceRecoveryInputs(manifest, snapshot) != nil {
+			return 0, "", errors.New("task output recovery manifest differs from the terminal invocation")
+		}
+		for _, item := range tasks {
+			if item != nil {
+				if binding, ok := manifest.VerifiedTaskBinding(item.ID); ok {
+					origins[item.ID] = binding.RunID
+				}
+			}
+		}
+	}
 	assertions := 0
 	if runResult.Acceptance != nil {
 		for _, verification := range runResult.Acceptance.VerificationEvidence {
@@ -370,7 +386,7 @@ func replayInputBoundAssertions(runID string, runResult *team.RunResult, tasks [
 				continue
 			}
 			assertions++
-			replayed, replayErr := team.ReplayTaskOutputAssertions(tasks, runID, snapshot, *verification.Spec)
+			replayed, replayErr := team.ReplayTaskOutputAssertions(tasks, runID, snapshot, *verification.Spec, origins)
 			persistedPassed := verification.ExitCode == 0
 			if persistedPassed == (replayErr != nil) || !reflect.DeepEqual(replayed, verification.TaskOutputAssertions) {
 				return 0, verification.Spec.WorksetSourceTask, errors.New("persisted task_output_assert result does not match independent replay")

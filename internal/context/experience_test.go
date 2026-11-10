@@ -3,7 +3,6 @@ package context
 import (
 	"context"
 	"math"
-	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -75,7 +74,7 @@ func TestBetaQuantileUniform(t *testing.T) {
 
 func openExperienceTestRepository(t *testing.T) *SQLiteRepository {
 	t.Helper()
-	repo, err := OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -139,3 +139,37 @@ func TestEvidenceFromSurvivesEventReplayAndShadow(t *testing.T) {
 		t.Fatalf("evidence_from leaked into depends_on: %q", item.DependsOn)
 	}
 }
+
+func TestDependencyBindingKeepsAcceptedArtifactsSeparateFromReviewedInputs(t *testing.T) {
+	c, _, reviewer, ref, receipt := newWorksetAuthorizationFixture(t)
+	reviewer.WorksetReceipt = cloneWorksetReceipt(receipt)
+	compiled, err := CompileResultContractDocument("source.json", []byte(`{"type":"object","required":["value"],"properties":{"value":{"type":"string"}},"additionalProperties":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := compiled.ref(true)
+	payload, err := validateStructuredResultPayload(compiled, contract, []byte(`{"value":"accepted judgment"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := mustArtifactStore(t, c.session.Workspace).Put(t.Context(), PutArtifactRequest{Content: []byte("accepted output"), Path: "review.txt", RunID: c.executionRunID, TaskID: reviewer.ID, Attempt: 1, Agent: reviewer.Agent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts := []ArtifactRef{artifact.ArtifactRef}
+	result := &TaskResult{TaskID: reviewer.ID, Attempt: 1, Agent: reviewer.Agent, Status: TaskResultStatusSuccess, Summary: "accepted review", StructuredPayload: payload, Artifacts: artifacts}
+	reviewer.Status, reviewer.TypedResult, reviewer.ResultContract = TaskDone, result, &contract
+	c.taskResults[reviewer.ID] = result
+	consumer := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "critic", EvidenceFrom: []string{reviewer.ID}}})[0]
+	worker := c.dependencyResultsForTask(consumer.ID)
+	if len(worker) != 1 || !slices.ContainsFunc(worker[0].Artifacts, func(artifact ArtifactRef) bool { return artifact.ID == ref.ID }) {
+		t.Fatal("worker view lost its separately authorized reviewed inputs")
+	}
+	bound := c.dependencyResultsForBinding(consumer.ID)
+	if len(bound) != 1 || !sameCanonicalEvidence(bound[0].Artifacts, artifacts) || !sameCanonicalEvidence(bound[0].StructuredPayload, payload) {
+		t.Fatal("contract binding replaced accepted result data with the enriched worker view")
+	}
+	if !sameCanonicalEvidence(result.Artifacts, artifacts) || string(result.StructuredPayload.Value) != string(payload.Value) {
+		t.Fatal("dependency projection changed the accepted result")
+	}
+}

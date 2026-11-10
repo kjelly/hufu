@@ -47,6 +47,10 @@ func (c *clock) elapsed() time.Duration {
 // count once, including when concurrent workers share a coordinator deadline.
 func Pause(ctx context.Context) func() {
 	c, _ := ctx.Value(clockKey{}).(*clock)
+	return pause(c)
+}
+
+func pause(c *clock) func() {
 	for current := c; current != nil; current = current.parent {
 		current.mu.Lock()
 		if current.active == 0 {

@@ -22,18 +22,22 @@ func TestHufuCodeReviewRuntimeOwnsAll51GapIdentities(t *testing.T) {
 	var ids []string
 	var inputs []any
 	for i, count := range []int{25, 24, 2} {
+		schema, lens := sourceSchema, "general"
+		if i == 2 {
+			schema, lens = session.ResultContracts["schemas/documentation-review-v1.json"], "documentation-risk"
+		}
 		gaps := make([]any, 0, count)
 		for j := range count {
-			gaps = append(gaps, map[string]any{"description": fmt.Sprintf("local limitation %d/%d", i, j), "missing_evidence": "independent evidence"})
+			gaps = append(gaps, map[string]any{"description": fmt.Sprintf("local limitation %d/%d", i, j), "missing_evidence": "independent evidence", "kind": "semantic_uncertainty", "requested_evidence": []any{}, "limitations": []any{}})
 		}
-		record := map[string]any{"kind": "review", "review_revision": "head", "workset_key": fmt.Sprintf("unit-%04d", i), "lens": "general", "findings": []any{}, "gaps": gaps, "invariant_assessments": []any{}, "reference_assessments": []any{}}
+		record := map[string]any{"kind": "review", "review_revision": "head", "workset_key": fmt.Sprintf("unit-%04d", i), "lens": lens, "findings": []any{}, "gaps": gaps, "invariant_assessments": []any{}, "reference_assessments": []any{}}
 		raw, err := json.Marshal(map[string]any{"record": record})
 		if err != nil {
 			t.Fatal(err)
 		}
-		ref := sourceSchema.ref(true)
+		ref := schema.ref(true)
 		source := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", ResultContract: &ref, WorksetBinding: &WorksetBinding{Bindings: map[string]string{"reference_candidate_ids": "[]"}}}})[0]
-		payload, err := validateStructuredResultPayload(sourceSchema, ref, raw)
+		payload, err := validateStructuredResultPayload(schema, ref, raw)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -106,7 +110,7 @@ func TestHufuCodeReviewRuntimeOwnsAll51GapIdentities(t *testing.T) {
 	}
 	tool := &submitResultTool{coordinator: c, todoID: item.ID}
 	shape := tool.Info().Parameters["structured_payload"].(map[string]any)
-	for _, field := range []string{"input_review", "scope", "test_verification"} {
+	for _, field := range []string{"input_review", "scope", "test_verification", "snapshot_coverage", "supplement_outcomes"} {
 		if _, advertised := shape["properties"].(map[string]any)[field]; advertised {
 			t.Fatalf("runtime-owned %s advertised as model output", field)
 		}
@@ -140,11 +144,11 @@ func TestHufuCodeReviewEmptyCritiqueOwnsSource(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	store.SetBranchID("main")
 	c.eventStore, c.eventJournal = store, eventStoreJournal{store: store}
-	sourceSchema := session.ResultContracts["schemas/review-v1.json"]
+	sourceSchema := session.ResultContracts["schemas/documentation-review-v1.json"]
 	criticSchema := session.ResultContracts["schemas/critique-v2.json"]
 	sourceRef, criticRef := sourceSchema.ref(true), criticSchema.ref(true)
 	source := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", ResultContract: &sourceRef, WorksetBinding: &WorksetBinding{Bindings: map[string]string{"reference_candidate_ids": "[]"}}}})[0]
-	raw := []byte(`{"record":{"kind":"review","review_revision":"head","workset_key":"unit-0000","lens":"general","findings":[],"gaps":[],"invariant_assessments":[],"reference_assessments":[]}}`)
+	raw := []byte(`{"record":{"kind":"review","review_revision":"head","workset_key":"unit-0000","lens":"documentation-risk","findings":[],"gaps":[],"invariant_assessments":[],"reference_assessments":[]}}`)
 	payload, err := validateStructuredResultPayload(sourceSchema, sourceRef, raw)
 	if err != nil {
 		t.Fatal(err)
@@ -251,8 +255,17 @@ func bindHufuCodeReviewReceiptFixture(t *testing.T, c *Coordinator, report map[s
 	test := report["test_verification"].(map[string]any)
 	test["completed"], test["passed"], test["exit_code"] = true, false, 1
 	test["diagnostic"] = strings.Repeat("FAIL snapshot α: expected {suffix}\n", 1000)
-	expected := map[string]any{"scope": report["scope"], "test_verification": test}
-	for field, sourceID := range map[string]string{"scope": "produce-workset", "test_verification": "verify-targeted-go-tests"} {
+	expected := map[string]any{
+		"scope": report["scope"], "test_verification": test,
+		"supplement_outcomes": []any{},
+		"snapshot_coverage": map[string]any{
+			"mode": "diff", "snapshot_id": "", "content_sha256": "", "revision": "",
+			"batch": 0, "batch_count": 0, "expected": []any{}, "completed": []any{}, "excluded": []any{}, "uncompleted": []any{},
+		},
+	}
+	for field, sourceID := range map[string]string{
+		"scope": "produce-workset", "test_verification": "verify-targeted-go-tests", "snapshot_coverage": "inventory-review-handoffs",
+	} {
 		item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "runtime", PlanTaskID: sourceID, ContractID: sourceID}})[0]
 		id := item.ID
 		*item = *template
@@ -267,7 +280,12 @@ func bindHufuCodeReviewReceiptFixture(t *testing.T, c *Coordinator, report map[s
 		if field == "test_verification" {
 			output = "targeted_go_tests"
 		}
-		outputs, digest, err := CanonicalizeRuntimeOutputs(map[string]any{output: expected[field]})
+		nativeOutputs := map[string]any{output: expected[field]}
+		if field == "snapshot_coverage" {
+			nativeOutputs["supplement_outcomes"] = expected["supplement_outcomes"]
+			delete(report, "supplement_outcomes")
+		}
+		outputs, digest, err := CanonicalizeRuntimeOutputs(nativeOutputs)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -396,5 +414,55 @@ func TestHufuCodeReviewCriticSubmitsOnlyDecisionsForAllFindings(t *testing.T) {
 				t.Fatal("stale decision keys accepted")
 			}
 		})
+	}
+}
+
+func TestReviewContractSourcesReachCritiqueAndReport(t *testing.T) {
+	session := loadHufuCodeReviewTeam(t)
+	for _, task := range session.ContractTasks {
+		if task.ID != "review-primary-workset" && task.ID != "review-documentation-workset" && task.ID != "review-documentation-escalation" {
+			continue
+		}
+		for _, count := range []int{0, 2} {
+			t.Run(fmt.Sprintf("%s/findings_%d", task.ID, count), func(t *testing.T) {
+				c := newTestCoordinator(t)
+				c.session.ResultContracts = session.ResultContracts
+				schema := session.ResultContracts[task.ResultContract.ID]
+				lens := "general"
+				if task.ID != "review-primary-workset" {
+					lens = "documentation-risk"
+				}
+				findings := make([]any, count)
+				for i := range count {
+					findings[i] = map[string]any{"summary": fmt.Sprintf("finding %d", i), "detail": "bounded observation", "severity": "info", "location": "doc.md:1", "evidence": []any{"sha256-" + strings.Repeat("a", 64)}, "requires_critique": false}
+				}
+				raw, err := json.Marshal(map[string]any{"record": map[string]any{"kind": "review", "review_revision": "head", "workset_key": "unit-0000", "lens": lens, "findings": findings, "gaps": []any{map[string]any{"description": "bounded review", "missing_evidence": "caller", "kind": "semantic_uncertainty", "requested_evidence": []any{}, "limitations": []any{}}}, "invariant_assessments": []any{}, "reference_assessments": []any{}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				ref := schema.ref(true)
+				payload, err := validateStructuredResultPayload(schema, ref, raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				source := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: task.Agent, ResultContract: &ref}})[0]
+				source.Status = TaskDone
+				source.TypedResult = &TaskResult{TaskID: source.ID, Status: TaskResultStatusCompletedWithGaps, StructuredPayload: payload}
+				for _, consumer := range []struct {
+					schema string
+					rows   int
+				}{{"schemas/critique-v2.json", count}, {"schemas/report-v2.json", 1}} {
+					consumerRef := session.ResultContracts[consumer.schema].ref(true)
+					item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "consumer", ResultContract: &consumerRef, EvidenceFrom: []string{source.ID}}})[0]
+					plans, err := c.fixedCollectionPlans(item.ID)
+					if err != nil {
+						t.Fatalf("%s rejected %s: %v", consumer.schema, ref.ID, err)
+					}
+					if len(plans) != 1 || len(plans[0].rows) != consumer.rows || len(plans[0].binding.Sources) != 1 {
+						t.Fatalf("%s lost source/rows: %#v", consumer.schema, plans)
+					}
+				}
+			})
+		}
 	}
 }

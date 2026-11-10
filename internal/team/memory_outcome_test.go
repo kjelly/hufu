@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -245,7 +244,7 @@ func testRepeatedOutcomeDoesNotDoubleCount(t *testing.T) {
 func outcomeTestCoordinator(t *testing.T, ids ...string) (*Coordinator, *contextstore.SQLiteRepository) {
 	t.Helper()
 	workspace := t.TempDir()
-	repo := openMigratedContextTestDB(t, filepath.Join(workspace, "context.sqlite"))
+	repo := openMemoryContextTestDB(t, workspace)
 	for _, id := range ids {
 		fingerprint := sha256.Sum256([]byte("go test ./..."))
 		if err := repo.Append(context.Background(), contextstore.ContextItem{ID: id, Kind: contextstore.ContextPattern, Content: "procedure " + id, Scope: contextstore.Scope{ProjectID: "project"}, Lifecycle: contextstore.LifecycleConfirmed, Metadata: map[string]string{"action_fingerprint": hex.EncodeToString(fingerprint[:])}}); err != nil {

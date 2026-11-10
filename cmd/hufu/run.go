@@ -64,7 +64,7 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	})
 	defer stopIdentityHeartbeat()
 
-	pr, err := readline.NewPromptReader(defaultHistoryPath())
+	pr, err := readline.NewPromptReaderWithHistoryFilter(defaultHistoryPath(), nil, chatHistoryAllowsLine)
 	if err != nil {
 		stderrLog("%s Readline initialization failed, falling back to basic input: %v\n", errStyle.Render("⚠"), err)
 		pr = nil
@@ -156,14 +156,9 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	routeDecision := maybeAutoSelectTeam(ctx, prompt, initialTeam, registry)
 	initialTeam = routeDecision.Team
 
-	initialSegments, err := resolveInitialSegments(prompt, initialTeam, registry, pr)
+	ctx, initialSegments, err := prepareRunSegments(ctx, prompt, initialTeam, registry, pr)
 	if err != nil {
 		return err
-	}
-	if opts.canonicalRun {
-		if err := validateCanonicalRunSegments(initialSegments, initialTeam, opts.workspaceMode, opts.intent); err != nil {
-			return err
-		}
 	}
 
 	pathConsent := newPathConsent()
@@ -186,6 +181,10 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	if err != nil {
 		return err
 	}
+	ctx, err = bindRunSegmentInputs(ctx, segments)
+	if err != nil {
+		return err
+	}
 
 	if opts.dryRun {
 		return executeDryRun(ctx, segments, prompt, loadedTeams)
@@ -202,7 +201,28 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	return executeAndReport(ctx, cancel, prompt, originalPrompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars, routeDecision)
 }
 
+func prepareRunSegments(ctx context.Context, prompt, initialTeam string, registry *team.TeamRegistry, pr *readline.PromptReader) (context.Context, []team.PromptSegment, error) {
+	segments, err := resolveInitialSegments(prompt, initialTeam, registry, pr)
+	if err != nil {
+		return nil, nil, err
+	}
+	if opts.canonicalRun {
+		if err := validateCanonicalRunSegments(segments, initialTeam, opts.workspaceMode, opts.intent); err != nil {
+			return nil, nil, err
+		}
+	}
+	ctx = derivedRunContext(ctx, segments, registry)
+	ctx, err = historicalRunContext(ctx, segments, registry)
+	return ctx, segments, err
+}
+
 func validateAndCaptureRunScope() error {
+	if err := validateNativeImageRunFlags(opts); err != nil {
+		return err
+	}
+	if len(opts.imagePaths) > 0 {
+		opts.routeMode = "team"
+	}
 	if err := validateRunFlags(); err != nil {
 		return err
 	}
@@ -431,6 +451,10 @@ func runWithInjection(ctx context.Context, tc *teamContext, initialResult string
 			return result, nil
 		}
 
+		if command, _ := splitChatCommand(prompt); command == "/image" {
+			stderrLog("Image controls require chat --ui plain or chat --ui chat; this dashboard did not submit an image turn.\n")
+			continue
+		}
 		stderrLog("\n%s Injecting additional prompt...\n\n", boldStyle.Render("↩"))
 
 		var contResult string

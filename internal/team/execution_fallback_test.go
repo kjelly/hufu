@@ -36,6 +36,8 @@ func TestClassifyProviderError(t *testing.T) {
 		{name: "429", err: &fantasy.ProviderError{StatusCode: http.StatusTooManyRequests}, want: ProviderRateLimited},
 		{name: "wrapped 503", err: fmt.Errorf("stream: %w", &fantasy.ProviderError{StatusCode: http.StatusServiceUnavailable}), want: ProviderUnavailable},
 		{name: "500", err: &fantasy.ProviderError{StatusCode: http.StatusInternalServerError}, want: ProviderUnavailable},
+		{name: "typed SSE transient", err: &fantasy.ProviderError{TransientError: true, ErrorType: "api_error"}, want: ProviderUnavailable},
+		{name: "SSE message alone", err: &fantasy.ProviderError{Message: "Internal Server Error"}, want: ProviderOther},
 		{name: "404", err: &fantasy.ProviderError{StatusCode: http.StatusNotFound}, want: ProviderModelUnavailable},
 		{name: "400 with an OpenAI model_not_found body", err: &fantasy.ProviderError{StatusCode: http.StatusBadRequest, ResponseBody: []byte(`{"error":{"code":"model_not_found"}}`)}, want: ProviderModelUnavailable},
 		{name: "400 with an Ollama not-found body", err: &fantasy.ProviderError{StatusCode: http.StatusBadRequest, Message: `model "x" not found, try pulling it first`}, want: ProviderModelUnavailable},

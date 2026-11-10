@@ -7,12 +7,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/actionstate"
@@ -78,13 +80,14 @@ type gapResolution struct {
 }
 
 type payload struct {
-	Scope            json.RawMessage `json:"scope"`
-	Tests            json.RawMessage `json:"test_verification"`
-	SnapshotCoverage json.RawMessage `json:"snapshot_coverage"`
-	Record           json.RawMessage `json:"record"`
-	InputReview      []inputReview   `json:"input_review"`
-	Coverage         string          `json:"coverage"`
-	GapResolutions   []gapResolution `json:"gap_resolutions"`
+	Scope              json.RawMessage `json:"scope"`
+	Tests              json.RawMessage `json:"test_verification"`
+	SnapshotCoverage   json.RawMessage `json:"snapshot_coverage"`
+	Record             json.RawMessage `json:"record"`
+	InputReview        []inputReview   `json:"input_review"`
+	Coverage           string          `json:"coverage"`
+	GapResolutions     []gapResolution `json:"gap_resolutions"`
+	SupplementOutcomes json.RawMessage `json:"supplement_outcomes,omitempty"`
 }
 
 type task struct {
@@ -103,12 +106,15 @@ type task struct {
 		} `json:"inputs"`
 	} `json:"workset_binding"`
 	Receipt *struct {
-		RunID            string `json:"run_id"`
-		TaskID           string `json:"task_id"`
-		Attempt          int    `json:"attempt"`
-		ProducerID       string `json:"producer_id"`
-		ModelExecutionID string `json:"model_execution_id"`
-		TranscriptRef    string `json:"transcript_ref"`
+		RunID              string `json:"run_id"`
+		TaskID             string `json:"task_id"`
+		Attempt            int    `json:"attempt"`
+		ProducerID         string `json:"producer_id"`
+		ModelExecutionID   string `json:"model_execution_id"`
+		TranscriptRef      string `json:"transcript_ref"`
+		ExitCode           *int   `json:"exit_code,omitempty"`
+		ActionID           string `json:"action_invocation_id"`
+		RuntimeOutputsHash string `json:"runtime_outputs_hash"`
 	} `json:"execution_receipt"`
 	VerifyResult *struct {
 		ExitCode    *int   `json:"exit_code"`
@@ -116,10 +122,11 @@ type task struct {
 		TimedOut    bool   `json:"timed_out"`
 	}
 	Result *struct {
-		RuntimeOutputs map[string]json.RawMessage `json:"runtime_outputs"`
-		Status         string                     `json:"status"`
-		Findings       []finding                  `json:"findings"`
-		Invariants     *struct {
+		RuntimeOutputs     map[string]json.RawMessage `json:"runtime_outputs"`
+		RuntimeOutputsHash string                     `json:"runtime_outputs_hash"`
+		Status             string                     `json:"status"`
+		Findings           []finding                  `json:"findings"`
+		Invariants         *struct {
 			Assessments []invariantAssessment `json:"assessments"`
 		} `json:"invariant_verification"`
 		FilesRead []struct {
@@ -133,9 +140,10 @@ type task struct {
 }
 
 type session struct {
-	RuntimeWorkspace string `json:"runtime_workspace"`
-	SnapshotID       string `json:"active_run_input_snapshot_id"`
-	Tasks            []task `json:"tasks"`
+	RuntimeWorkspace  string            `json:"runtime_workspace"`
+	SnapshotID        string            `json:"active_run_input_snapshot_id"`
+	Tasks             []task            `json:"tasks"`
+	RecoveredTaskRuns map[string]string `json:"-"`
 }
 
 // Run is the only embedded action entrypoint. Runtime-owned action identity,
@@ -155,7 +163,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	if err := decoder.Decode(&envelope); err != nil {
 		return err
 	}
-	if envelope.Type != "verify_review_report" && envelope.Type != "inventory_review_handoffs" {
+	if envelope.Type != "verify_review_report" && envelope.Type != "inventory_review_handoffs" && envelope.Type != "inventory_review_supplement_requests" {
 		return fmt.Errorf("unsupported review gate action")
 	}
 	var arguments struct {
@@ -194,13 +202,18 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	matched := false
 	for _, item := range current.Tasks {
 		isGate := (envelope.Type == "verify_review_report" && item.ContractID == "verify-review-report") ||
-			(envelope.Type == "inventory_review_handoffs" && item.ContractID == "inventory-review-handoffs")
+			(envelope.Type == "inventory_review_handoffs" && item.ContractID == "inventory-review-handoffs") ||
+			(envelope.Type == "inventory_review_supplement_requests" && item.ContractID == "inventory-review-supplement-requests")
 		if item.ID == os.Getenv("HUFU_TASK_ID") && isGate && item.Status == "in_progress" && current.SnapshotID != "" && item.SnapshotID == current.SnapshotID {
 			matched = true
 		}
 	}
 	if !matched {
 		return fmt.Errorf("current review gate occurrence is absent from checkpoint")
+	}
+	current.RecoveredTaskRuns, err = recoveryOrigins(os.Getenv("HUFU_RECOVERED_TASK_RUNS"))
+	if err != nil {
+		return err
 	}
 	for _, item := range current.Tasks {
 		if item.ContractID == "produce-workset" && item.Result != nil {
@@ -212,31 +225,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 			}
 		}
 	}
-	if envelope.Type == "inventory_review_handoffs" {
-		inventory, err := collectReviewHandoffs(current, os.Getenv("HUFU_RUN_ID"))
-		if err != nil {
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		coverage, err := collectSnapshotCoverage(current, os.Getenv("HUFU_RUN_ID"))
-		if err != nil {
-			return err
-		}
-		return json.NewEncoder(out).Encode(map[string]any{"outputs": map[string]any{"review_handoff_inventory": inventory, "snapshot_coverage": coverage}})
-	}
-	reportID, reportHash, err := verify(current, os.Getenv("HUFU_RUN_ID"))
-	if err != nil {
-		// A completed audit with a rejected report is verification evidence,
-		// not a provider outage. The task-result assertion fails and its bounded
-		// DAG repair sends this diagnostic back to the report producer.
-		return json.NewEncoder(out).Encode(map[string]any{"outputs": map[string]any{"review_report_verification": map[string]any{"passed": false, "diagnostic": err.Error()}}})
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return json.NewEncoder(out).Encode(map[string]any{"outputs": map[string]any{"review_report_verification": map[string]any{"passed": true, "report_task_id": reportID, "report_payload_sha256": reportHash}}})
+	return runGateAction(ctx, envelope.Type, current, out)
 }
 
 // This adapter intentionally uses the runtime action staging layout. A layout
@@ -256,13 +245,11 @@ func checkpointRoot(workspace, runID, actionID string) (string, string, error) {
 	return root, runtimeRoot, nil
 }
 
-func accepted(item task, snapshotID, runID string) (payload, error) {
+func accepted(item task, current session, runID string) (payload, error) {
 	var value payload
-	// Run-input snapshot metadata belongs to materialized native actions. LLM
-	// handoffs bind to the current run/task receipt and immutable workset instead.
-	// Reject conflicting snapshot metadata when present, without inventing it on
-	// ordinary workers, critics, or synthesis tasks.
-	if item.Status != "done" || item.Result == nil || (item.Result.Status != "success" && item.Result.Status != "completed_with_gaps") || item.Result.Payload == nil || item.Receipt == nil || item.Receipt.RunID != runID || item.Receipt.TaskID != item.ID || item.Receipt.Attempt <= 0 || item.Receipt.ProducerID == "" || item.Receipt.ModelExecutionID == "" || item.Receipt.TranscriptRef == "" || (item.SnapshotID != "" && item.SnapshotID != snapshotID) || item.VerifyResult == nil || item.VerifyResult.ExitCode == nil || *item.VerifyResult.ExitCode != 0 || item.VerifyResult.TimedOut || item.VerifyResult.Fingerprint == "" {
+	// Current-run legacy handoffs may omit snapshot metadata. Recovered
+	// handoffs require the runtime-issued origin grant and selected snapshot.
+	if item.Status != "done" || item.Result == nil || (item.Result.Status != "success" && item.Result.Status != "completed_with_gaps") || item.Result.Payload == nil || !current.acceptsReceiptOrigin(item, runID) || item.Receipt.Attempt <= 0 || item.Receipt.ProducerID == "" || item.Receipt.ModelExecutionID == "" || item.Receipt.TranscriptRef == "" || (item.SnapshotID != "" && item.SnapshotID != current.SnapshotID) || item.VerifyResult == nil || item.VerifyResult.ExitCode == nil || *item.VerifyResult.ExitCode != 0 || item.VerifyResult.TimedOut || item.VerifyResult.Fingerprint == "" {
 		return value, fmt.Errorf("task %s lacks a current accepted, verified handoff", item.ID)
 	}
 	canonical, err := canonicalJSON(item.Result.Payload.Value)
@@ -347,15 +334,18 @@ func verify(current session, runID string) (string, string, error) {
 	var reportID string
 	for _, item := range current.Tasks {
 		switch item.ContractID {
-		case "review-primary-workset", "review-documentation-workset", "review-documentation-escalation", "critic-review", "synthesize-review":
+		case "review-primary-workset", "review-documentation-workset", "review-documentation-escalation", "review-supplement-workset", "critic-review", "synthesize-review":
 		default:
 			continue
 		}
 		if _, duplicate := tasks[item.ID]; duplicate {
 			return "", "", fmt.Errorf("duplicate task ID")
 		}
-		value, err := accepted(item, current.SnapshotID, runID)
+		value, err := accepted(item, current, runID)
 		if err != nil {
+			if item.ContractID != "synthesize-review" {
+				return "", "", &sourceReviewError{cause: err}
+			}
 			return "", "", err
 		}
 		tasks[item.ID], values[item.ID] = item, value
@@ -368,7 +358,7 @@ func verify(current session, runID string) (string, string, error) {
 		}
 		var r record
 		if err := json.Unmarshal(value.Record, &r); err != nil {
-			return "", "", err
+			return "", "", &sourceReviewError{cause: fmt.Errorf("task %s has an invalid source record: %w", item.ID, err)}
 		}
 		records[item.ID] = r
 	}
@@ -377,21 +367,32 @@ func verify(current session, runID string) (string, string, error) {
 	}
 	critiqued := make(map[string]bool)
 	limited := false
-	for id, r := range records {
+	ids := make([]string, 0, len(records))
+	for id := range records {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var sourceErrors []error
+	for _, id := range ids {
+		r := records[id]
 		item := tasks[id]
 		if item.ContractID != "critic-review" {
 			if err := verifyReview(item, r); err != nil {
-				return "", "", err
+				sourceErrors = append(sourceErrors, err)
 			}
 			limited = limited || len(r.Gaps) > 0
 			continue
 		}
 		sourceID, critiqueLimited, err := verifyCritique(item, r, tasks, values, records, critiqued)
 		if err != nil {
-			return "", "", err
+			sourceErrors = append(sourceErrors, err)
+			continue
 		}
 		limited = limited || critiqueLimited
 		critiqued[sourceID] = true
+	}
+	if len(sourceErrors) > 0 {
+		return "", "", &sourceReviewError{cause: errors.Join(sourceErrors...)}
 	}
 	for id, r := range records {
 		for _, f := range r.Findings {
@@ -420,7 +421,7 @@ func verify(current session, runID string) (string, string, error) {
 		}
 		limited = limited || len(snapshotCoverage.Uncompleted) > 0
 	}
-	if err := verifyHandoffInventory(current, runID); err != nil {
+	if err := verifyReportHandoffEvidence(current, report, runID); err != nil {
 		return "", "", err
 	}
 	if len(report.InputReview) != len(records) {
@@ -576,7 +577,7 @@ func verifyInvariants(item task, r record) error {
 		acceptedAssessments = item.Result.Invariants.Assessments
 	}
 	if len(r.Invariants) != len(acceptedAssessments) {
-		return fmt.Errorf("task %s omitted invariant assessments", item.ID)
+		return fmt.Errorf("task %s invariant assessment count mismatch: record has %d, runtime verified %d", item.ID, len(r.Invariants), len(acceptedAssessments))
 	}
 	for i, assessment := range r.Invariants {
 		expected := acceptedAssessments[i]
@@ -616,7 +617,7 @@ func verifyActionEvidence(current session, report payload, runID string) error {
 		default:
 			continue
 		}
-		if seen[item.ContractID] || item.Status != "done" || item.Result == nil || item.Result.Status != "success" || item.Receipt == nil || item.Receipt.RunID != runID || item.SnapshotID != current.SnapshotID {
+		if seen[item.ContractID] || item.Status != "done" || item.Result == nil || item.Result.Status != "success" || !current.acceptsReceiptOrigin(item, runID) || item.SnapshotID != current.SnapshotID {
 			return fmt.Errorf("missing or ambiguous PREPARE evidence")
 		}
 		seen[item.ContractID] = true
@@ -652,6 +653,9 @@ func verifyGaps(report payload, records map[string]record, tasks map[string]task
 			if !ok || records[gap.ResolvingTaskID].Kind != "review" || gap.ResolvingTaskID == gap.TaskID || !observed(resolver, gap.Evidence) || !observed(tasks[findReportID(tasks)], gap.Evidence) {
 				return fmt.Errorf("gap %s lacks observed cross-workset evidence", key)
 			}
+			if resolver.ContractID == "review-supplement-workset" && (resolver.Binding == nil || resolver.Binding.Bindings["source_task_id"] != gap.TaskID || resolver.Binding.Bindings["source_gap_index"] != strconv.Itoa(gap.Index)) {
+				return fmt.Errorf("gap %s uses a supplement bound to another original gap", key)
+			}
 		}
 	}
 	var missing []string
@@ -678,4 +682,67 @@ func findReportID(tasks map[string]task) string {
 		}
 	}
 	return ""
+}
+
+func runGateAction(ctx context.Context, actionType string, current session, out io.Writer) error {
+	if actionType == "inventory_review_supplement_requests" {
+		requests, err := collectSupplementRequests(current, os.Getenv("HUFU_RUN_ID"))
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(map[string]any{"outputs": map[string]any{"review_supplement_requests": requests}})
+	}
+	if actionType == "inventory_review_handoffs" {
+		inventory, err := collectReviewHandoffs(current, os.Getenv("HUFU_RUN_ID"))
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		coverage, err := collectSnapshotCoverage(current, os.Getenv("HUFU_RUN_ID"))
+		if err != nil {
+			return err
+		}
+		outcomes, err := collectSupplementOutcomes(current, os.Getenv("HUFU_RUN_ID"))
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(map[string]any{"outputs": map[string]any{"review_handoff_inventory": inventory, "snapshot_coverage": coverage, "supplement_outcomes": outcomes}})
+	}
+	reportID, reportHash, err := verify(current, os.Getenv("HUFU_RUN_ID"))
+	if err != nil {
+		// verify returns this type directly. Native errors.As reflection cannot
+		// inspect a target type defined by the trusted-static interpreter.
+		if _, sourceFailure := err.(*sourceReviewError); sourceFailure {
+			// Rewriting the report cannot change accepted source records. Fail
+			// the action instead of taking the report-only verification back-edge.
+			return err
+		}
+		// A completed audit with a rejected report is verification evidence,
+		// not a provider outage. The task-result assertion fails and its bounded
+		// DAG repair sends this diagnostic back to the report producer.
+		return json.NewEncoder(out).Encode(map[string]any{"outputs": map[string]any{"review_report_verification": map[string]any{"passed": false, "diagnostic": err.Error()}}})
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return json.NewEncoder(out).Encode(map[string]any{"outputs": map[string]any{"review_report_verification": map[string]any{"passed": true, "report_task_id": reportID, "report_payload_sha256": reportHash}}})
+}
+
+func verifyReportHandoffEvidence(current session, report payload, runID string) error {
+	if err := verifyHandoffInventory(current, runID); err != nil {
+		return err
+	}
+	outcomes, err := collectSupplementOutcomes(current, runID)
+	if err != nil {
+		return err
+	}
+	if len(outcomes) > 0 || len(report.SupplementOutcomes) > 0 {
+		expected, marshalErr := json.Marshal(outcomes)
+		if marshalErr != nil || !equalJSON(expected, report.SupplementOutcomes) {
+			return fmt.Errorf("report substituted native supplement outcomes or limitations")
+		}
+	}
+	return nil
 }

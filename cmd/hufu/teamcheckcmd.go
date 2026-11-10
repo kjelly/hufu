@@ -34,12 +34,13 @@ type TeamCheckDocument struct {
 }
 
 type TeamCheckItem struct {
-	ID         string `json:"id"`
-	Category   string `json:"category"`
-	Status     string `json:"status"`
-	Required   bool   `json:"required"`
-	ReasonCode string `json:"reason_code"`
-	Message    string `json:"message"`
+	APIProtocol *apiProtocolDiagnostic `json:"api_protocol,omitempty"`
+	ID          string                 `json:"id"`
+	Category    string                 `json:"category"`
+	Status      string                 `json:"status"`
+	Required    bool                   `json:"required"`
+	ReasonCode  string                 `json:"reason_code"`
+	Message     string                 `json:"message"`
 }
 
 type teamCheckOptions struct {
@@ -154,6 +155,7 @@ func runTeamCheck(command *cobra.Command, name string, options *teamCheckOptions
 			document.Checks = append(document.Checks, TeamCheckItem{ID: "static.execution_preflight", Category: "static", Status: "failed", Required: true, ReasonCode: "execution_target_invalid", Message: err.Error()})
 		} else {
 			document.Checks = append(document.Checks, TeamCheckItem{ID: "static.execution_preflight", Category: "static", Status: "passed", Required: true, ReasonCode: "execution_targets_resolved", Message: "All configured execution targets resolve without starting a provider."})
+			document.Checks = append(document.Checks, teamAPIProtocolChecks(session.Config.Providers)...)
 		}
 	}
 

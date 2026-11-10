@@ -311,13 +311,128 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 8192
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "unread",
+                  "truncated",
+                  "missing_dependency",
+                  "semantic_uncertainty"
+                ]
+              },
+              "requested_evidence": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1024
+                    },
+                    "ranges": {
+                      "type": "array",
+                      "maxItems": 32,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "start": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "end": {
+                            "type": "integer",
+                            "minimum": 1
+                          }
+                        },
+                        "required": [
+                          "start",
+                          "end"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "ranges"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "limitations": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "unavailable_path",
+                        "out_of_scope",
+                        "version_mismatch",
+                        "budget_exhausted",
+                        "invalid_request"
+                      ]
+                    },
+                    "detail": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "detail"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
               "description",
-              "missing_evidence"
+              "missing_evidence",
+              "kind",
+              "requested_evidence",
+              "limitations"
             ],
-            "additionalProperties": false
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "unread",
+                        "truncated",
+                        "missing_dependency"
+                      ]
+                    }
+                  }
+                },
+                "then": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "requested_evidence": {
+                          "minItems": 1
+                        }
+                      }
+                    },
+                    {
+                      "properties": {
+                        "limitations": {
+                          "minItems": 1
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
           },
           "minItems": 0,
           "maxItems": 32
@@ -609,8 +724,15 @@
   "x-hufu-fixed-collections": [
     {
       "items_pointer": "/record/decisions",
+      "source_task_contracts": [
+        "review-primary-workset",
+        "review-documentation-workset",
+        "review-documentation-escalation",
+        "review-supplement-workset"
+      ],
       "source_contracts": [
-        "schemas/review-v1.json"
+        "schemas/review-v1.json",
+        "schemas/documentation-review-v1.json"
       ],
       "source_scope": "evidence_from",
       "source_pointer": "/record/findings",
@@ -688,8 +810,173 @@
     }
   ],
   "x-hufu-evidence-keys": {
+    "runtime_owned_files_read": true,
     "pointers": [
       "/record/decisions/*/evidence/*"
+    ]
+  },
+  "x-hufu-result-envelope": {
+    "type": "object",
+    "required": [
+      "status",
+      "structured_payload"
+    ],
+    "properties": {
+      "status": {
+        "enum": [
+          "success",
+          "completed_with_gaps",
+          "blocked"
+        ]
+      },
+      "structured_payload": {
+        "type": [
+          "object",
+          "null"
+        ]
+      }
+    },
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "status": {
+              "enum": [
+                "success",
+                "completed_with_gaps"
+              ]
+            }
+          },
+          "required": [
+            "status"
+          ]
+        },
+        "then": {
+          "properties": {
+            "structured_payload": {
+              "type": "object"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "structured_payload": {
+                    "properties": {
+                      "record": {
+                        "properties": {
+                          "decisions": {
+                            "contains": {
+                              "properties": {
+                                "verdict": {
+                                  "const": "unverified"
+                                }
+                              },
+                              "required": [
+                                "verdict"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "decisions"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "record"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "status": {
+                    "const": "completed_with_gaps"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "completed_with_gaps"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "structured_payload": {
+                    "anyOf": [
+                      {
+                        "properties": {
+                          "record": {
+                            "properties": {
+                              "decisions": {
+                                "contains": {
+                                  "properties": {
+                                    "verdict": {
+                                      "const": "unverified"
+                                    }
+                                  },
+                                  "required": [
+                                    "verdict"
+                                  ]
+                                }
+                              }
+                            },
+                            "required": [
+                              "decisions"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "record"
+                        ]
+                      },
+                      {
+                        "properties": {
+                          "record": {
+                            "properties": {
+                              "input_review": {
+                                "contains": {
+                                  "properties": {
+                                    "record": {
+                                      "properties": {
+                                        "gaps": {
+                                          "type": "array",
+                                          "minItems": 1
+                                        }
+                                      },
+                                      "required": [
+                                        "gaps"
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "record"
+                                  ]
+                                }
+                              }
+                            },
+                            "required": [
+                              "input_review"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "record"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
     ]
   }
 }

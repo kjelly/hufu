@@ -1,6 +1,9 @@
 package team
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // Branch switches rebuild the session checkpoint from the target branch's event
 // lineage. Every branch-specific field comes from replay; only the state that
@@ -55,6 +58,9 @@ func carryWorkspaceSessionState(next, live *SessionData) {
 	next.RuntimeWorkspace = live.RuntimeWorkspace
 	next.LearningGaps = append([]LearningGap(nil), live.LearningGaps...)
 	next.Rounds = live.Rounds
+	if !sameDerivedForkLineage(next.DerivedFork, live.DerivedFork) {
+		return
+	}
 	next.ConversationHistorySourceOffset = live.ConversationHistorySourceOffset
 	next.ConversationHistorySourceCounts = append([]int(nil), live.ConversationHistorySourceCounts...)
 	next.ConversationHistorySourceRanges = cloneSourceRanges(live.ConversationHistorySourceRanges)
@@ -76,12 +82,16 @@ func RefreshActiveBranchProjection(workspace string, st *SessionTree, es *EventS
 		return err
 	}
 	replayed := ReduceToSessionData(lineage)
-	if len(tasks) == 0 && len(replayed.Entries) == 0 && len(replayed.CriterionResults) == 0 && len(replayed.CriterionCheckpoints) == 0 && replayed.LastCriterionProgressAt == "" && replayed.ExecutionPolicySnapshot == nil {
+	if len(tasks) == 0 && len(replayed.Entries) == 0 && len(replayed.CriterionResults) == 0 && len(replayed.CriterionCheckpoints) == 0 && replayed.LastCriterionProgressAt == "" && replayed.ExecutionPolicySnapshot == nil && len(replayed.MediaInputSnapshots) == 0 && replayed.DerivedFork == nil {
 		return nil
 	}
 	sd := LoadSession(workspace)
 	if sd == nil {
 		sd = NewSession()
+	}
+	if replayed.DerivedFork != nil && !sameDerivedForkLineage(sd.DerivedFork, replayed.DerivedFork) {
+		carryWorkspaceSessionState(replayed, sd)
+		return SaveSession(workspace, replayed)
 	}
 	sd.Tasks = tasks
 	sd.Entries = replayed.Entries
@@ -89,6 +99,9 @@ func RefreshActiveBranchProjection(workspace string, st *SessionTree, es *EventS
 	sd.CriterionCheckpoints = replayed.CriterionCheckpoints
 	sd.LastCriterionProgressAt = replayed.LastCriterionProgressAt
 	sd.ExecutionPolicySnapshot = cloneExecutionPolicySnapshot(replayed.ExecutionPolicySnapshot)
+	sd.MediaInputSnapshots = cloneMediaInputSnapshots(replayed.MediaInputSnapshots)
+	sd.HistoricalResultGrants = cloneHistoricalGrantCycleRef(replayed.HistoricalResultGrants)
+	sd.DerivedFork = cloneDerivedForkRef(replayed.DerivedFork)
 	if err := SaveSession(workspace, sd); err != nil {
 		return fmt.Errorf("refresh projection for branch %q: %w", b.ID, err)
 	}
@@ -139,6 +152,9 @@ func branchReplayInputs(st *SessionTree, es *EventStore, branchID string) (*Sess
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("rebuild session: project branch: %w", err)
 	}
+	if _, err := es.validateHistoricalResultGrantProjection(context.Background(), lineage); err != nil {
+		return nil, nil, nil, fmt.Errorf("rebuild session: historical result grants: %w", err)
+	}
 	tasks, err := ReplayTodoList(lineage)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("rebuild session: replay execution identity: %w", err)
@@ -149,6 +165,7 @@ func branchReplayInputs(st *SessionTree, es *EventStore, branchID string) (*Sess
 			tasks[i] = cloneTodoItem(t)
 		}
 	}
+	restoreLegacyCollectionEvidence(tasks, b.State.TaskPlan)
 	return b, lineage, tasks, nil
 }
 

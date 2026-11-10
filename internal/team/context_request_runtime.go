@@ -78,7 +78,15 @@ func (c *Coordinator) newTaskContextRequest(task TaskDef, todoID string, attempt
 	}
 	modelExecutionID := contextModelExecutionID(todoID, agentName, task.Model)
 	if c != nil && strings.TrimSpace(c.modelExecutionID) != "" {
+		// Fanout dispatch owns this identity, including restored leaf proofs.
 		modelExecutionID = c.modelExecutionID
+	} else if c != nil {
+		if item := c.todoItemByID(todoID); item != nil && item.Retries > 0 {
+			// A DAG reset creates a new logical worker incarnation while its
+			// in-dispatch work counter restarts at one. Keep model identity stable
+			// within that lifecycle, including ordinary provider/verification retries.
+			modelExecutionID = "model-execution-" + hashContentKey(modelExecutionID+"\x00occurrence:"+strconv.Itoa(item.Retries+1))
+		}
 	}
 	r := ContextRequest{
 		SchemaVersion: ContextRequestSchemaVersion, RunID: c.contextRunID(), TaskID: todoID, Attempt: attempt,

@@ -48,13 +48,16 @@ func historicalLineage(ctx context.Context, scope HistoricalResultScope, maxEven
 	if err != nil {
 		return Lineage{}, nil, nil, historicalStreamError(err)
 	}
-	lineage, err := indexLineage(headers, tree, scope.Branch)
+	branchID, err := resolveBranch(tree, scope.Branch)
 	if err != nil {
 		return Lineage{}, nil, nil, err
 	}
-	selected := make(map[string]bool, len(lineage.Events))
-	for _, event := range lineage.Events {
-		selected[event.Event.ID] = true
+	// This pass selects headers only, so payload-dependent lineage checks
+	// cannot run yet. The full checked projector below remains mandatory
+	// after the exact lineage's content has been loaded within its budget.
+	selected := make(map[string]bool)
+	for _, event := range team.FilterEventsForBranch(headers, tree, branchID) {
+		selected[event.ID] = true
 	}
 	ordinal, payloadBytes := 0, 0
 	err = snapshot.Visit(ctx, func(event team.RunEvent) error {
@@ -73,7 +76,7 @@ func historicalLineage(ctx context.Context, scope HistoricalResultScope, maxEven
 	if err != nil {
 		return Lineage{}, nil, nil, historicalStreamError(err)
 	}
-	lineage, err = indexLineage(headers, tree, scope.Branch)
+	lineage, err := indexLineage(headers, tree, scope.Branch)
 	return lineage, tree, knownTeams, err
 }
 

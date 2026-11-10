@@ -8,9 +8,10 @@ import (
 )
 
 type TaskResultIdentityMsg struct {
-	TodoID   string
-	ResultID string
-	Team     string
+	TodoID     string
+	ResultID   string
+	Team       string
+	ImageCount int
 }
 
 func (m Model) resultIdentityLines(taskID string) []string {
@@ -19,11 +20,15 @@ func (m Model) resultIdentityLines(taskID string) []string {
 		return nil
 	}
 	width := max(m.width-2, 1)
-	return []string{
+	lines := []string{
 		wrapText("Result ID: "+sanitizeTerminalText(identity.ResultID), width),
 		wrapText("Team: "+sanitizeTerminalText(identity.Team), width),
 		wrapText(team.HistoricalResultCommand(sanitizeTerminalText(identity.ResultID), sanitizeTerminalText(identity.Team)), width),
 	}
+	if identity.ImageCount > 0 {
+		lines = append(lines, wrapText(team.HistoricalResultImagesCommand(sanitizeTerminalText(identity.ResultID), sanitizeTerminalText(identity.Team)), width))
+	}
+	return lines
 }
 
 func validResultIdentity(identity TaskResultIdentityMsg) bool {

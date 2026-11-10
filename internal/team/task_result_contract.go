@@ -14,6 +14,7 @@ import (
 // TaskDef, rather than from agent prose, so prompt, schema, and commit-time
 // validation have one source of truth.
 type taskResultSubmissionContract struct {
+	claimsProjection     *resultClaimsProjection
 	RequiredFields       []string
 	TaskResultAssertions []TaskResultAssertion
 	// SubmissionTaskResultAssertions excludes only runtime transcript fields
@@ -21,6 +22,7 @@ type taskResultSubmissionContract struct {
 	// assertion set remains in TaskResultAssertions for that late verifier.
 	SubmissionTaskResultAssertions []TaskResultAssertion
 	FilesReadMinItems              int
+	RuntimeOwnedFilesRead          bool
 	AllowEvidence                  bool
 	AllowArtifacts                 bool
 	InvariantVerification          InvariantVerificationMode
@@ -51,12 +53,8 @@ func taskResultSubmissionContractForTask(task TaskDef) taskResultSubmissionContr
 		if field := taskResultAssertionRootField(assertion.Pointer); field != "" {
 			contract.RequiredFields = appendUniqueString(contract.RequiredFields, field)
 		}
-		if assertion.Op == "equals_projection" {
-			if projection, err := decodeTaskResultProjection(assertion.Value); err == nil {
-				if field := taskResultAssertionRootField(projection.Pointer); field != "" {
-					contract.RequiredFields = appendUniqueString(contract.RequiredFields, field)
-				}
-			}
+		if field := taskResultAssertionRootField(taskResultAssertionReferencePointer(assertion)); field != "" {
+			contract.RequiredFields = appendUniqueString(contract.RequiredFields, field)
 		}
 		if strings.TrimSpace(assertion.Pointer) == "/files_read" {
 			switch assertion.Op {
@@ -103,13 +101,9 @@ func taskResultContractRequiresFilesRead(assertions []TaskResultAssertion) bool 
 }
 
 func taskResultAssertionUsesTranscriptFinalization(assertion TaskResultAssertion) bool {
-	if assertion.Op == "equals_projection" {
-		if projection, err := decodeTaskResultProjection(assertion.Value); err == nil {
-			switch taskResultAssertionRootField(projection.Pointer) {
-			case "raw_output_ref", "outputs":
-				return true
-			}
-		}
+	switch taskResultAssertionRootField(taskResultAssertionReferencePointer(assertion)) {
+	case "raw_output_ref", "outputs":
+		return true
 	}
 	switch taskResultAssertionRootField(assertion.Pointer) {
 	case "raw_output_ref", "outputs":

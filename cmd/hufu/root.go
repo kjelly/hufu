@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kjelly/hufu/internal/buildinfo"
 	"github.com/kjelly/hufu/internal/config"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -37,7 +38,7 @@ For scripts, pass --team or a profile that names a team.
 Set the model with --model <name> (highest priority), in team.yaml, or in hufu.yaml.`,
 		Args:         cobra.MaximumNArgs(1),
 		RunE:         runTeam,
-		Version:      version,
+		Version:      buildinfo.Current().String(),
 		SilenceUsage: true,
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {
 			configureOutputRendering()
@@ -113,6 +114,8 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().StringArrayVar(&opts.varFiles, "var-file", nil, "Read template variables from a file (.yaml/.yml or KEY=VALUE format). Can be specified multiple times; later files override earlier ones")
 	rootCmd.Flags().StringArrayVar(&opts.inputFlags, "input", nil, "Set a typed run input (name=json-or-typed-scalar); repeatable")
 	rootCmd.Flags().StringArrayVar(&opts.inputFiles, "input-file", nil, "Read typed run inputs from a JSON or YAML mapping; repeatable")
+	rootCmd.Flags().StringArrayVar(&opts.imagePaths, "image", nil, "Attach an image to one coordinator or explicit worker task; repeatable, ordered, preserves duplicates")
+	rootCmd.Flags().Lookup("image").Annotations = map[string][]string{profileCommandLocalFlag: {"true"}}
 	rootCmd.Flags().StringArrayVar(&opts.forcedSkills, "skill", nil, "Force-load specific skills (repeatable, e.g. --skill code-review --skill tdd)")
 	rootCmd.Flags().BoolVar(&opts.requestAcceptance, "request-acceptance", false, "Freeze explicit request requirements and require evidence before successful completion")
 	rootCmd.Flags().BoolVar(&opts.planMode, "plan", false, "Force plan-first mode: agents must submit plans before executing")
@@ -151,7 +154,7 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 	rootCmd.Flags().IntVar(&opts.compactionDiagnosticMaxLines, "compaction-diagnostic-max-lines", 0, "Override preserved diagnostic line cap; zero keeps the safety default")
 	rootCmd.Flags().IntVar(&opts.compactionDiagnosticMaxTokens, "compaction-diagnostic-max-tokens", 0, "Override preserved diagnostic token cap; zero keeps the safety default")
 	rootCmd.Flags().BoolVar(&opts.unattended, "unattended", false, "Run with no human present: ask_user returns safe defaults instead of blocking, --steps/--tui are disabled, and only allowlisted tools may run")
-	rootCmd.Flags().Int64Var(&opts.maxDuration, "max-duration", 0, "Budget: max total wall-clock seconds before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
+	rootCmd.Flags().Int64Var(&opts.maxDuration, "max-duration", 0, "Budget: max run seconds excluding browser dwell and verification waits before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
 	rootCmd.Flags().Int64Var(&opts.maxTotalTokens, "max-total-tokens", 0, "Budget: max cumulative LLM tokens before forcing wrap-up (0 = unlimited). Recommended for unattended runs.")
 	rootCmd.Flags().BoolVar(&opts.autoTeam, "auto-team", false, "Auto-select the team best suited to the prompt through a structured sidecar decision instead of prompting")
 	rootCmd.Flags().StringVar(&opts.routeMode, "route", "auto", "Execution route selection mode: auto, fast, or team")

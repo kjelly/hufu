@@ -20,6 +20,7 @@ const (
 	CommandWrapUp       CommandKind = "wrap_up"
 	CommandResetContext CommandKind = "reset_context"
 	CommandSwitchTeam   CommandKind = "switch_team"
+	CommandImages       CommandKind = "images"
 )
 
 // Command is one request from the front end. ID is the in-process
@@ -27,8 +28,9 @@ const (
 type Command struct {
 	ID     string
 	Kind   CommandKind
-	Text   string // submit_prompt only
-	Target string // switch_team only
+	Text   string       // submit_prompt only
+	Target string       // switch_team only
+	Image  ImageCommand // images only
 }
 
 // AckStatus is the admission decision for a command. Admission is in-memory:
@@ -53,12 +55,14 @@ type Ack struct {
 
 // TurnResult is the runtime's verdict for one turn, passed through unchanged.
 type TurnResult struct {
-	TurnID    string
-	Answer    string
-	Result    *team.RunResult // nil when the runtime produced no RunResult
-	Err       error
-	Cancelled bool
-	RunIDs    []string
+	TurnID         string
+	Answer         string
+	Result         *team.RunResult // nil when the runtime produced no RunResult
+	Err            error
+	Cancelled      bool
+	RunIDs         []string
+	InputAdmission *team.MediaTurnAdmission
+	Images         *ImageStatus
 	// Elapsed is the wall time from TurnStarted to settlement.
 	Elapsed time.Duration
 }
@@ -77,10 +81,11 @@ type Event interface{ isEvent() }
 
 // TurnStarted marks the moment a turn was handed to the runtime.
 type TurnStarted struct {
-	TurnID    string
-	CommandID string
-	Prompt    string
-	StartedAt time.Time
+	TurnID         string
+	CommandID      string
+	Prompt         string
+	StartedAt      time.Time
+	IncludePending bool
 }
 
 // TurnSettled carries the runtime's result for one turn.
@@ -91,10 +96,13 @@ type QueueDropped struct{ TurnIDs []string }
 
 // ControlDone reports the completion of reset_context or switch_team.
 type ControlDone struct {
-	CommandID string
-	Kind      CommandKind
-	Target    string
-	Err       error
+	CommandID      string
+	Kind           CommandKind
+	Target         string
+	Err            error
+	Images         *ImageStatus
+	ImageOperation ImageOperation
+	ClearedImages  int
 }
 
 // Closed is the final event; the events channel closes right after it.

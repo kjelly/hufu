@@ -20,6 +20,8 @@ import (
 // DAG edges and configuration-only fields, so it is not a safe durable
 // representation of an executable occurrence.
 type TaskOccurrenceProjection struct {
+	MediaBinding                  *MediaTaskBinding `json:"MediaBinding,omitempty"`
+	MediaInputDigest              string            `json:"MediaInputDigest,omitempty"`
 	ID                            string
 	PlanTaskID                    string
 	PlanFirst                     bool
@@ -91,6 +93,8 @@ type TaskOccurrenceProjection struct {
 	DynamicToolAuthorization *DynamicToolAuthorizationSnapshot
 	ResourceScopeSnapshot    *TaskResourceScopeSnapshot
 	ResultContract           *ResultContractRef
+	HistoricalResultBinding  *HistoricalResultTaskBinding `json:"HistoricalResultBinding,omitempty"`
+	DependencyResultView     *DependencyResultViewSpec    `json:"DependencyResultView,omitempty"`
 	WorkerWorkspace          *WorkerWorkspacePolicy
 	ExecutionRoute           *ExecutionRouteBinding
 	CatalogAction            *CatalogActionBinding
@@ -102,11 +106,22 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 	if item == nil || strings.TrimSpace(item.ID) == "" {
 		return TaskOccurrenceProjection{}, fmt.Errorf("task occurrence projection requires a Todo ID")
 	}
+	if err := validateTaskMediaShape(item); err != nil {
+		return TaskOccurrenceProjection{}, err
+	}
+	if err := validateHistoricalResultTaskBindingShape(item); err != nil {
+		return TaskOccurrenceProjection{}, err
+	}
 	if err := validateDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization); err != nil {
 		return TaskOccurrenceProjection{}, err
 	}
 	if err := validateTaskResourceScopeSnapshot(item.ResourceScopeSnapshot, item.SideEffect); err != nil {
 		return TaskOccurrenceProjection{}, err
+	}
+	if item.WorksetBinding != nil {
+		if err := validateRequiredArtifactReads(item.WorksetBinding.Inputs, item.WorksetBinding.RequiredReads); err != nil {
+			return TaskOccurrenceProjection{}, fmt.Errorf("required_reads_invalid: %w", err)
+		}
 	}
 	model := item.Model
 	modelTopology := cloneModelTopology(item.ModelTopology)
@@ -123,7 +138,7 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 	return TaskOccurrenceProjection{
 		ID: item.ID, PlanTaskID: item.PlanTaskID, PlanFirst: item.PlanFirst, PlanID: item.PlanID,
 		Phase: item.Phase, Action: cloneActionPtr(item.Action), ActionInputBindings: append([]ActionInputBinding(nil), item.ActionInputBindings...), RunInputSnapshotID: item.RunInputSnapshotID,
-		RunInputSnapshotHash: item.RunInputSnapshotHash, MaterializedActionPayloadHash: item.MaterializedActionPayloadHash,
+		RunInputSnapshotHash: item.RunInputSnapshotHash, MediaBinding: item.MediaBinding.Clone(), MediaInputDigest: item.MediaInputDigest, MaterializedActionPayloadHash: item.MaterializedActionPayloadHash,
 		BoundInputs: cloneStringMap(item.BoundInputs), InvariantVerification: item.InvariantVerification, ContractID: item.ContractID,
 		ContractHash: item.ContractHash, ContractRevision: item.ContractRevision, Agent: item.Agent,
 		Desc: item.Desc, Goal: item.Goal, Constraints: item.Constraints, Model: model,
@@ -137,6 +152,8 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 		DynamicToolAuthorization: cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		ResourceScopeSnapshot:    cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		ResultContract:           item.ResultContract.clone(),
+		HistoricalResultBinding:  item.HistoricalResultBinding.clone(),
+		DependencyResultView:     item.DependencyResultView.clone(),
 		WorkerWorkspace:          item.WorkerWorkspace.clone(),
 		ExecutionRoute:           item.ExecutionRoute.clone(),
 		CatalogAction:            item.CatalogAction.clone(),
@@ -178,7 +195,7 @@ func taskOccurrenceProjectionFromTaskDef(task TaskDef, runtimeID string) (TaskOc
 	desc := goal
 	item := todoItemFromSpec(TodoSpec{
 		PlanTaskID: task.ID, PlanFirst: task.PlanFirst, PlanID: task.PlanID, Phase: task.Phase,
-		Action: cloneActionPtr(task.Action), ActionInputBindings: append([]ActionInputBinding(nil), task.ActionInputBindings...), RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash,
+		Action: cloneActionPtr(task.Action), ActionInputBindings: append([]ActionInputBinding(nil), task.ActionInputBindings...), RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash, MediaBinding: task.MediaBinding.Clone(), MediaInputDigest: task.MediaInputDigest,
 		MaterializedActionPayloadHash: task.MaterializedActionPayloadHash, BoundInputs: cloneStringMap(task.BoundInputs),
 		InvariantVerification: task.InvariantVerification, ContractID: task.ContractID, ContractHash: task.ContractHash,
 		ContractRevision: task.ContractRevision, Agent: task.Agent, Desc: desc, Goal: goal,
@@ -198,12 +215,13 @@ func taskOccurrenceProjectionFromTaskDef(task TaskDef, runtimeID string) (TaskOc
 		DecisionProfile: task.DecisionProfile, DecisionOptions: append([]DecisionOption(nil), task.DecisionOptions...),
 		DecisionAssumptions: cloneDecisionAssumptions(task.DecisionAssumptions), DecisionFacts: cloneDecisionFacts(task.DecisionFacts),
 		DecisionArtifacts: append([]ArtifactRef(nil), task.DecisionArtifacts...), DecisionBaseRates: cloneBaseRateEvidence(task.DecisionBaseRates),
-		DecisionProvenance: cloneEvidenceProvenance(task.DecisionProvenance),
-		SubagentProvider:   task.SubagentProvider,
-		ResultContract:     task.ResultContract.clone(),
-		WorkerWorkspace:    task.WorkerWorkspace.clone(),
-		ExecutionRoute:     task.ExecutionRoute.clone(),
-		CatalogAction:      task.CatalogAction.clone(),
+		DecisionProvenance:   cloneEvidenceProvenance(task.DecisionProvenance),
+		SubagentProvider:     task.SubagentProvider,
+		ResultContract:       task.ResultContract.clone(),
+		DependencyResultView: task.DependencyResultView.clone(),
+		WorkerWorkspace:      task.WorkerWorkspace.clone(),
+		ExecutionRoute:       task.ExecutionRoute.clone(),
+		CatalogAction:        task.CatalogAction.clone(),
 	}, runtimeID)
 	if strings.TrimSpace(runtimeID) == "" {
 		// Digest-only compatibility callers do not have an occurrence ID. The

@@ -5,6 +5,7 @@ package tools
 
 import (
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -193,27 +194,31 @@ func TestSSHSessionManager_PasswordCaching(t *testing.T) {
 }
 
 func TestSSHSessionManager_PasswordExpiry(t *testing.T) {
-	manager := NewSSHSessionManager()
-
-	// Create session first
-	manager.Create("example.com", "test", 22, "task-1")
-
-	// Set password with very short expiry
-	manager.SetPassword("example.com", "secret123", 100*time.Millisecond)
-
-	// Should work immediately
-	password, ok := manager.GetPassword("example.com")
-	if !ok || password != "secret123" {
-		t.Fatal("Expected to retrieve password immediately")
-	}
-
-	// Wait for expiry
-	time.Sleep(150 * time.Millisecond)
-
-	// Should be expired
-	_, ok = manager.GetPassword("example.com")
-	if ok {
-		t.Error("Expected password to be expired")
+	for _, tc := range []struct {
+		name    string
+		elapsed time.Duration
+		wantOK  bool
+	}{
+		{"before expiry", 99 * time.Millisecond, true},
+		{"at expiry", 100 * time.Millisecond, true},
+		{"after expiry", 101 * time.Millisecond, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				manager := NewSSHSessionManager()
+				if _, err := manager.Create("example.com", "test", 22, "task-1"); err != nil {
+					t.Fatal(err)
+				}
+				if !manager.SetPassword("example.com", "secret123", 100*time.Millisecond) {
+					t.Fatal("SetPassword failed")
+				}
+				time.Sleep(tc.elapsed)
+				password, ok := manager.GetPassword("example.com")
+				if ok != tc.wantOK || (ok && password != "secret123") {
+					t.Fatalf("password available = %v, want %v", ok, tc.wantOK)
+				}
+			})
+		})
 	}
 }
 
@@ -260,29 +265,31 @@ func TestSSHSessionManager_PasswordNoSession(t *testing.T) {
 }
 
 func TestSSHSessionManager_UpdateLastUsed(t *testing.T) {
-	manager := NewSSHSessionManager()
+	synctest.Test(t, func(t *testing.T) {
+		manager := NewSSHSessionManager()
 
-	// Create session
-	manager.Create("example.com", "test", 22, "task-1")
+		// Create session
+		manager.Create("example.com", "test", 22, "task-1")
 
-	// Get initial LastUsedAt
-	session := manager.Get("example.com")
-	if session == nil {
-		t.Fatal("Expected to get session")
-	}
-	initialTime := session.LastUsedAt
+		// Get initial LastUsedAt
+		session := manager.Get("example.com")
+		if session == nil {
+			t.Fatal("Expected to get session")
+		}
+		initialTime := session.LastUsedAt
 
-	// Wait a bit
-	time.Sleep(10 * time.Millisecond)
+		// Wait a bit
+		time.Sleep(10 * time.Millisecond)
 
-	// Update last used
-	manager.UpdateLastUsed("example.com")
+		// Update last used
+		manager.UpdateLastUsed("example.com")
 
-	// Get session again
-	session = manager.Get("example.com")
-	if session.LastUsedAt.Before(initialTime) || session.LastUsedAt.Equal(initialTime) {
-		t.Error("Expected LastUsedAt to be updated")
-	}
+		// Get session again
+		session = manager.Get("example.com")
+		if session.LastUsedAt.Before(initialTime) || session.LastUsedAt.Equal(initialTime) {
+			t.Error("Expected LastUsedAt to be updated")
+		}
+	})
 }
 
 func TestSSHSessionManager_CleanupIdle(t *testing.T) {
@@ -342,21 +349,23 @@ func TestSSHSessionManager_CleanupIdlePartial(t *testing.T) {
 }
 
 func TestSSHSessionManager_UpdateLastUsedOnCreate(t *testing.T) {
-	manager := NewSSHSessionManager()
+	synctest.Test(t, func(t *testing.T) {
+		manager := NewSSHSessionManager()
 
-	// Create session
-	manager.Create("example.com", "test", 22, "task-1")
-	session := manager.Get("example.com")
-	firstTime := session.LastUsedAt
+		// Create session
+		manager.Create("example.com", "test", 22, "task-1")
+		session := manager.Get("example.com")
+		firstTime := session.LastUsedAt
 
-	// Wait
-	time.Sleep(10 * time.Millisecond)
+		// Wait
+		time.Sleep(10 * time.Millisecond)
 
-	// Create again (should update LastUsedAt)
-	manager.Create("example.com", "test", 22, "task-2")
-	session = manager.Get("example.com")
+		// Create again (should update LastUsedAt)
+		manager.Create("example.com", "test", 22, "task-2")
+		session = manager.Get("example.com")
 
-	if !session.LastUsedAt.After(firstTime) {
-		t.Error("Expected LastUsedAt to be updated on duplicate Create")
-	}
+		if !session.LastUsedAt.After(firstTime) {
+			t.Error("Expected LastUsedAt to be updated on duplicate Create")
+		}
+	})
 }

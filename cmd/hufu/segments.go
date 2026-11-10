@@ -55,7 +55,7 @@ func handleSegmentError(ctx context.Context, tc *teamContext, results []string, 
 // (coordinator DAG), based on the resolved route decision. It manages the
 // activeCoordinator pointer around the execution entry points so TUI/SIGINT
 // tracking and prompt injection remain consistent across both paths.
-func dispatchSegmentContent(ctx context.Context, tc *teamContext, content string, route RouteDecision, injector *promptInjector, activeCoord *activeCoordinator) (string, error) {
+func dispatchSegmentContent(ctx context.Context, tc *teamContext, content string, route RouteDecision, injector *promptInjector, activeCoord *activeCoordinator, runCoordinator segmentCoordinatorRunner) (string, error) {
 	if shouldUseFastPath(route, tc.coordinator) {
 		primary := tc.coordinator.PrimaryWorkerName()
 		d := fastPathDispatch{
@@ -86,7 +86,7 @@ func dispatchSegmentContent(ctx context.Context, tc *teamContext, content string
 	if injector.IsWrapUpRequested() {
 		tc.coordinator.SetWrapUp()
 	}
-	result, err := tc.coordinator.Run(ctx, content)
+	result, err := runCoordinator(ctx, tc.coordinator, content)
 	activeCoord.Store(nil)
 	return result, err
 }
@@ -174,9 +174,15 @@ func synthesizeDirectAgentResult(ctx context.Context, tc *teamContext, agentName
 func executeSegments(ctx context.Context, segments []team.PromptSegment, registry *team.TeamRegistry, defaultProviderURL string, loadedTeams map[string]*teamContext, injector *promptInjector, activeCoord *activeCoordinator, pathConsent *tools.PathConsent, vars map[string]string, route RouteDecision) (string, error) {
 	return executeSegmentsWithRunners(ctx, segments, registry, defaultProviderURL, loadedTeams, injector, activeCoord, pathConsent, vars, route,
 		func(ctx context.Context, coordinator *team.Coordinator, agentName, task string) (*team.DirectAgentResult, error) {
+			if len(opts.imagePaths) > 0 {
+				return coordinator.RunDirectAgentWithMediaAndSynthesis(ctx, agentName, task, team.MediaTurnRequest{Images: opts.imagePaths})
+			}
 			return coordinator.RunDirectAgent(ctx, agentName, task)
 		},
 		func(ctx context.Context, coordinator *team.Coordinator, prompt string) (string, error) {
+			if len(opts.imagePaths) > 0 {
+				return coordinator.RunWithMedia(ctx, prompt, team.MediaTurnRequest{Images: opts.imagePaths})
+			}
 			return coordinator.Run(ctx, prompt)
 		})
 }
@@ -247,7 +253,7 @@ func executeSegmentsWithRunners(ctx context.Context, segments []team.PromptSegme
 				stderrLog("\n%s Starting team %s...\n\n", boldStyle.Render("→"), teamStyle.Render(teamName))
 			}
 
-			result, err := dispatchSegmentContent(ctx, tc, content, route, injector, activeCoord)
+			result, err := dispatchSegmentContent(ctx, tc, content, route, injector, activeCoord, runCoordinator)
 			disp.stopTimer()
 			result, err = presentExploratoryDelivery(tc, result, err)
 
@@ -294,6 +300,19 @@ func executeSegmentsWithRunners(ctx context.Context, segments []team.PromptSegme
 			if err != nil {
 				return handleSegmentError(ctx, tc, results, err, "direct agent @%s failed", seg.Name)
 			}
+			if len(opts.imagePaths) > 0 {
+				delivered, deliveryErr := presentNativeImageDirectResult(tc, directResult)
+				if deliveryErr != nil {
+					if strings.TrimSpace(delivered) != "" {
+						results = append(results, fmt.Sprintf("## Agent: @%s (team: %s)\n%s", seg.Name, currentTeamName, delivered))
+					}
+					return handleSegmentError(ctx, tc, results, deliveryErr, "direct image task @%s was not accepted", seg.Name)
+				}
+				disp2.finalizeTasks()
+				results = append(results, fmt.Sprintf("## Agent: @%s (team: %s)\n%s", seg.Name, currentTeamName, delivered))
+				prevResult = delivered
+				continue
+			}
 
 			if directResult.ReplanRequired {
 				var replanned string
@@ -336,7 +355,7 @@ func executeSegmentsWithRunners(ctx context.Context, segments []team.PromptSegme
 				stderrLog("\n%s Team %s processing...\n\n", boldStyle.Render("→"), teamStyle.Render(currentTeamName))
 			}
 
-			result, err := dispatchSegmentContent(ctx, tc, content, route, injector, activeCoord)
+			result, err := dispatchSegmentContent(ctx, tc, content, route, injector, activeCoord, runCoordinator)
 			disp3.stopTimer()
 			result, err = presentExploratoryDelivery(tc, result, err)
 

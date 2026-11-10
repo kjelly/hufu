@@ -51,7 +51,7 @@ func fixtureTask(t *testing.T, id, contract, status string, value payload, r rec
 		"ID": id, "Status": "done", "contract_id": contract,
 		"evidence_from": evidenceFrom, "run_input_snapshot_id": snapshotID,
 		"execution_receipt": map[string]any{"run_id": "run-1", "task_id": id,
-			"attempt": 1, "producer_id": "reviewer", "model_execution_id": "execution-" + id,
+			"attempt": 1, "exit_code": 0, "producer_id": "reviewer", "model_execution_id": "execution-" + id,
 			"transcript_ref": "transcript-" + id},
 		"VerifyResult": map[string]any{"exit_code": 0, "fingerprint": "vfp-1"},
 		"typed_result": map[string]any{"status": status, "findings": r.Findings,
@@ -73,7 +73,7 @@ func gateFixture(t *testing.T) session {
 	first := record{Kind: "review", Revision: "frozen-head", Key: "unit-0", Lens: "security-tool", Findings: []finding{
 		{Summary: "Output limit off by one", Severity: "warning", Evidence: []string{"snapshot-a"}, RequiresCritique: true},
 		{Summary: "Network classification", Severity: "info", Evidence: []string{"snapshot-a"}},
-	}, Gaps: []json.RawMessage{raw(t, map[string]string{"description": "Registry not in this snapshot", "missing_evidence": "AllTools"})}}
+	}, Gaps: []json.RawMessage{raw(t, map[string]any{"description": "Registry not in this snapshot", "missing_evidence": "AllTools", "kind": "semantic_uncertainty", "requested_evidence": []any{}, "limitations": []any{}})}}
 	second := record{Kind: "review", Revision: "frozen-head", Key: "unit-1", Lens: "general", Findings: []finding{
 		{Summary: "Prompt-only URL protection", Severity: "info", Evidence: []string{"snapshot-b"}, RequiresCritique: true},
 	}, Gaps: []json.RawMessage{}}
@@ -308,7 +308,7 @@ func TestReviewGateInvariantHandoff(t *testing.T) {
 		t.Fatalf("error=%v", err)
 	}
 	r.Invariants = nil
-	if err := verifyInvariants(item, r); err == nil || !strings.Contains(err.Error(), "omitted invariant assessments") {
+	if err := verifyInvariants(item, r); err == nil || !strings.Contains(err.Error(), "record has 0, runtime verified 1") {
 		t.Fatalf("error=%v", err)
 	}
 }
@@ -435,7 +435,7 @@ func TestReviewGateConservativeCriticStatusRequiresGroundedGaps(t *testing.T) {
 			review := record{Kind: "review", Findings: []finding{{Summary: "Observed claim", Severity: "info", Evidence: []string{"snapshot-a"}}}}
 			sourceStatus := "success"
 			if test.sourceGap {
-				review.Gaps = []json.RawMessage{raw(t, map[string]string{"description": "Caller absent", "missing_evidence": "Caller body"})}
+				review.Gaps = []json.RawMessage{raw(t, map[string]any{"description": "Caller absent", "missing_evidence": "Caller body", "kind": "semantic_uncertainty", "requested_evidence": []any{}, "limitations": []any{}})}
 				sourceStatus = "completed_with_gaps"
 			}
 			sourcePayload := payload{Record: raw(t, review)}
@@ -485,5 +485,16 @@ func TestReviewGateRejectsRewritingFailedTestsAsPassed(t *testing.T) {
 	replacePayload(t, &fixture.Tasks[4], func(p *payload) { p.Tests = raw(t, map[string]any{"passed": true, "exit_code": 0}) })
 	if _, _, err := verify(fixture, "run-1"); err == nil || !strings.Contains(err.Error(), "substituted verify-targeted-go-tests") {
 		t.Fatalf("accepted forged test success: %v", err)
+	}
+}
+
+func TestInvariantAssessmentCountMismatch(t *testing.T) {
+	var item task
+	if err := json.Unmarshal(raw(t, map[string]any{"ID": "18", "typed_result": map[string]any{}}), &item); err != nil {
+		t.Fatal(err)
+	}
+	r := record{Invariants: []invariantAssessment{{ID: "invented", Status: "preserved", Summary: "unsupported"}}}
+	if err := verifyInvariants(item, r); err == nil || !strings.Contains(err.Error(), "record has 1, runtime verified 0") {
+		t.Fatalf("error=%v", err)
 	}
 }

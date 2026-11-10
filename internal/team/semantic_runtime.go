@@ -59,6 +59,7 @@ type SemanticRetrievalRuntime struct {
 	refreshCh chan struct{}
 
 	mu      sync.Mutex
+	started bool
 	state   string
 	failure error
 	ollama  *embedding.OllamaEmbedder
@@ -104,6 +105,10 @@ func newSemanticRetrievalRuntimeWithPoll(settings semantic.Settings, repo contex
 }
 
 func newSemanticRuntime(settings semantic.Settings, repo contextstore.Repository, projectID string, noNet bool, pollEvery time.Duration, readOnly bool) (*SemanticRetrievalRuntime, error) {
+	return newSemanticRuntimeWithStartup(settings, repo, projectID, noNet, pollEvery, readOnly, true)
+}
+
+func newSemanticRuntimeWithStartup(settings semantic.Settings, repo contextstore.Repository, projectID string, noNet bool, pollEvery time.Duration, readOnly, immediate bool) (*SemanticRetrievalRuntime, error) {
 	if !settings.Enabled() {
 		return nil, nil
 	}
@@ -133,13 +138,26 @@ func newSemanticRuntime(settings semantic.Settings, repo contextstore.Repository
 		state: semanticStateCold,
 		stats: SemanticRuntimeStatus{Mode: string(settings.Mode), Model: settings.Model, Endpoint: embedding.RedactEndpoint(settings.Endpoint)},
 	}
-	r.wg.Add(1)
-	go r.warmLoop()
-	if !readOnly {
-		r.wg.Add(1)
-		go r.refreshLoop()
+	if immediate {
+		r.start()
 	}
 	return r, nil
+}
+
+func (r *SemanticRetrievalRuntime) start() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.started || r.ctx.Err() != nil {
+		return
+	}
+	r.started = true
+	r.wg.Go(r.warmLoop)
+	if !r.readOnly {
+		r.wg.Go(r.refreshLoop)
+	}
 }
 
 // Mode is the retrieval mode the runtime serves (shadow or active); auto
@@ -151,7 +169,9 @@ func (r *SemanticRetrievalRuntime) Close() {
 	if r == nil {
 		return
 	}
+	r.mu.Lock()
 	r.cancel()
+	r.mu.Unlock()
 	r.wg.Wait()
 }
 
@@ -270,7 +290,6 @@ func (r *SemanticRetrievalRuntime) nudgeRefresh() {
 }
 
 func (r *SemanticRetrievalRuntime) warmLoop() {
-	defer r.wg.Done()
 	backoff := semanticWarmBackoffInitial
 	for {
 		var retry <-chan time.Time
@@ -356,7 +375,6 @@ func (r *SemanticRetrievalRuntime) readyBuilder() *contextstore.SemanticBuilder 
 // only signals that something may have changed; the builder decides per
 // item what to embed.
 func (r *SemanticRetrievalRuntime) refreshLoop() {
-	defer r.wg.Done()
 	ticker := time.NewTicker(r.pollEvery)
 	defer ticker.Stop()
 	lastRevision := int64(-1)

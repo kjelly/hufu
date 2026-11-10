@@ -13,6 +13,23 @@ import (
 	"github.com/kjelly/hufu/internal/execution"
 )
 
+func TestModelFanoutExecutionIDKeepsPersistedIdentity(t *testing.T) {
+	for _, test := range []struct {
+		model, slot, want string
+		retries           int
+	}{
+		{"fixture/vision", "main", "model-execution-4b1b887ffcfd21958e42dd0a6f192998", 0},
+		{"fixture/next", "extra-1", "model-execution-d9cbe281cf30758392ca8f5b182affce", 0},
+		{"fixture/next", "extra-1", "model-execution-fefc227bea4ccaa3b91950572a7ef293", 1},
+	} {
+		t.Run(test.want, func(t *testing.T) {
+			if got := modelFanoutExecutionID("run", "task", "worker", test.model, test.slot, test.retries); got != test.want {
+				t.Fatal("persisted model execution identity changed", got)
+			}
+		})
+	}
+}
+
 func TestModelFanoutRejectsDriftBeforeProvider(t *testing.T) {
 	for _, drift := range []string{"policy", "target"} {
 		t.Run(drift, func(t *testing.T) {

@@ -1,0 +1,4 @@
+{"method": "POST", "path": "/api/show", "images": [], "time": "2026-11-06T14:30:40.328266+00:00", "status": 200, "response_bytes": 491, "elapsed_seconds": 0.021}
+{"method": "GET", "path": "/api/ps", "images": [], "time": "2026-11-06T14:30:40.350637+00:00", "status": 200, "response_bytes": 13, "elapsed_seconds": 0.001}
+{"method": "POST", "path": "/api/show", "images": [], "time": "2026-11-06T14:30:40.498867+00:00", "status": 200, "response_bytes": 491, "elapsed_seconds": 0.001}
+{"method": "GET", "path": "/api/ps", "images": [], "time": "2026-11-06T14:30:40.500832+00:00", "status": 200, "response_bytes": 13, "elapsed_seconds": 0.001}

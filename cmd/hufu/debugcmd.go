@@ -591,6 +591,12 @@ func debugTextOmissionReason(data []byte) string {
 }
 
 func isDebugSensitivePath(rel string) bool {
+	// Media bytes belong to the private CAS even if corrupt content happens
+	// to look like printable text. Omit them before opening or redacting.
+	normalized := filepath.ToSlash(filepath.Clean(rel))
+	if normalized == "logs/artifacts/media/data" || strings.HasPrefix(normalized, "logs/artifacts/media/data/") {
+		return true
+	}
 	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
 		name := strings.ToLower(strings.TrimSpace(part))
 		if name == ".env" || strings.HasPrefix(name, ".env.") ||

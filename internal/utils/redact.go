@@ -176,6 +176,11 @@ func mayContainSecretKeyName(content string) bool {
 // explicit: every other scalar below a secret-looking key is redacted,
 // regardless of its JSON type.
 var numericTelemetryKeys = map[string]struct{}{
+	"image_token_upper_bound":         {},
+	"image-token-upper-bound":         {},
+	"image_tokens":                    {},
+	"text_tokens":                     {},
+	"request_tokens":                  {},
 	"max_tokens":                      {},
 	"requested_tokens":                {},
 	"available_tokens":                {},
@@ -215,6 +220,11 @@ var numericTelemetryKeys = map[string]struct{}{
 	// makes the manifest unparseable.
 	"token_count": {},
 	"tokens":      {},
+	// ShadowContextTrace contains only diagnostics; these fields are typed
+	// integer counters, not credential values. Nonnumeric values stay masked.
+	"legacy_tokens":    {},
+	"canonical_tokens": {},
+	"budget_tokens":    {},
 	// Universal decision-runtime limit frozen into correctness events. This is
 	// a numeric budget, not a credential value.
 	"total_decision_tokens":      {},
@@ -567,7 +577,9 @@ func learnedSecretProbe(value string) string {
 
 // RedactSecrets removes recognizable credential values before content is
 // persisted to workspace logs or session state. It intentionally preserves
-// keys and surrounding prose so diagnostics remain useful.
+// keys and surrounding prose so diagnostics remain useful. JSON documents,
+// JSONL records, and fenced JSON are redacted structurally before prose rules
+// can rewrite their serialized string delimiters.
 func RedactSecrets(content string) string {
 	return redactSecretsText(content, true)
 }
@@ -576,6 +588,13 @@ func RedactSecrets(content string) string {
 // walk learns from every string in discoverJSONSecrets before it redacts any,
 // so learning again from each string would only repeat that work.
 func redactSecretsText(content string, learn bool) string {
+	if redacted, ok := redactStructuredText(content, learn); ok {
+		return redacted
+	}
+	return redactSecretsPlainText(content, learn)
+}
+
+func redactSecretsPlainText(content string, learn bool) string {
 	// Every key-based pattern below requires a credential key name, and the
 	// authorization pattern requires its header name. Checking for those
 	// literals once skips the patterns for the ordinary text that has neither.
@@ -640,6 +659,10 @@ func redactSecretsText(content string, learn bool) string {
 		content = secretEnvRe.ReplaceAllString(content, "${1}"+redactedSecret)
 	}
 	content = redactLearnedSecrets(content)
+	return redactRegisteredSecrets(content)
+}
+
+func redactRegisteredSecrets(content string) string {
 	processRedactors.RLock()
 	redactors := append([]SecretRedactor(nil), processRedactors.items...)
 	processRedactors.RUnlock()
@@ -654,10 +677,8 @@ func redactSecretsText(content string, learn bool) string {
 // prose, while credential-looking object keys have their values replaced.
 // The returned document is always freshly marshaled JSON.
 func RedactJSON(data []byte) ([]byte, error) {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	var value any
-	if err := dec.Decode(&value); err != nil {
+	value, err := decodeRedactionJSON(data)
+	if err != nil {
 		return nil, err
 	}
 	discoverJSONSecrets(value, "")
@@ -671,15 +692,23 @@ func RedactJSON(data []byte) ([]byte, error) {
 // so escaped string values are unescaped before redaction, which text redaction
 // applied to the raw marshaled bytes would miss.
 func RedactJSONCompact(data []byte) ([]byte, error) {
+	value, err := decodeRedactionJSON(data)
+	if err != nil {
+		return nil, err
+	}
+	discoverJSONSecrets(value, "")
+	value = redactJSONValue(value, "")
+	return json.Marshal(value)
+}
+
+func decodeRedactionJSON(data []byte) (any, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	var value any
 	if err := dec.Decode(&value); err != nil {
 		return nil, err
 	}
-	discoverJSONSecrets(value, "")
-	value = redactJSONValue(value, "")
-	return json.Marshal(value)
+	return value, nil
 }
 
 // RedactJSONFileData redacts a single JSON document with JSON-aware redaction.
@@ -775,7 +804,7 @@ func discoverJSONSecrets(value any, key string) {
 	}
 	switch v := value.(type) {
 	case string:
-		learnSecretsFrom(v)
+		discoverTextSecrets(v)
 	case []any:
 		for _, item := range v {
 			discoverJSONSecrets(item, "")

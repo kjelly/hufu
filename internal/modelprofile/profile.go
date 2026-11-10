@@ -19,6 +19,8 @@ func NormalizeCapabilityName(name string) (string, bool) {
 		return "tools", true
 	case "attachment", "attachments", "vision", "image", "images", "multimodal", "multimodal_input", "supports_attachments", "supports_vision":
 		return "attachments", true
+	case "image_input", "supports_image_input":
+		return "image_input", true
 	case "reasoning", "reason", "thinking", "chain_of_thought", "supports_reasoning":
 		return "reasoning", true
 	case "temperature", "sampling_temperature", "supports_temperature":
@@ -106,6 +108,7 @@ type CapabilityEvidence struct {
 type CapabilityResolutionInput struct {
 	Tools       CapabilityEvidence
 	Attachments CapabilityEvidence
+	ImageInput  CapabilityEvidence
 	Reasoning   CapabilityEvidence
 	Temperature CapabilityEvidence
 }
@@ -114,6 +117,7 @@ type CapabilityResolutionInput struct {
 type CapabilitySources struct {
 	Tools       ResolvedValue[CapabilityState]
 	Attachments ResolvedValue[CapabilityState]
+	ImageInput  ResolvedValue[CapabilityState]
 	Reasoning   ResolvedValue[CapabilityState]
 	Temperature ResolvedValue[CapabilityState]
 }
@@ -157,6 +161,7 @@ type ModelProfile struct {
 
 	SupportsTools       CapabilityState `json:"supports_tools,omitzero"`
 	SupportsAttachments CapabilityState `json:"supports_attachments,omitzero"`
+	SupportsImageInput  CapabilityState `json:"supports_image_input,omitzero"`
 	SupportsReasoning   CapabilityState `json:"supports_reasoning,omitzero"`
 	SupportsTemperature CapabilityState `json:"supports_temperature,omitzero"`
 

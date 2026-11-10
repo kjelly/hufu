@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"github.com/kjelly/hufu/internal/execution"
 	"testing"
 )
 
@@ -44,44 +45,6 @@ func TestCacheHitSameGeneration(t *testing.T) {
 	}
 	if output != "result: clean" {
 		t.Errorf("output = %q, want %q", output, "result: clean")
-	}
-}
-
-func TestCacheMissAfterGenerationBump(t *testing.T) {
-	c := newTestCacheCoordinator()
-	testTaskCache(c).generation.Store(1)
-
-	c.storeTaskCache("researcher", "analyze code", "old result")
-
-	testTaskCache(c).generation.Add(1) // now gen = 2
-
-	// Exact match across generations is a HIT — same goal text means same work.
-	out, ok := c.lookupTaskCache(context.Background(), "researcher", "analyze code")
-	if !ok {
-		t.Fatal("expected cache hit for exact match across generations")
-	}
-	if out != "old result" {
-		t.Errorf("output = %q, want %q", out, "old result")
-	}
-}
-
-func TestCacheNewGenerationAllowsNewEntries(t *testing.T) {
-	c := newTestCacheCoordinator()
-	testTaskCache(c).generation.Store(1)
-
-	c.storeTaskCache("researcher", "analyze code", "old result")
-
-	testTaskCache(c).generation.Add(1) // gen = 2
-
-	// Store a new result under the new generation.
-	c.storeTaskCache("researcher", "analyze code", "fresh result")
-
-	output, ok := c.lookupTaskCache(context.Background(), "researcher", "analyze code")
-	if !ok {
-		t.Fatal("expected cache hit for new-generation entry, got miss")
-	}
-	if output != "fresh result" {
-		t.Errorf("output = %q, want %q", output, "fresh result")
 	}
 }
 
@@ -233,11 +196,11 @@ func TestCacheEmptyOnInit(t *testing.T) {
 	}
 }
 
-// TestCacheGenerationBumpInvalidatesStaleResult verifies that an exact-match
+// TestCacheGenerationBumpPreservesExactMatchAndAcceptsFreshResult verifies that an exact-match
 // lookup returns the cached result even after a generation bump, since the
 // same goal text means the same work. Fresh entries stored under the new
 // generation are also retrievable.
-func TestCacheGenerationBumpInvalidatesStaleResult(t *testing.T) {
+func TestCacheGenerationBumpPreservesExactMatchAndAcceptsFreshResult(t *testing.T) {
 	c := newTestCacheCoordinator()
 	testTaskCache(c).generation.Store(1)
 
@@ -270,49 +233,40 @@ func TestCacheGenerationBumpInvalidatesStaleResult(t *testing.T) {
 
 // ── Worker-vs-coordinator generation bump tests ───────────────────────────────
 
-// TestCoordinatorCallBumpsGeneration verifies the context-based discrimination
-// used in ExecuteTasks: a CoordTodoID context triggers a bump; a worker todoID
-// does not. We replicate the bump condition directly.
-func TestCoordinatorCallBumpsGeneration(t *testing.T) {
-	c := newTestCacheCoordinator()
-	initial := testTaskCache(c).generation.Load() // 0
-
-	// Simulate coordinator calling ExecuteTasks (callerID == CoordTodoID).
-	callerID := CoordTodoID
-	if callerID == "" || callerID == CoordTodoID {
-		testTaskCache(c).generation.Add(1)
-	}
-	if got := testTaskCache(c).generation.Load(); got != initial+1 {
-		t.Errorf("after coordinator call, generation = %d, want %d", got, initial+1)
-	}
-}
-
-func TestWorkerCallDoesNotBumpGeneration(t *testing.T) {
-	c := newTestCacheCoordinator()
-	testTaskCache(c).generation.Store(5)
-
-	// Simulate a worker calling ExecuteTasks (callerID is a task ID, not coord).
-	callerID := "42" // some worker todoID
-	if callerID == "" || callerID == CoordTodoID {
-		testTaskCache(c).generation.Add(1)
-	}
-
-	if got := testTaskCache(c).generation.Load(); got != 5 {
-		t.Errorf("after worker call, generation = %d, want 5 (must not change)", got)
-	}
-}
-
-func TestEmptyCallerIDCountsAsCoordinator(t *testing.T) {
-	c := newTestCacheCoordinator()
-	testTaskCache(c).generation.Store(3)
-
-	callerID := "" // no todoID in context
-	if callerID == "" || callerID == CoordTodoID {
-		testTaskCache(c).generation.Add(1)
-	}
-
-	if got := testTaskCache(c).generation.Load(); got != 4 {
-		t.Errorf("generation = %d, want 4 (empty callerID treated as coordinator)", got)
+func TestExecuteTasksCacheGeneration(t *testing.T) {
+	for _, tt := range []struct {
+		name, caller string
+		want         int64
+	}{
+		{"coordinator", CoordTodoID, 6}, {"worker", "42", 5}, {"empty caller", "", 6},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			worker := scriptWorker(textTurn("done"))
+			c := newTestCoordinator(t, withWorker(worker))
+			c.delegatedTasks = make(map[string]int)
+			c.maxConcurrent = 1
+			c.session.Config.AllowFreeTextResults = true
+			c.session.Agents["worker"].SideEffect = string(SideEffectNone)
+			registry := NewExecutionRegistry()
+			if err := registry.Register(fakeLanguageModelBackend{fakeExecutionBackend{name: "ollama", kind: execution.BackendKindLLM}}); err != nil {
+				t.Fatal(err)
+			}
+			c.SetExecutionRegistry(registry)
+			testTaskCache(c).generation.Store(5)
+			ctx := withTestProtocolRepairInvocationContext(t.Context())
+			if tt.caller != "" {
+				ctx = context.WithValue(ctx, todoIDKey{}, tt.caller)
+			}
+			if output, err := c.ExecuteTasks(ctx, []TaskDef{{Agent: "worker", Goal: "complete delegated work", SideEffect: SideEffectNone}}); err != nil {
+				t.Fatalf("dispatch: %v; output: %s; items: %+v", err, output, c.taskTracker.TodoList().Items())
+			}
+			if worker.Calls() != 1 {
+				t.Fatalf("worker calls = %d, want 1", worker.Calls())
+			}
+			if got := testTaskCache(c).generation.Load(); got != tt.want {
+				t.Fatalf("generation = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
 

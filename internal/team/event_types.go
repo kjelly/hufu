@@ -8,6 +8,11 @@ import "github.com/kjelly/hufu/internal/cost"
 type EventType string
 
 const (
+	EventMediaInputAdmitted                      EventType = "media_input_admitted"
+	EventTaskMediaBound                          EventType = "task_media_bound"
+	EventMediaProviderAdmitted                   EventType = "media_provider_admitted"
+	EventToolMediaPublished                      EventType = "tool_media_published"
+	EventMediaConsumerBound                      EventType = "media_consumer_bound"
 	EventProviderQuotaCooldown                   EventType = "provider_quota_cooldown"
 	EventRunStarted                              EventType = "run_started"
 	EventRunFinished                             EventType = "run_finished"
@@ -44,6 +49,8 @@ const (
 	EventRecoveryDecision                        EventType = "recovery_decision"
 	EventWorkflowStateChanged                    EventType = "workflow_state_changed"
 	EventWorkflowCycleStarted                    EventType = "workflow_cycle_started"
+	EventHistoricalResultsGranted                EventType = "historical_results_granted"
+	EventDerivedForkCreated                      EventType = "derived_fork_created"
 	EventCoordinatorCompactionCommitted          EventType = "coordinator_compaction_committed"
 	EventCoordinatorCompactionCheckpointAttested EventType = "coordinator_compaction_checkpoint_attested"
 	EventCoordinatorModelContinuationAdmitted    EventType = "coordinator_model_continuation_admitted"
@@ -130,7 +137,9 @@ func (e EventType) String() string { return string(e) }
 // reducers intentionally ignore what they do not understand.
 func IsKnownEventType(eventType string) bool {
 	switch EventType(eventType) {
-	case EventTaskResultCandidate, EventTaskResultCollectionCheckpointed, EventProviderQuotaCooldown, EventRunStarted, EventRunFinished, EventWrapUpPhase, EventRunCancellationRequested,
+	case EventArtifactReadCoverageObserved:
+		return true
+	case EventMediaInputAdmitted, EventTaskMediaBound, EventMediaProviderAdmitted, EventToolMediaPublished, EventMediaConsumerBound, EventTaskResultCandidate, EventTaskResultCollectionCheckpointed, EventProviderQuotaCooldown, EventRunStarted, EventRunFinished, EventWrapUpPhase, EventRunCancellationRequested,
 		EventDecisionArtifactObserved, EventArtifactEvidenceObserved, EventDecisionPrimitiveStarted, EventDecisionPrimitiveSettled, EventDecisionPrimitiveReused, EventControlDecisionObserved, EventRecoveryChangeObserved,
 		EventStrategyChangeEvaluated, EventStrategyChangeRejected,
 		EventUserMessageAdded, EventAssistantMessageAdded,
@@ -141,7 +150,7 @@ func IsKnownEventType(eventType string) bool {
 		EventArtifactCreated, EventCriterionReevaluated,
 		EventCriterionCheckpoint, EventMemoryRetrieved,
 		EventMemoryUsageRecorded, EventMemoryOutcomeRecorded,
-		EventPolicyDecision, EventRecoveryDecision, EventWorkflowStateChanged, EventWorkflowCycleStarted,
+		EventPolicyDecision, EventRecoveryDecision, EventWorkflowStateChanged, EventWorkflowCycleStarted, EventHistoricalResultsGranted, EventDerivedForkCreated, EventContractRecovery,
 		EventCoordinatorCompactionCommitted, EventCoordinatorCompactionCheckpointAttested,
 		EventCoordinatorModelContinuationAdmitted, EventContextWindowAdmission,
 		EventContextWindowCompactionCommitted, EventContextWindowDownshift,

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kjelly/hufu/internal/buildinfo"
 	"github.com/kjelly/hufu/internal/utils"
 )
 
@@ -234,6 +235,7 @@ func (c *Coordinator) prepareTerminalResult(result *RunResult) {
 	if strings.TrimSpace(result.RunID) == "" {
 		result.RunID = strings.TrimSpace(c.executionRunID)
 	}
+	result.HufuBuild = new(buildinfo.Current())
 	result.Warnings = normalizeRunWarnings(result.Warnings)
 	if result.EvidenceManifest != nil && strings.TrimSpace(result.RunID) == "" {
 		result.RunID = result.EvidenceManifest.RunID
@@ -328,6 +330,7 @@ func terminalLifecyclePayload(c *Coordinator, result *RunResult) LifecycleEventP
 		payload.Outcome = RunOutcomeFailed
 		return payload
 	}
+	payload.HufuBuild = result.HufuBuild
 	payload.RunID = result.RunID
 	payload.Outcome = result.Outcome
 	payload.GoalSatisfied = result.GoalSatisfied

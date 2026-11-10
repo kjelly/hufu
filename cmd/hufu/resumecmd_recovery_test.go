@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -18,21 +19,27 @@ import (
 )
 
 func TestResumeRecoveryPreviewThenExecute(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	for _, tc := range []struct {
 		name                          string
 		succeeds, delegated, noInputs bool
+		workflow                      bool
 	}{
 		{name: "direct", succeeds: true},
 		{name: "direct_exhausted"},
 		{name: "delegated", succeeds: true, delegated: true},
 		{name: "direct_empty_inputs", succeeds: true, noInputs: true},
 		{name: "delegated_empty_inputs", succeeds: true, delegated: true, noInputs: true},
+		{name: "failed_workflow", succeeds: true, delegated: true, workflow: true},
+		{name: "failed_workflow_exhausted", delegated: true, workflow: true},
 	} {
-		t.Run(tc.name, func(t *testing.T) { exerciseResumeRecovery(t, tc.succeeds, tc.delegated, tc.noInputs) })
+		t.Run(tc.name, func(t *testing.T) { exerciseResumeRecovery(t, tc.succeeds, tc.delegated, tc.noInputs, tc.workflow) })
 	}
 }
 
-func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs bool) {
+func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflow bool) {
 	t.Helper()
 	oldOpts := opts
 	oldTeam, oldSearch, oldBranch, oldRun, oldTask, oldModel := resumeTeamName, resumeSearch, resumeBranch, resumeRun, resumeRepairResult, resumeRepairModel
@@ -51,13 +58,19 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs bool) {
 	t.Setenv("HOME", filepath.Join(root, "home"))
 	t.Setenv("HUFU_STATE_HOME", filepath.Join(root, "state"))
 	t.Chdir(filepath.Join(root, "project"))
+	// Recovery exercises durable CLI checkpoints and bounded collector turns;
+	// its contract is turn/work preservation, not a five-second latency bound.
 	files := map[string]string{
-		"team.yaml":      "name: fixture-team\nworker-model: ollama/recovery-cli-fixture\ncoordinator-model: ollama/recovery-cli-fixture\nresult-transport: runtime\ngoal-mode: exploratory\ntimeout: 5\nmax-retries: 0\nacceptance:\n  required-workers: [worker]\n  require-no-unresolved-tasks: true\ninputs:\n  purpose:\n    type: string\n    default: review\n",
+		"team.yaml":      "name: fixture-team\nworker-model: ollama/recovery-cli-fixture\ncoordinator-model: ollama/recovery-cli-fixture\nresult-transport: runtime\ngoal-mode: exploratory\ntimeout: 30\nmax-retries: 0\nacceptance:\n  required-workers: [worker]\n  require-no-unresolved-tasks: true\ninputs:\n  purpose:\n    type: string\n    default: review\n",
 		"worker.md":      "---\nname: worker\nrole: worker\n---\nReturn a report with original limitations.\n",
 		"coordinator.md": "---\nname: coordinator\nrole: coordinator\n---\nCall finish after recovery.\n",
 	}
 	if noInputs {
 		files["team.yaml"], _, _ = strings.Cut(files["team.yaml"], "inputs:\n")
+	}
+	if workflow {
+		files["team.yaml"] += "workflow:\n  phases: [prepare, verify]\npolicies:\n  allow_phase_skip: true\ndelegation:\n  bind-task-goal-contracts: true\ntasks:\n  - id: prepare\n    agent: worker\n    phase: prepare\n    side_effect: none\n    execution:\n      requires_result: true\n  - id: verify\n    agent: verifier\n    phase: verify\n    side_effect: none\n    execution:\n      requires_result: true\n"
+		files["verifier.md"] = "---\nname: verifier\nrole: worker\n---\nVerify the retained result.\n"
 	}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(teamDir, name), []byte(body), 0o600); err != nil {
@@ -66,6 +79,7 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs bool) {
 	}
 	var repair atomic.Bool
 	var dispatched atomic.Bool
+	var verificationDispatched atomic.Bool
 	var workCalls, collectorCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
@@ -89,8 +103,15 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs bool) {
 			}
 		} else if !repair.Load() && delegated && strings.Contains(fmt.Sprint(request["tools"]), "name:agent") && !dispatched.Swap(true) {
 			finishReason = "tool_calls"
-			delta["tool_calls"] = []any{map[string]any{"index": 0, "id": "fixture-delegate", "type": "function", "function": map[string]any{"name": "agent", "arguments": `{"tasks":[{"agent":"worker","goal":"review fixture"}]}`}}}
-		} else if repair.Load() || (delegated && strings.Contains(fmt.Sprint(request["tools"]), "name:finish")) {
+			arguments := `{"tasks":[{"agent":"worker","goal":"review fixture"}]}`
+			if workflow {
+				arguments = `{"tasks":[{"agent":"worker","goal":"review fixture","contract_id":"prepare"}]}`
+			}
+			delta["tool_calls"] = []any{map[string]any{"index": 0, "id": "fixture-delegate", "type": "function", "function": map[string]any{"name": "agent", "arguments": arguments}}}
+		} else if repair.Load() && workflow && strings.Contains(fmt.Sprint(request["tools"]), "name:agent") && !verificationDispatched.Swap(true) {
+			finishReason = "tool_calls"
+			delta["tool_calls"] = []any{map[string]any{"index": 0, "id": "fixture-verify", "type": "function", "function": map[string]any{"name": "agent", "arguments": `{"tasks":[{"agent":"verifier","goal":"verify retained result","contract_id":"verify"}]}`}}}
+		} else if (repair.Load() && !workflow) || (delegated && strings.Contains(fmt.Sprint(request["tools"]), "name:finish")) {
 			finishReason = "tool_calls"
 			delta["tool_calls"] = []any{map[string]any{"index": 0, "id": "recovery-finish", "type": "function", "function": map[string]any{"name": "finish", "arguments": `{"response":"Recovered review complete"}`}}}
 		} else {
@@ -108,7 +129,17 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs bool) {
 	}))
 	t.Cleanup(server.Close)
 	workspace := filepath.Join(root, "workspace")
-	opts = runOptions{workspace: workspace, workspaceMode: "exact", canonicalRun: true, providerURL: server.URL + "/v1", contextWindowOverride: 131072, displayMode: "plain", eventFormat: "text", autoApprove: true, quietMode: true}
+	// Both initial loading and resume must use this fixture's subject. Process
+	// CWD is ambient state and can change while in-process tools finish.
+	project := canonicalRuntimePath(filepath.Join(root, "project"))
+	// Stop subject-root discovery here, independent of Git markers in the
+	// configured temporary root or its ancestors.
+	if output, err := exec.CommandContext(t.Context(), "git", "init", "--quiet", project).CombinedOutput(); err != nil {
+		t.Fatalf("initialize recovery project: %v\n%s", err, output)
+	}
+	opts = runOptions{workspace: workspace, workspaceMode: "exact", startDir: project, subjectRoot: project, canonicalRun: true, providerURL: server.URL + "/v1", contextWindowOverride: 131072, displayMode: "plain", eventFormat: "text", autoApprove: true, quietMode: true}
+	opts.modelOverride, opts.maxTokensOverride, opts.temperatureOverride = "ollama/recovery-cli-fixture", "4096", "0.15"
+	opts.timeoutOverride = 45
 	registry := team.NewTeamRegistry([]string{search})
 	if err := registry.Discover(); err != nil {
 		t.Fatal(err)
@@ -118,6 +149,9 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs bool) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = tc.Close() })
+	if tc.session.Scope.SubjectRoot != project {
+		t.Fatalf("initial subject root = %q, want %q", tc.session.Scope.SubjectRoot, project)
+	}
 	var direct *team.DirectAgentResult
 	var directErr error
 	if delegated {
@@ -157,7 +191,17 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs bool) {
 		t.Fatal(err)
 	}
 	resumeTeamName, resumeSearch, resumeBranch, resumeRun, resumeRepairResult, resumeRepairModel = "fixture-team", search, tree.ActiveBranch, blocked.ExecutionReceipt.RunID, blocked.ID, ""
+	if workflow {
+		source, err := team.ReadResumeSource(workspace, resumeBranch, "")
+		if err != nil || source.Session.WorkflowState != team.PhaseFailed {
+			t.Fatalf("fixture did not persist a failed workflow: source=%+v error=%v", source, err)
+		}
+	}
 	originalWork, originalTurns := blocked.ExecutionReceipt.ResultCollection.Work, blocked.ExecutionReceipt.ResultCollection.TurnsUsed
+	// Resume is a new CLI invocation: no original model/generation/timeout
+	// flags survive. Rehydrate them from the selected SQLite event lineage.
+	opts.modelOverride, opts.maxTokensOverride, opts.temperatureOverride = "", "", ""
+	opts.timeoutOverride, opts.contextWindowOverride = 0, 0
 	before := runtimeStoreFiles(t, workspace)
 	beforeCalls := collectorCalls.Load()
 	opts.dryRun, opts.outputFormat = true, "json"
@@ -165,6 +209,22 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs bool) {
 	cmd.SetContext(t.Context())
 	var output bytes.Buffer
 	cmd.SetOut(&output)
+	t.Chdir(project)
+	if succeeds && !delegated && !noInputs && !workflow {
+		opts.temperatureOverride = "0.8"
+		if err := runResumeCommand(cmd, nil); err != nil {
+			t.Fatal(err)
+		}
+		var rejected team.ResultCollectionRecoveryAssessment
+		if err := json.Unmarshal(output.Bytes(), &rejected); err != nil || rejected.Disposition != team.RecoveryBlocked {
+			t.Fatalf("changed launch override was not blocked: %+v %v", rejected, err)
+		}
+		if !reflect.DeepEqual(before, runtimeStoreFiles(t, workspace)) || beforeCalls != collectorCalls.Load() {
+			t.Fatal("blocked launch override wrote state or invoked a model")
+		}
+		opts.temperatureOverride = ""
+		output.Reset()
+	}
 	if err := runResumeCommand(cmd, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -173,13 +233,14 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs bool) {
 		t.Fatal(err)
 	}
 	if a.Disposition != team.RecoveryRepairClaims || a.TaskID != blocked.ID {
-		t.Fatalf("preview=%+v", a)
+		t.Fatalf("preview=%+v; subject=%q cwd=%q", a, project, currentWorkingDir())
 	}
 	if !reflect.DeepEqual(before, runtimeStoreFiles(t, workspace)) || beforeCalls != collectorCalls.Load() {
 		t.Fatal("positive CLI preview wrote state or called model")
 	}
 	repair.Store(true)
 	opts.dryRun, opts.outputFormat = false, ""
+	t.Chdir(project)
 	runErr := runResumeCommand(cmd, nil)
 	if (runErr == nil) != succeeds {
 		t.Fatalf("repair succeeds=%t error=%v", succeeds, runErr)
@@ -198,7 +259,15 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs bool) {
 	if !succeeds {
 		expectedStatus, additional = team.TaskBlocked, 2
 	}
-	if done == nil || done.Status != expectedStatus || done.ExecutionReceipt.ResultCollection.Work != originalWork || done.ExecutionReceipt.ResultCollection.TurnsUsed != originalTurns+additional || workCalls.Load() != 1 || collectorCalls.Load() != beforeCalls+int32(additional) {
+	expectedWork, expectedCollections := int32(1), beforeCalls+int32(additional)
+	if workflow && succeeds {
+		expectedWork++
+		expectedCollections++
+		if source.Session.WorkflowState != team.PhaseDone {
+			t.Fatalf("repaired task did not settle the failed workflow: %s", source.Session.WorkflowState)
+		}
+	}
+	if done == nil || done.Status != expectedStatus || done.ExecutionReceipt.ResultCollection.Work != originalWork || done.ExecutionReceipt.ResultCollection.TurnsUsed != originalTurns+additional || workCalls.Load() != expectedWork || collectorCalls.Load() != expectedCollections {
 		t.Fatalf("done=%+v work=%d collector=%d", done, workCalls.Load(), collectorCalls.Load())
 	}
 	if !succeeds {

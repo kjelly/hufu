@@ -20,6 +20,30 @@ func resultCollectionFixture(t *testing.T) (*Coordinator, *TodoItem, context.Con
 	return resultCollectionProviderFixture(t, "http://127.0.0.1:1/v1", false)
 }
 
+// The response function is a data channel with no handler; no work tool can be
+// exposed or executed by a collection turn.
+func assertCollectorResponseChannel(t *testing.T, request map[string]any) {
+	t.Helper()
+	functions, _ := request["tools"].([]any)
+	if len(functions) != 1 {
+		t.Errorf("collector response functions=%v", functions)
+		return
+	}
+	entry, _ := functions[0].(map[string]any)
+	function, _ := entry["function"].(map[string]any)
+	choice, _ := request["tool_choice"].(map[string]any)
+	selected, _ := choice["function"].(map[string]any)
+	if entry["type"] != "function" || function["name"] != agent.StructuredResponseFunctionName || choice["type"] != "function" || selected["name"] != agent.StructuredResponseFunctionName {
+		t.Errorf("collector exposed a work tool or did not require its response channel: %v %v", functions, choice)
+	}
+	parameters, _ := function["parameters"].(map[string]any)
+	properties, _ := parameters["properties"].(map[string]any)
+	claims, _ := properties["result"].(map[string]any)
+	if parameters["type"] != "object" || len(properties) != 1 || claims["type"] != "object" || parameters["additionalProperties"] != false {
+		t.Errorf("collector response lost its single result object envelope: %v", parameters)
+	}
+}
+
 func resultCollectionProviderFixture(t *testing.T, endpoint string, runtime bool, options ...func(*Coordinator)) (*Coordinator, *TodoItem, context.Context, ExecutionReceipt) {
 	t.Helper()
 	return resultCollectionTaskFixture(t, endpoint, runtime, nil, options...)
@@ -94,7 +118,8 @@ func resultCollectionTaskFixture(t *testing.T, endpoint string, runtime bool, co
 		t.Fatal(err)
 	}
 	receipt := ExecutionReceipt{RunID: c.executionRunID, TaskID: item.ID, Attempt: 1, OccurrenceAttempt: 1, ExecutionTarget: target,
-		Model: "ollama/test", ModelExecutionID: "work-execution-1", ProducerID: item.Agent, TranscriptRef: ref.ID,
+		ExitCode: new(0),
+		Model:    "ollama/test", ModelExecutionID: "work-execution-1", ProducerID: item.Agent, TranscriptRef: ref.ID,
 		StartedAt: time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC), FinishedAt: time.Date(2026, 10, 27, 0, 0, 1, 0, time.UTC), Usage: &ExecutionUsage{InputTokens: 5, OutputTokens: 3, TotalTokens: 8}}
 	return c, todoByID(t, c, item.ID), ctx, receipt
 }
@@ -452,6 +477,68 @@ func TestResultCollectionFrozenInputHashCompatibility(t *testing.T) {
 				if err := json.Unmarshal(body, &replayed, collectionDurationFormat); err != nil || replayed.InputsSHA256 != tc.hash {
 					t.Fatal("snapshot hash representation changed on replay", err)
 				}
+			}
+		})
+	}
+}
+
+func TestResultCollectionPolicyPreservesFrozenAuthority(t *testing.T) {
+	for _, name := range []string{"unchanged", "unused_environment", "reachable_environment", "backend", "network", "corrupt_hash", "unhashed_network"} {
+		t.Run(name, func(t *testing.T) {
+			c, _, _, receipt := resultCollectionProviderFixture(t, "http://127.0.0.1:1/v1", false, func(c *Coordinator) {
+				if name == "reachable_environment" {
+					c.session.Agents["worker"].ExtraModels = []string{"codex/other"}
+				}
+			})
+			frozen := c.ExecutionPolicySnapshot()
+			current := cloneExecutionPolicySnapshot(frozen)
+			switch name {
+			case "unused_environment", "reachable_environment":
+				changed := false
+				for i := range current.ExecutionWorlds {
+					for j := range current.ExecutionWorlds[i].InheritEnv {
+						variable := &current.ExecutionWorlds[i].InheritEnv[j]
+						if variable.Name == "PATH" {
+							variable.Present, variable.ValueHash = true, strings.Repeat("a", 64)
+							changed = true
+						}
+					}
+				}
+				if !changed {
+					t.Fatal("fixture has no inherited PATH")
+				}
+			case "backend":
+				current.Backends[0].IdentityHash = strings.Repeat("b", 64)
+			case "network", "unhashed_network":
+				current.ExecutionWorlds[0].CoordinatorNetworkDisabled = !current.ExecutionWorlds[0].CoordinatorNetworkDisabled
+			}
+			var err error
+			if name != "unhashed_network" {
+				current.ConfigurationHash, err = executionPolicyConfigurationHash(current)
+			}
+			if name == "corrupt_hash" {
+				current.ConfigurationHash = strings.Repeat("c", 64)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.executionPolicy.snapshot = current
+			policy, err := c.collectionPolicy(receipt.ExecutionTarget)
+			if name != "unchanged" && name != "unused_environment" {
+				if !errors.Is(err, errResultCollectionStale) {
+					t.Fatalf("changed authority accepted: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !sameCanonicalEvidence(policy, frozen) {
+				t.Fatal("collector replaced its original frozen policy")
+			}
+			stored, err := c.canonicalExecutionPolicySnapshot()
+			if err != nil || !sameCanonicalEvidence(stored, frozen) {
+				t.Fatalf("collector rewrote durable policy: %v", err)
 			}
 		})
 	}

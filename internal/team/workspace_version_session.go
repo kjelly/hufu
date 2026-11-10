@@ -194,6 +194,21 @@ func (o *WorkspaceSessionOps) resolveForkBase(ctx context.Context, target string
 // (no bytes are copied) and activates it. A historical fork first saves the
 // active branch's live state and then materializes the base.
 func (o *WorkspaceSessionOps) Fork(ctx context.Context, name, target string) (WorkspaceForkResult, error) {
+	return o.fork(ctx, name, target, false)
+}
+
+// ForkNewTask first refuses unsafe sources without running workspace recovery.
+// The immutable intent is saved with the child before snapshot publication.
+// A committed native derived event, rather than a caller's bool, determines
+// how recovery and replay interpret the child.
+func (o *WorkspaceSessionOps) ForkNewTask(ctx context.Context, name, target string) (WorkspaceForkResult, error) {
+	if _, err := o.PrepareDerivedFork(ctx, target); err != nil {
+		return WorkspaceForkResult{}, err
+	}
+	return o.fork(ctx, name, target, true)
+}
+
+func (o *WorkspaceSessionOps) fork(ctx context.Context, name, target string, newTask bool) (WorkspaceForkResult, error) {
 	state, err := o.validate(ctx)
 	if err != nil {
 		return WorkspaceForkResult{}, err
@@ -217,10 +232,30 @@ func (o *WorkspaceSessionOps) Fork(ctx context.Context, name, target string) (Wo
 	if err != nil {
 		return WorkspaceForkResult{}, err
 	}
+	var prepared *PreparedDerivedFork
+	if newTask {
+		prepared, err = o.PrepareDerivedFork(ctx, target)
+		if err != nil {
+			return WorkspaceForkResult{}, err
+		}
+		if prepared.snapshot.ID != base.ID {
+			return WorkspaceForkResult{}, ErrStaleResumeSource
+		}
+	}
 	SnapshotBranchState(o.Workspace, o.Tree, active)
-	branch, err := o.Tree.CreateBranch(name, target, o.Events)
+	branch, err := o.Tree.createBranch(name, target, o.Events, !newTask)
 	if err != nil {
 		return WorkspaceForkResult{}, fmt.Errorf("failed to fork branch: %w", err)
+	}
+	if prepared != nil {
+		intent := prepared.intent.clone()
+		intent.BranchID = branch.ID
+		if err := validateDerivedForkIntent(intent, branch); err != nil {
+			delete(o.Tree.Branches, branch.ID)
+			return WorkspaceForkResult{}, err
+		}
+		branch.Derivation = intent
+		branch.State.SelectedTeam = intent.Team
 	}
 	// FromSnapshotID records what the filesystem holds now (the active
 	// head); the fork base is the child snapshot's parent.
@@ -244,7 +279,12 @@ func (o *WorkspaceSessionOps) Fork(ctx context.Context, name, target string) (Wo
 	if err = o.step(ctx, op, versionstore.OperationObjectsWritten, child.ID); err != nil {
 		return WorkspaceForkResult{}, err
 	}
-	if child, err = o.commitAndPublish(ctx, child, versionstore.CaptureStats{}, 0); err != nil {
+	if prepared != nil {
+		child, err = o.commitDerivedForkSnapshot(ctx, child, prepared)
+	} else {
+		child, err = o.commitAndPublish(ctx, child, versionstore.CaptureStats{}, 0)
+	}
+	if err != nil {
 		return WorkspaceForkResult{}, err
 	}
 	if err = o.step(ctx, op, versionstore.OperationEventCommitted, ""); err != nil {
@@ -279,7 +319,7 @@ func (o *WorkspaceSessionOps) finishFork(ctx context.Context, op versionstore.Op
 	}
 	// The compaction state, session, and activation commit together.
 	err := switchSessionBranch(ctx, o.Workspace, o.Tree, func(batch *runtimeBatch) error {
-		if err := materializeCompactionBranch(batch, o.Workspace, o.Events, branch.ParentID, branch.ID, branch.ForkEventID); err != nil {
+		if err := o.materializeForkCompaction(batch, branch); err != nil {
 			return fmt.Errorf("failed to materialize compaction state for branch %q: %w", branch.ID, err)
 		}
 		if err := rebuildSessionForBranch(batch, o.Tree, o.Events, branch.ID); err != nil {

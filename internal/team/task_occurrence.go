@@ -2,18 +2,17 @@ package team
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 	"sync"
-	"sync/atomic"
 )
 
 var (
 	errTaskResultStale     = errors.New("task result provenance does not match active runtime occurrence")
 	errTaskResultDuplicate = errors.New("task result already submitted for active runtime occurrence")
-	taskDispatchSeq        atomic.Uint64
 )
 
 // taskOccurrenceController is the coordinator-owned transaction boundary for
@@ -51,6 +50,7 @@ func cloneTaskResult(result *TaskResult) *TaskResult {
 		return nil
 	}
 	copyResult := *result
+	copyResult.RuntimeMedia = result.RuntimeMedia.clone()
 	copyResult.BoundInputs = cloneStringMap(result.BoundInputs)
 	if result.RuntimeOutputs != nil {
 		copyResult.RuntimeOutputs = make(map[string]any, len(result.RuntimeOutputs))
@@ -221,7 +221,9 @@ func (c *Coordinator) openTaskOccurrence(identity submitResultRuntimeIdentity) {
 }
 
 func newTaskDispatchID() string {
-	return fmt.Sprintf("dispatch-%d", taskDispatchSeq.Add(1))
+	// Checkpoints retain lease IDs across process restarts. A fresh process
+	// must never reissue an earlier lease when reopening a submission.
+	return "dispatch-" + rand.Text()
 }
 
 func (controller *taskOccurrenceController) snapshot() taskOccurrenceControllerSnapshot {
@@ -437,6 +439,21 @@ func (c *Coordinator) finalizeTaskResultOccurrence(identity submitResultRuntimeI
 	if transcript.todoID != identity.TaskID || transcript.runID != identity.RunID || transcript.attempt != identity.Attempt {
 		return "", errTaskResultStale
 	}
+	return c.finalizeTaskResultRuntime(identity, func(finalized *TaskResult) (string, error) {
+		output, err := finalizeVerbatimTaskResult(transcript, finalized)
+		if err != nil {
+			return "", err
+		}
+		return output, contract.validateTranscriptFinalization(finalized)
+	})
+}
+
+// Runtime fields share the occurrence's existing clone/validate/publish gate.
+// No model-authored claim is rewritten by a finalization callback.
+func (c *Coordinator) finalizeTaskResultRuntime(identity submitResultRuntimeIdentity, finalize func(*TaskResult) (string, error)) (string, error) {
+	if c == nil || !validSubmitResultIdentity(identity) {
+		return "", errTaskResultStale
+	}
 	controller := c.occurrenceController(identity.TaskID)
 	if controller == nil {
 		return "", errTaskResultStale
@@ -450,11 +467,8 @@ func (c *Coordinator) finalizeTaskResultOccurrence(identity submitResultRuntimeI
 	}
 	finalized := cloneTaskResult(controller.result)
 	controller.mu.Unlock()
-	output, err := finalizeVerbatimTaskResult(transcript, finalized)
+	output, err := finalize(finalized)
 	if err != nil {
-		return "", err
-	}
-	if err := contract.validateTranscriptFinalization(finalized); err != nil {
 		return "", err
 	}
 	finalized.TaskID = identity.TaskID

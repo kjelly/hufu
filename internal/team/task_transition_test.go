@@ -2,10 +2,65 @@ package team
 
 import (
 	"encoding/json"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
 )
+
+func TestPendingMetadataDoesNotRecreateCanonicalTask(t *testing.T) {
+	for _, restart := range []bool{false, true} {
+		name := "live"
+		if restart {
+			name = "rehydrated"
+		}
+		t.Run(name, func(t *testing.T) {
+			c := newTestCoordinator(t)
+			// This fixture exercises canonical creation/checkpoint persistence,
+			// without a model or execution-policy admission to bypass.
+			c.executionRunID = ""
+			store, err := NewEventStore(c.session.Workspace, "checkpoint-run", "checkpoint-session")
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.eventStore = store
+			items, err := c.CommitTaskCreation(t.Context(), []TodoSpec{{Agent: "worker", Desc: "preflight failure"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := items[0].ID
+			if restart {
+				c.emittedTaskTransitions = nil
+				c.hydrateEmittedEventKeys()
+			}
+			fingerprint := NewFailureFingerprint("", "worker", "preflight", FailurePolicy, "fixture denied")
+			if err := c.taskTracker.TodoList().AppendFailureFingerprint(id, fingerprint); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.emitTaskEventsFromCheckpoint(c.taskTracker.TodoList().Items()); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.CommitTaskTransition(t.Context(), id, TaskPending, TaskBlocked, "fixture denied", "", nil); err != nil {
+				t.Fatal(err)
+			}
+			events, err := store.ReadEvents()
+			if err != nil {
+				t.Fatal(err)
+			}
+			created := 0
+			for _, event := range events {
+				if event.Type == string(EventTaskCreated) && event.TaskID == id {
+					created++
+				}
+			}
+			item := todoItemByID(ReduceToTodoList(events), id)
+			if created != 1 || item == nil || item.Status != TaskBlocked || len(item.FailureFingerprints) != 1 || item.FailureFingerprints[0].Digest != fingerprint.Digest {
+				t.Fatal("pending metadata recreated its occurrence or lost failure evidence")
+			}
+		})
+	}
+}
 
 func TestConcurrentCurrentTaskTerminalTransitions(t *testing.T) {
 	c := &Coordinator{taskTracker: NewTaskTracker()}
@@ -92,11 +147,37 @@ func TestLifecycleAttemptIsOccurrenceAttempt(t *testing.T) {
 	}
 }
 
-// The DispatchID is a process-local counter, so it cannot be a durable
-// identity input for world IDs or attempt keys.
-func TestDispatchIDIsProcessLocal(t *testing.T) {
-	first, second := newTaskDispatchID(), newTaskDispatchID()
-	if first == second || !strings.HasPrefix(first, "dispatch-") || !strings.HasPrefix(second, "dispatch-") {
-		t.Fatalf("dispatch IDs = %q, %q, want distinct process-local counters", first, second)
+// Recovery must issue a fresh lease even when it is a process's first dispatch.
+func TestDispatchIDsDoNotRepeatAcrossProcesses(t *testing.T) {
+	const childKey = "HUFU_DISPATCH_ID_CHILD"
+	if os.Getenv(childKey) == "1" {
+		for range 2 {
+			if _, err := os.Stdout.WriteString(newTaskDispatchID() + "\n"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]bool)
+	for range 2 {
+		cmd := exec.CommandContext(t.Context(), executable, "-test.run=^TestDispatchIDsDoNotRepeatAcrossProcesses$")
+		cmd.Env = append(os.Environ(), childKey+"=1")
+		output, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("dispatch subprocess: %v", err)
+		}
+		remaining := string(output)
+		for range 2 {
+			var id string
+			id, remaining, _ = strings.Cut(remaining, "\n")
+			if !strings.HasPrefix(id, "dispatch-") || seen[id] {
+				t.Fatalf("dispatch lease repeated across processes or is invalid: %q", id)
+			}
+			seen[id] = true
+		}
 	}
 }

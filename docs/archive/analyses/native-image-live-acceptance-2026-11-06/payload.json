@@ -1,0 +1,22 @@
+{
+  "observations": [
+    {
+      "blue_circles": 3,
+      "code": "1593",
+      "red_squares": 2,
+      "triangle_color": "green"
+    },
+    {
+      "blue_circles": 1,
+      "code": "2812",
+      "red_squares": 4,
+      "triangle_color": "yellow"
+    },
+    {
+      "blue_circles": 3,
+      "code": "1593",
+      "red_squares": 2,
+      "triangle_color": "green"
+    }
+  ]
+}

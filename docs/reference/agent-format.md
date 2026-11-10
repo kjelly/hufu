@@ -291,9 +291,25 @@ leaf 也一樣。
 
 相容的新 session 預設使用 `runtime`。一般 local worker 執行工作並留下完整報告，
 不需要呼叫 `submit_result`；runtime 先保存工作輸出與 transcript，再以同一個已核准
-模型 target 的普通文字生成收集 strict JSON。收集 request 不提供工具，不依賴 provider
-的原生 structured-output／tool-calling 功能。通常增加一次模型呼叫；格式或 schema
+模型 target 收集 strict JSON。新收集 request 封存完整 claims schema，並要求 provider
+透過 `return_result` 資料回傳函式交付 JSON 參數。這個函式沒有執行 handler，也不授予
+任何工作工具；實際 wire schema 仍經 provider admission。函式參數只有一個 `result`
+物件，裡面才是符合 claims schema 的完整結果，以避免部分 provider 將第一層空陣列
+參數轉成物件。Adapter 只移除這層封裝，保留 claims 物件的原始 bytes，不會把 `{}`
+改成 `[]`；未知、重複或額外的封裝欄位、非物件 result、多個或宣稱已執行的函式
+一律拒絕。額外推理文字不會成為結果。
+若舊 endpoint 忽略函式選擇，回傳文字仍須是合法 JSON，不會從前言抽取物件。
+已確認不支援工具的模型，以及未宣告 claims schema 的歷史 frozen request，維持
+原文字傳輸。通常增加一次模型呼叫；格式或 schema
 不合法時最多再修復一次，共兩回合，包含中斷時已派發的回合。
+
+收集失敗的分類以完整 canonical schema 為準，不以 provider 的可攜式 schema
+投影代替。來源、收據、workset 與 runtime 綁定驗證成功後，模型欄位的條件式
+`allOf`／`anyOf`／`oneOf`／`if`／`then`／`else`／`not`、長度或 pattern
+限制不合屬於 `invalid_schema`，可使用剩餘的結果修復回合；runtime-owned
+欄位及涉及它們的父層限制、無效來源或 policy 漂移仍拒絕修復。
+唯讀恢復評估使用相同分類，因此歷史上被記成 `source_invalid` 的表示方式錯誤，
+在重新驗證原始來源與授權後也可提出有界的結果修復，不重跑工作工具、不重置額度。
 
 Collector 接受 schema 已宣告的 `files_read`／`files_modified` 字串項目，
 以不改變路徑的方式轉成 `{path: ...}`；未知欄位、重複鍵與未宣告的縮寫仍拒絕。
@@ -326,6 +342,137 @@ runtime 收集的 envelope 使用相同的 `status`、`summary`、`structured_pa
 結果重跑原工作。JSON、schema、證據、預算或 verifier 失敗仍會如實阻擋完成。
 `--output json`、report 與 inspect 可看到收集狀態、已用／上限回合及失敗分類；完整
 內容保存在 durable artifact store。
+
+Tool、runtime collector 與 external proposal 都要求單一 JSON value，並拒絕
+物件內重複的 key（包含巢狀物件）、尾接 JSON 與尾接非 JSON 文字；尾端空白可保留。
+通過解碼或 admission 仍不代表任務完成。各 adapter 的來源與信任邊界、原生證據及
+回歸對照見 [結果傳輸契約](result-transport-contracts.md)。
+
+### 依陣列項目宣告結果標籤
+
+`task_result_assert` 的 `equals_by_items` 比較指定欄位與另一個陣列的空／非空標籤。
+規則由契約宣告，適用於 collection、tool submission、external proposal 與既有驗收／重播：
+
+```yaml
+verify-spec:
+  type: task_result_assert
+  task-result-assertions:
+    - pointer: /status
+      op: equals_by_items
+      value:
+        pointer: /structured_payload/value/record/gaps
+        empty: success
+        non_empty: completed_with_gaps
+```
+
+`value` 只接受 `pointer`、`empty`、`non_empty`；兩個標籤都必須明示為字串。
+Reference pointer 必須是非空 JSON Pointer，且實際指向有界陣列；缺值、null 或其他
+型別一律失敗，不視為空陣列。規則只比較，不自動改寫 status 或移除陣列內容。
+
+Collection 中，只有 `/status` 從 `structured_payload` 陣列推導、且兩個標籤都屬
+`success`／`completed_with_gaps` 的一致性失敗，能沿用既有有界格式修復回合。
+修復提示包含原 assertion 與拒絕原因，要求保留 findings、限制及證據。其他驗收失敗、
+runtime-owned 來源、非成功 outcome 的變更及已有 materialized artifacts 均不因此
+取得格式修復權限；工作工具不會重跑。新規則隨原 verification spec 封存，既有 run
+不會因 team.yaml 改動而被追溯改寫或自動重開。
+
+### 原生讀取紀錄的 runtime 投影
+
+`x-hufu-evidence-keys` 可加上 `runtime_owned_files_read: true`。此模式限具備原生
+`view` 的 local worker，external backend 或 execution-route 中的 external candidate
+在執行前拒絕；external proposal 也不能宣告或替代原生讀取證據。
+
+```json
+"x-hufu-evidence-keys": {
+  "runtime_owned_files_read": true,
+  "pointers": ["/record/decisions/*/evidence/*"]
+}
+```
+
+啟用後，模型與 collector 必須完全省略 outer `files_read`，包含 null、空陣列或
+與 runtime 相同的值都不接受。Runtime 從同一工作回合、branch、model execution 的
+成功 `view` 觀測及完整性檢查產生排序去重的 `files_read`，並在提交前檢查宣告
+pointer 下的每個 evidence ID 確實有觀測；只獲授權但未讀取的 artifact 不算證據。
+這只證明觀測過指定 artifact 的有界片段，不代表完整覆蓋或語意上的支持。
+
+Collection 恢復沿用原工作觀測，不重跑工具；接受結果保留完整投影，事件重播不從
+後來的讀取重新產生它。新的執行重試使用新的 lifecycle occurrence，歷史 collection
+與收據保留供稽核，但不能代替新工作。既有 schema 未啟用此選項時維持原提交契約。
+
+### Workset 必要 artifact 讀取範圍
+
+Producer 可在每個 workset item 宣告 `required_reads`，以 immutable artifact
+identity 與半開 byte ranges `[start,end)` 定義必須交付給 worker 的內容：
+
+```json
+{
+  "required_reads": [{
+    "artifact_id": "sha256-<content hash>",
+    "sha256": "<content hash>",
+    "byte_size": 4096,
+    "ranges": [{"start": 0, "end": 4096}]
+  }]
+}
+```
+
+每筆 identity 必須精確對應該 item 的一筆 `inputs`；非空 artifact 必須宣告
+有效且有界的 ranges。空 artifact 使用 `byte_size: 0`、`ranges: []`，仍須一次
+成功讀取。Runtime 將宣告複製至 durable `WorksetBinding`，納入原 workset 收據與
+occurrence 的完整性驗證。未宣告的既有任務維持原契約。
+
+只有授權的 built-in `view` 成功回傳內容才計入覆蓋；連續讀取與重疊區間取聯集，
+搜尋只計實際回傳片段，不計內部掃描範圍。失敗、未交付、內容或 artifact identity
+不符的回應不算已讀。Local worker 以外或無原生 `view`／durable journal 的執行
+方式，以及 closed tool sequence／structured execution steps，在執行前拒絕此契約，
+不以模型自述或 external tool metadata 替代。
+
+提交時若仍有缺口，runtime 回傳 `artifact_read_coverage_incomplete` 與
+`missing_reads`（artifact identity、`byte_size`、尚缺 `ranges`），由 team
+決定補讀與後續流程。讀取觀測綁定 task occurrence、dispatch、model execution、
+branch 與 workset 契約；持久化的原始回應及收據供 collection 恢復與重播核對，
+不能用新 attempt 或其他 worker 的讀取代替。
+
+此契約只證明指定 bytes 已交付給模型，不保證理解、判斷正確或證據充分；
+必要內容的選擇、任務拆分與語意不確定性仍由 team 負責。
+
+### 靜態依賴結果視圖（dependency-result-view）
+
+`dependency-result-view` 只接受在 team.yaml 的靜態 `contracts:` 任務宣告，
+必須啟用對應的靜態 contract binding；不是 agent frontmatter 或動態 `agent` tool 參數。
+以下為 contract 片段，agents 及其他團隊設定仍須完整定義：
+
+```yaml
+contracts:
+  - id: implement
+    agent: coder
+  - id: review
+    agent: reviewer
+    depends-on-contracts: [implement]
+    dependency-result-view:
+      mode: selected
+      fields: [summary, findings]
+```
+
+未設定或 `mode: full` 沿用完整 handoff。`full` 不接受 `fields`。
+`selected.fields` 必須是非空且不重複的陣列，只接受 `summary`、`findings`、
+`artifacts`、`files_modified`、`verification`，按此固定順序封存；未知鍵、
+未知值及其他大小寫均拒絕。所有視圖保留 task ID、agent、status 與
+「選定欄位視圖，不代表完整上游證據」標示。Artifact 僅提供既有 opaque reference
+與允許的 metadata，不揭露 backing path，也不增加讀取權限。
+
+Selected 僅適用於具有同批依賴的普通 Worker；`requires-evidence`、`evidence_from`、
+下游 result-contract、native action、sidecar、plan-first 及 closed tool sequence
+均拒絕。上游 canonical result 含 `StructuredPayload` 或無法驗證來源時，
+在該下游 Worker 呼叫前拒絕，不退回 full。選定欄位必須完整交付；context budget
+不足會停止，不截斷、不自動加入未選欄位。完整結果、收據、CAS 與 coordinator
+原有 handoff 保持完整，這項設定只改變 Worker 的 dependency presentation。
+
+Policy 隨靜態契約及 execution policy 封存。Retry、額外模型及復原必須驗證
+同一來源 revision、policy 與 view digest；來源漂移不能以最新結果替換。
+Inspector、JSON 與 report 提供模式、欄位、來源 event／branch／run／task／attempt
+及雜湊，並區分 prepared 與實際 runtime dispatch。含 selected 的新 session
+使用 policy v6、effective contract revision 2；舊 binary 必須拒絕該版本。
+全為 full 的 session 沿用原 policy、contract 與 manifest 版本。
 
 ### 結果合約（result-contract）
 
@@ -433,6 +580,9 @@ Schema 可選用下列通用 runtime 擴充（都包含在 schema hash 中）：
   已完成的報告 task 的 validated payload 產生最終回覆，保留其判定與限制，
   取代 coordinator 的自由摘要。無報告或多份報告不明確時 fail closed；
   明確承認失敗的 partial finish 仍可結束並揭露缺少報告的原因。
+  渲染時，能精確容納於 Go `int` 的 JSON 整數字面值會在獨立的 template
+  view 中轉成整數，供 `index` 使用；小數與更大的數值保留原始精度。
+  此轉換不改寫已接受的 payload、證據、收據或雜湊，無效索引仍拒絕渲染。
 
 例如，在 schema 根節點宣告（欄位名稱與降級值由團隊定義）：
 
@@ -835,6 +985,15 @@ userinfo、`localhost` 或非公開 IP 字面值。一般 hostname 的遠端 DNS
 工具保留來源 URL 供引用，但不保證模型會產生正確引用。對 hosted service
 的請求也可能消耗其配額。
 
+### 原生瀏覽器按鈕互動
+
+使用原生 Chrome `browser_click` 的 worker 與 task contract 必須明確宣告
+`side_effect: browser_interaction` 與 `recovery: manual`。此類別保留專案檔案
+唯讀與一般網路／工具限制，但允許已明確授權的原生頁面按鈕互動；它不是
+`none`，中斷或失敗時不會自動重播點擊。MCP 工具另須同類的 maintainer-owned
+`toolPolicies`，外部 MCP server 不能自稱此能力。詳見
+[Chrome 按鈕與彈窗](chrome-cdp.md#button-interaction-and-popup-handling)。
+
 ### 同一對話的歷史觀測結果
 
 Worker 必須在 `tools` 明確列出 `recall_observation` 才能保存及查詢自己的
@@ -1157,6 +1316,21 @@ runtime-owned evidence input 或 fixed collection 重疊。`source_task` 必須�
 驗證會重新核對綁定值，不會以較新的輸出重建歷史資料；文字與 JSON 數值不經
 模型重建或型別猜測。
 
+MCP native action 的圖片成果可選擇 `source_kind: "runtime_media"`，並省略
+`output`；runtime 從獨立的 canonical media projection 綁定完整有序 blocks、
+圖片 refs 與收據 hash，不會將媒體欄位塞進 action 的 `Outputs`：
+
+```json
+"x-hufu-runtime-inputs": [
+  {"target":"/images","source_task":"capture","source_kind":"runtime_media"}
+]
+```
+
+`source_kind` 僅接受 `runtime_output`、`runtime_media`；省略時沿用既有
+`runtime_output` 行為。圖片 metadata 不授予讀取 bytes 或轉送模型的權限。
+沒有凍結輸入的圖片來源只可在原 invocation 綁定；有凍結輸入的來源還須核對
+輸入 snapshot、action payload、來源 occurrence 與完整歷史收據。
+
 
 ### 收窄提交介面與候選結果修復
 
@@ -1203,3 +1377,122 @@ schema、證據、收據、驗證與提交交易；候選存在不代表驗收�
 候選的 prepared 狀態；修復收據以 `prepared_candidate_sha256` 記錄本機完成
 的來源。證據、契約或提交失敗分別顯示 `source_invalid`、`contract_rejected`、
 `commit_failed`，不再當成 schema 錯誤反覆要求模型改寫。
+
+### 固定集合的靜態來源資料流
+
+`x-hufu-fixed-collections` 可加入 `source_task_contracts`，列出該集合預期消費的
+team manifest 靜態 task contract IDs（不是執行時 Todo IDs）：
+
+```json
+{
+  "source_task_contracts": ["review-code", "review-documents"],
+  "source_contracts": ["schemas/code-review.json", "schemas/document-review.json"],
+  "source_pointer": "/record/findings"
+}
+```
+
+此片段省略既有集合的輸出欄位設定。`source_task_contracts` 是靜態覆蓋宣告，
+不會自動建立依賴、授權讀取或要求每一種來源都在該次派工出現；實際來源仍由
+`evidence_from`／`source_scope` 與已接受結果決定。清單必須唯一且有界。
+
+`team lint`、`team validate` 與共用執行前檢查會檢查宣告的 task 是否存在且
+有結果契約、其 schema 是否被 `source_contracts` 接受，以及來源 pointer 是否
+指向陣列。未宣告的動態來源回報 `contract_dataflow_unverified` 警告；複雜 schema
+組合無法判定時回報 `contract_dataflow_pointer_unverified`，不宣稱已驗證。
+這不是一般 JSON Schema 子型別證明，也不比較由模型轉換的來源／決策物件型別。
+
+CI 可用 `hufu team lint --team <name> --fail-on warning` 將未驗證資料流也列為
+必須處理的項目。新增 producer 或更名其結果契約時，應同步更新此宣告、下游
+`source_contracts` 及零筆、多筆、混合來源的串接測試。
+
+### 同一份語意結果的外層投影
+
+以 `x-hufu-result-projections` 宣告 findings／invariant claims 在 payload 中的唯一來源：
+
+```json
+"x-hufu-result-projections": {
+  "findings": "/record/findings",
+  "invariant_assessments": "/record/invariant_assessments",
+  "bind_invariant_severity": true
+}
+```
+
+兩個 pointer 都是相對於解碼後 payload 值的 JSON Pointer，可各自省略，
+但至少需要一個。來源必須是可解析的 array，宣告 `maxItems`（0–128），
+且不能互相重疊或與 runtime inputs、runtime-owned evidence inputs、fixed
+collections 的目標或 tool-evidence rewriting groups 重疊。Array items 必須是 object。局部 `$defs` 引用可使用；無法呈現給 provider 的形狀會拒絕載入。
+
+本機工具的來源是 `submit_result.structured_payload`；外部 worker 的來源是
+`structured_payload_json` JSON 字串解碼後的物件。例中的 `/record/findings`
+不包含傳輸欄位名稱或儲存用的 `/structured_payload/value` 前綴。
+`equals_projection` assertion 的兩個 pointer 則都以 canonical `TaskResult`
+文件為根；同一來源在 assertion 中應寫成 `/structured_payload/value/record/findings`。
+
+模型只在 payload 中提交一次；對應的外層欄位會從本機工具與外部 worker 的
+submission schema 移除。提交這些被移除的外層欄位，即使是空陣列、null 或完全相同的副本，也會拒絕。
+Payload 來源陣列可依其 schema 合法地使用 `[]`。
+Runtime 在 canonical validation／hash／持久化之前產生外層 findings 與 claims；
+location、evidence 等領域欄位留在 payload。未宣告此 extension 的既有契約保留原協定。
+
+Invariant claims 投影的靜態 task 必須在 `team.yaml` 的
+`spec.contracts[].invariant-verification` 宣告 `report` 或 `gate`；缺少此設定會在載入時拒絕。
+舊版 flat manifest 使用 `contracts[].invariant-verification`，`tasks[]` 僅為已棄用的讀取別名。
+此設定屬於靜態 task 契約，不放在 agent frontmatter，也不能由模型派工時覆寫。例如 v1 manifest 的 `spec` 片段：
+
+```yaml
+spec:
+  contracts:
+    - id: review
+      agent: reviewer
+      phase: verify
+      invariant-verification: report
+      execution:
+        requires-result: true
+```
+
+兩種模式都驗證原工作 context manifest、invariant 身分、來源證據與 claims，
+驗證失敗都不能接受結果。`report` 保留有效評估，不會僅因 error-severity invariant
+為 `violated`／`unknown` 就阻擋完成；`gate` 會以這兩種評估阻擋完成與 semantic
+regression acceptance。Warning／info 本身不觸發此 gate。
+Team 須有非空 `invariants.yaml` catalog；task 必須要求結果，在有 workflow 時位於
+`verify` phase，且不能使用 sidecar、summarize 或多模型執行。`gate` task 不能設為 optional。
+
+`bind_invariant_severity: true` 必須同時宣告兩種投影。對於 violated claim
+所指向的 finding，模型必須省略 severity；runtime 依原工作 context manifest
+驗證的 invariant 定義填入。未啟用此選項時 severity 由模型提交，runtime 只驗證
+與定義是否相符；格式修復仍由模型對齊 severity。獨立 finding 仍需自行提交 severity。未知 invariant、
+無效 index、定義衝突或來源證據不符不會被改寫成 preserved／較低 severity。
+摘要仍受既有長度限制，extended analysis 應放在 details。
+
+修復回應會提供被拒絕欄位的 JSON Pointer。修復保留已完成工作、判斷與證據，
+不會重新開啟工作工具；相同的被拒絕 JSON（忽略物件 key 順序與空白）再次出現時，
+停止自動修復並保留原始診斷。人工明確授權的額外修復自成一輪；原先已用次數與完整歷史仍保留，新一輪仍受其授權次數限制。
+
+### 完成狀態與 payload 的一致性
+
+結果契約可宣告 `x-hufu-result-envelope`，以 Draft 2020-12 JSON Schema
+檢查 `{ "status": ..., "structured_payload": ... }`。這個檢查在 runtime
+補齊固定集合、決策與已接受來源之後、保存結果之前執行。例如：
+
+```json
+"x-hufu-result-envelope": {
+  "if": {
+    "properties": {
+      "structured_payload": {
+        "properties": { "coverage": { "const": "incomplete" } },
+        "required": ["coverage"]
+      }
+    }
+  },
+  "then": { "properties": { "status": { "const": "completed_with_gaps" } } }
+}
+```
+
+此 envelope schema 是獨立的 schema 文件；fragment references 只指向其自身的
+`$defs` 等節點，不能引用外層 payload schema。外部檔案與網路引用仍禁止。
+模型與 collector 會收到完整規則；provider 的可攜提交 schema 不因此改變。
+本機提交、外部 worker、結果修復、下游來源驗證與契約升級預覽共用相同檢查。
+不一致時修正完成狀態，保留原始判斷、證據與限制，不能刪除 unknown／unverified
+來滿足契約。若 team 允許不帶 payload 的 blocked 結果，必須在此 schema
+明確允許 `structured_payload: null`。新增規則會改變凍結契約；既有 run 應先用
+`resume --upgrade-contracts --dry-run` 預覽，不能覆寫歷史結果或收據。

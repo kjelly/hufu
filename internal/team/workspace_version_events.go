@@ -45,6 +45,18 @@ func appendWorkspaceSnapshotCommitted(ctx context.Context, es *EventStore, snaps
 	if es == nil {
 		return RunEvent{}, fmt.Errorf("commit workspace snapshot: event store is unavailable")
 	}
+	event, err := workspaceSnapshotCommittedEvent(snapshot, stats)
+	if err != nil {
+		return RunEvent{}, err
+	}
+	event, err = es.AppendPersistedContext(ctx, event)
+	if err != nil {
+		return RunEvent{}, fmt.Errorf("commit workspace snapshot %s: %w", snapshot.ID, err)
+	}
+	return event, nil
+}
+
+func workspaceSnapshotCommittedEvent(snapshot versionstore.Snapshot, stats versionstore.CaptureStats) (RunEvent, error) {
 	payload, err := json.Marshal(WorkspaceSnapshotCommittedPayload{
 		SnapshotID: string(snapshot.ID), ParentSnapshotID: string(snapshot.Parent),
 		RootTreeHash: snapshot.RootTreeHash, ManifestDigest: snapshot.ManifestDigest,
@@ -57,15 +69,11 @@ func appendWorkspaceSnapshotCommitted(ctx context.Context, es *EventStore, snaps
 	if err != nil {
 		return RunEvent{}, fmt.Errorf("encode workspace snapshot event: %w", err)
 	}
-	event, err := es.AppendPersistedContext(ctx, RunEvent{
+	return RunEvent{
 		RunID: snapshot.RunID, BranchID: snapshot.BranchID, Actor: "workspace-versioning",
 		Type: string(EventWorkspaceSnapshotCommitted), IdempotencyKey: workspaceSnapshotIdempotencyKey(snapshot.ID),
 		Payload: payload,
-	})
-	if err != nil {
-		return RunEvent{}, fmt.Errorf("commit workspace snapshot %s: %w", snapshot.ID, err)
-	}
-	return event, nil
+	}, nil
 }
 
 func decodeWorkspaceSnapshotEvent(event RunEvent) (WorkspaceSnapshotCommittedPayload, bool) {

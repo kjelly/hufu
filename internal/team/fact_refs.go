@@ -107,14 +107,18 @@ func (c *Coordinator) resolveRuntimeOutputValue(ref FactRef, output string) (any
 	}
 	items := c.taskTracker.TodoList().Items()
 	runID := coordinatorRuntimeRunID(c)
+	origins, err := c.recoveredTaskOutputOrigins(items)
+	if err != nil {
+		return nil, err
+	}
 	spec := VerificationSpec{
 		Type: VerifyTaskOutputAssert, WorksetSourceTask: ref.TaskID, TaskOutputName: output,
 		Assertions: []JSONAssertion{{Pointer: "", Op: "exists"}},
 	}
-	if _, err := ReplayTaskOutputAssertions(items, runID, c.RunInputSnapshot(), spec); err != nil {
+	if _, err := ReplayTaskOutputAssertions(items, runID, c.RunInputSnapshot(), spec, origins); err != nil {
 		return nil, fmt.Errorf("fact_ref %q: runtime output is not canonical: %w", ref.Name, err)
 	}
-	source, err := uniqueTaskOutputSource(items, ref.TaskID, runID)
+	source, err := uniqueTaskOutputSource(items, ref.TaskID, runID, origins)
 	if err != nil {
 		return nil, err
 	}

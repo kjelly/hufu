@@ -113,6 +113,11 @@ field; their underlying old values were not retained and cannot be reconstructed
 Restore the original settings to resume, or use `--new` to archive the previous
 session and begin with the current settings.
 
+Frozen input and accepted payload decoding remove JSON transport whitespace added
+by checkpoint or export formatting. Machine projections store compact JSON to
+preserve embedded canonical values. String and number spellings, member order,
+receipts and existing hashes remain unchanged and are validated before reuse.
+
 New compatible local sessions use runtime result collection by default. Static
 `result-transport: runtime|tool` in team configuration or agent frontmatter is
 pinned in the execution policy; an agent override takes precedence over the
@@ -123,30 +128,81 @@ explicit runtime mode conflicts with that sequence and fails preflight.
 External workers, native actions, auxiliary tasks and plan submission retain
 their existing protocols.
 
+Tool, collection and external proposal decoders reject duplicate object keys
+and trailing JSON/text before interpreting claims. Their distinct canonical
+owners, native evidence checks and shared completion expectations are documented
+in [result transport contracts](../reference/result-transport-contracts.md).
+
 The work phase has no `submit_result` authority in runtime mode. After work
 returns, the runtime seals its complete report, transcript, source inputs and
 original attempt identity before starting a separate `result_collection`
-invocation on the admitted work target. It uses ordinary text generation with
-zero tools, then strictly decodes JSON and calls shared result admission.
+invocation on the admitted work target. New requests freeze the model-facing
+claims schema and require the provider's `return_result` function response
+unless the immutable model profile explicitly rules out tool support.
+This is a data channel with no executable handler: admission counts its actual
+wire schema, while the collector retains zero work-tool authority. The adapter
+requires a single `result` object argument and passes that object's exact bytes
+to strict JSON decoding and shared result admission. Keeping claims nested
+avoids function transports that turn empty top-level array arguments into
+objects; the adapter never coerces those values. Duplicate or extra envelope
+members, non-object results, unknown or multiple function responses are denied
+before any handler runs. Separate explanatory text cannot become claims. Older
+endpoints that ignore the requested function may still supply a bare JSON object, subject to
+the same strict validation and bounded repair. Explicitly text-only models and
+historical frozen text requests retain their original text transport.
 The accepted source is `collected`, with the same contract, evidence, verifier,
 terminal and workspace integration gates as a tool submission. Runtime-owned
 fields are still assembled from verified sources; the model cannot override them.
+When a bounded `return_result` argument envelope is rejected, its complete
+SDK-delivered arguments are redacted and retained in the immutable response
+blob, alongside a runtime-owned `response_issue` with the JSON Pointer,
+expected type, actual type and rejection code. These are SDK arguments, not a
+capture of the provider's raw HTTP response. The issue prevents those bytes
+from entering claims admission, even when they resemble valid claims. Repair
+prompts retain the rejected arguments as untrusted evidence and report
+`response_channel_failure` plus `format_feedback.stage: response_envelope`;
+for example `/result` expects `object` but received `string`. No automatic
+JSON-string decoding, type coercion or executable tool call is permitted.
+The original work receipt, turn budget and source checks remain authoritative
+through persistence, recovery previews and result-only repair. Legacy response
+blobs retain their original interpretation; missing historical arguments cannot
+be reconstructed from an old diagnostic. Oversized response arguments remain
+rejected by the existing byte limit without silently retaining a truncated value.
 Declared string entries in `files_read` and `files_modified` are converted
 losslessly to `{path: ...}` before DTO decoding. Duplicate keys, unknown fields
 and unsupported shorthand remain invalid.
 
-Each attempt has one collection call and at most one JSON/schema or
-representation repair. Only two representation errors qualify. The first is a
-failed `equals_projection` assertion (see Ordered result projections) whose
-`pointer` is `/findings` or `/invariant_verification/assessments` and whose
-reference array lies under `structured_payload`, when no other assertion fails
-and the result declares no artifacts. The second is a violated invariant's
-linked finding having a severity different from its verified definition. Any
-other assertion or attestation failure stops collection. The collector receives
-the original context's invariant IDs and severities. Repair may align the linked
-finding's severity with the definition; the runtime never rewrites it. The
-invariant's status and the other judgments stay unchanged, and the result must
-still pass attestation.
+A collector response wrapped entirely in one JSON code block may be normalized
+to its enclosed object before strict claims validation. Both LF and CRLF frames
+are supported. The complete original response remains in its immutable CAS blob;
+the prepared claims store the validated JSON separately. Extra prose, multiple
+frames, duplicate keys, non-object roots and oversized responses are rejected.
+This transport normalization does not change the tool submission decoder or
+permit runtime-owned fields, invalid source references or forged receipts.
+
+Each attempt has one collection call and at most one JSON/schema
+(including result-envelope consistency) or declared representation repair.
+A failed `equals_projection` assertion (see Ordered result projections) qualifies
+when its `pointer` is `/findings` or `/invariant_verification/assessments`, its
+reference array lies under `structured_payload`, no other assertion fails,
+and the result declares no artifacts. A declared `equals_by_items` assertion
+on `/status` also qualifies when its payload-derived empty/nonempty labels are
+both successful statuses. Both assertion cases require no artifacts and no
+other failing assertion. Without runtime severity binding, a violated
+invariant's linked finding severity can be repaired to match its verified
+definition; the model authors that severity and the runtime validates it.
+
+With `x-hufu-result-projections`, the model authors the payload source arrays
+once; the runtime derives the corresponding outer findings and assessments.
+When `bind_invariant_severity: true`, the model must omit severity on findings
+linked by violated invariant claims. The runtime fills those severities from
+definitions verified against the original work context manifest before canonical
+validation and hashing. Unlinked findings remain model-authored. This binding
+does not remove findings, change invariant judgments, or substitute evidence to
+obtain a passing result. Repair follows the same ownership rule and never
+supplies a duplicate outer projection. Other assertion or attestation failures stop collection;
+every repaired result must still pass attestation. See
+[the projection contract](../reference/agent-format.md#同一份語意結果的外層投影).
 Invariant summaries remain limited to 1000 runes; extended explanations belong
 in `details`. The runtime does not truncate a claim to make it valid. A
 turn is reserved durably before dispatch, so a lost in-flight call counts
@@ -158,6 +214,10 @@ accepted durable bytes before considering another permitted model call. It
 never redispatches completed work to repair a report. A storage continuation
 adds no model turns. Collection usage, including cache counters, is accounted
 separately from the frozen work usage.
+
+Reopening a submission issues a random dispatch lease ID. Lease IDs must remain
+distinct across process restarts; a process-local counter can repeat a persisted
+lease and make an otherwise valid recovery fail its checkpoint validation.
 
 Inspect derives content-free collection state, turns and failure reason from
 receipts and checkpoint events. CLI JSON and reports expose these fields;
@@ -353,6 +413,18 @@ execution identity separates parallel manifests and retries, while outcome
 credit remains capped across the parent occurrence. Provider token accounting
 charges each leaf once; parent lifecycle telemetry aggregates receipt usage
 without charging it again.
+
+Private leaf retry fingerprints stay in their private task projection. Only
+the parent publishes canonical task failure fingerprints; leaf diagnostics
+remain in execution receipts. Publishing a leaf fingerprint under the shared
+task ID would otherwise change the parent only during event replay.
+Before launching a fanout leaf, the public parent establishes the provider
+proxy boundary. Leaves cannot create clients against the direct upstream while
+the parent watchdog has no proxy to abort; a startup failure prevents dispatch.
+Configured skeptic votes use the parent's public provider boundary and sidecar,
+while retaining each leaf's model-execution identity. The skeptic consumes the
+text result without inheriting image access. If every vote abstains, the
+existing verification contract rejects completion.
 
 Tool schema normalization also owns its input. Admission serialization and
 Fantasy receive fresh nested schema containers, preserving the raw tool
@@ -575,6 +647,202 @@ contracts, original receipts and content-addressed transcript bytes. A refusal
 names available branches for read-only inspection; it does not start a fresh
 workflow or regenerate accepted payloads.
 
+New CLI sessions include a versioned `launch` object in the canonical execution
+policy event in `runtime.sqlite`. The same SQLite event commit and policy hash
+cover the startup values, so a crash cannot publish a policy without its launch
+settings. It records team and per-agent generation parameters, timeouts, worker
+and coordinator targets, resolved auxiliary targets (including disabled roles),
+execution-route choices, concurrency/round/step limits, goal mode, request
+acceptance and the allowlisted execution options. It does not store executable
+shell text, argv, provider URLs, API keys, environment values, or prompt text.
+Credentials must still be available from the current environment/configuration.
+
+`resume` restores these values from the selected branch's verified event lineage
+before applying explicit CLI/profile overrides and before model resolution or
+MCP/provider startup. Ordinary resume, result-only repair and contract recovery
+previews use the same restoration. Consequently `hufu resume --team <team>` no
+longer needs the original model/generation/timeout flags for new sessions.
+Explicit overrides still pass through normal policy-drift checks; restoration
+does not authorize changed tools, contracts, providers, network access or replay.
+Current host restrictions remain in force. Team definitions and provider
+registrations are still required; this is not a saved copy of the entire host.
+Old policies without `launch` stay unchanged and still require matching original
+settings: a hash-only historical setting cannot be reconstructed from today's
+defaults. No launch snapshot is backfilled into an old event or checkpoint.
+
+Legacy bound tasks can omit `invariant_verification` in their original event
+projection even when the static contract hash covered it. Checkpoint loading,
+canonical projection replacement, and resume preflight restore this field only
+when the complete current static contract reproduces that hash. Resume rejects
+projected invariant claims without a verified invariant mode before providers
+start; it never treats the projection as an ordinary task to bypass attestation.
+
+For result-schema changes, ordinary resume still refuses policy drift. The
+operator can preview a controlled recovery from the active canonical branch:
+
+```sh
+hufu resume --team <team> --workspace <control-root> --upgrade-contracts --dry-run
+hufu resume --team <team> --workspace <control-root> --upgrade-contracts \
+  --recovery-branch <new-name> --plan-hash <sha256-from-preview>
+hufu resume --team <team> --workspace <control-root> --branch <returned-branch-id>
+```
+
+Before execution, `hufu resume --team <team> --workspace <control-root>
+--branch <branch> --dry-run` checks ordinary source admission: policy
+compatibility, frozen inputs, retained results/receipts and pending artifact
+scopes. It reports accepted, resumable and terminal unresolved task counts.
+The check does not activate a branch or call tools/models. Provider reachability,
+workspace materialization and future verification/acceptance remain execution
+checks; passing source preflight is not a completed run. A shared workset receipt
+is verified against its canonical carrier while each consumer keeps its own
+exact frozen binding; every child need not store another receipt copy.
+
+If the team's configured profile forbids historical restore, explicitly select
+a restore-enabled profile, such as `--execution-profile default`, for all three
+commands. The ordinary evidence and execution-policy checks still apply.
+
+The default preview is a readable summary; use `--output json` for the full
+machine-readable plan. Each task includes a `reason`, its original `source_status`,
+and `affected_by` upstream task IDs when applicable. `original_failure` identifies
+an originally failed/blocked task; `upstream_changed` identifies an accepted result
+invalidated by an upstream retry or changed result binding. Invalid schemas,
+changed envelope projections, unfinished tasks and successfully revalidated
+results have separate reason codes. The preview also lists old/new schema IDs,
+hashes and structured-result requirements by owner, task verification to rerun,
+and acceptance checks/selected frozen request requirements that will reopen.
+It lists acceptance IDs or check positions, never command bodies or artifact paths.
+These descriptions are included in the plan hash and persisted recovery event;
+older events without descriptions remain readable. They explain the existing
+recovery decisions and do not authorize additional retries or relax acceptance.
+
+Preview lists each retained/retried task and pins the source event head, policy,
+original task digests and current policy in its plan hash. Versioned apply requires
+managed `required` versioning, the team/project locks and an unchanged plan. It refuses
+non-result execution-policy changes, changed static execution contracts, unsettled
+workspace operations and retries with side effects. It creates a native child
+branch, revalidates unchanged accepted payload bytes against the new schemas,
+and preserves the original receipts/transcripts and parent history. Invalid or
+failed read-only tasks and their dependent/evidence consumers become pending;
+verification and acceptance reopen. Apply itself makes no model calls. It does
+not authorize repairing a stored semantic judgment, copying a receipt into a new
+run, changing tools/models/scope, or replaying a completed external mutation.
+Only named static contracts are supported; unsupported sources fail closed.
+
+Recovered artifact access and workset verification retain the original producer
+run/task/attempt identities. A different invocation may use them only after the
+selected branch's canonical results, expansion receipts, frozen inputs and original
+successful receipts have been verified. Resume checks pending artifact scopes
+before entering the provider boundary; merely loading an old receipt grants no
+cross-run authority.
+Native output bindings and `task_output_assert` use the same admitted source-run
+mapping. Terminal evidence keeps those original identities so offline audit can
+replay acceptance against the verified recovery bindings as well.
+Local native adapters receive `HUFU_RECOVERED_TASK_RUNS`, a bounded runtime-owned
+task-to-origin-run map. Adapters can validate retained source receipts against
+that map and the selected snapshot while preserving the original identities.
+The runtime replaces inherited grants; checkpoint or model fields cannot supply
+the authority.
+
+An unversioned managed workspace can explicitly use `--metadata-only` on the
+upgrade preview and apply commands. This requires static task-goal binding,
+every source task and effective contract resolving to `side_effect: none`, and
+no recorded workspace versioning history. Agent defaults use ordinary admission
+rules; declared mutation/production steps remain ineligible. These conditions are
+checked again before ordinary resume. It uses the existing atomic session-lineage fork;
+project files remain shared and are not restored. The preview's `metadata_only`
+field is included in its hash. JSON apply output always includes a boolean
+`metadata_only`: `true` means project files remain shared without restoration;
+`false` means versioned recovery. The existing `branch`, `source_branch`, and
+`plan_hash` fields retain their meanings. Ordinary resume of the returned child omits the
+flag. Observe/required modes and projects with versioning history must use
+versioned recovery; metadata-only never downgrades their protection.
+
+For actions with input bindings, recovery reconstructs the occurrence contract
+from the original frozen snapshot and input policy. It verifies the materialized
+payload, binding paths and bound-value hashes before comparing contract hashes;
+an unbound template hash alone cannot identify an admitted action. This check
+does not execute the action or resolve replacement inputs.
+
+Resolver/provider source changes can also change `run_input_policy_hash`, even
+when all requested input values have already been frozen. Ordinary resume and
+result-schema-only recovery continue to reject this drift. An operator can add
+`--upgrade-input-policy` to **both** the `--upgrade-contracts --dry-run` preview
+and the plan-hash-bound apply. The preview's `input_policy_upgrade` records the
+old/new resolution policy hashes and the exact selected snapshot ID/hash.
+This explicitly accepts a resolution-policy change; an old opaque fingerprint
+alone cannot prove that only a provider's source changed.
+
+This option requires static task-goal binding, unchanged input schema (including
+required fields/defaults), unchanged action contracts, and read-only source and
+future contracts. It does not admit model, tool, environment, network, input-value
+or scope changes. Replay independently verifies the proof against the canonical
+source snapshot and policies. Input-bound occurrence hashes are updated for the
+new policy only after reconstructing and verifying their original materialized
+payloads and bindings. Original receipts, native outputs, payload bytes and input
+snapshots remain unchanged. Verification and acceptance reopen in the child;
+ordinary resume uses the same frozen values without calling a resolver again.
+The read-only restriction is checked again on subsequent resumes. Managed
+versioning-off workspaces still require the separate `--metadata-only` selection;
+this option does not weaken workspace versioning or plan freshness checks.
+Policy-drift diagnostics display the same normalized comparison hash used by
+admission, including the existing unused-backend environment compatibility.
+Canonical-equivalent omitted empty fields are not reported as separate changes.
+
+In extra-model fanout, a leaf validates delivery proof for its own
+`model_execution_id`. A sibling can be between its checkpoint update and durable
+dispatch-event publication; that transient state cannot invalidate the first
+leaf's independently recorded dispatch. A leaf without its own recorded manifest
+cannot borrow a sibling's proof. Parent completion still verifies every leaf's
+canonical delivery evidence after all leaf executions return.
+
+A changed fan-out `goal-template` is a non-result task-contract change, even
+when the edit describes a new submission format. Schema-only recovery refuses
+that drift. Changing the execution profile does not authorize changing the
+saved task contract; restoring the exact original team configuration or adding
+an explicitly supported migration is required.
+For submission-format changes, put ownership instructions in the agent prompt
+and schema while preserving task goals whose canonical outcome is unchanged.
+
+Result-only collection uses the same compatibility rule as ordinary resume for
+an external backend absent from both frozen and current model routes. Its
+ambient environment cannot authorize execution on that backend. Compatible
+collection keeps the original durable policy and checkpoint hash; it never
+substitutes the current process's policy fingerprint. Reachable-backend,
+executable, network, model and contract changes remain blocking drift.
+
+The canonical `contract_recovery_created` event owns the new policy, task
+bindings and explicit revalidation proofs. Replay validates its source against
+the preceding lineage. A crash after native fork but before that event leaves
+an ordinary child under the original policy; it cannot silently run under the
+new policy. Inspect that child and select the preserved parent before previewing
+again. Successful recovery publication is followed by normal resume and all
+ordinary evidence, verification and acceptance gates.
+
+Collections interrupted by cancellation can use the same explicit
+`--repair-result <task-id>` recovery when the original work receipt proves a
+completed, successful local execution. Unfinished work, unknown side effects,
+and blocked source/authorization failures remain ineligible. Recovery preserves
+the sealed work, consumed collector turns and previous diagnostics; it never
+reruns worker tools. Assessment revision 3 requires execution-completion proof;
+stored revisions 1 and 2 retain their original validation rules.
+Operator recovery suggestions offer a read-only result-repair assessment for
+these cancelled collections and suppress worker retry or ordinary resume actions.
+
+Ordinary and result-only previews install the same detached session, selected
+frozen inputs and read-only event-store branch. Native output bindings therefore
+use the exact retained receipts. After sealed-work verification, result recovery
+rebinds only the artifact permission envelope to the current invocation; the
+original receipt, artifact identities and authorized reference list stay intact.
+
+New collection evidence hashes exclude task display timestamps and model/tool
+durations, which historical lifecycle events did not persist, and canonicalize
+context-manifest order. For an older checkpoint, replay may restore only these
+four timing fields and the manifest order from its branch snapshot
+when that snapshot reproduces the original complete evidence hash and agrees
+with canonical task projections. Manifest entries, results, receipts and contracts still come from canonical
+replay, and the original full hash must still validate. Missing
+or mismatched historical evidence fails closed.
+
 For a blocked protocol submission, `resume --branch <source> --repair-result
 <task-id>` explicitly grants two additional result-only turns. The grant and
 previous repair history are durable, the original execution run/attempt,
@@ -600,6 +868,34 @@ Unknown counts and turns are omitted from JSON and shown as unknown in text. Pre
 `--repair-model`, `--report`, `--tui`, or new input assignments. A blocked preview
 is a successful inspection with `disposition: blocked`; no grant is created.
 
+Assessment revision 5 also permits sequential result-only repairs when all
+unresolved tasks belong to the same failed phase and each phase error matches a
+recoverable collection task. Select one task per command and reassess the next
+task after each repair. Already repaired tasks retain their accepted results and
+original receipts; no peer task receives authority from another task's grant.
+The failed phase and its original errors remain unchanged while any task is
+unresolved (`continues_workflow: false`). Only after every failed collection has
+a canonically verified accepted result and recovery grant can the phase reopen
+and ordinary verification and downstream work continue. Completion and reopening
+remain recoverable across process restarts. Unrelated failures, other phases,
+uncertain effects and missing recovery proof remain blocked. Stored earlier
+assessment revisions retain their original validation rules.
+When a later phase also needs collection repair, earlier successful phases keep
+their verified results and grants. Those historical blocked snapshots do not
+participate in reopening the later failed phase; its own authorized snapshot
+must still match the current workflow exactly.
+After an individual repair, the command can still exit unsuccessfully because
+peer tasks remain unresolved. Inspect the selected task's accepted result before
+repairing the next task; that run outcome does not undo the completed repair.
+
+Recovery applies the same single-block transport normalization before verifying
+claims. If the enclosed object passes the complete schema, source, receipt and
+decision checks, `commit_local` can publish it without another model call or an
+additional collection turn. Original response bytes and work receipts remain
+unchanged. The submission decoder still accepts only a JSON object; ambiguous
+frames, invalid claims, forged receipts and unauthorized evidence do not gain
+acceptance through normalization.
+
 Execution recomputes the assessment and atomically appends it with the grant and
 submission-only transition, fenced against the journal head. A competing writer
 must reassess rather than use stale authority. Valid durable claims receive no
@@ -622,13 +918,52 @@ rerunning settled decisions. A local result commit still
 passes ordinary verification and workflow acceptance; repairing one task can
 unlock undispatched downstream work and does not complete the entire run.
 
-An optional `--repair-model <backend/model>` selects an auxiliary submitter
+For result-only repair with `--repair-result`, an optional
+`--repair-model <backend/model>` selects an auxiliary submitter
 already present in both the original and current frozen LLM routes. The grant
 and repair turns record that model separately; the original worker target and
 execution receipt identity are retained. Unknown, bare and agent-backend repair
 targets fail before generation. This lets an operator repair a submission with
 an already admitted model when the worker model repeatedly exhausts its output
 budget without a tool call.
+
+When work has returned but a required bound decision never started, result-only
+repair cannot supply that decision. Use the separate, explicit work retry:
+
+```bash
+hufu resume --team <team> --workspace <control-root> --retry-work <task-id> --dry-run
+hufu resume --team <team> --workspace <control-root> --retry-work <task-id> \
+  --recovery-branch <new-name> --plan-hash <preview-sha256>
+hufu resume --team <team> --workspace <control-root> --branch <child-id>
+```
+
+An unversioned managed workspace additionally requires `--metadata-only` on
+preview and publication. Saved launch settings restore the execution profile
+and model overrides; legacy sessions without them still require the matching
+original settings. Publication creates and selects a
+child branch without running work; ordinary resume performs all normal policy,
+source, verification and acceptance checks before execution.
+
+This path requires unchanged execution policy and result contracts, static
+read-only contracts, canonical frozen inputs and accepted source evidence. The
+selected task must be the sole unresolved task, with completed successful sealed
+work and either a failed protocol collection or a verified committed `blocked`
+handoff without a structured decision payload. A committed blocked handoff keeps
+its original unsuccessful task outcome receipt; successful sealed work is
+verified independently. Both `TASK_BLOCKED` and
+`OPTIONAL_TASK_BLOCKED` are matched to the task's canonical optional status.
+Interrupted, errored or abstained decisions, tool policy denials, isolated or
+fanout work, and writing contracts require separate reconciliation. At most 64
+missing decision slots and a bounded pinned schema can enter one retry proof.
+
+The hash binds the exact parent head, sealed checkpoint, original schema and
+missing decision slots. Publication reassesses it and rejects stale previews.
+Replay reconstructs the slots from the original accepted source arrays. Parent
+results, work receipts and decisions remain historical evidence; the child
+retains unrelated accepted tasks, archives the old work receipt and opens a new
+occurrence for the selected task and its transitive consumers. New work uses
+the child branch's decision scope and fresh tool authorization. Verification
+and acceptance reopen; branch publication alone does not establish success.
 
 An unused external agent backend's inherited environment does not block an LLM
 continuation. This compatibility applies only when neither frozen nor current
@@ -676,7 +1011,8 @@ agent, and a coordinator cannot pick another model for such an agent.
 A route-bound attempt that fails with a provider error may fall back to the
 next candidate. The failure is classified structurally
 (`ClassifyProviderError`): HTTP 429 is `rate_limited`; 500/502/503/504, a
-refused or reset connection, DNS, and TLS failures are `provider_unavailable`;
+refused or reset connection, DNS, TLS failures, and SDK-typed transient SSE
+errors without an HTTP failure status are `provider_unavailable`;
 404 (or a documented "model not found" body) is `model_unavailable`; a
 transport timeout is `transport_timeout`; 401/403 (`auth_failed`) and context
 overflow (`context_length_exceeded`) never fall back. A fallback happens only
@@ -707,13 +1043,49 @@ receipt records the target it ran on, its `candidate_index`, and on a fallback
 attempt `fallback_from` and `fallback_failure_class`; an attempt whose
 provider failure did not fall back records `fallback_denied_reason`.
 
+## Transient provider requests
+
+Coordinator-managed model calls recover temporary provider failures at the
+shared request-admission boundary before failing a worker or collector. Hufu
+uses Fantasy's typed retryability signal, including `TransientError` on SSE
+errors inside an HTTP 200 stream; it never infers HTTP 500 from error text.
+Authentication and context-capacity rejections do not enter transient recovery.
+
+One logical model step permits at most two transient resends, with one- and
+two-second delays. Opening failures and deferred iterator errors share this
+limit. A deferred error is eligible only before **any** stream part reaches
+the caller. After a partial text, reasoning, tool, or other event is delivered,
+the error follows ordinary task recovery instead of restarting the stream.
+SDK retries remain disabled.
+
+The forced, data-only structured-response channel buffers each complete stream
+before publishing it to its parser. A private capability, installed only after
+excluding executable tools, permits discarding uncommitted reasoning and partial
+function arguments on a typed transient rejection. The same two-resend limit
+applies; fragments from different attempts never combine. Buffering includes
+framing and reasoning and stops at 32 MiB, independently of the smaller claims
+limit. Unexpected tools, tool results, or provider-executed events fail closed
+without a resend. Normal worker streams retain the partial-delivery restriction.
+
+Every resend uses the same model and step input, preserving previous tool
+results. The failed invocation settles and releases its provider slot before
+the delay; the next invocation gets a new ID and repeats admission, capacity
+and cost checks. Resending a model request does not restart a worker, repeat
+completed tools, consume a collector format-repair turn, or reset its saved
+work receipt. Delays honor cancellation and model/run wall-clock budgets.
+Persistent failures still stop truthfully at the ordinary recovery boundary.
+This policy covers normal workers, collectors, coordinators, direct agents,
+extra models and sidecars using coordinator admission; standalone transports
+retain their own policy.
+
 ## Ollama Cloud quota waits
 
 Coordinator-managed model calls automatically wait after an Ollama Cloud HTTP
 429 that rejected the request before any response was observed. This covers
 coordinator, worker, direct-agent, extra-model and sidecar calls through the
 shared provider admission boundary. Other providers retain their existing
-retry/fallback behavior. Standalone native System One decision transports and
+quota/fallback behavior, alongside the transient-request policy above.
+Standalone native System One decision transports and
 commands that do not use coordinator admission retain their own error policy.
 
 Hufu queries the official [balance API](https://docs.ollama.com/api/balance).
@@ -831,6 +1203,22 @@ the same phase rule. A declared `task_result_assert` on an action evaluates the
 provider's canonical runtime outputs before publishing the successful result or
 receipt; verification failure leaves the occurrence failed.
 
+### Result binding and worker evidence views
+
+Payload binding uses accepted dependency results without adding reviewed-input
+artifact references. Fixed collections, runtime-owned evidence arrays, and
+payload graph validation consume these values without repeatedly replaying
+artifact receipts for every source. Worker evidence views still add reviewed
+inputs only after authorization; result evidence references and evidence-delivery
+manifests continue to use that authorized view. This keeps collection preparation
+bounded by payload work without changing artifact access checks.
+
+Recovery authorization reads branch metadata through the matching event store's
+existing connection. Read-only checks therefore use the same immutable snapshot
+for events and branches, without copying the entire runtime database again for
+each artifact reference. Source hashes, frozen inputs, receipts and branch
+cutoffs remain subject to the same validation.
+
 ### Ordered result projections
 
 Teams may declare an `equals_projection` task-result assertion to compare two
@@ -838,6 +1226,13 @@ ordered object arrays before a successful worker result is committed and again
 at objective verification. The assertion's `pointer` selects the first array;
 its configuration-owned `value` contains a reference `pointer`, 1–16 unique
 `fields`, optional `optional_fields`, `field_defaults`, and optional boolean `allow_missing`.
+Both assertion pointers start at the canonical `TaskResult` document root:
+`/findings` selects its outer findings, while
+`/structured_payload/value/record/findings` selects an array in the saved
+payload. In contrast, `x-hufu-result-projections` pointers start at the decoded
+payload value itself, so the corresponding source is `/record/findings`.
+An external worker's `structured_payload_json` transport is decoded before
+projection; assertion pointers never traverse the transport string.
 Required and optional field names must be distinct, with at most 16 total. Both arrays must have the same
 length, and every selected field must exist and match at the same index.
 Fields listed in `optional_fields` may be absent from both objects; a value
@@ -892,6 +1287,39 @@ tasks as skipped. The sealed terminal snapshot keeps their states and original
 diagnostics for inspection and recovery, without appending task transitions
 after the run boundary.
 
+### Selected dependency-result presentation
+
+Static contracts can opt into `dependency-result-view: {mode: selected,
+fields: [...]}` for ordinary workers with same-batch dependencies. The setting
+is frozen in the admitted task and execution policy, rather than accepted from
+model tool arguments. Full mode keeps the legacy formatter and identities.
+See [the configuration reference](../reference/agent-format.md#靜態依賴結果視圖dependency-result-view).
+
+The runtime resolves complete accepted dependency results through the existing
+workset restrictions, then authenticates their completion events against the
+active branch lineage and fork cutoff. A separate renderer produces selected
+fields without modifying canonical results, receipts, CAS objects or access
+grants. Structured upstream payloads and downstream complete-evidence or
+result-contract requirements are incompatible with selected presentation.
+Selected context remains required, uncompressed and complete; insufficient
+capacity stops the downstream request before worker invocation.
+
+Selected manifests use schema 4, including when composed with query attribution;
+full manifests retain schema 2 or query schema 3. Each selected item binds the
+normalized policy SHA-256, ordered source branch/run/task/attempt/revision,
+completion event ID/hash and SHA-256 of each authorized full handoff. Its
+`ContentHash` is the full SHA-256 of the actual selected context bytes. These
+presentation hashes never replace canonical payload or receipt hashes.
+
+Primary selected requests begin with `ModelCalled: false`, outcome `prepared`.
+At the actual agent/provider invocation boundary the runtime persists the
+dispatched manifest before invoking the worker; this denotes runtime dispatch,
+not remote acknowledgement. Preview, cancellation and uncalled requests cannot
+prove delivery. Retry, fanout, completion and result-only recovery verify the
+frozen policy, exact source occurrence and dispatched view. Result-only recovery
+does not rerun work to obtain omitted fields. Inspector and report projections
+expose content-free attribution and distinguish preparation from dispatch.
+
 ### Follow-up workflows in one conversation
 
 A completed workflow is one execution cycle, not the end of its conversation.
@@ -927,6 +1355,15 @@ and the hash of the complete injected fragment. `inspect context --show-content`
 resolves and verifies this reference without depending on `context.sqlite`.
 
 Interrupted and failed workflows keep their existing recovery behavior.
+Lifecycle snapshots persist `failure_event: null` when an active failure has
+been cleared, including operator-authorized result repair. Replay preserves
+omitted fields in sparse events, but restores the cleared stop for historical
+completed operator repairs with a committed collection receipt. Original
+failure events, fingerprints and execution receipts remain in history.
+Startup can clear a recorded projection-mismatch recovery barrier only after
+validated canonical replay exactly matches the checkpoint and the barrier
+matches its durable mismatch event. Other recovery barriers remain enforced.
+
 `resume` never starts a new cycle, and dry-run and direct-agent entry points do
 not implicitly reopen completed workflows. Execution-policy compatibility is
 still enforced across the session. `--new` remains the explicit way to start a
@@ -949,12 +1386,78 @@ failed only when its canonical history contains an aborted zero-turn checkpoint
 and no model, tool, task or unknown activity. Other uncertain commits remain
 blocked until their actual terminal event can be confirmed.
 
+### Derived forks for a new task
+
+Use a derived fork to preserve a completed, failed, or safely interrupted
+workflow while starting a different request from its saved project files:
+
+```bash
+hufu session fork main --name investigation --new-task --workspace <control-root>
+hufu run --team <same-team> -- "Investigate a new question from this snapshot."
+```
+
+This requires a managed Linux workspace, required workspace versioning, a
+verified materializable source snapshot, and exclusive workspace/project
+locks. Off/observe mode and `--metadata-only` are rejected. Preflight is
+read-only and precedes workspace recovery: pending terminal commits, version
+recovery, unfinished isolated applies, paused tasks, and uncertain external
+effects require inspection and reconciliation first. Typed read-only or
+workspace-write attempts can be forked without replaying their work; external
+effects need explicit settled recovery metadata.
+
+The branch row durably records immutable source event/snapshot identities,
+hashes, capture provenance, team, and visible task-ID high-water mark. Its
+snapshot commit and `derived_fork_created` event publish atomically. An
+incomplete branch cannot be interpreted as an ordinary fork. Existing native
+fork recovery either removes an eventless incomplete child or completes a
+durable publication forward.
+
+The child starts as `awaiting_new_request`, with no executable parent tasks,
+conversation, compaction, input snapshots, acceptance evidence, retries, or
+historical grants. Parent events, results, receipts and reports remain
+unchanged. An ordinary fork of this pending child retains the original pending
+lineage. Resume, direct-agent, chat, dry-run, empty requests, and decision intent
+cannot activate it.
+
+The first nonempty canonical execute `run` for the same team establishes a
+version-1 `workflow_cycle_started` envelope with kind `derived_fork`, the
+original native event reference and a fresh invocation identity. It admits the
+child's current execution policy and fresh inputs; new task IDs exceed the
+source high-water mark. The first cycle withholds unscoped parent memory and
+automatic previous-response sharing. Explicit `--inherit-result worker=<id>`
+grants still work and commit with the cycle atomically. Later follow-ups use
+the ordinary conversation rules. A derived fork never clears the failed
+parent's workflow state.
+
+Offline overview and status expose the committed source branch/run membership,
+snapshot, capture provenance and first-cycle identity as `derived_fork`
+metadata. Before the first request, the selected child reports
+`awaiting_new_request` without inventing a run, invocation or successful outcome.
+Its next action requests input rather than offering to resume the parent's work.
+The current worker hub starts at the native fork boundary; explicitly selected
+historical parent runs retain their original report and attempts. Reading these
+views neither activates the branch nor migrates its database.
+
 Recovery settles completed phase contracts through the same workflow observer
 as normal execution before building the coordinator's phase-scoped tools. This
 also covers a checkpoint taken after task completion but before phase settlement,
 even when no task needs replay. The resulting workflow snapshot is persisted as
 a canonical event and checkpoint; pending or operator-blocked tasks do not
 advance, and objective VERIFY evidence and phase order remain required.
+Ordinary resume and its read-only preflight also validate the restored
+coordinator conversation before provider work. Legacy history limits preserve
+complete tool-call/result groups and the original request. Invalid pairing
+diagnostics identify the kind of mismatch, message/part positions and a bounded
+hash of the provider call ID, without including model-controlled IDs or content.
+Providers may recycle an ID in a later completed exchange. Request and legacy
+history projections assign collision-free aliases to these closed pairs while
+preserving messages, arguments and results. Native observations, historical
+receipts and stored legacy history remain unchanged; concurrent collisions,
+orphan results and missing results are rejected before provider work.
+Completed results retained across a fork revalidate decisions against their
+recorded provenance in the admitted ancestor lineage. New submissions still
+require decisions in the current occurrence scope; they cannot import an
+ancestor decision by supplying its provenance.
 The closed context-purpose registry permits terminal-phase context only for
 coordinator delivery, compaction, final-summary repair and acceptance review,
 with the exact declared role and trigger. Context manifests keep `DONE` or
@@ -1136,3 +1639,15 @@ worker replay. Legacy responses without this metadata retain their historical
 classification. Candidate storage failures are explicit `commit_failed` tool
 responses, so the provider adapter cannot discard their classification as an
 untyped execution error. External worker proposal protocols are unchanged.
+
+### Native browser interaction boundary
+
+`browser_interaction` tasks may use explicitly granted native Chrome button
+controls while retaining read-only project roots and read claims. This is a
+state-changing, non-replayable side-effect class with manual recovery by default;
+failed or interrupted clicks must not be repeated as read-only tool calls.
+Ordinary MCP observation policies stay `none`. A `browser_interaction` worker
+policy is valid only for native `chrome-cdp` `browser_click`, not external
+servers or same-name handlers. Frozen catalogs, task authority, normal denies,
+network restrictions and artifact scope still apply. Result-only repair cannot
+acquire this interaction authority. See [native Chrome controls](../reference/chrome-cdp.md#button-interaction-and-popup-handling).

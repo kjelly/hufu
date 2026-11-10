@@ -23,12 +23,16 @@ func (c *Coordinator) validateAcceptedDependencyPayloadGraph(source *TodoItem, v
 		if source.ResultContract != nil && source.ResultContract.RequireStructured {
 			return fmt.Errorf("evidence source %s is missing its required structured payload", source.ID)
 		}
-		return nil
+		compiled, err := c.compiledResultContract(source.ResultContract)
+		if err != nil {
+			return err
+		}
+		return validateResultEnvelope(compiled, source.TypedResult)
 	}
 	if visiting[source.ID] {
 		return fmt.Errorf("fixed collection evidence contains a dependency cycle")
 	}
-	key := source.ID + ":" + payload.SHA256
+	key := source.ID + ":" + payload.SHA256 + ":" + source.TypedResult.Status
 	if validated[key] {
 		return nil
 	}
@@ -52,12 +56,15 @@ func (c *Coordinator) validateAcceptedDependencyPayloadGraph(source *TodoItem, v
 	if err := compiled.schema.Validate(value); err != nil {
 		return err
 	}
+	if err := validateResultEnvelope(compiled, source.TypedResult); err != nil {
+		return err
+	}
 	if err := validateResultWorksetInputs(value, compiled.worksetInputs, source.WorksetBinding); err != nil {
 		return err
 	}
 	var results []TaskResult
 	if len(compiled.fixedCollections) > 0 {
-		results = c.dependencyResultsForTask(source.ID)
+		results = c.dependencyResultsForBinding(source.ID)
 	}
 	plans, err := buildResultFixedCollections(compiled.fixedCollections, source.EvidenceFrom, results)
 	if err != nil {
@@ -129,6 +136,9 @@ func (c *Coordinator) validateDependencyPayloads(results []TaskResult) error {
 }
 
 func validateRequiredEvidenceContext(input WorkerContextInput, compiled CompiledContext) error {
+	if err := validateSelectedDependencyContext(input, compiled); err != nil {
+		return err
+	}
 	if !input.TaskDef.Execution.RequiresEvidence {
 		return nil
 	}
@@ -147,6 +157,12 @@ func validateRequiredEvidenceContext(input WorkerContextInput, compiled Compiled
 // The canonical manifest is the durable proof of delivery, also after replay.
 // Old manifests without a dependency hash cannot prove a complete audit.
 func (c *Coordinator) validateRequiredEvidenceDelivery(todoID string, attempt int, runIDs ...string) error {
+	if err := c.validateHistoricalResultDelivery(todoID, attempt, runIDs...); err != nil {
+		return err
+	}
+	if err := c.validateSelectedDependencyDelivery(todoID, attempt, runIDs...); err != nil {
+		return err
+	}
 	item := c.todoItemByID(todoID)
 	if item == nil {
 		return nil
@@ -157,7 +173,13 @@ func (c *Coordinator) validateRequiredEvidenceDelivery(todoID string, attempt in
 		if err := c.validateResultReferenceReads(todoID, item.TypedResult); err != nil {
 			return err
 		}
-		if err := c.validateSubmittedEvidenceInputs(todoID, item.TypedResult.StructuredPayload); err != nil {
+		var err error
+		if item.Status == TaskDone {
+			err = c.validateAcceptedEvidenceInputs(todoID, item.TypedResult.StructuredPayload)
+		} else {
+			err = c.validateSubmittedEvidenceInputs(todoID, item.TypedResult.StructuredPayload)
+		}
+		if err != nil {
 			return err
 		}
 	}

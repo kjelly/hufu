@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 
@@ -182,6 +183,13 @@ func (c *Coordinator) newContextWindowRequestDescriptorWithContext(ctx context.C
 // bridge. It reuses the verified tool-evidence compactor, but never imports
 // coordinator task facts, history, summaries, metrics, or durable state.
 func (c *Coordinator) buildTransientWorkerCompactionProjection(ctx context.Context, messages []fantasy.Message, predecessor *StructuredSummary, originalGoal string) ([]fantasy.Message, *StructuredSummary, error) {
+	if agent.MessagesHaveMedia(messages) {
+		return c.buildMediaWorkerCompaction(ctx, messages, predecessor, originalGoal)
+	}
+	return c.buildTextWorkerCompactionProjection(ctx, messages, predecessor, originalGoal)
+}
+
+func (c *Coordinator) buildTextWorkerCompactionProjection(ctx context.Context, messages []fantasy.Message, predecessor *StructuredSummary, originalGoal string) ([]fantasy.Message, *StructuredSummary, error) {
 	canonical, err := c.buildCanonicalCompactionInput(ctx, messages)
 	if err != nil {
 		return nil, nil, err
@@ -256,9 +264,11 @@ func (m *ContextWindowManager) Admit(ctx context.Context, request ContextWindowR
 			},
 			&ContextWindowMetadataUnavailableError{ModelID: request.ModelID}
 	}
-	if !toolPairsIntact(request.Messages) {
-		return ContextWindowAdmission{Decision: ContextWindowCannotFit, RejectionReason: contextWindowReasonInvalidPairing}, fmt.Errorf("context window request has invalid tool-call/result pairing")
+	projected, err := projectHistoryToolPairs(request.Messages)
+	if err != nil {
+		return ContextWindowAdmission{Decision: ContextWindowCannotFit, RejectionReason: contextWindowReasonInvalidPairing}, fmt.Errorf("context window request has invalid tool-call/result pairing: %w", err)
 	}
+	request.Messages = projected
 	spec := globalRegistry.GetSpec(request.ModelID)
 	if request.AdmissionContext.IsBound() {
 		spec = modelContextSpecForProviderRequest(agent.ProviderRequest{
@@ -376,9 +386,9 @@ func (m *ContextWindowManager) Admit(ctx context.Context, request ContextWindowR
 		candidate = append(candidate, fantasy.NewUserMessage(currentPrompt))
 	}
 	candidate = append(candidate, protected...)
-	if !toolPairsIntact(candidate) {
+	if err := validateToolPairs(candidate); err != nil {
 		admission.RejectionReason = contextWindowReasonInvalidPairing
-		return admission, fmt.Errorf("context window compacted request has invalid tool-call/result pairing")
+		return admission, fmt.Errorf("context window compacted request has invalid tool-call/result pairing: %w", err)
 	}
 	request.Messages = candidate
 	requestTokens, err = m.countRequest(ctx, request)
@@ -446,6 +456,15 @@ func splitRequestForCompaction(request ContextWindowRequest) (prior, fixed []fan
 		}
 	}
 	if request.Prompt != "" {
+		// The current prompt is already reattached separately. A required
+		// context block may protect that same message; retain only one copy.
+		protected = slices.DeleteFunc(protected, func(message fantasy.Message) bool {
+			if message.Role != fantasy.MessageRoleUser || len(message.Content) != 1 {
+				return false
+			}
+			part, ok := fantasy.AsMessagePart[fantasy.TextPart](message.Content[0])
+			return ok && part.Text == request.Prompt
+		})
 		for i := len(messages) - 1; i >= 0; i-- {
 			if messages[i].Role != fantasy.MessageRoleUser || len(messages[i].Content) != 1 {
 				continue
@@ -506,37 +525,6 @@ func cloneMessages(messages []fantasy.Message) []fantasy.Message {
 	cloned := make([]fantasy.Message, len(messages))
 	copy(cloned, messages)
 	return cloned
-}
-
-func toolPairsIntact(messages []fantasy.Message) bool {
-	calls := make(map[string]struct{})
-	results := make(map[string]struct{})
-	for _, message := range messages {
-		for _, part := range message.Content {
-			if call, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok {
-				if call.ToolCallID == "" {
-					return false
-				}
-				if _, duplicate := calls[call.ToolCallID]; duplicate {
-					return false
-				}
-				calls[call.ToolCallID] = struct{}{}
-			}
-			if result, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok {
-				if result.ToolCallID == "" {
-					return false
-				}
-				if _, exists := calls[result.ToolCallID]; !exists {
-					return false
-				}
-				if _, duplicate := results[result.ToolCallID]; duplicate {
-					return false
-				}
-				results[result.ToolCallID] = struct{}{}
-			}
-		}
-	}
-	return len(calls) == len(results)
 }
 
 func containsVerifiedHistory(messages []fantasy.Message) bool {

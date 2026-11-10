@@ -26,7 +26,8 @@ func TestChatHistoryConvertsSessionEntries(t *testing.T) {
 
 func TestChatTeamHooks(t *testing.T) {
 	session := &chatSession{rootCtx: context.Background()} // nil registry: --default
-	alpha := &teamContext{teamName: "alpha", coordinator: &team.Coordinator{}}
+	alpha := &teamContext{teamName: "alpha", coordinator: newTestCoordinator(t, 0)}
+	t.Cleanup(func() { _ = alpha.coordinator.Close() })
 	adapter := newChatRuntimeAdapter(alpha, "alpha")
 	var sent []tea.Msg
 	session.installChatTeamHooks(adapter, &chatDisplay{}, func(msg tea.Msg) { sent = append(sent, msg) })

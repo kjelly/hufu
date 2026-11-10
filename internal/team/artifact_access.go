@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
+	"github.com/kjelly/hufu/internal/media"
 )
 
 // ArtifactAccessScope is the immutable, attempt-local capability set for
@@ -156,6 +157,9 @@ func (c *Coordinator) managedSkillArtifactRefs(agentDef *agent.AgentDef, goal st
 // can interpret model text as a new path.
 func (c *Coordinator) openArtifactRef(ctx context.Context, id string) (io.ReadCloser, error) {
 	id = strings.TrimSpace(id)
+	if isMediaArtifactID(id) {
+		return nil, media.Reject(media.Unsupported, "media requires an admitted native image input")
+	}
 	if c == nil || c.session == nil || id == "" {
 		return nil, fmt.Errorf("artifact reference is required")
 	}
@@ -190,7 +194,23 @@ func (c *Coordinator) openArtifactRef(ctx context.Context, id string) (io.ReadCl
 	if err != nil {
 		return nil, fmt.Errorf("artifact reference %q could not be opened", id)
 	}
-	return reader, nil
+	seeker, ok := reader.(io.ReadSeekCloser)
+	if !ok {
+		_ = reader.Close()
+		return nil, fmt.Errorf("artifact reference %q does not support immutable reads", id)
+	}
+	return &verifiedArtifactReader{ReadSeekCloser: seeker, sha256: ref.SHA256, byteSize: ref.ByteSize}, nil
+}
+
+// Identity is exposed only after the store has verified the authorized version.
+type verifiedArtifactReader struct {
+	io.ReadSeekCloser
+	sha256   string
+	byteSize int64
+}
+
+func (r *verifiedArtifactReader) ArtifactReadIdentity() (string, int64) {
+	return r.sha256, r.byteSize
 }
 
 func (c *Coordinator) authorizedArtifactRef(ctx context.Context, id string) (ArtifactRef, string, bool) {
@@ -317,9 +337,9 @@ func (c *Coordinator) buildArtifactAccessScope(todoID string, attempt int, goals
 	if item.WorksetBinding != nil {
 		binding := item.WorksetBinding
 		for _, input := range binding.Inputs {
-			ref, _, ok := c.authorizedWorksetInput(item, input.ID)
-			if !ok {
-				return nil, fmt.Errorf("artifact scope input %q is not authorized by the committed workset receipt", input.ID)
+			ref, _, err := c.resolveAuthorizedWorksetInput(item, input.ID)
+			if err != nil {
+				return nil, fmt.Errorf("artifact scope input %q is not authorized by the committed workset receipt: %w", input.ID, err)
 			}
 			addUnique(&scope.AuthorizedRefs, ref)
 		}
@@ -440,7 +460,7 @@ func (c *Coordinator) artifactScopePathCandidates(scope *ArtifactAccessScope) []
 	if c == nil || c.session == nil || scope == nil {
 		return nil
 	}
-	paths := make([]string, 0, len(scope.DeniedRefs)*4+2)
+	paths := make([]string, 0, len(scope.DeniedRefs)*4+3)
 	seen := make(map[string]bool)
 	add := func(path string) {
 		path = strings.TrimSpace(path)
@@ -456,6 +476,9 @@ func (c *Coordinator) artifactScopePathCandidates(scope *ArtifactAccessScope) []
 	artifactRoot := filepath.Join(storeRoot, logsDir, "artifacts")
 	add(filepath.Join(artifactRoot, "data"))
 	add(filepath.Join(artifactRoot, "meta"))
+	// Generic path tools never hydrate image bytes or read private metadata.
+	// Native image consumers resolve their canonical grants through the store.
+	add(filepath.Join(artifactRoot, "media"))
 	for _, ref := range scope.DeniedRefs {
 		if strings.TrimSpace(ref.ID) != "" {
 			add(filepath.Join(artifactRoot, "data", ref.ID))
@@ -477,8 +500,15 @@ func (c *Coordinator) artifactScopePathCandidates(scope *ArtifactAccessScope) []
 }
 
 func (c *Coordinator) authorizedWorksetInput(consumer *TodoItem, id string) (ArtifactRef, string, bool) {
+	ref, producerID, err := c.resolveAuthorizedWorksetInput(consumer, id)
+	return ref, producerID, err == nil
+}
+
+// Operator preflight preserves the rejection cause. Model-facing artifact
+// lookups retain the boolean boundary above and do not disclose storage errors.
+func (c *Coordinator) resolveAuthorizedWorksetInput(consumer *TodoItem, id string) (ArtifactRef, string, error) {
 	if c == nil || consumer == nil || consumer.WorksetBinding == nil || id == "" {
-		return ArtifactRef{}, "", false
+		return ArtifactRef{}, "", fmt.Errorf("missing workset input binding")
 	}
 	binding := consumer.WorksetBinding
 	visible := make([]*WorksetExpansionReceipt, 0)
@@ -489,16 +519,21 @@ func (c *Coordinator) authorizedWorksetInput(consumer *TodoItem, id string) (Art
 	}
 	receipts, conflicts := collectWorksetReceipts(visible)
 	if _, conflicted := conflicts[binding.WorksetID]; conflicted {
-		return ArtifactRef{}, "", false
+		return ArtifactRef{}, "", fmt.Errorf("conflicting workset expansion receipts")
 	}
 	receipt := receipts[binding.WorksetID]
 	if receipt == nil || receipt.Children[binding.ItemKey] != consumer.ID {
-		return ArtifactRef{}, "", false
+		return ArtifactRef{}, "", fmt.Errorf("workset receipt does not assign this child")
 	}
 	if receipt.ParentTaskID != binding.ParentTaskID ||
 		receipt.SourceArtifactID != binding.SourceArtifactID ||
 		receipt.SourceSHA256 != binding.SourceSHA256 {
-		return ArtifactRef{}, "", false
+		return ArtifactRef{}, "", fmt.Errorf("workset source identity differs from its binding")
+	}
+	if receipt.RunID != c.executionRunID || slices.ContainsFunc(binding.Inputs, func(input ArtifactRef) bool { return input.RunID != c.executionRunID }) {
+		if err := c.validateRecoveredWorksetReceipt(context.Background(), receipt, consumer); err != nil {
+			return ArtifactRef{}, "", fmt.Errorf("recovered workset receipt: %w", err)
+		}
 	}
 	for _, input := range binding.Inputs {
 		if input.ID != id || strings.TrimSpace(input.SHA256) == "" ||
@@ -508,18 +543,18 @@ func (c *Coordinator) authorizedWorksetInput(consumer *TodoItem, id string) (Art
 		producer := c.todoItemByID(input.TaskID)
 		if producer == nil || producer.Status != TaskDone || producer.TypedResult == nil ||
 			!taskResultStatusIsSuccessful(producer.TypedResult.Status) {
-			return ArtifactRef{}, "", false
+			return ArtifactRef{}, "", fmt.Errorf("input producer has no accepted result")
 		}
 		declared, ok := artifactRefByID(producer.TypedResult, id)
 		if !ok || !sameArtifactOccurrence(input, declared) {
-			return ArtifactRef{}, "", false
+			return ArtifactRef{}, "", fmt.Errorf("input occurrence differs from the producer's declared artifact")
 		}
 		if err := c.validateCurrentProducerArtifactOccurrence(input, input.TaskID, producer.TypedResult); err != nil {
-			return ArtifactRef{}, "", false
+			return ArtifactRef{}, "", fmt.Errorf("input producer occurrence: %w", err)
 		}
-		return input, input.TaskID, true
+		return input, input.TaskID, nil
 	}
-	return ArtifactRef{}, "", false
+	return ArtifactRef{}, "", fmt.Errorf("no immutable occurrence for the assigned input")
 }
 
 func sameArtifactOccurrence(first, second ArtifactRef) bool {

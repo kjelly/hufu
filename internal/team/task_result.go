@@ -281,8 +281,9 @@ type TaskResult struct {
 	BoundInputs                   map[string]string `json:"bound_inputs,omitempty"`
 	// RuntimeOutputs are canonical values produced by trusted runtime
 	// execution. Model-facing result DTOs intentionally cannot populate them.
-	RuntimeOutputs     map[string]any `json:"runtime_outputs,omitempty"`
-	RuntimeOutputsHash string         `json:"runtime_outputs_hash,omitempty"`
+	RuntimeOutputs     map[string]any          `json:"runtime_outputs,omitempty"`
+	RuntimeOutputsHash string                  `json:"runtime_outputs_hash,omitempty"`
+	RuntimeMedia       *RuntimeMediaProjection `json:"runtime_media,omitempty"`
 	// Details is the complete textual deliverable when a task produces a plan,
 	// analysis, review, or other handoff that does not need a separate file.
 	// It is part of the typed result, so downstream coordinators can consume it
@@ -391,6 +392,9 @@ func ParseFreeTextResult(text string) *TaskResult {
 func validateSubmittedTaskResult(result *TaskResult) error {
 	if result == nil {
 		return fmt.Errorf("missing structured task result")
+	}
+	if err := result.RuntimeMedia.Validate(); err != nil {
+		return err
 	}
 	switch result.Status {
 	case TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps,

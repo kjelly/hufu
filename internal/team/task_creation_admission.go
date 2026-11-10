@@ -2,9 +2,27 @@ package team
 
 import (
 	"context"
+	"encoding/json/v2"
 	"fmt"
 	"strings"
 )
+
+// taskCreationCheckpointKey restores the creation marker used by checkpoint
+// backfill. Pending metadata is not a new occurrence; an explicit retry reset
+// commits its own task_created event with a new retry count.
+func taskCreationCheckpointKey(event RunEvent) string {
+	if event.Type != string(EventTaskCreated) || event.SchemaVersion < eventStoreSchemaVersion || event.TaskID == "" {
+		return ""
+	}
+	var payload struct {
+		Status  TaskStatus `json:"status"`
+		Retries int        `json:"retries"`
+	}
+	if err := json.Unmarshal(event.Payload, &payload); err != nil || payload.Status != TaskPending || payload.Retries < 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s:%s:%d", event.TaskID, TaskPending, payload.Retries)
+}
 
 // validateTaskCreationAdmission is the final guard immediately before a
 // durable task_created append. Creation callers may reserve IDs and perform
@@ -15,6 +33,12 @@ import (
 func (c *Coordinator) validateTaskCreationAdmission(ctx context.Context, item *TodoItem) error {
 	if c == nil || item == nil {
 		return nil
+	}
+	if err := c.validateTaskMediaCreation(ctx, item); err != nil {
+		return err
+	}
+	if err := c.validateTaskHistoricalResultBinding(ctx, item); err != nil {
+		return fmt.Errorf("validate task %s historical results: %w", item.ID, err)
 	}
 	if err := validateActionOccurrenceBinding(item); err != nil {
 		return fmt.Errorf("validate task %s action input binding: %w", item.ID, err)

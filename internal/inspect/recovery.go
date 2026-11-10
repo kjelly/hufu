@@ -72,13 +72,19 @@ func recoveryEligibilityForItem(item *team.TodoItem, events []IndexedEvent, runI
 	if !policyKnown {
 		effectivePolicy = "unknown"
 	}
+	interruptedCollection := team.HasCancelledCollectionWork(item)
 	return &operatorpkg.RecoveryEligibility{
+		ResultCollectionInterrupted: interruptedCollection,
+		ResultCollectionBlocked: item.Status == team.TaskBlocked && item.FailureEvent != nil &&
+			item.FailureEvent.FailureClass == team.FailureProtocol && item.FailureEvent.FailureType == team.FailureTypeResultCollection &&
+			item.ExecutionReceipt != nil && item.ExecutionReceipt.ResultCollection != nil &&
+			item.ExecutionReceipt.ResultCollection.State == team.ResultCollectionBlocked,
 		TaskID: item.ID, Attempt: recoveryAttempt(item), TaskStatus: string(item.Status),
 		ExpectedEventID: latest.Event.ID, ExpectedEventHash: latest.Event.Hash,
 		ExternalEffectState: externalState, EffectivePolicy: effectivePolicy, PolicyRevision: policyRevision,
-		ExpectedRevision: expectedRevision, PolicyDenied: policyDenied, ResumeEligible: interrupted || decision.Action == team.RepairReplan,
+		ExpectedRevision: expectedRevision, PolicyDenied: policyDenied, ResumeEligible: !interruptedCollection && (interrupted || decision.Action == team.RepairReplan),
 		ReconcileEligible: decision.Action == team.RepairReconcile && capabilityKnown,
-		RetryEligible:     decision.Action == team.RepairRetry && retryStateProvenSafe(item, externalState),
+		RetryEligible:     !interruptedCollection && decision.Action == team.RepairRetry && retryStateProvenSafe(item, externalState),
 		CapabilityKnown:   capabilityKnown, ReasonCode: repairReasonCode(decision.Action, policyDenied, policyKnown || taskRetryDisposition(item) != ""), SourceRefs: refs,
 	}
 }
@@ -203,7 +209,7 @@ func normalizedExternalEffectState(item *team.TodoItem) string {
 		return ""
 	}
 	switch item.SideEffect {
-	case team.SideEffectExternalWrite, team.SideEffectInfraMutation, team.SideEffectCredential, team.SideEffectUnknown:
+	case team.SideEffectBrowserInteraction, team.SideEffectExternalWrite, team.SideEffectInfraMutation, team.SideEffectCredential, team.SideEffectUnknown:
 		switch item.RecoveryState {
 		case team.RecoveryStateComplete, team.RecoveryStateNotStarted, team.RecoveryStatePartial:
 			return item.RecoveryState

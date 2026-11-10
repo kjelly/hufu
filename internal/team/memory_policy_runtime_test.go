@@ -3,7 +3,6 @@ package team
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -11,7 +10,7 @@ import (
 )
 
 func TestApprovedMemoryPolicyLoadsIntoRuntime(t *testing.T) {
-	repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +48,7 @@ func TestApprovedMemoryPolicyLoadsIntoRuntime(t *testing.T) {
 }
 
 func TestNewMemoryPolicySeparatesCandidateAndInjectLimits(t *testing.T) {
-	repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+	repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +98,7 @@ func TestCoordinatorAppliesTeamLearningPolicyWithoutAdoption(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, err := contextstore.OpenSQLite(filepath.Join(t.TempDir(), "context.sqlite"))
+			repo, err := contextstore.OpenSQLiteInMemory(t.TempDir())
 			if err != nil {
 				t.Fatal(err)
 			}

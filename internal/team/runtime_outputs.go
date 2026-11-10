@@ -166,6 +166,7 @@ func redactJSONPreservingRuntimeOutputs(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	preserved := make([]any, 0)
+	maskCanonicalRuntimeMedia(document, &preserved)
 	maskCanonicalRuntimeOutputs(document, &preserved)
 	masked, err := json.Marshal(document)
 	if err != nil {
@@ -184,7 +185,39 @@ func redactJSONPreservingRuntimeOutputs(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.MarshalIndent(document, "", "  ")
+	// Machine projections embed canonical RawMessage values with byte hashes.
+	// Indenting the surrounding document would also indent those values.
+	return json.Marshal(document)
+}
+
+// Only result envelopes can preserve a runtime media projection. Model-owned
+// payloads and facts remain subject to ordinary redaction, including objects
+// that imitate a result envelope inside a semantic judgment.
+func maskCanonicalRuntimeMedia(value any, preserved *[]any) {
+	switch typed := value.(type) {
+	case []any:
+		for _, child := range typed {
+			maskCanonicalRuntimeMedia(child, preserved)
+		}
+	case map[string]any:
+		if raw, ok := typed["runtime_media"].(map[string]any); ok {
+			encoded, err := json.Marshal(raw)
+			var projection RuntimeMediaProjection
+			if err == nil && json.Unmarshal(encoded, &projection) == nil && projection.Validate() == nil &&
+				typed["task_id"] == projection.TaskID && typed["agent"] == projection.Agent {
+				index := len(*preserved)
+				*preserved = append(*preserved, raw)
+				typed["runtime_media"] = map[string]any{preservedRuntimeOutputsKey: index}
+			}
+		}
+		for key, child := range typed {
+			switch key {
+			case "structured_payload", "facts", "runtime_outputs", "outputs", "runtime_media":
+				continue
+			}
+			maskCanonicalRuntimeMedia(child, preserved)
+		}
+	}
 }
 
 func maskCanonicalRuntimeOutputs(value any, preserved *[]any) {

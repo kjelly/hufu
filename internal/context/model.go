@@ -3,7 +3,6 @@
 package context
 
 import (
-	"slices"
 	"strings"
 	"time"
 )
@@ -208,24 +207,11 @@ func (r SearchRequest) SemanticQueryText() string {
 
 // WithAllowedItemIDs returns a request with a copied, deduplicated, bytewise
 // sorted lineage restriction so caller mutation cannot change an in-flight
-// retrieval.
+// retrieval. Empty IDs are retained so retrieval rejects invalid constraints
+// rather than silently turning them into a different authorization set.
 func (r SearchRequest) WithAllowedItemIDs(ids []string) SearchRequest {
 	r.AllowedItemIDs = normalizeAllowedItemIDs(ids)
 	return r
-}
-
-func normalizeAllowedItemIDs(ids []string) []string {
-	if ids == nil {
-		return nil
-	}
-	normalized := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if id != "" {
-			normalized = append(normalized, id)
-		}
-	}
-	slices.Sort(normalized)
-	return slices.Compact(normalized)
 }
 
 type SearchResult struct {

@@ -14,11 +14,14 @@ const (
 // permission to use the corresponding capability.
 type BackendCapabilities struct {
 	DirectLanguageModel bool
-	StructuredResult    bool
-	WorkspaceRead       bool
-	WorkspaceWrite      bool
-	Shell               bool
-	Resume              bool
+	// NativeImageInput describes backend transport support only. The current
+	// model, concrete adapter and occurrence policy need independent admission.
+	NativeImageInput bool
+	StructuredResult bool
+	WorkspaceRead    bool
+	WorkspaceWrite   bool
+	Shell            bool
+	Resume           bool
 }
 
 // TargetDefaults supplies trusted defaults used only while admitting a bare

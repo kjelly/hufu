@@ -11,7 +11,7 @@ builds:
     binary: hufu
     ldflags:
       - -s -w
-      - -X main.version={{ .Version }}
+      - -X github.com/kjelly/hufu/internal/buildinfo.Version={{ .Version }}
     env:
       - CGO_ENABLED=0
     goos:

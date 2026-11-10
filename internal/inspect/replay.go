@@ -115,6 +115,9 @@ func sessionProjectionGate(lineage Lineage, selected selectedRun) string {
 			terminalSeen = true
 			continue
 		}
+		if terminalSeen && indexed.Event.Type == string(team.EventDerivedForkCreated) {
+			return ReasonProjectionNotRunScoped
+		}
 		if terminalSeen && indexed.Event.RunID != "" && indexed.Event.RunID != selected.terminal.RunID {
 			return ReasonProjectionNotRunScoped
 		}

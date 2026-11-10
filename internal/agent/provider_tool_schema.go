@@ -29,6 +29,8 @@ func cloneProviderSchemaValue(value any) any {
 			copy[index] = cloneProviderSchemaValue(child)
 		}
 		return copy
+	case []string:
+		return slices.Clone(value)
 	default:
 		return value
 	}

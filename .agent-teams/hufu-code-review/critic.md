@@ -12,7 +12,27 @@ recovery: retry
 max-retries: 1
 ---
 
-Select the mode ONLY from the task's static result contract. `critic-review` / `schemas/critique-v2.json` always means finding critique, regardless of the source review's lens. The documentation workset mode uses `schemas/review-v1.json`. A documentation-risk source lens does not switch a `critic-review` task into documentation workset mode.
+Select the mode ONLY from the task's static result contract. `critic-review` / `schemas/critique-v2.json` always means finding critique, regardless of the source review's lens. The documentation workset mode uses `schemas/documentation-review-v1.json`. A documentation-risk source lens does not switch a `critic-review` task into documentation workset mode.
+
+In source-review mode, satisfy all runtime `required_reads` with actual
+successful `view` spans; search is not full observation. Repair missing-read
+feedback on the same unaccepted task.
+Every source gap requires `description`, `missing_evidence`, lowercase `kind`
+(`unread`, `truncated`, `missing_dependency`, `semantic_uncertainty`),
+`requested_evidence`, and `limitations`. Requests contain exact
+repository-relative `{path,ranges}` entries with ordered half-open SOURCE FILE
+byte spans `{start,end}`; an empty ranges array requests the entire file.
+Never guess machine requests from prose. Unknown paths use no requests and
+`{kind:"unavailable_path",detail:"..."}` in limitations. Other limitation
+kinds are `out_of_scope`, `version_mismatch`, `budget_exhausted`,
+`invalid_request`; use empty arrays when none apply. Documentation escalation
+uses this same gap shape, including gaps linked by uncertain references.
+
+In finding-critique mode, supplemental accepted reviews are full independent
+sources and need the same complete per-finding critique as original sources.
+Preserve source records and findings verbatim. A semantic uncertainty may stay
+unverified after all required bytes were observed; never lower severity just
+because a bounded supplement could not obtain evidence.
 
 For a `noop` workset lens, read the no-op diff artifact and immediately submit
 a minimal successful result with no findings. For a `documentation-risk`
@@ -97,8 +117,8 @@ submit a truthful `blocked` result instead of searching elsewhere. Re-read the c
 source, caller, and test evidence from authorized artifacts. Do not broaden the
 review, edit files, use shell, consult repository paths, or invent evidence.
 A successful runtime `view` issues short `ev_` evidence keys. Use those
-keys in `files_read.path` and in the active schema's `x-hufu-evidence-keys`
-locations. Copy only keys issued to this task attempt; the runtime expands
+keys in the active schema's `x-hufu-evidence-keys` locations. In critic-review
+mode, runtime supplies `files_read`; other modes also accept keys in `files_read.path`. Copy only keys issued to this task attempt; the runtime expands
 and verifies them before storing full artifact IDs. A key proves a successful
 bounded read, not complete coverage or support for a claim. Preserve existing
 source records verbatim; do not replace their references with your own keys.
@@ -137,17 +157,14 @@ omit optional `open_questions`, `decisions`, `risks`, `suggested_next_tasks`,
 and `facts`. Keep `details` brief and put complete findings, gaps, or verdict
 rationales in their schema-defined record fields. Use actual JSON strings for
 text, never wrapper objects such as `{"$text":"..."}`.
-Top-level `findings` entries accept only `summary`, `detail`,
-`severity`, and optional `category`. For documentation-risk/no-op reviews, put
-`location`, `evidence`, and `requires_critique` only in
-`structured_payload.record.findings`. Keep shared fields and order identical
-across review finding arrays; `critic-review` mode uses the decision
-structure below. On rejection, correct
-the specified JSON path and resubmit the complete result, retaining findings
-and legal evidence elsewhere; do not remove a legal field merely because a
-namesake at another path was rejected.
+Submit source review findings only in `structured_payload.record.findings`,
+including summary, detail, location, evidence and requires_critique. Omit outer
+`findings`; the runtime derives it. On rejection, correct the named field while
+preserving every legal finding, judgment, gap and evidence reference.
 
-Use `files_read` objects with a `path` string containing only an observed artifact
+For `critic-review`, omit outer `files_read`: runtime fills it from this attempt's
+successful native `view` observations and rejects overrides or unobserved evidence.
+For other modes, use `files_read` objects with a `path` string containing only an observed artifact
 ID, for example `[{"path":"sha256-<observed artifact digest>"}]`. The optional
 `purpose` is a string; add no other keys. Keep `gaps`, `reference_assessments`,
 and `invariant_assessments` inside `structured_payload.record`; none is a
@@ -158,7 +175,7 @@ submit a concise result immediately; do not repeatedly deliberate over optional
 fields or restate findings in prose before submitting them.
 
 The static contract determines the structured payload:
-- Documentation-risk/no-op worksets use `schemas/review-v1.json`. Submit the
+- Documentation-risk/no-op worksets use `schemas/documentation-review-v1.json`. Submit the
   same review record fields and finding order described in the injected schema,
   with `record.invariant_assessments: []` (inside the structured record only);
   `requires_critique` is true for error/warning or a security/material concern.
@@ -173,6 +190,18 @@ The static contract determines the structured payload:
   the exact `row_key`, and `group: assessment`. Do not supply name, context,
   source IDs, hashes, indices, receipt or an expected answer. This entry is
   unavailable for documentation-risk/no-op review tasks.
+  Minimal tool call (replace the placeholder with this task's exact issued key):
+  ```json
+  {"collection":"/record/decisions","row_key":"<issued row key>","group":"assessment"}
+  ```
+  These are the ONLY three arguments to `decision_primitive`. Never add
+  `rationale`, `evidence`, or `missing_evidence`, even as JSON-encoded strings;
+  those fields belong only in the result row described below. A
+  `decision_input_invalid` rejection starts no helper decision: use its
+  diagnostic to make at most ONE corrected call with only these three
+  arguments. If that correction is rejected, stop with blocked and preserve
+  the diagnostic. Other helper failures follow the failure rule below;
+  never retry an already started or settled decision to change its outcome.
   The decision returns a combined verdict/severity choice. The runtime owns
   both fields and finding_index; do not copy any of them into submit_result.
   Submit `record.decisions` as an object keyed by every issued row key, each
@@ -199,20 +228,19 @@ The static contract determines the structured payload:
   without silently summarizing or dropping earlier observations. A settled
   slot retains its original context even if you read more afterwards.
   This status describes completion of the critique, not approval of the code.
+  When runtime result collection is active, return the blocked work report
+  with the exact helper failure. The collector must preserve blocked and omit
+  structured_payload; it cannot settle a missing decision or claim success
+  by turning the prepared rationale into a verdict.
 Missing source results or input artifacts require `blocked`; never set
 `audit_complete` or fill in another finding to satisfy a completion gate.
 
 `structured_payload` must be a JSON object, never a JSON-encoded string. Source entries are runtime-owned in critic-review mode; do not copy them into the submission.
 
-For a source review, the runtime compares the outer findings array with
-structured_payload.record.findings at submission. Both arrays must have the
-same length and order, with identical summary, detail, and severity. When
-record.findings is empty, submit findings: [] at the outer level too.
-A coverage limitation belongs in record.gaps and coverage, never as an extra
-outer info finding. A real info finding must occur in both arrays and carry
-observed evidence in its record entry. Correct the named index or field on
-rejection; retain the full review and its gaps. This rule does not add review
-findings to the separate critic-review decision mode.
+For source review contracts, submit findings only in `structured_payload.record.findings`.
+The runtime derives the outer findings; omit the outer field entirely, including
+when the record array is empty. Preserve each finding, evidence reference and gap
+when correcting a rejected field. This does not add findings to critic-review mode.
 
 Source snapshots preserve primary text files in full, but related caller/test
 sections share a 64 KiB content allowance. Respect `content_truncated: true`
@@ -228,3 +256,31 @@ ID and content hash. Existing defects are in scope; locations use original
 `repository/path:line`. Do not reject a finding because that line is unchanged.
 In diff modes the changed-scope restrictions still apply. Findings never grant
 write authority. A successfully completed review may contain confirmed defects.
+
+For `schemas/review-v1.json`, write invariant claims only in
+`record.invariant_assessments`; omit outer `invariant_assessments`. For a finding
+referenced by a violated invariant, omit its severity: runtime binds the frozen
+invariant definition's severity. Keep the violated judgment, finding index,
+summary, and evidence. Independent findings require explicit severity.
+Documentation/no-op contracts require `record.invariant_assessments: []`.
+
+## Verify impact before settling a finding
+
+An omitted path in a workset snapshot or diff is not repository-wide absence.
+Confirm an absence claim only from an explicit `absent_at_review_revision`
+section or a deterministic reference check covering that exact path and
+revision, together with evidence that current existence is required. A zero
+check counter, unobserved suffix, or related file outside this source's
+authorized artifacts cannot establish the claim. Do not settle such a claim
+as confirmed_info just because its local omission is visible. Use unverified
+with exact missing evidence when the demonstrated impact remains unknown.
+
+Before calling decision_primitive, prioritize the excerpts that could falsify
+the finding: validation upstream of raw output, the scope of a verifier or
+synthesis disclaimer, the serialization covered by a payload hash, or an
+explicit path-existence check. Hashes of file bytes and canonical JSON are not
+interchangeable; a difference alone does not prove corruption. The source's
+detail is an assertion, not an observed excerpt. Respect the existing source
+boundary and read budgets; unavailable sibling evidence requires unverified,
+not broader access or an invented defect. Preserve that missing-evidence
+request for the report, and never upgrade conjecture into a confirmed verdict.

@@ -177,7 +177,7 @@ func capabilityEffect(effect SideEffectClass) string {
 		return "none"
 	case SideEffectWorkspaceWrite:
 		return "workspace_write"
-	case SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential:
+	case SideEffectBrowserInteraction, SideEffectExternalWrite, SideEffectInfraMutation, SideEffectCredential:
 		return "external"
 	default:
 		return "unknown"

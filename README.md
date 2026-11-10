@@ -91,7 +91,7 @@ mise install
 # Build binary
 mise run build
 
-# Run directly
+# Run directly, with Hufu Git revision embedded at build time
 mise run run -- [prompt]
 
 # Validation (run sequentially)
@@ -101,6 +101,37 @@ mise run lint
 ```
 
 ---
+
+### Hufu version in execution records
+
+Each run records `hufu_build` in `runtime.sqlite`'s `run_started` event.
+The version includes the release or development version, Git revision, dirty
+state (when known), Go version, and identity source. Task inspection, execution
+telemetry, JSON output, and saved run reports expose the recorded identity.
+Resuming with another Hufu version preserves earlier runs; old records without
+version metadata remain unknown.
+
+For development, run from the Hufu repository root:
+
+```bash
+mise run run -- run --team my-team -- "your task"
+mise run run -- version
+# Equivalent explicit invocation:
+mise exec -- go run -buildvcs=true -p 2 ./cmd/hufu run --team my-team -- "your task"
+```
+
+For repeated use, build once with `mise run build`, then use
+`./hufu run --team my-team -- "your task"` and `./hufu version`.
+Rebuild after source changes. Released binaries carry the release version too.
+
+Plain `mise exec -- go run -p 2 ./cmd/hufu ...` also records a version:
+when embedded VCS data is absent, Hufu observes its own verified source checkout
+at startup and labels the source `runtime_git`. This is an observation at startup,
+not a build-time snapshot. It never uses the subject project's current directory.
+If the source checkout is unavailable, Git lookup fails, or source paths are
+trimmed, revision and dirty state remain unknown. Prefer `-buildvcs=true` for
+reliable build-time provenance. A dirty commit identifies the base revision and
+uncommitted state, not the exact contents of those changes.
 
 ## Quick Start
 
@@ -1748,6 +1779,23 @@ hufu chat --default --ui chat --theme light --display-preset epaper
 `--ui plain` (the default) keeps the line REPL and `--ui dashboard` (or
 `--tui`) the task dashboard. See
 [docs/architecture/chat-tui.md](docs/architecture/chat-tui.md).
+
+The runtime dashboard's `c` prompt also supports multiline text: `Ctrl+J`,
+`Alt+Enter` or `Shift+Enter` inserts a newline, `Enter` submits, and `Esc`
+cancels. Multiline paste preserves line breaks, and long drafts scroll.
+
+For CLI task entry, additional prompts and plain `hufu chat`, end a line with
+`\` to continue on the next line. To enter a block with blank lines,
+type `/multiline` first, then finish with `/end` on its own line. Use `\/end`
+to include a literal `/end` line. `Ctrl+C` or EOF cancels the entire draft.
+
+```text
+hufu> /multiline
+... Inspect the runtime input UI.
+...
+... Preserve line breaks in the task.
+... /end
+```
 
 ### Interactive PTY takeover (experimental)
 

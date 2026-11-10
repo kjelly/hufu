@@ -105,7 +105,7 @@ type PreparedExecutionWorld struct {
 // credential_mutation has no projection at all and MUST reject admission.
 func sideEffectExecutionRoots(root string, effect SideEffectClass) (writable, readOnly []string, err error) {
 	switch effect {
-	case SideEffectNone, "":
+	case SideEffectNone, SideEffectBrowserInteraction, "":
 		return nil, []string{root}, nil
 	case SideEffectWorkspaceWrite, SideEffectExternalWrite, SideEffectInfraMutation:
 		// v1 has no broader external-effect or infra-mutation projection than

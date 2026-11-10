@@ -94,6 +94,9 @@ func TestProbeShowMissingAndNonterminalTUIAreSideEffectFree(t *testing.T) {
 }
 
 func TestRefineCLIUsesFrozenOfflineExample(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: mise run test-integration")
+	}
 	root := t.TempDir()
 	source := filepath.Join(root, "source")
 	if err := os.CopyFS(source, os.DirFS("../../internal/improver/testdata/refinement")); err != nil {
