@@ -95,6 +95,8 @@ to re-create an abstraction that already exists in the runtime.
   membership, moved-case inventory and conservative parallelization for issue #32.
 - [Test performance baseline](reference/test-performance-baseline.md) — cache-separated
   Go test measurements, profiles and regression-contract inventory for issue #26.
+- [Issue 26 performance acceptance](reference/issue26-performance-acceptance.md) —
+  reproducible co-located captures, raw audits and completed measurement report.
 
 - [定性 belief 基礎](reference/qualitative-belief.md) — provenance-bearing claims,
   explicit support/counterevidence, gaps and retractions; standalone pure Go API

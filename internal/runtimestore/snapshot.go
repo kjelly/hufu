@@ -23,7 +23,7 @@ type snapshotFile struct {
 // checks source identity, metadata and contents again. A writer starting,
 // appending, checkpointing, closing, or replacing files invalidates the copy.
 // SQLite only opens the accepted private files, never the mutable source.
-func snapshotRuntimeStore(ctx context.Context, path string) (string, func() error, error) {
+func snapshotRuntimeStore(ctx context.Context, path string) (snapshot string, cleanup func() error, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return "", nil, err
 	}
@@ -33,6 +33,19 @@ func snapshotRuntimeStore(ctx context.Context, path string) (string, func() erro
 	}
 	ctx, cancel := context.WithTimeout(ctx, runtimeSnapshotTimeout(files))
 	defer cancel()
+	release, err := pauseRuntimeSnapshotWriter(ctx, path)
+	if err != nil {
+		return "", nil, err
+	}
+	defer func() {
+		if err := release(); err != nil {
+			resultErr = errors.Join(resultErr, err)
+			if cleanup != nil {
+				resultErr = errors.Join(resultErr, cleanup())
+				snapshot, cleanup = "", nil
+			}
+		}
+	}()
 	for attempt := range 3 {
 		if err := ctx.Err(); err != nil {
 			return "", nil, err
@@ -59,6 +72,33 @@ func snapshotRuntimeStore(ctx context.Context, path string) (string, func() erro
 		}
 	}
 	return "", nil, errSnapshotChanged
+}
+
+// pauseRuntimeSnapshotWriter borrows this process's single pooled connection
+// without executing SQL. Pending writes settle before the copy, and later
+// writes wait until verification finishes. The reference prevents Close from
+// checkpointing the WAL mid-copy. External writers still require all existing
+// file identity, metadata and digest checks; this is not a cross-process lock.
+func pauseRuntimeSnapshotWriter(ctx context.Context, path string) (func() error, error) {
+	sharedMu.Lock()
+	handle := currentHandleLocked(path)
+	if handle == nil {
+		sharedMu.Unlock()
+		return func() error { return nil }, nil
+	}
+	handle.refs++
+	store := &Store{db: handle.db, path: path, readOnly: true, shared: handle}
+	sharedMu.Unlock()
+
+	connection, err := store.db.Conn(ctx)
+	if err != nil {
+		return nil, errors.Join(err, store.Close())
+	}
+	return func() error {
+		// Release the connection before the reference: the last Close waits
+		// for borrowed connections and must not deadlock on this one.
+		return errors.Join(connection.Close(), store.Close())
+	}, nil
 }
 
 // runtimeSnapshotTimeout budgets both the copy and the verification read at

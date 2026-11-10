@@ -1,0 +1,68 @@
+name: Issue 26 full-suite evidence
+
+# Explicitly dispatched; ordinary PR pushes never restart this experiment.
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened]
+    paths: ['.github/workflows/test-baseline-issue26.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    if: github.event_name == 'workflow_dispatch'
+    name: cohort (${{ matrix.mode }}, ${{ matrix.cache_state }}, three samples)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      # All three samples of each mode/cache group share one physical runner.
+      matrix:
+        mode: [normal, race, cgo-free]
+        cache_state: [cold, warm, result]
+    env:
+      GOMAXPROCS: '2'
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly
+      CGO_ENABLED: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Checkout measurement controller
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up pinned mise toolchain
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          version: '2026.10.23'
+          cache: false
+          install_args: go
+      - name: Require native grep coverage
+        run: |
+          if ! command -v rg >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y ripgrep
+          fi
+          rg --version
+      - name: Check evidence tooling
+        run: mise exec -- python3 -m unittest discover -s scripts -p '*_test.py'
+      - name: Capture both fixture-remediated sources without retries
+        env:
+          BASELINE_MODE: ${{ matrix.mode }}
+          BASELINE_CACHE: ${{ matrix.cache_state }}
+        run: |
+          mkdir -p work
+          mise exec -- python3 scripts/issue26_acceptance.py \
+            --mode "$BASELINE_MODE" --cache-state "$BASELINE_CACHE" \
+            --output "$PWD/work/acceptance-${BASELINE_MODE}-${BASELINE_CACHE}"
+      - name: Upload raw evidence including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: issue26-cohort-${{ matrix.mode }}-${{ matrix.cache_state }}-attempt-${{ github.run_attempt }}
+          path: work/acceptance-*/
+          retention-days: 30
+          if-no-files-found: error
