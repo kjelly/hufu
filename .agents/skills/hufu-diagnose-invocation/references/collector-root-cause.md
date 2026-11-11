@@ -148,9 +148,54 @@ State the limits of each test: passing current-code fixtures can rule out a
 reproduced local transformation under those settings, but cannot prove what a
 historical provider returned or that a new prompt fixes that model. If the
 necessary wire evidence was never captured, report that gap and propose a
-bounded isolated capture of the minimal request with redacted request/response
-and effective schema/channel. Do not execute external inference without
+bounded isolated capture using the procedure below. When it could resolve the
+remaining attribution, request authorization rather than leaving the probe as
+an optional future suggestion. Do not execute external inference without
 authorization or call a new provider response a replay of historical evidence.
+
+## Capture an authorized real-model probe
+
+Prepare the probe before asking to send it. Name the competing explanations,
+what each predicts, and why offline fixtures cannot distinguish them. Bind the
+plan to the failed turn's exported request and record any differences in model,
+generation settings, context, provider/proxy, SDK version and response mode.
+Use a minimal synthetic or redacted payload when it tests the same hypothesis;
+if full frozen context is necessary, explicitly include that private content
+scope in the authorization request. Follow the main skill's request-budget,
+destination, timeout and cost disclosure requirements.
+
+Capture these three representations from the **same probe request**:
+
+1. The actual serialized HTTP request after SDK/adapter compilation: effective
+   model, generation parameters, function schema, tool choice and strict flag.
+   Compare it with the frozen application request; do not use current source as
+   a substitute for the sent schema.
+2. Raw HTTP response status and entity bytes, including SSE events before Hufu
+   normalization and SDK parsing. Record stream errors, finish reason and any
+   provider request ID. Reassemble arguments by choice/tool-call identity;
+   distinguish partial data from a completed function call.
+3. SDK function arguments before Hufu unwrapping/validation, followed by the
+   adapter result and validation outcome when exercised. Compare exact bytes
+   and hashes as well as parsed values/types at the rejected JSON pointers.
+
+Use the relevant Hufu provider/SDK path, not an unrelated client. Count actual
+HTTP sends, including automatic retries, against the authorized maximum;
+disable or bound retries and redirects accordingly. Exclude executable tools
+and live run mutation. Keep raw captures private, omit authentication headers
+and credentials, and share only within the user's authorized scope. Preserve
+original bytes in protected evidence; distinguish any redacted presentation
+copies and record hashes, request identity and capture provenance.
+
+Attribute only to the boundary observed: wrong arguments already present in
+raw SSE locate the defect upstream of local SDK parsing, but do not distinguish
+the model from an unobserved proxy/service transformation. Correct wire bytes
+that differ from SDK arguments support a local parsing/adapter investigation.
+An absent or false strict flag explains lack of enforced schema decoding, not
+why this particular response violated the schema. A passing probe leaves the
+historical cause unresolved unless other evidence establishes it. Use its
+result to choose the next discriminating check, within the approved budget;
+do not turn an unreproduced failure into a claim of innocence or a speculative
+production fix.
 
 ## Attribute only what the evidence supports
 

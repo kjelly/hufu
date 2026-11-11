@@ -1,12 +1,17 @@
 ---
 name: hufu-diagnose-invocation
-description: Diagnose failed, stalled, or ongoing Hufu invocations through public interfaces, tracing collector/model failures to the earliest evidenced divergence. When asked to fix a failure, correct confirmed defects and assess recovery when requested.
+description: Investigate failed, stalled, or ongoing Hufu invocations through public interfaces to establish root causes, testing competing explanations and requesting authorization for bounded real-model probes when needed. When asked to fix a failure, correct confirmed defects and assess recovery when requested.
 ---
 
 # Hufu Diagnose Invocation
 
 Investigate the requested `inv-...` or `run-...` using Hufu's public diagnostic
 interfaces. Treat their scoped, canonical output as the evidence boundary.
+For a failure investigation, the required outcome is an evidence-backed causal
+explanation of how the defect arose. The first observed invalid value is a
+starting point, not automatically the root cause. Continue tracing upstream
+and testing competing explanations while useful authorized checks remain.
+Do not substitute recovery advice or a preventive improvement for attribution.
 
 ## Choose the mode
 
@@ -238,6 +243,41 @@ identify whether it is raw transport data or an SDK/runtime projection.
 Report the earliest demonstrated divergence, tested alternatives, and the exact
 missing observation when upstream attribution remains unresolved. Do not label
 an error message or an untested prompt improvement a confirmed root cause.
+
+### Close the causal gap
+
+For each unresolved boundary, identify the competing explanations and the
+observation that would distinguish them. Perform available scoped interface
+checks, relevant source tracing, and focused offline reproductions. If missing
+provider evidence prevents attribution and a real-model probe could distinguish
+the explanations, prepare a concrete bounded probe and actively request the
+user's authorization; do not finish with only "raw response unavailable" or
+"could test later". Reuse explicit existing authorization covering the same
+destination, payload and request budget instead of asking again.
+
+Before requesting authorization, specify the hypothesis, destination/provider
+and model, whether the payload is synthetic, redacted or the full frozen task
+content, the maximum requests, timeout and possible cost, and the observations
+to capture. Prefer the smallest discriminating payload; explain when full
+context is needed to reproduce the failure. Diagnosis alone does not authorize
+external inference or sending private task content. Keep the probe separate
+from live workflow recovery, exclude executable tools, and preserve the original
+run. For collector probes, follow the capture procedure in
+[collector root-cause tracing](references/collector-root-cause.md#capture-an-authorized-real-model-probe).
+
+After authorization, execute within the agreed bounds and compare the results
+with the predictions. A successful new request does not explain an earlier
+failure or exonerate unobserved historical layers. Refine the hypothesis and
+continue useful checks within the remaining authorization; request an extension
+only when another concrete discriminating experiment justifies it. Do not
+silently retry until success or exceed the approved budget.
+
+Close with a confirmed causal chain when supported. If attribution remains
+unresolved after the available checks and bounded experiments, label it
+**root cause unresolved**, list the hypotheses tested and their results, and
+state the precise missing evidence or external limitation. If authorization
+is declined or unavailable, report that blocker and what can still be concluded.
+Never invent certainty to satisfy the root-cause requirement.
 
 ## 5. Correct confirmed defects when authorized
 
