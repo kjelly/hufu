@@ -3,6 +3,10 @@ description: "Independently research factual claims online, verify source eviden
 goal-mode: outcome
 request-acceptance: true
 result-transport: runtime
+worker-model: ollama/minimax-m3:cloud
+coordinator-model: ollama/minimax-m3:cloud
+sidecar-model: ollama/minimax-m3:cloud
+collector-response-channel: text_json
 max-rounds: 8
 max-concurrent: 2
 max-retries: 1

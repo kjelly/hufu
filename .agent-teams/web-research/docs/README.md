@@ -7,6 +7,13 @@
 `playwright_<角色>` 名稱是沿用的邏輯識別碼，保留現有引文契約的工具 ID；
 實作已不啟動 Playwright MCP。啟動方式見 [setup.md](setup.md)。
 
+目前 worker、coordinator 與 sidecar 預設使用 `ollama/minimax-m3:cloud`。runtime collector
+使用 `collector-response-channel: text_json`，直接收集完整 JSON claims，仍須通過
+原有 schema、收據、來源綁定與驗收；不會從分析前言擷取 JSON 或修補模型輸出。
+這些設定屬於 frozen execution policy，既有 session 不會自動換模型或回應通道。
+其他團隊若要先用函式通道、在 envelope 格式錯誤後使用剩餘修復額度切換文字通道，
+可選擇 `auto`，詳見[結果傳輸設定](../../../docs/reference/agent-format.md#結果傳輸result-transport)。
+
 ## 研究、查核與綜合
 
 預設流程為「兩路獨立研究 → verifier 查核 → synthesizer 綜合」：
