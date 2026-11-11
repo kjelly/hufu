@@ -303,6 +303,29 @@ leaf 也一樣。
 原文字傳輸。通常增加一次模型呼叫；格式或 schema
 不合法時最多再修復一次，共兩回合，包含中斷時已派發的回合。
 
+team.yaml（或 versioned manifest 的 `spec`）可選擇 collector 的資料回應通道：
+
+```yaml
+result-transport: runtime
+collector-response-channel: auto
+```
+
+只接受小寫 `function`、`text_json`、`auto`。未設定時保留既有 `function` 行為；
+已確認不支援工具的模型仍使用文字通道。`text_json` 不提供 response function，
+要求模型直接回傳完整 claims JSON，不加 `result` transport envelope；未預期的
+tool call 一律拒絕。兩種通道都保留原始 claims bytes，並經相同 schema、runtime
+binding、收據、證據與 admission；不會從推理前言抽出 JSON、解碼錯誤字串或補括號。
+
+`auto` 先使用函式通道；只有已保存的 typed response-envelope rejection 才會使
+下一個既有修復回合切換為 `text_json`。claims schema 或語意／來源拒絕不觸發
+通道切換。切換不增加模型回合、重置預算或重跑 worker；兩回合用盡仍 blocked。
+文字通道選擇封存在下一個 frozen request，重新啟動或明確的 operator repair grant
+都不會自動切回函式，仍受原本的總回合與重複失敗限制。
+
+設定屬於 frozen execution policy，不可藉動態 task 覆寫。既有 session 缺少設定時
+維持原通道及 hash；單純更新 team.yaml 不會授權舊任務換通道，普通 resume 會檢查
+policy drift。此設定不影響 external proposal、tool transport、sidecar 或原 worker 工具。
+
 收集失敗的分類以完整 canonical schema 為準，不以 provider 的可攜式 schema
 投影代替。來源、收據、workset 與 runtime 綁定驗證成功後，模型欄位的條件式
 `allOf`／`anyOf`／`oneOf`／`if`／`then`／`else`／`not`、長度或 pattern

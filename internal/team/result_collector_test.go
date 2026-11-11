@@ -22,6 +22,26 @@ import (
 	"testing"
 )
 
+func TestResultCollectionFailureExplainsPossibleModelCause(t *testing.T) {
+	for _, reason := range []RepairFailureReason{RepairFailureInvalidSchema, RepairFailureSource, RepairFailureCommit, repairFailureCollectionUnavailable, repairFailureCollectionBudget} {
+		t.Run(string(reason), func(t *testing.T) {
+			cause := errors.New("original diagnostic")
+			failure := &resultCollectionFailure{Reason: reason, Cause: cause}
+			message := failure.Error()
+			hasModelHint := strings.Contains(message, "model or an upstream provider/adapter")
+			if hasModelHint != (reason == RepairFailureInvalidSchema) {
+				t.Fatalf("inappropriate cause hint for %s: %s", reason, message)
+			}
+			if !strings.Contains(message, cause.Error()) || !errors.Is(failure, cause) || failure.Reason != reason {
+				t.Fatal("diagnostic hint changed the failure reason or cause")
+			}
+			if hasModelHint && !strings.Contains(message, "does not establish a Hufu runtime defect") {
+				t.Fatal("diagnostic asserted an unverified cause")
+			}
+		})
+	}
+}
+
 func TestResultCollectionKeepsRedactedEvidenceJSONValid(t *testing.T) {
 	requests := make(chan string, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -624,10 +644,15 @@ func TestResultCollectionTextRequestCompatibility(t *testing.T) {
 			if err := json.Unmarshal(data, &frozen); err != nil {
 				t.Fatal(err)
 			}
-			if scenario == "text-only model" && frozen.ClaimsSchema != nil {
-				t.Fatal("text-only model was offered a response function")
+			if scenario == "text-only model" && frozen.ResponseChannel != agent.CollectorResponseTextJSON {
+				t.Fatal("text-only model did not retain the text channel")
 			}
-			frozen.ClaimsSchema = nil
+			if scenario == "historical request" {
+				// Historical requests predate both the wire schema and explicit
+				// channel metadata. New text requests retain the claims schema.
+				frozen.ClaimsSchema = nil
+				frozen.ResponseChannel = ""
+			}
 			data, err = json.Marshal(frozen)
 			if err != nil {
 				t.Fatal(err)

@@ -23,6 +23,7 @@ var ErrStructuredResponseTool = errors.New("unexpected structured response tool"
 type StructuredResponseConfig struct {
 	Schema   map[string]any
 	MaxBytes int
+	Channel  CollectorResponseChannel
 }
 
 type structuredResponseModel struct {
@@ -37,14 +38,21 @@ func newStructuredResponseModel(model fantasy.LanguageModel, config *StructuredR
 	if config.Schema["type"] != "object" || config.MaxBytes <= 0 {
 		return nil, errors.New("structured response requires an object schema and a positive byte limit")
 	}
+	if config.Channel != "" && config.Channel != CollectorResponseFunction && config.Channel != CollectorResponseTextJSON {
+		return nil, errors.New("structured response requires a resolved response channel")
+	}
 	return &structuredResponseModel{LanguageModel: model, config: StructuredResponseConfig{
-		Schema: cloneProviderSchemaValue(config.Schema).(map[string]any), MaxBytes: config.MaxBytes,
+		Schema: cloneProviderSchemaValue(config.Schema).(map[string]any), MaxBytes: config.MaxBytes, Channel: config.Channel,
 	}}, nil
 }
 
 func (m *structuredResponseModel) responseCall(call fantasy.Call) (fantasy.Call, error) {
 	if len(call.Tools) != 0 {
 		return call, errors.New("structured response cannot expose executable tools")
+	}
+	if m.config.Channel == CollectorResponseTextJSON {
+		call.ToolChoice = new(fantasy.ToolChoiceNone)
+		return call, nil
 	}
 	// Some function-call transports encode empty top-level array arguments as
 	// objects. A single object argument preserves those arrays inside the claims
@@ -64,6 +72,9 @@ func (m *structuredResponseModel) responseCall(call fantasy.Call) (fantasy.Call,
 }
 
 func (m *structuredResponseModel) responseText(text string, calls []fantasy.ToolCallContent) (string, error) {
+	if m.config.Channel == CollectorResponseTextJSON && len(calls) != 0 {
+		return "", ErrStructuredResponseTool
+	}
 	if len(calls) > 1 {
 		return "", fmt.Errorf("%w: expected one response function", ErrStructuredResponseTool)
 	}
@@ -174,6 +185,10 @@ func (m *structuredResponseModel) Stream(ctx context.Context, call fantasy.Call)
 		var finish *fantasy.StreamPart
 		inputBytes := 0
 		for part := range stream {
+			if m.config.Channel == CollectorResponseTextJSON && (part.Type == fantasy.StreamPartTypeToolInputStart || part.Type == fantasy.StreamPartTypeToolInputDelta || part.Type == fantasy.StreamPartTypeToolInputEnd || part.Type == fantasy.StreamPartTypeToolCall || part.Type == fantasy.StreamPartTypeToolResult) {
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeError, Error: ErrStructuredResponseTool})
+				return
+			}
 			switch part.Type {
 			case fantasy.StreamPartTypeTextStart, fantasy.StreamPartTypeTextEnd,
 				fantasy.StreamPartTypeToolInputStart, fantasy.StreamPartTypeToolInputEnd:

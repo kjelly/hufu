@@ -6,6 +6,7 @@ import (
 	"flag"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -46,6 +47,34 @@ func TestPolicyProtocolIsFixedDuringComparison(t *testing.T) {
 }
 
 var updatePairedPolicySchema = flag.Bool("update-paired-policy-schema", false, "Update the reviewed paired policy type schema")
+
+func TestPolicyCollectorResponseChannelIsFixedDuringComparison(t *testing.T) {
+	project := t.TempDir()
+	roots, err := RegisterRoots(map[string]string{"subject_root": project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var previous string
+	for _, channel := range []agent.CollectorResponseChannel{agent.CollectorResponseFunction, agent.CollectorResponseTextJSON, agent.CollectorResponseAuto} {
+		policy := testPolicy(t, project, "model")
+		policy.ResultCollection = &team.ExecutionResultCollectionPolicySnapshot{Version: 1, Default: agent.ResultTransportRuntime,
+			CollectorResponseChannel: channel, CollectorSchemaRevision: 1, TurnLimit: 2, GenerationSHA256: strings.Repeat("a", 64)}
+		policy.ConfigurationHash = ""
+		raw, err := json.Marshal(policy, json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy.ConfigurationHash = paired.BytesDigest(raw)
+		projection, err := ProjectPolicy(policy, roots)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if previous != "" && projection.ComparisonDigest == previous {
+			t.Fatal("comparison erased a collector response channel change")
+		}
+		previous = projection.ComparisonDigest
+	}
+}
 
 func TestPolicyLaunchSettingsAreFixedDuringComparison(t *testing.T) {
 	project := t.TempDir()

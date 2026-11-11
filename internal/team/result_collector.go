@@ -59,7 +59,11 @@ type resultCollectionFailure struct {
 }
 
 func (failure *resultCollectionFailure) Error() string {
-	return fmt.Sprintf("result collection %s: %v", failure.Reason, failure.Cause)
+	message := fmt.Sprintf("result collection %s: %v", failure.Reason, failure.Cause)
+	if failure.Reason == RepairFailureInvalidSchema {
+		message += "\nHint: Invalid structured output may be caused by the model or an upstream provider/adapter. This error alone does not establish a Hufu runtime defect. Compare the sent schema and instructions with the raw provider response to identify the cause."
+	}
+	return message
 }
 func (failure *resultCollectionFailure) Unwrap() error { return failure.Cause }
 
@@ -214,16 +218,17 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 }
 
 type frozenCollectionRequest struct {
-	Version             int                    `json:"version"`
-	InvocationID        string                 `json:"invocation_id"`
-	Model               string                 `json:"model"`
-	System              string                 `json:"system"`
-	Prompt              string                 `json:"prompt"`
-	ManifestFingerprint string                 `json:"manifest_fingerprint"`
-	Generation          agent.GenerationParams `json:"generation"`
-	TeamGeneration      agent.GenerationParams `json:"team_generation"`
-	Tools               []any                  `json:"tools"`
-	ClaimsSchema        map[string]any         `json:"claims_schema,omitempty"`
+	ResponseChannel     agent.CollectorResponseChannel `json:"response_channel,omitempty"`
+	Version             int                            `json:"version"`
+	InvocationID        string                         `json:"invocation_id"`
+	Model               string                         `json:"model"`
+	System              string                         `json:"system"`
+	Prompt              string                         `json:"prompt"`
+	ManifestFingerprint string                         `json:"manifest_fingerprint"`
+	Generation          agent.GenerationParams         `json:"generation"`
+	TeamGeneration      agent.GenerationParams         `json:"team_generation"`
+	Tools               []any                          `json:"tools"`
+	ClaimsSchema        map[string]any                 `json:"claims_schema,omitempty"`
 }
 
 func decodeFrozenCollectionRequest(data []byte, checkpoint *ResultCollectionCheckpoint) (frozenCollectionRequest, error) {
@@ -239,6 +244,12 @@ func decodeFrozenCollectionRequest(data []byte, checkpoint *ResultCollectionChec
 		return request, errResultCollectionStale
 	}
 	if request.ClaimsSchema != nil && request.ClaimsSchema["type"] != "object" {
+		return request, errResultCollectionStale
+	}
+	if request.ResponseChannel != "" && request.ResponseChannel != agent.CollectorResponseFunction && request.ResponseChannel != agent.CollectorResponseTextJSON {
+		return request, errResultCollectionStale
+	}
+	if request.ResponseChannel == agent.CollectorResponseFunction && request.ClaimsSchema == nil {
 		return request, errResultCollectionStale
 	}
 	return request, nil

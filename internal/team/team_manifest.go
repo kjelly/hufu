@@ -209,27 +209,28 @@ type teamManifestSpecFields struct {
 	// Kept as an opaque map here because MCP server loading is owned by the
 	// session layer; declaring the key preserves this long-standing manifest
 	// field while strict validation still rejects unknown top-level keys.
-	MCPServers       map[string]interface{}     `yaml:"mcp-servers,omitempty"`
-	Unattended       bool                       `yaml:"unattended,omitempty"`
-	AutoApprove      bool                       `yaml:"auto-approve,omitempty"`
-	MaxWallClock     int64                      `yaml:"max-duration,omitempty"`
-	MaxTotalTokens   int64                      `yaml:"max-total-tokens,omitempty"`
-	Cost             *cost.PolicyConfig         `yaml:"cost,omitempty"`
-	Acceptance       interface{}                `yaml:"acceptance,omitempty"`
-	Rollback         string                     `yaml:"rollback,omitempty"`
-	ExecutionProfile string                     `yaml:"execution-profile,omitempty"`
-	GoalMode         string                     `yaml:"goal-mode,omitempty"`
-	Reliability      rawReliabilityConfig       `yaml:"reliability,omitempty"`
-	WorkerMemory     rawWorkerMemoryPolicy      `yaml:"worker-memory,omitempty"`
-	WorkerWorkspace  *agent.WorkerWorkspaceSpec `yaml:"worker-workspace,omitempty"`
-	ExecutionRoute   string                     `yaml:"execution-route,omitempty"`
-	ResultTransport  agent.ResultTransport      `yaml:"result-transport,omitempty"`
-	MemoryLearning   rawMemoryLearningPolicy    `yaml:"memory-learning,omitempty"`
-	ContextRouting   agent.ContextRoutingPolicy `yaml:"context-routing,omitempty"`
-	Compaction       rawCompactionPolicy        `yaml:"compaction,omitempty"`
-	ContextArtifacts *rawContextArtifactsPolicy `yaml:"context-artifacts,omitempty"`
-	Contracts        []TaskDef                  `yaml:"contracts,omitempty"`
-	Tasks            []TaskDef                  `yaml:"tasks,omitempty"` // Deprecated read alias.
+	MCPServers               map[string]interface{}         `yaml:"mcp-servers,omitempty"`
+	Unattended               bool                           `yaml:"unattended,omitempty"`
+	AutoApprove              bool                           `yaml:"auto-approve,omitempty"`
+	MaxWallClock             int64                          `yaml:"max-duration,omitempty"`
+	MaxTotalTokens           int64                          `yaml:"max-total-tokens,omitempty"`
+	Cost                     *cost.PolicyConfig             `yaml:"cost,omitempty"`
+	Acceptance               interface{}                    `yaml:"acceptance,omitempty"`
+	Rollback                 string                         `yaml:"rollback,omitempty"`
+	ExecutionProfile         string                         `yaml:"execution-profile,omitempty"`
+	GoalMode                 string                         `yaml:"goal-mode,omitempty"`
+	Reliability              rawReliabilityConfig           `yaml:"reliability,omitempty"`
+	WorkerMemory             rawWorkerMemoryPolicy          `yaml:"worker-memory,omitempty"`
+	WorkerWorkspace          *agent.WorkerWorkspaceSpec     `yaml:"worker-workspace,omitempty"`
+	ExecutionRoute           string                         `yaml:"execution-route,omitempty"`
+	ResultTransport          agent.ResultTransport          `yaml:"result-transport,omitempty"`
+	CollectorResponseChannel agent.CollectorResponseChannel `yaml:"collector-response-channel,omitempty"`
+	MemoryLearning           rawMemoryLearningPolicy        `yaml:"memory-learning,omitempty"`
+	ContextRouting           agent.ContextRoutingPolicy     `yaml:"context-routing,omitempty"`
+	Compaction               rawCompactionPolicy            `yaml:"compaction,omitempty"`
+	ContextArtifacts         *rawContextArtifactsPolicy     `yaml:"context-artifacts,omitempty"`
+	Contracts                []TaskDef                      `yaml:"contracts,omitempty"`
+	Tasks                    []TaskDef                      `yaml:"tasks,omitempty"` // Deprecated read alias.
 }
 
 // manifestEnvelope is a minimal, non-strict probe used only to detect
@@ -407,7 +408,7 @@ func DetectTeamSchemaVersion(teamDir string, vars map[string]string) (string, er
 // TestLegacyAndV1Alpha1NormalizeIdentically hold by construction rather
 // than by two independently maintained code paths agreeing by luck.
 func decodeTeamManifestYAML(file string, data []byte) (teamConfigYAML, string, error) {
-	if bytes.Contains(data, []byte("result-transport")) {
+	if bytes.Contains(data, []byte("result-transport")) || bytes.Contains(data, []byte("collector-response-channel")) {
 		if err := validateResultTransportAuthoring(data, true); err != nil {
 			return teamConfigYAML{}, "", fmt.Errorf("team manifest %s: %w", file, err)
 		}

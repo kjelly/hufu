@@ -49,3 +49,25 @@ func TestResultTransportAuthoringAcceptsOnlyDeclaredModes(t *testing.T) {
 		}
 	}
 }
+
+func TestCollectorResponseChannelAuthoring(t *testing.T) {
+	for _, value := range []string{"function", "text_json", "auto", "AUTO", "''", "null", "true", "[]", "{}"} {
+		for _, manifest := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/manifest=%v", value, manifest), func(t *testing.T) {
+				data := "name: channels\ncollector-response-channel: " + value + "\n"
+				if manifest {
+					data = "apiVersion: hufu.io/v1alpha1\nkind: AgentTeam\nmetadata:\n  name: channels\nspec:\n  collector-response-channel: " + value + "\n"
+				}
+				dir := t.TempDir()
+				if err := os.WriteFile(filepath.Join(dir, "team.yaml"), []byte(data), 0600); err != nil {
+					t.Fatal(err)
+				}
+				cfg, err := parseTeamYML(dir, nil)
+				valid := value == "function" || value == "text_json" || value == "auto"
+				if (err == nil) != valid || valid && string(cfg.CollectorResponseChannel) != value {
+					t.Fatalf("config=%+v err=%v", cfg, err)
+				}
+			})
+		}
+	}
+}

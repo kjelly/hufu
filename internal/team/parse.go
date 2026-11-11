@@ -1074,6 +1074,7 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 		cfg.WorkerMemory = agent.DefaultWorkerMemoryPolicy()
 	}
 	cfg.ResultTransport = yc.ResultTransport
+	cfg.CollectorResponseChannel = yc.CollectorResponseChannel
 	cfg.WorkerWorkspace = yc.WorkerWorkspace.Clone()
 	cfg.ExecutionRoute = strings.TrimSpace(yc.ExecutionRoute)
 	cfg.ContextRouting = yc.ContextRouting

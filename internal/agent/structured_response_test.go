@@ -148,6 +148,87 @@ func TestStructuredResponsePreservesArgumentsAndAdmission(t *testing.T) {
 	}
 }
 
+func TestTextJSONResponsePreservesBytesAndRejectsTools(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		text      string
+		tool      bool
+		wantError bool
+	}{
+		{"raw claims", `{ "items": [], "result": {"nested":true} }`, false, false},
+		{"duplicate names preserved for validation", `{"ok":true,"ok":false}`, false, false},
+		{"prose preserved for rejection", "analysis\n{\"ok\":true}", false, false},
+		{"unsolicited function denied", "", true, true},
+		{"oversized text denied", strings.Repeat("x", 1025), false, true},
+	} {
+		for _, streaming := range []bool{false, true} {
+			method := "generate"
+			if streaming {
+				method = "stream"
+			}
+			t.Run(tc.name+"/"+method, func(t *testing.T) {
+				content := fantasy.ResponseContent{fantasy.TextContent{Text: tc.text}}
+				if tc.tool {
+					content = append(content, fantasy.ToolCallContent{ToolName: StructuredResponseFunctionName, Input: `{"result":{}}`})
+				}
+				var base fantasy.LanguageModel = &resultLanguageModel{generateResponse: &fantasy.Response{Content: content, FinishReason: fantasy.FinishReasonStop}}
+				if streaming {
+					base = &streamLanguageModel{streamFn: func(context.Context) fantasy.StreamResponse {
+						return func(yield func(fantasy.StreamPart) bool) {
+							if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: tc.text}) {
+								return
+							}
+							if tc.tool && !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolInputStart, ToolCallName: StructuredResponseFunctionName}) {
+								return
+							}
+							yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+						}
+					}}
+				}
+				admission := &recordingAdmission{}
+				model, err := newStructuredResponseModel(NewAdmittedLanguageModelWithContext("test", base, admission, ProviderAdmissionContext{}), &StructuredResponseConfig{Channel: CollectorResponseTextJSON, Schema: map[string]any{"type": "object"}, MaxBytes: 1024})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var text string
+				if streaming {
+					stream, streamErr := model.Stream(t.Context(), fantasy.Call{})
+					err = streamErr
+					if err == nil {
+						for part := range stream {
+							if part.Type == fantasy.StreamPartTypeError {
+								err = part.Error
+								break
+							}
+							if part.Type == fantasy.StreamPartTypeTextDelta {
+								text += part.Delta
+							}
+						}
+					}
+				} else {
+					response, responseErr := model.Generate(t.Context(), fantasy.Call{})
+					err = responseErr
+					if response != nil {
+						text = response.Content.Text()
+					}
+				}
+				if (err != nil) != tc.wantError || !tc.wantError && text != tc.text {
+					t.Fatalf("text=%q err=%v", text, err)
+				}
+				admission.mu.Lock()
+				defer admission.mu.Unlock()
+				if len(admission.commits) != 1 {
+					t.Fatalf("admitted requests=%d", len(admission.commits))
+				}
+				call := admission.commits[0].Call
+				if call == nil || len(call.Tools) != 0 || call.ToolChoice == nil || *call.ToolChoice != fantasy.ToolChoiceNone {
+					t.Fatal("text request admission allowed tools")
+				}
+			})
+		}
+	}
+}
+
 func TestStructuredResponseRejectsMissingFinishAndOversizedData(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

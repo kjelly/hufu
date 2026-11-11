@@ -32,6 +32,32 @@ func TestRuntimeResultTransportRemovesReportingAuthority(t *testing.T) {
 	}
 }
 
+func TestCollectorResponseChannelIsFrozenPolicy(t *testing.T) {
+	c := newTestCoordinator(t)
+	policy, err := executionPolicyResultCollection(c.session, executionPolicySnapshotVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := collectionDigest(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, channel := range []agent.CollectorResponseChannel{agent.CollectorResponseFunction, agent.CollectorResponseTextJSON, agent.CollectorResponseAuto} {
+		c.session.Config.CollectorResponseChannel = channel
+		next, err := executionPolicyResultCollection(c.session, executionPolicySnapshotVersion)
+		if err != nil || next.CollectorResponseChannel != channel {
+			t.Fatalf("policy=%+v err=%v", next, err)
+		}
+		digest, err := collectionDigest(next)
+		if err != nil || digest == legacy {
+			t.Fatal("response channel is absent from policy identity")
+		}
+		if _, err := executionPolicyResultCollection(c.session, executionPolicySnapshotVersion-1); err == nil {
+			t.Fatal("legacy snapshot silently acquired a response channel")
+		}
+	}
+}
+
 func TestResultTransportUsesFrozenStaticPolicy(t *testing.T) {
 	c, item, _, _ := resultCollectionProviderFixture(t, "http://127.0.0.1:1/v1", true)
 	pinned := c.ExecutionPolicySnapshot().ResultCollection

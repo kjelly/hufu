@@ -19,13 +19,14 @@ type ExecutionResultTransportAgentPolicy struct {
 // The policy and immutable task contract jointly determine the protocol before
 // work begins; callers cannot select it through dynamic task arguments.
 type ExecutionResultCollectionPolicySnapshot struct {
-	Version                 int                                   `json:"version"`
-	Default                 agent.ResultTransport                 `json:"default"`
-	DefaultExplicit         bool                                  `json:"default_explicit,omitzero"`
-	Agents                  []ExecutionResultTransportAgentPolicy `json:"agents,omitempty"`
-	CollectorSchemaRevision int                                   `json:"collector_schema_revision"`
-	TurnLimit               int                                   `json:"turn_limit"`
-	GenerationSHA256        string                                `json:"generation_sha256"`
+	CollectorResponseChannel agent.CollectorResponseChannel        `json:"collector_response_channel,omitempty"`
+	Version                  int                                   `json:"version"`
+	Default                  agent.ResultTransport                 `json:"default"`
+	DefaultExplicit          bool                                  `json:"default_explicit,omitzero"`
+	Agents                   []ExecutionResultTransportAgentPolicy `json:"agents,omitempty"`
+	CollectorSchemaRevision  int                                   `json:"collector_schema_revision"`
+	TurnLimit                int                                   `json:"turn_limit"`
+	GenerationSHA256         string                                `json:"generation_sha256"`
 }
 
 func cloneExecutionResultCollectionPolicy(value *ExecutionResultCollectionPolicySnapshot) *ExecutionResultCollectionPolicySnapshot {
@@ -43,7 +44,14 @@ func executionPolicyResultCollection(session *TeamSession, version int) (*Execut
 	}
 	policy := &ExecutionResultCollectionPolicySnapshot{Version: 1, Default: agent.ResultTransportRuntime,
 		CollectorSchemaRevision: resultCollectionVersion, TurnLimit: resultCollectionDefaultTurns}
+	policy.CollectorResponseChannel = session.Config.CollectorResponseChannel
 	configured := false
+	if policy.CollectorResponseChannel != "" {
+		if !policy.CollectorResponseChannel.Valid() {
+			return nil, fmt.Errorf("invalid collector response channel %q", policy.CollectorResponseChannel)
+		}
+		configured = true
+	}
 	if mode := session.Config.ResultTransport; mode != "" {
 		if !mode.Valid() {
 			return nil, fmt.Errorf("invalid team result transport %q", mode)
@@ -95,6 +103,9 @@ func validateExecutionResultCollectionPolicy(policy *ExecutionResultCollectionPo
 	}
 	if policy.Version != 1 || !policy.Default.Valid() || policy.CollectorSchemaRevision != resultCollectionVersion || policy.TurnLimit != resultCollectionDefaultTurns || !validCollectionDigest(policy.GenerationSHA256) {
 		return fmt.Errorf("invalid result collection policy")
+	}
+	if policy.CollectorResponseChannel != "" && !policy.CollectorResponseChannel.Valid() {
+		return fmt.Errorf("invalid collector response channel policy")
 	}
 	last := ""
 	for _, entry := range policy.Agents {
@@ -177,7 +188,7 @@ func hasExplicitResultTransportSettings(session *TeamSession) bool {
 	if session == nil {
 		return false
 	}
-	if session.Config.ResultTransport != "" {
+	if session.Config.ResultTransport != "" || session.Config.CollectorResponseChannel != "" {
 		return true
 	}
 	for _, def := range session.Agents {

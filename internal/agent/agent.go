@@ -296,7 +296,8 @@ func DefaultMemoryLearningPolicy() MemoryLearningPolicy {
 }
 
 type TeamConfig struct {
-	Media *media.Policy `yaml:"media" json:"media,omitempty"`
+	CollectorResponseChannel CollectorResponseChannel `yaml:"collector-response-channel,omitempty" json:"collector_response_channel,omitempty"`
+	Media                    *media.Policy            `yaml:"media" json:"media,omitempty"`
 	// RequestAcceptance freezes explicit invocation requirements and checks them at finish.
 	RequestAcceptance bool `yaml:"request-acceptance" json:"request_acceptance,omitzero"`
 	Name              string

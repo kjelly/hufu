@@ -37,5 +37,11 @@ func validateResultTransportAuthoring(data []byte, manifest bool) error {
 			return fmt.Errorf("result-transport: %w", err)
 		}
 	}
+	if pair, ok := fields["collector-response-channel"]; ok {
+		var channel agent.CollectorResponseChannel
+		if err := channel.UnmarshalYAML(pair[1]); err != nil {
+			return err
+		}
+	}
 	return nil
 }
