@@ -300,19 +300,22 @@ func inspectPackage(source string) (string, error) {
 	}
 	hash := sha256.New()
 	runDeclarations := 0
+	var syntax []sourceSyntax
 	for _, name := range files {
 		path := filepath.Join(source, name)
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return "", fmt.Errorf("read Go runtime source %q: %w", name, readErr)
 		}
-		parsed, parseErr := parser.ParseFile(token.NewFileSet(), path, data, 0)
+		positions := token.NewFileSet()
+		parsed, parseErr := parser.ParseFile(positions, path, data, 0)
 		if parseErr != nil {
 			return "", fmt.Errorf("parse Go runtime source %q: %w", name, parseErr)
 		}
 		if parsed.Name.Name != "main" {
 			return "", fmt.Errorf("go runtime source %q uses package %q, want main", name, parsed.Name.Name)
 		}
+		syntax = append(syntax, sourceSyntax{name: name, file: parsed, positions: positions})
 		for _, declaration := range parsed.Decls {
 			function, ok := declaration.(*ast.FuncDecl)
 			if !ok || function.Recv != nil {
@@ -335,6 +338,9 @@ func inspectPackage(source string) (string, error) {
 	}
 	if runDeclarations != 1 {
 		return "", fmt.Errorf("trusted Go action requires exactly one exported Run function; found %d", runDeclarations)
+	}
+	if err := validateSourceAssignments(syntax); err != nil {
+		return "", err
 	}
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }

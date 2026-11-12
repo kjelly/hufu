@@ -177,6 +177,19 @@ The runtime validates the source path, rejects symlinks, hashes the non-test Go
 files, and verifies the hash again before execution. A source change therefore
 fails closed instead of silently running a different adapter.
 
+The embedded interpreter currently cannot faithfully execute a parallel assignment
+with multiple right-hand expressions, a field destination, and an evaluated
+function call on the right. Package inspection and the execution child reject
+this form with `unsupported_parallel_field_call` and a source location before
+running the adapter. Capture call results in local variables, then assign fields,
+or use sequential field assignments when there are no evaluation-order dependencies.
+Literal assignments, builtins and type conversions remain supported. For example:
+
+```go
+status, digest, size := "present", hash(data), int64(len(data))
+row.Status, row.SHA256, row.ByteSize = status, digest, size
+```
+
 Example layout:
 
 ```text
