@@ -39,6 +39,14 @@ func TestResultCollectionRepairsResponseEnvelopeWithOriginalArguments(t *testing
 					http.Error(w, "extra call", http.StatusBadRequest)
 					return
 				}
+				if n == 1 {
+					for _, msg := range request["messages"].([]any) {
+						content, _ := msg.(map[string]any)["content"].(string)
+						if strings.Contains(content, `"format_diagnostic"`) {
+							t.Error("initial collection advertised a validation failure before any response was rejected")
+						}
+					}
+				}
 				arguments := tc.arguments
 				if n == 2 {
 					arguments = `{"result":{"status":"success","summary":"saved report"}}`

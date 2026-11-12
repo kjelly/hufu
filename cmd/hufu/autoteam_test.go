@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/team"
 )
@@ -217,5 +220,77 @@ func TestTeamDescription_FallsBackToAgents(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("teamDescription %q missing %q", got, want)
 		}
+	}
+}
+
+func TestSelectionPreflightDoesNotFreezeTargetWorkspace(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		name := "run"
+		if dryRun {
+			name = "dry run"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			original := opts
+			t.Cleanup(func() { opts = original })
+			subject := t.TempDir()
+			t.Chdir(subject)
+			workspace := filepath.Join(t.TempDir(), "target")
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/v1/chat/completions" {
+					t.Error("selection construction generated a model response")
+				}
+				_, _ = w.Write([]byte(`{"data":[{"id":"selection-test","max_context_window":32768}],"model_info":{"general.architecture":"llama","llama.context_length":32768},"parameters":"num_ctx 32768","capabilities":["completion","tools"]}`))
+			}))
+			defer server.Close()
+			opts = runOptions{workspace: workspace, startDir: subject, subjectRoot: subject, providerURL: server.URL + "/v1", sidecarModelOverride: "ollama/selection-test", dryRun: dryRun}
+			handle := buildSelectionSidecar(t.Context())
+			if dryRun {
+				if handle != nil {
+					handle.Close()
+					t.Fatal("dry run created a selection invocation")
+				}
+				if _, err := os.Stat(workspace); !os.IsNotExist(err) {
+					t.Fatalf("dry run touched target workspace: %v", err)
+				}
+				return
+			}
+			if handle == nil {
+				t.Fatal("selection preflight unavailable")
+			}
+			handle.Close()
+			if _, err := os.Stat(filepath.Join(workspace, "runtime.sqlite")); !os.IsNotExist(err) {
+				t.Fatalf("selection preflight wrote the target event store: %v", err)
+			}
+			entries, err := os.ReadDir(workspace)
+			if err != nil || len(entries) != 1 || !entries[0].IsDir() {
+				t.Fatalf("selection did not retain an isolated control directory: %v %v", entries, err)
+			}
+			if _, err := os.Stat(filepath.Join(workspace, entries[0].Name(), "runtime.sqlite")); err != nil {
+				t.Fatalf("selection audit store was discarded: %v", err)
+			}
+			session := &team.TeamSession{Dir: subject, Workspace: workspace, Config: agent.TeamConfig{Name: "actual-team"}}
+			if err := session.SetCompatibilityWorkspaceScope(subject); err != nil {
+				t.Fatal(err)
+			}
+			coordinator, err := team.NewCoordinator(session, server.URL+"/v1", "", nil, nil, team.RoleModels{}, 2, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = coordinator.Close() })
+			if err := freezeStartupExecutionPolicy(coordinator); err != nil {
+				t.Fatalf("selection policy poisoned actual team startup: %v", err)
+			}
+			opts.sidecarModelOverride = "ollama/selection-next"
+			next := buildSelectionSidecar(t.Context())
+			if next == nil {
+				t.Fatal("new auxiliary policy could not open its own selection scope")
+			}
+			next.Close()
+			if err := freezeStartupExecutionPolicy(coordinator); err != nil {
+				t.Fatalf("later selection changed the actual team's frozen policy: %v", err)
+			}
+		})
 	}
 }

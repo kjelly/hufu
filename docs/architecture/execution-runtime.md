@@ -102,6 +102,14 @@ contract can be attached to an upstream resolver worker through
 schema-validated successful result. The schema is pinned in the execution
 policy snapshot and cannot be changed by a coordinator task payload.
 
+CLI route and team-selection preflights own a private `.selection-*` control
+directory beneath the selected workspace root. Each preflight retains its own
+canonical context, events and frozen auxiliary policy for audit; it never
+installs that policy into the actual team's event lineage. Inspect its records
+by passing that control directory explicitly with `--workspace`. Dry-run does
+not construct or invoke a selection preflight. Explicit non-default teams
+continue to skip selection entirely.
+
 When resuming, execution policy drift is rejected before provider preflight.
 The error lists changed snapshot fields, identifies model routes, contract
 owners and MCP servers, and shows old/new numeric or boolean settings. Entry

@@ -22,6 +22,13 @@ type memorySaveLTMWrapper struct {
 	coordinator *Coordinator
 }
 
+// These explicitly granted compatibility handlers write only runtime-scoped
+// canonical memory. File paths are metadata, never sources to read or execute.
+// Bound worksets remain denied by the separate bound-policy capability.
+func (*memorySaveLTMWrapper) unboundArtifactPolicyTool() {}
+func (*stmWriteTool) unboundArtifactPolicyTool()         {}
+func (*ltmUpdateTool) unboundArtifactPolicyTool()        {}
+
 func (t *memorySaveLTMWrapper) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{
 		Name:        "memory_save",

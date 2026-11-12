@@ -184,11 +184,15 @@ func teamDescription(dir string) string {
 }
 
 // buildSelectionSidecar constructs a preflight coordinator for team matching.
-// It never returns a raw sidecar: the coordinator opens the explicit workspace
-// repository/event lineage and installs the prompt preparer before a model can
-// be called. Returning nil leaves selection unresolved.
+// It never returns a raw sidecar: the coordinator opens its own private control
+// directory under the selected workspace and installs the prompt preparer before
+// a model can be called. Retain that directory for audit; the auxiliary policy
+// must never be frozen into the actual team's event lineage. Returning nil leaves
+// selection unresolved.
 func buildSelectionSidecar(ctx context.Context) *preflightSidecarHandle {
-	_ = ctx // coordinator-sidecar initialization is lazy; generation uses the caller context.
+	if opts.dryRun {
+		return nil
+	}
 	cfg := config.LoadConfig()
 	// Team selection is an auxiliary LLM role. It must not silently inherit a
 	// worker or coordinator target, either of which may be an agent backend.
@@ -204,10 +208,21 @@ func buildSelectionSidecar(ctx context.Context) *preflightSidecarHandle {
 			return nil
 		}
 	}
-	session.Workspace = getWorkspace()
-	if session.Workspace == "" {
+	workspaceRoot := getWorkspace()
+	if workspaceRoot == "" {
 		return nil
 	}
+	if err := os.MkdirAll(workspaceRoot, 0o700); err != nil {
+		return nil
+	}
+	// Selection is a separate invocation, not a resume of the selected team.
+	// A unique directory also isolates concurrent selections and changed
+	// auxiliary policies without resetting any existing run's frozen policy.
+	workspace, err := os.MkdirTemp(workspaceRoot, ".selection-")
+	if err != nil {
+		return nil
+	}
+	session.Workspace = workspace
 	if err := session.SetCompatibilityWorkspaceScope(runtimeSubjectRoot()); err != nil {
 		return nil
 	}

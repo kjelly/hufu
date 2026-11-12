@@ -159,6 +159,9 @@ var externalTools = map[string]bool{
 // writeTools can mutate the local workspace; their presence implies
 // workspace_write unless a higher risk tool is also present.
 var writeTools = map[string]bool{
+	"memory_save":   true,
+	"stm_write":     true,
+	"ltm_update":    true,
 	"bash":          true,
 	"golang":        true,
 	"lua":           true,

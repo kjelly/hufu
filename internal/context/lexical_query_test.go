@@ -6,8 +6,8 @@ import (
 )
 
 // TestSearchLexicalToleratesQueriesWithoutFTSTerms guards the worker context
-// routing preflight: a task goal written entirely in CJK text, or one whose
-// only ASCII words are FTS5 operators, must not turn lexical retrieval into
+// routing preflight: a task goal with no matching words, or one whose
+// only words are FTS5 operators, must not turn lexical retrieval into
 // an FTS syntax error that fails the task before its worker starts.
 func TestSearchLexicalToleratesQueriesWithoutFTSTerms(t *testing.T) {
 	repo, _ := scopeMatrixFixture(t)
@@ -19,6 +19,7 @@ func TestSearchLexicalToleratesQueriesWithoutFTSTerms(t *testing.T) {
 	}{
 		{name: "CJK-only goal", query: "清理舊環境並建立驗證所需基礎設施"},
 		{name: "punctuation only", query: "--- ;;; //"},
+		{name: "combining marks only", query: "\u0301\u0308"},
 		{name: "operator keywords only", query: "AND OR NOT NEAR"},
 		{name: "operator keyword between terms", query: "private NOT finding", wantHit: "agent-a-finding"},
 		{name: "trailing operator keyword", query: "private finding OR", wantHit: "agent-a-finding"},
@@ -44,7 +45,8 @@ func TestFTSQueryQuotesTermsAndDropsOperators(t *testing.T) {
 		want  string
 	}{
 		{query: "", want: ""},
-		{query: "清理舊環境", want: ""},
+		{query: "清理舊環境", want: `"清理舊環境"`},
+		{query: "青鷺 OR café", want: `"青鷺" OR "café"`},
 		{query: "private finding", want: `"private" OR "finding"`},
 		{query: "a NOT b", want: `"a" OR "b"`},
 		{query: "AND OR NOT NEAR", want: ""},
@@ -89,5 +91,31 @@ func TestSearchLexicalMatchesLongGoalsBySharedTerms(t *testing.T) {
 	ids := idsOfResults(got)
 	if len(ids) != 2 || ids[0] != "redaction" || ids[1] != "testing" {
 		t.Fatalf("SearchLexical(goal) = %v, want [redaction testing]", ids)
+	}
+}
+
+func TestSearchLexicalPreservesUnicodeTerms(t *testing.T) {
+	repo, err := OpenSQLiteInMemory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	scope := Scope{ProjectID: "proj", TeamID: "team"}
+	const content = "虛構專案「青鷺」 café مرحبا Привет"
+	if err := repo.Append(t.Context(),
+		ContextItem{ID: "visible", Kind: ContextPattern, Content: content, Scope: scope, Lifecycle: LifecycleConfirmed},
+		ContextItem{ID: "foreign", Kind: ContextPattern, Content: content, Scope: Scope{ProjectID: "proj", TeamID: "other"}, Lifecycle: LifecycleConfirmed},
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{"青鷺", "café", "cafe\u0301", "مرحبا", "привет", `青鷺 OR "missing"`} {
+		t.Run(query, func(t *testing.T) {
+			for _, search := range []func(context.Context, SearchRequest) ([]SearchResult, error){repo.SearchLexical, repo.SearchSupplementalLexical} {
+				got, err := search(t.Context(), SearchRequest{Query: query, Scope: scope, Limit: 10, AllowedItemIDs: []string{"visible", "foreign"}})
+				if err != nil || len(got) != 1 || got[0].Item.ID != "visible" {
+					t.Fatalf("query %q: results=%v err=%v", query, idsOfResults(got), err)
+				}
+			}
+		})
 	}
 }

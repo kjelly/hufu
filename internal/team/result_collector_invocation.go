@@ -113,6 +113,11 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 		}
 		feedback.Issues = append(feedback.Issues, *checkpoint.RepairIssue)
 	}
+	// A first collection has no rejected response. Only repair requests need
+	// a fallback diagnostic when the original validation message is unavailable.
+	if diagnostic != "" || checkpoint.Response != nil || checkpoint.RepairIssue != nil {
+		diagnostic = schemaRepairDiagnostic(diagnostic)
+	}
 	claimsSchema := map[string]any{"type": "object", "properties": info.Parameters, "required": info.Required, "additionalProperties": false}
 	data, err := json.Marshal(struct {
 		Schema           map[string]any                 `json:"claims_schema"`
@@ -126,7 +131,7 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 		ResponseIssue    *agent.StructuredResponseIssue `json:"response_channel_failure,omitempty"`
 	}{claimsSchema,
 		localResultSubmissionContract(c, checkpoint.TaskID).SubmissionTaskResultAssertions,
-		workInput, string(work.Report), string(transcript), string(previous), schemaRepairDiagnostic(diagnostic), feedback, responseIssue}, json.Deterministic(true))
+		workInput, string(work.Report), string(transcript), string(previous), diagnostic, feedback, responseIssue}, json.Deterministic(true))
 	if err != nil {
 		return "", nil, nil, err
 	}

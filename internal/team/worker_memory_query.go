@@ -77,8 +77,8 @@ func (c *Coordinator) queryWorkerMemory(ctx context.Context, todoID, query strin
 }
 
 // unboundArtifactPolicyTool marks Hufu-owned tools that an unbound worker may
-// call under the artifact policy. Such a tool takes no filesystem path and
-// reads only state the runtime scopes to the calling task. The interface is
+// call under the artifact policy. Such a tool never resolves caller-supplied
+// filesystem paths and accesses only runtime-scoped state. The interface is
 // sealed to this package: a tool's own workspace-scope description is not
 // enough, because any tool can describe itself that way.
 type unboundArtifactPolicyTool interface {

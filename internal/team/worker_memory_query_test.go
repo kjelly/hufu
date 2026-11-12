@@ -108,3 +108,18 @@ func TestScopedMemoryQueryIsAllowedOnlyForUnboundWorkers(t *testing.T) {
 		})
 	}
 }
+
+func TestLegacyMemoryMutationArtifactPolicy(t *testing.T) {
+	for _, tool := range []fantasy.AgentTool{&memorySaveLTMWrapper{}, &stmWriteTool{}, &ltmUpdateTool{}} {
+		t.Run(tool.Info().Name, func(t *testing.T) {
+			def := &agent.AgentDef{Name: "worker", Tools: tool.Info().Name}
+			for _, bound := range []bool{false, true} {
+				ctx := context.WithValue(t.Context(), tools.ArtifactPathPolicyKey, workerArtifactPathPolicy(def, bound, nil))
+				denial := artifactScopeToolDenial(ctx, tool.Info().Name, tool)
+				if (denial != "") != bound {
+					t.Errorf("bound=%v denial=%q", bound, denial)
+				}
+			}
+		})
+	}
+}
