@@ -591,6 +591,12 @@ func (m Model) itemLines(item *team.TodoItem, selected bool, isMatch bool, width
 		if failure := team.FailureDisplayText(item); failure != "" {
 			errLine := truncateLineCells(strings.ReplaceAll(failure, "\n", " | "), width-4)
 			lines = append(lines, m.styles.errorIcon.Render("  ✗ "+errLine))
+			if item.FailureEvent != nil {
+				if diagnosis := team.NormalizedActionDiagnosis(item.FailureEvent.Diagnosis); diagnosis != nil {
+					lines = append(lines, m.styles.errorIcon.Render("  "+truncateLineCells(diagnosis.Summary, width-4)))
+					lines = append(lines, m.styles.errorIcon.Render("  "+truncateLineCells("Cause (provider-reported): "+diagnosis.Cause, width-4)))
+				}
+			}
 		}
 	}
 

@@ -311,9 +311,10 @@ func (w *runtimeWorkflow) actionExecutionError(task TaskDef, err error) Executio
 		source = task.Agent
 	}
 	result := ExecutionError{Phase: phase, Component: component, Source: source, Category: category,
-		Message: err.Error(), Cause: err.Error(), Retryable: retryable}
+		Message: err.Error(), Cause: err.Error(), Retryable: retryable, Diagnosis: actionDiagnosisFromError(err)}
 	if commandErr, ok := errors.AsType[*ActionCommandError](err); ok {
 		result.ExitCode = commandErr.ExitCode
+		result.Evidence = actionProcessEvidenceFromError(err)
 	}
 	return result
 }

@@ -7,18 +7,27 @@ import (
 	"strings"
 	"testing"
 
+	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestFailureOutputsUseCanonicalPayload(t *testing.T) {
 	exitCode := 127
 	event := &team.FailureEventPayload{
-		TaskID: "12", Phase: "verification", FailureClass: team.FailureEnvironment,
+		Diagnosis: &team.ActionFailureDiagnosis{Version: 1, Code: "missing_executable", Summary: "Required tool is unavailable", CauseStatus: "confirmed", Cause: "The action executable was not found", Evidence: []team.ActionDiagnosticFact{{Name: "exit_status", Value: "127"}}, Suggestions: []string{"Install the required tool"}},
+		TaskID:    "12", Phase: "verification", FailureClass: team.FailureEnvironment,
 		RetryDisposition: team.ReplanRequired, Command: "tool status", WorkDir: "/project",
 		Shell: "sh", ExitCode: &exitCode, Stderr: "tool: not found", Fingerprint: "fp-12",
 		Hint: "use an explicit relative path", Summary: "verification failed",
 	}
 	canonical := team.RenderFailureText(event)
+	if !strings.Contains(canonical, "missing_executable") {
+		t.Fatal("missing provider explanation")
+	}
+	var inspected bytes.Buffer
+	if err := renderInspectTaskText(&inspected, "main", inspectpkg.TaskData{TaskID: "12", Failure: event}); err != nil || !strings.Contains(inspected.String(), canonical) {
+		t.Fatalf("inspect explanation=%s err=%v", inspected.String(), err)
+	}
 	status := team.StatusEvent{Type: "failure", Data: map[string]any{"failure_event": event}}
 	if got := failureEventFromStatus(status); got == nil || team.RenderFailureText(got) != canonical {
 		t.Fatalf("status event did not preserve canonical payload")

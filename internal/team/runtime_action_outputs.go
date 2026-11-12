@@ -9,6 +9,7 @@ import (
 // failure journal, and on the action lifecycle stream, and returns err.
 func (c *Coordinator) failRuntimeAction(task TaskDef, todoID, actionID string, startedAt time.Time, err error) error {
 	runtimeErr := c.phaseWorkflow.actionExecutionError(task, err)
+	runtimeErr.ReceiptID = actionID
 	_ = c.taskTracker.TodoList().SetRuntimeError(todoID, &runtimeErr)
 	class := ClassifyTaskFailureStructured(FailureClassificationInput{Err: err})
 	c.PersistFailureWithClass(task.Agent, task.Goal, todoID, c.FailureDetail(err, FailureSourceError), RetryNone, class)

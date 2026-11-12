@@ -97,3 +97,33 @@ func TestApplyWorkspaceStatusScopeKeepsLegacyInvocationUnavailable(t *testing.T)
 func operatorScopeWithoutInvocation() operatorpkg.ResolvedScope {
 	return operatorpkg.ResolvedScope{RunID: "legacy-run", BranchID: "main"}
 }
+
+func TestStatusPresentsProviderDiagnosisInTextAndJSON(t *testing.T) {
+	workspace := t.TempDir()
+	diagnosis := &team.ActionFailureDiagnosis{Version: 1, Code: "capacity_exceeded", Summary: "Evidence exceeds capacity", CauseStatus: "confirmed", Cause: "Fixed metadata exceeds the budget", Evidence: []team.ActionDiagnosticFact{{Name: "observed_bytes", Value: "411383"}}}
+	failure := &team.FailureEventPayload{TaskID: "1", FailureClass: team.FailureExecution, RetryDisposition: team.RetryNone, Summary: "action failed", Diagnosis: diagnosis}
+	if err := team.SaveSession(workspace, &team.SessionData{Tasks: []*team.TodoItem{{ID: "1", Status: team.TaskError, FailureEvent: failure}}}); err != nil {
+		t.Fatal(err)
+	}
+	previousWorkspace, previousJSON, previousWorkers := statusWorkspace, statusJSON, statusWorkers
+	t.Cleanup(func() { statusWorkspace, statusJSON, statusWorkers = previousWorkspace, previousJSON, previousWorkers })
+	statusWorkspace, statusWorkers = workspace, false
+	for _, asJSON := range []bool{false, true} {
+		statusJSON = asJSON
+		command := &cobra.Command{}
+		var output bytes.Buffer
+		command.SetOut(&output)
+		if err := runStatus(command, nil); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(output.String(), "capacity_exceeded") || !strings.Contains(output.String(), "411383") {
+			t.Fatalf("status diagnosis missing: %s", output.String())
+		}
+		if asJSON {
+			var decoded workspaceStatus
+			if err := json.Unmarshal(output.Bytes(), &decoded); err != nil || len(decoded.Failures) != 1 || decoded.Failures[0].Diagnosis == nil {
+				t.Fatalf("JSON diagnosis: %s err=%v", output.String(), err)
+			}
+		}
+	}
+}

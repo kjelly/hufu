@@ -114,6 +114,7 @@ func (event ExecutionEvent) MarshalJSON() ([]byte, error) {
 // LifecycleEventPayload defines the canonical observability envelope required for all
 // run and phase events to guarantee a consistent schema for telemetry.
 type LifecycleEventPayload struct {
+	ActionDiagnosis  *ActionFailureDiagnosis         `json:"action_diagnosis,omitempty"`
 	AcceptanceRetry  *FinalAcceptanceRetryAssessment `json:"acceptance_retry,omitempty"`
 	HufuBuild        *buildinfo.Info                 `json:"hufu_build,omitempty"`
 	RunID            string                          `json:"run_id,omitempty"`

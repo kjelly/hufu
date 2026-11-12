@@ -32,20 +32,21 @@ var statusCmd = &cobra.Command{
 }
 
 type workspaceStatus struct {
-	Workspace    string `json:"workspace"`
-	Team         string `json:"team,omitempty"`
-	RunID        string `json:"run_id,omitempty"`
-	InvocationID string `json:"invocation_id,omitempty"`
-	BranchID     string `json:"branch_id,omitempty"`
-	Session      string `json:"session"`
-	CreatedAt    string `json:"created_at,omitempty"`
-	UpdatedAt    string `json:"updated_at,omitempty"`
-	Rounds       int    `json:"rounds"`
-	Total        int    `json:"total"`
-	Done         int    `json:"done"`
-	Error        int    `json:"error"`
-	Skipped      int    `json:"skipped"`
-	Pending      int    `json:"pending"`
+	Failures     []team.FailureEventPayload `json:"failures,omitempty"`
+	Workspace    string                     `json:"workspace"`
+	Team         string                     `json:"team,omitempty"`
+	RunID        string                     `json:"run_id,omitempty"`
+	InvocationID string                     `json:"invocation_id,omitempty"`
+	BranchID     string                     `json:"branch_id,omitempty"`
+	Session      string                     `json:"session"`
+	CreatedAt    string                     `json:"created_at,omitempty"`
+	UpdatedAt    string                     `json:"updated_at,omitempty"`
+	Rounds       int                        `json:"rounds"`
+	Total        int                        `json:"total"`
+	Done         int                        `json:"done"`
+	Error        int                        `json:"error"`
+	Skipped      int                        `json:"skipped"`
+	Pending      int                        `json:"pending"`
 	// Workers is present only with --workers.
 	Workers     *inspectpkg.WorkerAttempts   `json:"workers,omitempty"`
 	Recovery    *workspaceRecovery           `json:"recovery,omitempty"`
@@ -114,6 +115,9 @@ func runStatus(command *cobra.Command, _ []string) error {
 	_, _ = fmt.Fprintf(command.OutOrStdout(), "Updated:    %s\n", status.UpdatedAt)
 	_, _ = fmt.Fprintf(command.OutOrStdout(), "Rounds:     %d\n", status.Rounds)
 	_, _ = fmt.Fprintf(command.OutOrStdout(), "Tasks:      %d done · %d error · %d skipped · %d pending (%d total)\n", status.Done, status.Error, status.Skipped, status.Pending, status.Total)
+	for _, failure := range status.Failures {
+		_, _ = fmt.Fprintln(command.OutOrStdout(), team.RenderFailureText(&failure))
+	}
 	writeWorkspaceRecovery(command.OutOrStdout(), status.Recovery)
 	if status.Workers != nil {
 		writeWorkerAttempts(command.OutOrStdout(), *status.Workers, statusVerbose)
@@ -152,6 +156,7 @@ func applyWorkspaceStatusScope(status *workspaceStatus, scope operatorpkg.Resolv
 func summarizeWorkspaceSession(workspace string, session *team.SessionData) workspaceStatus {
 	status := workspaceStatus{
 		Workspace: workspace,
+		Failures:  team.FailureEventsFromTodos(session.Tasks),
 		Session:   runtimestore.Path(workspace),
 		CreatedAt: session.CreatedAt,
 		UpdatedAt: session.UpdatedAt,

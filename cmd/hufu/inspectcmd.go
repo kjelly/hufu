@@ -14,6 +14,7 @@ import (
 	"github.com/kjelly/hufu/internal/cost"
 	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	operatorpkg "github.com/kjelly/hufu/internal/operator"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 type inspectCLIOptions struct {
@@ -508,6 +509,11 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 }
 
 func renderInspectTaskText(writer io.Writer, branchID string, data inspectpkg.TaskData) error {
+	if data.Failure != nil {
+		if _, err := fmt.Fprintln(writer, team.RenderFailureText(data.Failure)); err != nil {
+			return err
+		}
+	}
 	if err := renderInspectBuild(writer, data.HufuBuild); err != nil {
 		return err
 	}

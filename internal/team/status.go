@@ -1065,6 +1065,8 @@ func (tl *TodoList) SetRuntimeError(id string, runtimeErr *ExecutionError) error
 				ti.RuntimeError = nil
 			} else {
 				copyErr := *runtimeErr
+				copyErr.Diagnosis = NormalizedActionDiagnosis(runtimeErr.Diagnosis)
+				copyErr.Evidence = append([]string(nil), runtimeErr.Evidence...)
 				ti.RuntimeError = &copyErr
 			}
 			updated = true
@@ -1320,6 +1322,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 	var runtimeErr *ExecutionError
 	if item.RuntimeError != nil {
 		copyErr := *item.RuntimeError
+		copyErr.Diagnosis = NormalizedActionDiagnosis(item.RuntimeError.Diagnosis)
 		copyErr.Evidence = append([]string(nil), item.RuntimeError.Evidence...)
 		runtimeErr = &copyErr
 	}

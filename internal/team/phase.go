@@ -31,15 +31,17 @@ const (
 
 // ExecutionError represents a structured failure model.
 type ExecutionError struct {
-	Phase     Phase    `json:"phase"`
-	Component string   `json:"component"`
-	Category  string   `json:"category"`
-	Source    string   `json:"source"`
-	Message   string   `json:"message"`
-	Cause     string   `json:"cause,omitempty"`
-	Evidence  []string `json:"evidence,omitempty"`
-	Retryable bool     `json:"retryable"`
-	ExitCode  *int     `json:"exit_code,omitempty"`
+	ReceiptID string                  `json:"receipt_id,omitempty"`
+	Diagnosis *ActionFailureDiagnosis `json:"diagnosis,omitempty"`
+	Phase     Phase                   `json:"phase"`
+	Component string                  `json:"component"`
+	Category  string                  `json:"category"`
+	Source    string                  `json:"source"`
+	Message   string                  `json:"message"`
+	Cause     string                  `json:"cause,omitempty"`
+	Evidence  []string                `json:"evidence,omitempty"`
+	Retryable bool                    `json:"retryable"`
+	ExitCode  *int                    `json:"exit_code,omitempty"`
 }
 
 // PhaseResult represents the structured outcome of a workflow phase.

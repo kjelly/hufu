@@ -430,12 +430,14 @@ func commandActionFailure(err error, stdout []byte, stderr string) error {
 		class = FailureEnvironment
 	}
 	detail := strings.TrimSpace(stderr)
+	var diagnosis *ActionFailureDiagnosis
 	var reported actionCommandFailure
-	if jsonv2.Unmarshal(stdout, &reported, jsonv2.RejectUnknownMembers(true)) == nil {
+	if exitCode != nil && *exitCode > 0 && len(stdout) <= 16*1024 && jsonv2.Unmarshal(stdout, &reported, jsonv2.RejectUnknownMembers(true)) == nil {
 		switch reported.Error.Class {
 		case FailureExecution, FailureEnvironment, FailureContract, FailureProtocol, FailureVerify:
 			if reported.Error.Message != "" && class != FailureCancelled && class != FailureTimeout {
 				class, detail = reported.Error.Class, reported.Error.Message
+				diagnosis = NormalizedActionDiagnosis(reported.Error.Diagnosis)
 			}
 		}
 	}
@@ -443,7 +445,8 @@ func commandActionFailure(err error, stdout []byte, stderr string) error {
 		detail = err.Error()
 	}
 	return &ActionCommandError{Cause: err, ExitCode: exitCode, Class: class,
-		Diagnostic: utils.TruncateString(utils.RedactSecrets(detail), 4096)}
+		Diagnostic: utils.TruncateString(utils.RedactSecrets(detail), 4096), Diagnosis: diagnosis,
+		ProcessDiagnostic: utils.TruncateString(utils.SanitizeTerminalText(utils.RedactSecrets(stderr)), 16*1024)}
 }
 
 func (p *golangActionProvider) Execute(ctx context.Context, action Action) (interface{}, error) {
@@ -456,7 +459,11 @@ func (p *golangActionProvider) Execute(ctx context.Context, action Action) (inte
 	}
 	result, err := p.run(ctx, payload, 1024*1024, maxRunInputResolverDiagnosticBytes)
 	if err != nil {
-		return nil, fmt.Errorf("go action failed: %w", err)
+		stdout := result.Stdout
+		if result.StdoutTruncated {
+			stdout = nil
+		}
+		return nil, fmt.Errorf("go action failed: %w", commandActionFailure(err, stdout, string(result.Stderr)))
 	}
 	if result.StdoutTruncated {
 		return nil, fmt.Errorf("go action output exceeds %d bytes", 1024*1024)
@@ -563,7 +570,7 @@ func (p *golangActionProvider) run(ctx context.Context, payload []byte, outputLi
 	if result.StderrTruncated {
 		detail += " (diagnostic truncated)"
 	}
-	return result, errors.New(utils.RedactSecrets(detail))
+	return result, fmt.Errorf("%s: %w", utils.RedactSecrets(detail), err)
 }
 
 func actionCommandEnvironment(ctx context.Context) []string {

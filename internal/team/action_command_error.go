@@ -5,10 +5,12 @@ import "fmt"
 // ActionCommandError retains process evidence independently of adapter logs.
 // Failure classification must never interpret successful stderr banners.
 type ActionCommandError struct {
-	Cause      error
-	ExitCode   *int
-	Class      TaskFailureClass
-	Diagnostic string
+	Cause             error
+	ExitCode          *int
+	Class             TaskFailureClass
+	Diagnostic        string
+	Diagnosis         *ActionFailureDiagnosis
+	ProcessDiagnostic string
 }
 
 func (e *ActionCommandError) Error() string {
@@ -18,6 +20,8 @@ func (e *ActionCommandError) Error() string {
 	return fmt.Sprintf("adapter command failed: %s", e.Diagnostic)
 }
 
+func (e *ActionCommandError) ActionFailureDiagnosis() *ActionFailureDiagnosis { return e.Diagnosis }
+
 func (e *ActionCommandError) Unwrap() error { return e.Cause }
 
 func (e *ActionCommandError) FailureClassOverride() TaskFailureClass { return e.Class }
@@ -26,7 +30,8 @@ func (e *ActionCommandError) FailureClassOverride() TaskFailureClass { return e.
 // command adapters. It is accepted only after a nonzero process exit.
 type actionCommandFailure struct {
 	Error struct {
-		Class   TaskFailureClass `json:"failure_class"`
-		Message string           `json:"message"`
+		Class     TaskFailureClass        `json:"failure_class"`
+		Message   string                  `json:"message"`
+		Diagnosis *ActionFailureDiagnosis `json:"diagnosis,omitempty"`
 	} `json:"error"`
 }

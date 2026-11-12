@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `2683db54`
+> Verified-Commit: — (working tree; pending commit)
 > Supersedes: —
 > Superseded-By: —
 
@@ -14,6 +14,71 @@ lifecycle, and records provider identity in lifecycle events and receipts.
 
 The provider owns domain semantics. Hufu does not interpret Git, deployment,
 cloud, database, or other domain-specific commands.
+
+## Provider-authored failure explanations
+
+A command or embedded Go action can explain a domain failure by writing one
+strict JSON envelope to stdout **and exiting nonzero** (Go `Run` returns an
+error). Do not mix a failure envelope with successful outputs or progress:
+
+```json
+{
+  "error": {
+    "failure_class": "execution",
+    "message": "Cannot prepare evidence within its declared budget",
+    "diagnosis": {
+      "version": 1,
+      "code": "capacity_exceeded",
+      "summary": "Fixed evidence overhead exceeds the per-item budget",
+      "cause_status": "confirmed",
+      "cause": "Repeated dependency metadata cannot be reduced by splitting the primary input",
+      "evidence": [
+        {"name": "observed_bytes", "value": "411383"},
+        {"name": "limit_bytes", "value": "393216"}
+      ],
+      "suggestions": ["Refine evidence partitioning while preserving coverage"]
+    }
+  }
+}
+```
+
+`diagnosis` is optional. Existing `failure_class`/`message` envelopes and plain
+stderr failures remain supported. Allowed failure classes are `execution`,
+`environment`, `contract`, `protocol`, and `verify`. Cancellation and timeout
+always take precedence over provider claims. An envelope is read only after a
+nonzero process exit; launch errors and truncated Go stdout cannot supply one.
+Unknown fields (including provider-supplied task IDs, receipt IDs, or recovery
+dispositions), duplicate keys, trailing JSON and envelopes over 16 KiB are not
+accepted as structured explanations. They remain failures with the ordinary
+process diagnostic. An invalid optional diagnosis is omitted without changing
+the process outcome.
+
+`version` must be 1. `code` and evidence `name` use lowercase ASCII letters,
+digits and underscores, with 1–100 bytes. `cause_status` is `confirmed`,
+`hypothesis`, or `unresolved`: it describes the **provider's claim**, not an
+independent runtime attribution. Summary and cause are required, limited to
+500 and 2,000 bytes respectively. At most 16 evidence facts and eight suggestions
+are accepted, with each value/suggestion limited to 500 bytes. Evidence values
+are strings. Sensitive evidence names are masked; use nonsecret measurement
+names such as `observed_bytes`. Text is secret-masked and terminal controls are
+removed before persistence or presentation.
+
+Hufu binds the explanation to the current task and action receipt, preserves
+it in `runtime_error.diagnosis`, `failure_event.diagnosis`, action lifecycle
+`action_diagnosis`, and the action receipt's `diagnosis`, and replays it through
+the ordinary event/session path. Failure receipts also retain the runtime-owned
+attempt, process exit code and bounded/redacted process `diagnostics` separately
+from the concise provider message, so secondary errors remain inspectable.
+Terminal/TUI failure details, reports, JSON,
+`status` and `inspect task` use the same explanation. Runtime task states,
+dependency blocking, attempt history and recovery dispositions remain the
+authority for impact and eligibility. Suggestions are displayed as provider
+suggestions; they do not execute commands, authorize retries or override policy.
+No model call is needed to explain a measured domain failure. Providers that
+lack evidence should report `unresolved` and identify the missing observation,
+rather than inventing a cause. Historical failures without a diagnosis remain
+available through their original diagnostics; Hufu does not rewrite receipts or
+infer a new historical explanation.
 
 ## Provider types
 

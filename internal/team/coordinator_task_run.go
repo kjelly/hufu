@@ -3015,26 +3015,30 @@ func (c *Coordinator) ingestActionProviderArtifacts(ctx context.Context, actionR
 }
 
 type runtimeActionReceipt struct {
-	RuntimeMediaHash              string            `json:"runtime_media_hash,omitempty"`
-	Version                       int               `json:"version"`
-	RunID                         string            `json:"run_id,omitempty"`
-	TaskID                        string            `json:"task_id"`
-	Agent                         string            `json:"agent,omitempty"`
-	ActionID                      string            `json:"action_id"`
-	Capability                    string            `json:"capability"`
-	Provider                      string            `json:"provider,omitempty"`
-	ProviderDescriptorSHA256      string            `json:"provider_descriptor_sha256,omitempty"`
-	Type                          string            `json:"type"`
-	Status                        string            `json:"status"`
-	StartedAt                     time.Time         `json:"started_at"`
-	FinishedAt                    time.Time         `json:"finished_at"`
-	Output                        string            `json:"output,omitempty"`
-	Error                         string            `json:"error,omitempty"`
-	RunInputSnapshotID            string            `json:"run_input_snapshot_id,omitempty"`
-	RunInputSnapshotHash          string            `json:"run_input_snapshot_hash,omitempty"`
-	MaterializedActionPayloadHash string            `json:"materialized_action_payload_hash,omitempty"`
-	BoundInputs                   map[string]string `json:"bound_inputs,omitempty"`
-	RuntimeOutputsHash            string            `json:"runtime_outputs_hash,omitempty"`
+	Diagnostics                   []string                `json:"diagnostics,omitempty"`
+	ExitCode                      *int                    `json:"exit_code,omitempty"`
+	Attempt                       int                     `json:"attempt,omitempty"`
+	Diagnosis                     *ActionFailureDiagnosis `json:"diagnosis,omitempty"`
+	RuntimeMediaHash              string                  `json:"runtime_media_hash,omitempty"`
+	Version                       int                     `json:"version"`
+	RunID                         string                  `json:"run_id,omitempty"`
+	TaskID                        string                  `json:"task_id"`
+	Agent                         string                  `json:"agent,omitempty"`
+	ActionID                      string                  `json:"action_id"`
+	Capability                    string                  `json:"capability"`
+	Provider                      string                  `json:"provider,omitempty"`
+	ProviderDescriptorSHA256      string                  `json:"provider_descriptor_sha256,omitempty"`
+	Type                          string                  `json:"type"`
+	Status                        string                  `json:"status"`
+	StartedAt                     time.Time               `json:"started_at"`
+	FinishedAt                    time.Time               `json:"finished_at"`
+	Output                        string                  `json:"output,omitempty"`
+	Error                         string                  `json:"error,omitempty"`
+	RunInputSnapshotID            string                  `json:"run_input_snapshot_id,omitempty"`
+	RunInputSnapshotHash          string                  `json:"run_input_snapshot_hash,omitempty"`
+	MaterializedActionPayloadHash string                  `json:"materialized_action_payload_hash,omitempty"`
+	BoundInputs                   map[string]string       `json:"bound_inputs,omitempty"`
+	RuntimeOutputsHash            string                  `json:"runtime_outputs_hash,omitempty"`
 	catalogActionReceiptFields
 }
 
@@ -3058,6 +3062,8 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 	}
 	if eventType != "action_started" {
 		ref, err := c.writeRuntimeActionReceipt(runtimeActionReceipt{
+			Diagnosis:   actionDiagnosisFromError(actionErr),
+			Diagnostics: actionProcessEvidenceFromError(actionErr), ExitCode: actionExitCodeFromError(actionErr), Attempt: c.currentTaskAttempt(todoID),
 			RuntimeMediaHash: c.taskRuntimeMediaHash(todoID),
 			Version:          2, RunID: coordinatorRuntimeRunID(c), TaskID: todoID, Agent: task.Agent, ActionID: actionID,
 			Capability: capability, Provider: providerName, ProviderDescriptorSHA256: c.phaseWorkflow.providerDescriptorDigest(capability),
@@ -3099,6 +3105,7 @@ func (c *Coordinator) emitRuntimeActionEvent(eventType string, task TaskDef, tod
 		Phase:            runtimeActionEventPhase(c.phaseWorkflow), Agent: task.Agent, Provider: providerName,
 		Capability: capability, ActionID: actionID, ToolName: task.Action.Type,
 		ActionStatus: status, FailureSignature: failureSignature, Artifacts: refs,
+		ActionDiagnosis:    actionDiagnosisFromError(actionErr),
 		RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash,
 		MaterializedActionPayloadHash: task.MaterializedActionPayloadHash, BoundInputs: cloneStringMap(task.BoundInputs),
 		RuntimeOutputsHash: func() string {

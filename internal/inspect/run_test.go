@@ -272,7 +272,8 @@ func TestProjectTaskIncludesDetachedRedactedFailure(t *testing.T) {
 		FailureEvent: &team.FailureEventPayload{
 			TaskID: "task-1", FailureClass: team.TaskFailureClass("execution"),
 			RetryDisposition: team.RetryDisposition("retryable"), ExitCode: &exitCode,
-			Summary: "request failed api_key=super-secret-value", Stderr: "Authorization: Bearer super-secret-value",
+			Diagnosis: &team.ActionFailureDiagnosis{Version: 1, Code: "capacity_exceeded", Summary: "Capacity exceeded", CauseStatus: "confirmed", Cause: "Limit reached api_key=super-secret-value", Evidence: []team.ActionDiagnosticFact{{Name: "observed_bytes", Value: "411383"}}},
+			Summary:   "request failed api_key=super-secret-value", Stderr: "Authorization: Bearer super-secret-value",
 		},
 	}
 	data := projectTask(item, InspectQuery{RunID: "run-1", TaskID: item.ID})
@@ -285,6 +286,13 @@ func TestProjectTaskIncludesDetachedRedactedFailure(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "super-secret-value") {
 		t.Fatalf("failure projection leaked a secret: %s", encoded)
+	}
+	if data.Failure.Diagnosis == nil {
+		t.Fatal("inspect dropped provider diagnosis")
+	}
+	data.Failure.Diagnosis.Evidence[0].Value = "changed"
+	if item.FailureEvent.Diagnosis.Evidence[0].Value != "411383" {
+		t.Fatal("inspect aliases provider evidence")
 	}
 	data.Failure.Summary = "changed"
 	if item.FailureEvent.Summary == "changed" {

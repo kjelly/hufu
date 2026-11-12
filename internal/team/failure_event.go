@@ -15,23 +15,24 @@ const FailureTypeResultCollection = "collection"
 // failure event (§9). It deliberately contains bounded evidence rather than a
 // copy of the task prompt/description.
 type FailureEventPayload struct {
-	TaskID           string           `json:"task_id" yaml:"task_id"`
-	Phase            string           `json:"phase" yaml:"phase"`
-	FailureClass     TaskFailureClass `json:"failure_class" yaml:"failure_class"`
-	RetryDisposition RetryDisposition `json:"retry_disposition" yaml:"retry_disposition"`
-	Command          string           `json:"command" yaml:"command"`
-	WorkDir          string           `json:"work_dir" yaml:"work_dir"`
-	Shell            string           `json:"shell" yaml:"shell"`
-	ExitCode         *int             `json:"exit_code" yaml:"exit_code"`
-	Stdout           string           `json:"stdout" yaml:"stdout"`
-	Stderr           string           `json:"stderr" yaml:"stderr"`
-	Fingerprint      string           `json:"fingerprint" yaml:"fingerprint"`
-	Hint             string           `json:"hint" yaml:"hint"`
-	Summary          string           `json:"summary" yaml:"summary"`
-	NextAction       string           `json:"next_action,omitempty" yaml:"next_action,omitempty"`
-	FailedStepID     string           `json:"failed_step_id,omitempty" yaml:"failed_step_id,omitempty"`
-	ReceiptID        string           `json:"receipt_id,omitempty" yaml:"receipt_id,omitempty"`
-	FailureType      string           `json:"failure_type,omitempty" yaml:"failure_type,omitempty"`
+	Diagnosis        *ActionFailureDiagnosis `json:"diagnosis,omitempty" yaml:"diagnosis,omitempty"`
+	TaskID           string                  `json:"task_id" yaml:"task_id"`
+	Phase            string                  `json:"phase" yaml:"phase"`
+	FailureClass     TaskFailureClass        `json:"failure_class" yaml:"failure_class"`
+	RetryDisposition RetryDisposition        `json:"retry_disposition" yaml:"retry_disposition"`
+	Command          string                  `json:"command" yaml:"command"`
+	WorkDir          string                  `json:"work_dir" yaml:"work_dir"`
+	Shell            string                  `json:"shell" yaml:"shell"`
+	ExitCode         *int                    `json:"exit_code" yaml:"exit_code"`
+	Stdout           string                  `json:"stdout" yaml:"stdout"`
+	Stderr           string                  `json:"stderr" yaml:"stderr"`
+	Fingerprint      string                  `json:"fingerprint" yaml:"fingerprint"`
+	Hint             string                  `json:"hint" yaml:"hint"`
+	Summary          string                  `json:"summary" yaml:"summary"`
+	NextAction       string                  `json:"next_action,omitempty" yaml:"next_action,omitempty"`
+	FailedStepID     string                  `json:"failed_step_id,omitempty" yaml:"failed_step_id,omitempty"`
+	ReceiptID        string                  `json:"receipt_id,omitempty" yaml:"receipt_id,omitempty"`
+	FailureType      string                  `json:"failure_type,omitempty" yaml:"failure_type,omitempty"`
 }
 
 // MarshalJSON makes direct serialization safe as well as the explicit
@@ -88,6 +89,7 @@ func RenderFailureText(event *FailureEventPayload) string {
 	// run displayed "command: wait_for | work_dir: /home/u…" while the reason —
 	// an exhausted attempt budget — appeared nowhere in the CLI output at all.
 	// The fields below are supporting detail and can afford to be cut.
+	b.WriteString(renderActionDiagnosis(event.Diagnosis))
 	fmt.Fprintf(&b, "summary: %s\n", event.Summary)
 	if event.NextAction != "" {
 		fmt.Fprintf(&b, "next_action: %s\n", event.NextAction)
@@ -207,6 +209,7 @@ func cloneFailureEventPayload(event *FailureEventPayload) *FailureEventPayload {
 		return nil
 	}
 	copyEvent := *event
+	copyEvent.Diagnosis = NormalizedActionDiagnosis(event.Diagnosis)
 	if event.ExitCode != nil {
 		code := *event.ExitCode
 		copyEvent.ExitCode = &code
@@ -251,8 +254,11 @@ func (c *Coordinator) failureEventForItem(item *TodoItem, class TaskFailureClass
 		event.Shell = c.session.Config.Shell
 	}
 	if item.Action != nil && item.RuntimeError != nil {
+		event.Diagnosis = NormalizedActionDiagnosis(item.RuntimeError.Diagnosis)
+		event.ReceiptID = item.RuntimeError.ReceiptID
 		event.Command = item.Action.Type
 		event.ExitCode = item.RuntimeError.ExitCode
+		event.Stderr = strings.Join(item.RuntimeError.Evidence, "\n")
 	}
 	if class == FailureCancelled {
 		// Cancellation is a coordination-level terminal cause. A failed tool or
@@ -348,12 +354,13 @@ func failureEventPayloadMap(event *FailureEventPayload) map[string]interface{} {
 		"receipt_id":        event.ReceiptID,
 		"failure_type":      event.FailureType,
 		"failure_event":     event,
+		"diagnosis":         event.Diagnosis,
 	}
 }
 
 var failureEventFieldNames = []string{
 	"task_id", "phase", "failure_class", "retry_disposition", "command", "work_dir", "shell",
-	"exit_code", "stdout", "stderr", "fingerprint", "hint", "summary", "next_action", "failed_step_id", "receipt_id", "failure_type",
+	"diagnosis", "exit_code", "stdout", "stderr", "fingerprint", "hint", "summary", "next_action", "failed_step_id", "receipt_id", "failure_type",
 }
 
 // mergeFailureEventJSON applies only fields present in the event payload.
@@ -406,6 +413,7 @@ func mergeFailureEventJSON(existing *FailureEventPayload, payload json.RawMessag
 			_ = json.Unmarshal(raw, target)
 		}
 	}
+	apply("diagnosis", &result.Diagnosis)
 	apply("task_id", &result.TaskID)
 	apply("phase", &result.Phase)
 	apply("failure_class", &result.FailureClass)
@@ -431,6 +439,9 @@ func failureSummary(item *TodoItem) string {
 		return ""
 	}
 	if item.FailureEvent != nil && strings.TrimSpace(item.FailureEvent.Summary) != "" {
+		if d := NormalizedActionDiagnosis(item.FailureEvent.Diagnosis); d != nil {
+			return d.Summary
+		}
 		return item.FailureEvent.Summary
 	}
 	return utils.TruncateString(item.Detail, 500)
