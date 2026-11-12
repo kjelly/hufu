@@ -16,6 +16,11 @@ func validateResumeRepairTarget(source *team.ResumeSource, taskID string) error 
 		return nil
 	}
 	for _, item := range source.Session.Tasks {
+		if item != nil && item.ID == taskID && team.HasLegacySubmissionCandidate(item) {
+			return fmt.Errorf("task %q requires controlled legacy submission migration; preview with --upgrade-contracts --repair-result %s --dry-run (and --metadata-only for an unversioned workspace)", taskID, taskID)
+		}
+	}
+	for _, item := range source.Session.Tasks {
 		if item != nil && item.ID == taskID && item.FailureEvent != nil &&
 			((item.Status == team.TaskBlocked && item.FailureEvent.FailureClass == team.FailureProtocol) ||
 				(item.Status == team.TaskError && item.FailureEvent.FailureClass == team.FailureCancelled && item.ExecutionReceipt != nil && item.ExecutionReceipt.ResultCollection != nil)) {
@@ -62,11 +67,20 @@ func runResumeSourcePreflight(cmd *cobra.Command, session *team.TeamSession, coo
 }
 
 func bindResumePreflightVersion(ctx context.Context, session *team.TeamSession) error {
+	return bindResumePreflightVersionContext(ctx, session, true)
+}
+
+// Result repair retains legacy unmanaged support. When a registered workspace
+// exists, its mode and identity must still match execution admission.
+func bindResumePreflightVersionContext(ctx context.Context, session *team.TeamSession, required bool) error {
 	managed, registry, _, err := lookupManagedWorkspace(ctx, session.Workspace)
 	if err != nil {
 		return err
 	}
 	if registry == nil {
+		if !required {
+			return nil
+		}
 		return fmt.Errorf("%w: resume preflight requires a managed workspace", versionstore.ErrVersionedWorkspaceUnresolved)
 	}
 	defer func() { _ = registry.Close() }()

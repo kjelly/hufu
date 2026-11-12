@@ -21,7 +21,7 @@ func writeContractRecoveryPreview(w io.Writer, plan *team.ContractRecoveryPlan, 
 	var out strings.Builder
 	failed, downstream := 0, 0
 	for _, task := range plan.Tasks {
-		if task.Reason == "original_failure" {
+		if task.Reason == "original_failure" && task.Action == "retry" {
 			failed++
 		}
 		if task.Reason == "upstream_changed" {
@@ -33,6 +33,9 @@ func writeContractRecoveryPreview(w io.Writer, plan *team.ContractRecoveryPlan, 
 		label = "Read-only work recovery"
 	}
 	fmt.Fprintf(&out, "%s preview: retain %d; retry %d (original failures: %d; affected downstream: %d)\n", label, plan.Retained, plan.Retried, failed, downstream)
+	if plan.Repaired > 0 {
+		fmt.Fprintf(&out, "Result-only repairs: %d; original worker tools will not be replayed; collector turns require a separate child resume --repair-result.\n", plan.Repaired)
+	}
 	fmt.Fprintf(&out, "Source branch: %q; event: %s\n", plan.SourceBranch, plan.SourceHead)
 	if retry := plan.WorkRetry; retry != nil {
 		fmt.Fprintf(&out, "Read-only work retry: task %q; missing required decisions: %d; old work and decisions remain in the source branch.\n", retry.TaskID, len(retry.MissingDecisions))
@@ -45,6 +48,9 @@ func writeContractRecoveryPreview(w io.Writer, plan *team.ContractRecoveryPlan, 
 	}
 	for _, task := range plan.Tasks {
 		fmt.Fprintf(&out, "  Task %q: %s — %s (source status: %s)", task.ID, task.Action, recoveryReasonText(task.Reason), task.SourceStatus)
+		if legacy := task.LegacySubmission; legacy != nil {
+			fmt.Fprintf(&out, "; transport: tool -> runtime; legacy submissions spent: %d; no turns granted by publication", legacy.AttemptsUsed)
+		}
 		if len(task.AffectedBy) > 0 {
 			fmt.Fprintf(&out, "; affected by: %s", strings.Join(task.AffectedBy, ", "))
 		}
@@ -79,6 +85,8 @@ func writeContractRecoveryPreview(w io.Writer, plan *team.ContractRecoveryPlan, 
 
 func recoveryReasonText(reason string) string {
 	switch reason {
+	case "legacy_submission":
+		return "rejected legacy submit_result candidate preserved for bounded collection"
 	case "original_failure":
 		return "original failed or blocked task"
 	case "unfinished_task":

@@ -24,7 +24,7 @@ type chromePageFlow struct {
 	pendingDwell  bool
 	captureFailed bool
 	verification  bool
-	humanRequests map[string]bool
+	humanRequests map[string]*chromeHumanRequest
 	waitForHuman  func(context.Context) error
 }
 

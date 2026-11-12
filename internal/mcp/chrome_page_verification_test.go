@@ -134,8 +134,13 @@ func TestChromePageExplicitVerificationRequiresChallengeAndSharesRequestLimit(t 
 		t.Run(string(state), func(t *testing.T) {
 			page := &chromePageFixture{text: "Current public page"}
 			waits := 0
-			flow := chromePageFlow{page: page, verification: true, waitForHuman: func(context.Context) error { waits++; return nil }}
-			ctx := WithChromePageClassifier(t.Context(), func(context.Context, browser.Snapshot) (ChromePageState, error) { return state, nil })
+			flow := chromePageFlow{page: page, verification: true, waitForHuman: func(context.Context) error { waits++; page.text = "Verified article"; return nil }}
+			ctx := WithChromePageClassifier(t.Context(), func(context.Context, browser.Snapshot) (ChromePageState, error) {
+				if page.text == "Verified article" {
+					return ChromePageReadable, nil
+				}
+				return state, nil
+			})
 			err := flow.waitForVerification(ctx, flow.waitForHuman)
 			challenge := state == ChromePageNeedsHuman
 			if (err == nil) != challenge || waits != map[bool]int{false: 0, true: 1}[challenge] {
@@ -145,6 +150,79 @@ func TestChromePageExplicitVerificationRequiresChallengeAndSharesRequestLimit(t 
 			_ = flow.waitForVerification(ctx, flow.waitForHuman)
 			if waits > 1 || (!challenge && waits != 0) {
 				t.Fatalf("repeated or unjustified prompt: %d", waits)
+			}
+		})
+	}
+}
+
+func TestChromePageVerificationAllowsOnlyOneExplicitRetry(t *testing.T) {
+	for _, scenario := range []string{"confirmed", "still_challenged", "cancelled", "unavailable"} {
+		t.Run(scenario, func(t *testing.T) {
+			page := &chromePageFixture{text: challengePageText}
+			flow := chromePageFlow{page: page, verification: true}
+			waits := 0
+			flow.waitForHuman = func(context.Context) error {
+				waits++
+				if scenario == "cancelled" {
+					return tools.ErrHumanVerificationDeclined
+				}
+				if scenario == "unavailable" && waits == 1 {
+					return errors.New("human unavailable")
+				}
+				if waits == 2 && (scenario == "confirmed" || scenario == "unavailable") {
+					page.text = "Verified article"
+				}
+				return nil
+			}
+			var events []tools.HumanVerificationObservation
+			ctx := tools.WithHumanVerificationObserver(t.Context(), func(_ context.Context, event tools.HumanVerificationObservation) error {
+				events = append(events, event)
+				return nil
+			})
+			ctx = WithChromePageClassifier(ctx, func(_ context.Context, captured browser.Snapshot) (ChromePageState, error) {
+				if captured.Text == "Verified article" {
+					return ChromePageReadable, nil
+				}
+				return ChromePageNeedsHuman, nil
+			})
+			if _, err := flow.snapshot(ctx); err == nil {
+				t.Fatal("unresolved initial challenge succeeded")
+			}
+			_, _ = flow.snapshot(ctx)
+			_, _ = flow.navigate(ctx, "https://example.test/article")
+			_, _ = flow.snapshot(ctx)
+			if waits != 1 {
+				t.Fatal("automatic read or renavigation repeated the prompt")
+			}
+			err := flow.waitForVerification(ctx, flow.waitForHuman)
+			wantSuccess := scenario == "confirmed" || scenario == "unavailable"
+			if (err == nil) != wantSuccess {
+				t.Fatalf("error=%v", err)
+			}
+			_ = flow.waitForVerification(ctx, flow.waitForHuman)
+			wantWaits := 2
+			if scenario == "cancelled" {
+				wantWaits = 1
+			}
+			if waits != wantWaits {
+				t.Fatalf("waits=%d", waits)
+			}
+			if wantSuccess && (len(flow.humanRequests) != 0 || events[len(events)-1].Status != "page_verified") {
+				t.Fatalf("requests=%+v events=%+v", flow.humanRequests, events)
+			}
+			if scenario == "still_challenged" && events[len(events)-1].Status != "page_unresolved" {
+				t.Fatalf("events=%+v", events)
+			}
+			if wantWaits == 2 {
+				var requests []tools.HumanVerificationObservation
+				for _, event := range events {
+					if event.Status == "requested" {
+						requests = append(requests, event)
+					}
+				}
+				if len(requests) != 2 || requests[0].RequestID == requests[1].RequestID || requests[1].Trigger != "explicit" || requests[1].Attempt != 2 || requests[0].URLSHA256 != requests[1].URLSHA256 {
+					t.Fatalf("requests=%+v", requests)
+				}
 			}
 		})
 	}
@@ -246,13 +324,13 @@ func TestChromePageVerificationDwellAndHumanWaitPreserveWorkingBudget(t *testing
 			}
 			return ChromePageReadable, nil
 		})
-		tools.SetOnAskUserTUI(func(ctx context.Context, _, _ string, _ []tools.AskUserTUIOption, _ bool) (string, bool) {
+		tools.SetOnAskUserTUI(func(ctx context.Context, question, _ string, _ []tools.AskUserTUIOption, _ bool) (string, bool) {
 			time.Sleep(time.Hour)
 			if ctx.Err() != nil {
 				t.Fatal("human wait consumed working-time budget")
 			}
 			page.text = "Fresh article after manual verification"
-			return `{"answers":["continue"]}`, true
+			return chromeConfirmationAnswer(question), true
 		})
 		defer tools.SetOnAskUserTUI(nil)
 		flow.waitForHuman = func(ctx context.Context) error {

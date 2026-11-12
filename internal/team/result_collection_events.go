@@ -74,6 +74,17 @@ func (c *Coordinator) appendCollectionCheckpointLocked(ctx context.Context, item
 	receipt.ResultCollection = cloneResultCollectionCheckpoint(checkpoint)
 	if result != nil {
 		c.applyResultContractReceipt(checkpoint.TaskID, result, &receipt)
+		if checkpoint.LegacySubmission != nil && taskResultStatusIsSuccessful(result.Status) {
+			// This derived receipt records the accepted submission outcome. The exact
+			// unsuccessful native receipt remains sealed in LegacySubmission.Work.
+			receipt.ExitCode = new(0)
+			receipt.SubmittedResult = cloneTaskResult(result)
+			receipt.RepairProvenance.Success = true
+			receipt.RepairProvenance.RepairAttempts = checkpoint.TurnsUsed
+			receipt.RepairProvenance.FailureReason = ""
+			receipt.RepairProvenance.Error = ""
+			receipt.RepairProvenance.SubmittedResult = cloneTaskResult(result)
+		}
 	}
 	payload := resultCollectionEvent{Receipt: receipt, Result: cloneTaskResult(result)}
 	body, err := json.Marshal(payload, json.Deterministic(true), collectionDurationFormat)

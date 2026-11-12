@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"encoding/json/v2"
 	"fmt"
 
 	"github.com/kjelly/hufu/internal/browser"
@@ -13,7 +14,28 @@ import (
 )
 
 func (c *Coordinator) withChromePageVerification(ctx context.Context) context.Context {
+	ctx = tools.WithHumanVerificationObserver(ctx, c.recordHumanVerification)
 	return mcp.WithChromePageClassifier(ctx, c.classifyChromePage)
+}
+
+func (c *Coordinator) recordHumanVerification(ctx context.Context, observation tools.HumanVerificationObservation) error {
+	if !c.hasDurableEventJournal() {
+		return nil
+	}
+	metadata, _ := invocationMetadataFromContext(ctx)
+	payload, err := json.Marshal(observation)
+	if err != nil {
+		return err
+	}
+	_, err = c.EventJournal().Append(ctx, RunEvent{
+		Type: string(EventHumanVerificationObserved), RunID: metadata.RunID,
+		BranchID: c.activeBranchID(), TaskID: metadata.TaskID, Attempt: metadata.Attempt,
+		Actor: metadata.AgentName, Payload: payload,
+	})
+	if err != nil {
+		return fmt.Errorf("persist human verification: %w", err)
+	}
+	return nil
 }
 
 func (c *Coordinator) classifyChromePage(ctx context.Context, page browser.Snapshot) (mcp.ChromePageState, error) {

@@ -2,7 +2,9 @@ package team
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -281,13 +283,15 @@ func TestDAGSchedulerHumanWaitRunsIndependentWork(t *testing.T) {
 			resumed := make(chan struct{})
 			finish := sync.OnceFunc(func() { close(finishOther) })
 			respond := sync.OnceFunc(func() { close(answer) })
-			tools.SetOnAskUserTUI(func(ctx context.Context, _, _ string, _ []tools.AskUserTUIOption, _ bool) (string, bool) {
+			tools.SetOnAskUserTUI(func(ctx context.Context, question, _ string, _ []tools.AskUserTUIOption, _ bool) (string, bool) {
 				close(prompt)
 				select {
 				case <-answer:
 				case <-ctx.Done():
 				}
-				return `{"answers":["continue"]}`, true
+				_, code, _ := strings.Cut(question, "\nConfirmation code: ")
+				answer, _ := json.Marshal(tools.AskUserResponse{Free: code})
+				return string(answer), true
 			})
 			defer tools.SetOnAskUserTUI(nil)
 			var humanID, otherID string
@@ -391,13 +395,15 @@ func TestDAGSchedulerHumanWaitWithSharedBackend(t *testing.T) {
 	queued, resumed := make(chan struct{}), make(chan struct{})
 	backend := make(chan struct{}, 1)
 	respond := sync.OnceFunc(func() { close(answer) })
-	tools.SetOnAskUserTUI(func(ctx context.Context, _, _ string, _ []tools.AskUserTUIOption, _ bool) (string, bool) {
+	tools.SetOnAskUserTUI(func(ctx context.Context, question, _ string, _ []tools.AskUserTUIOption, _ bool) (string, bool) {
 		close(prompt)
 		select {
 		case <-answer:
 		case <-ctx.Done():
 		}
-		return `{"answers":["continue"]}`, true
+		_, code, _ := strings.Cut(question, "\nConfirmation code: ")
+		answer, _ := json.Marshal(tools.AskUserResponse{Free: code})
+		return string(answer), true
 	})
 	defer tools.SetOnAskUserTUI(nil)
 	var humanID string

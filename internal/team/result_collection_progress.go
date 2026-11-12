@@ -13,6 +13,11 @@ func collectionReceipt(item *TodoItem, checkpoint *ResultCollectionCheckpoint) *
 	if item == nil || checkpoint == nil {
 		return nil
 	}
+	if receipt := item.ExecutionReceipt; receipt != nil && receipt.ResultCollection != nil &&
+		receipt.ResultCollection.BranchID == checkpoint.BranchID && receipt.ResultCollection.Work == checkpoint.Work &&
+		receipt.RunID == checkpoint.SourceRunID && receipt.Attempt == checkpoint.Attempt && receipt.ModelExecutionID == checkpoint.ModelExecutionID {
+		return receipt
+	}
 	for index := range item.ExecutionReceipts {
 		receipt := &item.ExecutionReceipts[index]
 		if receipt.RunID == checkpoint.SourceRunID && receipt.Attempt == checkpoint.Attempt && receipt.ModelExecutionID == checkpoint.ModelExecutionID &&
@@ -29,18 +34,25 @@ func collectionReceipt(item *TodoItem, checkpoint *ResultCollectionCheckpoint) *
 
 func collectionTurnLimit(receipt *ExecutionReceipt) (int, error) {
 	limit := resultCollectionDefaultTurns
+	if receipt.ResultCollection != nil && receipt.ResultCollection.LegacySubmission != nil {
+		limit = max(limit, receipt.ResultCollection.LegacySubmission.AttemptsUsed)
+	}
 	if receipt.RepairProvenance == nil {
 		return limit, nil
 	}
 	checkpoint := receipt.ResultCollection
 	for _, grant := range receipt.RepairProvenance.OperatorGrants {
-		if checkpoint == nil || grant.RunID == "" || grant.BranchID != checkpoint.BranchID || grant.TranscriptRef != receipt.TranscriptRef ||
+		bound := checkpoint
+		if checkpoint != nil && checkpoint.ContractUpgrade != nil && grant.BranchID == checkpoint.ContractUpgrade.Original.BranchID {
+			bound = checkpoint.ContractUpgrade.Original
+		}
+		if bound == nil || grant.RunID == "" || grant.BranchID != bound.BranchID || grant.TranscriptRef != receipt.TranscriptRef ||
 			grant.Model != "" || grant.AfterAttempts < 0 || grant.AfterAttempts > checkpoint.TurnsUsed ||
 			(grant.AdditionalAttempts != 0 && grant.AdditionalAttempts != 2) {
 			return 0, errResultCollectionStale
 		}
 		if grant.Recovery != nil {
-			if err := validateStoredRecoveryGrant(grant, checkpoint); err != nil {
+			if err := validateStoredRecoveryGrant(grant, bound); err != nil {
 				return 0, err
 			}
 		}

@@ -18,6 +18,7 @@ type ResumeSource struct {
 	eventHash           string
 	sessionSHA256       string
 	metadataOnly        bool
+	contractRepairTask  string
 	inputPolicyRecovery bool
 }
 
@@ -55,11 +56,13 @@ func ReadResumeSource(workspace, target, runID string) (*ResumeSource, error) {
 		return nil, ResumeSourceError(workspace, err)
 	}
 	metadataOnly := false
+	contractRepairTask := ""
 	inputPolicyRecovery := false
 	for _, event := range lineage {
 		switch event.Type {
 		case string(EventDerivedForkCreated):
 			metadataOnly = false // An explicit new-task derivation starts a new request.
+			contractRepairTask = ""
 			inputPolicyRecovery = false
 		case string(EventContractRecovery):
 			plan, decodeErr := decodeContractRecovery(event)
@@ -67,6 +70,7 @@ func ReadResumeSource(workspace, target, runID string) (*ResumeSource, error) {
 				return nil, ResumeSourceError(workspace, decodeErr)
 			}
 			metadataOnly = plan.MetadataOnly
+			contractRepairTask = contractRepairTaskID(plan)
 			inputPolicyRecovery = inputPolicyRecovery || plan.InputPolicyUpgrade != nil
 		}
 	}
@@ -85,7 +89,7 @@ func ReadResumeSource(workspace, target, runID string) (*ResumeSource, error) {
 		return nil, err
 	}
 	return &ResumeSource{BranchID: branch.ID, Session: session, workspace: workspace,
-		activeBranch: tree.ActiveBranch, eventHead: head, eventHash: hash, sessionSHA256: digest, metadataOnly: metadataOnly, inputPolicyRecovery: inputPolicyRecovery}, nil
+		activeBranch: tree.ActiveBranch, eventHead: head, eventHash: hash, sessionSHA256: digest, metadataOnly: metadataOnly, contractRepairTask: contractRepairTask, inputPolicyRecovery: inputPolicyRecovery}, nil
 }
 
 // ResumeSourceError retains the refusal and names inspectable alternatives.

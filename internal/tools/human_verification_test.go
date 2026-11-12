@@ -4,8 +4,10 @@ package tools
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -106,10 +108,10 @@ func TestOverlappingTUIWaitsCountOnce(t *testing.T) {
 }
 
 func TestHumanVerificationRequiresActualConfirmation(t *testing.T) {
-	for _, scenario := range []string{"continue", "cancel", "unattended", "invalid", "cancelled"} {
+	for _, scenario := range []string{"continue", "cancel", "unattended", "invalid", "cancelled", "tui_cancelled"} {
 		t.Run(scenario, func(t *testing.T) {
 			called := false
-			SetOnAskUserTUI(func(ctx context.Context, _, _ string, _ []AskUserTUIOption, _ bool) (string, bool) {
+			SetOnAskUserTUI(func(ctx context.Context, question, _ string, _ []AskUserTUIOption, _ bool) (string, bool) {
 				called = true
 				if IsAutoApprove(ctx) {
 					t.Error("manual verification can auto-approve")
@@ -117,7 +119,13 @@ func TestHumanVerificationRequiresActualConfirmation(t *testing.T) {
 				if scenario == "invalid" {
 					return `{"free_text":"continue"}`, true
 				}
-				return `{"answers":["` + scenario + `"]}`, true
+				if scenario == "tui_cancelled" {
+					return `{"cancelled":true}`, true
+				}
+				if scenario == "continue" {
+					return humanConfirmationAnswer(question), true
+				}
+				return `{"free_text":"cancel"}`, true
 			})
 			defer SetOnAskUserTUI(nil)
 			ctx, stop := context.WithCancel(t.Context())
@@ -130,6 +138,9 @@ func TestHumanVerificationRequiresActualConfirmation(t *testing.T) {
 				stop()
 			}
 			err := WaitForHumanVerification(callCtx, "Verify in Chrome")
+			if (scenario == "cancel" || scenario == "tui_cancelled") && !errors.Is(err, ErrHumanVerificationDeclined) {
+				t.Fatalf("cancellation lost: %v", err)
+			}
 			if (err == nil) != (scenario == "continue") {
 				t.Fatalf("error=%v", err)
 			}
@@ -162,7 +173,7 @@ func TestHumanVerificationExcludesWaitAndPreservesOuterLimits(t *testing.T) {
 				defer end()
 				worker, endWorker := WithInteractiveAwareTimeout(coordinator, time.Second)
 				defer endWorker()
-				SetOnAskUserTUI(func(ctx context.Context, _, _ string, _ []AskUserTUIOption, _ bool) (string, bool) {
+				SetOnAskUserTUI(func(ctx context.Context, question, _ string, _ []AskUserTUIOption, _ bool) (string, bool) {
 					if scenario == "continue" {
 						time.Sleep(time.Hour)
 						if total.Err() != nil || idle.Elapsed() != time.Hour {
@@ -177,7 +188,7 @@ func TestHumanVerificationExcludesWaitAndPreservesOuterLimits(t *testing.T) {
 						}
 						<-ctx.Done()
 					}
-					return `{"answers":["continue"]}`, true
+					return humanConfirmationAnswer(question), true
 				})
 				defer SetOnAskUserTUI(nil)
 				err := WaitForHumanVerification(worker, "Verify in Chrome")
@@ -194,6 +205,78 @@ func TestHumanVerificationExcludesWaitAndPreservesOuterLimits(t *testing.T) {
 					t.Fatal("outer limit ignored")
 				}
 			})
+		})
+	}
+}
+
+func humanConfirmationAnswer(question string) string {
+	_, code, _ := strings.Cut(question, "\nConfirmation code: ")
+	answer, _ := json.Marshal(AskUserResponse{Free: code})
+	return string(answer)
+}
+
+func TestHumanVerificationRejectsDefaultAndStaleAnswers(t *testing.T) {
+	for _, scenario := range []string{"blank_then_code", "legacy_choice", "stale_code", "journal_failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			var oldCode string
+			prompts := 0
+			SetOnAskUserTUI(func(_ context.Context, question, kind string, opts []AskUserTUIOption, _ bool) (string, bool) {
+				prompts++
+				if kind != "free_text" || len(opts) != 0 {
+					t.Fatal("verification offered a default selection")
+				}
+				if oldCode == "" {
+					_, oldCode, _ = strings.Cut(question, "\nConfirmation code: ")
+					return humanConfirmationAnswer(question), true
+				}
+				switch scenario {
+				case "blank_then_code":
+					if prompts == 2 {
+						return `{"free_text":""}`, true
+					}
+					return humanConfirmationAnswer(question), true
+				case "legacy_choice":
+					return `{"answers":["continue"]}`, true
+				default:
+					data, _ := json.Marshal(AskUserResponse{Free: oldCode})
+					return string(data), true
+				}
+			})
+			t.Cleanup(func() { SetOnAskUserTUI(nil) })
+			if err := WaitForHumanVerification(t.Context(), "First page"); err != nil {
+				t.Fatal(err)
+			}
+			var observations []HumanVerificationObservation
+			journalError := errors.New("journal unavailable")
+			ctx := WithHumanVerificationObserver(t.Context(), func(_ context.Context, event HumanVerificationObservation) error {
+				observations = append(observations, event)
+				if scenario == "journal_failure" {
+					return journalError
+				}
+				return nil
+			})
+			err := WaitForHumanVerification(ctx, "Second page")
+			if (err == nil) != (scenario == "blank_then_code") {
+				t.Fatalf("error=%v", err)
+			}
+			if scenario == "journal_failure" {
+				if !errors.Is(err, journalError) || prompts != 1 {
+					t.Fatalf("prompts=%d error=%v", prompts, err)
+				}
+				return
+			}
+			last := observations[len(observations)-1]
+			want := "failed"
+			if scenario == "blank_then_code" {
+				want = "confirmed"
+			}
+			if last.Status != want || last.RequestID == "" {
+				t.Fatalf("observations=%+v", observations)
+			}
+			encoded, _ := json.Marshal(observations)
+			if strings.Contains(string(encoded), oldCode) || strings.Contains(string(encoded), "Second page") {
+				t.Fatal("persisted prompt or confirmation code")
+			}
 		})
 	}
 }

@@ -112,19 +112,19 @@ func TestChromeSnapshotAutomaticallyRequestsAuthorizedHumanVerification(t *testi
 			}
 			tools.SetOnAskUserTUI(func(_ context.Context, question, _ string, _ []tools.AskUserTUIOption, _ bool) (string, bool) {
 				prompts++
-				if !strings.Contains(question, "https://example.test/source") || captures.Load() != 1 {
+				if !strings.Contains(question, "https://example.test/source") || captures.Load() < 1 {
 					t.Error("human prompt lost actual target or capture order")
 				}
 				if scenario == "explicit" && !strings.Contains(question, "Verify this public security challenge") {
 					t.Error("explicit wait lost its authorized reason")
 				}
 				if scenario == "cancelled" {
-					return `{"answers":["cancel"]}`, true
+					return `{"free_text":"cancel"}`, true
 				}
 				if scenario != "still_challenged" {
 					verified.Store(true)
 				}
-				return `{"answers":["continue"]}`, true
+				return chromeConfirmationAnswer(question), true
 			})
 			t.Cleanup(func() { tools.SetOnAskUserTUI(nil) })
 			descriptor := manager.GetTools()[0]
@@ -178,7 +178,11 @@ func TestChromeSnapshotAutomaticallyRequestsAuthorizedHumanVerification(t *testi
 				}
 				_, waitError, err := manager.ExecuteAuthorizedTool(ctx, waitTool.Name, waitDigest, `{"reason":"Please confirm the page"}`)
 				denied := scenario == "denied" && err != nil
-				if (!denied && (err != nil || !waitError)) || prompts != wantPrompts {
+				expectedPrompts := wantPrompts
+				if scenario == "still_challenged" {
+					expectedPrompts++
+				}
+				if (!denied && (err != nil || !waitError)) || prompts != expectedPrompts {
 					t.Fatalf("explicit wait bypassed classification: tool error=%v error=%v prompts=%d", waitError, err, prompts)
 				}
 			}

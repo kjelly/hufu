@@ -1,0 +1,659 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Concise synthesis with complete bound evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "synthesis_complete",
+    "answer",
+    "sections",
+    "unresolved",
+    "input_review",
+    "citations"
+  ],
+  "properties": {
+    "synthesis_complete": {
+      "type": "boolean"
+    },
+    "answer": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "$ref": "#/$defs/paragraph"
+      },
+      "description": "Directly answer the original question by connecting the audited findings, including decisive conditions and uncertainty."
+    },
+    "sections": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "$ref": "#/$defs/section"
+      },
+      "description": "Explain material distinctions, conditions, exceptions, and disagreements. Do not repeat each finding as a separate section."
+    },
+    "unresolved": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "maxLength": 2500,
+      "description": "Explain what remains unknown and its effect on the answer; preserve every material qualification from the accepted audit."
+    },
+    "input_review": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "audit_complete",
+          "input_review",
+          "question",
+          "summary",
+          "findings",
+          "overall_limitations",
+          "claim_assessments",
+          "kind",
+          "task_id",
+          "payload_sha256"
+        ],
+        "properties": {
+          "audit_complete": {
+            "type": "boolean",
+            "const": true
+          },
+          "input_review": {
+            "type": "array",
+            "maxItems": 2,
+            "uniqueItems": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "task_id",
+                "payload_sha256",
+                "lens"
+              ],
+              "properties": {
+                "task_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "payload_sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "lens": {
+                  "type": "string",
+                  "enum": [
+                    "primary_search",
+                    "countercheck"
+                  ]
+                }
+              }
+            },
+            "minItems": 2,
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "lens": {
+                      "const": "primary_search"
+                    }
+                  },
+                  "required": [
+                    "lens"
+                  ]
+                }
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "lens": {
+                      "const": "countercheck"
+                    }
+                  },
+                  "required": [
+                    "lens"
+                  ]
+                }
+              }
+            ]
+          },
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 3000,
+            "description": "Procedural audit summary only; factual verdicts belong exclusively to findings[].verdict after runtime evidence binding."
+          },
+          "findings": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/$defs/finding"
+            }
+          },
+          "overall_limitations": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2500
+          },
+          "claim_assessments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "source_task_id",
+                "source_index",
+                "claim",
+                "handling",
+                "reason"
+              ],
+              "properties": {
+                "source_task_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "maxLength": 200
+                },
+                "source_index": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "claim": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "maxLength": 1000
+                },
+                "handling": {
+                  "type": "string",
+                  "enum": [
+                    "addressed",
+                    "duplicate",
+                    "out_of_scope",
+                    "unverified"
+                  ]
+                },
+                "reason": {
+                  "description": "Input-accounting explanation only: split, merge, exclusion or unresolved coverage. Do not restate factual verdicts or quotation-validation success; runtime can downgrade findings after submission. Not rendered in the final report.",
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "maxLength": 1500
+                }
+              }
+            }
+          },
+          "kind": {
+            "type": "string",
+            "const": "evidence_audit"
+          },
+          "task_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "payload_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    "citations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "audit_task_id",
+          "finding_index",
+          "claim",
+          "answer_0",
+          "answer_1",
+          "answer_2",
+          "section_0",
+          "section_1",
+          "section_2",
+          "section_3",
+          "section_4",
+          "section_5"
+        ],
+        "properties": {
+          "audit_task_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "finding_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "claim": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "description": "One independently adjudicable proposition, preserving speaker, cited person/document and event/time context. Split claims about different speakers or independently verifiable numbers. Support for a subset or a different speaker never establishes the whole claim; do not qualify a compound supported claim with only one part verified."
+          },
+          "answer_0": {
+            "type": "string",
+            "enum": [
+              "cite",
+              "omit"
+            ]
+          },
+          "answer_1": {
+            "type": "string",
+            "enum": [
+              "cite",
+              "omit"
+            ]
+          },
+          "answer_2": {
+            "type": "string",
+            "enum": [
+              "cite",
+              "omit"
+            ]
+          },
+          "section_0": {
+            "type": "string",
+            "enum": [
+              "cite",
+              "omit"
+            ]
+          },
+          "section_1": {
+            "type": "string",
+            "enum": [
+              "cite",
+              "omit"
+            ]
+          },
+          "section_2": {
+            "type": "string",
+            "enum": [
+              "cite",
+              "omit"
+            ]
+          },
+          "section_3": {
+            "type": "string",
+            "enum": [
+              "cite",
+              "omit"
+            ]
+          },
+          "section_4": {
+            "type": "string",
+            "enum": [
+              "cite",
+              "omit"
+            ]
+          },
+          "section_5": {
+            "type": "string",
+            "enum": [
+              "cite",
+              "omit"
+            ]
+          }
+        }
+      },
+      "description": "One runtime-bound row per accepted audit finding. Citation choices affect only the concise presentation; every finding remains in input_review and the appendix."
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim",
+        "verdict",
+        "researcher_agreement",
+        "evidence_basis",
+        "analysis",
+        "sources",
+        "dissent",
+        "limitations"
+      ],
+      "properties": {
+        "claim": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "One independently adjudicable proposition, preserving speaker, cited person/document and event/time context. Split claims about different speakers or independently verifiable numbers. Support for a subset or a different speaker never establishes the whole claim; do not qualify a compound supported claim with only one part verified."
+        },
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "supported",
+            "contradicted",
+            "mixed",
+            "unverified"
+          ]
+        },
+        "researcher_agreement": {
+          "type": "string",
+          "enum": [
+            "agree",
+            "disagree",
+            "partial",
+            "not_applicable"
+          ]
+        },
+        "evidence_basis": {
+          "type": "string",
+          "enum": [
+            "official_primary_checked",
+            "primary_source_checked",
+            "independent_corroboration",
+            "single_source",
+            "conflicting_sources",
+            "insufficient_evidence"
+          ]
+        },
+        "analysis": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2500
+        },
+        "sources": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "dissent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500
+        },
+        "limitations": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "verdict": {
+                "enum": [
+                  "supported",
+                  "contradicted",
+                  "mixed"
+                ]
+              }
+            },
+            "required": [
+              "verdict"
+            ]
+          },
+          "then": {
+            "properties": {
+              "sources": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "evidence_basis": {
+                "const": "independent_corroboration"
+              }
+            },
+            "required": [
+              "evidence_basis"
+            ]
+          },
+          "then": {
+            "properties": {
+              "sources": {
+                "minItems": 2
+              }
+            }
+          }
+        }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "publisher",
+        "publication_date",
+        "url",
+        "source_type",
+        "page_status",
+        "quote",
+        "relation",
+        "independence_group"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "publisher": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "publication_date": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https?://[^\\s]+$",
+          "maxLength": 4096
+        },
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "official_primary",
+            "primary",
+            "secondary",
+            "reference",
+            "unknown"
+          ]
+        },
+        "page_status": {
+          "type": "string",
+          "enum": [
+            "checked",
+            "unverified"
+          ]
+        },
+        "fetch_status": {
+          "type": "string",
+          "enum": [
+            "fetched",
+            "failed",
+            "unusable_response",
+            "not_attempted",
+            "pending"
+          ],
+          "description": "Runtime-owned observation status; omit on submission."
+        },
+        "citation_status": {
+          "type": "string",
+          "enum": [
+            "matched",
+            "mismatch",
+            "missing_quote",
+            "unavailable"
+          ],
+          "description": "Runtime-owned exact quote matching status; omit on submission."
+        },
+        "tool_call_id": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "quote": {
+          "type": "string",
+          "maxLength": 800,
+          "description": "One contiguous exact substring of this worker's successful fetch; no added ellipsis, splicing or paraphrase."
+        },
+        "relation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "independence_group": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "page_status": {
+                "const": "checked"
+              }
+            },
+            "required": [
+              "page_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "quote": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "paragraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "maxLength": 1800
+        }
+      }
+    },
+    "section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "title"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "maxLength": 1800
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "maxLength": 120
+        }
+      }
+    }
+  },
+  "x-hufu-evidence-inputs": {
+    "runtime_owned": true,
+    "items_pointer": "/input_review",
+    "task_id_pointer": "/task_id",
+    "hash_pointer": "/payload_sha256",
+    "complete_pointer": "/synthesis_complete",
+    "value_bindings": {
+      "/audit_complete": "/audit_complete",
+      "/input_review": "/input_review",
+      "/question": "/question",
+      "/summary": "/summary",
+      "/findings": "/findings",
+      "/overall_limitations": "/overall_limitations",
+      "/claim_assessments": "/claim_assessments",
+      "/kind": "/kind"
+    }
+  },
+  "x-hufu-submission-fields": [
+    "status",
+    "summary",
+    "structured_payload",
+    "memory_uses"
+  ],
+  "x-hufu-final-report": "# 研究總結\n\n{{$audit := index .input_review 0}}問題：{{$audit.question}}\n\n## 綜合回答\n\n{{range $p, $paragraph := .answer}}{{.text}}\n\n依據：{{range $.citations}}{{if eq (index . (printf \"answer_%d\" $p)) \"cite\"}}{{$f := index $audit.findings .finding_index}}[查核 {{.finding_index}}](#查核-{{.finding_index}})（{{$f.verdict}}） {{end}}{{end}}\n\n{{end}}{{range $p, $paragraph := .sections}}## {{.title}}\n\n{{.text}}\n\n依據：{{range $.citations}}{{if eq (index . (printf \"section_%d\" $p)) \"cite\"}}{{$f := index $audit.findings .finding_index}}[查核 {{.finding_index}}](#查核-{{.finding_index}})（{{$f.verdict}}） {{end}}{{end}}\n\n{{end}}## 尚待釐清\n\n{{.unresolved}}\n\n## 查核限制\n\n{{$audit.overall_limitations}}\n\n## 詳細查核與來源\n\n查核結果：task {{$audit.task_id}}；payload SHA-256 {{$audit.payload_sha256}}\n\n查核完成：{{$audit.audit_complete}}\n\n{{with $audit}}## 比較的研究輸入\n{{range .input_review}}\n- task {{.task_id}}｜{{.lens}}｜payload sha256 {{.payload_sha256}}\n{{end}}{{range $i, $finding := .findings}}\n### 查核 {{$i}}\n\n**{{.claim}}**\n\n判定：{{.verdict}}\n\n{{.analysis}}\n\n研究員一致性：{{.researcher_agreement}}\n\n不同意見：{{.dissent}}\n\n限制：{{.limitations}}\n{{range .sources}}\n- {{.title}}｜{{.publisher}}｜{{.publication_date}}\n  來源：{{.url}}\n  證據：{{.page_status}}；抓取：{{.fetch_status}}；引用驗證：{{.citation_status}}{{if .tool_call_id}}；工具紀錄：{{.tool_call_id}}{{end}}{{if .quote}}\n  提交引文（僅 matched 可作證據）：{{.quote}}{{end}}\n{{end}}{{end}}\n## 整體限制\n\n{{.overall_limitations}}\n\n## 原始主張處理紀錄\n\n以下為研究輸入，並非已確認事實。處理狀態僅表示輸入涵蓋情形；addressed 不代表已證實，最終判定與證據缺口以上方查核結果為準。\n{{range .claim_assessments}}\n- task {{.source_task_id}} / {{.source_index}}：{{.claim}}\n  處理：{{.handling}}\n{{end}}{{end}}\n",
+  "x-hufu-fixed-collections": [
+    {
+      "items_pointer": "/citations",
+      "source_contracts": [
+        "schemas/audit-v2.json"
+      ],
+      "source_task_contracts": [
+        "evidence-audit"
+      ],
+      "source_pointer": "/findings",
+      "task_id_field": "audit_task_id",
+      "index_field": "finding_index",
+      "value_bindings": {
+        "claim": "/claim"
+      },
+      "choice_fields": [
+        "answer_0",
+        "answer_1",
+        "answer_2",
+        "section_0",
+        "section_1",
+        "section_2",
+        "section_3",
+        "section_4",
+        "section_5"
+      ]
+    }
+  ],
+  "allOf": [
+    {"if":{"properties":{"answer":{"minItems":1}}},"then":{"properties":{"citations":{"contains":{"properties":{"answer_0":{"const":"cite"}},"required":["answer_0"]}}}}},
+    {"if":{"properties":{"answer":{"maxItems":0}}},"then":{"properties":{"citations":{"items":{"properties":{"answer_0":{"const":"omit"}}}}}}},
+    {"if":{"properties":{"answer":{"minItems":2}}},"then":{"properties":{"citations":{"contains":{"properties":{"answer_1":{"const":"cite"}},"required":["answer_1"]}}}}},
+    {"if":{"properties":{"answer":{"maxItems":1}}},"then":{"properties":{"citations":{"items":{"properties":{"answer_1":{"const":"omit"}}}}}}},
+    {"if":{"properties":{"answer":{"minItems":3}}},"then":{"properties":{"citations":{"contains":{"properties":{"answer_2":{"const":"cite"}},"required":["answer_2"]}}}}},
+    {"if":{"properties":{"answer":{"maxItems":2}}},"then":{"properties":{"citations":{"items":{"properties":{"answer_2":{"const":"omit"}}}}}}},
+    {"if":{"properties":{"sections":{"minItems":1}}},"then":{"properties":{"citations":{"contains":{"properties":{"section_0":{"const":"cite"}},"required":["section_0"]}}}}},
+    {"if":{"properties":{"sections":{"maxItems":0}}},"then":{"properties":{"citations":{"items":{"properties":{"section_0":{"const":"omit"}}}}}}},
+    {"if":{"properties":{"sections":{"minItems":2}}},"then":{"properties":{"citations":{"contains":{"properties":{"section_1":{"const":"cite"}},"required":["section_1"]}}}}},
+    {"if":{"properties":{"sections":{"maxItems":1}}},"then":{"properties":{"citations":{"items":{"properties":{"section_1":{"const":"omit"}}}}}}},
+    {"if":{"properties":{"sections":{"minItems":3}}},"then":{"properties":{"citations":{"contains":{"properties":{"section_2":{"const":"cite"}},"required":["section_2"]}}}}},
+    {"if":{"properties":{"sections":{"maxItems":2}}},"then":{"properties":{"citations":{"items":{"properties":{"section_2":{"const":"omit"}}}}}}},
+    {"if":{"properties":{"sections":{"minItems":4}}},"then":{"properties":{"citations":{"contains":{"properties":{"section_3":{"const":"cite"}},"required":["section_3"]}}}}},
+    {"if":{"properties":{"sections":{"maxItems":3}}},"then":{"properties":{"citations":{"items":{"properties":{"section_3":{"const":"omit"}}}}}}},
+    {"if":{"properties":{"sections":{"minItems":5}}},"then":{"properties":{"citations":{"contains":{"properties":{"section_4":{"const":"cite"}},"required":["section_4"]}}}}},
+    {"if":{"properties":{"sections":{"maxItems":4}}},"then":{"properties":{"citations":{"items":{"properties":{"section_4":{"const":"omit"}}}}}}},
+    {"if":{"properties":{"sections":{"minItems":6}}},"then":{"properties":{"citations":{"contains":{"properties":{"section_5":{"const":"cite"}},"required":["section_5"]}}}}},
+    {"if":{"properties":{"sections":{"maxItems":5}}},"then":{"properties":{"citations":{"items":{"properties":{"section_5":{"const":"omit"}}}}}}}
+  ]
+}

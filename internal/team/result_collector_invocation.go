@@ -92,6 +92,10 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 		}
 		previous, responseIssue = response.Data, response.ResponseIssue
 	}
+	if checkpoint.LegacySubmission != nil && checkpoint.Response == nil {
+		previous = work.Report
+		collectionContext += "\n## Legacy submission-only recovery\nThe original worker stopped because its result delivery sequence closed after a schema rejection. work_report is the authenticated completion candidate, not the later procedural blocked acknowledgment. Repair only its representation using the same accepted source results; preserve semantic claims, uncertainty and citations. The original exit code remains unsuccessful and is not proof of task completion. Do not treat this migration as proof that an audit, verification or acceptance passed. No work tools may run.\n"
+	}
 	workInput, err := c.historicalResultCollectionInput(ctx, checkpoint.TaskID, work.Input)
 	if err != nil {
 		return "", nil, nil, err

@@ -46,7 +46,7 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 	if err != nil {
 		return nil, err
 	}
-	tasks, err := team.ReplayTodoList(selected.runEvents)
+	tasks, err := team.ReplayTodoList(selected.taskEvents)
 	if err != nil {
 		return nil, fmt.Errorf("%w: replay overview tasks for run %q: %v", ErrIntegrity, resolvedQuery.RunID, err)
 	}

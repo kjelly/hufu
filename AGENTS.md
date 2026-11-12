@@ -94,10 +94,6 @@ mise run lint
 
 The command must complete successfully with no errors before the task is considered complete. If it reports errors, fix them and rerun the command; do not stop with known lint failures. Documentation-only changes do not require this code lint gate.
 
-- Serialize live agent-team runs with heavyweight Go validation. A team can
-  launch a native inventory or final audit while models are running; these may
-  copy `runtime.sqlite`. Wait for the team process to exit before full tests,
-  race, vet, or lint so I/O contention cannot exhaust action deadlines.
 - Before Go validation, check free space on the filesystems containing the
   configured `GOTMPDIR`, `GOCACHE`, and `GOMODCACHE`, as well as `/tmp`.
   Free space in `/tmp` does not protect a full build-cache volume. Preserve

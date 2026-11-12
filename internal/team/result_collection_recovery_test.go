@@ -42,6 +42,97 @@ func blockedRecoveryFixture(t *testing.T, body string, prepared bool, reason Rep
 	return c, item.ID, cp
 }
 
+func TestResultCollectionRecoveryGrantsTurnsForLostExhaustedResponse(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		used    int
+		durable bool
+		added   int
+	}{
+		{"pending", 0, false, 0},
+		{"lost_with_remaining_turn", 1, false, 0},
+		{"lost_exhausted", 2, false, 2},
+		{"durable_response_exhausted", 2, true, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, item, ctx, cp := beginCollectionFixture(t)
+			var err error
+			for turn := range tc.used {
+				cp, err = c.reserveResultCollection(ctx, cp, strings.Repeat("collector-", turn+1), []byte(`{"tools":[]}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if turn+1 < tc.used {
+					cp, err = c.recordCollectionResponse(ctx, cp, []byte(`{"status":`))
+					if err == nil {
+						cp, err = c.recordCollectionSchemaFailure(ctx, cp)
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if tc.durable {
+				cp, err = c.recordCollectionResponse(ctx, cp, []byte(`{"status":"success","summary":"original report"}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			c.recordCollectionStopReceipt(item.ID, &resultCollectionFailure{Reason: RepairFailureCommit, Checkpoint: cp, Cause: context.DeadlineExceeded})
+			c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "collection interrupted", NeedsHuman, FailureProtocol, TaskBlocked, "original report")
+			c = reopenRecoveryCoordinator(t, c)
+			a, err := c.AssessResultCollectionRecovery(t.Context(), item.ID)
+			if err != nil || validateRecoveryAssessment(a) != nil || a.AdditionalTurns != tc.added || a.TurnsUsed != tc.used || a.Checkpoint.Work != cp.Work {
+				t.Fatalf("assessment=%+v err=%v", a, err)
+			}
+			if tc.added == 0 {
+				return
+			}
+			stale := cloneRecoveryAssessment(a)
+			stale.AdditionalTurns = 0
+			stale.Fingerprint, err = recoveryAssessmentFingerprint(stale)
+			if err != nil || !errors.Is(validateRecoveryAssessment(stale), errResultCollectionStale) {
+				t.Fatal("new assessment admitted an exhausted continuation without a response")
+			}
+			stale.ValidatorRevision = 5
+			stale.Fingerprint, err = recoveryAssessmentFingerprint(stale)
+			if err != nil || validateRecoveryAssessment(stale) != nil {
+				t.Fatal("historical assessment proof rules changed")
+			}
+			c.executionRunID = "explicit-lost-response-repair"
+			if err := c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), item.ID)); err != nil {
+				t.Fatal(err)
+			}
+			c = reopenRecoveryCoordinator(t, c)
+			c.executionRunID = "explicit-lost-response-repair"
+			granted := currentResultCollection(c.todoItemByID(item.ID))
+			if granted.TurnsUsed != 2 || granted.TurnLimit != 4 || granted.Work != cp.Work {
+				t.Fatal("grant reset consumed turns or changed sealed work")
+			}
+			ctx, err = c.restoreCollectionContext(WithSessionResume(t.Context()), granted)
+			if err == nil {
+				granted, err = c.reserveResultCollection(ctx, granted, "replacement-collector", []byte(`{"tools":[]}`))
+			}
+			if err == nil {
+				granted, err = c.recordCollectionResponse(ctx, granted, []byte(`{"status":"success","summary":"original report"}`))
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			c = reopenRecoveryCoordinator(t, c)
+			worker := scriptWorker(textTurn("must never replay work"))
+			c.workerAgentOverride = worker
+			if _, err := c.executeTask(WithSessionResume(t.Context()), taskDefFromTodoItem(c.todoItemByID(item.ID)), item.ID); err != nil {
+				t.Fatal(err)
+			}
+			done := c.todoItemByID(item.ID)
+			if done.Status != TaskDone || worker.Calls() != 0 || done.ExecutionReceipt.ResultCollection.TurnsUsed != 3 || done.ExecutionReceipt.ResultCollection.Work != cp.Work {
+				t.Fatal("repair did not finish locally from preserved work")
+			}
+		})
+	}
+}
+
 func TestResultCollectionRecoveryResumesCancelledCollection(t *testing.T) {
 	for _, state := range []ResultCollectionState{ResultCollectionPending, ResultCollectionReceived, ResultCollectionPrepared} {
 		t.Run(string(state), func(t *testing.T) {

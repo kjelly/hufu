@@ -18,7 +18,7 @@ const (
 	RecoveryRepairClaims            ResultCollectionRecoveryDisposition = "repair_claims"
 	RecoveryResumeCollection        ResultCollectionRecoveryDisposition = "resume_collection"
 	RecoveryBlocked                 ResultCollectionRecoveryDisposition = "blocked"
-	resultRecoveryValidatorRevision                                     = 5
+	resultRecoveryValidatorRevision                                     = 7
 )
 
 type ResultCollectionRecoveryCheck struct {
@@ -294,6 +294,9 @@ func validateRecoveryAssessment(a *ResultCollectionRecoveryAssessment) error {
 		if a.AdditionalTurns != 0 && a.AdditionalTurns != 2 {
 			return errResultCollectionStale
 		}
+		if a.ValidatorRevision >= 6 && a.Checkpoint.Response == nil && a.Checkpoint.Prepared == nil && a.RemainingTurns+a.AdditionalTurns == 0 {
+			return errResultCollectionStale
+		}
 	default:
 		return errResultCollectionBlocked
 	}
@@ -317,6 +320,9 @@ func (c *Coordinator) AssessResumeResultCollection(ctx context.Context, source *
 	defer func() { _ = store.Close() }()
 	restore := c.installResumeValidationSource(source, store)
 	defer restore()
+	if err := c.validateResumeRecoveryMode(WithResultOnlyRepair(ctx, taskID), source); err != nil {
+		return nil, err
+	}
 	a, err := c.AssessResultCollectionRecovery(ctx, taskID)
 	if err != nil {
 		return nil, err
@@ -382,10 +388,21 @@ func validateCollectionRecoveryGrantEvent(event RunEvent, grant *ResultRepairGra
 
 func validateCollectionRecoveryReplay(events []RunEvent) error {
 	checkpoints := make(map[string]*ResultCollectionCheckpoint)
-	for _, event := range events {
+	for index, event := range events {
+		if event.Type == string(EventContractRecovery) {
+			for _, item := range ReduceToTodoList(events[:index+1]) {
+				if cp := currentResultCollection(item); cp != nil {
+					checkpoints[item.ID] = cp
+				}
+			}
+			continue
+		}
 		if event.Type == string(EventTaskResultCollectionCheckpointed) {
 			var payload resultCollectionEvent
 			if err := json.Unmarshal(event.Payload, &payload, collectionDurationFormat); err != nil {
+				return err
+			}
+			if err := validateMigratedCollectionProgress(checkpoints[event.TaskID], payload.Receipt.ResultCollection); err != nil {
 				return err
 			}
 			checkpoints[event.TaskID] = payload.Receipt.ResultCollection
@@ -412,8 +429,29 @@ func validateCollectionRecoveryReplay(events []RunEvent) error {
 			}
 		}
 		if payload.Receipt != nil && payload.Receipt.ResultCollection != nil {
+			if err := validateMigratedCollectionProgress(checkpoints[event.TaskID], payload.Receipt.ResultCollection); err != nil {
+				return err
+			}
 			checkpoints[event.TaskID] = payload.Receipt.ResultCollection
 		}
+	}
+	return nil
+}
+
+func validateMigratedCollectionProgress(prior, next *ResultCollectionCheckpoint) error {
+	if next == nil || next.ContractUpgrade == nil && next.LegacySubmission == nil && (prior == nil || prior.ContractUpgrade == nil && prior.LegacySubmission == nil) {
+		return nil
+	}
+	if prior != nil && prior.LegacySubmission == nil && next.ContractUpgrade == nil && next.LegacySubmission == nil && (next.Attempt != prior.Attempt || next.ModelExecutionID != prior.ModelExecutionID) {
+		return nil // A separately admitted work attempt has its own ordinary binding.
+	}
+	if prior == nil || !sameCanonicalEvidence(prior.ContractUpgrade, next.ContractUpgrade) || prior != nil && !sameCanonicalEvidence(prior.LegacySubmission, next.LegacySubmission) {
+		return errResultCollectionStale
+	}
+	before, err := collectionBindingDigest(prior)
+	after, nextErr := collectionBindingDigest(next)
+	if err != nil || nextErr != nil || before != after || prior.Work != next.Work || next.TurnsUsed < prior.TurnsUsed {
+		return errResultCollectionStale
 	}
 	return nil
 }
@@ -529,11 +567,21 @@ func (c *Coordinator) assessRecoveryClaims(ctx context.Context, item *TodoItem, 
 	if ref == nil {
 		ref, kind = cp.Response, "response"
 	}
+	if ref == nil && cp.LegacySubmission != nil {
+		if check("legacy_submission", validateLegacyCollection(cp)) {
+			a.Disposition = RecoveryResumeCollection
+			a.AdditionalTurns = 2
+		}
+		return
+	}
 	if ref == nil {
 		switch a.OriginalReason {
 		case RepairFailureCommit, repairFailureCollectionUnavailable, repairFailureCollectionBudget, repairFailurePreparation, RepairFailureResultMissing:
 			a.Disposition = RecoveryResumeCollection
-			if a.OriginalReason != RepairFailureCommit {
+			// A storage continuation can reuse remaining turns, but a lost
+			// response at the limit requires the explicit result-only grant's
+			// bounded allowance. Consumed reservations are never refunded.
+			if a.OriginalReason != RepairFailureCommit || a.RemainingTurns == 0 {
 				a.AdditionalTurns = 2
 			}
 		default:

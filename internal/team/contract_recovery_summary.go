@@ -35,11 +35,11 @@ func (c *Coordinator) describeContractRecovery(plan *ContractRecoveryPlan, sourc
 			continue
 		}
 		patch := patches[item.ID]
-		if patch == nil || patch.Action != "retry" {
+		if patch == nil || patch.Action != "retry" && patch.Action != "repair_result" {
 			continue
 		}
 		for _, id := range append(slices.Clone(item.DependsOn), item.EvidenceFrom...) {
-			if parent := patches[id]; parent != nil && (parent.Action == "retry" || !sameCanonicalEvidence(parent.ResultContract, findRecoverySourceRef(source, id))) {
+			if parent := patches[id]; parent != nil && (parent.Action == "retry" || parent.Action == "repair_result" || !sameCanonicalEvidence(parent.ResultContract, findRecoverySourceRef(source, id))) {
 				patch.AffectedBy = append(patch.AffectedBy, id)
 			}
 		}

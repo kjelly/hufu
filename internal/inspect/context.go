@@ -113,7 +113,7 @@ func inspectContext(ctx context.Context, query InspectQuery, options ContextOpti
 	if err != nil {
 		return nil, err
 	}
-	tasks, err := team.ReplayTodoList(selected.runEvents)
+	tasks, err := team.ReplayTodoList(selected.taskEvents)
 	if err != nil {
 		return nil, fmt.Errorf("%w: replay tasks for run %q: %v", ErrIntegrity, query.RunID, err)
 	}

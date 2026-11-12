@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,6 +18,70 @@ import (
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/tools"
 )
+
+func TestHumanVerificationObservationsPersistWithoutOperatorContent(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.initEventStore()
+	ctx := withInvocationMetadata(t.Context(), InvocationMetadata{RunID: c.executionRunID, TaskID: "worker-task", AgentName: "worker", Attempt: 2})
+	ctx = c.withChromePageVerification(ctx)
+	ctx = tools.WithHumanVerificationRequest(ctx, tools.HumanVerificationObservation{RequestID: "request-one", URLSHA256: strings.Repeat("a", 64), Attempt: 1, Trigger: "automatic"})
+	statuses := []string{"requested", "prompt_requested", "answer_rejected", "confirmed", "page_unresolved"}
+	for _, status := range statuses {
+		if err := tools.ObserveHumanVerification(ctx, status); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := c.EventJournal().ReadEvents(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actual []string
+	for _, event := range events {
+		if event.Type != string(EventHumanVerificationObserved) {
+			continue
+		}
+		var observation tools.HumanVerificationObservation
+		if err := json.Unmarshal(event.Payload, &observation); err != nil {
+			t.Fatal(err)
+		}
+		if event.TaskID != "worker-task" || event.Attempt != 2 || event.Actor != "worker" || observation.RequestID != "request-one" {
+			t.Fatalf("event=%+v observation=%+v", event, observation)
+		}
+		actual = append(actual, observation.Status)
+	}
+	if !slices.Equal(actual, statuses) {
+		t.Fatalf("statuses=%v", actual)
+	}
+	if _, err := ReplayTodoList(events); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.eventStore.VerifyHashChain(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.eventStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tools.ObserveHumanVerification(ctx, "page_verified"); err == nil {
+		t.Fatal("closed durable journal allowed verification")
+	}
+	reopened, err := OpenEventStoreReadOnly(c.session.Workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	replayed, err := reopened.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed) != len(events) {
+		t.Fatalf("persisted events=%d want=%d", len(replayed), len(events))
+	}
+	for i := range events {
+		if replayed[i].Hash != events[i].Hash {
+			t.Fatal("reopening changed canonical evidence")
+		}
+	}
+}
 
 func TestChromePageClassificationUsesDurableSystemOneDecision(t *testing.T) {
 	for _, scenario := range []string{"challenge", "readable", "access_error", "uncertain", "provider_error", "invalid", "repair", "closed_sequence", "force_mcp"} {

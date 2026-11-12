@@ -29,18 +29,25 @@ func (c *Coordinator) validateMetadataContractRecovery(ctx context.Context, sess
 	if !c.session.Config.Delegation.BindTaskGoalContracts {
 		return fmt.Errorf("metadata-only recovery requires static task-goal contracts")
 	}
+	selected := contractResultRepairID(ctx)
 	for _, definition := range c.session.ContractTasks {
 		worker := c.session.Agents[normalizedName(definition.Agent)]
 		if worker == nil {
 			return fmt.Errorf("metadata-only recovery requires configured worker %q", definition.Agent)
 		}
 		effect, _, _ := resolveTaskRecovery(worker, definition)
-		if !metadataReadOnlyTask(effect, definition.Execution) {
+		browserContract := selected != "" && effect == SideEffectBrowserInteraction &&
+			!structuredStepsContainEffect(definition.Execution.Steps, ExecutionEffectMutate) && !structuredStepsContainEffect(definition.Execution.Steps, ExecutionEffectProduce)
+		if !metadataReadOnlyTask(effect, definition.Execution) && !browserContract {
 			return fmt.Errorf("metadata-only recovery requires read-only static contract %q", definition.ID)
 		}
 	}
 	for _, item := range session.Tasks {
-		if item != nil && !IsPrimaryOccurrence(item) && !metadataReadOnlyTask(item.SideEffect, item.Execution) {
+		if item == nil || IsPrimaryOccurrence(item) {
+			continue
+		}
+		preservedBrowser := selected != "" && collectionRecoveryBrowserTask(item, selected)
+		if !metadataReadOnlyTask(item.SideEffect, item.Execution) && !preservedBrowser {
 			return fmt.Errorf("metadata-only recovery refuses task %s side effects", item.ID)
 		}
 	}
@@ -84,7 +91,9 @@ func (c *Coordinator) forkContractRecovery(ctx context.Context, source *ResumeSo
 	}
 	defer func() { _ = store.Close() }()
 	ops := &WorkspaceSessionOps{Version: version, Workspace: c.session.Workspace, Tree: tree, Events: c.eventStore, Store: store}
-	if _, err = ops.PrepareDerivedFork(ctx, source.BranchID); err != nil {
+	if _, err = ops.prepareDerivedFork(ctx, source.BranchID, func(session *SessionData) error {
+		return validateContractRecoverySessionSafety(ctx, session)
+	}); err != nil {
 		return nil, err
 	}
 	result, err := ops.Fork(ctx, name, source.BranchID)

@@ -21,18 +21,23 @@
 | Runtime 階段 | Worker／契約 | 交接與完成條件 |
 | --- | --- | --- |
 | `prepare` | researcher／`primary-research`、countercheck／`counter-research` | 同批獨立研究，兩份 typed result 都完成才前進 |
-| `audit` | verifier／`evidence-audit` | `evidence_from` 引用兩份研究；自行開頁查核，提交 `audit-v1.json` |
-| `verify` | synthesizer／`research-synthesis` | `evidence_from` 只引用已完成 verifier；提交 `synthesis-v1.json` |
+| `audit` | verifier／`evidence-audit` | `evidence_from` 引用兩份研究；自行開頁查核，提交 `audit-v2.json` |
+| `verify` | synthesizer／`research-synthesis` | `evidence_from` 只引用已完成 verifier；提交 `synthesis-v2.json` |
 
 階段順序、四個必需 worker、typed result 與客觀 verifier 皆由 runtime
 強制執行；coordinator 不能在 verifier 完成後直接結束。研究或查核若已完成
 但證據有缺口，可交接 `completed_with_gaps`；`partial`、`blocked` 或失敗
 不能當作已完成輸入。總結本身未完成也不能通過最終驗收。
 
-synthesizer 只可呼叫 `submit_result`，不再搜尋、瀏覽或重做查核。
+synthesizer 不具執行工具，回傳完整 JSON，與其他階段一樣由 runtime collector
+收集結果；不再搜尋、瀏覽或重做查核。初次提交與格式修復共用既有兩輪上限，
+修復承接已保存的工作與同一份 accepted audit，不重新研究或增加重試預算。
+此階段不使用一次性的 `tool-sequence: [submit_result]`：該序列會在首次格式拒絕後
+關閉，與允許修復格式的交付要求衝突。
 它先直接回答原問題，再整合適用條件、重要區分、例外與未決問題，
 不能把每項 finding 各縮成一句就當作綜合。每段回答選擇對應的
-`finding_indices`；schema 依實際已接受 finding 數量拒絕越界引用。
+固定集合 `citations` 的 `cite`／`omit` 選擇；runtime 綁定實際 finding index，拒絕
+不存在段落的引用、缺列或捏造的集合 key。
 這只驗證引用存在，文字是否正確理解證據、保留限定語仍是模型的語意責任。
 
 runtime 以 `x-hufu-evidence-inputs` 的 `runtime_owned: true` 綁定完整查核
@@ -88,15 +93,20 @@ decision runtime 判斷頁面；可沿用 sidecar，或透過 `decision-runtime`
 System One。只有明確判定為安全／機器人驗證頁時，工具內才要求人工接手，確認後
 重新擷取與判斷，只有正文可讀才回傳成功。即使沒有按鈕、來源只是備援副本，
 也會進入此流程。設定的初次快照與停留順序仍保留；若挑戰在停留時自行解除，
-runtime 會以新快照確認後繼續。同一未解決網址不反覆要求人工處理。
+runtime 會以新快照確認後繼續。同一未解決網址只自動請求一次；
+若確認後仍是挑戰頁，可明確呼叫等待工具再接手一次，每個未解決網址總計最多兩次，
+取消後不再重問。
 模型判斷故障、不確定或存取錯誤會回報工具錯誤，不要求人工確認。
-直接呼叫 `browser_wait_for_user` 也須通過新快照的驗證頁判定，並共用同一網址的請求次數限制；
+直接呼叫 `browser_wait_for_user` 也須通過新快照的驗證頁判定，確認後立即複查頁面，
+並共用同一網址的請求次數限制；
 不能用人工確認修復分類器故障。使用者取消或無人模式不會被當成讀取成功。
 
 若仍遇到需要人工處理的頁面問題，可呼叫自己的
 `playwright_<角色>__browser_wait_for_user({"reason":"請完成公開頁面的人工驗證"})`。
 使用 dynamic gateway 時先 inspect 該 target，再以相同 `reason` 欄位呼叫。
-Hufu 會切到該角色的分頁並等待 CLI／TUI 回答；等待期間不計入 worker 與
+Hufu 會切到該角色的分頁並等待 CLI／TUI 輸入本次隨機確認碼；單按 Enter、
+舊答案或預選項目都不能確認。輸入 `cancel` 可取消；輸入不符會重新提示，最多三次。
+等待期間不計入 worker 與
 coordinator 的工作 timeout 與 `--max-duration` 總時間預算，重疊等待只扣一次。
 取消、Ctrl+C 與外部操作期限仍有效。人工確認後必須再次 `browser_snapshot({})`，確認實際 URL 與原文；
 確認本身不是證據，也不能修復 404 或引文不符。無人值守、使用者取消或
@@ -281,7 +291,7 @@ GOMAXPROCS=2 mise exec -- go test -p 2 ./.agent-teams/web-research/tests
 
 ## 提交契約與既有 session
 
-`audit-v1.json` 延續舊 report v2 的外層提交欄位限制、runtime-owned 研究
+`audit-v2.json` 延續舊 report v2 的外層提交欄位限制、runtime-owned 研究
 輸入、引文綁定與原始主張涵蓋檢查，但把最終呈現交給後續綜合契約。
 另外要求兩份研究輸入分別具有 `primary_search` 與 `countercheck` lens。
 
@@ -303,3 +313,23 @@ GOMAXPROCS=2 mise exec -- go test -p 2 ./.agent-teams/web-research/tests
 `recovery: manual`，專案檔案仍唯讀，但不把點擊當成可自動重播的觀察。
 不得自動登入、送出表單、購買、授予權限或處理 CAPTCHA。
 變更會影響 frozen policy；既有執行的歷史資料與 checkpoint 不可改寫。
+
+人工驗證事件可從 `hufu inspect trace <run-id> --workspace <workspace> --format json`
+查看 `human_verification_observed`，以 `refs` 的 request ID 與 URL SHA-256 對照同一次處理。
+`requested` 表示開始準備請求，`prompt_requested` 表示呼叫互動輸入，
+不等於操作員已看到提示；`answer_rejected` 表示輸入不符，`confirmed` 表示確認碼通過，
+`page_verified`／`page_unresolved` 才是確認後的頁面複查結果。
+`cancelled`／`failed`／`wait_failed` 保留取消與失敗的階段。
+事件不保存確認碼、回答文字、提示內容或原始網址；`confirmed` 不等於來源驗證成功。
+
+## 完整證據與呈現篇幅
+
+新任務使用 `research-v2.json`、`audit-v2.json` 與 `synthesis-v2.json`。
+canonical findings、逐項處理紀錄及必要 sources 不再受 12／24／4 筆的呈現配額限制；
+仍保留原子主張、狀態 enum、精確引文、來源綁定、欄位長度與 runtime 輸出資源限制。
+綜合回答維持 1–3 段、最多 6 個主題段落；完整 audit 與每筆來源都呈現在附錄。
+`citations` 使用 runtime 固定集合，每個 accepted finding 必有一列，模型只選
+`answer_0`–`answer_2`、`section_0`–`section_5` 的 `cite`／`omit`。
+原 task ID、finding index 與 claim 由 runtime 綁定，不能自填或引用不存在的 finding。
+舊版 schema 保持原樣；既有 session 必須先用 `resume --upgrade-contracts --dry-run`
+檢查受控契約恢復，不能直接覆寫歷史 schema、刪減 findings 或重跑已完成的研究來繞過拒絕。

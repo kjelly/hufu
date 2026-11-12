@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 const collectedFindingSchema = `{"type":"object","additionalProperties":false,"required":["findings"],"properties":{"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["summary"],"properties":{"summary":{"type":"string"}}}}}}`
@@ -522,6 +523,56 @@ func TestResultCollectionFailureProjectsCollectorDiagnostic(t *testing.T) {
 			replayed := ReduceToTodoList(events)[0]
 			if replayed.FailureEvent == nil || replayed.FailureEvent.Command != "result_collection" || replayed.ExecutionReceipt.RepairProvenance.Error != current.ExecutionReceipt.RepairProvenance.Error {
 				t.Fatal("replay lost the collector failure and exact diagnostic")
+			}
+		})
+	}
+}
+
+func TestResultCollectionInterruptedCheckpointProjectsCurrentFailure(t *testing.T) {
+	for _, state := range []ResultCollectionState{ResultCollectionPending, ResultCollectionInFlight, ResultCollectionReceived, ResultCollectionPrepared} {
+		t.Run(string(state), func(t *testing.T) {
+			c, item, ctx, checkpoint := beginCollectionFixture(t)
+			var err error
+			if state != ResultCollectionPending {
+				checkpoint, err = c.reserveResultCollection(ctx, checkpoint, "interrupted-collector", []byte(`{"tools":[]}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if state == ResultCollectionReceived || state == ResultCollectionPrepared {
+				checkpoint, err = c.recordCollectionResponse(ctx, checkpoint, []byte(`{"status":"success","summary":"complete report"}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if state == ResultCollectionPrepared {
+				checkpoint, err = c.prepareCollectionClaims(ctx, checkpoint)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			expired, cancel := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+			defer cancel()
+			failure := c.collectionFailure(expired, checkpoint, RepairFailureCommit, fmt.Errorf("read artifact metadata: %w", expired.Err()))
+			c.recordCollectionStopReceipt(item.ID, failure)
+			current := todoByID(t, c, item.ID)
+			current.LastOperation = "old_failed_tool"
+			event := c.failureEventForItem(current, FailureProtocol, NeedsHuman, failure.Error(), FailureFingerprint{}, item.ID)
+			if event.Command != "result_collection" || event.Phase != "protocol" || event.FailureType != FailureTypeResultCollection || !strings.Contains(event.Stderr, context.DeadlineExceeded.Error()) {
+				t.Fatalf("interrupted collector attributed to earlier work: %+v", event)
+			}
+			c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, failure.Error(), NeedsHuman, FailureProtocol, TaskBlocked, "complete work report")
+			events, err := c.EventJournal().ReadEvents(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			replayed := ReduceToTodoList(events)[0]
+			if replayed.FailureEvent.Command != "result_collection" || replayed.ExecutionReceipt.ResultCollection.State != state || replayed.ExecutionReceipt.ResultCollection.Work != checkpoint.Work {
+				t.Fatal("terminal replay lost the diagnostic or original collection progress")
+			}
+			current.ExecutionReceipt.RepairProvenance.RepairAttempts++
+			if _, ok := resultCollectionFailureDiagnostic(current); ok {
+				t.Fatal("diagnostic accepted provenance for another collection turn")
 			}
 		})
 	}

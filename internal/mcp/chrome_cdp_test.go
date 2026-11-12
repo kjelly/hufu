@@ -21,12 +21,12 @@ import (
 
 func TestChromeCDPHumanWaitOutlivesDefaultToolTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		tools.SetOnAskUserTUI(func(ctx context.Context, _, _ string, _ []tools.AskUserTUIOption, _ bool) (string, bool) {
+		tools.SetOnAskUserTUI(func(ctx context.Context, question, _ string, _ []tools.AskUserTUIOption, _ bool) (string, bool) {
 			time.Sleep(time.Hour)
 			if ctx.Err() != nil {
 				t.Fatal("MCP timeout expired during manual verification")
 			}
-			return `{"answers":["continue"]}`, true
+			return chromeConfirmationAnswer(question), true
 		})
 		defer tools.SetOnAskUserTUI(nil)
 		fake := newRuntimeTestServer(t, nil)
@@ -254,7 +254,7 @@ func TestChromeCDPAuthorizationAndEvidence(t *testing.T) {
 			t.Error("manual prompt lost actual target URL")
 		}
 		brokenDocument.Store(false)
-		return `{"answers":["continue"]}`, true
+		return chromeConfirmationAnswer(question), true
 	})
 	defer tools.SetOnAskUserTUI(nil)
 	if _, isError, err := manager.ExecuteTool(t.Context(), "chrome__browser_wait_for_user", `{"reason":"manual verification"}`); err != nil || isError || snapshotReads.Load() != readsBeforeWait {
@@ -269,4 +269,11 @@ func TestChromeCDPAuthorizationAndEvidence(t *testing.T) {
 	if closed.Load() != 1 {
 		t.Fatalf("closed tabs=%d", closed.Load())
 	}
+}
+
+// Type the freshly displayed code, never synthesize a preselected choice.
+func chromeConfirmationAnswer(question string) string {
+	_, code, _ := strings.Cut(question, "\nConfirmation code: ")
+	answer, _ := json.Marshal(map[string]string{"free_text": code})
+	return string(answer)
 }

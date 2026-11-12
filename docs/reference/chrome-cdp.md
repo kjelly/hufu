@@ -84,7 +84,10 @@ Include this instruction in the owning agent's prompt:
 > remaining challenges, access errors and missing content truthfully.
 
 The tool focuses its dedicated tab and opens the normal CLI/TUI question. Only
-an actual `continue` answer resumes it. Auto-approval, unattended defaults and
+the freshly displayed confirmation code, typed into the free-text prompt, resumes it.
+Enter alone, old codes and the former `continue` selection are rejected. Type
+`cancel` to decline; three invalid answers end that request without confirmation.
+Auto-approval, unattended defaults and
 model-selected answers cannot confirm manual verification. Without an interactive
 human the tool returns an error instead of waiting forever.
 Within a DAG, the human prompt yields the task’s team concurrency slot once
@@ -144,7 +147,10 @@ human prompt inside the snapshot call. Classifier errors fail immediately;
 These states do not establish a security challenge and cannot be repaired by
 human confirmation. Explicit `browser_wait_for_user` calls on a declaration
 with page verification enabled also classify a fresh capture and require a
-confirmed challenge; they share the automatic wait's per-URL request limit.
+confirmed challenge. Each unresolved URL receives at most one automatic prompt
+and at most two total requests. An explicit call can request the remaining
+manual attempt after an unsuccessful automatic attempt, and requires a new code.
+Operator cancellation prevents further requests for that unresolved URL.
 The tab's
 operation gate stays held, preventing navigation while waiting. The wait is
 separately authorized as `browser_wait_for_user`; snapshot authority alone does
@@ -153,13 +159,14 @@ Closed tool sequences, result-only repairs, `force-mcp` and denial of the
 decision primitive reject automatic classification without inference or a
 fallback human prompt; they cannot acquire hidden calls through this option.
 
-After a real `continue` answer, the runtime captures and classifies the page
+After the operator types the current confirmation code, the runtime captures and classifies the page
 again. Only a `readable` result is returned as successful source evidence.
 Cancellation, unavailable human input, persistent challenges, access errors and
 failed classifications return tool errors with the observed page and gap; they
 never treat confirmation as proof of content. Repeated captures or navigation
 to the same unresolved URL do not repeat the automatic human request. A readable
-capture clears that URL's request marker. The marker is local to the loaded
+capture clears that URL's request marker. Explicit waits also recapture and
+classify after confirmation before returning success. The marker is local to the loaded
 browser declaration; it is not a durable approval across process restarts.
 The owning team decides how to report gaps or choose substitute sources.
 
@@ -292,3 +299,17 @@ An optional real-browser check uses a disposable profile and local fixture only:
 ```bash
 HUFU_TEST_CHROME=1 mise exec -- go test -p 2 ./internal/browser -run '^TestCDPChromeIntegration$' -count=1
 ```
+
+### Verification observations
+
+`hufu inspect trace <run-id> --workspace <workspace> --format json` exposes
+`human_verification_observed` events, including task/attempt identity, status,
+and request ID / URL SHA-256 refs. `requested` means preparation began;
+`prompt_requested` means interactive input was requested, not proof that the
+operator saw it. `answer_rejected` records an invalid answer; `confirmed` means
+the current code was accepted. `page_verified` and `page_unresolved` distinguish
+the actual post-confirmation page outcome. `cancelled`, `failed` and
+`wait_failed` identify failure stages, including failures before prompting.
+These events contain no prompt, answer, confirmation code or raw URL. Recording
+failure stops the operation; a confirmation is never substituted for page
+verification. The same observer is used for worker and runtime-action paths.

@@ -1,0 +1,354 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-hufu-tool-evidence": {
+    "allow_historical": true,
+    "historical_pointer": "/historical_observation",
+    "groups_pointer": "/findings",
+    "items_pointer": "/sources",
+    "value_pointer": "/url",
+    "quote_pointer": "/quote",
+    "status_pointer": "/page_status",
+    "call_id_pointer": "/tool_call_id",
+    "verified_status": "fetched",
+    "unverified_status": "unverified",
+    "diagnostics": {
+      "fetch_pointer": "/fetch_status",
+      "citation_pointer": "/citation_status",
+      "fetch_values": {
+        "succeeded": "fetched",
+        "failed": "failed",
+        "unusable": "unusable_response",
+        "absent": "not_attempted",
+        "pending": "pending"
+      },
+      "citation_values": {
+        "matched": "matched",
+        "mismatch": "mismatch",
+        "empty": "missing_quote",
+        "unavailable": "unavailable"
+      }
+    },
+    "group_fallback": {
+      "/assessment": "unverified",
+      "/reasoning": "至少一項來源引文未通過本次工具證據綁定。缺口原因請見各來源的抓取與引用驗證狀態；抓取成功不代表引文符合原文。"
+    },
+    "group_append": {
+      "/open_questions": "工具證據綁定未完成，結論降為未驗證；來源保留供檢查缺口。"
+    },
+    "tools": [
+      "playwright_researcher__browser_snapshot",
+      "playwright_countercheck__browser_snapshot"
+    ],
+    "output_format": "text",
+    "target_pattern": "(?m)^- Page URL: (https?://\\S+)[ \\t]*\\r?$",
+    "text_pattern": "(?ms)^### Snapshot\\r?\\n```yaml\\r?\\n(.*?)\\r?\\n```[ \\t]*(?:\\r?\\n|$)"
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "lens",
+    "question",
+    "findings",
+    "disconfirmation_effort",
+    "limitations"
+  ],
+  "properties": {
+    "lens": {
+      "type": "string",
+      "enum": [
+        "primary_search",
+        "countercheck"
+      ]
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "findings": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "disconfirmation_effort": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "limitations": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim",
+        "assessment",
+        "reasoning",
+        "sources",
+        "open_questions"
+      ],
+      "properties": {
+        "claim": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "One independently adjudicable proposition, preserving speaker, cited person/document and event/time context. Split claims about different speakers or independently verifiable numbers. Support for a subset or a different speaker never establishes the whole claim; do not qualify a compound supported claim with only one part verified."
+        },
+        "assessment": {
+          "type": "string",
+          "enum": [
+            "supported",
+            "contradicted",
+            "mixed",
+            "unverified"
+          ]
+        },
+        "reasoning": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "sources": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "open_questions": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "assessment": {
+                "enum": [
+                  "supported",
+                  "contradicted",
+                  "mixed"
+                ]
+              }
+            },
+            "required": [
+              "assessment"
+            ]
+          },
+          "then": {
+            "properties": {
+              "sources": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "publisher",
+        "publication_date",
+        "url",
+        "source_type",
+        "page_status",
+        "quote",
+        "relation",
+        "independence_group"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "publisher": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "publication_date": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https?://[^\\s]+$",
+          "maxLength": 4096
+        },
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "official_primary",
+            "primary",
+            "secondary",
+            "reference",
+            "unknown"
+          ]
+        },
+        "page_status": {
+          "type": "string",
+          "enum": [
+            "fetched",
+            "unverified"
+          ]
+        },
+        "fetch_status": {
+          "type": "string",
+          "enum": [
+            "fetched",
+            "failed",
+            "unusable_response",
+            "not_attempted",
+            "pending"
+          ],
+          "description": "Runtime-owned observation status; omit on submission."
+        },
+        "citation_status": {
+          "type": "string",
+          "enum": [
+            "matched",
+            "mismatch",
+            "missing_quote",
+            "unavailable"
+          ],
+          "description": "Runtime-owned exact quote matching status; omit on submission."
+        },
+        "tool_call_id": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "historical_observation": {
+          "description": "Runtime-owned original observation and current read provenance; null for a fresh observation. Omit on submission.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "read_event_id",
+            "observation_id",
+            "source_run_id",
+            "source_task_id",
+            "source_call_id",
+            "observed_at",
+            "sha256",
+            "content_sha256",
+            "content_format",
+            "tool",
+            "read_call_id",
+            "offset",
+            "bytes",
+            "total_bytes"
+          ],
+          "properties": {
+            "read_event_id": {
+              "type": "string"
+            },
+            "model_execution_id": {
+              "type": "string"
+            },
+            "observation_id": {
+              "type": "string"
+            },
+            "source_run_id": {
+              "type": "string"
+            },
+            "source_task_id": {
+              "type": "string"
+            },
+            "source_call_id": {
+              "type": "string"
+            },
+            "observed_at": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "content_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "content_format": {
+              "type": "string",
+              "enum": [
+                "tool_output",
+                "evidence_text"
+              ]
+            },
+            "tool": {
+              "type": "string"
+            },
+            "read_call_id": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "total_bytes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "quote": {
+          "type": "string",
+          "maxLength": 800,
+          "description": "One contiguous exact substring of this worker's successful fetch; no added ellipsis, splicing or paraphrase."
+        },
+        "relation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "independence_group": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "page_status": {
+                "const": "fetched"
+              }
+            },
+            "required": [
+              "page_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "quote": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "title": "Complete evidence-preserving research"
+}

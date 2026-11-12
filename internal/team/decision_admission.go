@@ -390,7 +390,7 @@ func (c *Coordinator) validateTaskOccurrenceAdmission(ctx context.Context, task 
 			if migrationErr != nil {
 				return DecisionAdmission{}, false, fmt.Errorf("validate migrated decision admission for task %s: %w", taskID, migrationErr)
 			}
-			if !matchesLegacyMigration {
+			if !matchesLegacyMigration && !collectionContractAdmissionMatches(item, admission) {
 				return DecisionAdmission{}, false, fmt.Errorf("decision admission task input does not match task %s", taskID)
 			}
 		}

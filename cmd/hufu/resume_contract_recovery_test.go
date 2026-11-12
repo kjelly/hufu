@@ -52,7 +52,10 @@ func TestResumeContractRecoveryFlags(t *testing.T) {
 		{name: "no plan", upgrade: true, branch: "recovery"},
 		{name: "no branch", upgrade: true, hash: strings.Repeat("a", 64)},
 		{name: "preview cannot apply", dry: true, upgrade: true, branch: "recovery", hash: strings.Repeat("a", 64)},
-		{name: "repair separate", upgrade: true, dry: true, repair: "7"},
+		{name: "result-only upgrade preview", upgrade: true, dry: true, repair: "7", valid: true},
+		{name: "result-only upgrade apply", upgrade: true, branch: "repair", hash: strings.Repeat("a", 64), repair: "7", valid: true},
+		{name: "result-only upgrade exact ID", upgrade: true, dry: true, repair: " 7"},
+		{name: "result-only upgrade preserves inputs", upgrade: true, dry: true, repair: "7", inputPolicy: true},
 		{name: "plan needs upgrade", branch: "recovery", hash: strings.Repeat("a", 64)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

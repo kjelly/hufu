@@ -11,6 +11,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 const maxTraceDiagnostics = 100
@@ -47,7 +48,7 @@ func InspectTrace(ctx context.Context, query InspectQuery) (*Envelope, error) {
 		entry := eventTraceEntry(indexed)
 		candidates = append(candidates, traceCandidate{entry: entry, anchored: true, stableKey: indexed.Event.ID})
 	}
-	tasks, err := team.ReplayTodoList(selected.runEvents)
+	tasks, err := team.ReplayTodoList(selected.taskEvents)
 	if err != nil {
 		return nil, fmt.Errorf("%w: replay tasks for run %q: %v", ErrIntegrity, query.RunID, err)
 	}
@@ -140,6 +141,11 @@ func eventTraceEntry(indexed IndexedEvent) TraceEntry {
 	status, reasonCode := eventStatusAndReason(event.Payload)
 	refs := []string{}
 	switch team.EventType(event.Type) {
+	case team.EventHumanVerificationObserved:
+		var observation tools.HumanVerificationObservation
+		if json.Unmarshal(event.Payload, &observation) == nil {
+			refs = normalizeOpaqueRefs([]string{observation.RequestID, observation.URLSHA256})
+		}
 	case team.EventToolObservationRecorded:
 		var publication team.ToolObservationPayload
 		if json.Unmarshal(event.Payload, &publication) == nil {

@@ -31,6 +31,10 @@ type PreparedDerivedFork struct {
 // materialization. In particular it must precede workspace startup recovery
 // on this entry, so rejected uncertain effects are never reconciled implicitly.
 func (o *WorkspaceSessionOps) PrepareDerivedFork(ctx context.Context, target string) (*PreparedDerivedFork, error) {
+	return o.prepareDerivedFork(ctx, target, validateDerivedForkSessionSafety)
+}
+
+func (o *WorkspaceSessionOps) prepareDerivedFork(ctx context.Context, target string, safety func(*SessionData) error) (*PreparedDerivedFork, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -62,7 +66,7 @@ func (o *WorkspaceSessionOps) PrepareDerivedFork(ctx context.Context, target str
 	if _, err := o.Events.validateHistoricalResultGrantProjection(ctx, active); err != nil {
 		return nil, err
 	}
-	if err := validateDerivedForkSourceSafety(active, o.Version.TeamName); err != nil {
+	if err := validateDerivedForkSourceSafety(active, o.Version.TeamName, safety); err != nil {
 		return nil, err
 	}
 	branchID, cutoff := o.Tree.ActiveBranch, ""
@@ -92,7 +96,7 @@ func (o *WorkspaceSessionOps) PrepareDerivedFork(ctx context.Context, target str
 	if _, err := o.Events.validateHistoricalResultGrantProjection(ctx, lineage); err != nil {
 		return nil, err
 	}
-	if err := validateDerivedForkSourceSafety(lineage, o.Version.TeamName); err != nil {
+	if err := validateDerivedForkSourceSafety(lineage, o.Version.TeamName, safety); err != nil {
 		return nil, err
 	}
 	if len(lineage) == 0 || len(events) == 0 {
@@ -189,7 +193,7 @@ func (o *WorkspaceSessionOps) validateDerivedLiveCheckpoint(ctx context.Context)
 	return nil
 }
 
-func validateDerivedForkSourceSafety(lineage []RunEvent, expectedTeam string) error {
+func validateDerivedForkSourceSafety(lineage []RunEvent, expectedTeam string, safety func(*SessionData) error) error {
 	var teamName string
 	for _, event := range lineage {
 		if event.Type != string(EventRunStarted) {
@@ -212,7 +216,7 @@ func validateDerivedForkSourceSafety(lineage []RunEvent, expectedTeam string) er
 	if _, err := ReplayTodoList(lineage); err != nil {
 		return err
 	}
-	return validateDerivedForkSessionSafety(ReduceToSessionData(lineage))
+	return safety(ReduceToSessionData(lineage))
 }
 
 func (prepared *PreparedDerivedFork) bindSnapshotSources(lineage []RunEvent) error {

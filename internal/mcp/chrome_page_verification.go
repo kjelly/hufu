@@ -2,10 +2,14 @@ package mcp
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/kjelly/hufu/internal/browser"
+	"github.com/kjelly/hufu/internal/tools"
 )
 
 // ChromePageState is a validated semantic decision, never a substring match on
@@ -55,8 +59,8 @@ func classifyChromePage(ctx context.Context, page browser.Snapshot) (ChromePageS
 
 // verifyPage holds the declaration's operation gate throughout classification,
 // human input and recapture. The worker cannot navigate away during that wait.
-// At most one human request is made per unresolved URL, including cancelled
-// waits and renavigation. A readable capture clears that URL's request marker.
+// Automatic prompts run once per unresolved URL. One explicit retry is allowed;
+// it still requires a fresh operator confirmation. Cancellation is final.
 func (f *chromePageFlow) verifyPage(ctx context.Context, page browser.Snapshot, afterDwell bool) (string, error) {
 	state, classificationErr := classifyChromePage(ctx, page)
 	if classificationErr != nil {
@@ -95,16 +99,24 @@ func (f *chromePageFlow) verifyPage(ctx context.Context, page browser.Snapshot, 
 	if state != ChromePageNeedsHuman {
 		return "", chromePageVerificationError(page, state, classificationErr)
 	}
-	if err := f.requestHumanVerification(ctx, page, f.waitForHuman); err != nil {
+	ctx, err := f.requestHumanVerification(ctx, page, f.waitForHuman, false)
+	if err != nil {
 		return "", chromePageVerificationError(page, state, err)
 	}
+	return f.finishHumanVerification(ctx, page)
+}
+
+func (f *chromePageFlow) finishHumanVerification(ctx context.Context, page browser.Snapshot) (string, error) {
 	fresh, err := f.page.Snapshot(ctx)
 	if err != nil {
-		return "", err
+		return "", errors.Join(err, tools.ObserveHumanVerification(ctx, "page_unresolved"))
 	}
-	state, classificationErr = classifyChromePage(ctx, fresh)
+	state, classificationErr := classifyChromePage(ctx, fresh)
 	if state != ChromePageReadable || classificationErr != nil {
-		return "", chromePageVerificationError(fresh, state, classificationErr)
+		return "", errors.Join(chromePageVerificationError(fresh, state, classificationErr), tools.ObserveHumanVerification(ctx, "page_unresolved"))
+	}
+	if err := tools.ObserveHumanVerification(ctx, "page_verified"); err != nil {
+		return "", err
 	}
 	delete(f.humanRequests, page.URL)
 	return formatChromeSnapshot(fresh)
@@ -129,21 +141,60 @@ func (f *chromePageFlow) waitForVerification(ctx context.Context, wait func(cont
 	if state != ChromePageNeedsHuman {
 		return chromePageVerificationError(page, state, nil)
 	}
-	return f.requestHumanVerification(ctx, page, wait)
+	ctx, err = f.requestHumanVerification(ctx, page, wait, true)
+	if err != nil {
+		return err
+	}
+	_, err = f.finishHumanVerification(ctx, page)
+	return err
 }
 
-func (f *chromePageFlow) requestHumanVerification(ctx context.Context, page browser.Snapshot, wait func(context.Context) error) error {
-	if f.humanRequests[page.URL] {
-		return errors.New("human verification already requested for this unresolved URL")
+type chromeHumanRequest struct {
+	attempts int
+	declined bool
+}
+
+func (f *chromePageFlow) requestHumanVerification(ctx context.Context, page browser.Snapshot, wait func(context.Context) error, explicit bool) (context.Context, error) {
+	request := f.humanRequests[page.URL]
+	if request != nil {
+		switch {
+		case request.declined:
+			return ctx, errors.New("human verification was cancelled; no further requests for this unresolved URL")
+		case request.attempts >= 2:
+			return ctx, errors.New("human verification remains unresolved after two requests; request limit reached for this URL")
+		case !explicit:
+			return ctx, errors.New("previous human verification did not establish readable content; automatic prompting is suppressed. One explicit browser_wait_for_user request remains, requiring a fresh operator confirmation code")
+		}
 	}
 	if f.humanRequests == nil {
-		f.humanRequests = make(map[string]bool)
+		f.humanRequests = make(map[string]*chromeHumanRequest)
 	}
-	f.humanRequests[page.URL] = true
+	if request == nil {
+		request = new(chromeHumanRequest)
+		f.humanRequests[page.URL] = request
+	}
+	request.attempts++
+	trigger := "automatic"
+	if explicit {
+		trigger = "explicit"
+	}
+	ctx = tools.WithHumanVerificationRequest(ctx, tools.HumanVerificationObservation{
+		RequestID: rand.Text(), URLSHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(page.URL))), Attempt: request.attempts, Trigger: trigger,
+	})
+	if err := tools.ObserveHumanVerification(ctx, "requested"); err != nil {
+		return ctx, err
+	}
 	if wait == nil {
-		return errors.New("human verification unavailable")
+		return ctx, errors.Join(errors.New("human verification unavailable"), tools.ObserveHumanVerification(ctx, "failed"))
 	}
-	return wait(ctx)
+	err := wait(ctx)
+	request.declined = errors.Is(err, tools.ErrHumanVerificationDeclined) || errors.Is(err, context.Canceled)
+	if err != nil {
+		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		err = errors.Join(err, tools.ObserveHumanVerification(recordCtx, "wait_failed"))
+	}
+	return ctx, err
 }
 
 func chromePageVerificationError(page browser.Snapshot, state ChromePageState, cause error) error {

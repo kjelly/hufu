@@ -57,6 +57,9 @@ func validateRecoveryProofChecks(a *ResultCollectionRecoveryAssessment) error {
 	if a.ValidatorRevision >= 4 {
 		required["workflow_recovery"] = false
 	}
+	if a.ValidatorRevision >= 7 && a.Checkpoint.LegacySubmission != nil && a.Checkpoint.Response == nil {
+		required["legacy_submission"] = false
+	}
 	for _, check := range a.Checks {
 		if a.ValidatorRevision >= 2 && check.Code == "canonical_claims" && !check.Passed && a.Disposition != RecoveryRepairClaims {
 			return errResultCollectionStale

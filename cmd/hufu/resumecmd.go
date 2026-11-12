@@ -142,6 +142,9 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 		if resumeRepairResult == "" {
 			return runResumeSourcePreflight(cmd, tc.session, tc.coordinator, source)
 		}
+		if err := bindResumePreflightVersionContext(cmd.Context(), tc.session, false); err != nil {
+			return err
+		}
 		assessment, err := tc.coordinator.AssessResumeResultCollection(cmd.Context(), source, resumeRepairResult)
 		if err != nil {
 			return err
@@ -230,14 +233,14 @@ func init() {
 	registerResumeLaunchFlags(f)
 	f.StringVar(&resumeBranch, "branch", "", "Exact existing branch ID, name, or label to resume (defaults to active)")
 	f.StringVar(&resumeRun, "run", "", "Require the source run to belong to the selected branch")
-	f.BoolVar(&resumeUpgradeContracts, "upgrade-contracts", false, "Preview or create a recovery child for changed result schemas; never bypass ordinary resume policy checks")
+	f.BoolVar(&resumeUpgradeContracts, "upgrade-contracts", false, "Preview or create a recovery child for result schemas or rejected submission-only transport; ordinary resume checks remain mandatory")
 	f.BoolVar(&resumeUpgradeInputPolicy, "upgrade-input-policy", false, "Explicitly include resolver/provider policy changes in --upgrade-contracts; preserves verified frozen inputs and requires read-only contracts")
-	f.BoolVar(&resumeMetadataOnly, "metadata-only", false, "Explicit lineage-only recovery for an unversioned read-only team; project files remain shared")
+	f.BoolVar(&resumeMetadataOnly, "metadata-only", false, "Explicit lineage-only recovery for unversioned read-only work or verified result-only upgrades; project files remain shared")
 	f.StringVar(&resumeRecoveryBranch, "recovery-branch", "", "New child branch name for an explicitly previewed recovery")
 	f.StringVar(&resumeRecoveryPlan, "plan-hash", "", "Exact SHA-256 from the recovery preview")
 	f.BoolVar(&resumeRetryAcceptance, "retry-acceptance", false, "Retry unavailable final request acceptance against the saved answer; never redispatch workers or collectors")
 	f.DurationVar(&resumeAcceptanceTimeout, "acceptance-timeout", 5*time.Minute, "Per-review call timeout for --retry-acceptance; preserves frozen work and execution policy")
-	f.StringVar(&resumeRepairResult, "repair-result", "", "Authorize bounded result-only recovery for a blocked protocol task or cancelled collection; never replay worker tools")
+	f.StringVar(&resumeRepairResult, "repair-result", "", "Authorize bounded result-only recovery; may combine with --upgrade-contracts; never replay worker tools")
 	f.StringVar(&resumeRetryWork, "retry-work", "", "Preview or fork a controlled retry of one completed read-only work attempt whose required decisions never started")
 	f.StringVar(&resumeRepairModel, "repair-model", "", "Auxiliary result submission model (must already be frozen in the source policy); preserves the original worker target")
 	registerTeamSelectionFlags(f, &resumeTeamName, "Agent team name (inferred from --workspace when omitted)")
@@ -335,8 +338,11 @@ func validateResumeRepairFlags() error {
 		return fmt.Errorf("--retry-work requires an exact task ID and cannot combine with contract or input policy upgrades")
 	}
 	if resumeBranchRecoveryRequested() {
-		if resumeRepairResult != "" || resumeRepairModel != "" || opts.reportMode || opts.tuiMode || len(opts.inputFlags) > 0 || len(opts.inputFiles) > 0 {
-			return fmt.Errorf("recovery branching cannot combine with result repair, report, tui or input assignments")
+		if resumeRepairResult != "" && (!resumeUpgradeContracts || resumeUpgradeInputPolicy || strings.TrimSpace(resumeRepairResult) != resumeRepairResult) {
+			return fmt.Errorf("combined result repair requires --upgrade-contracts, an exact task ID and unchanged input policy")
+		}
+		if resumeRepairModel != "" || opts.reportMode || opts.tuiMode || len(opts.inputFlags) > 0 || len(opts.inputFiles) > 0 {
+			return fmt.Errorf("recovery branching cannot combine with model overrides, report, tui or input assignments")
 		}
 		if opts.dryRun {
 			if resumeRecoveryBranch != "" || resumeRecoveryPlan != "" {

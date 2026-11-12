@@ -18,27 +18,29 @@ import (
 
 func collectionBindingDigest(checkpoint *ResultCollectionCheckpoint) (string, error) {
 	return collectionDigest(struct {
-		Version          int                       `json:"version"`
-		Branch           string                    `json:"branch"`
-		Run              string                    `json:"run"`
-		Task             string                    `json:"task"`
-		Agent            string                    `json:"agent"`
-		Attempt          int                       `json:"attempt"`
-		ModelExecution   string                    `json:"model_execution"`
-		FanoutIndex      int                       `json:"fanout_index,omitzero"`
-		FanoutLeaf       bool                      `json:"fanout_leaf"`
-		Target           execution.ExecutionTarget `json:"target"`
-		Revision         int                       `json:"revision"`
-		Dispatch         string                    `json:"dispatch"`
-		Policy           string                    `json:"policy"`
-		Contract         string                    `json:"contract"`
-		InputsID         string                    `json:"inputs_id"`
-		InputsHash       string                    `json:"inputs_hash"`
-		Evidence         string                    `json:"evidence"`
-		EvidenceRevision int                       `json:"evidence_revision,omitzero"`
-		Workspace        string                    `json:"workspace"`
-		CollectorSchema  int                       `json:"collector_schema"`
-	}{checkpoint.Version, checkpoint.BranchID, checkpoint.SourceRunID, checkpoint.TaskID, checkpoint.Agent,
+		LegacySubmission *LegacySubmissionRecovery        `json:"legacy_submission,omitempty"`
+		ContractUpgrade  *ResultCollectionContractUpgrade `json:"contract_upgrade,omitempty"`
+		Version          int                              `json:"version"`
+		Branch           string                           `json:"branch"`
+		Run              string                           `json:"run"`
+		Task             string                           `json:"task"`
+		Agent            string                           `json:"agent"`
+		Attempt          int                              `json:"attempt"`
+		ModelExecution   string                           `json:"model_execution"`
+		FanoutIndex      int                              `json:"fanout_index,omitzero"`
+		FanoutLeaf       bool                             `json:"fanout_leaf"`
+		Target           execution.ExecutionTarget        `json:"target"`
+		Revision         int                              `json:"revision"`
+		Dispatch         string                           `json:"dispatch"`
+		Policy           string                           `json:"policy"`
+		Contract         string                           `json:"contract"`
+		InputsID         string                           `json:"inputs_id"`
+		InputsHash       string                           `json:"inputs_hash"`
+		Evidence         string                           `json:"evidence"`
+		EvidenceRevision int                              `json:"evidence_revision,omitzero"`
+		Workspace        string                           `json:"workspace"`
+		CollectorSchema  int                              `json:"collector_schema"`
+	}{checkpoint.LegacySubmission, checkpoint.ContractUpgrade, checkpoint.Version, checkpoint.BranchID, checkpoint.SourceRunID, checkpoint.TaskID, checkpoint.Agent,
 		checkpoint.Attempt, checkpoint.ModelExecutionID, checkpoint.FanoutIndex, checkpoint.FanoutLeaf, checkpoint.ExecutionTarget, checkpoint.WorkOccurrenceRevision,
 		checkpoint.WorkDispatchID, checkpoint.PolicySHA256, checkpoint.TaskContractSHA256, checkpoint.InputsID,
 		checkpoint.InputsSHA256, checkpoint.EvidenceSHA256, checkpoint.EvidenceRevision, checkpoint.WorkspaceIdentitySHA256, checkpoint.CollectorSchemaRevision})

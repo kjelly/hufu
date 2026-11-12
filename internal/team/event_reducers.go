@@ -513,7 +513,7 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 		}
 		if e.Type == string(EventContractRecovery) {
 			if plan, err := decodeContractRecovery(e); err == nil {
-				_ = applyContractRecoveryTasks(taskMap, plan)
+				_ = applyContractRecoveryTasks(taskMap, plan, effectiveEventBranchID(e))
 			}
 			continue
 		}

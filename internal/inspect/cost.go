@@ -43,7 +43,7 @@ func InspectCost(ctx context.Context, query InspectQuery) (*Envelope, error) {
 		return nil, err
 	}
 	if resolved.TaskID != "" {
-		tasks, replayErr := team.ReplayTodoList(selected.runEvents)
+		tasks, replayErr := team.ReplayTodoList(selected.taskEvents)
 		if replayErr != nil {
 			return nil, fmt.Errorf("%w: replay cost task scope for run %q: %v", ErrIntegrity, resolved.RunID, replayErr)
 		}

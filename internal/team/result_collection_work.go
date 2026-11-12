@@ -146,6 +146,19 @@ func collectionForReceipt(item *TodoItem, receipt *ExecutionReceipt) *ResultColl
 }
 
 func (c *Coordinator) loadCollectionWork(ctx context.Context, item *TodoItem, checkpoint *ResultCollectionCheckpoint) (*resultCollectionWork, error) {
+	if checkpoint == nil {
+		return nil, errResultCollectionStale
+	}
+	policy, err := c.collectionPolicy(checkpoint.ExecutionTarget)
+	if err != nil {
+		return nil, err
+	}
+	return c.loadCollectionWorkAgainstPolicy(ctx, item, checkpoint, policy, nil)
+}
+
+// The explicit policy argument is used only by contract-upgrade assessment to
+// verify original work against the already validated source policy.
+func (c *Coordinator) loadCollectionWorkAgainstPolicy(ctx context.Context, item *TodoItem, checkpoint *ResultCollectionCheckpoint, policy *ExecutionPolicySnapshot, original *SessionData) (*resultCollectionWork, error) {
 	if err := validateResultCollectionCheckpoint(checkpoint); err != nil {
 		return nil, err
 	}
@@ -153,15 +166,20 @@ func (c *Coordinator) loadCollectionWork(ctx context.Context, item *TodoItem, ch
 		checkpoint.InputsID != item.RunInputSnapshotID || checkpoint.InputsSHA256 != item.RunInputSnapshotHash {
 		return nil, errResultCollectionStale
 	}
-	policy, err := c.collectionPolicy(checkpoint.ExecutionTarget)
-	if err != nil || policy.ConfigurationHash != checkpoint.PolicySHA256 {
-		return nil, fmt.Errorf("collection policy changed: %w", errors.Join(err, errResultCollectionStale))
+	if policy == nil || policy.ConfigurationHash != checkpoint.PolicySHA256 {
+		return nil, fmt.Errorf("collection policy changed: %w", errResultCollectionStale)
 	}
 	contractHash, err := decisionTaskInputDigest(item)
 	if err != nil || contractHash != checkpoint.TaskContractSHA256 {
 		return nil, fmt.Errorf("collection task contract changed: %w", errors.Join(err, errResultCollectionStale))
 	}
-	if err := c.validateCollectionEvidence(item, checkpoint); err != nil {
+	validateEvidence := c.validateCollectionEvidence
+	if original != nil {
+		validateEvidence = func(item *TodoItem, cp *ResultCollectionCheckpoint) error {
+			return c.validateOriginalContractCollectionEvidence(ctx, original, item, cp)
+		}
+	}
+	if err := validateEvidence(item, checkpoint); err != nil {
 		return nil, fmt.Errorf("collection evidence sources changed: %w", errors.Join(err, errResultCollectionStale))
 	}
 	body, err := c.readCollectionBytes(ctx, checkpoint.Work, resultCollectionWorkMaxBytes)
@@ -172,7 +190,7 @@ func (c *Coordinator) loadCollectionWork(ctx context.Context, item *TodoItem, ch
 	if err := json.Unmarshal(body, &work, json.RejectUnknownMembers(true), collectionDurationFormat); err != nil {
 		return nil, err
 	}
-	bindingHash, err := collectionBindingDigest(checkpoint)
+	bindingHash, err := collectionWorkBinding(item, checkpoint)
 	if err != nil || work.Version != resultCollectionVersion || work.BindingSHA256 != bindingHash || work.Receipt.ResultCollection != nil ||
 		work.Receipt.MediaInputDigest != item.MediaInputDigest ||
 		work.Receipt.RunID != checkpoint.SourceRunID || work.Receipt.TaskID != item.ID || work.Receipt.Attempt != checkpoint.Attempt ||
@@ -195,5 +213,26 @@ func (c *Coordinator) loadCollectionWork(ctx context.Context, item *TodoItem, ch
 	if err := c.validateResumeTranscript(ctx, &work.Receipt); err != nil {
 		return nil, err
 	}
+	if checkpoint.LegacySubmission != nil {
+		if err := c.validateLegacyWork(ctx, item, checkpoint, &work); err != nil {
+			return nil, err
+		}
+	}
 	return &work, nil
+}
+
+// collectionWorkBinding selects the immutable original work seal independently
+// of the current submission contract or a derived legacy collection proof.
+func collectionWorkBinding(item *TodoItem, checkpoint *ResultCollectionCheckpoint) (string, error) {
+	sealed := checkpoint
+	if upgrade := checkpoint.ContractUpgrade; upgrade != nil {
+		if item.ResultContract == nil || *item.ResultContract != upgrade.AcceptedContract {
+			return "", errResultCollectionStale
+		}
+		sealed = upgrade.Original
+	}
+	if checkpoint.LegacySubmission != nil {
+		return legacyWorkBinding(checkpoint.LegacySubmission)
+	}
+	return collectionBindingDigest(sealed)
 }

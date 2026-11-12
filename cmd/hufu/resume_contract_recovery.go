@@ -18,6 +18,9 @@ import (
 // invocation with its full policy, evidence, verification and acceptance gates.
 func runContractRecoveryCommand(cmd *cobra.Command, source *team.ResumeSource, name string, binding *commandWorkspaceBinding, registry *team.TeamRegistry, vars map[string]string) (runErr error) {
 	recoveryCtx := withResumeLaunchPolicy(commandContext(cmd), source)
+	if resumeRepairResult != "" {
+		recoveryCtx = team.WithContractResultRepair(recoveryCtx, resumeRepairResult)
+	}
 	if resumeRetryWork != "" {
 		recoveryCtx = team.WithReadOnlyWorkRetry(recoveryCtx, resumeRetryWork)
 	}
@@ -53,7 +56,8 @@ func runContractRecoveryCommand(cmd *cobra.Command, source *team.ResumeSource, n
 			SourceBranch string `json:"source_branch"`
 			PlanHash     string `json:"plan_hash"`
 			MetadataOnly bool   `json:"metadata_only"`
-		}{Branch: branch, SourceBranch: source.BranchID, PlanHash: plan.SHA256, MetadataOnly: plan.MetadataOnly})
+			RepairResult string `json:"repair_result,omitempty"`
+		}{Branch: branch, SourceBranch: source.BranchID, PlanHash: plan.SHA256, MetadataOnly: plan.MetadataOnly, RepairResult: resumeRepairResult})
 		if err != nil {
 			return err
 		}
@@ -64,6 +68,10 @@ func runContractRecoveryCommand(cmd *cobra.Command, source *team.ResumeSource, n
 		if _, err = fmt.Fprintln(cmd.OutOrStdout(), "Metadata-only recovery: session history is forked; project files remain shared."); err != nil {
 			return err
 		}
+	}
+	if plan.Repaired > 0 {
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "Recovery branch: %s; retained: %d; result-only repairs: %d; read-only retries: %d\nContinue with: hufu resume --team %q --execution-profile %q --workspace %q --branch %q --repair-result %q\n", branch, plan.Retained, plan.Repaired, plan.Retried, name, tc.coordinator.ExecutionProfile().Name, binding.Resolution.ControlRoot, branch, resumeRepairResult)
+		return err
 	}
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "Recovery branch: %s; retained: %d; read-only retries: %d\nContinue with: hufu resume --team %q --execution-profile %q --workspace %q --branch %q\n", branch, plan.Retained, plan.Retried, name, tc.coordinator.ExecutionProfile().Name, binding.Resolution.ControlRoot, branch)
 	return err

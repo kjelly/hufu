@@ -127,6 +127,13 @@ func (c *Coordinator) validateResumeResultContract(item *TodoItem) error {
 
 func (c *Coordinator) validateResumeRecoveryMode(ctx context.Context, source *ResumeSource) error {
 	if source.metadataOnly {
+		if source.contractRepairTask != "" {
+			selected := source.contractRepairTask
+			if id, _ := ctx.Value(resultOnlyRepairKey{}).(string); id != "" {
+				selected = id
+			}
+			ctx = WithContractResultRepair(ctx, selected)
+		}
 		if err := c.validateMetadataContractRecovery(ctx, source.Session); err != nil {
 			return err
 		}

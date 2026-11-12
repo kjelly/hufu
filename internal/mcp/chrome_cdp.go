@@ -120,7 +120,7 @@ func (m *MCPToolManager) loadChromeCDP(ctx context.Context, name string, cfg MCP
 		}
 		return flow.click(ctx, ref)
 	})
-	add(mcpgo.NewTool("browser_wait_for_user", mcpgo.WithDescription("Pause model working-time timeout while the operator manually verifies the current Chrome page. Requires a real interactive answer, never auto-approves. After confirmation, call browser_snapshot; confirmation alone proves no page content."),
+	add(mcpgo.NewTool("browser_wait_for_user", mcpgo.WithDescription("Pause model working-time timeout while the operator manually verifies the current Chrome page. Requires a real interactive answer, never auto-approves. Type the fresh confirmation code shown in CLI/TUI after completing verification; Enter alone is insufficient. Automatic verification prompts once per unresolved URL; one explicit retry is allowed, with at most two total requests. Operator cancellation is final. With page verification enabled, fresh content is classified before success. After confirmation, call browser_snapshot for source evidence; confirmation alone proves no page content."),
 		mcpgo.WithString("reason", mcpgo.Required(), mcpgo.MinLength(1), mcpgo.MaxLength(2000))), func(ctx context.Context, request mcpgo.CallToolRequest) (string, error) {
 		reason, err := request.RequireString("reason")
 		if err != nil {

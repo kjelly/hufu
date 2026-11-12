@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json/v2"
 	"strings"
 	"testing"
 
@@ -164,8 +165,12 @@ func TestAskUser_Cancel(t *testing.T) {
 
 	select {
 	case resp := <-replyCh:
-		if strings.Contains(resp, "a") {
-			t.Error("cancel should send empty/default response, not option value")
+		var answer askRespJSON
+		if err := json.Unmarshal([]byte(resp), &answer); err != nil {
+			t.Fatal(err)
+		}
+		if !answer.Cancelled || len(answer.Answers) != 0 || answer.Free != "" {
+			t.Error("cancel should send an explicit cancellation without an answer")
 		}
 	default:
 		t.Error("expected response on replyCh after cancel")

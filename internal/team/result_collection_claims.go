@@ -7,11 +7,17 @@ import (
 
 func resultCollectionFailureDiagnostic(item *TodoItem) (string, bool) {
 	checkpoint := currentResultCollection(item)
-	if checkpoint == nil || checkpoint.State != ResultCollectionBlocked || item.ExecutionReceipt.RepairProvenance == nil {
+	if checkpoint == nil || item.ExecutionReceipt.RepairProvenance == nil {
 		return "", false
 	}
 	provenance := item.ExecutionReceipt.RepairProvenance
-	if !provenance.Attempted || provenance.Success || provenance.FailureReason != checkpoint.FailureReason || provenance.Error == "" {
+	if !provenance.Attempted || provenance.Success || provenance.RepairAttempts != checkpoint.TurnsUsed || provenance.FailureReason == "" || provenance.Error == "" {
+		return "", false
+	}
+	// Cancellation or storage failure can prevent the blocked checkpoint append.
+	// The terminal receipt still records that stop against the current work and
+	// consumed turn count. Do not substitute an earlier worker-tool diagnostic.
+	if checkpoint.State == ResultCollectionBlocked && provenance.FailureReason != checkpoint.FailureReason {
 		return "", false
 	}
 	return schemaRepairDiagnostic(provenance.Error), true

@@ -102,7 +102,7 @@ func (m Model) updateAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.inAskUser = false
 			return m.maybeQuitAfterAsk()
 		case "ctrl+c":
-			st.req.ReplyCh <- marshalAskResp(nil, "")
+			st.req.ReplyCh <- marshalAskCancelled()
 			m.inAskUser = false
 			return m.handleCtrlC()
 		}
@@ -121,7 +121,7 @@ func (m Model) updateAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "ctrl+c":
-		st.req.ReplyCh <- marshalAskResp(nil, "")
+		st.req.ReplyCh <- marshalAskCancelled()
 		m.inAskUser = false
 		return m.handleCtrlC()
 	case "up", "k":
@@ -290,8 +290,14 @@ func (m Model) askUserView() string {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 type askRespJSON struct {
-	Answers []string `json:"answers,omitempty"`
-	Free    string   `json:"free_text,omitempty"`
+	Answers   []string `json:"answers,omitempty"`
+	Free      string   `json:"free_text,omitempty"`
+	Cancelled bool     `json:"cancelled,omitzero"`
+}
+
+func marshalAskCancelled() string {
+	data, _ := json.Marshal(askRespJSON{Cancelled: true})
+	return string(data)
 }
 
 func marshalAskResp(answers []string, free string) string {

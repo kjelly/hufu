@@ -212,8 +212,19 @@ storage failure or exhausted repair budget stops result collection, retaining
 work and isolated/fanout delivery artifacts. Resume uses received, prepared or
 accepted durable bytes before considering another permitted model call. It
 never redispatches completed work to repair a report. A storage continuation
-adds no model turns. Collection usage, including cache counters, is accounted
+uses durable claims or remaining turns without adding model turns. When no
+response survived and the original turn budget is exhausted, an explicit
+`--repair-result` grant authorizes up to two further collector turns, preserving
+all earlier consumed reservations. Ordinary resume does not grant that allowance.
+Collection usage, including cache counters, is accounted
 separately from the frozen work usage.
+
+If cancellation or storage failure prevents the blocked checkpoint append, the
+terminal receipt records the collection stop against the current work and
+consumed turn count. Failure diagnostics identify `result_collection` from that
+receipt even while its last durable checkpoint remains pending, in flight,
+received or prepared. An earlier worker-tool error must not replace that cause;
+the checkpoint and its evidence remain unchanged for recovery.
 
 Reopening a submission issues a random dispatch lease ID. Lease IDs must remain
 distinct across process restarts; a process-local counter can repeat a persisted
@@ -813,6 +824,95 @@ or failed judgment remains a partial run; successful completion still requires
 the normal evidence manifest and CompletionGate. Cancellation preserves the
 completed tasks. Retry cannot combine with task repair, contract upgrades,
 media or new input assignments.
+
+A returned worker can instead use the explicit combined path:
+
+```sh
+hufu resume --team <team> --workspace <control-root> --branch <source> \
+  --upgrade-contracts --repair-result <task-id> --metadata-only --dry-run --output json
+hufu resume --team <team> --workspace <control-root> --branch <source> \
+  --upgrade-contracts --repair-result <task-id> --metadata-only \
+  --recovery-branch <new-name> --plan-hash <sha256-from-preview>
+hufu resume --team <team> --workspace <control-root> --branch <returned-branch-id> \
+  --repair-result <task-id> --dry-run --output json
+hufu resume --team <team> --workspace <control-root> --branch <returned-branch-id> \
+  --repair-result <task-id>
+```
+
+Omit `--metadata-only` for a managed required-versioning workspace. The plan
+lists `repair_result` separately from worker `retry` and records its `repaired`
+count. Publication only establishes the child: no collector, worker, tool,
+verification or acceptance runs, and it grants no model turns. JSON publication
+includes `repair_result` so the next command can retain the exact selection.
+The separate child preview/resume uses ordinary result-only checks. A stored
+response valid under the new schema can be committed locally; a repairable
+format failure requires the ordinary explicit allowance of at most two further
+collector turns. Collector channels expose no worker tools.
+
+The combined path pins the original checkpoint, work CAS reference, receipt,
+transcript, frozen inputs, work occurrence, execution target and original
+contract to the source task digest. A child submission binding names the new
+branch/policy/contract without rewriting the original work seal. Consumed turns
+and prior grants remain accounted for; cached prepared claims are revalidated
+from the original response under the new contract. Retained payloads and their
+native provenance remain byte-for-byte evidence; downstream verification and
+acceptance reopen as shown in the plan. A source requiring new work prevents
+result-only reuse of its dependent's old observations.
+
+With this explicit, proof-bound mode, an unversioned workspace can preserve
+completed `browser_interaction` work as well as read-only work. Accepted browser
+sources need successful finished receipts; the selected blocked collection
+needs a successful sealed work receipt. Uncertain/partial effects, running
+terminals, mutation/production steps, unsupported external effects, isolated
+worlds, model fanout and missing or altered evidence remain blocked. Future
+browser contracts retain their declared authority, but existing browser tasks
+cannot become worker retries. The ordinary metadata-only path and new-task
+fork safety are unchanged. Models, execution authority, scope and frozen-input
+policy cannot change through this combined operation. One original collection
+is selected per upgrade; upgrading an already upgraded collection is currently
+refused. Subsequent result-only repairs use the ordinary child policy.
+
+For a legacy `tool` worker whose literal execution sequence was only
+`[submit_result]`, the same explicit combined command can migrate a rejected
+submission into bounded runtime collection, even when its terminal class is
+`execution`. This is a separate `legacy_submission` proof, not a relabeling of
+historical failure events or evidence of successful work. It requires a settled
+read-only task, a complete runtime-saved rejected completion candidate, its
+original transcript/receipt and unchanged frozen input/source bindings. Every
+recorded tool call must be `submit_result`, the initial rejected arguments must
+match the saved candidate and failed step, and spent calls must match the
+original step-budget receipt. Unrelated denials, tool work, isolated/fanout or
+workset execution, restricted dependency views and uncertain effects are refused.
+
+Version-one candidates hashed whole source task projections, including process
+metrics that canonical event replay does not retain. If that old hash cannot be
+reproduced, migration additionally requires an authenticated original model
+dispatch manifest whose complete dependency content hash still matches current
+accepted sources, and those full canonical source receipts/results must already
+exist unchanged before that dispatch. Missing, compressed, changed or undispatched dependency
+context is refused. The original candidate wrapper remains immutable; the new
+proof separately seals the verified canonical sources.
+
+This legacy path permits exactly the selected agent's explicit `tool` →
+`runtime` transport change and removal of that task's single submission slot.
+Result schemas, models, generation settings, other tools, source membership,
+input policy and all other contracts remain pinned. It cannot simultaneously
+upgrade result schemas or retry another task. Completed browser sources may
+be retained under the same receipt-verified rules above. The preview separately
+shows the old submission count; publication grants no new turns.
+
+The derived collection capsule contains the complete rejected candidate,
+original unsuccessful native receipt, original goal/constraints and complete
+accepted source results. It is not a capture of the original HTTP request.
+Consumed legacy submissions are carried into the collection budget; the child
+must separately preview and authorize `--repair-result`. The first data-only
+turn receives the preserved candidate plus schema feedback. At most two new
+collector turns are granted, and normal validation, objective verification and
+acceptance still run. After successful collection, the child's derived
+submission receipt records the accepted outcome; the source branch and exact
+original failed receipt remain unchanged in durable evidence. Subsequent
+resume and replay validate the derived receipt normally. No worker, browser,
+file inspection or source research is repeated.
 
 For actions with input bindings, recovery reconstructs the occurrence contract
 from the original frozen snapshot and input policy. It verifies the materialized

@@ -163,8 +163,9 @@ type AskUserTUIOption struct {
 // AskUserResponse is the normalized response shape used by ask_user in
 // interactive, TUI, and unattended modes.
 type AskUserResponse struct {
-	Answers []string `json:"answers"`
-	Free    string   `json:"free_text,omitempty"`
+	Answers   []string `json:"answers"`
+	Free      string   `json:"free_text,omitempty"`
+	Cancelled bool     `json:"cancelled,omitzero"`
 }
 
 // ErrAskUserAbstained is returned by an AskUserChoiceSelector that declines

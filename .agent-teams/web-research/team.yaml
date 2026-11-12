@@ -217,7 +217,6 @@ contracts:
       requires-grounded-result: true
       requires-evidence: true
       max-evidence-sources: 1
-      tool-sequence: [submit_result]
     verify-spec:
       type: task_result_assert
       task-result-assertions:

@@ -9,7 +9,91 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
+
+func TestResultCollectionRepairsUndeclaredParagraphFieldsWithoutRepeatingWork(t *testing.T) {
+	const schema = `{"type":"object","additionalProperties":false,"required":["answer"],"properties":{"answer":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["text"],"properties":{"text":{"type":"string"}}}}}}`
+	const valid = `{"status":"completed_with_gaps","summary":"saved synthesis","structured_payload":{"answer":[{"text":"The evidence remains inconclusive."}]}}`
+	invalid := strings.Replace(valid, `"text":"The evidence remains inconclusive."`, `"text":"The evidence remains inconclusive.","text_note":""`, 1)
+	for _, repeated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("repeated=%t", repeated), func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/chat/completions" {
+					_, _ = fmt.Fprint(w, `{"model":"test","parameters":"num_ctx 131072","capabilities":["completion","tools"]}`)
+					return
+				}
+				var request map[string]any
+				if err := json.UnmarshalRead(r.Body, &request); err != nil {
+					t.Error(err)
+					return
+				}
+				n := calls.Add(1)
+				if n > 2 {
+					t.Error("format repair exceeded the original two-turn budget")
+					http.Error(w, "extra call", http.StatusBadRequest)
+					return
+				}
+				if exposed, _ := request["tools"].([]any); len(exposed) != 0 {
+					t.Error("text collection exposed execution tools")
+				}
+				body := invalid
+				if n == 2 {
+					prompt := fmt.Sprint(request["messages"])
+					for _, field := range []string{"previous_response", "text_note", "format_diagnostic", "The evidence remains inconclusive."} {
+						if !strings.Contains(prompt, field) {
+							t.Errorf("repair lost original claims or diagnostic: %s", field)
+						}
+					}
+					if !repeated {
+						body = valid
+					}
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprintf(w, "data: {\"id\":\"synthesis\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", body)
+			}))
+			t.Cleanup(server.Close)
+			compiled, err := CompileResultContractDocument("paragraphs.json", []byte(schema))
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, item, ctx, receipt := resultCollectionTaskFixture(t, server.URL+"/v1", true, func(spec *TodoSpec) {
+				spec.ResultContract = new(compiled.ref(true))
+			}, func(c *Coordinator) {
+				c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
+				c.session.Config.CollectorResponseChannel = agent.CollectorResponseTextJSON
+			})
+			worker := scriptWorker(textTurn("must not repeat synthesis"))
+			c.workerAgentOverride = worker
+			err = c.collectReturnedWork(ctx, c.session.Agents[item.Agent], receipt, "saved synthesis", "original task")
+			if (err == nil) == repeated || calls.Load() != 2 || worker.Calls() != 0 {
+				t.Fatalf("repeated=%t calls=%d worker=%d err=%v", repeated, calls.Load(), worker.Calls(), err)
+			}
+			item = c.todoItemByID(item.ID)
+			checkpoint := currentResultCollection(item)
+			if checkpoint.TurnsUsed != 2 || checkpoint.TurnLimit != 2 || checkpoint.ModelExecutionID != receipt.ModelExecutionID {
+				t.Fatal("format repair changed the work identity or budget")
+			}
+			work, err := c.loadCollectionWork(t.Context(), item, checkpoint)
+			if err != nil || work.Receipt.TranscriptRef != receipt.TranscriptRef || string(work.Report) != "saved synthesis" {
+				t.Fatalf("format repair lost original work or transcript: %v", err)
+			}
+			c = reopenRecoveryCoordinator(t, c)
+			item = c.todoItemByID(item.ID)
+			if repeated {
+				if currentResultCollection(item).State != ResultCollectionBlocked || item.TypedResult != nil {
+					t.Fatal("repeated invalid output was accepted after replay")
+				}
+				return
+			}
+			if item.TypedResult == nil || item.TypedResult.Status != TaskResultStatusCompletedWithGaps || string(item.TypedResult.StructuredPayload.Value) != `{"answer":[{"text":"The evidence remains inconclusive."}]}` {
+				t.Fatal("field repair changed the original judgment or answer after replay")
+			}
+		})
+	}
+}
 
 const collectedNotesSchema = `{"type":"object","additionalProperties":false,"required":["notes"],"properties":{"notes":{"type":"array","items":{"type":"string"}}}}`
 

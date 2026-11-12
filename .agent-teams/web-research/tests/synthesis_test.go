@@ -275,7 +275,7 @@ func TestResearchPipelineRequiresSynthesisAfterAudit(t *testing.T) {
 		}
 		if doc["x-hufu-final-report"] != nil {
 			finalReports++
-			if compiled.ID != "schemas/synthesis-v1.json" {
+			if compiled.ID != "schemas/synthesis-v2.json" {
 				t.Fatalf("another worker owns final rendering: %s", compiled.ID)
 			}
 		}
@@ -290,8 +290,15 @@ func TestResearchPipelineRequiresSynthesisAfterAudit(t *testing.T) {
 				t.Fatalf("audit handoff: %+v", task)
 			}
 		case "synthesizer":
-			if task.Phase != team.PhaseVerify || !task.Execution.RequiresEvidence || task.Execution.MaxEvidenceSources != 1 || !slices.Equal(task.Execution.ToolSequence, []string{"submit_result"}) {
+			if task.Phase != team.PhaseVerify || !task.Execution.RequiresEvidence || task.Execution.MaxEvidenceSources != 1 || len(task.Execution.ToolSequence) != 0 {
 				t.Fatalf("synthesis handoff or tool boundary: %+v", task)
+			}
+			resolved, err := team.ResolveStaticWorkerTools(team.StaticToolResolutionInput{
+				Session: session, Agent: session.Agents[task.Agent], Task: task,
+				BaseTools: []string{"submit_result", "view", "web_search", "bash"}, ResultTransport: agent.ResultTransportRuntime,
+			})
+			if err != nil || len(resolved.Names) != 0 || !resolved.ResultRequired || resolved.ResultToolRequired {
+				t.Fatalf("synthesis must collect returned work without execution tools: %+v %v", resolved, err)
 			}
 		}
 	}
@@ -312,10 +319,10 @@ func TestResearchPipelineRequiresSynthesisAfterAudit(t *testing.T) {
 	if session.Agents["synthesizer"].Tools != "submit_result" {
 		t.Fatal("synthesizer has unexpected tools")
 	}
-	if session.Config.ResultTransport != agent.ResultTransportRuntime || session.Agents["synthesizer"].ResultTransport != agent.ResultTransportTool {
-		t.Fatal("research collection and the synthesizer's closed sequence do not have explicit compatible transports")
+	if session.Config.ResultTransport != agent.ResultTransportRuntime || session.Agents["synthesizer"].ResultTransport != agent.ResultTransportRuntime {
+		t.Fatal("all stages must permit bounded runtime result collection")
 	}
-	for _, name := range []string{"researcher", "countercheck", "verifier"} {
+	for _, name := range []string{"researcher", "countercheck", "verifier", "synthesizer"} {
 		prompt := session.Agents[name].System
 		if !strings.Contains(prompt, "Never call `submit_result`") || strings.Contains(prompt, "Submit exactly one `submit_result`") || !strings.Contains(prompt, "return one complete JSON report") {
 			t.Fatalf("%s still uses a tool submission instruction under runtime collection", name)

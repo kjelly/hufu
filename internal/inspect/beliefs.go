@@ -51,7 +51,7 @@ func InspectBeliefs(ctx context.Context, query InspectQuery) (*Envelope, error) 
 	if err != nil {
 		return nil, fmt.Errorf("%w: project diagnostic episodes: %v", ErrIntegrity, err)
 	}
-	tasks, err := team.ReplayTodoList(selected.runEvents)
+	tasks, err := team.ReplayTodoList(selected.taskEvents)
 	if err != nil {
 		return nil, fmt.Errorf("%w: project belief execution state: %v", ErrIntegrity, err)
 	}

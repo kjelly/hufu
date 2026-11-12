@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"slices"
 	"strings"
@@ -206,6 +207,7 @@ type CatalogActionData struct {
 type selectedRun struct {
 	raw           []team.RunEvent
 	runEvents     []team.RunEvent
+	taskEvents    []team.RunEvent
 	terminal      *team.RunEvent
 	terminalIndex int
 }
@@ -230,7 +232,7 @@ func projectRunData(ctx context.Context, query InspectQuery, lineage Lineage) (R
 	if err != nil {
 		return RunData{}, selectedRun{}, err
 	}
-	tasks, err := team.ReplayTodoList(selected.runEvents)
+	tasks, err := team.ReplayTodoList(selected.taskEvents)
 	if err != nil {
 		return RunData{}, selectedRun{}, fmt.Errorf("%w: replay tasks for run %q: %v", ErrIntegrity, query.RunID, err)
 	}
@@ -287,7 +289,7 @@ func InspectTask(ctx context.Context, query InspectQuery) (*Envelope, error) {
 	if err != nil {
 		return nil, err
 	}
-	tasks, err := team.ReplayTodoList(selected.runEvents)
+	tasks, err := team.ReplayTodoList(selected.taskEvents)
 	if err != nil {
 		return nil, fmt.Errorf("%w: replay tasks for run %q: %v", ErrIntegrity, query.RunID, err)
 	}
@@ -348,6 +350,7 @@ func selectRun(lineage Lineage, query InspectQuery) (selectedRun, error) {
 	}
 
 	selected := selectedRun{raw: raw, runEvents: runEvents, terminalIndex: -1}
+	selected.taskEvents = recoveryTaskEvents(raw, runEvents)
 	for index := range raw {
 		event := &raw[index]
 		if event.RunID != query.RunID || event.Type != "run_finished" {
@@ -363,6 +366,51 @@ func selectRun(lineage Lineage, query InspectQuery) (selectedRun, error) {
 		selected.terminalIndex = index
 	}
 	return selected, nil
+}
+
+// A result-only grant belongs to the recovery run, while its prior checkpoint
+// belongs to the original work run. Include that task's earlier lineage for
+// validated replay; keep the visible timeline restricted to the requested run.
+func recoveryTaskEvents(raw, runEvents []team.RunEvent) []team.RunEvent {
+	// Contract recovery rebinds tasks collectively, including retained source
+	// results. Replay its complete ancestry while the timeline remains run-scoped.
+	for index, event := range raw {
+		if event.ID == runEvents[0].ID {
+			if slices.ContainsFunc(raw[:index], func(event team.RunEvent) bool { return event.Type == string(team.EventContractRecovery) }) {
+				return append(slices.Clone(raw[:index]), runEvents...)
+			}
+			break
+		}
+	}
+	needed := make(map[string]bool)
+	var sessionID string
+	for _, event := range runEvents {
+		if event.SessionID != "" {
+			sessionID = event.SessionID
+		}
+		if event.TaskID == "" || event.Type != string(team.EventTaskProtocolIncomplete) {
+			continue
+		}
+		var payload struct {
+			Grant *team.ResultRepairGrant `json:"result_repair_grant"`
+		}
+		if jsonv2.Unmarshal(event.Payload, &payload) == nil && payload.Grant != nil && payload.Grant.Recovery != nil {
+			needed[event.TaskID] = true
+		}
+	}
+	if len(needed) == 0 {
+		return runEvents
+	}
+	var replay []team.RunEvent
+	for _, event := range raw {
+		if event.ID == runEvents[0].ID {
+			break
+		}
+		if needed[event.TaskID] && (sessionID == "" || event.SessionID == sessionID) {
+			replay = append(replay, event)
+		}
+	}
+	return append(replay, runEvents...)
 }
 
 func envelope(kind Kind, query InspectQuery, branchID string, data any) *Envelope {

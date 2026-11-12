@@ -161,7 +161,24 @@ func (c *Coordinator) saveResultCandidate(ctx context.Context, taskID, raw strin
 }
 
 func (c *Coordinator) loadResultCandidate(ctx context.Context, item *TodoItem, candidate *ResultCandidate) (map[string]any, error) {
-	if candidate == nil || item == nil || item.ResultContract == nil || candidate.BranchID != c.activeBranchID() || candidate.TaskID != item.ID || candidate.Agent != item.Agent || candidate.ContractID != item.ResultContract.ID || candidate.ContractHash != item.ResultContract.SchemaSHA256 || candidate.InputsID != item.RunInputSnapshotID || candidate.InputsHash != item.RunInputSnapshotHash || candidate.Version < 1 {
+	return c.loadResultCandidateAtBranch(ctx, item, candidate, c.activeBranchID())
+}
+
+func (c *Coordinator) loadResultCandidateAtBranch(ctx context.Context, item *TodoItem, candidate *ResultCandidate, branch string) (map[string]any, error) {
+	if item == nil || candidate == nil {
+		return nil, errTaskResultStale
+	}
+	evidenceHash, err := c.resultCandidateEvidenceHash(item)
+	if err != nil || evidenceHash != candidate.EvidenceHash {
+		return nil, fmt.Errorf("candidate evidence changed: %w", errors.Join(err, errTaskResultStale))
+	}
+	return c.readResultCandidateAtBranch(ctx, item, candidate, branch)
+}
+
+// readResultCandidateAtBranch authenticates the immutable candidate wrapper.
+// Callers must independently authorize the source evidence binding.
+func (c *Coordinator) readResultCandidateAtBranch(ctx context.Context, item *TodoItem, candidate *ResultCandidate, branch string) (map[string]any, error) {
+	if candidate == nil || item == nil || item.ResultContract == nil || candidate.BranchID != branch || candidate.TaskID != item.ID || candidate.Agent != item.Agent || candidate.ContractID != item.ResultContract.ID || candidate.ContractHash != item.ResultContract.SchemaSHA256 || candidate.InputsID != item.RunInputSnapshotID || candidate.InputsHash != item.RunInputSnapshotHash || candidate.Version < 1 {
 		return nil, errTaskResultStale
 	}
 	if item.ResultCandidate == nil || item.ResultCandidate.SHA256 != candidate.SHA256 || item.ResultCandidate.Version != candidate.Version {
@@ -169,10 +186,6 @@ func (c *Coordinator) loadResultCandidate(ctx context.Context, item *TodoItem, c
 	}
 	if _, _, err := c.boundResultContract(item.ID); err != nil {
 		return nil, err
-	}
-	evidenceHash, err := c.resultCandidateEvidenceHash(item)
-	if err != nil || evidenceHash != candidate.EvidenceHash {
-		return nil, fmt.Errorf("candidate evidence changed: %w", errors.Join(err, errTaskResultStale))
 	}
 	if item.ExecutionReceipt != nil && (item.ExecutionReceipt.RunID != candidate.SourceRunID || item.ExecutionReceipt.Attempt != candidate.Attempt) {
 		return nil, errTaskResultStale

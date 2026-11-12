@@ -14,7 +14,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/kjelly/hufu/internal/auditverify"
 	"github.com/kjelly/hufu/internal/team"
+	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -39,9 +41,25 @@ func TestResumeRecoveryPreviewThenExecute(t *testing.T) {
 	}
 }
 
-func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflow bool) {
+type resumeRecoveryUpgradeFixture struct{ versioned bool }
+
+func TestResumeContractRecoveryUpgradesOnlyReturnedWork(t *testing.T) {
+	for _, versioned := range []bool{false, true} {
+		t.Run(fmt.Sprintf("versioned=%t", versioned), func(t *testing.T) {
+			exerciseResumeRecovery(t, true, true, true, true, resumeRecoveryUpgradeFixture{versioned: versioned})
+		})
+	}
+}
+
+func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflow bool, upgrade ...resumeRecoveryUpgradeFixture) {
+	upgradeContracts := len(upgrade) > 0
+	versionedUpgrade := upgradeContracts && upgrade[0].versioned
 	t.Helper()
 	oldOpts := opts
+	oldUpgrade, oldMetadata, oldRecoveryBranch, oldRecoveryPlan := resumeUpgradeContracts, resumeMetadataOnly, resumeRecoveryBranch, resumeRecoveryPlan
+	t.Cleanup(func() {
+		resumeUpgradeContracts, resumeMetadataOnly, resumeRecoveryBranch, resumeRecoveryPlan = oldUpgrade, oldMetadata, oldRecoveryBranch, oldRecoveryPlan
+	})
 	oldTeam, oldSearch, oldBranch, oldRun, oldTask, oldModel := resumeTeamName, resumeSearch, resumeBranch, resumeRun, resumeRepairResult, resumeRepairModel
 	t.Cleanup(func() {
 		opts = oldOpts
@@ -72,6 +90,11 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflo
 		files["team.yaml"] += "workflow:\n  phases: [prepare, verify]\npolicies:\n  allow_phase_skip: true\ndelegation:\n  bind-task-goal-contracts: true\ntasks:\n  - id: prepare\n    agent: worker\n    phase: prepare\n    side_effect: none\n    execution:\n      requires_result: true\n  - id: verify\n    agent: verifier\n    phase: verify\n    side_effect: none\n    execution:\n      requires_result: true\n"
 		files["verifier.md"] = "---\nname: verifier\nrole: worker\n---\nVerify the retained result.\n"
 	}
+	if upgradeContracts {
+		files["team.yaml"] = strings.ReplaceAll(files["team.yaml"], "execution:\n      requires_result: true", "result-contract: {schema: research.json, require-structured: true}\n    execution:\n      requires_result: true")
+		files["team.yaml"] = strings.Replace(files["team.yaml"], "phase: prepare\n    side_effect: none", "phase: prepare\n    side_effect: browser_interaction\n    recovery: manual", 1)
+		files["research.json"] = `{"type":"object","required":["findings"],"properties":{"findings":{"type":"array","maxItems":12,"items":{"type":"string"}}},"additionalProperties":false}`
+	}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(teamDir, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
@@ -96,7 +119,14 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflo
 		finishReason := "stop"
 		if strings.Contains(prompt, "supplied model-authored claims schema") {
 			collectorCalls.Add(1)
-			if repair.Load() && succeeds {
+			if upgradeContracts {
+				findings := make([]string, 14)
+				for i := range 14 {
+					findings[i] = fmt.Sprint("Original finding ", i)
+				}
+				claims, _ := json.Marshal(map[string]any{"status": "success", "summary": "All original findings retained", "structured_payload": map[string]any{"findings": findings}})
+				delta["content"] = string(claims)
+			} else if repair.Load() && succeeds {
 				delta["content"] = `{"status":"success","summary":"Original limitation preserved"}`
 			} else {
 				delta["content"] = `{"status":42,"summary":"Original limitation preserved"}`
@@ -137,6 +167,33 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflo
 	if output, err := exec.CommandContext(t.Context(), "git", "init", "--quiet", project).CombinedOutput(); err != nil {
 		t.Fatalf("initialize recovery project: %v\n%s", err, output)
 	}
+	if upgradeContracts {
+		mode := "off"
+		if versionedUpgrade {
+			mode = "required"
+		}
+		configDir := filepath.Join(os.Getenv("HOME"), ".config", "hufu")
+		if err := os.MkdirAll(configDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(configDir, "hufu.yaml"), []byte("workspace-versioning:\n  mode: "+mode+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		managedRegistry, err := workspacepkg.OpenReadWrite(os.Getenv("HUFU_STATE_HOME"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		managedProject, err := managedRegistry.RegisterProject(t.Context(), project)
+		if err != nil {
+			_ = managedRegistry.Close()
+			t.Fatal(err)
+		}
+		managed, err := managedRegistry.CreateWorkspace(t.Context(), managedProject.ID, "fixture-team")
+		if closeErr := managedRegistry.Close(); err != nil || closeErr != nil {
+			t.Fatal(err, closeErr)
+		}
+		workspace = managed.ControlRoot
+	}
 	opts = runOptions{workspace: workspace, workspaceMode: "exact", startDir: project, subjectRoot: project, canonicalRun: true, providerURL: server.URL + "/v1", contextWindowOverride: 131072, displayMode: "plain", eventFormat: "text", autoApprove: true, quietMode: true}
 	opts.modelOverride, opts.maxTokensOverride, opts.temperatureOverride = "ollama/recovery-cli-fixture", "4096", "0.15"
 	opts.timeoutOverride = 45
@@ -144,7 +201,21 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflo
 	if err := registry.Discover(); err != nil {
 		t.Fatal(err)
 	}
-	tc, err := loadTeamByName(t.Context(), "fixture-team", registry, opts.providerURL, "", nil, nil, nil, false, false)
+	var tc *teamContext
+	var err error
+	if upgradeContracts {
+		binding, _, bindErr := resolveExistingExecutionWorkspace(t.Context(), "fixture-team", true)
+		if bindErr != nil {
+			t.Fatal(bindErr)
+		}
+		binding, _, bindErr = bindManagedResumeWorkspace(t.Context(), binding, "fixture-team", false)
+		if bindErr != nil {
+			t.Fatal(bindErr)
+		}
+		tc, err = loadTeamByNameWithWorkspaceBinding(t.Context(), "fixture-team", binding, registry, opts.providerURL, "", newPathConsent(), nil, nil, false, false)
+	} else {
+		tc, err = loadTeamByName(t.Context(), "fixture-team", registry, opts.providerURL, "", nil, nil, nil, false, false)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,6 +273,57 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflo
 	// flags survive. Rehydrate them from the selected SQLite event lineage.
 	opts.modelOverride, opts.maxTokensOverride, opts.temperatureOverride = "", "", ""
 	opts.timeoutOverride, opts.contextWindowOverride = 0, 0
+	if upgradeContracts {
+		if err := os.WriteFile(filepath.Join(teamDir, "research.json"), []byte(`{"type":"object","required":["findings"],"properties":{"findings":{"type":"array","items":{"type":"string"}}},"additionalProperties":false}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		resumeUpgradeContracts, resumeMetadataOnly = true, !versionedUpgrade
+		opts.dryRun, opts.outputFormat = true, "json"
+		upgradeCmd := &cobra.Command{Use: "resume"}
+		upgradeCmd.SetContext(t.Context())
+		var upgradeOutput bytes.Buffer
+		upgradeCmd.SetOut(&upgradeOutput)
+		before := runtimeStoreFiles(t, workspace)
+		beforeCalls := collectorCalls.Load()
+		if err := runResumeCommand(upgradeCmd, nil); err != nil {
+			t.Fatal(err)
+		}
+		var plan team.ContractRecoveryPlan
+		if err := json.Unmarshal(upgradeOutput.Bytes(), &plan); err != nil || plan.Repaired != 1 || plan.Retried != 0 {
+			t.Fatalf("upgrade plan=%+v err=%v", plan, err)
+		}
+		if !reflect.DeepEqual(before, runtimeStoreFiles(t, workspace)) || collectorCalls.Load() != beforeCalls || workCalls.Load() != 1 {
+			t.Fatal("upgrade preview changed state or called a model")
+		}
+		opts.dryRun = false
+		resumeRecoveryBranch, resumeRecoveryPlan = "result-upgrade", plan.SHA256
+		upgradeOutput.Reset()
+		if err := runResumeCommand(upgradeCmd, nil); err != nil {
+			t.Fatal(err)
+		}
+		var publication struct {
+			Branch       string `json:"branch"`
+			RepairResult string `json:"repair_result"`
+		}
+		if err := json.Unmarshal(upgradeOutput.Bytes(), &publication); err != nil || publication.RepairResult != blocked.ID {
+			t.Fatal("publication lost result-only continuation", err)
+		}
+		parent, err := team.ReadResumeSource(workspace, resumeBranch, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range parent.Session.Tasks {
+			if item.ID == blocked.ID && (item.Status != team.TaskBlocked || item.ExecutionReceipt.ResultCollection.Work != originalWork || item.ExecutionReceipt.ResultCollection.TurnsUsed != originalTurns) {
+				t.Fatal("parent work changed")
+			}
+		}
+		if collectorCalls.Load() != beforeCalls || workCalls.Load() != 1 {
+			t.Fatal("publication called models or worker")
+		}
+		resumeBranch = publication.Branch
+		resumeUpgradeContracts, resumeMetadataOnly = false, false
+		resumeRecoveryBranch, resumeRecoveryPlan = "", ""
+	}
 	before := runtimeStoreFiles(t, workspace)
 	beforeCalls := collectorCalls.Load()
 	opts.dryRun, opts.outputFormat = true, "json"
@@ -232,7 +354,11 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflo
 	if err := json.Unmarshal(output.Bytes(), &a); err != nil {
 		t.Fatal(err)
 	}
-	if a.Disposition != team.RecoveryRepairClaims || a.TaskID != blocked.ID {
+	expectedDisposition := team.RecoveryRepairClaims
+	if upgradeContracts {
+		expectedDisposition = team.RecoveryCommitLocal
+	}
+	if a.Disposition != expectedDisposition || a.TaskID != blocked.ID {
 		t.Fatalf("preview=%+v; subject=%q cwd=%q", a, project, currentWorkingDir())
 	}
 	if !reflect.DeepEqual(before, runtimeStoreFiles(t, workspace)) || beforeCalls != collectorCalls.Load() {
@@ -256,6 +382,9 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflo
 		}
 	}
 	expectedStatus, additional := team.TaskDone, 1
+	if upgradeContracts {
+		additional = 0
+	}
 	if !succeeds {
 		expectedStatus, additional = team.TaskBlocked, 2
 	}
@@ -269,6 +398,15 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflo
 	}
 	if done == nil || done.Status != expectedStatus || done.ExecutionReceipt.ResultCollection.Work != originalWork || done.ExecutionReceipt.ResultCollection.TurnsUsed != originalTurns+additional || workCalls.Load() != expectedWork || collectorCalls.Load() != expectedCollections {
 		t.Fatalf("done=%+v work=%d collector=%d", done, workCalls.Load(), collectorCalls.Load())
+	}
+	if upgradeContracts {
+		if source.Session.RunResult == nil {
+			t.Fatal("recovered workflow has no terminal result")
+		}
+		audit, err := auditverify.VerifyWorkspaceRun(t.Context(), workspace, source.Session.RunResult.RunID, auditverify.VerifyOptions{})
+		if err != nil || audit.Verdict != auditverify.AuditVerdictPass {
+			t.Fatalf("recovered workflow audit=%+v err=%v", audit, err)
+		}
 	}
 	if !succeeds {
 		beforeCalls = collectorCalls.Load()

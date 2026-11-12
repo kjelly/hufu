@@ -72,3 +72,48 @@ func TestResumeContractRecoveryWorkRetryPreview(t *testing.T) {
 		})
 	}
 }
+
+func TestResumeContractRecoveryResultRepairPreview(t *testing.T) {
+	plan := &team.ContractRecoveryPlan{Repaired: 1, Tasks: []team.ContractRecoveryTask{{ID: "2", Action: "repair_result", Reason: "original_failure", SourceStatus: team.TaskBlocked}}}
+	for _, format := range []string{"text", "json"} {
+		t.Run(format, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := writeContractRecoveryPreview(&out, plan, format); err != nil {
+				t.Fatal(err)
+			}
+			if format == "json" {
+				var decoded team.ContractRecoveryPlan
+				if err := json.Unmarshal(out.Bytes(), &decoded); err != nil || decoded.Repaired != 1 || decoded.Retried != 0 || decoded.Tasks[0].Action != "repair_result" {
+					t.Fatal("preview lost result-only authority", err)
+				}
+				return
+			}
+			for _, required := range []string{"retry 0", "Result-only repairs: 1", "worker tools will not be replayed", "separate child resume --repair-result", `Task "2": repair_result`} {
+				if !strings.Contains(out.String(), required) {
+					t.Fatalf("missing result-only explanation %q", required)
+				}
+			}
+		})
+	}
+}
+
+func TestResumeContractRecoveryLegacySubmissionPreview(t *testing.T) {
+	plan := &team.ContractRecoveryPlan{Retained: 3, Repaired: 1, Tasks: []team.ContractRecoveryTask{{ID: "4", Action: "repair_result", Reason: "legacy_submission", SourceStatus: team.TaskBlocked, LegacySubmission: &team.LegacySubmissionRecovery{Version: 1, AttemptsUsed: 5}}}}
+	var text bytes.Buffer
+	if err := writeContractRecoveryPreview(&text, plan, "text"); err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{"transport: tool -> runtime", "legacy submissions spent: 5", "no turns granted by publication", "rejected legacy submit_result"} {
+		if !strings.Contains(text.String(), part) {
+			t.Fatalf("missing legacy recovery boundary: %s", part)
+		}
+	}
+	var encoded bytes.Buffer
+	if err := writeContractRecoveryPreview(&encoded, plan, "json"); err != nil {
+		t.Fatal(err)
+	}
+	var restored team.ContractRecoveryPlan
+	if err := json.Unmarshal(encoded.Bytes(), &restored); err != nil || restored.Tasks[0].LegacySubmission.AttemptsUsed != 5 || restored.Retried != 0 {
+		t.Fatalf("lost legacy proof: %v", err)
+	}
+}

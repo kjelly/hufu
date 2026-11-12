@@ -477,14 +477,14 @@ func executeAskUser(ctx context.Context, call fantasy.ToolCall) (response fantas
 	case "multiple_choice":
 		return handleMultipleChoice(args)
 	case "free_text":
-		return handleFreeText(args)
+		return handleFreeText(ctx, args)
 	case "mixed":
 		return handleMixed(args)
 	default:
 		if len(args.Options) > 0 {
 			return handleSingleChoice(args)
 		}
-		return handleFreeText(args)
+		return handleFreeText(ctx, args)
 	}
 }
 
@@ -611,12 +611,16 @@ func handleMultipleChoice(args askUserArgs) (fantasy.ToolResponse, error) {
 	return fantasy.NewTextResponse(string(data)), nil
 }
 
-func handleFreeText(args askUserArgs) (fantasy.ToolResponse, error) {
+func handleFreeText(ctx context.Context, args askUserArgs) (fantasy.ToolResponse, error) {
 	prompt := promptui.Prompt{
 		Label: "Your answer",
 	}
 	input, err := prompt.Run()
 	if err != nil {
+		verification, _ := ctx.Value(humanVerificationKey{}).(bool)
+		if verification && errors.Is(err, promptui.ErrInterrupt) {
+			return fantasy.ToolResponse{}, ErrHumanVerificationDeclined
+		}
 		if IsInteractiveAbortRequested() {
 			return fantasy.NewTextErrorResponse("ask_user cancelled during shutdown"), nil
 		}

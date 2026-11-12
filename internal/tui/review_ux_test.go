@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json/v2"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,6 +11,38 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/kjelly/hufu/internal/team"
 )
+
+func TestAskUserDistinguishesCancellationFromEmptySubmission(t *testing.T) {
+	for _, scenario := range []string{"free_text_cancel", "choice_cancel", "free_text_empty"} {
+		t.Run(scenario, func(t *testing.T) {
+			m := New("", TeamInfo{})
+			reply := make(chan string, 1)
+			kind := "free_text"
+			if scenario == "choice_cancel" {
+				kind = "single_choice"
+			}
+			next, _ := m.Update(AskUserMsg{Question: "Verify", Type: kind, Options: []AskUserOption{{Label: "Continue", Value: "continue"}}, ReplyCh: reply})
+			m = next.(Model)
+			key := "ctrl+c"
+			if scenario == "free_text_empty" {
+				key = "enter"
+			}
+			m = uxKey(m, key)
+			var answer askRespJSON
+			select {
+			case raw := <-reply:
+				if err := json.Unmarshal([]byte(raw), &answer); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				t.Fatal("dialog did not answer")
+			}
+			if answer.Cancelled != (scenario != "free_text_empty") || m.inAskUser || len(answer.Answers) != 0 || answer.Free != "" {
+				t.Fatalf("answer=%+v dialog active=%t", answer, m.inAskUser)
+			}
+		})
+	}
+}
 
 func uxKey(m Model, key string) Model {
 	next, _ := m.Update(keyPress(key))

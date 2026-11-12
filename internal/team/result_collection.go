@@ -59,47 +59,49 @@ type ResultCollectionRef struct {
 }
 
 // ResultCollectionCheckpoint belongs to one original worker attempt. Its work
-// binding never changes; revision, progress and collector invocations advance
-// through event-first compare-and-swap updates, independently of Todo status.
+// seal never changes. An explicit contract upgrade may rebind submission via
+// ContractUpgrade; ordinary progress advances through event-first updates.
 type ResultCollectionCheckpoint struct {
-	RepairIssue             *ResultSubmissionIssue    `json:"repair_issue,omitempty"`
-	LastRejectedSHA256      string                    `json:"last_rejected_sha256,omitempty"`
-	LastRejectedTurn        int                       `json:"last_rejected_turn,omitzero"`
-	Version                 int                       `json:"version"`
-	Revision                int                       `json:"revision"`
-	State                   ResultCollectionState     `json:"state"`
-	BranchID                string                    `json:"branch_id"`
-	SourceRunID             string                    `json:"source_run_id"`
-	TaskID                  string                    `json:"task_id"`
-	Agent                   string                    `json:"agent"`
-	Attempt                 int                       `json:"attempt"`
-	ModelExecutionID        string                    `json:"model_execution_id"`
-	FanoutIndex             int                       `json:"fanout_index,omitzero"`
-	FanoutLeaf              bool                      `json:"fanout_leaf,omitzero"`
-	ExecutionTarget         execution.ExecutionTarget `json:"execution_target"`
-	WorkOccurrenceRevision  int                       `json:"work_occurrence_revision"`
-	WorkDispatchID          string                    `json:"work_dispatch_id"`
-	SubmissionRevision      int                       `json:"submission_revision"`
-	SubmissionDispatchID    string                    `json:"submission_dispatch_id"`
-	PolicySHA256            string                    `json:"policy_sha256"`
-	TaskContractSHA256      string                    `json:"task_contract_sha256"`
-	InputsID                string                    `json:"inputs_id,omitempty"`
-	InputsSHA256            string                    `json:"inputs_sha256,omitempty"`
-	EvidenceSHA256          string                    `json:"evidence_sha256"`
-	EvidenceRevision        int                       `json:"evidence_revision,omitzero"`
-	WorkspaceIdentitySHA256 string                    `json:"workspace_identity_sha256"`
-	CollectorSchemaRevision int                       `json:"collector_schema_revision"`
-	Work                    ResultCollectionRef       `json:"work"`
-	InvocationID            string                    `json:"invocation_id,omitempty"`
-	InvocationRunID         string                    `json:"invocation_run_id,omitempty"`
-	TurnsUsed               int                       `json:"turns_used"`
-	TurnLimit               int                       `json:"turn_limit"`
-	Request                 *ResultCollectionRef      `json:"request,omitempty"`
-	Response                *ResultCollectionRef      `json:"response,omitempty"`
-	Prepared                *ResultCollectionRef      `json:"prepared,omitempty"`
-	Accepted                *ResultCollectionRef      `json:"accepted,omitempty"`
-	FailureReason           RepairFailureReason       `json:"failure_reason,omitempty"`
-	ObservedUsage           *ExecutionUsage           `json:"observed_usage,omitempty"`
+	LegacySubmission        *LegacySubmissionRecovery        `json:"legacy_submission,omitempty"`
+	ContractUpgrade         *ResultCollectionContractUpgrade `json:"contract_upgrade,omitempty"`
+	RepairIssue             *ResultSubmissionIssue           `json:"repair_issue,omitempty"`
+	LastRejectedSHA256      string                           `json:"last_rejected_sha256,omitempty"`
+	LastRejectedTurn        int                              `json:"last_rejected_turn,omitzero"`
+	Version                 int                              `json:"version"`
+	Revision                int                              `json:"revision"`
+	State                   ResultCollectionState            `json:"state"`
+	BranchID                string                           `json:"branch_id"`
+	SourceRunID             string                           `json:"source_run_id"`
+	TaskID                  string                           `json:"task_id"`
+	Agent                   string                           `json:"agent"`
+	Attempt                 int                              `json:"attempt"`
+	ModelExecutionID        string                           `json:"model_execution_id"`
+	FanoutIndex             int                              `json:"fanout_index,omitzero"`
+	FanoutLeaf              bool                             `json:"fanout_leaf,omitzero"`
+	ExecutionTarget         execution.ExecutionTarget        `json:"execution_target"`
+	WorkOccurrenceRevision  int                              `json:"work_occurrence_revision"`
+	WorkDispatchID          string                           `json:"work_dispatch_id"`
+	SubmissionRevision      int                              `json:"submission_revision"`
+	SubmissionDispatchID    string                           `json:"submission_dispatch_id"`
+	PolicySHA256            string                           `json:"policy_sha256"`
+	TaskContractSHA256      string                           `json:"task_contract_sha256"`
+	InputsID                string                           `json:"inputs_id,omitempty"`
+	InputsSHA256            string                           `json:"inputs_sha256,omitempty"`
+	EvidenceSHA256          string                           `json:"evidence_sha256"`
+	EvidenceRevision        int                              `json:"evidence_revision,omitzero"`
+	WorkspaceIdentitySHA256 string                           `json:"workspace_identity_sha256"`
+	CollectorSchemaRevision int                              `json:"collector_schema_revision"`
+	Work                    ResultCollectionRef              `json:"work"`
+	InvocationID            string                           `json:"invocation_id,omitempty"`
+	InvocationRunID         string                           `json:"invocation_run_id,omitempty"`
+	TurnsUsed               int                              `json:"turns_used"`
+	TurnLimit               int                              `json:"turn_limit"`
+	Request                 *ResultCollectionRef             `json:"request,omitempty"`
+	Response                *ResultCollectionRef             `json:"response,omitempty"`
+	Prepared                *ResultCollectionRef             `json:"prepared,omitempty"`
+	Accepted                *ResultCollectionRef             `json:"accepted,omitempty"`
+	FailureReason           RepairFailureReason              `json:"failure_reason,omitempty"`
+	ObservedUsage           *ExecutionUsage                  `json:"observed_usage,omitempty"`
 }
 
 type resultCollectionWork struct {
@@ -136,6 +138,11 @@ func cloneResultCollectionCheckpoint(value *ResultCollectionCheckpoint) *ResultC
 		return nil
 	}
 	clone := *value
+	clone.LegacySubmission = cloneLegacySubmission(value.LegacySubmission)
+	if value.ContractUpgrade != nil {
+		clone.ContractUpgrade = new(*value.ContractUpgrade)
+		clone.ContractUpgrade.Original = cloneResultCollectionCheckpoint(value.ContractUpgrade.Original)
+	}
 	if value.RepairIssue != nil {
 		clone.RepairIssue = new(*value.RepairIssue)
 		clone.RepairIssue.Expected = slices.Clone(value.RepairIssue.Expected)
@@ -210,6 +217,12 @@ func validateResultCollectionBinding(value *ResultCollectionCheckpoint) error {
 	}
 	if (value.InputsID == "") != (value.InputsSHA256 == "") || (value.InputsSHA256 != "" && !validCollectionDigest(value.InputsSHA256) && !runInputHashPattern.MatchString(value.InputsSHA256)) {
 		return fmt.Errorf("invalid result collection frozen inputs")
+	}
+	if err := validateLegacyCollection(value); err != nil {
+		return err
+	}
+	if err := validateCollectionContractUpgrade(value); err != nil {
+		return err
 	}
 	return validateCollectionReferences(value)
 }

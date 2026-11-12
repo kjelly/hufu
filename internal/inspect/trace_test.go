@@ -3,11 +3,28 @@ package inspect
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/kjelly/hufu/internal/team"
+	"github.com/kjelly/hufu/internal/tools"
 )
+
+func TestTraceShowsHumanVerificationStagesAndRequestIdentity(t *testing.T) {
+	for _, status := range []string{"requested", "prompt_requested", "answer_rejected", "confirmed", "page_verified", "page_unresolved", "cancelled", "wait_failed"} {
+		t.Run(status, func(t *testing.T) {
+			payload, err := json.Marshal(tools.HumanVerificationObservation{RequestID: "human-request", URLSHA256: "page-digest", Status: status, Attempt: 2, Trigger: "explicit"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			entry := eventTraceEntry(IndexedEvent{Ordinal: 7, Event: team.RunEvent{Type: string(team.EventHumanVerificationObserved), TaskID: "task-1", Attempt: 3, Payload: payload}})
+			if entry.Status != status || entry.Ref.TaskID != "task-1" || entry.Ref.Attempt != 3 || !slices.Contains(entry.Refs, "human-request") || !slices.Contains(entry.Refs, "page-digest") {
+				t.Fatalf("entry=%+v", entry)
+			}
+		})
+	}
+}
 
 func TestInspectTraceOrdersAnchoredEntriesAndPlacesUnanchoredLast(t *testing.T) {
 	fixture := buildRunFixture(t)
