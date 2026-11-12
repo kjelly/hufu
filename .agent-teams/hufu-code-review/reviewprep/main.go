@@ -334,14 +334,12 @@ type reviewSourceSnapshot struct {
 	goIndex          []goSnapshotIndexEntry
 	goIndexErr       error
 	goIndexReady     bool
+	goPackagePaths   map[string]string
+	goReverseImports map[string]map[string]bool
+	goDependents     map[string]map[string]bool
 	frozenArtifact   artifact
 	frozenRoot       string
 	skipFrozenSource bool
-}
-
-type goSnapshotIndexEntry struct {
-	path        string
-	identifiers map[string]struct{}
 }
 
 type listedGoPackage struct {
@@ -386,7 +384,7 @@ var (
 // runtime. The wire format remains runtime-neutral JSON; shared tools DTOs
 // carry only artifact byte-range identities and contain no team policy.
 func Run(ctx context.Context, in io.Reader, out io.Writer) error {
-	return run(ctx, in, out)
+	return writeReviewFailure(out, run(ctx, in, out))
 }
 
 func run(ctx context.Context, in io.Reader, out io.Writer) error {
@@ -657,10 +655,10 @@ func Prepare(ctx context.Context, config Config) (result actionResult, resultErr
 	defer func() {
 		after, err := captureRepositorySnapshot(ctx, repo, outputDir)
 		if err != nil {
-			resultErr = errors.Join(resultErr, fmt.Errorf("verify repository remained unchanged: %w", err))
+			resultErr = joinReviewErrors(resultErr, fmt.Errorf("verify repository remained unchanged: %w", err))
 			return
 		}
-		resultErr = errors.Join(resultErr, compareRepositorySnapshots(before, after))
+		resultErr = joinReviewErrors(resultErr, compareRepositorySnapshots(before, after))
 	}()
 
 	resolution, err := resolveRequestedRange(ctx, repo, config)
@@ -2899,112 +2897,6 @@ func (s *reviewSourceSnapshot) bundleData(partition string, primaryPaths []strin
 	return data, err
 }
 
-func (s *reviewSourceSnapshot) relatedGoPaths(primaryPaths []string) ([]string, error) {
-	primary := make(map[string]struct{}, len(primaryPaths))
-	symbols := make(map[string]struct{})
-	paired := make(map[string]struct{})
-	primaryDirs := make(map[string]struct{})
-	for _, repositoryPath := range primaryPaths {
-		repositoryPath = filepath.ToSlash(repositoryPath)
-		primary[repositoryPath] = struct{}{}
-		if filepath.Ext(repositoryPath) != ".go" {
-			continue
-		}
-		primaryDirs[path.Dir(repositoryPath)] = struct{}{}
-		if strings.HasSuffix(repositoryPath, "_test.go") {
-			paired[strings.TrimSuffix(repositoryPath, "_test.go")+".go"] = struct{}{}
-		} else {
-			paired[strings.TrimSuffix(repositoryPath, ".go")+"_test.go"] = struct{}{}
-		}
-		data, err := s.readRegularFile(repositoryPath)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return nil, err
-		}
-		for symbol := range declaredGoSymbols(repositoryPath, data) {
-			symbols[symbol] = struct{}{}
-		}
-	}
-	if len(symbols) == 0 && len(paired) == 0 {
-		return nil, nil
-	}
-
-	type candidate struct {
-		path     string
-		priority int
-	}
-	if err := s.ensureGoIndex(); err != nil {
-		return nil, err
-	}
-	var candidates []candidate
-	for _, indexed := range s.goIndex {
-		repositoryPath := indexed.path
-		if _, changed := primary[repositoryPath]; changed {
-			continue
-		}
-		priority := 4
-		if _, exactPair := paired[repositoryPath]; exactPair {
-			priority = 0
-		} else {
-			if !identifierSetsIntersect(indexed.identifiers, symbols) {
-				continue
-			}
-			_, sameDirectory := primaryDirs[path.Dir(repositoryPath)]
-			switch {
-			case sameDirectory && strings.HasSuffix(repositoryPath, "_test.go"):
-				priority = 1
-			case sameDirectory:
-				priority = 2
-			case strings.HasSuffix(repositoryPath, "_test.go"):
-				priority = 3
-			}
-		}
-		candidates = append(candidates, candidate{path: repositoryPath, priority: priority})
-	}
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].priority != candidates[j].priority {
-			return candidates[i].priority < candidates[j].priority
-		}
-		return candidates[i].path < candidates[j].path
-	})
-	result := make([]string, 0, len(candidates))
-	for _, current := range candidates {
-		result = append(result, current.path)
-	}
-	return result, nil
-}
-
-func (s *reviewSourceSnapshot) ensureGoIndex() error {
-	if s.goIndexReady {
-		return s.goIndexErr
-	}
-	s.goIndexReady = true
-	s.goIndexErr = filepath.WalkDir(s.root, func(current string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" || entry.Type()&os.ModeSymlink != 0 {
-			return nil
-		}
-		relative, err := filepath.Rel(s.root, current)
-		if err != nil {
-			return err
-		}
-		data, err := os.ReadFile(current)
-		if err != nil {
-			return err
-		}
-		s.goIndex = append(s.goIndex, goSnapshotIndexEntry{
-			path:        filepath.ToSlash(relative),
-			identifiers: goFileIdentifiers(filepath.ToSlash(relative), data),
-		})
-		return nil
-	})
-	return s.goIndexErr
-}
-
 func (s *reviewSourceSnapshot) readRegularFile(repositoryPath string) ([]byte, error) {
 	relative, err := cleanSnapshotPath(repositoryPath)
 	if err != nil {
@@ -3019,65 +2911,6 @@ func (s *reviewSourceSnapshot) readRegularFile(repositoryPath string) ([]byte, e
 		return nil, fmt.Errorf("snapshot path %q is not a regular file", repositoryPath)
 	}
 	return os.ReadFile(fullPath)
-}
-
-func declaredGoSymbols(filename string, data []byte) map[string]struct{} {
-	result := make(map[string]struct{})
-	parsed, err := parser.ParseFile(token.NewFileSet(), filename, data, parser.SkipObjectResolution)
-	if err != nil {
-		return result
-	}
-	add := func(name string) {
-		if name != "_" && len([]rune(name)) >= 4 {
-			result[name] = struct{}{}
-		}
-	}
-	for _, declaration := range parsed.Decls {
-		switch current := declaration.(type) {
-		case *ast.FuncDecl:
-			add(current.Name.Name)
-		case *ast.GenDecl:
-			for _, spec := range current.Specs {
-				switch value := spec.(type) {
-				case *ast.TypeSpec:
-					add(value.Name.Name)
-				case *ast.ValueSpec:
-					for _, name := range value.Names {
-						add(name.Name)
-					}
-				}
-			}
-		}
-	}
-	return result
-}
-
-func goFileIdentifiers(filename string, data []byte) map[string]struct{} {
-	identifiers := make(map[string]struct{})
-	parsed, err := parser.ParseFile(token.NewFileSet(), filename, data, parser.SkipObjectResolution)
-	if err != nil {
-		return identifiers
-	}
-	ast.Inspect(parsed, func(node ast.Node) bool {
-		identifier, ok := node.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		if len([]rune(identifier.Name)) >= 4 {
-			identifiers[identifier.Name] = struct{}{}
-		}
-		return true
-	})
-	return identifiers
-}
-
-func identifierSetsIntersect(first, second map[string]struct{}) bool {
-	for identifier := range first {
-		if _, ok := second[identifier]; ok {
-			return true
-		}
-	}
-	return false
 }
 
 func offlineGoEnvironment() []string {

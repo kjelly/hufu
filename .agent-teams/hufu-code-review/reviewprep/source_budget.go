@@ -92,8 +92,7 @@ func appendBoundReviewBatch(result []*batch, current *batch, artifactRoot, outpu
 		left, right = splitDiffFragment(current)
 	}
 	if left == nil {
-		return nil, fmt.Errorf("workset_item_too_large: paths=%v source_snapshot_bytes=%d estimated_review_input_tokens=%d; configured caps: max_source_snapshot_bytes=%d max_review_input_tokens=%d; remediation: narrow the request or provide an explicit input budget sufficient for one source line and dependency inventory",
-			current.paths, len(source), tokens, config.MaxSourceSnapshotBytes, config.MaxReviewInputTokens)
+		return nil, oversizedReviewInputError(current, source, inventory, tokens, config)
 	}
 	result, err = appendBoundReviewBatch(result, left, artifactRoot, outputDir, snapshot, config, route, verification)
 	if err != nil {

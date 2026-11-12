@@ -295,3 +295,83 @@ func TestRepositorySnapshotPartitionsLargePrimaryInsteadOfOmittingIt(t *testing.
 		t.Fatal("large snapshot primary was omitted instead of partitioned")
 	}
 }
+
+func TestLargeDependencyInventoryDoesNotDuplicateOmittedMetadata(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "target.go"), "package sample\nfunc Target() {}\n")
+	for i := range 1000 {
+		writeFile(t, filepath.Join(root, fmt.Sprintf("caller_%04d.go", i)), "package sample\nfunc Caller() {Target()}\n")
+	}
+	snapshot := &reviewSourceSnapshot{root: root, revision: "frozen"}
+	source, data, err := snapshot.bundleDataWithScopes("unit", []string{"target.go"}, nil, 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inventory evidenceInventory
+	if err = json.Unmarshal(data, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory.Sources) != 1001 {
+		t.Fatalf("lost dependency inventory: %d", len(inventory.Sources))
+	}
+	for i, row := range inventory.Sources {
+		if row.SHA256 == "" || row.ByteSize == 0 || len(row.RequiredScopes) != 1 {
+			t.Fatalf("lost source identity: %#v", row)
+		}
+		if i > maxSnapshotRelatedPaths && (!row.Omitted || len(row.AvailableSpans) != 0) {
+			t.Fatalf("omitted evidence misrepresented: %#v", row)
+		}
+		for _, span := range row.AvailableSpans {
+			if span.BundleEnd > int64(len(source)) {
+				t.Fatal("source coordinates escaped assigned artifact")
+			}
+		}
+	}
+	if bytes.Count(source, []byte("\n## ")) != maxSnapshotRelatedPaths+1 {
+		t.Fatalf("omitted section metadata duplicated in source: %d sections", bytes.Count(source, []byte("\n## ")))
+	}
+	if estimateReviewInputTokens(len(source))+estimateReviewInputTokens(len(data)) > defaultMaxReviewInputTokens {
+		t.Fatalf("metadata still exceeds input budget: source=%d inventory=%d", len(source), len(data))
+	}
+	current := &batch{lens: "general", pathSeen: make(map[string]struct{})}
+	current.add("target.go", []byte("diff --git a/target.go b/target.go\n@@ -1 +1 @@\n-old\n+new\n"), 4)
+	config := Config{MaxSourceSnapshotBytes: defaultMaxSourceSnapshotBytes, MaxReviewInputTokens: defaultMaxReviewInputTokens, MaxWorksetItems: 32}
+	out := t.TempDir()
+	batches, err := boundReviewBatches(out, filepath.Join(out, "workset"), []*batch{current}, snapshot, config, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := writeItems(out, filepath.Join(out, "workset"), batches, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range items {
+		assertReviewInputBudget(t, out, entry, config)
+		assertRequiredArtifactInputs(t, out, entry)
+	}
+}
+
+func TestOmittedRelatedMetadataRetainsNonTextMarkers(t *testing.T) {
+	for _, tc := range []struct{ name, content, marker string }{
+		{"binary", "\x00data", "content: binary_omitted"},
+		{"empty", "", "content: empty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, filepath.Join(root, "target.go"), "package sample\nfunc Target() {}\n")
+			writeFile(t, filepath.Join(root, "target_test.go"), tc.content)
+			snapshot := &reviewSourceSnapshot{root: root}
+			source, data, err := snapshot.bundleDataWithScopes("unit", []string{"target.go"}, nil, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(source, []byte(tc.marker)) {
+				t.Fatalf("lost exceptional source marker: %s", source)
+			}
+			var inventory evidenceInventory
+			if err = json.Unmarshal(data, &inventory); err != nil || len(inventory.Sources) != 2 {
+				t.Fatalf("lost exceptional inventory: %s err=%v", data, err)
+			}
+		})
+	}
+}

@@ -338,6 +338,25 @@ attempt guard for instructions, reasoning, result submission, rereads, and
 repairs. Each manifest item records `source_snapshot_bytes` and
 `estimated_review_input_tokens` for comparison with the actual artifacts.
 
+Go caller/test candidates are scoped to the owning directory and packages
+that import it directly or transitively in the frozen snapshot. Import aliases,
+dot imports, nested modules and vendored identities are resolved from source
+and the nearest `go.mod`, without running `go list` or fetching dependencies.
+A shared identifier such as `Context` in an unrelated package is not a caller
+reference. Missing, unreadable or malformed module ownership keeps conservative
+name matching rather than silently asserting absence. This remains a candidate
+heuristic, not a type-checked call graph: interface injection, reflection and
+dynamic calls can require the existing supplemental-evidence workflow. The
+source bundle states this limitation; unlisted paths never prove absence.
+
+The evidence inventory uses compact JSON with the same schema and complete
+per-source fields. Budget-omitted related text keeps its path, role, hash, full
+byte size, required scopes and omission flags in that inventory; its section
+metadata is not duplicated into the source bundle. Embedded content still has
+exact bundle/source offsets, and binary/empty/unavailable markers remain
+explicit. This bounds redundant framing without dropping selected identities,
+raising budgets or weakening required artifact reads.
+
 Primary text files are complete; they are never truncated to satisfy these
 budgets. Related caller/test evidence has a separate shared 64 KiB content
 allowance, in deterministic priority order, plus section metadata. Every
@@ -352,7 +371,15 @@ If a single primary file and indivisible diff hunk still cannot fit,
 PREPARE returns `workset_item_too_large` with observed sizes, configured limits,
 and remediation before publishing worksets. Split that source file or choose
 an explicit input budget with sufficient attempt headroom. Increasing worker
-retries does not repair an oversized evidence unit. Adapter and payload changes
+retries does not repair an oversized evidence unit. The producer also emits a
+structured `workset_item_too_large` diagnosis on this failure. It reports
+primary/related content bytes, source metadata bytes, dependency path count,
+fixed per-item source bytes, inventory bytes, and observed/configured input
+planning units (one estimated token per two bytes, rounded per artifact).
+When fixed overhead or the inventory alone exceeds a limit, the explanation
+identifies why splitting primary source cannot solve it. These measurements
+are provider evidence, not recovery permission; the runtime retains and
+presents them without interpreting review vocabulary. Adapter and payload changes
 require a fresh invocation; historical accepted artifacts remain immutable.
 
 ## Documentation reference contract

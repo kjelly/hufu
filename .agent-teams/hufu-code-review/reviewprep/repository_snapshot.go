@@ -95,7 +95,8 @@ func repositorySnapshotInventory(ctx context.Context, repo string, snapshot *rev
 			if err != nil {
 				return nil, err
 			}
-			file.SHA256, file.Bytes = sha256Hex([]byte(target)), int64(len(target))
+			file.SHA256 = sha256Hex([]byte(target))
+			file.Bytes = int64(len(target))
 			file.Disposition, file.Reason = "excluded", "symlink"
 		case "100644", "100755":
 			if err := inspectSnapshotFile(snapshot.root, &file); err != nil {

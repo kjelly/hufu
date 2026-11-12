@@ -74,6 +74,7 @@ func (s *reviewSourceSnapshot) bundleDataWithScopes(partition string, primaryPat
 		inventory.SnapshotID, inventory.ContentSHA256 = s.identity.ID, s.identity.ContentSHA256
 		fmt.Fprintf(&bundle, "review_mode: repository_snapshot\nsnapshot_id: %s\ncontent_sha256: %s\n", s.identity.ID, s.identity.ContentSHA256)
 	}
+	bundle.WriteString("dependency_selection: same-package and snapshot import-dependent identifier candidates; unknown module ownership retains conservative name matching. This is not a type-checked call graph: interface injection, reflection and dynamic calls may require supplemental evidence.\nRelated paths without embedded content remain fully identified in the evidence inventory; their metadata is not duplicated here.\n")
 	bundle.WriteString("Read this artifact as the source/caller/test authority for the assigned workset. Do not substitute the live checkout.\ncoverage_scope: workset_only\nUnlisted or unavailable paths are not evidence of repository absence. Source byte ranges are half-open; source line coordinates retain their original numbering.\n")
 	fmt.Fprintf(&bundle, "primary_paths: %d\nrelated_paths: %d\nrelated_content_budget_bytes: %d\n", len(primaryPaths), len(related), relatedBudget)
 	seen := make(map[string]bool)
@@ -94,14 +95,23 @@ func (s *reviewSourceSnapshot) bundleDataWithScopes(partition string, primaryPat
 		if index >= maxSnapshotRelatedPaths {
 			limit = 0
 		}
-		row, used, err := s.writeEvidenceSection(&bundle, current, "related", nil, limit)
+		section := &bundle
+		if limit == 0 {
+			section = new(strings.Builder)
+		}
+		row, used, err := s.writeEvidenceSection(section, current, "related", nil, limit)
 		if err != nil {
 			return nil, nil, err
+		}
+		// Budget-omitted text is fully described by the inventory. Keep
+		// exceptional markers (binary, empty, unavailable) in the text too.
+		if limit == 0 && !row.Truncated {
+			bundle.WriteString(section.String())
 		}
 		remaining -= used
 		inventory.Sources = append(inventory.Sources, row)
 	}
-	encoded, err := json.MarshalIndent(inventory, "", "  ")
+	encoded, err := json.Marshal(inventory)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -144,7 +154,10 @@ func (s *reviewSourceSnapshot) writeEvidenceSection(bundle *strings.Builder, rep
 		if err != nil {
 			return row, 0, err
 		}
-		row.Status, row.SHA256, row.ByteSize, row.Omitted = "symlink", sha256Hex([]byte(target)), int64(len(target)), true
+		row.Status = "symlink"
+		row.SHA256 = sha256Hex([]byte(target))
+		row.ByteSize = int64(len(target))
+		row.Omitted = true
 		row.OmittedBytes = row.ByteSize
 		fmt.Fprintf(bundle, "status: symlink\ntarget: %s\n", filepath.ToSlash(target))
 		return row, 0, nil
@@ -158,7 +171,9 @@ func (s *reviewSourceSnapshot) writeEvidenceSection(bundle *strings.Builder, rep
 	if err != nil {
 		return row, 0, err
 	}
-	row.Status, row.SHA256, row.ByteSize = "present", sha256Hex(data), int64(len(data))
+	row.Status = "present"
+	row.SHA256 = sha256Hex(data)
+	row.ByteSize = int64(len(data))
 	fmt.Fprintf(bundle, "status: present\nbytes: %d\nsha256: %s\n", len(data), row.SHA256)
 	if requested == nil {
 		requested = []tools.ArtifactByteRange{}
@@ -263,7 +278,9 @@ func (s *reviewSourceSnapshot) persistFrozenSource(artifactRoot, outputDir strin
 			if err != nil {
 				return err
 			}
-			file.Mode, file.SHA256, file.Bytes = "120000", sha256Hex([]byte(target)), int64(len(target))
+			file.Mode = "120000"
+			file.SHA256 = sha256Hex([]byte(target))
+			file.Bytes = int64(len(target))
 			file.Disposition, file.Reason = "excluded", "symlink"
 			// The link identity is retained but no filesystem link is published.
 		} else if info.Mode().IsRegular() {

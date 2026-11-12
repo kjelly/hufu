@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -213,6 +214,55 @@ func TestEmbeddedRuntimeEnforcesSourceSnapshotBudget(t *testing.T) {
 	config := Config{MaxSourceSnapshotBytes: 20_000, MaxReviewInputTokens: 10_000}
 	for _, entry := range m.Items {
 		assertReviewInputBudget(t, workspace, entry, config)
+		assertFrozenEvidenceIntegrity(t, workspace, entry)
+	}
+}
+
+func assertFrozenEvidenceIntegrity(t *testing.T, workspace string, entry item) {
+	t.Helper()
+	var inventory evidenceInventory
+	var bundle []byte
+	for _, input := range entry.Inputs {
+		data, err := os.ReadFile(filepath.Join(workspace, input.Path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if int64(len(data)) != input.Bytes || sha256Hex(data) != input.SHA256 {
+			t.Fatalf("artifact integrity mismatch: %s", input.Path)
+		}
+		switch input.Kind {
+		case "review_source_snapshot":
+			bundle = data
+		case "review_evidence_inventory":
+			if err := json.Unmarshal(data, &inventory); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if len(inventory.Sources) == 0 || len(bundle) == 0 {
+		t.Fatal("missing frozen evidence")
+	}
+	for _, row := range inventory.Sources {
+		data, err := os.ReadFile(filepath.Join(workspace, entry.Bindings["frozen_source_root"], row.Path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if row.Status != "present" || row.ByteSize != int64(len(data)) || row.SHA256 != sha256Hex(data) {
+			t.Fatalf("corrupt source identity: %#v", row)
+		}
+		available := int64(0)
+		for _, span := range row.AvailableSpans {
+			if span.Start < 0 || span.Start >= span.End || span.End > int64(len(data)) || span.BundleStart < 0 || span.BundleStart >= span.BundleEnd || span.BundleEnd > int64(len(bundle)) {
+				t.Fatalf("invalid source span: %#v", span)
+			}
+			if !bytes.Equal(data[span.Start:span.End], bundle[span.BundleStart:span.BundleEnd]) {
+				t.Fatalf("source bytes changed: %s", row.Path)
+			}
+			available += span.End - span.Start
+		}
+		if row.OmittedBytes != int64(len(data))-available {
+			t.Fatalf("corrupt omitted bytes: %#v", row)
+		}
 	}
 }
 
