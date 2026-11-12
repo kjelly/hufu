@@ -357,6 +357,7 @@ func terminalLifecyclePayload(c *Coordinator, result *RunResult) LifecycleEventP
 	payload.RunInputs = CloneRunInputSnapshot(result.RunInputs)
 	payload.RunInputOriginRunID = result.RunInputOriginRunID
 	payload.InputBoundAssertions = slices.Clone(result.InputBoundAssertions)
+	payload.AcceptanceRetry = result.AcceptanceRetry
 	if result.EvidenceManifest != nil {
 		payload.EvidenceManifest = result.EvidenceManifest
 	}

@@ -776,6 +776,44 @@ field is included in its hash. JSON apply output always includes a boolean
 flag. Observe/required modes and projects with versioning history must use
 versioned recovery; metadata-only never downgrades their protection.
 
+A completed workflow whose final request review was unavailable can use an
+explicit acceptance-only retry:
+
+```sh
+hufu resume --team <team> --workspace <control-root> --branch <branch> \
+  --run <latest-terminal-run> --retry-acceptance --acceptance-timeout 5m \
+  --dry-run --output json
+hufu resume --team <team> --workspace <control-root> --branch <branch> \
+  --run <latest-terminal-run> --retry-acceptance --acceptance-timeout 5m
+```
+
+The exact run must be the latest terminal result, all tasks must remain settled
+and accepted, and the only failure must be a timed-out or cancelled request review.
+Legacy records are eligible only for exact runtime deadline errors; malformed
+protocol output is not treated as an unavailable verdict.
+Existing negative primary/material verdicts require a follow-up request. The
+saved answer must reproduce the original review's response hash; the runtime
+may remove only its exact generated acceptance appendix and legacy workflow-closed
+warning, followed by mandatory hash equality; it never reconstructs the
+answer from worker summaries. Ordinary resume policy, frozen inputs, complete
+retained results and original transcripts are revalidated before provider work.
+Decision-terminal preparation is currently unsupported by this entry point.
+
+Preview makes no changes or model calls. Execution appends a new run and a
+`final_acceptance_retry_started` binding without changing old events, answers,
+task receipts or workflow state. Only the existing final acceptance pipeline
+runs: declared team acceptance verifiers and request/material reviews. No
+coordinator generation, worker redispatch, result collector, new input resolver
+or browser work runs. Original model/schema/permission settings remain frozen.
+`--acceptance-timeout` is an explicit per-review operational allowance (default
+5m), recorded with the source head, task digest, input and answer hashes; it
+does not change the frozen work policy or verifier timeout. Existing protocol
+repair bounds permit at most four review calls per explicit retry. A new timeout
+or failed judgment remains a partial run; successful completion still requires
+the normal evidence manifest and CompletionGate. Cancellation preserves the
+completed tasks. Retry cannot combine with task repair, contract upgrades,
+media or new input assignments.
+
 For actions with input bindings, recovery reconstructs the occurrence contract
 from the original frozen snapshot and input policy. It verifies the materialized
 payload, binding paths and bound-value hashes before comparing contract hashes;

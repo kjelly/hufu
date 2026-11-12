@@ -889,27 +889,28 @@ func (s RunStats) IsZero() bool {
 }
 
 type RunResult struct {
-	HufuBuild            *buildinfo.Info              `json:"hufu_build,omitempty"`
-	RunID                string                       `json:"run_id,omitempty"`
-	Outcome              RunOutcome                   `json:"outcome"`
-	GoalSatisfied        bool                         `json:"goal_satisfied"`
-	GoalMode             GoalMode                     `json:"goal_mode,omitempty"`
-	Response             string                       `json:"response"`
-	Reason               string                       `json:"reason,omitempty"`
-	Warnings             []string                     `json:"warnings,omitempty"`
-	StopReason           StopReason                   `json:"stop_reason,omitempty"`
-	ExitCode             int                          `json:"exit_code,omitempty"`
-	Acceptance           *AcceptanceResult            `json:"acceptance,omitempty"`
-	Worksets             []WorksetGroupState          `json:"worksets,omitempty"`
-	UnresolvedTasks      []TaskReference              `json:"unresolved_tasks,omitempty"`
-	Continuation         *ContinuationInfo            `json:"continuation,omitempty"`
-	Stats                RunStats                     `json:"stats"`
-	Metrics              RunMetrics                   `json:"metrics,omitempty"`
-	EvidenceManifest     *EvidenceManifest            `json:"evidence_manifest,omitempty"`
-	Telemetry            *RunTelemetry                `json:"telemetry,omitempty"`
-	RunInputs            *RunInputSnapshot            `json:"run_inputs,omitempty"`
-	RunInputOriginRunID  string                       `json:"run_input_origin_run_id,omitempty"`
-	InputBoundAssertions []InputBoundAssertionSummary `json:"input_bound_assertions,omitempty"`
+	AcceptanceRetry      *FinalAcceptanceRetryAssessment `json:"acceptance_retry,omitempty"`
+	HufuBuild            *buildinfo.Info                 `json:"hufu_build,omitempty"`
+	RunID                string                          `json:"run_id,omitempty"`
+	Outcome              RunOutcome                      `json:"outcome"`
+	GoalSatisfied        bool                            `json:"goal_satisfied"`
+	GoalMode             GoalMode                        `json:"goal_mode,omitempty"`
+	Response             string                          `json:"response"`
+	Reason               string                          `json:"reason,omitempty"`
+	Warnings             []string                        `json:"warnings,omitempty"`
+	StopReason           StopReason                      `json:"stop_reason,omitempty"`
+	ExitCode             int                             `json:"exit_code,omitempty"`
+	Acceptance           *AcceptanceResult               `json:"acceptance,omitempty"`
+	Worksets             []WorksetGroupState             `json:"worksets,omitempty"`
+	UnresolvedTasks      []TaskReference                 `json:"unresolved_tasks,omitempty"`
+	Continuation         *ContinuationInfo               `json:"continuation,omitempty"`
+	Stats                RunStats                        `json:"stats"`
+	Metrics              RunMetrics                      `json:"metrics,omitempty"`
+	EvidenceManifest     *EvidenceManifest               `json:"evidence_manifest,omitempty"`
+	Telemetry            *RunTelemetry                   `json:"telemetry,omitempty"`
+	RunInputs            *RunInputSnapshot               `json:"run_inputs,omitempty"`
+	RunInputOriginRunID  string                          `json:"run_input_origin_run_id,omitempty"`
+	InputBoundAssertions []InputBoundAssertionSummary    `json:"input_bound_assertions,omitempty"`
 	// Review completion is intentionally separate from an implementation
 	// outcome: a completed exploratory review may surface findings but never
 	// proves they were fixed.

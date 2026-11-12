@@ -45,6 +45,7 @@ type RequestAcceptanceResult struct {
 	Checks         []RequestAcceptanceCheck  `json:"checks"`
 	MaterialReview *RequestMaterialReview    `json:"material_review,omitempty"`
 	Error          string                    `json:"error,omitempty"`
+	ErrorKind      string                    `json:"error_kind,omitempty"`
 }
 
 type requestAcceptanceSource struct {
@@ -186,6 +187,11 @@ func (c *Coordinator) evaluateRequestAcceptance(ctx context.Context, candidateRe
 	result := &RequestAcceptanceResult{}
 	fail := func(err error) (*RequestAcceptanceResult, error) {
 		result.Error = utils.TruncateRunes(utils.RedactSecrets(err.Error()), 2048)
+		if errors.Is(err, context.DeadlineExceeded) {
+			result.ErrorKind = "timeout"
+		} else if errors.Is(err, context.Canceled) {
+			result.ErrorKind = "cancelled"
+		}
 		return result, err
 	}
 	contract, err := RequestAcceptanceContractFromSnapshot(snapshot)

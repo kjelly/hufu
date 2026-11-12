@@ -29,6 +29,22 @@ func runResumeSourcePreflight(cmd *cobra.Command, session *team.TeamSession, coo
 	if err := bindResumePreflightVersion(cmd.Context(), session); err != nil {
 		return err
 	}
+	if resumeRetryAcceptance {
+		assessment, err := coordinator.AssessFinalAcceptanceRetry(cmd.Context(), source, resumeRun, resumeAcceptanceTimeout)
+		if err != nil {
+			return err
+		}
+		if opts.outputFormat == "json" {
+			data, err := json.Marshal(assessment)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), string(data))
+			return err
+		}
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "Final acceptance retry preflight passed: branch %s; source run %s; retained tasks %d; per-review timeout %ds; maximum review calls %d. Saved answer and frozen evidence are unchanged; no worker or collector dispatch. Declared team acceptance verifiers still run.\n", assessment.Branch, assessment.SourceRunID, assessment.Retained, assessment.TimeoutSeconds, assessment.MaxReviewCalls)
+		return err
+	}
 	assessment, err := coordinator.AssessResumeSource(cmd.Context(), source)
 	if err != nil {
 		return err

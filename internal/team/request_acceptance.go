@@ -166,7 +166,11 @@ func (c *Coordinator) requestAcceptanceCall(ctx context.Context, operation, prom
 	if len([]rune(prompt)) > 192000 {
 		return nil, fmt.Errorf("request acceptance %s context exceeds its limit", operation)
 	}
-	reviewCtx, cancel := waitbudget.WithTimeout(ctx, c.verifyTaskTimeout())
+	timeout := c.verifyTaskTimeout()
+	if retry, ok := ctx.Value(finalAcceptanceRetryKey{}).(finalAcceptanceRetryRequest); ok {
+		timeout = retry.Timeout
+	}
+	reviewCtx, cancel := waitbudget.WithTimeout(ctx, timeout)
 	defer cancel()
 	ctx = reviewCtx
 	c.mu.RLock()

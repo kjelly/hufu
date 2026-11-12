@@ -2293,6 +2293,9 @@ func compactProjectContext(ctx context.Context, compacter textCompacter, project
 }
 
 func (c *Coordinator) Run(ctx context.Context, userPrompt string) (string, error) {
+	if retry, ok := ctx.Value(finalAcceptanceRetryKey{}).(finalAcceptanceRetryRequest); ok {
+		return c.retryFinalAcceptance(ctx, retry)
+	}
 	if err := c.ValidateDerivedForkRequest(ctx, userPrompt); err != nil {
 		return "", err
 	}

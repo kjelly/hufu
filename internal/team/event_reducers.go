@@ -251,29 +251,30 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			}
 		case "run_finished":
 			var payload struct {
-				RunID                string                       `json:"run_id"`
-				Outcome              RunOutcome                   `json:"outcome"`
-				GoalSatisfied        bool                         `json:"goal_satisfied"`
-				GoalMode             GoalMode                     `json:"goal_mode"`
-				Response             string                       `json:"response"`
-				Reason               string                       `json:"reason"`
-				Warnings             []string                     `json:"warnings,omitempty"`
-				StopReason           StopReason                   `json:"stop_reason"`
-				ExitCode             int                          `json:"exit_code"`
-				UnresolvedTasks      []TaskReference              `json:"unresolved_tasks"`
-				CompletedReview      bool                         `json:"completed_review,omitempty"`
-				FindingsPresent      bool                         `json:"findings_present,omitempty"`
-				FixedAndVerified     bool                         `json:"fixed_and_verified,omitempty"`
-				AcceptanceAdvisory   bool                         `json:"acceptance_advisory,omitempty"`
-				Acceptance           *AcceptanceResult            `json:"acceptance"`
-				Worksets             []WorksetGroupState          `json:"worksets"`
-				Stats                RunStats                     `json:"stats"`
-				Metrics              RunMetrics                   `json:"metrics"`
-				Telemetry            *RunTelemetry                `json:"telemetry"`
-				EvidenceManifest     *EvidenceManifest            `json:"evidence_manifest"`
-				RunInputs            *RunInputSnapshot            `json:"run_inputs,omitempty"`
-				RunInputOriginRunID  string                       `json:"run_input_origin_run_id,omitempty"`
-				InputBoundAssertions []InputBoundAssertionSummary `json:"input_bound_assertions,omitempty"`
+				AcceptanceRetry      *FinalAcceptanceRetryAssessment `json:"acceptance_retry,omitempty"`
+				RunID                string                          `json:"run_id"`
+				Outcome              RunOutcome                      `json:"outcome"`
+				GoalSatisfied        bool                            `json:"goal_satisfied"`
+				GoalMode             GoalMode                        `json:"goal_mode"`
+				Response             string                          `json:"response"`
+				Reason               string                          `json:"reason"`
+				Warnings             []string                        `json:"warnings,omitempty"`
+				StopReason           StopReason                      `json:"stop_reason"`
+				ExitCode             int                             `json:"exit_code"`
+				UnresolvedTasks      []TaskReference                 `json:"unresolved_tasks"`
+				CompletedReview      bool                            `json:"completed_review,omitempty"`
+				FindingsPresent      bool                            `json:"findings_present,omitempty"`
+				FixedAndVerified     bool                            `json:"fixed_and_verified,omitempty"`
+				AcceptanceAdvisory   bool                            `json:"acceptance_advisory,omitempty"`
+				Acceptance           *AcceptanceResult               `json:"acceptance"`
+				Worksets             []WorksetGroupState             `json:"worksets"`
+				Stats                RunStats                        `json:"stats"`
+				Metrics              RunMetrics                      `json:"metrics"`
+				Telemetry            *RunTelemetry                   `json:"telemetry"`
+				EvidenceManifest     *EvidenceManifest               `json:"evidence_manifest"`
+				RunInputs            *RunInputSnapshot               `json:"run_inputs,omitempty"`
+				RunInputOriginRunID  string                          `json:"run_input_origin_run_id,omitempty"`
+				InputBoundAssertions []InputBoundAssertionSummary    `json:"input_bound_assertions,omitempty"`
 			}
 			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.Outcome != "" {
 				runID := payload.RunID
@@ -284,7 +285,7 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 					session.PendingWrapUp = nil
 				}
 				session.RunResult = &RunResult{
-					HufuBuild: builds[e.RunID], RunID: runID, Outcome: payload.Outcome, GoalSatisfied: payload.GoalSatisfied,
+					AcceptanceRetry: payload.AcceptanceRetry, HufuBuild: builds[e.RunID], RunID: runID, Outcome: payload.Outcome, GoalSatisfied: payload.GoalSatisfied,
 					GoalMode: payload.GoalMode, Response: payload.Response, Reason: payload.Reason,
 					Warnings:   slices.Clone(payload.Warnings),
 					StopReason: payload.StopReason, ExitCode: payload.ExitCode,

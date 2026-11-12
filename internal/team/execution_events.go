@@ -114,13 +114,14 @@ func (event ExecutionEvent) MarshalJSON() ([]byte, error) {
 // LifecycleEventPayload defines the canonical observability envelope required for all
 // run and phase events to guarantee a consistent schema for telemetry.
 type LifecycleEventPayload struct {
-	HufuBuild        *buildinfo.Info `json:"hufu_build,omitempty"`
-	RunID            string          `json:"run_id,omitempty"`
-	Phase            string          `json:"phase"`
-	Agent            string          `json:"agent"`
-	Provider         string          `json:"provider"`
-	Artifacts        []ArtifactRef   `json:"artifacts"`
-	FailureSignature string          `json:"failure_signature"`
+	AcceptanceRetry  *FinalAcceptanceRetryAssessment `json:"acceptance_retry,omitempty"`
+	HufuBuild        *buildinfo.Info                 `json:"hufu_build,omitempty"`
+	RunID            string                          `json:"run_id,omitempty"`
+	Phase            string                          `json:"phase"`
+	Agent            string                          `json:"agent"`
+	Provider         string                          `json:"provider"`
+	Artifacts        []ArtifactRef                   `json:"artifacts"`
+	FailureSignature string                          `json:"failure_signature"`
 
 	// Extended fields used for specific events (e.g. run_started, run_finished, reliability_eval)
 	Team string `json:"team,omitempty"`
@@ -461,9 +462,20 @@ func (c *Coordinator) clearSupersededPendingWrapUp(runID string) {
 // mutable run lifecycle is initialized. The lease remains held until the
 // returned cleanup function has completed all terminal and persistence work.
 func (c *Coordinator) beginPublicInvocationExecutionRun(parent context.Context) (context.Context, func(), error) {
+	return c.beginAdmittedPublicInvocation(parent, nil)
+}
+
+// Admission runs under the invocation lease before any mutable lifecycle state.
+func (c *Coordinator) beginAdmittedPublicInvocation(parent context.Context, admit func() error) (context.Context, func(), error) {
 	lease, err := c.acquireInvocationLease(parent)
 	if err != nil {
 		return nil, nil, err
+	}
+	if admit != nil {
+		if err := admit(); err != nil {
+			lease.release()
+			return nil, nil, err
+		}
 	}
 	binding, err := claimInvocationBinding(parent)
 	if err != nil {

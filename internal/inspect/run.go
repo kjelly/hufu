@@ -25,23 +25,25 @@ type AttemptSummary struct {
 }
 
 type RunData struct {
-	HufuBuild         *buildinfo.Info           `json:"hufu_build,omitempty"`
-	RequestAcceptance *RequestAcceptanceSummary `json:"request_acceptance,omitempty"`
-	RunID             string                    `json:"run_id"`
-	TerminalEventID   string                    `json:"terminal_event_id,omitempty"`
-	Outcome           string                    `json:"outcome,omitempty"`
-	GoalSatisfied     bool                      `json:"goal_satisfied,omitzero"`
-	StopReason        string                    `json:"stop_reason,omitempty"`
-	Acceptance        string                    `json:"acceptance"`
-	Completion        string                    `json:"completion"`
-	TaskSummary       TaskSummary               `json:"task_summary"`
-	AttemptSummary    AttemptSummary            `json:"attempt_summary"`
-	EvidenceRefs      []string                  `json:"evidence_refs"`
+	AcceptanceRetry   *team.FinalAcceptanceRetryAssessment `json:"acceptance_retry,omitempty"`
+	HufuBuild         *buildinfo.Info                      `json:"hufu_build,omitempty"`
+	RequestAcceptance *RequestAcceptanceSummary            `json:"request_acceptance,omitempty"`
+	RunID             string                               `json:"run_id"`
+	TerminalEventID   string                               `json:"terminal_event_id,omitempty"`
+	Outcome           string                               `json:"outcome,omitempty"`
+	GoalSatisfied     bool                                 `json:"goal_satisfied,omitzero"`
+	StopReason        string                               `json:"stop_reason,omitempty"`
+	Acceptance        string                               `json:"acceptance"`
+	Completion        string                               `json:"completion"`
+	TaskSummary       TaskSummary                          `json:"task_summary"`
+	AttemptSummary    AttemptSummary                       `json:"attempt_summary"`
+	EvidenceRefs      []string                             `json:"evidence_refs"`
 }
 
 // Inspect projections expose statuses and opaque refs. Request text and quoted
 // tool output remain in the explicitly requested result/evidence views.
 type RequestAcceptanceSummary struct {
+	Error          string                          `json:"error,omitempty"`
 	SnapshotID     string                          `json:"snapshot_id"`
 	SnapshotHash   string                          `json:"snapshot_hash"`
 	RequestCovered bool                            `json:"request_covered"`
@@ -69,10 +71,13 @@ func summarizeRequestAcceptance(review *team.RequestAcceptanceResult) *RequestAc
 		return nil
 	}
 	result := &RequestAcceptanceSummary{SnapshotID: review.SnapshotID, SnapshotHash: review.SnapshotHash,
-		RequestCovered: review.RequestCovered, Passed: review.Validate() == nil}
+		RequestCovered: review.RequestCovered, Passed: review.Validate() == nil, Error: review.Error}
 	for _, requirement := range review.Contract.Requirements {
 		check := RequestAcceptanceCheckSummary{ID: requirement.ID, Required: requirement.Required,
 			Verification: requirement.Verification, Status: "missing", EvidenceRefs: []string{}}
+		if review.Error != "" {
+			check.Status = "unavailable"
+		}
 		for _, reviewed := range review.Checks {
 			if reviewed.ID == requirement.ID {
 				check.Status = reviewed.Status
@@ -250,6 +255,7 @@ func projectRunData(ctx context.Context, query InspectQuery, lineage Lineage) (R
 			return RunData{}, selectedRun{}, fmt.Errorf("%w: terminal event %q did not reduce to run %q", ErrIntegrity, selected.terminal.ID, query.RunID)
 		}
 		result := projected.RunResult
+		data.AcceptanceRetry = result.AcceptanceRetry
 		data.Outcome = string(result.Outcome)
 		data.GoalSatisfied = result.GoalSatisfied
 		data.StopReason = string(result.StopReason)

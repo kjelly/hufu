@@ -52,7 +52,7 @@ func (c *Coordinator) AssessResumeSource(ctx context.Context, source *ResumeSour
 	if err := c.validateResumeSources(WithSessionResume(ctx)); err != nil {
 		return nil, err
 	}
-	if source.Session.WorkflowState == PhaseDone {
+	if source.Session.WorkflowState == PhaseDone && !finalAcceptanceRetryRequested(ctx) {
 		return nil, fmt.Errorf("workflow is already complete; start a follow-up request instead of resume")
 	}
 	if source.Session.WorkflowState == PhaseFailed {

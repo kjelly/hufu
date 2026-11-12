@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -15,18 +16,21 @@ import (
 )
 
 var (
-	resumeTeamName           string
-	resumeSearch             string
-	resumeBranch             string
-	resumeRun                string
-	resumeRepairResult       string
-	resumeRetryWork          string
-	resumeRepairModel        string
-	resumeUpgradeContracts   bool
-	resumeUpgradeInputPolicy bool
-	resumeMetadataOnly       bool
-	resumeRecoveryBranch     string
-	resumeRecoveryPlan       string
+	resumeTeamName             string
+	resumeSearch               string
+	resumeBranch               string
+	resumeRun                  string
+	resumeAcceptanceTimeoutSet bool
+	resumeRetryAcceptance      bool
+	resumeAcceptanceTimeout    time.Duration
+	resumeRepairResult         string
+	resumeRetryWork            string
+	resumeRepairModel          string
+	resumeUpgradeContracts     bool
+	resumeUpgradeInputPolicy   bool
+	resumeMetadataOnly         bool
+	resumeRecoveryBranch       string
+	resumeRecoveryPlan         string
 )
 
 var resumeCmd = &cobra.Command{
@@ -60,6 +64,7 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 		return err
 	}
 	opts.requestAcceptanceSet = cmd.Flags().Changed("request-acceptance")
+	resumeAcceptanceTimeoutSet = cmd.Flags().Changed("acceptance-timeout")
 	if err := validateRunFlags(); err != nil {
 		return err
 	}
@@ -159,6 +164,9 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ctx = team.WithSessionResume(ctx)
+	if resumeRetryAcceptance {
+		ctx = team.WithFinalAcceptanceRetry(ctx, resumeRun, resumeAcceptanceTimeout)
+	}
 	if resumeRepairResult != "" {
 		ctx = team.WithResultOnlyRepair(ctx, resumeRepairResult)
 		ctx = team.WithResultRepairModel(ctx, resumeRepairModel)
@@ -227,6 +235,8 @@ func init() {
 	f.BoolVar(&resumeMetadataOnly, "metadata-only", false, "Explicit lineage-only recovery for an unversioned read-only team; project files remain shared")
 	f.StringVar(&resumeRecoveryBranch, "recovery-branch", "", "New child branch name for an explicitly previewed recovery")
 	f.StringVar(&resumeRecoveryPlan, "plan-hash", "", "Exact SHA-256 from the recovery preview")
+	f.BoolVar(&resumeRetryAcceptance, "retry-acceptance", false, "Retry unavailable final request acceptance against the saved answer; never redispatch workers or collectors")
+	f.DurationVar(&resumeAcceptanceTimeout, "acceptance-timeout", 5*time.Minute, "Per-review call timeout for --retry-acceptance; preserves frozen work and execution policy")
 	f.StringVar(&resumeRepairResult, "repair-result", "", "Authorize bounded result-only recovery for a blocked protocol task or cancelled collection; never replay worker tools")
 	f.StringVar(&resumeRetryWork, "retry-work", "", "Preview or fork a controlled retry of one completed read-only work attempt whose required decisions never started")
 	f.StringVar(&resumeRepairModel, "repair-model", "", "Auxiliary result submission model (must already be frozen in the source policy); preserves the original worker target")
@@ -317,6 +327,10 @@ func resumeBranchRecoveryRequested() bool {
 }
 
 func validateResumeRepairFlags() error {
+	if err := validateAcceptanceRetryFlags(); err != nil {
+		return err
+	}
+
 	if resumeRetryWork != "" && (strings.TrimSpace(resumeRetryWork) != resumeRetryWork || resumeUpgradeContracts || resumeUpgradeInputPolicy) {
 		return fmt.Errorf("--retry-work requires an exact task ID and cannot combine with contract or input policy upgrades")
 	}
@@ -344,6 +358,20 @@ func validateResumeRepairFlags() error {
 	}
 	if opts.dryRun && (resumeRepairModel != "" || opts.reportMode || opts.tuiMode || len(opts.inputFlags) > 0 || len(opts.inputFiles) > 0) {
 		return fmt.Errorf("resume --dry-run cannot use --repair-model, --report, --tui, or input assignments")
+	}
+	return nil
+}
+
+func validateAcceptanceRetryFlags() error {
+	if resumeRetryAcceptance {
+		if strings.TrimSpace(resumeRun) == "" || strings.TrimSpace(resumeRun) != resumeRun || resumeAcceptanceTimeout <= 0 {
+			return fmt.Errorf("--retry-acceptance requires an exact --run and positive --acceptance-timeout")
+		}
+		if resumeRepairResult != "" || resumeRepairModel != "" || resumeRetryWork != "" || resumeUpgradeContracts || resumeUpgradeInputPolicy || resumeMetadataOnly || resumeRecoveryBranch != "" || resumeRecoveryPlan != "" || len(opts.imagePaths) > 0 || len(opts.inputFlags) > 0 || len(opts.inputFiles) > 0 {
+			return fmt.Errorf("--retry-acceptance cannot combine with task repair, branch recovery, media or new inputs")
+		}
+	} else if resumeAcceptanceTimeoutSet {
+		return fmt.Errorf("--acceptance-timeout requires --retry-acceptance")
 	}
 	return nil
 }
