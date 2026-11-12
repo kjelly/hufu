@@ -39,7 +39,7 @@ func ProviderTransportObserverEnabled(ctx context.Context) bool {
 }
 
 func withProviderTransportIdentity(ctx context.Context, request ProviderRequest) context.Context {
-	if _, ok := ctx.Value(providerObserverKey{}).(func(context.Context, ProviderTransportObservation)); !ok {
+	if _, ok := ctx.Value(providerObserverKey{}).(func(context.Context, ProviderTransportObservation)); !ok && !hasProviderCallBudget(ctx) {
 		return ctx
 	}
 	return context.WithValue(ctx, providerIdentityKey{}, providerTransportIdentity{invocationID: request.InvocationID, modelID: request.ModelID, hasMedia: ProviderRequestHasMedia(request)})
