@@ -1591,7 +1591,6 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 		retrySuppressionSeen:      make(map[string]bool),
 		verbose:                   verbose,
 		think:                     think,
-		reportStatus:              func(event StatusEvent) {},
 		taskTracker:               NewTaskTracker(),
 		restoredTodoIDs:           make(map[string]struct{}),
 		admittedTodoIDs:           make(map[string]struct{}),
@@ -1645,6 +1644,9 @@ func newScopedCoordinator(params coordinatorParams, services RuntimeServices) (*
 		skillPatternsDetected:  0,
 		maxDrafts:              maxDraftsPerSession,
 	}
+	// Headless maintenance still reports progress to the watchdog. Install the
+	// wrapper before any streaming callback can capture the default reporter.
+	c.SetStatusReporter(func(StatusEvent) {})
 	// Install the complete production service bundle before any dependent
 	// callback or tool captures the coordinator, then apply only explicitly
 	// injected seams.
