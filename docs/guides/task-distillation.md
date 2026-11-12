@@ -1,5 +1,11 @@
 # Extract knowledge before cleaning old tasks
 
+> Status: active
+> Authority: guide
+> Verified-Commit: 46a8793e
+> Supersedes: —
+> Superseded-By: —
+
 `hufu workspace distill` asks the configured team sidecar model to propose
 durable knowledge and retention decisions. It supports explicit task IDs in
 the current managed workspace, retired workspaces in managed trash, or both
