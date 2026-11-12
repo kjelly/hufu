@@ -3,6 +3,7 @@ package team
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -20,6 +21,12 @@ func (es *EventStore) AppendPersistedBatchAtHead(ctx context.Context, events []R
 }
 
 func (es *EventStore) appendPersistedEvents(ctx context.Context, requested []RunEvent, expectedHead *string) ([]RunEvent, error) {
+	return es.appendEventsWithProjection(ctx, requested, expectedHead, nil)
+}
+
+// appendEventsWithProjection commits maintenance projections with their
+// canonical events. The callback must use tx exclusively, with no external I/O.
+func (es *EventStore) appendEventsWithProjection(ctx context.Context, requested []RunEvent, expectedHead *string, project func(context.Context, *sql.Tx) error) ([]RunEvent, error) {
 	if len(requested) == 0 {
 		return nil, fmt.Errorf("event batch is empty")
 	}
@@ -105,6 +112,11 @@ func (es *EventStore) appendPersistedEvents(ctx context.Context, requested []Run
 			if err := persistRunReport(dbctx, tx, history, event); err != nil {
 				return failClosed(fmt.Errorf("write run report: %w", err))
 			}
+		}
+	}
+	if project != nil {
+		if err := project(dbctx, tx); err != nil {
+			return nil, fmt.Errorf("project run events: %w", err)
 		}
 	}
 	committed = true

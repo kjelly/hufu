@@ -211,6 +211,10 @@ type RestoreRequest struct {
 
 type PurgeRequest struct {
 	TrashID string
+	// Preserve runs under the source workspace lock, after ownership and
+	// registry validation, before any destructive lifecycle step. An error
+	// leaves the source in recoverable trash.
+	Preserve func(context.Context, TrashWorkspace) error
 }
 
 type GCRequest struct {

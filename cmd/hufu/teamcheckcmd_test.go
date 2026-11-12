@@ -114,6 +114,7 @@ func TestOnlineTeamCheckDeadlineIsClassifiedWithoutInference(t *testing.T) {
 
 func writeTeamCheckFixture(t *testing.T, providerURL string) (string, string) {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	name := "check-team"
 	dir := filepath.Join(root, name)

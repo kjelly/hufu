@@ -80,6 +80,9 @@ the completion note is written. Existing backup files are never overwritten.
 
 ## Removal and recovery
 
+To extract and merge useful knowledge before cleaning tasks or permanently
+purging an old workspace, see [task distillation](task-distillation.md).
+
 Delete is recoverable: it validates the registry and ownership marker, takes
 the execution lock, and renames the control root into managed trash.
 

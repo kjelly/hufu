@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"slices"
 	"sort"
 	"strings"
@@ -73,6 +74,13 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 	builds := make(map[string]*buildinfo.Info)
 	for _, e := range events {
 		switch e.Type {
+		case string(EventTaskRemoved):
+			var removed struct {
+				TaskIDFloor int `json:"task_id_floor"`
+			}
+			if json.Unmarshal(e.Payload, &removed) == nil {
+				session.WorkflowTaskIDFloor = max(session.WorkflowTaskIDFloor, removed.TaskIDFloor)
+			}
 		case string(EventArtifactReadCoverageObserved):
 			if err := validateArtifactReadObservationEvent(e); err != nil {
 				session.RecoveryRequired = true
@@ -437,22 +445,31 @@ func sameReceiptMigrationIdentity(receipt ExecutionReceipt, migration ReceiptBac
 
 func reduceToTodoList(events []RunEvent) todoReplayResult {
 	events = normalizeReplayEvents(events)
-	// Earlier cycles remain in the journal for historical run inspection, but
-	// cannot establish tasks or verification evidence in the active cycle.
+	// Keep ordinary replay's fast path: superseded cycles never need decoding.
 	for i := len(events) - 1; i >= 0; i-- {
+		reset := false
 		if events[i].Type == string(EventDerivedForkCreated) {
-			if _, err := decodeDerivedForkCreated(events[i]); err == nil {
-				events = events[i+1:]
-				break
-			}
+			_, err := decodeDerivedForkCreated(events[i])
+			reset = err == nil
 		}
 		if events[i].Type == string(EventWorkflowCycleStarted) {
-			if _, err := decodeWorkflowCycleStarted(events[i]); err == nil {
-				events = events[i+1:]
-				break
-			}
+			_, err := decodeWorkflowCycleStarted(events[i])
+			reset = err == nil
+		}
+		if reset {
+			events = events[i+1:]
+			break
 		}
 	}
+	return reduceTodoEventStream(slices.Values(events))
+}
+
+// reduceTodoEventStream is the same canonical projection for in-memory replay
+// and bounded maintenance readers. Normalize identities before cycle boundaries
+// so duplicate events cannot reset or reopen an occurrence.
+func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
+	seenIDs := map[string]bool{}
+	seenKeys := map[eventIdempotencyIdentity]bool{}
 	taskMap := make(map[string]*TodoItem)
 	var taskOrder []string
 	result := newTodoReplayResult()
@@ -463,7 +480,37 @@ func reduceToTodoList(events []RunEvent) todoReplayResult {
 	// until a canonical creation occurrence is present.
 	frozenContracts := make(map[string]bool)
 
-	for _, e := range events {
+	for e := range events {
+		if e.ID != "" && seenIDs[e.ID] {
+			continue
+		}
+		if e.ID != "" {
+			seenIDs[e.ID] = true
+		}
+		if e.IdempotencyKey != "" {
+			key := newEventIdempotencyIdentity(e.BranchID, e.IdempotencyKey)
+			if seenKeys[key] {
+				continue
+			}
+			seenKeys[key] = true
+		}
+		reset := false
+		if e.Type == string(EventWorkflowCycleStarted) {
+			_, err := decodeWorkflowCycleStarted(e)
+			reset = err == nil
+		}
+		if e.Type == string(EventDerivedForkCreated) {
+			_, err := decodeDerivedForkCreated(e)
+			reset = err == nil
+		}
+		if reset {
+			taskMap = make(map[string]*TodoItem)
+			taskOrder = nil
+			result = newTodoReplayResult()
+			receiptObservations = make(map[string]*WorksetExpansionReceipt)
+			frozenContracts = make(map[string]bool)
+			continue
+		}
 		if e.Type == string(EventContractRecovery) {
 			if plan, err := decodeContractRecovery(e); err == nil {
 				_ = applyContractRecoveryTasks(taskMap, plan)

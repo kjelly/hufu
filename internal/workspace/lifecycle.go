@@ -166,6 +166,11 @@ func (m *WorkspaceManager) Purge(ctx context.Context, request PurgeRequest) (Pur
 	if err = m.validateTrashWorkspace(project, trash); err != nil {
 		return PurgeResult{}, err
 	}
+	if request.Preserve != nil {
+		if err := request.Preserve(ctx, trash); err != nil {
+			return PurgeResult{}, fmt.Errorf("preserve workspace before purge: %w", err)
+		}
+	}
 	item, purgeErr := registry.purgeWorkspaceLocked(ctx, trash)
 	result := PurgeResult{Outcome: "complete", Items: []LifecycleItem{}}
 	if item.OperationID != "" {
@@ -179,6 +184,31 @@ func (m *WorkspaceManager) Purge(ctx context.Context, request PurgeRequest) (Pur
 		}
 	}
 	return result, purgeErr
+}
+
+// VisitTrash exposes a validated, locked retired workspace to maintenance
+// readers. The visitor must not restore or purge that workspace itself.
+func (m *WorkspaceManager) VisitTrash(ctx context.Context, trashID string, visit func(TrashWorkspace) error) error {
+	trash, project, err := m.loadTrashForLifecycle(ctx, trashID)
+	if err != nil {
+		return err
+	}
+	locks, err := AcquireWorkspaceLocks(m.stateRoot, []string{trash.WorkspaceID})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = locks.Close() }()
+	trash, currentProject, err := m.loadTrashForLifecycle(ctx, trashID)
+	if err != nil {
+		return err
+	}
+	if currentProject.ID != project.ID {
+		return ErrConflict
+	}
+	if err = m.validateTrashWorkspace(currentProject, trash); err != nil {
+		return err
+	}
+	return visit(trash)
 }
 
 func resolveLifecycleProject(ctx context.Context, registry *SQLiteRegistry, startDir, selector string) (Project, error) {

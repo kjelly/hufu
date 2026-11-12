@@ -697,6 +697,11 @@ func (c *Coordinator) applyLiveTaskProjection(tasks []*TodoItem) {
 			c.taskTracker.TodoList().Restore(tasks)
 		}
 	}
+	if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
+		var floor int
+		c.viewSessionData(func(sd *SessionData) { floor = sd.WorkflowTaskIDFloor })
+		c.taskTracker.TodoList().ensureIDFloor(floor)
+	}
 	c.rebuildAntiThrashingState()
 
 	if !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {

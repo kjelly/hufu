@@ -416,6 +416,7 @@ func TestLoadTeamDryRunAppliesWorkerModelOverrides(t *testing.T) {
 }
 
 func TestLoadTeamDryRunRejectsInvalidWorkerModelBeforeWorkspace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	tests := []struct {
 		name    string
 		entries []string

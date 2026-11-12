@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	json "encoding/json/v2"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -33,17 +35,51 @@ type maintenanceGeneratorOptions struct {
 }
 
 type sidecarTextGenerator struct {
-	s       *sidecar.Sidecar
-	ctx     context.Context
-	purpose string
-	profile sidecar.Profile
+	s          *sidecar.Sidecar
+	ctx        context.Context
+	purpose    string
+	profile    sidecar.Profile
+	policyHash string
+}
+
+// CheckpointIdentity binds reusable maintenance results to the same admitted
+// policy, generation profile, purpose and system instructions.
+func (g sidecarTextGenerator) CheckpointIdentity() string {
+	if g.policyHash == "" {
+		return ""
+	}
+	raw, err := json.Marshal(struct {
+		Policy  string
+		Purpose string
+		Profile sidecar.Profile
+		System  string
+	}{g.policyHash, g.purpose, g.profile, sidecar.SystemPrompt()})
+	if err != nil {
+		return ""
+	}
+	hash := sha256.Sum256(raw)
+	return hex.EncodeToString(hash[:])
 }
 
 func (g sidecarTextGenerator) GenerateText(ctx context.Context, prompt string) (string, error) {
 	if g.ctx != nil {
 		ctx = g.ctx
 	}
-	return g.s.ExecuteProfile(sidecar.WithPurpose(ctx, g.purpose), prompt, g.profile)
+	text, err := g.s.ExecuteProfile(sidecar.WithPurpose(ctx, g.purpose), prompt, g.profile)
+	return text, maintenanceInvocationError(ctx, err)
+}
+
+// Preserve the invocation owner's reason without losing cancellation matching.
+// Cancellation remains terminal; it must never become a transport retry.
+func maintenanceInvocationError(ctx context.Context, err error) error {
+	if err == nil || ctx.Err() == nil {
+		return err
+	}
+	cause := context.Cause(ctx)
+	if errors.Is(cause, ctx.Err()) {
+		return cause
+	}
+	return errors.Join(cause, ctx.Err())
 }
 
 // newMaintenanceTextGenerator binds the team to the maintenance workspace and
@@ -56,6 +92,7 @@ func newMaintenanceTextGenerator(ctx context.Context, options maintenanceGenerat
 		return nil, "", nil, err
 	}
 	cfg := config.LoadConfig()
+	session.ExecutionRouteConfigs = cfg.ExecutionRoutes
 	session.GlobalDecisionRuntime = cfg.DecisionRuntime.Clone()
 	session.GlobalControlDecisions = cfg.ControlDecisions.Clone()
 	model := firstNonEmpty(options.ModelOverride, session.Config.SidecarModel, session.Config.Generation.Model, cfg.SidecarModel, cfg.Model)
@@ -108,7 +145,11 @@ func newMaintenanceTextGenerator(ctx context.Context, options maintenanceGenerat
 		fingerprint := sha256.Sum256([]byte("memory-conflict-v2\x00" + model + "\x00" + identity))
 		model += "@sha256:" + hex.EncodeToString(fingerprint[:])
 	}
-	return sidecarTextGenerator{s: handle.Sidecar(), ctx: handle.Context(), purpose: options.Purpose, profile: options.Profile}, model, release, nil
+	policyHash := ""
+	if snapshot := coordinator.ExecutionPolicySnapshot(); snapshot != nil {
+		policyHash = snapshot.ConfigurationHash
+	}
+	return sidecarTextGenerator{s: handle.Sidecar(), ctx: handle.Context(), purpose: options.Purpose, profile: options.Profile, policyHash: policyHash}, model, release, nil
 }
 
 // teamRegistryFromSearchPath resolves teams from a comma-separated search

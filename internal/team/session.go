@@ -136,9 +136,10 @@ type SessionData struct {
 	// WorkflowState and PhaseResults are the durable, runtime-owned workflow
 	// state. They are deliberately separate from task prose and conversation
 	// history so a resumed run cannot infer a completed phase from model text.
-	WorkflowState               Phase                      `json:"workflow_state,omitempty"`
-	WorkflowCycleID             string                     `json:"workflow_cycle_id,omitempty"`
-	DerivedFork                 *DerivedForkRef            `json:"derived_fork,omitempty"`
+	WorkflowState   Phase           `json:"workflow_state,omitempty"`
+	WorkflowCycleID string          `json:"workflow_cycle_id,omitempty"`
+	DerivedFork     *DerivedForkRef `json:"derived_fork,omitempty"`
+	// WorkflowTaskIDFloor also reserves task identities retired by maintenance.
 	WorkflowTaskIDFloor         int                        `json:"workflow_task_id_floor,omitzero"`
 	PhaseResults                map[Phase]PhaseResult      `json:"phase_results,omitempty"`
 	RuntimeWorkspace            string                     `json:"runtime_workspace,omitempty"`

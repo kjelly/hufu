@@ -14,6 +14,7 @@ internal/agent/structured_response.go<TAB>m.LanguageModel.Stream(ctx, call)<TAB>
 internal/sidecar/sidecar.go<TAB>invocationAgent.Generate(ctx, call)<TAB>sidecar.generate<TAB>sidecar<TAB>runtime_boundary
 internal/team/coordinator_task_run.go<TAB>ag.Stream(callCtx, call)<TAB>Coordinator.runAgentWithStatusAndHistory<TAB>task_execution<TAB>runtime_boundary
 internal/promotion/analyzer.go<TAB>a.Generator.Generate(ctx, DraftRequest{<TAB>promotion.Analyzer<TAB>promotion_draft<TAB>adapter_boundary
+cmd/hufu/workspace_distill.go<TAB>taskdistill.GenerateBatched(cmd.Context(), checkpointed, plan.Sources, options.policy, options.maxCalls)<TAB>runWorkspaceDistill<TAB>task_distillation<TAB>adapter_boundary
 internal/team/coordinator_skills.go<TAB>sidecar.NewSidecarWithAdmissionContext(ctx, provider, c.sidecarModel, c.providerAdmission(), invocation.AdmissionContext)<TAB>Coordinator.Sidecar<TAB>skill_matcher<TAB>runtime_boundary
 internal/team/coordinator_skills.go<TAB>sidecar.NewSidecarWithAdmissionContext(ctx, provider, c.guardModel, c.providerAdmission(), invocation.AdmissionContext)<TAB>Coordinator.GuardSidecar<TAB>guard_reviewer<TAB>runtime_boundary
 internal/team/coordinator_skills.go<TAB>sidecar.NewSidecarWithAdmissionContext(ctx, provider, c.judgeModel, c.providerAdmission(), invocation.AdmissionContext)<TAB>Coordinator.JudgeSidecar<TAB>judge<TAB>runtime_boundary
@@ -22,3 +23,4 @@ cmd/hufu/decisionrt_registry.go<TAB>hufusidecar.NewSidecar(ctx, provider, r.opti
 internal/decisionrt/backend/systemone/transport.go<TAB>b.client.Do(request)<TAB>systemone.backend.post<TAB>decision_model<TAB>adapter_boundary
 internal/decisionrt/backend/factory.go<TAB>systemone.New(systemone.Config{Endpoint: config.Endpoint<TAB>backend.New<TAB>decision_model<TAB>adapter_boundary
 cmd/hufu/decisionrt_registry.go<TAB>systemone.New(systemone.Config{Endpoint: options.SystemOneURL<TAB>systemOneAvailabilityReason<TAB>decisionrt_backend<TAB>projection_boundary
+cmd/hufu/workspace_distill_probe.go<TAB>taskdistill.ProbeBatch(cmd.Context(), generator, plan.Sources, options.policy, options.probeBatch, options.maxCalls)<TAB>runWorkspaceDistillationProbe<TAB>task_distillation<TAB>adapter_boundary

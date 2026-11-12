@@ -336,6 +336,7 @@ agents:
 }
 
 func TestLoadTeamByName_DryRunDoesNotCreateWorkspace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	originalOpts := opts
 	t.Cleanup(func() { opts = originalOpts })
 
@@ -380,6 +381,7 @@ func TestLoadTeamByName_DryRunDoesNotCreateWorkspace(t *testing.T) {
 }
 
 func TestLoadTeamByName_ManagedDryRunDoesNotCreateState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	originalOpts := opts
 	t.Cleanup(func() { opts = originalOpts })
 
