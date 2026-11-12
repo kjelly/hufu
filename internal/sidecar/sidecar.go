@@ -459,7 +459,7 @@ func (s *Sidecar) generateWithOptions(ctx context.Context, prompt string, profil
 		return "", fmt.Errorf("sidecar agent returned no result")
 	}
 	if profile.RequireCompleteOutput && result.Response.FinishReason == fantasy.FinishReasonLength {
-		return "", fmt.Errorf("sidecar output truncated by provider token limit (reserved=%d, output_tokens=%d, response_bytes=%d)", profile.MaxOutputTokens, result.TotalUsage.OutputTokens, len(result.Response.Content.Text()))
+		return "", &IncompleteOutputError{ReservedTokens: profile.MaxOutputTokens, OutputTokens: result.TotalUsage.OutputTokens, ResponseBytes: len(result.Response.Content.Text())}
 	}
 	return result.Response.Content.Text(), nil
 }

@@ -515,6 +515,10 @@ func TestExecuteProfileRejectsTokenLimitedStructuredOutput(t *testing.T) {
 			calls := 0
 			s.SetUsageObserver(func(*fantasy.AgentResult) { calls++ })
 			output, err := s.ExecuteProfile(t.Context(), "Return structured JSON", Profile{MaxOutputTokens: 32, RequireCompleteOutput: true})
+			var incomplete *IncompleteOutputError
+			if !errors.Is(err, ErrIncompleteOutput) || !errors.As(err, &incomplete) || incomplete.ReservedTokens != 32 || incomplete.ResponseBytes != len(text) {
+				t.Fatalf("missing incomplete-output metadata: %v", err)
+			}
 			if err == nil || !strings.Contains(err.Error(), "truncated by provider token limit") || !strings.Contains(err.Error(), "reserved=32") || output != "" || calls != 1 {
 				t.Fatalf("partial structured output accepted, retried, or uncharged: output=%q err=%v calls=%d", output, err, calls)
 			}
