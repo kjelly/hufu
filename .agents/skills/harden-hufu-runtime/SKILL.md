@@ -11,6 +11,20 @@ replace package-specific guidance.
 
 ## Change Workflow
 
+### Acceptance before implementation
+
+For fixes and behavior changes, use the repository's
+[fix evidence workflow](../../../docs/reference/fix-evidence.md). State the
+failing trigger, expected outcome, target/version/environment and completion
+boundary before editing. Keep confirmed causes, hypotheses and missing evidence
+separate; a diagnostic improvement may be complete while the original workflow
+remains unresolved.
+
+If the same workflow fails again after a claimed fix, revisit the failure class,
+acceptance boundary and recovery design before another patch or full rerun.
+Do not substitute larger budgets, weaker validation or one successful probe for
+evidence that the declared target can complete.
+
 ### 1. Classify the change
 
 Identify the canonical owner before editing. Use the closest existing package
@@ -129,6 +143,12 @@ For runtime changes, add or update tests covering the applicable layers:
 Use existing fixtures and test seams. Do not make Hufu tests depend on a Pilot
 checkout, external binary, live provider, or consumer-specific fixture.
 
+Start with the observed failure and neighboring cases, then exercise the actual
+integration boundary before broad gates. For long workflows, inject relevant
+format/length, transport, cancellation and repair failures offline; verify call
+bounds, checkpoint reuse, retained progress and data preservation. Do not require
+a new test when an existing test supplies adequate before/after evidence.
+
 For result contracts, exercise the complete producer → inventory → consumer →
 verification/acceptance path offline, with empty and mixed source schemas and a
 rejected submission followed by a bounded field repair. Test local and external
@@ -175,6 +195,12 @@ For integration or infrastructure mutation, run only with explicit
 authorization and report the actual command, exit code, acceptance result,
 verification evidence, and unresolved tasks. Passing unit tests or a model
 success message is not evidence that an external workflow completed.
+
+Classify the outcome as source validation, a bounded probe, or full-target
+acceptance, with the actual workload/environment and remaining limitations.
+Complete the PR evidence block from observed results. Reuse passed checks for
+unchanged source/settings while preserving all required gates; do not make the
+user repeatedly run the whole workflow as the primary regression test.
 
 ## Stop Conditions
 

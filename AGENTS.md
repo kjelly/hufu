@@ -63,6 +63,27 @@ Run heavyweight validation tasks sequentially, not as parallel mise tasks.
   checkouts, and cache outputs, preserving recovery evidence and deliverables.
   Report cache growth, cleanup, and any necessary retained large artifacts.
 
+## Bug-fix acceptance
+
+- For bug fixes and behavior changes, define the failing trigger, expected
+  outcome, affected boundary, and completion evidence before implementation.
+  Follow the [fix evidence workflow](docs/reference/fix-evidence.md).
+- For invocation failures, use `hufu-diagnose-invocation`; for runtime changes,
+  use `harden-hufu-runtime`. Apply their existing scope and authorization rules.
+- Separate confirmed causes from hypotheses. Missing evidence permits diagnostic
+  improvements, but does not establish that the original failure is fixed.
+- Cover the observed failure and relevant failure class before broad checks.
+  For long workflows, include bounded repair, partial progress, restart/reuse,
+  cancellation and data preservation where applicable. Reuse passed checks for
+  unchanged code; retain all required project gates.
+- When the same workflow fails again after a claimed fix, revisit the acceptance
+  boundary, evidence and recovery design before another patch or full rerun.
+  More retries, weaker validation, or one successful probe are not completion
+  evidence for the entire workflow.
+- Report source validation, bounded probes and full-target acceptance separately.
+  Non-documentation PRs must include the structured fix evidence block described
+  in the reference; CI checks its consistency, not the truth of an RCA.
+
 ## Required Validation
 
 Any task that modifies Go source code, tests, or other code must run:

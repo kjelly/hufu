@@ -1,0 +1,29 @@
+name: Fix evidence
+
+on:
+  pull_request:
+    branches: [main, master]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: fix-evidence-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: fix-evidence-current
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          fetch-depth: 0
+      - name: Validate current PR evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check-fix-evidence.py --refresh-pr

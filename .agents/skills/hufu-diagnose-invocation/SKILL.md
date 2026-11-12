@@ -281,6 +281,22 @@ Never invent certainty to satisfy the root-cause requirement.
 
 ## 5. Correct confirmed defects when authorized
 
+In full repair mode, apply the
+[fix evidence workflow](../../../docs/reference/fix-evidence.md): define the
+acceptance trigger, expected outcome and target/version/environment before the
+patch. Turn the observed failure into an offline regression or cite an existing
+test with adequate before/after evidence. Exercise the affected integration
+boundary and relevant failure class before broad checks. If historical evidence
+is missing, label that boundary unresolved; do not call a diagnostic improvement
+proof that the original workflow is repaired.
+
+For a workflow that fails again after a claimed fix, revisit the evidence,
+acceptance boundary and recovery design before another patch or full rerun.
+Use bounded scripted faults for long workflows, preserving completed work and
+testing checkpoint reuse, call limits, cancellation and data safety. Existing
+live-execution authorization remains valid within its target, operations and
+budget; source repair does not expand it.
+
 In diagnosis mode, skip source edits and proceed to recovery assessment and
 recommendations. In full repair mode, choose the owner from the evidence:
 
@@ -379,6 +395,11 @@ If the workflow is already complete, identify that state and explain the
 appropriate follow-up entry point instead of requesting another repair.
 
 ## 7. Report the finding
+
+Use the PR evidence contract to distinguish source validation, a bounded probe
+and full-target acceptance. A single compliant response that never exercised
+repair is not evidence that repair worked. State whether the original failure
+was reproduced, which integration path was exercised and what remains unproven.
 
 Scale the report to the question. Include:
 
