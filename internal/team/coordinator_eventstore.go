@@ -155,13 +155,14 @@ func (c *Coordinator) initEventStore() {
 	}
 	c.resetContextWindowTelemetrySummary()
 	c.resetTeamActionProposals()
+	var stepReceiptEvents []RunEvent
 	// Hydrate the active branch during every normal startup. Pending terminal
 	// reconciliation is a recovery concern and must not also replay telemetry.
 	if events, readErr := es.ReadEvents(); readErr != nil {
 		c.markSessionRecovery("event-store telemetry hydration read failed: " + utils.RedactSecrets(readErr.Error()))
 	} else {
 		branchEvents := FilterEventsForBranch(events, st, activeBranch)
-		c.hydrateStructuredStepReceipts(branchEvents)
+		stepReceiptEvents = branchEvents
 		c.hydrateDecisionPrimitiveResults(branchEvents)
 		c.hydrateContextWindowTelemetry(branchEvents)
 		c.rebuildTeamActionProposals(branchEvents)
@@ -187,6 +188,10 @@ func (c *Coordinator) initEventStore() {
 	c.hydrateEmittedEventKeys(st, activeBranch)
 	c.checkCanonicalProjectionShadow(st, activeBranch)
 	c.repairMemoryLearningGaps(st, activeBranch)
+	// A canonical projection rebuild can replace recovery metadata. Validate
+	// receipt CAS after that rebuild so a new semantic integrity failure cannot
+	// be cleared by replaying otherwise healthy journal rows.
+	c.hydrateStructuredStepReceipts(stepReceiptEvents)
 }
 
 func (c *Coordinator) hydrateDecisionPrimitiveResults(events []RunEvent) {

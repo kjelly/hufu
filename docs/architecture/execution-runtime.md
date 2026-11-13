@@ -434,7 +434,9 @@ the currently authorized occurrence, or the verified original work occurrence
 of a result-only checkpoint. Native tool-call IDs may repeat in different
 occurrences; the storage key includes the complete occurrence, and an ambiguous
 unscoped lookup does not choose a historical receipt. Source corruption or
-missing CAS bytes prevents startup admission. These receipts do not authorize
+missing CAS bytes prevents startup admission. Receipt CAS is validated after
+canonical projection recovery, so rebuilding healthy journal metadata cannot
+clear a newly detected receipt-integrity admission barrier. These receipts do not authorize
 step replay or promise exactly-once external operations. The standalone
 in-memory execution engine does not create a durable coordinator invocation.
 

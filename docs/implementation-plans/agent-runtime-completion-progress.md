@@ -29,8 +29,8 @@
 | 階段 | 狀態 | 證據 |
 | --- | --- | --- |
 | 1 決策設定繼承 | 已完成，`e3c94b8b` | 下節 before/after、完整測試、vet、lint |
-| 2 Step 執行歸因 | 已完成（本次提交） | 下節 before/after、CAS/replay、投影、完整測試與所有 gate |
-| 3 中斷恢復回歸 | 待實作 | — |
+| 2 Step 執行歸因 | 已完成，`a0eb66c2` | 下節 before/after、CAS/replay、投影、完整測試與所有 gate |
+| 3 中斷恢復回歸 | 已完成，本次提交 | 下節 subprocess matrix、完整測試與所有 gate |
 | 4 跨 run economics 比較 | 待實作 | — |
 
 ## 階段 1：共用決策 transport
@@ -119,3 +119,34 @@
 
 - 最終 `mise run lint` 通過（0 issues），`bin/check-docs` 通過（106 active files、204 total files、693 relative links、51 Go function anchors）。Source snapshot 確認全部 Go 與規範檔自完整測試開始後沒有變更，只有進度紀錄新增驗證結果。第二階段 source validation 完成，可提交。
 - 第二階段完成界線為離線歸因、完整持久化／replay、scope／來源拒絕及診斷投影；沒有執行真實模型實驗，亦不宣稱外部操作 exactly-once 或原外部工作負載已完成。第三、四階段尚待實作。
+
+## 階段 3：程序中斷與恢復
+
+- Trigger：child 已取得 task admission，於副作用前、外部效果完成但尚無 receipt、A 的 durable receipt 已保存而 B 執行中、collection checkpoint 已保存但尚未 TaskDone，以及任務完成等邊界終止程序。
+- 預期：全新 coordinator／store handle 只讀 canonical evidence 決定復用、readonly 重試或既有 reconcile／blocked；無法證明安全的 external write 不得重播。使用獨立檔案並 fsync 的副作用計數器、握手後 kill 自有 child，沒有 startup sleep。
+- 影響邊界：先擴充共享測試 fixture 與行為測試；尚無確認的 production recovery 缺陷。若實測違反契約，先保留 before 與 cause，再於既有 recovery 邊界最小修正。
+- 完成證據：故障矩陣、結果／receipt bytes 保留、失敗分類、取消、validator／repair budget、policy drift／無效 evidence／分支／readonly retry，加上 focused、contracts、完整 test／vet／lint 與適用 race；目前尚未完成。
+
+- 第一輪 subprocess gate 在抵達握手前因 fixture 的 delegatedTasks map 未初始化而 panic，已補齊 fixture；這不是 production recovery 缺陷證據。下一輪確認 external write 沒有重播，但原測試誤把 replay-policy 阻擋當成 reconcile、並誤認取消不得留下失敗 mutation receipt；已依既有契約區分分類，另加入明確 RecoveryReconcile 案例。
+- 最新 9 情境 subprocess matrix 通過（exit 0，team 1.279s）：副作用前、effect／settlement 窗口、明確 reconcile 的未知外部狀態、A receipt 已保存而 B 執行中、完成後重啟、validator 失敗、單次 repair 耗盡、實際 context 取消、readonly 重試。父程序 kill 握手後的自有 child，以 fresh coordinator／store 重播；比對 durable counters、typed failure disposition、完整 receipt bytes，並檢查 producer／validator 沒有重跑。尚未完成整個第三階段。
+- 此階段暫無 production recovery 修正。Collection checkpoint 的實際程序中斷、其餘拒絕案例與最終 gates 仍待補齊；既有第二階段 branch／CAS／來源替換測試可重用其相應證據，不可代替 collection 邊界。
+- 新測試 archive 曾使可歸屬 cache 短暫達 2061.1 MiB；以本 checkout／新增測試符號、缺少現行 crash-recovery 測試及無 /proc 消費者確認過時輸出，清理 9 entries、630.6 MiB。最新盤點 1578.4 MiB，scratch 9.3 MiB；保留共享依賴與現行測試產物。
+
+- Collection 實際程序中斷 gate 通過（team 1.492s）：child 由公開 ExecuteTasks 完成一次 fixture external write 與一次 collector，於 claims committed、尚未 TaskDone 時握手後被 kill。Fresh coordinator／store 使用同一 frozen endpoint（原 server 已隨 child 關閉），由 ResumeInterruptedTasks 直接本地完成；worker calls=0、兩項 durable counters 各維持 1，原 report／receipt／claims bytes 與 collector budget 不變，再次 resume 無重播。
+- 新增拒絕矩陣的 before 確認兩類原因：sibling fixture 誤選 saveCheckpoint 補寫的較晚 task_started，已改為第一筆 pre-step 邊界；missing／corrupt receipt 則是真實 startup 缺陷。診斷顯示 CAS reader 明確回報缺失／hash mismatch，但 recovery=false、admission 通過；source tracing 確認 initEventStore 在 hydrate 時標記失敗，隨後 replaceCanonicalProjection 又以健康 journal 的欄位清掉 recovery marker。
+- Root fix：於既有 initEventStore 內，將 step receipt CAS validation／hydration 移到 canonical projection 修復之後，避免新 semantic integrity failure 被 replay 清除；沿用原 stores／schema／recovery machinery。沒有弱化 source/hash／branch／policy 驗證。
+- Root fix 後 focused gate 通過（team 2.859s）：實際 killed-child 的 policy drift、missing/corrupt receipt、公開 ForkSessionBranch 的 sibling source 拒絕，以及正向矩陣、collection checkpoint 和既有 startup projection tests。CAS 失敗保持 recovery-required，拒絕公開 ExecuteTasks，原 counters／journal bytes 不變。最終新增 collection work 損毀案例與完整失敗 receipt 斷言後待重跑，尚未完成第三階段。
+- 清理 8 個缺少現行來源拒絕測試的過時自有測試 artifacts，共 591.8 MiB（確認 checkout／新增符號及無消費者）；最新可歸屬 cache 1578.9 MiB。未清除共享依賴或其他工作產物。
+
+- 最後 focused gate 通過（team 4.104s）：collection committed-before-TaskDone 的 intact／missing-work／mismatched-work 三情境、9 個 structured interruption 情境、4 個 startup／scope 拒絕情境與相鄰既有測試。失敗分類使用既有 typed classes；structured cancellation／validator 的 task envelope 仍為 generic execution failure，完整 step diagnostics 與 failed receipt 保留。這是既有分類限制，未擴張成新的自動 retry 或 recovery 機制。
+
+- mise run lint 通過（0 issues）、文件檢查通過。Race 前清理 8 個缺少現行 collection mismatch 行為的過時自有測試 artifacts，共 449.3 MiB；檢查過 checkout／新增符號與無消費者，保留現行 normal 產物及共享依賴。Focused race 已開始，第三階段仍待 contracts／完整 test／vet 與最終審核。
+
+- Focused race 通過（team 18.894s），涵蓋新程序中斷／collection／拒絕矩陣、既有 step replay 與 startup projection。Child 使用同一個 race-instrumented binary，父程序在等待 child 結束後檢查 race diagnostics，避免把 child 的 race 當成預期 kill 忽略。Contracts gate 已開始。
+
+- mise run test-contracts 全數通過（exit 0）：team 130.423s、CLI 51.300s、reviewgate 9.360s、reviewprep 25.627s，及 inspect／operator／auditverify／web-research。完整測試已開始，Source validation 尚待整套測試與 vet。
+
+- 最終完整 `mise run test` 通過（exit 0）：team 819.149s、CLI 176.640s、improver 121.682s；沒有略過測試。Source snapshot 核對本階段全部 Go 與規範檔在完整測試期間未變更，只有進度紀錄追加驗證結果。
+- 完整測試後可歸屬 cache 1863.9 MiB（70 entries，低於 2 GiB），scratch 約 11 MiB；cache volume 可用約 64 GiB、`/tmp` 可用約 7.7 GiB、available RAM 約 10 GiB。保留現行 normal／race 輸出與共享依賴。
+
+- 最終 `mise run vet` 通過（exit 0），文件檢查與 diff whitespace 檢查通過；沿用同一 source 已通過的 lint、race 與 contracts。第三階段 source validation 完成，交付為離線恢復安全回歸及確認缺陷的最小修正；未擴建外部 exactly-once 或自動續跑機制。第四階段尚待實作。

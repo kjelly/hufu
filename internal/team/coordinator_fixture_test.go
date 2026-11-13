@@ -27,14 +27,24 @@ var errGenericWorkerFailure = errors.New("worker failed: generic execution error
 
 // coordinatorFixture collects the knobs newTestCoordinator exposes.
 type coordinatorFixture struct {
-	config agent.TeamConfig
-	agents map[string]*agent.AgentDef
-	worker fantasy.Agent
-	status StatusReporter
-	runID  string
+	config    agent.TeamConfig
+	agents    map[string]*agent.AgentDef
+	worker    fantasy.Agent
+	status    StatusReporter
+	runID     string
+	workspace string
 }
 
 type coordinatorOption func(*coordinatorFixture) error
+
+// Parent-owned subprocess workspaces survive a killed test child and are
+// removed by the parent after its replacement coordinator has closed.
+func withCoordinatorWorkspace(workspace string) coordinatorOption {
+	return func(f *coordinatorFixture) error {
+		f.workspace = workspace
+		return nil
+	}
+}
 
 var errInvalidFixtureWorker = errors.New("withWorker requires a non-nil worker")
 
@@ -102,9 +112,13 @@ func newTestCoordinator(t *testing.T, opts ...coordinatorOption) *Coordinator {
 			t.Fatalf("newTestCoordinator: option %d: %v", i+1, err)
 		}
 	}
+	workspace := f.workspace
+	if workspace == "" {
+		workspace = t.TempDir()
+	}
 	c := &Coordinator{
 		session: &TeamSession{
-			Workspace: t.TempDir(),
+			Workspace: workspace,
 			Config:    f.config,
 			Agents:    f.agents,
 		},
