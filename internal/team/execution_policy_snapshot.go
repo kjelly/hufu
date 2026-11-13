@@ -14,7 +14,6 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/cost"
-	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/semantic"
 )
@@ -338,7 +337,7 @@ func newExecutionPolicyStateForVersion(c *Coordinator, version int) (*executionP
 	if err != nil {
 		return nil, err
 	}
-	runtimeHash, runtimeErr := settings.Merge(c.session.GlobalDecisionRuntime, c.session.Config.DecisionRuntime).Fingerprint("sidecar")
+	runtimeHash, runtimeErr := c.session.decisionRuntimeFingerprint()
 	if runtimeErr != nil {
 		return nil, runtimeErr
 	}

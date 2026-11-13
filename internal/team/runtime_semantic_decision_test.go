@@ -37,41 +37,56 @@ func TestRuntimeAgentSelectionReplaysLargeCandidateDomain(t *testing.T) {
 }
 
 func TestRuntimeDecisionSharedDefaultsAndConfigurationDrift(t *testing.T) {
-	server := newControlModelServer(t, 200, controlChoice("o", 0, .99))
-	c, legacy := newControlTestCoordinator(t, control.PathReviewer, control.ModeOff, "", `{"token":"A1"}`)
-	defaults := settings.Config{Backend: "systemone", SystemOne: settings.SystemOne{Model: "shared-model", Endpoint: server.URL}}.WithSource("global")
-	c.session.GlobalDecisionRuntime = defaults
-	invocation := sidecar.DecisionInvocation{Name: "runtime_route", Question: "Choose a route", Input: "accepted request", Options: []catalog.Option{{ID: "fast"}, {ID: "team"}}, MaxCalls: 100}
-	result, err := c.runRuntimeChoice(t.Context(), nil, invocation)
-	if err != nil || result.Status != decisionrt.StatusDecided || result.Model != "shared-model" {
-		t.Fatalf("result=%#v error=%v", result, err)
+	tests := []struct {
+		name   string
+		change func(*testing.T, *settings.Config)
+	}{
+		{"model", func(_ *testing.T, c *settings.Config) { c.SystemOne.Model = "changed-model" }},
+		{"backend", func(_ *testing.T, c *settings.Config) { c.Backend = "sidecar" }},
+		{"endpoint", func(_ *testing.T, c *settings.Config) { c.SystemOne.Endpoint = "http://127.0.0.1:1" }},
+		{"timeout", func(_ *testing.T, c *settings.Config) { c.SystemOne.Timeout = time.Second }},
+		{"credential", func(t *testing.T, _ *settings.Config) { t.Setenv("DECISION_RUNTIME_TEST_KEY", "fixture-key-after") }},
 	}
-	if legacy.calls.Load() != 0 || server.calls.Load() != 1 {
-		t.Fatal("unexpected extra inference")
-	}
-	entries, err := catalog.New(map[string]catalog.Entry{"route": {Version: "1", Kind: decisionrt.KindChoice, Question: invocation.Question, Options: invocation.Options, Agents: []string{"worker"}}}, catalog.WithRuntimeConfig(defaults))
-	if err != nil {
-		t.Fatal(err)
-	}
-	records, err := c.DecisionPrimitiveResults(t.Context())
-	if err != nil || len(records) != 1 {
-		t.Fatalf("records=%v error=%v", records, err)
-	}
-	transport := entries.Transports()["route"]
-	if records[0].Transport.Model != transport.Model || records[0].Transport.Endpoint != transport.Endpoint || records[0].Transport.Sources["model"] != "global" {
-		t.Fatalf("different effective defaults: %#v %#v", records[0].Transport, transport)
-	}
-	hash, err := defaults.Fingerprint("sidecar")
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.executionPolicy = &executionPolicyState{snapshot: &ExecutionPolicySnapshot{DecisionRuntimeHash: hash}}
-	c.session.GlobalDecisionRuntime.SystemOne.Model = "changed-model"
-	if _, err := c.runRuntimeChoice(t.Context(), nil, invocation); err == nil || !strings.Contains(err.Error(), "drift") {
-		t.Fatalf("changed policy accepted: %v", err)
-	}
-	if server.calls.Load() != 1 {
-		t.Fatal("drift reached provider")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newControlModelServer(t, 200, controlChoice("o", 0, .99))
+			c, legacy := newControlTestCoordinator(t, control.PathReviewer, control.ModeOff, "", `{"token":"A1"}`)
+			t.Setenv("DECISION_RUNTIME_TEST_KEY", "fixture-key-before")
+			defaults := settings.Config{Backend: "systemone", SystemOne: settings.SystemOne{Model: "shared-model", Endpoint: server.URL, APIKeyEnv: "DECISION_RUNTIME_TEST_KEY"}}.WithSource("global")
+			c.session.GlobalDecisionRuntime = defaults
+			invocation := sidecar.DecisionInvocation{Name: "runtime_route", Question: "Choose a route", Input: "accepted request", Options: []catalog.Option{{ID: "fast"}, {ID: "team"}}, MaxCalls: 100}
+			result, err := c.runRuntimeChoice(t.Context(), nil, invocation)
+			if err != nil || result.Status != decisionrt.StatusDecided || result.Model != "shared-model" {
+				t.Fatalf("result=%#v error=%v", result, err)
+			}
+			if legacy.calls.Load() != 0 || server.calls.Load() != 1 {
+				t.Fatal("unexpected extra inference")
+			}
+			entries, err := catalog.New(map[string]catalog.Entry{"route": {Version: "1", Kind: decisionrt.KindChoice, Question: invocation.Question, Options: invocation.Options, Agents: []string{"worker"}}}, catalog.WithRuntimeConfig(defaults))
+			if err != nil {
+				t.Fatal(err)
+			}
+			records, err := c.DecisionPrimitiveResults(t.Context())
+			if err != nil || len(records) != 1 {
+				t.Fatalf("records=%v error=%v", records, err)
+			}
+			transport := entries.Transports()["route"]
+			if records[0].Transport.Model != transport.Model || records[0].Transport.Endpoint != transport.Endpoint || records[0].Transport.Sources["model"] != "global" {
+				t.Fatalf("different effective defaults: %#v %#v", records[0].Transport, transport)
+			}
+			hash, err := defaults.Fingerprint("sidecar")
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.executionPolicy = &executionPolicyState{snapshot: &ExecutionPolicySnapshot{DecisionRuntimeHash: hash}}
+			tc.change(t, &c.session.GlobalDecisionRuntime)
+			if _, err := c.runRuntimeChoice(t.Context(), nil, invocation); err == nil || !strings.Contains(err.Error(), "drift") {
+				t.Fatalf("changed policy accepted: %v", err)
+			}
+			if server.calls.Load() != 1 {
+				t.Fatal("drift reached provider")
+			}
+		})
 	}
 }
 
@@ -136,5 +151,30 @@ func TestRuntimeDecisionConcurrentReplayAndChangedCandidates(t *testing.T) {
 	}
 	if generator.calls.Load() != 2 {
 		t.Fatal("cancelled request reached provider")
+	}
+}
+
+func TestRuntimeDecisionLegacySharedTransport(t *testing.T) {
+	for _, name := range []string{"runtime_browser_page", "runtime_new_fixture_choice"} {
+		t.Run(name, func(t *testing.T) {
+			server := newControlModelServer(t, 200, controlChoice("o", 0, .99))
+			c, legacy := newControlTestCoordinator(t, control.PathReviewer, control.ModeOff, "", `{"token":"A1"}`)
+			c.session.GlobalControlDecisions = control.Config{Model: "legacy-shared", Endpoint: server.URL, Timeout: time.Second}
+			invocation := sidecar.DecisionInvocation{Name: name, Question: "Choose an outcome", Input: "fixture evidence", Options: []catalog.Option{{ID: "accepted"}, {ID: "blocked"}}, MaxCalls: 1}
+			result, err := c.runRuntimeChoice(t.Context(), nil, invocation)
+			if err != nil || result.Status != decisionrt.StatusDecided || result.Model != "legacy-shared" {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			if legacy.calls.Load() != 0 || server.calls.Load() != 1 {
+				t.Fatal("shared transport did not own inference")
+			}
+			records, err := c.DecisionPrimitiveResults(t.Context())
+			if err != nil || len(records) != 1 || records[0].Transport.Timeout != time.Second || !strings.Contains(records[0].Transport.Sources["model"], "control-decisions") {
+				t.Fatalf("records=%+v err=%v", records, err)
+			}
+			if _, err = c.runRuntimeChoice(t.Context(), nil, invocation); err != nil || server.calls.Load() != 1 {
+				t.Fatalf("replay inferred: %v", err)
+			}
+		})
 	}
 }

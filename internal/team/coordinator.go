@@ -26,7 +26,6 @@ import (
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/decisionrt/control"
-	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/execution"
 	"github.com/kjelly/hufu/internal/hooks"
 	"github.com/kjelly/hufu/internal/mcp"
@@ -1490,7 +1489,10 @@ func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordi
 		}
 	}
 	decisionSidecars := &decisionSidecarResolver{defaultModel: params.RoleModels.Sidecar}
-	decisionConfig := settings.Merge(params.Session.GlobalDecisionRuntime, params.Session.Config.DecisionRuntime)
+	decisionConfig, err := params.Session.ResolveDecisionRuntime()
+	if err != nil {
+		return nil, err
+	}
 	primitiveService, err := catalog.New(params.Session.Config.DecisionPrimitives, catalog.WithRuntimeConfig(decisionConfig), catalog.WithSidecarGenerator(decisionSidecars.generator))
 	if err != nil {
 		return nil, err
@@ -1499,7 +1501,7 @@ func newCoordinator(params coordinatorParams, services RuntimeServices) (*Coordi
 		return nil, err
 	}
 	params.DecisionPrimitives = primitiveService
-	controlService, err := control.New(control.Merge(params.Session.GlobalControlDecisions, params.Session.Config.ControlDecisions), utils.RedactSecrets, control.WithRuntimeConfig(decisionConfig), control.WithSidecarGenerator(decisionSidecars.generator))
+	controlService, err := control.New(control.Merge(params.Session.GlobalControlDecisions, params.Session.Config.ControlDecisions).PolicyOnly(), utils.RedactSecrets, control.WithRuntimeConfig(decisionConfig), control.WithSidecarGenerator(decisionSidecars.generator))
 	if err != nil {
 		return nil, err
 	}
@@ -1889,7 +1891,8 @@ func registerProviderSecrets(registry *tools.SecretRegistry, session *TeamSessio
 			ExactValue: provider.ProviderAPIKey,
 		})
 	}
-	if keyEnv := settings.Merge(session.GlobalDecisionRuntime, session.Config.DecisionRuntime).SystemOne.APIKeyEnv; keyEnv != "" {
+	shared, _ := session.ResolveDecisionRuntime()
+	if keyEnv := shared.SystemOne.APIKeyEnv; keyEnv != "" {
 		_ = registry.Register(tools.SecretRef{Name: "decision_runtime.api_key", Source: "decision runtime credential environment", ExactValue: os.Getenv(keyEnv)})
 	}
 	for name, primitive := range session.Config.DecisionPrimitives {

@@ -24,7 +24,13 @@ type SystemOne struct {
 	APIKeyEnv string        `yaml:"api-key-env,omitempty" json:"api_key_env,omitempty"`
 }
 
+// Sidecar holds backend-specific transport settings; its model belongs to the role configuration.
+type Sidecar struct {
+	Timeout time.Duration `yaml:"timeout,omitempty" json:"timeout,omitzero"`
+}
+
 type Config struct {
+	Sidecar   Sidecar           `yaml:"sidecar,omitempty" json:"sidecar,omitzero"`
 	Backend   string            `yaml:"backend,omitempty" json:"backend,omitempty"`
 	SystemOne SystemOne         `yaml:"systemone,omitempty" json:"systemone"`
 	Sources   map[string]string `yaml:"-" json:"-"`
@@ -59,13 +65,17 @@ func Merge(base, override Config) Config {
 		result.SystemOne.Timeout = override.SystemOne.Timeout
 		result.Sources["systemone.timeout"] = override.Sources["systemone.timeout"]
 	}
+	if override.Sidecar.Timeout != 0 {
+		result.Sidecar.Timeout = override.Sidecar.Timeout
+		result.Sources["sidecar.timeout"] = override.Sources["sidecar.timeout"]
+	}
 	return result
 }
 
 func (c Config) WithSource(source string) Config {
 	c = c.Clone()
 	c.Sources = map[string]string{}
-	for _, key := range []string{"backend", "systemone.model", "systemone.endpoint", "systemone.timeout", "systemone.api-key-env"} {
+	for _, key := range []string{"backend", "systemone.model", "systemone.endpoint", "systemone.timeout", "systemone.api-key-env", "sidecar.timeout"} {
 		c.Sources[key] = source
 	}
 	return c
@@ -77,6 +87,9 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 func (c Config) Validate() error {
 	if c.Backend != "" && c.Backend != "systemone" && c.Backend != "sidecar" {
 		return fmt.Errorf("decision-runtime.backend must be systemone or sidecar")
+	}
+	if c.Sidecar.Timeout < 0 || c.Sidecar.Timeout > decisionrt.MaxAllowedTimeout() {
+		return fmt.Errorf("decision-runtime.sidecar.timeout is out of range")
 	}
 	if c.SystemOne.Timeout < 0 || c.SystemOne.Timeout > decisionrt.MaxAllowedTimeout() {
 		return fmt.Errorf("decision-runtime.systemone.timeout is out of range")
@@ -133,11 +146,18 @@ func Resolve(c Config, explicit Transport, defaultBackend string) (Transport, er
 		{"model", &r.Model, c.SystemOne.Model}, {"endpoint", &r.Endpoint, c.SystemOne.Endpoint}, {"api-key-env", &r.APIKeyEnv, c.SystemOne.APIKeyEnv},
 	}
 	for _, f := range fields {
+		sourceKey := f.key
+		// This is provenance, not a credential value. A credential-shaped
+		// JSON key would be redacted by the durable journal and change the
+		// canonical transport even though APIKeyEnv itself is never serialized.
+		if sourceKey == "api-key-env" {
+			sourceKey = "authentication"
+		}
 		if *f.dst != "" {
-			r.Sources[f.key] = "entry"
+			r.Sources[sourceKey] = "entry"
 		} else if r.Backend == "systemone" && f.value != "" {
 			*f.dst = f.value
-			r.Sources[f.key] = c.Sources["systemone."+f.key]
+			r.Sources[sourceKey] = c.Sources["systemone."+f.key]
 		}
 	}
 	if r.Timeout != 0 {
@@ -145,6 +165,10 @@ func Resolve(c Config, explicit Transport, defaultBackend string) (Transport, er
 	} else if r.Backend == "systemone" {
 		r.Timeout = c.SystemOne.Timeout
 		r.Sources["timeout"] = c.Sources["systemone.timeout"]
+	}
+	if r.Timeout == 0 && r.Backend == "sidecar" {
+		r.Timeout = c.Sidecar.Timeout
+		r.Sources["timeout"] = c.Sources["sidecar.timeout"]
 	}
 	if r.Timeout == 0 {
 		r.Timeout = decisionrt.DefaultTimeout
@@ -165,7 +189,7 @@ func Resolve(c Config, explicit Transport, defaultBackend string) (Transport, er
 // Fingerprint freezes effective inference configuration and credential revision
 // without persisting credential values. Empty legacy configuration stays empty.
 func (c Config) Fingerprint(defaultBackend string) (string, error) {
-	if c.Backend == "" && c.SystemOne == (SystemOne{}) {
+	if c.Backend == "" && c.SystemOne == (SystemOne{}) && c.Sidecar == (Sidecar{}) {
 		return "", nil
 	}
 	transport, err := Resolve(c, Transport{}, defaultBackend)

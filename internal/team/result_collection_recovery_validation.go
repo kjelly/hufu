@@ -3,7 +3,6 @@ package team
 import (
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/decisionrt/control"
-	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/semantic"
 	"github.com/kjelly/hufu/internal/utils"
 )
@@ -13,17 +12,20 @@ import (
 // recovery must prove full compatibility with normal startup policy instead.
 func (c *Coordinator) prepareRecoveryValidation() error {
 	session := c.session
-	var err error
+	shared, err := session.ResolveDecisionRuntime()
+	if err != nil {
+		return err
+	}
 	// An unbound lazy resolver supplies the same model identity as startup;
 	// it cannot construct a sidecar or execute a decision.
 	resolver := &decisionSidecarResolver{defaultModel: c.sidecarModel}
 	// Compile verification-only catalogs with an unbound generator identity.
 	// No provider transport is installed; hashes match normal runtime startup.
-	c.decisionPrimitives, err = catalog.New(session.Config.DecisionPrimitives, catalog.WithRuntimeConfig(settings.Merge(session.GlobalDecisionRuntime, session.Config.DecisionRuntime)), catalog.WithSidecarGenerator(resolver.generator))
+	c.decisionPrimitives, err = catalog.New(session.Config.DecisionPrimitives, catalog.WithRuntimeConfig(shared), catalog.WithSidecarGenerator(resolver.generator))
 	if err != nil {
 		return err
 	}
-	c.controlDecisions, err = control.New(control.Merge(session.GlobalControlDecisions, session.Config.ControlDecisions), utils.RedactSecrets, control.WithRuntimeConfig(settings.Merge(session.GlobalDecisionRuntime, session.Config.DecisionRuntime)), control.WithSidecarGenerator(resolver.generator))
+	c.controlDecisions, err = control.New(control.Merge(session.GlobalControlDecisions, session.Config.ControlDecisions).PolicyOnly(), utils.RedactSecrets, control.WithRuntimeConfig(shared), control.WithSidecarGenerator(resolver.generator))
 	if err != nil {
 		return err
 	}

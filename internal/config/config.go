@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -153,6 +154,7 @@ func (p ProviderConfig) Validate() error {
 type Config struct {
 	Media                 *media.Policy `yaml:"media"`
 	mediaPolicies         []*media.Policy
+	decisionRuntimeError  error
 	mediaPolicyError      error
 	ProviderURL           string                    `yaml:"provider-url"`
 	ProviderAPIKey        string                    `yaml:"provider-api-key"`
@@ -264,6 +266,9 @@ func LoadConfig() *Config {
 func (c *Config) mergeFromFile(path string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			c.decisionRuntimeError = fmt.Errorf("read configuration %s: %w", path, err)
+		}
 		return
 	}
 	var fileCfg Config
@@ -271,6 +276,10 @@ func (c *Config) mergeFromFile(path string) {
 		if c.Media != nil || fileCfg.Media != nil {
 			c.mediaPolicyError = err
 		}
+		// A malformed layer cannot prove which transport the operator intended.
+		// Keep optional missing files valid, but refuse inference from an
+		// unreadable or unparseable file instead of silently using defaults.
+		c.decisionRuntimeError = fmt.Errorf("%s: invalid configuration", path)
 		fmt.Fprintf(os.Stderr, "warning: failed to parse %s: %v\n", path, err)
 		return
 	}
@@ -278,8 +287,16 @@ func (c *Config) mergeFromFile(path string) {
 	c.mergeScalarFields(&fileCfg)
 	c.recordSources(&fileCfg, path)
 	c.WorkspaceVersioning.merge(fileCfg.WorkspaceVersioning)
-	c.DecisionRuntime = settings.Merge(c.DecisionRuntime, fileCfg.DecisionRuntime.WithSource(path))
-	c.ControlDecisions = control.Merge(c.ControlDecisions, fileCfg.ControlDecisions)
+	normalized, decisionErr := control.NormalizeTransport(fileCfg.DecisionRuntime.WithSource(path), fileCfg.ControlDecisions, path)
+	if decisionErr != nil {
+		c.decisionRuntimeError = decisionErr
+	} else {
+		c.DecisionRuntime = settings.Merge(c.DecisionRuntime, normalized)
+	}
+	if fileCfg.ControlDecisions.HasTransport() {
+		fmt.Fprintf(os.Stderr, "warning: %s: control-decisions transport is deprecated; use decision-runtime\n", path)
+	}
+	c.ControlDecisions = control.Merge(c.ControlDecisions, fileCfg.ControlDecisions.PolicyOnly())
 	c.SemanticRetrieval = semantic.Merge(c.SemanticRetrieval, fileCfg.SemanticRetrieval)
 	c.Timeouts = c.Timeouts.Merge(fileCfg.Timeouts)
 	c.Cost.merge(fileCfg.Cost)

@@ -224,7 +224,10 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		return nil, err
 	}
 	session.ExecutionRouteConfigs = cfg.ExecutionRoutes
-	session.GlobalDecisionRuntime = cfg.DecisionRuntime.Clone()
+	session.GlobalDecisionRuntime, err = cfg.ResolveDecisionRuntime()
+	if err != nil {
+		return nil, err
+	}
 	session.GlobalControlDecisions = cfg.ControlDecisions.Clone()
 	session.GlobalSemanticRetrieval = cfg.SemanticRetrieval.Clone()
 	resolvedModelList := cfg.ResolveModelList(session.Config.ModelList)

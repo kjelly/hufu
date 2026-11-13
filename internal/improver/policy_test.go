@@ -8,9 +8,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/config"
+	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/improve/paired"
 	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/team"
@@ -230,5 +232,37 @@ func TestPolicyRetainsMediaAuthorization(t *testing.T) {
 	}
 	if projected.Media == nil || projected.Media.Policy.AllowedTargets[0].ImageTokenUpperBound != 8192 || projected.Media.Policy.AllowedTargets[0].IdentityHash != "fixed-transport" {
 		t.Fatal("projection lost media limits or pinned target identity")
+	}
+}
+
+func TestPolicyDecisionTimeoutIsFixedDuringComparison(t *testing.T) {
+	project := t.TempDir()
+	roots, err := RegisterRoots(map[string]string{"subject_root": project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var previous string
+	for _, timeout := range []time.Duration{time.Second, 2 * time.Second} {
+		runtime := settings.Config{Backend: "sidecar", Sidecar: settings.Sidecar{Timeout: timeout}}
+		hash, err := runtime.Fingerprint("sidecar")
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy := testPolicy(t, project, "model")
+		policy.DecisionRuntimeHash = hash
+		policy.ConfigurationHash = ""
+		raw, err := json.Marshal(policy, json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy.ConfigurationHash = paired.BytesDigest(raw)
+		projection, err := ProjectPolicy(policy, roots)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if previous != "" && projection.ComparisonDigest == previous {
+			t.Fatal("comparison erased the decision timeout change")
+		}
+		previous = projection.ComparisonDigest
 	}
 }

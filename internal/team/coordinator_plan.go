@@ -10,7 +10,6 @@ import (
 
 	"github.com/kjelly/hufu/internal/decisionrt"
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
-	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/tools"
 )
@@ -43,7 +42,11 @@ type planReviewer struct {
 
 func (c *Coordinator) getPlanReviewer(_ context.Context, todoID string) (*planReviewer, error) {
 	model := c.planReviewerModel
-	if settings.Merge(c.session.GlobalDecisionRuntime, c.session.Config.DecisionRuntime).Backend == "systemone" {
+	shared, err := c.session.ResolveDecisionRuntime()
+	if err != nil {
+		return nil, err
+	}
+	if shared.Backend == "systemone" {
 		model = ""
 	}
 	return &planReviewer{coordinator: c, modelID: model, todoID: todoID, toolNames: []string{"approve_plan", "reject_plan"}}, nil

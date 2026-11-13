@@ -808,7 +808,7 @@ func TestControlDecisionsMergeFieldByField(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(homeConfig), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(homeConfig, []byte("control-decisions:\n  endpoint: http://gpu:11434/v1/systemone\n  model: nimble\n  mode: shadow\n  points:\n    guard-reviewer: {mode: off}\n"), 0o600); err != nil {
+	if err := os.WriteFile(homeConfig, []byte("control-decisions:\n  endpoint: http://gpu:11434/v1/systemone\n  model: nimble\n  mode: active\n  points:\n    guard-reviewer: {mode: off}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	project := t.TempDir()
@@ -816,8 +816,9 @@ func TestControlDecisionsMergeFieldByField(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(project)
-	got := LoadConfig().ControlDecisions
-	if got.Endpoint != "http://gpu:11434/v1/systemone" || got.Model != "nimble" || got.Mode != "shadow" {
+	cfg := LoadConfig()
+	got := cfg.ControlDecisions
+	if got.HasTransport() || cfg.DecisionRuntime.SystemOne.Endpoint != "http://gpu:11434/v1/systemone" || cfg.DecisionRuntime.SystemOne.Model != "nimble" || got.Mode != "active" {
 		t.Fatalf("control-decisions = %#v", got)
 	}
 	if got.Points["guard-reviewer"].Mode != "off" || got.Points["path-reviewer"].Mode != "active" || *got.Points["path-reviewer"].MinConfidence != 0.95 {

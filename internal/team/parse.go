@@ -1249,15 +1249,22 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	// authoring normalizer has already validated and materialized this config;
 	// an absent block leaves it at the reserved "off" profile.
 	cfg.Decision = decision
-	if _, err := catalog.New(yc.DecisionPrimitives, catalog.ValidationOnly(), catalog.WithRuntimeConfig(yc.DecisionRuntime), catalog.AllowInheritedTransport()); err != nil {
+	shared, err := control.NormalizeTransport(yc.DecisionRuntime.WithSource("team"), yc.ControlDecisions, "team")
+	if err != nil {
 		return cfg, DecisionAuthoringMetadata{}, err
 	}
-	cfg.DecisionRuntime = yc.DecisionRuntime.WithSource("team")
+	if yc.ControlDecisions.HasTransport() {
+		fmt.Fprintln(os.Stderr, "warning: team control-decisions transport is deprecated; use decision-runtime")
+	}
+	if _, err := catalog.New(yc.DecisionPrimitives, catalog.ValidationOnly(), catalog.WithRuntimeConfig(shared), catalog.AllowInheritedTransport()); err != nil {
+		return cfg, DecisionAuthoringMetadata{}, err
+	}
+	cfg.DecisionRuntime = shared
 	cfg.DecisionPrimitives = yc.DecisionPrimitives
 	if err := yc.ControlDecisions.Validate(); err != nil {
 		return cfg, DecisionAuthoringMetadata{}, err
 	}
-	cfg.ControlDecisions = yc.ControlDecisions.Clone()
+	cfg.ControlDecisions = yc.ControlDecisions.PolicyOnly()
 	if err := yc.SemanticRetrieval.Validate(); err != nil {
 		return cfg, DecisionAuthoringMetadata{}, err
 	}

@@ -81,7 +81,7 @@ control-decisions:
 
 ### 3.3 驗收
 
-以 table-driven tests 覆蓋：無設定、僅 canonical、僅 legacy、同層相同／衝突、global/team 部分覆寫、顯式 sidecar、inactive backend 欄位、entry override、無效值與 credential 不可用。
+以 table-driven tests 覆蓋：無設定、僅 canonical、僅 legacy、同層相同／衝突、global/team 部分覆寫、顯式 sidecar、inactive backend 欄位、entry override、無效值、YAML 語法／重複欄位錯誤、設定檔無法讀取與 credential 不可用。可選設定檔不存在仍保留預設，其餘讀取／解析錯誤不能被後續層覆寫而靜默使用模型預設。
 
 以 runtime 整合 fixture 驗證：
 

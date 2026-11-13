@@ -34,7 +34,7 @@ func TestControlDecisionsParseInBothManifestForms(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := cfg.ControlDecisions
-			if got.Model != "nimble" || got.Timeout != 4*time.Second || got.Mode != control.ModeActive ||
+			if got.HasTransport() || cfg.DecisionRuntime.SystemOne.Model != "nimble" || cfg.DecisionRuntime.SystemOne.Timeout != 4*time.Second || got.Mode != control.ModeActive ||
 				got.Points[control.PathReviewer].Mode != control.ModeActive || *got.Points[control.PathReviewer].MinConfidence != 0.95 {
 				t.Fatalf("control-decisions = %#v", got)
 			}
@@ -108,10 +108,9 @@ func newControlDecisionCoordinator(t *testing.T, session *TeamSession) (*Coordin
 		return nil, err
 	}
 	t.Cleanup(func() {
-		if c.eventStore != nil {
-			_ = c.eventStore.Close()
+		if err := c.Close(); err != nil {
+			t.Errorf("close control decision coordinator: %v", err)
 		}
-		c.CloseContextPreflight()
 	})
 	return c, nil
 }

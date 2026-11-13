@@ -1,8 +1,12 @@
 package settings
 
 import (
+	"bytes"
+	"encoding/json/v2"
 	"testing"
 	"time"
+
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 func TestTransportResolution(t *testing.T) {
@@ -43,5 +47,60 @@ func TestTransportMissingModelAndLegacyDefault(t *testing.T) {
 		if cfg.Validate() == nil {
 			t.Fatalf("accepted invalid configuration %#v", cfg)
 		}
+	}
+}
+
+func TestSidecarTimeoutIsBackendScoped(t *testing.T) {
+	global := Config{Backend: "sidecar", Sidecar: Sidecar{Timeout: time.Minute}, SystemOne: SystemOne{Model: "inactive", APIKeyEnv: "UNUSED_DECISION_KEY", Timeout: 30 * time.Second}}.WithSource("global")
+	local := Config{Sidecar: Sidecar{Timeout: time.Second}}.WithSource("team")
+	merged := Merge(global, local)
+	got, err := Resolve(merged, Transport{}, "sidecar")
+	if err != nil || got.Timeout != time.Second || got.Sources["timeout"] != "team" || got.APIKeyEnv != "" || got.Model != "" {
+		t.Fatalf("transport=%+v err=%v", got, err)
+	}
+	before, err := merged.Fingerprint("sidecar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged.SystemOne.Model = "another-inactive-model"
+	after, err := merged.Fingerprint("sidecar")
+	if err != nil || before != after {
+		t.Fatalf("inactive model changed fingerprint: %v", err)
+	}
+	merged.Sidecar.Timeout = 2 * time.Second
+	after, err = merged.Fingerprint("sidecar")
+	if err != nil || before == after {
+		t.Fatalf("active timeout did not change fingerprint: %v", err)
+	}
+	merged.Sidecar.Timeout = -time.Second
+	if merged.Validate() == nil {
+		t.Fatal("negative sidecar timeout accepted")
+	}
+}
+
+func TestTransportProvenanceSurvivesRedaction(t *testing.T) {
+	cfg := Config{Backend: "systemone", SystemOne: SystemOne{Model: "fixture-model", APIKeyEnv: "DECISION_TEST_KEY"}}.WithSource("global")
+	transport, err := Resolve(cfg, Transport{}, "sidecar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redacted, err := utils.RedactJSON(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted Transport
+	if err := json.Unmarshal(redacted, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := json.Marshal(persisted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(encoded, canonical) {
+		t.Fatal("transport provenance changed during journal redaction")
 	}
 }

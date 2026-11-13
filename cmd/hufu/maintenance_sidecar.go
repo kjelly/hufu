@@ -13,7 +13,6 @@ import (
 	contextstore "github.com/kjelly/hufu/internal/context"
 	"github.com/kjelly/hufu/internal/decisionrt"
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
-	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/memoryconflict"
 	"github.com/kjelly/hufu/internal/sidecar"
 	"github.com/kjelly/hufu/internal/team"
@@ -93,11 +92,17 @@ func newMaintenanceTextGenerator(ctx context.Context, options maintenanceGenerat
 	}
 	cfg := config.LoadConfig()
 	session.ExecutionRouteConfigs = cfg.ExecutionRoutes
-	session.GlobalDecisionRuntime = cfg.DecisionRuntime.Clone()
+	session.GlobalDecisionRuntime, err = cfg.ResolveDecisionRuntime()
+	if err != nil {
+		return nil, "", nil, err
+	}
 	session.GlobalControlDecisions = cfg.ControlDecisions.Clone()
 	model := firstNonEmpty(options.ModelOverride, session.Config.SidecarModel, session.Config.Generation.Model, cfg.SidecarModel, cfg.Model)
 	decisionOnly := options.Purpose == "memory_conflict_judge"
-	shared := settings.Merge(session.GlobalDecisionRuntime, session.Config.DecisionRuntime)
+	shared, err := session.ResolveDecisionRuntime()
+	if err != nil {
+		return nil, "", nil, err
+	}
 	if model == "" && (!decisionOnly || shared.Backend != "systemone") {
 		return nil, "", nil, fmt.Errorf("%s requires --model or a team/config sidecar/model", options.Purpose)
 	}
