@@ -30,7 +30,11 @@ func TestHufuCodeReviewRuntimeOwnsAll51GapIdentities(t *testing.T) {
 		for j := range count {
 			gaps = append(gaps, map[string]any{"description": fmt.Sprintf("local limitation %d/%d", i, j), "missing_evidence": "independent evidence", "kind": "semantic_uncertainty", "requested_evidence": []any{}, "limitations": []any{}})
 		}
-		record := map[string]any{"kind": "review", "review_revision": "head", "workset_key": fmt.Sprintf("unit-%04d", i), "lens": lens, "findings": []any{}, "gaps": gaps, "invariant_assessments": []any{}, "reference_assessments": []any{}}
+		key := fmt.Sprintf("unit-%04d", i)
+		if i == 1 {
+			key = "supplement-0007"
+		}
+		record := map[string]any{"kind": "review", "review_revision": "head", "workset_key": key, "lens": lens, "findings": []any{}, "gaps": gaps, "invariant_assessments": []any{}, "reference_assessments": []any{}}
 		raw, err := json.Marshal(map[string]any{"record": record})
 		if err != nil {
 			t.Fatal(err)
@@ -133,120 +137,131 @@ func TestHufuCodeReviewRuntimeOwnsAll51GapIdentities(t *testing.T) {
 }
 
 func TestHufuCodeReviewEmptyCritiqueOwnsSource(t *testing.T) {
-	session := loadHufuCodeReviewTeam(t)
-	c := newBudgetCoordinator(t)
-	c.session.ResultContracts = session.ResultContracts
-	c.session.Workspace = t.TempDir()
-	store, err := NewEventStore(c.session.Workspace, "empty-critique", "session")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	store.SetBranchID("main")
-	c.eventStore, c.eventJournal = store, eventStoreJournal{store: store}
-	sourceSchema := session.ResultContracts["schemas/documentation-review-v1.json"]
-	criticSchema := session.ResultContracts["schemas/critique-v2.json"]
-	sourceRef, criticRef := sourceSchema.ref(true), criticSchema.ref(true)
-	source := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", ResultContract: &sourceRef, WorksetBinding: &WorksetBinding{Bindings: map[string]string{"reference_candidate_ids": "[]"}}}})[0]
-	raw := []byte(`{"record":{"kind":"review","review_revision":"head","workset_key":"unit-0000","lens":"documentation-risk","findings":[],"gaps":[],"invariant_assessments":[],"reference_assessments":[]}}`)
-	payload, err := validateStructuredResultPayload(sourceSchema, sourceRef, raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	source.Status = TaskDone
-	source.TypedResult = &TaskResult{TaskID: source.ID, Status: TaskResultStatusSuccess, StructuredPayload: payload}
-	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "critic", ResultContract: &criticRef, EvidenceFrom: []string{source.ID}}})[0]
-	result, rejection := c.structuredPayloadForSubmission(item.ID, []byte(`{"audit_complete":true,"record":{"kind":"critique","decisions":{}}}`))
-	if rejection != "" {
-		t.Fatal(rejection)
-	}
-	value, err := decodeResultContractJSON(result.Value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record := value.(map[string]any)["record"].(map[string]any)
-	inputs := record["input_review"].([]any)
-	if len(inputs) != 1 || evidenceString(inputs[0], "/task_id") != source.ID || evidenceString(inputs[0], "/payload_sha256") != payload.SHA256 || len(record["decisions"].([]any)) != 0 {
-		t.Fatalf("incorrect canonical source or empty coverage: %s", result.Value)
-	}
-	// Even copying the exact accepted source is forbidden at the worker boundary.
-	record["decisions"] = map[string]any{}
-	raw, err = json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, rejection = c.structuredPayloadForSubmission(item.ID, raw); !strings.Contains(rejection, "runtime-owned evidence inputs") {
-		t.Fatalf("worker source override accepted: %s", rejection)
-	}
-	// Synthesis owns neither the review nor the nested critic record. The
-	// stored report must preserve both complete accepted records and hashes.
-	item.Status = TaskDone
-	item.TypedResult = &TaskResult{TaskID: item.ID, Status: TaskResultStatusSuccess, StructuredPayload: result}
-	reportRef := session.ResultContracts["schemas/report-v2.json"].ref(true)
-	reportItem := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "synthesizer", ResultContract: &reportRef, EvidenceFrom: []string{source.ID, item.ID}}})[0]
-	reportValue, err := decodeResultContractJSON([]byte(hufuCodeReviewReportFixture))
-	if err != nil {
-		t.Fatal(err)
-	}
-	report := reportValue.(map[string]any)
-	delete(report, "input_review")
-	expectedReceipts := bindHufuCodeReviewReceiptFixture(t, c, report)
-	report["gap_resolutions"] = map[string]any{}
-	raw, err = json.Marshal(report)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reportPayload, rejection := c.structuredPayloadForSubmission(reportItem.ID, raw)
-	if rejection != "" {
-		t.Fatal(rejection)
-	}
-	stored, err := decodeResultContractJSON(reportPayload.Value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	canonical := stored.(map[string]any)
-	for field, expected := range expectedReceipts {
-		actual, err := json.Marshal(canonical[field], json.Deterministic(true))
-		if err != nil {
-			t.Fatal(err)
-		}
-		want, err := json.Marshal(expected, json.Deterministic(true))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(actual, want) {
-			t.Fatalf("runtime lost complete %s receipt", field)
-		}
-		report[field] = expected
-		override, err := json.Marshal(report)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, rejection := c.structuredPayloadForSubmission(reportItem.ID, override); !strings.Contains(rejection, "runtime-owned") {
-			t.Fatalf("model supplied %s accepted: %s", field, rejection)
-		}
-		delete(report, field)
-	}
-	encoded, err := json.Marshal(reportPayload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var restored ResultPayload
-	if err := json.Unmarshal(encoded, &restored); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(restored.Value, reportPayload.Value) || restored.SHA256 != reportPayload.SHA256 || c.validateSubmittedEvidenceInputs(reportItem.ID, &restored) != nil {
-		t.Fatal("complete report receipts did not survive persistence/replay")
-	}
-	reportInputs := canonical["input_review"].([]any)
-	if len(reportInputs) != 2 || evidenceString(reportInputs[1], "/task_id") != item.ID || evidenceString(reportInputs[1], "/payload_sha256") != result.SHA256 || evidenceString(reportInputs[1], "/record/kind") != "critique" || evidenceString(reportInputs[1], "/record/input_review/0/task_id") != source.ID || evidenceString(reportInputs[1], "/record/input_review/0/payload_sha256") != payload.SHA256 {
-		t.Fatal("runtime-owned report lost nested critic source identity or hash")
+	for _, tc := range []struct{ name, schema, key, lens string }{
+		{"documentation", "schemas/documentation-review-v1.json", "unit-0000", "documentation-risk"},
+		{"supplement", "schemas/review-v1.json", "supplement-0000", "general"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session := loadHufuCodeReviewTeam(t)
+			c := newBudgetCoordinator(t)
+			c.session.ResultContracts = session.ResultContracts
+			c.session.Workspace = t.TempDir()
+			store, err := NewEventStore(c.session.Workspace, "empty-critique", "session")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			store.SetBranchID("main")
+			c.eventStore, c.eventJournal = store, eventStoreJournal{store: store}
+			sourceSchema := session.ResultContracts[tc.schema]
+			criticSchema := session.ResultContracts["schemas/critique-v2.json"]
+			sourceRef, criticRef := sourceSchema.ref(true), criticSchema.ref(true)
+			source := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", ResultContract: &sourceRef, WorksetBinding: &WorksetBinding{Bindings: map[string]string{"reference_candidate_ids": "[]"}}}})[0]
+			raw := fmt.Appendf(nil, `{"record":{"kind":"review","review_revision":"head","workset_key":%q,"lens":%q,"findings":[],"gaps":[],"invariant_assessments":[],"reference_assessments":[]}}`, tc.key, tc.lens)
+			payload, err := validateStructuredResultPayload(sourceSchema, sourceRef, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			source.Status = TaskDone
+			source.TypedResult = &TaskResult{TaskID: source.ID, Status: TaskResultStatusSuccess, StructuredPayload: payload}
+			item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "critic", ResultContract: &criticRef, EvidenceFrom: []string{source.ID}}})[0]
+			result, rejection := c.structuredPayloadForSubmission(item.ID, []byte(`{"audit_complete":true,"record":{"kind":"critique","decisions":{}}}`))
+			if rejection != "" {
+				t.Fatal(rejection)
+			}
+			value, err := decodeResultContractJSON(result.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record := value.(map[string]any)["record"].(map[string]any)
+			inputs := record["input_review"].([]any)
+			if len(inputs) != 1 || evidenceString(inputs[0], "/task_id") != source.ID || evidenceString(inputs[0], "/payload_sha256") != payload.SHA256 || len(record["decisions"].([]any)) != 0 {
+				t.Fatalf("incorrect canonical source or empty coverage: %s", result.Value)
+			}
+			// Even copying the exact accepted source is forbidden at the worker boundary.
+			record["decisions"] = map[string]any{}
+			raw, err = json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, rejection = c.structuredPayloadForSubmission(item.ID, raw); !strings.Contains(rejection, "runtime-owned evidence inputs") {
+				t.Fatalf("worker source override accepted: %s", rejection)
+			}
+			// Synthesis owns neither the review nor the nested critic record. The
+			// stored report must preserve both complete accepted records and hashes.
+			item.Status = TaskDone
+			item.TypedResult = &TaskResult{TaskID: item.ID, Status: TaskResultStatusSuccess, StructuredPayload: result}
+			reportRef := session.ResultContracts["schemas/report-v2.json"].ref(true)
+			reportItem := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "synthesizer", ResultContract: &reportRef, EvidenceFrom: []string{source.ID, item.ID}}})[0]
+			reportValue, err := decodeResultContractJSON([]byte(hufuCodeReviewReportFixture))
+			if err != nil {
+				t.Fatal(err)
+			}
+			report := reportValue.(map[string]any)
+			delete(report, "input_review")
+			outcomes := []any{}
+			if tc.name == "supplement" {
+				outcomes = []any{map[string]any{"source_task_id": source.ID, "gap_index": 0, "kind": "missing_dependency", "workset_key": "", "limitations": []any{map[string]any{"kind": "unavailable_path", "detail": "Requested source is absent from the frozen revision"}}}}
+			}
+			expectedReceipts := bindHufuCodeReviewReceiptFixture(t, c, report, outcomes)
+			report["gap_resolutions"] = map[string]any{}
+			raw, err = json.Marshal(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reportPayload, rejection := c.structuredPayloadForSubmission(reportItem.ID, raw)
+			if rejection != "" {
+				t.Fatal(rejection)
+			}
+			stored, err := decodeResultContractJSON(reportPayload.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			canonical := stored.(map[string]any)
+			for field, expected := range expectedReceipts {
+				actual, err := json.Marshal(canonical[field], json.Deterministic(true))
+				if err != nil {
+					t.Fatal(err)
+				}
+				want, err := json.Marshal(expected, json.Deterministic(true))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(actual, want) {
+					t.Fatalf("runtime lost complete %s receipt", field)
+				}
+				report[field] = expected
+				override, err := json.Marshal(report)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, rejection := c.structuredPayloadForSubmission(reportItem.ID, override); !strings.Contains(rejection, "runtime-owned") {
+					t.Fatalf("model supplied %s accepted: %s", field, rejection)
+				}
+				delete(report, field)
+			}
+			encoded, err := json.Marshal(reportPayload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var restored ResultPayload
+			if err := json.Unmarshal(encoded, &restored); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(restored.Value, reportPayload.Value) || restored.SHA256 != reportPayload.SHA256 || c.validateSubmittedEvidenceInputs(reportItem.ID, &restored) != nil {
+				t.Fatal("complete report receipts did not survive persistence/replay")
+			}
+			reportInputs := canonical["input_review"].([]any)
+			if len(reportInputs) != 2 || evidenceString(reportInputs[1], "/task_id") != item.ID || evidenceString(reportInputs[1], "/payload_sha256") != result.SHA256 || evidenceString(reportInputs[1], "/record/kind") != "critique" || evidenceString(reportInputs[1], "/record/input_review/0/task_id") != source.ID || evidenceString(reportInputs[1], "/record/input_review/0/payload_sha256") != payload.SHA256 {
+				t.Fatal("runtime-owned report lost nested critic source identity or hash")
+			}
+		})
 	}
 }
 
 // Supply native action receipts using the same fixture and verification path as
 // fact_refs. Models submit neither the scope nor the failed-test diagnostic.
-func bindHufuCodeReviewReceiptFixture(t *testing.T, c *Coordinator, report map[string]any) map[string]any {
+func bindHufuCodeReviewReceiptFixture(t *testing.T, c *Coordinator, report map[string]any, outcomes ...[]any) map[string]any {
 	t.Helper()
 	baseline, template := runtimeOutputRefFixture(t)
 	c.executionRunID = baseline.executionRunID
@@ -262,6 +277,9 @@ func bindHufuCodeReviewReceiptFixture(t *testing.T, c *Coordinator, report map[s
 			"mode": "diff", "snapshot_id": "", "content_sha256": "", "revision": "",
 			"batch": 0, "batch_count": 0, "expected": []any{}, "completed": []any{}, "excluded": []any{}, "uncompleted": []any{},
 		},
+	}
+	if len(outcomes) > 0 {
+		expected["supplement_outcomes"] = outcomes[0]
 	}
 	for field, sourceID := range map[string]string{
 		"scope": "produce-workset", "test_verification": "verify-targeted-go-tests", "snapshot_coverage": "inventory-review-handoffs",
@@ -315,7 +333,7 @@ func TestHufuCodeReviewCriticSubmitsOnlyDecisionsForAllFindings(t *testing.T) {
 			for i := range findings {
 				findings[i] = map[string]any{"summary": fmt.Sprintf("finding %d", i), "detail": "source detail", "severity": "info", "location": "file.go:1", "evidence": []any{"sha256-" + strings.Repeat("a", 64)}, "requires_critique": i%2 == 0}
 			}
-			record := map[string]any{"kind": "review", "review_revision": "head", "workset_key": "unit-0002", "lens": "documentation-risk", "findings": findings, "gaps": []any{}, "invariant_assessments": []any{}, "reference_assessments": []any{}}
+			record := map[string]any{"kind": "review", "review_revision": "head", "workset_key": "supplement-0002", "lens": "general", "findings": findings, "gaps": []any{}, "invariant_assessments": []any{}, "reference_assessments": []any{}}
 			raw, err := json.Marshal(map[string]any{"record": record})
 			if err != nil {
 				t.Fatal(err)
@@ -417,10 +435,10 @@ func TestHufuCodeReviewCriticSubmitsOnlyDecisionsForAllFindings(t *testing.T) {
 	}
 }
 
-func TestReviewContractSourcesReachCritiqueAndReport(t *testing.T) {
+func TestHufuCodeReviewContractSourcesReachCritiqueAndReport(t *testing.T) {
 	session := loadHufuCodeReviewTeam(t)
 	for _, task := range session.ContractTasks {
-		if task.ID != "review-primary-workset" && task.ID != "review-documentation-workset" && task.ID != "review-documentation-escalation" {
+		if task.ID != "review-primary-workset" && task.ID != "review-documentation-workset" && task.ID != "review-documentation-escalation" && task.ID != "review-supplement-workset" {
 			continue
 		}
 		for _, count := range []int{0, 2} {
@@ -429,14 +447,18 @@ func TestReviewContractSourcesReachCritiqueAndReport(t *testing.T) {
 				c.session.ResultContracts = session.ResultContracts
 				schema := session.ResultContracts[task.ResultContract.ID]
 				lens := "general"
-				if task.ID != "review-primary-workset" {
+				key := "unit-0000"
+				if task.ID == "review-supplement-workset" {
+					key = "supplement-0000"
+				}
+				if task.ID == "review-documentation-workset" || task.ID == "review-documentation-escalation" {
 					lens = "documentation-risk"
 				}
 				findings := make([]any, count)
 				for i := range count {
 					findings[i] = map[string]any{"summary": fmt.Sprintf("finding %d", i), "detail": "bounded observation", "severity": "info", "location": "doc.md:1", "evidence": []any{"sha256-" + strings.Repeat("a", 64)}, "requires_critique": false}
 				}
-				raw, err := json.Marshal(map[string]any{"record": map[string]any{"kind": "review", "review_revision": "head", "workset_key": "unit-0000", "lens": lens, "findings": findings, "gaps": []any{map[string]any{"description": "bounded review", "missing_evidence": "caller", "kind": "semantic_uncertainty", "requested_evidence": []any{}, "limitations": []any{}}}, "invariant_assessments": []any{}, "reference_assessments": []any{}}})
+				raw, err := json.Marshal(map[string]any{"record": map[string]any{"kind": "review", "review_revision": "head", "workset_key": key, "lens": lens, "findings": findings, "gaps": []any{map[string]any{"description": "bounded review", "missing_evidence": "caller", "kind": "semantic_uncertainty", "requested_evidence": []any{}, "limitations": []any{}}}, "invariant_assessments": []any{}, "reference_assessments": []any{}}})
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -410,8 +410,7 @@ func (c *Coordinator) setRestoredTodoIDs(tasks []*TodoItem) {
 		return
 	}
 	ids := make(map[string]struct{}, len(tasks))
-	prof := c.ExecutionProfile()
-	if !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
+	if c.restoresSessionTasks() {
 		for _, item := range tasks {
 			if item != nil && strings.TrimSpace(item.ID) != "" {
 				ids[item.ID] = struct{}{}

@@ -13,12 +13,15 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/kjelly/hufu/internal/tools"
 	"github.com/kjelly/hufu/internal/workspace/versionstore"
 )
 
 type contractCollectionFixtureOptions struct {
-	PriorGrant bool
-	Endpoint   string
+	StringEnvelope bool
+	PriorGrant     bool
+	Endpoint       string
+	ArtifactKeys   bool
 }
 
 func contractCollectionFixture(t *testing.T, response string, effect SideEffectClass, options ...contractCollectionFixtureOptions) (*Coordinator, *ResumeSource, string) {
@@ -27,7 +30,11 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 	if len(options) > 0 {
 		fixture = options[0]
 	}
-	old, err := CompileResultContractDocument("research.json", []byte(`{"type":"object","required":["findings"],"properties":{"findings":{"type":"array","maxItems":12,"items":{"type":"string"}}},"additionalProperties":false}`))
+	oldDocument := `{"type":"object","required":["findings"],"properties":{"findings":{"type":"array","maxItems":12,"items":{"type":"string"}}},"additionalProperties":false}`
+	if fixture.ArtifactKeys {
+		oldDocument = strings.TrimSuffix(oldDocument, "}") + `,"x-hufu-evidence-keys":{"pointers":["/findings/*"],"runtime_owned_files_read":true}}`
+	}
+	old, err := CompileResultContractDocument("research.json", []byte(oldDocument))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,12 +49,20 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 	if err != nil {
 		t.Fatal(err)
 	}
+	var observedSource ArtifactRef
 	c, item, ctx, receipt := resultCollectionTaskFixture(t, cmp.Or(fixture.Endpoint, "http://127.0.0.1:1/v1"), fixture.Endpoint != "", func(spec *TodoSpec) {
 		spec.ContractID, spec.ContractHash, spec.Phase = definition.ID, hash, definition.Phase
 		spec.VerifySpec = definition.VerifySpec
 		spec.SideEffect, spec.Recovery, spec.ResultContract = effect, RecoveryManual, &ref
 		spec.RunInputSnapshotID, spec.RunInputSnapshotHash = snapshot.ID, snapshot.SnapshotHash
+		if fixture.ArtifactKeys {
+			spec.WorksetBinding = &WorksetBinding{WorksetID: "evidence", ItemKey: "sample", Inputs: []ArtifactRef{observedSource}, RequiredReads: []tools.ArtifactReadCoverage{{ArtifactID: observedSource.ID, SHA256: observedSource.SHA256, ByteSize: observedSource.ByteSize, Ranges: []tools.ArtifactByteRange{{Start: 0, End: observedSource.ByteSize}}}}}
+		}
 	}, func(c *Coordinator) {
+		if fixture.ArtifactKeys {
+			c.session.Agents["worker"].Tools = "view"
+			observedSource = contractCollectionArtifact(t, c)
+		}
 		c.session.Config.Delegation.BindTaskGoalContracts = true
 		c.session.ContractTasks = []TaskDef{definition}
 		c.session.ResultContracts = map[string]*CompiledResultContract{ref.ID: old}
@@ -56,6 +71,12 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 	})
 	appendBranchEvent(t, c.eventStore, RunEvent{Type: string(EventRunInputsResolved), RunID: "run-test", Payload: mustProjectionJSON(t, snapshot)})
 	receipt.RunInputSnapshotID, receipt.RunInputSnapshotHash = snapshot.ID, snapshot.SnapshotHash
+	if fixture.ArtifactKeys {
+		ctx, response = observeContractCollectionKeys(t, c, item, ctx, &receipt, response, observedSource)
+	}
+	if fixture.StringEnvelope {
+		response = fmt.Sprintf(`{"result":%q}`, response)
+	}
 	cp, err := c.beginResultCollection(ctx, item.ID, receipt, "complete original research with every finding")
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +134,7 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 	if err := SaveSessionTree(c.session.Workspace, tree); err != nil {
 		t.Fatal(err)
 	}
-	next, err := CompileResultContractDocument("research.json", []byte(`{"type":"object","required":["findings"],"properties":{"findings":{"type":"array","items":{"type":"string"}}},"additionalProperties":false}`))
+	next, err := CompileResultContractDocument("research.json", []byte(strings.Replace(oldDocument, `"maxItems":12,`, "", 1)))
 	if err != nil {
 		t.Fatal(err)
 	}

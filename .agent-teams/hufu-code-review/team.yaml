@@ -259,7 +259,10 @@ spec:
     bind-task-goal-contracts: true
     forbid-context-files: true
     allowed-workers: [reviewer, documentation-reviewer, critic, synthesizer]
-    no-redispatch-after-success: [reviewer, documentation-reviewer, synthesizer]
+    # Reviewer handles primary and supplemental worksets; critic handles
+    # documentation escalation and independent critiques of distinct sources.
+    # Immutable workset receipts prevent redispatch of accepted worksets.
+    no-redispatch-after-success: [documentation-reviewer, synthesizer]
 
   acceptance:
     mode: blocking
@@ -588,7 +591,7 @@ spec:
       phase: verify
       optional: true
       invariant-verification: report
-      result-contract: { schema: schemas/review-v1.json, require-structured: true }
+      result-contract: { schema: schemas/supplement-review-v1.json, require-structured: true }
       fan_out:
         source-artifact:
           task_id: prepare-review-supplement

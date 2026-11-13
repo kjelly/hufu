@@ -11,9 +11,11 @@ import (
 )
 
 type resumeLaunchPolicyKey struct{}
+type resumeSetupSourceKey struct{}
 
 func withResumeLaunchPolicy(ctx context.Context, source *team.ResumeSource) context.Context {
-	return context.WithValue(ctx, resumeLaunchPolicyKey{}, source.Session.ExecutionPolicySnapshot)
+	ctx = context.WithValue(ctx, resumeLaunchPolicyKey{}, source.Session.ExecutionPolicySnapshot)
+	return context.WithValue(ctx, resumeSetupSourceKey{}, source)
 }
 
 func restoreResumeLaunchSettings(ctx context.Context, session *team.TeamSession) error {
@@ -101,4 +103,9 @@ func registerResumeLaunchFlags(f *pflag.FlagSet) {
 	f.BoolVar(&opts.planMode, "plan", false, "Require a plan before execution")
 	f.BoolVar(&opts.autoSkills, "auto-skills", false, "Enable automatic skill matching")
 	f.BoolVar(&opts.noJournal, "no-journal", false, "Disable task-result journaling")
+}
+
+func resumeSetupSource(ctx context.Context) *team.ResumeSource {
+	source, _ := ctx.Value(resumeSetupSourceKey{}).(*team.ResumeSource)
+	return source
 }

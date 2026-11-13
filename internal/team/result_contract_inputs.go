@@ -164,7 +164,7 @@ func (c *Coordinator) validateEvidenceInputBindings(todoID string, payload *Resu
 	if err := validateResultWorksetInputs(value, compiled.worksetInputs, item.WorksetBinding); err != nil {
 		return err
 	}
-	runtimeInputs, err := c.resultRuntimeInputValues(compiled)
+	runtimeInputs, err := c.resultRuntimeInputValues(compiled, todoID)
 	if err != nil {
 		return err
 	}

@@ -20,6 +20,8 @@ type ResumeSource struct {
 	metadataOnly        bool
 	contractRepairTask  string
 	inputPolicyRecovery bool
+	lineage             []RunEvent
+	actionProviders     map[string]string
 }
 
 func ReadResumeSource(workspace, target, runID string) (*ResumeSource, error) {
@@ -58,12 +60,14 @@ func ReadResumeSource(workspace, target, runID string) (*ResumeSource, error) {
 	metadataOnly := false
 	contractRepairTask := ""
 	inputPolicyRecovery := false
+	var actionProviders map[string]string
 	for _, event := range lineage {
 		switch event.Type {
 		case string(EventDerivedForkCreated):
 			metadataOnly = false // An explicit new-task derivation starts a new request.
 			contractRepairTask = ""
 			inputPolicyRecovery = false
+			actionProviders = nil
 		case string(EventContractRecovery):
 			plan, decodeErr := decodeContractRecovery(event)
 			if decodeErr != nil {
@@ -72,6 +76,9 @@ func ReadResumeSource(workspace, target, runID string) (*ResumeSource, error) {
 			metadataOnly = plan.MetadataOnly
 			contractRepairTask = contractRepairTaskID(plan)
 			inputPolicyRecovery = inputPolicyRecovery || plan.InputPolicyUpgrade != nil
+			if plan.ActionRepair != nil {
+				actionProviders = plan.ActionRepair.ProviderBindings
+			}
 		}
 	}
 	session := ReduceToSessionData(lineage)
@@ -89,7 +96,7 @@ func ReadResumeSource(workspace, target, runID string) (*ResumeSource, error) {
 		return nil, err
 	}
 	return &ResumeSource{BranchID: branch.ID, Session: session, workspace: workspace,
-		activeBranch: tree.ActiveBranch, eventHead: head, eventHash: hash, sessionSHA256: digest, metadataOnly: metadataOnly, contractRepairTask: contractRepairTask, inputPolicyRecovery: inputPolicyRecovery}, nil
+		activeBranch: tree.ActiveBranch, eventHead: head, eventHash: hash, sessionSHA256: digest, metadataOnly: metadataOnly, contractRepairTask: contractRepairTask, inputPolicyRecovery: inputPolicyRecovery, lineage: lineage, actionProviders: actionProviders}, nil
 }
 
 // ResumeSourceError retains the refusal and names inspectable alternatives.

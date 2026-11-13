@@ -39,17 +39,21 @@ func compileResultRuntimeInputs(root map[string]any) ([]resultRuntimeInputSpec, 
 		spec := &specs[i]
 		spec.SourceTask = strings.TrimSpace(spec.SourceTask)
 		spec.Output = strings.TrimSpace(spec.Output)
-		if spec.SourceTask == "" || len(spec.SourceTask) > maxTaskResultPointerBytes || len(spec.Output) > maxTaskResultPointerBytes {
+		if len(spec.SourceTask) > maxTaskResultPointerBytes || len(spec.Output) > maxTaskResultPointerBytes {
 			return nil, fmt.Errorf("runtime input %d requires bounded source_task and output names", i)
 		}
 		switch spec.SourceKind {
 		case "", "runtime_output":
-			if spec.Output == "" {
+			if spec.SourceTask == "" || spec.Output == "" {
 				return nil, fmt.Errorf("runtime input %d requires an output name", i)
 			}
 		case "runtime_media":
-			if spec.Output != "" {
+			if spec.SourceTask == "" || spec.Output != "" {
 				return nil, fmt.Errorf("runtime media input %d must omit output", i)
+			}
+		case "workset_binding":
+			if spec.SourceTask != "" || spec.Output == "" || len(spec.Output) > maxWorksetKeyBytes {
+				return nil, fmt.Errorf("workset runtime input %d requires output and must omit source_task", i)
 			}
 		default:
 			return nil, fmt.Errorf("runtime input %d has an unsupported source_kind", i)
@@ -60,8 +64,8 @@ func compileResultRuntimeInputs(root map[string]any) ([]resultRuntimeInputSpec, 
 		if err := validateJSONPointer(spec.Target); err != nil {
 			return nil, fmt.Errorf("runtime input %d: %w", i, err)
 		}
-		if _, err := fixedCollectionSchemaAt(root, spec.Target); err != nil {
-			return nil, fmt.Errorf("runtime input %d target must select directly declared properties: %w", i, err)
+		if _, err := runtimeInputSchemaAt(root, spec.Target); err != nil {
+			return nil, fmt.Errorf("runtime input %d target must select declared object properties: %w", i, err)
 		}
 		for _, previous := range specs[:i] {
 			if resultPointersOverlap(previous.Target, spec.Target) {
@@ -76,6 +80,12 @@ func bindRuntimeInputSchemas(specs []resultRuntimeInputSpec, schema *jsonschema.
 	for i := range specs {
 		node := schema
 		for _, token := range fixedCollectionPointerTokens(specs[i].Target) {
+			for hops := 0; node != nil && node.Ref != nil && hops < 64; hops++ {
+				node = node.Ref
+			}
+			if node == nil {
+				break
+			}
 			node = node.Properties[token]
 		}
 		specs[i].valueSchema = node
@@ -89,6 +99,9 @@ func validateRuntimeInputSources(session *TeamSession, contracts map[string]*Com
 	}
 	for id, compiled := range contracts {
 		for _, spec := range compiled.runtimeInputs {
+			if spec.SourceKind == "workset_binding" {
+				continue
+			}
 			source, exists := sources[strings.ToLower(spec.SourceTask)]
 			if !exists || source.Action == nil {
 				return fmt.Errorf("schema %q runtime input requires a declared native source task %q", id, spec.SourceTask)
@@ -112,7 +125,7 @@ func validateRuntimeInputSources(session *TeamSession, contracts map[string]*Com
 	return nil
 }
 
-func (c *Coordinator) resultRuntimeInputValues(compiled *CompiledResultContract) (map[string]any, error) {
+func (c *Coordinator) resultRuntimeInputValues(compiled *CompiledResultContract, taskID string) (map[string]any, error) {
 	if compiled == nil || len(compiled.runtimeInputs) == 0 {
 		return nil, nil
 	}
@@ -120,9 +133,15 @@ func (c *Coordinator) resultRuntimeInputValues(compiled *CompiledResultContract)
 	for _, spec := range compiled.runtimeInputs {
 		var value any
 		var err error
-		if spec.SourceKind == "runtime_media" {
+		switch spec.SourceKind {
+		case "workset_binding":
+			if taskID == "" {
+				return nil, fmt.Errorf("workset runtime input requires its owning task")
+			}
+			value, err = c.resultWorksetBindingValue(taskID, spec.Output)
+		case "runtime_media":
 			value, err = c.resolveRuntimeMediaValue(spec.SourceTask)
-		} else {
+		default:
 			value, err = c.resolveRuntimeOutputValue(FactRef{Name: spec.Target, TaskID: spec.SourceTask, RuntimeOutput: spec.Output}, spec.Output)
 		}
 		if err != nil {
@@ -208,9 +227,13 @@ func validateResultRuntimeInputs(value any, specs []resultRuntimeInputSpec, valu
 	return nil
 }
 
-func omitRuntimeResultInputs(root map[string]any, specs []resultRuntimeInputSpec) {
+func omitRuntimeResultInputs(root map[string]any, specs []resultRuntimeInputSpec) error {
 	for _, spec := range specs {
+		if err := materializeRuntimeInputParents(root, spec.Target); err != nil {
+			return err
+		}
 		omitRuntimeEvidenceInputs(root, &resultEvidenceInputsSpec{RuntimeBind: true, ItemsPointer: spec.Target})
 	}
 	delete(root, "x-hufu-runtime-inputs")
+	return nil
 }

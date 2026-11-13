@@ -171,8 +171,8 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 8192,
-          "pattern": "^unit-[0-9]{4}$",
-          "description": "Exact WorksetBinding.bindings.key / ItemKey (for example unit-0000), never the Workset ID.",
+          "pattern": "^(unit|supplement)-[0-9]{4}$",
+          "description": "Exact WorksetBinding.bindings.key / ItemKey: primary unit-0000 through unit-0031 or supplemental supplement-0000 through supplement-0007; never the Workset ID.",
           "enum": [
             "unit-0000",
             "unit-0001",
@@ -205,7 +205,15 @@
             "unit-0028",
             "unit-0029",
             "unit-0030",
-            "unit-0031"
+            "unit-0031",
+            "supplement-0000",
+            "supplement-0001",
+            "supplement-0002",
+            "supplement-0003",
+            "supplement-0004",
+            "supplement-0005",
+            "supplement-0006",
+            "supplement-0007"
           ]
         },
         "lens": {
@@ -732,6 +740,7 @@
       ],
       "source_contracts": [
         "schemas/review-v1.json",
+        "schemas/supplement-review-v1.json",
         "schemas/documentation-review-v1.json"
       ],
       "source_scope": "evidence_from",

@@ -387,7 +387,16 @@ func verifySupplementRuntimeOutputs(task supplementTask) error {
 	if err != nil {
 		return err
 	}
-	canonical, err := canonicalSupplementJSON(data)
+	// Runtime output receipts hash the complete two-space-indented JSON map.
+	// Structured result payloads below use compact JSON; their canonicalizer
+	// must not be reused for a runtime output receipt.
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	canonical, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}

@@ -16,21 +16,23 @@ import (
 )
 
 var (
-	resumeTeamName             string
-	resumeSearch               string
-	resumeBranch               string
-	resumeRun                  string
-	resumeAcceptanceTimeoutSet bool
-	resumeRetryAcceptance      bool
-	resumeAcceptanceTimeout    time.Duration
-	resumeRepairResult         string
-	resumeRetryWork            string
-	resumeRepairModel          string
-	resumeUpgradeContracts     bool
-	resumeUpgradeInputPolicy   bool
-	resumeMetadataOnly         bool
-	resumeRecoveryBranch       string
-	resumeRecoveryPlan         string
+	resumeTeamName              string
+	resumeSearch                string
+	resumeBranch                string
+	resumeRun                   string
+	resumeAcceptanceTimeoutSet  bool
+	resumeRetryAcceptance       bool
+	resumeAcceptanceTimeout     time.Duration
+	resumeRepairResult          string
+	resumeRepairAction          string
+	resumeRebuildActionPayloads bool
+	resumeRetryWork             string
+	resumeRepairModel           string
+	resumeUpgradeContracts      bool
+	resumeUpgradeInputPolicy    bool
+	resumeMetadataOnly          bool
+	resumeRecoveryBranch        string
+	resumeRecoveryPlan          string
 )
 
 var resumeCmd = &cobra.Command{
@@ -218,13 +220,13 @@ func validateResumeProfile(teamName string, registry *team.TeamRegistry, vars ma
 	if err != nil {
 		return fmt.Errorf("failed to inspect team %q: %w", teamName, err)
 	}
-	profile, err := team.ResolveExecutionProfile(opts.executionProfile, session.Config.ExecutionProfile)
+	_, err = team.ResolveExecutionProfile(opts.executionProfile, session.Config.ExecutionProfile)
 	if err != nil {
 		return fmt.Errorf("failed to resolve resume profile: %w", err)
 	}
-	if profile.DisableHistoricalTaskReuse || profile.DisableJournalRestore {
-		return fmt.Errorf("resume cannot use execution profile %q because it disables historical session restore", profile.Name)
-	}
+	// Canonical source selection and explicit resume distinguish same-session
+	// restoration from a fresh user request. Frozen policy admission still
+	// rejects profile or execution-authority changes.
 	return nil
 }
 
@@ -241,6 +243,8 @@ func init() {
 	f.BoolVar(&resumeRetryAcceptance, "retry-acceptance", false, "Retry unavailable final request acceptance against the saved answer; never redispatch workers or collectors")
 	f.DurationVar(&resumeAcceptanceTimeout, "acceptance-timeout", 5*time.Minute, "Per-review call timeout for --retry-acceptance; preserves frozen work and execution policy")
 	f.StringVar(&resumeRepairResult, "repair-result", "", "Authorize bounded result-only recovery; may combine with --upgrade-contracts; never replay worker tools")
+	f.StringVar(&resumeRepairAction, "repair-action", "", "Preview or fork a changed read-only Go action source repair; retains verified work and frozen inputs")
+	f.BoolVar(&resumeRebuildActionPayloads, "rebuild-action-payloads", false, "Explicitly reconstruct redacted public numeric budgets with --repair-action, verified against original frozen payload hashes")
 	f.StringVar(&resumeRetryWork, "retry-work", "", "Preview or fork a controlled retry of one completed read-only work attempt whose required decisions never started")
 	f.StringVar(&resumeRepairModel, "repair-model", "", "Auxiliary result submission model (must already be frozen in the source policy); preserves the original worker target")
 	registerTeamSelectionFlags(f, &resumeTeamName, "Agent team name (inferred from --workspace when omitted)")
@@ -326,11 +330,15 @@ func printResultRecoveryAssessment(cmd *cobra.Command, a *team.ResultCollectionR
 }
 
 func resumeBranchRecoveryRequested() bool {
-	return resumeUpgradeContracts || resumeRetryWork != ""
+	return resumeUpgradeContracts || resumeRetryWork != "" || resumeRepairAction != ""
 }
 
 func validateResumeRepairFlags() error {
 	if err := validateAcceptanceRetryFlags(); err != nil {
+		return err
+	}
+
+	if err := validateResumeActionRepairFlags(); err != nil {
 		return err
 	}
 
@@ -351,12 +359,12 @@ func validateResumeRepairFlags() error {
 			return nil
 		}
 		if strings.TrimSpace(resumeRecoveryBranch) == "" || len(resumeRecoveryPlan) != 64 {
-			return fmt.Errorf("preview with --upgrade-contracts or --retry-work and --dry-run, then supply --recovery-branch and --plan-hash")
+			return fmt.Errorf("preview with --upgrade-contracts, --retry-work or --repair-action and --dry-run, then supply --recovery-branch and --plan-hash")
 		}
 		return nil
 	}
 	if resumeRecoveryBranch != "" || resumeRecoveryPlan != "" || resumeMetadataOnly || resumeUpgradeInputPolicy {
-		return fmt.Errorf("branch recovery options require --upgrade-contracts or --retry-work; --upgrade-input-policy requires --upgrade-contracts")
+		return fmt.Errorf("branch recovery options require --upgrade-contracts, --retry-work or --repair-action; --upgrade-input-policy requires --upgrade-contracts")
 	}
 
 	if resumeRepairModel != "" && resumeRepairResult == "" {
@@ -373,11 +381,21 @@ func validateAcceptanceRetryFlags() error {
 		if strings.TrimSpace(resumeRun) == "" || strings.TrimSpace(resumeRun) != resumeRun || resumeAcceptanceTimeout <= 0 {
 			return fmt.Errorf("--retry-acceptance requires an exact --run and positive --acceptance-timeout")
 		}
-		if resumeRepairResult != "" || resumeRepairModel != "" || resumeRetryWork != "" || resumeUpgradeContracts || resumeUpgradeInputPolicy || resumeMetadataOnly || resumeRecoveryBranch != "" || resumeRecoveryPlan != "" || len(opts.imagePaths) > 0 || len(opts.inputFlags) > 0 || len(opts.inputFiles) > 0 {
+		if resumeRepairResult != "" || resumeRepairAction != "" || resumeRebuildActionPayloads || resumeRepairModel != "" || resumeRetryWork != "" || resumeUpgradeContracts || resumeUpgradeInputPolicy || resumeMetadataOnly || resumeRecoveryBranch != "" || resumeRecoveryPlan != "" || len(opts.imagePaths) > 0 || len(opts.inputFlags) > 0 || len(opts.inputFiles) > 0 {
 			return fmt.Errorf("--retry-acceptance cannot combine with task repair, branch recovery, media or new inputs")
 		}
 	} else if resumeAcceptanceTimeoutSet {
 		return fmt.Errorf("--acceptance-timeout requires --retry-acceptance")
+	}
+	return nil
+}
+
+func validateResumeActionRepairFlags() error {
+	if resumeRebuildActionPayloads && resumeRepairAction == "" {
+		return fmt.Errorf("--rebuild-action-payloads requires --repair-action")
+	}
+	if resumeRepairAction != "" && (strings.TrimSpace(resumeRepairAction) != resumeRepairAction || resumeUpgradeContracts || resumeUpgradeInputPolicy || resumeRetryWork != "" || resumeRepairResult != "") {
+		return fmt.Errorf("--repair-action requires one exact task ID and cannot combine with other repair modes")
 	}
 	return nil
 }

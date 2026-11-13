@@ -163,6 +163,15 @@ func (c *Coordinator) assessContractResultRepair(ctx context.Context, source *Re
 		if patch.ResultContract == nil || *patch.ResultContract == *item.ResultContract {
 			return fmt.Errorf("selected collection result contract is unchanged")
 		}
+		// New runtime-owned fields must have verified frozen sources before a
+		// recovery child is published, even when old claims need format repair.
+		compiled := c.session.ResultContracts[patch.ResultContract.ID]
+		if compiled == nil {
+			return fmt.Errorf("recovery target result schema is unavailable")
+		}
+		if _, err := c.resultRuntimeInputValues(compiled, id); err != nil {
+			return fmt.Errorf("recovery target runtime inputs: %w", err)
+		}
 		patch.Collection = &ResultCollectionContractUpgrade{Original: cp, OriginalContract: *item.ResultContract,
 			AcceptedContract: *patch.ResultContract, AcceptedPolicy: plan.Policy.ConfigurationHash, SourceTaskSHA256: patch.SourceSHA256}
 		return nil

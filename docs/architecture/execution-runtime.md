@@ -728,7 +728,13 @@ hufu resume --team <team> --workspace <control-root> --branch <returned-branch-i
 Before execution, `hufu resume --team <team> --workspace <control-root>
 --branch <branch> --dry-run` checks ordinary source admission: policy
 compatibility, frozen inputs, retained results/receipts and pending artifact
-scopes. It reports accepted, resumable and terminal unresolved task counts.
+scopes. For the active branch, it also checks the mutable checkpoint against
+canonical replay using the startup parity and safe-prefix rules. A previously
+recorded projection barrier is eligible to clear on startup only after full
+parity is restored; preview verifies that proof without changing the barrier.
+Selecting another branch checks that branch's canonical source because
+activation will rebuild its checkpoint. It reports accepted, resumable and
+terminal unresolved task counts.
 The check does not activate a branch or call tools/models. Provider reachability,
 workspace materialization and future verification/acceptance remain execution
 checks; passing source preflight is not a completed run. A shared workset receipt
@@ -754,7 +760,11 @@ older events without descriptions remain readable. They explain the existing
 recovery decisions and do not authorize additional retries or relax acceptance.
 
 Preview lists each retained/retried task and pins the source event head, policy,
-original task digests and current policy in its plan hash. Versioned apply requires
+original task digests and current policy in its plan hash. The source proof uses
+that branch's canonical lineage head; the separate journal head/hash keeps the
+preview bound to the complete store, including writes on sibling branches.
+Switching back to a source branch therefore preserves its proof without allowing
+a stale preview after another branch writes an event. Versioned apply requires
 managed `required` versioning, the team/project locks and an unchanged plan. It refuses
 non-result execution-policy changes, changed static execution contracts, unsettled
 workspace operations and retries with side effects. It creates a native child
@@ -856,6 +866,12 @@ The separate child preview/resume uses ordinary result-only checks. A stored
 response valid under the new schema can be committed locally; a repairable
 format failure requires the ordinary explicit allowance of at most two further
 collector turns. Collector channels expose no worker tools.
+Runtime-issued evidence keys keep the original successful read's branch,
+schema and work occurrence. A validated contract-upgrade proof permits only
+that sealed origin; current artifact authorization and content hashes remain
+mandatory. Historical results/report projection replays the complete scoped
+team/session recovery lineage, including global recovery events. An operator
+recovery without a unique team owner fails closed across mixed-team sessions.
 
 The combined path pins the original checkpoint, work CAS reference, receipt,
 transcript, frozen inputs, work occurrence, execution target and original
@@ -927,6 +943,72 @@ from the original frozen snapshot and input policy. It verifies the materialized
 payload, binding paths and bound-value hashes before comparing contract hashes;
 an unbound template hash alone cannot identify an admitted action. This check
 does not execute the action or resolve replacement inputs.
+
+A failed native Go action can select a changed trusted static Go program through
+`resume --repair-action <task-id> --dry-run`. This is an explicit source repair,
+with a separate proof of the original failed action event, old/new program
+identities and every shared capability. It requires a settled execution failure,
+`side_effect: none`, retry recovery, static goal binding and read-only source and
+future contracts. The first version supports known Go provider families only.
+Result schemas, static tasks, models, tools, reachable environment, network
+policy and frozen input values must remain unchanged. A changed shared resolver
+policy is explicitly included in the plan; the resolver is not called again.
+
+Preview and publication execute no action or model. Review the returned plan,
+then publish it separately:
+
+```bash
+hufu resume --team <team> --workspace <control-root> --branch <source-branch> \
+  --repair-action <task-id> --dry-run --output json
+hufu resume --team <team> --workspace <control-root> --branch <source-branch> \
+  --repair-action <task-id> --recovery-branch <new-name> --plan-hash <preview-sha256>
+hufu resume --team <team> --workspace <control-root> --branch <returned-child> --dry-run
+hufu resume --team <team> --workspace <control-root> --branch <returned-child>
+```
+
+Managed versioning-off workspaces additionally require `--metadata-only` in both
+preview and publication. The child retains validated completed work and original
+receipts, retries the selected action and affected downstream consumers, and
+reopens verification and acceptance. Publication does not execute those tasks
+or prove final acceptance. Ordinary child resume rechecks exact accepted Go
+program identities. A further source change needs a new approved repair.
+Changed scope, arbitrary alterations and missing historical evidence are refused.
+Action progress belongs to its action invocation. Replay binds observations to
+the canonical `action_started` identity, so a recovered invocation may restart
+its attempt counter without preserving a previous action's progress instead.
+Old-action observations cannot overwrite the new invocation's progress;
+sequence ordering within an invocation and terminal-state guards still apply.
+Trusted Go source remains maintainer-authored code; this proof does not audit its
+behavior.
+
+`--rebuild-action-payloads` can be added to **both** the `--repair-action`
+preview and plan-hash-bound publication when historical redaction masked public
+numeric token budgets. The runtime reconstructs the payload from the unchanged
+static action and original frozen input snapshot. Its complete bytes must match
+the original `materialized_action_payload_hash`. Every semantic difference from
+the stored payload must replace exactly `[REDACTED]` with an integer from zero
+to 2,147,483,647 under a `max_<scope>_input_tokens` or
+`max_<scope>_output_tokens` key. Credential-like scopes, strings, unknown fields,
+changed scope values and all other differences remain refused. The existing
+unscoped `max_output_tokens` telemetry DTO contract is unchanged.
+
+The preview includes each task's `action_payload_reconstruction`: exact stored
+and materialized payload hashes, original snapshot identity, changed JSON
+Pointers and reconstructed payload bytes. Those bytes must survive ordinary
+secret redaction; a repair cannot disable registered secret protections.
+A plan permits at most 32 reconstructed payloads, one MiB in total and 64 changed
+paths per payload. Replay independently checks source task hashes, complete
+payload hashes, numeric metadata restrictions and original frozen bindings.
+The child projects the proven original payload; the parent's redacted action,
+all original receipts and accepted result bytes remain unchanged. Ordinary
+child resume still checks admission, providers, evidence, verification and
+acceptance. Preview and publication perform no provider or model execution.
+
+An explicit canonical same-session `resume` can restore the original saved
+`fresh-session` profile's task state and frozen inputs. This does not change the
+profile, import another request's cache or journal results, or enable broader
+historical memory. New requests keep fresh-session isolation. Profile, source,
+evidence and execution-policy admission still apply before execution.
 
 Resolver/provider source changes can also change `run_input_policy_hash`, even
 when all requested input values have already been frozen. Ordinary resume and

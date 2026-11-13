@@ -404,7 +404,6 @@
       "BindInitialTaskContracts": false,
       "BindTaskGoalContracts": true,
       "NoRedispatchAfterSuccess": [
-        "reviewer",
         "documentation-reviewer",
         "synthesizer"
       ],

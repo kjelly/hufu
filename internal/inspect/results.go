@@ -206,7 +206,13 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 	}
 	rows := []HistoricalResult{}
 	teams := map[string]string{}
+	sessionTeams := historicalSessionTeams(events)
 	states := make(map[string]*historicalTaskState)
+	// Recovery proofs bind a complete source task projection. Per-task event
+	// slices alone cannot replay them, so retain the same team/session lineage
+	// and use it after a recovery event. Other teams never enter this projection.
+	lineages := make(map[string][]team.RunEvent)
+	recovered := make(map[string]bool)
 	known := make(map[string]bool)
 	var grant *team.RunEvent
 	for _, indexed := range events {
@@ -239,6 +245,17 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 		case team.EventHistoricalResultsGranted:
 			grant = &event
 		}
+		teamName, err := historicalEventTeam(event, teams, sessionTeams)
+		if err != nil {
+			return nil, nil, err
+		}
+		lineageKey := teamName + "\x00" + event.SessionID
+		if scope.Team == "" || teamName == scope.Team {
+			lineages[lineageKey] = append(lineages[lineageKey], event)
+			if event.Type == string(team.EventContractRecovery) {
+				recovered[lineageKey] = true
+			}
+		}
 		if event.Type == string(team.EventRunFinished) && (scope.Team == "" || teams[event.RunID] == scope.Team) {
 			row, err := historicalRunResponse(indexed, branch, scope.Workspace, teams[event.RunID])
 			if err != nil {
@@ -250,7 +267,6 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 		if !strings.HasPrefix(event.Type, "task_") || event.TaskID == "" {
 			continue
 		}
-		teamName := teams[event.RunID]
 		// Filter before replaying or decoding result content; a team selector
 		// must not send another team's content to either the CLI or an LLM.
 		if scope.Team != "" && teamName != scope.Team {
@@ -281,26 +297,17 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 		if !team.IsTerminalEvent(event.Type) {
 			continue
 		}
-		todos, err := team.ReplayTodoList(state.events)
+		replayEvents := state.events
+		if recovered[lineageKey] {
+			replayEvents = lineages[lineageKey]
+		}
+		todos, err := team.ReplayTodoList(replayEvents)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: replay historical result: %v", ErrIntegrity, err)
 		}
-		for _, item := range todos {
-			if item.ID != event.TaskID {
-				continue
-			}
-			for _, index := range state.rows {
-				rows[index].CurrentStatus = string(item.Status)
-				if rows[index].Validity == "accepted" {
-					rows[index].Validity = "superseded"
-				}
-			}
-			row, err := historicalResultFromItem(indexed, item, branch, scope.Workspace, teamName, state.originRun)
-			if err != nil {
-				return nil, nil, err
-			}
-			state.rows = append(state.rows, len(rows))
-			rows = append(rows, row)
+		rows, err = appendHistoricalTaskRows(rows, state, todos, indexed, branch, scope.Workspace, teamName)
+		if err != nil {
+			return nil, nil, err
 		}
 	}
 	for index := range rows {
@@ -309,6 +316,64 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 		row.OriginalPrompt, row.OriginalPromptEventID = prompt.content, prompt.eventID
 	}
 	return rows, slices.Sorted(maps.Keys(known)), nil
+}
+
+func appendHistoricalTaskRows(rows []HistoricalResult, state *historicalTaskState, todos []*team.TodoItem, indexed IndexedEvent, branch, workspace, teamName string) ([]HistoricalResult, error) {
+	for _, item := range todos {
+		if item.ID != indexed.Event.TaskID {
+			continue
+		}
+		for _, index := range state.rows {
+			rows[index].CurrentStatus = string(item.Status)
+			if rows[index].Validity == "accepted" {
+				rows[index].Validity = "superseded"
+			}
+		}
+		row, err := historicalResultFromItem(indexed, item, branch, workspace, teamName, state.originRun)
+		if err != nil {
+			return nil, err
+		}
+		state.rows = append(state.rows, len(rows))
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+func historicalSessionTeams(events []IndexedEvent) map[string]map[string]bool {
+	sessionTeams := make(map[string]map[string]bool)
+	// Operator/global authority can precede run_started and carry a separate
+	// run ID. Attribute only non-task events to a uniquely identified session;
+	// task content still requires its own run's team identity below.
+	for _, indexed := range events {
+		var owner struct {
+			Team string `json:"team"`
+		}
+		if json.Unmarshal(indexed.Event.Payload, &owner) != nil || strings.TrimSpace(owner.Team) == "" {
+			continue
+		}
+		if sessionTeams[indexed.Event.SessionID] == nil {
+			sessionTeams[indexed.Event.SessionID] = make(map[string]bool)
+		}
+		sessionTeams[indexed.Event.SessionID][strings.ToLower(strings.TrimSpace(owner.Team))] = true
+	}
+	return sessionTeams
+}
+
+func historicalEventTeam(event team.RunEvent, teams map[string]string, sessionTeams map[string]map[string]bool) (string, error) {
+	teamName := teams[event.RunID]
+	if teamName != "" || strings.HasPrefix(event.Type, "task_") {
+		return teamName, nil
+	}
+	owners := sessionTeams[event.SessionID]
+	if len(owners) != 1 && event.Type == string(team.EventContractRecovery) {
+		return "", fmt.Errorf("%w: contract recovery has no unique session team", ErrScopeConflict)
+	}
+	if len(owners) == 1 {
+		for owner := range owners {
+			return owner, nil
+		}
+	}
+	return "", nil
 }
 
 func invalidateHistoricalRows(rows []HistoricalResult, indices []int, removed bool) {

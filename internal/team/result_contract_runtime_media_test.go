@@ -22,7 +22,7 @@ func testRuntimeMediaResultInputs(t *testing.T, c *Coordinator, source *TodoItem
 	ref := compiled.ref(true)
 	consumer := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", ResultContract: &ref}})[0]
 	consumer.Status = TaskInProgress
-	values, err := c.resultRuntimeInputValues(compiled)
+	values, err := c.resultRuntimeInputValues(compiled, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func testRuntimeMediaResultInputs(t *testing.T, c *Coordinator, source *TodoItem
 				return c.structuredPayloadForSubmission(consumer.ID, []byte(raw))
 			}
 			request := AttemptRequest{Task: taskDefFromTodoItem(consumer), resultContractSchema: compiled,
-				resultRuntimeInputs: func() (map[string]any, error) { return c.resultRuntimeInputValues(compiled) }}
+				resultRuntimeInputs: func() (map[string]any, error) { return c.resultRuntimeInputValues(compiled, "") }}
 			payload, err := canonicalExternalStructuredPayload(request, &WorkerResultProposal{StructuredPayloadJSON: new(raw)}, nil)
 			if err != nil {
 				return nil, err.Error()
@@ -108,7 +108,7 @@ func testRuntimeMediaResultInputs(t *testing.T, c *Coordinator, source *TodoItem
 			}
 		}
 		c.taskTracker.TodoList().Restore(items)
-		if _, err := c.resultRuntimeInputValues(compiled); err == nil {
+		if _, err := c.resultRuntimeInputValues(compiled, ""); err == nil {
 			t.Fatal("runtime media binding accepted a stale or substituted source")
 		}
 		source = cloneTodoItem(original)

@@ -21,20 +21,22 @@ type ContractRevalidation struct {
 }
 
 type ContractRecoveryTask struct {
-	LegacySubmission *LegacySubmissionRecovery        `json:"legacy_submission,omitempty"`
-	Collection       *ResultCollectionContractUpgrade `json:"collection,omitempty"`
-	Reason           string                           `json:"reason,omitempty"`
-	SourceStatus     TaskStatus                       `json:"source_status,omitempty"`
-	AffectedBy       []string                         `json:"affected_by,omitempty"`
-	ID               string                           `json:"id"`
-	SourceSHA256     string                           `json:"source_sha256"`
-	Action           string                           `json:"action"`
-	ResultContract   *ResultContractRef               `json:"result_contract,omitempty"`
-	ContractHash     string                           `json:"contract_hash"`
-	Revalidation     *ContractRevalidation            `json:"revalidation,omitempty"`
+	PayloadReconstruction *ActionPayloadReconstruction     `json:"action_payload_reconstruction,omitempty"`
+	LegacySubmission      *LegacySubmissionRecovery        `json:"legacy_submission,omitempty"`
+	Collection            *ResultCollectionContractUpgrade `json:"collection,omitempty"`
+	Reason                string                           `json:"reason,omitempty"`
+	SourceStatus          TaskStatus                       `json:"source_status,omitempty"`
+	AffectedBy            []string                         `json:"affected_by,omitempty"`
+	ID                    string                           `json:"id"`
+	SourceSHA256          string                           `json:"source_sha256"`
+	Action                string                           `json:"action"`
+	ResultContract        *ResultContractRef               `json:"result_contract,omitempty"`
+	ContractHash          string                           `json:"contract_hash"`
+	Revalidation          *ContractRevalidation            `json:"revalidation,omitempty"`
 }
 
 type ContractRecoveryPlan struct {
+	ActionRepair         *ReadOnlyActionRepair    `json:"action_repair,omitempty"`
 	Repaired             int                      `json:"repaired,omitzero"`
 	WorkRetry            *ReadOnlyWorkRetry       `json:"work_retry,omitempty"`
 	ContractChanges      []ContractRecoveryChange `json:"contract_changes,omitempty"`
@@ -43,6 +45,8 @@ type ContractRecoveryPlan struct {
 	InputPolicyUpgrade   *RunInputPolicyRecovery  `json:"input_policy_upgrade,omitempty"`
 	MetadataOnly         bool                     `json:"metadata_only,omitzero"`
 	Version              int                      `json:"version"`
+	JournalHead          string                   `json:"journal_head,omitempty"`
+	JournalHash          string                   `json:"journal_hash,omitempty"`
 	SourceBranch         string                   `json:"source_branch"`
 	SourceHead           string                   `json:"source_head"`
 	SourceHash           string                   `json:"source_hash"`
@@ -77,6 +81,9 @@ func (c *Coordinator) prepareContractRecoveryAssessment(ctx context.Context, sou
 	if digest, err := collectionDigest(source.Session); err != nil || digest != source.sessionSHA256 {
 		return fmt.Errorf("contract recovery source projection changed")
 	}
+	if actionPayloadReconstructionRequested(ctx) && readOnlyActionRepairID(ctx) == "" {
+		return fmt.Errorf("action payload reconstruction requires an explicit read-only Go action repair")
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -99,25 +106,9 @@ func (c *Coordinator) assessPreparedContractRecovery(ctx context.Context, source
 	if err != nil {
 		return nil, err
 	}
-	workRetryTask, retryWork := readOnlyWorkRetryRequested(ctx)
-	if retryWork && old.ConfigurationHash != current.ConfigurationHash {
-		return nil, fmt.Errorf("work retry requires unchanged result contracts and execution policy; preview contract recovery separately")
-	}
-	if !retryWork && old.ConfigurationHash == current.ConfigurationHash {
-		return nil, fmt.Errorf("result contracts are unchanged; use ordinary resume or result-only repair")
-	}
-	plan := &ContractRecoveryPlan{MetadataOnly: metadataContractRecoveryRequested(ctx), Version: 1, SourceBranch: source.BranchID, SourceHead: source.eventHead, SourceHash: source.eventHash, SourcePolicy: old.ConfigurationHash, Policy: current, ResumePhase: PhaseVerify}
-	if retryWork {
-		plan.WorkRetry, err = c.assessReadOnlyWorkRetry(ctx, source, workRetryTask)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if old.RunInputPolicyHash != current.RunInputPolicyHash {
-		plan.InputPolicyUpgrade, err = c.assessRunInputPolicyRecovery(source.Session, old, current)
-		if err != nil {
-			return nil, err
-		}
+	plan, err := c.newContractRecoveryPlan(ctx, source, old, current)
+	if err != nil {
+		return nil, err
 	}
 	tasks := map[string]TaskDef{}
 	for _, task := range c.session.ContractTasks {
@@ -197,6 +188,12 @@ func (c *Coordinator) assessPreparedContractRecovery(ctx context.Context, source
 		if err := validateWorkRetryScope(source.Session.Tasks, plan); err != nil {
 			return nil, err
 		}
+	}
+	if err := validateActionPayloadReconstructionProofs(source.lineage, source.Session.Tasks, plan); err != nil {
+		return nil, err
+	}
+	if err := validateActionRepairProof(source.lineage, source.Session.Tasks, plan); err != nil {
+		return nil, err
 	}
 	plan.SHA256, err = recoveryPlanHash(*plan)
 	return plan, err
@@ -358,6 +355,9 @@ func decodeContractRecovery(event RunEvent) (*ContractRecoveryPlan, error) {
 	if err != nil || hash != plan.SHA256 || plan.Version != 1 || plan.SourceBranch == "" || plan.SourceBranch == effectiveEventBranchID(event) || plan.SourceHead == "" || !validCollectionDigest(plan.SourceHash) || !validCollectionDigest(plan.SourcePolicy) || validateExecutionPolicySnapshot(plan.Policy) != nil {
 		return nil, fmt.Errorf("invalid contract recovery plan")
 	}
+	if !validContractRecoveryJournalIdentity(&plan) {
+		return nil, fmt.Errorf("invalid contract recovery journal identity")
+	}
 	if plan.ResumePhase != PhaseInit && plan.ResumePhase != PhasePrepare && plan.ResumePhase != PhaseAudit && plan.ResumePhase != PhaseExecute && plan.ResumePhase != PhaseVerify {
 		return nil, fmt.Errorf("invalid contract recovery phase")
 	}
@@ -402,7 +402,7 @@ func validateContractRecoveryLineage(event RunEvent, preceding []RunEvent, admit
 	if admitted == nil || admitted.ConfigurationHash != plan.SourcePolicy {
 		return nil, fmt.Errorf("contract recovery original policy mismatch")
 	}
-	if plan.WorkRetry == nil && plan.SourcePolicy == plan.Policy.ConfigurationHash {
+	if plan.WorkRetry == nil && plan.ActionRepair == nil && plan.SourcePolicy == plan.Policy.ConfigurationHash {
 		return nil, fmt.Errorf("unchanged-policy recovery requires an explicit work retry proof")
 	}
 	if plan.WorkRetry != nil {
@@ -412,6 +412,9 @@ func validateContractRecoveryLineage(event RunEvent, preceding []RunEvent, admit
 		if err := validateReadOnlyWorkRetry(preceding, plan); err != nil {
 			return nil, err
 		}
+	}
+	if plan.ActionRepair != nil && (!sameCanonicalEvidence(admitted.ResultContracts, plan.Policy.ResultContracts) || admitted.StaticWorkflowHash != plan.Policy.StaticWorkflowHash) {
+		return nil, fmt.Errorf("action repair cannot change result schemas or static contracts")
 	}
 	left, right := *cloneExecutionPolicySnapshot(admitted), *cloneExecutionPolicySnapshot(plan.Policy)
 	if plan.InputPolicyUpgrade != nil {
@@ -442,6 +445,13 @@ func validateContractRecoveryLineage(event RunEvent, preceding []RunEvent, admit
 	if err := validateRecoveryTaskSources(tasks, plan); err != nil {
 		return nil, err
 	}
+	if err := validateActionPayloadReconstructionProofs(preceding, tasks, plan); err != nil {
+		return nil, err
+	}
+	if err := validateActionRepairProof(preceding, tasks, plan); err != nil {
+		return nil, err
+	}
+
 	if plan.Repaired > 0 {
 		projection := make(map[string]*TodoItem)
 		for _, item := range tasks {
@@ -469,6 +479,12 @@ func validateRecoveryTaskSources(tasks []*TodoItem, plan *ContractRecoveryPlan) 
 		digest, err := collectionDigest(item)
 		if item == nil || err != nil || digest != patch.SourceSHA256 {
 			return fmt.Errorf("contract recovery source task %s changed", patch.ID)
+		}
+		if patch.PayloadReconstruction != nil && plan.ActionRepair == nil {
+			return fmt.Errorf("payload reconstruction requires action repair proof")
+		}
+		if err := validateReconstructedActionPayload(item, patch.PayloadReconstruction); err != nil {
+			return err
 		}
 		preservedBrowser := plan.Repaired > 0 && collectionRecoveryBrowserTask(item, contractRepairTaskID(plan))
 		if plan.MetadataOnly && !metadataReadOnlyTask(item.SideEffect, item.Execution) && !preservedBrowser {
@@ -506,6 +522,9 @@ func applyContractRecoveryTasks(tasks map[string]*TodoItem, plan *ContractRecove
 	}
 	for _, patch := range plan.Tasks {
 		item := cloneTodoItem(tasks[patch.ID])
+		if patch.PayloadReconstruction != nil {
+			item.Action.Payload = patch.PayloadReconstruction.Payload
+		}
 		item.ResultContract = patch.ResultContract.clone()
 		item.ContractHash = patch.ContractHash
 		item.ContractRevalidation = cloneContractRevalidation(patch.Revalidation)
@@ -583,6 +602,9 @@ func (c *Coordinator) contractRecoveryPolicies(ctx context.Context, source *Resu
 	current.ConfigurationHash, err = executionPolicyConfigurationHash(current)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+	if readOnlyActionRepairID(ctx) != "" && (!sameCanonicalEvidence(old.ResultContracts, current.ResultContracts) || old.StaticWorkflowHash != current.StaticWorkflowHash) {
+		return nil, nil, nil, fmt.Errorf("action repair cannot change result schemas or static contracts")
 	}
 	// Reconstruct the current static workflow with original result refs. This
 	// proves that the opaque static hash changed only because of those refs.
@@ -664,7 +686,11 @@ func (c *Coordinator) assessContractRecoveryTask(ctx context.Context, item *Todo
 		}
 		oldDef.Execution = cloneExecutionContract(item.Execution)
 	}
-	oldHash, e := contractRecoveryTaskHash(oldDef, item, session)
+	comparison, reconstruction, e := prepareRecoveredActionPayload(ctx, oldDef, item, session)
+	if e != nil {
+		return ContractRecoveryTask{}, false, e
+	}
+	oldHash, e := contractRecoveryTaskHash(oldDef, comparison, session)
 	if e != nil {
 		return ContractRecoveryTask{}, false, fmt.Errorf("task %s contract inputs: %w", item.ID, e)
 	}
@@ -673,7 +699,7 @@ func (c *Coordinator) assessContractRecoveryTask(ctx context.Context, item *Todo
 	}
 	updated := *session
 	updated.ExecutionPolicySnapshot = c.ExecutionPolicySnapshot()
-	newHash, e := contractRecoveryTaskHash(definition, item, &updated)
+	newHash, e := contractRecoveryTaskHash(definition, comparison, &updated)
 	if e != nil {
 		return ContractRecoveryTask{}, false, e
 	}
@@ -687,7 +713,7 @@ func (c *Coordinator) assessContractRecoveryTask(ctx context.Context, item *Todo
 			targetRef = bound.clone()
 		}
 	}
-	patch := ContractRecoveryTask{Reason: "accepted_result", SourceStatus: item.Status, ID: item.ID, SourceSHA256: digest, Action: "retain", ResultContract: targetRef, ContractHash: newHash, Revalidation: nil}
+	patch := ContractRecoveryTask{PayloadReconstruction: reconstruction, Reason: "accepted_result", SourceStatus: item.Status, ID: item.ID, SourceSHA256: digest, Action: "retain", ResultContract: targetRef, ContractHash: newHash, Revalidation: nil}
 	if validContractRevalidation(item, item.ExecutionReceipt) {
 		patch.Revalidation = cloneContractRevalidation(item.ContractRevalidation)
 		patch.Revalidation.SourceTaskSHA256 = digest

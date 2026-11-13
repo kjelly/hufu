@@ -1219,14 +1219,14 @@ retryLoop:
 			}))
 
 			compiledResult := c.attemptResultContractSchema(task)
-			_, inputErr := c.resultRuntimeInputValues(compiledResult)
+			_, inputErr := c.resultRuntimeInputValues(compiledResult, todoID)
 			if inputErr != nil {
 				err = c.blockTaskExecutionEnvelopePreflight(task, c.todoItemByID(todoID), inputErr)
 				return
 			}
 			var runtimeInputLookup func() (map[string]any, error)
 			if compiledResult != nil && len(compiledResult.runtimeInputs) > 0 {
-				runtimeInputLookup = func() (map[string]any, error) { return c.resultRuntimeInputValues(compiledResult) }
+				runtimeInputLookup = func() (map[string]any, error) { return c.resultRuntimeInputValues(compiledResult, todoID) }
 			}
 			if c.workerAgentOverride != nil {
 				output, steps, err = c.runAgentWithStatusAndHistory(taskCtx, ag, agentName, currentPrompt, conversationHistory, timing, c.planSubmissionStop(task, todoID)...)

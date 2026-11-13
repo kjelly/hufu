@@ -43,7 +43,7 @@ func TestEmbeddedReviewDefinitionsMatchAuthoritativeSchema(t *testing.T) {
 	want := authoritative["$defs"].(map[string]any)["review"]
 	// Runtime contracts must be self-contained, so critique and report embed
 	// the review definition instead of referencing another schema file.
-	for _, filename := range []string{"critique-v1.json", "critique-v2.json", "report-v1.json"} {
+	for _, filename := range []string{"supplement-review-v1.json", "critique-v1.json", "critique-v2.json", "report-v1.json", "report-v2.json"} {
 		t.Run(filename, func(t *testing.T) {
 			_, document := contractSchema(t, filename)
 			got := document["$defs"].(map[string]any)["review"]
@@ -76,6 +76,34 @@ func schemaFixture() (map[string]any, map[string]any, map[string]any) {
 	tests["base_revision"], tests["packages"], tests["exit_code"] = "frozen-head", []any{"./internal/example"}, 0
 	tests["completed"], tests["timed_out"], tests["output_truncated"] = true, false, false
 	return review, critique, report
+}
+
+func TestReviewSchemasPreserveBoundedSupplementIdentities(t *testing.T) {
+	for _, filename := range []string{"review-v1.json", "documentation-review-v1.json", "critique-v1.json", "critique-v2.json", "report-v1.json", "report-v2.json"} {
+		t.Run(filename, func(t *testing.T) {
+			_, document := contractSchema(t, filename)
+			definition := document["$defs"].(map[string]any)["review"]
+			compiler := jsonschema.NewCompiler()
+			if err := compiler.AddResource("https://hufu.invalid/review", definition); err != nil {
+				t.Fatal(err)
+			}
+			schema, err := compiler.Compile("https://hufu.invalid/review")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"unit-0000", "unit-0031", "supplement-0000", "supplement-0007", "unit-0032", "supplement-0008", "supplement-00000", "workset-0000"} {
+				review, _, _ := schemaFixture()
+				review["workset_key"] = key
+				if filename == "documentation-review-v1.json" {
+					review["lens"] = "documentation"
+				}
+				valid := key == "unit-0000" || key == "unit-0031" || key == "supplement-0000" || key == "supplement-0007"
+				if err := schema.Validate(review); (err == nil) != valid {
+					t.Fatalf("key %s valid=%v: %v", key, valid, err)
+				}
+			}
+		})
+	}
 }
 
 func TestTeamResultSchemasRejectFalseCompletion(t *testing.T) {
@@ -346,7 +374,7 @@ func TestReportRequiresCompleteRuntimeAttestations(t *testing.T) {
 }
 
 func TestCompleteContractsFitRuntimePromptBudget(t *testing.T) {
-	for _, name := range []string{"review-v1.json", "critique-v1.json", "critique-v2.json", "report-v1.json", "report-v2.json"} {
+	for _, name := range []string{"review-v1.json", "documentation-review-v1.json", "critique-v1.json", "critique-v2.json", "report-v1.json", "report-v2.json"} {
 		_, document := contractSchema(t, name)
 		canonical, err := json.Marshal(document)
 		if err != nil {
@@ -480,7 +508,7 @@ func TestReportV2PreservesFailedTests(t *testing.T) {
 }
 
 func TestReviewSchemaInvariantStateEvidence(t *testing.T) {
-	for _, filename := range []string{"review-v1.json", "critique-v1.json", "critique-v2.json", "report-v1.json", "report-v2.json"} {
+	for _, filename := range []string{"review-v1.json", "documentation-review-v1.json", "critique-v1.json", "critique-v2.json", "report-v1.json", "report-v2.json"} {
 		t.Run(filename, func(t *testing.T) {
 			_, document := contractSchema(t, filename)
 			item := document["$defs"].(map[string]any)["review"].(map[string]any)["properties"].(map[string]any)["invariant_assessments"].(map[string]any)["items"]
@@ -556,4 +584,28 @@ func reportV2CoverageFixture(count int) (map[string]any, map[string]any) {
 	critique, report := critiqueCoverageFixture(count)
 	report["supplement_outcomes"] = []any{}
 	return critique, report
+}
+
+func TestReportSupplementOutcomesPreserveFlatLimitations(t *testing.T) {
+	schema, _ := contractSchema(t, "report-v2.json")
+	limitation := map[string]any{"kind": "unavailable_path", "detail": "Requested source is absent from the frozen revision"}
+	for _, test := range []struct {
+		name        string
+		limitations any
+		valid       bool
+	}{
+		{"empty", []any{}, true},
+		{"flat", []any{limitation}, true},
+		{"nested", []any{[]any{limitation}}, false},
+		{"unknown_kind", []any{map[string]any{"kind": "invented", "detail": "invalid"}}, false},
+		{"missing_detail", []any{map[string]any{"kind": "unavailable_path"}}, false},
+		{"null", nil, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := []any{map[string]any{"source_task_id": "3", "gap_index": 0, "kind": "missing_dependency", "workset_key": "", "limitations": test.limitations}}
+			if err := schema.Properties["supplement_outcomes"].Validate(value); (err == nil) != test.valid {
+				t.Fatalf("valid=%t: %v", test.valid, err)
+			}
+		})
+	}
 }

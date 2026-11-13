@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -28,7 +29,13 @@ func acceptedSupplementAction(item task, current session, runID string) error {
 	if err != nil {
 		return err
 	}
-	sum := sha256.Sum256(canonical)
+	// Native runtime output receipts cover the two-space-indented canonical
+	// map. Compact JSON remains the format for structured result payloads.
+	var receiptJSON bytes.Buffer
+	if err := json.Indent(&receiptJSON, canonical, "", "  "); err != nil {
+		return err
+	}
+	sum := sha256.Sum256(receiptJSON.Bytes())
 	digest := "sha256:" + hex.EncodeToString(sum[:])
 	if item.Result.RuntimeOutputsHash != digest || item.Receipt.RuntimeOutputsHash != digest {
 		return fmt.Errorf("supplement action runtime outputs differ from its receipt")

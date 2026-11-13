@@ -32,23 +32,29 @@ func (c *Coordinator) clearMatchedProjectionRecovery(lineage []RunEvent, replaye
 		return
 	}
 	_ = c.mutateSessionData(func(sd *SessionData) error {
-		if !sd.RecoveryRequired || sd.PendingTerminalCommit != nil ||
-			!strings.HasPrefix(sd.RecoveryReason, "event-store projection mismatch: ") {
-			return nil
-		}
-		for i := len(lineage) - 1; i >= 0; i-- {
-			if lineage[i].Type != "projection_mismatch" {
-				continue
-			}
-			var payload struct {
-				Reason string `json:"reason"`
-			}
-			if json.Unmarshal(lineage[i].Payload, &payload) == nil && payload.Reason == sd.RecoveryReason {
-				sd.RecoveryRequired = false
-				sd.RecoveryReason = ""
-			}
-			break
+		if isRecordedProjectionRecovery(sd, replayed, lineage) {
+			sd.RecoveryRequired = false
+			sd.RecoveryReason = ""
 		}
 		return nil
 	})
+}
+
+// Call only after complete canonical parity has been established. Read-only
+// admission uses the same proof without clearing or persisting the barrier.
+func isRecordedProjectionRecovery(checkpoint, replayed *SessionData, lineage []RunEvent) bool {
+	if checkpoint == nil || replayed == nil || replayed.RecoveryRequired ||
+		!checkpoint.RecoveryRequired || checkpoint.PendingTerminalCommit != nil ||
+		!strings.HasPrefix(checkpoint.RecoveryReason, "event-store projection mismatch: ") {
+		return false
+	}
+	for i := len(lineage) - 1; i >= 0; i-- {
+		if lineage[i].Type == "projection_mismatch" {
+			var payload struct {
+				Reason string `json:"reason"`
+			}
+			return json.Unmarshal(lineage[i].Payload, &payload) == nil && payload.Reason == checkpoint.RecoveryReason
+		}
+	}
+	return false
 }

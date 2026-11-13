@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/golangruntime"
 	"github.com/kjelly/hufu/internal/runtimestore"
+	"github.com/kjelly/hufu/internal/team"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
@@ -147,12 +149,19 @@ func TestEmbeddedSupplementUsesReceiptBoundFrozenRequests(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		canonical, err := canonicalSupplementJSON(data)
+		var values map[string]any
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.UseNumber()
+		if err := decoder.Decode(&values); err != nil {
+			t.Fatal(err)
+		}
+		// Generate the receipt at the real runtime boundary, independently of
+		// the adapter verifier. Its canonical format differs from payload JSON.
+		canonical, digest, err := team.CanonicalizeRuntimeOutputs(values)
 		if err != nil {
 			t.Fatal(err)
 		}
-		digest := "sha256:" + sha256Hex(canonical)
-		return map[string]any{"ID": id, "Status": "done", "contract_id": contract, "run_input_snapshot_id": "inputs", "execution_receipt": map[string]any{"run_id": "run-1", "task_id": id, "attempt": 1, "action_invocation_id": action, "runtime_outputs_hash": digest, "producer_id": "reviewer", "model_execution_id": "model-execution", "transcript_ref": "transcript"}, "VerifyResult": map[string]any{"exit_code": 0, "fingerprint": "verified"}, "typed_result": map[string]any{"status": "success", "runtime_outputs": outputs, "runtime_outputs_hash": digest}}
+		return map[string]any{"ID": id, "Status": "done", "contract_id": contract, "run_input_snapshot_id": "inputs", "execution_receipt": map[string]any{"run_id": "run-1", "task_id": id, "attempt": 1, "action_invocation_id": action, "runtime_outputs_hash": digest, "producer_id": "reviewer", "model_execution_id": "model-execution", "transcript_ref": "transcript"}, "VerifyResult": map[string]any{"exit_code": 0, "fingerprint": "verified"}, "typed_result": map[string]any{"status": "success", "runtime_outputs": canonical, "runtime_outputs_hash": digest}}
 	}
 	original := actionTask("1", "produce-workset", "original", map[string]any{"scope": scope})
 	inventory := actionTask("2", "inventory-review-supplement-requests", "inventory", map[string]any{"review_supplement_requests": requests})
@@ -217,5 +226,44 @@ func TestEmbeddedSupplementUsesReceiptBoundFrozenRequests(t *testing.T) {
 	result, err = golangruntime.Execute(t.Context(), "", program, envelope, env, 1<<20, 16<<10)
 	if err == nil || !strings.Contains(string(result.Stderr), "supplement source receipt mismatch") {
 		t.Fatalf("substituted source did not fail at receipt binding: %v %s", err, result.Stderr)
+	}
+}
+
+func TestSupplementRuntimeOutputsMatchRuntimeCanonicalReceipts(t *testing.T) {
+	for _, scenario := range []string{"valid", "changed_output", "changed_receipt", "compact_hash"} {
+		t.Run(scenario, func(t *testing.T) {
+			outputs, digest, err := team.CanonicalizeRuntimeOutputs(map[string]any{
+				"scope": map[string]any{"count": json.Number("9007199254740993"), "ratio": json.Number("1e-7"), "paths": []any{"來源<&>.go", nil, true}, "empty": map[string]any{}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire := map[string]any{"typed_result": map[string]any{"runtime_outputs": outputs, "runtime_outputs_hash": digest}, "execution_receipt": map[string]any{"runtime_outputs_hash": digest}}
+			data, err := json.Marshal(wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var task supplementTask
+			if err = json.Unmarshal(data, &task); err != nil {
+				t.Fatal(err)
+			}
+			switch scenario {
+			case "changed_output":
+				task.Result.Outputs["scope"] = json.RawMessage(`{"count":2}`)
+			case "changed_receipt":
+				task.Receipt.RuntimeOutputsHash = "sha256:" + strings.Repeat("0", 64)
+			case "compact_hash":
+				data, err := json.Marshal(outputs)
+				if err != nil {
+					t.Fatal(err)
+				}
+				compact := "sha256:" + sha256Hex(data)
+				task.Result.RuntimeOutputsHash = compact
+				task.Receipt.RuntimeOutputsHash = compact
+			}
+			if err := verifySupplementRuntimeOutputs(task); (err == nil) != (scenario == "valid") {
+				t.Fatalf("runtime receipt verification: %v", err)
+			}
+		})
 	}
 }

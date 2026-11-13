@@ -174,6 +174,9 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	if err := restoreResumeLaunchSettings(ctx, session); err != nil {
 		return nil, fmt.Errorf("restore saved launch settings: %w", err)
 	}
+	if resumeSetupSource(ctx) != nil && opts.newSession {
+		return nil, fmt.Errorf("resume cannot start a replacement session")
+	}
 	// Apply CLI model overrides as the highest-priority model config layer.
 	cliModelOverrides, err := applyCLIRuntimeOverrides(session)
 	if err != nil {
@@ -242,7 +245,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 	resolvedGuardModel := roleModels.Guard
 	resolvedJudgeModel := roleModels.Judge
 	resolvedPlanReviewerModel := roleModels.PlanReviewer
-	startsFresh := opts.newSession || execProfile.DisableHistoricalTaskReuse
+	startsFresh := opts.newSession || (execProfile.DisableHistoricalTaskReuse && resumeSetupSource(ctx) == nil)
 	if err := validateDerivedRunEntry(ctx, session, startsFresh); err != nil {
 		return nil, err
 	}
@@ -260,6 +263,12 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		})
 		if err != nil {
 			return nil, err
+		}
+		if source := resumeSetupSource(ctx); source != nil {
+			if err := coordinator.AuthorizeSessionRestore(source); err != nil {
+				_ = coordinator.Close()
+				return nil, err
+			}
 		}
 		return &teamContext{teamName: teamName, session: session, coordinator: coordinator, roleSources: roleSources}, nil
 	}

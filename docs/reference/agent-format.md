@@ -1519,3 +1519,11 @@ Team 須有非空 `invariants.yaml` catalog；task 必須要求結果，在有 w
 來滿足契約。若 team 允許不帶 payload 的 blocked 結果，必須在此 schema
 明確允許 `structured_payload: null`。新增規則會改變凍結契約；既有 run 應先用
 `resume --upgrade-contracts --dry-run` 預覽，不能覆寫歷史結果或收據。
+
+`x-hufu-runtime-inputs` also accepts `source_kind: workset_binding`. For this
+source, omit `source_task` and name a frozen string binding in `output`. The
+runtime verifies the assigned child, expansion receipt, immutable manifest and
+producer occurrence before filling `target`; model-supplied overrides are
+rejected even when identical. Local `$ref` parents are supported for targets;
+external, cyclic and ambiguous reference paths are rejected. The model-facing
+schema omits these fields while canonical results retain them for replay.

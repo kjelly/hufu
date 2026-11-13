@@ -32,6 +32,9 @@ func (c *Coordinator) AssessResumeSource(ctx context.Context, source *ResumeSour
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := validateResumeCheckpointProjection(source); err != nil {
+		return nil, err
+	}
 	if err := c.prepareRecoveryValidation(); err != nil {
 		return nil, err
 	}

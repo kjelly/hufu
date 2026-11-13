@@ -18,7 +18,7 @@ const (
 	RecoveryRepairClaims            ResultCollectionRecoveryDisposition = "repair_claims"
 	RecoveryResumeCollection        ResultCollectionRecoveryDisposition = "resume_collection"
 	RecoveryBlocked                 ResultCollectionRecoveryDisposition = "blocked"
-	resultRecoveryValidatorRevision                                     = 7
+	resultRecoveryValidatorRevision                                     = 8
 )
 
 type ResultCollectionRecoveryCheck struct {

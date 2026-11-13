@@ -557,6 +557,8 @@ type Coordinator struct {
 	// set by CLI --new so archived events remain auditable without being
 	// replayed into the new session's task projection.
 	freshSession atomic.Bool
+	// sessionResume restores only an explicitly selected canonical session.
+	sessionResume atomic.Bool
 	// freshSessionMemory prevents a --new invocation from injecting a prior
 	// session's archive into its new coordinator or worker prompts. Unlike
 	// freshSession, it remains set for this coordinator's whole lifetime.

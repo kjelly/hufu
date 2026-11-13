@@ -18,6 +18,12 @@ import (
 // invocation with its full policy, evidence, verification and acceptance gates.
 func runContractRecoveryCommand(cmd *cobra.Command, source *team.ResumeSource, name string, binding *commandWorkspaceBinding, registry *team.TeamRegistry, vars map[string]string) (runErr error) {
 	recoveryCtx := withResumeLaunchPolicy(commandContext(cmd), source)
+	if resumeRepairAction != "" {
+		recoveryCtx = team.WithReadOnlyActionRepair(recoveryCtx, resumeRepairAction)
+	}
+	if resumeRebuildActionPayloads {
+		recoveryCtx = team.WithActionPayloadReconstruction(recoveryCtx)
+	}
 	if resumeRepairResult != "" {
 		recoveryCtx = team.WithContractResultRepair(recoveryCtx, resumeRepairResult)
 	}
@@ -57,7 +63,8 @@ func runContractRecoveryCommand(cmd *cobra.Command, source *team.ResumeSource, n
 			PlanHash     string `json:"plan_hash"`
 			MetadataOnly bool   `json:"metadata_only"`
 			RepairResult string `json:"repair_result,omitempty"`
-		}{Branch: branch, SourceBranch: source.BranchID, PlanHash: plan.SHA256, MetadataOnly: plan.MetadataOnly, RepairResult: resumeRepairResult})
+			RepairAction string `json:"repair_action,omitempty"`
+		}{Branch: branch, SourceBranch: source.BranchID, PlanHash: plan.SHA256, MetadataOnly: plan.MetadataOnly, RepairResult: resumeRepairResult, RepairAction: resumeRepairAction})
 		if err != nil {
 			return err
 		}

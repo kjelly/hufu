@@ -29,6 +29,9 @@ func contractRecoveryTaskHash(definition TaskDef, item *TodoItem, session *Sessi
 	if !sameCanonicalEvidence(canonicalActionBindings(bindings), canonicalActionBindings(item.ActionInputBindings)) ||
 		!sameCanonicalEvidence(identity.BoundInputs, item.BoundInputs) || identity.PayloadHash != item.MaterializedActionPayloadHash ||
 		item.Action == nil || materialized.Capability != item.Action.Capability || materialized.Type != item.Action.Type || materialized.Payload != item.Action.Payload {
+		if item.Action != nil && identity.PayloadHash == item.MaterializedActionPayloadHash && materialized.Payload != item.Action.Payload {
+			return "", fmt.Errorf("%w: stored frozen action payload bytes differ from their verified materialization; redacted or altered historical payloads require separate recovery", errTaskInputDrift)
+		}
 		return "", fmt.Errorf("%w: frozen action payload or input binding changed", errTaskInputDrift)
 	}
 	return boundTaskContractHash(base, identity.ContractHash, policy.RunInputPolicyHash), nil

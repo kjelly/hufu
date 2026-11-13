@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/auditverify"
+	"github.com/kjelly/hufu/internal/inspect"
 	"github.com/kjelly/hufu/internal/team"
 	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 	"github.com/spf13/cobra"
@@ -400,6 +401,9 @@ func exerciseResumeRecovery(t *testing.T, succeeds, delegated, noInputs, workflo
 		t.Fatalf("done=%+v work=%d collector=%d", done, workCalls.Load(), collectorCalls.Load())
 	}
 	if upgradeContracts {
+		if _, err := inspect.LoadHistoricalResults(t.Context(), inspect.HistoricalResultScope{Workspace: workspace, Team: "fixture-team", Branch: resumeBranch}); err != nil {
+			t.Fatalf("recovered results cannot be read: %v", err)
+		}
 		if source.Session.RunResult == nil {
 			t.Fatal("recovered workflow has no terminal result")
 		}

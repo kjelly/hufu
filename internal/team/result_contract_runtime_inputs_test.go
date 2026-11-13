@@ -65,7 +65,7 @@ func TestRuntimeResultInputsSubmissionAndReplay(t *testing.T) {
 					return c.structuredPayloadForSubmission(consumer.ID, []byte(raw))
 				}
 				request := AttemptRequest{Task: taskDefFromTodoItem(consumer), resultContractSchema: compiled,
-					resultRuntimeInputs: func() (map[string]any, error) { return c.resultRuntimeInputValues(compiled) }}
+					resultRuntimeInputs: func() (map[string]any, error) { return c.resultRuntimeInputValues(compiled, "") }}
 				payload, err := canonicalExternalStructuredPayload(request, &WorkerResultProposal{StructuredPayloadJSON: new(raw)}, nil)
 				if err != nil {
 					return nil, err.Error()
@@ -211,11 +211,11 @@ func TestRuntimeResultInputDeclarationsFailClosed(t *testing.T) {
 
 func TestRuntimeResultInputsExternalRechecksReceipt(t *testing.T) {
 	c, source, consumer, compiled := runtimeInputResultFixture(t)
-	if _, err := c.resultRuntimeInputValues(compiled); err != nil {
+	if _, err := c.resultRuntimeInputValues(compiled, ""); err != nil {
 		t.Fatal(err)
 	}
 	request := AttemptRequest{Task: taskDefFromTodoItem(consumer), resultContractSchema: compiled,
-		resultRuntimeInputs: func() (map[string]any, error) { return c.resultRuntimeInputValues(compiled) }}
+		resultRuntimeInputs: func() (map[string]any, error) { return c.resultRuntimeInputValues(compiled, "") }}
 	source.ExecutionReceipt.RuntimeOutputsHash = "sha256:changed-after-preflight"
 	if payload, err := canonicalExternalStructuredPayload(request, &WorkerResultProposal{StructuredPayloadJSON: new(`{"decision":true}`)}, nil); payload != nil || err == nil {
 		t.Fatal("external proposal bypassed a changed native receipt")

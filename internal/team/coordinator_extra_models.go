@@ -817,6 +817,7 @@ func cloneCoordinator(orig *Coordinator, newSession *TeamSession) *Coordinator {
 		noProgressUsageOwner:               usageOwner,
 		noProgressUsageNamespace:           usageNamespace,
 	}
+	clone.sessionResume.Store(orig.sessionResume.Load())
 	cacheDeps := taskCacheDependenciesFor(clone)
 	cacheDeps.AppendJournal = nil
 	clone.taskCache = orig.TaskCache().Fork(cacheDeps)

@@ -474,6 +474,7 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 	var taskOrder []string
 	result := newTodoReplayResult()
 	receiptObservations := make(map[string]*WorksetExpansionReceipt)
+	activeActions := make(map[string]string)
 	// Only task_created establishes a durable occurrence contract. Older
 	// snapshot-only histories begin with lifecycle events such as
 	// task_completed; those events must retain their latest snapshot semantics
@@ -509,6 +510,16 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 			result = newTodoReplayResult()
 			receiptObservations = make(map[string]*WorksetExpansionReceipt)
 			frozenContracts = make(map[string]bool)
+			activeActions = make(map[string]string)
+			continue
+		}
+		if e.Type == "action_started" && e.TaskID != "" {
+			var payload struct {
+				ActionID string `json:"action_id"`
+			}
+			if json.Unmarshal(e.Payload, &payload) == nil && payload.ActionID != "" {
+				activeActions[e.TaskID] = payload.ActionID
+			}
 			continue
 		}
 		if e.Type == string(EventContractRecovery) {
@@ -629,11 +640,7 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 			}
 			if json.Unmarshal(e.Payload, &payload) == nil && payload.ActionProgress != nil {
 				if item := taskMap[e.TaskID]; item != nil && item.Status == TaskInProgress {
-					prior := item.ActionProgress
-					observed := payload.ActionProgress
-					if prior == nil || observed.Attempt > prior.Attempt || observed.Attempt == prior.Attempt && observed.ActionID == prior.ActionID && observed.Sequence > prior.Sequence {
-						item.ActionProgress = cloneActionProgress(observed)
-					}
+					item.ActionProgress = replayActionProgress(item.ActionProgress, payload.ActionProgress, activeActions[e.TaskID])
 				}
 			}
 			continue
@@ -763,6 +770,7 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 				if _, exists := taskMap[taskID]; exists {
 					delete(taskMap, taskID)
 					delete(frozenContracts, taskID)
+					delete(activeActions, taskID)
 					for i, id := range taskOrder {
 						if id == taskID {
 							taskOrder = append(taskOrder[:i], taskOrder[i+1:]...)
@@ -1019,10 +1027,7 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 			item.Desc = desc
 		}
 		if observed := payload.ActionProgress; observed != nil {
-			prior := item.ActionProgress
-			if prior == nil || observed.Attempt > prior.Attempt || observed.Attempt == prior.Attempt && observed.ActionID == prior.ActionID && observed.Sequence > prior.Sequence {
-				item.ActionProgress = cloneActionProgress(observed)
-			}
+			item.ActionProgress = replayActionProgress(item.ActionProgress, observed, activeActions[taskID])
 		}
 		if payload.Goal != "" {
 			item.Goal = payload.Goal

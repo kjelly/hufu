@@ -359,10 +359,21 @@ func (c *Coordinator) observedRequiredArtifactReads(ctx context.Context, binding
 	if err != nil {
 		return nil, err
 	}
-	scope := decisionPrimitiveScope(events, c.activeBranchID(), metadata)
+	_, compiled, err := c.boundResultContract(identity.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	origin, err := c.resultObservationScope(ctx, identity.TaskID, compiled, metadata, events)
+	if err != nil {
+		return nil, err
+	}
+	if origin.workRevision > 0 {
+		workRevision, workDispatch = origin.workRevision, origin.workDispatch
+	}
+	scope := decisionPrimitiveScope(origin.events, origin.branch, metadata)
 	observed := make(map[string][]tools.ArtifactByteRange)
-	for _, event := range events {
-		if event.Type != string(EventArtifactReadCoverageObserved) || event.TaskID != identity.TaskID || event.RunID != identity.RunID || event.Attempt != identity.Attempt || event.Actor != identity.Agent {
+	for _, event := range origin.events {
+		if event.Type != string(EventArtifactReadCoverageObserved) || event.BranchID != origin.branch || event.TaskID != identity.TaskID || event.RunID != identity.RunID || event.Attempt != identity.Attempt || event.Actor != identity.Agent {
 			continue
 		}
 		if err := validateArtifactReadObservationEvent(event); err != nil {

@@ -117,3 +117,31 @@ func TestResumeContractRecoveryLegacySubmissionPreview(t *testing.T) {
 		t.Fatalf("lost legacy proof: %v", err)
 	}
 }
+
+func TestResumeContractRecoveryActionRepairPreview(t *testing.T) {
+	plan := &team.ContractRecoveryPlan{Retained: 7, Retried: 1, ActionRepair: &team.ReadOnlyActionRepair{TaskID: "8", Capability: "native", OriginalProvider: "old-program", AcceptedProvider: "fixed-program", SharedCapabilities: []string{"native", "resolver"}}}
+	plan.Tasks = []team.ContractRecoveryTask{{ID: "8", Action: "retry", PayloadReconstruction: &team.ActionPayloadReconstruction{StoredSHA256: "stored-budget-hash", MaterializedSHA256: "original-budget-hash", Paths: []string{"/max_analysis_input_tokens"}}}}
+	for _, format := range []string{"text", "json"} {
+		t.Run(format, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := writeContractRecoveryPreview(&out, plan, format); err != nil {
+				t.Fatal(err)
+			}
+			if format == "json" {
+				var restored team.ContractRecoveryPlan
+				if err := json.Unmarshal(out.Bytes(), &restored); err != nil {
+					t.Fatal(err)
+				}
+				if restored.ActionRepair == nil || restored.ActionRepair.TaskID != "8" || restored.Retained != 7 || len(restored.Tasks) != 1 || restored.Tasks[0].PayloadReconstruction == nil {
+					t.Fatal("missing action repair projection")
+				}
+			} else {
+				for _, required := range []string{"Read-only action repair", "retain 7; retry 1", "old-program -> fixed-program", "native, resolver", "stored-budget-hash -> original-budget-hash", "/max_analysis_input_tokens"} {
+					if !strings.Contains(out.String(), required) {
+						t.Fatalf("missing %q", required)
+					}
+				}
+			}
+		})
+	}
+}

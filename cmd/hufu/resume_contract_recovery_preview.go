@@ -32,6 +32,9 @@ func writeContractRecoveryPreview(w io.Writer, plan *team.ContractRecoveryPlan, 
 	if plan.WorkRetry != nil {
 		label = "Read-only work recovery"
 	}
+	if plan.ActionRepair != nil {
+		label = "Read-only action repair"
+	}
 	fmt.Fprintf(&out, "%s preview: retain %d; retry %d (original failures: %d; affected downstream: %d)\n", label, plan.Retained, plan.Retried, failed, downstream)
 	if plan.Repaired > 0 {
 		fmt.Fprintf(&out, "Result-only repairs: %d; original worker tools will not be replayed; collector turns require a separate child resume --repair-result.\n", plan.Repaired)
@@ -39,6 +42,9 @@ func writeContractRecoveryPreview(w io.Writer, plan *team.ContractRecoveryPlan, 
 	fmt.Fprintf(&out, "Source branch: %q; event: %s\n", plan.SourceBranch, plan.SourceHead)
 	if retry := plan.WorkRetry; retry != nil {
 		fmt.Fprintf(&out, "Read-only work retry: task %q; missing required decisions: %d; old work and decisions remain in the source branch.\n", retry.TaskID, len(retry.MissingDecisions))
+	}
+	if repair := plan.ActionRepair; repair != nil {
+		fmt.Fprintf(&out, "Action repair: task %q; capability %q; provider %s -> %s; shared capabilities: %s\n", repair.TaskID, repair.Capability, repair.OriginalProvider, repair.AcceptedProvider, strings.Join(repair.SharedCapabilities, ", "))
 	}
 	if upgrade := plan.InputPolicyUpgrade; upgrade != nil {
 		fmt.Fprintf(&out, "Input policy upgrade: %s -> %s; frozen snapshot: %q (sha256 %s)\n", upgrade.OriginalSHA256, upgrade.AcceptedSHA256, upgrade.SnapshotID, upgrade.SnapshotSHA256)
@@ -53,6 +59,9 @@ func writeContractRecoveryPreview(w io.Writer, plan *team.ContractRecoveryPlan, 
 		}
 		if len(task.AffectedBy) > 0 {
 			fmt.Fprintf(&out, "; affected by: %s", strings.Join(task.AffectedBy, ", "))
+		}
+		if proof := task.PayloadReconstruction; proof != nil {
+			fmt.Fprintf(&out, "; payload reconstruction: %s -> %s; paths: %s", proof.StoredSHA256, proof.MaterializedSHA256, strings.Join(proof.Paths, ", "))
 		}
 		out.WriteByte('\n')
 	}

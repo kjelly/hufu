@@ -42,10 +42,14 @@ func (c *Coordinator) resultEvidenceKeyRefs(ctx context.Context, todoID string, 
 	if err != nil {
 		return nil, err
 	}
-	scope := decisionPrimitiveScope(events, c.activeBranchID(), metadata)
+	origin, err := c.resultObservationScope(ctx, todoID, compiled, metadata, events)
+	if err != nil {
+		return nil, err
+	}
+	scope := decisionPrimitiveScope(origin.events, origin.branch, metadata)
 	refs := make(map[string]ArtifactRef)
-	for _, event := range events {
-		if event.Type != string(EventArtifactEvidenceObserved) || event.RunID != identity.RunID || event.TaskID != identity.TaskID || event.Attempt != identity.Attempt || event.Actor != identity.Agent || event.BranchID != c.activeBranchID() {
+	for _, event := range origin.events {
+		if event.Type != string(EventArtifactEvidenceObserved) || event.RunID != identity.RunID || event.TaskID != identity.TaskID || event.Attempt != identity.Attempt || event.Actor != identity.Agent || event.BranchID != origin.branch {
 			continue
 		}
 		if err := validateDecisionObservationEvent(event); err != nil {
@@ -55,7 +59,7 @@ func (c *Coordinator) resultEvidenceKeyRefs(ctx context.Context, todoID string, 
 		if err := json.Unmarshal(event.Payload, &observation); err != nil {
 			return nil, err
 		}
-		if observation.Scope != scope || observation.SchemaHash != compiled.SchemaSHA256 || observation.ModelExecutionID != metadata.ModelExecutionID || observation.ErrorCode != "" {
+		if observation.Scope != scope || observation.SchemaHash != origin.schema || observation.ModelExecutionID != metadata.ModelExecutionID || observation.ErrorCode != "" {
 			continue
 		}
 		if _, err := c.readDecisionArtifact(ctx, observation.Output, 1<<20); err != nil {

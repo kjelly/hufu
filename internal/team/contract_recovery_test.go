@@ -69,11 +69,16 @@ func contractRecoveryFixtureFromState(t *testing.T, f *versionFixture, configure
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := mustArtifactStore(t, f.control).Put(t.Context(), PutArtifactRequest{Kind: "workset_manifest", Path: "workset.json", Content: []byte(`{"schema_version":1,"items":[{"key":"failed"},{"key":"consumer"}]}`), RunID: "source-run", TaskID: "1", Attempt: 1, Agent: "worker"})
+	manifestRows := []WorksetItem{{Key: "failed", Bindings: map[string]string{"label": "frozen-value"}, Inputs: []ArtifactRef{input.ArtifactRef}}, {Key: "consumer", Bindings: map[string]string{"label": "frozen-value"}, Inputs: []ArtifactRef{input.ArtifactRef}}}
+	manifestData, err := json.Marshal(WorksetManifest{SchemaVersion: WorksetSchemaVersion, Items: manifestRows})
 	if err != nil {
 		t.Fatal(err)
 	}
-	workset := &WorksetExpansionReceipt{WorksetID: "original-workset", RunID: "source-run", ParentTaskID: "source", SourceArtifactID: manifest.ID, SourceSHA256: manifest.SHA256, SourceArtifact: manifest.ArtifactRef, ItemCount: 2, Children: map[string]string{"failed": "2", "consumer": "3"}}
+	manifest, err := mustArtifactStore(t, f.control).Put(t.Context(), PutArtifactRequest{Kind: "workset_manifest", Path: "workset.json", Content: manifestData, RunID: "source-run", TaskID: "1", Attempt: 1, Agent: "worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workset := &WorksetExpansionReceipt{WorksetID: worksetID(manifest.ID, manifest.SHA256, manifestRows), ItemKeysSHA256: worksetItemKeysDigest(manifestRows), RunID: "source-run", ParentTaskID: "source", SourceArtifactID: manifest.ID, SourceSHA256: manifest.SHA256, SourceArtifact: manifest.ArtifactRef, ItemCount: 2, Children: map[string]string{"failed": "2", "consumer": "3"}}
 	var tasks []*TodoItem
 	for i, definition := range c.session.ContractTasks {
 		id := string(rune('1' + i))
@@ -114,7 +119,7 @@ func contractRecoveryFixtureFromState(t *testing.T, f *versionFixture, configure
 				item.ExecutionReceipts = []ExecutionReceipt{*item.ExecutionReceipt}
 			}
 		} else {
-			item.WorksetBinding = &WorksetBinding{WorksetID: workset.WorksetID, ParentTaskID: workset.ParentTaskID, ItemKey: definition.ID, Inputs: []ArtifactRef{input.ArtifactRef}, SourceArtifactID: manifest.ID, SourceSHA256: manifest.SHA256, SourceArtifact: manifest.ArtifactRef}
+			item.WorksetBinding = &WorksetBinding{WorksetID: workset.WorksetID, ParentTaskID: workset.ParentTaskID, ItemKey: definition.ID, Bindings: map[string]string{"label": "frozen-value"}, Inputs: []ArtifactRef{input.ArtifactRef}, SourceArtifactID: manifest.ID, SourceSHA256: manifest.SHA256, SourceArtifact: manifest.ArtifactRef}
 			// Runtime dispatch records one receipt on the first child; all
 			// siblings use its committed child map rather than private copies.
 			if i == 1 {
@@ -653,5 +658,72 @@ func TestContractRecoveryMetadataOnlyRejectsUnsafeSources(t *testing.T) {
 				t.Fatal("metadata preflight changed project files")
 			}
 		})
+	}
+}
+
+func TestContractRecoveryPublishesAfterSiblingBranchObservation(t *testing.T) {
+	c, f, _ := metadataContractRecoveryFixture(t, nil)
+	tree, err := LoadSessionTree(f.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := ForkSessionBranch(t.Context(), f.control, tree, f.events, "peer", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.events.SetBranchID(peer.ID)
+	appendBranchEvent(t, f.events, RunEvent{Type: "unrelated-observation", Payload: []byte(`{}`)})
+	if _, _, err := CheckoutSessionBranch(t.Context(), f.control, tree, f.events, "main"); err != nil {
+		t.Fatal(err)
+	}
+	f.events.SetBranchID("main")
+	source, err := ReadResumeSource(f.control, "main", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := source.lineage
+	ctx := WithMetadataOnlyContractRecovery(t.Context())
+	plan, err := c.AssessContractRecovery(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A separate CLI apply reads a fresh source: the preview hash must still
+	// reject a global write even when the selected branch did not change.
+	f.events.SetBranchID(peer.ID)
+	appendBranchEvent(t, f.events, RunEvent{Type: "unrelated-observation", Payload: []byte(`{}`)})
+	f.events.SetBranchID("main")
+	fresh, err := ReadResumeSource(f.control, "main", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ApplyContractRecovery(ctx, fresh, "stale-after-peer", plan.SHA256); err == nil {
+		t.Fatal("fresh source admitted an outdated preview after a sibling write")
+	}
+	source = fresh
+	plan, err = c.AssessContractRecovery(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	branch, err := c.ApplyContractRecovery(ctx, source, "recovered-after-peer", plan.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.SourceHead == source.eventHead || plan.SourceHead != before[len(before)-1].ID {
+		t.Fatal("plan used the global journal head instead of the source lineage")
+	}
+	child, err := ReadResumeSource(f.control, branch, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.Session.ExecutionPolicySnapshot.ConfigurationHash != plan.Policy.ConfigurationHash {
+		t.Fatal("child policy not admitted")
+	}
+	tree, err = LoadSessionTree(f.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := ProjectValidatedEventsForBranch(mustReadEvents(t, f.events), tree, "main")
+	if err != nil || !reflect.DeepEqual(parent, before) {
+		t.Fatalf("parent changed: %v", err)
 	}
 }

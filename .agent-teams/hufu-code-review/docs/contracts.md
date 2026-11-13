@@ -44,10 +44,22 @@ The native inventory derives original task/gap/hash identities from accepted
 records and emits receipt-bound runtime outputs. The producer consumes those
 outputs and the original hash-verified frozen manifest, never model-copied
 receipts, live checkout files, or historical storage mutation.
+Runtime-output receipt digests cover the complete normalized map serialized
+as two-space-indented JSON, matching `CanonicalizeRuntimeOutputs`; accepted
+structured-payload digests use compact JSON. These representations are distinct.
+The supplemental verifier preserves numbers and recomputes the original receipt
+digest without reapplying redaction. Its embedded integration fixture obtains
+receipts from the real runtime canonicalizer rather than the verifier itself.
 
 Exactly one round is permitted, at most eight supplemental items and within
 the unchanged 32-review/64-evidence-source capacity. Original worksets are not
-redispatched. Each supplement binds the original task, gap, hash, revision,
+redispatched. The `reviewer` role is reusable for the distinct supplemental
+workset; immutable expansion receipts reject redispatch of either workset.
+The `critic` role is likewise reusable for documentation escalation and
+independent critiques of distinct sources. `documentation-reviewer` and
+`synthesizer` retain role-level one-shot restrictions. Role reuse does not
+authorize another supplement round or replay of accepted tasks.
+Each supplement binds the original task, gap, hash, revision,
 frozen manifest identity and requested paths. The native producer validates
 paths, ordered ranges, scope grants, source identity and byte limits before
 reading frozen bytes. Unavailable, excluded, stale, invalid or over-budget
@@ -62,6 +74,8 @@ evidence and supplemental source/critic coverage. A supplemental resolver must
 bind the exact original task and gap. Original accepted records, findings and
 severities remain immutable; every original gap stays visible even if resolved.
 Coverage attests bytes returned, not understanding or semantic correctness.
+Each outcome preserves its flat `limitations` array of `{kind, detail}` objects,
+including nonempty restrictions for requests that could not be materialized.
 
 
 1. Dispatch the workset producer and snapshot-pinned Go verifier together.
@@ -135,7 +149,8 @@ critiques and synthesizes accepted results. Each primary review's
 claims (`invariant_id`, `status`, `summary`, and optional `finding_index` /
 `missing_evidence`, in ascending ID order) while
 `submit_result` can still be corrected; the handoff inventory repeats the full
-comparison later, when reviewers can no longer be redispatched. The final report audit is a static
+comparison later, after the original workset's accepted tasks are immutable.
+The final report audit is a static
 `side_effect: none` VERIFY action, bound to that same scope snapshot. Its typed
 runtime output is objectively checked for `passed: true` before the action can
 be marked done; blocking acceptance cannot pass until this contract succeeds.
@@ -635,3 +650,18 @@ verdicts; contradictory sibling evidence must be explained, not used to
 silently rewrite a verdict. This remains semantic model work, not a new
 native assertion that code is correct. Historical invocations are unchanged;
 team policy changes require a fresh invocation under ordinary resume rules.
+
+Review result keys accept the producer's exact bounded vocabulary: `unit-0000`
+through `unit-0031` for primary items and `supplement-0000` through
+`supplement-0007` for incremental items. Critic and report schemas embed the
+same review definition. Workset binding still requires the assigned item key;
+an allowed key from another item cannot substitute for that identity. Historical
+schema drift uses ordinary controlled contract recovery and result-only repair,
+preserving accepted sources and the completed worker transcript.
+
+Supplemental results use `schemas/supplement-review-v1.json`. The runtime owns
+`record.workset_key`, `record.review_revision` and `record.lens`, binding them
+from the assigned immutable workset. Frozen goal metadata describes the review
+scope; it is not a request to submit these fields. The collector submits only
+semantic claims and omits the runtime-owned identity fields. Critic and report
+source selectors accept this schema alongside primary/documentation sources.

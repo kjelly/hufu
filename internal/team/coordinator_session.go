@@ -584,7 +584,7 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 	// the only compatible evidence: any restored task means the initial batch
 	// is no longer pending; an empty/corrupt replacement session remains
 	// pending. Never infer this from STM/LTM or conversation prose.
-	if len(sd.Tasks) > 0 && !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
+	if len(sd.Tasks) > 0 && c.restoresSessionTasks() {
 		sd.DelegationPhase = DelegationPhaseActive
 	} else if sd.DelegationPhase == "" {
 		sd.DelegationPhase = DelegationPhaseInitialPending
@@ -608,13 +608,13 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 	// When DisableHistoricalTaskReuse is enabled (e.g. fresh-session or
 	// fresh-verification),
 	// prior rounds are not inherited so execution starts fresh at round 0.
-	if !prof.DisableHistoricalTaskReuse {
+	if c.restoresSessionTasks() {
 		c.baseRounds = sd.Rounds
 	} else {
 		c.baseRounds = 0
 	}
 	c.applyLiveTaskProjection(sd.Tasks)
-	if !prof.DisableHistoricalMemory && c.compactionState == nil && c.compactionRecoveryError() == nil {
+	if (!prof.DisableHistoricalMemory || c.sessionResume.Load()) && c.compactionState == nil && c.compactionRecoveryError() == nil {
 		c.hydrateConversationHistoryFromSessionData()
 	}
 	// Canonical compaction state is restored only after initEventStore has
@@ -628,6 +628,9 @@ func (c *Coordinator) SetSessionData(sd *SessionData) {
 func (c *Coordinator) SetFreshSession(v bool) {
 	if c == nil {
 		return
+	}
+	if v {
+		c.sessionResume.Store(false)
 	}
 	c.freshSession.Store(v)
 	c.freshSessionMemory.Store(v)
@@ -687,12 +690,12 @@ func (c *Coordinator) applyLiveTaskProjection(tasks []*TodoItem) {
 	}
 	c.setRestoredTodoIDs(tasks)
 	prof := c.ExecutionProfile()
-	if c.workflowCycleID() != "" && !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore && c.taskTracker != nil {
+	if c.workflowCycleID() != "" && c.restoresSessionTasks() && c.taskTracker != nil {
 		var floor int
 		c.viewSessionData(func(sd *SessionData) { floor = sd.WorkflowTaskIDFloor })
 		c.taskTracker.TodoList().restoreWorkflowCycle(tasks, floor)
 	}
-	if len(tasks) > 0 && !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
+	if len(tasks) > 0 && c.restoresSessionTasks() {
 		if c.taskTracker != nil && c.taskTracker.TodoList() != nil {
 			c.taskTracker.TodoList().Restore(tasks)
 		}
@@ -973,8 +976,7 @@ func (c *Coordinator) getInterruptedTasks() []*TodoItem {
 //
 //nolint:gocyclo // The recovery matrix is intentionally explicit to preserve fail-closed side-effect semantics.
 func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
-	prof := c.ExecutionProfile()
-	if prof.DisableHistoricalTaskReuse || prof.DisableJournalRestore {
+	if !c.restoresSessionTasks() {
 		return 0, nil
 	}
 	if err := c.authorizeOperatorResultRepair(ctx); err != nil {

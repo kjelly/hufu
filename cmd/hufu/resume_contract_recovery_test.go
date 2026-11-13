@@ -18,8 +18,10 @@ import (
 )
 
 func TestResumeContractRecoveryFlags(t *testing.T) {
-	oldRetry := resumeRetryWork
-	t.Cleanup(func() { resumeRetryWork = oldRetry })
+	oldRetry, oldAction, oldRebuild := resumeRetryWork, resumeRepairAction, resumeRebuildActionPayloads
+	t.Cleanup(func() {
+		resumeRetryWork, resumeRepairAction, resumeRebuildActionPayloads = oldRetry, oldAction, oldRebuild
+	})
 	savedOpts, upgrade, branch, hash, task, model, metadata, inputPolicy := opts, resumeUpgradeContracts, resumeRecoveryBranch, resumeRecoveryPlan, resumeRepairResult, resumeRepairModel, resumeMetadataOnly, resumeUpgradeInputPolicy
 	t.Cleanup(func() {
 		opts, resumeUpgradeContracts, resumeRecoveryBranch, resumeRecoveryPlan, resumeRepairResult, resumeRepairModel, resumeMetadataOnly = savedOpts, upgrade, branch, hash, task, model, metadata
@@ -32,8 +34,24 @@ func TestResumeContractRecoveryFlags(t *testing.T) {
 		valid                  bool
 		inputPolicy            bool
 		retry                  string
+		action                 string
+		rebuild                bool
 	}{
 		{name: "preview", dry: true, upgrade: true, valid: true},
+		{name: "action preview", dry: true, action: "8", valid: true},
+		{name: "payload rebuild preview", dry: true, action: "8", rebuild: true, valid: true},
+		{name: "payload rebuild apply", action: "8", rebuild: true, branch: "rebuild", hash: strings.Repeat("a", 64), valid: true},
+		{name: "payload rebuild requires action", dry: true, rebuild: true},
+		{name: "payload rebuild cannot upgrade", dry: true, rebuild: true, upgrade: true},
+		{name: "payload rebuild cannot repair result", dry: true, rebuild: true, repair: "8"},
+		{name: "action metadata preview", dry: true, action: "8", metadata: true, valid: true},
+		{name: "action apply", action: "8", branch: "recovery", hash: strings.Repeat("a", 64), valid: true},
+		{name: "action needs plan", action: "8"},
+		{name: "action cannot retry", dry: true, action: "8", retry: "8"},
+		{name: "action cannot repair result", dry: true, action: "8", repair: "8"},
+		{name: "action cannot upgrade", dry: true, action: "8", upgrade: true},
+		{name: "action cannot upgrade inputs", dry: true, action: "8", inputPolicy: true},
+		{name: "action exact id", dry: true, action: " 8"},
 		{name: "work preview", dry: true, retry: "32", valid: true},
 		{name: "work metadata preview", dry: true, retry: "32", metadata: true, valid: true},
 		{name: "work apply", retry: "32", branch: "recovery", hash: strings.Repeat("a", 64), valid: true},
@@ -60,7 +78,8 @@ func TestResumeContractRecoveryFlags(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			opts = runOptions{dryRun: tc.dry}
-			resumeRetryWork = tc.retry
+			resumeRetryWork, resumeRepairAction = tc.retry, tc.action
+			resumeRebuildActionPayloads = tc.rebuild
 			resumeMetadataOnly = tc.metadata
 			resumeUpgradeInputPolicy = tc.inputPolicy
 			resumeUpgradeContracts, resumeRecoveryBranch, resumeRecoveryPlan, resumeRepairResult, resumeRepairModel = tc.upgrade, tc.branch, tc.hash, tc.repair, ""

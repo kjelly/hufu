@@ -18,6 +18,11 @@ func startTeamCoordinator(ctx context.Context, coordinator *team.Coordinator, se
 	// boundary has already been crossed.
 	coordinator.SetExecutionProfile(execProfile)
 	coordinator.SetFreshSession(startsFresh)
+	if source := resumeSetupSource(ctx); source != nil {
+		if err := coordinator.AuthorizeSessionRestore(source); err != nil {
+			return err
+		}
+	}
 	coordinator.SetSessionData(sessionData)
 	if err := freezeStartupExecutionPolicy(coordinator); err != nil {
 		return err

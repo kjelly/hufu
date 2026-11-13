@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func supplementGateFixture(t *testing.T) session {
@@ -27,15 +30,13 @@ func supplementGateFixture(t *testing.T) session {
 		item := fixtureTask(t, id, contract, "success", payload{}, record{}, nil)
 		item.SnapshotID = current.SnapshotID
 		item.Receipt.ActionID = "action-" + id
-		item.Result.RuntimeOutputs = outputs
-		data, err := canonicalJSON(raw(t, outputs))
-		if err != nil {
+		var values map[string]any
+		decoder := json.NewDecoder(bytes.NewReader(raw(t, outputs)))
+		decoder.UseNumber()
+		if err := decoder.Decode(&values); err != nil {
 			t.Fatal(err)
 		}
-		sum := sha256.Sum256(data)
-		digest := "sha256:" + hex.EncodeToString(sum[:])
-		item.Receipt.RuntimeOutputsHash = digest
-		item.Result.RuntimeOutputsHash = digest
+		setSupplementRuntimeOutputs(t, &item, values)
 		return item
 	}
 	inventory := seal("20", "inventory-review-supplement-requests", map[string]json.RawMessage{"review_supplement_requests": raw(t, requests)})
@@ -167,5 +168,45 @@ func TestSupplementReportAuditsIncrementalEvidenceWithoutErasingSources(t *testi
 	}
 	if !reflect.DeepEqual(original, []byte(current.Tasks[0].Result.Payload.Value)) {
 		t.Fatal("audit changed accepted source bytes")
+	}
+}
+
+func setSupplementRuntimeOutputs(t *testing.T, item *task, values map[string]any) {
+	t.Helper()
+	outputs, digest, err := team.CanonicalizeRuntimeOutputs(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item.Result.RuntimeOutputs = nil
+	if err := json.Unmarshal(raw(t, outputs), &item.Result.RuntimeOutputs); err != nil {
+		t.Fatal(err)
+	}
+	item.Result.RuntimeOutputsHash, item.Receipt.RuntimeOutputsHash = digest, digest
+}
+
+func TestSupplementActionUsesRuntimeReceiptFormat(t *testing.T) {
+	for _, scenario := range []string{"valid", "changed_output", "changed_receipt", "compact_hash"} {
+		t.Run(scenario, func(t *testing.T) {
+			current := supplementGateFixture(t)
+			item := current.Tasks[len(current.Tasks)-2]
+			setSupplementRuntimeOutputs(t, &item, map[string]any{"scope": map[string]any{"count": json.Number("9007199254740993"), "ratio": json.Number("1e-7"), "paths": []any{"來源<&>.go", nil, true}, "empty": map[string]any{}}})
+			switch scenario {
+			case "changed_output":
+				item.Result.RuntimeOutputs["scope"] = json.RawMessage(`{"count":2}`)
+			case "changed_receipt":
+				item.Receipt.RuntimeOutputsHash = "invalid"
+			case "compact_hash":
+				canonical, err := canonicalJSON(raw(t, item.Result.RuntimeOutputs))
+				if err != nil {
+					t.Fatal(err)
+				}
+				sum := sha256.Sum256(canonical)
+				digest := "sha256:" + hex.EncodeToString(sum[:])
+				item.Result.RuntimeOutputsHash, item.Receipt.RuntimeOutputsHash = digest, digest
+			}
+			if err := acceptedSupplementAction(item, current, "run-1"); (err == nil) != (scenario == "valid") {
+				t.Fatalf("runtime receipt verification: %v", err)
+			}
+		})
 	}
 }

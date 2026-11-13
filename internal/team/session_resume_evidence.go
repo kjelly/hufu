@@ -138,7 +138,12 @@ func (c *Coordinator) validateResumeRecoveryMode(ctx context.Context, source *Re
 			return err
 		}
 	}
-	if source.inputPolicyRecovery {
+	if source.actionProviders != nil {
+		if err := c.validateRestoredActionProviders(source.actionProviders); err != nil {
+			return err
+		}
+	}
+	if source.inputPolicyRecovery || source.actionProviders != nil {
 		return c.validateInputPolicyRecoveryContracts(source.Session)
 	}
 	return nil

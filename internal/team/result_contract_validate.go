@@ -304,7 +304,7 @@ func (c *Coordinator) validateStructuredPayloadClaims(todoID string, raw json.Ra
 	}
 	if err == nil {
 		var values map[string]any
-		values, err = c.resultRuntimeInputValues(compiled)
+		values, err = c.resultRuntimeInputValues(compiled, todoID)
 		if err == nil {
 			assembled, err = assembleResultRuntimeInputs(assembled, compiled.runtimeInputs, values)
 		}
@@ -414,7 +414,9 @@ func visibleResultPayloadSchema(ref ResultContractRef, compiled *CompiledResultC
 		if value, err := decodeResultContractJSON(compiled.CanonicalSchema); err == nil {
 			if schema, ok := value.(map[string]any); ok {
 				omitRuntimeEvidenceInputs(schema, compiled.evidenceInputs)
-				omitRuntimeResultInputs(schema, compiled.runtimeInputs)
+				if err := omitRuntimeResultInputs(schema, compiled.runtimeInputs); err != nil {
+					return map[string]any{"type": "object", "additionalProperties": false}
+				}
 				delete(schema, "$schema")
 				if guidance {
 					if projected := projectResultGuidanceSchema(schema); projected != nil {

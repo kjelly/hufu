@@ -14,7 +14,7 @@ import (
 const maxHistoricalTaskResponseBytes = 1 << 20
 
 func (c *Coordinator) historicalTaskResultBlocked(taskID string) bool {
-	if !c.ExecutionProfile().DisableHistoricalTaskReuse {
+	if !c.ExecutionProfile().DisableHistoricalTaskReuse || (c.sessionResume.Load() && c.todoItemByID(taskID) != nil) {
 		return false
 	}
 	c.restoredTodoIDsMu.RLock()

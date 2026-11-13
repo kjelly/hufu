@@ -180,6 +180,29 @@ func TestHistoricalResultsSeparateRepeatedTaskIDsAndTeams(t *testing.T) {
 	}
 }
 
+func TestHistoricalResultsRejectAmbiguousRecoveryTeam(t *testing.T) {
+	workspace, store := newHistoricalFixture(t)
+	appendHistoricalTask(t, store, "run-first", "1", "review result")
+	appendHistoricalFixture(t, store, team.RunEvent{RunID: "run-other", Type: "run_started"}, map[string]any{"team": "other"})
+	appendHistoricalTask(t, store, "run-other", "2", "OTHER_TEAM_SENTINEL")
+	// An operator event without a run team cannot borrow one selector's
+	// authority when the session contains multiple teams.
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexed := make([]IndexedEvent, 0, len(events)+1)
+	for _, event := range events {
+		indexed = append(indexed, IndexedEvent{Event: event})
+	}
+	// Scope selection must reject an unattributed authority before its body
+	// can enter a selected team's replay; do not write an invalid store event.
+	indexed = append(indexed, IndexedEvent{Event: team.RunEvent{SessionID: events[0].SessionID, RunID: "operator", Type: string(team.EventContractRecovery), Payload: []byte(`{}`)}})
+	if _, _, err := projectHistoricalResults(t.Context(), indexed, "main", HistoricalResultScope{Workspace: workspace, Team: "review"}); !errors.Is(err, ErrScopeConflict) {
+		t.Fatalf("unattributed recovery crossed team scope: %v", err)
+	}
+}
+
 func TestHistoricalResultsSurviveNewSessionAndJournalCompactionProjection(t *testing.T) {
 	workspace, store := newHistoricalFixture(t)
 	durable := appendHistoricalTask(t, store, "run-first", "1", "保存的完整分析")

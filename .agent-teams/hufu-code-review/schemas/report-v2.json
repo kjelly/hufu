@@ -34,33 +34,29 @@
           "limitations": {
             "type": "array",
             "items": {
-              "type": "array",
-              "maxItems": 16,
-              "items": {
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "type": "string",
-                    "enum": [
-                      "unavailable_path",
-                      "out_of_scope",
-                      "version_mismatch",
-                      "budget_exhausted",
-                      "invalid_request"
-                    ]
-                  },
-                  "detail": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 2048
-                  }
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "unavailable_path",
+                    "out_of_scope",
+                    "version_mismatch",
+                    "budget_exhausted",
+                    "invalid_request"
+                  ]
                 },
-                "required": [
-                  "kind",
-                  "detail"
-                ],
-                "additionalProperties": false
-              }
+                "detail": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2048
+                }
+              },
+              "required": [
+                "kind",
+                "detail"
+              ],
+              "additionalProperties": false
             },
             "maxItems": 17
           }
@@ -2063,8 +2059,8 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 8192,
-          "pattern": "^unit-[0-9]{4}$",
-          "description": "Exact WorksetBinding.bindings.key / ItemKey (for example unit-0000), never the Workset ID.",
+          "pattern": "^(unit|supplement)-[0-9]{4}$",
+          "description": "Exact WorksetBinding.bindings.key / ItemKey: primary unit-0000 through unit-0031 or supplemental supplement-0000 through supplement-0007; never the Workset ID.",
           "enum": [
             "unit-0000",
             "unit-0001",
@@ -2097,7 +2093,15 @@
             "unit-0028",
             "unit-0029",
             "unit-0030",
-            "unit-0031"
+            "unit-0031",
+            "supplement-0000",
+            "supplement-0001",
+            "supplement-0002",
+            "supplement-0003",
+            "supplement-0004",
+            "supplement-0005",
+            "supplement-0006",
+            "supplement-0007"
           ]
         },
         "lens": {
@@ -2614,7 +2618,11 @@
       "source_task": "verify-targeted-go-tests",
       "output": "targeted_go_tests"
     },
-    {"target":"/supplement_outcomes","source_task":"inventory-review-handoffs","output":"supplement_outcomes"},
+    {
+      "target": "/supplement_outcomes",
+      "source_task": "inventory-review-handoffs",
+      "output": "supplement_outcomes"
+    },
     {
       "target": "/snapshot_coverage",
       "source_task": "inventory-review-handoffs",
@@ -2643,6 +2651,7 @@
       ],
       "source_contracts": [
         "schemas/review-v1.json",
+        "schemas/supplement-review-v1.json",
         "schemas/documentation-review-v1.json"
       ],
       "source_pointer": "/record/gaps",

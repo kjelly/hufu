@@ -173,7 +173,8 @@ func mayContainSecretKeyName(content string) bool {
 }
 
 // Numeric token counters are telemetry, not credentials. Keep this exception
-// explicit: every other scalar below a secret-looking key is redacted,
+// explicit, alongside bounded scoped input/output budget metadata: every
+// other scalar below a secret-looking key is redacted,
 // regardless of its JSON type.
 var numericTelemetryKeys = map[string]struct{}{
 	"image_token_upper_bound":         {},
@@ -788,6 +789,9 @@ func discoverJSONSecrets(value any, key string) {
 		if safeSecretMetadataValue(key, value) {
 			return
 		}
+		if IsPublicTokenBudget(key, value) {
+			return
+		}
 		if isNumericTelemetryValue(key, value) {
 			return
 		}
@@ -826,12 +830,15 @@ func IsRedactedJSONKey(key string) bool {
 		return false
 	}
 	_, telemetry := numericTelemetryKeys[strings.ToLower(key)]
-	return !telemetry
+	return !telemetry && !isPublicTokenBudgetKey(key)
 }
 
 func redactJSONValue(value any, key string) any {
 	if key != "" && containsSecretKeyName(key) {
 		if safeSecretMetadataValue(key, value) {
+			return value
+		}
+		if IsPublicTokenBudget(key, value) {
 			return value
 		}
 		if isNumericTelemetryValue(key, value) {

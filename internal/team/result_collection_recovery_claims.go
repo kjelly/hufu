@@ -1,6 +1,7 @@
 package team
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -81,6 +82,12 @@ func (c *Coordinator) validateRecoveryIndependentClaims(ctx context.Context, cp 
 	if !check("independent_claims", independentErr) {
 		return false
 	}
+	// Runtime-owned sources can be verified independently of the presence or
+	// shape of model-authored payload claims.
+	_, err = c.resultRuntimeInputValues(compiled, taskID)
+	if !check("runtime_inputs", err) {
+		return false
+	}
 	if independent == nil && compiled != nil && (compiled.evidenceReferences != nil || compiled.evidenceInputs != nil || len(compiled.runtimeInputs) > 0 || len(compiled.fixedCollections) > 0) {
 		check("payload_sources", errors.New("malformed JSON prevents independent verification of source references"))
 		return false
@@ -106,6 +113,13 @@ func (c *Coordinator) validateRecoveryIndependentClaims(ctx context.Context, cp 
 		}
 		if !check("tool_evidence", err) {
 			return false
+		}
+		// Absence makes no payload source claim. After receipts and runtime
+		// sources pass, the ordinary decoder may classify it as format repair;
+		// the replacement still goes through full submission validation.
+		payload := bytes.TrimSpace(input.StructuredPayload)
+		if len(payload) == 0 || bytes.Equal(payload, []byte("null")) {
+			return true
 		}
 		_, message, repairable := c.validateStructuredPayloadClaims(taskID, input.StructuredPayload, false, records)
 		if message != "" && !repairable {

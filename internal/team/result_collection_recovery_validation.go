@@ -51,6 +51,9 @@ func validateRecoveryProofChecks(a *ResultCollectionRecoveryAssessment) error {
 			required["independent_claims"] = false
 		}
 	}
+	if a.ValidatorRevision >= 8 && a.Checkpoint.State != ResultCollectionCommitted && (a.Checkpoint.Prepared != nil || a.Checkpoint.Response != nil) {
+		required["runtime_inputs"] = false
+	}
 	if a.ValidatorRevision >= 3 {
 		required["execution_ended"] = false
 	}
