@@ -46,6 +46,11 @@ func TestMaintenanceGeneratorAdmitsConfiguredRoutesAndDistillationBatches(t *tes
 			opts = runOptions{}
 			t.Setenv("HOME", t.TempDir())
 			project := t.TempDir()
+			// t.TempDir uses the operator's GOTMPDIR, whose ancestors may
+			// contain Git markers. Give this fixture its own discovery boundary.
+			if err := os.Mkdir(filepath.Join(project, ".git"), 0o700); err != nil {
+				t.Fatal(err)
+			}
 			t.Chdir(project)
 			var calls, wrongModel, truncatedBatch atomic.Int32
 			steps := maintenanceDistillationReplies(tc.truncated, tc.repair)
@@ -113,6 +118,11 @@ func TestMaintenanceGeneratorAdmitsConfiguredRoutesAndDistillationBatches(t *tes
 				t.Fatal(err)
 			}
 			t.Cleanup(release)
+			// Discovery must not let an ancestor marker change an already
+			// selected fixture repository between audit workspaces.
+			if err := os.Mkdir(filepath.Join(filepath.Dir(project), ".git"), 0o700); err != nil {
+				t.Fatal(err)
+			}
 			second, _, closeSecond, err := taskDistillationGeneratorFactory(t.Context(), dir, filepath.Join(project, "another-audit"), "fixture/maintenance-model")
 			if err != nil {
 				t.Fatal(err)

@@ -107,6 +107,13 @@ func validateCurrentEventPayload(event RunEvent) error {
 		return err
 	}
 	switch EventType(event.Type) {
+	case EventStructuredStepReceiptRecorded:
+		_, err := decodeStructuredStepReceiptEvent(event)
+		return err
+	case EventStructuredStepInvocationObserved:
+		_, err := decodeStructuredStepInvocation(event)
+		return err
+
 	case EventArtifactReadCoverageObserved:
 		return validateArtifactReadObservationEvent(event)
 	case EventMediaInputAdmitted:

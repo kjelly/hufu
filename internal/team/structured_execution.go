@@ -5,11 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -33,29 +32,35 @@ const (
 // invocation. A producer cannot invent it: the runtime derives the ID and
 // input digest before invoking the step runner.
 type ExecutionStepReceipt struct {
-	ID               string              `json:"id"`
-	TaskID           string              `json:"task_id"`
-	Attempt          int                 `json:"attempt"`
-	RepairAttempt    int                 `json:"repair_attempt,omitempty"`
-	StepID           string              `json:"step_id"`
-	Tool             string              `json:"tool"`
-	InputSHA256      string              `json:"input_sha256"`
-	StartedAt        time.Time           `json:"started_at"`
-	FinishedAt       time.Time           `json:"finished_at"`
-	ExitCode         int                 `json:"exit_code"`
-	Stdout           string              `json:"stdout,omitempty"`
-	Stderr           string              `json:"stderr,omitempty"`
-	StdoutRef        ArtifactRef         `json:"stdout_ref,omitempty"`
-	StderrRef        ArtifactRef         `json:"stderr_ref,omitempty"`
-	Consumed         []ArtifactRef       `json:"consumed,omitempty"`
-	Produced         []ArtifactRef       `json:"produced,omitempty"`
-	ConsumedDigests  map[string]string   `json:"consumed_digests,omitempty"`
-	ProducedDigests  map[string]string   `json:"produced_digests,omitempty"`
-	ProducedFacts    []StructuredFactRef `json:"produced_facts,omitempty"`
-	ResolvedRefs     []ResolvedStepRef   `json:"resolved_refs,omitempty"`
-	PolicyVerdict    string              `json:"policy_verdict"`
-	ValidatorVerdict string              `json:"validator_verdict,omitempty"`
-	FailureClass     string              `json:"failure_class,omitempty"`
+	RunID              string              `json:"run_id,omitempty"`
+	BranchID           string              `json:"branch_id,omitempty"`
+	OccurrenceRevision int                 `json:"occurrence_revision,omitzero"`
+	ExecutionKind      string              `json:"execution_kind,omitempty"`
+	ProposedModel      string              `json:"proposed_model,omitempty"`
+	ModelExecutionIDs  []string            `json:"model_execution_ids,omitempty"`
+	ID                 string              `json:"id"`
+	TaskID             string              `json:"task_id"`
+	Attempt            int                 `json:"attempt"`
+	RepairAttempt      int                 `json:"repair_attempt,omitempty"`
+	StepID             string              `json:"step_id"`
+	Tool               string              `json:"tool"`
+	InputSHA256        string              `json:"input_sha256"`
+	StartedAt          time.Time           `json:"started_at"`
+	FinishedAt         time.Time           `json:"finished_at"`
+	ExitCode           int                 `json:"exit_code"`
+	Stdout             string              `json:"stdout,omitempty"`
+	Stderr             string              `json:"stderr,omitempty"`
+	StdoutRef          ArtifactRef         `json:"stdout_ref,omitempty"`
+	StderrRef          ArtifactRef         `json:"stderr_ref,omitempty"`
+	Consumed           []ArtifactRef       `json:"consumed,omitempty"`
+	Produced           []ArtifactRef       `json:"produced,omitempty"`
+	ConsumedDigests    map[string]string   `json:"consumed_digests,omitempty"`
+	ProducedDigests    map[string]string   `json:"produced_digests,omitempty"`
+	ProducedFacts      []StructuredFactRef `json:"produced_facts,omitempty"`
+	ResolvedRefs       []ResolvedStepRef   `json:"resolved_refs,omitempty"`
+	PolicyVerdict      string              `json:"policy_verdict"`
+	ValidatorVerdict   string              `json:"validator_verdict,omitempty"`
+	FailureClass       string              `json:"failure_class,omitempty"`
 }
 
 // ResolvedStepRef binds one consumer input to the exact runtime-owned output
@@ -131,6 +136,8 @@ func (f StructuredStepRunnerFunc) RunStructuredStep(ctx context.Context, request
 
 // StructuredExecutionRequest identifies an execution contract attempt.
 type StructuredExecutionRequest struct {
+	receiptScope    string
+	publishReceipt  func(context.Context, ExecutionStepReceipt) (ExecutionStepReceipt, error)
 	TaskID          string
 	Attempt         int
 	Contract        ExecutionContract
@@ -183,179 +190,6 @@ func (e *StructuredExecutionError) Unwrap() error {
 		return nil
 	}
 	return e.Cause
-}
-
-// ExecutionStepReceiptRegistry keeps authoritative receipts independent of
-// worker summaries. It is safe to share between concurrently running tasks.
-type ExecutionStepReceiptRegistry struct {
-	mu       sync.RWMutex
-	receipts map[string]ExecutionStepReceipt
-}
-
-// NewExecutionStepReceiptRegistry creates an empty authoritative receipt store.
-func NewExecutionStepReceiptRegistry() *ExecutionStepReceiptRegistry {
-	return &ExecutionStepReceiptRegistry{receipts: make(map[string]ExecutionStepReceipt)}
-}
-
-// Record stores one runtime-created receipt. Duplicate IDs with different
-// evidence are rejected, preventing a later attempt from replacing history.
-func (r *ExecutionStepReceiptRegistry) Record(receipt ExecutionStepReceipt) error {
-	if r == nil {
-		return fmt.Errorf("execution receipt registry is nil")
-	}
-	if strings.TrimSpace(receipt.ID) == "" {
-		return fmt.Errorf("execution receipt id is required")
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if old, ok := r.receipts[receipt.ID]; ok {
-		if !reflect.DeepEqual(old, receipt) {
-			return fmt.Errorf("execution receipt %q conflicts with existing evidence", receipt.ID)
-		}
-		return nil
-	}
-	r.receipts[receipt.ID] = cloneExecutionStepReceipt(receipt)
-	return nil
-}
-
-// Get returns a detached receipt by ID.
-func (r *ExecutionStepReceiptRegistry) Get(id string) (ExecutionStepReceipt, bool) {
-	if r == nil {
-		return ExecutionStepReceipt{}, false
-	}
-	r.mu.RLock()
-	receipt, ok := r.receipts[id]
-	r.mu.RUnlock()
-	return cloneExecutionStepReceipt(receipt), ok
-}
-
-// ValidateClaims ensures every result claim cites an actual receipt belonging
-// to exactly the same task and attempt. A claim for an unexecuted or other
-// attempt's step therefore cannot become authoritative task evidence.
-func (r *ExecutionStepReceiptRegistry) ValidateClaims(taskID string, attempt int, ids []string) error {
-	if r == nil {
-		return fmt.Errorf("execution receipt registry is nil")
-	}
-	if len(ids) == 0 {
-		return fmt.Errorf("at least one execution receipt claim is required")
-	}
-	seen := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			return fmt.Errorf("execution receipt claim is empty")
-		}
-		if seen[id] {
-			return fmt.Errorf("execution receipt claim %q is duplicated", id)
-		}
-		seen[id] = true
-		receipt, ok := r.Get(id)
-		if !ok {
-			return fmt.Errorf("execution receipt claim %q does not exist", id)
-		}
-		if receipt.TaskID != taskID || receipt.Attempt != attempt {
-			return fmt.Errorf("execution receipt claim %q belongs to task %q attempt %d, not task %q attempt %d", id, receipt.TaskID, receipt.Attempt, taskID, attempt)
-		}
-	}
-	return nil
-}
-
-// ValidateCompleteClaims requires an exact claim set for one successful
-// structured attempt. This prevents a worker from citing only the final happy
-// receipt while omitting an earlier failed validator or repair invocation.
-func (r *ExecutionStepReceiptRegistry) ValidateCompleteClaims(taskID string, attempt int, ids []string) error {
-	if err := r.ValidateClaims(taskID, attempt, ids); err != nil {
-		return err
-	}
-	expected := r.ReceiptIDs(taskID, attempt)
-	claimed := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		claimed[strings.TrimSpace(id)] = true
-	}
-	var missing []string
-	for _, id := range expected {
-		if !claimed[id] {
-			missing = append(missing, id)
-		}
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("successful structured result omits execution receipt(s): %s", strings.Join(missing, ", "))
-	}
-	return nil
-}
-
-// ReceiptIDs returns stable receipt IDs for exactly one task attempt.
-func (r *ExecutionStepReceiptRegistry) ReceiptIDs(taskID string, attempt int) []string {
-	if r == nil {
-		return nil
-	}
-	r.mu.RLock()
-	receipts := make([]ExecutionStepReceipt, 0)
-	for _, receipt := range r.receipts {
-		if receipt.TaskID == taskID && receipt.Attempt == attempt {
-			receipts = append(receipts, receipt)
-		}
-	}
-	r.mu.RUnlock()
-	sort.Slice(receipts, func(i, j int) bool {
-		if receipts[i].StartedAt.Equal(receipts[j].StartedAt) {
-			return receipts[i].ID < receipts[j].ID
-		}
-		return receipts[i].StartedAt.Before(receipts[j].StartedAt)
-	})
-	ids := make([]string, len(receipts))
-	for i, receipt := range receipts {
-		ids[i] = receipt.ID
-	}
-	return ids
-}
-
-// FirstFailure returns the first causal non-zero receipt for one task attempt.
-// Later reporting calls (including a rejected submit_result) cannot replace it.
-func (r *ExecutionStepReceiptRegistry) FirstFailure(taskID string, attempt int) (ExecutionStepReceipt, bool) {
-	if r == nil {
-		return ExecutionStepReceipt{}, false
-	}
-	r.mu.RLock()
-	var receipts []ExecutionStepReceipt
-	for _, receipt := range r.receipts {
-		if receipt.TaskID != taskID || (attempt > 0 && receipt.Attempt != attempt) {
-			continue
-		}
-		receipts = append(receipts, receipt)
-	}
-	r.mu.RUnlock()
-	sortExecutionReceipts(receipts)
-	for i, receipt := range receipts {
-		if receipt.ExitCode == 0 {
-			continue
-		}
-		if receipt.ValidatorVerdict == "fail" {
-			recovered := false
-			for _, later := range receipts[i+1:] {
-				if later.StepID == receipt.StepID && later.ExitCode == 0 && later.ValidatorVerdict == "pass" {
-					recovered = true
-					break
-				}
-			}
-			if recovered {
-				continue
-			}
-		}
-		return cloneExecutionStepReceipt(receipt), true
-	}
-	return ExecutionStepReceipt{}, false
-}
-
-func cloneExecutionStepReceipt(receipt ExecutionStepReceipt) ExecutionStepReceipt {
-	copyReceipt := receipt
-	copyReceipt.Consumed = append([]ArtifactRef(nil), receipt.Consumed...)
-	copyReceipt.Produced = append([]ArtifactRef(nil), receipt.Produced...)
-	copyReceipt.ProducedFacts = append([]StructuredFactRef(nil), receipt.ProducedFacts...)
-	copyReceipt.ResolvedRefs = append([]ResolvedStepRef(nil), receipt.ResolvedRefs...)
-	copyReceipt.ConsumedDigests = cloneStringMap(receipt.ConsumedDigests)
-	copyReceipt.ProducedDigests = cloneStringMap(receipt.ProducedDigests)
-	return copyReceipt
 }
 
 // RunStructuredExecution executes a structured contract using a generic step
@@ -431,22 +265,22 @@ func (e *structuredExecutionRun) runStep(step ExecutionStep, repairAttempt int) 
 	for _, dependency := range step.DependsOn {
 		if !e.stepSucceeded[dependency] {
 			err := fmt.Errorf("step %q cannot run before dependency %q succeeds", step.ID, dependency)
-			return e.recordPreflightFailure(step, repairAttempt, err), err
+			return e.recordPreflightFailure(step, repairAttempt, err)
 		}
 	}
 	if err := e.validateMutationInputs(step); err != nil {
-		return e.recordPreflightFailure(step, repairAttempt, err), err
+		return e.recordPreflightFailure(step, repairAttempt, err)
 	}
 	// Admission runs before input resolution so a blocked step performs no
 	// work at all, not merely no mutation.
 	if e.request.AdmitStep != nil {
 		if err := e.request.AdmitStep(step); err != nil {
-			return e.recordPreflightFailure(step, repairAttempt, err), err
+			return e.recordPreflightFailure(step, repairAttempt, err)
 		}
 	}
 	resolvedInput, resolvedRefs, err := e.resolveStepInput(step)
 	if err != nil {
-		return e.recordPreflightFailure(step, repairAttempt, err), err
+		return e.recordPreflightFailure(step, repairAttempt, err)
 	}
 	switch step.Effect {
 	case ExecutionEffectValidate:
@@ -456,11 +290,12 @@ func (e *structuredExecutionRun) runStep(step ExecutionStep, repairAttempt int) 
 	}
 	e.receiptCount++
 	startedAt := time.Now().UTC()
-	stepResult, runErr := e.runner.RunStructuredStep(e.ctx, StructuredStepRequest{
+	stepRequest := StructuredStepRequest{
 		TaskID: e.request.TaskID, Attempt: e.request.Attempt, RepairAttempt: repairAttempt,
 		Model: e.selectedModel(step, repairAttempt), Step: step, ResolvedInput: resolvedInput,
 		Artifacts: cloneArtifactMap(e.result.Artifacts), Frozen: cloneArtifactMap(e.result.FrozenArtifacts), Facts: cloneStructuredFacts(e.result.Facts),
-	})
+	}
+	stepResult, attribution, runErr := executeAttributedStructuredStep(e.ctx, e.runner, stepRequest, e.receiptID(step, repairAttempt))
 	if runErr != nil && stepResult.ExitCode == 0 {
 		stepResult.ExitCode = 1
 	}
@@ -468,14 +303,13 @@ func (e *structuredExecutionRun) runStep(step ExecutionStep, repairAttempt int) 
 		stepResult.Stderr = runErr.Error()
 	}
 	receipt := e.newReceipt(step, repairAttempt, startedAt, stepResult, runErr, resolvedInput, resolvedRefs)
+	receipt.ExecutionKind, receipt.ProposedModel, receipt.ModelExecutionIDs = attribution.kind, stepRequest.Model, attribution.invocations
 	if runErr == nil && stepResult.ExitCode == 0 {
 		runErr = e.recordDeclaredOutputs(step, stepResult, &receipt)
 	}
-	e.result.Receipts = append(e.result.Receipts, receipt)
-	if e.request.Registry != nil {
-		if registryErr := e.request.Registry.Record(receipt); registryErr != nil {
-			return receipt, registryErr
-		}
+	receipt, persistErr := e.recordReceipt(receipt)
+	if persistErr != nil {
+		return receipt, persistErr
 	}
 	if runErr != nil || receipt.ExitCode != 0 {
 		if runErr == nil {
@@ -495,25 +329,22 @@ func (e *structuredExecutionRun) selectedModel(step ExecutionStep, repairAttempt
 	return e.request.SelectModel(step, repairAttempt)
 }
 
-func (e *structuredExecutionRun) recordPreflightFailure(step ExecutionStep, repairAttempt int, cause error) ExecutionStepReceipt {
+func (e *structuredExecutionRun) recordPreflightFailure(step ExecutionStep, repairAttempt int, cause error) (ExecutionStepReceipt, error) {
 	e.receiptCount++
 	now := time.Now().UTC()
 	receipt := ExecutionStepReceipt{
-		ID:     structuredReceiptID(e.request.TaskID, e.request.Attempt, step.ID, repairAttempt, e.receiptCount),
+		ID:     e.receiptID(step, repairAttempt),
 		TaskID: e.request.TaskID, Attempt: e.request.Attempt, RepairAttempt: repairAttempt,
 		StepID: step.ID, Tool: step.Tool, InputSHA256: structuredInputDigest(step.Input),
 		StartedAt: now, FinishedAt: now, ExitCode: 1, Stderr: cause.Error(), PolicyVerdict: "denied",
-		FailureClass: "policy",
+		FailureClass: "policy", ExecutionKind: "unknown",
 	}
 	receipt.StderrRef = executionOutputRef(receipt.ID, "stderr", receipt.Stderr)
 	if step.Effect == ExecutionEffectValidate {
 		receipt.ValidatorVerdict = "fail"
 	}
-	e.result.Receipts = append(e.result.Receipts, receipt)
-	if e.request.Registry != nil {
-		_ = e.request.Registry.Record(receipt)
-	}
-	return receipt
+	receipt, err := e.recordReceipt(receipt)
+	return receipt, errors.Join(cause, err)
 }
 
 func (e *structuredExecutionRun) validateMutationInputs(step ExecutionStep) error {
@@ -541,7 +372,7 @@ func (e *structuredExecutionRun) validateMutationInputs(step ExecutionStep) erro
 
 func (e *structuredExecutionRun) newReceipt(step ExecutionStep, repairAttempt int, startedAt time.Time, stepResult ExecutionStepResult, runErr error, resolvedInput map[string]any, resolvedRefs []ResolvedStepRef) ExecutionStepReceipt {
 	receipt := ExecutionStepReceipt{
-		ID:     structuredReceiptID(e.request.TaskID, e.request.Attempt, step.ID, repairAttempt, e.receiptCount),
+		ID:     e.receiptID(step, repairAttempt),
 		TaskID: e.request.TaskID, Attempt: e.request.Attempt, RepairAttempt: repairAttempt,
 		StepID: step.ID, Tool: step.Tool, InputSHA256: structuredInputDigest(resolvedInput),
 		StartedAt: startedAt, FinishedAt: time.Now().UTC(), ExitCode: stepResult.ExitCode,

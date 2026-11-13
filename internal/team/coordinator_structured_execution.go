@@ -59,6 +59,9 @@ func (c *Coordinator) RunStructuredTask(ctx context.Context, todoID string, atte
 }
 
 func (c *Coordinator) runStructuredTask(ctx context.Context, todoID string, attempt int, runner StructuredStepRunner, task TaskDef) (*StructuredExecutionResult, error) {
+	if runner == nil {
+		return nil, fmt.Errorf("structured execution runner is required")
+	}
 	c.setCurrentTaskAttempt(todoID, attempt)
 	contract := task.Execution
 	upstream, err := c.resolveStructuredUpstreamOutputs(todoID, contract)
@@ -73,14 +76,20 @@ func (c *Coordinator) runStructuredTask(ctx context.Context, todoID string, atte
 			return nil, fmt.Errorf("resolve structured task agent %q: %w", item.Agent, err)
 		}
 	}
+	scope := ""
+	if c.EventStore() != nil && item != nil {
+		scope = fmt.Sprintf("%s/%s/%d", c.executionRunID, c.EventStore().BranchID(), item.OccurrenceRevision)
+	}
 	return RunStructuredExecution(ctx, StructuredExecutionRequest{
-		TaskID: todoID, Attempt: attempt, Contract: contract, Registry: c.executionStepReceiptRegistry(), UpstreamOutputs: upstream,
+		receiptScope:   scope,
+		publishReceipt: c.structuredStepReceiptPublisher(todoID, attempt),
+		TaskID:         todoID, Attempt: attempt, Contract: contract, Registry: c.executionStepReceiptRegistry(), UpstreamOutputs: upstream,
 		PublishArtifact: c.structuredArtifactPublisher(todoID, attempt, task.Agent),
 		SelectModel: func(step ExecutionStep, repairAttempt int) string {
 			return c.selectStructuredStepModel(task, step, repairAttempt, agentDef)
 		},
 		AdmitStep: c.structuredStepCommitGate(todoID, task),
-	}, runner)
+	}, &observedStructuredStepRunner{owner: c, inner: runner})
 }
 
 // structuredStepCommitGate applies the same commit gate a worker's tool calls

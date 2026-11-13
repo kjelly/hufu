@@ -161,6 +161,7 @@ func (c *Coordinator) initEventStore() {
 		c.markSessionRecovery("event-store telemetry hydration read failed: " + utils.RedactSecrets(readErr.Error()))
 	} else {
 		branchEvents := FilterEventsForBranch(events, st, activeBranch)
+		c.hydrateStructuredStepReceipts(branchEvents)
 		c.hydrateDecisionPrimitiveResults(branchEvents)
 		c.hydrateContextWindowTelemetry(branchEvents)
 		c.rebuildTeamActionProposals(branchEvents)

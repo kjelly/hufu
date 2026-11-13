@@ -161,29 +161,30 @@ type ReplanData struct {
 }
 
 type TaskData struct {
-	HufuBuild         *buildinfo.Info           `json:"hufu_build,omitempty"`
-	ResultCandidate   *ResultCandidateData      `json:"result_candidate,omitempty"`
-	RunID             string                    `json:"run_id"`
-	TaskID            string                    `json:"task_id"`
-	Status            string                    `json:"status"`
-	Phase             string                    `json:"phase,omitempty"`
-	AgentID           string                    `json:"agent_id,omitempty"`
-	ExecutionTarget   string                    `json:"execution_target,omitempty"`
-	ExecutionTopology []string                  `json:"execution_topology"`
-	Attempts          []AttemptData             `json:"attempts"`
-	RetryDisposition  string                    `json:"retry_disposition,omitempty"`
-	FailureClass      string                    `json:"failure_class,omitempty"`
-	ReasonCode        string                    `json:"reason_code,omitempty"`
-	RecoveryState     string                    `json:"recovery_state,omitempty"`
-	Reconciliation    *ReconciliationData       `json:"reconciliation,omitempty"`
-	Failure           *team.FailureEventPayload `json:"failure,omitempty"`
-	ArtifactRefs      []string                  `json:"artifact_refs"`
-	ContextRefs       []string                  `json:"context_refs"`
-	MemoryRefs        []string                  `json:"memory_refs"`
-	KnowledgeCoverage *KnowledgeCoverageData    `json:"knowledge_coverage,omitempty"`
-	SideEffect        string                    `json:"side_effect,omitempty"`
-	CatalogAction     *CatalogActionData        `json:"catalog_action,omitempty"`
-	Replans           []ReplanData              `json:"replans,omitempty"`
+	StructuredSteps   []team.StructuredStepMetadata `json:"structured_steps"`
+	HufuBuild         *buildinfo.Info               `json:"hufu_build,omitempty"`
+	ResultCandidate   *ResultCandidateData          `json:"result_candidate,omitempty"`
+	RunID             string                        `json:"run_id"`
+	TaskID            string                        `json:"task_id"`
+	Status            string                        `json:"status"`
+	Phase             string                        `json:"phase,omitempty"`
+	AgentID           string                        `json:"agent_id,omitempty"`
+	ExecutionTarget   string                        `json:"execution_target,omitempty"`
+	ExecutionTopology []string                      `json:"execution_topology"`
+	Attempts          []AttemptData                 `json:"attempts"`
+	RetryDisposition  string                        `json:"retry_disposition,omitempty"`
+	FailureClass      string                        `json:"failure_class,omitempty"`
+	ReasonCode        string                        `json:"reason_code,omitempty"`
+	RecoveryState     string                        `json:"recovery_state,omitempty"`
+	Reconciliation    *ReconciliationData           `json:"reconciliation,omitempty"`
+	Failure           *team.FailureEventPayload     `json:"failure,omitempty"`
+	ArtifactRefs      []string                      `json:"artifact_refs"`
+	ContextRefs       []string                      `json:"context_refs"`
+	MemoryRefs        []string                      `json:"memory_refs"`
+	KnowledgeCoverage *KnowledgeCoverageData        `json:"knowledge_coverage,omitempty"`
+	SideEffect        string                        `json:"side_effect,omitempty"`
+	CatalogAction     *CatalogActionData            `json:"catalog_action,omitempty"`
+	Replans           []ReplanData                  `json:"replans,omitempty"`
 }
 
 // ReconciliationData is bounded evidence for the selected task attempt.
@@ -311,6 +312,28 @@ func InspectTask(ctx context.Context, query InspectQuery) (*Envelope, error) {
 		return nil, classifyProjectionError(query.RunID, err)
 	}
 	data := projectTaskWithEvents(matches[0], query, runIndexedEvents(lineage, query))
+	stepEvents, err := team.StructuredStepProjectionEvents(selected.raw, selected.taskEvents)
+	if err != nil {
+		return nil, fmt.Errorf("%w: structured step scope: %v", ErrIntegrity, err)
+	}
+	stepRows, err := team.LoadStructuredStepReceipts(ctx, query.Workspace, stepEvents)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("%w: structured step receipts: %v", ErrIntegrity, err)
+	}
+	data.StructuredSteps = []team.StructuredStepMetadata{}
+	for _, row := range stepRows {
+		if row.Receipt.TaskID == query.TaskID && (query.Attempt == 0 || row.Receipt.Attempt == query.Attempt) {
+			data.StructuredSteps = append(data.StructuredSteps, row.Metadata())
+		}
+	}
+	data.StructuredSteps = team.IncludeLegacyStructuredSteps(data.StructuredSteps, matches)
+	if query.Attempt > 0 {
+		data.StructuredSteps = slices.DeleteFunc(data.StructuredSteps, func(step team.StructuredStepMetadata) bool { return step.Attempt > 0 && step.Attempt != query.Attempt })
+	}
+
 	if query.Attempt > 0 && len(data.Attempts) == 0 {
 		return nil, fmt.Errorf("%w: attempt %d for task %q in run %q", ErrNotFound, query.Attempt, query.TaskID, query.RunID)
 	}

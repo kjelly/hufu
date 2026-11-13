@@ -29,13 +29,15 @@ type TelemetryCapability struct {
 // normalized identity and metadata evidence is included. Provider URLs,
 // credentials, headers, and raw provider responses are intentionally absent.
 type TelemetryProjection struct {
-	APIProtocol   config.APIProtocolBinding `json:"api_protocol,omitzero"`
-	SchemaVersion int                       `json:"schema_version"`
-	InvocationID  string                    `json:"invocation_id,omitempty"`
-	ModelID       string                    `json:"model_id"`
-	Provider      string                    `json:"provider"`
-	Family        string                    `json:"family,omitempty"`
-	Estimator     TelemetryValue[string]    `json:"estimator,omitzero"`
+	// ExecutionTarget is bound by runtime invocation admission, not diagnostic profile resolution.
+	ExecutionTarget string                    `json:"execution_target,omitempty"`
+	APIProtocol     config.APIProtocolBinding `json:"api_protocol,omitzero"`
+	SchemaVersion   int                       `json:"schema_version"`
+	InvocationID    string                    `json:"invocation_id,omitempty"`
+	ModelID         string                    `json:"model_id"`
+	Provider        string                    `json:"provider"`
+	Family          string                    `json:"family,omitempty"`
+	Estimator       TelemetryValue[string]    `json:"estimator,omitzero"`
 
 	Operator         TelemetryValue[int] `json:"operator_context,omitzero"`
 	Catalog          TelemetryValue[int] `json:"catalog_context,omitzero"`

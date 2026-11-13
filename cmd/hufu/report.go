@@ -121,6 +121,7 @@ func generateReports(loadedTeams map[string]*teamContext, _ string, include func
 }
 
 type reportData struct {
+	StructuredSteps       []team.StructuredStepMetadata
 	Todos                 []*team.TodoItem
 	STM                   string
 	Skills                []team.SkillUsageEntry
@@ -1094,6 +1095,7 @@ func buildReportMD(data *reportData, teamName string, finalResult string) string
 		}
 	}
 
+	writeStructuredStepReport(&b, data.StructuredSteps)
 	return utils.RedactSecrets(b.String())
 }
 

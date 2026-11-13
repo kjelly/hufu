@@ -309,7 +309,8 @@ func (c *Coordinator) failureEventForItem(item *TodoItem, class TaskFailureClass
 		}
 	} else if c != nil {
 		attempt := c.currentTaskAttempt(taskID)
-		if receipt, ok := c.executionStepReceiptRegistry().FirstFailure(taskID, attempt); ok {
+		registry, _ := c.taskStepReceiptRegistry(taskID, attempt)
+		if receipt, ok := registry.FirstFailure(taskID, attempt); ok {
 			event.FailedStepID = receipt.StepID
 			event.ReceiptID = receipt.ID
 			failureType := receipt.FailureClass

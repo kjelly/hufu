@@ -18,7 +18,8 @@ import (
 	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
-const runReportVersion = 1
+const runReportVersion = 2
+const legacyRunReportVersion = 1
 const maxRunReportBytes = 8 << 20
 
 // ErrRunReportUnavailable means no immutable report was captured. Historical
@@ -37,6 +38,7 @@ type RunReport struct {
 	Cost                  *cost.View                         `json:"cost,omitempty"`
 	CostUnavailableReason string                             `json:"cost_unavailable_reason,omitempty"`
 	ModelProfiles         []modelprofile.TelemetryProjection `json:"model_profiles,omitempty"`
+	StructuredSteps       []StructuredStepMetadata           `json:"structured_steps,omitempty"`
 	ContextRouting        ContextManifestSummary             `json:"context_routing"`
 	ControlDecisions      []ControlDecisionSummary           `json:"control_decisions,omitempty"`
 
@@ -173,10 +175,20 @@ func projectRunReport(events []RunEvent, tree *SessionTree, terminal RunEvent) (
 			return nil, errors.New("report evidence manifest digest mismatch")
 		}
 	}
-	report.Tasks, err = reportTasksForRun(lineage, terminal.RunID, report.Team)
+	var taskEvents []RunEvent
+	report.Tasks, taskEvents, err = reportTasksForRun(lineage, terminal.RunID, report.Team)
 	if err != nil {
 		return nil, err
 	}
+	stepEvents, err := StructuredStepProjectionEvents(lineage, taskEvents)
+	if err != nil {
+		return nil, err
+	}
+	report.StructuredSteps, err = ProjectStructuredStepMetadata(stepEvents)
+	if err != nil {
+		return nil, err
+	}
+	report.StructuredSteps = IncludeLegacyStructuredSteps(report.StructuredSteps, report.Tasks)
 	report.ImageResultIDs, err = reportImageResultIDs(lineage, terminal.RunID)
 	if err != nil {
 		return nil, err
@@ -217,7 +229,7 @@ func projectRunReport(events []RunEvent, tree *SessionTree, terminal RunEvent) (
 // reportTasksForRun uses the same occurrence boundary as historical results:
 // a fresh task_created in another run starts a new contract, while retry/resume
 // transitions retain the originating contract. Task IDs alone are not identities.
-func reportTasksForRun(lineage []RunEvent, runID, teamName string) ([]*TodoItem, error) {
+func reportTasksForRun(lineage []RunEvent, runID, teamName string) ([]*TodoItem, []RunEvent, error) {
 	type taskHistory struct {
 		origin  string
 		events  []RunEvent
@@ -235,13 +247,13 @@ func reportTasksForRun(lineage []RunEvent, runID, teamName string) ([]*TodoItem,
 		}
 		if len(event.Payload) > 0 {
 			if err := json.Unmarshal(event.Payload, &metadata); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		if metadata.Team != "" {
 			name := strings.ToLower(strings.TrimSpace(metadata.Team))
 			if prior := teams[event.RunID]; prior != "" && prior != name {
-				return nil, errors.New("conflicting report team identity")
+				return nil, nil, errors.New("conflicting report team identity")
 			}
 			teams[event.RunID] = name
 		}
@@ -270,14 +282,16 @@ func reportTasksForRun(lineage []RunEvent, runID, teamName string) ([]*TodoItem,
 		}
 	}
 	result := []*TodoItem{}
+	selectedEvents := []RunEvent{}
 	for _, id := range order {
 		state := histories[id]
 		if !state.touched {
 			continue
 		}
+		selectedEvents = append(selectedEvents, state.events...)
 		tasks, err := ReplayTodoList(state.events)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, task := range tasks {
 			if task != nil && task.ID == id {
@@ -285,7 +299,7 @@ func reportTasksForRun(lineage []RunEvent, runID, teamName string) ([]*TodoItem,
 			}
 		}
 	}
-	return result, nil
+	return result, selectedEvents, nil
 }
 
 // LoadRunReport reads a single immutable snapshot and verifies its full binding
@@ -326,7 +340,7 @@ func LoadRunReport(ctx context.Context, workspace, sourceEventID string) (*RunRe
 	if err != nil {
 		return nil, err
 	}
-	if sourceHash != events[index].Hash || version != runReportVersion {
+	if sourceHash != events[index].Hash || (version != runReportVersion && version != legacyRunReportVersion) {
 		return nil, errors.New("run report source binding or schema mismatch")
 	}
 	if state == "unavailable" {
@@ -345,6 +359,15 @@ func LoadRunReport(ctx context.Context, workspace, sourceEventID string) (*RunRe
 	expected, err := projectRunReport(events[:index+1], tree, events[index])
 	if err != nil {
 		return nil, fmt.Errorf("verify report projection: %w", err)
+	}
+	if version == legacyRunReportVersion {
+		for _, event := range events[:index+1] {
+			if event.RunID == events[index].RunID && event.Type == string(EventStructuredStepReceiptRecorded) {
+				return nil, errors.New("legacy report version cannot omit current structured step evidence")
+			}
+		}
+		expected.SchemaVersion = legacyRunReportVersion
+		expected.StructuredSteps = nil
 	}
 	encoded, err := marshalRunReport(expected)
 	if err != nil {

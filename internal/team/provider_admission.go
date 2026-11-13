@@ -2,7 +2,6 @@ package team
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -11,7 +10,6 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/cost"
 	"github.com/kjelly/hufu/internal/media"
-	"github.com/kjelly/hufu/internal/modelprofile"
 	"github.com/kjelly/hufu/internal/tools"
 )
 
@@ -111,18 +109,29 @@ func (a providerRequestAdmission) AcquireProviderInvocation(ctx context.Context,
 	if a.c == nil {
 		return nil, nil
 	}
+	leaveStep := func() {}
+	if scope := structuredStepScopeFromContext(ctx); scope != nil {
+		var err error
+		leaveStep, err = scope.acquire(a.c)
+		if err != nil {
+			return nil, err
+		}
+	}
 	ctx, leaveCapacity, err := tools.EnterCapacityTool(ctx)
 	if err != nil {
+		leaveStep()
 		return nil, err
 	}
 	slot, err := acquireSem(ctx, a.c.providerSemaphore(modelID))
 	if err != nil {
 		leaveCapacity()
+		leaveStep()
 		return nil, err
 	}
 	return func() {
 		slot.release()
 		leaveCapacity()
+		leaveStep()
 	}, nil
 }
 
@@ -137,6 +146,11 @@ func (a providerRequestAdmission) CommitProviderInvocation(ctx context.Context, 
 	if !request.AdmissionContext.IsBound() {
 		return fmt.Errorf("provider profile commit context is not provider-bound")
 	}
+	if scope := structuredStepScopeFromContext(ctx); scope != nil {
+		if err := scope.preflight(ctx, a.c, request); err != nil {
+			return err
+		}
+	}
 	if err := a.c.validateInvocationProtocol(request); err != nil {
 		return err
 	}
@@ -150,15 +164,12 @@ func (a providerRequestAdmission) CommitProviderInvocation(ctx context.Context, 
 	if err != nil {
 		return err
 	}
-	var projection modelprofile.TelemetryProjection
-	if err := json.Unmarshal([]byte(request.AdmissionContext.ProfileTelemetryJSON), &projection); err != nil {
-		return fmt.Errorf("decode provider profile commit projection: %w", err)
+	projection, err := providerInvocationProfileProjection(request)
+	if err != nil {
+		return err
 	}
-	projection.InvocationID = request.InvocationID
-	if projection.APIProtocol != request.AdmissionContext.APIProtocol {
-		return fmt.Errorf("provider profile API protocol differs from invocation binding")
-	}
-	if err := a.c.commitModelProfileResolved(ctx, projection); err != nil {
+	profileEvent, err := a.c.commitModelProfileResolvedEvent(ctx, projection)
+	if err != nil {
 		return err
 	}
 	if providerRequestHasMedia(request) {
@@ -173,7 +184,7 @@ func (a providerRequestAdmission) CommitProviderInvocation(ctx context.Context, 
 		}
 	}
 	if a.c.costManager == nil {
-		return nil
+		return commitStructuredStepInvocation(ctx, a.c, request, profileEvent)
 	}
 	requestTokens, err := defaultCounter.CountProviderRequest(ctx, request.ModelID, request)
 	if err != nil {
@@ -183,25 +194,34 @@ func (a providerRequestAdmission) CommitProviderInvocation(ctx context.Context, 
 	if err != nil {
 		return err
 	}
-	target, err := a.c.resolveCanonicalTaskTarget(request.ModelID, "")
+	if projection.ExecutionTarget == "" {
+		return fmt.Errorf("provider invocation has no provable execution target for cost admission")
+	}
+	validatedTarget, err := a.c.resolveCanonicalTaskTarget(projection.ExecutionTarget, "")
 	if err != nil {
-		return fmt.Errorf("resolve cost execution target %q: %w", request.ModelID, err)
+		return fmt.Errorf("validate bound cost execution target: %w", err)
 	}
 	_, err = a.c.costManager.Reserve(ctx, a.c.EventJournal(), CostReservationRequest{
-		Identity: identity, ExecutionTarget: target.String(),
+		Identity: identity, ExecutionTarget: validatedTarget.String(),
 		EstimatedInputTokens: int64(requestTokens), ReservedOutputTokens: int64(providerRequestOutputReservation(request)),
 	})
 	if err != nil {
 		return err
 	}
-	return nil
+	return commitStructuredStepInvocation(ctx, a.c, request, profileEvent)
 }
 
 // SettleProviderInvocation records terminal accounting without changing the
 // already-produced provider result. CostManager latches persistence failures
 // so subsequent reservations fail closed.
 func (a providerRequestAdmission) SettleProviderInvocation(ctx context.Context, request agent.ProviderRequest, result agent.ProviderInvocationResult) {
-	if a.c == nil || a.c.costManager == nil || request.InvocationID == "" {
+	if a.c == nil || request.InvocationID == "" {
+		return
+	}
+	if scope := structuredStepScopeFromContext(ctx); scope != nil {
+		scope.observe(ctx, a.c, request, result)
+	}
+	if a.c.costManager == nil {
 		return
 	}
 	var usage *cost.TokenUsage

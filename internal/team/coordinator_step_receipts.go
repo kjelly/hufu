@@ -1,6 +1,7 @@
 package team
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -75,8 +76,14 @@ func (c *Coordinator) executionStepReceiptRegistry() *ExecutionStepReceiptRegist
 	return registry
 }
 
-func (c *Coordinator) recordActualToolReceipt(todoID string, attempt int, toolCallID, tool, input, output string, isError bool, startedAt time.Time) error {
+func (c *Coordinator) recordActualToolReceipt(ctx context.Context, todoID string, attempt int, toolCallID, tool, input, output string, isError bool, startedAt time.Time) error {
 	if c == nil || strings.TrimSpace(todoID) == "" || attempt <= 0 || strings.TrimSpace(toolCallID) == "" {
+		return nil
+	}
+	// Coordinator orchestration has no worker task occurrence. Its canonical
+	// evidence is the workflow action/observation emitted by the caller; a
+	// worker receipt lease must not suppress that lifecycle event.
+	if todoID == CoordTodoID {
 		return nil
 	}
 	if startedAt.IsZero() {
@@ -91,7 +98,8 @@ func (c *Coordinator) recordActualToolReceipt(todoID string, attempt int, toolCa
 	sum := sha256.Sum256([]byte(input))
 	validatorVerdict := ""
 	stepID := toolCallID
-	if step, ok := c.executionStepForTool(todoID, attempt, tool); ok {
+	step, declaredStep := c.executionStepForTool(todoID, attempt, tool)
+	if declaredStep {
 		stepID = step.ID
 		if step.Effect == ExecutionEffectValidate {
 			validatorVerdict = "pass"
@@ -105,6 +113,7 @@ func (c *Coordinator) recordActualToolReceipt(todoID string, attempt int, toolCa
 		policyVerdict = "allowed"
 	}
 	receipt := ExecutionStepReceipt{
+		ExecutionKind:    "tool_call",
 		ID:               toolCallID,
 		TaskID:           todoID,
 		Attempt:          attempt,
@@ -122,6 +131,25 @@ func (c *Coordinator) recordActualToolReceipt(todoID string, attempt int, toolCa
 		receipt.Stderr = output
 		receipt.Stdout = ""
 	}
+	if c.EventStore() != nil {
+		bound, err := submitResultRuntimeIdentityFromContext(ctx, c, todoID)
+		if err != nil || bound.Attempt != attempt {
+			return fmt.Errorf("tool receipt has no immutable runtime occurrence")
+		}
+		receipt.RunID, receipt.BranchID, receipt.OccurrenceRevision = bound.RunID, c.EventStore().BranchID(), bound.OccurrenceRevision
+		if declaredStep {
+			active, ok := c.activeTaskResultOccurrence(todoID)
+			if !ok || !sameTaskResultOccurrence(bound, active) {
+				return fmt.Errorf("tool step receipt occurrence is stale")
+			}
+			if publish := c.structuredStepReceiptPublisher(todoID, attempt); publish != nil {
+				receipt, err = publish(ctx, receipt)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
 	return c.executionStepReceiptRegistry().Record(receipt)
 }
 
@@ -137,7 +165,11 @@ func (c *Coordinator) executionStepForTool(todoID string, attempt int, tool stri
 		if err != nil {
 			return ExecutionStep{}, false
 		}
-		next := len(c.executionStepReceiptRegistry().ReceiptIDs(todoID, attempt))
+		registry, err := c.taskStepReceiptRegistry(todoID, attempt)
+		if err != nil {
+			return ExecutionStep{}, false
+		}
+		next := len(registry.ReceiptIDs(todoID, attempt))
 		if next < len(ordered) && ordered[next].Tool == tool {
 			return ordered[next], true
 		}
@@ -199,8 +231,10 @@ func (c *Coordinator) validateTaskResultReceiptClaims(todoID string, result *Tas
 	if requiresClaims && len(result.ReceiptIDs) == 0 {
 		return fmt.Errorf("structured execution result must cite execution receipt_ids")
 	}
-	registry := c.executionStepReceiptRegistry()
-	var err error
+	registry, err := c.taskStepReceiptRegistry(todoID, attempt)
+	if err != nil {
+		return err
+	}
 	if requiresClaims && taskResultStatusIsSuccessful(result.Status) {
 		contract := c.executionContractForTask(todoID)
 		err = registry.ValidateSuccessfulContract(todoID, attempt, contract, result.ReceiptIDs)

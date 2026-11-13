@@ -123,11 +123,10 @@ func (c *Coordinator) authorizeReferenceMetadataTransport(ctx context.Context, r
 	if request.InvocationID == "" {
 		return media.Reject(media.DurabilityRequired, "metadata transport has no committed invocation")
 	}
-	var expected modelprofile.TelemetryProjection
-	if err := json.Unmarshal([]byte(request.AdmissionContext.ProfileTelemetryJSON), &expected); err != nil {
+	expected, err := providerInvocationProfileProjection(request)
+	if err != nil {
 		return err
 	}
-	expected.InvocationID = request.InvocationID
 	view, err := c.mediaLineage(ctx)
 	if err != nil {
 		return err

@@ -4926,7 +4926,7 @@ func (c *Coordinator) runAgentWithStatusAndHistory(ctx context.Context, ag fanta
 				}
 			}
 			attempt, _ := ctx.Value(executionAttemptKey{}).(int)
-			if receiptErr := c.recordActualToolReceipt(todoID, attempt, tr.ToolCallID, tr.ToolName, callInput, resultPreview, isErrResult, callStarted); receiptErr != nil {
+			if receiptErr := c.recordActualToolReceipt(ctx, todoID, attempt, tr.ToolCallID, tr.ToolName, callInput, resultPreview, isErrResult, callStarted); receiptErr != nil {
 				return fmt.Errorf("record tool execution receipt: %w", receiptErr)
 			}
 			if c.phaseWorkflow != nil && c.phaseWorkflow.Enabled() {

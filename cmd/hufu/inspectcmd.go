@@ -489,6 +489,11 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 			if _, err := fmt.Fprintf(writer, "%d\t%s\t%s\t%s\t%s\n", ordinal, entry.Ref.Source, entry.Kind, valueOrUnavailable(entry.Status), valueOrUnavailable(entry.ReasonCode)); err != nil {
 				return err
 			}
+			if entry.StructuredStep != nil {
+				if err := renderStructuredStepsText(writer, []team.StructuredStepMetadata{*entry.StructuredStep}); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	case inspectpkg.StorageData:
@@ -540,6 +545,9 @@ func renderInspectTaskText(writer io.Writer, branchID string, data inspectpkg.Ta
 			action.ActionID, action.EntryHash, action.ArgumentsHash, action.InvocationID, refsOrNone(action.ProposalIDs)); err != nil {
 			return err
 		}
+	}
+	if err := renderStructuredStepsText(writer, data.StructuredSteps); err != nil {
+		return err
 	}
 	for _, attempt := range data.Attempts {
 		if _, err := fmt.Fprintf(writer, "Attempt %d: model_execution_id=%s producer=%s execution_target=%s backend=%s exit_code=%s verification=%s winning=%t\n",

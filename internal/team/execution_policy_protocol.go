@@ -94,7 +94,15 @@ func (c *Coordinator) validateInvocationProtocol(request agent.ProviderRequest) 
 	if c == nil || c.executionPolicy == nil {
 		return nil
 	}
-	policy, ok := c.executionPolicy.providerPolicyForModel(request.ModelID)
+	modelID := request.ModelID
+	target, known, err := boundProviderInvocationTarget(request)
+	if err != nil {
+		return err
+	}
+	if known {
+		modelID = target.String()
+	}
+	policy, ok := c.executionPolicy.providerPolicyForModel(modelID)
 	if !ok || policy.APIProtocol != request.AdmissionContext.APIProtocol {
 		return fmt.Errorf("provider invocation API protocol differs from frozen execution policy")
 	}

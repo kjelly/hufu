@@ -15,7 +15,8 @@ import (
 func reportDataFromSaved(saved *team.RunReport) *reportData {
 	data := &reportData{
 		ReportSource: saved, StartedAt: saved.StartedAt, CompletedAt: saved.CompletedAt,
-		RunResult: saved.Result, Todos: saved.Tasks, InvocationID: saved.InvocationID, SourceRunID: saved.RunID,
+		StructuredSteps: team.IncludeLegacyStructuredSteps(saved.StructuredSteps, saved.Tasks),
+		RunResult:       saved.Result, Todos: saved.Tasks, InvocationID: saved.InvocationID, SourceRunID: saved.RunID,
 		SessionData: &team.SessionData{RequiredResourceLockSet: saved.RequiredResourceLockSet}, DecisionPrimitives: saved.DecisionPrimitives,
 		AuditUnavailableReason: "live artifact verification is not part of this immutable historical snapshot",
 		CostUnavailableReason:  saved.CostUnavailableReason, Cost: saved.Cost, ModelProfiles: saved.ModelProfiles, ContextRouting: saved.ContextRouting, ControlDecisions: saved.ControlDecisions, DeprecatedMemory: saved.DeprecatedMemory,

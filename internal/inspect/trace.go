@@ -41,11 +41,30 @@ func InspectTrace(ctx context.Context, query InspectQuery) (*Envelope, error) {
 		return nil, err
 	}
 	indexedEvents := runIndexedEvents(lineage, query)
+	stepEvents, err := team.StructuredStepProjectionEvents(selected.raw, selected.taskEvents)
+	if err != nil {
+		return nil, fmt.Errorf("%w: structured step scope: %v", ErrIntegrity, err)
+	}
+	rows, err := team.LoadStructuredStepReceipts(ctx, query.Workspace, stepEvents)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("%w: structured step receipts: %v", ErrIntegrity, err)
+	}
+	steps := make(map[string]team.StructuredStepMetadata, len(rows))
+	for _, row := range rows {
+		steps[row.SourceEventID] = row.Metadata()
+	}
+
 	query.BranchID = lineage.BranchID
 	diagnostics := make([]Diagnostic, 0)
 	candidates := make([]traceCandidate, 0, len(indexedEvents))
 	for _, indexed := range indexedEvents {
 		entry := eventTraceEntry(indexed)
+		if metadata, ok := steps[indexed.Event.ID]; ok {
+			entry.StructuredStep = &metadata
+		}
 		candidates = append(candidates, traceCandidate{entry: entry, anchored: true, stableKey: indexed.Event.ID})
 	}
 	tasks, err := team.ReplayTodoList(selected.taskEvents)

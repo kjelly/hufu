@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	operatorpkg "github.com/kjelly/hufu/internal/operator"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 const SchemaVersion = 1
@@ -202,14 +203,15 @@ type TraceRef struct {
 }
 
 type TraceEntry struct {
-	Ref                TraceRef `json:"ref"`
-	Kind               string   `json:"kind"`
-	AnchorEventID      string   `json:"anchor_event_id,omitempty"`
-	AnchorEventOrdinal int64    `json:"anchor_event_ordinal,omitzero"`
-	Timestamp          string   `json:"timestamp,omitempty"`
-	Status             string   `json:"status,omitempty"`
-	ReasonCode         string   `json:"reason_code,omitempty"`
-	Refs               []string `json:"refs,omitempty"`
+	StructuredStep     *team.StructuredStepMetadata `json:"structured_step,omitempty"`
+	Ref                TraceRef                     `json:"ref"`
+	Kind               string                       `json:"kind"`
+	AnchorEventID      string                       `json:"anchor_event_id,omitempty"`
+	AnchorEventOrdinal int64                        `json:"anchor_event_ordinal,omitzero"`
+	Timestamp          string                       `json:"timestamp,omitempty"`
+	Status             string                       `json:"status,omitempty"`
+	ReasonCode         string                       `json:"reason_code,omitempty"`
+	Refs               []string                     `json:"refs,omitempty"`
 }
 
 type Diagnostic struct {

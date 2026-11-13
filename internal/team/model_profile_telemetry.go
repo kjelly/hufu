@@ -19,37 +19,43 @@ func (c *Coordinator) reportModelProfileResolved(projection modelprofile.Telemet
 }
 
 func (c *Coordinator) commitModelProfileResolved(ctx context.Context, projection modelprofile.TelemetryProjection) error {
+	_, err := c.commitModelProfileResolvedEvent(ctx, projection)
+	return err
+}
+
+func (c *Coordinator) commitModelProfileResolvedEvent(ctx context.Context, projection modelprofile.TelemetryProjection) (RunEvent, error) {
 	if c == nil {
-		return fmt.Errorf("persist model profile resolved: coordinator is unavailable")
+		return RunEvent{}, fmt.Errorf("persist model profile resolved: coordinator is unavailable")
 	}
 	store := c.EventStore()
 	if store == nil {
-		return fmt.Errorf("persist model profile resolved: event store is unavailable")
+		return RunEvent{}, fmt.Errorf("persist model profile resolved: event store is unavailable")
 	}
 	if projection.InvocationID == "" {
 		invocationID, err := newLegacyModelProfileInvocationID()
 		if err != nil {
-			return fmt.Errorf("persist model profile resolved: %w", err)
+			return RunEvent{}, fmt.Errorf("persist model profile resolved: %w", err)
 		}
 		projection.InvocationID = invocationID
 	}
 	payload, err := json.Marshal(projection)
 	if err != nil {
-		return fmt.Errorf("marshal model profile resolved: %w", err)
+		return RunEvent{}, fmt.Errorf("marshal model profile resolved: %w", err)
 	}
 	key := "model-profile-resolved:" + projection.InvocationID
-	if _, err := store.AppendPersistedContext(ctx, RunEvent{
+	durable, err := store.AppendPersistedContext(ctx, RunEvent{
 		Type: string(EventModelProfileResolved), Actor: "coordinator",
 		IdempotencyKey: key, Payload: payload,
-	}); err != nil {
-		return fmt.Errorf("persist model profile resolved: %w", err)
+	})
+	if err != nil {
+		return RunEvent{}, fmt.Errorf("persist model profile resolved: %w", err)
 	}
 	status := c.newEvent(string(EventModelProfileResolved)).
 		withModel(projection.ModelID).
 		withMessage(fmt.Sprintf("model profile resolved: %s/%s effective context=%d (%s)", projection.Provider, projection.ModelID, projection.Effective.Value, projection.Effective.Source))
 	status.ModelProfile = &projection
 	c.report(status)
-	return nil
+	return durable, nil
 }
 
 func newLegacyModelProfileInvocationID() (string, error) {

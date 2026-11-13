@@ -390,6 +390,63 @@ disposition. A runtime-verified resolution removes that blocker. Tasks allowing
 `retry_worker` or `replan_required` retain the existing bounded self-healing
 window.
 
+## Structured step execution evidence
+
+A structured step's selected `Model` is a proposal, not proof that a provider
+was invoked. New receipts distinguish `tool_call`, `model_generation`, and
+`unknown`, and keep `proposed_model` separate from `model_execution_ids`.
+The default declared-tool adapter reports `tool_call`. This describes its
+direct execution; auxiliary generation inside a tool retains its ordinary
+task-level profile and cost accounting. A custom runner cannot attest a model
+invocation by returning a model name or an ID in its result.
+
+The coordinator's private step scope observes the existing admitted provider
+commit and settlement boundary. A `model_generation` receipt must cite every
+observed provider invocation ID for the same run, branch, task, attempt,
+occurrence revision, step, and repair attempt. Reused, unknown, late or
+conflicting bindings are rejected. Returning with an unfinished provider
+invocation fails the step. An unobserved custom runner and historical receipts
+without these fields remain `unknown`; no historical invocation is invented.
+This adds neither a generative runner nor a second source of charges.
+
+Provider commit binds `execution_target` in the existing profile invocation
+projection from its immutable provider identity and selector syntax. Cost
+admission uses that bound target, rather than applying a named default to a
+transport already selected for a bare model. The step projection obtains actual
+targets from these linked invocations, preserving all IDs and targets when a
+step makes several calls. Explicit profile and ledger targets must agree. Legacy
+bare-model telemetry without sufficient target evidence remains unavailable;
+historical receipts, prices and hashes are never rewritten to fill that gap.
+
+New complete receipts use a version-1 blob in the existing content-addressed
+artifact store. The journal's `structured_step_receipt_recorded` event binds the
+blob's digest, size and runtime occurrence; its safe summary is checked against
+the complete canonical body. `structured_step_invocation_observed` binds each
+actual call to its committed profile source. A named artifact digest is encoded
+as a name/sha256 pair, so an output named `api_key` is not mistaken for a secret
+whose digest should be replaced. Human diagnostics are redacted before their
+full stdout/stderr references are hashed. The 64 MiB blob limit rejects an
+oversize receipt explicitly; it does not truncate diagnostics or relax
+redaction.
+
+The registry is a selected-lineage cache. Authoritative result claims select
+the currently authorized occurrence, or the verified original work occurrence
+of a result-only checkpoint. Native tool-call IDs may repeat in different
+occurrences; the storage key includes the complete occurrence, and an ambiguous
+unscoped lookup does not choose a historical receipt. Source corruption or
+missing CAS bytes prevents startup admission. These receipts do not authorize
+step replay or promise exactly-once external operations. The standalone
+in-memory execution engine does not create a durable coordinator invocation.
+
+Task inspect, trace and saved reports expose the same safe attribution without
+raw tool diagnostics. New immutable report snapshots use report schema 2 and
+capture native summaries at the terminal journal transaction, without opening
+CAS or mutable checkpoints in that transaction. Report schema 1 remains readable
+and is compared using its original projection; viewing it can show unknown
+historical attribution without updating its stored bytes. Live inspect verifies
+the complete cited CAS body. A report cannot use a legacy schema to omit native
+step evidence recorded by its own run.
+
 ## Frozen task execution envelope
 
 Every new task occurrence resolves an immutable `TaskExecutionEnvelope` before
