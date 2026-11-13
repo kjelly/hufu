@@ -166,6 +166,8 @@ to re-create an abstraction that already exists in the runtime.
 
 ### Planning
 
+- [Agent runtime 功能補齊](implementation-plans/agent-runtime-completion.md) — 決策設定繼承、step 歸因、離線恢復回歸與跨 run economics 比較。
+
 - [Runtime result collection](implementation-plans/runtime-result-collection.md)
 - [Failed result collection recovery](implementation-plans/failed-result-collection-recovery.md)
   — remove ordinary workers' submit_result dependency through tool-free result
