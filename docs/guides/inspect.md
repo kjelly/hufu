@@ -28,6 +28,7 @@ hufu inspect trace <run-id>
 hufu inspect cost [run-id] [--task <task-id>]
 hufu inspect routes <run-id> [--task <task-id>]
 hufu inspect economics <run-id>
+hufu inspect economics-compare --manifest <file>
 hufu inspect replay <run-id>
 hufu inspect semantic-retrieval [run-id] [--task <task-id>]
 hufu inspect storage
@@ -150,6 +151,57 @@ invalidate a fully accounted run total.
 Latency uses nearest-rank p50/p95 over completed attempts with valid persisted
 start/end times, with sample and exclusion counts. Empty samples are null;
 running attempts never receive a live elapsed duration in this observation.
+
+
+## Comparing declared groups of runs
+
+```sh
+hufu inspect economics-compare --manifest comparison.json --format json
+hufu inspect economics-compare --manifest comparison.json --format text
+```
+
+The manifest is strict JSON (unknown and duplicate fields are rejected), at most
+1 MiB, with 2–100 selections in 2–10 groups. Each group must contain a run:
+
+```json
+{
+  "schema_version": 1,
+  "workload_id": "operator-chosen-task-set",
+  "runs": [
+    {"group": "baseline", "workspace": "./baseline", "branch_id": "main", "run_id": "run-a"},
+    {"group": "candidate", "workspace": "./candidate", "branch_id": "main", "run_id": "run-b"}
+  ]
+}
+```
+
+Relative workspace paths resolve from the manifest directory. Use full branch
+IDs, not names or labels. Canonical workspace/branch/run duplicates, including
+symlink aliases and duplicates across groups, are rejected. The manifest alone
+selects scope: explicit `--workspace`/`-w`, `--branch`, or `--session` is a usage
+error, including an explicitly empty value.
+
+Every selected run remains in the denominator. Accepted means a recorded terminal
+run with outcome `completed` and acceptance `passed`; failed, partial, blocked,
+nonterminal and unknown runs remain visible. Task verification rate is summed
+verified tasks divided by summed tasks, not an average of per-run rates.
+Group total and cost per accepted run include failed-run spending and require
+complete costs for every selected run. Otherwise they are null, with the known
+subtotal, incomplete-run count and reasons shown separately. No accepted runs
+means a null divisor result; zero tasks means a null task rate. USD micros use
+checked integer sums and upward-rounded division. Local, subscription and
+unknown amounts are never treated as zero.
+
+Each run retains its bound branch/run/session, event ID/hash, available policy
+and input snapshot references, and attempt latency p50/p95 with sample count.
+Economics and references come from one frozen lineage per run; later writes do
+not change that view. Different selections may observe different source times.
+Snapshot observations list distinct hashes and unavailable fields, without
+inferring semantic workload equivalence from those hashes. There is no group
+latency percentile or automatic winning strategy. `workload_source` is
+`operator_declared`: these are observed groups, not a causal savings experiment.
+JSON and text expose the same cost qualifications and source identities. Reads
+never call a provider/verifier or migrate/recover the workspace. Invalid manifests
+use exit 2; missing, unauthorized or corrupt sources follow normal inspect errors.
 
 ## Recorded worker routes
 

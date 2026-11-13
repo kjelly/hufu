@@ -16,18 +16,19 @@ const SchemaVersion = 1
 type Kind string
 
 const (
-	KindRun       Kind = "run"
-	KindTask      Kind = "task"
-	KindTrace     Kind = "trace"
-	KindEvidence  Kind = "evidence"
-	KindContext   Kind = "context"
-	KindReplay    Kind = "replay"
-	KindStorage   Kind = "storage"
-	KindOverview  Kind = "overview"
-	KindCost      Kind = "cost"
-	KindRoutes    Kind = "routes"
-	KindEconomics Kind = "economics"
-	KindBeliefs   Kind = "beliefs"
+	KindRun              Kind = "run"
+	KindTask             Kind = "task"
+	KindTrace            Kind = "trace"
+	KindEvidence         Kind = "evidence"
+	KindContext          Kind = "context"
+	KindReplay           Kind = "replay"
+	KindStorage          Kind = "storage"
+	KindOverview         Kind = "overview"
+	KindCost             Kind = "cost"
+	KindRoutes           Kind = "routes"
+	KindEconomics        Kind = "economics"
+	KindEconomicsCompare Kind = "economics-compare"
+	KindBeliefs          Kind = "beliefs"
 	// KindControlDecisions summarizes runtime control decision observations.
 	KindControlDecisions Kind = "control-decisions"
 	// KindSemanticRetrieval summarizes semantic retrieval traces.

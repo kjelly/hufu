@@ -48,6 +48,7 @@ the detailed audit, context, or decision maintenance commands.`,
   hufu inspect task task-7 --run run-123 --format json
   hufu inspect trace run-123 --branch incident-fix
   hufu inspect cost run-123 --task task-7 --format json
+  hufu inspect economics-compare --manifest comparison.json --format json
   hufu inspect replay run-123 --format json
   hufu inspect control-decisions --workspace ./workspace
   hufu inspect semantic-retrieval run-123 --workspace ./workspace
@@ -72,6 +73,7 @@ the detailed audit, context, or decision maintenance commands.`,
 		newInspectCostCommand(options),
 		newInspectRoutesCommand(options),
 		newInspectEconomicsCommand(options),
+		newInspectEconomicsCompareCommand(options),
 		newInspectBeliefsCommand(options),
 		newInspectControlDecisionsCommand(options),
 		newInspectSemanticRetrievalCommand(options),
@@ -425,6 +427,8 @@ func renderInspectText(writer io.Writer, envelope *inspectpkg.Envelope) error {
 		return renderInspectCostText(writer, data)
 	case inspectpkg.RoutesData:
 		return renderInspectRoutesText(writer, envelope.Query, data)
+	case inspectpkg.EconomicsComparisonData:
+		return renderInspectEconomicsComparisonText(writer, data)
 	case inspectpkg.EconomicsData:
 		return renderInspectEconomicsText(writer, envelope.Query, data)
 	case inspectpkg.BeliefsData:

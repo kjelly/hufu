@@ -30,8 +30,8 @@
 | --- | --- | --- |
 | 1 決策設定繼承 | 已完成，`e3c94b8b` | 下節 before/after、完整測試、vet、lint |
 | 2 Step 執行歸因 | 已完成，`a0eb66c2` | 下節 before/after、CAS/replay、投影、完整測試與所有 gate |
-| 3 中斷恢復回歸 | 已完成，本次提交 | 下節 subprocess matrix、完整測試與所有 gate |
-| 4 跨 run economics 比較 | 待實作 | — |
+| 3 中斷恢復回歸 | 已完成，`9f9e3def` | 下節 subprocess matrix、完整測試與所有 gate |
+| 4 跨 run economics 比較 | 已完成，本次提交 | 下節 manifest／唯讀投影、完整測試與所有 gate |
 
 ## 階段 1：共用決策 transport
 
@@ -150,3 +150,28 @@
 - 完整測試後可歸屬 cache 1863.9 MiB（70 entries，低於 2 GiB），scratch 約 11 MiB；cache volume 可用約 64 GiB、`/tmp` 可用約 7.7 GiB、available RAM 約 10 GiB。保留現行 normal／race 輸出與共享依賴。
 
 - 最終 `mise run vet` 通過（exit 0），文件檢查與 diff whitespace 檢查通過；沿用同一 source 已通過的 lint、race 與 contracts。第三階段 source validation 完成，交付為離線恢復安全回歸及確認缺陷的最小修正；未擴建外部 exactly-once 或自動續跑機制。第四階段尚待實作。
+
+## 階段 4：唯讀跨 run economics 比較
+
+- Trigger：現有 economics 僅呈現單 run，尚無可檢查來源及完整成本資格的分組比較。
+- 預期：manifest 是唯一 scope 來源；每筆以同一 frozen lineage 取得 economics／snapshot refs，保留所有成功、失敗與 nonterminal 樣本。完整 group 金額包含失敗花費；任一 run 不完整就保持 null，不把已知小計冒充完整成本。
+- 影響邊界：internal/inspect 純投影、manifest loader 與 inspect CLI／文件；不修改 runtime 執行、ledger、選模或 recovery。
+- 完成證據：離線 fixture 的手算統計、未知／零分母、嚴格 manifest／來源拒絕、同一 frozen view、workspace bytes 不變、JSON／text 語義與既有 economics 相容，及 focused／完整 test／vet／lint。尚未完成。
+
+- 已實作嚴格 JSON manifest（1 MiB、100 runs、10 groups），先完成 shape／limit 檢查，再解析相對路徑與 symlink canonical identity，拒絕跨 group 重複及 branch name／label。CLI 明確拒絕父命令 scope flags，包含空值。
+- 沿用 projectEconomics 與既有 checked USD-micros helper；只排除單 run per-verified-task 專用的 no_samples 分母原因，所有成本完整性資格原樣保留。每筆 snapshot refs 與 economics 來自同一 bound lineage，沒有新增 ledger 或 provider 呼叫。
+- 首輪 focused 的 frozen-view fixture 追加事件漏設 actor，第二輪 snapshot fixture 同樣缺 actor；補齊測試來源身分，沒有放寬產品驗證。第三輪 focused 全通過（inspect 1.522s、CLI 0.387s）：含失敗花費手算 42 USD micros、unknown／local／subscription 與 nonterminal 的 null／原因、overflow、來源拒絕、snapshot refs／差異、workspace bytes 不變及 JSON／text。既有單 run economics 測試維持通過。
+- 更新 inspect help、Nushell completion 與使用說明。文件檢查通過（106 active files、204 total files、693 relative links、51 Go function anchors）。
+- focused 後可歸屬 cache 1991.0 MiB；辨識本 checkout／既有 CLI economics 測試符號、缺少新 comparison CLI 的過時測試輸出，確認無 /proc 消費者後清理 10 entries、414.7 MiB，降至 1576.4 MiB。scratch 約 11 MiB；cache volume 可用約 64 GiB、available RAM 約 10 GiB。
+
+- `mise run lint` 通過（0 issues）。完整 `mise run test` 已開始，凍結所有 Go 來源；驗證前可歸屬 cache 1602.3 MiB（65 entries）、共享 GOCACHE 約 13 GiB、GOTMPDIR 約 986 MiB、GOMODCACHE 約 17 GiB。第 4 階段只新增 inspect 純投影／CLI，不修改共享 runtime 並行狀態或 result contract，沿用第 3 階段相應 race／contracts 證據，不重複啟動無變更的 heavyweight gates。
+
+- 首輪完整 `mise run test` 通過（exit 0）：team 820.980s、CLI 164.184s、inspect 8.116s。驗證期間 source snapshot 全部相符，只有進度紀錄追加。全套結束後可歸屬 cache 1704.3 MiB（67 entries）。
+- 最終 Go 1.27 慣例核對後，僅將兩處測試改為 errors.AsType／slices.Clone；產品程式與接受條件均未再變更。補跑 focused 與最後 gates，重用未變更 runtime 的有效結果，不略過必需驗證。
+
+- 最後 source 的 focused 測試通過（inspect 1.525s、CLI 0.387s）。最終完整 `mise run test` 全套通過（exit 0）：team 826.056s、CLI 159.827s、inspect 7.928s；沒有略過測試，Go 來源與驗證開始時的 snapshot 全部相符。待最後 vet／lint 與提交。
+
+- 最終 `mise run vet` 通過（exit 0）、`mise run lint` 通過（0 issues）；同一 frozen source 的完整測試與 focused 均已通過。第四階段 source validation 完成。第 1–4 階段全部交付；真實模型 A/B／校準與隔離工程維持規格所列範圍之外。
+- 最終容量盤點：可由本 checkout／新增符號確認的 task cache 1821.8 MiB（69 entries，低於 2 GiB）；共享 GOCACHE 約 13 GiB、GOTMPDIR 約 986 MiB、GOMODCACHE 約 17 GiB。cache volume 可用約 64 GiB、`/tmp` 可用約 7.7 GiB、available RAM 約 10 GiB。未移動 cache 或清除共享依賴／未知來源的既有產物。
+- 全任務已回收確定過時的自有 cache 約 5292.8 MiB（約 5.17 GiB），另清理 abandoned workdirs 約 605 MiB。最後 inspect cache 盤點未找到可再確定淘汰的項目（0 entries）；保留有效建置輸出。task scratch 約 14 MiB，供本次提交及驗證紀錄使用，提交完成後清理，不保留大型暫存交付物。
+- 完成界線：可由 coding agent 交付的 runtime 功能、離線恢復與觀測比較均已驗證；不宣稱真實模型品質／節費結論或外部操作 exactly-once。原始 canonical receipt／payload 與既有安全契約維持不變。
