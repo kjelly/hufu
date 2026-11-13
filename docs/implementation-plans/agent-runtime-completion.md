@@ -75,7 +75,7 @@ control-decisions:
 4. Legacy block 有 transport 欄位但省略 backend 時，依該 block 原有 backend 語義正規化；若 canonical 已明確指定另一 backend，視為同層衝突。顯式 `sidecar` 不得因存在 inactive systemone 欄位而改成 systemone。
 5. 已有 catalog entry 顯式 transport 的優先序維持為 `合併後共用設定 → entry override`。本版不新增任意 runtime point 的 YAML override 機制。
 6. 四種 legacy 名稱映射僅可服務既有 mode／confidence 政策，不再決定是否繼承共用 transport。新 runtime 名稱無須加入 transport 名稱表。
-7. Sidecar 的實際模型由現有 sidecar model precedence 決定，不把 systemone.model／endpoint／credential 套到 sidecar。保留兩個 backend 的 confidence、校準及安全失敗語義；不新增 fallback inference。
+7. Canonical `decision-runtime.sidecar.timeout` 保存 sidecar 專屬 timeout；legacy sidecar timeout 正規化到此欄位，不能借用 inactive systemone timeout。Sidecar 的實際模型由現有 sidecar model precedence 決定，不把 systemone.model／endpoint／credential 套到 sidecar。保留兩個 backend 的 confidence、校準及安全失敗語義；不新增 fallback inference。
 8. 有效 backend、model、timeout、endpoint identity 與逐欄位來源沿用現有 Transport／inspect 輸出；修正 legacy 正規化後的來源，禁止將繼承值全標成 entry。沿用既有 secret redaction。
 9. Policy snapshot 必須釘選有效 transport 與既有 credential revision。若改變解析語義需要新 snapshot 版本，保留舊版解碼；歷史事件不重算、不覆寫。舊執行的模型／有效政策不同時，普通 resume 拒絕並說明差異及既有 recovery／新執行途徑，不自動升級或繞過 drift。
 
@@ -212,16 +212,16 @@ Manifest 是 workspace／branch／run 選取的唯一來源；若同時顯式傳
 
 ## 7. 驗證與交付
 
-實作者先跑當項的 focused tests，再依專案要求循序執行以下 gate。遵守 cache／磁碟／記憶體預算，保留既有 cache 與 GOTMPDIR；從 `GOMAXPROCS=2`、Go `-p 2` 開始，不平行啟動重量驗證。
+實作者先跑當項的 focused tests，再依專案要求循序執行以下 gate。遵守 cache／磁碟／記憶體預算，保留既有 cache 與 GOTMPDIR；focused Go 驗證從 `GOMAXPROCS=2`、Go `-p 2` 開始，不平行啟動重量驗證。完整 mise tasks 會套用專案的 `GOMAXPROCS=4`；只在記憶體 reserve 足夠時執行，不以巢狀 mise 指令假設外層環境可覆寫 task 設定。
 
 ```bash
 mise exec -- env GOMAXPROCS=2 go test -p 2 ./internal/decisionrt/... ./internal/config ./internal/team ./internal/inspect ./cmd/hufu
-mise exec -- env GOMAXPROCS=2 mise run test
-mise exec -- env GOMAXPROCS=2 mise run vet
-mise exec -- env GOMAXPROCS=2 mise run lint
+mise run test
+mise run vet
+mise run lint
 ```
 
-涉及 receipt／result contract、binding、repair 或 replay 的第 2、3 項另須執行 `mise exec -- env GOMAXPROCS=2 mise run test-contracts`。修改共享 receipt 或並行狀態的項目補對應 package／測試的 focused race 檢查，以 `mise exec -- env GOMAXPROCS=2 go test -race -p 2` 執行並指定實際受影響的 package／test pattern。
+涉及 receipt／result contract、binding、repair 或 replay 的第 2、3 項另須執行 `mise run test-contracts`。修改共享 receipt 或並行狀態的項目補對應 package／測試的 focused race 檢查，以 `mise exec -- env GOMAXPROCS=2 go test -race -p 2` 執行並指定實際受影響的 package／test pattern。
 
 交付包含：實際修改範圍、before/after 回歸證據、已執行命令與結果、剩餘限制、cache 成長與清理情況。非文件 PR 依 fix evidence workflow 提供結構化 evidence block，清楚標示 offline／source validation；不得將 fixture 成功寫成 full-target acceptance。
 
