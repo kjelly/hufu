@@ -6,7 +6,7 @@
 > Supersedes: —
 > Superseded-By: —
 > Proposed-Date: 2026-10-14
-> Execution-Status: 核心 CLI、team 篩選、LLM 三階段查詢與即時結果身份已於工作樹實作；完整驗證與實際模型品質評估見目前交付狀態
+> Execution-Status: 核心 CLI、team 篩選、LLM 三階段查詢與即時結果身份已實作；2026-11-15 已補齊 1K／10K／100K 的完整本機冷／熱讀取路徑量測與配置優化比較。真實模型語意品質仍未驗收；索引維持條件式方案。
 > Scope: team-neutral 歷史結果讀取、LLM 查詢、結果保存與 CLI
 > Reviewed-Baseline: 上述 HEAD 的目前 working tree；包含其他進行中的 runtime 變更，開工時重新確認實際介面
 
@@ -21,8 +21,10 @@
 - canonical task snapshots 已保存 typed result 與文字結果，讀取重用既有 event chain 與 reducer，沒有新增第二份結果 truth store。`--new` 建立的舊 root 透過 `--all-branches` 明確讀取。
 - query 沒有 literal 命中時，以同一授權 scope、日期與 status 的近期候選作明確的 recency fallback，再由 LLM 判斷相關性；這不適用於 resolver 失敗，不能猜測未解析的意圖。回傳 lexical_match_count、recency_fallback 和截斷資訊。
 - 目前使用 event_replay，沒有實作落盤索引、embedding 或 index build 指令；索引維護段落仍為條件式設計。artifact/transcript 只回傳保存的 references，不宣稱檔案現況已驗證。
+- 2026-11-15 的 [完整本機性能基線](../reference/historical-results-performance-2026-11-15.md) 已完成：每個 1K／10K／100K 規模各 20 組 fresh-process／same-process 配對，共 120 次真實 SQLite／驗證／Cobra query，三段生成維持 scripted。100K cold／warm p95 為 15.73／14.97 秒；約 97% 耗時在完整歷史 load。這不是實體磁碟冷讀、真實 LLM latency 或 production SLO。
+- 同日完成[配置優化與同 fixture 比較](../reference/historical-results-optimization-2026-11-15.md)：另 120 次查詢全部成功，100K 累計配置中位數降低約 21.5%，最大抽樣 RSS 降低約 13–14%，cold／warm p95 為 13.95／13.79 秒。10K cold p95 增加 14.8%，因此不宣稱所有延遲指標改善。完整 test／vet／lint／定向 race／test-contracts 均通過；仍保留兩次全域鏈驗證與 `event_replay`，沒有新增索引。
 - preview 只顯示明確 scope 與呼叫者設定的 model；不解析問題。clarification/unsupported 回傳可讀診斷與 exit 2，由使用者帶補充問題重新查詢。
-- 契約測試與真實 binary 搭配本地 fixture provider 的三次生成流程已通過；本機未提供 Ollama service，尚未實測實際模型的自然語言 recall/support gate，不能宣稱達到後述 90%／95% 指標。實際檢查與界線記錄於 [驗證記錄](../reference/historical-results-validation.md)。
+- 契約測試與真實 binary 搭配本地 fixture provider 的三次生成流程已通過；2026-10-14 的原始驗證當時未提供 Ollama service，之後的 context-query 模型 A/B 也不是本案的自然語言查詢評估。至少 30 題、recall 90%／support 95% 的門檻仍未實測；實際檢查與界線記錄於 [驗證記錄](../reference/historical-results-validation.md)。
 
 ## 1 目前問題與可重用能力
 
@@ -49,7 +51,7 @@ hufu results query "比較最近兩次部署檢查的結果" --team ops
 # 可設定查詢模型；沿用 Hufu 已設定的 provider
 hufu results query "上週有哪些任務仍然 blocked？" --model <provider/model>
 
-# 離線操作；results 無子指令時等同 list
+# 離線操作；results 無子指令時印出最新完整最終回覆
 hufu results
 hufu results list --limit 20
 hufu results search "timeout" --agent helper

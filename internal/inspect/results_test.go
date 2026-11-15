@@ -404,3 +404,41 @@ func TestHistoricalResultsBindOriginalRequestAcrossRunsAndResume(t *testing.T) {
 		}
 	}
 }
+
+func TestHistoricalResultsTeamIdentityRemainsChronological(t *testing.T) {
+	workspace, store := newHistoricalFixture(t)
+	// A run has no team until a canonical event declares one. A later identity
+	// must not expose its earlier result through a team-scoped query.
+	unknown := appendHistoricalTask(t, store, "run-late-team", "unknown", "unscoped result")
+	appendHistoricalFixture(t, store, team.RunEvent{RunID: "run-late-team", Type: "run_started"}, map[string]any{"team": "review"})
+	known := appendHistoricalTask(t, store, "run-late-team", "known", "scoped result")
+	snapshot, err := LoadHistoricalResults(t.Context(), HistoricalResultScope{Workspace: workspace, Team: "review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Results) != 1 || snapshot.Results[0].SourceEventID != known.ID {
+		t.Fatalf("retroactive team scope: %#v", snapshot.Results)
+	}
+	snapshot.Results[0].TypedResult.Summary = "caller mutation"
+	snapshot.Results[0].TypedResultJSON[0] = '!'
+	snapshot.Results[0].Branches[0] = "caller branch"
+	again, err := LoadHistoricalResults(t.Context(), HistoricalResultScope{Workspace: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again.Results) != 2 {
+		t.Fatalf("lost unscoped row: %#v", again.Results)
+	}
+	for _, row := range again.Results {
+		if row.TypedResult.Summary == "caller mutation" || row.TypedResultJSON[0] != '{' || row.Branches[0] != "main" {
+			t.Fatal("caller mutation reached a later snapshot")
+		}
+		if row.SourceEventID == unknown.ID && row.Team != "" {
+			t.Fatal("unknown team was rewritten")
+		}
+	}
+	appendHistoricalFixture(t, store, team.RunEvent{RunID: "run-late-team", Type: "run_started"}, map[string]any{"team": "other"})
+	if _, err := LoadHistoricalResults(t.Context(), HistoricalResultScope{Workspace: workspace, Team: "review"}); !errors.Is(err, ErrIntegrity) {
+		t.Fatalf("conflicting identity accepted: %v", err)
+	}
+}

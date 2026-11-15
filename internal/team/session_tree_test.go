@@ -392,3 +392,36 @@ func TestSessionTree_CopyBranchStateDeepCopy(t *testing.T) {
 		t.Errorf("child Compaction.UserCorrections aliases parent: %q", child.State.Compaction.UserCorrections[0])
 	}
 }
+
+func TestBranchProjectionOwnsEventSlice(t *testing.T) {
+	tree := NewSessionTree()
+	tree.Branches["child"] = &SessionBranch{ID: "child", ParentID: "main", ForkEventID: "first"}
+	events := []RunEvent{{ID: "first", BranchID: "main"}, {ID: "after", BranchID: "main"}, {ID: "child-event", BranchID: "child"}}
+	for _, branch := range []string{"main", "child"} {
+		t.Run(branch, func(t *testing.T) {
+			projected, err := projectEventsForBranch(events, tree, branch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(projected) != 2 || projected[0].ID != "first" {
+				t.Fatalf("incorrect lineage: %#v", projected)
+			}
+			wantLast := "after"
+			if branch == "child" {
+				wantLast = "child-event"
+			}
+			if projected[1].ID != wantLast {
+				t.Fatalf("fork cutoff changed: %#v", projected)
+			}
+			projected[0].ID = "changed"
+			projected = append(projected, RunEvent{ID: "extra"})
+			if events[0].ID != "first" || events[1].ID != "after" || events[2].ID != "child-event" {
+				t.Fatal("projection shares input slice storage")
+			}
+			again, err := projectEventsForBranch(events, tree, branch)
+			if err != nil || len(again) != 2 || again[0].ID != "first" {
+				t.Fatalf("projection mutation leaked: %#v %v", again, err)
+			}
+		})
+	}
+}

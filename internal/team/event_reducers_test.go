@@ -409,3 +409,45 @@ func TestReducersRestoreRuntimeTaskContract(t *testing.T) {
 		t.Fatalf("runtime task slices/contract were not replayed: %#v", got)
 	}
 }
+
+func TestTodoReplayPreservesFirstIdentityAndCycleBoundary(t *testing.T) {
+	for _, cycle := range []bool{false, true} {
+		name := "ordinary"
+		if cycle {
+			name = "new cycle"
+		}
+		t.Run(name, func(t *testing.T) {
+			events := []RunEvent{
+				{ID: "created", Type: "task_created", TaskID: "1", Payload: []byte(`{"id":"1","status":"pending","desc":"original"}`)},
+				{ID: "completed", IdempotencyKey: "terminal", Type: "task_completed", TaskID: "1", Payload: []byte(`{"id":"1","status":"done","output":"accepted"}`)},
+				{ID: "completed", Type: "task_failed", TaskID: "1", Payload: []byte(`{"id":"1","status":"error","output":"duplicate ID"}`)},
+				{ID: "other", IdempotencyKey: "terminal", Type: "task_failed", TaskID: "1", Payload: []byte(`{"id":"1","status":"error","output":"duplicate key"}`)},
+			}
+			// A duplicate identity must not introduce a reset, even on the cycle path.
+			events = append(events, RunEvent{ID: "created", RunID: "duplicate-run", Type: string(EventWorkflowCycleStarted), Payload: []byte(`{"task_id_floor":1,"request":"duplicate"}`)})
+			if cycle {
+				events = append(events,
+					RunEvent{ID: "cycle", RunID: "follow-up-run", Type: string(EventWorkflowCycleStarted), Payload: []byte(`{"task_id_floor":1,"request":"follow up"}`)},
+					RunEvent{ID: "next", Type: "task_completed", TaskID: "2", Payload: []byte(`{"id":"2","status":"done","output":"next accepted"}`)},
+				)
+			} else {
+				// Exercise the streaming fast path without any cycle event type.
+				events = events[:len(events)-1]
+			}
+			before := slices.Clone(events)
+			items := ReduceToTodoList(events)
+			wantID, wantOutput := "1", "accepted"
+			if cycle {
+				wantID, wantOutput = "2", "next accepted"
+			}
+			if len(items) != 1 || items[0].ID != wantID || items[0].Status != TaskDone || items[0].Output != wantOutput {
+				t.Fatalf("identity/cycle replay changed: %#v", items)
+			}
+			for index := range events {
+				if events[index].ID != before[index].ID || events[index].Type != before[index].Type || string(events[index].Payload) != string(before[index].Payload) {
+					t.Fatal("replay mutated the input journal")
+				}
+			}
+		})
+	}
+}

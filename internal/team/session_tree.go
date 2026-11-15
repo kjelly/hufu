@@ -363,7 +363,7 @@ func projectBranchLineage(events []RunEvent, st *SessionTree, branchID string, v
 	visiting[branchID] = true
 	defer delete(visiting, branchID)
 
-	var lineage []RunEvent
+	var inherited []RunEvent
 	parentID := strings.TrimSpace(branch.ParentID)
 	if parentID == "" {
 		if strings.TrimSpace(branch.ForkEventID) != "" {
@@ -385,12 +385,26 @@ func projectBranchLineage(events []RunEvent, st *SessionTree, branchID string, v
 			if forkIndex < 0 {
 				return nil, fmt.Errorf("branch %q fork event %q is not in parent %q visible lineage", branchID, forkEventID, parentID)
 			}
-			lineage = append(lineage, parentLineage[:forkIndex+1]...)
+			inherited = parentLineage[:forkIndex+1]
 		}
 		// An empty fork is an explicitly empty inherited prefix. Do not fall
 		// back to unrestricted parent history.
 	}
 
+	// Reserve the exact visible size instead of repeatedly copying the large
+	// event structs as the lineage grows. The returned slice still owns its
+	// backing array, independently of both the input and the parent projection.
+	count := len(inherited)
+	for _, event := range events {
+		if effectiveEventBranchID(event) == branchID {
+			count++
+		}
+	}
+	var lineage []RunEvent
+	if count > 0 {
+		lineage = make([]RunEvent, 0, count)
+	}
+	lineage = append(lineage, inherited...)
 	for _, event := range events {
 		if effectiveEventBranchID(event) == branchID {
 			lineage = append(lineage, event)

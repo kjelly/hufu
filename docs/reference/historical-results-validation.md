@@ -2,11 +2,13 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: —（2026-10-14 工作樹，尚未提交）
+> Verified-Commit: —（原始功能驗證為 2026-10-14 工作樹；2026-11-15 完整本機性能量測另列 source／binary identity）
 > Supersedes: —
 > Superseded-By: —
 
 本次交付新增 [results CLI](../guides/historical-results.md)。驗證使用 Go 1.27.2、Linux amd64、temporary workspaces 與本地 fixture providers。fixtures 測試讀取、身份、scope、schema、錯誤和 provider transport 的契約；不代表實際模型的語意準確率。
+
+> 最新性能狀態：已補齊 [2026-11-15 完整本機查詢基線](historical-results-performance-2026-11-15.md)，包含 1K／10K／100K 各 20 組冷／熱配對、SQLite 私有快照、全鏈驗證、projection、實際 Cobra query、記憶體與來源 byte preservation。以下 projection-only 數字保留為歷史紀錄，不能和新版不同 fixture／scope 的量測作直接前後比較。
 
 ## 覆蓋的行為
 
@@ -41,6 +43,10 @@
 
 初次完整執行使用 cache temporary directory，遇到 chat E2E 的 deadline 與 SQLite fsync 導致的 package timeout。既有 [環境 baseline](context-delivery-baseline.md) 要求同時設定 TMPDIR 與 GOTMPDIR；換到 `/tmp` 後，chat E2E 單獨通過，沒有修改 test assertion 或產品流程。另一次 sandbox 執行拒絕 httptest loopback socket，因此使用工具權限流程重跑 local fixtures，不把這些案例改成 skip。
 
+## 2026-11-15 配置優化
+
+[同 fixture 的完整前後比較](historical-results-optimization-2026-11-15.md)已完成：120 次查詢全部成功，100K 累計配置減少約 21.5%、最大抽樣 RSS 減少約 13–14%，cold／warm p95 為 13.95／13.79 秒。10K cold p95 較基線增加 14.8%，保留全部樣本與限制。完整 test、vet、lint、定向 race 與離線契約 gates 通過；未修改 canonical sources、雜湊驗證或真實模型品質驗收狀態。
+
 ## Projection 性能量測
 
 執行 `go test ./internal/inspect -run '^$' -bench BenchmarkHistoricalResultProjection -benchtime=1x -count=1`，單次 iteration 的 in-memory fixture 結果如下：
@@ -51,8 +57,8 @@
 | 10K | 2.111 s | 185.9 MB |
 | 100K | 23.153 s | 1.882 GB |
 
-這是 [projection benchmark](../../internal/inspect/results_bench_test.go)，不包含 SQLite 讀取、完整 chain validation、index build 或 LLM latency；bytes 是累計 allocations，不是 peak RSS。當時有其他 Go validation 工作並行，單次樣本不能用來建立 p95 或 production SLO。第一版仍使用 event_replay；大型歷史需要後續索引及完整冷／熱查詢量測，不能把此表當成索引已完成的證據。
+這是 [projection benchmark](../../internal/inspect/results_bench_test.go)，不包含 SQLite 讀取、完整 chain validation、index build 或 LLM latency；bytes 是累計 allocations，不是 peak RSS。當時有其他 Go validation 工作並行，單次樣本不能用來建立 p95 或 production SLO。完整本機冷／熱量測已由上述新版基線補齊；查詢仍使用 event_replay，是否新增結果索引須另依瓶頸決定，不能把舊表當成索引已完成的證據。
 
 ## 實際模型品質界線
 
-本機 Ollama endpoint 未提供 service，沒有執行真實模型的自然語言問題集。改善計畫中的至少 30 題、top-10 recall 90% 與 answer support 95% 是尚未評估的門檻。本次能宣稱 transport、scope、budget、schema 與 canonical result 契約通過；不能宣稱實際語意準確率已達標。
+2026-10-14 原始驗證當時的 Ollama endpoint 未提供 service，沒有執行本案真實模型自然語言問題集。後續 context-query 的合成模型 A/B 與本次完整本機性能量測，均不代替至少 30 題、top-10 recall 90% 與 answer support 95% 的品質驗收。可宣稱 transport、scope、budget、schema、canonical result 契約與已記錄本機性能完成；不能宣稱本案實際語意準確率已達標。

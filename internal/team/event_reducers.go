@@ -444,6 +444,15 @@ func sameReceiptMigrationIdentity(receipt ExecutionReceipt, migration ReceiptBac
 }
 
 func reduceToTodoList(events []RunEvent) todoReplayResult {
+	// The streaming reducer already enforces first-wins identities. Only a
+	// cycle boundary needs the normalized slice for the reverse reset search;
+	// ordinary task replay can avoid a second deduplication and event copy.
+	hasCycle := slices.ContainsFunc(events, func(event RunEvent) bool {
+		return event.Type == string(EventDerivedForkCreated) || event.Type == string(EventWorkflowCycleStarted)
+	})
+	if !hasCycle {
+		return reduceTodoEventStream(slices.Values(events))
+	}
 	events = normalizeReplayEvents(events)
 	// Keep ordinary replay's fast path: superseded cycles never need decoding.
 	for i := len(events) - 1; i >= 0; i-- {

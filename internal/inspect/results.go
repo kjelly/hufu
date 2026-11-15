@@ -106,6 +106,9 @@ func LoadHistoricalResults(ctx context.Context, scope HistoricalResultScope) (Hi
 		for _, name := range teams {
 			knownTeams[name] = true
 		}
+		if len(snapshot.Results) == 0 {
+			snapshot.Results = slices.Grow(snapshot.Results, len(rows))
+		}
 		for _, row := range rows {
 			if index, exists := byID[row.ResultID]; exists {
 				existing := &snapshot.Results[index]
@@ -165,6 +168,49 @@ type historicalTaskState struct {
 type historicalPromptKey struct{ session, run string }
 type historicalPromptSource struct{ content, eventID string }
 
+type historicalEventMetadata struct {
+	Team           string `json:"team"`
+	Status         string `json:"status"`
+	ResetForRetry  bool   `json:"reset_for_retry"`
+	ResetForResume bool   `json:"reset_for_resume"`
+}
+
+// Decode once and reserve only terminal rows visible to the requested team.
+// Capture the team at each event, rather than applying later declarations to
+// earlier events that had no canonical team identity yet.
+func historicalMetadata(ctx context.Context, events []IndexedEvent, scope HistoricalResultScope) ([]historicalEventMetadata, map[string]bool, int, error) {
+	metadata := make([]historicalEventMetadata, len(events))
+	teams := make(map[string]string)
+	known := make(map[string]bool)
+	terminals := 0
+	for index, indexed := range events {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, 0, err
+		}
+		event := indexed.Event
+		entry := &metadata[index]
+		if len(event.Payload) != 0 {
+			if err := json.Unmarshal(event.Payload, entry); err != nil {
+				return nil, nil, 0, fmt.Errorf("%w: decode history event %s: %v", ErrIntegrity, event.ID, err)
+			}
+		}
+		if entry.Team != "" {
+			entry.Team = strings.ToLower(strings.TrimSpace(entry.Team))
+			if prior := teams[event.RunID]; prior != "" && prior != entry.Team {
+				return nil, nil, 0, fmt.Errorf("%w: conflicting team identity for run %s", ErrIntegrity, event.RunID)
+			}
+			teams[event.RunID] = entry.Team
+			known[entry.Team] = true
+		}
+		entry.Team = teams[event.RunID]
+		if (scope.Team == "" || entry.Team == scope.Team) &&
+			(event.Type == string(team.EventRunFinished) || event.TaskID != "" && strings.HasPrefix(event.Type, "task_") && team.IsTerminalEvent(event.Type)) {
+			terminals++
+		}
+	}
+	return metadata, known, terminals, nil
+}
+
 // Keep the first user message of each originating run, independently of
 // later continuations and resume runs. Only the selected lineage is read.
 func historicalOriginalPrompts(ctx context.Context, events []IndexedEvent) (map[historicalPromptKey]historicalPromptSource, error) {
@@ -204,47 +250,31 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 	if err != nil {
 		return nil, nil, err
 	}
-	rows := []HistoricalResult{}
-	teams := map[string]string{}
-	sessionTeams := historicalSessionTeams(events)
+	metadataByEvent, known, terminals, err := historicalMetadata(ctx, events, scope)
+	if err != nil {
+		return nil, nil, err
+	}
+	rows := make([]HistoricalResult, 0, terminals)
 	states := make(map[string]*historicalTaskState)
-	// Recovery proofs bind a complete source task projection. Per-task event
-	// slices alone cannot replay them, so retain the same team/session lineage
-	// and use it after a recovery event. Other teams never enter this projection.
+	teams := make(map[string]string)
+	sessionTeams := historicalSessionTeams(events)
+	// Recovery proofs require the complete authorized team/session lineage.
 	lineages := make(map[string][]team.RunEvent)
 	recovered := make(map[string]bool)
-	known := make(map[string]bool)
 	var grant *team.RunEvent
-	for _, indexed := range events {
+	for eventIndex, indexed := range events {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
 		event := indexed.Event
-		var metadata struct {
-			Team           string `json:"team"`
-			Status         string `json:"status"`
-			ResetForRetry  bool   `json:"reset_for_retry"`
-			ResetForResume bool   `json:"reset_for_resume"`
-		}
-		if len(event.Payload) != 0 {
-			if err := json.Unmarshal(event.Payload, &metadata); err != nil {
-				return nil, nil, fmt.Errorf("%w: decode history event %s: %v", ErrIntegrity, event.ID, err)
-			}
-		}
-		if metadata.Team != "" {
-			metadata.Team = strings.ToLower(strings.TrimSpace(metadata.Team))
-			if prior := teams[event.RunID]; prior != "" && prior != metadata.Team {
-				return nil, nil, fmt.Errorf("%w: conflicting team identity for run %s", ErrIntegrity, event.RunID)
-			}
-			teams[event.RunID] = metadata.Team
-			known[metadata.Team] = true
-		}
+		metadata := metadataByEvent[eventIndex]
 		switch team.EventType(event.Type) {
 		case team.EventWorkflowCycleStarted, team.EventDerivedForkCreated:
 			grant = nil
 		case team.EventHistoricalResultsGranted:
-			grant = &event
+			grant = new(event)
 		}
+		teams[event.RunID] = metadata.Team
 		teamName, err := historicalEventTeam(event, teams, sessionTeams)
 		if err != nil {
 			return nil, nil, err
@@ -256,8 +286,8 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 				recovered[lineageKey] = true
 			}
 		}
-		if event.Type == string(team.EventRunFinished) && (scope.Team == "" || teams[event.RunID] == scope.Team) {
-			row, err := historicalRunResponse(indexed, branch, scope.Workspace, teams[event.RunID])
+		if event.Type == string(team.EventRunFinished) && (scope.Team == "" || metadata.Team == scope.Team) {
+			row, err := historicalRunResponse(indexed, branch, scope.Workspace, metadata.Team)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -276,7 +306,7 @@ func projectHistoricalResults(ctx context.Context, events []IndexedEvent, branch
 		state := states[key]
 		newOccurrence := event.Type == string(team.EventTaskCreated) && !metadata.ResetForRetry && !metadata.ResetForResume && state != nil && state.originRun != event.RunID
 		if state == nil || newOccurrence {
-			state = &historicalTaskState{originRun: event.RunID}
+			state = &historicalTaskState{originRun: event.RunID, events: make([]team.RunEvent, 0, 2)}
 			// Per-task replay still needs the original cycle's grant before
 			// task_created. Keep that immutable authority with this occurrence
 			// across later cycles, without replaying unrelated tasks or bodies.

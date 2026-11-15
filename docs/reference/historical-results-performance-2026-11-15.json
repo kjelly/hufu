@@ -1,0 +1,2800 @@
+{
+  "schema_version": 1,
+  "status": "measurement_complete",
+  "head": "0b4f4eac23c0bfa1d031ef3437ff59ee31512f27",
+  "source_state": "working_tree",
+  "benchmark_source": "cmd/hufu/results_performance_test.go",
+  "benchmark_source_sha256": "ecec7783c76004e47ff0958d4a7b6b9e34d540b0a63b94f0fc24ea12218598a7",
+  "binary_sha256": "e40bf6686303e9d5bc18dd3c5c529f538fd3f6e0c9958ed1cb054e65222e1f7a",
+  "go_version": "go1.27.2",
+  "gomaxprocs": 2,
+  "platform": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+  "cpu": "Intel Core i7-6700K",
+  "fixture_filesystem": "tmpfs",
+  "pairs_per_size": 20,
+  "queries_total": 120,
+  "real_model_calls": 0,
+  "real_model_latency_ns": null,
+  "real_model_tokens": null,
+  "real_model_cost_usd": null,
+  "index_state": "event_replay",
+  "index_build_ns": null,
+  "method": {
+    "head": "0b4f4eac23c0bfa1d031ef3437ff59ee31512f27",
+    "source": "cmd/hufu/results_performance_test.go",
+    "source_sha256": "ecec7783c76004e47ff0958d4a7b6b9e34d540b0a63b94f0fc24ea12218598a7",
+    "sizes": [
+      1000,
+      10000,
+      100000
+    ],
+    "pairs_per_size": 20,
+    "queries_per_size": 40,
+    "cold_definition": "first command in a fresh Go test process, OS caches not evicted; tmpfs fixture",
+    "warm_definition": "second fresh Cobra command in same process; new SQLite snapshot and full verification still mandatory",
+    "models": "scripted resolver/selection/answer; no network and no real tokens or USD estimates",
+    "fixture": "one implicit-main branch, one team, deterministic hashed events, terminal task results; 1/100 match Unicode needle",
+    "metrics": [
+      "Cobra query total",
+      "full historical load",
+      "resolver-to-selection candidate pipeline inclusive",
+      "standalone readonly snapshot open",
+      "standalone validated global event scan",
+      "RSS sampled 5ms",
+      "process high-water RSS",
+      "allocated bytes",
+      "fixture bytes",
+      "source SHA after each pair"
+    ],
+    "read_only": "fixture runtime.sqlite SHA must remain unchanged",
+    "index": "event_replay; index build not applicable"
+  },
+  "sizes": [
+    {
+      "count": 1000,
+      "fixture": {
+        "count": 1000,
+        "events": 2001,
+        "match_id": "res-3e8570e17ef35e77d81721e2b68ae373a94fd6456f3963fb9d799097e29a7f09",
+        "store_sha256": "f0da8a7de2c2d03212b602ed2ea72088c8a804b16095855be023fa4eb7b25872",
+        "store_bytes": 1298432,
+        "payload_bytes": 388303,
+        "seed_ns": 162256592
+      },
+      "modes": {
+        "process_cold": {
+          "total_ns": {
+            "n": 20,
+            "p50": 147077358.5,
+            "p95": 184502855,
+            "min": 124750863,
+            "max": 184771905
+          },
+          "load_ns": {
+            "n": 20,
+            "p50": 139783075.0,
+            "p95": 172795375,
+            "min": 119139463,
+            "max": 175655703
+          },
+          "candidate_pipeline_ns": {
+            "n": 20,
+            "p50": 4981937.0,
+            "p95": 9068555,
+            "min": 4099032,
+            "max": 10437716
+          },
+          "allocated_bytes": {
+            "n": 20,
+            "p50": 45431468.0,
+            "p95": 45489712,
+            "min": 45376176,
+            "max": 45511392
+          },
+          "rss_baseline_bytes": {
+            "n": 20,
+            "p50": 55461888.0,
+            "p95": 56094720,
+            "min": 54829056,
+            "max": 56238080
+          },
+          "rss_peak_sampled_bytes": {
+            "n": 20,
+            "p50": 78970880.0,
+            "p95": 79958016,
+            "min": 77946880,
+            "max": 80228352
+          },
+          "process_hwm_bytes": {
+            "n": 20,
+            "p50": 78970880.0,
+            "p95": 79958016,
+            "min": 77844480,
+            "max": 80228352
+          },
+          "median_load_share": 0.9525223239760403
+        },
+        "same_process_warm": {
+          "total_ns": {
+            "n": 20,
+            "p50": 137493802.0,
+            "p95": 181855975,
+            "min": 122364693,
+            "max": 198090976
+          },
+          "load_ns": {
+            "n": 20,
+            "p50": 132303687.0,
+            "p95": 177751533,
+            "min": 116390036,
+            "max": 190389975
+          },
+          "candidate_pipeline_ns": {
+            "n": 20,
+            "p50": 3823403.0,
+            "p95": 5534987,
+            "min": 3317941,
+            "max": 6352923
+          },
+          "allocated_bytes": {
+            "n": 20,
+            "p50": 44867408.0,
+            "p95": 44971488,
+            "min": 44827600,
+            "max": 45006256
+          },
+          "rss_baseline_bytes": {
+            "n": 20,
+            "p50": 78979072.0,
+            "p95": 79970304,
+            "min": 75124736,
+            "max": 80236544
+          },
+          "rss_peak_sampled_bytes": {
+            "n": 20,
+            "p50": 79857664.0,
+            "p95": 80687104,
+            "min": 78782464,
+            "max": 81039360
+          },
+          "process_hwm_bytes": {
+            "n": 20,
+            "p50": 79857664.0,
+            "p95": 80687104,
+            "min": 78782464,
+            "max": 81039360
+          },
+          "median_load_share": 0.9571785856072476
+        }
+      },
+      "snapshot_open_ns": {
+        "n": 20,
+        "p50": 8362203.0,
+        "p95": 11950813,
+        "min": 7997655,
+        "max": 13388937
+      },
+      "validated_scan_ns": {
+        "n": 20,
+        "p50": 13553383.0,
+        "p95": 16872547,
+        "min": 11243671,
+        "max": 18723992
+      },
+      "raw": {
+        "fixture": {
+          "count": 1000,
+          "events": 2001,
+          "match_id": "res-3e8570e17ef35e77d81721e2b68ae373a94fd6456f3963fb9d799097e29a7f09",
+          "store_sha256": "f0da8a7de2c2d03212b602ed2ea72088c8a804b16095855be023fa4eb7b25872",
+          "store_bytes": 1298432,
+          "payload_bytes": 388303,
+          "seed_ns": 162256592
+        },
+        "pairs": [
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 171441495,
+                "load_ns": 159030038,
+                "candidate_pipeline_ns": 10437716,
+                "output_bytes": 13074,
+                "allocated_bytes": 45486744,
+                "rss_baseline_bytes": 54833152,
+                "rss_peak_sampled_bytes": 78184448,
+                "process_hwm_bytes": 77844480,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 173755298,
+                "load_ns": 168493056,
+                "candidate_pipeline_ns": 4020498,
+                "output_bytes": 13074,
+                "allocated_bytes": 44940328,
+                "rss_baseline_bytes": 75124736,
+                "rss_peak_sampled_bytes": 79609856,
+                "process_hwm_bytes": 79609856,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 8349220,
+            "validated_scan_ns": 12582427,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 155042447,
+                "load_ns": 146876493,
+                "candidate_pipeline_ns": 6643650,
+                "output_bytes": 13074,
+                "allocated_bytes": 45444312,
+                "rss_baseline_bytes": 55967744,
+                "rss_peak_sampled_bytes": 80228352,
+                "process_hwm_bytes": 80228352,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 137605481,
+                "load_ns": 131896536,
+                "candidate_pipeline_ns": 4620991,
+                "output_bytes": 13074,
+                "allocated_bytes": 44866936,
+                "rss_baseline_bytes": 80236544,
+                "rss_peak_sampled_bytes": 80687104,
+                "process_hwm_bytes": 80687104,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 8245969,
+            "validated_scan_ns": 13281730,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 149222836,
+                "load_ns": 140214689,
+                "candidate_pipeline_ns": 7388118,
+                "output_bytes": 13074,
+                "allocated_bytes": 45438560,
+                "rss_baseline_bytes": 55689216,
+                "rss_peak_sampled_bytes": 78389248,
+                "process_hwm_bytes": 78389248,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 138747617,
+                "load_ns": 132710838,
+                "candidate_pipeline_ns": 3507108,
+                "output_bytes": 13074,
+                "allocated_bytes": 44869016,
+                "rss_baseline_bytes": 78393344,
+                "rss_peak_sampled_bytes": 80379904,
+                "process_hwm_bytes": 80379904,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 8103458,
+            "validated_scan_ns": 11695039,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 144486382,
+                "load_ns": 138885388,
+                "candidate_pipeline_ns": 4406484,
+                "output_bytes": 13074,
+                "allocated_bytes": 45423608,
+                "rss_baseline_bytes": 54829056,
+                "rss_peak_sampled_bytes": 78942208,
+                "process_hwm_bytes": 78942208,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 124126496,
+                "load_ns": 117715569,
+                "candidate_pipeline_ns": 3600058,
+                "output_bytes": 13074,
+                "allocated_bytes": 44829192,
+                "rss_baseline_bytes": 78954496,
+                "rss_peak_sampled_bytes": 80584704,
+                "process_hwm_bytes": 80584704,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 8282390,
+            "validated_scan_ns": 12000524,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 158177161,
+                "load_ns": 145080769,
+                "candidate_pipeline_ns": 9068555,
+                "output_bytes": 13074,
+                "allocated_bytes": 45465640,
+                "rss_baseline_bytes": 55967744,
+                "rss_peak_sampled_bytes": 79958016,
+                "process_hwm_bytes": 79958016,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 198090976,
+                "load_ns": 190389975,
+                "candidate_pipeline_ns": 6352923,
+                "output_bytes": 13074,
+                "allocated_bytes": 45006256,
+                "rss_baseline_bytes": 79970304,
+                "rss_peak_sampled_bytes": 80412672,
+                "process_hwm_bytes": 80412672,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 13388937,
+            "validated_scan_ns": 18723992,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 164099379,
+                "load_ns": 155258553,
+                "candidate_pipeline_ns": 5335702,
+                "output_bytes": 13074,
+                "allocated_bytes": 45462400,
+                "rss_baseline_bytes": 55447552,
+                "rss_peak_sampled_bytes": 79437824,
+                "process_hwm_bytes": 79437824,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 148415423,
+                "load_ns": 137555122,
+                "candidate_pipeline_ns": 5531442,
+                "output_bytes": 13074,
+                "allocated_bytes": 44901528,
+                "rss_baseline_bytes": 79450112,
+                "rss_peak_sampled_bytes": 79847424,
+                "process_hwm_bytes": 79847424,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 8838702,
+            "validated_scan_ns": 13490161,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 184502855,
+                "load_ns": 172795375,
+                "candidate_pipeline_ns": 6708532,
+                "output_bytes": 13074,
+                "allocated_bytes": 45489712,
+                "rss_baseline_bytes": 55160832,
+                "rss_peak_sampled_bytes": 79286272,
+                "process_hwm_bytes": 79286272,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 153046432,
+                "load_ns": 147991845,
+                "candidate_pipeline_ns": 3731832,
+                "output_bytes": 13074,
+                "allocated_bytes": 44900512,
+                "rss_baseline_bytes": 79298560,
+                "rss_peak_sampled_bytes": 79589376,
+                "process_hwm_bytes": 79589376,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 8375186,
+            "validated_scan_ns": 14373055,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 184771905,
+                "load_ns": 175655703,
+                "candidate_pipeline_ns": 7418630,
+                "output_bytes": 13074,
+                "allocated_bytes": 45511392,
+                "rss_baseline_bytes": 55300096,
+                "rss_peak_sampled_bytes": 79097856,
+                "process_hwm_bytes": 79097856,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 181855975,
+                "load_ns": 177751533,
+                "candidate_pipeline_ns": 3500341,
+                "output_bytes": 13074,
+                "allocated_bytes": 44971488,
+                "rss_baseline_bytes": 79106048,
+                "rss_peak_sampled_bytes": 79781888,
+                "process_hwm_bytes": 79781888,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 8330527,
+            "validated_scan_ns": 16872547,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 157087989,
+                "load_ns": 151597213,
+                "candidate_pipeline_ns": 4284855,
+                "output_bytes": 13074,
+                "allocated_bytes": 45449728,
+                "rss_baseline_bytes": 55517184,
+                "rss_peak_sampled_bytes": 78598144,
+                "process_hwm_bytes": 78598144,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 137382123,
+                "load_ns": 132801653,
+                "candidate_pipeline_ns": 3763714,
+                "output_bytes": 13074,
+                "allocated_bytes": 44880552,
+                "rss_baseline_bytes": 78602240,
+                "rss_peak_sampled_bytes": 79646720,
+                "process_hwm_bytes": 79646720,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 8453085,
+            "validated_scan_ns": 14334487,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 161473198,
+                "load_ns": 154875072,
+                "candidate_pipeline_ns": 4997305,
+                "output_bytes": 13074,
+                "allocated_bytes": 45461960,
+                "rss_baseline_bytes": 55443456,
+                "rss_peak_sampled_bytes": 78229504,
+                "process_hwm_bytes": 78229504,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 122364693,
+                "load_ns": 116390036,
+                "candidate_pipeline_ns": 3317941,
+                "output_bytes": 13074,
+                "allocated_bytes": 44842888,
+                "rss_baseline_bytes": 78245888,
+                "rss_peak_sampled_bytes": 79523840,
+                "process_hwm_bytes": 79523840,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 8524850,
+            "validated_scan_ns": 11243671,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 134705398,
+                "load_ns": 128792563,
+                "candidate_pipeline_ns": 4569118,
+                "output_bytes": 13074,
+                "allocated_bytes": 45409248,
+                "rss_baseline_bytes": 55562240,
+                "rss_peak_sampled_bytes": 78893056,
+                "process_hwm_bytes": 78893056,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 127759484,
+                "load_ns": 122376496,
+                "candidate_pipeline_ns": 3384630,
+                "output_bytes": 13074,
+                "allocated_bytes": 44846400,
+                "rss_baseline_bytes": 78909440,
+                "rss_peak_sampled_bytes": 80080896,
+                "process_hwm_bytes": 80080896,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 8259242,
+            "validated_scan_ns": 16864765,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 125435550,
+                "load_ns": 119552666,
+                "candidate_pipeline_ns": 4707671,
+                "output_bytes": 13074,
+                "allocated_bytes": 45387424,
+                "rss_baseline_bytes": 55963648,
+                "rss_peak_sampled_bytes": 78999552,
+                "process_hwm_bytes": 78999552,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 131347840,
+                "load_ns": 125249791,
+                "candidate_pipeline_ns": 5114036,
+                "output_bytes": 13074,
+                "allocated_bytes": 44859176,
+                "rss_baseline_bytes": 79003648,
+                "rss_peak_sampled_bytes": 79835136,
+                "process_hwm_bytes": 79835136,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 8491752,
+            "validated_scan_ns": 11442156,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 130682320,
+                "load_ns": 124402290,
+                "candidate_pipeline_ns": 4966569,
+                "output_bytes": 13074,
+                "allocated_bytes": 45395880,
+                "rss_baseline_bytes": 56094720,
+                "rss_peak_sampled_bytes": 79511552,
+                "process_hwm_bytes": 79511552,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 126404044,
+                "load_ns": 119928315,
+                "candidate_pipeline_ns": 3842646,
+                "output_bytes": 13074,
+                "allocated_bytes": 44839200,
+                "rss_baseline_bytes": 79523840,
+                "rss_peak_sampled_bytes": 79986688,
+                "process_hwm_bytes": 79986688,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 9279478,
+            "validated_scan_ns": 13874543,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 131106667,
+                "load_ns": 122807292,
+                "candidate_pipeline_ns": 5015039,
+                "output_bytes": 13074,
+                "allocated_bytes": 45402688,
+                "rss_baseline_bytes": 55160832,
+                "rss_peak_sampled_bytes": 77946880,
+                "process_hwm_bytes": 77946880,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 138644080,
+                "load_ns": 134095840,
+                "candidate_pipeline_ns": 3772398,
+                "output_bytes": 13074,
+                "allocated_bytes": 44886048,
+                "rss_baseline_bytes": 77963264,
+                "rss_peak_sampled_bytes": 78782464,
+                "process_hwm_bytes": 78782464,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 8054640,
+            "validated_scan_ns": 12511118,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 136725769,
+                "load_ns": 131336528,
+                "candidate_pipeline_ns": 4099032,
+                "output_bytes": 13074,
+                "allocated_bytes": 45407176,
+                "rss_baseline_bytes": 55463936,
+                "rss_peak_sampled_bytes": 78598144,
+                "process_hwm_bytes": 78598144,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 134646273,
+                "load_ns": 127976633,
+                "candidate_pipeline_ns": 5534987,
+                "output_bytes": 13074,
+                "allocated_bytes": 44864216,
+                "rss_baseline_bytes": 78618624,
+                "rss_peak_sampled_bytes": 80662528,
+                "process_hwm_bytes": 80662528,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 9799830,
+            "validated_scan_ns": 15927120,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 144931881,
+                "load_ns": 139351461,
+                "candidate_pipeline_ns": 4350821,
+                "output_bytes": 13074,
+                "allocated_bytes": 45424376,
+                "rss_baseline_bytes": 56238080,
+                "rss_peak_sampled_bytes": 79212544,
+                "process_hwm_bytes": 79212544,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 138758058,
+                "load_ns": 133726959,
+                "candidate_pipeline_ns": 3989504,
+                "output_bytes": 13074,
+                "allocated_bytes": 44864152,
+                "rss_baseline_bytes": 79228928,
+                "rss_peak_sampled_bytes": 79626240,
+                "process_hwm_bytes": 79626240,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 8189604,
+            "validated_scan_ns": 13846288,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 129567583,
+                "load_ns": 123772719,
+                "candidate_pipeline_ns": 4584801,
+                "output_bytes": 13074,
+                "allocated_bytes": 45386528,
+                "rss_baseline_bytes": 54931456,
+                "rss_peak_sampled_bytes": 78274560,
+                "process_hwm_bytes": 78274560,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 123496255,
+                "load_ns": 117066726,
+                "candidate_pipeline_ns": 3606241,
+                "output_bytes": 13074,
+                "allocated_bytes": 44827600,
+                "rss_baseline_bytes": 78299136,
+                "rss_peak_sampled_bytes": 79630336,
+                "process_hwm_bytes": 79630336,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 11950813,
+            "validated_scan_ns": 14404219,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 124750863,
+                "load_ns": 119139463,
+                "candidate_pipeline_ns": 4326227,
+                "output_bytes": 13074,
+                "allocated_bytes": 45376176,
+                "rss_baseline_bytes": 55459840,
+                "rss_peak_sampled_bytes": 79872000,
+                "process_hwm_bytes": 79872000,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 134465450,
+                "load_ns": 128898647,
+                "candidate_pipeline_ns": 4439208,
+                "output_bytes": 13074,
+                "allocated_bytes": 44858264,
+                "rss_baseline_bytes": 79884288,
+                "rss_peak_sampled_bytes": 80207872,
+                "process_hwm_bytes": 79941632,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 7997655,
+            "validated_scan_ns": 12523444,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 131786155,
+                "load_ns": 126371932,
+                "candidate_pipeline_ns": 4184595,
+                "output_bytes": 13074,
+                "allocated_bytes": 45400664,
+                "rss_baseline_bytes": 55562240,
+                "rss_peak_sampled_bytes": 78475264,
+                "process_hwm_bytes": 78475264,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 136973148,
+                "load_ns": 130269317,
+                "candidate_pipeline_ns": 3804160,
+                "output_bytes": 13074,
+                "allocated_bytes": 44867880,
+                "rss_baseline_bytes": 78479360,
+                "rss_peak_sampled_bytes": 79867904,
+                "process_hwm_bytes": 79867904,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 8329913,
+            "validated_scan_ns": 11793953,
+            "validated_events": 2001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 160821278,
+                "load_ns": 150811081,
+                "candidate_pipeline_ns": 8140392,
+                "output_bytes": 13074,
+                "allocated_bytes": 45461616,
+                "rss_baseline_bytes": 55320576,
+                "rss_peak_sampled_bytes": 79450112,
+                "process_hwm_bytes": 79450112,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 174188248,
+                "load_ns": 163517000,
+                "candidate_pipeline_ns": 4555598,
+                "output_bytes": 13074,
+                "allocated_bytes": 44933208,
+                "rss_baseline_bytes": 79462400,
+                "rss_peak_sampled_bytes": 81039360,
+                "process_hwm_bytes": 81039360,
+                "loaded_results": 1000,
+                "matched": 10,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 8903679,
+            "validated_scan_ns": 13616605,
+            "validated_events": 2001
+          }
+        ],
+        "complete": true
+      }
+    },
+    {
+      "count": 10000,
+      "fixture": {
+        "count": 10000,
+        "events": 20001,
+        "match_id": "res-21616f833c25f9cce09a0ed39215259f4991def8ebfd432031a5c5cab827f470",
+        "store_sha256": "86635b7629b2ba36eeeda0ecc5e9cc23544cfc7b61515541549975fd99ce6893",
+        "store_bytes": 12029952,
+        "payload_bytes": 3942763,
+        "seed_ns": 1333154654
+      },
+      "modes": {
+        "process_cold": {
+          "total_ns": {
+            "n": 20,
+            "p50": 1386244469.0,
+            "p95": 1564986481,
+            "min": 1287204880,
+            "max": 1778381621
+          },
+          "load_ns": {
+            "n": 20,
+            "p50": 1338658678.5,
+            "p95": 1483230936,
+            "min": 1207661754,
+            "max": 1678420089
+          },
+          "candidate_pipeline_ns": {
+            "n": 20,
+            "p50": 33869700.5,
+            "p95": 54148527,
+            "min": 29439799,
+            "max": 55476746
+          },
+          "allocated_bytes": {
+            "n": 20,
+            "p50": 462197352.0,
+            "p95": 462575816,
+            "min": 461965040,
+            "max": 462931072
+          },
+          "rss_baseline_bytes": {
+            "n": 20,
+            "p50": 55392256.0,
+            "p95": 55865344,
+            "min": 54763520,
+            "max": 56188928
+          },
+          "rss_peak_sampled_bytes": {
+            "n": 20,
+            "p50": 180281344.0,
+            "p95": 183476224,
+            "min": 177025024,
+            "max": 184041472
+          },
+          "process_hwm_bytes": {
+            "n": 20,
+            "p50": 180078592.0,
+            "p95": 183414784,
+            "min": 176525312,
+            "max": 183533568
+          },
+          "median_load_share": 0.9625613387758052
+        },
+        "same_process_warm": {
+          "total_ns": {
+            "n": 20,
+            "p50": 1401120019.5,
+            "p95": 1619649217,
+            "min": 1254853719,
+            "max": 1780636417
+          },
+          "load_ns": {
+            "n": 20,
+            "p50": 1350315462.0,
+            "p95": 1561521593,
+            "min": 1219679410,
+            "max": 1737934761
+          },
+          "candidate_pipeline_ns": {
+            "n": 20,
+            "p50": 34436385.5,
+            "p95": 44034618,
+            "min": 28648045,
+            "max": 53667228
+          },
+          "allocated_bytes": {
+            "n": 20,
+            "p50": 461747908.0,
+            "p95": 462080712,
+            "min": 461476112,
+            "max": 462507424
+          },
+          "rss_baseline_bytes": {
+            "n": 20,
+            "p50": 177416192.0,
+            "p95": 182456320,
+            "min": 169521152,
+            "max": 183480320
+          },
+          "rss_peak_sampled_bytes": {
+            "n": 20,
+            "p50": 182489088.0,
+            "p95": 183717888,
+            "min": 174866432,
+            "max": 187449344
+          },
+          "process_hwm_bytes": {
+            "n": 20,
+            "p50": 182153216.0,
+            "p95": 183717888,
+            "min": 178200576,
+            "max": 187449344
+          },
+          "median_load_share": 0.9655159037146055
+        }
+      },
+      "snapshot_open_ns": {
+        "n": 20,
+        "p50": 67269117.0,
+        "p95": 86722652,
+        "min": 61719497,
+        "max": 90566472
+      },
+      "validated_scan_ns": {
+        "n": 20,
+        "p50": 143450981.5,
+        "p95": 167935936,
+        "min": 112591333,
+        "max": 201236765
+      },
+      "raw": {
+        "fixture": {
+          "count": 10000,
+          "events": 20001,
+          "match_id": "res-21616f833c25f9cce09a0ed39215259f4991def8ebfd432031a5c5cab827f470",
+          "store_sha256": "86635b7629b2ba36eeeda0ecc5e9cc23544cfc7b61515541549975fd99ce6893",
+          "store_bytes": 12029952,
+          "payload_bytes": 3942763,
+          "seed_ns": 1333154654
+        },
+        "pairs": [
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1374358215,
+                "load_ns": 1333073284,
+                "candidate_pipeline_ns": 33474812,
+                "output_bytes": 23260,
+                "allocated_bytes": 462154288,
+                "rss_baseline_bytes": 55373824,
+                "rss_peak_sampled_bytes": 182165504,
+                "process_hwm_bytes": 182165504,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1378002811,
+                "load_ns": 1307255630,
+                "candidate_pipeline_ns": 31650841,
+                "output_bytes": 23260,
+                "allocated_bytes": 461643664,
+                "rss_baseline_bytes": 182169600,
+                "rss_peak_sampled_bytes": 182173696,
+                "process_hwm_bytes": 181600256,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 65504376,
+            "validated_scan_ns": 155250841,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1423261478,
+                "load_ns": 1346413840,
+                "candidate_pipeline_ns": 32547383,
+                "output_bytes": 23260,
+                "allocated_bytes": 462219328,
+                "rss_baseline_bytes": 56188928,
+                "rss_peak_sampled_bytes": 178372608,
+                "process_hwm_bytes": 177876992,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1559809274,
+                "load_ns": 1510183326,
+                "candidate_pipeline_ns": 34960345,
+                "output_bytes": 23260,
+                "allocated_bytes": 462058528,
+                "rss_baseline_bytes": 172191744,
+                "rss_peak_sampled_bytes": 182521856,
+                "process_hwm_bytes": 181948416,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 65607074,
+            "validated_scan_ns": 140822491,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1465079046,
+                "load_ns": 1419790031,
+                "candidate_pipeline_ns": 36902502,
+                "output_bytes": 23260,
+                "allocated_bytes": 462355504,
+                "rss_baseline_bytes": 55599104,
+                "rss_peak_sampled_bytes": 182894592,
+                "process_hwm_bytes": 182304768,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1780636417,
+                "load_ns": 1737934761,
+                "candidate_pipeline_ns": 31517786,
+                "output_bytes": 23260,
+                "allocated_bytes": 462507424,
+                "rss_baseline_bytes": 177897472,
+                "rss_peak_sampled_bytes": 187449344,
+                "process_hwm_bytes": 187449344,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 90566472,
+            "validated_scan_ns": 164765810,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1778381621,
+                "load_ns": 1678420089,
+                "candidate_pipeline_ns": 54148527,
+                "output_bytes": 23260,
+                "allocated_bytes": 462931072,
+                "rss_baseline_bytes": 54763520,
+                "rss_peak_sampled_bytes": 179204096,
+                "process_hwm_bytes": 178479104,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1575177037,
+                "load_ns": 1522779176,
+                "candidate_pipeline_ns": 34072363,
+                "output_bytes": 23260,
+                "allocated_bytes": 461988688,
+                "rss_baseline_bytes": 174837760,
+                "rss_peak_sampled_bytes": 182992896,
+                "process_hwm_bytes": 182358016,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 77108389,
+            "validated_scan_ns": 145271684,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1537144414,
+                "load_ns": 1483230936,
+                "candidate_pipeline_ns": 44413134,
+                "output_bytes": 23260,
+                "allocated_bytes": 462567832,
+                "rss_baseline_bytes": 54865920,
+                "rss_peak_sampled_bytes": 183414784,
+                "process_hwm_bytes": 183414784,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1513698791,
+                "load_ns": 1451485736,
+                "candidate_pipeline_ns": 32586874,
+                "output_bytes": 23260,
+                "allocated_bytes": 461902848,
+                "rss_baseline_bytes": 183480320,
+                "rss_peak_sampled_bytes": 183480320,
+                "process_hwm_bytes": 182910976,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 83401396,
+            "validated_scan_ns": 167935936,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1510634901,
+                "load_ns": 1426554704,
+                "candidate_pipeline_ns": 34663830,
+                "output_bytes": 23260,
+                "allocated_bytes": 462474152,
+                "rss_baseline_bytes": 55410688,
+                "rss_peak_sampled_bytes": 182108160,
+                "process_hwm_bytes": 181792768,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1370001676,
+                "load_ns": 1324025279,
+                "candidate_pipeline_ns": 31328147,
+                "output_bytes": 23260,
+                "allocated_bytes": 461677472,
+                "rss_baseline_bytes": 169521152,
+                "rss_peak_sampled_bytes": 181800960,
+                "process_hwm_bytes": 181792768,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 69381838,
+            "validated_scan_ns": 143642013,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1309554684,
+                "load_ns": 1272557388,
+                "candidate_pipeline_ns": 29439799,
+                "output_bytes": 23260,
+                "allocated_bytes": 462069000,
+                "rss_baseline_bytes": 55865344,
+                "rss_peak_sampled_bytes": 179118080,
+                "process_hwm_bytes": 179118080,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1619649217,
+                "load_ns": 1561521593,
+                "candidate_pipeline_ns": 53667228,
+                "output_bytes": 23260,
+                "allocated_bytes": 462080712,
+                "rss_baseline_bytes": 179122176,
+                "rss_peak_sampled_bytes": 179122176,
+                "process_hwm_bytes": 178528256,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 86722652,
+            "validated_scan_ns": 201236765,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1477881856,
+                "load_ns": 1436158386,
+                "candidate_pipeline_ns": 34013658,
+                "output_bytes": 23260,
+                "allocated_bytes": 462483960,
+                "rss_baseline_bytes": 55554048,
+                "rss_peak_sampled_bytes": 184041472,
+                "process_hwm_bytes": 183533568,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1417572481,
+                "load_ns": 1365298841,
+                "candidate_pipeline_ns": 43256546,
+                "output_bytes": 23260,
+                "allocated_bytes": 461778472,
+                "rss_baseline_bytes": 177688576,
+                "rss_peak_sampled_bytes": 180961280,
+                "process_hwm_bytes": 183533568,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 67734426,
+            "validated_scan_ns": 145702038,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1345719058,
+                "load_ns": 1279511665,
+                "candidate_pipeline_ns": 55476746,
+                "output_bytes": 23260,
+                "allocated_bytes": 462175376,
+                "rss_baseline_bytes": 55193600,
+                "rss_peak_sampled_bytes": 183476224,
+                "process_hwm_bytes": 183050240,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1348141620,
+                "load_ns": 1305768913,
+                "candidate_pipeline_ns": 34800408,
+                "output_bytes": 23260,
+                "allocated_bytes": 461614448,
+                "rss_baseline_bytes": 179339264,
+                "rss_peak_sampled_bytes": 183107584,
+                "process_hwm_bytes": 183107584,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 64874444,
+            "validated_scan_ns": 158610279,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1419745967,
+                "load_ns": 1344244073,
+                "candidate_pipeline_ns": 35303186,
+                "output_bytes": 23260,
+                "allocated_bytes": 462262184,
+                "rss_baseline_bytes": 55263232,
+                "rss_peak_sampled_bytes": 181514240,
+                "process_hwm_bytes": 181039104,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1399876220,
+                "load_ns": 1364186779,
+                "candidate_pipeline_ns": 28648045,
+                "output_bytes": 23260,
+                "allocated_bytes": 461731928,
+                "rss_baseline_bytes": 175775744,
+                "rss_peak_sampled_bytes": 180731904,
+                "process_hwm_bytes": 181039104,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 62307368,
+            "validated_scan_ns": 137418232,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1321582767,
+                "load_ns": 1268389407,
+                "candidate_pipeline_ns": 31441684,
+                "output_bytes": 23260,
+                "allocated_bytes": 462050848,
+                "rss_baseline_bytes": 55279616,
+                "rss_peak_sampled_bytes": 182448128,
+                "process_hwm_bytes": 182448128,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1254853719,
+                "load_ns": 1219679410,
+                "candidate_pipeline_ns": 29937447,
+                "output_bytes": 23260,
+                "allocated_bytes": 461476112,
+                "rss_baseline_bytes": 182456320,
+                "rss_peak_sampled_bytes": 182456320,
+                "process_hwm_bytes": 181874688,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 63241778,
+            "validated_scan_ns": 147848316,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1339091362,
+                "load_ns": 1295559178,
+                "candidate_pipeline_ns": 30903294,
+                "output_bytes": 23260,
+                "allocated_bytes": 462115240,
+                "rss_baseline_bytes": 55541760,
+                "rss_peak_sampled_bytes": 177135616,
+                "process_hwm_bytes": 177135616,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1533437290,
+                "load_ns": 1477947783,
+                "candidate_pipeline_ns": 33609604,
+                "output_bytes": 23260,
+                "allocated_bytes": 461876424,
+                "rss_baseline_bytes": 177143808,
+                "rss_peak_sampled_bytes": 183717888,
+                "process_hwm_bytes": 183717888,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 65598602,
+            "validated_scan_ns": 129922968,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1341771342,
+                "load_ns": 1303299268,
+                "candidate_pipeline_ns": 30353567,
+                "output_bytes": 23260,
+                "allocated_bytes": 462141616,
+                "rss_baseline_bytes": 55607296,
+                "rss_peak_sampled_bytes": 179625984,
+                "process_hwm_bytes": 179625984,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1357656400,
+                "load_ns": 1305871598,
+                "candidate_pipeline_ns": 44034618,
+                "output_bytes": 23260,
+                "allocated_bytes": 461648832,
+                "rss_baseline_bytes": 179634176,
+                "rss_peak_sampled_bytes": 183107584,
+                "process_hwm_bytes": 182550528,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 74497151,
+            "validated_scan_ns": 134971626,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1398130723,
+                "load_ns": 1354887327,
+                "candidate_pipeline_ns": 34776346,
+                "output_bytes": 23260,
+                "allocated_bytes": 462261256,
+                "rss_baseline_bytes": 55660544,
+                "rss_peak_sampled_bytes": 180531200,
+                "process_hwm_bytes": 180531200,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1380322425,
+                "load_ns": 1336444145,
+                "candidate_pipeline_ns": 36395903,
+                "output_bytes": 23260,
+                "allocated_bytes": 461715504,
+                "rss_baseline_bytes": 180543488,
+                "rss_peak_sampled_bytes": 183025664,
+                "process_hwm_bytes": 182640640,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 67598656,
+            "validated_scan_ns": 143259950,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1291653438,
+                "load_ns": 1249290344,
+                "candidate_pipeline_ns": 33725743,
+                "output_bytes": 23260,
+                "allocated_bytes": 461991880,
+                "rss_baseline_bytes": 55709696,
+                "rss_peak_sampled_bytes": 181039104,
+                "process_hwm_bytes": 181039104,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1402363819,
+                "load_ns": 1335269518,
+                "candidate_pipeline_ns": 40357495,
+                "output_bytes": 23260,
+                "allocated_bytes": 461763888,
+                "rss_baseline_bytes": 181055488,
+                "rss_peak_sampled_bytes": 182755328,
+                "process_hwm_bytes": 181903360,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 64439460,
+            "validated_scan_ns": 127766545,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1287204880,
+                "load_ns": 1245229372,
+                "candidate_pipeline_ns": 34465241,
+                "output_bytes": 23260,
+                "allocated_bytes": 461984432,
+                "rss_baseline_bytes": 55156736,
+                "rss_peak_sampled_bytes": 180031488,
+                "process_hwm_bytes": 179576832,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1293588386,
+                "load_ns": 1247783948,
+                "candidate_pipeline_ns": 38582247,
+                "output_bytes": 23260,
+                "allocated_bytes": 461556600,
+                "rss_baseline_bytes": 173170688,
+                "rss_peak_sampled_bytes": 180789248,
+                "process_hwm_bytes": 180150272,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 69876789,
+            "validated_scan_ns": 159713733,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1564986481,
+                "load_ns": 1475082287,
+                "candidate_pipeline_ns": 33310018,
+                "output_bytes": 23260,
+                "allocated_bytes": 462575816,
+                "rss_baseline_bytes": 54775808,
+                "rss_peak_sampled_bytes": 178802688,
+                "process_hwm_bytes": 178200576,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1554622208,
+                "load_ns": 1512616142,
+                "candidate_pipeline_ns": 39121447,
+                "output_bytes": 23260,
+                "allocated_bytes": 461941456,
+                "rss_baseline_bytes": 170168320,
+                "rss_peak_sampled_bytes": 174866432,
+                "process_hwm_bytes": 178200576,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 73757490,
+            "validated_scan_ns": 127476872,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1414243645,
+                "load_ns": 1357951750,
+                "candidate_pipeline_ns": 47315839,
+                "output_bytes": 23260,
+                "allocated_bytes": 462272856,
+                "rss_baseline_bytes": 55103488,
+                "rss_peak_sampled_bytes": 177025024,
+                "process_hwm_bytes": 176525312,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1540132060,
+                "load_ns": 1490148093,
+                "candidate_pipeline_ns": 30203497,
+                "output_bytes": 23260,
+                "allocated_bytes": 462028160,
+                "rss_baseline_bytes": 170176512,
+                "rss_peak_sampled_bytes": 183025664,
+                "process_hwm_bytes": 183025664,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 65609771,
+            "validated_scan_ns": 131512989,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1300774449,
+                "load_ns": 1207661754,
+                "candidate_pipeline_ns": 33704791,
+                "output_bytes": 23260,
+                "allocated_bytes": 461965040,
+                "rss_baseline_bytes": 54976512,
+                "rss_peak_sampled_bytes": 178790400,
+                "process_hwm_bytes": 178208768,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1316248022,
+                "load_ns": 1265069797,
+                "candidate_pipeline_ns": 29386101,
+                "output_bytes": 23260,
+                "allocated_bytes": 461531560,
+                "rss_baseline_bytes": 172318720,
+                "rss_peak_sampled_bytes": 182419456,
+                "process_hwm_bytes": 182419456,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 61719497,
+            "validated_scan_ns": 112591333,
+            "validated_events": 20001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 1311250513,
+                "load_ns": 1228631308,
+                "candidate_pipeline_ns": 33103052,
+                "output_bytes": 23260,
+                "allocated_bytes": 462072552,
+                "rss_baseline_bytes": 55652352,
+                "rss_peak_sampled_bytes": 179138560,
+                "process_hwm_bytes": 178552832,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 1291635357,
+                "load_ns": 1240574134,
+                "candidate_pipeline_ns": 43993917,
+                "output_bytes": 23260,
+                "allocated_bytes": 461482584,
+                "rss_baseline_bytes": 171655168,
+                "rss_peak_sampled_bytes": 181424128,
+                "process_hwm_bytes": 180916224,
+                "loaded_results": 10000,
+                "matched": 100,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 66939578,
+            "validated_scan_ns": 119784826,
+            "validated_events": 20001
+          }
+        ],
+        "complete": true
+      }
+    },
+    {
+      "count": 100000,
+      "fixture": {
+        "count": 100000,
+        "events": 200001,
+        "match_id": "res-634983162854957abef5694371bb3819f50d8a491e8876b74b3a736fcc98789e",
+        "store_sha256": "15bdbb02c0c7f1672e0deef5fba04bb00614c7d7168dac318e2844dee64748a4",
+        "store_bytes": 120274944,
+        "payload_bytes": 40027363,
+        "seed_ns": 15898131439
+      },
+      "modes": {
+        "process_cold": {
+          "total_ns": {
+            "n": 20,
+            "p50": 14695273031.0,
+            "p95": 15727093335,
+            "min": 13548268493,
+            "max": 17052544040
+          },
+          "load_ns": {
+            "n": 20,
+            "p50": 14196460976.5,
+            "p95": 15116685888,
+            "min": 13056013600,
+            "max": 16683562815
+          },
+          "candidate_pipeline_ns": {
+            "n": 20,
+            "p50": 343817421.5,
+            "p95": 473698116,
+            "min": 311452774,
+            "max": 490080399
+          },
+          "allocated_bytes": {
+            "n": 20,
+            "p50": 4693870800.0,
+            "p95": 4695570216,
+            "min": 4691519008,
+            "max": 4697489560
+          },
+          "rss_baseline_bytes": {
+            "n": 20,
+            "p50": 55382016.0,
+            "p95": 55939072,
+            "min": 54448128,
+            "max": 55955456
+          },
+          "rss_peak_sampled_bytes": {
+            "n": 20,
+            "p50": 1175754752.0,
+            "p95": 1233641472,
+            "min": 1053757440,
+            "max": 1241751552
+          },
+          "process_hwm_bytes": {
+            "n": 20,
+            "p50": 1175138304.0,
+            "p95": 1233088512,
+            "min": 1053200384,
+            "max": 1241751552
+          },
+          "median_load_share": 0.9695405476475558
+        },
+        "same_process_warm": {
+          "total_ns": {
+            "n": 20,
+            "p50": 14075815176.5,
+            "p95": 14970867614,
+            "min": 13155307512,
+            "max": 16139597692
+          },
+          "load_ns": {
+            "n": 20,
+            "p50": 13499215637.5,
+            "p95": 14575994572,
+            "min": 12747755306,
+            "max": 15709679303
+          },
+          "candidate_pipeline_ns": {
+            "n": 20,
+            "p50": 351053910.0,
+            "p95": 458305960,
+            "min": 307485295,
+            "max": 554873655
+          },
+          "allocated_bytes": {
+            "n": 20,
+            "p50": 4692396752.0,
+            "p95": 4694630616,
+            "min": 4690967752,
+            "max": 4696754048
+          },
+          "rss_baseline_bytes": {
+            "n": 20,
+            "p50": 1152710656.0,
+            "p95": 1213812736,
+            "min": 976183296,
+            "max": 1222742016
+          },
+          "rss_peak_sampled_bytes": {
+            "n": 20,
+            "p50": 1219608576.0,
+            "p95": 1251618816,
+            "min": 1138860032,
+            "max": 1252229120
+          },
+          "process_hwm_bytes": {
+            "n": 20,
+            "p50": 1226006528.0,
+            "p95": 1251201024,
+            "min": 1167990784,
+            "max": 1251807232
+          },
+          "median_load_share": 0.970740122115983
+        }
+      },
+      "snapshot_open_ns": {
+        "n": 20,
+        "p50": 677767622.0,
+        "p95": 772044856,
+        "min": 633943137,
+        "max": 851409692
+      },
+      "validated_scan_ns": {
+        "n": 20,
+        "p50": 1421842128.5,
+        "p95": 1770675555,
+        "min": 1235566967,
+        "max": 1782681885
+      },
+      "raw": {
+        "fixture": {
+          "count": 100000,
+          "events": 200001,
+          "match_id": "res-634983162854957abef5694371bb3819f50d8a491e8876b74b3a736fcc98789e",
+          "store_sha256": "15bdbb02c0c7f1672e0deef5fba04bb00614c7d7168dac318e2844dee64748a4",
+          "store_bytes": 120274944,
+          "payload_bytes": 40027363,
+          "seed_ns": 15898131439
+        },
+        "pairs": [
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 14750647130,
+                "load_ns": 14056259409,
+                "candidate_pipeline_ns": 343467765,
+                "output_bytes": 23396,
+                "allocated_bytes": 4693278728,
+                "rss_baseline_bytes": 55226368,
+                "rss_peak_sampled_bytes": 1175842816,
+                "process_hwm_bytes": 1175273472,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 14331809058,
+                "load_ns": 13787198559,
+                "candidate_pipeline_ns": 458305960,
+                "output_bytes": 23396,
+                "allocated_bytes": 4692924992,
+                "rss_baseline_bytes": 1166708736,
+                "rss_peak_sampled_bytes": 1251618816,
+                "process_hwm_bytes": 1251201024,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 684628652,
+            "validated_scan_ns": 1337133024,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 14241802556,
+                "load_ns": 13838514995,
+                "candidate_pipeline_ns": 332172146,
+                "output_bytes": 23396,
+                "allocated_bytes": 4692345328,
+                "rss_baseline_bytes": 55001088,
+                "rss_peak_sampled_bytes": 1124327424,
+                "process_hwm_bytes": 1123672064,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 14970867614,
+                "load_ns": 14575994572,
+                "candidate_pipeline_ns": 325358015,
+                "output_bytes": 23396,
+                "allocated_bytes": 4694610200,
+                "rss_baseline_bytes": 1106804736,
+                "rss_peak_sampled_bytes": 1233403904,
+                "process_hwm_bytes": 1233403904,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 647482083,
+            "validated_scan_ns": 1492029402,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 14657130417,
+                "load_ns": 14263111233,
+                "candidate_pipeline_ns": 323702092,
+                "output_bytes": 23396,
+                "allocated_bytes": 4694012776,
+                "rss_baseline_bytes": 55152640,
+                "rss_peak_sampled_bytes": 1222717440,
+                "process_hwm_bytes": 1222717440,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 13920479062,
+                "load_ns": 13165257789,
+                "candidate_pipeline_ns": 373419072,
+                "output_bytes": 23396,
+                "allocated_bytes": 4691284920,
+                "rss_baseline_bytes": 1222742016,
+                "rss_peak_sampled_bytes": 1222742016,
+                "process_hwm_bytes": 1221992448,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 675777255,
+            "validated_scan_ns": 1591747925,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 14672551596,
+                "load_ns": 14129810720,
+                "candidate_pipeline_ns": 473698116,
+                "output_bytes": 23396,
+                "allocated_bytes": 4694379856,
+                "rss_baseline_bytes": 55410688,
+                "rss_peak_sampled_bytes": 1175666688,
+                "process_hwm_bytes": 1175003136,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 16139597692,
+                "load_ns": 15709679303,
+                "candidate_pipeline_ns": 397507467,
+                "output_bytes": 23396,
+                "allocated_bytes": 4696754048,
+                "rss_baseline_bytes": 1110233088,
+                "rss_peak_sampled_bytes": 1166811136,
+                "process_hwm_bytes": 1175003136,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 675423348,
+            "validated_scan_ns": 1605066325,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 13762877152,
+                "load_ns": 13340227337,
+                "candidate_pipeline_ns": 353636327,
+                "output_bytes": 23396,
+                "allocated_bytes": 4692360032,
+                "rss_baseline_bytes": 55873536,
+                "rss_peak_sampled_bytes": 1182117888,
+                "process_hwm_bytes": 1181442048,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 13483652243,
+                "load_ns": 13103688945,
+                "candidate_pipeline_ns": 332338991,
+                "output_bytes": 23396,
+                "allocated_bytes": 4691616720,
+                "rss_baseline_bytes": 1106239488,
+                "rss_peak_sampled_bytes": 1200455680,
+                "process_hwm_bytes": 1200455680,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 658020890,
+            "validated_scan_ns": 1418839535,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 14844862380,
+                "load_ns": 14282757714,
+                "candidate_pipeline_ns": 490080399,
+                "output_bytes": 23396,
+                "allocated_bytes": 4694068408,
+                "rss_baseline_bytes": 55562240,
+                "rss_peak_sampled_bytes": 1158750208,
+                "process_hwm_bytes": 1158086656,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 14779139132,
+                "load_ns": 14342906580,
+                "candidate_pipeline_ns": 360974210,
+                "output_bytes": 23396,
+                "allocated_bytes": 4694630616,
+                "rss_baseline_bytes": 1146511360,
+                "rss_peak_sampled_bytes": 1240002560,
+                "process_hwm_bytes": 1239519232,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 651971299,
+            "validated_scan_ns": 1235566967,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 13673533395,
+                "load_ns": 13149824430,
+                "candidate_pipeline_ns": 438923591,
+                "output_bytes": 23396,
+                "allocated_bytes": 4692111168,
+                "rss_baseline_bytes": 55353344,
+                "rss_peak_sampled_bytes": 1053757440,
+                "process_hwm_bytes": 1053200384,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 13560409667,
+                "load_ns": 13088269759,
+                "candidate_pipeline_ns": 404670168,
+                "output_bytes": 23396,
+                "allocated_bytes": 4691811008,
+                "rss_baseline_bytes": 976183296,
+                "rss_peak_sampled_bytes": 1216475136,
+                "process_hwm_bytes": 1215840256,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 751125054,
+            "validated_scan_ns": 1633888109,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 15499992962,
+                "load_ns": 15116685888,
+                "candidate_pipeline_ns": 315507997,
+                "output_bytes": 23396,
+                "allocated_bytes": 4695306624,
+                "rss_baseline_bytes": 54820864,
+                "rss_peak_sampled_bytes": 1197240320,
+                "process_hwm_bytes": 1197240320,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 14741910005,
+                "load_ns": 14326081445,
+                "candidate_pipeline_ns": 334619537,
+                "output_bytes": 23396,
+                "allocated_bytes": 4694365136,
+                "rss_baseline_bytes": 1197297664,
+                "rss_peak_sampled_bytes": 1197297664,
+                "process_hwm_bytes": 1196666880,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 670869567,
+            "validated_scan_ns": 1316618997,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 13722602320,
+                "load_ns": 13364757128,
+                "candidate_pipeline_ns": 311452774,
+                "output_bytes": 23396,
+                "allocated_bytes": 4691519008,
+                "rss_baseline_bytes": 55623680,
+                "rss_peak_sampled_bytes": 1168375808,
+                "process_hwm_bytes": 1168375808,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 13155307512,
+                "load_ns": 12747755306,
+                "candidate_pipeline_ns": 340514946,
+                "output_bytes": 23396,
+                "allocated_bytes": 4690967752,
+                "rss_baseline_bytes": 1168404480,
+                "rss_peak_sampled_bytes": 1239138304,
+                "process_hwm_bytes": 1238253568,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 645451089,
+            "validated_scan_ns": 1370313369,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 15727093335,
+                "load_ns": 15006625524,
+                "candidate_pipeline_ns": 377400467,
+                "output_bytes": 23396,
+                "allocated_bytes": 4695313968,
+                "rss_baseline_bytes": 54939648,
+                "rss_peak_sampled_bytes": 1219141632,
+                "process_hwm_bytes": 1218404352,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 14610592896,
+                "load_ns": 13885178341,
+                "candidate_pipeline_ns": 307485295,
+                "output_bytes": 23396,
+                "allocated_bytes": 4693280064,
+                "rss_baseline_bytes": 1189834752,
+                "rss_peak_sampled_bytes": 1226084352,
+                "process_hwm_bytes": 1225355264,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 772044856,
+            "validated_scan_ns": 1308813714,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 13775403221,
+                "load_ns": 13056013600,
+                "candidate_pipeline_ns": 319935237,
+                "output_bytes": 23396,
+                "allocated_bytes": 4691980624,
+                "rss_baseline_bytes": 55693312,
+                "rss_peak_sampled_bytes": 1176231936,
+                "process_hwm_bytes": 1175752704,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 13529649588,
+                "load_ns": 13095447242,
+                "candidate_pipeline_ns": 407260317,
+                "output_bytes": 23396,
+                "allocated_bytes": 4691097960,
+                "rss_baseline_bytes": 1113911296,
+                "rss_peak_sampled_bytes": 1138860032,
+                "process_hwm_bytes": 1175752704,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 643044745,
+            "validated_scan_ns": 1317039394,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 15648157778,
+                "load_ns": 14830727367,
+                "candidate_pipeline_ns": 463299426,
+                "output_bytes": 23396,
+                "allocated_bytes": 4695570216,
+                "rss_baseline_bytes": 55513088,
+                "rss_peak_sampled_bytes": 1224507392,
+                "process_hwm_bytes": 1223806976,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 14231151291,
+                "load_ns": 13827387758,
+                "candidate_pipeline_ns": 335820245,
+                "output_bytes": 23396,
+                "allocated_bytes": 4692719392,
+                "rss_baseline_bytes": 1193209856,
+                "rss_peak_sampled_bytes": 1229316096,
+                "process_hwm_bytes": 1229316096,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 719459012,
+            "validated_scan_ns": 1304143805,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 13548268493,
+                "load_ns": 13146666494,
+                "candidate_pipeline_ns": 328804317,
+                "output_bytes": 23396,
+                "allocated_bytes": 4692221840,
+                "rss_baseline_bytes": 55955456,
+                "rss_peak_sampled_bytes": 1233641472,
+                "process_hwm_bytes": 1233088512,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 13343043244,
+                "load_ns": 12999600709,
+                "candidate_pipeline_ns": 316627732,
+                "output_bytes": 23396,
+                "allocated_bytes": 4691420856,
+                "rss_baseline_bytes": 1144238080,
+                "rss_peak_sampled_bytes": 1194434560,
+                "process_hwm_bytes": 1233088512,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 633943137,
+            "validated_scan_ns": 1341439298,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 15481826547,
+                "load_ns": 15033421522,
+                "candidate_pipeline_ns": 401754775,
+                "output_bytes": 23396,
+                "allocated_bytes": 4694757264,
+                "rss_baseline_bytes": 55205888,
+                "rss_peak_sampled_bytes": 1160278016,
+                "process_hwm_bytes": 1160278016,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 14703921159,
+                "load_ns": 14040802175,
+                "candidate_pipeline_ns": 383443235,
+                "output_bytes": 23396,
+                "allocated_bytes": 4692767520,
+                "rss_baseline_bytes": 1160323072,
+                "rss_peak_sampled_bytes": 1183277056,
+                "process_hwm_bytes": 1183277056,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 701377387,
+            "validated_scan_ns": 1424844722,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 14932536283,
+                "load_ns": 14461060097,
+                "candidate_pipeline_ns": 404040674,
+                "output_bytes": 23396,
+                "allocated_bytes": 4694602112,
+                "rss_baseline_bytes": 54943744,
+                "rss_peak_sampled_bytes": 1241751552,
+                "process_hwm_bytes": 1241751552,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 14360322706,
+                "load_ns": 13947303183,
+                "candidate_pipeline_ns": 341610195,
+                "output_bytes": 23396,
+                "allocated_bytes": 4693499672,
+                "rss_baseline_bytes": 1101139968,
+                "rss_peak_sampled_bytes": 1233633280,
+                "process_hwm_bytes": 1240973312,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 684724035,
+            "validated_scan_ns": 1770675555,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 15464208680,
+                "load_ns": 14724836645,
+                "candidate_pipeline_ns": 341884145,
+                "output_bytes": 23396,
+                "allocated_bytes": 4695045424,
+                "rss_baseline_bytes": 55939072,
+                "rss_peak_sampled_bytes": 1175490560,
+                "process_hwm_bytes": 1174867968,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 13488661399,
+                "load_ns": 13097450037,
+                "candidate_pipeline_ns": 316131616,
+                "output_bytes": 23396,
+                "allocated_bytes": 4691524288,
+                "rss_baseline_bytes": 1158909952,
+                "rss_peak_sampled_bytes": 1215860736,
+                "process_hwm_bytes": 1215860736,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 686649839,
+            "validated_scan_ns": 1437960293,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 14295788806,
+                "load_ns": 13919433634,
+                "candidate_pipeline_ns": 316992382,
+                "output_bytes": 23396,
+                "allocated_bytes": 4692385632,
+                "rss_baseline_bytes": 55259136,
+                "rss_peak_sampled_bytes": 1112080384,
+                "process_hwm_bytes": 1114206208,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 13849945571,
+                "load_ns": 13211232716,
+                "candidate_pipeline_ns": 554873655,
+                "output_bytes": 23396,
+                "allocated_bytes": 4692074112,
+                "rss_baseline_bytes": 1060106240,
+                "rss_peak_sampled_bytes": 1252229120,
+                "process_hwm_bytes": 1251807232,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 851409692,
+            "validated_scan_ns": 1782681885,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 17052544040,
+                "load_ns": 16683562815,
+                "candidate_pipeline_ns": 344167078,
+                "output_bytes": 23396,
+                "allocated_bytes": 4697489560,
+                "rss_baseline_bytes": 54448128,
+                "rss_peak_sampled_bytes": 1127202816,
+                "process_hwm_bytes": 1127202816,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 13271679242,
+                "load_ns": 12834951758,
+                "candidate_pipeline_ns": 360497625,
+                "output_bytes": 23396,
+                "allocated_bytes": 4691277312,
+                "rss_baseline_bytes": 1127219200,
+                "rss_peak_sampled_bytes": 1233035264,
+                "process_hwm_bytes": 1233035264,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 679757989,
+            "validated_scan_ns": 1581817142,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 13727869197,
+                "load_ns": 13313157183,
+                "candidate_pipeline_ns": 346016475,
+                "output_bytes": 23396,
+                "allocated_bytes": 4692699424,
+                "rss_baseline_bytes": 55791616,
+                "rss_peak_sampled_bytes": 1227280384,
+                "process_hwm_bytes": 1226657792,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 14624490197,
+                "load_ns": 14234956739,
+                "candidate_pipeline_ns": 314387860,
+                "output_bytes": 23396,
+                "allocated_bytes": 4693717960,
+                "rss_baseline_bytes": 1213812736,
+                "rss_peak_sampled_bytes": 1213812736,
+                "process_hwm_bytes": 1226657792,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 665906185,
+            "validated_scan_ns": 1400229672,
+            "validated_events": 200001
+          },
+          {
+            "samples": [
+              {
+                "mode": "process_cold",
+                "success": true,
+                "total_ns": 14717994466,
+                "load_ns": 14331956384,
+                "candidate_pipeline_ns": 324026907,
+                "output_bytes": 23396,
+                "allocated_bytes": 4693728824,
+                "rss_baseline_bytes": 55443456,
+                "rss_peak_sampled_bytes": 1168584704,
+                "process_hwm_bytes": 1168584704,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              },
+              {
+                "mode": "same_process_warm",
+                "success": true,
+                "total_ns": 13441992204,
+                "load_ns": 13054459642,
+                "candidate_pipeline_ns": 361855664,
+                "output_bytes": 23396,
+                "allocated_bytes": 4691156728,
+                "rss_baseline_bytes": 1168605184,
+                "rss_peak_sampled_bytes": 1168605184,
+                "process_hwm_bytes": 1167990784,
+                "loaded_results": 100000,
+                "matched": 1000,
+                "scripted_calls": 3
+              }
+            ],
+            "snapshot_open_ns": 718440288,
+            "validated_scan_ns": 1446191268,
+            "validated_events": 200001
+          }
+        ],
+        "complete": true
+      }
+    }
+  ],
+  "limitations": [
+    "Process-cold is a first request in a fresh test process, not a cold physical disk; OS caches are not evicted.",
+    "Time includes Cobra command construction/flags, scope, readonly SQLite snapshots, full chain verification, projection, query and JSON serialization; excludes OS process launch and post-response JSON assertions.",
+    "All three Generate calls are scripted. No real provider/network latency, token or cost claim.",
+    "Snapshot-open and validated-scan measurements are separate warm component observations after each pair, not additive decomposition of a query.",
+    "Candidate pipeline includes resolver decode, Retrieve, excerpts and selection prompt compilation, not pure search alone.",
+    "RSS is sampled every 5ms; process HWM is cumulative within each pair; sampled RSS includes retained Go heap.",
+    "One branch/team, compact deterministic terminal task results; no claim about arbitrary payloads, branch counts or physical-storage SLO."
+  ],
+  "query_count_scope": "120 formal benchmark queries; excludes smoke/unit and two additional profiling queries",
+  "diagnostic_profile": {
+    "queries": 2,
+    "included_in_benchmark_statistics": false,
+    "scope": "same 100K fixture shape, two CLI queries, one standalone validated scan and source SHA check; no fixture import in sampled process",
+    "fixture": {
+      "count": 100000,
+      "events": 200001,
+      "match_id": "res-634983162854957abef5694371bb3819f50d8a491e8876b74b3a736fcc98789e",
+      "store_sha256": "a50242cc3b5d3c712d43d77f4370d83a5635067df5cc3eee49c834781c195443",
+      "store_bytes": 120274944,
+      "payload_bytes": 40027363,
+      "seed_ns": 15495929678
+    },
+    "pair": {
+      "samples": [
+        {
+          "mode": "process_cold",
+          "success": true,
+          "total_ns": 15917456467,
+          "load_ns": 15134091254,
+          "candidate_pipeline_ns": 402271478,
+          "output_bytes": 23386,
+          "allocated_bytes": 4696061072,
+          "rss_baseline_bytes": 55767040,
+          "rss_peak_sampled_bytes": 1212399616,
+          "process_hwm_bytes": 1211826176,
+          "loaded_results": 100000,
+          "matched": 1000,
+          "scripted_calls": 3
+        },
+        {
+          "mode": "same_process_warm",
+          "success": true,
+          "total_ns": 13899830982,
+          "load_ns": 13471348528,
+          "candidate_pipeline_ns": 397162539,
+          "output_bytes": 23386,
+          "allocated_bytes": 4692892672,
+          "rss_baseline_bytes": 1201033216,
+          "rss_peak_sampled_bytes": 1207734272,
+          "process_hwm_bytes": 1211826176,
+          "loaded_results": 100000,
+          "matched": 1000,
+          "scripted_calls": 3
+        }
+      ],
+      "snapshot_open_ns": 794580511,
+      "validated_scan_ns": 1422022791,
+      "validated_events": 200001
+    },
+    "binary_sha256": "8dfe5a26dc3b46e5fdedb93481d7fc9c6a8469fd2fd58d48454a00382e387699",
+    "private_fixture_driver_sha256": "0d827aa2847e945bb4d7c429bc8c90f8f552b84330699e5c9c2d2808de6e0e0a",
+    "cpu_profile_sha256": "2c350ab9f66c20bca6afb931dde5a68f5a6c8deaa9403b3be9a464e1b97dde43",
+    "allocation_profile_sha256": "58f94402b19152b8a141c02590f71cff157762096d08a089e9ecd6e764a22823",
+    "cpu_top": "File: history-perf.test\nBuild ID: a830d2b4a6fef74406b1541567ee727d04a9c6d3\nType: cpu\nTime: 2026-11-15 01:12:01 UTC\nDuration: 32.40s, Total samples = 39.51s (121.96%)\nShowing nodes accounting for 17.56s, 44.44% of 39.51s total\nDropped 629 nodes (cum <= 0.20s)\nShowing top 20 nodes out of 287\n      flat  flat%   sum%        cum   cum%\n     3.44s  8.71%  8.71%      3.44s  8.71%  crypto/internal/fips140/sha256.blockAVX2\n     2.64s  6.68% 15.39%      3.75s  9.49%  runtime.tryDeferToSpanScan\n     1.77s  4.48% 19.87%      1.77s  4.48%  runtime.memmove\n     1.12s  2.83% 22.70%      4.21s 10.66%  runtime.scanObject\n     0.96s  2.43% 25.13%      0.96s  2.43%  internal/runtime/syscall/linux.Syscall6\n     0.93s  2.35% 27.49%      0.93s  2.35%  encoding/json/internal/jsonwire.ConsumeSimpleString (inline)\n     0.79s  2.00% 29.49%      0.79s  2.00%  runtime.spanClass.sizeclass (inline)\n     0.62s  1.57% 31.06%      0.62s  1.57%  runtime.memclrNoHeapPointers\n     0.59s  1.49% 32.55%      0.81s  2.05%  modernc.org/libc.Xpthread_mutex_lock\n     0.58s  1.47% 34.02%      1.33s  3.37%  modernc.org/sqlite/lib._sqlite3VdbeExec\n     0.58s  1.47% 35.48%      0.72s  1.82%  strings.ToLower\n     0.50s  1.27% 36.75%      0.50s  1.27%  internal/runtime/maps.memHashAES\n     0.45s  1.14% 37.89%      1.83s  4.63%  encoding/json/jsontext.(*decoderState).ReadValue\n     0.44s  1.11% 39.00%      0.67s  1.70%  runtime.mallocgcSmallScanNoHeaderSC2\n     0.40s  1.01% 40.02%      0.40s  1.01%  runtime.tgkill\n     0.38s  0.96% 40.98%      0.67s  1.70%  internal/stringslite.Index\n     0.37s  0.94% 41.91%      0.37s  0.94%  encoding/json/internal/jsonwire.ConsumeWhitespace (inline)\n     0.34s  0.86% 42.77%      0.86s  2.18%  modernc.org/libc.Xpthread_mutex_unlock\n     0.34s  0.86% 43.63%      1.28s  3.24%  runtime.mapaccess2_faststr\n     0.32s  0.81% 44.44%      0.32s  0.81%  runtime.procyieldAsm\n",
+    "allocation_top": "File: history-perf.test\nBuild ID: a830d2b4a6fef74406b1541567ee727d04a9c6d3\nType: alloc_space\nTime: 2026-11-15 01:12:33 UTC\nShowing nodes accounting for 7875.12MB, 85.58% of 9202.02MB total\nDropped 173 nodes (cum <= 46.01MB)\nShowing top 20 nodes out of 103\n      flat  flat%   sum%        cum   cum%\n 1267.27MB 13.77% 13.77%  2120.73MB 23.05%  github.com/kjelly/hufu/internal/team.reduceTodoEventStream-range1\n 1060.72MB 11.53% 25.30%  1060.72MB 11.53%  github.com/kjelly/hufu/internal/team.projectBranchLineage\n  795.70MB  8.65% 33.95%  5088.41MB 55.30%  github.com/kjelly/hufu/internal/inspect.projectHistoricalResults\n  535.36MB  5.82% 39.76%   535.36MB  5.82%  github.com/kjelly/hufu/internal/inspect.historicalLineage.func2\n  496.94MB  5.40% 45.16%  8484.36MB 92.20%  github.com/kjelly/hufu/internal/inspect.LoadHistoricalResults\n  392.27MB  4.26% 49.43%   392.27MB  4.26%  github.com/kjelly/hufu/internal/team.cloneTodoItem\n  358.59MB  3.90% 53.32%   358.59MB  3.90%  bytes.Clone (inline)\n  326.08MB  3.54% 56.87%   326.08MB  3.54%  reflect.unsafe_New\n  313.65MB  3.41% 60.28%   313.65MB  3.41%  github.com/kjelly/hufu/internal/team.normalizeReplayEvents\n  300.10MB  3.26% 63.54%   300.10MB  3.26%  reflect.mapassign_faststr0\n  286.56MB  3.11% 66.65%   484.61MB  5.27%  github.com/kjelly/hufu/internal/team.scanEventRow\n  252.51MB  2.74% 69.39%   252.51MB  2.74%  modernc.org/sqlite.(*conn).columnText\n     213MB  2.31% 71.71%   662.06MB  7.19%  modernc.org/sqlite.(*rows).Next\n  206.63MB  2.25% 73.96%   736.38MB  8.00%  github.com/kjelly/hufu/internal/inspect.indexLineage\n  196.56MB  2.14% 76.09%   196.56MB  2.14%  encoding/json/jsontext.NewDecoder (inline)\n  196.55MB  2.14% 78.23%   196.55MB  2.14%  modernc.org/sqlite.(*conn).columnBlob\n  195.53MB  2.12% 80.35%   196.53MB  2.14%  encoding/json/jsontext.(*decoderState).fetch\n  177.52MB  1.93% 82.28%   177.52MB  1.93%  encoding/json/jsontext.(*Value).UnmarshalJSON\n  169.51MB  1.84% 84.12%   169.51MB  1.84%  encoding/hex.EncodeToString (inline)\n  134.08MB  1.46% 85.58%  1664.32MB 18.09%  github.com/kjelly/hufu/internal/inspect.historicalResultFromItem\n",
+    "interpretation": "CPU sample time includes parallel runtime/GC work; cumulative allocation percentages overlap and must not be added."
+  },
+  "validation": {
+    "full_test": "passed (cmd/hufu 163.907s; internal/team 839.568s)",
+    "vet": "passed",
+    "lint": "passed (0 issues)",
+    "new_fixture_race": "passed (2.313s)",
+    "formal_benchmark": "passed (3 scales x 20 pairs, 120 successful queries)",
+    "diagnostic_profile": "passed (2 queries, not mixed into statistics)",
+    "docs": "passed (108 active, 206 total files; 702 relative links; 51 Go anchors)",
+    "diff": "passed",
+    "independent_quantile_and_cohort_check": "passed"
+  },
+  "resource_accounting": {
+    "observed_task_scratch_peak_mib": 366,
+    "retained_private_checkpoint_directory": "/tmp/codex-task.r4d5fX",
+    "retained_private_checkpoint_mib_approx": 1.8,
+    "shared_gocache_before_kib": 17762152,
+    "shared_gocache_final_kib": 18256812,
+    "reclaimed_obsolete_cache_bytes": 181407744,
+    "note": "Shared cache net change is observed, not attributed wholly to this task. All disposable binaries and datasets removed; current normal/race exports and shared dependencies preserved."
+  }
+}
