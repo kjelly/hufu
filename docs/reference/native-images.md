@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: —（projection 並行改善與驗證隨同次 commit 交付；M3／M4 既有基準為 `2aea4d23`，不代表 Codex 真實推論已驗收）
+> Verified-Commit: `70bf3d16`（projection 並行程式與離線驗證基準；M3／M4 既有基準為 `2aea4d23`，不代表 Codex 真實推論已驗收）
 > Supersedes: —
 > Superseded-By: —
 
@@ -132,8 +132,9 @@ native input，也不宣稱提供同 UID 的 OS 隔離。投影在子程序及 r
 之後回收；副本與每次 occurrence 的資源預留都計量。
 
 殘留 projection 也計入總容量與檔案數，上限沿 media policy 的 branch bytes／
-blobs 限制；同一 control root 的 copy 計量、使用與回收以跨程序鎖保護。
-這個限制包含相同圖片在不同工作下的副本，不因 CAS 去重而忽略崩潰殘留。
+blobs 限制。這個限制包含相同圖片在不同工作下的副本，不因 CAS 去重而忽略
+崩潰殘留。同一 control root 的配額計量、發布與回收由 workspace projection
+lock 協調；使用中的副本則由各 consumer 持有的 kernel lease 保護。
 
 Workspace projection lock 只涵蓋配額檢查、完整 bundle 寫入／驗證與發布，以及
 最後回收；不跨越 app-server lifetime。每個 consumer 在 projection 目錄建立

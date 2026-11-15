@@ -2,13 +2,13 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `2aea4d23`（M0～M4 已交付程式／離線驗證基準；各階段及 Ollama smoke acceptance 的實際執行版本與範圍見對應紀錄）
+> Verified-Commit: `70bf3d16`（projection 並行程式／離線驗證基準；M0～M4 既有基準為 `2aea4d23`；各階段及 Ollama smoke acceptance 的實際執行版本與範圍見對應紀錄）
 > Supersedes: —
 > Superseded-By: —
 
 依 [實作規格](native-image-runtime.md) 分階段交付，每階段驗證後獨立 commit。未通過驗收的階段不標示完成。
 
-> 目前 M0～M4 程式與離線驗證均已交付；以下是按時間保留的階段歷程，早期「尚需 M2／M3／M4」不再是待辦。Codex 真實推論、其他服務的實機驗收，以及 projection 並行的後續交付仍須各自辨識，不把單次 Ollama smoke 當成這些項目的完成證據。
+> 目前 M0～M4 程式與離線驗證均已交付；projection 並行程式與離線驗證也已於 `70bf3d16` 交付，詳見末節。以下是按時間保留的階段歷程，早期「尚需 M2／M3／M4」不再是待辦。仍待完成的是 Codex 真實推論與其他服務的實機驗收；單次 Ollama smoke 不作為這些項目的完成證據。
 
 ## Baseline
 
@@ -815,7 +815,7 @@ finding 準確率仍需後續新 invocation 的審查結果，不能由這些測
 
 ## Codex projection 並行實作（2026-11-15）
 
-> 狀態：實作、配額競爭與所有必要 Linux gates、Darwin 編譯均已完成；隨本次功能 commit 交付。這是原 M0～M4 以外的後續改善，不改寫 2026-11-08 的歷史調查結論。
+> 狀態：實作、配額競爭與所有必要 Linux gates、Darwin 編譯均已完成，已於 `70bf3d16` 交付。這是原 M0～M4 以外的後續改善，不改寫 2026-11-08 的歷史調查結論。
 
 確認的 trigger：`TestCodexImageProjectionSharesCopiesUntilLastConsumer` 在舊版由第一個 consumer 持有 workspace lock，第二個 consumer 等待至 deadline 而失敗。Canonical owner 維持 `codexImageProjection`／`checkCodexProjectionCopies`；沒有新增 journal／policy／receipt schema 或模型權限。
 
