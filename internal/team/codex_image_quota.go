@@ -15,8 +15,9 @@ import (
 const codexProjectionLockFile = ".hufu-projections.lock"
 
 // Include copies left by an interrupted process. A process-local reservation
-// cannot account for those bytes. The caller holds the shared projection lock
-// until all app-server consumers have drained and their copies are reclaimed.
+// cannot account for those bytes. The caller holds the workspace projection
+// lock throughout quota admission and copying; consumer leases protect the
+// published bytes after that lock is released and until consumers drain.
 func checkCodexProjectionCopies(ctx context.Context, base, current *os.Root, refs []media.Ref, limits media.Limits) error {
 	entries, err := readCodexProjectionEntries(base, limits.MaxBranchBlobs+1)
 	if err != nil {
@@ -52,7 +53,7 @@ func checkCodexProjectionCopies(ctx context.Context, base, current *os.Root, ref
 			_ = child.Close()
 			return media.Reject(media.AccessDenied, "Codex projection copy directory changed")
 		}
-		files, err := readCodexProjectionEntries(child, limits.MaxBranchBlobs)
+		files, err := readCodexProjectionEntries(child, limits.MaxBranchBlobs+maxCodexProjectionConsumers)
 		if err != nil {
 			_ = child.Close()
 			return err
@@ -62,6 +63,13 @@ func checkCodexProjectionCopies(ctx context.Context, base, current *os.Root, ref
 			if err != nil {
 				_ = child.Close()
 				return err
+			}
+			if strings.HasPrefix(file.Name(), codexProjectionConsumerPrefix) {
+				if !validCodexProjectionConsumerName(file.Name()) || !validCodexProjectionConsumerInfo(metadata) {
+					_ = child.Close()
+					return media.Reject(media.AccessDenied, "unsafe Codex projection consumer lease")
+				}
+				continue // Empty lease files are metadata, not retained image copies.
 			}
 			if !validCodexProjectionFilename(file.Name()) || !metadata.Mode().IsRegular() || metadata.Mode().Perm() != 0o400 || metadata.Size() <= 0 {
 				_ = child.Close()

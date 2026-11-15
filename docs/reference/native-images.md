@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `2aea4d23`（涵蓋 M3 results 查詢／匯出與 M4 pinned Codex localImage 接入的程式及離線驗證；不代表 Codex 真實推論已驗收）
+> Verified-Commit: —（projection 並行改善與驗證隨同次 commit 交付；M3／M4 既有基準為 `2aea4d23`，不代表 Codex 真實推論已驗收）
 > Supersedes: —
 > Superseded-By: —
 
@@ -134,6 +134,21 @@ native input，也不宣稱提供同 UID 的 OS 隔離。投影在子程序及 r
 殘留 projection 也計入總容量與檔案數，上限沿 media policy 的 branch bytes／
 blobs 限制；同一 control root 的 copy 計量、使用與回收以跨程序鎖保護。
 這個限制包含相同圖片在不同工作下的副本，不因 CAS 去重而忽略崩潰殘留。
+
+Workspace projection lock 只涵蓋配額檢查、完整 bundle 寫入／驗證與發布，以及
+最後回收；不跨越 app-server lifetime。每個 consumer 在 projection 目錄建立
+獨立、空白、0600 的 kernel lock marker（每份 projection 最多 1024 個），持有至
+其子程序及 repair 排空。相同 binding 可共用已驗證的唯讀副本，最後一個
+consumer 離開才刪除。不同 binding 的副本各自計入 branch bytes／blobs；額度不足時以
+`limit_exceeded` 拒絕該次 admission，不自動等待配額或增加重試；
+不同 `CODEX_HOME` 可在此邊界並行，同一 home 的 app-server state lock 仍序列化。
+
+所有 marker 建立、過期判定與刪除都在 workspace lock 內進行，以 kernel lock
+判斷存活，不靠 PID 或 timeout 猜測。程序崩潰留下的圖片仍計入 retained-copy
+配額；同 binding 重新使用時清理已解鎖 marker 並驗證原副本。清理最多等待
+workspace lock 5 秒；失敗則保留副本與 marker、釋放自己的 kernel lease，後續
+仍按實際副本計量。這不是刪除任意孤立或損壞圖片的機制。
+
 resume 保持原 binding／thread 與 logical paths：遺失副本從原 CAS 重建，
 內容或權限竄改、既有 admission 的 binary identity 改變、world 不符時拒絕。原始使用者檔案不需存在。
 

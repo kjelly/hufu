@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/kjelly/hufu/internal/log"
 	"github.com/kjelly/hufu/internal/media"
 )
 
@@ -20,7 +21,6 @@ type codexImageProjection struct {
 	refs        []media.Ref
 	reservation *media.Reservation
 	release     func()
-	unlock      func()
 }
 
 func codexImageProjectionHash(binding *media.TaskBinding, target string) (string, error) {
@@ -88,7 +88,8 @@ func newCodexImageProjection(ctx context.Context, c *Coordinator, request Attemp
 	if err != nil {
 		return nil, err
 	}
-	projection.unlock = unlock
+	// Publication and quota admission finish before any app-server consumer runs.
+	defer unlock()
 	root, err := openCodexProjectionDirectory(base, "input-"+strings.TrimPrefix(hash, "sha256:"))
 	if err != nil {
 		return nil, err
@@ -101,20 +102,19 @@ func newCodexImageProjection(ctx context.Context, c *Coordinator, request Attemp
 	}
 	projection.path = codexImageProjectionPath(c.artifactStoreRootPath(), hash)
 	files := make(map[string]os.FileInfo)
+	lease := &codexProjectionLease{base: base, root: root, directory: "input-" + strings.TrimPrefix(hash, "sha256:"), directoryInfo: directoryInfo,
+		lockPath: filepath.Join(parentPath, "media-projections", codexProjectionLockFile), files: files, maxImages: policy.Policy.Image.MaxBranchBlobs}
 	projection.release = sync.OnceFunc(func() {
-		for name, info := range files {
-			if current, err := root.Lstat(name); err == nil && os.SameFile(info, current) {
-				_ = root.Remove(name)
-			}
+		if err := lease.close(); err != nil {
+			log.Printf("Codex projection cleanup retained copies: %v\n", err)
 		}
-		_ = root.Close()
-		if current, err := base.Lstat("input-" + strings.TrimPrefix(hash, "sha256:")); err == nil && os.SameFile(directoryInfo, current) {
-			_ = base.Remove("input-" + strings.TrimPrefix(hash, "sha256:"))
-		}
-		_ = base.Close()
-		unlock()
 		reservation.Release()
 	})
+	lease.consumer, err = newCodexProjectionConsumer(ctx, root, policy.Policy.Image.MaxBranchBlobs)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := checkCodexProjectionCopies(ctx, base, root, projection.refs, policy.Policy.Image); err != nil {
 		return nil, err
 	}
@@ -243,9 +243,6 @@ func (p *codexImageProjection) Close() {
 	}
 	if p.root != nil {
 		_ = p.root.Close()
-	}
-	if p.unlock != nil {
-		p.unlock()
 	}
 	p.reservation.Release()
 }

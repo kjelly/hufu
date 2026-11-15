@@ -197,3 +197,36 @@ func TestCodexProjectionLockScopeAcrossIndependentHomes(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexProjectionConsumerNormalizesCreationPermissions(t *testing.T) {
+	if directory := os.Getenv("HUFU_TEST_CODEX_CONSUMER_DIRECTORY"); directory != "" {
+		root, err := os.OpenRoot(directory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = root.Close() }()
+		previous := unix.Umask(0o777)
+		defer unix.Umask(previous)
+		consumer, err := newCodexProjectionConsumer(t.Context(), root, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = consumer.file.Close() }()
+		info, err := root.Lstat(consumer.name)
+		if err != nil || !validCodexProjectionConsumerInfo(info) {
+			t.Fatalf("unsafe new consumer under restrictive umask: %v %v", info, err)
+		}
+		if err := consumer.file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if active, err := pruneCodexProjectionConsumers(t.Context(), root, 1); err != nil || active != 0 {
+			t.Fatalf("consumer could not be reclaimed: %d %v", active, err)
+		}
+		return
+	}
+	command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestCodexProjectionConsumerNormalizesCreationPermissions$")
+	command.Env = append(os.Environ(), "HUFU_TEST_CODEX_CONSUMER_DIRECTORY="+t.TempDir(), fakeCodexServerScriptEnvVar+"=")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("restrictive consumer umask: %v: %s", err, output)
+	}
+}

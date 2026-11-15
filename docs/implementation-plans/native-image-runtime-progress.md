@@ -8,7 +8,7 @@
 
 依 [實作規格](native-image-runtime.md) 分階段交付，每階段驗證後獨立 commit。未通過驗收的階段不標示完成。
 
-> 目前 M0～M4 程式與離線驗證均已交付；以下是按時間保留的階段歷程，早期「尚需 M2／M3／M4」不再是待辦。Codex 真實推論、其他服務的實機驗收，以及末節 projection 並行候選仍須各自辨識，不把單次 Ollama smoke 當成這些項目的完成證據。
+> 目前 M0～M4 程式與離線驗證均已交付；以下是按時間保留的階段歷程，早期「尚需 M2／M3／M4」不再是待辦。Codex 真實推論、其他服務的實機驗收，以及 projection 並行的後續交付仍須各自辨識，不把單次 Ollama smoke 當成這些項目的完成證據。
 
 ## Baseline
 
@@ -811,3 +811,35 @@ workspace 下的 `logs/media-projections/.hufu-projections.lock` 保護 retained
 runtime 的 media／quota／acceptance 契約，也沒有執行真實 Codex／Ollama 推論或
 重播歷史 collector 請求。跨 workset 指引與判定問題已做離線契約驗證；真實模型
 finding 準確率仍需後續新 invocation 的審查結果，不能由這些測試推定。
+
+
+## Codex projection 並行實作（2026-11-15）
+
+> 狀態：實作、配額競爭與所有必要 Linux gates、Darwin 編譯均已完成；隨本次功能 commit 交付。這是原 M0～M4 以外的後續改善，不改寫 2026-11-08 的歷史調查結論。
+
+確認的 trigger：`TestCodexImageProjectionSharesCopiesUntilLastConsumer` 在舊版由第一個 consumer 持有 workspace lock，第二個 consumer 等待至 deadline 而失敗。Canonical owner 維持 `codexImageProjection`／`checkCodexProjectionCopies`；沒有新增 journal／policy／receipt schema 或模型權限。
+
+設計採 workspace publish／cleanup lock 加獨立 consumer kernel leases。整個 bounded bundle 都在 workspace lock 內做配額檢查、寫入及驗證，因此沒有在 lock 外尚未發布、卻未計量的預留。每個 consumer 使用獨立空白 0600 marker；最後一個活躍 consumer 排空才清除副本，同 binding 可共用。每份 projection 最多 1024 consumers，目錄讀取有界；不安全 marker、symlink、未知檔案與損壞圖片仍拒絕。Per-home app-server lifetime lock 保留。
+
+存活判斷使用既有跨程序 exclusive file lock；所有 marker 開啟／掃描／刪除皆在 workspace lock 內，不用 PID liveness 或 TTL 猜測。Crash 釋放 kernel lease，retained image bytes 仍計入 quota；新程序／constructor 只移除已解鎖 marker，重新驗證圖片。Cleanup 最多等候 5 秒，失敗保留副本、回報診斷並釋放自己的 lease；未取得 workspace lock 不刪除檔案。
+
+離線驗證涵蓋：同／不同 task binding、重複 image parts、共享最後一個 consumer、byte／blob quota、取消 waiter、cleanup contention／再次使用、unsafe marker／目錄限額、restrictive umask、兩個獨立 home 的實際 fake app-server 同時讀取 SHA 驗證的圖片、取消後 drain／reap，再釋放 projection，以及跨程序 owner crash／另一 consumer 保留／新程序 lease 重用。既有完整 Codex provider admission、repair／timeout、成本、CAS resume 和 canonical audit 仍沿原 gates 驗證；新的雙 app-server 測試證明 projection／transport boundary，不冒充真實模型或自由多代理任務驗收。
+
+前置基準為 `5aaed3f9`。最後 Go 來源與 `.mise.toml` selection 的 SHA-256 固定於 private checkpoint；擴充 `test-contracts` 只增加 `TestCodexImage`／`TestCodexProjection` 的選取，沒有改動 toolchain、env、lint 或完整 test 命令。開發期 lint 指出的字元條件簡化已等價修正，以下最終 gates 均通過修正版；沒有新增 lint 排除。
+
+| 檢查 | 最終結果 |
+|---|---|
+| 原始阻塞 trigger | 舊版第二個 consumer 等待至 deadline；修正後共享最後 consumer、不同 task 與配額競爭均通過 |
+| `mise run lint` | PASS；0 issues |
+| 定向 `go test -race -p 2 ./internal/team` | PASS；165.896 秒，涵蓋 projection／consumer、copy quota、native-image、state lock 及獨立 home 邊界 |
+| `mise run test` | PASS；`internal/team` 859.367 秒、`cmd/hufu` 162.157 秒，其餘 packages 全部通過 |
+| 擴充後 `mise run test-contracts` | PASS；team 143.101 秒，包含新 projection 測試；CLI／audit／operator／reviewgate／reviewprep／web fixtures 全部通過 |
+| `mise run vet` | PASS；無診斷 |
+| Darwin amd64 `go build -p 2 -o /dev/null ./internal/team` | PASS；只宣稱 source compile，不宣稱當地 process／服務驗收 |
+| Windows amd64 編譯（額外檢查） | 未通過；immutable `git archive 5aaed3f9` 在未修改的 `internal/tools` 產生完全相同的 missing platform functions 診斷，確認既有限制，不宣稱本輪已支援 Windows |
+
+上述 Go 指令皆經 mise，沿用既有 caches／GOTMPDIR；跨平台與 race 逐項執行。最終 source validation 與離線 projection／transport acceptance 已完成；沒有真實模型呼叫、登入、圖片外送或文件搬移。
+
+共享 cache 期間出現超出本輪清理清單的縮減，包含 standard-library exports 與原先保留的 project archive；沒有把這些空間算成本輪回收。初次 lint 的 missing exports 經正常 `go list -deps -export ./...` 補齊後重驗。此處不推定 cache 被其他程序變更的原因，也沒有清空 cache 或改路徑。
+
+資源收尾：回收可辨識過期／baseline archives 636,035,232 bytes（約 606.6 MiB），以及自有 baseline／測試目錄約 61.2 MiB。沒有 standalone executable。保留目前 normal／race／Darwin 與部分 Windows 可用 exports，可辨識 project allocation 1,034,366,976 bytes（約 986.4 MiB），低於 2 GiB；必要 reusable dependencies 2,398,081,024 bytes 另計。私有 checkpoint `/tmp/codex-task.gjEkgt` 刻意保留小型 gate logs、source hashes、commit／baseline 比對與清理 manifests；未保留 archive checkout 或大型 fixture。
