@@ -18,18 +18,20 @@ func TestResultCollectionResponseChannelsPreserveAdmissionAndBudget(t *testing.T
 		name         string
 		mode         agent.CollectorResponseChannel
 		first        string
+		second       string
 		text         string
 		wantText     bool
 		wantCalls    int32
 		wantAccepted bool
 	}{
-		{"automatic fallback", agent.CollectorResponseAuto, `{"result":"broken JSON"}`, `{"status":"success","summary":"saved report"}`, true, 2, true},
-		{"fallback still validates", agent.CollectorResponseAuto, `{"result":[]}`, `{"status":"invented","summary":"saved report"}`, true, 2, false},
-		{"fallback rejects prose", agent.CollectorResponseAuto, `{"result":null}`, `analysis {"status":"success","summary":"saved report"}`, true, 2, false},
-		{"semantic rejection stays on function", agent.CollectorResponseAuto, `{"result":{"status":"invented","summary":"saved report"}}`, "", false, 2, false},
-		{"explicit function", agent.CollectorResponseFunction, `{"result":"broken JSON"}`, "", false, 2, false},
-		{"legacy function", "", `{"result":"broken JSON"}`, "", false, 2, false},
-		{"explicit text", agent.CollectorResponseTextJSON, "", `{"status":"success","summary":"saved report"}`, true, 1, true},
+		{name: "automatic fallback", mode: agent.CollectorResponseAuto, first: `{"result":"broken JSON"}`, text: `{"status":"success","summary":"saved report"}`, wantText: true, wantCalls: 2, wantAccepted: true},
+		{name: "fallback still validates", mode: agent.CollectorResponseAuto, first: `{"result":[]}`, text: `{"status":"invented","summary":"saved report"}`, wantText: true, wantCalls: 2},
+		{name: "fallback rejects prose", mode: agent.CollectorResponseAuto, first: `{"result":null}`, text: `analysis {"status":"success","summary":"saved report"}`, wantText: true, wantCalls: 2},
+		{name: "semantic rejection stays on function", mode: agent.CollectorResponseAuto, first: `{"result":{"status":"invented","summary":"saved report"}}`, wantCalls: 2},
+		{name: "explicit function", mode: agent.CollectorResponseFunction, first: `{"result":"broken JSON"}`, wantCalls: 2},
+		{name: "legacy function", first: `{"result":"broken JSON"}`, wantCalls: 2},
+		{name: "function repairs mixed envelope", mode: agent.CollectorResponseFunction, first: `{"result":{"status":"success","summary":"saved report"},"status":"success"}`, second: `{"result":{"status":"success","summary":"saved report"}}`, wantCalls: 2, wantAccepted: true},
+		{name: "explicit text", mode: agent.CollectorResponseTextJSON, text: `{"status":"success","summary":"saved report"}`, wantText: true, wantCalls: 1, wantAccepted: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls atomic.Int32
@@ -62,7 +64,11 @@ func TestResultCollectionResponseChannelsPreserveAdmissionAndBudget(t *testing.T
 					return
 				}
 				assertCollectorResponseChannel(t, request)
-				_, _ = fmt.Fprintf(w, "data: {\"id\":\"function\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"return\",\"type\":\"function\",\"function\":{\"name\":\"return_result\",\"arguments\":%q}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"function\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n", tc.first)
+				arguments := tc.first
+				if n == 2 && tc.second != "" {
+					arguments = tc.second
+				}
+				_, _ = fmt.Fprintf(w, "data: {\"id\":\"function\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"return\",\"type\":\"function\",\"function\":{\"name\":\"return_result\",\"arguments\":%q}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"function\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n", arguments)
 			}))
 			t.Cleanup(server.Close)
 			c, item, ctx, receipt := resultCollectionProviderFixture(t, server.URL+"/v1", true, func(c *Coordinator) {
@@ -90,10 +96,14 @@ func TestResultCollectionResponseChannelsPreserveAdmissionAndBudget(t *testing.T
 			}
 			c = reopenRecoveryCoordinator(t, c)
 			checkpoint = currentResultCollection(c.todoItemByID(item.ID))
-			if tc.wantText {
+			if tc.wantText || tc.mode == agent.CollectorResponseFunction {
+				wantChannel := agent.CollectorResponseFunction
+				if tc.wantText {
+					wantChannel = agent.CollectorResponseTextJSON
+				}
 				channel, err := c.collectionResponseChannel(t.Context(), checkpoint, modelprofile.CapabilityYes)
-				if err != nil || channel != agent.CollectorResponseTextJSON {
-					t.Fatalf("restart lost text channel: %s %v", channel, err)
+				if err != nil || channel != wantChannel {
+					t.Fatalf("restart lost response channel: %s %v", channel, err)
 				}
 			}
 			if tc.mode == agent.CollectorResponseAuto && tc.wantText && tc.wantCalls == 2 {

@@ -12,6 +12,10 @@ import (
 )
 
 func supplementGateFixture(t *testing.T) session {
+	return supplementGateFixtureWithRequest(t, false)
+}
+
+func supplementGateFixtureWithRequest(t *testing.T, invalidRequest bool) session {
 	t.Helper()
 	current := gateFixture(t)
 	replacePayload(t, &current.Tasks[0], func(p *payload) {
@@ -19,7 +23,10 @@ func supplementGateFixture(t *testing.T) session {
 		if err := json.Unmarshal(p.Record, &r); err != nil {
 			t.Fatal(err)
 		}
-		r.Gaps = []json.RawMessage{raw(t, sourceGap{Description: "Caller missing from bundle", MissingEvidence: "Caller source", Kind: "missing_dependency", RequestedEvidence: []requestedEvidence{{Path: "caller.go", Ranges: []evidenceRange{}}}, Limitations: []sourceLimitation{}})}
+		r.Gaps = []json.RawMessage{raw(t, sourceGap{Description: "Caller missing from bundle", MissingEvidence: "Caller source", Kind: "missing_dependency", RequestedEvidence: []requestedEvidence{{Path: "caller.go", Ranges: []evidenceRange{{Start: 0, End: 5}}}}, Limitations: []sourceLimitation{}})}
+		if invalidRequest {
+			r.Gaps = []json.RawMessage{raw(t, sourceGap{Description: "Exact file unavailable", MissingEvidence: "Package source", Kind: "missing_dependency", RequestedEvidence: []requestedEvidence{{Path: "internal/inspect/", Ranges: []evidenceRange{{Start: 0, End: 1}}}}, Limitations: []sourceLimitation{}})}
+		}
 		p.Record = raw(t, r)
 	})
 	requests, err := collectSupplementRequests(current, "run-1")
@@ -41,7 +48,15 @@ func supplementGateFixture(t *testing.T) session {
 	}
 	inventory := seal("20", "inventory-review-supplement-requests", map[string]json.RawMessage{"review_supplement_requests": raw(t, requests)})
 	outcomes := []supplementOutcome{{SourceTaskID: "3", GapIndex: 0, Kind: "missing_dependency", WorksetKey: "supplement-0000", Limitations: []sourceLimitation{}}}
+	if invalidRequest {
+		outcomes[0].WorksetKey = ""
+		outcomes[0].Limitations = []sourceLimitation{{Kind: "invalid_request", Detail: "Requested path is a directory, not an exact frozen file"}}
+	}
 	producer := seal("21", "prepare-review-supplement", map[string]json.RawMessage{"supplement_round": raw(t, 1), "supplement_prepared": raw(t, true), "supplement_outcomes": raw(t, outcomes)})
+	if invalidRequest {
+		current.Tasks = append(current.Tasks, inventory, producer)
+		return current
+	}
 	review := record{Kind: "review", Revision: "frozen-head", Key: "supplement-0000", Lens: "general", Findings: []finding{}, Gaps: []json.RawMessage{}, References: []referenceAssessment{}}
 	incremental := fixtureTask(t, "22", "review-supplement-workset", "success", payload{Record: raw(t, review)}, review, nil)
 	incremental.Binding.Bindings["source_task_id"] = "3"
@@ -103,7 +118,7 @@ func TestSourceGapRequiresStructuredEvidenceOrLimitation(t *testing.T) {
 				gap.Limitations = []sourceLimitation{{Kind: "hidden", Detail: "unknown"}}
 			}
 			_, err := decodeSourceGap(raw(t, gap))
-			valid := kind == "valid" || kind == "semantic"
+			valid := kind == "valid" || kind == "semantic" || kind == "path_escape" || kind == "invalid_range"
 			if (err == nil) != valid {
 				t.Fatalf("gap %s: %v", kind, err)
 			}
@@ -111,8 +126,48 @@ func TestSourceGapRequiresStructuredEvidenceOrLimitation(t *testing.T) {
 	}
 }
 
+func TestSupplementInventoryPreservesUnsupportedEvidenceRequests(t *testing.T) {
+	for _, kind := range []string{"directory", "escape", "reversed_range"} {
+		t.Run(kind, func(t *testing.T) {
+			current := gateFixture(t)
+			gap := sourceGap{Description: "Unresolved dependency", MissingEvidence: "Exact file unavailable", Kind: "missing_dependency", RequestedEvidence: []requestedEvidence{{Path: "internal/inspect/", Ranges: []evidenceRange{{Start: 0, End: 1}}}}, Limitations: []sourceLimitation{}}
+			if kind == "escape" {
+				gap.RequestedEvidence[0].Path = "../caller.go"
+			} else if kind == "reversed_range" {
+				gap.RequestedEvidence[0].Path = "caller.go"
+				gap.RequestedEvidence[0].Ranges[0] = evidenceRange{Start: 5, End: 1}
+			}
+			replacePayload(t, &current.Tasks[0], func(p *payload) {
+				var r record
+				if err := json.Unmarshal(p.Record, &r); err != nil {
+					t.Fatal(err)
+				}
+				r.Gaps = []json.RawMessage{raw(t, gap)}
+				p.Record = raw(t, r)
+			})
+			original := raw(t, current.Tasks[0].Result.Payload)
+			requests, err := collectSupplementRequests(current, "run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(requests.Requests) != 1 || requests.Requests[0].SourceHash != current.Tasks[0].Result.Payload.Hash || !equalJSON(raw(t, requests.Requests[0].RequestedEvidence), raw(t, gap.RequestedEvidence)) || !equalJSON(original, raw(t, current.Tasks[0].Result.Payload)) {
+				t.Fatal("inventory changed a source request instead of retaining it for a typed materialization limitation")
+			}
+		})
+	}
+}
+
 func TestSupplementReportAuditsIncrementalEvidenceWithoutErasingSources(t *testing.T) {
-	current := supplementGateFixture(t)
+	for _, invalidRequest := range []bool{false, true} {
+		t.Run(map[bool]string{false: "materialized", true: "invalid_request"}[invalidRequest], func(t *testing.T) {
+			testSupplementReportAudit(t, invalidRequest)
+		})
+	}
+}
+
+func testSupplementReportAudit(t *testing.T, invalidRequest bool) {
+	t.Helper()
+	current := supplementGateFixtureWithRequest(t, invalidRequest)
 	var source record
 	var sourcePayload payload
 	if err := json.Unmarshal(current.Tasks[0].Result.Payload.Value, &sourcePayload); err != nil {
@@ -130,7 +185,12 @@ func TestSupplementReportAuditsIncrementalEvidenceWithoutErasingSources(t *testi
 		p.Record = raw(t, critique)
 	})
 	var outcomes []supplementOutcome
-	producer := current.Tasks[len(current.Tasks)-2]
+	var producer task
+	for _, item := range current.Tasks {
+		if item.ContractID == "prepare-review-supplement" {
+			producer = item
+		}
+	}
 	if err := json.Unmarshal(producer.Result.RuntimeOutputs["supplement_outcomes"], &outcomes); err != nil {
 		t.Fatal(err)
 	}
@@ -154,9 +214,35 @@ func TestSupplementReportAuditsIncrementalEvidenceWithoutErasingSources(t *testi
 		}
 		p.SupplementOutcomes = raw(t, outcomes)
 		p.GapResolutions[0].ResolvingTaskID = "22"
+		if invalidRequest {
+			p.GapResolutions[0].Status = "retained"
+			p.GapResolutions[0].ResolvingTaskID = ""
+			p.GapResolutions[0].Evidence = []string{}
+		}
 	})
-	current.Tasks[4].EvidenceFrom = append(current.Tasks[4].EvidenceFrom, "22")
+	if !invalidRequest {
+		current.Tasks[4].EvidenceFrom = append(current.Tasks[4].EvidenceFrom, "22")
+	}
 	setFixtureInventory(t, &current)
+	// Exercise the native-output to runtime-bound report contract, including
+	// nonempty limitations; an empty list cannot reveal an extra array layer.
+	schema, _ := contractSchema(t, "report-v2.json")
+	var outcomeValue any
+	if err := json.Unmarshal(raw(t, outcomes), &outcomeValue); err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Properties["supplement_outcomes"].Validate(outcomeValue); err != nil {
+		t.Fatalf("native supplement outcomes violate the report binding: %v", err)
+	}
+	if invalidRequest {
+		row := outcomeValue.([]any)[0].(map[string]any)
+		limitations := row["limitations"]
+		row["limitations"] = []any{limitations}
+		if err := schema.Properties["supplement_outcomes"].Validate(outcomeValue); err == nil {
+			t.Fatal("nested limitations accepted instead of the native flat contract")
+		}
+		row["limitations"] = limitations
+	}
 	if _, _, err := verify(current, "run-1"); err != nil {
 		t.Fatalf("complete supplemental handoff: %v", err)
 	}

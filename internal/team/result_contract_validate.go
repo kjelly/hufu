@@ -507,9 +507,12 @@ func resultContractPromptSection(ref *ResultContractRef, compiled *CompiledResul
 			}
 		}
 		for _, binding := range compiled.runtimeInputs {
-			if binding.SourceKind == "runtime_media" {
+			switch binding.SourceKind {
+			case "workset_binding":
+				fmt.Fprintf(b, "The runtime supplies `%s` from this child's receipt-verified frozen workset binding `%s`. Omit this field entirely; submit semantic decisions only.\n", binding.Target, binding.Output)
+			case "runtime_media":
 				fmt.Fprintf(b, "The runtime supplies `%s` from the receipt-verified media projection of native task `%s`. Omit this field entirely; never copy or summarize its value in the submission.\n", binding.Target, binding.SourceTask)
-			} else {
+			default:
 				fmt.Fprintf(b, "The runtime supplies `%s` from receipt-verified native task `%s` output `%s`. Omit this field entirely; never copy or summarize its value in the submission.\n", binding.Target, binding.SourceTask, binding.Output)
 			}
 		}

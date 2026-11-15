@@ -17,12 +17,16 @@ import (
 // checkpointing, embedded provider execution, and objective verification. The
 // preceding accepted review inventory is a fixture; no model is called.
 func TestTeamAuditDispatchBindsScopeAndVerifiesProviderResult(t *testing.T) {
-	t.Run("accepted", func(t *testing.T) { testTeamAuditDispatch(t, false, false) })
-	t.Run("rejected", func(t *testing.T) { testTeamAuditDispatch(t, true, false) })
-	t.Run("invalid_source", func(t *testing.T) { testTeamAuditDispatch(t, false, true) })
+	t.Run("accepted", func(t *testing.T) { testTeamAuditDispatch(t, false, false, false) })
+	t.Run("rejected", func(t *testing.T) { testTeamAuditDispatch(t, true, false, false) })
+	t.Run("invalid_source", func(t *testing.T) { testTeamAuditDispatch(t, false, true, false) })
 }
 
-func testTeamAuditDispatch(t *testing.T, rejected, invalidSource bool) {
+func TestSupplementInventoryDispatchPreservesExplicitEvidenceRanges(t *testing.T) {
+	testTeamAuditDispatch(t, false, false, true)
+}
+
+func testTeamAuditDispatch(t *testing.T, rejected, invalidSource, supplement bool) {
 	t.Helper()
 	teamDir, err := filepath.Abs("..")
 	if err != nil {
@@ -54,6 +58,27 @@ func testTeamAuditDispatch(t *testing.T, rejected, invalidSource bool) {
 		t.Fatal(err)
 	}
 	fixture := gateFixture(t)
+	if supplement {
+		replacePayload(t, &fixture.Tasks[0], func(p *payload) {
+			var source record
+			if err := json.Unmarshal(p.Record, &source); err != nil {
+				t.Fatal(err)
+			}
+			source.Gaps = []json.RawMessage{raw(t, sourceGap{Description: "Caller missing", MissingEvidence: "caller bytes", Kind: "missing_dependency", RequestedEvidence: []requestedEvidence{{Path: "caller.go", Ranges: []evidenceRange{{Start: 0, End: 5}}}}, Limitations: []sourceLimitation{}})}
+			p.Record = raw(t, source)
+		})
+		requests, err := collectSupplementRequests(fixture, "run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var outputs map[string]any
+		if err := json.Unmarshal(raw(t, map[string]any{"review_supplement_requests": requests}), &outputs); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := team.CanonicalizeRuntimeOutputs(outputs); err != nil {
+			t.Fatalf("native Go supplement serialization: %v", err)
+		}
+	}
 	if invalidSource {
 		fixture.Tasks[3].Result.Status = "success"
 	}
@@ -88,10 +113,14 @@ func testTeamAuditDispatch(t *testing.T, rejected, invalidSource bool) {
 	// These are current-run accepted fixture tasks, not history to be reused.
 	coordinator.TaskTracker().TodoList().Restore(saved.Tasks)
 	coordinator.TaskTracker().TodoList().SetRunID("run-1")
-	output, err := coordinator.ExecuteTasks(t.Context(), []team.TaskDef{{Agent: "reviewer", ContractID: "verify-review-report", Goal: "Audit all accepted review evidence"}})
+	contractID := "verify-review-report"
+	if supplement {
+		contractID = "inventory-review-supplement-requests"
+	}
+	output, err := coordinator.ExecuteTasks(t.Context(), []team.TaskDef{{Agent: "reviewer", ContractID: contractID, Goal: "Audit all accepted review evidence"}})
 	var audit *team.TodoItem
 	for _, item := range coordinator.TaskTracker().TodoList().Items() {
-		if item.ContractID == "verify-review-report" {
+		if item.ContractID == contractID {
 			audit = item
 		}
 	}
@@ -112,6 +141,16 @@ func testTeamAuditDispatch(t *testing.T, rejected, invalidSource bool) {
 	}
 	if audit == nil || audit.Status != team.TaskDone || audit.RunInputSnapshotID != snapshot.ID || audit.VerifyResult == nil || audit.VerifyResult.ExitCode != 0 || audit.ExecutionReceipt == nil || audit.ExecutionReceipt.RunInputSnapshotID != snapshot.ID {
 		t.Fatalf("audit=%+v output=%s", audit, output)
+	}
+	if supplement {
+		var requests supplementRequests
+		if err := json.Unmarshal(raw(t, audit.TypedResult.RuntimeOutputs["review_supplement_requests"]), &requests); err != nil {
+			t.Fatal(err)
+		}
+		if len(requests.Requests) != 1 || len(requests.Requests[0].RequestedEvidence) != 1 || len(requests.Requests[0].RequestedEvidence[0].Ranges) != 1 || requests.Requests[0].RequestedEvidence[0].Ranges[0] != (evidenceRange{Start: 0, End: 5}) {
+			t.Fatalf("supplement inventory lost explicit ranges: %#v", requests)
+		}
+		return
 	}
 	if audit.TypedResult.RuntimeOutputs["review_report_verification"] == nil {
 		t.Fatal("audit produced no verified runtime output")

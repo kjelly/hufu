@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json/v2"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -165,6 +167,7 @@ func TestHufuCodeReviewEmptyCritiqueOwnsSource(t *testing.T) {
 			source.Status = TaskDone
 			source.TypedResult = &TaskResult{TaskID: source.ID, Status: TaskResultStatusSuccess, StructuredPayload: payload}
 			item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "critic", ResultContract: &criticRef, EvidenceFrom: []string{source.ID}}})[0]
+			assertCritiqueClaimsHaveOneSemanticLocation(t, c, item.ID)
 			result, rejection := c.structuredPayloadForSubmission(item.ID, []byte(`{"audit_complete":true,"record":{"kind":"critique","decisions":{}}}`))
 			if rejection != "" {
 				t.Fatal(rejection)
@@ -485,6 +488,24 @@ func TestHufuCodeReviewContractSourcesReachCritiqueAndReport(t *testing.T) {
 					}
 				}
 			})
+		}
+	}
+}
+
+func assertCritiqueClaimsHaveOneSemanticLocation(t *testing.T, c *Coordinator, taskID string) {
+	t.Helper()
+	info, err := collectionGuidanceInfo(c, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fields := slices.Sorted(maps.Keys(info.Parameters)); !slices.Equal(fields, []string{"status", "structured_payload", "summary"}) {
+		t.Fatalf("critic claims expose duplicate semantic channels: %v", fields)
+	}
+	// Even empty optional copies are rejected, rather than silently discarded.
+	for _, field := range []string{"details", "findings", "evidence", "risks", "decisions", "open_questions", "confidence"} {
+		input := fmt.Sprintf(`{"status":"blocked","summary":"missing source","%s":null}`, field)
+		if _, err := c.decodeCollectionClaims(taskID, []byte(input)); err == nil || localResultRejectionReason(err) != RepairFailureInvalidSchema {
+			t.Fatalf("undeclared outer %s was not rejected: %v", field, err)
 		}
 	}
 }

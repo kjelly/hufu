@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kjelly/hufu/internal/agent"
 )
 
 const collectedFindingSchema = `{"type":"object","additionalProperties":false,"required":["findings"],"properties":{"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["summary"],"properties":{"summary":{"type":"string"}}}}}}`
@@ -180,6 +182,9 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 	valid := `{"status":"success","summary":"review complete","findings":[{"summary":"observed finding"}],"structured_payload":{"findings":[{"summary":"observed finding"}]}}`
 	conditionalValid := strings.Replace(valid, `"structured_payload":{"findings":[{"summary":"observed finding"}]}`, `"structured_payload":{"findings":[{"summary":"observed finding","status":"unknown"}]}`, 1)
 	conditionalInvalid := strings.Replace(conditionalValid, `"status":"unknown"`, `"status":"unknown","finding_index":0`, 1)
+	const severitySchema = `{"type":"object","required":["findings"],"properties":{"findings":{"type":"array","items":{"type":"object","required":["summary","severity","review_required"],"properties":{"summary":{"type":"string"},"severity":{"type":"string","enum":["warning","info"]},"review_required":{"type":"boolean"}},"allOf":[{"if":{"properties":{"severity":{"const":"warning"}}},"then":{"properties":{"review_required":{"const":true}}}}]}}}}`
+	severityValid := strings.Replace(valid, `"structured_payload":{"findings":[{"summary":"observed finding"}]}`, `"structured_payload":{"findings":[{"summary":"observed finding","severity":"warning","review_required":true}]}`, 1)
+	severityInvalid := strings.Replace(severityValid, `"summary":"observed finding","severity":"warning","review_required":true`, `"severity":"warning","review_required":false`, 1)
 	mismatch := strings.Replace(valid, `"findings":[{"summary":"observed finding"}]`, `"findings":[{"summary":"different wording"}]`, 1)
 	richSchema := strings.Replace(collectedFindingSchema, `"summary":{"type":"string"}`, `"summary":{"type":"string"},"location":{"type":"string"},"evidence":{"type":"array","items":{"type":"string"}}`, 1)
 	richValid := `{"status":"success","summary":"review complete","findings":[{"summary":"one"},{"summary":"two"},{"summary":"three"}],"structured_payload":{"findings":[{"summary":"one","location":"a.go:1","evidence":["source-a"]},{"summary":"two","location":"b.go:2","evidence":["source-b"]},{"summary":"three","location":"c.go:3","evidence":["source-c"]}]}}`
@@ -206,12 +211,16 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 	}{
 		{name: "multiple_wrong_layers", first: string(richInvalid), second: richValid, schema: richSchema},
 		{name: "empty_response", second: valid},
+		{name: "syntax_trailing_fields", first: strings.Replace(valid, `,"findings":`, `},"findings":`, 1), second: valid},
+		{name: "syntax_repeated_rejection", first: strings.Replace(valid, `,"findings":`, `},"findings":`, 1), second: strings.Replace(valid, `,"findings":`, `},"findings":`, 1), failureReason: RepairFailureInvalidSchema},
 		{name: "ordinary_invariant_field", first: strings.Replace(valid, `"status"`, `"invariant_assessments":[],"status"`, 1), second: valid},
 		{name: "unknown_field", first: strings.Replace(valid, `"status"`, `"assumptions":[],"status"`, 1), second: valid},
 		{name: "projection_mismatch", first: mismatch, second: valid},
 		{name: "projection_budget_exhausted", first: mismatch, second: mismatch},
 		{name: "acceptance_failure", first: valid, contractFailure: true},
 		{name: "canonical_conditional", first: conditionalInvalid, second: conditionalValid, schema: collectedConditionalFindingSchema},
+		{name: "conditional_and_missing_field", first: strings.Replace(conditionalInvalid, `"summary":"observed finding","status"`, `"status"`, 1), second: conditionalValid, schema: collectedConditionalFindingSchema},
+		{name: "conditional_const_and_missing_field", first: severityInvalid, second: severityValid, schema: severitySchema},
 		{name: "canonical_conditional_budget", first: conditionalInvalid, second: conditionalInvalid, schema: collectedConditionalFindingSchema, failureReason: RepairFailureInvalidSchema},
 		{name: "forged_receipt_with_conditional", first: strings.Replace(conditionalInvalid, `"status":"success"`, `"receipt_ids":["forged-receipt"],"status":"success"`, 1), schema: collectedConditionalFindingSchema, sourceFailure: true, failureReason: RepairFailureSource},
 	} {
@@ -227,7 +236,13 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				assertCollectorResponseChannel(t, request)
+				if strings.HasPrefix(tc.name, "syntax_") {
+					if tools, _ := request["tools"].([]any); len(tools) != 0 {
+						t.Error("syntax repair exposed tools on the text channel")
+					}
+				} else {
+					assertCollectorResponseChannel(t, request)
+				}
 				n := calls.Add(1)
 				if n > 2 || ((tc.contractFailure || tc.sourceFailure) && n > 1) {
 					t.Error("unexpected repair turn")
@@ -237,7 +252,7 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 				body := tc.first
 				if n == 2 {
 					body = tc.second
-					if tc.schema == richSchema {
+					if tc.schema == richSchema || strings.HasPrefix(tc.name, "conditional_") || strings.HasPrefix(tc.name, "syntax_") {
 						var feedback *collectionFormatFeedback
 						for _, message := range request["messages"].([]any) {
 							content, _ := message.(map[string]any)["content"].(string)
@@ -252,13 +267,27 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 							}
 							var data struct {
 								Feedback *collectionFormatFeedback `json:"format_feedback"`
+								Previous string                    `json:"previous_response"`
 							}
 							if decodeErr := json.Unmarshal(raw, &data); decodeErr != nil {
 								t.Error(decodeErr)
 							}
 							feedback = data.Feedback
+							if strings.HasPrefix(tc.name, "syntax_") && data.Previous != tc.first {
+								t.Error("syntax repair changed the complete rejected response")
+							}
 						}
-						if feedback == nil || len(feedback.Issues) != 4 || feedback.Truncated {
+						wantIssues := 4
+						if strings.HasPrefix(tc.name, "conditional_") {
+							wantIssues = 2
+						}
+						if strings.HasPrefix(tc.name, "syntax_") {
+							wantIssues = 1
+							if feedback == nil || feedback.Syntax == nil || feedback.Syntax.FirstValueEnd == 0 || !strings.Contains(fmt.Sprint(request["messages"]), "premature closing braces") {
+								t.Error("syntax repair lost the broken top-level boundary")
+							}
+						}
+						if feedback == nil || len(feedback.Issues) != wantIssues || feedback.Truncated {
 							t.Errorf("incomplete repair feedback: %+v", feedback)
 						}
 					}
@@ -281,6 +310,9 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 			c, _, _, _ := resultCollectionProviderFixture(t, server.URL+"/v1", true, func(c *Coordinator) {
 				c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
 				c.session.AgentResultContracts = map[string]ResultContractRef{"worker": compiled.ref(true)}
+				if strings.HasPrefix(tc.name, "syntax_") {
+					c.session.Config.CollectorResponseChannel = agent.CollectorResponseTextJSON
+				}
 			})
 			worker := scriptWorker(textTurn("Review complete: observed finding."))
 			c.workerAgentOverride = worker
@@ -294,7 +326,7 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 			_, err = c.ExecuteTasks(t.Context(), []TaskDef{{ID: "review", Agent: "worker", Model: "ollama/test", Goal: "Review findings", SideEffect: SideEffectNone,
 				Execution: ExecutionContract{RequiresResult: true, ForbidArtifacts: true}, VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: assertions}}})
 			item := c.taskTracker.TodoList().Items()[1]
-			wantSuccess := tc.second == valid || tc.second == richValid || tc.second == conditionalValid
+			wantSuccess := tc.second == valid || tc.second == richValid || tc.second == conditionalValid || tc.second == severityValid
 			if (err == nil) != wantSuccess {
 				t.Fatalf("status=%s detail=%s error=%v", item.Status, item.Detail, err)
 			}
@@ -308,6 +340,9 @@ func TestResultCollectionRepairsClaimsWithoutRepeatingWork(t *testing.T) {
 			}
 			if wantSuccess && (item.Status != TaskDone || checkpoint.State != ResultCollectionCommitted) {
 				t.Fatal("repaired claims did not complete")
+			}
+			if tc.schema == severitySchema && (!strings.Contains(string(item.TypedResult.StructuredPayload.Value), `"severity":"warning"`) || !strings.Contains(string(item.TypedResult.StructuredPayload.Value), `"review_required":true`)) {
+				t.Fatal("repair changed severity or lost the required review flag")
 			}
 			if !wantSuccess && (item.TypedResult != nil || checkpoint.State != ResultCollectionBlocked) {
 				t.Fatal("rejected claims published success")

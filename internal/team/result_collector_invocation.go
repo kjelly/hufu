@@ -113,6 +113,9 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 		}
 		feedback.Issues = append(feedback.Issues, *checkpoint.RepairIssue)
 	}
+	if feedback != nil && feedback.Syntax != nil {
+		collectionContext += "\nJSON grammar repair: format_feedback.syntax.byte_offset is zero-based in the previous_response UTF-8 bytes; line and byte_column are one-based. first_value_end_byte_offset marks the exclusive end of an already-complete first JSON value followed by invalid trailing data. Check premature closing braces and fields outside the top-level object. Repair punctuation while preserving every claim and later field; do not discard trailing findings or evidence to make parsing succeed.\n"
+	}
 	// A first collection has no rejected response. Only repair requests need
 	// a fallback diagnostic when the original validation message is unavailable.
 	if diagnostic != "" || checkpoint.Response != nil || checkpoint.RepairIssue != nil {

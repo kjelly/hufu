@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-hufu-submission-fields": ["status", "summary", "structured_payload"],
   "type": "object",
   "properties": {
     "audit_complete": {
@@ -264,7 +265,7 @@
                 "maxItems": 32
               },
               "requires_critique": {
-                "type": "boolean"
+                "type": "boolean", "description": "Must be true for every warning or error finding. Use true for an info finding when independent critique is needed. Preserve severity and findings when repairing this field."
               },
               "detail": {
                 "type": "string",

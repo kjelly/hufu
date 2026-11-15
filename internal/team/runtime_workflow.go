@@ -881,9 +881,7 @@ func (w *runtimeWorkflow) snapshot() (Phase, map[Phase]PhaseResult, string, *Ret
 	var retryStateCopy *RetryState
 	if w.retryState != nil {
 		retryStateCopy = NewRetryState()
-		for k, v := range w.retryState.Attempts {
-			retryStateCopy.Attempts[k] = v
-		}
+		retryStateCopy.Attempts = copyRetryAttempts(w.retryState.Attempts)
 	}
 	return w.state, results, w.workspace.Root, retryStateCopy
 }
@@ -927,9 +925,7 @@ func (w *runtimeWorkflow) restore(state Phase, results map[Phase]PhaseResult, ro
 	}
 	if retryState != nil {
 		w.retryState = NewRetryState()
-		for k, v := range retryState.Attempts {
-			w.retryState.Attempts[k] = v
-		}
+		w.retryState.Attempts = copyRetryAttempts(retryState.Attempts)
 	}
 	return nil
 }

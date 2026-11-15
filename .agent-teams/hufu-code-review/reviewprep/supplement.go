@@ -35,13 +35,22 @@ type supplementGap struct {
 	Limitations       []supplementLimitation `json:"limitations"`
 }
 type frozenSupplementRequest struct {
-	SourceTaskID   string            `json:"source_task_id"`
-	SourceHash     string            `json:"source_payload_sha256"`
-	GapIndex       int               `json:"gap_index"`
-	ReviewRevision string            `json:"review_revision"`
-	Bindings       map[string]string `json:"bindings"`
-	Gap            supplementGap     `json:"gap"`
+	SourceTaskID      string                 `json:"source_task_id"`
+	SourceHash        string                 `json:"source_payload_sha256"`
+	GapIndex          int                    `json:"gap_index"`
+	ReviewRevision    string                 `json:"review_revision"`
+	Bindings          map[string]string      `json:"bindings"`
+	Description       string                 `json:"description"`
+	MissingEvidence   string                 `json:"missing_evidence"`
+	Kind              string                 `json:"kind"`
+	RequestedEvidence []supplementEvidence   `json:"requested_evidence"`
+	Limitations       []supplementLimitation `json:"limitations"`
 }
+
+func (r frozenSupplementRequest) gap() supplementGap {
+	return supplementGap{Description: r.Description, MissingEvidence: r.MissingEvidence, Kind: r.Kind, RequestedEvidence: r.RequestedEvidence, Limitations: r.Limitations}
+}
+
 type frozenSupplementRequests struct {
 	Round      int                       `json:"round"`
 	SnapshotID string                    `json:"run_input_snapshot_id"`
@@ -187,6 +196,7 @@ func materializeReviewSupplement(ctx context.Context, artifactRoot, producerRoot
 	}
 	items := []item{}
 	artifacts := []artifact{}
+	canonicalInputs := map[string]artifact{}
 	outcomes := []supplementOutcome{}
 	seen := map[string]bool{}
 	total := 0
@@ -199,7 +209,7 @@ func materializeReviewSupplement(ctx context.Context, artifactRoot, producerRoot
 			return actionResult{}, fmt.Errorf("duplicate supplement gap request")
 		}
 		seen[identity] = true
-		outcome := supplementOutcome{SourceTaskID: request.SourceTaskID, GapIndex: request.GapIndex, Kind: request.Gap.Kind, Limitations: append([]supplementLimitation{}, request.Gap.Limitations...)}
+		outcome := supplementOutcome{SourceTaskID: request.SourceTaskID, GapIndex: request.GapIndex, Kind: request.Kind, Limitations: append([]supplementLimitation{}, request.Limitations...)}
 		if len(items) >= maxItems {
 			outcome.Limitations = append(outcome.Limitations, supplementLimitation{Kind: "budget_exhausted", Detail: "The single supplement round permits at most eight items and 32 total review sources"})
 			outcomes = append(outcomes, outcome)
@@ -223,11 +233,32 @@ func materializeReviewSupplement(ctx context.Context, artifactRoot, producerRoot
 		entry.Bindings["source_gap_index"] = strconv.Itoa(request.GapIndex)
 		entry.Bindings["source_payload_sha256"] = request.SourceHash
 		entry.Bindings["reference_candidate_ids"] = "[]"
-		entry.Bindings["supplement_kind"] = request.Gap.Kind
+		entry.Bindings["supplement_kind"] = request.Kind
 		entry.Bindings["supplement_round"] = "1"
+		// Content IDs select one producer declaration. Different gaps may ask
+		// for identical bytes; reuse the first reference instead of publishing
+		// conflicting paths for that ID. Keep each gap's identity and reads.
+		for index, ref := range entry.Inputs {
+			canonical, exists := canonicalInputs[ref.ID]
+			if !exists {
+				canonicalInputs[ref.ID] = ref
+				artifacts = append(artifacts, ref)
+				continue
+			}
+			comparison := canonical
+			comparison.Path = ref.Path
+			if comparison != ref {
+				return actionResult{}, fmt.Errorf("supplement artifact %q has conflicting content metadata", ref.ID)
+			}
+			entry.Inputs[index] = canonical
+			for name, value := range entry.Bindings {
+				if value == ref.Path {
+					entry.Bindings[name] = canonical.Path
+				}
+			}
+		}
 		outcome.WorksetKey = entry.Key
 		items = append(items, entry)
-		artifacts = append(artifacts, entry.Inputs...)
 		total += len(candidate.sourceBundle) + len(candidate.evidenceInventory) + candidate.diff.Len()
 		outcomes = append(outcomes, outcome)
 	}
@@ -253,12 +284,12 @@ func prepareSupplementBatch(producerRoot string, request frozenSupplementRequest
 	fail := func(kind, detail string) (*batch, *reviewSourceSnapshot, *supplementLimitation) {
 		return nil, nil, &supplementLimitation{Kind: kind, Detail: detail}
 	}
-	switch request.Gap.Kind {
+	switch request.Kind {
 	case "unread", "truncated", "missing_dependency":
 	default:
 		return fail("invalid_request", "Only typed source evidence gaps can request supplementation")
 	}
-	if len(request.Gap.RequestedEvidence) == 0 || len(request.Gap.RequestedEvidence) > 16 {
+	if len(request.RequestedEvidence) == 0 || len(request.RequestedEvidence) > 16 {
 		return fail("invalid_request", "No bounded exact paths were requested; prose is not interpreted as a path selector")
 	}
 	manifestName := request.Bindings["frozen_source_manifest"]
@@ -303,7 +334,7 @@ func materializeSupplementBatch(sourceRoot, resolvedRoot string, frozen frozenSo
 	}
 	current := &batch{lens: "general", pathSeen: map[string]struct{}{}, sourceScopes: map[string][]tools.ArtifactByteRange{}, relatedBudget: 0}
 	selectedBytes := 0
-	for _, evidence := range request.Gap.RequestedEvidence {
+	for _, evidence := range request.RequestedEvidence {
 		clean, err := cleanSnapshotPath(evidence.Path)
 		if err != nil || filepath.ToSlash(clean) != evidence.Path || current.hasPath(evidence.Path) || evidence.Ranges == nil || len(evidence.Ranges) > 32 {
 			return fail("invalid_request", "Requested paths and byte ranges must be exact, unique and bounded")
@@ -355,8 +386,8 @@ func materializeSupplementBatch(sourceRoot, resolvedRoot string, frozen frozenSo
 		current.pathSeen[evidence.Path] = struct{}{}
 		current.sourceScopes[evidence.Path] = spans
 	}
-	fmt.Fprintf(&current.diff, "Supplement original task %s gap %d (%s). Original findings and gap remain immutable.\n", request.SourceTaskID, request.GapIndex, request.Gap.Kind)
-	fmt.Fprintf(&current.diff, "Requested evidence: %s\nMissing evidence: %s\n", request.Gap.Description, request.Gap.MissingEvidence)
+	fmt.Fprintf(&current.diff, "Supplement original task %s gap %d (%s). Original findings and gap remain immutable.\n", request.SourceTaskID, request.GapIndex, request.Kind)
+	fmt.Fprintf(&current.diff, "Requested evidence: %s\nMissing evidence: %s\n", request.Description, request.MissingEvidence)
 	current.lines = strings.Count(current.diff.String(), "\n")
 	snapshot := &reviewSourceSnapshot{root: sourceRoot, revision: frozen.Revision, baseRevision: frozen.BaseRevision, skipFrozenSource: true}
 	bundle, inventory, err := snapshot.bundleDataWithScopes("supplement", current.paths, current.sourceScopes, 0)
@@ -400,7 +431,13 @@ func verifySupplementRuntimeOutputs(task supplementTask) error {
 	if err != nil {
 		return err
 	}
-	if "sha256:"+sha256Hex(canonical) != task.Result.RuntimeOutputsHash {
+	// Runtime output receipts hash the indented canonical output map. Source
+	// structured payloads use compact JSON and retain their separate hash path.
+	var receiptBytes bytes.Buffer
+	if err := json.Indent(&receiptBytes, canonical, "", "  "); err != nil {
+		return err
+	}
+	if "sha256:"+sha256Hex(receiptBytes.Bytes()) != task.Result.RuntimeOutputsHash {
 		return fmt.Errorf("supplement prerequisite runtime output digest mismatch")
 	}
 	return nil
@@ -452,7 +489,7 @@ func validateSupplementSources(tasks []supplementTask, requests frozenSupplement
 				return err
 			}
 			a, _ := json.Marshal(gap)
-			b, _ := json.Marshal(request.Gap)
+			b, _ := json.Marshal(request.gap())
 			c, _ := json.Marshal(task.Binding.Bindings)
 			d, _ := json.Marshal(request.Bindings)
 			if string(a) != string(b) || string(c) != string(d) {

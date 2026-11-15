@@ -400,6 +400,39 @@ func LatestSuccessfulExecutionReceipt(item *TodoItem, runID string) *ExecutionRe
 	return latestSuccessfulExecutionReceipt(item, runID)
 }
 
+// AmbiguousSuccessfulExecutionReceipts counts competing successful producer
+// identities without confusing an admitted retry with parallel candidates.
+// Earlier known occurrences are superseded only when the existing winner
+// proves the task's current lifecycle occurrence. Unknown legacy occurrences
+// and a mismatched winner retain the conservative whole-run check.
+func AmbiguousSuccessfulExecutionReceipts(item *TodoItem, runID string) (bool, int) {
+	if item == nil || runID == "" {
+		return false, 0
+	}
+	currentOccurrence := 0
+	if winner := latestSuccessfulExecutionReceipt(item, runID); winner != nil &&
+		winner.OccurrenceAttempt > 0 && winner.OccurrenceAttempt == item.Retries+1 {
+		currentOccurrence = winner.OccurrenceAttempt
+	}
+	seen := make(map[string]bool)
+	add := func(receipt ExecutionReceipt) {
+		if receipt.RunID != runID || !receipt.Succeeded() || strings.TrimSpace(receipt.TranscriptRef) == "" {
+			return
+		}
+		if currentOccurrence > 0 && receipt.OccurrenceAttempt > 0 && receipt.OccurrenceAttempt < currentOccurrence {
+			return
+		}
+		seen[receipt.ModelExecutionID+"\x00"+receipt.TranscriptRef] = true
+	}
+	for _, receipt := range item.ExecutionReceipts {
+		add(receipt)
+	}
+	if item.ExecutionReceipt != nil {
+		add(*item.ExecutionReceipt)
+	}
+	return len(seen) > 1, len(seen)
+}
+
 // latestSuccessfulExecutionReceipt returns runner-owned transcript evidence for
 // a completed task. Retries are searched newest-first so a stale failed attempt
 // cannot satisfy the final task evidence requirement.

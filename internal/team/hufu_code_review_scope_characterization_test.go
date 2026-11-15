@@ -221,8 +221,28 @@ func TestHufuCodeReviewRepairExampleSatisfiesResultSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := validateStructuredResultPayload(compiled, ref, payload); err != nil {
-		t.Fatalf("repair example violates compiled result schema: %v; example=%s", err, raw)
+	session.Workspace = t.TempDir()
+	c := newTestCoordinator(t, withCoordinatorWorkspace(session.Workspace))
+	c.session = session
+	_, source := runtimeWorksetProducerFixture(t, c, []byte(`{"schema_version":3,"items":[{"key":"unit-0000","bindings":{"key":"unit-0000","lens":"general","review_revision":"frozen","reference_candidate_ids":"[]"}}]}`))
+	children, err := c.expandFanOutTasks([]TaskDef{{ID: "example", Agent: "reviewer", FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "seed", Artifact: source.ID}, GoalTemplate: "Review {key}"}}})
+	if err != nil || len(children) != 1 {
+		t.Fatalf("expand example: %v", err)
+	}
+	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", ResultContract: &ref, WorksetBinding: children[0].WorksetBinding}})[0]
+	receipts, err := buildWorksetReceipts(children, []string{item.ID}, c.executionRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item.WorksetReceipt = receipts[item.WorksetBinding.WorksetID]
+	modelRecord := example["structured_payload"].(map[string]any)["record"].(map[string]any)
+	for _, field := range []string{"workset_key", "review_revision", "lens"} {
+		if _, present := modelRecord[field]; present {
+			t.Fatalf("repair example asks the model to supply runtime-owned %s", field)
+		}
+	}
+	if _, rejection := c.structuredPayloadForSubmission(item.ID, payload); rejection != "" {
+		t.Fatalf("repair example fails ordinary runtime assembly/admission: %s; example=%s", rejection, raw)
 	}
 }
 
@@ -535,13 +555,28 @@ func TestHufuCodeReviewReferenceScopeReachesWorkerPromptAndSubmission(t *testing
 			if parent.FanOut == nil {
 				t.Fatal("missing fan-out contract")
 			}
-			parent.FanOut = &FanOutSpec{Source: "manifest.json", GoalTemplate: parent.FanOut.GoalTemplate}
-			writeWorksetManifest(t, session.Workspace, `{"schema_version":3,"items":[{"key":"unit-0000","bindings":{"key":"unit-0000","lens":"documentation-risk","review_revision":"frozen","reference_candidate_ids":"[]"}},{"key":"unit-0001","bindings":{"key":"unit-0001","lens":"documentation-risk","review_revision":"frozen","reference_candidate_ids":"[\"ref-000000\"]"}}]}`)
-			c := &Coordinator{session: session, taskTracker: NewTaskTracker(), executionRunID: "run-scope"}
+			c := newTestCoordinator(t, withCoordinatorWorkspace(session.Workspace))
+			c.session = session
+			_, source := runtimeWorksetProducerFixture(t, c, []byte(`{"schema_version":3,"items":[{"key":"unit-0000","bindings":{"key":"unit-0000","lens":"documentation-risk","review_revision":"frozen","reference_candidate_ids":"[]"}},{"key":"unit-0001","bindings":{"key":"unit-0001","lens":"documentation-risk","review_revision":"frozen","reference_candidate_ids":"[\"ref-000000\"]"}}]}`))
+			parent.FanOut = &FanOutSpec{SourceArtifact: FactRef{TaskID: "seed", Artifact: source.ID}, GoalTemplate: parent.FanOut.GoalTemplate}
 			children, err := c.expandFanOutTasks([]TaskDef{parent})
 			if err != nil {
 				t.Fatal(err)
 			}
+			var specs []TodoSpec
+			for _, child := range children {
+				specs = append(specs, TodoSpec{Agent: child.Agent, Desc: child.Goal, ResultContract: child.ResultContract, WorksetBinding: child.WorksetBinding})
+			}
+			items := c.taskTracker.TodoList().AddBatch(specs)
+			var ids []string
+			for _, item := range items {
+				ids = append(ids, item.ID)
+			}
+			receipts, err := buildWorksetReceipts(children, ids, c.executionRunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			items[0].WorksetReceipt = receipts[children[0].WorksetBinding.WorksetID]
 			for i, child := range children {
 				ctx, err := CompileWorkerContext(t.Context(), WorkerContextInput{Goal: child.Goal, TaskDef: child, ModelContext: ModelContextSpec{ContextWindow: 16384, MaxOutputTokens: 256, SafetyMarginTokens: 64}})
 				if err != nil {
@@ -550,13 +585,13 @@ func TestHufuCodeReviewReferenceScopeReachesWorkerPromptAndSubmission(t *testing
 				if !strings.Contains(ctx.Prompt, "Assigned reference_candidate_ids="+child.WorksetBinding.Bindings["reference_candidate_ids"]) || strings.Contains(ctx.Prompt, "{reference_candidate_ids}") {
 					t.Fatalf("scope missing from actual compiled prompt: %s", ctx.Prompt)
 				}
-				item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: child.Agent, Desc: child.Goal, ResultContract: child.ResultContract, WorksetBinding: child.WorksetBinding}})[0]
+				item := items[i]
 				makePayload := func(include bool) []byte {
 					refs := []any{}
 					if include {
 						refs = append(refs, map[string]any{"reference_id": "ref-000000", "kind": "deleted", "rationale": "The assigned source records scratch removal", "evidence": []string{"sha256-" + strings.Repeat("a", 64)}, "finding_index": nil, "gap_index": nil})
 					}
-					data, err := json.Marshal(map[string]any{"record": map[string]any{"kind": "review", "review_revision": "frozen", "workset_key": child.WorksetBinding.ItemKey, "lens": "documentation-risk", "findings": []any{}, "gaps": []any{}, "invariant_assessments": []any{}, "reference_assessments": refs}})
+					data, err := json.Marshal(map[string]any{"record": map[string]any{"kind": "review", "findings": []any{}, "gaps": []any{}, "invariant_assessments": []any{}, "reference_assessments": refs}})
 					if err != nil {
 						t.Fatal(err)
 					}

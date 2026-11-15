@@ -27,7 +27,31 @@ func declaredGoSymbols(filename string, data []byte) map[string]struct{} {
 	for _, declaration := range parsed.Decls {
 		switch current := declaration.(type) {
 		case *ast.FuncDecl:
-			add(current.Name.Name)
+			if current.Recv == nil {
+				add(current.Name.Name)
+			} else {
+				// Method names such as Error and Unwrap are shared by unrelated
+				// types. Match the receiver identity instead of treating every
+				// selector with the same method name as a caller of this file.
+				for _, receiver := range current.Recv.List {
+					typeExpr := receiver.Type
+					for typeExpr != nil {
+						switch value := typeExpr.(type) {
+						case *ast.StarExpr:
+							typeExpr = value.X
+						case *ast.IndexExpr:
+							typeExpr = value.X
+						case *ast.IndexListExpr:
+							typeExpr = value.X
+						case *ast.Ident:
+							add(value.Name)
+							typeExpr = nil
+						default:
+							typeExpr = nil
+						}
+					}
+				}
+			}
 		case *ast.GenDecl:
 			for _, spec := range current.Specs {
 				switch value := spec.(type) {

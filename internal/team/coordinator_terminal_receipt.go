@@ -47,15 +47,16 @@ func (c *Coordinator) persistSuccessfulCoordinatorTaskReceipt(todoID, producer s
 	zero := 0
 	finishedAt := time.Now().UTC()
 	receipt := &ExecutionReceipt{
-		RunID:            runID,
-		TaskID:           todoID,
-		Attempt:          attempt,
-		ModelExecutionID: contextModelExecutionID(todoID, producer, "coordinator-runtime"),
-		StartedAt:        startedAt.UTC(),
-		FinishedAt:       finishedAt,
-		ExitCode:         &zero,
-		ProducerID:       producer,
-		TranscriptRef:    transcriptRef.ID,
+		RunID:             runID,
+		TaskID:            todoID,
+		Attempt:           attempt,
+		OccurrenceAttempt: c.taskAttempt(todoID),
+		ModelExecutionID:  contextModelExecutionID(todoID, producer, "coordinator-runtime"),
+		StartedAt:         startedAt.UTC(),
+		FinishedAt:        finishedAt,
+		ExitCode:          &zero,
+		ProducerID:        producer,
+		TranscriptRef:     transcriptRef.ID,
 	}
 	if item := c.todoItemByID(todoID); item != nil {
 		receipt.RunInputSnapshotID = item.RunInputSnapshotID

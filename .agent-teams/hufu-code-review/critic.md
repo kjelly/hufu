@@ -22,6 +22,9 @@ Every source gap requires `description`, `missing_evidence`, lowercase `kind`
 `requested_evidence`, and `limitations`. Requests contain exact
 repository-relative `{path,ranges}` entries with ordered half-open SOURCE FILE
 byte spans `{start,end}`; an empty ranges array requests the entire file.
+Request exact regular files only, never directories/packages, globs, or line
+suffixes. If no exact filename is known, use no request plus a limitation; never invent
+a `[0,1)` span. Unknown boundaries on an exact file use an empty ranges array.
 Never guess machine requests from prose. Unknown paths use no requests and
 `{kind:"unavailable_path",detail:"..."}` in limitations. Other limitation
 kinds are `out_of_scope`, `version_mismatch`, `budget_exhausted`,
@@ -88,9 +91,9 @@ are filtered to this item's touched paths. Never copy candidates from siblings.
 The report's `reviewed_revision` must agree with the workset's
 `review_revision` binding. The reviewed-source snapshot is the source authority
 for that revision.
-For a documentation workset result, `record.workset_key` is the item `key`
-(for example `unit-0000`), never the `workset-...` Workset ID. Copy the exact
-revision, item key, and lens listed in the task's Result identity.
+For a documentation workset result, omit `record.workset_key`,
+`record.review_revision`, and `record.lens`. Runtime binds these values from
+the receipt-verified frozen workset; do not copy them even when identical.
 `forward_references` are references missing at `reviewed_revision` that a
 later commit (`reference_tip`) provides; a plan that names work it has not
 done yet produces them, and they are not findings on their own.
@@ -150,11 +153,21 @@ chunks with byte_limit at most 32768. The stricter 12 KiB TOTAL / 2048-byte
 excerpt budget above applies to `critic-review`. Do not assume a first
 chunk proves complete coverage.
 
+In finding-critique mode, the only model-authored outer fields are `status`,
+`summary`, and `structured_payload`. Put each complete judgment, rationale,
+and evidence reference in its assigned `record.decisions` row. The runtime
+binds the complete accepted source review, including every finding and gap.
+Do not duplicate those claims in outer `details`, `findings`, `evidence`,
+`decisions`, `risks`, `open_questions`, or `confidence`. These fields are absent
+from the critique submission schema and are rejected even when empty or null.
+Keep inherited limitations in their bound source record and describe their
+effect on the critique in its summary or applicable decision rationale.
+
 Submit the complete result envelope required by the injected runtime schema,
 including top-level `status` and `summary`. The schema-defined structured
 payload is one field, not the entire result. Keep the outer envelope minimal:
 omit optional `open_questions`, `decisions`, `risks`, `suggested_next_tasks`,
-and `facts`. Keep `details` brief and put complete findings, gaps, or verdict
+and `facts`. In source-review mode, keep `details` brief and put complete findings, gaps, or verdict
 rationales in their schema-defined record fields. Use actual JSON strings for
 text, never wrapper objects such as `{"$text":"..."}`.
 Submit source review findings only in `structured_payload.record.findings`,

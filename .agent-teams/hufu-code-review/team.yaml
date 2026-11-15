@@ -18,6 +18,10 @@ spec:
   workspace: workspace
   goal-mode: outcome
   execution-profile: fresh-session
+  # Return complete claims through the data-only response function. Its single
+  # result argument contains status, summary and structured_payload; it has no
+  # executable handler. Canonical validation and the two-turn budget still apply.
+  collector-response-channel: function
   # Memory learning stays off. Every review task runs in the verify phase,
   # which receives only memory explicitly activated for verify, so reviews
   # never apply learned knowledge and stay independent of earlier findings;
@@ -432,7 +436,7 @@ spec:
         source-artifact:
           task_id: produce-workset
           artifact: primary review workset manifest
-        goal-template: 'Review primary workset item {key} with the {lens} lens. Result identity: record.workset_key="{key}", record.review_revision="{review_revision}", record.lens="{lens}". The item key is distinct from the Workset ID. Assigned reference_candidate_ids={reference_candidate_ids}. Return exactly these IDs in record.reference_assessments, in this order; an empty list requires []. Write every invariant summary in at most 300 characters (the runtime rejects more than 1000) and use the identical text in invariant_assessments and record.invariant_assessments.'
+        goal-template: 'Review primary workset item {key} with the {lens} lens. Assigned revision={review_revision}, key={key}, lens={lens}; runtime binds record identity, so omit record.workset_key, record.review_revision and record.lens from submissions. The item key is distinct from the Workset ID. Assigned reference_candidate_ids={reference_candidate_ids}. Return exactly these IDs in record.reference_assessments, in this order; an empty list requires []. Write every invariant summary in at most 300 characters (the runtime rejects more than 1000) in record.invariant_assessments only; runtime projects the outer invariant_assessments. Set requires_critique=true for every warning or error finding.'
       execution:
         requires-result: true
         requires-grounded-result: true
@@ -478,7 +482,7 @@ spec:
         source-artifact:
           task_id: produce-workset
           artifact: documentation review workset manifest
-        goal-template: 'Review routine documentation workset item {key} with the {lens} lens. Result identity: record.workset_key="{key}", record.review_revision="{review_revision}", record.lens="{lens}". The item key is distinct from the Workset ID. Assigned reference_candidate_ids={reference_candidate_ids}. Return exactly these IDs in record.reference_assessments, in this order; an empty list requires [].'
+        goal-template: 'Review routine documentation workset item {key} with the {lens} lens. Assigned revision={review_revision}, key={key}, lens={lens}; runtime binds record identity, so omit record.workset_key, record.review_revision and record.lens from submissions. The item key is distinct from the Workset ID. Assigned reference_candidate_ids={reference_candidate_ids}. Return exactly these IDs in record.reference_assessments, in this order; an empty list requires [].'
       execution:
         requires-result: true
         requires-grounded-result: true
@@ -506,7 +510,7 @@ spec:
         source-artifact:
           task_id: produce-workset
           artifact: documentation escalation workset manifest
-        goal-template: 'Adversarially review escalated documentation workset item {key} with the {lens} lens. Result identity: record.workset_key="{key}", record.review_revision="{review_revision}", record.lens="{lens}". The item key is distinct from the Workset ID. Assigned reference_candidate_ids={reference_candidate_ids}. Return exactly these IDs in record.reference_assessments, in this order; an empty list requires [].'
+        goal-template: 'Adversarially review escalated documentation workset item {key} with the {lens} lens. Assigned revision={review_revision}, key={key}, lens={lens}; runtime binds record identity, so omit record.workset_key, record.review_revision and record.lens from submissions. The item key is distinct from the Workset ID. Assigned reference_candidate_ids={reference_candidate_ids}. Return exactly these IDs in record.reference_assessments, in this order; an empty list requires [].'
       execution:
         requires-result: true
         requires-grounded-result: true
@@ -596,7 +600,7 @@ spec:
         source-artifact:
           task_id: prepare-review-supplement
           artifact: supplemental review workset manifest
-        goal-template: 'Review supplemental workset item {key} for original task {source_task_id} gap {source_gap_index} ({supplement_kind}); this is the only supplement round. Result identity: record.workset_key="{key}", record.review_revision="{review_revision}", record.lens="{lens}". Read all required source artifact ranges. Assigned reference_candidate_ids={reference_candidate_ids}. Preserve original accepted findings and gaps; provide only this incremental review. Byte coverage is not semantic understanding.'
+        goal-template: 'Review supplemental workset item {key} for original task {source_task_id} gap {source_gap_index} ({supplement_kind}); this is the only supplement round. Assigned revision={review_revision}, key={key}, lens={lens}; runtime binds record identity, so omit record.workset_key, record.review_revision and record.lens from submissions. Read all required source artifact ranges. Assigned reference_candidate_ids={reference_candidate_ids}. Preserve original accepted findings and gaps; provide only this incremental review. Byte coverage is not semantic understanding.'
       execution:
         requires-result: true
         requires-grounded-result: true

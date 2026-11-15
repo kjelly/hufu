@@ -112,6 +112,9 @@ func projectResultSchema(root map[string]any, guidance bool) map[string]any {
 				result[key] = value
 			}
 		}
+		if guidance {
+			appendVisibleLogicalGuidance(schema, result, depth, &nodes)
+		}
 		return result
 	}
 	projected := project(root, 1, make(map[string]bool))
@@ -125,6 +128,107 @@ func projectResultSchema(root map[string]any, guidance bool) map[string]any {
 		return nil
 	}
 	return projected
+}
+
+func appendVisibleLogicalGuidance(schema, result map[string]any, depth int, nodes *int) {
+	// Preserve logical rules as a unit: retaining an if without its then (or
+	// an incomplete anyOf) gives misleading instructions. Rules mentioning
+	// hidden runtime fields remain canonical validation only.
+	logical := make(map[string]any)
+	for _, key := range []string{"allOf", "anyOf", "oneOf", "if", "then", "else", "not"} {
+		if value, exists := schema[key]; exists {
+			logical[key] = value
+		}
+	}
+	if resultGuidanceConstraintVisible(logical, result, depth, nodes) {
+		for key, value := range logical {
+			result[key] = value
+		}
+	}
+}
+
+// Check complete scalar logical branches against the projected visible shape.
+// Never partially project a branch: unsupported keywords, unresolved references
+// and composite/hidden properties make the whole group unsuitable for prompt
+// guidance. Composite collections can be replaced by keyed model decisions or
+// contain runtime-owned values. Provider descriptors stay portable separately.
+func resultGuidanceConstraintVisible(value any, shape map[string]any, depth int, nodes *int) bool {
+	*nodes++
+	if depth > maxDynamicSchemaDepth || *nodes > maxDynamicSchemaNodes {
+		return false
+	}
+	if _, ok := value.(bool); ok {
+		return true
+	}
+	schema, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	properties, _ := shape["properties"].(map[string]any)
+	for key, value := range schema {
+		switch key {
+		case "allOf", "anyOf", "oneOf":
+			branches, ok := value.([]any)
+			if !ok {
+				return false
+			}
+			for _, branch := range branches {
+				if !resultGuidanceConstraintVisible(branch, shape, depth+1, nodes) {
+					return false
+				}
+			}
+		case "if", "then", "else", "not":
+			if !resultGuidanceConstraintVisible(value, shape, depth+1, nodes) {
+				return false
+			}
+		case "properties":
+			children, ok := value.(map[string]any)
+			if !ok {
+				return false
+			}
+			for name, child := range children {
+				visible, ok := properties[name].(map[string]any)
+				typeName, _ := visible["type"].(string)
+				if !ok || typeName == "" || typeName == "object" || typeName == "array" || !resultGuidanceConstraintVisible(child, visible, depth+1, nodes) {
+					return false
+				}
+			}
+		case "required":
+			names, ok := value.([]any)
+			if !ok {
+				return false
+			}
+			for _, name := range names {
+				name, ok := name.(string)
+				if !ok || properties[name] == nil {
+					return false
+				}
+			}
+		case "items", "additionalProperties":
+			return false
+		case "const":
+			switch value.(type) {
+			case map[string]any, []any:
+				return false
+			}
+		case "enum":
+			values, ok := value.([]any)
+			if !ok {
+				return false
+			}
+			for _, value := range values {
+				switch value.(type) {
+				case map[string]any, []any:
+					return false
+				}
+			}
+		default:
+			if !resultSchemaKeyword(key, true) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func resultSchemaKeyword(keyword string, guidance bool) bool {

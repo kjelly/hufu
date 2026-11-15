@@ -53,6 +53,41 @@ func TestResultCollectionFormatFeedback(t *testing.T) {
 	}
 }
 
+func TestResultCollectionSyntaxFeedbackLocatesBrokenBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw         string
+		line, column, end int
+	}{
+		{"trailing fields", `{"status":"success"},"summary":"saved"}`, 1, 21, 20},
+		{"multiline Unicode", "{\n\"summary\":\"證據\",\n\"status\":]}", 3, 10, 0},
+		{"incomplete object", `{"status":`, 1, 11, 0},
+		{"duplicate key", `{"status":true,"status":false}`, 1, 16, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := tc.raw
+			feedback := resultCollectionFormatFeedback([]byte(tc.raw), fantasy.ToolInfo{})
+			data, err := json.Marshal(feedback)
+			if err != nil || len(data) > maxCollectionFeedbackBytes {
+				t.Fatal("syntax feedback exceeds its bound")
+			}
+			var decoded struct {
+				Syntax *struct {
+					ByteOffset    int `json:"byte_offset"`
+					Line          int `json:"line"`
+					ByteColumn    int `json:"byte_column"`
+					FirstValueEnd int `json:"first_value_end_byte_offset"`
+				} `json:"syntax"`
+			}
+			if err := json.Unmarshal(data, &decoded); err != nil || decoded.Syntax == nil {
+				t.Fatal("invalid JSON feedback lost the parser location")
+			}
+			if decoded.Syntax.Line != tc.line || decoded.Syntax.ByteColumn != tc.column || decoded.Syntax.FirstValueEnd != tc.end || decoded.Syntax.ByteOffset < 0 || decoded.Syntax.ByteOffset > len(tc.raw) || tc.raw != before {
+				t.Fatalf("incorrect parser location or changed response: %s", data)
+			}
+		})
+	}
+}
+
 func TestResultCollectionFormatFeedbackReportsEveryBoundViolation(t *testing.T) {
 	info := fantasy.ToolInfo{Parameters: map[string]any{
 		"assessments": map[string]any{"type": "array", "items": map[string]any{

@@ -1039,7 +1039,8 @@ retryLoop:
 		if persistScopeReceipt {
 			committedScopeReceipt := &ExecutionReceipt{
 				RunID: runID, TaskID: todoID, Attempt: attempt, ProducerID: agentName,
-				ArtifactScope: cloneArtifactAccessScope(attemptArtifactScope),
+				OccurrenceAttempt: c.taskAttempt(todoID),
+				ArtifactScope:     cloneArtifactAccessScope(attemptArtifactScope),
 			}
 			if err := c.setAttemptReceipt(todoID, committedScopeReceipt); err != nil {
 				closeTranscript()
@@ -3149,12 +3150,13 @@ func (c *Coordinator) materializeCheckpointedProtocolRepair(item *TodoItem, agen
 	}
 
 	receipt := ExecutionReceipt{
-		RunID:      c.executionRunID,
-		TaskID:     item.ID,
-		Attempt:    1,
-		ProducerID: agentName,
-		StartedAt:  time.Now(),
-		FinishedAt: time.Now(),
+		RunID:             c.executionRunID,
+		TaskID:            item.ID,
+		Attempt:           1,
+		OccurrenceAttempt: c.taskAttempt(item.ID),
+		ProducerID:        agentName,
+		StartedAt:         time.Now(),
+		FinishedAt:        time.Now(),
 	}
 	if item.ExecutionReceipt != nil {
 		receipt = cloneExecutionReceipt(item.ExecutionReceipt)
@@ -3230,12 +3232,13 @@ func (c *Coordinator) persistProtocolRepairPreparationFailure(item *TodoItem, ag
 		return fmt.Errorf("protocol repair preparation receipt requires task and error")
 	}
 	receipt := ExecutionReceipt{
-		RunID:      c.executionRunID,
-		TaskID:     item.ID,
-		Attempt:    1,
-		ProducerID: agentName,
-		StartedAt:  time.Now(),
-		FinishedAt: time.Now(),
+		RunID:             c.executionRunID,
+		TaskID:            item.ID,
+		Attempt:           1,
+		OccurrenceAttempt: c.taskAttempt(item.ID),
+		ProducerID:        agentName,
+		StartedAt:         time.Now(),
+		FinishedAt:        time.Now(),
 	}
 	if item.ExecutionReceipt != nil {
 		receipt = cloneExecutionReceipt(item.ExecutionReceipt)

@@ -21,6 +21,9 @@ type taskEventPayload struct {
 	Status            string                  `json:"status"`
 	Desc              string                  `json:"desc,omitempty"`
 	Agent             string                  `json:"agent,omitempty"`
+	Retries           int                     `json:"retries,omitzero"`
+	Attempt           int                     `json:"attempt,omitzero"`
+	ResetForRetry     bool                    `json:"reset_for_retry,omitzero"`
 	Advances          []string                `json:"advances,omitempty"`
 	ExecutionReceipts []team.ExecutionReceipt `json:"execution_receipts,omitempty"`
 }

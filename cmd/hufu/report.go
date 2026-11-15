@@ -568,28 +568,8 @@ func itemHasReceiptsFromAnotherRun(item *team.TodoItem, runID string) bool {
 }
 
 func itemHasAmbiguousCurrentRunReceipts(item *team.TodoItem, runID string) bool {
-	if item == nil || runID == "" {
-		return false
-	}
-	seen := make(map[string]bool)
-	count := 0
-	for _, receipt := range item.ExecutionReceipts {
-		if receipt.RunID != runID || !receipt.Succeeded() {
-			continue
-		}
-		identity := receipt.ModelExecutionID + "\x00" + receipt.TranscriptRef
-		if !seen[identity] {
-			seen[identity] = true
-			count++
-		}
-	}
-	if item.ExecutionReceipt != nil && item.ExecutionReceipt.RunID == runID && item.ExecutionReceipt.Succeeded() {
-		identity := item.ExecutionReceipt.ModelExecutionID + "\x00" + item.ExecutionReceipt.TranscriptRef
-		if !seen[identity] {
-			count++
-		}
-	}
-	return count > 1
+	ambiguous, _ := team.AmbiguousSuccessfulExecutionReceipts(item, runID)
+	return ambiguous
 }
 
 //nolint:gocyclo // report rendering intentionally covers all execution projections.

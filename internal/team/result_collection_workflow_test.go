@@ -17,6 +17,61 @@ import (
 	"github.com/kjelly/hufu/internal/tools"
 )
 
+func TestResultCollectionRepairsRuntimeWorksetFieldsWithoutRepeatingWork(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			_, _ = fmt.Fprint(w, `{"model":"test","parameters":"num_ctx 131072","model_info":{"general.architecture":"qwen2","qwen2.context_length":131072},"capabilities":["completion","tools"]}`)
+			return
+		}
+		var request map[string]any
+		if err := json.UnmarshalRead(r.Body, &request); err != nil {
+			t.Error(err)
+			return
+		}
+		assertCollectorResponseChannel(t, request)
+		n := calls.Add(1)
+		body := `{"status":"success","summary":"decision from original work","structured_payload":{"record":{"decision":true}}}`
+		if n == 1 {
+			body = strings.Replace(body, `"decision":true`, `"decision":true,"identity":"model-reconstructed"`, 1)
+		} else if n != 2 {
+			t.Error("collector exceeded its repair budget")
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "data: {\"id\":\"claims\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", body)
+	}))
+	t.Cleanup(server.Close)
+	compiled, err := CompileResultContractDocument("assigned.json", []byte(runtimeWorksetInputSchema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _, _, _ := resultCollectionProviderFixture(t, server.URL+"/v1", true, func(c *Coordinator) {
+		c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
+		c.session.AgentResultContracts = map[string]ResultContractRef{"worker": compiled.ref(true)}
+	})
+	c.providerBoundaryStart = func(context.Context, string) error { return nil }
+	c.delegatedTasks = make(map[string]int)
+	testTaskCache(c).entries = make(map[string][]cachedTaskEntry)
+	worker := scriptWorker(textTurn("Decision true from the completed work."))
+	c.workerAgentOverride = worker
+	_, manifest := runtimeWorksetProducerFixture(t, c, []byte(`{"schema_version":1,"items":[{"key":"assigned-child","bindings":{"identity":"frozen-value"}}]}`))
+	_, err = c.ExecuteTasks(t.Context(), []TaskDef{{ID: "evaluate", Agent: "worker", Model: "ollama/test", SideEffect: SideEffectNone,
+		Execution: ExecutionContract{RequiresResult: true},
+		FanOut:    &FanOutSpec{SourceArtifact: FactRef{TaskID: "seed", Artifact: manifest.ID}, GoalTemplate: "Evaluate {identity}"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := c.taskTracker.TodoList().Items()
+	item := items[len(items)-1]
+	cp := currentResultCollection(item)
+	if worker.Calls() != 1 || calls.Load() != 2 || cp == nil || cp.State != ResultCollectionCommitted || cp.TurnsUsed != 2 || item.Status != TaskDone {
+		t.Fatalf("work=%d collections=%d state=%s checkpoint=%+v", worker.Calls(), calls.Load(), item.Status, cp)
+	}
+	if item.TypedResult == nil || !strings.Contains(string(item.TypedResult.StructuredPayload.Value), `"identity":"frozen-value"`) || !strings.Contains(string(item.TypedResult.StructuredPayload.Value), `"decision":true`) {
+		t.Fatal("repair lost the work decision or reconstructed runtime identity")
+	}
+}
+
 func TestResultCollectionCompletesBoundWorksetWithResultContract(t *testing.T) {
 	var workCalls, collectionCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

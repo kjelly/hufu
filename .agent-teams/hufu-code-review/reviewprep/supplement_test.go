@@ -23,31 +23,33 @@ func frozenSupplementFixture(t *testing.T) (string, frozenSupplementRequest) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return producer, frozenSupplementRequest{SourceTaskID: "3", SourceHash: strings.Repeat("a", 64), ReviewRevision: "frozen", Bindings: map[string]string{"frozen_source_manifest": frozen.Path, "frozen_source_sha256": frozen.SHA256, "frozen_source_root": snapshot.frozenRoot}, Gap: supplementGap{Kind: "missing_dependency", Description: "Caller missing", MissingEvidence: "source.go", RequestedEvidence: []supplementEvidence{{Path: "source.go", Ranges: []tools.ArtifactByteRange{}}}, Limitations: []supplementLimitation{}}}
+	return producer, frozenSupplementRequest{SourceTaskID: "3", SourceHash: strings.Repeat("a", 64), ReviewRevision: "frozen", Bindings: map[string]string{"frozen_source_manifest": frozen.Path, "frozen_source_sha256": frozen.SHA256, "frozen_source_root": snapshot.frozenRoot}, Kind: "missing_dependency", Description: "Caller missing", MissingEvidence: "source.go", RequestedEvidence: []supplementEvidence{{Path: "source.go", Ranges: []tools.ArtifactByteRange{}}}, Limitations: []supplementLimitation{}}
 }
 
 func TestSupplementUsesExactFrozenSourceAndRejectsInvalidRequests(t *testing.T) {
-	for _, kind := range []string{"valid", "missing", "escape", "version", "content", "range", "semantic", "budget", "no_request"} {
+	for _, kind := range []string{"valid", "missing", "directory", "escape", "version", "content", "range", "semantic", "budget", "no_request"} {
 		t.Run(kind, func(t *testing.T) {
 			producer, request := frozenSupplementFixture(t)
 			remaining := maxSupplementBytes
 			switch kind {
 			case "missing":
-				request.Gap.RequestedEvidence[0].Path = "missing.go"
+				request.RequestedEvidence[0].Path = "missing.go"
+			case "directory":
+				request.RequestedEvidence[0].Path = "internal/inspect/"
 			case "escape":
-				request.Gap.RequestedEvidence[0].Path = "../source.go"
+				request.RequestedEvidence[0].Path = "../source.go"
 			case "version":
 				request.ReviewRevision = "newer"
 			case "content":
 				writeFile(t, filepath.Join(producer, request.Bindings["frozen_source_root"], "source.go"), "changed")
 			case "range":
-				request.Gap.RequestedEvidence[0].Ranges = []tools.ArtifactByteRange{{Start: 0, End: 999}}
+				request.RequestedEvidence[0].Ranges = []tools.ArtifactByteRange{{Start: 0, End: 999}}
 			case "semantic":
-				request.Gap.Kind = "semantic_uncertainty"
+				request.Kind = "semantic_uncertainty"
 			case "budget":
 				remaining = 1
 			case "no_request":
-				request.Gap.RequestedEvidence = nil
+				request.RequestedEvidence = nil
 			}
 			candidate, _, limitation := prepareSupplementBatch(producer, request, remaining)
 			if kind == "valid" {
@@ -56,6 +58,8 @@ func TestSupplementUsesExactFrozenSourceAndRejectsInvalidRequests(t *testing.T) 
 				}
 			} else if candidate != nil || limitation == nil || limitation.Kind == "" {
 				t.Fatalf("invalid request materialized: %v", limitation)
+			} else if (kind == "directory" || kind == "escape" || kind == "range") && limitation.Kind != "invalid_request" {
+				t.Fatalf("unsafe request lacked its typed rejection: %v", limitation)
 			}
 		})
 	}
@@ -79,7 +83,7 @@ func TestSupplementRoundIsBoundedAndPreservesGapIdentity(t *testing.T) {
 		t.Fatal("single round exceeded its item bound or lost gaps")
 	}
 	for index, outcome := range outcomes {
-		if outcome.SourceTaskID != request.SourceTaskID || outcome.GapIndex != index || outcome.Kind != request.Gap.Kind {
+		if outcome.SourceTaskID != request.SourceTaskID || outcome.GapIndex != index || outcome.Kind != request.Kind {
 			t.Fatal("original gap identity changed")
 		}
 		if index >= maxSupplementItems && (outcome.WorksetKey != "" || len(outcome.Limitations) != 1 || outcome.Limitations[0].Kind != "budget_exhausted") {
@@ -90,17 +94,37 @@ func TestSupplementRoundIsBoundedAndPreservesGapIdentity(t *testing.T) {
 	if len(m.Items) != maxSupplementItems {
 		t.Fatal("manifest exceeded round bound")
 	}
-	for _, entry := range m.Items {
-		assertRequiredArtifactInputs(t, root, entry)
-	}
+	assertSupplementDeclarations(t, root, result, m)
 	if _, err := materializeReviewSupplement(t.Context(), root, producer, scopeAttestation{}, requests, maxSupplementItems); err == nil {
 		t.Fatal("second publication reused nonempty output")
 	}
 }
 
+func assertSupplementDeclarations(t *testing.T, root string, result actionResult, m manifest) {
+	t.Helper()
+	declarations := map[string]artifact{}
+	for _, ref := range result.Artifacts {
+		if _, exists := declarations[ref.ID]; exists {
+			t.Fatal("repeated content has multiple producer declarations")
+		}
+		declarations[ref.ID] = ref
+	}
+	for _, entry := range m.Items {
+		assertRequiredArtifactInputs(t, root, entry)
+		for _, ref := range entry.Inputs {
+			if ref != declarations[ref.ID] {
+				t.Fatal("workset input differs from its canonical producer declaration")
+			}
+			if ref.Kind == "review_evidence_inventory" && entry.Bindings["evidence_inventory"] != ref.Path {
+				t.Fatal("workset evidence binding retained a noncanonical alias")
+			}
+		}
+	}
+}
+
 func TestSupplementUnavailableEvidenceKeepsLimitationsWithoutDispatch(t *testing.T) {
 	producer, request := frozenSupplementFixture(t)
-	request.Gap.RequestedEvidence[0].Path = "not-retained.go"
+	request.RequestedEvidence[0].Path = "not-retained.go"
 	root := t.TempDir()
 	result, err := materializeReviewSupplement(t.Context(), root, producer, scopeAttestation{}, frozenSupplementRequests{Round: 1, Requests: []frozenSupplementRequest{request}}, maxSupplementItems)
 	if err != nil {
@@ -122,8 +146,24 @@ func TestSupplementUnavailableEvidenceKeepsLimitationsWithoutDispatch(t *testing
 }
 
 func TestEmbeddedSupplementUsesReceiptBoundFrozenRequests(t *testing.T) {
+	for _, kind := range []string{"valid", "directory", "escape", "range"} {
+		t.Run(kind, func(t *testing.T) { testEmbeddedSupplementUsesReceiptBoundFrozenRequests(t, kind) })
+	}
+}
+
+func testEmbeddedSupplementUsesReceiptBoundFrozenRequests(t *testing.T, kind string) {
+	t.Helper()
 	root := t.TempDir()
 	producer, request := frozenSupplementFixture(t)
+	request.RequestedEvidence[0].Ranges = []tools.ArtifactByteRange{{Start: 0, End: 5}}
+	switch kind {
+	case "directory":
+		request.RequestedEvidence[0].Path = "internal/inspect/"
+	case "escape":
+		request.RequestedEvidence[0].Path = "../source.go"
+	case "range":
+		request.RequestedEvidence[0].Ranges[0].End = 999
+	}
 	producerRoot := filepath.Join(root, "runtime", "runs", "run-1", "actions", "original")
 	if err := os.MkdirAll(filepath.Dir(producerRoot), 0755); err != nil {
 		t.Fatal(err)
@@ -133,7 +173,10 @@ func TestEmbeddedSupplementUsesReceiptBoundFrozenRequests(t *testing.T) {
 	}
 	requestedScope := lastNScope(1)
 	scope := scopeAttestation{Requested: requestedScope, RequestedInputHash: scopeInputDigest(requestedScope), Satisfied: true, Resolved: resolvedScope{Base: "base", Head: "frozen"}}
-	sourcePayload := map[string]any{"record": map[string]any{"review_revision": "frozen", "gaps": []supplementGap{request.Gap}}}
+	sourcePayload := map[string]any{"record": map[string]any{"review_revision": "frozen", "gaps": []supplementGap{request.gap()}}}
+	if kind == "valid" {
+		sourcePayload["record"].(map[string]any)["gaps"] = []supplementGap{request.gap(), request.gap()}
+	}
 	payloadBytes, err := json.Marshal(sourcePayload)
 	if err != nil {
 		t.Fatal(err)
@@ -144,6 +187,11 @@ func TestEmbeddedSupplementUsesReceiptBoundFrozenRequests(t *testing.T) {
 	}
 	request.SourceHash = sha256Hex(canonicalPayload)
 	requests := frozenSupplementRequests{Round: 1, SnapshotID: "inputs", Requests: []frozenSupplementRequest{request}}
+	if kind == "valid" {
+		duplicate := request
+		duplicate.GapIndex = 1
+		requests.Requests = append(requests.Requests, duplicate)
+	}
 	actionTask := func(id, contract, action string, outputs map[string]any) map[string]any {
 		data, err := json.Marshal(outputs)
 		if err != nil {
@@ -163,7 +211,7 @@ func TestEmbeddedSupplementUsesReceiptBoundFrozenRequests(t *testing.T) {
 		}
 		return map[string]any{"ID": id, "Status": "done", "contract_id": contract, "run_input_snapshot_id": "inputs", "execution_receipt": map[string]any{"run_id": "run-1", "task_id": id, "attempt": 1, "action_invocation_id": action, "runtime_outputs_hash": digest, "producer_id": "reviewer", "model_execution_id": "model-execution", "transcript_ref": "transcript"}, "VerifyResult": map[string]any{"exit_code": 0, "fingerprint": "verified"}, "typed_result": map[string]any{"status": "success", "runtime_outputs": canonical, "runtime_outputs_hash": digest}}
 	}
-	original := actionTask("1", "produce-workset", "original", map[string]any{"scope": scope})
+	original := actionTask("1", "produce-workset", "original", map[string]any{"scope": scope, "wide_counter": json.Number("9007199254740993")})
 	inventory := actionTask("2", "inventory-review-supplement-requests", "inventory", map[string]any{"review_supplement_requests": requests})
 	sourceTask := actionTask("3", "review-primary-workset", "", nil)
 	sourceTask["run_input_snapshot_id"] = ""
@@ -217,9 +265,35 @@ func TestEmbeddedSupplementUsesReceiptBoundFrozenRequests(t *testing.T) {
 	if err := json.Unmarshal(result.Stdout, &output); err != nil {
 		t.Fatal(err)
 	}
-	if output.Outputs["item_count"] != float64(1) {
+	wantItems := float64(2)
+	if kind != "valid" {
+		wantItems = 0
+		var outcomes []supplementOutcome
+		encoded, err := json.Marshal(output.Outputs["supplement_outcomes"])
+		if err != nil || json.Unmarshal(encoded, &outcomes) != nil || len(outcomes) != 1 || outcomes[0].WorksetKey != "" || len(outcomes[0].Limitations) != 1 || outcomes[0].Limitations[0].Kind != "invalid_request" {
+			t.Fatalf("unsafe request lost its typed limitation: %s", result.Stdout)
+		}
+	}
+	if output.Outputs["item_count"] != wantItems {
 		t.Fatalf("native supplement failed: %s", result.Stdout)
 	}
+	if kind == "valid" {
+		m := readManifest(t, filepath.Join(staging, "supplement", "workset-manifest.json"))
+		assertSupplementDeclarations(t, staging, output, m)
+		if len(m.Items) != 2 || m.Items[0].Bindings["source_gap_index"] != "0" || m.Items[1].Bindings["source_gap_index"] != "1" {
+			t.Fatal("canonical content reuse merged distinct gap identities")
+		}
+	}
+	// Preserve exact runtime output numbers, and reject changed bytes even when
+	// the task and receipt still claim the original hash.
+	originalOutputs := original["typed_result"].(map[string]any)["runtime_outputs"].(map[string]any)
+	originalOutputs["wide_counter"] = json.Number("9007199254740992")
+	save()
+	result, err = golangruntime.Execute(t.Context(), "", program, envelope, env, 1<<20, 16<<10)
+	if err == nil || !strings.Contains(string(result.Stderr), "runtime output digest mismatch") {
+		t.Fatalf("changed runtime output escaped receipt validation: %v %s", err, result.Stderr)
+	}
+	originalOutputs["wide_counter"] = json.Number("9007199254740993")
 	// Reusing a request after its accepted source identity changes must fail.
 	sourceTask["typed_result"].(map[string]any)["structured_payload"].(map[string]any)["sha256"] = strings.Repeat("b", 64)
 	save()

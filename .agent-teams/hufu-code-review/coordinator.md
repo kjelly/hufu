@@ -71,8 +71,12 @@ Dispatch the fixed contracts in this order:
    without reconstructing paths, receipt IDs, hashes, or snapshot grants.
    If any accepted gap is `unread`, `truncated`, or `missing_dependency`,
    dispatch exactly one `reviewer` action with
-   `contract_id="inventory-review-supplement-requests"`, then exactly one
-   `reviewer` action with `contract_id="prepare-review-supplement"`, then
+   `contract_id="inventory-review-supplement-requests"` AND exactly one
+   `reviewer` action with `contract_id="prepare-review-supplement"` in the SAME
+   `agent` call. The static dependency orders inventory before preparation;
+   dispatching either contract alone is rejected before work starts. Use:
+   `{"tasks":[{"agent":"reviewer","contract_id":"inventory-review-supplement-requests","goal":"Inventory accepted typed evidence gaps."},{"agent":"reviewer","contract_id":"prepare-review-supplement","goal":"Prepare supplement worksets from the native inventory."}]}`.
+   After that batch completes, dispatch
    `reviewer` with `contract_id="review-supplement-workset"` only when preparation
    reports `item_count > 0`. An empty manifest is never dispatched. The runtime
    expands the native manifest; never manually select items or copy request

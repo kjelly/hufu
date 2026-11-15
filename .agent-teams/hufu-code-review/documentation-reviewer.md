@@ -27,6 +27,9 @@ Every gap has `description`, `missing_evidence`, exact lowercase `kind`,
 `[{path:"exact/repository-relative/path",ranges:[{start:0,end:100}]}]`,
 using ordered half-open SOURCE FILE byte coordinates, not artifact offsets.
 `ranges: []` requests a whole file. Never extract paths by guessing prose.
+Paths name exact regular files, never directories/packages, globs, or line
+suffixes. If only a package is known, request nothing and retain the limitation.
+Never invent a `[0,1)` span; an exact file with unknown boundaries uses `[]`.
 If no exact path is available, retain an empty request array and a limitation
 `{kind:"unavailable_path",detail:"..."}`. Other limitation kinds are
 `out_of_scope`, `version_mismatch`, `budget_exhausted`, and `invalid_request`.
@@ -147,9 +150,9 @@ characters; the runtime rejects a summary over 1000, and a rejected copy can
 fail the whole review. Put longer supporting analysis in result details.
 
 The static workset contract also requires `structured_payload.record`:
-- `kind: review`, and `review_revision`, `workset_key`, `lens` copied exactly
-  from the injected workset bindings. `workset_key` is the item `key` (for
-  example `unit-0000`), never the `workset-...` Workset ID;
+- `kind: review`; omit `review_revision`, `workset_key`, and `lens` from
+  `record`. Runtime binds them from the receipt-verified frozen workset;
+  never copy them, even when the values match the task context;
 - `findings`: the sole findings array, with `summary`, `detail`, `severity`,
   changed `location`, observed opaque `evidence` refs, and `requires_critique`;
 - `requires_critique: true` for every `error` or `warning`, and for an `info`

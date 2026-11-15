@@ -5,6 +5,32 @@ synthesizes all results, and audits the final inventory before acceptance.
 All review-specific adapters and schemas are owned by this team. The runtime
 supports side-effect-free verification actions through its generic phase gate.
 
+Reviewer schemas describe `requires_critique` directly: every warning/error
+finding requires `true`; info findings may also request independent critique.
+This domain rule stays with the team, including the report's embedded review
+schema. Repair must preserve findings and severity. Write invariant assessments
+only in `record.invariant_assessments`; the runtime projects the outer envelope.
+
+The reviewer role is reusable across the primary and distinct supplemental
+worksets. Its successful primary review cannot lock out the bounded supplement
+round. Workset receipts still reject re-expansion of the same workset; retry
+or recovery targets its existing children. Documentation reviewer and synthesizer
+retain their one-shot role policy. Submit the supplement inventory and prepare
+contracts in one batch; their static edge supplies the execution order.
+
+Review identity schemas admit both the bounded primary keys (`unit-0000` through
+`unit-0031`) and the single supplement round (`supplement-0000` through
+`supplement-0007`). Use the current frozen item key, including for supplemental
+results. Artifact directory names and the source review's original key do not
+identify the new result. The native handoff still requires exact equality with
+the current binding; admitting both key families does not permit substitution.
+The review schemas bind `record.workset_key`, `review_revision`, and `lens`
+through generic `workset_binding` runtime inputs. Workers and collectors omit
+these fields, including identical copies. Runtime verifies the immutable
+manifest and expansion receipt before assembling the canonical review, and
+revalidates that same source after persistence or replay. The model supplies
+findings, gaps and assessments; it does not reconstruct fixed identity data.
+
 Each source-review contract declares an `equals_projection` assertion between
 outer `findings` and `structured_payload.record.findings`, selecting `summary`,
 `detail`, and `severity`. Counts, order, and shared fields are checked at
@@ -64,11 +90,42 @@ frozen manifest identity and requested paths. The native producer validates
 paths, ordered ranges, scope grants, source identity and byte limits before
 reading frozen bytes. Unavailable, excluded, stale, invalid or over-budget
 requests retain typed limitations. No missing source is evidence of absence.
+When different gaps materialize identical content, the producer declares that
+content ID once and reuses its canonical reference in every item's inputs and
+path bindings. Gap identities, outcomes and required reads remain separate.
+Only path aliases with identical content metadata can be reused; conflicting
+metadata fails publication. The runtime's ambiguous-declaration guard stays in
+force, including current run, task and attempt checks.
 
 `inventory-review-handoffs` inventories both original and supplemental accepted
 reviews. Their findings all require the usual independent critic coverage.
 The final report runtime-binds `supplement_outcomes` from that inventory,
 including every typed producer limitation; the model must omit this field.
+Each outcome's `limitations` is one array of `{kind, detail}` objects, matching
+the native producer and inventory. Empty and nonempty limitation arrays pass
+the same report binding; nested arrays are invalid. Up to 17 limitations retain
+the original 16 request limitations plus a materialization limitation.
+
+Result collection uses `collector-response-channel: function`. The model
+returns the complete claims object in the sole `result` argument of the
+`return_result` response function; `structured_payload` remains a field inside
+those claims. The function has no executable handler and exposes no work tools.
+The function channel avoids relying on plain-text JSON after repeated incomplete
+text responses. It does not guarantee provider conformance or repair JSON:
+malformed, mixed, or extra envelope fields remain rejected. Canonical validation,
+source receipts, runtime-owned fields, and the two-turn format budget still apply.
+Historical malformed responses lacked raw HTTP captures; their upstream origin
+remains unresolved.
+Both critique schema versions use `x-hufu-submission-fields` to expose only
+`status`, `summary`, and `structured_payload` to the model and collector.
+Every judgment, full rationale, and evidence reference belongs in its keyed
+decision row; the runtime binds the complete accepted source review. Optional
+outer copies such as `details`, `findings`, `evidence`, and `risks` are rejected,
+including null or empty values. This enforces the prompt's single location for
+critique claims without dropping source findings, inherited gaps, or decisions.
+The canonical payload, receipts, severity rules, and two-turn collection budget
+are unchanged. This narrows a team contract; it does not repair malformed JSON
+or establish the upstream cause of a historical malformed response.
 The audit re-derives request identity, outcome membership, observed resolver
 evidence and supplemental source/critic coverage. A supplemental resolver must
 bind the exact original task and gap. Original accepted records, findings and
@@ -381,6 +438,35 @@ visible evidence limitations: reviewers must report relevant gaps and cannot
 infer absent behavior from an omitted suffix. Small callers and focused tests
 still appear in full. Binary, missing, and symlink observations retain their
 existing explicit status markers.
+
+Related Go paths are a syntax-based dependency inventory, not a complete call
+graph. Same-package references use declared symbols; cross-package references
+must import the frozen module/package and select its symbols through the
+actual package name, an explicit alias, or a dot import. Nested modules retain
+their own import identity. Method dependencies use receiver type identities,
+so unrelated `Error` or `Unwrap` methods and unrelated packages' `Query` types
+do not inflate every workset. Interface dispatch and indirect calls can still
+require supplemental evidence; an unlisted caller never proves absence.
+
+The native supplement-request wire format places the accepted gap fields
+directly on each request, alongside its source task/hash, gap index, revision
+and frozen-source bindings. It does not add a `gap` wrapper: nonempty requested
+byte ranges then fit the runtime's unchanged eight-level output depth limit.
+Consumer and final audit still compare the complete gap and source grant with
+the immutable accepted record; flattening never removes ranges or limitations.
+Inventory validates the accepted gap's structure and bounds, preserving even
+unsupported evidence requests verbatim. The materializer checks exact file
+paths and byte ranges against frozen source before reading requested content;
+directory, escape, or invalid-range requests yield `invalid_request` outcomes
+without worksets. They remain visible source gaps and typed limitations in the
+report. Inventory never guesses a replacement filename, normalizes a request
+into authority, or turns such a limitation into acceptance of the code.
+Native output receipt verification uses the runtime's indented canonical JSON
+representation and preserves numeric lexemes with `UseNumber`. Accepted model
+payload hashes continue to use compact canonical JSON. These are distinct
+contracts: adapters must not substitute one hash format for the other. Offline
+supplement fixtures obtain output receipts from `CanonicalizeRuntimeOutputs`
+and reject changed output values as well as substituted source payloads.
 
 If a single primary file and indivisible diff hunk still cannot fit,
 PREPARE returns `workset_item_too_large` with observed sizes, configured limits,

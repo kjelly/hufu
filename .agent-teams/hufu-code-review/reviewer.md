@@ -43,6 +43,10 @@ limitation `{kind:"unavailable_path",detail:"..."}`. Other limitation kinds are
 `out_of_scope`, `version_mismatch`, `budget_exhausted`, and `invalid_request`.
 Use empty arrays when none apply. Semantic uncertainty may remain after every
 byte was read and does not require forced evidence or a forced conclusion.
+Request an exact regular file, never a directory/package, glob, or path with
+a line-number suffix. If only the package is known, retain an empty request
+array and the limitation. Never invent a `[0,1)` span for unavailable content;
+use an empty ranges array for an exact file whose byte boundaries are unknown.
 
 A `review-supplement-workset` task is an incremental review of one original
 accepted gap at the SAME frozen revision, not a replacement review. Read the
@@ -238,9 +242,9 @@ characters; the runtime rejects a summary over 1000, and a rejected copy can
 fail the whole review. Put longer supporting analysis in result details.
 
 The static workset contract also requires `structured_payload.record`:
-- `kind: review`, and `review_revision`, `workset_key`, `lens` copied exactly
-  from the injected workset bindings. `workset_key` is the item `key` (for
-  example `unit-0000`), never the `workset-...` Workset ID;
+- `kind: review`; omit `review_revision`, `workset_key`, and `lens` from
+  `record`. Runtime binds them from the receipt-verified frozen workset;
+  never copy them, even when the values match the task context;
 - `findings`: the sole findings array, with `summary`, `detail`, source
   `location`, observed opaque `evidence` refs, and `requires_critique`;
 - `requires_critique: true` for every `error` or `warning`, and for an `info`

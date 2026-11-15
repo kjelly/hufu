@@ -115,7 +115,7 @@
                 "maxItems": 32
               },
               "requires_critique": {
-                "type": "boolean"
+                "type": "boolean", "description": "Must be true for every warning or error finding. Use true for an info finding when independent critique is needed. Preserve severity and findings when repairing this field."
               },
               "detail": {
                 "type": "string",
@@ -583,5 +583,6 @@
   },
   "x-hufu-result-projections": {
     "findings": "/record/findings"
-  }
+  },
+  "x-hufu-runtime-inputs": [{"target":"/record/workset_key","source_kind":"workset_binding","output":"key"},{"target":"/record/review_revision","source_kind":"workset_binding","output":"review_revision"},{"target":"/record/lens","source_kind":"workset_binding","output":"lens"}]
 }

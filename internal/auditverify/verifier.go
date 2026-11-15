@@ -603,30 +603,11 @@ func verifyProvenanceDimension(runID string, runResult *team.RunResult, tasks []
 	return AuditDimensionResult{Status: AuditDimensionPass, Reason: fmt.Sprintf("%d task evidence binding(s) match their winning execution receipt", checked)}
 }
 
-// ambiguousSuccessfulReceipts mirrors cmd/hufu/report.go's
-// itemHasAmbiguousCurrentRunReceipts: it counts distinct successful producer
-// identities (model_execution_id + transcript_ref) for a task within one run.
-// More than one means no completion order or manifest binding can honestly
-// claim a single winner (spec.md §27).
+// Use the evidence owner's occurrence rule in both audit and reports. A prior
+// admitted occurrence remains history, while competing or unknown current
+// producer identities cannot justify a unique winner (spec.md §27).
 func ambiguousSuccessfulReceipts(item *team.TodoItem, runID string) (bool, int) {
-	seen := make(map[string]bool)
-	add := func(modelExecutionID, transcriptRef string) {
-		seen[modelExecutionID+"\x00"+transcriptRef] = true
-	}
-	for _, receipt := range item.ExecutionReceipts {
-		if receipt.RunID != runID || !receipt.Succeeded() {
-			continue
-		}
-		if strings.TrimSpace(receipt.TranscriptRef) == "" {
-			continue
-		}
-		add(receipt.ModelExecutionID, receipt.TranscriptRef)
-	}
-	if r := item.ExecutionReceipt; r != nil && r.RunID == runID &&
-		r.Succeeded() && strings.TrimSpace(r.TranscriptRef) != "" {
-		add(r.ModelExecutionID, r.TranscriptRef)
-	}
-	return len(seen) > 1, len(seen)
+	return team.AmbiguousSuccessfulExecutionReceipts(item, runID)
 }
 
 // verifyAcceptanceDimension checks that the persisted AcceptanceResult is

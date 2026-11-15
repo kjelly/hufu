@@ -126,6 +126,14 @@ by checkpoint or export formatting. Machine projections store compact JSON to
 preserve embedded canonical values. String and number spellings, member order,
 receipts and existing hashes remain unchanged and are validated before reuse.
 
+Successful receipt ambiguity is scoped to the admitted task occurrence when the
+canonical winning receipt's positive `occurrence_attempt` equals the durable
+task's `retries + 1`. Earlier known occurrences remain immutable history and do
+not compete with that winner. Competing producers within the current occurrence,
+unknown legacy occurrence numbers, and mismatched lifecycle counters retain the
+conservative ambiguity check. Audit certification and report diagnostics share
+this rule; it does not change canonical winning-receipt selection.
+
 New compatible local sessions use runtime result collection by default. Static
 `result-transport: runtime|tool` in team configuration or agent frontmatter is
 pinned in the execution policy; an agent override takes precedence over the

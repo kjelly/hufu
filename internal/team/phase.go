@@ -1,6 +1,8 @@
 package team
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"regexp"
 	"strings"
@@ -136,6 +138,28 @@ func NewRetryState() *RetryState {
 	}
 }
 
+// Retry counters use opaque keys: diagnostic JSON as an object member name
+// can look like a credential field to redaction, changing an integer counter
+// into a string. Keep the signature's existing grouping semantics unchanged.
+func retrySignatureKey(signature string) string {
+	sum := sha256.Sum256([]byte(signature))
+	return "rfs_" + hex.EncodeToString(sum[:])
+}
+
+// Normalize legacy diagnostic keys on copied state, without rewriting stored
+// events. Opaque keys and non-signature legacy identifiers stay unchanged.
+func copyRetryAttempts(attempts map[string]int) map[string]int {
+	result := make(map[string]int, len(attempts))
+	for key, count := range attempts {
+		var signature FailureSignature
+		if json.Unmarshal([]byte(key), &signature) == nil && signature.Phase != "" && signature.Category != "" {
+			key = retrySignatureKey(key)
+		}
+		result[key] += count
+	}
+	return result
+}
+
 // RecordFailure records a failure and returns whether it can be retried.
 func (s *RetryState) RecordFailure(e ExecutionError, maxAttempts int) bool {
 	if !e.Retryable || maxAttempts <= 0 {
@@ -144,7 +168,8 @@ func (s *RetryState) RecordFailure(e ExecutionError, maxAttempts int) bool {
 	if s.Attempts == nil {
 		s.Attempts = make(map[string]int)
 	}
-	sigKey := e.Signature().String()
+	s.Attempts = copyRetryAttempts(s.Attempts)
+	sigKey := retrySignatureKey(e.Signature().String())
 	s.Attempts[sigKey]++
 	return s.Attempts[sigKey] <= maxAttempts
 }

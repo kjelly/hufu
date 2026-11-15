@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"path"
 	"strings"
 )
 
@@ -36,7 +35,13 @@ type supplementRequest struct {
 	GapIndex       int               `json:"gap_index"`
 	ReviewRevision string            `json:"review_revision"`
 	Bindings       map[string]string `json:"bindings"`
-	Gap            sourceGap         `json:"gap"`
+	// Keep gap fields at request level so explicit ranges fit the generic
+	// runtime output depth limit without dropping any accepted source data.
+	Description       string              `json:"description"`
+	MissingEvidence   string              `json:"missing_evidence"`
+	Kind              string              `json:"kind"`
+	RequestedEvidence []requestedEvidence `json:"requested_evidence"`
+	Limitations       []sourceLimitation  `json:"limitations"`
 }
 
 type supplementRequests struct {
@@ -62,17 +67,14 @@ func decodeSourceGap(raw json.RawMessage) (sourceGap, error) {
 		return gap, fmt.Errorf("source gap lacks a structured request or limitation")
 	}
 	for _, request := range gap.RequestedEvidence {
-		if request.Path == "" || len(request.Path) > 1024 || strings.ContainsAny(request.Path, "\\\x00\n\r") || strings.HasPrefix(request.Path, "/") || path.Clean(request.Path) != request.Path || request.Path == "." || strings.HasPrefix(request.Path, "../") || request.Ranges == nil || len(request.Ranges) > 32 {
-			return gap, fmt.Errorf("invalid requested evidence path or ranges")
-		}
-		var end int64
-		for _, span := range request.Ranges {
-			if span.Start < end || span.End <= span.Start {
-				return gap, fmt.Errorf("requested evidence ranges must be ordered nonempty half-open byte spans")
-			}
-			end = span.End
+		if request.Path == "" || len(request.Path) > 1024 || request.Ranges == nil || len(request.Ranges) > 32 {
+			return gap, fmt.Errorf("requested evidence requires bounded path and range data")
 		}
 	}
+	// An accepted source can contain an unsupported path or range request.
+	// Preserve it as data: materialization validates against the frozen tree
+	// before any requested file is read, returning an invalid_request limitation
+	// rather than discarding the gap or stopping every other review source.
 	for _, limitation := range gap.Limitations {
 		switch limitation.Kind {
 		case "unavailable_path", "out_of_scope", "version_mismatch", "budget_exhausted", "invalid_request":
@@ -118,7 +120,8 @@ func collectSupplementRequests(current session, runID string) (supplementRequest
 				if gap.Kind == "semantic_uncertainty" {
 					continue
 				}
-				result.Requests = append(result.Requests, supplementRequest{SourceTaskID: item.ID, SourceHash: source.PayloadHash, GapIndex: index, ReviewRevision: r.Revision, Bindings: item.Binding.Bindings, Gap: gap})
+				result.Requests = append(result.Requests, supplementRequest{SourceTaskID: item.ID, SourceHash: source.PayloadHash, GapIndex: index, ReviewRevision: r.Revision, Bindings: item.Binding.Bindings,
+					Description: gap.Description, MissingEvidence: gap.MissingEvidence, Kind: gap.Kind, RequestedEvidence: gap.RequestedEvidence, Limitations: gap.Limitations})
 			}
 		}
 	}

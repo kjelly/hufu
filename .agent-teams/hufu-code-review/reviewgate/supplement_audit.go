@@ -97,7 +97,7 @@ func collectSupplementOutcomes(current session, runID string) ([]supplementOutco
 	byKey := map[string]frozenGapIdentity{}
 	for index, outcome := range outcomes {
 		request := requests.Requests[index]
-		if outcome.SourceTaskID != request.SourceTaskID || outcome.GapIndex != request.GapIndex || outcome.Kind != request.Gap.Kind || outcome.Limitations == nil {
+		if outcome.SourceTaskID != request.SourceTaskID || outcome.GapIndex != request.GapIndex || outcome.Kind != request.Kind || outcome.Limitations == nil {
 			return nil, fmt.Errorf("supplement outcome changed an original gap identity")
 		}
 		if outcome.WorksetKey == "" {

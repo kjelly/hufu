@@ -2,8 +2,42 @@ package team
 
 import (
 	"context"
+	"reflect"
 	"testing"
+	"time"
 )
+
+func TestCoordinatorTaskReceiptRecordsRetryOccurrence(t *testing.T) {
+	c := newTestCoordinator(t)
+	c.executionRunID = "run-coordinator-retry"
+	id := addTodo(t, c, "runtime result")
+	var prior ExecutionReceipt
+	for occurrence := 1; occurrence <= 2; occurrence++ {
+		if occurrence == 2 {
+			if err := c.CommitTaskResetForRetry(t.Context(), id, "retry the runtime result"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := c.CommitTaskTransition(t.Context(), id, TaskPending, TaskInProgress, "runtime work", "", nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.persistSuccessfulCoordinatorTaskReceipt(id, "worker", c.taskAttempt(id), time.Now(), "runtime output"); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.CommitTaskTransition(t.Context(), id, TaskInProgress, TaskDone, "runtime complete", "", nil); err != nil {
+			t.Fatal(err)
+		}
+		item := c.todoItemByID(id)
+		if item.ExecutionReceipt == nil || item.ExecutionReceipt.OccurrenceAttempt != occurrence || len(item.ExecutionReceipts) != occurrence {
+			t.Fatalf("occurrence %d receipt=%+v history=%+v", occurrence, item.ExecutionReceipt, item.ExecutionReceipts)
+		}
+		if occurrence == 1 {
+			prior = cloneExecutionReceipt(&item.ExecutionReceipts[0])
+		} else if !reflect.DeepEqual(prior, item.ExecutionReceipts[0]) {
+			t.Fatal("retry rewrote the first occurrence receipt")
+		}
+	}
+}
 
 func TestRuntimeActionPersistsTaskReceiptBeforeEvidenceManifest(t *testing.T) {
 	command := []string{"/bin/sh", "-c", `set -eu
@@ -25,7 +59,7 @@ printf '%s' '{"outputs":{"ok":true},"artifacts":[{"path":"result.txt","kind":"pr
 		t.Fatalf("task receipts = single=%#v history=%#v, want exactly one", got.ExecutionReceipt, got.ExecutionReceipts)
 	}
 	receipt := got.ExecutionReceipt
-	if receipt.RunID != "run-terminal-receipt-action" || receipt.TaskID != item.ID || receipt.Attempt != 1 || receipt.ProducerID == "" || receipt.ModelExecutionID == "" || receipt.TranscriptRef == "" || receipt.ExitCode == nil || *receipt.ExitCode != 0 {
+	if receipt.RunID != "run-terminal-receipt-action" || receipt.TaskID != item.ID || receipt.Attempt != 1 || receipt.OccurrenceAttempt != 1 || receipt.ProducerID == "" || receipt.ModelExecutionID == "" || receipt.TranscriptRef == "" || receipt.ExitCode == nil || *receipt.ExitCode != 0 {
 		t.Fatalf("successful task receipt = %#v", receipt)
 	}
 

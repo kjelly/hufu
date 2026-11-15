@@ -2,8 +2,46 @@ package team
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
+
+func TestWorkflowRetryCountersSurviveSecretLikeFailureDetails(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "new", true: "legacy"}[legacy], func(t *testing.T) {
+			c := newTestCoordinator(t)
+			store, err := NewEventStore(c.session.Workspace, "run-retry-redaction", "session-retry-redaction")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			c.eventStore = store
+			failure := ExecutionError{Phase: PhasePrepare, Component: "prepare", Category: CategoryProviderFailure, Source: "adapter", Cause: "max_review_input_tokens=200000 api_key=private-fixture-value", Retryable: true}
+			retry := NewRetryState()
+			if legacy {
+				retry.Attempts[failure.Signature().String()] = 1
+			} else if !retry.RecordFailure(failure, 1) {
+				t.Fatal("first retry denied")
+			}
+			if err := c.emitWorkflowStateChange(newWorkflowStateChangedPayload(PhasePrepare, nil, retry)); err != nil {
+				t.Fatal(err)
+			}
+			events := mustReadEvents(t, store)
+			for _, event := range events {
+				if strings.Contains(string(event.Payload), "private-fixture-value") {
+					t.Fatal("retry state persisted credential text")
+				}
+			}
+			replayed := ReduceToSessionData(events)
+			if replayed.RetryState == nil || len(replayed.RetryState.Attempts) != 1 {
+				t.Fatalf("retry counters unavailable after replay: %#v", replayed.RetryState)
+			}
+			if replayed.RetryState.RecordFailure(failure, 1) {
+				t.Fatal("event replay reset the exhausted retry allowance")
+			}
+		})
+	}
+}
 
 func newSessionStateTestCoordinator(t *testing.T, session *TeamSession) *Coordinator {
 	t.Helper()

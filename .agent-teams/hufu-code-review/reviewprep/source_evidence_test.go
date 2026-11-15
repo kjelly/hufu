@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -13,6 +14,48 @@ import (
 
 	"github.com/kjelly/hufu/internal/tools"
 )
+
+func TestRelatedGoPathsDistinguishesMethodReceivers(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "target.go"), "package sample\ntype ReviewError struct{}\nfunc (*ReviewError) Error() string { return \"review\" }\n")
+	writeFile(t, filepath.Join(root, "caller.go"), "package sample\nfunc Caller() string { return new(ReviewError).Error() }\n")
+	writeFile(t, filepath.Join(root, "unrelated.go"), "package sample\nimport \"errors\"\nfunc Unrelated() string { return errors.New(\"unrelated\").Error() }\n")
+	snapshot := &reviewSourceSnapshot{root: root, revision: "frozen"}
+	paths, err := snapshot.relatedGoPaths([]string{"target.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(paths, "caller.go") || slices.Contains(paths, "unrelated.go") {
+		t.Fatalf("receiver dependency selection = %v", paths)
+	}
+}
+
+func TestRelatedGoPathsBindsCrossPackageSymbolsToImports(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "go.mod"), "module example.test/review\n\ngo 1.27\n")
+	writeFile(t, filepath.Join(root, "target/types.go"), "package actualname\ntype Query struct{}\n")
+	files := map[string]string{
+		"target/local.go":      "package actualname\nvar Local Query\n",
+		"caller/default.go":    "package caller\nimport \"example.test/review/target\"\nvar Default actualname.Query\n",
+		"caller/alias.go":      "package caller\nimport t \"example.test/review/target\"\nvar Alias t.Query\n",
+		"caller/dot.go":        "package caller\nimport . \"example.test/review/target\"\nvar Dot Query\n",
+		"unrelated/local.go":   "package unrelated\ntype Query struct{}\n",
+		"unrelated/foreign.go": "package unrelated\nimport t \"example.test/other/target\"\nvar Foreign t.Query\n",
+	}
+	for path, data := range files {
+		writeFile(t, filepath.Join(root, path), data)
+	}
+	snapshot := &reviewSourceSnapshot{root: root, revision: "frozen"}
+	paths, err := snapshot.relatedGoPaths([]string{"target/types.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path := range files {
+		if slices.Contains(paths, path) != !strings.HasPrefix(path, "unrelated/") {
+			t.Fatalf("import-bound dependency selection = %v; path %s", paths, path)
+		}
+	}
+}
 
 func assertRequiredArtifactInputs(t *testing.T, root string, entry item) {
 	t.Helper()

@@ -303,6 +303,12 @@ leaf 也一樣。
 原文字傳輸。通常增加一次模型呼叫；格式或 schema
 不合法時最多再修復一次，共兩回合，包含中斷時已派發的回合。
 
+JSON 語法錯誤的修復回饋包含 parser 的 UTF-8 `byte_offset`（從 0 起算）、
+`line`／`byte_column`（從 1 起算）；若第一個完整 JSON 值後還有資料，另提供
+`first_value_end_byte_offset`。這些位置相對於完整的 `previous_response`，用來
+定位過早結束的物件或錯誤標點。Runtime 不會補括號、丟棄尾端欄位或改寫 claims；
+相同的無效回應仍受重複拒絕保護，格式修復預算不變。
+
 team.yaml（或 versioned manifest 的 `spec`）可選擇 collector 的資料回應通道：
 
 ```yaml
@@ -1329,7 +1335,8 @@ The runtime never discards or truncates previously observed evidence to fit.
 ]
 ```
 
-`target` 必須指向直接宣告的物件屬性，且不能與其他 runtime binding、
+`target` 必須指向宣告的物件屬性；可沿不帶額外限制的本地 `$defs` reference，
+且不能與其他 runtime binding、
 runtime-owned evidence input 或 fixed collection 重疊。`source_task` 必須是
 已宣告的 native action task。模型必須省略這些欄位；provider schema 與修復提示
 也會排除它們。本機及外部 worker 的提交皆由 runtime 核對當次 run 的成功 action
@@ -1338,6 +1345,21 @@ runtime-owned evidence input 或 fixed collection 重疊。`source_task` 必須�
 來源缺失、過期、收據不符或輸出不符合 schema 時，提交會被拒絕。儲存結果的
 驗證會重新核對綁定值，不會以較新的輸出重建歷史資料；文字與 JSON 數值不經
 模型重建或型別猜測。
+
+當資料已由當前 task 的工作集決定，可使用 `source_kind: "workset_binding"`，
+省略 `source_task`，並以 `output` 指定 frozen manifest 內的字串 binding 名稱：
+
+```json
+"x-hufu-runtime-inputs": [
+  {"target":"/record/item_key","source_kind":"workset_binding","output":"key"}
+]
+```
+
+runtime 先驗證 receipt 的當次 child mapping、來源 occurrence、manifest digest
+與 frozen bindings，再組裝值。缺少 receipt、來源過期、binding 被替換或值不合
+schema 都會拒絕提交；不會猜測預設值或將字串解析成其他型別。模型必須省略
+目標欄位，即使提供相同值也會被拒絕。儲存結果保留完整值與 hash；重開後依
+原始 receipt 和 manifest 重驗，不使用較新 producer 的資料重建歷史結果。
 
 MCP native action 的圖片成果可選擇 `source_kind: "runtime_media"`，並省略
 `output`；runtime 從獨立的 canonical media projection 綁定完整有序 blocks、
@@ -1349,7 +1371,7 @@ MCP native action 的圖片成果可選擇 `source_kind: "runtime_media"`，並�
 ]
 ```
 
-`source_kind` 僅接受 `runtime_output`、`runtime_media`；省略時沿用既有
+`source_kind` 接受 `runtime_output`、`runtime_media` 及前述 `workset_binding`；省略時沿用既有
 `runtime_output` 行為。圖片 metadata 不授予讀取 bytes 或轉送模型的權限。
 沒有凍結輸入的圖片來源只可在原 invocation 綁定；有凍結輸入的來源還須核對
 輸入 snapshot、action payload、來源 occurrence 與完整歷史收據。

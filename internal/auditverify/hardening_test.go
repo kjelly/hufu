@@ -321,7 +321,7 @@ func TestVerifyBundleRejectsUnsupportedFutureSchemaVersion(t *testing.T) {
 // with the given receipts and evidence binding so each case only has to vary
 // the one thing it's testing. ---
 
-func buildProvenanceFixture(t *testing.T, receipts []team.ExecutionReceipt, binding team.EvidenceBinding) fixture {
+func buildProvenanceFixture(t *testing.T, receipts []team.ExecutionReceipt, binding team.EvidenceBinding, resetForRetry ...bool) fixture {
 	t.Helper()
 	workspace := t.TempDir()
 	runID := "run-provenance-fixture"
@@ -332,6 +332,34 @@ func buildProvenanceFixture(t *testing.T, receipts []team.ExecutionReceipt, bind
 		t.Fatalf("new event store: %v", err)
 	}
 	defer func() { _ = store.Close() }()
+	artifactStore, err := team.NewFileArtifactStore(workspace, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifactRefs []team.ArtifactRef
+	aliases := make(map[string]string)
+	artifactIDs := make([]string, 0, len(binding.ArtifactIDs))
+	for _, id := range binding.ArtifactIDs {
+		ref, err := artifactStore.Put(t.Context(), team.PutArtifactRequest{Kind: "task_transcript", Path: id + ".txt", Content: []byte("transcript for " + id), RunID: runID, TaskID: taskID, Attempt: binding.Attempt, Agent: "worker"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		aliases[id] = ref.ID
+		artifactIDs = append(artifactIDs, ref.ID)
+		artifactRefs = append(artifactRefs, ref.ArtifactRef)
+	}
+	// Fixture aliases must resolve to real CAS IDs, so provenance tests do not
+	// pass or fail alongside an unrelated artifact-membership error.
+	binding.ArtifactIDs = artifactIDs
+	if id := aliases[binding.TranscriptRef]; id != "" {
+		binding.TranscriptRef = id
+	}
+	receipts = append([]team.ExecutionReceipt(nil), receipts...)
+	for i := range receipts {
+		if id := aliases[receipts[i].TranscriptRef]; id != "" {
+			receipts[i].TranscriptRef = id
+		}
+	}
 	mustAppend := func(event team.RunEvent) {
 		if _, err := store.AppendPersisted(event); err != nil {
 			t.Fatalf("append %s: %v", event.Type, err)
@@ -340,24 +368,16 @@ func buildProvenanceFixture(t *testing.T, receipts []team.ExecutionReceipt, bind
 
 	mustAppend(team.RunEvent{Type: "task_created", Actor: "coordinator", RunID: runID, TaskID: taskID,
 		Payload: mustJSON(t, taskEventPayload{ID: taskID, Status: "pending", Desc: "do the thing", Agent: "worker"})})
+	retries := 0
+	if len(resetForRetry) == 1 && resetForRetry[0] {
+		mustAppend(team.RunEvent{Type: "task_completed", Actor: "worker", RunID: runID, TaskID: taskID,
+			Payload: mustJSON(t, taskEventPayload{ID: taskID, Status: "done", Agent: "worker", ExecutionReceipts: receipts[:1]})})
+		retries = 1
+		mustAppend(team.RunEvent{Type: "task_created", Actor: "coordinator", RunID: runID, TaskID: taskID,
+			Payload: mustJSON(t, taskEventPayload{ID: taskID, Status: "pending", Agent: "worker", Retries: retries, Attempt: 2, ResetForRetry: true, ExecutionReceipts: receipts[:1]})})
+	}
 	mustAppend(team.RunEvent{Type: "task_completed", Actor: "worker", RunID: runID, TaskID: taskID,
-		Payload: mustJSON(t, taskEventPayload{ID: taskID, Status: "done", Desc: "do the thing", Agent: "worker", ExecutionReceipts: receipts})})
-
-	artifactStore, err := team.NewFileArtifactStore(workspace, workspace)
-	if err != nil {
-		t.Fatalf("new artifact store: %v", err)
-	}
-	var artifactRefs []team.ArtifactRef
-	for _, id := range binding.ArtifactIDs {
-		putResult, err := artifactStore.Put(context.Background(), team.PutArtifactRequest{
-			Kind: "task_transcript", Path: id + ".txt", Content: []byte("transcript for " + id),
-			RunID: runID, TaskID: taskID, Attempt: binding.Attempt, Agent: "worker",
-		})
-		if err != nil {
-			t.Fatalf("put artifact: %v", err)
-		}
-		artifactRefs = append(artifactRefs, putResult.ArtifactRef)
-	}
+		Payload: mustJSON(t, taskEventPayload{ID: taskID, Status: "done", Desc: "do the thing", Agent: "worker", Retries: retries, Attempt: retries + 1, ExecutionReceipts: receipts})})
 
 	manifest := &team.EvidenceManifest{
 		RunID: runID, Status: "accepted", ArtifactRefs: artifactRefs,
@@ -397,6 +417,50 @@ func TestVerifyWorkspaceRunAmbiguousReceiptsFailProvenance(t *testing.T) {
 	}
 	if result.Verdict != AuditVerdictFail {
 		t.Fatalf("ambiguous receipts verdict = %s, want fail", result.Verdict)
+	}
+}
+
+func TestVerifyWorkspaceRunSuccessfulRetryUsesOccurrence(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		oldAttempt int
+		reset      bool
+		competing  bool
+		bindOld    bool
+		wantPass   bool
+	}{
+		{name: "superseded success", oldAttempt: 1, reset: true, wantPass: true},
+		{name: "same occurrence competes", oldAttempt: 2, reset: true},
+		{name: "unknown legacy occurrence", reset: true},
+		{name: "no admitted reset", oldAttempt: 1},
+		{name: "competing current producer", oldAttempt: 1, reset: true, competing: true},
+		{name: "stale binding", oldAttempt: 1, reset: true, bindOld: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prior := team.ExecutionReceipt{RunID: "run-provenance-fixture", TaskID: "t1", Attempt: 1, OccurrenceAttempt: tc.oldAttempt, ModelExecutionID: "exec-a", ProducerID: "worker", ExitCode: new(0), TranscriptRef: "sha256-prior"}
+			current := team.ExecutionReceipt{RunID: prior.RunID, TaskID: prior.TaskID, Attempt: 1, OccurrenceAttempt: 2, ModelExecutionID: "exec-b", ProducerID: "worker", ExitCode: new(0), TranscriptRef: "sha256-current"}
+			receipts := []team.ExecutionReceipt{prior, current}
+			if tc.competing {
+				other := current
+				other.ModelExecutionID, other.TranscriptRef = "exec-c", "sha256-competing"
+				receipts = append(receipts, other)
+			}
+			bound := current
+			if tc.bindOld {
+				bound = prior
+			}
+			fx := buildProvenanceFixture(t, receipts, team.EvidenceBinding{RunID: bound.RunID, TaskID: bound.TaskID, Attempt: bound.Attempt, ModelExecutionID: bound.ModelExecutionID, ProducerID: bound.ProducerID, TranscriptRef: bound.TranscriptRef, ArtifactIDs: []string{bound.TranscriptRef}}, tc.reset)
+			result, err := VerifyWorkspaceRun(t.Context(), fx.workspace, fx.runID, VerifyOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (result.Provenance.Status == AuditDimensionPass) != tc.wantPass {
+				t.Fatalf("provenance=%+v findings=%+v", result.Provenance, result.Findings)
+			}
+			if tc.wantPass && (result.Completion.Status != AuditDimensionPass || result.Verdict != AuditVerdictPass) {
+				t.Fatalf("current occurrence did not certify completion: %+v", result)
+			}
+		})
 	}
 }
 

@@ -1,7 +1,11 @@
 package team
 
 import (
+	"bytes"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
+	"io"
 	"maps"
 	"slices"
 	"strconv"
@@ -19,10 +23,43 @@ type collectionSchemaHint struct {
 }
 
 type collectionFormatFeedback struct {
-	Stage     string                  `json:"stage,omitempty"`
-	Issues    []ResultSubmissionIssue `json:"issues"`
-	Objects   []collectionSchemaHint  `json:"objects,omitempty"`
-	Truncated bool                    `json:"truncated"`
+	Stage     string                    `json:"stage,omitempty"`
+	Issues    []ResultSubmissionIssue   `json:"issues"`
+	Objects   []collectionSchemaHint    `json:"objects,omitempty"`
+	Truncated bool                      `json:"truncated"`
+	Syntax    *collectionSyntaxFeedback `json:"syntax,omitempty"`
+}
+
+type collectionSyntaxFeedback struct {
+	ByteOffset    int64 `json:"byte_offset"`
+	Line          int   `json:"line"`
+	ByteColumn    int   `json:"byte_column"`
+	FirstValueEnd int64 `json:"first_value_end_byte_offset,omitzero"`
+}
+
+// Locate grammar failures without interpreting or repairing the claims. Only
+// coordinates are copied; the complete rejected response remains authoritative.
+func resultCollectionSyntaxFeedback(raw []byte) *collectionSyntaxFeedback {
+	decoder := jsontext.NewDecoder(bytes.NewReader(raw))
+	_, err := decoder.ReadValue()
+	var firstEnd int64
+	if err == nil {
+		firstEnd = decoder.InputOffset()
+		_, err = decoder.ReadToken()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+	}
+	offset := decoder.InputOffset()
+	if syntax, ok := errors.AsType[*jsontext.SyntacticError](err); ok {
+		offset = syntax.ByteOffset
+	}
+	offset = int64(max(0, min(int(offset), len(raw))))
+	prefix := raw[:offset]
+	return &collectionSyntaxFeedback{
+		ByteOffset: offset, Line: bytes.Count(prefix, []byte{'\n'}) + 1,
+		ByteColumn: len(prefix) - bytes.LastIndexByte(prefix, '\n'), FirstValueEnd: firstEnd,
+	}
 }
 
 // Feedback describes the rejected representation without changing its claims.
@@ -37,6 +74,9 @@ func resultCollectionFormatFeedback(raw []byte, info fantasy.ToolInfo) *collecti
 		return nil // Preserve the original diagnostic when schema analysis is unavailable.
 	}
 	feedback := &collectionFormatFeedback{Truncated: truncated}
+	if len(issues) == 1 && issues[0].Code == "invalid_json" {
+		feedback.Syntax = resultCollectionSyntaxFeedback(raw)
+	}
 	root := submissionSchema(info)
 	seen := make(map[string]bool)
 	for _, issue := range issues {

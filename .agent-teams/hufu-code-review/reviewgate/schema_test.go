@@ -54,6 +54,45 @@ func TestEmbeddedReviewDefinitionsMatchAuthoritativeSchema(t *testing.T) {
 	}
 }
 
+func TestReviewWorksetKeysMatchSchemaAndHandoffIdentity(t *testing.T) {
+	schema, _ := contractSchema(t, "review-v1.json")
+	for _, tc := range []struct {
+		name, assigned, submitted string
+		schemaValid, handoffValid bool
+	}{
+		{"primary", "unit-0000", "unit-0000", true, true},
+		{"supplement", "supplement-0000", "supplement-0000", true, true},
+		{"last_supplement", "supplement-0007", "supplement-0007", true, true},
+		{"beyond_supplement_bound", "supplement-0008", "supplement-0008", false, true},
+		{"substituted_primary", "supplement-0000", "unit-0000", true, false},
+		{"substituted_supplement", "supplement-0000", "supplement-0001", true, false},
+		{"workset_id", "supplement-0000", "workset-deadbeef", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			value, _, _ := schemaFixture()
+			value["workset_key"] = tc.submitted
+			candidate := map[string]any{"record": value}
+			if err := schema.Validate(candidate); (err == nil) != tc.schemaValid {
+				t.Fatalf("schema valid=%t, want %t: %v", err == nil, tc.schemaValid, err)
+			}
+			var review record
+			if err := json.Unmarshal(raw(t, value), &review); err != nil {
+				t.Fatal(err)
+			}
+			item := fixtureTask(t, "10", "review-supplement-workset", "completed_with_gaps", payload{Record: raw(t, value)}, review, nil)
+			item.Binding.Bindings["key"] = tc.assigned
+			// Schema fixture evidence is a real opaque-ID shape. Authorize the
+			// same observation so the handoff tests identity, not missing reads.
+			if err := json.Unmarshal(raw(t, map[string]any{"typed_result": map[string]any{"files_read": []map[string]string{{"path": review.Findings[0].Evidence[0]}}}}), &item); err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyReview(item, review); (err == nil) != tc.handoffValid {
+				t.Fatalf("handoff valid=%t, want %t: %v", err == nil, tc.handoffValid, err)
+			}
+		})
+	}
+}
+
 func schemaFixture() (map[string]any, map[string]any, map[string]any) {
 	review := map[string]any{"kind": "review", "review_revision": "frozen-head", "workset_key": "unit-0001", "lens": "general",
 		"reference_assessments": []any{}, "invariant_assessments": []any{}, "findings": []any{map[string]any{"summary": "Prompt-only URL protection", "detail": "A private URL can pass the configured tool restriction", "severity": "info", "location": "team.yaml:20", "evidence": []any{"sha256-" + strings.Repeat("b", 64)}, "requires_critique": true}},

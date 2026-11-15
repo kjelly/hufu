@@ -33,7 +33,7 @@ func taskProtocolRepairAttemptLimit(item *TodoItem) int {
 }
 
 func (c *Coordinator) checkpointProtocolRepairAttempt(item *TodoItem, agentName, prompt string, history []RepairAttemptProvenance, result *TaskResult, success bool, reason RepairFailureReason, runErr error) error {
-	receipt := ExecutionReceipt{RunID: c.executionRunID, TaskID: item.ID, Attempt: 1, ProducerID: agentName, StartedAt: time.Now()}
+	receipt := ExecutionReceipt{RunID: c.executionRunID, TaskID: item.ID, Attempt: 1, OccurrenceAttempt: c.taskAttempt(item.ID), ProducerID: agentName, StartedAt: time.Now()}
 	if item.ExecutionReceipt != nil {
 		receipt = cloneExecutionReceipt(item.ExecutionReceipt)
 	}

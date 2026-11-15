@@ -25,7 +25,7 @@ type WorkflowStateChangedPayload struct {
 func newWorkflowStateChangedPayload(state Phase, results map[Phase]PhaseResult, retry *RetryState) WorkflowStateChangedPayload {
 	payload := WorkflowStateChangedPayload{State: state, PhaseResults: results}
 	if retry != nil {
-		payload.RetryAttempts = retry.Attempts
+		payload.RetryAttempts = copyRetryAttempts(retry.Attempts)
 	}
 	return payload
 }
@@ -75,9 +75,7 @@ func reduceWorkflowStateChanged(session *SessionData, event RunEvent) {
 	session.WorkflowState = payload.State
 	session.PhaseResults = payload.PhaseResults
 	retry := NewRetryState()
-	for signature, attempts := range payload.RetryAttempts {
-		retry.Attempts[signature] = attempts
-	}
+	retry.Attempts = copyRetryAttempts(payload.RetryAttempts)
 	session.RetryState = retry
 }
 

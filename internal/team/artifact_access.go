@@ -506,9 +506,9 @@ func (c *Coordinator) authorizedWorksetInput(consumer *TodoItem, id string) (Art
 
 // Operator preflight preserves the rejection cause. Model-facing artifact
 // lookups retain the boolean boundary above and do not disclose storage errors.
-func (c *Coordinator) resolveAuthorizedWorksetInput(consumer *TodoItem, id string) (ArtifactRef, string, error) {
-	if c == nil || consumer == nil || consumer.WorksetBinding == nil || id == "" {
-		return ArtifactRef{}, "", fmt.Errorf("missing workset input binding")
+func (c *Coordinator) authorizedWorksetReceipt(consumer *TodoItem) (*WorksetExpansionReceipt, error) {
+	if c == nil || c.taskTracker == nil || consumer == nil || consumer.WorksetBinding == nil {
+		return nil, fmt.Errorf("missing workset input binding")
 	}
 	binding := consumer.WorksetBinding
 	visible := make([]*WorksetExpansionReceipt, 0)
@@ -519,22 +519,33 @@ func (c *Coordinator) resolveAuthorizedWorksetInput(consumer *TodoItem, id strin
 	}
 	receipts, conflicts := collectWorksetReceipts(visible)
 	if _, conflicted := conflicts[binding.WorksetID]; conflicted {
-		return ArtifactRef{}, "", fmt.Errorf("conflicting workset expansion receipts")
+		return nil, fmt.Errorf("conflicting workset expansion receipts")
 	}
 	receipt := receipts[binding.WorksetID]
 	if receipt == nil || receipt.Children[binding.ItemKey] != consumer.ID {
-		return ArtifactRef{}, "", fmt.Errorf("workset receipt does not assign this child")
+		return nil, fmt.Errorf("workset receipt does not assign this child")
 	}
 	if receipt.ParentTaskID != binding.ParentTaskID ||
 		receipt.SourceArtifactID != binding.SourceArtifactID ||
 		receipt.SourceSHA256 != binding.SourceSHA256 {
-		return ArtifactRef{}, "", fmt.Errorf("workset source identity differs from its binding")
+		return nil, fmt.Errorf("workset source identity differs from its binding")
 	}
 	if receipt.RunID != c.executionRunID || slices.ContainsFunc(binding.Inputs, func(input ArtifactRef) bool { return input.RunID != c.executionRunID }) {
 		if err := c.validateRecoveredWorksetReceipt(context.Background(), receipt, consumer); err != nil {
-			return ArtifactRef{}, "", fmt.Errorf("recovered workset receipt: %w", err)
+			return nil, fmt.Errorf("recovered workset receipt: %w", err)
 		}
 	}
+	return receipt, nil
+}
+
+func (c *Coordinator) resolveAuthorizedWorksetInput(consumer *TodoItem, id string) (ArtifactRef, string, error) {
+	if id == "" {
+		return ArtifactRef{}, "", fmt.Errorf("missing workset input binding")
+	}
+	if _, err := c.authorizedWorksetReceipt(consumer); err != nil {
+		return ArtifactRef{}, "", err
+	}
+	binding := consumer.WorksetBinding
 	for _, input := range binding.Inputs {
 		if input.ID != id || strings.TrimSpace(input.SHA256) == "" ||
 			strings.TrimSpace(input.RunID) == "" || strings.TrimSpace(input.TaskID) == "" || input.Attempt <= 0 || strings.TrimSpace(input.Agent) == "" {

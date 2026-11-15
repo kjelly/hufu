@@ -42,6 +42,9 @@ func compileResultRuntimeInputs(root map[string]any) ([]resultRuntimeInputSpec, 
 		if len(spec.SourceTask) > maxTaskResultPointerBytes || len(spec.Output) > maxTaskResultPointerBytes {
 			return nil, fmt.Errorf("runtime input %d requires bounded source_task and output names", i)
 		}
+		if spec.SourceKind != "workset_binding" && spec.SourceTask == "" {
+			return nil, fmt.Errorf("runtime input %d requires source_task", i)
+		}
 		switch spec.SourceKind {
 		case "", "runtime_output":
 			if spec.SourceTask == "" || spec.Output == "" {

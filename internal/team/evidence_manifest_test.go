@@ -48,6 +48,45 @@ func evidenceCoordinator(t *testing.T, runID string) *Coordinator {
 	return c
 }
 
+func TestAmbiguousSuccessfulExecutionReceiptsPreservesOccurrenceEvidence(t *testing.T) {
+	prior := ExecutionReceipt{RunID: "run", TaskID: "task", Attempt: 1, OccurrenceAttempt: 1, ModelExecutionID: "prior", TranscriptRef: "prior-transcript", ExitCode: new(0)}
+	current := ExecutionReceipt{RunID: "run", TaskID: "task", Attempt: 1, OccurrenceAttempt: 2, ModelExecutionID: "current", TranscriptRef: "current-transcript", ExitCode: new(0)}
+	for _, tc := range []struct {
+		name         string
+		priorAttempt int
+		retries      int
+		unknownLast  bool
+		wantCount    int
+	}{
+		{name: "known superseded occurrence", priorAttempt: 1, retries: 1, wantCount: 1},
+		{name: "same occurrence candidates", priorAttempt: 2, retries: 1, wantCount: 2},
+		{name: "unknown legacy prior", retries: 1, wantCount: 2},
+		{name: "unknown winner", priorAttempt: 1, retries: 1, unknownLast: true, wantCount: 2},
+		{name: "counter mismatch", priorAttempt: 1, wantCount: 2},
+		{name: "future receipt", priorAttempt: 3, retries: 1, wantCount: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old, latest := prior, current
+			old.OccurrenceAttempt = tc.priorAttempt
+			if tc.unknownLast {
+				latest.OccurrenceAttempt = 0
+			}
+			item := &TodoItem{Retries: tc.retries, ExecutionReceipts: []ExecutionReceipt{old, latest}, ExecutionReceipt: &latest}
+			before := string(mustJSON(t, item))
+			ambiguous, count := AmbiguousSuccessfulExecutionReceipts(item, "run")
+			if count != tc.wantCount || ambiguous != (tc.wantCount > 1) {
+				t.Fatalf("ambiguous=%t count=%d, want %d identities", ambiguous, count, tc.wantCount)
+			}
+			if string(mustJSON(t, item)) != before {
+				t.Fatal("receipt classification rewrote task or historical receipts")
+			}
+		})
+	}
+	if ambiguous, count := AmbiguousSuccessfulExecutionReceipts(nil, "run"); ambiguous || count != 0 {
+		t.Fatal("nil task has producer identities")
+	}
+}
+
 func TestArtifactStoreAndManifestFailClosedOnTamper(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "report.md")

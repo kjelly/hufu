@@ -2,8 +2,58 @@ package team
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
+
+func TestResultGuidancePreservesVisibleConditionalConstraints(t *testing.T) {
+	for _, tc := range []struct {
+		name, field string
+		visible     bool
+	}{
+		{"model_field", "review_required", true},
+		{"omitted_runtime_field", "receipt", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var schema map[string]any
+			raw := `{"type":"object","properties":{"severity":{"type":"string"},"review_required":{"type":"boolean"}},"allOf":[{"if":{"properties":{"severity":{"const":"warning"}},"required":["severity"]},"then":{"properties":{"` + tc.field + `":{"const":true}},"required":["` + tc.field + `"]}}]}`
+			if err := json.Unmarshal([]byte(raw), &schema); err != nil {
+				t.Fatal(err)
+			}
+			guidance := projectResultGuidanceSchema(schema)
+			_, retained := guidance["allOf"]
+			if retained != tc.visible {
+				t.Fatalf("conditional retained=%t, want %t: %#v", retained, tc.visible, guidance)
+			}
+			portable := projectProviderResultSchema(schema)
+			if portable["allOf"] != nil || !dynamicSchemaEligible(portable) {
+				t.Fatal("prompt constraints leaked into portable provider descriptor")
+			}
+			encoded, err := json.Marshal(guidance)
+			if err != nil || (!tc.visible && strings.Contains(string(encoded), "receipt")) {
+				t.Fatalf("omitted fields reappeared in guidance: %s, %v", encoded, err)
+			}
+		})
+	}
+}
+
+func TestResultGuidanceOmitsCompositeConditionalConstraints(t *testing.T) {
+	for _, constraint := range []string{
+		`{"then":{"properties":{"rows":{"minItems":1}}}}`,
+		`{"then":{"additionalProperties":false}}`,
+		`{"then":{"const":{"receipt":"runtime"}}}`,
+		`{"then":{"enum":[{"receipt":"runtime"}]}}`,
+	} {
+		var schema map[string]any
+		raw := `{"type":"object","properties":{"rows":{"type":"array","items":{"type":"string"}},"status":{"type":"string"}},"allOf":[` + constraint + `]}`
+		if err := json.Unmarshal([]byte(raw), &schema); err != nil {
+			t.Fatal(err)
+		}
+		if guidance := projectResultGuidanceSchema(schema); guidance["allOf"] != nil {
+			t.Fatalf("composite canonical constraint leaked into model projection: %#v", guidance)
+		}
+	}
+}
 
 func TestProviderResultSchemaPreservesNestedRequiredFields(t *testing.T) {
 	dir := t.TempDir()
