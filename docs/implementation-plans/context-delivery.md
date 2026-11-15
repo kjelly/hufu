@@ -14,6 +14,8 @@
 > Location: `docs/implementation-plans/context-delivery.md`；本次文件修訂維持現址，不搬移文件
 > Completion claim: contract correctness / synthetic fixture retrieval quality；不宣稱真實任務成功率提升
 
+> 後續另案（2026-11-14）：使用者指定 `ollama/deepseek-v4.1-flash:cloud` 並授權兩批各最多 48 次呼叫，已完成 [bounded 真實模型 A/B 與評測集校準實驗](../reference/context-query-live-evaluation-2026-11-14.md)。修正版合成任務 active 為 24/24、legacy 為 9/24；校準候選未通過保留集採用門檻，未套用 production 設定。本計畫原工作包仍是離線交付；另案結果不代表完整 live agent workflow 或正式 decision outcome 校準已驗收。
+
 ## 0. 執行範圍與順序
 
 Coding Agent 依序執行 **PR-00 → PR-01 → PR-02**。每一階段包含實作、測試、故障注入與可重現報告，不依賴人工標註真實工作負載、外部模型帳號或 production 環境。PR-02 的前置條件是 PR-01 的機器可判定 gate 通過；無須另外向使用者索取任務、模型或預算。
@@ -36,7 +38,7 @@ PR-00、PR-01 已提交且有 source-bound 離線證據；PR-02 的正式 opt-in
 
 以下項目已從實作工作包及驗收前置條件移除，不留下 Coding Agent 自行完成的待辦：
 
-- **真實模型 A/B**：需要使用者選定代表任務、模型與費用預算。依使用者選擇，本次只做離線驗證；後續另案先整理離線結果，再提出任務、模型、預算及停止條件供使用者決定。
+- **真實模型 A/B（原工作包排除，後續另案已執行）**：原先依使用者選擇只做離線驗證；使用者後續指定模型、採納合成代表任務及兩批各 48 次的呼叫上限，已完成 [2026-11-14 實驗](../reference/context-query-live-evaluation-2026-11-14.md)。實驗結果與限制獨立記錄，不改變原工作包的離線驗收範圍。
 - **Lineage 大型檢索修正**：vector 授權過濾與成本策略尚無核准架構。依使用者選擇，本次移除；後續另案比較方案與 benchmark，再決定架構。不得把 draft 架構當成本案授權，也不得為通過本案 gate 改 vector backend 或移除 overfetch guard。
 - **執行中 refresh／背景 trigger 與實驗平台**：不是本案改善 goal-only 檢索的必要工作，移除；沒有另案執行或部署待辦。
 
