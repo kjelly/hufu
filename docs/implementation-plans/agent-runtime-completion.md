@@ -2,12 +2,12 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `5bf54fd7`
+> Verified-Commit: `0b4f4eac23c0bfa1d031ef3437ff59ee31512f27`（四階段交付基準）
 > Supersedes: —
 > Superseded-By: —
-> 實作狀態：可開始分項實作；不是已完成的驗證報告。
-> 更新日期：2026-11-13
-> 程式查核基準：`5bf54fd7a9e3beac08ae4c5c165ca24ce98dc5ff`（本地 HEAD）。
+> 實作狀態：四階段程式與離線驗收均已完成；本文保留功能契約，完成證據以實作紀錄的最終結果為準，不再是待開工清單。
+> 更新日期：2026-11-15
+> 原始程式查核基準：`5bf54fd7a9e3beac08ae4c5c165ca24ce98dc5ff`；這是開工前基準，不是目前 HEAD。
 > 範圍：決策設定繼承、structured step 執行歸因、離線恢復回歸、跨 run economics 比較。
 > 進度與驗證：[實作紀錄](agent-runtime-completion-progress.md)。
 

@@ -399,4 +399,5 @@ mise run lint
   race exports 後，再清理 29 個過期 archives／索引，回收約 30 MiB。
   現行專案 exports 約 800 MiB；必要相依與快取設定保留，scratch 約 154 MiB。
 - 文件與 diff 檢查通過；本階段可提交。本計畫不需要新的 admission service、
-  結果傳輸模式或 lifecycle 重寫。另一份計畫的 WP3–WP5 與最終跨計畫整合仍未完成。
+  結果傳輸模式或 lifecycle 重寫。當時另一份計畫的 WP3–WP5 與跨計畫整合尚未完成；
+  後續已完成，最終證據見 [continuation 計畫第 25 節](session-continuation-and-derived-forks.md#25-wp5-typed-diagnostics-與最終驗收)。

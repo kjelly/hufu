@@ -2,11 +2,13 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: `5bf54fd7`
+> Verified-Commit: `0b4f4eac23c0bfa1d031ef3437ff59ee31512f27`（四階段交付基準）
 > Supersedes: —
 > Superseded-By: —
 
 規格：[Agent runtime 功能補齊](agent-runtime-completion.md)。
+
+> 目前狀態：第 1～4 階段均已完成。以下保留按時間追加的驗證歷程，中途的「尚待」「尚未完成」不代表新的待辦；完成狀態以本頁階段表與各階段最後驗證紀錄為準。真實模型實驗與隔離工程不屬於這四個工作包。
 
 ## 基線
 
@@ -31,7 +33,7 @@
 | 1 決策設定繼承 | 已完成，`e3c94b8b` | 下節 before/after、完整測試、vet、lint |
 | 2 Step 執行歸因 | 已完成，`a0eb66c2` | 下節 before/after、CAS/replay、投影、完整測試與所有 gate |
 | 3 中斷恢復回歸 | 已完成，`9f9e3def` | 下節 subprocess matrix、完整測試與所有 gate |
-| 4 跨 run economics 比較 | 已完成，本次提交 | 下節 manifest／唯讀投影、完整測試與所有 gate |
+| 4 跨 run economics 比較 | 已完成，`0b4f4eac` | 下節 manifest／唯讀投影、完整測試與所有 gate |
 
 ## 階段 1：共用決策 transport
 

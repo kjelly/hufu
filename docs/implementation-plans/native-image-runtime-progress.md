@@ -8,6 +8,8 @@
 
 依 [實作規格](native-image-runtime.md) 分階段交付，每階段驗證後獨立 commit。未通過驗收的階段不標示完成。
 
+> 目前 M0～M4 程式與離線驗證均已交付；以下是按時間保留的階段歷程，早期「尚需 M2／M3／M4」不再是待辦。Codex 真實推論、其他服務的實機驗收，以及末節 projection 並行候選仍須各自辨識，不把單次 Ollama smoke 當成這些項目的完成證據。
+
 ## Baseline
 
 - 原始碼基準：`b97ef843f440ab0cca85a8a453892ba2c4eef560`；工作樹起始無 tracked changes。
