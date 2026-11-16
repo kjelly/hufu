@@ -7,6 +7,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -64,6 +65,10 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	syncLogState()
 	if err := applyProfile(cmd); err != nil {
 		return err
+	}
+	if opts.eventFormat == "jsonl" {
+		cmd.Root().SilenceErrors = true
+		defer func() { emitJSONLCommandError(runErr) }()
 	}
 	opts.requestAcceptanceSet = cmd.Flags().Changed("request-acceptance")
 	resumeAcceptanceTimeoutSet = cmd.Flags().Changed("acceptance-timeout")
@@ -153,6 +158,9 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 		}
 		return printResultRecoveryAssessment(cmd, assessment)
 	}
+	var loadedTeams map[string]*teamContext
+	finishIdentity := beginCLIInvocation(os.Stderr, func() map[string]*teamContext { return loadedTeams })
+	defer finishIdentity()
 	activationCtx := withResumeActivation(withResumeLaunchPolicy(commandContext(cmd), source), source)
 	tc, err := loadTeamByNameWithWorkspaceBinding(activationCtx, teamName, binding, registry, opts.providerURL, opts.providerAPIKey, newPathConsent(), vars, opts.forcedSkills, opts.planMode, opts.autoSkills)
 	if err != nil {
@@ -178,11 +186,13 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	}
 	injector := newPromptInjector(nil)
 	activeCoord := new(activeCoordinator)
-	var loadedTeams map[string]*teamContext
 	defer setupPromptSignals(injector)()
 	defer setupInterruptHandler(injector, activeCoord, &loadedTeams, cancel)()
 
 	loadedTeams = map[string]*teamContext{teamName: tc}
+	bindInvocationIdentity(loadedTeams, opts.invocationID)
+	stopIdentityHeartbeat := startInvocationIdentityHeartbeat(os.Stderr, opts.invocationID, invocationIdentityHeartbeatInterval, tc.coordinator.ProviderQuotaWaiting)
+	defer stopIdentityHeartbeat()
 	if err := configureRunInputAssignments(loadedTeams); err != nil {
 		return err
 	}
@@ -275,6 +285,8 @@ func init() {
 	f.BoolVar(&opts.unattended, "unattended", false, "Run without human interaction")
 	f.BoolVar(&opts.reportMode, "report", false, "Export the saved run report to workspace/report.md")
 	f.BoolVar(&opts.noSummary, "no-summary", false, "Suppress the execution summary")
+	f.StringVar(&opts.eventFormat, "event-format", "text", "Status event format: text or jsonl")
+	registerStaticFlagCompletion(resumeCmd, "event-format", []string{"text", "jsonl"})
 	_ = resumeCmd.MarkFlagFilename("var-file")
 }
 

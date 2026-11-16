@@ -23,11 +23,9 @@ import (
 )
 
 func runTeam(cmd *cobra.Command, args []string) (runErr error) {
-	opts.invocationID = team.NewInvocationID()
 	var loadedTeams map[string]*teamContext
-	defer func() {
-		emitExecutionIdentity(os.Stderr, opts.invocationID, collectExecutionRunIdentities(loadedTeams, nil))
-	}()
+	finishIdentity := beginCLIInvocation(os.Stderr, func() map[string]*teamContext { return loadedTeams })
+	defer finishIdentity()
 	if opts.intent == "decision" && opts.eventFormat == "jsonl" {
 		decisionJSONLSequence.Store(0)
 	}

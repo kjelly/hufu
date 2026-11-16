@@ -201,6 +201,14 @@ TTY can open the team picker when no team is named; scripts should pass
 is compatibility syntax. Every command that accepts `--agent-team` also accepts
 `--team`, including the root command, `chat`, `resume`, `retry`, and `reconcile`.
 
+Execution commands print the same diagnostic identity lines to stderr:
+`Invocation ID: inv-...` and `Run ID: run-... (team: ...)`. Each execution,
+including resume, retry, reconcile, and each chat turn, has its own invocation
+identity. These lines remain available with `--quiet` or `--no-summary` and do
+not mix with the final answer on stdout. `run`, `decide`, and `resume` also
+support `--event-format jsonl` for `invocation_identity` and `run_identity`
+events. Read-only resume previews do not allocate an execution identity.
+
 An interactive exploratory run can deliver an answer without an acceptance
 contract. In a terminal, Hufu prints an explicit unverified warning and exits
 successfully once the response is delivered; the persisted run remains

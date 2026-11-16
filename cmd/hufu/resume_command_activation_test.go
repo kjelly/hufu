@@ -11,12 +11,13 @@ import (
 	"sync/atomic"
 	"testing"
 
+	inspectpkg "github.com/kjelly/hufu/internal/inspect"
 	"github.com/kjelly/hufu/internal/team"
 	workspacepkg "github.com/kjelly/hufu/internal/workspace"
 	"github.com/kjelly/hufu/internal/workspace/versionstore"
 )
 
-func TestResumeCommandActivatesVersionedBranchBeforeProvider(t *testing.T) {
+func TestExecutionCommandsPreserveIdentityAndVersionedWork(t *testing.T) {
 	oldOpts := opts
 	oldTeam, oldSearch, oldBranch, oldRun, oldTask, oldModel := resumeTeamName, resumeSearch, resumeBranch, resumeRun, resumeRepairResult, resumeRepairModel
 	t.Cleanup(func() {
@@ -131,8 +132,98 @@ func TestResumeCommandActivatesVersionedBranchBeforeProvider(t *testing.T) {
 	}
 	f.write(t, "version.txt", "B")
 	resuming.Store(true)
-	_, err = runCLI(t, "resume", "--workspace", f.control, "--branch", "main", "--run", runID, "--team", "dev", "--agent-team-search-path", search, "--provider-url", server.URL+"/v1", "--context-window", "131072", "--quiet")
-	if err != nil || calls.Load() == 0 {
-		t.Fatalf("public resume: calls=%d err=%v", calls.Load(), err)
+	var previousInvocation string
+	for _, format := range []string{"text", "jsonl"} {
+		t.Run(format, func(t *testing.T) {
+			stderr, err := os.CreateTemp(t.TempDir(), "stderr-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = stderr.Close() })
+			originalStderr := os.Stderr
+			func() {
+				os.Stderr = stderr
+				defer func() { os.Stderr = originalStderr }()
+				_, err = runCLI(t, "resume", "--workspace", f.control, "--branch", "main", "--run", runID, "--team", "dev", "--agent-team-search-path", search, "--provider-url", server.URL+"/v1", "--context-window", "131072", "--quiet", "--no-summary", "--event-format", format)
+			}()
+			if err != nil || calls.Load() == 0 {
+				t.Fatalf("public resume: calls=%d err=%v", calls.Load(), err)
+			}
+			latest, err := inspectpkg.InspectLatestRun(t.Context(), f.control)
+			if err != nil || latest == nil {
+				t.Fatalf("inspect resumed run: %v", err)
+			}
+			if !strings.HasPrefix(latest.InvocationID, "inv-") || latest.InvocationID == previousInvocation || latest.InvocationID != opts.invocationID || latest.Run.RunID == runID {
+				t.Fatalf("resume did not persist a fresh invocation/run: %+v", latest)
+			}
+			previousInvocation = latest.InvocationID
+			data, err := os.ReadFile(stderr.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			output := string(data)
+			if format == "text" {
+				for _, want := range []string{"Invocation ID: " + latest.InvocationID, "Run ID: " + latest.Run.RunID + " (team: dev)"} {
+					if !strings.Contains(output, want) {
+						t.Fatalf("resume missing shared identity output %q: %s", want, output)
+					}
+				}
+			} else {
+				var found bool
+				for line := range strings.SplitSeq(output, "\n") {
+					var event jsonStatusEvent
+					if json.Unmarshal([]byte(line), &event) == nil && event.Type == "run_identity" && event.InvocationID == latest.InvocationID && event.RunID == latest.Run.RunID && event.Team == "dev" {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("resume missing shared JSONL run identity: %s", output)
+				}
+			}
+			if workCalls.Load() != 1 {
+				t.Fatal("identity reporting replayed accepted worker work")
+			}
+		})
+	}
+	oldRecoveryTask, oldRecoveryTeam, oldRecoverySearch := targetedRecoveryTaskID, targetedRecoveryTeamName, targetedRecoverySearch
+	t.Cleanup(func() {
+		targetedRecoveryTaskID, targetedRecoveryTeamName, targetedRecoverySearch = oldRecoveryTask, oldRecoveryTeam, oldRecoverySearch
+	})
+	for _, action := range []team.TargetedRecoveryAction{team.TargetedRecoveryRetry, team.TargetedRecoveryReconcile} {
+		t.Run(string(action)+" error", func(t *testing.T) {
+			opts.eventFormat = "text"
+			targetedRecoveryTaskID, targetedRecoveryTeamName, targetedRecoverySearch = "missing-task", "dev", search
+			stderr, err := os.CreateTemp(t.TempDir(), "stderr-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = stderr.Close() })
+			originalStderr := os.Stderr
+			func() {
+				os.Stderr = stderr
+				defer func() { os.Stderr = originalStderr }()
+				captureStdout(t, func() { err = runTargetedRecoveryCommand(action) })
+			}()
+			if err == nil {
+				t.Fatal("missing recovery task must fail")
+			}
+			latest, err := inspectpkg.InspectLatestRun(t.Context(), f.control)
+			if err != nil || latest == nil {
+				t.Fatalf("inspect recovery run: %v", err)
+			}
+			if !strings.HasPrefix(latest.InvocationID, "inv-") || latest.InvocationID == previousInvocation || latest.InvocationID != opts.invocationID {
+				t.Fatalf("recovery did not persist a fresh invocation: %+v", latest)
+			}
+			previousInvocation = latest.InvocationID
+			data, err := os.ReadFile(stderr.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{"Invocation ID: " + latest.InvocationID, "Run ID: " + latest.Run.RunID + " (team: dev)"} {
+				if !strings.Contains(string(data), want) {
+					t.Fatalf("failed recovery missing shared identity %q: %s", want, data)
+				}
+			}
+		})
 	}
 }

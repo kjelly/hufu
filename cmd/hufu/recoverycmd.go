@@ -44,6 +44,9 @@ var retryCmd = &cobra.Command{
 }
 
 func runTargetedRecoveryCommand(action team.TargetedRecoveryAction) (runErr error) {
+	var loadedTeams map[string]*teamContext
+	finishIdentity := beginCLIInvocation(os.Stderr, func() map[string]*teamContext { return loadedTeams })
+	defer finishIdentity()
 	if err := captureRuntimeRoots(); err != nil {
 		return err
 	}
@@ -80,6 +83,10 @@ func runTargetedRecoveryCommand(action team.TargetedRecoveryAction) (runErr erro
 	defer func() {
 		runErr = errors.Join(runErr, tc.Close())
 	}()
+	loadedTeams = map[string]*teamContext{teamName: tc}
+	bindInvocationIdentity(loadedTeams, opts.invocationID)
+	stopIdentityHeartbeat := startInvocationIdentityHeartbeat(os.Stderr, opts.invocationID, invocationIdentityHeartbeatInterval, tc.coordinator.ProviderQuotaWaiting)
+	defer stopIdentityHeartbeat()
 
 	var report team.TargetedRecoveryReport
 	switch action {

@@ -8,9 +8,21 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kjelly/hufu/internal/team"
 )
 
 const invocationIdentityHeartbeatInterval = 5 * time.Minute
+
+// beginCLIInvocation gives every execution command the same parent identity
+// and terminal identity block, including executions that return an error.
+func beginCLIInvocation(w io.Writer, loadedTeams func() map[string]*teamContext) func() {
+	invocationID := team.NewInvocationID()
+	opts.invocationID = invocationID
+	return func() {
+		emitExecutionIdentity(w, invocationID, collectExecutionRunIdentities(loadedTeams(), nil))
+	}
+}
 
 // cliRunIdentity is the terminal CLI projection of one durable coordinator
 // invocation. A single hufu command may allocate more than one run ID when it

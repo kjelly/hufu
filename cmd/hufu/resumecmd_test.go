@@ -129,6 +129,9 @@ func TestResumeRecoveryPreviewDoesNotActivateBranch(t *testing.T) {
 	if err := runResumeCommand(cmd, nil); err != nil {
 		t.Fatal(err)
 	}
+	if opts.invocationID != "" {
+		t.Fatal("read-only preview allocated an invocation identity")
+	}
 	var assessment team.ResultCollectionRecoveryAssessment
 	if err := json.Unmarshal(output.Bytes(), &assessment); err != nil {
 		t.Fatalf("invalid JSON: %v %s", err, output.String())
