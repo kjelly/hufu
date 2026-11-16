@@ -74,7 +74,7 @@ func (s *reviewSourceSnapshot) bundleDataWithScopes(partition string, primaryPat
 		inventory.SnapshotID, inventory.ContentSHA256 = s.identity.ID, s.identity.ContentSHA256
 		fmt.Fprintf(&bundle, "review_mode: repository_snapshot\nsnapshot_id: %s\ncontent_sha256: %s\n", s.identity.ID, s.identity.ContentSHA256)
 	}
-	bundle.WriteString("dependency_selection: same-package and snapshot import-dependent identifier candidates; unknown module ownership retains conservative name matching. This is not a type-checked call graph: interface injection, reflection and dynamic calls may require supplemental evidence.\nRelated paths without embedded content remain fully identified in the evidence inventory; their metadata is not duplicated here.\n")
+	bundle.WriteString("dependency_selection: same-package and snapshot import-dependent identifier candidates; symbol matches precede weaker method-name-only candidates, including candidate tests; unknown module ownership retains conservative name matching. This is not a type-checked call graph: interface injection, reflection and dynamic calls may require supplemental evidence.\nRelated paths without embedded content remain fully identified in the evidence inventory; their metadata is not duplicated here.\n")
 	bundle.WriteString("Read this artifact as the source/caller/test authority for the assigned workset. Do not substitute the live checkout.\ncoverage_scope: workset_only\nUnlisted or unavailable paths are not evidence of repository absence. Source byte ranges are half-open; source line coordinates retain their original numbering.\n")
 	fmt.Fprintf(&bundle, "primary_paths: %d\nrelated_paths: %d\nrelated_content_budget_bytes: %d\n", len(primaryPaths), len(related), relatedBudget)
 	seen := make(map[string]bool)

@@ -104,7 +104,7 @@ func (r *ScopedReader) Inspect(ctx context.Context, kind Kind, taskID string) (*
 	var data any
 	switch kind {
 	case KindRun:
-		data, _, err = projectRunData(ctx, query, bound.Lineage)
+		data, _, _, err = projectRunData(ctx, query, bound.Lineage)
 	case KindRoutes:
 		data, err = projectRoutes(ctx, query, bound.Lineage)
 	case KindEconomics:

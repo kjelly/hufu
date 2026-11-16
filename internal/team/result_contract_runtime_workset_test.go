@@ -71,8 +71,8 @@ func TestRuntimeResultInputsBindManifestValuesForSubmissionRoutes(t *testing.T) 
 				return payload, ""
 			}
 			for _, value := range []string{`"frozen-value"`, `"different"`, `null`} {
-				if result, rejection := submit(`{"record":{"decision":true,"identity":` + value + `}}`); result != nil || rejection == "" {
-					t.Fatal("model override accepted")
+				if result, rejection := submit(`{"record":{"decision":true,"identity":` + value + `}}`); result != nil || !strings.Contains(rejection, "/record/identity is runtime-owned") {
+					t.Fatalf("override %s must fail runtime ownership at /record/identity: %s", value, rejection)
 				}
 			}
 			payload, rejection := submit(`{"record":{"decision":true}}`)
@@ -201,32 +201,42 @@ func TestRuntimeResultInputsWorksetDeclarationValidation(t *testing.T) {
 func TestRuntimeResultInputsRejectUnverifiedWorksetValues(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		edit func(*Coordinator, *TodoItem, *TodoItem)
+		edit func(*testing.T, *Coordinator, *TodoItem, *TodoItem)
 	}{
-		{"missing_binding", func(_ *Coordinator, _ *TodoItem, child *TodoItem) { child.WorksetBinding = nil }},
-		{"missing_receipt", func(_ *Coordinator, _ *TodoItem, child *TodoItem) { child.WorksetReceipt = nil }},
-		{"wrong_child", func(_ *Coordinator, _ *TodoItem, child *TodoItem) {
+		{"missing_binding", func(_ *testing.T, _ *Coordinator, _ *TodoItem, child *TodoItem) { child.WorksetBinding = nil }},
+		{"missing_receipt", func(_ *testing.T, _ *Coordinator, _ *TodoItem, child *TodoItem) { child.WorksetReceipt = nil }},
+		{"wrong_child", func(_ *testing.T, _ *Coordinator, _ *TodoItem, child *TodoItem) {
 			child.WorksetReceipt.Children[child.WorksetBinding.ItemKey] = "unrelated"
 		}},
-		{"stale_producer", func(c *Coordinator, source *TodoItem, _ *TodoItem) {
-			current := c.GetTaskResult(source.ID)
+		{"stale_producer", func(t *testing.T, c *Coordinator, source *TodoItem, _ *TodoItem) {
+			current := *c.GetTaskResult(source.ID)
 			current.Attempt++
+			if err := c.CommitTaskResetForRetry(t.Context(), source.ID, "retry producer"); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.CommitTaskTransition(t.Context(), source.ID, TaskPending, TaskInProgress, "new producer occurrence", "", attemptStartMetadata(current.Attempt)); err != nil {
+				t.Fatal(err)
+			}
 			c.setCurrentTaskAttempt(source.ID, current.Attempt)
-			c.storeSubmittedTaskResult(source.ID, current)
+			c.storeSubmittedTaskResult(source.ID, &current)
 		}},
-		{"source_occurrence", func(_ *Coordinator, _ *TodoItem, child *TodoItem) { child.WorksetBinding.SourceArtifact.Attempt++ }},
-		{"changed_source", func(_ *Coordinator, _ *TodoItem, child *TodoItem) {
+		{"source_occurrence", func(_ *testing.T, _ *Coordinator, _ *TodoItem, child *TodoItem) {
+			child.WorksetBinding.SourceArtifact.Attempt++
+		}},
+		{"changed_source", func(_ *testing.T, _ *Coordinator, _ *TodoItem, child *TodoItem) {
 			child.WorksetBinding.SourceSHA256 = strings.Repeat("0", 64)
 		}},
-		{"changed_binding", func(_ *Coordinator, _ *TodoItem, child *TodoItem) {
+		{"changed_binding", func(_ *testing.T, _ *Coordinator, _ *TodoItem, child *TodoItem) {
 			child.WorksetBinding.Bindings["identity"] = "replacement"
 		}},
-		{"missing_value", func(_ *Coordinator, _ *TodoItem, child *TodoItem) { delete(child.WorksetBinding.Bindings, "identity") }},
-		{"stale_run", func(c *Coordinator, _ *TodoItem, _ *TodoItem) { c.executionRunID = "unrelated-run" }},
+		{"missing_value", func(_ *testing.T, _ *Coordinator, _ *TodoItem, child *TodoItem) {
+			delete(child.WorksetBinding.Bindings, "identity")
+		}},
+		{"stale_run", func(_ *testing.T, c *Coordinator, _ *TodoItem, _ *TodoItem) { c.executionRunID = "unrelated-run" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, source, child, _ := runtimeWorksetInputFixture(t)
-			tc.edit(c, source, child)
+			tc.edit(t, c, source, child)
 			if payload, rejection := c.structuredPayloadForSubmission(child.ID, []byte(`{"record":{"decision":true}}`)); payload != nil || rejection == "" {
 				t.Fatal("unverified binding was published")
 			}

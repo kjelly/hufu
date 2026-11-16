@@ -42,13 +42,9 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 	if bound.DerivedFork != nil && bound.DerivedFork.AwaitingNewRequest {
 		return pendingDerivedForkOverview(ctx, resolvedQuery, bound)
 	}
-	runData, selected, err := projectRunData(ctx, resolvedQuery, bound.Lineage)
+	runData, selected, tasks, err := projectRunData(ctx, resolvedQuery, bound.Lineage)
 	if err != nil {
 		return nil, err
-	}
-	tasks, err := team.ReplayTodoList(selected.taskEvents)
-	if err != nil {
-		return nil, fmt.Errorf("%w: replay overview tasks for run %q: %v", ErrIntegrity, resolvedQuery.RunID, err)
 	}
 
 	states, reasons, blockers := overviewTaskFacts(tasks)

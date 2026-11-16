@@ -167,11 +167,16 @@ func (s *reviewSourceSnapshot) relatedGoPaths(primaryPaths []string) ([]string, 
 		if paired[indexed.path] {
 			priority = 0
 		} else {
-			if !s.goReferenceMatches(indexed, scopes) {
+			matched, methodOnly := s.goReferenceMatch(indexed, scopes)
+			if !matched {
 				continue
 			}
 			_, sameDirectory := scopes[path.Dir(indexed.path)]
 			switch {
+			case methodOnly:
+				// Method names alone do not establish receiver ownership.
+				// Keep indirect-call candidates behind all symbol matches.
+				priority = 5
 			case sameDirectory && strings.HasSuffix(indexed.path, "_test.go"):
 				priority = 1
 			case sameDirectory:
@@ -195,13 +200,14 @@ func (s *reviewSourceSnapshot) relatedGoPaths(primaryPaths []string) ([]string, 
 	return result, nil
 }
 
-func (s *reviewSourceSnapshot) goReferenceMatches(indexed goSnapshotIndexEntry, scopes map[string]*goReferenceScope) bool {
+func (s *reviewSourceSnapshot) goReferenceMatch(indexed goSnapshotIndexEntry, scopes map[string]*goReferenceScope) (matched, methodOnly bool) {
+	weak := false
 	for _, scope := range scopes {
 		local := identifierSetsIntersect(indexed.identifiers, scope.symbols)
 		if path.Dir(indexed.path) == scope.directory {
 			// Generic method names alone cannot identify a same-package owner.
 			if local {
-				return true
+				return true, false
 			}
 			continue
 		}
@@ -211,10 +217,13 @@ func (s *reviewSourceSnapshot) goReferenceMatches(indexed goSnapshotIndexEntry, 
 		// Indirect callers may mention only a method on a returned value.
 		// Retain that observation when package lineage admits the caller.
 		if scope.packagePath == "" || indexed.packagePath == "" || s.goPackageDependents(scope.packagePath)[indexed.packagePath] {
-			return true
+			if local {
+				return true, false
+			}
+			weak = true
 		}
 	}
-	return false
+	return weak, weak
 }
 
 func declaredGoMethodNames(filename string, data []byte) map[string]struct{} {

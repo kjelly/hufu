@@ -1405,7 +1405,8 @@ JSON `data.latest` includes the workspace, team, invocation, session, branch,
 and per-workspace read errors. If any workspace is unavailable, `data.complete`
 is false and `data.latest` is null; missing observations are never reported as
 zero tasks. A complete response with `data.latest=null` means no run has started.
-The text table separates `AVAILABILITY`, `OUTCOME`, and `ERROR`. These are
+Each team row also preserves the registry lifecycle state in `registry_state`.
+The text table separates `AVAILABILITY`, `REGISTRY_STATE`, `OUTCOME`, and `ERROR`. These are
 read-only persisted observations, not process liveness checks.
 
 ### Directory Descriptions

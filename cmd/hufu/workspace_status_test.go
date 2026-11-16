@@ -44,7 +44,7 @@ func TestCollectWorkspaceStatus(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if data.Complete == test.failure || len(data.Teams) != 3 || data.Teams[0].Team != "alpha" || data.Teams[1].State != "no_runs" {
+			if data.Selection != inspectpkg.LatestRunSelection || data.Complete == test.failure || len(data.Teams) != 3 || data.Teams[0].Team != "alpha" || data.Teams[1].State != "no_runs" {
 				t.Fatalf("data = %+v", data)
 			}
 			if test.failure {
@@ -70,6 +70,49 @@ func TestCollectWorkspaceStatus(t *testing.T) {
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
+	}
+}
+
+func TestWorkspaceStatusPreservesRegistryState(t *testing.T) {
+	for _, state := range []string{"trashed", "purging"} {
+		t.Run(state, func(t *testing.T) {
+			data, err := collectWorkspaceStatus(t.Context(), workspacepkg.Project{}, []workspacepkg.Workspace{{TeamName: "review", ControlRoot: "/workspace", State: state}}, func(context.Context, string) (*inspectpkg.LatestRun, error) {
+				t.Fatal("inactive workspace must not be read")
+				return nil, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if data.Complete || data.Latest != nil || len(data.Teams) != 1 || data.Teams[0].State != "unavailable" || data.Teams[0].RegistryState != state {
+				t.Fatalf("registry state lost: %+v", data)
+			}
+			var output bytes.Buffer
+			if err := writeWorkspaceJSON(&output, data); err != nil {
+				t.Fatal(err)
+			}
+			var document struct {
+				Data workspaceStatusData `json:"data"`
+			}
+			if err := json.Unmarshal(output.Bytes(), &document); err != nil {
+				t.Fatal(err)
+			}
+			if document.Data.Teams[0].RegistryState != state {
+				t.Fatalf("JSON lost registry state: %s", output.String())
+			}
+			output.Reset()
+			if err := writeWorkspaceStatus(&output, data); err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+			headers, cells := strings.Fields(lines[1]), strings.Fields(lines[2])
+			columns := make(map[string]string)
+			for i, header := range headers {
+				columns[header] = cells[i]
+			}
+			if columns["REGISTRY_STATE"] != state || columns["AVAILABILITY"] != "unavailable" {
+				t.Fatalf("text lost registry state: %s", output.String())
+			}
+		})
 	}
 }
 

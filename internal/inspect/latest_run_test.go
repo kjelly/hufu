@@ -13,6 +13,9 @@ import (
 )
 
 func TestInspectLatestRun(t *testing.T) {
+	if LatestRunSelection != "latest_started_all_branches" {
+		t.Fatal("public latest-run selection contract changed")
+	}
 	for _, branch := range []string{"main", "feature"} {
 		t.Run(branch, func(t *testing.T) {
 			workspace := t.TempDir()

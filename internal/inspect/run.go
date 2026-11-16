@@ -221,25 +221,25 @@ func InspectRun(ctx context.Context, query InspectQuery) (*Envelope, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, _, err := projectRunData(ctx, query, lineage)
+	data, _, _, err := projectRunData(ctx, query, lineage)
 	if err != nil {
 		return nil, err
 	}
 	return envelope(KindRun, query, lineage.BranchID, data), nil
 }
 
-func projectRunData(ctx context.Context, query InspectQuery, lineage Lineage) (RunData, selectedRun, error) {
+func projectRunData(ctx context.Context, query InspectQuery, lineage Lineage) (RunData, selectedRun, []*team.TodoItem, error) {
 	selected, err := selectRun(lineage, query)
 	if err != nil {
-		return RunData{}, selectedRun{}, err
+		return RunData{}, selectedRun{}, nil, err
 	}
 	tasks, err := team.ReplayTodoList(selected.taskEvents)
 	if err != nil {
-		return RunData{}, selectedRun{}, fmt.Errorf("%w: replay tasks for run %q: %v", ErrIntegrity, query.RunID, err)
+		return RunData{}, selectedRun{}, nil, fmt.Errorf("%w: replay tasks for run %q: %v", ErrIntegrity, query.RunID, err)
 	}
 	explanation, err := auditverify.ExplainLineageRun(ctx, query.Workspace, query.RunID, selected.raw)
 	if err != nil {
-		return RunData{}, selectedRun{}, classifyProjectionError(query.RunID, err)
+		return RunData{}, selectedRun{}, nil, classifyProjectionError(query.RunID, err)
 	}
 
 	data := RunData{
@@ -255,7 +255,7 @@ func projectRunData(ctx context.Context, query InspectQuery, lineage Lineage) (R
 		data.TerminalEventID = selected.terminal.ID
 		projected := team.ReduceToSessionData(selected.raw[:selected.terminalIndex+1])
 		if projected == nil || projected.RunResult == nil || projected.RunResult.RunID != query.RunID {
-			return RunData{}, selectedRun{}, fmt.Errorf("%w: terminal event %q did not reduce to run %q", ErrIntegrity, selected.terminal.ID, query.RunID)
+			return RunData{}, selectedRun{}, nil, fmt.Errorf("%w: terminal event %q did not reduce to run %q", ErrIntegrity, selected.terminal.ID, query.RunID)
 		}
 		result := projected.RunResult
 		data.AcceptanceRetry = result.AcceptanceRetry
@@ -275,7 +275,7 @@ func projectRunData(ctx context.Context, query InspectQuery, lineage Lineage) (R
 	if explanation != nil && explanation.Verification != nil {
 		data.Completion = string(explanation.Verification.Completion.Status)
 	}
-	return data, selected, nil
+	return data, selected, tasks, nil
 }
 
 func InspectTask(ctx context.Context, query InspectQuery) (*Envelope, error) {

@@ -27,11 +27,12 @@ type workspaceStatusData struct {
 }
 
 type workspaceTeamStatus struct {
-	Team      string                        `json:"team"`
-	Workspace string                        `json:"workspace"`
-	State     string                        `json:"state"`
-	Latest    *inspectpkg.LatestRun         `json:"latest"`
-	Error     *inspectpkg.OperatorErrorView `json:"error"`
+	Team          string                        `json:"team"`
+	Workspace     string                        `json:"workspace"`
+	State         string                        `json:"state"`
+	RegistryState string                        `json:"registry_state"`
+	Latest        *inspectpkg.LatestRun         `json:"latest"`
+	Error         *inspectpkg.OperatorErrorView `json:"error"`
 }
 
 func newWorkspaceStatusCommand(deps workspaceCommandDeps) *cobra.Command {
@@ -86,13 +87,13 @@ func readRegisteredWorkspaceLatestRun(ctx context.Context, path string) (*inspec
 func collectWorkspaceStatus(ctx context.Context, project workspacepkg.Project, workspaces []workspacepkg.Workspace,
 	read func(context.Context, string) (*inspectpkg.LatestRun, error),
 ) (workspaceStatusData, error) {
-	data := workspaceStatusData{Project: project, Selection: "latest_started_all_branches", Complete: true, Teams: []workspaceTeamStatus{}}
+	data := workspaceStatusData{Project: project, Selection: inspectpkg.LatestRunSelection, Complete: true, Teams: []workspaceTeamStatus{}}
 	workspaces = slices.SortedFunc(slices.Values(workspaces), func(a, b workspacepkg.Workspace) int { return cmp.Compare(a.TeamName, b.TeamName) })
 	for _, workspace := range workspaces {
 		if err := ctx.Err(); err != nil {
 			return workspaceStatusData{}, err
 		}
-		row := workspaceTeamStatus{Team: workspace.TeamName, Workspace: workspace.ControlRoot, State: "no_runs"}
+		row := workspaceTeamStatus{Team: workspace.TeamName, Workspace: workspace.ControlRoot, State: "no_runs", RegistryState: workspace.State}
 		if workspace.State != "active" {
 			row.State = "unavailable"
 			row.Error = &inspectpkg.OperatorErrorView{Kind: "workspace", Code: "workspace_not_active", Message: "workspace is not active"}
@@ -134,7 +135,7 @@ func writeWorkspaceStatus(writer io.Writer, data workspaceStatusData) error {
 		}
 	}
 	table := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(table, "TEAM\tAVAILABILITY\tOUTCOME\tDONE/TOTAL\tUNRESOLVED\tSTARTED\tINVOCATION\tRUN\tBRANCH\tWORKSPACE\tERROR"); err != nil {
+	if _, err := fmt.Fprintln(table, "TEAM\tAVAILABILITY\tREGISTRY_STATE\tOUTCOME\tDONE/TOTAL\tUNRESOLVED\tSTARTED\tINVOCATION\tRUN\tBRANCH\tWORKSPACE\tERROR"); err != nil {
 		return err
 	}
 	for _, row := range data.Teams {
@@ -152,7 +153,11 @@ func writeWorkspaceStatus(writer io.Writer, data workspaceStatusData) error {
 		if row.Error != nil {
 			errorCode = row.Error.Code
 		}
-		values := []string{row.Team, row.State, outcome, counts, unresolved, started, invocation, run, branch, row.Workspace, errorCode}
+		registryState := row.RegistryState
+		if registryState == "" {
+			registryState = "-"
+		}
+		values := []string{row.Team, row.State, registryState, outcome, counts, unresolved, started, invocation, run, branch, row.Workspace, errorCode}
 		for i := range values {
 			values[i] = operatorpkg.SafeDisplayText(values[i], 1024)
 		}

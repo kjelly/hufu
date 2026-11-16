@@ -8,6 +8,10 @@ import (
 	"github.com/kjelly/hufu/internal/team"
 )
 
+// LatestRunSelection names the stable selection contract: the last run_started
+// across all branches, rather than the last updated task or active branch.
+const LatestRunSelection = "latest_started_all_branches"
+
 // LatestRun describes the last run_started in a workspace's validated global
 // event chain, including inactive branches. It is not an OS liveness check.
 type LatestRun struct {
@@ -53,17 +57,13 @@ func InspectLatestRun(ctx context.Context, workspace string) (*LatestRun, error)
 			return nil, err
 		}
 	}
-	data, selected, err := projectRunData(ctx, query, lineage)
+	data, _, tasks, err := projectRunData(ctx, query, lineage)
 	if err != nil {
 		return nil, err
 	}
 	invocation, err := persistedInvocationID(lineage, query.RunID)
 	if err != nil {
 		return nil, err
-	}
-	tasks, err := team.ReplayTodoList(selected.taskEvents)
-	if err != nil {
-		return nil, fmt.Errorf("%w: replay latest run tasks", ErrIntegrity)
 	}
 	states := make(map[string]int)
 	for _, task := range tasks {

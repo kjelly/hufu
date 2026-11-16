@@ -1,11 +1,54 @@
 package main
 
 import (
+	"encoding/json/v2"
 	"fmt"
 	"path/filepath"
 	"slices"
 	"testing"
 )
+
+func TestRelatedGoPathsPrioritizeSymbolsOverMethodNames(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "go.mod"), "module example.test/review\n\ngo 1.27\n")
+	strong := "package caller\nimport api \"example.test/review/service\"\nfunc Real(h *api.Handle) string { return h.Error() }\n"
+	for name, content := range map[string]string{
+		"service/api.go":         "package service\ntype Handle struct{}\nfunc (*Handle) Error() string { return \"\" }\n",
+		"caller/z_real.go":       strong,
+		"caller/a_noise.go":      "package caller\nfunc Noise(err error) string { return err.Error() }\n",
+		"caller/a_noise_test.go": "package caller\nfunc TestNoise(err error) string { return err.Error() }\n",
+	} {
+		writeFile(t, filepath.Join(root, name), content)
+	}
+	snapshot := &reviewSourceSnapshot{root: root}
+	got, err := snapshot.relatedGoPaths([]string{"service/api.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0] != "caller/z_real.go" {
+		t.Fatalf("method-only candidates displaced the symbol match: %v", got)
+	}
+	_, raw, err := snapshot.bundleDataWithScopes("unit", []string{"service/api.go"}, nil, len(strong))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inventory evidenceInventory
+	if err := json.Unmarshal(raw, &inventory); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range inventory.Sources {
+		if source.Role != "related" {
+			continue
+		}
+		if source.Path == "caller/z_real.go" {
+			if source.Omitted || source.Truncated || source.OmittedBytes != 0 {
+				t.Fatalf("symbol match lost the bounded content allowance: %+v", source)
+			}
+		} else if !source.Omitted {
+			t.Fatalf("weak candidate consumed the symbol match's allowance: %+v", source)
+		}
+	}
+}
 
 func TestRelatedGoPathsFollowPackageDependencies(t *testing.T) {
 	root := t.TempDir()
