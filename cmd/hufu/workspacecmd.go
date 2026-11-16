@@ -74,6 +74,7 @@ func newWorkspaceCommand(deps workspaceCommandDeps) *cobra.Command {
 		newWorkspaceRegisterCommand(deps),
 		newWorkspaceListCommand(deps),
 		newWorkspaceShowCommand(deps),
+		newWorkspaceStatusCommand(deps),
 		newWorkspacePathCommand(deps),
 		newWorkspaceSubjectPathCommand(deps),
 		newWorkspaceAliasCommand(deps),

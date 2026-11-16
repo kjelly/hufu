@@ -78,6 +78,36 @@ output. Substitute the actual identities; do not infer IDs from task prose.
 
 ## 1. Resolve the target and scope
 
+If no invocation or run ID is supplied, discover the latest started run for
+the current registered project through the public read-only command:
+
+```bash
+hufu workspace status --output json
+```
+
+Confirm this command exists in the selected diagnostic executable. In a Hufu
+checkout with an older PATH binary, use the checkout through mise, for example
+`mise run run -- workspace status --output json`, or reuse a scratch binary
+built from it. Do not treat an older binary's unknown-command error as missing
+project data.
+
+Use `data.latest` only when `data.complete` is true and `data.latest` is not
+null. It supplies the exact workspace, team, invocation, session, branch and
+`run.run_id`; use those identities for subsequent inspection. Each team row
+selects its last `run_started` across all branches, including inactive ones;
+the project selects by start timestamp, then team name for ties. This is the
+latest started run, not the most recently updated result or proof of a live
+process. State which target was selected and its start time. Never replace an
+explicitly supplied target with this discovery result.
+
+`data.teams` retains available rows when another workspace cannot be read.
+When `complete=false`, `latest=null` prevents an uncertain project-wide choice;
+inspect the row errors or request a team/ID instead of silently choosing a
+surviving row. A complete result with `latest=null` means no registered team
+has a recorded run start; do not guess an ID. An unregistered project must be
+reported as such; diagnosis does not authorize registration. A project selector
+can be passed as `hufu workspace status "$project_selector" --output json`.
+
 For a known team, inspect the current workspace:
 
 ```bash

@@ -1379,6 +1379,8 @@ Common management commands:
 
 ```bash
 hufu workspace list --all
+hufu workspace status                       # task summaries across project teams
+hufu workspace status --output json         # latest run identities for diagnostics
 hufu workspace doctor
 hufu workspace delete --team default --yes   # recoverable rename to trash
 hufu workspace restore <trash-id> --yes
@@ -1386,6 +1388,16 @@ hufu workspace gc                            # dry-run by default
 hufu workspace gc --apply --yes
 eval "$(hufu workspace shell-init bash)"      # defines hcd and hproj
 ```
+
+`workspace status [selector]` reads the current registered project (or a project
+ID, slug, or alias). It selects each team's last started run across all branches,
+then the project's latest by start timestamp, with team name breaking ties.
+JSON `data.latest` includes the workspace, team, invocation, session, branch,
+`run.run_id`, outcome and task counts. `data.teams` includes task state counts
+and per-workspace read errors. If any workspace is unavailable, `complete` is
+false and `latest` is null; missing observations are never reported as zero tasks.
+A complete response with `latest=null` means no run has started. These are
+read-only persisted observations, not process liveness checks.
 
 ### Directory Descriptions
 
