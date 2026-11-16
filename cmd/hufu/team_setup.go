@@ -305,15 +305,7 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 
 	models := modelsInUse(session, resolvedSidecarModel, resolvedGuardModel, resolvedJudgeModel, resolvedPlanReviewerModel, resolvedModelList)
 
-	if err := team.EnsureWorkspaceDirs(session.Workspace); err != nil {
-		stderrLog("%s Failed to ensure workspace dirs: %v\n", errStyle.Render("⚠"), err)
-	}
-	if err := team.InitLTM(session.Workspace, session.Config.Name); err != nil {
-		stderrLog("%s Failed to init ltm.md: %v\n", errStyle.Render("⚠"), err)
-	}
-	if err := team.InitSTM(session.Workspace); err != nil {
-		stderrLog("%s Failed to init stm.md: %v\n", errStyle.Render("⚠"), err)
-	}
+	initializeTeamWorkspaceFiles(session)
 	// Resolve this once so lifecycle reset, historical extraction, pruning, and
 	// coordinator visibility all agree on what "fresh" means.
 	// A profile that forbids historical task reuse must start from an empty
@@ -368,6 +360,18 @@ func loadTeamCommon(ctx context.Context, teamName string, session *team.TeamSess
 		roleSources: roleSources,
 		mcpManager:  mcpManager,
 	}, nil
+}
+
+func initializeTeamWorkspaceFiles(session *team.TeamSession) {
+	if err := team.EnsureWorkspaceDirs(session.Workspace); err != nil {
+		stderrLog("%s Failed to ensure workspace dirs: %v\n", errStyle.Render("⚠"), err)
+	}
+	if err := team.InitLTM(session.Workspace, session.Config.Name); err != nil {
+		stderrLog("%s Failed to init ltm.md: %v\n", errStyle.Render("⚠"), err)
+	}
+	if err := team.InitSTM(session.Workspace); err != nil {
+		stderrLog("%s Failed to init stm.md: %v\n", errStyle.Render("⚠"), err)
+	}
 }
 
 // applyCLIRuntimeOverrides applies every CLI (and profile-supplied) runtime

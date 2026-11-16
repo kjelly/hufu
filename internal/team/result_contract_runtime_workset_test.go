@@ -54,7 +54,7 @@ func runtimeWorksetProducerFixture(t *testing.T, c *Coordinator, content []byte)
 	return producer, manifest.ArtifactRef
 }
 
-func TestRuntimeResultInputsBindFrozenWorksetValues(t *testing.T) {
+func TestRuntimeResultInputsBindManifestValuesForSubmissionRoutes(t *testing.T) {
 	for _, route := range []string{"local", "external"} {
 		t.Run(route, func(t *testing.T) {
 			c, _, child, compiled := runtimeWorksetInputFixture(t)

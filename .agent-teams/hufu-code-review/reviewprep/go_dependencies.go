@@ -106,6 +106,7 @@ type goReferenceScope struct {
 	directory   string
 	packagePath string
 	symbols     map[string]struct{}
+	methods     map[string]struct{}
 }
 
 // Identifier names are a candidate heuristic, not a typed call graph. Bind
@@ -137,11 +138,14 @@ func (s *reviewSourceSnapshot) relatedGoPaths(primaryPaths []string) ([]string, 
 		directory := path.Dir(repositoryPath)
 		scope := scopes[directory]
 		if scope == nil {
-			scope = &goReferenceScope{directory: directory, packagePath: s.goPackagePath(directory), symbols: make(map[string]struct{})}
+			scope = &goReferenceScope{directory: directory, packagePath: s.goPackagePath(directory), symbols: make(map[string]struct{}), methods: make(map[string]struct{})}
 			scopes[directory] = scope
 		}
 		for symbol := range declaredGoSymbols(repositoryPath, data) {
 			scope.symbols[symbol] = struct{}{}
+		}
+		for method := range declaredGoMethodNames(repositoryPath, data) {
+			scope.methods[method] = struct{}{}
 		}
 	}
 	if len(scopes) == 0 && len(paired) == 0 {
@@ -193,17 +197,39 @@ func (s *reviewSourceSnapshot) relatedGoPaths(primaryPaths []string) ([]string, 
 
 func (s *reviewSourceSnapshot) goReferenceMatches(indexed goSnapshotIndexEntry, scopes map[string]*goReferenceScope) bool {
 	for _, scope := range scopes {
-		if !identifierSetsIntersect(indexed.identifiers, scope.symbols) {
+		local := identifierSetsIntersect(indexed.identifiers, scope.symbols)
+		if path.Dir(indexed.path) == scope.directory {
+			// Generic method names alone cannot identify a same-package owner.
+			if local {
+				return true
+			}
 			continue
 		}
-		if path.Dir(indexed.path) == scope.directory || scope.packagePath == "" || indexed.packagePath == "" {
-			return true
+		if !local && !identifierSetsIntersect(indexed.identifiers, scope.methods) {
+			continue
 		}
-		if s.goPackageDependents(scope.packagePath)[indexed.packagePath] {
+		// Indirect callers may mention only a method on a returned value.
+		// Retain that observation when package lineage admits the caller.
+		if scope.packagePath == "" || indexed.packagePath == "" || s.goPackageDependents(scope.packagePath)[indexed.packagePath] {
 			return true
 		}
 	}
 	return false
+}
+
+func declaredGoMethodNames(filename string, data []byte) map[string]struct{} {
+	result := make(map[string]struct{})
+	parsed, err := parser.ParseFile(token.NewFileSet(), filename, data, parser.SkipObjectResolution)
+	if err != nil {
+		return result
+	}
+	for _, declaration := range parsed.Decls {
+		method, ok := declaration.(*ast.FuncDecl)
+		if ok && method.Recv != nil && len([]rune(method.Name.Name)) >= 4 {
+			result[method.Name.Name] = struct{}{}
+		}
+	}
+	return result
 }
 
 func (s *reviewSourceSnapshot) ensureGoIndex() error {

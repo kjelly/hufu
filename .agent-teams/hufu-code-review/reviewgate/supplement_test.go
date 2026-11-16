@@ -293,7 +293,12 @@ func TestSupplementActionUsesRuntimeReceiptFormat(t *testing.T) {
 				digest := "sha256:" + hex.EncodeToString(sum[:])
 				item.Result.RuntimeOutputsHash, item.Receipt.RuntimeOutputsHash = digest, digest
 			}
-			if err := acceptedSupplementAction(item, current, "run-1"); (err == nil) != (scenario == "valid") {
+			current.Tasks = []task{item}
+			view, err := projectedFixture(current, "run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := acceptedSupplementAction(view.Tasks[0]); (err == nil) != (scenario == "valid") {
 				t.Fatalf("runtime receipt verification: %v", err)
 			}
 		})
