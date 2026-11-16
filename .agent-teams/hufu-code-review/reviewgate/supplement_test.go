@@ -29,7 +29,7 @@ func supplementGateFixtureWithRequest(t *testing.T, invalidRequest bool) session
 		}
 		p.Record = raw(t, r)
 	})
-	requests, err := collectSupplementRequests(current, "run-1")
+	requests, err := fixtureCollectSupplementRequests(current, "run-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestSupplementAuditPreservesAcceptedSourceAndRejectsIncompleteRound(t *test
 			case "hidden_request":
 				current.Tasks[len(current.Tasks)-3].Result.RuntimeOutputs["review_supplement_requests"] = raw(t, supplementRequests{Round: 1, SnapshotID: current.SnapshotID, Requests: []supplementRequest{}})
 			}
-			outcomes, err := collectSupplementOutcomes(current, "run-1")
+			outcomes, err := fixtureCollectSupplementOutcomes(current, "run-1")
 			if (err == nil) != (kind == "valid") {
 				t.Fatalf("audit %s: %v", kind, err)
 			}
@@ -127,12 +127,15 @@ func TestSourceGapRequiresStructuredEvidenceOrLimitation(t *testing.T) {
 }
 
 func TestSupplementInventoryPreservesUnsupportedEvidenceRequests(t *testing.T) {
-	for _, kind := range []string{"directory", "escape", "reversed_range"} {
+	for _, kind := range []string{"directory", "escape", "reversed_range", "no_paths"} {
 		t.Run(kind, func(t *testing.T) {
 			current := gateFixture(t)
 			gap := sourceGap{Description: "Unresolved dependency", MissingEvidence: "Exact file unavailable", Kind: "missing_dependency", RequestedEvidence: []requestedEvidence{{Path: "internal/inspect/", Ranges: []evidenceRange{{Start: 0, End: 1}}}}, Limitations: []sourceLimitation{}}
 			if kind == "escape" {
 				gap.RequestedEvidence[0].Path = "../caller.go"
+			} else if kind == "no_paths" {
+				gap.RequestedEvidence = []requestedEvidence{}
+				gap.Limitations = []sourceLimitation{{Kind: "unavailable_path", Detail: "Exact file is not known in the assigned workset"}}
 			} else if kind == "reversed_range" {
 				gap.RequestedEvidence[0].Path = "caller.go"
 				gap.RequestedEvidence[0].Ranges[0] = evidenceRange{Start: 5, End: 1}
@@ -146,7 +149,7 @@ func TestSupplementInventoryPreservesUnsupportedEvidenceRequests(t *testing.T) {
 				p.Record = raw(t, r)
 			})
 			original := raw(t, current.Tasks[0].Result.Payload)
-			requests, err := collectSupplementRequests(current, "run-1")
+			requests, err := fixtureCollectSupplementRequests(current, "run-1")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -243,13 +246,13 @@ func testSupplementReportAudit(t *testing.T, invalidRequest bool) {
 		}
 		row["limitations"] = limitations
 	}
-	if _, _, err := verify(current, "run-1"); err != nil {
+	if _, _, err := fixtureVerify(current, "run-1"); err != nil {
 		t.Fatalf("complete supplemental handoff: %v", err)
 	}
 	original := append([]byte(nil), current.Tasks[0].Result.Payload.Value...)
 	// The report must preserve all original source records and native outcomes.
 	replacePayload(t, &current.Tasks[4], func(p *payload) { p.InputReview = p.InputReview[1:] })
-	if _, _, err := verify(current, "run-1"); err == nil {
+	if _, _, err := fixtureVerify(current, "run-1"); err == nil {
 		t.Fatal("report erased the original review after supplementation")
 	}
 	if !reflect.DeepEqual(original, []byte(current.Tasks[0].Result.Payload.Value)) {

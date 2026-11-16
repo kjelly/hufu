@@ -176,6 +176,7 @@ type teamManifestSpecFields struct {
 	ProjectContext       bool                              `yaml:"project-context,omitempty"`
 	Shell                string                            `yaml:"shell,omitempty"`
 	Vars                 map[string]interface{}            `yaml:"vars,omitempty"`
+	DeprecatedVars       map[string]string                 `yaml:"deprecated-vars,omitempty"`
 	Inputs               map[string]runInputDefinitionYAML `yaml:"inputs,omitempty"`
 	// WorkerContextSize is a token budget, not a character count; the YAML
 	// key is kept as-is for backward compatibility.

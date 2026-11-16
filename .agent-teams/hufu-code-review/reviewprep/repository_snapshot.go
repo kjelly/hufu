@@ -379,61 +379,34 @@ func compactScopeContext(value any) any {
 
 // A completed producer from this invocation or a runtime-authorized recovery
 // origin pins the verifier. No model-supplied source identity is used.
-func frozenRepositorySnapshot(requested resolverScope) (*repositorySnapshotManifest, error) {
+func frozenRepositorySnapshot(ctx context.Context, requested resolverScope) (*repositorySnapshotManifest, error) {
 	workspace := os.Getenv("HUFU_WORKSPACE")
 	if workspace == "" {
 		return nil, nil
 	} // direct helper callers have no runtime state
-	runID, actionID := os.Getenv("HUFU_RUN_ID"), os.Getenv("HUFU_ACTION_INVOCATION_ID")
-	root := filepath.Clean(workspace)
-	for count := 0; count < 5; count++ {
-		root = filepath.Dir(root)
-	}
-	if !filepath.IsAbs(workspace) || runID == "" || actionID == "" || filepath.Join(root, "runtime", "runs", runID, "actions", actionID) != workspace {
-		return nil, fmt.Errorf("unsupported verifier action workspace")
-	}
-	data, err := actionstate.SessionCheckpoint(root)
+	data, err := actionstate.ActionSources(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var current struct {
-		SnapshotID string `json:"active_run_input_snapshot_id"`
-		Tasks      []struct {
-			ID         string `json:"ID"`
-			Status     string `json:"Status"`
-			ContractID string `json:"contract_id"`
-			SnapshotID string `json:"run_input_snapshot_id"`
-			Receipt    *struct {
-				RunID  string `json:"run_id"`
-				TaskID string `json:"task_id"`
-			} `json:"execution_receipt"`
-			Result *struct {
-				Status  string                     `json:"status"`
-				Outputs map[string]json.RawMessage `json:"runtime_outputs"`
-			} `json:"typed_result"`
-		} `json:"tasks"`
+		Version int              `json:"version"`
+		Tasks   []supplementTask `json:"tasks"`
 	}
 	if err := json.Unmarshal(data, &current); err != nil {
 		return nil, err
 	}
-	var origins map[string]string
-	encodedOrigins := os.Getenv("HUFU_RECOVERED_TASK_RUNS")
-	if len(encodedOrigins) > 64<<10 {
-		return nil, fmt.Errorf("runtime recovery origins exceed 64 KiB")
-	}
-	if encodedOrigins != "" {
-		if err := json.Unmarshal([]byte(encodedOrigins), &origins); err != nil {
-			return nil, fmt.Errorf("invalid runtime recovery origins: %w", err)
-		}
+	if current.Version != 1 {
+		return nil, fmt.Errorf("unsupported source view version")
 	}
 	var frozen *repositorySnapshotManifest
 	for _, task := range current.Tasks {
 		if task.ContractID != "produce-workset" {
 			continue
 		}
-		if frozen != nil || task.Status != "done" || task.Result == nil || task.Result.Status != "success" || current.SnapshotID == "" || task.SnapshotID != current.SnapshotID || task.Receipt == nil || task.Receipt.RunID == "" || (task.Receipt.RunID != runID && origins[task.ID] != task.Receipt.RunID) || task.Receipt.TaskID != task.ID {
+		if frozen != nil || !task.VerifiedOutputs || task.Result == nil {
 			return nil, fmt.Errorf("producer is missing, stale, or ambiguous")
 		}
+
 		var scope scopeAttestation
 		if err := json.Unmarshal(task.Result.Outputs["scope"], &scope); err != nil {
 			return nil, err

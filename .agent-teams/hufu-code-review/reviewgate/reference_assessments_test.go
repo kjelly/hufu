@@ -30,7 +30,7 @@ func TestReferenceAssessmentGateEnforcesModelClassification(t *testing.T) {
 	for _, kind := range []string{"required", "historical", "deleted", "example", "uncertain"} {
 		t.Run(kind, func(t *testing.T) {
 			item, r := referenceReview(t, kind)
-			inventory, err := collectReviewHandoffs(session{Tasks: []task{item}}, "run-1")
+			inventory, err := fixtureCollectReviewHandoffs(session{Tasks: []task{item}}, "run-1")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -40,7 +40,7 @@ func TestReferenceAssessmentGateEnforcesModelClassification(t *testing.T) {
 			if (kind == "uncertain") != (len(inventory.RequiredGapRefs) == 1) {
 				t.Fatalf("uncertain reference gap coverage = %#v", inventory)
 			}
-			if err := verifyReview(item, r); err != nil {
+			if err := fixtureVerifyReview(item, r); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -77,11 +77,11 @@ func TestReferenceAssessmentGateEnforcesModelClassification(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			item, r := referenceReview(t, test.kind)
 			test.edit(&item, &r)
-			if err := verifyReview(item, r); err == nil {
+			if err := fixtureVerifyReview(item, r); err == nil {
 				t.Fatal("invalid reference assessment accepted")
 			}
 			replacePayload(t, &item, func(p *payload) { p.Record = raw(t, r) })
-			if _, err := collectReviewHandoffs(session{Tasks: []task{item}}, "run-1"); err == nil {
+			if _, err := fixtureCollectReviewHandoffs(session{Tasks: []task{item}}, "run-1"); err == nil {
 				t.Fatal("inventory accepted invalid classification")
 			}
 		})

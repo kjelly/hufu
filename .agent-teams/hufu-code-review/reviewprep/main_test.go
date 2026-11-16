@@ -91,7 +91,7 @@ func TestVerifyReviewTestsRunsTargetedPackageInReviewedRevisionSnapshot(t *testi
 	if !receipt.Completed || !receipt.Passed || receipt.ExitCode != 0 || !slices.Equal(receipt.Packages, []string{"./calc"}) {
 		t.Fatalf("targeted Go test receipt = %#v", receipt)
 	}
-	if len(result.Artifacts) != 1 || result.Artifacts[0].ID != receipt.ArtifactID || result.Artifacts[0].SHA256 != receipt.ArtifactSHA256 {
+	if len(result.Artifacts) != 2 || result.Artifacts[0].ID != receipt.ArtifactID || result.Artifacts[0].SHA256 != receipt.ArtifactSHA256 {
 		t.Fatalf("verification artifacts = %#v, receipt = %#v", result.Artifacts, receipt)
 	}
 	reportData, err := os.ReadFile(filepath.Join(repo, result.Artifacts[0].Path))
@@ -106,7 +106,7 @@ func TestVerifyReviewTestsRunsTargetedPackageInReviewedRevisionSnapshot(t *testi
 		t.Fatalf("verification report = %#v", report)
 	}
 	if bytes.Contains(reportData, []byte(`"output":`)) || report.OutputSHA256 == "" || report.OutputBytes == 0 {
-		t.Fatalf("verification artifact must hash test output without persisting it: %s", reportData)
+		t.Fatalf("verification report must reference complete output separately: %s", reportData)
 	}
 
 	live := exec.CommandContext(t.Context(), "go", "test", "./calc")
@@ -148,7 +148,7 @@ func TestRunVerifyReviewTestsReturnsFailedEvidenceWithoutActionFailure(t *testin
 	if err := json.Unmarshal(receiptJSON, &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if !receipt.Completed || receipt.Passed || receipt.ExitCode == 0 || receipt.Diagnostic == "" || receipt.ArtifactID == "" || len(result.Artifacts) != 1 {
+	if !receipt.Completed || receipt.Passed || receipt.ExitCode == 0 || receipt.Diagnostic == "" || receipt.ArtifactID == "" || len(result.Artifacts) != 2 {
 		t.Fatalf("failed verifier evidence = %#v, artifacts = %#v", receipt, result.Artifacts)
 	}
 	status, ok := result.Outputs["targeted_go_test_status"].(map[string]any)
@@ -163,7 +163,11 @@ func TestRunVerifyReviewTestsReturnsFailedEvidenceWithoutActionFailure(t *testin
 	if err := json.Unmarshal(sealed, &evidence); err != nil {
 		t.Fatal(err)
 	}
-	if evidence.Diagnostic != receipt.Diagnostic || sha256Hex([]byte(evidence.Diagnostic)) != evidence.OutputSHA256 {
+	rawOutput, err := os.ReadFile(filepath.Join(repo, result.Artifacts[1].Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Diagnostic != receipt.Diagnostic || sha256Hex(rawOutput) != evidence.OutputSHA256 {
 		t.Fatal("sealed test evidence lost its failure diagnostic")
 	}
 }

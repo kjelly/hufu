@@ -353,6 +353,8 @@ type TeamConfig struct {
 	ProjectContext  bool
 	Shell           string
 	Vars            map[string]interface{}
+	// DeprecatedVars maps retired template variables to team-owned migration guidance.
+	DeprecatedVars map[string]string
 	// WorkerContextSize bounds the injected project context (AGENTS.md) in
 	// tokens, not characters — see coordinator's getWorkerContextSize.
 	WorkerContextSize int

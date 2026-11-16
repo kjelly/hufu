@@ -189,7 +189,20 @@ func resultGuidanceConstraintVisible(value any, shape map[string]any, depth int,
 			for name, child := range children {
 				visible, ok := properties[name].(map[string]any)
 				typeName, _ := visible["type"].(string)
-				if !ok || typeName == "" || typeName == "object" || typeName == "array" || !resultGuidanceConstraintVisible(child, visible, depth+1, nodes) {
+				if !ok || typeName == "" || typeName == "object" {
+					return false
+				}
+				if typeName == "array" {
+					// Primitive arrays retain their membership in the model
+					// projection. Object rows may instead be runtime-owned or
+					// replaced by keyed decisions; their bounds are not portable.
+					items, _ := visible["items"].(map[string]any)
+					itemType, _ := items["type"].(string)
+					if itemType != "string" && itemType != "number" && itemType != "integer" && itemType != "boolean" && itemType != "null" {
+						return false
+					}
+				}
+				if !resultGuidanceConstraintVisible(child, visible, depth+1, nodes) {
 					return false
 				}
 			}

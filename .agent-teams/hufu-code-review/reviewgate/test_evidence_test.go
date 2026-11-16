@@ -35,6 +35,7 @@ func TestReviewGateRequiresHonestTestOutcomeCoverage(t *testing.T) {
 				item := &fixture.Tasks[i]
 				if item.ContractID == "verify-targeted-go-tests" {
 					item.Result.RuntimeOutputs["targeted_go_tests"] = evidence
+					sealFixtureOutputs(t, item)
 				}
 				if item.ContractID == "synthesize-review" {
 					replacePayload(t, item, func(p *payload) {
@@ -48,7 +49,7 @@ func TestReviewGateRequiresHonestTestOutcomeCoverage(t *testing.T) {
 					}
 				}
 			}
-			_, _, err := verify(fixture, "run-1")
+			_, _, err := fixtureVerify(fixture, "run-1")
 			if (err == nil) != test.valid {
 				t.Fatalf("valid=%v error=%v", test.valid, err)
 			}

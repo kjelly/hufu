@@ -178,3 +178,48 @@ func writeSource(t *testing.T, directory, source string) {
 func minimalSource(body string) string {
 	return "package main\nimport (\"context\"; \"io\")\nfunc Run(_ context.Context, _ io.Reader, out io.Writer) error { " + body + " }\n"
 }
+
+func TestExecuteTrustedProgramSupervisesDescendantCommands(t *testing.T) {
+	teamDir := t.TempDir()
+	source := filepath.Join(teamDir, "action")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeSource(t, source, `package main
+import (
+ "context"
+ "io"
+ "os"
+ "os/exec"
+ "time"
+ "github.com/kjelly/hufu/internal/processutil"
+)
+func Run(ctx context.Context, _ io.Reader, out io.Writer) error {
+ ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+ defer cancel()
+ cmd := exec.CommandContext(ctx, "/bin/sh", "-c", "(sleep 0.5; printf orphan > \"$HUFU_TEST_ORPHAN\") & wait")
+ cmd.Env = os.Environ()
+ if err := processutil.RunContextCommand(cmd, time.Second); err == nil { return io.EOF }
+ _, err := io.WriteString(out, "canceled")
+ return err
+}
+`)
+	program, err := Prepare(teamDir, "action")
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "orphan")
+	result, err := Execute(t.Context(), "", program, nil, append(os.Environ(), "HUFU_TEST_ORPHAN="+marker), 1024, 1024)
+	if err != nil || string(result.Stdout) != "canceled" {
+		t.Fatalf("supervised action: %v; %s; %s", err, result.Stdout, result.Stderr)
+	}
+	// A surviving grandchild would publish this marker after the action returns.
+	select {
+	case <-time.After(600 * time.Millisecond):
+	case <-t.Context().Done():
+		t.Fatal(t.Context().Err())
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("descendant survived cancellation: %v", err)
+	}
+}

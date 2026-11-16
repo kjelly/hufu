@@ -4,6 +4,8 @@ metadata:
   name: hufu-code-review
 spec:
   description: "Read-only, artifact-backed review of the Hufu Go codebase"
+  deprecated-vars:
+    review.scope.max_commits: "no longer controls review scope; use --input review.scope=<json>"
   coordinator-model: ollama/minimax-m3:cloud
   # Every worker runs on the hufu.yaml `review` route and falls back to its
   # next candidate on a provider outage. Workers must not set their own
@@ -234,11 +236,12 @@ spec:
       source: ./reviewprep
       mode: trusted-static
       timeout: 300
+    # reviewprep: 30m/package, 35m total; 5m for snapshot setup and sealing.
     verify-review-tests:
       runtime: golang
       source: ./reviewprep
       mode: trusted-static
-      timeout: 1200
+      timeout: 2400
     prepare-review-supplement:
       runtime: golang
       source: ./reviewprep
@@ -304,6 +307,7 @@ spec:
           - { pointer: /timed_out, op: equals, value: false }
           - { pointer: /output_truncated, op: equals, value: false }
           - { pointer: /artifact_id, op: non_empty }
+          - { pointer: /output_artifact_id, op: non_empty }
       # PREPARE validates explicit links/syntax and records missing inline
       # references. Semantic classifications are mandatory source-review records
       # checked by the handoff inventory and final audit in VERIFY.
@@ -424,6 +428,7 @@ spec:
           - { pointer: /runtime_outputs/targeted_go_tests/timed_out, op: equals, value: false }
           - { pointer: /runtime_outputs/targeted_go_tests/output_truncated, op: equals, value: false }
           - { pointer: /runtime_outputs/targeted_go_tests/artifact_id, op: non_empty }
+          - { pointer: /runtime_outputs/targeted_go_tests/output_artifact_id, op: non_empty }
 
     - id: review-primary-workset
       kind: outcome

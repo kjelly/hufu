@@ -43,10 +43,14 @@ const (
 )
 
 // actionStateSymbols lends trusted actions read-only runtime state and shared
-// artifact coverage contracts under their normal Go import paths.
+// artifact coverage contracts and supervised commands under their normal Go import paths.
 var actionStateSymbols = interp.Exports{
+	"github.com/kjelly/hufu/internal/processutil/processutil": {
+		"RunContextCommand": reflect.ValueOf(processutil.RunContextCommand),
+	},
 	"github.com/kjelly/hufu/internal/actionstate/actionstate": {
 		"SessionCheckpoint": reflect.ValueOf(actionstate.SessionCheckpoint),
+		"ActionSources":     reflect.ValueOf(actionstate.ActionSources),
 	},
 	"github.com/kjelly/hufu/internal/tools/tools": {
 		"ArtifactByteRange":    reflect.ValueOf((*tools.ArtifactByteRange)(nil)),

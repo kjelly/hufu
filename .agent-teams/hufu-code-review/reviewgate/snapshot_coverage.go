@@ -60,9 +60,9 @@ type snapshotIdentity struct {
 	Files      []snapshotInventoryFile `json:"files"`
 }
 
-func collectSnapshotCoverage(current session, runID string) (snapshotCoverage, error) {
+func collectSnapshotCoverage(current sourceSession) (snapshotCoverage, error) {
 	result := snapshotCoverage{Mode: "diff", Expected: []string{}, Completed: []string{}, Excluded: []snapshotUnfinished{}, Uncompleted: []snapshotUnfinished{}}
-	scope, err := acceptedSnapshotScope(current, runID)
+	scope, err := acceptedSnapshotScope(current)
 	if err != nil || scope == nil {
 		return result, err
 	}
@@ -73,11 +73,11 @@ func collectSnapshotCoverage(current session, runID string) (snapshotCoverage, e
 	}
 	result.Mode, result.SnapshotID, result.ContentSHA256, result.Revision = "repository_snapshot", identity.ID, identity.Hash, identity.Revision
 	result.Batch, result.BatchCount = identity.Batch, identity.BatchCount
-	covered, limited, err := checkedSnapshotReviews(current, runID, identity, files)
+	covered, limited, err := checkedSnapshotReviews(current, identity, files)
 	if err != nil {
 		return result, err
 	}
-	if err := checkedSnapshotVerifier(current, runID, identity); err != nil {
+	if err := checkedSnapshotVerifier(current, identity); err != nil {
 		return result, err
 	}
 	for _, file := range identity.Files {
@@ -102,7 +102,7 @@ func collectSnapshotCoverage(current session, runID string) (snapshotCoverage, e
 	return result, nil
 }
 
-func acceptedSnapshotScope(current session, runID string) (*snapshotAttestation, error) {
+func acceptedSnapshotScope(current sourceSession) (*snapshotAttestation, error) {
 	var scope *snapshotAttestation
 	for _, item := range current.Tasks {
 		if item.ContractID != "produce-workset" || item.Result == nil {
@@ -115,7 +115,7 @@ func acceptedSnapshotScope(current session, runID string) (*snapshotAttestation,
 		if candidate.Requested.Kind != "repository_snapshot" {
 			continue
 		}
-		if scope != nil || item.Status != "done" || item.Result.Status != "success" || !current.acceptsReceiptOrigin(item, runID) || current.SnapshotID == "" || item.SnapshotID != current.SnapshotID {
+		if scope != nil || !item.VerifiedOutputs {
 			return nil, fmt.Errorf("snapshot producer lacks current accepted identity")
 		}
 		scope = &candidate
@@ -160,7 +160,7 @@ func checkedSnapshotFiles(scope *snapshotAttestation) (map[string]snapshotInvent
 	return files, nil
 }
 
-func checkedSnapshotReviews(current session, runID string, identity *snapshotIdentity, files map[string]snapshotInventoryFile) (map[string]bool, map[string]bool, error) {
+func checkedSnapshotReviews(current sourceSession, identity *snapshotIdentity, files map[string]snapshotInventoryFile) (map[string]bool, map[string]bool, error) {
 	covered, limited := make(map[string]bool), make(map[string]bool)
 	for _, item := range current.Tasks {
 		switch item.ContractID {
@@ -168,7 +168,7 @@ func checkedSnapshotReviews(current session, runID string, identity *snapshotIde
 		default:
 			continue
 		}
-		value, err := accepted(item, current, runID)
+		value, err := accepted(item)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -189,7 +189,7 @@ func checkedSnapshotReviews(current session, runID string, identity *snapshotIde
 	return covered, limited, nil
 }
 
-func checkSnapshotReviewFiles(item task, review record, files map[string]snapshotInventoryFile, covered, limited map[string]bool) error {
+func checkSnapshotReviewFiles(item sourceTask, review record, files map[string]snapshotInventoryFile, covered, limited map[string]bool) error {
 	observedSource := false
 	for _, input := range item.Binding.Inputs {
 		if input.Kind == "review_source_snapshot" && input.SHA256 != "" && observed(item, []string{input.ID}) {
@@ -219,13 +219,13 @@ func checkSnapshotReviewFiles(item task, review record, files map[string]snapsho
 	return nil
 }
 
-func checkedSnapshotVerifier(current session, runID string, identity *snapshotIdentity) error {
+func checkedSnapshotVerifier(current sourceSession, identity *snapshotIdentity) error {
 	found := false
 	for _, item := range current.Tasks {
 		if item.ContractID != "verify-targeted-go-tests" {
 			continue
 		}
-		if found || item.Status != "done" || item.Result == nil || item.Result.Status != "success" || !current.acceptsReceiptOrigin(item, runID) || item.SnapshotID != current.SnapshotID {
+		if found || !item.VerifiedOutputs || item.Result == nil {
 			return fmt.Errorf("missing or ambiguous snapshot verifier")
 		}
 		found = true

@@ -43,11 +43,18 @@ Dispatch the fixed contracts in this order:
    child is intentional evidence that the route was empty; never omit a route,
    count items yourself, or substitute filesystem paths for artifact refs.
 3. Treat only the `verify-targeted-go-tests` typed output, its declared
-   `go_test_verification` artifact, and the runtime action receipt as evidence
+   `go_test_verification` and `go_test_output` artifacts, and the runtime action receipt as evidence
    that Go tests ran. The verifier executes in the immutable reviewed-revision
    snapshot. `completed: true` attests execution, while `passed` records the
    target outcome. Failed tests remain review evidence and require final
    `completed_with_gaps`; a launch failure or timeout blocks PREPARE.
+   Tests have an explicit 30m package deadline and a 35m command deadline;
+   the action allows 40m including snapshot setup and evidence publication.
+   `timeout_kind` distinguishes `test`, `command`, `caller_deadline`, `canceled`,
+   and `none`. `diagnostic` is a bounded head/tail summary; `summary_truncated`
+   does not mean evidence was lost. `output_artifact_id` binds the complete
+   merged stdout/stderr (up to a 64MiB storage budget; overflow fails closed).
+   `output_truncated` still describes incomplete durable evidence and blocks.
    Never reuse or repeat a prior full-suite claim from prose; prior
    test evidence is admissible only when it arrives as an explicit artifact or
    receipt bound to the reviewed revision.
@@ -78,7 +85,8 @@ Dispatch the fixed contracts in this order:
    `{"tasks":[{"agent":"reviewer","contract_id":"inventory-review-supplement-requests","goal":"Inventory accepted typed evidence gaps."},{"agent":"reviewer","contract_id":"prepare-review-supplement","goal":"Prepare supplement worksets from the native inventory."}]}`.
    After that batch completes, dispatch
    `reviewer` with `contract_id="review-supplement-workset"` only when preparation
-   reports `item_count > 0`. An empty manifest is never dispatched. The runtime
+   reports `item_count > 0`. Zero items retain typed outcomes/limitations and
+   publish no executable manifest. The runtime
    expands the native manifest; never manually select items or copy request
    identities. This is at most ONE round, at most EIGHT supplement items,
    within the existing 32-review/64-source bound and frozen scope. Never

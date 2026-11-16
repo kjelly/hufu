@@ -35,7 +35,7 @@ type handoffInventory struct {
 
 // Source identity comes from the admitted contract and validated record, never
 // from the agent's name: a critic can itself produce a documentation review.
-func collectReviewHandoffs(current session, runID string) (handoffInventory, error) {
+func collectReviewHandoffs(current sourceSession) (handoffInventory, error) {
 	inventory := handoffInventory{Passed: true, SourceTaskIDs: []string{}, RequiredCriticSources: []string{}, Sources: []handoffSource{}, RequiredGapRefs: []gapRef{}}
 	seen := make(map[string]bool)
 	for _, item := range current.Tasks {
@@ -48,7 +48,7 @@ func collectReviewHandoffs(current session, runID string) (handoffInventory, err
 			return handoffInventory{}, fmt.Errorf("duplicate or empty review source ID")
 		}
 		seen[item.ID] = true
-		value, err := accepted(item, current, runID)
+		value, err := accepted(item)
 		if err != nil {
 			return handoffInventory{}, err
 		}
@@ -92,7 +92,7 @@ func collectReviewHandoffs(current session, runID string) (handoffInventory, err
 			inventory.RequiredCriticSources = append(inventory.RequiredCriticSources, source.TaskID)
 		}
 	}
-	coverage, err := collectSnapshotCoverage(current, runID)
+	coverage, err := collectSnapshotCoverage(current)
 	if err != nil {
 		return handoffInventory{}, err
 	}
@@ -102,7 +102,7 @@ func collectReviewHandoffs(current session, runID string) (handoffInventory, err
 	return inventory, nil
 }
 
-func readReferences(item task) []string {
+func readReferences(item sourceTask) []string {
 	refs := []string{}
 	for _, file := range item.Result.FilesRead {
 		refs = append(refs, file.Path)
@@ -111,8 +111,8 @@ func readReferences(item task) []string {
 	return refs
 }
 
-func verifyHandoffInventory(current session, runID string) error {
-	expected, err := collectReviewHandoffs(current, runID)
+func verifyHandoffInventory(current sourceSession) error {
+	expected, err := collectReviewHandoffs(current)
 	if err != nil {
 		return err
 	}
@@ -125,7 +125,7 @@ func verifyHandoffInventory(current session, runID string) error {
 		if item.ContractID != "inventory-review-handoffs" {
 			continue
 		}
-		if found || item.Status != "done" || item.Result == nil || item.Result.Status != "success" || !current.acceptsReceiptOrigin(item, runID) || item.SnapshotID != current.SnapshotID || !equalJSON(encoded, item.Result.RuntimeOutputs["review_handoff_inventory"]) {
+		if found || !item.VerifiedOutputs || item.Result == nil || !equalJSON(encoded, item.Result.RuntimeOutputs["review_handoff_inventory"]) {
 			return fmt.Errorf("missing, stale, or ambiguous review handoff inventory")
 		}
 		found = true

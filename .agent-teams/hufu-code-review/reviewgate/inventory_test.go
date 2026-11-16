@@ -22,7 +22,7 @@ func TestInventoryIncludesDocumentationReviewPerformedByCritic(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.Tasks = append(fixture.Tasks, item)
-	inventory, err := collectReviewHandoffs(fixture, "run-1")
+	inventory, err := fixtureCollectReviewHandoffs(fixture, "run-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestInventoryIncludesDocumentationReviewPerformedByCritic(t *testing.T) {
 	if inventory.Sources[2].TaskID != "13" || inventory.Sources[2].WorksetKey != "unit-0000" || inventory.Sources[2].Lens != "documentation-risk" || !slices.Equal(inventory.Sources[2].ArtifactsRead, []string{"snapshot-a", "snapshot-b"}) {
 		t.Fatalf("task/workset/artifact ownership lost: %+v", inventory.Sources[2])
 	}
-	if _, _, err := verify(fixture, "run-1"); err == nil || !strings.Contains(err.Error(), "unassigned required critique") {
+	if _, _, err := fixtureVerify(fixture, "run-1"); err == nil || !strings.Contains(err.Error(), "unassigned required critique") {
 		t.Fatalf("missing independent documentation critique accepted: %v", err)
 	}
 }
@@ -54,7 +54,7 @@ func TestInventoryRejectsUnacceptedOrSubstitutedHandoffs(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := gateFixture(t)
 			test.edit(&fixture)
-			if _, err := collectReviewHandoffs(fixture, "run-1"); err == nil {
+			if _, err := fixtureCollectReviewHandoffs(fixture, "run-1"); err == nil {
 				t.Fatal("invalid review handoff accepted")
 			}
 		})
@@ -69,7 +69,7 @@ func TestInventoryVerificationRejectsOmittedSource(t *testing.T) {
 	}
 	inventory.RequiredCriticSources = inventory.RequiredCriticSources[:1]
 	fixture.Tasks[7].Result.RuntimeOutputs["review_handoff_inventory"] = raw(t, inventory)
-	if err := verifyHandoffInventory(fixture, "run-1"); err == nil {
+	if err := fixtureVerifyHandoffInventory(fixture, "run-1"); err == nil {
 		t.Fatal("inventory omitted a required source")
 	}
 }
@@ -89,7 +89,7 @@ func TestInventoryEnumeratesOriginalGapIndices(t *testing.T) {
 		}
 		fixture.Tasks = append(fixture.Tasks, fixtureTask(t, source.id, source.contract, "completed_with_gaps", payload{Record: raw(t, r)}, r, nil))
 	}
-	inventory, err := collectReviewHandoffs(fixture, "run-1")
+	inventory, err := fixtureCollectReviewHandoffs(fixture, "run-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestInventoryVerificationRejectsInventedGapIndex(t *testing.T) {
 	}
 	inventory.RequiredGapRefs = append(inventory.RequiredGapRefs, gapRef{TaskID: "3", Index: 1})
 	fixture.Tasks[7].Result.RuntimeOutputs["review_handoff_inventory"] = raw(t, inventory)
-	if err := verifyHandoffInventory(fixture, "run-1"); err == nil {
+	if err := fixtureVerifyHandoffInventory(fixture, "run-1"); err == nil {
 		t.Fatal("inventory with an invented gap accepted")
 	}
 }

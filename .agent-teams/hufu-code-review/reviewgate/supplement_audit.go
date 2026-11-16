@@ -1,9 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -17,39 +14,20 @@ type supplementOutcome struct {
 	Limitations  []sourceLimitation `json:"limitations"`
 }
 
-func acceptedSupplementAction(item task, current session, runID string) error {
-	if item.Status != "done" || item.Result == nil || item.Result.Status != "success" || !current.acceptsReceiptOrigin(item, runID) || item.SnapshotID != current.SnapshotID || item.Receipt.Attempt <= 0 || item.Receipt.ActionID == "" || item.VerifyResult == nil || item.VerifyResult.ExitCode == nil || *item.VerifyResult.ExitCode != 0 || item.VerifyResult.TimedOut || item.VerifyResult.Fingerprint == "" {
-		return fmt.Errorf("supplement action lacks a verified runtime receipt")
-	}
-	data, err := json.Marshal(item.Result.RuntimeOutputs)
-	if err != nil {
-		return err
-	}
-	canonical, err := canonicalJSON(data)
-	if err != nil {
-		return err
-	}
-	// Native runtime output receipts cover the two-space-indented canonical
-	// map. Compact JSON remains the format for structured result payloads.
-	var receiptJSON bytes.Buffer
-	if err := json.Indent(&receiptJSON, canonical, "", "  "); err != nil {
-		return err
-	}
-	sum := sha256.Sum256(receiptJSON.Bytes())
-	digest := "sha256:" + hex.EncodeToString(sum[:])
-	if item.Result.RuntimeOutputsHash != digest || item.Receipt.RuntimeOutputsHash != digest {
-		return fmt.Errorf("supplement action runtime outputs differ from its receipt")
+func acceptedSupplementAction(item sourceTask) error {
+	if !item.VerifiedOutputs {
+		return fmt.Errorf("supplement action lacks verified runtime outputs: %s", item.OutputsError)
 	}
 	return nil
 }
 
-func collectSupplementOutcomes(current session, runID string) ([]supplementOutcome, error) {
+func collectSupplementOutcomes(current sourceSession) ([]supplementOutcome, error) {
 	outcomes := []supplementOutcome{}
-	requests, err := collectSupplementRequests(current, runID)
+	requests, err := collectSupplementRequests(current)
 	if err != nil {
 		return nil, err
 	}
-	var inventory, producer *task
+	var inventory, producer *sourceTask
 	for index := range current.Tasks {
 		item := &current.Tasks[index]
 		switch item.ContractID {
@@ -76,10 +54,10 @@ func collectSupplementOutcomes(current session, runID string) ([]supplementOutco
 	if inventory == nil || producer == nil {
 		return nil, fmt.Errorf("typed source gaps require the bounded supplement request and prepare actions before report inventory")
 	}
-	if err := acceptedSupplementAction(*inventory, current, runID); err != nil {
+	if err := acceptedSupplementAction(*inventory); err != nil {
 		return nil, err
 	}
-	if err := acceptedSupplementAction(*producer, current, runID); err != nil {
+	if err := acceptedSupplementAction(*producer); err != nil {
 		return nil, err
 	}
 	expected, err := json.Marshal(requests)
@@ -124,7 +102,7 @@ func collectSupplementOutcomes(current session, runID string) ([]supplementOutco
 	if len(byKey) > 8 {
 		return nil, fmt.Errorf("supplement workset exceeds eight-item round limit")
 	}
-	if err := verifySupplementReviews(current, runID, byKey); err != nil {
+	if err := verifySupplementReviews(current, byKey); err != nil {
 		return nil, err
 	}
 	return outcomes, nil
@@ -136,7 +114,7 @@ type frozenGapIdentity struct {
 	Hash   string
 }
 
-func verifySupplementReviews(current session, runID string, byKey map[string]frozenGapIdentity) error {
+func verifySupplementReviews(current sourceSession, byKey map[string]frozenGapIdentity) error {
 	for _, item := range current.Tasks {
 		if item.ContractID != "review-supplement-workset" {
 			continue
@@ -149,7 +127,7 @@ func verifySupplementReviews(current session, runID string, byKey map[string]fro
 		if !ok || binding["source_task_id"] != identity.TaskID || binding["source_gap_index"] != strconv.Itoa(identity.Index) || binding["source_payload_sha256"] != identity.Hash || binding["supplement_round"] != "1" {
 			return fmt.Errorf("supplement review does not match its accepted request")
 		}
-		if _, err := accepted(item, current, runID); err != nil {
+		if _, err := accepted(item); err != nil {
 			return err
 		}
 		delete(byKey, binding["key"])

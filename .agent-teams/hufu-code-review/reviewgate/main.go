@@ -4,14 +4,11 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -90,12 +87,11 @@ type payload struct {
 	SupplementOutcomes json.RawMessage `json:"supplement_outcomes,omitempty"`
 }
 
-type task struct {
+type sourceTask struct {
 	ID           string
 	Status       string
 	ContractID   string   `json:"contract_id"`
 	EvidenceFrom []string `json:"evidence_from"`
-	SnapshotID   string   `json:"run_input_snapshot_id"`
 	Binding      *struct {
 		Bindings     map[string]string `json:"bindings"`
 		TouchedPaths []string          `json:"touched_paths"`
@@ -105,28 +101,16 @@ type task struct {
 			SHA256 string `json:"sha256"`
 		} `json:"inputs"`
 	} `json:"workset_binding"`
-	Receipt *struct {
-		RunID              string `json:"run_id"`
-		TaskID             string `json:"task_id"`
-		Attempt            int    `json:"attempt"`
-		ProducerID         string `json:"producer_id"`
-		ModelExecutionID   string `json:"model_execution_id"`
-		TranscriptRef      string `json:"transcript_ref"`
-		ExitCode           *int   `json:"exit_code,omitempty"`
-		ActionID           string `json:"action_invocation_id"`
-		RuntimeOutputsHash string `json:"runtime_outputs_hash"`
-	} `json:"execution_receipt"`
-	VerifyResult *struct {
-		ExitCode    *int   `json:"exit_code"`
-		Fingerprint string `json:"fingerprint"`
-		TimedOut    bool   `json:"timed_out"`
-	}
+	VerifiedResult  bool   `json:"verified_result"`
+	VerifiedOutputs bool   `json:"verified_outputs"`
+	ResultError     string `json:"result_error"`
+	OutputsError    string `json:"outputs_error"`
+
 	Result *struct {
-		RuntimeOutputs     map[string]json.RawMessage `json:"runtime_outputs"`
-		RuntimeOutputsHash string                     `json:"runtime_outputs_hash"`
-		Status             string                     `json:"status"`
-		Findings           []finding                  `json:"findings"`
-		Invariants         *struct {
+		RuntimeOutputs map[string]json.RawMessage `json:"runtime_outputs"`
+		Status         string                     `json:"status"`
+		Findings       []finding                  `json:"findings"`
+		Invariants     *struct {
 			Assessments []invariantAssessment `json:"assessments"`
 		} `json:"invariant_verification"`
 		FilesRead []struct {
@@ -139,11 +123,10 @@ type task struct {
 	} `json:"typed_result"`
 }
 
-type session struct {
-	RuntimeWorkspace  string            `json:"runtime_workspace"`
-	SnapshotID        string            `json:"active_run_input_snapshot_id"`
-	Tasks             []task            `json:"tasks"`
-	RecoveredTaskRuns map[string]string `json:"-"`
+type sourceSession struct {
+	Version int          `json:"version"`
+	InputID string       `json:"input_id"`
+	Tasks   []sourceTask `json:"tasks"`
 }
 
 // Run is the only embedded action entrypoint. Runtime-owned action identity,
@@ -182,38 +165,28 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return fmt.Errorf("expected one action envelope")
 	}
-	root, runtimeRoot, err := checkpointRoot(os.Getenv("HUFU_WORKSPACE"), os.Getenv("HUFU_RUN_ID"), os.Getenv("HUFU_ACTION_INVOCATION_ID"))
+	data, err := actionstate.ActionSources(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("read verified review sources: %w", err)
 	}
-	data, err := actionstate.SessionCheckpoint(root)
-	if err != nil {
-		return fmt.Errorf("read review checkpoint: %w", err)
-	}
-	var current session
+	var current sourceSession
 	if err := json.Unmarshal(data, &current); err != nil {
 		return err
 	}
-	// The runtime-owned staging path and current bound occurrence select the
-	// checkpoint, never a model-selected session path.
-	if current.RuntimeWorkspace != "" && current.RuntimeWorkspace != runtimeRoot {
-		return fmt.Errorf("runtime workspace does not match checkpoint")
+	if current.Version != 1 {
+		return fmt.Errorf("unsupported source view version")
 	}
 	matched := false
 	for _, item := range current.Tasks {
 		isGate := (envelope.Type == "verify_review_report" && item.ContractID == "verify-review-report") ||
 			(envelope.Type == "inventory_review_handoffs" && item.ContractID == "inventory-review-handoffs") ||
 			(envelope.Type == "inventory_review_supplement_requests" && item.ContractID == "inventory-review-supplement-requests")
-		if item.ID == os.Getenv("HUFU_TASK_ID") && isGate && item.Status == "in_progress" && current.SnapshotID != "" && item.SnapshotID == current.SnapshotID {
+		if item.ID == os.Getenv("HUFU_TASK_ID") && isGate {
 			matched = true
 		}
 	}
 	if !matched {
-		return fmt.Errorf("current review gate occurrence is absent from checkpoint")
-	}
-	current.RecoveredTaskRuns, err = recoveryOrigins(os.Getenv("HUFU_RECOVERED_TASK_RUNS"))
-	if err != nil {
-		return err
+		return fmt.Errorf("current review gate occurrence is absent from source view")
 	}
 	for _, item := range current.Tasks {
 		if item.ContractID == "produce-workset" && item.Result != nil {
@@ -228,39 +201,12 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	return runGateAction(ctx, envelope.Type, current, out)
 }
 
-// This adapter intentionally uses the runtime action staging layout. A layout
-// change fails closed; it never searches for or guesses another session.
-func checkpointRoot(workspace, runID, actionID string) (string, string, error) {
-	if !filepath.IsAbs(workspace) || runID == "" || actionID == "" {
-		return "", "", fmt.Errorf("missing runtime action identity")
-	}
-	root := filepath.Clean(workspace)
-	for depth := 0; depth < 5; depth++ {
-		root = filepath.Dir(root)
-	}
-	runtimeRoot := filepath.Join(root, "runtime")
-	if filepath.Join(runtimeRoot, "runs", runID, "actions", actionID) != workspace {
-		return "", "", fmt.Errorf("unsupported action workspace layout")
-	}
-	return root, runtimeRoot, nil
-}
-
-func accepted(item task, current session, runID string) (payload, error) {
+func accepted(item sourceTask) (payload, error) {
 	var value payload
-	// Current-run legacy handoffs may omit snapshot metadata. Recovered
-	// handoffs require the runtime-issued origin grant and selected snapshot.
-	if item.Status != "done" || item.Result == nil || (item.Result.Status != "success" && item.Result.Status != "completed_with_gaps") || item.Result.Payload == nil || !current.acceptsReceiptOrigin(item, runID) || item.Receipt.Attempt <= 0 || item.Receipt.ProducerID == "" || item.Receipt.ModelExecutionID == "" || item.Receipt.TranscriptRef == "" || (item.SnapshotID != "" && item.SnapshotID != current.SnapshotID) || item.VerifyResult == nil || item.VerifyResult.ExitCode == nil || *item.VerifyResult.ExitCode != 0 || item.VerifyResult.TimedOut || item.VerifyResult.Fingerprint == "" {
-		return value, fmt.Errorf("task %s lacks a current accepted, verified handoff", item.ID)
+	if !item.VerifiedResult || item.Result == nil || item.Result.Payload == nil {
+		return value, fmt.Errorf("task %s lacks a current accepted, verified handoff: %s", item.ID, item.ResultError)
 	}
-	canonical, err := canonicalJSON(item.Result.Payload.Value)
-	if err != nil {
-		return value, err
-	}
-	sum := sha256.Sum256(canonical)
-	if hex.EncodeToString(sum[:]) != item.Result.Payload.Hash {
-		return value, fmt.Errorf("task %s payload hash mismatch", item.ID)
-	}
-	if err := json.Unmarshal(canonical, &value); err != nil {
+	if err := json.Unmarshal(item.Result.Payload.Value, &value); err != nil {
 		return value, err
 	}
 	return value, nil
@@ -282,7 +228,7 @@ func canonicalJSON(raw json.RawMessage) ([]byte, error) {
 	return json.Marshal(value)
 }
 
-func bind(inputs []inputReview, ids []string, tasks map[string]task, values map[string]payload) error {
+func bind(inputs []inputReview, ids []string, tasks map[string]sourceTask, values map[string]payload) error {
 	if len(inputs) != len(ids) {
 		return fmt.Errorf("input handoff count differs from evidence_from")
 	}
@@ -309,7 +255,7 @@ func bind(inputs []inputReview, ids []string, tasks map[string]task, values map[
 	return nil
 }
 
-func observed(item task, evidence []string) bool {
+func observed(item sourceTask, evidence []string) bool {
 	if len(evidence) == 0 || item.Result == nil {
 		return false
 	}
@@ -327,8 +273,8 @@ func observed(item task, evidence []string) bool {
 	return true
 }
 
-func verify(current session, runID string) (string, string, error) {
-	tasks := make(map[string]task)
+func verify(current sourceSession) (string, string, error) {
+	tasks := make(map[string]sourceTask)
 	values := make(map[string]payload)
 	records := make(map[string]record)
 	var reportID string
@@ -341,7 +287,7 @@ func verify(current session, runID string) (string, string, error) {
 		if _, duplicate := tasks[item.ID]; duplicate {
 			return "", "", fmt.Errorf("duplicate task ID")
 		}
-		value, err := accepted(item, current, runID)
+		value, err := accepted(item)
 		if err != nil {
 			if item.ContractID != "synthesize-review" {
 				return "", "", &sourceReviewError{cause: err}
@@ -402,7 +348,7 @@ func verify(current session, runID string) (string, string, error) {
 		}
 	}
 	report := values[reportID]
-	if err := verifyActionEvidence(current, report, runID); err != nil {
+	if err := verifyActionEvidence(current, report); err != nil {
 		return "", "", err
 	}
 	testLimited, err := verifyTestEvidence(report.Tests)
@@ -410,7 +356,7 @@ func verify(current session, runID string) (string, string, error) {
 		return "", "", err
 	}
 	limited = limited || testLimited
-	snapshotCoverage, err := collectSnapshotCoverage(current, runID)
+	snapshotCoverage, err := collectSnapshotCoverage(current)
 	if err != nil {
 		return "", "", err
 	}
@@ -421,7 +367,7 @@ func verify(current session, runID string) (string, string, error) {
 		}
 		limited = limited || len(snapshotCoverage.Uncompleted) > 0
 	}
-	if err := verifyReportHandoffEvidence(current, report, runID); err != nil {
+	if err := verifyReportHandoffEvidence(current, report); err != nil {
 		return "", "", err
 	}
 	if len(report.InputReview) != len(records) {
@@ -471,7 +417,7 @@ func verifyTestEvidence(data json.RawMessage) (bool, error) {
 	return !*tests.Passed || tests.OutputTruncated, nil
 }
 
-func verifyReview(item task, r record) error {
+func verifyReview(item sourceTask, r record) error {
 	if r.Kind != "review" || item.Binding == nil || r.Revision != item.Binding.Bindings["review_revision"] || r.Key != item.Binding.Bindings["key"] || r.Lens != item.Binding.Bindings["lens"] {
 		return fmt.Errorf("task %s changed its workset identity", item.ID)
 	}
@@ -495,7 +441,7 @@ func verifyReview(item task, r record) error {
 // The producer binds the candidate inventory; only the model interprets prose.
 // Every missing path must receive a grounded classification. Uncertainty stays
 // visible in the existing gap/coverage contract, never an implicit exemption.
-func verifyReferenceAssessments(item task, r record) error {
+func verifyReferenceAssessments(item sourceTask, r record) error {
 	var ids []string
 	encoded := item.Binding.Bindings["reference_candidate_ids"]
 	if err := json.Unmarshal([]byte(encoded), &ids); err != nil || ids == nil || len(ids) > 128 {
@@ -533,7 +479,7 @@ func verifyReferenceAssessments(item task, r record) error {
 	return nil
 }
 
-func verifyCritique(item task, r record, tasks map[string]task, values map[string]payload, records map[string]record, critiqued map[string]bool) (string, bool, error) {
+func verifyCritique(item sourceTask, r record, tasks map[string]sourceTask, values map[string]payload, records map[string]record, critiqued map[string]bool) (string, bool, error) {
 	if r.Kind != "critique" || len(item.EvidenceFrom) != 1 || len(r.InputReview) != 1 {
 		return "", false, fmt.Errorf("critic %s must audit exactly one source review", item.ID)
 	}
@@ -571,7 +517,7 @@ func verifyCritique(item task, r record, tasks map[string]task, values map[strin
 	return sourceID, reportedGaps, nil
 }
 
-func verifyInvariants(item task, r record) error {
+func verifyInvariants(item sourceTask, r record) error {
 	var acceptedAssessments []invariantAssessment
 	if item.Result.Invariants != nil {
 		acceptedAssessments = item.Result.Invariants.Assessments
@@ -598,7 +544,7 @@ func verifyInvariants(item task, r record) error {
 	return nil
 }
 
-func verifyActionEvidence(current session, report payload, runID string) error {
+func verifyActionEvidence(current sourceSession, report payload) error {
 	seen := make(map[string]bool)
 	for _, item := range current.Tasks {
 		var source json.RawMessage
@@ -617,7 +563,7 @@ func verifyActionEvidence(current session, report payload, runID string) error {
 		default:
 			continue
 		}
-		if seen[item.ContractID] || item.Status != "done" || item.Result == nil || item.Result.Status != "success" || !current.acceptsReceiptOrigin(item, runID) || item.SnapshotID != current.SnapshotID {
+		if seen[item.ContractID] || !item.VerifiedOutputs || item.Result == nil {
 			return fmt.Errorf("missing or ambiguous PREPARE evidence")
 		}
 		seen[item.ContractID] = true
@@ -636,7 +582,7 @@ func verifyActionEvidence(current session, report payload, runID string) error {
 	return nil
 }
 
-func verifyGaps(report payload, records map[string]record, tasks map[string]task) error {
+func verifyGaps(report payload, records map[string]record, tasks map[string]sourceTask) error {
 	seen := make(map[string]bool)
 	for _, gap := range report.GapResolutions {
 		r, ok := records[gap.TaskID]
@@ -675,7 +621,7 @@ func verifyGaps(report payload, records map[string]record, tasks map[string]task
 	return nil
 }
 
-func findReportID(tasks map[string]task) string {
+func findReportID(tasks map[string]sourceTask) string {
 	for id, item := range tasks {
 		if item.ContractID == "synthesize-review" {
 			return id
@@ -684,33 +630,33 @@ func findReportID(tasks map[string]task) string {
 	return ""
 }
 
-func runGateAction(ctx context.Context, actionType string, current session, out io.Writer) error {
+func runGateAction(ctx context.Context, actionType string, current sourceSession, out io.Writer) error {
 	if actionType == "inventory_review_supplement_requests" {
-		requests, err := collectSupplementRequests(current, os.Getenv("HUFU_RUN_ID"))
+		requests, err := collectSupplementRequests(current)
 		if err != nil {
 			return err
 		}
 		return json.NewEncoder(out).Encode(map[string]any{"outputs": map[string]any{"review_supplement_requests": requests}})
 	}
 	if actionType == "inventory_review_handoffs" {
-		inventory, err := collectReviewHandoffs(current, os.Getenv("HUFU_RUN_ID"))
+		inventory, err := collectReviewHandoffs(current)
 		if err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		coverage, err := collectSnapshotCoverage(current, os.Getenv("HUFU_RUN_ID"))
+		coverage, err := collectSnapshotCoverage(current)
 		if err != nil {
 			return err
 		}
-		outcomes, err := collectSupplementOutcomes(current, os.Getenv("HUFU_RUN_ID"))
+		outcomes, err := collectSupplementOutcomes(current)
 		if err != nil {
 			return err
 		}
 		return json.NewEncoder(out).Encode(map[string]any{"outputs": map[string]any{"review_handoff_inventory": inventory, "snapshot_coverage": coverage, "supplement_outcomes": outcomes}})
 	}
-	reportID, reportHash, err := verify(current, os.Getenv("HUFU_RUN_ID"))
+	reportID, reportHash, err := verify(current)
 	if err != nil {
 		// verify returns this type directly. Native errors.As reflection cannot
 		// inspect a target type defined by the trusted-static interpreter.
@@ -730,11 +676,11 @@ func runGateAction(ctx context.Context, actionType string, current session, out 
 	return json.NewEncoder(out).Encode(map[string]any{"outputs": map[string]any{"review_report_verification": map[string]any{"passed": true, "report_task_id": reportID, "report_payload_sha256": reportHash}}})
 }
 
-func verifyReportHandoffEvidence(current session, report payload, runID string) error {
-	if err := verifyHandoffInventory(current, runID); err != nil {
+func verifyReportHandoffEvidence(current sourceSession, report payload) error {
+	if err := verifyHandoffInventory(current); err != nil {
 		return err
 	}
-	outcomes, err := collectSupplementOutcomes(current, runID)
+	outcomes, err := collectSupplementOutcomes(current)
 	if err != nil {
 		return err
 	}

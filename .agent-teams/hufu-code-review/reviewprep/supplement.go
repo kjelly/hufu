@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -65,33 +64,20 @@ type supplementOutcome struct {
 }
 
 type supplementTask struct {
-	ID         string
-	Status     string
-	ContractID string `json:"contract_id"`
-	SnapshotID string `json:"run_input_snapshot_id"`
-	Binding    *struct {
+	ID              string
+	Status          string
+	ContractID      string `json:"contract_id"`
+	VerifiedResult  bool   `json:"verified_result"`
+	VerifiedOutputs bool   `json:"verified_outputs"`
+	OutputsError    string `json:"outputs_error"`
+	Workspace       string `json:"workspace"`
+	Binding         *struct {
 		Bindings map[string]string `json:"bindings"`
 	} `json:"workset_binding"`
-	Receipt *struct {
-		RunID              string `json:"run_id"`
-		TaskID             string `json:"task_id"`
-		ActionID           string `json:"action_invocation_id"`
-		ProducerID         string `json:"producer_id"`
-		ModelExecutionID   string `json:"model_execution_id"`
-		TranscriptRef      string `json:"transcript_ref"`
-		RuntimeOutputsHash string `json:"runtime_outputs_hash"`
-		Attempt            int    `json:"attempt"`
-	} `json:"execution_receipt"`
-	VerifyResult *struct {
-		ExitCode    *int   `json:"exit_code"`
-		TimedOut    bool   `json:"timed_out"`
-		Fingerprint string `json:"fingerprint"`
-	}
 	Result *struct {
-		Status             string                     `json:"status"`
-		Outputs            map[string]json.RawMessage `json:"runtime_outputs"`
-		RuntimeOutputsHash string                     `json:"runtime_outputs_hash"`
-		Payload            *struct {
+		Status  string                     `json:"status"`
+		Outputs map[string]json.RawMessage `json:"runtime_outputs"`
+		Payload *struct {
 			Value json.RawMessage `json:"value"`
 			Hash  string          `json:"sha256"`
 		} `json:"structured_payload"`
@@ -111,36 +97,22 @@ func PrepareReviewSupplement(ctx context.Context, payload string) (actionResult,
 		return actionResult{}, err
 	}
 	workspace := os.Getenv("HUFU_WORKSPACE")
-	runID, actionID := os.Getenv("HUFU_RUN_ID"), os.Getenv("HUFU_ACTION_INVOCATION_ID")
-	root := filepath.Clean(workspace)
-	for count := 0; count < 5; count++ {
-		root = filepath.Dir(root)
-	}
-	if !filepath.IsAbs(workspace) || runID == "" || actionID == "" || filepath.Join(root, "runtime", "runs", runID, "actions", actionID) != workspace {
-		return actionResult{}, fmt.Errorf("unsupported supplement action identity")
-	}
-	data, err := actionstate.SessionCheckpoint(root)
+	data, err := actionstate.ActionSources(ctx)
 	if err != nil {
 		return actionResult{}, err
 	}
 	var current struct {
-		SnapshotID string           `json:"active_run_input_snapshot_id"`
+		Version    int              `json:"version"`
+		SnapshotID string           `json:"input_id"`
 		Tasks      []supplementTask `json:"tasks"`
 	}
 	if err := json.Unmarshal(data, &current); err != nil {
 		return actionResult{}, err
 	}
-	origins := map[string]string{}
-	if raw := os.Getenv("HUFU_RECOVERED_TASK_RUNS"); raw != "" {
-		if len(raw) > 64*1024 {
-			return actionResult{}, fmt.Errorf("recovery origins exceed limit")
-		}
-		if err := json.Unmarshal([]byte(raw), &origins); err != nil {
-			return actionResult{}, err
-		}
+	if current.Version != 1 {
+		return actionResult{}, fmt.Errorf("unsupported source view version")
 	}
-	valid := func(task supplementTask) bool { return validSupplementTask(task, current.SnapshotID, runID, origins) }
-	producer, requestTask, err := selectSupplementPrerequisites(current.Tasks, current.SnapshotID, os.Getenv("HUFU_TASK_ID"), valid)
+	producer, requestTask, err := selectSupplementPrerequisites(current.Tasks, os.Getenv("HUFU_TASK_ID"))
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -158,16 +130,13 @@ func PrepareReviewSupplement(ctx context.Context, payload string) (actionResult,
 	if requests.Round != 1 || requests.SnapshotID != current.SnapshotID {
 		return actionResult{}, fmt.Errorf("supplement request snapshot or round mismatch")
 	}
-	if err := validateSupplementSources(current.Tasks, requests, scope, valid); err != nil {
+	if err := validateSupplementSources(current.Tasks, requests, scope); err != nil {
 		return actionResult{}, err
 	}
-	if err := verifySupplementRuntimeOutputs(*producer); err != nil {
-		return actionResult{}, err
+	producerRoot := producer.Workspace
+	if producerRoot == "" {
+		return actionResult{}, fmt.Errorf("verified producer workspace missing")
 	}
-	if err := verifySupplementRuntimeOutputs(*requestTask); err != nil {
-		return actionResult{}, err
-	}
-	producerRoot := filepath.Join(root, "runtime", "runs", producer.Receipt.RunID, "actions", producer.Receipt.ActionID)
 	originals := 0
 	for _, task := range current.Tasks {
 		switch task.ContractID {
@@ -262,6 +231,13 @@ func materializeReviewSupplement(ctx context.Context, artifactRoot, producerRoot
 		total += len(candidate.sourceBundle) + len(candidate.evidenceInventory) + candidate.diff.Len()
 		outcomes = append(outcomes, outcome)
 	}
+	result := actionResult{Outputs: map[string]any{"supplement_prepared": true, "supplement_round": 1, "supplement_outcomes": outcomes, "item_count": len(items), "scope": scope}, Artifacts: artifacts}
+	// An unmaterialized request remains typed audit evidence, not executable
+	// work. Runtime projects every declared workset before action acceptance,
+	// even when the coordinator would subsequently skip empty fan-out.
+	if len(items) == 0 {
+		return result, nil
+	}
 	m := manifest{SchemaVersion: manifestSchemaVersion, Scope: scope, Items: items, Range: reviewRange{Start: scope.Resolved.Base, End: scope.Resolved.Head}, Observed: observedBudget{WorksetItems: len(items)}}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -276,8 +252,8 @@ func materializeReviewSupplement(ctx context.Context, artifactRoot, producerRoot
 		return actionResult{}, err
 	}
 	manifestArtifact.Description = "supplemental review workset manifest"
-	artifacts = append(artifacts, manifestArtifact)
-	return actionResult{Outputs: map[string]any{"supplement_prepared": true, "supplement_round": 1, "supplement_outcomes": outcomes, "item_count": len(items), "scope": scope}, Artifacts: artifacts}, nil
+	result.Artifacts = append(result.Artifacts, manifestArtifact)
+	return result, nil
 }
 
 func prepareSupplementBatch(producerRoot string, request frozenSupplementRequest, remaining int) (*batch, *reviewSourceSnapshot, *supplementLimitation) {
@@ -410,62 +386,15 @@ func materializeSupplementBatch(sourceRoot, resolvedRoot string, frozen frozenSo
 	return current, snapshot, nil
 }
 
-func verifySupplementRuntimeOutputs(task supplementTask) error {
-	if task.Result == nil || task.Receipt == nil || task.Result.RuntimeOutputsHash == "" || task.Result.RuntimeOutputsHash != task.Receipt.RuntimeOutputsHash {
-		return fmt.Errorf("supplement prerequisite lacks receipt-bound runtime outputs")
-	}
-	data, err := json.Marshal(task.Result.Outputs)
-	if err != nil {
-		return err
-	}
-	// Runtime output receipts hash the complete two-space-indented JSON map.
-	// Structured result payloads below use compact JSON; their canonicalizer
-	// must not be reused for a runtime output receipt.
-	var value any
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if err := decoder.Decode(&value); err != nil {
-		return err
-	}
-	canonical, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return err
-	}
-	// Runtime output receipts hash the indented canonical output map. Source
-	// structured payloads use compact JSON and retain their separate hash path.
-	var receiptBytes bytes.Buffer
-	if err := json.Indent(&receiptBytes, canonical, "", "  "); err != nil {
-		return err
-	}
-	if "sha256:"+sha256Hex(receiptBytes.Bytes()) != task.Result.RuntimeOutputsHash {
-		return fmt.Errorf("supplement prerequisite runtime output digest mismatch")
-	}
-	return nil
-}
-
-func canonicalSupplementJSON(data []byte) ([]byte, error) {
-	var value any
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if err := decoder.Decode(&value); err != nil {
-		return nil, err
-	}
-	return json.Marshal(value)
-}
-
-func validateSupplementSources(tasks []supplementTask, requests frozenSupplementRequests, scope scopeAttestation, valid func(supplementTask) bool) error {
+func validateSupplementSources(tasks []supplementTask, requests frozenSupplementRequests, scope scopeAttestation) error {
 	for _, request := range requests.Requests {
 		found := false
 		for _, task := range tasks {
 			if task.ID != request.SourceTaskID {
 				continue
 			}
-			if !valid(task) || task.Receipt.ProducerID == "" || task.Receipt.ModelExecutionID == "" || task.Receipt.TranscriptRef == "" || task.Result.Payload == nil || task.Binding == nil || task.Result.Payload.Hash != request.SourceHash {
+			if !task.VerifiedResult || task.Result == nil || task.Result.Payload == nil || task.Binding == nil || task.Result.Payload.Hash != request.SourceHash {
 				return fmt.Errorf("supplement source receipt mismatch")
-			}
-			canonical, err := canonicalSupplementJSON(task.Result.Payload.Value)
-			if err != nil || sha256Hex(canonical) != request.SourceHash {
-				return fmt.Errorf("supplement source payload digest mismatch")
 			}
 			switch task.ContractID {
 			case "review-primary-workset", "review-documentation-workset", "review-documentation-escalation":
@@ -504,35 +433,31 @@ func validateSupplementSources(tasks []supplementTask, requests frozenSupplement
 	return nil
 }
 
-func validSupplementTask(task supplementTask, snapshotID, runID string, origins map[string]string) bool {
-	return task.Status == "done" && task.Result != nil && (task.Result.Status == "success" || task.Result.Status == "completed_with_gaps") && snapshotID != "" && (task.SnapshotID == "" || task.SnapshotID == snapshotID) && task.Receipt != nil && task.Receipt.TaskID == task.ID && task.Receipt.Attempt > 0 && (task.Receipt.RunID == runID || origins[task.ID] == task.Receipt.RunID && task.SnapshotID == snapshotID) && task.VerifyResult != nil && task.VerifyResult.ExitCode != nil && *task.VerifyResult.ExitCode == 0 && !task.VerifyResult.TimedOut && task.VerifyResult.Fingerprint != ""
-}
-
-func selectSupplementPrerequisites(tasks []supplementTask, snapshotID, taskID string, valid func(supplementTask) bool) (*supplementTask, *supplementTask, error) {
+func selectSupplementPrerequisites(tasks []supplementTask, taskID string) (*supplementTask, *supplementTask, error) {
 	var producer, requestTask *supplementTask
 	active := false
 	for index := range tasks {
 		task := &tasks[index]
 		if task.ContractID == "prepare-review-supplement" {
-			if task.ID != taskID || task.Status != "in_progress" || task.SnapshotID != snapshotID || active {
+			if task.ID != taskID || task.Status != "in_progress" || active {
 				return nil, nil, fmt.Errorf("supplement is limited to one round")
 			}
 			active = true
 		}
 		if task.ContractID == "produce-workset" {
-			if producer != nil || !valid(*task) || task.Result.Status != "success" || task.SnapshotID != snapshotID {
-				return nil, nil, fmt.Errorf("invalid original producer")
+			if producer != nil || !task.VerifiedOutputs || task.Result == nil {
+				return nil, nil, fmt.Errorf("invalid original producer: %s", task.OutputsError)
 			}
 			producer = task
 		}
 		if task.ContractID == "inventory-review-supplement-requests" {
-			if requestTask != nil || !valid(*task) || task.Result.Status != "success" || task.SnapshotID != snapshotID {
-				return nil, nil, fmt.Errorf("invalid supplement request producer")
+			if requestTask != nil || !task.VerifiedOutputs || task.Result == nil {
+				return nil, nil, fmt.Errorf("invalid supplement request producer: %s", task.OutputsError)
 			}
 			requestTask = task
 		}
 	}
-	if !active || producer == nil || requestTask == nil || producer.Receipt.ActionID == "" || requestTask.Receipt.ActionID == "" {
+	if !active || producer == nil || requestTask == nil {
 		return nil, nil, fmt.Errorf("accepted supplement prerequisites missing")
 	}
 	return producer, requestTask, nil

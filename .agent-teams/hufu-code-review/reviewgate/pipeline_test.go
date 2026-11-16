@@ -19,7 +19,7 @@ func TestReviewContractPipelineAccountsForMixedSources(t *testing.T) {
 			}
 			source := fixtureTask(t, "13", "review-documentation-escalation", "success", payload{Record: raw(t, doc)}, doc, nil)
 			current.Tasks = append(current.Tasks, source)
-			inventory, err := collectReviewHandoffs(current, "run-1")
+			inventory, err := fixtureCollectReviewHandoffs(current, "run-1")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -37,12 +37,12 @@ func TestReviewContractPipelineAccountsForMixedSources(t *testing.T) {
 				p.InputReview = append(p.InputReview, entry(source, doc, t), entry(critic, critique, t))
 			})
 			current.Tasks[4].EvidenceFrom = append(current.Tasks[4].EvidenceFrom, "13", "14")
-			if _, _, err := verify(current, "run-1"); err != nil {
+			if _, _, err := fixtureVerify(current, "run-1"); err != nil {
 				t.Fatal(err)
 			}
 			// A stale or rewritten synthesis cannot pass, even after every worker is done.
 			replacePayload(t, &current.Tasks[4], func(p *payload) { p.InputReview[len(p.InputReview)-2].Hash = "substituted" })
-			if _, _, err := verify(current, "run-1"); err == nil {
+			if _, _, err := fixtureVerify(current, "run-1"); err == nil {
 				t.Fatal("final audit accepted substituted source identity")
 			}
 		})

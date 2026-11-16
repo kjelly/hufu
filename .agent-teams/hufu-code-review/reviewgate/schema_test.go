@@ -86,7 +86,7 @@ func TestReviewWorksetKeysMatchSchemaAndHandoffIdentity(t *testing.T) {
 			if err := json.Unmarshal(raw(t, map[string]any{"typed_result": map[string]any{"files_read": []map[string]string{{"path": review.Findings[0].Evidence[0]}}}}), &item); err != nil {
 				t.Fatal(err)
 			}
-			if err := verifyReview(item, review); (err == nil) != tc.handoffValid {
+			if err := fixtureVerifyReview(item, review); (err == nil) != tc.handoffValid {
 				t.Fatalf("handoff valid=%t, want %t: %v", err == nil, tc.handoffValid, err)
 			}
 		})
@@ -494,12 +494,17 @@ func TestReportV2AcceptsEmptyCritiqueAndPreservesCoverage(t *testing.T) {
 
 func TestReportV2PreservesFailedTests(t *testing.T) {
 	schema, document := contractSchema(t, "report-v2.json")
-	for _, scenario := range []string{"failed", "claims_pass", "missing_diagnostic", "launch_error", "timeout", "truncated"} {
+	for _, scenario := range []string{"failed", "short_summary", "claims_pass", "missing_diagnostic", "launch_error", "timeout", "truncated"} {
 		t.Run(scenario, func(t *testing.T) {
 			_, report := reportV2CoverageFixture(0)
 			tests := report["test_verification"].(map[string]any)
 			tests["passed"], tests["exit_code"], tests["diagnostic"] = false, 1, "--- FAIL: TestSocketPath: bind: invalid argument"
 			switch scenario {
+			case "short_summary":
+				tests["summary_truncated"] = true
+				tests["timeout_kind"] = "none"
+				tests["output_artifact_id"] = "sha256-" + strings.Repeat("c", 64)
+				tests["output_artifact_sha256"] = strings.Repeat("c", 64)
 			case "claims_pass":
 				tests["passed"] = true
 			case "missing_diagnostic":
@@ -520,7 +525,7 @@ func TestReportV2PreservesFailedTests(t *testing.T) {
 				t.Fatal(err)
 			}
 			err = schema.Validate(value)
-			if scenario != "failed" {
+			if scenario != "failed" && scenario != "short_summary" {
 				if err == nil {
 					t.Fatal("accepted invalid test evidence")
 				}

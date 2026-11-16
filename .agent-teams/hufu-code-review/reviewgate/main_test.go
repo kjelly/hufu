@@ -96,6 +96,8 @@ func gateFixture(t *testing.T) session {
 	prepare.Result.RuntimeOutputs = map[string]json.RawMessage{"scope": scope}
 	verifier := fixtureTask(t, "2", "verify-targeted-go-tests", "success", payload{}, record{}, nil)
 	verifier.Result.RuntimeOutputs = map[string]json.RawMessage{"targeted_go_tests": tests}
+	sealFixtureOutputs(t, &prepare)
+	sealFixtureOutputs(t, &verifier)
 	fixture := session{SnapshotID: "scope-1", Tasks: []task{a, b, c, d, e, prepare, verifier}}
 	setFixtureInventory(t, &fixture)
 	return fixture
@@ -103,13 +105,14 @@ func gateFixture(t *testing.T) session {
 
 func setFixtureInventory(t *testing.T, fixture *session) {
 	t.Helper()
-	inventory, err := collectReviewHandoffs(*fixture, "run-1")
+	inventory, err := fixtureCollectReviewHandoffs(*fixture, "run-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	item := fixtureTask(t, "9", "inventory-review-handoffs", "success", payload{}, record{}, nil)
 	item.SnapshotID = fixture.SnapshotID
 	item.Result.RuntimeOutputs = map[string]json.RawMessage{"review_handoff_inventory": raw(t, inventory)}
+	sealFixtureOutputs(t, &item)
 	for i := range fixture.Tasks {
 		if fixture.Tasks[i].ContractID == item.ContractID {
 			fixture.Tasks[i] = item
@@ -211,7 +214,7 @@ func TestReviewGateCoverageAndRejectedHandoffs(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			s := gateFixture(t)
 			test.edit(&s)
-			_, _, err := verify(s, "run-1")
+			_, _, err := fixtureVerify(s, "run-1")
 			if test.want == "" {
 				if err != nil {
 					t.Fatal(err)
@@ -237,7 +240,7 @@ func TestReviewGapCoverageDiagnostics(t *testing.T) {
 		{"duplicate_replaces_missing", []gapResolution{valid[0], valid[1], valid[2], valid[2]}, "duplicate 10/2"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			err := verifyGaps(payload{GapResolutions: test.resolutions}, records, nil)
+			err := fixtureVerifyGaps(payload{GapResolutions: test.resolutions}, records, nil)
 			if test.want == "" && err != nil || test.want != "" && (err == nil || !strings.Contains(err.Error(), test.want)) {
 				t.Fatalf("error=%v, want %q", err, test.want)
 			}
@@ -263,7 +266,7 @@ func completeReviewFixture(t *testing.T) session {
 
 func TestReviewGateAcceptsCompleteReviewWithoutFindings(t *testing.T) {
 	fixture := completeReviewFixture(t)
-	if id, _, err := verify(fixture, "run-1"); err != nil || id != "4" {
+	if id, _, err := fixtureVerify(fixture, "run-1"); err != nil || id != "4" {
 		t.Fatalf("id=%s error=%v", id, err)
 	}
 }
@@ -286,7 +289,7 @@ func TestReviewGateReadsNativeVerificationCheckpointFields(t *testing.T) {
 			if err := json.Unmarshal(raw(t, map[string]any{"VerifyResult": test.result}), item); err != nil {
 				t.Fatal(err)
 			}
-			_, _, err := verify(fixture, "run-1")
+			_, _, err := fixtureVerify(fixture, "run-1")
 			if (err == nil) != test.valid {
 				t.Fatalf("valid=%v error=%v", test.valid, err)
 			}
@@ -300,15 +303,15 @@ func TestReviewGateInvariantHandoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := record{Invariants: []invariantAssessment{{ID: "lease-order", Status: "unknown", Summary: "Missing caller", MissingEvidence: []string{"setAttemptReceipt"}}}, Gaps: []json.RawMessage{raw(t, map[string]string{"missing_evidence": "setAttemptReceipt"})}}
-	if err := verifyInvariants(item, r); err != nil {
+	if err := fixtureVerifyInvariants(item, r); err != nil {
 		t.Fatal(err)
 	}
 	r.Gaps = nil
-	if err := verifyInvariants(item, r); err == nil || !strings.Contains(err.Error(), "concealed an unknown invariant") {
+	if err := fixtureVerifyInvariants(item, r); err == nil || !strings.Contains(err.Error(), "concealed an unknown invariant") {
 		t.Fatalf("error=%v", err)
 	}
 	r.Invariants = nil
-	if err := verifyInvariants(item, r); err == nil || !strings.Contains(err.Error(), "record has 0, runtime verified 1") {
+	if err := fixtureVerifyInvariants(item, r); err == nil || !strings.Contains(err.Error(), "record has 0, runtime verified 1") {
 		t.Fatalf("error=%v", err)
 	}
 }
@@ -316,7 +319,7 @@ func TestReviewGateInvariantHandoff(t *testing.T) {
 func TestReviewGateRejectsUnassignedRequiredCritique(t *testing.T) {
 	s := gateFixture(t)
 	s.Tasks = append(s.Tasks[:3], s.Tasks[4])
-	if _, _, err := verify(s, "run-1"); err == nil || !strings.Contains(err.Error(), "unassigned required critique") {
+	if _, _, err := fixtureVerify(s, "run-1"); err == nil || !strings.Contains(err.Error(), "unassigned required critique") {
 		t.Fatalf("error=%v", err)
 	}
 }
@@ -445,7 +448,7 @@ func TestReviewGateConservativeCriticStatusRequiresGroundedGaps(t *testing.T) {
 			if !test.observed {
 				critic.Result.FilesRead = nil
 			}
-			id, limited, err := verifyCritique(critic, critique, map[string]task{"3": source}, map[string]payload{"3": sourcePayload}, map[string]record{"3": review}, map[string]bool{})
+			id, limited, err := fixtureVerifyCritique(critic, critique, map[string]task{"3": source}, map[string]payload{"3": sourcePayload}, map[string]record{"3": review}, map[string]bool{})
 			if test.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 					t.Fatalf("error=%v, want %s", err, test.wantErr)
@@ -468,7 +471,7 @@ func TestReviewGateAcceptsEmptyCritiqueCoverage(t *testing.T) {
 	if err := json.Unmarshal(source.Result.Payload.Value, &sourcePayload); err != nil {
 		t.Fatal(err)
 	}
-	id, gaps, err := verifyCritique(critic, critique, map[string]task{"3": source}, map[string]payload{"3": sourcePayload}, map[string]record{"3": review}, map[string]bool{})
+	id, gaps, err := fixtureVerifyCritique(critic, critique, map[string]task{"3": source}, map[string]payload{"3": sourcePayload}, map[string]record{"3": review}, map[string]bool{})
 	if err != nil || gaps || id != "3" {
 		t.Fatalf("id=%s gaps=%v error=%v", id, gaps, err)
 	}
@@ -478,12 +481,13 @@ func TestReviewGateRejectsRewritingFailedTestsAsPassed(t *testing.T) {
 	fixture := gateFixture(t)
 	failed := raw(t, map[string]any{"completed": true, "passed": false, "exit_code": 1, "diagnostic": "--- FAIL: TestSocketPath"})
 	fixture.Tasks[6].Result.RuntimeOutputs["targeted_go_tests"] = failed
+	sealFixtureOutputs(t, &fixture.Tasks[6])
 	replacePayload(t, &fixture.Tasks[4], func(p *payload) { p.Tests = failed })
-	if _, _, err := verify(fixture, "run-1"); err != nil {
+	if _, _, err := fixtureVerify(fixture, "run-1"); err != nil {
 		t.Fatal(err)
 	}
 	replacePayload(t, &fixture.Tasks[4], func(p *payload) { p.Tests = raw(t, map[string]any{"passed": true, "exit_code": 0}) })
-	if _, _, err := verify(fixture, "run-1"); err == nil || !strings.Contains(err.Error(), "substituted verify-targeted-go-tests") {
+	if _, _, err := fixtureVerify(fixture, "run-1"); err == nil || !strings.Contains(err.Error(), "substituted verify-targeted-go-tests") {
 		t.Fatalf("accepted forged test success: %v", err)
 	}
 }
@@ -494,7 +498,7 @@ func TestInvariantAssessmentCountMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := record{Invariants: []invariantAssessment{{ID: "invented", Status: "preserved", Summary: "unsupported"}}}
-	if err := verifyInvariants(item, r); err == nil || !strings.Contains(err.Error(), "record has 1, runtime verified 0") {
+	if err := fixtureVerifyInvariants(item, r); err == nil || !strings.Contains(err.Error(), "record has 1, runtime verified 0") {
 		t.Fatalf("error=%v", err)
 	}
 }

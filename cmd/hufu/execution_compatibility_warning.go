@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/team"
@@ -18,7 +20,7 @@ type executionCompatibilityWarningState struct {
 	workspaceArgument string
 	workspaceWarned   bool
 	authoredWarned    bool
-	reviewScopeWarned bool
+	deprecatedWarned  map[string]bool
 	warningWriter     io.Writer
 }
 
@@ -33,8 +35,15 @@ func (s *executionCompatibilityWarningState) observeTeam(ctx context.Context, tc
 	if team.HasAuthoredLegacyLocalExecutionBackend(tc.session) {
 		s.warnAuthoredAlias()
 	}
-	if strings.EqualFold(strings.TrimSpace(tc.session.Config.Name), "hufu-code-review") && strings.TrimSpace(vars["review.scope.max_commits"]) != "" {
-		s.warnReviewScopeVar()
+	for _, key := range slices.Sorted(maps.Keys(tc.session.Config.DeprecatedVars)) {
+		if strings.TrimSpace(vars[key]) == "" || s.deprecatedWarned[key] {
+			continue
+		}
+		if s.deprecatedWarned == nil {
+			s.deprecatedWarned = make(map[string]bool)
+		}
+		s.deprecatedWarned[key] = true
+		s.writeWarning(fmt.Sprintf("warning: --var %s is deprecated; %s", key, tc.session.Config.DeprecatedVars[key]))
 	}
 	// The inspector is intentionally the only detection implementation. It
 	// opens no writer and changes no workspace state. A scan failure is not a
@@ -49,14 +58,6 @@ func (s *executionCompatibilityWarningState) observeTeam(ctx context.Context, tc
 	if observer.HasActionableState() {
 		s.warnWorkspaceState()
 	}
-}
-
-func (s *executionCompatibilityWarningState) warnReviewScopeVar() {
-	if s == nil || s.reviewScopeWarned {
-		return
-	}
-	s.reviewScopeWarned = true
-	s.writeWarning("warning: --var review.scope.max_commits is deprecated and no longer controls review scope; use --input review.scope=<json>")
 }
 
 func (s *executionCompatibilityWarningState) warnWorkspaceState() {

@@ -97,6 +97,10 @@
             {
               "pointer": "/artifact_id",
               "op": "non_empty"
+            },
+            {
+              "pointer": "/output_artifact_id",
+              "op": "non_empty"
             }
           ],
           "source_task": "verify-targeted-go-tests",
@@ -238,6 +242,10 @@
               },
               {
                 "pointer": "/artifact_id",
+                "op": "non_empty"
+              },
+              {
+                "pointer": "/output_artifact_id",
                 "op": "non_empty"
               }
             ],

@@ -35,7 +35,10 @@ func TestSnapshotGoTestExecutionCompletion(t *testing.T) {
 			if test.cancel {
 				cancel()
 			}
-			got := runSnapshotGoTests(ctx, &reviewSourceSnapshot{root: root}, []string{"./target"}, os.Environ())
+			got, err := runSnapshotGoTests(ctx, &reviewSourceSnapshot{root: root}, []string{"./target"}, os.Environ(), filepath.Join(root, "output.log"), defaultGoTestLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
 			if got.Completed != test.completed || got.Passed != test.passed || got.ExitCode != test.exitCode {
 				t.Fatalf("execution = %+v", got)
 			}

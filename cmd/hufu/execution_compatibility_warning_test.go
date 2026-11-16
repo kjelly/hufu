@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -28,17 +27,27 @@ func TestExecutionCompatibilityWorkspaceWarningUsesOnlyExplicitArgument(t *testi
 	}
 }
 
-func TestCompatibilityObserverWarnsForDeprecatedReviewScopeVar(t *testing.T) {
-	state := newExecutionCompatibilityWarningState("")
-	var warnings bytes.Buffer
-	state.warningWriter = &warnings
-	tc := &teamContext{
-		session:     &team.TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: "hufu-code-review"}},
-		coordinator: &team.Coordinator{},
-	}
-	state.observeTeam(context.Background(), tc, map[string]string{"review.scope.max_commits": "3"})
-	if got := warnings.String(); !strings.Contains(got, "no longer controls review scope") || !strings.Contains(got, "--input review.scope=<json>") {
-		t.Fatalf("deprecated scope warning = %q", got)
+func TestCompatibilityObserverUsesTeamDeclaredDeprecatedVars(t *testing.T) {
+	for _, name := range []string{"alpha", "beta"} {
+		t.Run(name, func(t *testing.T) {
+			state := newExecutionCompatibilityWarningState("")
+			var warnings bytes.Buffer
+			state.warningWriter = &warnings
+			tc := &teamContext{
+				session:     &team.TeamSession{Workspace: t.TempDir(), Config: agent.TeamConfig{Name: name, DeprecatedVars: map[string]string{"old.option": "use --input scope=<json>"}}},
+				coordinator: &team.Coordinator{},
+			}
+			state.observeTeam(t.Context(), tc, map[string]string{"old.option": "3"})
+			state.observeTeam(t.Context(), tc, map[string]string{"old.option": "3"})
+			if got := warnings.String(); strings.Count(got, "--var old.option is deprecated") != 1 || !strings.Contains(got, "use --input scope=<json>") {
+				t.Fatalf("team warning = %q", got)
+			}
+			warnings.Reset()
+			state.observeTeam(t.Context(), tc, map[string]string{"undeclared": "3"})
+			if warnings.Len() != 0 {
+				t.Fatalf("undeclared variable warning: %q", warnings.String())
+			}
+		})
 	}
 }
 
@@ -50,17 +59,12 @@ func TestCompatibilityWarningOncePerInvocation(t *testing.T) {
 	state.warnWorkspaceState()
 	state.warnAuthoredAlias()
 	state.warnAuthoredAlias()
-	state.warnReviewScopeVar()
-	state.warnReviewScopeVar()
 	got := warnings.String()
 	if count := strings.Count(got, "warning: workspace contains deprecated execution identity state"); count != 1 {
 		t.Fatalf("workspace warning count = %d, want 1: %q", count, got)
 	}
 	if count := strings.Count(got, "warning: execution backend alias `local` is deprecated"); count != 1 {
 		t.Fatalf("authored alias warning count = %d, want 1: %q", count, got)
-	}
-	if count := strings.Count(got, "--var review.scope.max_commits is deprecated"); count != 1 {
-		t.Fatalf("review scope warning count = %d, want 1: %q", count, got)
 	}
 }
 

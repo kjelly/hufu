@@ -90,9 +90,9 @@ func decodeSourceGap(raw json.RawMessage) (sourceGap, error) {
 
 // Only the receipt-verified accepted records select requests. No model copies
 // task identities, gap indices, hashes, snapshot grants, or frozen-source paths.
-func collectSupplementRequests(current session, runID string) (supplementRequests, error) {
-	result := supplementRequests{Round: 1, SnapshotID: current.SnapshotID, Requests: []supplementRequest{}}
-	inventory, err := collectReviewHandoffs(current, runID)
+func collectSupplementRequests(current sourceSession) (supplementRequests, error) {
+	result := supplementRequests{Round: 1, SnapshotID: current.InputID, Requests: []supplementRequest{}}
+	inventory, err := collectReviewHandoffs(current)
 	if err != nil {
 		return result, err
 	}
@@ -104,7 +104,7 @@ func collectSupplementRequests(current session, runID string) (supplementRequest
 			if item.ContractID == "review-supplement-workset" {
 				continue
 			}
-			value, err := accepted(item, current, runID)
+			value, err := accepted(item)
 			if err != nil {
 				return result, err
 			}

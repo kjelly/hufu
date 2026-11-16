@@ -1159,6 +1159,7 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	if len(yc.Vars) > 0 {
 		cfg.Vars = yc.Vars
 	}
+	cfg.DeprecatedVars = yc.DeprecatedVars
 	if yc.WorkerContextSize > 0 {
 		cfg.WorkerContextSize = yc.WorkerContextSize
 	}

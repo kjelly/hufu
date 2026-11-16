@@ -40,7 +40,6 @@ const (
 	defaultMaxWorksetItems   = 64
 	routingDocumentation     = "documentation"
 	maxSnapshotRelatedPaths  = 24
-	maxGoTestOutputBytes     = 128 * 1024
 )
 
 type actionRequest struct {
@@ -137,6 +136,11 @@ type actionResult struct {
 }
 
 type goTestVerification struct {
+	TimeoutKind          string `json:"timeout_kind"`
+	SummaryTruncated     bool   `json:"summary_truncated"`
+	OutputArtifactID     string `json:"output_artifact_id"`
+	OutputArtifactSHA256 string `json:"output_artifact_sha256"`
+
 	Completed        bool     `json:"completed"`
 	Passed           bool     `json:"passed"`
 	ReviewedRevision string   `json:"reviewed_revision"`
@@ -154,6 +158,11 @@ type goTestVerification struct {
 }
 
 type goTestReceipt struct {
+	TimeoutKind          string `json:"timeout_kind"`
+	SummaryTruncated     bool   `json:"summary_truncated"`
+	OutputArtifactID     string `json:"output_artifact_id"`
+	OutputArtifactSHA256 string `json:"output_artifact_sha256"`
+
 	Completed          bool     `json:"completed"`
 	Passed             bool     `json:"passed"`
 	ReviewedRevision   string   `json:"reviewed_revision"`
@@ -798,7 +807,7 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 	pinnedConfig := config
 	var frozen *repositorySnapshotManifest
 	if config.Scope.Kind == "repository_snapshot" {
-		frozen, err = frozenRepositorySnapshot(config.Scope)
+		frozen, err = frozenRepositorySnapshot(ctx, config.Scope)
 		if err != nil {
 			return actionResult{}, err
 		}
@@ -847,13 +856,26 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 		return actionResult{}, err
 	}
 	packages := targetedGoTestPackages(snapshot.root, paths)
-	verification := runSnapshotGoTests(ctx, snapshot, packages, goTestEnvironment)
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
+		return actionResult{}, fmt.Errorf("create verification output directory: %w", err)
+	}
+	outputPath := filepath.Join(outputDir, "targeted-go-tests.log")
+	verification, err := runSnapshotGoTests(ctx, snapshot, packages, goTestEnvironment, outputPath, defaultGoTestLimits())
+	if err != nil {
+		return actionResult{}, err
+	}
+	outputArtifact, err := fileArtifact(artifactRoot, outputPath, "go_test_output")
+	if err != nil {
+		return actionResult{}, err
+	}
+	if outputArtifact.SHA256 != verification.OutputSHA256 || outputArtifact.Bytes != int64(verification.OutputBytes) {
+		return actionResult{}, errors.New("complete Go test output changed before publication")
+	}
+	verification.OutputArtifactID = outputArtifact.ID
+	verification.OutputArtifactSHA256 = outputArtifact.SHA256
 	if snapshot.identity != nil {
 		verification.SnapshotID = snapshot.identity.ID
 		verification.ContentSHA256 = snapshot.identity.ContentSHA256
-	}
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		return actionResult{}, fmt.Errorf("create verification output directory: %w", err)
 	}
 	report, err := json.MarshalIndent(verification, "", "  ")
 	if err != nil {
@@ -875,6 +897,8 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 		BaseRevision: verification.BaseRevision, Packages: verification.Packages,
 		Command: verification.Command, ExitCode: verification.ExitCode,
 		TimedOut: verification.TimedOut, OutputTruncated: verification.OutputTruncated,
+		TimeoutKind: verification.TimeoutKind, SummaryTruncated: verification.SummaryTruncated,
+		OutputArtifactID: outputArtifact.ID, OutputArtifactSHA256: outputArtifact.SHA256,
 		ArtifactID: reportArtifact.ID, ArtifactSHA256: reportArtifact.SHA256,
 		RequestedInputHash: scopeInputDigest(config.Scope),
 		SnapshotID:         verification.SnapshotID, ContentSHA256: verification.ContentSHA256,
@@ -898,7 +922,7 @@ func VerifyReviewTests(ctx context.Context, config Config) (actionResult, error)
 			"completed": receipt.Completed,
 			"passed":    receipt.Passed, "timed_out": receipt.TimedOut, "output_truncated": receipt.OutputTruncated,
 		},
-	}, Artifacts: []artifact{reportArtifact}}, nil
+	}, Artifacts: []artifact{reportArtifact, outputArtifact}}, nil
 }
 
 func targetedGoTestPackages(snapshotRoot string, changed []string) []string {
@@ -931,35 +955,6 @@ func targetedGoTestPackages(snapshotRoot string, changed []string) []string {
 	}
 	sort.Strings(result)
 	return result
-}
-
-func runSnapshotGoTests(ctx context.Context, snapshot *reviewSourceSnapshot, packages, environment []string) goTestVerification {
-	arguments := append([]string{"test", "-p", "2", "-mod=readonly", "-count=1"}, packages...)
-	command := exec.CommandContext(ctx, "go", arguments...)
-	command.Dir = snapshot.root
-	command.Env = environment
-	output := &cappedBuffer{limit: maxGoTestOutputBytes}
-	command.Stdout = output
-	command.Stderr = output
-	runErr := command.Run()
-	exitCode := 0
-	if runErr != nil {
-		exitCode = -1
-		// The trusted-static Go interpreter does not yet expose errors.AsType.
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
-			exitCode = exitErr.ExitCode()
-		}
-	}
-	return goTestVerification{
-		Completed: ctx.Err() == nil && (exitCode == 0 || exitCode == 1),
-		Passed:    runErr == nil, ReviewedRevision: snapshot.revision,
-		BaseRevision: snapshot.baseRevision, Packages: packages,
-		Command: append([]string{"go"}, arguments...), ExitCode: exitCode,
-		TimedOut:     errors.Is(ctx.Err(), context.DeadlineExceeded),
-		OutputSHA256: sha256Hex([]byte(output.String())), OutputBytes: output.buffer.Len(),
-		OutputTruncated: output.truncated, Diagnostic: output.String(),
-	}
 }
 
 func sanitizedGoTestEnvironment(ctx context.Context) ([]string, error) {
@@ -3350,9 +3345,15 @@ func lensForPath(path string) string {
 }
 
 func fileArtifact(root, path, kind string) (artifact, error) {
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return artifact{}, fmt.Errorf("read artifact %q: %w", path, err)
+	}
+	defer func() { _ = file.Close() }()
+	digest := sha256.New()
+	size, err := io.Copy(digest, file)
+	if err != nil {
+		return artifact{}, fmt.Errorf("hash artifact %q: %w", path, err)
 	}
 	canonicalRoot, err := canonicalPath(root)
 	if err != nil {
@@ -3369,8 +3370,8 @@ func fileArtifact(root, path, kind string) (artifact, error) {
 	if err != nil {
 		return artifact{}, fmt.Errorf("make artifact path relative: %w", err)
 	}
-	digest := sha256Hex(data)
-	return artifact{ID: "sha256-" + digest, Path: filepath.ToSlash(rel), Kind: kind, SHA256: digest, Bytes: int64(len(data))}, nil
+	hexDigest := hex.EncodeToString(digest.Sum(nil))
+	return artifact{ID: "sha256-" + hexDigest, Path: filepath.ToSlash(rel), Kind: kind, SHA256: hexDigest, Bytes: size}, nil
 }
 
 func sha256Hex(data []byte) string {

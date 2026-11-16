@@ -39,7 +39,7 @@ func TestResultGuidancePreservesVisibleConditionalConstraints(t *testing.T) {
 
 func TestResultGuidanceOmitsCompositeConditionalConstraints(t *testing.T) {
 	for _, constraint := range []string{
-		`{"then":{"properties":{"rows":{"minItems":1}}}}`,
+		`{"then":{"properties":{"rows":{"items":{"properties":{"receipt":{"const":"runtime"}}}}}}}`,
 		`{"then":{"additionalProperties":false}}`,
 		`{"then":{"const":{"receipt":"runtime"}}}`,
 		`{"then":{"enum":[{"receipt":"runtime"}]}}`,
@@ -52,6 +52,33 @@ func TestResultGuidanceOmitsCompositeConditionalConstraints(t *testing.T) {
 		if guidance := projectResultGuidanceSchema(schema); guidance["allOf"] != nil {
 			t.Fatalf("composite canonical constraint leaked into model projection: %#v", guidance)
 		}
+	}
+}
+
+func TestResultGuidancePreservesPrimitiveArrayConditions(t *testing.T) {
+	for _, tc := range []struct {
+		name, item string
+		retained   bool
+	}{
+		{"string", `{"type":"string"}`, true},
+		{"object", `{"type":"object","properties":{"receipt":{"type":"string"}}}`, false},
+		{"unknown", `{}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := `{"type":"object","properties":{"status":{"type":"string"},"rows":{"type":"array","items":` + tc.item + `}},"allOf":[{"if":{"properties":{"status":{"const":"preserved"}}},"then":{"properties":{"rows":{"maxItems":0}}}}]}`
+			value, err := decodeResultContractJSON([]byte(raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			schema := value.(map[string]any)
+			guidance := projectResultGuidanceSchema(schema)
+			if (guidance["allOf"] != nil) != tc.retained {
+				t.Fatalf("conditional retained incorrectly: %#v", guidance)
+			}
+			if portable := projectProviderResultSchema(schema); portable["allOf"] != nil {
+				t.Fatal("conditional leaked into portable descriptor")
+			}
+		})
 	}
 }
 

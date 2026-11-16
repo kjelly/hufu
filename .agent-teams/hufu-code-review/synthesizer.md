@@ -135,7 +135,9 @@ The structured payload must contain:
   resolved), any critic decision is `unverified`, the injected test_verification
   status has `passed: false`, or its `output_truncated` is true. Failing tests describe
   the reviewed snapshot or its execution environment, not a failed review
-  workflow. Runtime preserves their diagnostic; do not claim they passed. Otherwise use
+  workflow. `diagnostic` is a bounded summary; `summary_truncated` alone does
+  not create an evidence gap when the complete `output_artifact_id` is present.
+  Preserve that reference and the reported outcome; do not claim tests passed. Otherwise use
   `coverage: complete` and result status `success`. Code findings may remain
   even when review coverage is complete.
 

@@ -13,6 +13,112 @@ import (
 	"testing"
 )
 
+func TestResultCollectionRepairsConditionalInvariantAndEnvelopeTogether(t *testing.T) {
+	var document map[string]any
+	if err := json.Unmarshal([]byte(projectionTestSchema), &document); err != nil {
+		t.Fatal(err)
+	}
+	properties := document["properties"].(map[string]any)
+	properties["limitations"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+	assessments := invariantAssessmentClaimsSchema(false)
+	var conditions []any
+	if err := json.Unmarshal([]byte(`[{"if":{"properties":{"status":{"const":"preserved"}}},"then":{"properties":{"missing_evidence":{"maxItems":0}}}},{"if":{"properties":{"status":{"const":"unknown"}}},"then":{"required":["missing_evidence"],"properties":{"missing_evidence":{"minItems":1}}}}]`), &conditions); err != nil {
+		t.Fatal(err)
+	}
+	assessments["items"].(map[string]any)["allOf"] = conditions
+	properties["assessments"] = assessments
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := CompileResultContractDocument("conditional.json", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			_, _ = fmt.Fprint(w, `{"model":"test","parameters":"num_ctx 131072","model_info":{"general.architecture":"qwen2","qwen2.context_length":131072},"capabilities":["completion","tools"]}`)
+			return
+		}
+		var request map[string]any
+		if err := json.UnmarshalRead(r.Body, &request); err != nil {
+			t.Error(err)
+			return
+		}
+		assertCollectorResponseChannel(t, request)
+		prompt := fmt.Sprint(request["messages"])
+		if !strings.Contains(prompt, `"maxItems":0`) {
+			t.Error("collector lost conditional primitive-array bounds")
+		}
+		n := calls.Add(1)
+		if n > 2 {
+			t.Error("collector exceeded its two-turn budget")
+			http.Error(w, "extra request", http.StatusBadRequest)
+			return
+		}
+		body := `{"structured_payload":{"findings":[{"summary":"retained observation","severity":"info"}],"limitations":["Unrelated caller outside snapshot"],"assessments":[{"invariant_id":"safe","status":"preserved","summary":"Observed owner is preserved","missing_evidence":["Unrelated caller outside snapshot"]}]}}`
+		if n == 2 {
+			for _, pointer := range []string{"\"pointer\":\"/status\"", "\"pointer\":\"/summary\"", "\"pointer\":\"/structured_payload/assessments/0/missing_evidence\""} {
+				if !strings.Contains(prompt, pointer) {
+					t.Errorf("repair lost simultaneous violation %s", pointer)
+				}
+			}
+			body = `{"status":"completed_with_gaps","summary":"Reviewed with a limitation","structured_payload":{"findings":[{"summary":"retained observation","severity":"info"}],"limitations":["Unrelated caller outside snapshot"],"assessments":[{"invariant_id":"safe","status":"preserved","summary":"Observed owner is preserved"}]}}`
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "data: {\"id\":\"conditional\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", body)
+	}))
+	t.Cleanup(server.Close)
+	review := TaskDef{ID: "review", Agent: "worker", Phase: PhaseVerify, InvariantVerification: InvariantVerificationReport,
+		SideEffect: SideEffectNone, Execution: ExecutionContract{RequiresResult: true, ForbidArtifacts: true}, ResultContract: new(compiled.ref(true))}
+	c, _, _, _ := resultCollectionProviderFixture(t, server.URL+"/v1", true, func(c *Coordinator) {
+		c.session.Config.Delegation.BindTaskGoalContracts = true
+		c.session.ContractTasks = []TaskDef{review}
+		c.session.Config.MaxRetries = 0
+		c.session.Agents["worker"].MaxRetries = 0
+		c.session.InvariantCatalog = []InvariantDefinition{{ID: "safe", Statement: "Preserve observed owner", Severity: InvariantSeverityError, AppliesTo: []string{"*"}}}
+		c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
+		c.session.AgentResultContracts = map[string]ResultContractRef{"worker": compiled.ref(true)}
+	})
+	worker := scriptWorker(textTurn("Owner preserved; retain the observation and unrelated-caller limitation."))
+	c.workerAgentOverride = worker
+	c.providerBoundaryStart = func(context.Context, string) error { return nil }
+	c.delegatedTasks = make(map[string]int)
+	testTaskCache(c).entries = make(map[string][]cachedTaskEntry)
+	if _, err := c.ExecuteTasks(t.Context(), []TaskDef{{ContractID: "review", Agent: "worker", Model: "ollama/test", Goal: "Review owner"}}); err != nil {
+		t.Fatal(err)
+	}
+	item := c.taskTracker.TodoList().Items()[1]
+	cp := currentResultCollection(item)
+	if item.Status != TaskDone || cp == nil || cp.State != ResultCollectionCommitted || calls.Load() != 2 || worker.Calls() != 1 {
+		t.Fatalf("bounded repair failed: status=%s collection=%+v", item.Status, cp)
+	}
+	work, err := c.loadCollectionWork(t.Context(), item, cp)
+	if err != nil || string(work.Report) != "Owner preserved; retain the observation and unrelated-caller limitation." {
+		t.Fatalf("work report changed: %v", err)
+	}
+	result := item.TypedResult
+	if result == nil || len(result.Findings) != 1 || result.Findings[0].Summary != "retained observation" || result.InvariantVerification.Assessments[0].Status != InvariantPreserved || !strings.Contains(string(result.StructuredPayload.Value), `"limitations":["Unrelated caller outside snapshot"]`) {
+		t.Fatal("repair lost an observation, limitation or judgment")
+	}
+	events, err := c.EventJournal().ReadEvents(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, replayed := range ReduceToTodoList(events) {
+		if replayed.ID != item.ID {
+			continue
+		}
+		replayedWork, err := c.loadCollectionWork(t.Context(), replayed, currentResultCollection(replayed))
+		if err != nil || !reflect.DeepEqual(replayedWork.Receipt, work.Receipt) || !reflect.DeepEqual(replayed.TypedResult, result) {
+			t.Fatal("replay changed canonical result or original receipt")
+		}
+		return
+	}
+	t.Fatal("replay lost the task")
+}
+
 func TestResultCollectionRecoveryRepairsProjectedInvariantBounds(t *testing.T) {
 	var document map[string]any
 	if err := json.Unmarshal([]byte(projectionTestSchema), &document); err != nil {

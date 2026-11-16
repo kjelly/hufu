@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,26 +123,41 @@ func assertSupplementDeclarations(t *testing.T, root string, result actionResult
 	}
 }
 
-func TestSupplementUnavailableEvidenceKeepsLimitationsWithoutDispatch(t *testing.T) {
-	producer, request := frozenSupplementFixture(t)
-	request.RequestedEvidence[0].Path = "not-retained.go"
-	root := t.TempDir()
-	result, err := materializeReviewSupplement(t.Context(), root, producer, scopeAttestation{}, frozenSupplementRequests{Round: 1, Requests: []frozenSupplementRequest{request}}, maxSupplementItems)
-	if err != nil {
-		t.Fatal(err)
-	}
-	outcomes := result.Outputs["supplement_outcomes"].([]supplementOutcome)
-	if result.Outputs["item_count"] != 0 || len(outcomes) != 1 || outcomes[0].Limitations[0].Kind != "unavailable_path" {
-		t.Fatal("unavailable evidence was hidden")
-	}
-	// Empty manifests are retained audit outputs; the coordinator must not dispatch them.
-	data, err := os.ReadFile(filepath.Join(root, "supplement", "workset-manifest.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var value manifest
-	if err := json.Unmarshal(data, &value); err != nil || len(value.Items) != 0 {
-		t.Fatal("unexpected work was published")
+func TestSupplementWithoutItemsKeepsLimitationsWithoutManifest(t *testing.T) {
+	for _, kind := range []string{"no_requests", "no_paths", "unavailable", "budget"} {
+		t.Run(kind, func(t *testing.T) {
+			producer, request := frozenSupplementFixture(t)
+			requests := []frozenSupplementRequest{request}
+			wantOutcomes, wantLimit := 1, "unavailable_path"
+			limit := maxSupplementItems
+			switch kind {
+			case "no_requests":
+				requests = nil
+				wantOutcomes = 0
+			case "no_paths":
+				requests[0].RequestedEvidence = nil
+				wantLimit = "invalid_request"
+			case "unavailable":
+				requests[0].RequestedEvidence[0].Path = "not-retained.go"
+			case "budget":
+				limit, wantLimit = 0, "budget_exhausted"
+			}
+			root := t.TempDir()
+			result, err := materializeReviewSupplement(t.Context(), root, producer, scopeAttestation{}, frozenSupplementRequests{Round: 1, Requests: requests}, limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			outcomes := result.Outputs["supplement_outcomes"].([]supplementOutcome)
+			if result.Outputs["item_count"] != 0 || result.Outputs["supplement_prepared"] != true || len(outcomes) != wantOutcomes || len(result.Artifacts) != 0 {
+				t.Fatalf("zero-item output = %+v", result)
+			}
+			if wantOutcomes > 0 && (outcomes[0].SourceTaskID != request.SourceTaskID || outcomes[0].GapIndex != request.GapIndex || outcomes[0].WorksetKey != "" || len(outcomes[0].Limitations) != 1 || outcomes[0].Limitations[0].Kind != wantLimit) {
+				t.Fatal("original request identity or typed limitation was lost")
+			}
+			if _, err := os.Stat(filepath.Join(root, "supplement", "workset-manifest.json")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("empty executable manifest was retained: %v", err)
+			}
+		})
 	}
 }
 
@@ -277,6 +293,9 @@ func testEmbeddedSupplementUsesReceiptBoundFrozenRequests(t *testing.T, kind str
 	if output.Outputs["item_count"] != wantItems {
 		t.Fatalf("native supplement failed: %s", result.Stdout)
 	}
+	if wantItems == 0 && len(output.Artifacts) != 0 {
+		t.Fatal("interpreted producer declared an empty executable workset")
+	}
 	if kind == "valid" {
 		m := readManifest(t, filepath.Join(staging, "supplement", "workset-manifest.json"))
 		assertSupplementDeclarations(t, staging, output, m)
@@ -290,7 +309,7 @@ func testEmbeddedSupplementUsesReceiptBoundFrozenRequests(t *testing.T, kind str
 	originalOutputs["wide_counter"] = json.Number("9007199254740992")
 	save()
 	result, err = golangruntime.Execute(t.Context(), "", program, envelope, env, 1<<20, 16<<10)
-	if err == nil || !strings.Contains(string(result.Stderr), "runtime output digest mismatch") {
+	if err == nil || !strings.Contains(string(result.Stderr), "runtime outputs differ from its receipt") {
 		t.Fatalf("changed runtime output escaped receipt validation: %v %s", err, result.Stderr)
 	}
 	originalOutputs["wide_counter"] = json.Number("9007199254740993")
@@ -303,41 +322,56 @@ func testEmbeddedSupplementUsesReceiptBoundFrozenRequests(t *testing.T, kind str
 	}
 }
 
-func TestSupplementRuntimeOutputsMatchRuntimeCanonicalReceipts(t *testing.T) {
-	for _, scenario := range []string{"valid", "changed_output", "changed_receipt", "compact_hash"} {
-		t.Run(scenario, func(t *testing.T) {
-			outputs, digest, err := team.CanonicalizeRuntimeOutputs(map[string]any{
-				"scope": map[string]any{"count": json.Number("9007199254740993"), "ratio": json.Number("1e-7"), "paths": []any{"來源<&>.go", nil, true}, "empty": map[string]any{}},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			wire := map[string]any{"typed_result": map[string]any{"runtime_outputs": outputs, "runtime_outputs_hash": digest}, "execution_receipt": map[string]any{"runtime_outputs_hash": digest}}
-			data, err := json.Marshal(wire)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var task supplementTask
-			if err = json.Unmarshal(data, &task); err != nil {
-				t.Fatal(err)
-			}
-			switch scenario {
-			case "changed_output":
-				task.Result.Outputs["scope"] = json.RawMessage(`{"count":2}`)
-			case "changed_receipt":
-				task.Receipt.RuntimeOutputsHash = "sha256:" + strings.Repeat("0", 64)
-			case "compact_hash":
-				data, err := json.Marshal(outputs)
-				if err != nil {
-					t.Fatal(err)
-				}
-				compact := "sha256:" + sha256Hex(data)
-				task.Result.RuntimeOutputsHash = compact
-				task.Receipt.RuntimeOutputsHash = compact
-			}
-			if err := verifySupplementRuntimeOutputs(task); (err == nil) != (scenario == "valid") {
-				t.Fatalf("runtime receipt verification: %v", err)
-			}
-		})
+// TestSupplementRuntimeActionFixture is invoked only by the runtime integration
+// test. It uses the real materializer and writes its ordinary action envelope
+// inside the runtime-assigned action root; no model or production service runs.
+func TestSupplementRuntimeActionFixture(t *testing.T) {
+	root := os.Getenv("HUFU_TEST_SUPPLEMENT_OUTPUT")
+	if root == "" {
+		t.Skip("runtime subprocess fixture")
 	}
+	producer, request := frozenSupplementFixture(t)
+	requests := []frozenSupplementRequest{request}
+	limit := maxSupplementItems
+	switch os.Getenv("HUFU_TEST_SUPPLEMENT_CASE") {
+	case "no_requests":
+		requests = nil
+	case "no_paths":
+		requests[0].RequestedEvidence = nil
+		requests[0].Limitations = []supplementLimitation{{Kind: "unavailable_path", Detail: "Exact file unavailable in the assigned workset"}}
+	case "unavailable":
+		requests[0].RequestedEvidence[0].Path = "not-retained.go"
+	case "mixed":
+		missing := request
+		missing.GapIndex = 1
+		missing.RequestedEvidence = nil
+		requests = append(requests, missing)
+	case "budget":
+		limit = 0
+	case "valid":
+	default:
+		t.Fatal("unknown runtime fixture case")
+	}
+	scope := scopeAttestation{Requested: lastNScope(1), RequestedInputHash: scopeInputDigest(lastNScope(1)), Satisfied: true, Resolved: resolvedScope{Base: "base", Head: "frozen"}}
+	result, err := materializeReviewSupplement(t.Context(), root, producer, scope, frozenSupplementRequests{Round: 1, Requests: requests}, limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "fixture-response.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func canonicalSupplementJSON(data []byte) ([]byte, error) {
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(value)
 }

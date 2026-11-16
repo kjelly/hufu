@@ -67,7 +67,7 @@ func testTeamAuditDispatch(t *testing.T, rejected, invalidSource, supplement boo
 			source.Gaps = []json.RawMessage{raw(t, sourceGap{Description: "Caller missing", MissingEvidence: "caller bytes", Kind: "missing_dependency", RequestedEvidence: []requestedEvidence{{Path: "caller.go", Ranges: []evidenceRange{{Start: 0, End: 5}}}}, Limitations: []sourceLimitation{}})}
 			p.Record = raw(t, source)
 		})
-		requests, err := collectSupplementRequests(fixture, "run-1")
+		requests, err := fixtureCollectSupplementRequests(fixture, "run-1")
 		if err != nil {
 			t.Fatal(err)
 		}

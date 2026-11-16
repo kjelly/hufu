@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/kjelly/hufu/internal/runtimestore"
+	"github.com/kjelly/hufu/internal/team"
 )
 
 func TestFrozenRepositorySnapshotRecoveryRequiresRuntimeGrant(t *testing.T) {
@@ -21,15 +22,30 @@ func TestFrozenRepositorySnapshotRecoveryRequiresRuntimeGrant(t *testing.T) {
 			t.Setenv("HUFU_WORKSPACE", workspace)
 			t.Setenv("HUFU_RUN_ID", "resumed-run")
 			t.Setenv("HUFU_ACTION_INVOCATION_ID", "verify")
+			t.Setenv("HUFU_TASK_ID", "2")
 			t.Setenv("HUFU_RECOVERED_TASK_RUNS", "{}")
 			requested := resolverScope{Kind: "repository_snapshot", Head: "HEAD"}
 			manifest := &repositorySnapshotManifest{ID: "sha256:" + strings.Repeat("a", 64), Revision: "frozen-head"}
 			scope := scopeAttestation{Requested: requested, RequestedInputHash: scopeInputDigest(requested), Satisfied: true, RepositorySnapshot: manifest}
 			scope.Resolved.Head = manifest.Revision
-			receipt := map[string]any{"run_id": "source-run", "task_id": "1"}
+			scopeBytes, err := json.Marshal(scope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var plain any
+			if err := json.Unmarshal(scopeBytes, &plain); err != nil {
+				t.Fatal(err)
+			}
+			outputs, digest, err := team.CanonicalizeRuntimeOutputs(map[string]any{"scope": plain})
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt := map[string]any{"run_id": "source-run", "task_id": "1", "attempt": 1, "action_invocation_id": "produce", "runtime_outputs_hash": digest}
 			item := map[string]any{"ID": "1", "Status": "done", "contract_id": "produce-workset", "run_input_snapshot_id": "frozen-inputs", "execution_receipt": receipt,
-				"typed_result": map[string]any{"status": "success", "runtime_outputs": map[string]any{"scope": scope}}}
-			checkpoint := map[string]any{"active_run_input_snapshot_id": "frozen-inputs", "tasks": []any{item}}
+				"VerifyResult": map[string]any{"exit_code": 0, "fingerprint": "verified"},
+				"typed_result": map[string]any{"status": "success", "runtime_outputs": outputs, "runtime_outputs_hash": digest}}
+			active := map[string]any{"ID": "2", "Status": "in_progress", "run_input_snapshot_id": "frozen-inputs"}
+			checkpoint := map[string]any{"active_run_input_snapshot_id": "frozen-inputs", "tasks": []any{item, active}}
 			switch mode {
 			case "current":
 				receipt["run_id"] = "resumed-run"
@@ -62,7 +78,7 @@ func TestFrozenRepositorySnapshotRecoveryRequiresRuntimeGrant(t *testing.T) {
 			if err := store.PutDocument(t.Context(), runtimestore.DocumentSession, data); err != nil {
 				t.Fatal(err)
 			}
-			actual, err := frozenRepositorySnapshot(requested)
+			actual, err := frozenRepositorySnapshot(t.Context(), requested)
 			valid := mode == "current" || mode == "recovered"
 			if (err == nil) != valid || (err == nil && actual.ID != manifest.ID) {
 				t.Fatalf("snapshot=%+v err=%v", actual, err)

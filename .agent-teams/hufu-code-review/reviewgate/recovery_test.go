@@ -43,7 +43,7 @@ func TestReviewGateKeepsRuntimeAuthorizedRecoveryOrigins(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			id, digest, err := verify(current, "resumed-run")
+			id, digest, err := fixtureVerify(current, "resumed-run")
 			if (err == nil) != (mode == "accepted") || (err == nil && (id != "7" || digest == "")) {
 				t.Fatalf("report=%s hash=%s err=%v", id, digest, err)
 			}
@@ -106,18 +106,5 @@ func TestEmbeddedReviewGateUsesRuntimeRecoveryGrant(t *testing.T) {
 				t.Fatal("native gate accepted old receipts without a runtime grant")
 			}
 		})
-	}
-}
-
-func TestRecoveryOriginsRequiresBoundedRuntimeJSON(t *testing.T) {
-	for _, encoded := range []string{`{"3":"run-1"}`, "", "{}", `{"3":false}`, strings.Repeat("x", (64<<10)+1)} {
-		origins, err := recoveryOrigins(encoded)
-		invalid := encoded == `{"3":false}` || len(encoded) > 64<<10
-		if (err != nil) != invalid {
-			t.Fatalf("unexpected runtime origin parse result: err=%v", err)
-		}
-		if encoded == `{"3":"run-1"}` && origins["3"] != "run-1" {
-			t.Fatal("runtime origin was lost")
-		}
 	}
 }

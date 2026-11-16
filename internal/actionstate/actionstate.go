@@ -16,12 +16,16 @@ import (
 // at root, read without creating or changing any file. A workspace without a
 // checkpoint returns an error wrapping os.ErrNotExist.
 func SessionCheckpoint(root string) ([]byte, error) {
-	store, err := runtimestore.OpenReadOnly(context.Background(), root)
+	return sessionCheckpoint(context.Background(), root)
+}
+
+func sessionCheckpoint(ctx context.Context, root string) ([]byte, error) {
+	store, err := runtimestore.OpenReadOnly(ctx, root)
 	if err != nil {
 		return nil, fmt.Errorf("read session checkpoint: %w", err)
 	}
 	defer func() { _ = store.Close() }()
-	body, exists, err := store.GetDocument(context.Background(), runtimestore.DocumentSession)
+	body, exists, err := store.GetDocument(ctx, runtimestore.DocumentSession)
 	if err != nil {
 		return nil, fmt.Errorf("read session checkpoint: %w", err)
 	}

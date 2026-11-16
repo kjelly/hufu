@@ -13,7 +13,7 @@ func TestReviewGateReportsAllInvalidSources(t *testing.T) {
 	current := gateFixture(t)
 	current.Tasks[0].Result.Status = "success"
 	current.Tasks[3].Result.Status = "success"
-	_, _, err := verify(current, "run-1")
+	_, _, err := fixtureVerify(current, "run-1")
 	source, ok := errors.AsType[*sourceReviewError](err)
 	if !ok {
 		t.Fatalf("source error lost attribution: %v", err)
@@ -25,7 +25,7 @@ func TestReviewGateReportsAllInvalidSources(t *testing.T) {
 	}
 	// Rewriting the report cannot fix immutable source status.
 	replacePayload(t, &current.Tasks[4], func(p *payload) { p.Coverage = "complete" })
-	_, _, err = verify(current, "run-1")
+	_, _, err = fixtureVerify(current, "run-1")
 	if _, ok := errors.AsType[*sourceReviewError](err); !ok {
 		t.Fatal("source failure routed to report repair")
 	}
