@@ -47,10 +47,12 @@ $hufu-diagnose-invocation 修正 inv-...
 
 ## Interface contract
 
-- Start with `hufu status`, `hufu inspect`, and `hufu results`. Use JSON output
-  for filtering, counting, and comparison; confirm flags with `--help` or
-  full command help, such as `hufu help --all inspect run`. Resolve the diagnostic
-  executable from the launch record before attributing failures. For a launch
+- Use `hufu workspace status` to discover a target when no ID is supplied;
+  use `hufu status`, `hufu inspect`, and `hufu results` for scoped diagnosis.
+  Use JSON output for filtering, counting, and comparison; confirm flags with
+  `--help` or full command help, such as `hufu help --all inspect run`.
+  Resolve the diagnostic executable from the launch record before attributing
+  failures. For a launch
   through `mise exec -- go run ./cmd/hufu`, use that checkout through mise or
   one reusable scratch binary built from it, rather than silently using PATH's
   `hufu`. Record revision/dirty state when available; `version dev` does not

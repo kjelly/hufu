@@ -143,3 +143,71 @@ func TestWorkspaceStatusCommand(t *testing.T) {
 		t.Fatalf("status recreated missing root: %v", err)
 	}
 }
+
+func TestWriteWorkspaceStatusSeparatesAvailabilityAndOutcome(t *testing.T) {
+	for _, test := range []struct {
+		name, availability, outcome, displayedOutcome, errorCode string
+		hasRun                                                   bool
+	}{
+		{"completed", "available", "completed", "completed", "-", true},
+		{"failed", "available", "failed", "failed", "-", true},
+		{"partial", "available", "partial", "partial", "-", true},
+		{"ongoing", "available", "", "-", "-", true},
+		{"no_runs", "no_runs", "", "-", "-", false},
+		{"unavailable", "unavailable", "", "-", "integrity_failure", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			row := workspaceTeamStatus{Team: "example", Workspace: "/workspace", State: test.availability}
+			if test.hasRun {
+				row.Latest = &inspectpkg.LatestRun{InvocationID: "inv-example", BranchID: "main",
+					Run: inspectpkg.RunData{RunID: "run-example", Outcome: test.outcome}}
+			}
+			if test.errorCode != "-" {
+				row.Error = &inspectpkg.OperatorErrorView{Code: test.errorCode}
+			}
+			data := workspaceStatusData{Teams: []workspaceTeamStatus{row}}
+			var output bytes.Buffer
+			if err := writeWorkspaceStatus(&output, data); err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+			if len(lines) != 3 {
+				t.Fatalf("unexpected table: %s", output.String())
+			}
+			headers, cells := strings.Fields(lines[1]), strings.Fields(lines[2])
+			if len(headers) != len(cells) {
+				t.Fatalf("header/cell mismatch: %s", output.String())
+			}
+			columns := make(map[string]string)
+			for i, header := range headers {
+				columns[header] = cells[i]
+			}
+			if columns["AVAILABILITY"] != test.availability || columns["OUTCOME"] != test.displayedOutcome || columns["ERROR"] != test.errorCode {
+				t.Fatalf("availability, outcome and diagnostic must remain distinct: %s", output.String())
+			}
+			output.Reset()
+			if err := writeWorkspaceJSON(&output, data); err != nil {
+				t.Fatal(err)
+			}
+			var document map[string]any
+			if err := json.Unmarshal(output.Bytes(), &document); err != nil {
+				t.Fatal(err)
+			}
+			rows := document["data"].(map[string]any)["teams"].([]any)
+			jsonRow := rows[0].(map[string]any)
+			if jsonRow["state"] != test.availability {
+				t.Fatalf("JSON availability contract changed: %s", output.String())
+			}
+			if test.hasRun {
+				run := jsonRow["latest"].(map[string]any)["run"].(map[string]any)
+				var wantOutcome any
+				if test.outcome != "" {
+					wantOutcome = test.outcome
+				}
+				if run["outcome"] != wantOutcome {
+					t.Fatalf("JSON outcome contract changed: %s", output.String())
+				}
+			}
+		})
+	}
+}

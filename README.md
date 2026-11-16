@@ -1394,9 +1394,10 @@ ID, slug, or alias). It selects each team's last started run across all branches
 then the project's latest by start timestamp, with team name breaking ties.
 JSON `data.latest` includes the workspace, team, invocation, session, branch,
 `run.run_id`, outcome and task counts. `data.teams` includes task state counts
-and per-workspace read errors. If any workspace is unavailable, `complete` is
-false and `latest` is null; missing observations are never reported as zero tasks.
-A complete response with `latest=null` means no run has started. These are
+and per-workspace read errors. If any workspace is unavailable, `data.complete`
+is false and `data.latest` is null; missing observations are never reported as
+zero tasks. A complete response with `data.latest=null` means no run has started.
+The text table separates `AVAILABILITY`, `OUTCOME`, and `ERROR`. These are
 read-only persisted observations, not process liveness checks.
 
 ### Directory Descriptions

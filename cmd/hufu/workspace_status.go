@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -133,29 +134,29 @@ func writeWorkspaceStatus(writer io.Writer, data workspaceStatusData) error {
 		}
 	}
 	table := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(table, "TEAM\tSTATE\tDONE/TOTAL\tUNRESOLVED\tSTARTED\tINVOCATION\tRUN\tBRANCH\tWORKSPACE"); err != nil {
+	if _, err := fmt.Fprintln(table, "TEAM\tAVAILABILITY\tOUTCOME\tDONE/TOTAL\tUNRESOLVED\tSTARTED\tINVOCATION\tRUN\tBRANCH\tWORKSPACE\tERROR"); err != nil {
 		return err
 	}
 	for _, row := range data.Teams {
 		counts, unresolved, started, invocation, run, branch := "-", "-", "-", "-", "-", "-"
-		state := row.State
+		outcome, errorCode := "-", "-"
 		if row.Latest != nil {
 			latest := row.Latest
 			counts = fmt.Sprintf("%d/%d", latest.Run.TaskSummary.Done, latest.Run.TaskSummary.Total)
 			unresolved = fmt.Sprint(latest.Run.TaskSummary.Unresolved)
 			started, invocation, run, branch = latest.StartedAt.Format(time.RFC3339Nano), latest.InvocationID, latest.Run.RunID, latest.BranchID
 			if latest.Run.Outcome != "" {
-				state = latest.Run.Outcome
+				outcome = latest.Run.Outcome
 			}
 		}
 		if row.Error != nil {
-			state += ":" + row.Error.Code
+			errorCode = row.Error.Code
 		}
-		values := []string{row.Team, state, counts, unresolved, started, invocation, run, branch, row.Workspace}
+		values := []string{row.Team, row.State, outcome, counts, unresolved, started, invocation, run, branch, row.Workspace, errorCode}
 		for i := range values {
 			values[i] = operatorpkg.SafeDisplayText(values[i], 1024)
 		}
-		if _, err := fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7], values[8]); err != nil {
+		if _, err := fmt.Fprintln(table, strings.Join(values, "\t")); err != nil {
 			return err
 		}
 	}
