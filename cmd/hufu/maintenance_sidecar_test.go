@@ -34,6 +34,9 @@ func TestMaintenanceGeneratorAdmitsConfiguredRoutesAndDistillationBatches(t *tes
 		{"truncated then blank rationale", "execution-routes:\n  maintenance-route:\n    candidates: [fixture/worker]\n", "", true, "rationale"},
 		{"duplicate knowledge", "execution-routes:\n  maintenance-route:\n    candidates: [fixture/worker]\n", "", true, "duplicates"},
 		{"schema violation", "execution-routes:\n  maintenance-route:\n    candidates: [fixture/worker]\n", "", true, "schema"},
+		{"flattened replacement then schema correction", "execution-routes:\n  maintenance-route:\n    candidates: [fixture/worker]\n", "", true, "shape-again"},
+		{"overlong replacement then length correction", "execution-routes:\n  maintenance-route:\n    candidates: [fixture/worker]\n", "", true, "length-again"},
+		{"overlong knowledge as singleton", "execution-routes:\n  maintenance-route:\n    candidates: [fixture/worker]\n", "", true, "length-singleton"},
 		{"overlong knowledge", "execution-routes:\n  maintenance-route:\n    candidates: [fixture/worker]\n", "", true, "length"},
 		{"sensitive knowledge", "execution-routes:\n  maintenance-route:\n    candidates: [fixture/worker]\n", "", true, "sensitive"},
 		{"retained citation", "execution-routes:\n  maintenance-route:\n    candidates: [fixture/worker]\n", "", true, "citation"},
@@ -153,8 +156,11 @@ func TestMaintenanceGeneratorAdmitsConfiguredRoutesAndDistillationBatches(t *tes
 			if tc.repair != "" && tc.repair != "duplicates" {
 				wantCalls++
 			}
+			if tc.repair == "length-again" || tc.repair == "shape-again" {
+				wantCalls++
+			}
 			wantAction, wantKnowledge := "discard", 0
-			if tc.repair == "duplicates" || tc.repair == "length" {
+			if tc.repair == "duplicates" || tc.repair == "length" || tc.repair == "length-singleton" || tc.repair == "length-again" || tc.repair == "shape-again" {
 				wantAction, wantKnowledge = "distill", 1
 			}
 			if tc.repair == "citation" {
@@ -190,9 +196,22 @@ func maintenanceDistillationReplies(truncated bool, repair string) []scripted.St
 	case "schema":
 		invalid = `{"decisions":[{"source_id":123,"action":"discard","reason":"transient"}],"knowledge":[]}`
 		steps[1].Match = &scripted.Match{Contains: "schema_violation at decisions[0].source_id (type: expected=string, got=number)"}
-	case "length":
+	case "length", "length-singleton", "length-again", "shape-again":
 		invalid = `{"decisions":[{"source_id":"fragment_0_0/0","action":"distill","reason":"verified"}],"knowledge":[{"text":"` + strings.Repeat("x", 2043) + `","source_ids":["fragment_0_0/0"]}]}`
 		steps[1] = scripted.Step{Content: `{"texts":[["Keep the verified applicability constraint."]]}`, Match: &scripted.Match{Contains: "Rewrite overlong knowledge text only."}}
+		if repair == "length-singleton" {
+			steps[1].Content = `{"texts":["Keep the verified applicability constraint."]}`
+		}
+		if repair == "length-again" || repair == "shape-again" {
+			corrected := steps[1]
+			corrected.Match = &scripted.Match{Contains: "maxLength: limit=2000, got=2431"}
+			steps[1].Content = `{"texts":["` + strings.Repeat("界", 2431) + `"]}`
+			if repair == "shape-again" {
+				corrected.Match = &scripted.Match{Contains: "maxItems: limit=1, got=6"}
+				steps[1].Content = `{"texts":["one","two","three","four","five","six"]}`
+			}
+			steps = slices.Insert(steps, 2, corrected)
+		}
 	case "sensitive":
 		invalid = `{"decisions":[{"source_id":"fragment_0_0/0","action":"distill","reason":"reusable"}],"knowledge":[{"text":"AKIAAAAAAAAAAAAAAAAA","source_ids":["fragment_0_0/0"]}]}`
 	case "duplicates":

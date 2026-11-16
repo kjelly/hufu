@@ -239,6 +239,50 @@ func TestRuntimeDocuments(t *testing.T) {
 	}
 }
 
+func TestHasDocumentPrefixReadsLiteralNamesWithoutWriting(t *testing.T) {
+	workspace := t.TempDir()
+	writer, err := Open(t.Context(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if found, err := writer.HasDocumentPrefix(t.Context(), ""); err != nil || found {
+		t.Fatalf("empty store: found=%v err=%v", found, err)
+	}
+	for _, name := range []string{"checkpoint:one", "literal_%name", "π:entry", "nul\x00name"} {
+		if err := writer.PutDocument(t.Context(), name, []byte("unchanged")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reader, err := OpenReadOnly(t.Context(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	for _, store := range []*Store{writer, reader} {
+		for _, tc := range []struct {
+			prefix string
+			want   bool
+		}{
+			{"checkpoint:", true}, {"literal_%", true}, {"π:", true}, {"nul\x00", true},
+			{"", true}, {"missing", false}, {"CHECKPOINT:", false}, {"literal_other", false},
+		} {
+			if found, err := store.HasDocumentPrefix(t.Context(), tc.prefix); err != nil || found != tc.want {
+				t.Fatalf("prefix=%q found=%v want=%v err=%v", tc.prefix, found, tc.want, err)
+			}
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		if found, err := store.HasDocumentPrefix(ctx, "checkpoint:"); found || !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled discovery: found=%v err=%v", found, err)
+		}
+		body, found, err := store.GetDocument(t.Context(), "checkpoint:one")
+		if err != nil || !found || string(body) != "unchanged" {
+			t.Fatal("prefix discovery changed document contents")
+		}
+	}
+}
+
 func TestWithTxRollsBackEveryWriteOnError(t *testing.T) {
 	store, err := openMemoryTestStore(t)
 	if err != nil {

@@ -28,6 +28,19 @@ type Queryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
+// HasDocumentPrefix reports whether any document name has the literal prefix.
+// It reads names only, without loading bodies or interpreting SQL wildcards.
+// A match is discovery metadata, not validation of document contents.
+func (s *Store) HasDocumentPrefix(ctx context.Context, prefix string) (bool, error) {
+	var present bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(
+SELECT 1 FROM runtime_documents WHERE substr(CAST(name AS BLOB), 1, ?) = ? LIMIT 1)`, len(prefix), []byte(prefix)).Scan(&present)
+	if err != nil {
+		return false, fmt.Errorf("read runtime document prefix: %w", err)
+	}
+	return present, nil
+}
+
 // GetDocument returns the body of name and whether it exists.
 func (s *Store) GetDocument(ctx context.Context, name string) ([]byte, bool, error) {
 	return GetDocument(ctx, s.db, name)

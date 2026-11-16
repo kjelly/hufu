@@ -113,6 +113,18 @@ func newMaintenanceTextGenerator(ctx context.Context, options maintenanceGenerat
 			return nil, "", nil, fmt.Errorf("%s execution target: %w", options.Purpose, err)
 		}
 	}
+	// This freshly loaded session is private to the text-only generator below.
+	// LoadTeam still validates authored declarations, but maintenance cannot
+	// execute workers or actions and must not bind their live MCP adapters.
+	// Remove those capabilities from its admitted policy as well; ordinary
+	// team loading and coordinator startup keep their full validation gates.
+	session.MCPServers = nil
+	session.Config.ActionProviders = nil
+	session.ProviderRegistry = team.NewProviderRegistry()
+	session.ActionCatalog = nil
+	// Invocation inputs belong to the unreachable agent workflow too. Their
+	// resolvers cannot be advertised after removing their action providers.
+	session.RunInputDefinitions = nil
 	// A maintenance command is a CLI model invocation, but it still needs the
 	// same repository, compiler, redaction, manifest, and event boundary as a
 	// coordinator sidecar. Bind the loaded team to the maintenance workspace

@@ -22,8 +22,9 @@ func cleanupWorkspaceDistillationFixture(t *testing.T, closer io.Closer) {
 }
 
 func TestWorkspaceDistillationPreviewThenApplyPreservesKnowledgeBeforeCleanup(t *testing.T) {
-	for _, mode := range []string{"apply", "changed source", "storage failure", "call budget"} {
+	for _, mode := range []string{"apply", "extract only", "protected extraction", "protected extraction batches", "changed source", "storage failure", "call budget"} {
 		t.Run(mode, func(t *testing.T) {
+			protectedExtraction := mode == "protected extraction" || mode == "protected extraction batches"
 			fixture := newWorkspaceCLIFixture(t)
 			fixture.run(t, "register")
 			fixture.deps.registryOptions = []workspacepkg.RegistryOption{workspacepkg.WithIDGenerator(workspacepkg.NewIDGenerator(bytes.NewReader(fixtureIDs(0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28))))}
@@ -39,7 +40,10 @@ func TestWorkspaceDistillationPreviewThenApplyPreservesKnowledgeBeforeCleanup(t 
 			_ = registry.Close()
 			oldSession := team.NewSession()
 			oldSession.Tasks = []*team.TodoItem{{ID: "old", Agent: "worker", Desc: "earlier duplicate work", Status: team.TaskDone, Output: "A useful general procedure."}}
-			if mode == "call budget" {
+			if protectedExtraction {
+				oldSession.RunResult = &team.RunResult{Outcome: team.RunOutcomePartial}
+			}
+			if mode == "call budget" || mode == "extract only" || mode == "protected extraction batches" {
 				oldSession.Tasks[0].Output = strings.Repeat("evidence ", taskdistill.MaxInputBytes/4)
 			}
 			if err = team.SaveSession(old.ControlRoot, oldSession); err != nil {
@@ -82,6 +86,34 @@ func TestWorkspaceDistillationPreviewThenApplyPreservesKnowledgeBeforeCleanup(t 
 					t.Fatal(err)
 				}
 				calls++
+				if mode == "extract only" || mode == "protected extraction batches" {
+					return identityTextGenerator{identity: "admitted-fixture-policy", generate: func(_ context.Context, prompt string) (string, error) {
+						_, data, _ := strings.Cut(prompt, "\nDATA: ")
+						var input struct {
+							Sources []taskdistill.Source `json:"sources"`
+						}
+						if err := json.Unmarshal([]byte(data), &input); err != nil {
+							t.Fatal(err)
+						}
+						draft := taskdistill.Draft{Decisions: []taskdistill.Decision{}, Knowledge: []taskdistill.Knowledge{}}
+						var ids []string
+						for _, source := range input.Sources {
+							action := "distill"
+							if source.ID == "fragment_1_0" || source.Protected {
+								action = "retain"
+							}
+							draft.Decisions = append(draft.Decisions, taskdistill.Decision{SourceID: source.ID, Action: action, Reason: "frozen evidence"})
+							if action == "distill" {
+								ids = append(ids, source.ID)
+							}
+						}
+						if len(ids) > 0 {
+							draft.Knowledge = append(draft.Knowledge, taskdistill.Knowledge{Text: "Preserve the useful general procedure and its applicability.", SourceIDs: ids})
+						}
+						raw, err := json.Marshal(draft)
+						return string(raw), err
+					}}, "test-model", func() {}, nil
+				}
 				draft := taskdistill.Draft{Decisions: []taskdistill.Decision{{SourceID: "1", Action: "distill", Reason: "useful"}, {SourceID: trash.TrashID, Action: "distill", Reason: "duplicate"}}, Knowledge: []taskdistill.Knowledge{{Text: "Preserve the useful general procedure and its applicability.", SourceIDs: []string{"1", trash.TrashID}}}}
 				raw, _ := json.Marshal(draft)
 				return staticTextGenerator{reply: string(raw)}, "test-model", func() {}, nil
@@ -94,13 +126,47 @@ func TestWorkspaceDistillationPreviewThenApplyPreservesKnowledgeBeforeCleanup(t 
 				}
 				return
 			}
-			output := fixture.run(t, "distill", "--team", "default", "--task", "1", "--trash", trash.TrashID, "--team-search-path", search)
+			command := newWorkspaceCommand(fixture.deps)
+			command.SetContext(t.Context())
+			command.SilenceErrors, command.SilenceUsage = true, true
+			var previewOutput, previewProgress bytes.Buffer
+			command.SetOut(&previewOutput)
+			command.SetErr(&previewProgress)
+			args := []string{"distill", "--team", "default", "--task", "1", "--trash", trash.TrashID, "--team-search-path", search}
+			if protectedExtraction {
+				args = append(args, "--extract-only")
+			}
+			command.SetArgs(args)
+			if err := command.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if mode != "extract only" && mode != "protected extraction batches" && previewProgress.Len() != 0 {
+				t.Fatalf("unexpected preview stderr: %s", previewProgress.String())
+			}
+			output := previewOutput.String()
 			var plan workspaceDistillationPlan
 			if err = json.Unmarshal([]byte(output), &plan); err != nil {
 				t.Fatal(err)
 			}
 			if plan.ID == "" || calls != 1 || len(team.LoadSession(destination.ControlRoot).Tasks) != 1 || !pathExistsForCLI(trash.TrashPath) {
 				t.Fatal("preview changed source tasks")
+			}
+			if protectedExtraction {
+				if !plan.ExtractOnly || !plan.Sources[1].Protected || plan.Draft.Decisions[0].Action != taskdistill.ActionExtractOnly {
+					t.Fatalf("extraction-only plan lost protection or authorized deletion: %+v", plan)
+				}
+				// The public review/show/apply path must preserve the restriction
+				// and original source hashes, rather than accepting only previews.
+				reviewedRaw, reviewErr := executeWorkspaceCommand(t, fixture.deps, "distill", "review", plan.ID, "--team", "default", "--keep-knowledge", "0")
+				if reviewErr != nil {
+					t.Fatal(reviewErr)
+				}
+				if err = json.Unmarshal([]byte(reviewedRaw), &plan); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = executeWorkspaceCommand(t, fixture.deps, "distill", "show", plan.ID, "--team", "default"); err != nil {
+					t.Fatal(err)
+				}
 			}
 			checkScope := newWorkspaceCommand(fixture.deps)
 			checkScope.SetContext(t.Context())
@@ -110,6 +176,13 @@ func TestWorkspaceDistillationPreviewThenApplyPreservesKnowledgeBeforeCleanup(t 
 			}
 			if _, err = os.Stat(filepath.Join(destination.ControlRoot, "context.sqlite")); !os.IsNotExist(err) {
 				t.Fatal("preview confirmed knowledge")
+			}
+			if mode == "extract only" {
+				for _, decision := range plan.Draft.Decisions {
+					if decision.SourceID == trash.TrashID && decision.Action != taskdistill.ActionExtractOnly {
+						t.Fatal("retained fragment did not protect the trash source")
+					}
+				}
 			}
 			if mode == "changed source" {
 				oldSession.Tasks[0].Output = "different evidence"
@@ -131,7 +204,7 @@ func TestWorkspaceDistillationPreviewThenApplyPreservesKnowledgeBeforeCleanup(t 
 				}
 			}
 			_, err = executeWorkspaceCommand(t, fixture.deps, "distill", "--team", "default", "--apply", plan.ID, "--yes")
-			if mode != "apply" {
+			if mode != "apply" && mode != "extract only" && !protectedExtraction {
 				if err == nil || len(team.LoadSession(destination.ControlRoot).Tasks) != 1 || !pathExistsForCLI(trash.TrashPath) {
 					t.Fatalf("failed apply mutated sources: %v", err)
 				}
@@ -140,7 +213,11 @@ func TestWorkspaceDistillationPreviewThenApplyPreservesKnowledgeBeforeCleanup(t 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(team.LoadSession(destination.ControlRoot).Tasks) != 0 || pathExistsForCLI(trash.TrashPath) {
+			wantTasks := 0
+			if protectedExtraction {
+				wantTasks = 1
+			}
+			if len(team.LoadSession(destination.ControlRoot).Tasks) != wantTasks || pathExistsForCLI(trash.TrashPath) != (mode == "extract only" || protectedExtraction) {
 				t.Fatal("apply did not clean selected sources")
 			}
 			repo, err := contextstore.OpenSQLiteReadOnly(filepath.Join(destination.ControlRoot, "context.sqlite"))
@@ -151,6 +228,9 @@ func TestWorkspaceDistillationPreviewThenApplyPreservesKnowledgeBeforeCleanup(t 
 			_ = repo.Close()
 			if err != nil || len(items) != 1 || len(items[0].Evidence) != 2 {
 				t.Fatalf("knowledge=%+v err=%v", items, err)
+			}
+			if protectedExtraction && items[0].Evidence[1].Ref != trash.TrashID+"@sha256:"+taskdistill.Digest(plan.Sources[1]) {
+				t.Fatal("protected source evidence hash was replaced by the model input projection")
 			}
 			if _, err = executeWorkspaceCommand(t, fixture.deps, "distill", "--team", "default", "--apply", plan.ID, "--yes"); err != nil {
 				t.Fatalf("idempotent retry: %v", err)

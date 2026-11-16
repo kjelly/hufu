@@ -3,6 +3,7 @@ package taskdistill
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -94,5 +95,44 @@ func TestSaveKnowledgeIsIdempotentAndRefusesChangedConfirmation(t *testing.T) {
 	}
 	if err = SaveKnowledge(t.Context(), repo, scope, "plan", sources, draft); err == nil {
 		t.Fatal("retired knowledge authorized cleanup")
+	}
+}
+
+func TestSaveKnowledgeAcceptsByteBoundedAggregates(t *testing.T) {
+	repo, err := contextstore.OpenSQLiteInMemory("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	sources := []Source{{ID: "source", Content: "Frozen verified evidence."}}
+	scope := contextstore.Scope{ProjectID: "project", TeamID: "team"}
+	draft := Draft{Decisions: []Decision{{"source", "distill", "approved facts"}}, Knowledge: []Knowledge{}}
+	for i := range 1001 {
+		draft.Knowledge = append(draft.Knowledge, Knowledge{fmt.Sprintf("Verified rule %d.", i), []string{"source"}})
+	}
+	for range 2 {
+		if err := SaveKnowledge(t.Context(), repo, scope, "aggregate", sources, draft); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, err := repo.Query(t.Context(), contextstore.RepositoryQuery{Scope: scope, Limit: 2000})
+	if err != nil || len(items) != len(draft.Knowledge) {
+		t.Fatalf("stored count=%d err=%v", len(items), err)
+	}
+	for _, item := range items {
+		if len(item.Evidence) != 1 || item.Evidence[0].Ref != "source@sha256:"+Digest(sources[0]) {
+			t.Fatal("aggregate lost the exact frozen source binding")
+		}
+	}
+	large := Draft{Decisions: draft.Decisions, Knowledge: []Knowledge{}}
+	for i := range 1001 {
+		large.Knowledge = append(large.Knowledge, Knowledge{strings.Repeat("x", 1100) + fmt.Sprint(i), []string{"source"}})
+	}
+	if err := SaveKnowledge(t.Context(), repo, scope, "oversized", sources, large); !errors.Is(err, ErrInvalid) {
+		t.Fatal("aggregate exceeded the unchanged canonical byte bound")
+	}
+	items, err = repo.Query(t.Context(), contextstore.RepositoryQuery{Scope: scope, Limit: 2000})
+	if err != nil || len(items) != len(draft.Knowledge) {
+		t.Fatalf("rejected aggregate changed confirmed knowledge: count=%d err=%v", len(items), err)
 	}
 }

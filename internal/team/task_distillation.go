@@ -142,7 +142,7 @@ func RemoveDistilledTasks(ctx context.Context, workspace, planID string, snapsho
 	}
 	ids := []string{}
 	for _, decision := range draft.Decisions {
-		if decision.Action != "retain" {
+		if !taskdistill.RetainsSource(decision.Action) {
 			ids = append(ids, decision.SourceID)
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"unicode/utf8"
 )
 
@@ -36,6 +37,7 @@ type draftRunner struct {
 	cache        CheckpointStore
 	remaining    int
 	splitContent bool
+	wholeSources bool // Refinement may filter whole facts, never fragments of a fact.
 }
 
 func newDraftRunner(generator TextGenerator, calls int) *draftRunner {
@@ -54,14 +56,7 @@ func (r *draftRunner) generate(ctx context.Context, sources []Source, policy str
 	if err != nil {
 		return Draft{}, err
 	}
-	legacy := Digest(struct {
-		Prompt       string
-		SplitContent bool
-	}{prompt, r.splitContent})
-	key := legacy
-	if !r.splitContent {
-		key = Digest([]string{legacy, "preserve_selected_facts_v1"})
-	}
+	key, legacy := draftCheckpointKeys(prompt, r.splitContent)
 	if draft, found, err := r.cached(ctx, key, legacy, sources, policy, depth); err != nil || found {
 		return draft, err
 	}
@@ -79,10 +74,14 @@ func (r *draftRunner) generate(ctx context.Context, sources []Source, policy str
 	if errors.Is(err, ErrTransport) {
 		return Draft{}, err
 	}
-	if !errors.Is(err, ErrIncompleteOutput) && !incompleteDraftJSON(err) {
+	partitionFacts := r.wholeFactProtocolFailure(err)
+	if !errors.Is(err, ErrIncompleteOutput) && !incompleteDraftJSON(err) && !partitionFacts {
 		return Draft{}, err
 	}
 	if _, _, ok := r.splitSources(sources, depth); !ok {
+		if partitionFacts {
+			return Draft{}, err
+		}
 		return Draft{}, fmt.Errorf("%w: bounded source splitting exhausted: %w", ErrIncompleteOutput, err)
 	}
 	if r.cache != nil {
@@ -93,14 +92,63 @@ func (r *draftRunner) generate(ctx context.Context, sources []Source, policy str
 	return r.split(ctx, sources, policy, depth, key)
 }
 
+// Filtering and merging may repartition immutable whole facts after bounded
+// protocol correction fails. Every child still passes the original admission
+// gates; ordinary extraction, privacy failures and interruptions stay terminal.
+func (r *draftRunner) wholeFactProtocolFailure(err error) bool {
+	if (r.splitContent && !r.wholeSources) || errors.Is(err, ErrCallBudget) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	issue, ok := errors.AsType[*OutputViolation](err)
+	return ok && (errors.Is(issue, ErrReferences) || issue.Code == "citation_not_distilled" || issue.Code == "uncovered_distill_source" || issue.Code == "invalid_json" || issue.Code == "schema_violation")
+}
+
+func draftCheckpointKeys(prompt string, splitContent bool) (key, legacy string) {
+	legacy = Digest(struct {
+		Prompt       string
+		SplitContent bool
+	}{prompt, splitContent})
+	key = legacy
+	if !splitContent {
+		key = Digest([]string{legacy, "preserve_selected_facts_v1"})
+	}
+	return key, legacy
+}
+
+func retainedKnowledgeCheckpointKey(key string) string {
+	return Digest([]string{key, "retained_fragment_knowledge_v1"})
+}
+
+func aggregateKnowledgeCheckpointKey(key string) string {
+	return Digest([]string{key, "aggregate_knowledge_v1"})
+}
+
+func draftCheckpointSchema(key, candidate string, splitContent bool) string {
+	if candidate == aggregateKnowledgeCheckpointKey(key) {
+		return Schema
+	}
+	if splitContent && candidate == retainedKnowledgeCheckpointKey(key) {
+		return retainedCheckpointSchema
+	}
+	return modelSchema
+}
+
+func draftCheckpointReadKeys(key, legacy string, splitContent bool) []string {
+	keys := []string{aggregateKnowledgeCheckpointKey(key), key}
+	if splitContent {
+		keys = []string{aggregateKnowledgeCheckpointKey(key), retainedKnowledgeCheckpointKey(key), key}
+	}
+	if legacy != key {
+		keys = append(keys, legacy)
+	}
+	return keys
+}
+
 func (r *draftRunner) cached(ctx context.Context, key, legacy string, sources []Source, policy string, depth int) (Draft, bool, error) {
 	if r.cache == nil {
 		return Draft{}, false, nil
 	}
-	keys := []string{key}
-	if legacy != key {
-		keys = append(keys, legacy)
-	}
+	keys := draftCheckpointReadKeys(key, legacy, r.splitContent)
 	for _, candidate := range keys {
 		checkpoint, found, err := r.cache.LoadDraftCheckpoint(ctx, candidate)
 		if err != nil {
@@ -116,7 +164,7 @@ func (r *draftRunner) cached(ctx context.Context, key, legacy string, sources []
 			draft, err := r.split(ctx, sources, policy, depth, key)
 			return draft, true, err
 		}
-		draft, err := decodeDraft(string(checkpoint.Draft), sources)
+		draft, err := decodeCheckpointDraft(string(checkpoint.Draft), sources, draftCheckpointSchema(key, candidate, r.splitContent))
 		if err == nil {
 			err = r.validateStage(draft)
 		}
@@ -141,7 +189,18 @@ func (r *draftRunner) call(ctx context.Context, prompt string, sources []Source)
 	draft, err := decodeModelDraft(raw, sources)
 	if err != nil {
 		if issue, ok := errors.AsType[*OutputViolation](err); ok && issue.Code == "schema_violation" {
-			issue.rewrite = knowledgeRewriteCandidate(raw, sources)
+			scope, guardErr := knowledgeRewriteCandidate(raw, sources)
+			if guardErr != nil {
+				err = guardErr
+			} else if scope != nil {
+				// Length errors must not hide privacy, protection or stage
+				// violations and thereby grant protocol-recovery authority.
+				if guardErr = r.validateStage(scope.draft); guardErr != nil {
+					err = guardErr
+				} else {
+					issue.rewrite = scope
+				}
+			}
 		}
 		return Draft{}, withRejectedCandidate(err, raw)
 	}
@@ -156,6 +215,9 @@ func (r *draftRunner) validateStage(draft Draft) error {
 		for i, decision := range draft.Decisions {
 			if decision.Action == "discard" {
 				return violation("merge_discard", fmt.Sprintf("decisions[%d].action", i), nil)
+			}
+			if decision.Action == ActionExtractOnly {
+				return violation("merge_runtime_action", fmt.Sprintf("decisions[%d].action", i), nil)
 			}
 		}
 	}
@@ -189,7 +251,7 @@ func (r *draftRunner) split(ctx context.Context, sources []Source, policy string
 func (r *draftRunner) splitSources(sources []Source, depth int) ([][]Source, map[string]string, bool) {
 	// A selected fact must remain indivisible during consolidation: child
 	// decisions must not hide a discard of part of that fact.
-	if !r.splitContent && len(sources) == 1 {
+	if (!r.splitContent || r.wholeSources) && len(sources) == 1 {
 		return nil, nil, false
 	}
 	return splitDraftSources(sources, depth)
@@ -197,6 +259,14 @@ func (r *draftRunner) splitSources(sources []Source, depth int) ([][]Source, map
 
 func (r *draftRunner) save(ctx context.Context, key string, draft Draft) (Draft, error) {
 	if r.cache != nil {
+		// Contract additions use new record keys. Older readers keep their
+		// immutable legacy records and never receive runtime-only actions or
+		// aggregate item counts outside their canonical contract.
+		if len(draft.Knowledge) > maxModelKnowledgeItems {
+			key = aggregateKnowledgeCheckpointKey(key)
+		} else if r.splitContent && slices.ContainsFunc(draft.Decisions, func(d Decision) bool { return d.Action == ActionExtractOnly }) {
+			key = retainedKnowledgeCheckpointKey(key)
+		}
 		raw, err := json.Marshal(draft)
 		if err != nil {
 			return Draft{}, err
@@ -241,9 +311,7 @@ func aggregateSplitDrafts(sources []Source, drafts []Draft, owners map[string]st
 	for _, draft := range drafts {
 		for _, decision := range draft.Decisions {
 			id := owners[decision.SourceID]
-			if actions[id] == "" || decision.Action == "retain" || actions[id] == "discard" {
-				actions[id] = decision.Action
-			}
+			actions[id] = combineFragmentActions(actions[id], decision.Action)
 		}
 		for _, knowledge := range draft.Knowledge {
 			ids := []string{}
@@ -260,7 +328,7 @@ func aggregateSplitDrafts(sources []Source, drafts []Draft, owners map[string]st
 	for _, knowledge := range result.Knowledge {
 		ids := []string{}
 		for _, id := range knowledge.SourceIDs {
-			if actions[id] == "distill" {
+			if allowsKnowledge(actions[id]) {
 				ids = append(ids, id)
 			}
 		}

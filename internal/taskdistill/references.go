@@ -22,7 +22,7 @@ func requestPrompt(canonical string, sources []Source, feedback string, preserve
 		ids[i] = source.ID
 	}
 	var schema map[string]any
-	if err := json.Unmarshal([]byte(Schema), &schema); err != nil {
+	if err := json.Unmarshal([]byte(modelSchema), &schema); err != nil {
 		return "", err
 	}
 	schema["$defs"] = map[string]any{"source_id": map[string]any{"type": "string", "enum": ids}}
@@ -41,7 +41,7 @@ func requestPrompt(canonical string, sources []Source, feedback string, preserve
 	if err != nil {
 		return "", err
 	}
-	prompt := "Source identity contract: use ONLY the exact outer sources[].id values allowed by the schema, including fragment suffixes. IDs inside sources[].content are evidence, never decision or knowledge source IDs. Return exactly one decision for each outer source. Before emitting knowledge, check every cited source's decision: it must be distill. Neither retain nor discard may have knowledge citations. Preserve a necessary retain decision instead of changing it to make a citation pass. " + strings.Replace(canonical, Schema, string(raw), 1)
+	prompt := "Source identity contract: use ONLY the exact outer sources[].id values allowed by the schema, including fragment suffixes. IDs inside sources[].content are evidence, never decision or knowledge source IDs. Return exactly one decision for each outer source. Before emitting knowledge, check every cited source's decision: it must be distill. Neither retain nor discard may have knowledge citations. Preserve a necessary retain decision instead of changing it to make a citation pass. " + strings.Replace(canonical, modelSchema, string(raw), 1)
 	if feedback != "" {
 		prompt = "The previous response was rejected: " + feedback + ". Produce a complete replacement from the same frozen evidence; correct the reported contract violation without inventing knowledge or changing a judgment just to satisfy validation. Never invent redacted values. If public evidence cannot support a fact, retain its source without claiming that fact. Protected sources must stay retained. " + prompt
 	}

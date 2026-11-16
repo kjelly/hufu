@@ -93,14 +93,14 @@ func inputSize(sources []Source, policy string) int {
 // provenance for the original sources. Any retained fragment retains its whole
 // source. A failure at any stage returns no applicable proposal.
 func GenerateBatched(ctx context.Context, generator TextGenerator, sources []Source, policy string, maxCalls int) (Draft, error) {
-	batches, err := PrepareBatches(sources, policy, maxCalls)
+	runner := newDraftRunner(generator, maxCalls)
+	batches, err := runner.prepareBatches(ctx, sources, policy, maxCalls)
 	if err != nil {
 		return Draft{}, err
 	}
 	if len(batches) == 1 && slices.EqualFunc(batches[0], sources, func(a, b Source) bool { return a == b }) {
-		return newDraftRunner(generator, maxCalls).generate(ctx, sources, policy, 0)
+		return runner.generate(ctx, sources, policy, 0)
 	}
-	runner := newDraftRunner(generator, maxCalls)
 	owners := map[string]string{}
 	for index := range sources {
 		prefix := fmt.Sprintf("fragment_%d_", index)
@@ -128,9 +128,7 @@ func GenerateBatched(ctx context.Context, generator TextGenerator, sources []Sou
 		}
 		for _, decision := range draft.Decisions {
 			id := owners[decision.SourceID]
-			if actions[id] == "" || decision.Action == "retain" || actions[id] == "discard" {
-				actions[id] = decision.Action
-			}
+			actions[id] = combineFragmentActions(actions[id], decision.Action)
 		}
 		for _, knowledge := range draft.Knowledge {
 			for i, id := range knowledge.SourceIDs {
@@ -143,7 +141,7 @@ func GenerateBatched(ctx context.Context, generator TextGenerator, sources []Sou
 		result.Decisions = append(result.Decisions, Decision{source.ID, actions[source.ID], "Aggregated fragment decisions; any retained fragment retains the complete source. See model call evidence in the draft workspace."})
 	}
 	for i := range result.Knowledge {
-		result.Knowledge[i].SourceIDs = slices.DeleteFunc(result.Knowledge[i].SourceIDs, func(id string) bool { return actions[id] != "distill" })
+		result.Knowledge[i].SourceIDs = slices.DeleteFunc(result.Knowledge[i].SourceIDs, func(id string) bool { return !allowsKnowledge(actions[id]) })
 	}
 	result.Knowledge = slices.DeleteFunc(result.Knowledge, func(k Knowledge) bool { return len(k.SourceIDs) == 0 })
 	result.Knowledge = mergeExactKnowledge(result.Knowledge)
@@ -155,6 +153,62 @@ func GenerateBatched(ctx context.Context, generator TextGenerator, sources []Sou
 		return Draft{}, err
 	}
 	return result, nil
+}
+
+// Only complete, canonical checkpoints in this runner's frozen scope reduce
+// the minimum call budget. Split hints still reserve work. Execution validates
+// every reused record again and enforces the shared call budget normally.
+func (r *draftRunner) prepareBatches(ctx context.Context, sources []Source, policy string, maxCalls int) ([][]Source, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	batches, originalErr := PrepareBatches(sources, policy, maxCalls)
+	if originalErr == nil || r.cache == nil || maxCalls < 1 || maxCalls > MaxModelCalls {
+		return batches, originalErr
+	}
+	batches, err := PrepareBatches(sources, policy, MaxModelCalls)
+	if err != nil {
+		return nil, originalErr
+	}
+	missing := 0
+	fragmentPolicy := extractionPolicy(sources, batches, policy)
+	for i, batch := range batches {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		prompt, err := draftPrompt(batch, fragmentPolicy)
+		if err != nil {
+			return nil, err
+		}
+		key, legacy := draftCheckpointKeys(prompt, true)
+		var checkpoint Checkpoint
+		found := false
+		checkpointSchema := modelSchema
+		for _, candidate := range draftCheckpointReadKeys(key, legacy, true) {
+			checkpoint, found, err = r.cache.LoadDraftCheckpoint(ctx, candidate)
+			if err != nil {
+				return nil, err
+			}
+			if found {
+				checkpointSchema = draftCheckpointSchema(key, candidate, true)
+				break
+			}
+		}
+		if !found || checkpoint.Split {
+			if checkpoint.Split && len(checkpoint.Draft) != 0 {
+				return nil, fmt.Errorf("%w: split checkpoint contains a draft", ErrInvalid)
+			}
+			missing++
+			continue
+		}
+		if _, err := decodeCheckpointDraft(string(checkpoint.Draft), batch, checkpointSchema); err != nil {
+			return nil, fmt.Errorf("extract batch %d/%d checkpoint: %w", i+1, len(batches), err)
+		}
+	}
+	if missing >= maxCalls { // Preserve the reserve for knowledge consolidation.
+		return nil, fmt.Errorf("%w: %d uncached extraction batches plus knowledge merging exceed the %d-call budget; source retained", ErrInvalid, missing, maxCalls)
+	}
+	return batches, nil
 }
 
 func mergeExactKnowledge(items []Knowledge) []Knowledge {

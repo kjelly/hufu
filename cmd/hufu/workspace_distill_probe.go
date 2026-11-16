@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"slices"
 
@@ -8,12 +9,26 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func prepareWorkspaceDistillationBatches(sources []taskdistill.Source, options workspaceDistillOptions) ([][]taskdistill.Source, error) {
+func prepareWorkspaceDistillationBatches(ctx context.Context, workspace string, sources []taskdistill.Source, options workspaceDistillOptions) ([][]taskdistill.Source, error) {
 	budget := options.maxCalls
 	if options.probeBatch > 0 {
 		budget = taskdistill.MaxModelCalls // Bound the inventory, not unselected model calls.
 	}
 	batches, err := taskdistill.PrepareBatches(sources, options.policy, budget)
+	if err != nil && options.probeBatch == 0 && options.maxCalls >= 1 && options.maxCalls <= taskdistill.MaxModelCalls {
+		// Keep fresh-work preflight before provider construction. When records
+		// exist, scope admission is needed before any cache discount is safe.
+		inventory, inventoryErr := taskdistill.PrepareBatches(sources, options.policy, taskdistill.MaxModelCalls)
+		if inventoryErr == nil {
+			cached, cacheErr := hasDistillationCheckpoints(ctx, workspace)
+			if cacheErr != nil {
+				return nil, cacheErr
+			}
+			if cached {
+				batches, err = inventory, nil
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

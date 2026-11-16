@@ -25,8 +25,11 @@ import (
 
 type workspaceDistillOptions struct {
 	team, model, searchPath, policy, apply string
+	refine, review                         string
 	tasks, trash                           []string
+	keepKnowledge                          []int
 	yes                                    bool
+	extractOnly                            bool
 	maxCalls                               int
 	probeBatch                             int
 }
@@ -38,20 +41,22 @@ type distillationTrashSource struct {
 }
 
 type workspaceDistillationPlan struct {
-	ID              string                         `json:"id"`
-	ProjectID       string                         `json:"project_id"`
-	WorkspaceID     string                         `json:"workspace_id"`
-	ContextScopeID  string                         `json:"context_scope_id"`
-	DraftWorkspace  string                         `json:"draft_workspace"`
-	AuditWorkspaces []string                       `json:"audit_workspaces,omitempty"`
-	Team            string                         `json:"team"`
-	Model           string                         `json:"model"`
-	Policy          string                         `json:"policy"`
-	Tasks           *team.TaskDistillationSnapshot `json:"tasks,omitempty"`
-	Trash           []distillationTrashSource      `json:"trash,omitempty"`
-	Sources         []taskdistill.Source           `json:"sources"`
-	MaxModelCalls   int                            `json:"max_model_calls"`
-	Draft           taskdistill.Draft              `json:"draft"`
+	ID              string                           `json:"id"`
+	Refinement      *workspaceDistillationRefinement `json:"refinement,omitempty"`
+	ProjectID       string                           `json:"project_id"`
+	WorkspaceID     string                           `json:"workspace_id"`
+	ContextScopeID  string                           `json:"context_scope_id"`
+	DraftWorkspace  string                           `json:"draft_workspace"`
+	AuditWorkspaces []string                         `json:"audit_workspaces,omitempty"`
+	Team            string                           `json:"team"`
+	Model           string                           `json:"model"`
+	Policy          string                           `json:"policy"`
+	Tasks           *team.TaskDistillationSnapshot   `json:"tasks,omitempty"`
+	Trash           []distillationTrashSource        `json:"trash,omitempty"`
+	Sources         []taskdistill.Source             `json:"sources"`
+	MaxModelCalls   int                              `json:"max_model_calls"`
+	ExtractOnly     bool                             `json:"extract_only,omitzero"`
+	Draft           taskdistill.Draft                `json:"draft"`
 }
 
 var taskDistillationGeneratorFactory = func(ctx context.Context, dir, workspace, model string) (maintenanceTextGenerator, string, func(), error) {
@@ -85,7 +90,8 @@ func newWorkspaceDistillCommand(deps workspaceCommandDeps) *cobra.Command {
 	flags.IntVar(&options.probeBatch, "probe-batch", 0, "Validate only this 1-based extraction batch within the call budget; no applicable plan or cleanup")
 	flags.StringVar(&options.apply, "apply", "", "Apply this saved preview ID without another model call")
 	flags.BoolVar(&options.yes, "yes", false, "Confirm saving reviewed knowledge and cleaning selected sources with --apply")
-	command.AddCommand(newWorkspaceDistillListCommand(deps))
+	flags.BoolVar(&options.extractOnly, "extract-only", false, "Draft knowledge while unconditionally retaining every source, including protected sources")
+	command.AddCommand(newWorkspaceDistillListCommand(deps), newWorkspaceDistillRefineCommand(deps), newWorkspaceDistillShowCommand(deps), newWorkspaceDistillReviewCommand(deps))
 	return command
 }
 
@@ -125,7 +131,13 @@ func runWorkspaceDistill(cmd *cobra.Command, deps workspaceCommandDeps, options 
 	if options.apply != "" {
 		return applyWorkspaceDistillation(cmd, manager, resolution, options.apply, stateRoot)
 	}
-	plan := workspaceDistillationPlan{ProjectID: resolution.ProjectID, WorkspaceID: resolution.WorkspaceID, ContextScopeID: resolution.ContextScopeID, Team: options.team, Policy: options.policy, MaxModelCalls: options.maxCalls}
+	if options.review != "" {
+		return reviewWorkspaceDistillation(cmd, manager, resolution, options, stateRoot)
+	}
+	if options.refine != "" {
+		return refineWorkspaceDistillation(cmd, manager, resolution, options, stateRoot)
+	}
+	plan := workspaceDistillationPlan{ProjectID: resolution.ProjectID, WorkspaceID: resolution.WorkspaceID, ContextScopeID: resolution.ContextScopeID, Team: options.team, Policy: options.policy, MaxModelCalls: options.maxCalls, ExtractOnly: options.extractOnly}
 	if len(options.tasks) > 0 {
 		snapshot, err := team.SnapshotTasksForDistillation(cmd.Context(), resolution.ControlRoot, options.tasks)
 		if err != nil {
@@ -154,8 +166,9 @@ func runWorkspaceDistill(cmd *cobra.Command, deps workspaceCommandDeps, options 
 			return err
 		}
 	}
-	// Validate the complete batch budget before constructing a provider.
-	batches, err := prepareWorkspaceDistillationBatches(plan.Sources, options)
+	// Validate inventory and fresh-work budget before constructing a provider.
+	// Cached work also needs the admitted policy to bind its reusable scope.
+	batches, err := prepareWorkspaceDistillationBatches(cmd.Context(), resolution.ControlRoot, distillationGenerationSources(plan), options)
 	if err != nil {
 		return err
 	}
@@ -193,9 +206,15 @@ func runWorkspaceDistill(cmd *cobra.Command, deps workspaceCommandDeps, options 
 	if options.probeBatch > 0 {
 		return runWorkspaceDistillationProbe(cmd, checkpointed, plan, options, len(batches))
 	}
-	plan.Draft, err = taskdistill.GenerateBatched(cmd.Context(), checkpointed, plan.Sources, options.policy, options.maxCalls)
+	plan.Draft, err = taskdistill.GenerateBatched(cmd.Context(), checkpointed, distillationGenerationSources(plan), options.policy, options.maxCalls)
 	if err != nil {
 		return err
+	}
+	if plan.ExtractOnly {
+		retainDistillationSources(&plan.Draft)
+		if err = validateDistillationPlanDraft(plan); err != nil {
+			return err
+		}
 	}
 	if cached, ok := checkpointed.(*distillationCheckpointGenerator); ok {
 		plan.AuditWorkspaces = slices.Clone(cached.audits)
@@ -247,29 +266,8 @@ func writeDistillationJSON(cmd *cobra.Command, value any) error {
 
 func applyWorkspaceDistillation(cmd *cobra.Command, manager *workspacepkg.WorkspaceManager, destination workspacepkg.Resolution, id, stateRoot string) error {
 	ctx := cmd.Context()
-	store, err := runtimestore.OpenRead(ctx, destination.ControlRoot)
+	plan, err := loadWorkspaceDistillationPlan(ctx, destination, id, 0)
 	if err != nil {
-		return err
-	}
-	raw, exists, readErr := store.GetDocument(ctx, "task_distillation_plan:"+id)
-	closeErr := store.Close()
-	if err = errors.Join(readErr, closeErr); err != nil {
-		return err
-	}
-	if !exists {
-		return errors.New("distillation preview not found")
-	}
-	var plan workspaceDistillationPlan
-	if err = json.Unmarshal(raw, &plan, json.RejectUnknownMembers(true)); err != nil {
-		return err
-	}
-	savedID := plan.ID
-	plan.ID = ""
-	if savedID != id || taskdistill.Digest(plan) != id || plan.ProjectID != destination.ProjectID || plan.WorkspaceID != destination.WorkspaceID || plan.ContextScopeID != destination.ContextScopeID || plan.Team != destination.TeamName {
-		return errors.New("distillation preview identity mismatch")
-	}
-	plan.ID = id
-	if err = taskdistill.Validate(plan.Draft, plan.Sources); err != nil {
 		return err
 	}
 	completedTrash, err := validateDistillationTrash(ctx, manager, destination, stateRoot, plan)
@@ -324,7 +322,7 @@ func applyWorkspaceDistillation(cmd *cobra.Command, manager *workspacepkg.Worksp
 			continue
 		}
 		decision := slices.IndexFunc(plan.Draft.Decisions, func(decision taskdistill.Decision) bool { return decision.SourceID == source.TrashID })
-		if plan.Draft.Decisions[decision].Action == "retain" {
+		if taskdistill.RetainsSource(plan.Draft.Decisions[decision].Action) {
 			continue
 		}
 		_, err = manager.Purge(ctx, workspacepkg.PurgeRequest{TrashID: source.TrashID, Preserve: func(ctx context.Context, trash workspacepkg.TrashWorkspace) error {
@@ -491,11 +489,18 @@ func validateWorkspaceDistillOptions(cmd *cobra.Command, options workspaceDistil
 		if !options.yes {
 			return errors.New("--apply requires --yes")
 		}
-		if len(options.tasks)+len(options.trash) != 0 || options.policy != "" || options.model != "" || cmd.Flags().Changed("probe-batch") || cmd.Flags().Changed("max-model-calls") {
-			return errors.New("--apply uses the saved preview; do not provide --task, --trash, --policy, --model or --max-model-calls")
+		if len(options.tasks)+len(options.trash) != 0 || options.policy != "" || options.model != "" || cmd.Flags().Changed("probe-batch") || cmd.Flags().Changed("max-model-calls") || cmd.Flags().Changed("extract-only") {
+			return errors.New("--apply uses the saved preview; do not provide --task, --trash, --policy, --model, --max-model-calls or --extract-only")
+		}
+	} else if options.refine != "" || options.review != "" {
+		if options.yes || len(options.tasks)+len(options.trash) != 0 || options.probeBatch != 0 {
+			return errors.New("refine accepts a saved plan only; no source selection, probe or --yes")
 		}
 	} else if options.yes || len(options.tasks)+len(options.trash) == 0 {
 		return errors.New("preview requires --task or --trash; --yes is only valid with --apply")
+	}
+	if options.extractOnly && options.probeBatch > 0 {
+		return errors.New("--extract-only requires a complete preview, not a probe")
 	}
 	return nil
 }

@@ -91,6 +91,35 @@ func TestTaskDistillationRemovalCommitsEventsCheckpointAndReplay(t *testing.T) {
 	}
 }
 
+func TestTaskDistillationExtractOnlyKeepsTasksAndHistoricalEvidence(t *testing.T) {
+	workspace, es := distillationTaskFixture(t)
+	snapshot, err := SnapshotTasksForDistillation(t.Context(), workspace, []string{"1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := es.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := taskdistill.Draft{Decisions: []taskdistill.Decision{{SourceID: "1", Action: taskdistill.ActionExtractOnly, Reason: "retain unresolved fragments"}}, Knowledge: []taskdistill.Knowledge{{Text: "Keep the independently verified procedure.", SourceIDs: []string{"1"}}}}
+	for range 2 {
+		if err := RemoveDistilledTasks(t.Context(), workspace, "retained-knowledge-plan", snapshot, draft); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after, err := es.ReadEvents()
+	if err != nil || len(after) != len(before) || len(LoadSession(workspace).Tasks) != 2 || len(ReduceToTodoList(after)) != 2 {
+		t.Fatalf("extract_only changed tasks or immutable evidence: %v", err)
+	}
+	st, err := LoadSessionTree(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RebuildSessionForBranch(workspace, st, es, "main"); err != nil || len(LoadSession(workspace).Tasks) != 2 {
+		t.Fatalf("retained tasks did not survive replay: %v", err)
+	}
+}
+
 func TestTaskDistillationProtectsDependenciesBranchesAndStaleSources(t *testing.T) {
 	for _, mode := range []string{"dependency", "branch", "incomplete", "stale"} {
 		t.Run(mode, func(t *testing.T) {

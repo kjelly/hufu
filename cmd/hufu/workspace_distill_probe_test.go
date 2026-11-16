@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	json "encoding/json/v2"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,5 +113,18 @@ func TestWorkspaceDistillationProbeHasBoundedCallsAndCannotBecomeAnApplyPlan(t *
 		if id == probed {
 			t.Fatal("normal preview repeated the verified probe batch")
 		}
+	}
+	requested = nil
+	resumed, err := run("distill", "--team", "default", "--task", "1", "--max-model-calls", "1", "--team-search-path", search)
+	var plan workspaceDistillationPlan
+	if err != nil || json.Unmarshal([]byte(resumed), &plan) != nil || plan.ID == "" || len(requested) != 0 {
+		t.Fatalf("cached preview could not use a smaller budget: calls=%v err=%v", requested, err)
+	}
+	output, err = run("distill", "--team", "default", "--task", "1", "--max-model-calls", "1", "--policy", "changed policy", "--team-search-path", search)
+	if !errors.Is(err, taskdistill.ErrInvalid) || output != "" || len(requested) != 0 {
+		t.Fatalf("unrelated checkpoints granted model calls: calls=%v err=%v", requested, err)
+	}
+	if len(team.LoadSession(destination.ControlRoot).Tasks) != 1 {
+		t.Fatal("budget-aware preview removed its source")
 	}
 }
