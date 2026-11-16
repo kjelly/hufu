@@ -27,3 +27,6 @@ review.md
 # Local test performance evidence (JSONL, profiles, private build caches).
 /work/
 /scripts/__pycache__/
+
+# Personal Hufu configuration lives in ~/.config/hufu/hufu.yaml.
+/hufu.yaml
