@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: —（本次工作樹，尚未提交）
+> Verified-Commit: `65775502`
 > Supersedes: —
 > Superseded-By: —
 
@@ -26,6 +26,22 @@ For requirements that vary with each invocation, enable `request-acceptance:
 true` or pass `--request-acceptance`. This supplements static contracts with a
 frozen, model-resolved request and an evidence-bound completion review. See
 [per-request runtime acceptance](request-acceptance.md).
+
+## Team-owned compatibility guidance
+
+Teams may declare `deprecated-vars` in a flat manifest or under `spec` in a
+versioned manifest. Keys are retired template-variable names; values are the
+team's migration guidance:
+
+```yaml
+deprecated-vars:
+  legacy.option: "use --input scope=<json>"
+```
+
+The CLI emits a warning on stderr when a nonempty declared variable is supplied,
+once per variable per invocation. It does not infer a replacement value or alter
+the task scope. The team owns variable names and guidance; the CLI contains no
+team-name branches. JSONL event mode suppresses these text warnings.
 
 ## 單檔 Team Preset
 

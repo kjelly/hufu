@@ -2,7 +2,7 @@
 
 > Status: active
 > Authority: reference
-> Verified-Commit: — (working tree; pending commit)
+> Verified-Commit: `65775502`
 > Supersedes: —
 > Superseded-By: —
 
@@ -208,6 +208,39 @@ The Go action is trusted team code: it runs with the Hufu process user's
 authority and may deliberately use `os`, `os/exec`, Git, and file I/O. Those
 capabilities remain inside the pre-written adapter; Hufu core does not expose
 a Git capability or turn this provider into a coding-agent tool.
+
+### Verified action sources
+
+Trusted Go providers can call `actionstate.ActionSources(ctx)` through
+`github.com/kjelly/hufu/internal/actionstate`. This returns a versioned JSON
+view (`version: 1`) of source tasks for the current action. The runtime selects
+the checkpoint from its invocation environment and validates the active
+occurrence before returning any data; adapters do not reconstruct store paths.
+
+The view contains an opaque `input_id` and `tasks`. Each task exposes `ID`,
+`Status`, `contract_id`, `evidence_from`, `workset_binding`, `typed_result`,
+`verified_result`, and `verified_outputs`. Adapters must check the relevant
+verification flag before consuming a source, and reject unsupported versions.
+Invalid and unfinished tasks remain visible with false flags; they must not be
+silently omitted from domain coverage. `result_error` and `outputs_error` are
+diagnostics, not fields to interpret for authorization.
+
+`verified_result` covers accepted model results, receipt identity, objective
+verification, admitted origin, frozen inputs and the canonical payload hash.
+Current-run legacy model results may omit input metadata; recovered sources
+require the selected input snapshot and a runtime-issued origin grant.
+`verified_outputs` additionally requires native action identity, an exact
+nonempty input snapshot and both stored output hashes matching the complete
+canonical output map. A completed command whose domain output reports failure
+can still be valid evidence; teams own the decision to accept that outcome.
+
+Verified native sources also expose `workspace`, resolved by the runtime from
+their original action identity, including authorized recovery sources. Source
+payloads, complete diagnostics and receipts remain unchanged in storage. Raw
+receipts, verification fingerprints and recovery grants are not part of this
+view. Team adapters own domain comparisons and coverage rules, while the runtime
+owns these provenance checks. `SessionCheckpoint` remains available for legacy
+adapters; new evidence consumers should use `ActionSources`.
 
 ### MCP provider
 
