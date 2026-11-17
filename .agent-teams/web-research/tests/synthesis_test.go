@@ -275,7 +275,7 @@ func TestResearchPipelineRequiresSynthesisAfterAudit(t *testing.T) {
 		}
 		if doc["x-hufu-final-report"] != nil {
 			finalReports++
-			if compiled.ID != "schemas/synthesis-v2.json" {
+			if compiled.ID != "schemas/synthesis-v3.json" {
 				t.Fatalf("another worker owns final rendering: %s", compiled.ID)
 			}
 		}

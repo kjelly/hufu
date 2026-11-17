@@ -666,6 +666,21 @@ transcript。中斷後恢復時，runtime 先核對收據所綁定 transcript �
 沒有匹配呼叫是 `not_attempted`，有呼叫但沒有結果是 `pending`。
 多次抓取中若有成功且引文匹配，以該成功工具 ID 綁定。保留引文不是驗證通過。
 
+若合約還要求證明來源正文進入後續模型請求，設定
+`require_model_delivery: true` 與 `model_delivery_pointer: "/model_delivery"`。
+來源 schema 必須宣告該 object 欄位。它由 runtime 填入，模型提交該欄位
+（包括 null）會遭拒絕，model-facing schema 不顯示它。
+收據包含 `status`、`invocation_id`、`model_id`、`request_sha256`、
+`source_sha256`、`source_bytes`、`delivered_sha256`、`delivered_bytes`；
+`request_sha256` 是 admission 邊界輸入訊息的 SHA-256，不含 credential。
+只有相同正文及來源完整送入、且觀察到該次 provider 成功回應時，`status`
+才是 `full`。其他狀態為 `truncated`、`modified`、`omitted`、`not_observed`。
+沒有此收據、正文截短或變更、沒有後續回應時，群組採用原本 fallback。
+即使 `citation_status` 是 `matched`，也不豁免完整輸入要求。
+這是 Hufu provider 訊息邊界的證據，無法保證供應商內部處理或模型完整理解。
+收據與回應觀察保存在原 attempt transcript，結果修復、重啟及受控合約
+恢復沿用原紀錄；不以新模型回合追認原工作已讀取來源。
+
 需要多來源時，可在 `x-hufu-tool-evidence` 宣告
 `corroboration: {"group_pointer":"/evidence_basis","group_value":"independent_corroboration","origin_pointer":"/independence_group","minimum":2}`。
 宣稱該 basis 的群組必須具有足量已通過工具證據綁定的不同來源識別及不同輸入目標；

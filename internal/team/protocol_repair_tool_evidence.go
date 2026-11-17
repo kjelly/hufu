@@ -165,7 +165,7 @@ func (c *Coordinator) restoreTranscriptEvidence(ctx context.Context, receipt *Ex
 		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
 			return nil, fmt.Errorf("decode protocol repair transcript: %w", err)
 		}
-		if record.Event == "tool_call" || record.Event == "tool_result" || record.Event == "historical_observation" {
+		if record.Event == "tool_call" || record.Event == "tool_result" || record.Event == "historical_observation" || record.Event == "model_input" || record.Event == "model_input_result" {
 			transcript.retainEvidence(record, len(scanner.Bytes()))
 		}
 	}

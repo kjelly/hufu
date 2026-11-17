@@ -70,9 +70,12 @@ type taskTranscript struct {
 	evidence        []taskTranscriptRecord
 	evidenceBytes   int
 	evidenceInvalid bool
+	modelInputs     bool
 }
 
 type taskTranscriptRecord struct {
+	ModelInput       *toolModelInputReceipt  `json:"model_input,omitempty"`
+	ProviderResult   *toolModelInputResult   `json:"provider_result,omitempty"`
 	Historical       *ObservationReadPayload `json:"historical,omitempty"`
 	HistoricalTarget string                  `json:"historical_target,omitempty"`
 	Timestamp        string                  `json:"timestamp"`
@@ -306,6 +309,9 @@ func (t *taskTranscript) append(record taskTranscriptRecord) error {
 	}
 	if _, err := t.f.Write(append(data, '\n')); err != nil {
 		return fmt.Errorf("write task transcript: %w", err)
+	}
+	if record.Event == "model_input" {
+		t.modelInputs = true
 	}
 	t.retainEvidence(record, len(data))
 	return nil

@@ -34,7 +34,7 @@ func TestContractDataflowPreservesResearchBeyondPresentationLimits(t *testing.T)
 				c.taskTracker.TodoList().UpdateStatus(item.ID, TaskDone, "verified")
 			}
 			c.session.ResultContracts = make(map[string]*CompiledResultContract)
-			for _, name := range []string{"research-v2", "audit-v2", "synthesis-v2"} {
+			for _, name := range []string{"research-v3", "audit-v3", "synthesis-v3"} {
 				id := "schemas/" + name + ".json"
 				compiled, err := compileResultContractSchema(filepath.Join(bundledTeamsDir(t), "web-research"), id)
 				if err != nil {
@@ -58,7 +58,7 @@ func TestContractDataflowPreservesResearchBeyondPresentationLimits(t *testing.T)
 				if err != nil {
 					t.Fatal(err)
 				}
-				schema := c.session.ResultContracts["schemas/research-v2.json"]
+				schema := c.session.ResultContracts["schemas/research-v3.json"]
 				ref := schema.ref(true)
 				source := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: []string{"researcher", "countercheck"}[track], ContractID: []string{"primary-research", "counter-research"}[track], ResultContract: &ref}})[0]
 				payload, err := validateStructuredResultPayload(schema, ref, raw)
@@ -68,7 +68,7 @@ func TestContractDataflowPreservesResearchBeyondPresentationLimits(t *testing.T)
 				accept(source, payload)
 				ids = append(ids, source.ID)
 			}
-			auditSchema := c.session.ResultContracts["schemas/audit-v2.json"]
+			auditSchema := c.session.ResultContracts["schemas/audit-v3.json"]
 			ref := auditSchema.ref(true)
 			audit := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "verifier", ContractID: "evidence-audit", ResultContract: &ref, EvidenceFrom: ids}})[0]
 			plans, err := c.fixedCollectionPlans(audit.ID)
@@ -98,7 +98,7 @@ func TestContractDataflowPreservesResearchBeyondPresentationLimits(t *testing.T)
 			}
 			// Carry the complete accepted binding and its original source scope.
 			accept(audit, payload)
-			schema := c.session.ResultContracts["schemas/synthesis-v2.json"]
+			schema := c.session.ResultContracts["schemas/synthesis-v3.json"]
 			ref = schema.ref(true)
 			synthesis := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "synthesizer", ContractID: "research-synthesis", ResultContract: &ref, EvidenceFrom: []string{audit.ID}}})[0]
 			plans, err = c.fixedCollectionPlans(synthesis.ID)
@@ -181,7 +181,7 @@ func TestContractDataflowPreservesResearchBeyondPresentationLimits(t *testing.T)
 }
 
 func TestContractDataflowBindsEveryResearchSourceDiagnostic(t *testing.T) {
-	compiled, err := compileResultContractSchema(filepath.Join(bundledTeamsDir(t), "web-research"), "schemas/research-v2.json")
+	compiled, err := compileResultContractSchema(filepath.Join(bundledTeamsDir(t), "web-research"), "schemas/research-v3.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,6 +201,7 @@ func TestContractDataflowBindsEveryResearchSourceDiagnostic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	records = appendObservedModelInput(t, compiled, records)
 	payload, err := validateStructuredResultPayload(compiled, compiled.ref(true), raw, records)
 	if err != nil {
 		t.Fatal(err)
@@ -221,6 +222,9 @@ func TestContractDataflowBindsEveryResearchSourceDiagnostic(t *testing.T) {
 		}
 		if source.(map[string]any)["citation_status"] != want {
 			t.Fatalf("source %d lost its original citation status", i)
+		}
+		if evidenceString(source, "/model_delivery/status") != "full" {
+			t.Fatalf("source %d lost its independent model delivery receipt", i)
 		}
 	}
 }

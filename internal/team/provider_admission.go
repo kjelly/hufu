@@ -183,6 +183,9 @@ func (a providerRequestAdmission) CommitProviderInvocation(ctx context.Context, 
 			}
 		}
 	}
+	if err := a.c.recordToolModelInputs(ctx, request); err != nil {
+		return err
+	}
 	if a.c.costManager == nil {
 		return commitStructuredStepInvocation(ctx, a.c, request, profileEvent)
 	}
@@ -218,6 +221,7 @@ func (a providerRequestAdmission) SettleProviderInvocation(ctx context.Context, 
 	if a.c == nil || request.InvocationID == "" {
 		return
 	}
+	settleToolModelInputs(ctx, request, result)
 	if scope := structuredStepScopeFromContext(ctx); scope != nil {
 		scope.observe(ctx, a.c, request, result)
 	}

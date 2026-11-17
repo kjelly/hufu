@@ -21,8 +21,8 @@
 | Runtime 階段 | Worker／契約 | 交接與完成條件 |
 | --- | --- | --- |
 | `prepare` | researcher／`primary-research`、countercheck／`counter-research` | 同批獨立研究，兩份 typed result 都完成才前進 |
-| `audit` | verifier／`evidence-audit` | `evidence_from` 引用兩份研究；自行開頁查核，提交 `audit-v2.json` |
-| `verify` | synthesizer／`research-synthesis` | `evidence_from` 只引用已完成 verifier；提交 `synthesis-v2.json` |
+| `audit` | verifier／`evidence-audit` | `evidence_from` 引用兩份研究；自行開頁查核，提交 `audit-v3.json` |
+| `verify` | synthesizer／`research-synthesis` | `evidence_from` 只引用已完成 verifier；提交 `synthesis-v3.json` |
 
 階段順序、四個必需 worker、typed result 與客觀 verifier 皆由 runtime
 強制執行；coordinator 不能在 verifier 完成後直接結束。研究或查核若已完成
@@ -291,7 +291,7 @@ GOMAXPROCS=2 mise exec -- go test -p 2 ./.agent-teams/web-research/tests
 
 ## 提交契約與既有 session
 
-`audit-v2.json` 延續舊 report v2 的外層提交欄位限制、runtime-owned 研究
+`audit-v3.json` 延續舊 report v2 的外層提交欄位限制、runtime-owned 研究
 輸入、引文綁定與原始主張涵蓋檢查，但把最終呈現交給後續綜合契約。
 另外要求兩份研究輸入分別具有 `primary_search` 與 `countercheck` lens。
 
@@ -324,7 +324,7 @@ GOMAXPROCS=2 mise exec -- go test -p 2 ./.agent-teams/web-research/tests
 
 ## 完整證據與呈現篇幅
 
-新任務使用 `research-v2.json`、`audit-v2.json` 與 `synthesis-v2.json`。
+新任務使用 `research-v3.json`、`audit-v3.json` 與 `synthesis-v3.json`。
 canonical findings、逐項處理紀錄及必要 sources 不再受 12／24／4 筆的呈現配額限制；
 仍保留原子主張、狀態 enum、精確引文、來源綁定、欄位長度與 runtime 輸出資源限制。
 綜合回答維持 1–3 段、最多 6 個主題段落；完整 audit 與每筆來源都呈現在附錄。
@@ -333,3 +333,31 @@ canonical findings、逐項處理紀錄及必要 sources 不再受 12／24／4 �
 原 task ID、finding index 與 claim 由 runtime 綁定，不能自填或引用不存在的 finding。
 舊版 schema 保持原樣；既有 session 必須先用 `resume --upgrade-contracts --dry-run`
 檢查受控契約恢復，不能直接覆寫歷史 schema、刪減 findings 或重跑已完成的研究來繞過拒絕。
+
+### 模型輸入與引用的驗收
+
+目前使用的 research-v3、audit-v3 合約要求 `model_delivery` 收據。
+快照成功後，runtime 在共用 provider admission 邊界比對該次模型請求的
+工具結果正文，保存模型、provider invocation ID、輸入訊息 SHA-256、
+原正文／送入正文的 SHA-256 與位元組數；不另外複製整份 prompt。
+收據 `full` 必須同時有完整相同正文、相同實際來源，以及該次 provider
+的成功回應。只有提交前的快照、沒有後續模型回應，不能取得此資格。
+此收據記錄 Hufu 送入 provider 的訊息邊界，並不聲稱能檢視供應商內部處理。
+
+`truncated` 表示正文被截短，`modified` 表示正文或來源變更／輸入有歧義，
+`omitted` 表示該請求沒有對應工具結果，`not_observed` 表示缺少可用的請求及回應證據。
+之後的 context compaction 不會抹除先前已完整送入的收據；新快照不能借用舊正文收據。
+結果收集或格式修復只能沿用原本封存的收據，重啟從收據指定的 CAS transcript
+恢復；不會把 collector 看到的轉述當成原研究員讀過來源。
+
+每個結論仍須提供支持該原子主張的短引文。runtime 分別記錄抓取、
+引文匹配與模型輸入結果：引文可以 matched，但模型輸入不足時結論仍為 unverified。
+verifier 必須用自己的分頁與成功快照重新讀取，再判斷引文是否支持該主張；
+精確字串存在並不代表主張成立。任何必要環節缺失，保留來源、原引文及缺口，
+標示證據不足，不得以成功導覽或等待時間代替。
+
+`model_delivery` 是 runtime-owned 欄位，模型提交即拒絕，包括 null 或相同值；
+model-facing schema 與修復範例不要求模型填寫。它會隨 canonical payload 保存，
+可透過 `hufu results show <result-id> --payload` 查看，並顯示於最終來源報告。
+舊任務沒有這些收據時無法追認完整輸入；本次調查的歷史結果不會被修改。
+這些檢查驗證可追溯的輸入與引用，無法保證模型完整理解全文。

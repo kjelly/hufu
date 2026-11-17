@@ -749,7 +749,11 @@ func (c *Coordinator) assessContractRecoveryTask(ctx context.Context, item *Todo
 				}
 				observations = transcript.evidenceRecords()
 			}
-			payload, e := validateStructuredResultPayload(compiled, *patch.ResultContract, item.TypedResult.StructuredPayload.Value, observations)
+			claims, e := modelDeliveryClaimsForRevalidation(compiled.toolEvidence, item.TypedResult.StructuredPayload.Value)
+			var payload *ResultPayload
+			if e == nil {
+				payload, e = validateStructuredResultPayload(compiled, *patch.ResultContract, claims, observations)
+			}
 			if e != nil || payload.SHA256 != item.TypedResult.StructuredPayload.SHA256 {
 				patch.Reason = "result_schema_invalid"
 				needsRetry = true

@@ -100,6 +100,9 @@ func validateStructuredResultPayload(compiled *CompiledResultContract, ref Resul
 	if err != nil {
 		return nil, fmt.Errorf("%s: structured_payload is not a single JSON value: %w", structuredPayloadInvalidCode, err)
 	}
+	if err := rejectModelDeliveryOverride(value, compiled.toolEvidence); err != nil {
+		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
+	}
 	// Only normalize fields/elements. A null payload itself means absence at
 	// the submission boundary and must not satisfy a required payload via a
 	// serialized spelling that bypasses that presence check.
@@ -413,6 +416,7 @@ func visibleResultPayloadSchema(ref ResultContractRef, compiled *CompiledResultC
 	if compiled != nil {
 		if value, err := decodeResultContractJSON(compiled.CanonicalSchema); err == nil {
 			if schema, ok := value.(map[string]any); ok {
+				omitModelDeliverySchema(schema, compiled.toolEvidence)
 				omitRuntimeEvidenceInputs(schema, compiled.evidenceInputs)
 				if err := omitRuntimeResultInputs(schema, compiled.runtimeInputs); err != nil {
 					return map[string]any{"type": "object", "additionalProperties": false}

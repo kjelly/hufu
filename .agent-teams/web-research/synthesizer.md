@@ -10,7 +10,7 @@ side_effect: none
 recovery: retry
 delegation: disabled
 result-contract:
-  schema: schemas/synthesis-v2.json
+  schema: schemas/synthesis-v3.json
   require-structured: true
 ---
 

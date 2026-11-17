@@ -16,29 +16,31 @@ import (
 // Vocabulary and fallback values belong to the owning schema. Core only
 // matches declared JSON fields against successful, runner-owned observations.
 type resultToolEvidenceSpec struct {
-	AllowHistorical   bool     `json:"allow_historical,omitzero"`
-	HistoricalPointer string   `json:"historical_pointer,omitempty"`
-	GroupsPointer     string   `json:"groups_pointer"`
-	ItemsPointer      string   `json:"items_pointer"`
-	Tool              string   `json:"tool"`
-	Tools             []string `json:"tools,omitempty"`
-	OutputFormat      string   `json:"output_format,omitempty"`
-	TextPattern       string   `json:"text_pattern,omitempty"`
-	TargetPattern     string   `json:"target_pattern,omitempty"`
-	textPattern       *regexp.Regexp
-	targetPattern     *regexp.Regexp
-	InputPointer      string                       `json:"input_pointer"`
-	ValuePointer      string                       `json:"value_pointer"`
-	OutputPointer     string                       `json:"output_pointer"`
-	QuotePointer      string                       `json:"quote_pointer"`
-	StatusPointer     string                       `json:"status_pointer"`
-	VerifiedStatus    string                       `json:"verified_status"`
-	UnverifiedStatus  string                       `json:"unverified_status"`
-	CallIDPointer     string                       `json:"call_id_pointer"`
-	GroupFallback     map[string]any               `json:"group_fallback"`
-	GroupAppend       map[string]string            `json:"group_append,omitempty"`
-	Diagnostics       *resultEvidenceDiagnostics   `json:"diagnostics,omitempty"`
-	Corroboration     *resultEvidenceCorroboration `json:"corroboration,omitempty"`
+	RequireModelDelivery bool     `json:"require_model_delivery,omitzero"`
+	ModelDeliveryPointer string   `json:"model_delivery_pointer,omitempty"`
+	AllowHistorical      bool     `json:"allow_historical,omitzero"`
+	HistoricalPointer    string   `json:"historical_pointer,omitempty"`
+	GroupsPointer        string   `json:"groups_pointer"`
+	ItemsPointer         string   `json:"items_pointer"`
+	Tool                 string   `json:"tool"`
+	Tools                []string `json:"tools,omitempty"`
+	OutputFormat         string   `json:"output_format,omitempty"`
+	TextPattern          string   `json:"text_pattern,omitempty"`
+	TargetPattern        string   `json:"target_pattern,omitempty"`
+	textPattern          *regexp.Regexp
+	targetPattern        *regexp.Regexp
+	InputPointer         string                       `json:"input_pointer"`
+	ValuePointer         string                       `json:"value_pointer"`
+	OutputPointer        string                       `json:"output_pointer"`
+	QuotePointer         string                       `json:"quote_pointer"`
+	StatusPointer        string                       `json:"status_pointer"`
+	VerifiedStatus       string                       `json:"verified_status"`
+	UnverifiedStatus     string                       `json:"unverified_status"`
+	CallIDPointer        string                       `json:"call_id_pointer"`
+	GroupFallback        map[string]any               `json:"group_fallback"`
+	GroupAppend          map[string]string            `json:"group_append,omitempty"`
+	Diagnostics          *resultEvidenceDiagnostics   `json:"diagnostics,omitempty"`
+	Corroboration        *resultEvidenceCorroboration `json:"corroboration,omitempty"`
 }
 
 type resultEvidenceCorroboration struct {
@@ -141,6 +143,9 @@ func compileResultContractExtensions(root map[string]any) (*resultToolEvidenceSp
 			}
 		}
 		if err := spec.Diagnostics.validate(); err != nil {
+			return nil, nil, err
+		}
+		if err := spec.validateModelDelivery(root); err != nil {
 			return nil, nil, err
 		}
 		if spec.Diagnostics != nil {
@@ -481,8 +486,20 @@ func bindResultToolEvidence(value any, spec *resultToolEvidenceSpec, records []t
 			item[callKey] = ""
 			match, quote := evidenceString(item, spec.ValuePointer), evidenceString(item, spec.QuotePointer)
 			index := slices.IndexFunc(observations, func(o successfulToolObservation) bool {
-				return o.match == match && strings.TrimSpace(quote) != "" && strings.Contains(strings.Join(strings.Fields(o.output), " "), strings.Join(strings.Fields(quote), " "))
+				return o.match == match && strings.TrimSpace(quote) != "" && strings.Contains(strings.Join(strings.Fields(o.output), " "), strings.Join(strings.Fields(quote), " ")) && (!spec.RequireModelDelivery || observedToolModelInput(records, o.id, o.output).Status == "full")
 			})
+			// Quote matching and delivery are independent diagnostics. A quote
+			// may match a captured page that the worker never received in full.
+			quoteIndex := index
+			if quoteIndex < 0 {
+				quoteIndex = slices.IndexFunc(observations, func(o successfulToolObservation) bool {
+					return o.match == match && strings.TrimSpace(quote) != "" && strings.Contains(strings.Join(strings.Fields(o.output), " "), strings.Join(strings.Fields(quote), " "))
+				})
+			}
+			delivered, err := bindModelDelivery(item, spec, records, observations, match, quoteIndex)
+			if err != nil {
+				return 0, err
+			}
 			if spec.HistoricalPointer != "" {
 				key, _ := evidenceMember(spec.HistoricalPointer)
 				// Model-supplied provenance never earns historical credit.
@@ -500,9 +517,11 @@ func bindResultToolEvidence(value any, spec *resultToolEvidenceSpec, records []t
 				}
 			}
 			if spec.Diagnostics != nil {
-				if bindResultEvidenceDiagnostics(item, spec, observations, records, match, quote, index) {
+				matched := bindResultEvidenceDiagnostics(item, spec, observations, records, match, quote, quoteIndex)
+				if matched && delivered {
 					verifiedItems = append(verifiedItems, item)
 				} else {
+					item[statusKey] = spec.UnverifiedStatus
 					missing = true
 				}
 				continue
