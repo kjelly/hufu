@@ -81,9 +81,9 @@ snapshot 的 `arguments` 必須是 `{}`；`url`、`filename` 等欄位均不接�
 已導覽其他來源，先重新導覽。快照的 `Page URL` 應與預期來源及實際觀察到的
 重新導向一致，不能把別頁引文掛在原本想查的網址下。
 
-三個角色皆設定 `page-dwell: {min-seconds: 300, max-seconds: 600}`。
+三個角色皆設定 `page-dwell: {min-seconds: 60, max-seconds: 360}`。
 導覽載入完成即回傳；第一次 `browser_snapshot` 先擷取原文與按鈕，
-再隨機停留 5–10 分鐘，結束才回傳等待前擷取的快照與擷取時間。
+再隨機停留 1–6 分鐘，結束才回傳等待前擷取的快照與擷取時間。
 後續快照讀取當前內容，不重複停留。這段停留不計入 worker／coordinator 的工作 timeout，
 亦不計入 `--max-duration` 總時間預算；取消與外部操作期限仍生效。不要再加另一段閱讀等待，亦不可把停留
 完成當作頁面已讀取或主張已驗證的證據。調整範圍會改變 frozen policy。

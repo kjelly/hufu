@@ -38,7 +38,7 @@ mcp-servers:
     type: chrome-cdp
     page-verification: true
     url: http://127.0.0.1:9222
-    page-dwell: {min-seconds: 300, max-seconds: 600}
+    page-dwell: {min-seconds: 60, max-seconds: 360}
     allowedTools: [browser_navigate, browser_snapshot, browser_click, browser_wait_for_user]
     toolPolicies:
       browser_navigate:
@@ -76,7 +76,7 @@ mcp-servers:
     type: chrome-cdp
     page-verification: true
     url: http://127.0.0.1:9222
-    page-dwell: {min-seconds: 300, max-seconds: 600}
+    page-dwell: {min-seconds: 60, max-seconds: 360}
     allowedTools: [browser_navigate, browser_snapshot, browser_click, browser_wait_for_user]
     toolPolicies:
       browser_navigate:
@@ -114,7 +114,7 @@ mcp-servers:
     type: chrome-cdp
     page-verification: true
     url: http://127.0.0.1:9222
-    page-dwell: {min-seconds: 300, max-seconds: 600}
+    page-dwell: {min-seconds: 60, max-seconds: 360}
     allowedTools: [browser_navigate, browser_snapshot, browser_click, browser_wait_for_user]
     toolPolicies:
       browser_navigate:

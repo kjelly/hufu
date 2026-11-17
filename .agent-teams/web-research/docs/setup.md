@@ -20,9 +20,9 @@ consume worker/coordinator working-time timeout or the run duration budget
 (`--max-duration`). Ctrl+C and external operation deadlines still apply. Unattended execution cannot confirm verification.
 
 Each of the three browser declarations enables
-`page-dwell: {min-seconds: 300, max-seconds: 600}`. After a successful navigation,
+`page-dwell: {min-seconds: 60, max-seconds: 360}`. After a successful navigation,
 navigation returns after loading; the first `browser_snapshot` captures text
-and controls immediately, then keeps the page open for a newly sampled 5–10
+and controls immediately, then keeps the page open for a newly sampled 1–6
 minutes before returning that captured content. Later snapshots read fresh
 content without another dwell. This passive dwell does
 not consume agent/coordinator working-time timeout or the run duration budget

@@ -50,7 +50,7 @@ func TestWebResearchWorkflowRetainsSearchAndDedicatedChromeTools(t *testing.T) {
 		if !cfg.PageVerification {
 			t.Fatalf("%s lost runtime page verification", name)
 		}
-		if cfg.PageDwell == nil || cfg.PageDwell.MinSeconds != 300 || cfg.PageDwell.MaxSeconds != 600 {
+		if cfg.PageDwell == nil || cfg.PageDwell.MinSeconds != 60 || cfg.PageDwell.MaxSeconds != 360 {
 			t.Fatalf("%s lost the required random page dwell", name)
 		}
 		if cfg.Type != "chrome-cdp" || cfg.URL != "http://127.0.0.1:9222" || len(cfg.Command) != 0 || len(cfg.TemporaryDirectoryEnv) != 0 {
