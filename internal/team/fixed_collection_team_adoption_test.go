@@ -99,12 +99,16 @@ func adoptedFixedCollectionFixture(t *testing.T, teamName string) (*Coordinator,
 	return c, item, plans, value
 }
 
-func adoptedCollectionPayload(t *testing.T, c *Coordinator, item *TodoItem, raw []byte, external bool) (*ResultPayload, error) {
+func adoptedCollectionPayload(t *testing.T, c *Coordinator, item *TodoItem, raw []byte, external bool, status ...string) (*ResultPayload, error) {
 	t.Helper()
 	if external {
 		input := string(raw)
 		request := AttemptRequest{Task: taskDefFromTodoItem(item), resultContractSchema: c.session.ResultContracts[item.ResultContract.ID], resultEvidenceInputs: c.dependencyResultsForTask(item.ID)}
-		return canonicalExternalStructuredPayload(request, &WorkerResultProposal{StructuredPayloadJSON: &input}, nil)
+		proposal := &WorkerResultProposal{StructuredPayloadJSON: &input}
+		if len(status) > 0 {
+			proposal.Status = status[0]
+		}
+		return canonicalExternalStructuredPayload(request, proposal, nil)
 	}
 	payload, rejection := c.structuredPayloadForSubmission(item.ID, raw)
 	if rejection != "" {

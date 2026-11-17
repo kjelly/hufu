@@ -1362,16 +1362,16 @@ retryLoop:
 			// Capture the worker's original final response before any repair
 			// agent is started. The repair context intentionally does not carry
 			// this recorder, so its output cannot mutate the original evidence.
-			if recordErr := transcript.RecordAssistantOutput(output); recordErr != nil && err == nil {
+			if recordErr := transcript.RecordAssistantOutput(output); recordErr != nil {
 				failure := fmt.Errorf("record original task transcript: %w", recordErr)
 				if runtimeCollection {
 					collectionSealErr = failure
-				} else {
+				} else if err == nil {
 					err = failure
 				}
 			}
 			if ref, manifestErr := transcript.Manifest(); manifestErr != nil {
-				if err == nil {
+				if err == nil || runtimeCollection {
 					failure := fmt.Errorf("create original task transcript manifest: %w", manifestErr)
 					if runtimeCollection {
 						collectionSealErr = errors.Join(collectionSealErr, failure)
@@ -1468,6 +1468,14 @@ retryLoop:
 			receipt.ExitCode = new(0)
 		}
 		err, terminalBlocked := c.finalizeTaskTerminalResources(parentCtx, todoID, err)
+		stoppedToolLoop := runtimeCollection && collectionSealErr == nil && !terminalBlocked && attemptContextErr == nil &&
+			collectableToolLoop(parentCtx, err, task, attemptDispositions)
+		if stoppedToolLoop {
+			receipt.WorkStopReason = workStopToolLoop
+			receipt.ExitCode = new(1)
+			err = nil
+			c.report(c.newEvent("step").withAgent(agentName).withTodoID(todoID).withMessage("tool loop stopped work; collecting retained evidence without work tools"))
+		}
 		if runtimeCollection && err == nil && !terminalBlocked {
 			workUsageBudget := attemptTokens.snapshotForUsage()
 			c.recordAttemptUsage(todoID, attempt, usageWithProgressTokens(steps, workUsageBudget))
@@ -1487,6 +1495,9 @@ retryLoop:
 				if deprecatedReport {
 					stopReason = "deprecated_result_transport"
 				}
+				if stoppedToolLoop {
+					stopReason = workStopToolLoop
+				}
 				collectionCtx = context.WithValue(collectionCtx, resultCollectionStopKey{}, stopReason)
 				collectionCtx = withInvocationMetadata(collectionCtx, invocationMetadataFromManifest(&contextManifest))
 				err = c.collectReturnedWork(collectionCtx, agentDef, receipt, output, currentPrompt)
@@ -1495,6 +1506,14 @@ retryLoop:
 				attemptTokens = workUsageBudget
 				if err == nil && c.GetTaskResult(todoID) == nil {
 					err = &resultCollectionFailure{Reason: RepairFailureCommit, Cause: errors.New("accepted collection result was not published")}
+				}
+				if err == nil && stoppedToolLoop {
+					// The immutable work seal still contains exit_code=1. Only the
+					// final attempt has now produced an accepted result with gaps.
+					receipt.ExitCode = new(0)
+					if saveErr := c.setAttemptReceipt(todoID, &receipt); saveErr != nil {
+						err = &resultCollectionFailure{Reason: RepairFailureCommit, Cause: saveErr}
+					}
 				}
 			}
 			if err != nil {

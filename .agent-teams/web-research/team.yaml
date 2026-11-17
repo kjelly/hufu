@@ -175,7 +175,7 @@ contracts:
       type: task_result_assert
       task-result-assertions:
         - {pointer: /structured_payload/value/lens, op: equals, value: primary_search}
-        - {pointer: /structured_payload/value/findings, op: min_items, value: 1}
+        - {pointer: /structured_payload/value/findings, op: min_items, value: 0}
   - id: counter-research
     agent: countercheck
     phase: prepare
@@ -189,7 +189,7 @@ contracts:
       type: task_result_assert
       task-result-assertions:
         - {pointer: /structured_payload/value/lens, op: equals, value: countercheck}
-        - {pointer: /structured_payload/value/findings, op: min_items, value: 1}
+        - {pointer: /structured_payload/value/findings, op: min_items, value: 0}
   - id: evidence-audit
     agent: verifier
     phase: audit
@@ -205,7 +205,7 @@ contracts:
       type: task_result_assert
       task-result-assertions:
         - {pointer: /structured_payload/value/audit_complete, op: equals, value: true}
-        - {pointer: /structured_payload/value/findings, op: min_items, value: 1}
+        - {pointer: /structured_payload/value/findings, op: min_items, value: 0}
   - id: research-synthesis
     agent: synthesizer
     phase: verify
@@ -223,4 +223,4 @@ contracts:
         - {pointer: /structured_payload/value/synthesis_complete, op: equals, value: true}
         - {pointer: /structured_payload/value/input_review, op: min_items, value: 1}
         - {pointer: /structured_payload/value/input_review/0/audit_complete, op: equals, value: true}
-        - {pointer: /structured_payload/value/answer, op: min_items, value: 1}
+        - {pointer: /structured_payload/value/answer, op: min_items, value: 0}

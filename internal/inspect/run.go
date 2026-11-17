@@ -122,6 +122,7 @@ func requestDeliveryDimension(value string, allowed ...string) string {
 }
 
 type AttemptData struct {
+	WorkStopReason     string `json:"work_stop_reason,omitempty"`
 	Attempt            int    `json:"attempt"`
 	ModelExecutionID   string `json:"model_execution_id,omitempty"`
 	ProducerID         string `json:"producer_id,omitempty"`
@@ -554,6 +555,7 @@ func projectTaskWithEvents(item *team.TodoItem, query InspectQuery, events []Ind
 			continue
 		}
 		attempt := AttemptData{
+			WorkStopReason:     receipt.WorkStopReason,
 			Recovery:           recovery[attemptReceiptKey(receipt.RunID, receipt.TaskID, receipt.Attempt, receipt.ModelExecutionID)],
 			Attempt:            receipt.Attempt,
 			ModelExecutionID:   receipt.ModelExecutionID,

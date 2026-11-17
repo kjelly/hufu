@@ -210,16 +210,19 @@ func TestSynthesisCompletionVerifierRejectsIncompleteResults(t *testing.T) {
 	if spec == nil {
 		t.Fatal("missing synthesis verification")
 	}
-	for _, scenario := range []string{"complete with evidence gaps", "unfinished synthesis", "unfinished audit", "missing answer", "missing audit"} {
+	for _, scenario := range []string{"complete with evidence gaps", "empty findings report", "unfinished synthesis", "unfinished audit", "missing answer", "missing audit"} {
 		t.Run(scenario, func(t *testing.T) {
 			value := synthesisWithAudit("unverified")
 			switch scenario {
+			case "empty findings report":
+				value["input_review"].([]any)[0].(map[string]any)["findings"] = []any{}
+				value["answer"] = []any{}
 			case "unfinished synthesis":
 				value["synthesis_complete"] = false
 			case "unfinished audit":
 				value["input_review"].([]any)[0].(map[string]any)["audit_complete"] = false
 			case "missing answer":
-				value["answer"] = []any{}
+				delete(value, "answer")
 			case "missing audit":
 				value["input_review"] = []any{}
 			}
@@ -232,7 +235,7 @@ func TestSynthesisCompletionVerifierRejectsIncompleteResults(t *testing.T) {
 				StructuredPayload: &team.ResultPayload{Value: raw},
 			}
 			verification, err := team.ExecuteVerificationSpecWithTaskResult(t.Context(), "sh", t.TempDir(), *spec, result)
-			wantSuccess := scenario == "complete with evidence gaps"
+			wantSuccess := scenario == "complete with evidence gaps" || scenario == "empty findings report"
 			if (err == nil) != wantSuccess || verification == nil || (verification.ExitCode == 0) != wantSuccess {
 				t.Fatalf("want success=%v, verification=%+v, err=%v", wantSuccess, verification, err)
 			}

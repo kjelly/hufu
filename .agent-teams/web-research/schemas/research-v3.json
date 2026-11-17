@@ -69,7 +69,7 @@
     },
     "findings": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
       "items": {
         "$ref": "#/$defs/finding"
       }
@@ -402,5 +402,6 @@
       ]
     }
   },
-  "title": "Complete evidence-preserving research"
+  "title": "Complete evidence-preserving research",
+  "x-hufu-result-envelope": {"type":"object","if":{"properties":{"structured_payload":{"type":"object","required":["findings"],"properties":{"findings":{"type":"array","maxItems":0}}}}},"then":{"properties":{"status":{"enum":["completed_with_gaps","partial","blocked","failed"]}}}}
 }

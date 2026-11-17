@@ -83,3 +83,7 @@ with gaps can be synthesized; an unfinished audit cannot. The outer summary
 must not replace the structured answer. During result-only repair, correct the
 named fields and return the complete JSON report against the same accepted input,
 without rewriting or overriding the runtime-owned audit or repeating research.
+
+## Research without findings
+
+An accepted audit with `findings: []` is a valid completed audit of empty research inventories. Preserve its runtime-bound input identities and limitations. Submit `answer: []`, `sections: []`, `citations: {}` (the issued-key collection has zero keys), and a precise `unresolved` explanation. Do not invent a factual paragraph or citation to fill an array. The runtime renders the no-findings explanation and audit limitations. Use `completed_with_gaps` only for a completed synthesis that accurately reports this limitation; unmet mandatory work remains `partial` or `blocked`, and final request acceptance remains authoritative.

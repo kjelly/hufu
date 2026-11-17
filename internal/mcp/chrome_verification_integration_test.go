@@ -16,7 +16,7 @@ import (
 )
 
 func TestChromeSnapshotAutomaticallyRequestsAuthorizedHumanVerification(t *testing.T) {
-	for _, scenario := range []string{"confirmed", "explicit", "denied", "unattended", "cancelled", "still_challenged", "classifier_error", "uncertain", "readable"} {
+	for _, scenario := range []string{"confirmed", "explicit", "denied", "unattended", "cancelled", "still_challenged", "classifier_error", "uncertain", "readable", "access_error"} {
 		t.Run(scenario, func(t *testing.T) {
 			var verified atomic.Bool
 			var captures, focuses atomic.Int32
@@ -89,6 +89,9 @@ func TestChromeSnapshotAutomaticallyRequestsAuthorizedHumanVerification(t *testi
 				if scenario == "readable" {
 					return ChromePageReadable, nil
 				}
+				if scenario == "access_error" {
+					return ChromePageAccessError, nil
+				}
 				if page.Text == challengePageText {
 					return ChromePageNeedsHuman, nil
 				}
@@ -142,14 +145,14 @@ func TestChromeSnapshotAutomaticallyRequestsAuthorizedHumanVerification(t *testi
 				t.Fatal(err)
 			}
 			text, isError, err := manager.ExecuteAuthorizedTool(ctx, descriptor.Name, digest, input)
-			if err != nil || isError != (scenario != "confirmed" && scenario != "readable" && scenario != "explicit") {
+			if err != nil || isError != (scenario != "confirmed" && scenario != "readable" && scenario != "explicit" && scenario != "access_error") {
 				t.Fatalf("text=%s isError=%v error=%v", text, isError, err)
 			}
 			if scenario == "confirmed" && (!strings.Contains(text, "Fresh public article") || strings.Contains(text, challengePageText) || captures.Load() != 2) {
 				t.Fatalf("stale evidence after human confirmation: %s", text)
 			}
 			wantPrompts := 1
-			noChallenge := scenario == "classifier_error" || scenario == "uncertain" || scenario == "readable"
+			noChallenge := scenario == "classifier_error" || scenario == "uncertain" || scenario == "readable" || scenario == "access_error"
 			if scenario == "denied" || scenario == "unattended" || noChallenge {
 				wantPrompts = 0
 			}
@@ -164,6 +167,15 @@ func TestChromeSnapshotAutomaticallyRequestsAuthorizedHumanVerification(t *testi
 				_, _, _ = manager.ExecuteAuthorizedTool(ctx, descriptor.Name, digest, "{}")
 				if prompts != wantPrompts {
 					t.Fatal("unresolved challenge prompted twice")
+				}
+			}
+			if scenario == "access_error" {
+				before := captures.Load()
+				result, err := manager.ExecuteAuthorizedToolResult(ctx, descriptor.Name, digest, "{}")
+				var outcome chromeSourceAccess
+				if err != nil || result.IsError || result.InvocationID == "" || json.Unmarshal(result.StructuredContent, &outcome) != nil ||
+					outcome.Status != "source_unavailable" || outcome.Citable || outcome.Executed || !outcome.Exhausted || outcome.Attempts != 2 || captures.Load() != before {
+					t.Fatalf("unavailable source was retried or lost its native status: %+v err=%v", result, err)
 				}
 			}
 			// The model's explicit tool call must not bypass a failed automatic

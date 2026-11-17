@@ -143,7 +143,25 @@ a non-readable initial classification causes a fresh capture and classification
 before asking for help, so a challenge that cleared itself need not interrupt
 the operator. Only a `needs_human_verification` decision enters the existing
 human prompt inside the snapshot call. Classifier errors fail immediately;
-`uncertain` and `access_error` decisions return tool errors without prompting.
+`uncertain` decisions return tool errors without prompting. An `access_error`
+from `browser_snapshot` returns a native availability observation instead:
+`status: source_unavailable`, the actual `url`, `reason: access_error`, a bounded
+diagnostic, `citable: false`, `attempts`, `attempt_limit`, `exhausted`, and
+`next_action: use_another_source`. The text and structured MCP content carry the
+same outcome; the ordinary tool transcript and invocation receipt preserve it.
+It contains no citation-bearing snapshot. Recording an unavailable source does
+not establish that a factual claim is false or that a research task failed.
+
+Each dedicated browser declaration permits two access-error snapshots per
+source during its lifetime. URLs are grouped conservatively by origin and
+normalized path, ignoring query strings and fragments. Exhaustion prevents
+further snapshots, navigation to that source, clicks and human-verification
+reads; a different source remains usable. The allowance is not renewed by
+navigation or argument changes. Closing the declaration ends its allowance;
+result-only recovery never reopens it or repeats its browser operations.
+Classifier, permission, cancellation, transport and publication failures retain
+their error behavior. A post-click failure remains an error because the click
+may already have changed browser state.
 These states do not establish a security challenge and cannot be repaired by
 human confirmation. Explicit `browser_wait_for_user` calls on a declaration
 with page verification enabled also classify a fresh capture and require a

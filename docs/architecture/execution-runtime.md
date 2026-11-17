@@ -169,6 +169,20 @@ historical frozen text requests retain their original text transport.
 The accepted source is `collected`, with the same contract, evidence, verifier,
 terminal and workspace integration gates as a tool submission. Runtime-owned
 fields are still assembled from verified sources; the model cannot override them.
+
+For runtime-collection workers with `none` or `browser_interaction` side effects,
+a tool-loop stop can also seal existing work and enter this data-only collection
+path. Closed tool sequences, planning, cancelled contexts and observed policy or
+guard denials are excluded. No worker or browser tools are replayed. Collection
+uses its existing two-turn budget and cannot submit unqualified `success` after
+this stop: it must preserve the limitation in `completed_with_gaps`, `partial`,
+`blocked` or `failed`. Ordinary contract, evidence, verification and request
+acceptance gates still decide whether that result completes the task or goal.
+The sealed work retains its unsuccessful receipt and complete transcript. The
+current receipt records `work_stop_reason: tool_loop`; after a valid collection,
+its exit code describes the collected attempt, without rewriting the sealed
+work. Invalid collection preserves its checkpoint for bounded result-only
+recovery after restart. `inspect task` and worker status expose the work stop.
 When a bounded `return_result` argument envelope is rejected, its complete
 SDK-delivered arguments are redacted and retained in the immutable response
 blob, alongside a runtime-owned `response_issue` with the JSON Pointer,

@@ -77,7 +77,7 @@ func HasCancelledCollectionWork(item *TodoItem) bool {
 		return false
 	}
 	r := item.ExecutionReceipt
-	if r == nil || currentResultCollection(item) == nil || r.FinishedAt.IsZero() || r.ExitCode == nil || *r.ExitCode != 0 {
+	if r == nil || currentResultCollection(item) == nil || !collectionWorkCompleted(r, true) {
 		return false
 	}
 	cp := r.ResultCollection
@@ -260,7 +260,8 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 }
 
 func collectionWorkCompleted(receipt *ExecutionReceipt, cancelled bool) bool {
-	return receipt != nil && !receipt.FinishedAt.IsZero() && (!cancelled || (receipt.ExitCode != nil && *receipt.ExitCode == 0))
+	return receipt != nil && !receipt.FinishedAt.IsZero() && (!cancelled ||
+		(receipt.ExitCode != nil && (*receipt.ExitCode == 0 || *receipt.ExitCode == 1 && receipt.WorkStopReason == workStopToolLoop)))
 }
 
 func validateRecoveryAssessment(a *ResultCollectionRecoveryAssessment) error {

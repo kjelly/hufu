@@ -168,6 +168,10 @@ type ToolInvocationReceipt struct {
 
 // ExecutionReceipt represents the execution provenance and metadata for a single task run attempt.
 type ExecutionReceipt struct {
+	// WorkStopReason distinguishes stopped work from normal return. Collection
+	// keeps the original work receipt (including its exit code) in its sealed
+	// work artifact; ExitCode here records the final attempt after collection.
+	WorkStopReason                string            `json:"work_stop_reason,omitempty"`
 	MediaInputDigest              string            `json:"media_input_digest,omitempty"`
 	RunID                         string            `json:"run_id"`
 	TaskID                        string            `json:"task_id"`

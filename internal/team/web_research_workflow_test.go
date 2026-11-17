@@ -255,7 +255,7 @@ func TestWebResearchWorkflowRequiresObjectiveAuditVerification(t *testing.T) {
 			if name != "missing_verification" {
 				var err error
 				audit.VerifyResult, err = ExecuteVerificationSpecWithTaskResult(t.Context(), "sh", session.Workspace, *bound[2].VerifySpec, audit.TypedResult)
-				if wantPass := name == "complete_with_gaps"; isVerifySuccess(audit.VerifyResult) != wantPass || (err == nil) != wantPass {
+				if wantPass := name == "complete_with_gaps" || name == "empty_findings"; isVerifySuccess(audit.VerifyResult) != wantPass || (err == nil) != wantPass {
 					t.Fatalf("audit verification = %#v, err=%v", audit.VerifyResult, err)
 				}
 				// The task runner publishes TaskDone only after its bound
@@ -267,7 +267,7 @@ func TestWebResearchWorkflowRequiresObjectiveAuditVerification(t *testing.T) {
 				audit.Status = TaskVerifying
 			}
 			err := w.observe(append(items, audit))
-			if name == "complete_with_gaps" {
+			if name == "complete_with_gaps" || name == "empty_findings" {
 				if err != nil || w.State() != PhaseVerify {
 					t.Fatalf("complete inconclusive audit rejected: phase=%s, err=%v", w.State(), err)
 				}

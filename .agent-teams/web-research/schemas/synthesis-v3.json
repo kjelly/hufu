@@ -17,7 +17,7 @@
     },
     "answer": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
       "maxItems": 3,
       "items": {
         "$ref": "#/$defs/paragraph"
@@ -135,7 +135,7 @@
           },
           "findings": {
             "type": "array",
-            "minItems": 1,
+            "minItems": 0,
             "items": {
               "$ref": "#/$defs/finding"
             }
@@ -211,7 +211,7 @@
     },
     "citations": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -657,7 +657,7 @@
     "structured_payload",
     "memory_uses"
   ],
-  "x-hufu-final-report": "# 研究總結\n\n{{$audit := index .input_review 0}}問題：{{$audit.question}}\n\n## 綜合回答\n\n{{range $p, $paragraph := .answer}}{{.text}}\n\n依據：{{range $.citations}}{{if eq (index . (printf \"answer_%d\" $p)) \"cite\"}}{{$f := index $audit.findings .finding_index}}[查核 {{.finding_index}}](#查核-{{.finding_index}})（{{$f.verdict}}） {{end}}{{end}}\n\n{{end}}{{range $p, $paragraph := .sections}}## {{.title}}\n\n{{.text}}\n\n依據：{{range $.citations}}{{if eq (index . (printf \"section_%d\" $p)) \"cite\"}}{{$f := index $audit.findings .finding_index}}[查核 {{.finding_index}}](#查核-{{.finding_index}})（{{$f.verdict}}） {{end}}{{end}}\n\n{{end}}## 尚待釐清\n\n{{.unresolved}}\n\n## 查核限制\n\n{{$audit.overall_limitations}}\n\n## 詳細查核與來源\n\n查核結果：task {{$audit.task_id}}；payload SHA-256 {{$audit.payload_sha256}}\n\n查核完成：{{$audit.audit_complete}}\n\n{{with $audit}}## 比較的研究輸入\n{{range .input_review}}\n- task {{.task_id}}｜{{.lens}}｜payload sha256 {{.payload_sha256}}\n{{end}}{{range $i, $finding := .findings}}\n### 查核 {{$i}}\n\n**{{.claim}}**\n\n判定：{{.verdict}}\n\n{{.analysis}}\n\n研究員一致性：{{.researcher_agreement}}\n\n不同意見：{{.dissent}}\n\n限制：{{.limitations}}\n{{range .sources}}\n- {{.title}}｜{{.publisher}}｜{{.publication_date}}\n  來源：{{.url}}\n  證據：{{.page_status}}；抓取：{{.fetch_status}}；引用驗證：{{.citation_status}}{{with index . \"model_delivery\"}}；模型輸入：{{.status}}{{if .invocation_id}}（{{.invocation_id}}）{{end}}{{end}}{{if .tool_call_id}}；工具紀錄：{{.tool_call_id}}{{end}}{{if .quote}}\n  提交引文（僅 matched 且模型輸入 full 可作證據）：{{.quote}}{{end}}\n{{end}}{{end}}\n## 整體限制\n\n{{.overall_limitations}}\n\n## 原始主張處理紀錄\n\n以下為研究輸入，並非已確認事實。處理狀態僅表示輸入涵蓋情形；addressed 不代表已證實，最終判定與證據缺口以上方查核結果為準。\n{{range .claim_assessments}}\n- task {{.source_task_id}} / {{.source_index}}：{{.claim}}\n  處理：{{.handling}}\n{{end}}{{end}}\n",
+  "x-hufu-final-report": "# 研究總結\n\n{{$audit := index .input_review 0}}問題：{{$audit.question}}\n\n## 綜合回答\n\n{{if not $audit.findings}}本次沒有可供綜合的研究發現；無法確認的部分與來源缺口列於下方。\n\n{{end}}{{range $p, $paragraph := .answer}}{{.text}}\n\n依據：{{range $.citations}}{{if eq (index . (printf \"answer_%d\" $p)) \"cite\"}}{{$f := index $audit.findings .finding_index}}[查核 {{.finding_index}}](#查核-{{.finding_index}})（{{$f.verdict}}） {{end}}{{end}}\n\n{{end}}{{range $p, $paragraph := .sections}}## {{.title}}\n\n{{.text}}\n\n依據：{{range $.citations}}{{if eq (index . (printf \"section_%d\" $p)) \"cite\"}}{{$f := index $audit.findings .finding_index}}[查核 {{.finding_index}}](#查核-{{.finding_index}})（{{$f.verdict}}） {{end}}{{end}}\n\n{{end}}## 尚待釐清\n\n{{.unresolved}}\n\n## 查核限制\n\n{{$audit.overall_limitations}}\n\n## 詳細查核與來源\n\n查核結果：task {{$audit.task_id}}；payload SHA-256 {{$audit.payload_sha256}}\n\n查核完成：{{$audit.audit_complete}}\n\n{{with $audit}}## 比較的研究輸入\n{{range .input_review}}\n- task {{.task_id}}｜{{.lens}}｜payload sha256 {{.payload_sha256}}\n{{end}}{{range $i, $finding := .findings}}\n### 查核 {{$i}}\n\n**{{.claim}}**\n\n判定：{{.verdict}}\n\n{{.analysis}}\n\n研究員一致性：{{.researcher_agreement}}\n\n不同意見：{{.dissent}}\n\n限制：{{.limitations}}\n{{range .sources}}\n- {{.title}}｜{{.publisher}}｜{{.publication_date}}\n  來源：{{.url}}\n  證據：{{.page_status}}；抓取：{{.fetch_status}}；引用驗證：{{.citation_status}}{{with index . \"model_delivery\"}}；模型輸入：{{.status}}{{if .invocation_id}}（{{.invocation_id}}）{{end}}{{end}}{{if .tool_call_id}}；工具紀錄：{{.tool_call_id}}{{end}}{{if .quote}}\n  提交引文（僅 matched 且模型輸入 full 可作證據）：{{.quote}}{{end}}\n{{end}}{{end}}\n## 整體限制\n\n{{.overall_limitations}}\n\n## 原始主張處理紀錄\n\n以下為研究輸入，並非已確認事實。處理狀態僅表示輸入涵蓋情形；addressed 不代表已證實，最終判定與證據缺口以上方查核結果為準。\n{{range .claim_assessments}}\n- task {{.source_task_id}} / {{.source_index}}：{{.claim}}\n  處理：{{.handling}}\n{{end}}{{end}}\n",
   "x-hufu-fixed-collections": [
     {
       "items_pointer": "/citations",
@@ -687,6 +687,7 @@
     }
   ],
   "allOf": [
+    {"if":{"properties":{"input_review":{"items":{"properties":{"findings":{"maxItems":0}}}}}},"then":{"properties":{"answer":{"maxItems":0},"sections":{"maxItems":0},"citations":{"maxItems":0}}},"else":{"properties":{"answer":{"minItems":1},"citations":{"minItems":1}}}},
     {"if":{"properties":{"answer":{"minItems":1}}},"then":{"properties":{"citations":{"contains":{"properties":{"answer_0":{"const":"cite"}},"required":["answer_0"]}}}}},
     {"if":{"properties":{"answer":{"maxItems":0}}},"then":{"properties":{"citations":{"items":{"properties":{"answer_0":{"const":"omit"}}}}}}},
     {"if":{"properties":{"answer":{"minItems":2}}},"then":{"properties":{"citations":{"contains":{"properties":{"answer_1":{"const":"cite"}},"required":["answer_1"]}}}}},
@@ -705,5 +706,6 @@
     {"if":{"properties":{"sections":{"maxItems":4}}},"then":{"properties":{"citations":{"items":{"properties":{"section_4":{"const":"omit"}}}}}}},
     {"if":{"properties":{"sections":{"minItems":6}}},"then":{"properties":{"citations":{"contains":{"properties":{"section_5":{"const":"cite"}},"required":["section_5"]}}}}},
     {"if":{"properties":{"sections":{"maxItems":5}}},"then":{"properties":{"citations":{"items":{"properties":{"section_5":{"const":"omit"}}}}}}}
-  ]
+  ],
+  "x-hufu-result-envelope": {"type":"object","if":{"properties":{"structured_payload":{"type":"object","required":["input_review"],"properties":{"input_review":{"type":"array","minItems":1,"items":{"type":"object","required":["findings"],"properties":{"findings":{"type":"array","maxItems":0}}}}}}}},"then":{"properties":{"status":{"enum":["completed_with_gaps","partial","blocked","failed"]}}}}
 }

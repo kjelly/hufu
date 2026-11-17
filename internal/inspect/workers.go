@@ -33,6 +33,7 @@ const (
 // state. It carries identities, enums, targets, and counters only: never
 // output, prompts, tool arguments or results, or transcript content.
 type WorkerAttemptView struct {
+	WorkStopReason    string `json:"work_stop_reason,omitempty"`
 	AttemptKey        string `json:"attempt_key"`
 	RunID             string `json:"run_id"`
 	InvocationRunID   string `json:"invocation_run_id,omitempty"`
@@ -376,6 +377,9 @@ func (b *attemptBuilder) finish(todo *team.TodoItem, latest bool, now time.Time)
 }
 
 func projectResultCollection(view *WorkerAttemptView, receipt *team.ExecutionReceipt, latest bool, status team.TaskStatus) {
+	if receipt != nil {
+		view.WorkStopReason = receipt.WorkStopReason
+	}
 	if receipt == nil || receipt.ResultCollection == nil {
 		return
 	}

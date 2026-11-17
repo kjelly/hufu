@@ -90,7 +90,15 @@ func (c *Coordinator) prepareCollectionClaims(ctx context.Context, expected *Res
 	// Normalize framing before strict submission decoding. Keep Response bound
 	// to the exact received bytes and persist the validated JSON as Claims.
 	raw, _ = collectionResponseJSON(raw)
-	if _, err := c.decodeCollectionClaims(expected.TaskID, raw); err != nil {
+	input, err := c.decodeCollectionClaims(expected.TaskID, raw)
+	if err != nil {
+		return nil, err
+	}
+	work, err := c.loadCollectionWork(ctx, c.todoItemByID(expected.TaskID), expected)
+	if err != nil {
+		return nil, rejectLocalResult(RepairFailureSource, err)
+	}
+	if err := validateStoppedWorkClaims(work, input); err != nil {
 		return nil, err
 	}
 	return c.updateResultCollection(ctx, expected, func(next *ResultCollectionCheckpoint, _ *ExecutionReceipt) error {
@@ -137,6 +145,9 @@ func (c *Coordinator) commitPreparedCollection(ctx context.Context, expected *Re
 	}
 	input, err := c.decodeCollectionClaims(item.ID, []byte(resolved))
 	if err != nil {
+		return err
+	}
+	if err := validateStoppedWorkClaims(work, input); err != nil {
 		return err
 	}
 	// A malformed model field must not conceal forged receipts or artifact
@@ -214,7 +225,8 @@ func (tx *taskResultOccurrenceTransaction) commitCollection(ctx context.Context,
 	if err != nil || current != pinned || expected.State != ResultCollectionPrepared {
 		return errResultCollectionStale
 	}
-	if _, err := c.loadCollectionWork(ctx, item, expected); err != nil {
+	work, err := c.loadCollectionWork(ctx, item, expected)
+	if err != nil {
 		return err
 	}
 	canonical := cloneTaskResult(result)
@@ -233,6 +245,13 @@ func (tx *taskResultOccurrenceTransaction) commitCollection(ctx context.Context,
 		return err
 	}
 	next.State = ResultCollectionCommitted
+	if work.StopReason == workStopToolLoop {
+		// Preserve the failed work receipt in Work, while publishing the
+		// accepted collection's terminal outcome on the current receipt.
+		collected := cloneExecutionReceipt(receipt)
+		collected.ExitCode = new(0)
+		receipt = &collected
+	}
 	if err := c.appendCollectionCheckpointLocked(ctx, item, receipt, next, canonical); err != nil {
 		return err
 	}

@@ -19,17 +19,22 @@ type chromePage interface {
 // A navigation opens one pending capture/dwell; rereads and click verification
 // never silently add a second dwell or return a cached document.
 type chromePageFlow struct {
-	page          chromePage
-	dwell         *ChromePageDwellConfig
-	pendingDwell  bool
-	captureFailed bool
-	verification  bool
-	humanRequests map[string]*chromeHumanRequest
-	waitForHuman  func(context.Context) error
+	page               chromePage
+	dwell              *ChromePageDwellConfig
+	pendingDwell       bool
+	captureFailed      bool
+	verification       bool
+	currentSource      string
+	unavailableSources map[string]*chromeSourceAccessError
+	humanRequests      map[string]*chromeHumanRequest
+	waitForHuman       func(context.Context) error
 }
 
 func (f *chromePageFlow) navigate(ctx context.Context, url string) (string, error) {
 	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if err := f.exhaustedSource(url); err != nil {
 		return "", err
 	}
 	if f.pendingDwell && !f.captureFailed {
@@ -40,21 +45,35 @@ func (f *chromePageFlow) navigate(ctx context.Context, url string) (string, erro
 	}
 	f.pendingDwell = f.dwell != nil
 	f.captureFailed = false
+	f.currentSource = url
 	return "Navigation completed. Call browser_snapshot now to capture the page before the configured dwell; navigation alone is not source evidence.", nil
 }
 
 func (f *chromePageFlow) read(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if err := f.exhaustedSource(f.currentSource); err != nil {
+		return "", err
+	}
 	page, err := f.page.Snapshot(ctx)
 	if err != nil {
 		return "", err
 	}
 	if f.verification {
-		return f.verifyPage(ctx, page, false)
+		text, err := f.verifyPage(ctx, page, false)
+		return text, f.recordSourceAccess(err)
 	}
 	return formatChromeSnapshot(page)
 }
 
 func (f *chromePageFlow) snapshot(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if err := f.exhaustedSource(f.currentSource); err != nil {
+		return "", err
+	}
 	var delay *ChromePageDwellConfig
 	if f.pendingDwell {
 		delay = f.dwell
@@ -77,7 +96,7 @@ func (f *chromePageFlow) snapshot(ctx context.Context) (string, error) {
 	if err == nil && f.verification {
 		verified, verifyErr := f.verifyPage(ctx, captured, delay != nil)
 		if verifyErr != nil {
-			return "", verifyErr
+			return "", f.recordSourceAccess(verifyErr)
 		}
 		// Keep the capture-before-dwell receipt for readable initial pages.
 		if verified != "" {
@@ -94,6 +113,9 @@ func (f *chromePageFlow) click(ctx context.Context, ref string) (string, error) 
 	allowed, _ := ctx.Value(tools.BrowserInteractionAllowedKey).(bool)
 	if !allowed {
 		return "", errors.New("browser_click requires runtime browser_interaction authority")
+	}
+	if err := f.exhaustedSource(f.currentSource); err != nil {
+		return "", err
 	}
 	if f.pendingDwell {
 		return "", errors.New("take browser_snapshot before clicking")

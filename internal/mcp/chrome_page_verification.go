@@ -113,7 +113,11 @@ func (f *chromePageFlow) finishHumanVerification(ctx context.Context, page brows
 	}
 	state, classificationErr := classifyChromePage(ctx, fresh)
 	if state != ChromePageReadable || classificationErr != nil {
-		return "", errors.Join(chromePageVerificationError(fresh, state, classificationErr), tools.ObserveHumanVerification(ctx, "page_unresolved"))
+		failure := chromePageVerificationError(fresh, state, classificationErr)
+		if err := tools.ObserveHumanVerification(ctx, "page_unresolved"); err != nil {
+			return "", errors.Join(failure, err)
+		}
+		return "", failure
 	}
 	if err := tools.ObserveHumanVerification(ctx, "page_verified"); err != nil {
 		return "", err
@@ -126,6 +130,12 @@ func (f *chromePageFlow) finishHumanVerification(ctx context.Context, page brows
 // automatic waits. A worker cannot turn a classifier failure into a prompt by
 // calling browser_wait_for_user itself.
 func (f *chromePageFlow) waitForVerification(ctx context.Context, wait func(context.Context) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := f.exhaustedSource(f.currentSource); err != nil {
+		return err
+	}
 	page, err := f.page.Snapshot(ctx)
 	if err != nil {
 		return err
@@ -139,7 +149,7 @@ func (f *chromePageFlow) waitForVerification(ctx context.Context, wait func(cont
 		return errors.New("browser_page_readable: no human verification is required; call browser_snapshot for source evidence")
 	}
 	if state != ChromePageNeedsHuman {
-		return chromePageVerificationError(page, state, nil)
+		return f.recordSourceAccess(chromePageVerificationError(page, state, nil))
 	}
 	ctx, err = f.requestHumanVerification(ctx, page, wait, true)
 	if err != nil {
@@ -198,6 +208,9 @@ func (f *chromePageFlow) requestHumanVerification(ctx context.Context, page brow
 }
 
 func chromePageVerificationError(page browser.Snapshot, state ChromePageState, cause error) error {
+	if state == ChromePageAccessError && cause == nil {
+		return unavailableChromeSource(page)
+	}
 	text, err := formatChromeSnapshot(page)
 	if err != nil {
 		return err

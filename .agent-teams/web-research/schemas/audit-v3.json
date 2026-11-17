@@ -168,7 +168,7 @@
     },
     "findings": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
       "items": {
         "$ref": "#/$defs/finding"
       }
@@ -568,5 +568,6 @@
         }
       }
     }
-  ]
+  ],
+  "x-hufu-result-envelope": {"type":"object","if":{"properties":{"structured_payload":{"type":"object","required":["findings"],"properties":{"findings":{"type":"array","maxItems":0}}}}},"then":{"properties":{"status":{"enum":["completed_with_gaps","partial","blocked","failed"]}}}}
 }
