@@ -9,11 +9,19 @@ type HumanVerificationObservation struct {
 	URLSHA256 string `json:"url_sha256,omitempty"`
 	Attempt   int    `json:"request_attempt"`
 	Trigger   string `json:"trigger"`
+	Purpose   string `json:"purpose,omitempty"`
 	Status    string `json:"status"`
 }
 
 type humanVerificationRequestKey struct{}
 type humanVerificationObserverKey struct{}
+
+// HumanVerificationRequiresAuthentication is set only by the native browser's
+// typed page classification, never by model-supplied prompt text.
+func HumanVerificationRequiresAuthentication(ctx context.Context) bool {
+	request, _ := ctx.Value(humanVerificationRequestKey{}).(HumanVerificationObservation)
+	return request.Purpose == "authentication"
+}
 
 func WithHumanVerificationRequest(ctx context.Context, request HumanVerificationObservation) context.Context {
 	return context.WithValue(ctx, humanVerificationRequestKey{}, request)

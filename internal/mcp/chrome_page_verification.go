@@ -17,10 +17,11 @@ import (
 type ChromePageState string
 
 const (
-	ChromePageReadable    ChromePageState = "readable"
-	ChromePageNeedsHuman  ChromePageState = "needs_human_verification"
-	ChromePageAccessError ChromePageState = "access_error"
-	ChromePageUncertain   ChromePageState = "uncertain"
+	ChromePageReadable               ChromePageState = "readable"
+	ChromePageNeedsHuman             ChromePageState = "needs_human_verification"
+	ChromePageAccessError            ChromePageState = "access_error"
+	ChromePageUncertain              ChromePageState = "uncertain"
+	ChromePageAuthenticationRequired ChromePageState = "authentication_required"
 )
 
 type ChromePageClassifier func(context.Context, browser.Snapshot) (ChromePageState, error)
@@ -50,7 +51,7 @@ func classifyChromePage(ctx context.Context, page browser.Snapshot) (ChromePageS
 		return ChromePageUncertain, err
 	}
 	switch state {
-	case ChromePageReadable, ChromePageNeedsHuman, ChromePageAccessError, ChromePageUncertain:
+	case ChromePageReadable, ChromePageNeedsHuman, ChromePageAccessError, ChromePageUncertain, ChromePageAuthenticationRequired:
 		return state, nil
 	default:
 		return ChromePageUncertain, errors.New("invalid browser page classification")
@@ -96,24 +97,46 @@ func (f *chromePageFlow) verifyPage(ctx context.Context, page browser.Snapshot, 
 		delete(f.humanRequests, page.URL)
 		return formatChromeSnapshot(page)
 	}
-	if state != ChromePageNeedsHuman {
+	if state != ChromePageNeedsHuman && state != ChromePageAuthenticationRequired {
 		return "", chromePageVerificationError(page, state, classificationErr)
 	}
-	ctx, err := f.requestHumanVerification(ctx, page, f.waitForHuman, false)
+	ctx, err := f.requestHumanVerification(ctx, page, f.waitForHuman, false, state)
 	if err != nil {
+		if _, ok := chromeSourceOutcome(err); ok {
+			return "", err
+		}
 		return "", chromePageVerificationError(page, state, err)
 	}
-	return f.finishHumanVerification(ctx, page)
+	return f.finishHumanVerification(ctx, page, 1)
 }
 
-func (f *chromePageFlow) finishHumanVerification(ctx context.Context, page browser.Snapshot) (string, error) {
+func (f *chromePageFlow) finishHumanVerification(ctx context.Context, page browser.Snapshot, remaining int) (string, error) {
 	fresh, err := f.page.Snapshot(ctx)
 	if err != nil {
 		return "", errors.Join(err, tools.ObserveHumanVerification(ctx, "page_unresolved"))
 	}
 	state, classificationErr := classifyChromePage(ctx, fresh)
+	// A security challenge may reveal a login gate (or vice versa). Ask for
+	// that distinct action explicitly, with at most one additional handoff.
+	if classificationErr == nil && remaining > 0 &&
+		(state == ChromePageNeedsHuman || state == ChromePageAuthenticationRequired) &&
+		tools.HumanVerificationRequiresAuthentication(ctx) != (state == ChromePageAuthenticationRequired) {
+		if err := tools.ObserveHumanVerification(ctx, "page_unresolved"); err != nil {
+			return "", err
+		}
+		ctx, err = f.requestHumanVerification(ctx, fresh, f.waitForHuman, false, state)
+		if err != nil {
+			return "", err
+		}
+		return f.finishHumanVerification(ctx, fresh, remaining-1)
+	}
 	if state != ChromePageReadable || classificationErr != nil {
 		failure := chromePageVerificationError(fresh, state, classificationErr)
+		if classificationErr == nil && remaining == 0 && state == ChromePageNeedsHuman {
+			unavailable := unavailableChromeSourceReason(fresh, "authentication_unresolved")
+			unavailable.outcome.Exhausted = true
+			failure = unavailable
+		}
 		if err := tools.ObserveHumanVerification(ctx, "page_unresolved"); err != nil {
 			return "", errors.Join(failure, err)
 		}
@@ -148,23 +171,24 @@ func (f *chromePageFlow) waitForVerification(ctx context.Context, wait func(cont
 		delete(f.humanRequests, page.URL)
 		return errors.New("browser_page_readable: no human verification is required; call browser_snapshot for source evidence")
 	}
-	if state != ChromePageNeedsHuman {
+	if state != ChromePageNeedsHuman && state != ChromePageAuthenticationRequired {
 		return f.recordSourceAccess(chromePageVerificationError(page, state, nil))
 	}
-	ctx, err = f.requestHumanVerification(ctx, page, wait, true)
+	ctx, err = f.requestHumanVerification(ctx, page, wait, true, state)
 	if err != nil {
-		return err
+		return f.recordSourceAccess(err)
 	}
-	_, err = f.finishHumanVerification(ctx, page)
-	return err
+	_, err = f.finishHumanVerification(ctx, page, 1)
+	return f.recordSourceAccess(err)
 }
 
 type chromeHumanRequest struct {
 	attempts int
 	declined bool
+	state    ChromePageState
 }
 
-func (f *chromePageFlow) requestHumanVerification(ctx context.Context, page browser.Snapshot, wait func(context.Context) error, explicit bool) (context.Context, error) {
+func (f *chromePageFlow) requestHumanVerification(ctx context.Context, page browser.Snapshot, wait func(context.Context) error, explicit bool, state ChromePageState) (context.Context, error) {
 	request := f.humanRequests[page.URL]
 	if request != nil {
 		switch {
@@ -172,7 +196,7 @@ func (f *chromePageFlow) requestHumanVerification(ctx context.Context, page brow
 			return ctx, errors.New("human verification was cancelled; no further requests for this unresolved URL")
 		case request.attempts >= 2:
 			return ctx, errors.New("human verification remains unresolved after two requests; request limit reached for this URL")
-		case !explicit:
+		case !explicit && request.state == state:
 			return ctx, errors.New("previous human verification did not establish readable content; automatic prompting is suppressed. One explicit browser_wait_for_user request remains, requiring a fresh operator confirmation code")
 		}
 	}
@@ -184,12 +208,18 @@ func (f *chromePageFlow) requestHumanVerification(ctx context.Context, page brow
 		f.humanRequests[page.URL] = request
 	}
 	request.attempts++
+	request.state = state
 	trigger := "automatic"
 	if explicit {
 		trigger = "explicit"
 	}
+	purpose := ""
+	if state == ChromePageAuthenticationRequired {
+		purpose = "authentication"
+	}
 	ctx = tools.WithHumanVerificationRequest(ctx, tools.HumanVerificationObservation{
 		RequestID: rand.Text(), URLSHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(page.URL))), Attempt: request.attempts, Trigger: trigger,
+		Purpose: purpose,
 	})
 	if err := tools.ObserveHumanVerification(ctx, "requested"); err != nil {
 		return ctx, err
@@ -198,7 +228,24 @@ func (f *chromePageFlow) requestHumanVerification(ctx context.Context, page brow
 		return ctx, errors.Join(errors.New("human verification unavailable"), tools.ObserveHumanVerification(ctx, "failed"))
 	}
 	err := wait(ctx)
-	request.declined = errors.Is(err, tools.ErrHumanVerificationDeclined) || errors.Is(err, context.Canceled)
+	request.declined = errors.Is(err, tools.ErrHumanVerificationDeclined) || errors.Is(err, tools.ErrHumanVerificationNotConfirmed) || errors.Is(err, context.Canceled)
+	unavailableLogin := state == ChromePageAuthenticationRequired && err == tools.ErrHumanVerificationUnavailable
+	if (err == tools.ErrHumanVerificationNotConfirmed || unavailableLogin) && ctx.Err() == nil {
+		request.declined = true
+		status, reason := "wait_declined", "verification_declined"
+		if state == ChromePageAuthenticationRequired {
+			reason = "authentication_declined"
+		}
+		if unavailableLogin {
+			status, reason = "wait_unavailable", "authentication_required"
+		}
+		if observeErr := tools.ObserveHumanVerification(ctx, status); observeErr != nil {
+			return ctx, errors.Join(err, observeErr)
+		}
+		unavailable := unavailableChromeSourceReason(page, reason)
+		unavailable.outcome.Exhausted = true
+		return ctx, unavailable
+	}
 	if err != nil {
 		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
@@ -208,6 +255,11 @@ func (f *chromePageFlow) requestHumanVerification(ctx context.Context, page brow
 }
 
 func chromePageVerificationError(page browser.Snapshot, state ChromePageState, cause error) error {
+	if state == ChromePageAuthenticationRequired && cause == nil {
+		unavailable := unavailableChromeSourceReason(page, "authentication_required")
+		unavailable.outcome.Exhausted = true
+		return unavailable
+	}
 	if state == ChromePageAccessError && cause == nil {
 		return unavailableChromeSource(page)
 	}

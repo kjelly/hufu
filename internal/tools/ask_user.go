@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"charm.land/fantasy"
+	"github.com/kjelly/hufu/internal/waitbudget"
 	"github.com/manifoldco/promptui"
 )
 
@@ -131,7 +132,7 @@ func NewAskUserTool(opts ...ToolOption) fantasy.AgentTool {
 		workspaceScope: noWorkspaceScope(),
 		info: fantasy.ToolInfo{
 			Name:        "ask_user",
-			Description: "Ask the user a question and wait for their response. Supports multiple choice, free text, or mixed (choices + free text). Use this when you need clarification, confirmation, or input from the user.",
+			Description: "Ask the user a question and wait for their response. Supports multiple choice, free text, or mixed (choices + free text). Use this when you need clarification, confirmation, or input from the user. A blank or invalid interactive answer returns declined: true, a negative answer that grants no permission; cancellation is separate.",
 			Parameters: map[string]any{
 				"question": map[string]any{
 					"type":        "string",
@@ -421,6 +422,8 @@ func executeAskUser(ctx context.Context, call fantasy.ToolCall) (response fantas
 	// Only a real interactive wait yields scheduling capacity. Auto-approval
 	// and unattended defaults above/below must not suspend a task.
 	if !IsUnattended(ctx) && (onAskUserTUI != nil || IsInteractiveEnvironment()) {
+		resumeIdle := waitbudget.PauseRunIdle(ctx)
+		defer resumeIdle()
 		resume, err := BeginCapacityWait(ctx)
 		if err != nil {
 			return fantasy.ToolResponse{}, err
@@ -435,7 +438,20 @@ func executeAskUser(ctx context.Context, call fantasy.ToolCall) (response fantas
 
 	// TUI mode: use the native dialog — no terminal release or stdin needed.
 	if jsonResp, ok := TryAskUserTUI(ctx, args.Question, questionType, toTUIOptions(args.Options), args.AllowAny); ok {
-		return fantasy.NewTextResponse(jsonResp), nil
+		if err := ctx.Err(); err != nil {
+			return fantasy.ToolResponse{}, err
+		}
+		var answer AskUserResponse
+		if err := json.Unmarshal([]byte(jsonResp), &answer); err != nil {
+			return fantasy.ToolResponse{}, err
+		}
+		if answer.Cancelled || answer.Declined {
+			return marshalAskUserResponse(answer)
+		}
+		if normalized, valid := normalizeAskUserResponse(answer, args, questionType); valid {
+			return marshalAskUserResponse(normalized)
+		}
+		return marshalAskUserResponse(AskUserResponse{Declined: true})
 	}
 
 	// TUI mode returned false — check if context was cancelled.
@@ -450,7 +466,7 @@ func executeAskUser(ctx context.Context, call fantasy.ToolCall) (response fantas
 	// operator can follow up out-of-band.
 	if IsUnattended(ctx) || !IsInteractiveEnvironment() {
 		if verification, _ := ctx.Value(humanVerificationKey{}).(bool); verification {
-			return fantasy.NewTextErrorResponse("browser verification needs an interactive human; no answer was supplied"), nil
+			return fantasy.ToolResponse{}, ErrHumanVerificationUnavailable
 		}
 		return unattendedAskUserResponse(ctx, args, questionType)
 	}
@@ -460,8 +476,15 @@ func executeAskUser(ctx context.Context, call fantasy.ToolCall) (response fantas
 	}
 
 	// CLI mode: read from stdin.
-	StdinMu.Lock()
+	if err := StdinMu.LockContext(ctx); err != nil {
+		return fantasy.ToolResponse{}, err
+	}
 	defer StdinMu.Unlock()
+	defer func() {
+		if ctx.Err() != nil {
+			response, runErr = fantasy.ToolResponse{}, ctx.Err()
+		}
+	}()
 
 	SetAskUserActive(true)
 	defer SetAskUserActive(false)
@@ -473,22 +496,22 @@ func executeAskUser(ctx context.Context, call fantasy.ToolCall) (response fantas
 
 	switch questionType {
 	case "single_choice":
-		return handleSingleChoice(args)
+		return handleSingleChoice(ctx, args)
 	case "multiple_choice":
-		return handleMultipleChoice(args)
+		return handleMultipleChoice(ctx, args)
 	case "free_text":
 		return handleFreeText(ctx, args)
 	case "mixed":
-		return handleMixed(args)
+		return handleMixed(ctx, args)
 	default:
 		if len(args.Options) > 0 {
-			return handleSingleChoice(args)
+			return handleSingleChoice(ctx, args)
 		}
 		return handleFreeText(ctx, args)
 	}
 }
 
-func handleSingleChoice(args askUserArgs) (fantasy.ToolResponse, error) {
+func handleSingleChoice(ctx context.Context, args askUserArgs) (fantasy.ToolResponse, error) {
 	var items []string
 	for _, opt := range args.Options {
 		label := opt.Label
@@ -508,7 +531,7 @@ func handleSingleChoice(args askUserArgs) (fantasy.ToolResponse, error) {
 		Size:  10,
 	}
 
-	index, _, err := prompt.Run()
+	index, _, err := runAskUserSelect(ctx, &prompt)
 	if err != nil {
 		if IsInteractiveAbortRequested() {
 			return fantasy.NewTextErrorResponse("ask_user cancelled during shutdown"), nil
@@ -520,10 +543,7 @@ func handleSingleChoice(args askUserArgs) (fantasy.ToolResponse, error) {
 	}
 
 	if args.AllowAny && index == len(args.Options) {
-		promptText := promptui.Prompt{
-			Label: "Your answer",
-		}
-		freeInput, err := promptText.Run()
+		freeInput, err := runAskUserPrompt(ctx, "Your answer")
 		if err != nil {
 			if IsInteractiveAbortRequested() {
 				return fantasy.NewTextErrorResponse("ask_user cancelled during shutdown"), nil
@@ -533,7 +553,7 @@ func handleSingleChoice(args askUserArgs) (fantasy.ToolResponse, error) {
 			}
 			return fantasy.NewTextErrorResponse(err.Error()), nil
 		}
-		resp := askResponseType{Free: strings.TrimSpace(freeInput)}
+		resp := askResponseType{Free: strings.TrimSpace(freeInput), Declined: strings.TrimSpace(freeInput) == ""}
 		data, err := json.Marshal(resp)
 		if err != nil {
 			return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to marshal response: %v", err)), nil
@@ -555,7 +575,7 @@ func handleSingleChoice(args askUserArgs) (fantasy.ToolResponse, error) {
 	return fantasy.NewTextResponse(string(data)), nil
 }
 
-func handleMultipleChoice(args askUserArgs) (fantasy.ToolResponse, error) {
+func handleMultipleChoice(ctx context.Context, args askUserArgs) (fantasy.ToolResponse, error) {
 	for i, opt := range args.Options {
 		label := opt.Label
 		if opt.Value != "" && opt.Value != opt.Label {
@@ -564,10 +584,7 @@ func handleMultipleChoice(args askUserArgs) (fantasy.ToolResponse, error) {
 		fmt.Fprintf(os.Stderr, "  %s %s\n", cyanFmt(fmt.Sprintf("[%d]", i+1)), label)
 	}
 
-	prompt := promptui.Prompt{
-		Label: "Your choices (comma-separated, e.g. 1,3)",
-	}
-	input, err := prompt.Run()
+	input, err := runAskUserPrompt(ctx, "Your choices (comma-separated, e.g. 1,3)")
 	if err != nil {
 		if IsInteractiveAbortRequested() {
 			return fantasy.NewTextErrorResponse("ask_user cancelled during shutdown"), nil
@@ -580,7 +597,7 @@ func handleMultipleChoice(args askUserArgs) (fantasy.ToolResponse, error) {
 
 	input = strings.TrimSpace(input)
 	if input == "" {
-		return fantasy.NewTextErrorResponse("no choices provided"), nil
+		return marshalAskUserResponse(AskUserResponse{Declined: true})
 	}
 
 	var answers []string
@@ -593,7 +610,7 @@ func handleMultipleChoice(args askUserArgs) (fantasy.ToolResponse, error) {
 				answers = append(answers, p)
 				continue
 			}
-			return fantasy.NewTextErrorResponse(fmt.Sprintf("invalid choice: %q", p)), nil
+			return marshalAskUserResponse(AskUserResponse{Declined: true})
 		}
 		selected := args.Options[choice-1]
 		value := selected.Value
@@ -612,10 +629,7 @@ func handleMultipleChoice(args askUserArgs) (fantasy.ToolResponse, error) {
 }
 
 func handleFreeText(ctx context.Context, args askUserArgs) (fantasy.ToolResponse, error) {
-	prompt := promptui.Prompt{
-		Label: "Your answer",
-	}
-	input, err := prompt.Run()
+	input, err := runAskUserPrompt(ctx, "Your answer")
 	if err != nil {
 		verification, _ := ctx.Value(humanVerificationKey{}).(bool)
 		if verification && errors.Is(err, promptui.ErrInterrupt) {
@@ -630,7 +644,7 @@ func handleFreeText(ctx context.Context, args askUserArgs) (fantasy.ToolResponse
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 
-	resp := askResponseType{Free: strings.TrimSpace(input)}
+	resp := askResponseType{Free: strings.TrimSpace(input), Declined: strings.TrimSpace(input) == ""}
 	data, err := json.Marshal(resp)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to marshal response: %v", err)), nil
@@ -638,7 +652,7 @@ func handleFreeText(ctx context.Context, args askUserArgs) (fantasy.ToolResponse
 	return fantasy.NewTextResponse(string(data)), nil
 }
 
-func handleMixed(args askUserArgs) (fantasy.ToolResponse, error) {
+func handleMixed(ctx context.Context, args askUserArgs) (fantasy.ToolResponse, error) {
 	for i, opt := range args.Options {
 		label := opt.Label
 		if opt.Value != "" && opt.Value != opt.Label {
@@ -648,10 +662,7 @@ func handleMixed(args askUserArgs) (fantasy.ToolResponse, error) {
 	}
 	fmt.Fprintf(os.Stderr, "  %s %s\n", cyanFmt("[0]"), "Type your own answer")
 
-	prompt := promptui.Prompt{
-		Label: "Your choice(s) or free text",
-	}
-	input, err := prompt.Run()
+	input, err := runAskUserPrompt(ctx, "Your choice(s) or free text")
 	if err != nil {
 		if err == promptui.ErrInterrupt {
 			return fantasy.NewTextErrorResponse("ask_user cancelled by user"), nil
@@ -661,7 +672,7 @@ func handleMixed(args askUserArgs) (fantasy.ToolResponse, error) {
 
 	input = strings.TrimSpace(input)
 	if input == "" {
-		return fantasy.NewTextErrorResponse("no input provided"), nil
+		return marshalAskUserResponse(AskUserResponse{Declined: true})
 	}
 
 	var answers []string
@@ -674,10 +685,7 @@ func handleMixed(args askUserArgs) (fantasy.ToolResponse, error) {
 		if choice, err := strconv.Atoi(p); err == nil && choice >= 0 && choice <= len(args.Options) {
 			hasNumber = true
 			if choice == 0 {
-				promptText := promptui.Prompt{
-					Label: "Your answer",
-				}
-				freeInput, err := promptText.Run()
+				freeInput, err := runAskUserPrompt(ctx, "Your answer")
 				if err != nil {
 					if IsInteractiveAbortRequested() {
 						return fantasy.NewTextErrorResponse("ask_user cancelled during shutdown"), nil
@@ -703,7 +711,7 @@ func handleMixed(args askUserArgs) (fantasy.ToolResponse, error) {
 		freeText = input
 	}
 
-	resp := askResponseType{Answers: answers, Free: freeText}
+	resp := askResponseType{Answers: answers, Free: freeText, Declined: len(answers) == 0 && strings.TrimSpace(freeText) == ""}
 	data, err := json.Marshal(resp)
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("failed to marshal response: %v", err)), nil

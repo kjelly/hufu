@@ -8,6 +8,8 @@ import (
 	"runtime/pprof"
 	"sync/atomic"
 	"time"
+
+	"github.com/kjelly/hufu/internal/waitbudget"
 )
 
 // stallLogsDir holds goroutine dumps taken when the run appears stalled.
@@ -53,6 +55,7 @@ type invocationWatchdog struct {
 	threshold   time.Duration
 	maxDumps    int32
 	poll        time.Duration
+	idleClock   *waitbudget.RunIdleClock
 	activityAt  atomic.Int64
 	lastDumpAt  atomic.Int64
 	dumps       atomic.Int32
@@ -73,7 +76,7 @@ func (c *Coordinator) newInvocationWatchdog(ctx context.Context, cancel context.
 	if poll <= 0 {
 		poll = defaultStallPollInterval
 	}
-	w := &invocationWatchdog{coordinator: c, ctx: ctx, cancel: cancel, threshold: threshold, maxDumps: maxDumps, poll: poll, done: make(chan struct{})}
+	w := &invocationWatchdog{coordinator: c, ctx: ctx, cancel: cancel, threshold: threshold, maxDumps: maxDumps, poll: poll, idleClock: &c.tokenBudgetRoot().runIdle, done: make(chan struct{})}
 	w.touch()
 	return w
 }
@@ -99,7 +102,13 @@ func (c *Coordinator) touchActivity() {
 }
 
 func (w *invocationWatchdog) touch() {
-	w.activityAt.Store(time.Now().UnixNano())
+	w.activityAt.Store(w.workingTime())
+}
+
+// Use the same union of explicit idle intervals as the run budget. Accounting
+// for completed intervals also covers waits shorter than the polling interval.
+func (w *invocationWatchdog) workingTime() int64 {
+	return time.Now().UnixNano() - int64(w.idleClock.Elapsed())
 }
 
 func (w *invocationWatchdog) start() {
@@ -124,13 +133,13 @@ func (w *invocationWatchdog) run() {
 		case <-w.ctx.Done():
 			return
 		case <-ticker.C:
-			if w.coordinator.providerManager.ProviderQuotaWaiting() {
+			if w.coordinator.providerManager.ProviderQuotaWaiting() || w.idleClock.Paused() {
 				w.touch()
 				w.lastDumpAt.Store(0)
 				continue
 			}
 			now := time.Now()
-			idle := now.Sub(time.Unix(0, w.activityAt.Load()))
+			idle := max(0, time.Duration(w.workingTime()-w.activityAt.Load()))
 			if idle < w.threshold {
 				// Activity resumed; a future stall should be reported
 				// immediately rather than waiting out a stale dump timer.

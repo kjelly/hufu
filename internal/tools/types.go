@@ -5,13 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"charm.land/fantasy"
 )
 
-var StdinMu sync.Mutex
+var StdinMu PromptMutex
 
 type agentToolsAllowedKeyType struct{}
 
@@ -166,6 +165,7 @@ type AskUserResponse struct {
 	Answers   []string `json:"answers"`
 	Free      string   `json:"free_text,omitempty"`
 	Cancelled bool     `json:"cancelled,omitzero"`
+	Declined  bool     `json:"declined,omitzero"`
 }
 
 // ErrAskUserAbstained is returned by an AskUserChoiceSelector that declines

@@ -274,7 +274,9 @@ var debugCmd = &cobra.Command{
 				}
 				return rows
 			}
-			addDerivedExecutionEvents(addRunEvents())
+			runRows := addRunEvents()
+			addDerivedExecutionEvents(runRows)
+			addRunStallDumps(tw, workspacePath, runRows, inclusions)
 			// The task journal lives in runtime.sqlite; the bundle carries its
 			// run's records as JSONL under the historical name.
 			var taskJournal bytes.Buffer

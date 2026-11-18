@@ -43,6 +43,43 @@ var (
 	skipTagStyle, doneTagStyle, errTagStyle, teamStyle, wrapUpStyle   lipgloss.Style
 )
 
+func handleAskUserTUI(ctx context.Context, question, qtype string, opts []tools.AskUserTUIOption, allowAny bool) (string, bool) {
+	if err := askUserMu.LockContext(ctx); err != nil {
+		return "", false
+	}
+	defer askUserMu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return "", false
+	default:
+	}
+
+	p := activeTUIProgram.Load()
+	if p == nil {
+		return "", false
+	}
+	replyCh := make(chan string, 1)
+	tuiOpts := make([]tuipkg.AskUserOption, len(opts))
+	for i, o := range opts {
+		tuiOpts[i] = tuipkg.AskUserOption{Label: o.Label, Value: o.Value}
+	}
+	p.Send(tuipkg.AskUserMsg{
+		Question: question,
+		Type:     qtype,
+		Options:  tuiOpts,
+		AllowAny: allowAny,
+		ReplyCh:  replyCh,
+	})
+	select {
+	case resp := <-replyCh:
+		return resp, true
+	case <-ctx.Done():
+		p.Send(tuipkg.AskUserCancelMsg{})
+		return "", false
+	}
+}
+
 func init() {
 	applyCLIStyles(tuipkg.NewCLIStyleSet(tuipkg.ThemeAuto, false, cliColorProfile()))
 }
@@ -78,43 +115,10 @@ func setStatusFlusher(w *lineWriter, taskDisp *taskDisplay, skillDisp *skillDisp
 	activeStatusFlusher.skillDisp = skillDisp
 }
 
-var askUserMu sync.Mutex
+var askUserMu tools.PromptMutex
 
 func init() {
-	tools.SetOnAskUserTUI(func(ctx context.Context, question, qtype string, opts []tools.AskUserTUIOption, allowAny bool) (string, bool) {
-		askUserMu.Lock()
-		defer askUserMu.Unlock()
-
-		select {
-		case <-ctx.Done():
-			return "", false
-		default:
-		}
-
-		p := activeTUIProgram.Load()
-		if p == nil {
-			return "", false
-		}
-		replyCh := make(chan string, 1)
-		tuiOpts := make([]tuipkg.AskUserOption, len(opts))
-		for i, o := range opts {
-			tuiOpts[i] = tuipkg.AskUserOption{Label: o.Label, Value: o.Value}
-		}
-		p.Send(tuipkg.AskUserMsg{
-			Question: question,
-			Type:     qtype,
-			Options:  tuiOpts,
-			AllowAny: allowAny,
-			ReplyCh:  replyCh,
-		})
-		select {
-		case resp := <-replyCh:
-			return resp, true
-		case <-ctx.Done():
-			p.Send(tuipkg.AskUserCancelMsg{})
-			return "", false
-		}
-	})
+	tools.SetOnAskUserTUI(handleAskUserTUI)
 
 	// path_consent still uses ReleaseTerminal/RestoreTerminal (no native TUI dialog).
 	tools.SetOnAskUserStart(func() {

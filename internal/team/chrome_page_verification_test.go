@@ -24,7 +24,7 @@ func TestHumanVerificationObservationsPersistWithoutOperatorContent(t *testing.T
 	c.initEventStore()
 	ctx := withInvocationMetadata(t.Context(), InvocationMetadata{RunID: c.executionRunID, TaskID: "worker-task", AgentName: "worker", Attempt: 2})
 	ctx = c.withChromePageVerification(ctx)
-	ctx = tools.WithHumanVerificationRequest(ctx, tools.HumanVerificationObservation{RequestID: "request-one", URLSHA256: strings.Repeat("a", 64), Attempt: 1, Trigger: "automatic"})
+	ctx = tools.WithHumanVerificationRequest(ctx, tools.HumanVerificationObservation{RequestID: "request-one", URLSHA256: strings.Repeat("a", 64), Attempt: 1, Trigger: "automatic", Purpose: "authentication"})
 	statuses := []string{"requested", "prompt_requested", "answer_rejected", "confirmed", "page_unresolved"}
 	for _, status := range statuses {
 		if err := tools.ObserveHumanVerification(ctx, status); err != nil {
@@ -44,7 +44,7 @@ func TestHumanVerificationObservationsPersistWithoutOperatorContent(t *testing.T
 		if err := json.Unmarshal(event.Payload, &observation); err != nil {
 			t.Fatal(err)
 		}
-		if event.TaskID != "worker-task" || event.Attempt != 2 || event.Actor != "worker" || observation.RequestID != "request-one" {
+		if event.TaskID != "worker-task" || event.Attempt != 2 || event.Actor != "worker" || observation.RequestID != "request-one" || observation.Purpose != "authentication" {
 			t.Fatalf("event=%+v observation=%+v", event, observation)
 		}
 		actual = append(actual, observation.Status)
@@ -84,12 +84,12 @@ func TestHumanVerificationObservationsPersistWithoutOperatorContent(t *testing.T
 }
 
 func TestChromePageClassificationUsesDurableSystemOneDecision(t *testing.T) {
-	for _, scenario := range []string{"challenge", "readable", "access_error", "uncertain", "provider_error", "invalid", "repair", "closed_sequence", "force_mcp"} {
+	for _, scenario := range []string{"challenge", "readable", "access_error", "authentication_required", "uncertain", "provider_error", "invalid", "repair", "closed_sequence", "force_mcp"} {
 		t.Run(scenario, func(t *testing.T) {
-			state := map[string]int{"challenge": 1, "readable": 0, "access_error": 2, "uncertain": 3}[scenario]
+			state := map[string]int{"challenge": 1, "readable": 0, "access_error": 2, "uncertain": 3, "authentication_required": 4}[scenario]
 			response, err := json.Marshal(map[string]any{"answers": map[string]any{"decision": map[string]any{
-				"type": "choice", "confidence": .25, "choice": []string{"o00", "o01", "o02", "o03"}[state],
-				"probabilities": map[string]float64{"o00": .25, "o01": .25, "o02": .25, "o03": .25},
+				"type": "choice", "confidence": .25, "choice": []string{"o00", "o01", "o02", "o03", "o04"}[state],
+				"probabilities": map[string]float64{"o00": .2, "o01": .2, "o02": .2, "o03": .2, "o04": .2},
 			}}})
 			if err != nil {
 				t.Fatal(err)
@@ -117,10 +117,13 @@ func TestChromePageClassificationUsesDurableSystemOneDecision(t *testing.T) {
 				ctx = context.WithValue(ctx, tools.AgentForceMCPKey, true)
 			}
 			page := browser.Snapshot{URL: "https://example.test/source", Title: "Just a moment...", Text: "Performing security verification\nPerformance and Security by Cloudflare", CapturedAt: time.Now().UTC()}
+			if scenario == "authentication_required" {
+				page.URL, page.Title, page.Text = "https://example.test/account/login", "Sign in", "See what's happening\nEmail or username\nContinue with Google"
+			}
 			got, err := c.classifyChromePage(ctx, page)
 			policyDenied := scenario == "repair" || scenario == "closed_sequence" || scenario == "force_mcp"
 			wantError := scenario == "provider_error" || scenario == "invalid" || policyDenied
-			want := []mcp.ChromePageState{mcp.ChromePageReadable, mcp.ChromePageNeedsHuman, mcp.ChromePageAccessError, mcp.ChromePageUncertain}[state]
+			want := []mcp.ChromePageState{mcp.ChromePageReadable, mcp.ChromePageNeedsHuman, mcp.ChromePageAccessError, mcp.ChromePageUncertain, mcp.ChromePageAuthenticationRequired}[state]
 			if (err != nil) != wantError || (!wantError && got != want) {
 				t.Fatalf("state=%s error=%v", got, err)
 			}
@@ -146,7 +149,7 @@ func TestChromePageClassificationUsesDurableSystemOneDecision(t *testing.T) {
 			server.mu.Lock()
 			body := strings.Join(server.body, "\n")
 			server.mu.Unlock()
-			if !strings.Contains(body, "Performing security verification") || !strings.Contains(body, "untrusted evidence") {
+			if !strings.Contains(body, "Email or username") && !strings.Contains(body, "Performing security verification") || !strings.Contains(body, "untrusted evidence") {
 				t.Fatal("classification lost actual page evidence or trust boundary")
 			}
 		})

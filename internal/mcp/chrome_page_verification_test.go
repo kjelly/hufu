@@ -16,6 +16,63 @@ import (
 
 const challengePageText = "Performing security verification\nThis website verifies you are not a bot.\nPerformance and Security by Cloudflare"
 
+func TestChromeAuthenticationHandoffBoundsGateTransitions(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		pages       []string
+		unavailable bool
+	}{
+		{name: "login_to_article", pages: []string{"login", "article"}},
+		{name: "challenge_then_login", pages: []string{"challenge", "login", "article"}},
+		{name: "login_then_challenge", pages: []string{"login", "challenge", "article"}},
+		{name: "login_challenge_loop", pages: []string{"login", "challenge", "login"}, unavailable: true},
+		{name: "challenge_login_loop", pages: []string{"challenge", "login", "challenge"}, unavailable: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			page := &chromePageFixture{text: tc.pages[0]}
+			flow := chromePageFlow{page: page, verification: true}
+			waits := 0
+			flow.waitForHuman = func(ctx context.Context) error {
+				if tools.HumanVerificationRequiresAuthentication(ctx) != (page.text == "login") {
+					t.Fatal("gate transition lost the distinct operator decision")
+				}
+				waits++
+				if waits > 2 {
+					t.Fatal("unbounded operator prompts")
+				}
+				page.text = tc.pages[waits]
+				return nil
+			}
+			ctx := WithChromePageClassifier(t.Context(), func(_ context.Context, page browser.Snapshot) (ChromePageState, error) {
+				switch page.Text {
+				case "login":
+					return ChromePageAuthenticationRequired, nil
+				case "challenge":
+					return ChromePageNeedsHuman, nil
+				default:
+					return ChromePageReadable, nil
+				}
+			})
+			text, err := flow.snapshot(ctx)
+			if waits != len(tc.pages)-1 || page.captures != len(tc.pages) || page.clicks != 0 {
+				t.Fatalf("waits=%d captures=%d clicks=%d", waits, page.captures, page.clicks)
+			}
+			if tc.unavailable {
+				outcome, ok := chromeSourceOutcome(err)
+				if !ok || !outcome.outcome.Exhausted || outcome.outcome.Citable {
+					t.Fatalf("unresolved gate was not unavailable: %v", err)
+				}
+				_, _ = flow.snapshot(ctx)
+				if waits != 2 || page.captures != len(tc.pages) {
+					t.Fatal("unresolved source was accessed again")
+				}
+			} else if err != nil || !strings.Contains(text, "article") || strings.Contains(text, "login") || strings.Contains(text, "challenge") {
+				t.Fatalf("handoff did not return fresh article: %s %v", text, err)
+			}
+		})
+	}
+}
+
 func TestChromePageVerificationRequiresFreshContentAfterHumanAnswer(t *testing.T) {
 	for _, scenario := range []string{"confirmed", "cancelled", "still_challenged", "uncertain", "invalid_decision", "classifier_error", "policy_denied", "access_error", "readable"} {
 		t.Run(scenario, func(t *testing.T) {

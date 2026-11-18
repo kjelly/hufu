@@ -85,8 +85,11 @@ Include this instruction in the owning agent's prompt:
 
 The tool focuses its dedicated tab and opens the normal CLI/TUI question. Only
 the freshly displayed confirmation code, typed into the free-text prompt, resumes it.
-Enter alone, old codes and the former `continue` selection are rejected. Type
-`cancel` to decline; three invalid answers end that request without confirmation.
+Enter alone, an old code or any invalid answer declines verification of this
+source without another prompt or a tool error. The source becomes
+`source_unavailable` with `reason: verification_declined` and `citable: false`;
+use another source. Type `cancel` to cancel explicitly; cancellation remains
+a separate failure and never confirms the page.
 Auto-approval, unattended defaults and
 model-selected answers cannot confirm manual verification. Without an interactive
 human the tool returns an error instead of waiting forever.
@@ -108,7 +111,10 @@ CDP discovery and reading pages still count. The configured page dwell below is
 a separate opt-in exception. CDP I/O
 has separate bounded wall timeouts. Cancellation, Ctrl+C shutdown and explicit
 external deadlines remain effective during human waits. Browser verification
-also pauses the run duration budget (`--max-duration`).
+also pauses the run duration budget (`--max-duration`) and the silent-stall
+watchdog. The watchdog resumes after the wait; completed idle intervals are
+excluded even between watchdog polls. CLI input reads and queued stdin ownership
+are cancellable without closing shared stdin, so later prompts remain usable.
 Manager shutdown cancels native calls before closing its own tabs; Chrome stays
 running.
 
@@ -130,7 +136,7 @@ mcp-servers:
 
 The runtime passes the actual URL, title, text, controls, capture time and
 truncation flag to `runtime_browser_page`. Its fixed choices are `readable`,
-`needs_human_verification`, `access_error` and `uncertain`. It uses the existing
+`needs_human_verification`, `access_error`, `authentication_required` and `uncertain`. It uses the existing
 `decision-runtime` configuration: select `backend: systemone` and configure its
 model/endpoint as described in [control decisions](control-decisions.md), or
 use the existing sidecar backend. Adding this browser option does not select a
@@ -141,9 +147,27 @@ launch new classification calls. Page content is evidence, never instructions.
 The first capture still precedes any configured page dwell. After the dwell,
 a non-readable initial classification causes a fresh capture and classification
 before asking for help, so a challenge that cleared itself need not interrupt
-the operator. Only a `needs_human_verification` decision enters the existing
-human prompt inside the snapshot call. Classifier errors fail immediately;
-`uncertain` decisions return tool errors without prompting. An `access_error`
+the operator. A `needs_human_verification` decision requests security verification; an
+`authentication_required` decision asks whether to log in manually inside the
+snapshot call. Classifier errors fail immediately;
+`uncertain` decisions return tool errors without prompting. A login, account
+selection, registration or private-account gate is `authentication_required`,
+a distinct operator decision rather than a bot-verification challenge. Hufu focuses
+its dedicated tab and asks whether the operator wants to log in manually. Enter
+or invalid input skips login and returns non-citable `source_unavailable` with
+`reason: authentication_declined`. The operator can sign in in Chrome, return to
+the intended source, and type the fresh confirmation code to hand control back.
+Hufu then captures and classifies the actual page again; the login form and the
+confirmation are never citation evidence. Credentials are never entered into Hufu
+or supplied by a model. With no interactive operator, or if the confirmed page
+still requires login, the source remains unavailable with
+`reason: authentication_required`. Declined or unresolved login sources are
+exhausted immediately, without repeated prompts. A challenge that reveals a
+login gate (or the reverse) permits at most one additional, distinct handoff;
+remaining gates become an unavailable source after that bound. Policy denial,
+cancellation and observation/storage failures remain errors.
+Optional login controls alongside readable public content do not imply a gate.
+An `access_error`
 from `browser_snapshot` returns a native availability observation instead:
 `status: source_unavailable`, the actual `url`, `reason: access_error`, a bounded
 diagnostic, `citable: false`, `attempts`, `attempt_limit`, `exhausted`, and
@@ -165,10 +189,12 @@ may already have changed browser state.
 These states do not establish a security challenge and cannot be repaired by
 human confirmation. Explicit `browser_wait_for_user` calls on a declaration
 with page verification enabled also classify a fresh capture and require a
-confirmed challenge. Each unresolved URL receives at most one automatic prompt
+confirmed challenge or login gate. Each unresolved URL receives at most one automatic prompt
 and at most two total requests. An explicit call can request the remaining
 manual attempt after an unsuccessful automatic attempt, and requires a new code.
-Operator cancellation prevents further requests for that unresolved URL.
+A negative answer stops all further access to that unavailable source in this
+browser declaration. Explicit cancellation also prevents further human requests
+for that unresolved URL and remains a distinct cancellation outcome.
 The tab's
 operation gate stays held, preventing navigation while waiting. The wait is
 separately authorized as `browser_wait_for_user`; snapshot authority alone does
@@ -324,10 +350,15 @@ HUFU_TEST_CHROME=1 mise exec -- go test -p 2 ./internal/browser -run '^TestCDPCh
 `human_verification_observed` events, including task/attempt identity, status,
 and request ID / URL SHA-256 refs. `requested` means preparation began;
 `prompt_requested` means interactive input was requested, not proof that the
-operator saw it. `answer_rejected` records an invalid answer; `confirmed` means
-the current code was accepted. `page_verified` and `page_unresolved` distinguish
+operator saw it. Historical `answer_rejected` events record rejected answers.
+New `declined` / `wait_declined` events record negative answers without retrying;
+`confirmed` means the current code was accepted. `page_verified` and `page_unresolved` distinguish
 the actual post-confirmation page outcome. `cancelled`, `failed` and
 `wait_failed` identify failure stages, including failures before prompting.
 These events contain no prompt, answer, confirmation code or raw URL. Recording
 failure stops the operation; a confirmation is never substituted for page
 verification. The same observer is used for worker and runtime-action paths.
+
+Run-scoped `hufu debug <run-id>` exports the redacted goroutine dumps referenced
+by that run's `run_stall_detected` events. Unreferenced dumps and other runs are
+excluded; missing, unsafe or symlinked dumps are identified in the bundle manifest.

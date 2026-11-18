@@ -202,6 +202,8 @@ func TryAskUserTUI(ctx context.Context, question, qtype string, opts []AskUserTU
 	if onAskUserTUI == nil {
 		return "", false
 	}
+	resumeIdle := waitbudget.PauseRunIdle(ctx)
+	defer resumeIdle()
 	trackInteractiveWait(true)
 	defer trackInteractiveWait(false)
 	return onAskUserTUI(ctx, question, qtype, opts, allowAny)

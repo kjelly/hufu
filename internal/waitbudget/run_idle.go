@@ -19,6 +19,13 @@ func (c *RunIdleClock) Context(parent context.Context) context.Context {
 
 func (c *RunIdleClock) Elapsed() time.Duration { return c.clock.elapsed() }
 
+// Paused reports an explicit runtime wait, including overlapping waits.
+func (c *RunIdleClock) Paused() bool {
+	c.clock.mu.Lock()
+	defer c.clock.mu.Unlock()
+	return c.clock.active > 0
+}
+
 // WithTimeout limits remaining run time, excluding only explicit run idle.
 // Ordinary working-time pauses must not extend this budget. External parent
 // cancellation and deadlines are still authoritative.

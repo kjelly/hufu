@@ -11,6 +11,25 @@ import (
 
 // ── L1: AskUser dialog ─────────────────────────────────────────────────────
 
+func TestAskUserEmptyEnterClosesFreeTextDialog(t *testing.T) {
+	m := New("test", TeamInfo{TeamName: "t"})
+	replies := make(chan string, 1)
+	next, _ := m.Update(AskUserMsg{Question: "Verify source?", Type: "free_text", ReplyCh: replies})
+	next, _ = next.(Model).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if next.(Model).inAskUser {
+		t.Fatal("blank answer left the dialog open")
+	}
+	select {
+	case reply := <-replies:
+		var response askRespJSON
+		if json.Unmarshal([]byte(reply), &response) != nil || response.Cancelled || response.Free != "" {
+			t.Fatalf("blank answer became cancellation or an error: %s", reply)
+		}
+	default:
+		t.Fatal("blank answer was not returned")
+	}
+}
+
 func TestAskUser_FreeText(t *testing.T) {
 	m := New("test", TeamInfo{TeamName: "t"})
 	m.width = 100

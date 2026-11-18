@@ -21,6 +21,7 @@ require (
 	github.com/ergochat/readline v0.1.3
 	github.com/manifoldco/promptui v0.9.0
 	github.com/mark3labs/mcp-go v1.3.0
+	github.com/muesli/cancelreader v0.2.2
 	github.com/philippgille/chromem-go v0.7.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/spf13/cobra v1.10.2
@@ -66,7 +67,6 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-runewidth v0.0.30 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
-	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect

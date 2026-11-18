@@ -45,8 +45,12 @@ func (e *chromeSourceAccessError) Error() string {
 }
 
 func unavailableChromeSource(page browser.Snapshot) error {
+	return unavailableChromeSourceReason(page, "access_error")
+}
+
+func unavailableChromeSourceReason(page browser.Snapshot, reason string) *chromeSourceAccessError {
 	return &chromeSourceAccessError{outcome: chromeSourceAccess{
-		Status: "source_unavailable", URL: page.URL, Reason: "access_error",
+		Status: "source_unavailable", URL: page.URL, Reason: reason,
 		Diagnostic: utils.TruncateRunes(page.Title+"\n"+page.Text, 2000),
 		Executed:   true, ObservedAt: page.CapturedAt,
 		AttemptLimit: chromeSourceAttemptLimit, NextAction: "use_another_source",
@@ -97,7 +101,7 @@ func (f *chromePageFlow) recordSourceAccess(err error) error {
 		outcome.Attempts = prior.outcome.Attempts
 	}
 	outcome.Attempts = min(outcome.Attempts+1, chromeSourceAttemptLimit)
-	outcome.Exhausted = outcome.Attempts >= chromeSourceAttemptLimit
+	outcome.Exhausted = outcome.Exhausted || outcome.Attempts >= chromeSourceAttemptLimit
 	next := &chromeSourceAccessError{outcome: outcome}
 	f.unavailableSources[key] = next
 	// Bind requested and redirected URLs to one allowance, without trusting a

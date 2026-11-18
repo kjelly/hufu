@@ -48,6 +48,11 @@ func TestHumanAndProviderWaitsShareWorkingBudget(t *testing.T) {
 }
 
 func TestHumanVerificationNeverUsesNonInteractiveSelector(t *testing.T) {
+	// TestMain pins interactivity for the rest of this package's tool fixtures.
+	// Model the non-interactive startup decision explicitly for this case.
+	previousInteractive := IsInteractiveEnvironment()
+	interactiveEnvPinned.Store(false)
+	t.Cleanup(func() { interactiveEnvPinned.Store(previousInteractive) })
 	previous := os.Stdin
 	null, err := os.Open(os.DevNull)
 	if err != nil {
@@ -61,8 +66,8 @@ func TestHumanVerificationNeverUsesNonInteractiveSelector(t *testing.T) {
 		t.Fatal("a model selector cannot confirm manual verification")
 		return AskUserResponse{Answers: []string{"continue"}}, nil
 	}))
-	if err := WaitForHumanVerification(ctx, "Verify"); err == nil {
-		t.Fatal("non-interactive verification succeeded")
+	if err := WaitForHumanVerification(ctx, "Verify"); !errors.Is(err, ErrHumanVerificationUnavailable) {
+		t.Fatalf("non-interactive verification lost its unavailable classification: %v", err)
 	}
 }
 
@@ -256,7 +261,7 @@ func TestHumanVerificationRejectsDefaultAndStaleAnswers(t *testing.T) {
 				return nil
 			})
 			err := WaitForHumanVerification(ctx, "Second page")
-			if (err == nil) != (scenario == "blank_then_code") {
+			if err == nil {
 				t.Fatalf("error=%v", err)
 			}
 			if scenario == "journal_failure" {
@@ -266,9 +271,9 @@ func TestHumanVerificationRejectsDefaultAndStaleAnswers(t *testing.T) {
 				return
 			}
 			last := observations[len(observations)-1]
-			want := "failed"
-			if scenario == "blank_then_code" {
-				want = "confirmed"
+			want := "declined"
+			if !errors.Is(err, ErrHumanVerificationNotConfirmed) || prompts != 2 {
+				t.Fatalf("negative answer retried: prompts=%d error=%v", prompts, err)
 			}
 			if last.Status != want || last.RequestID == "" {
 				t.Fatalf("observations=%+v", observations)
