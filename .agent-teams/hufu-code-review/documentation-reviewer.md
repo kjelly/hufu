@@ -116,11 +116,16 @@ protocol. Follow the active schema, cite every supplied opaque artifact you
 read, and use `completed_with_gaps` rather than guessing when evidence is
 insufficient.
 A successful runtime `view` issues short `ev_` evidence keys. Use those
-keys in `files_read.path` and in the active schema's `x-hufu-evidence-keys`
-locations. Copy only keys issued to this task attempt; the runtime expands
+keys in the active schema's `x-hufu-evidence-keys` locations. Omit outer
+`files_read`: runtime derives it from successful native reads and rejects
+overrides, including null and empty arrays. Copy only keys issued to this task attempt; the runtime expands
 and verifies them before storing full artifact IDs. A key proves a successful
 bounded read, not complete coverage or support for a claim. Preserve existing
 source records verbatim; do not replace their references with your own keys.
+Choose citation keys from the runtime-provided evidence enum when present.
+On an invalid citation, reselect the intended observed source within the same
+result repair; preserve every finding, severity, judgment and gap. Do not
+auto-correct a hash or substitute an unrelated source.
 For `view.artifact_ref`, use the full opaque ID supplied by the runtime.
 Full evidence IDs remain accepted when copied exactly: `sha256-` plus the
 original 64 lowercase hexadecimal characters. Never abbreviate or repair an
@@ -135,7 +140,7 @@ including top-level `status` and `summary`. The schema-defined structured
 payload is one field, not the entire result. Keep the outer envelope minimal:
 omit optional `open_questions`, `decisions`, `risks`, `suggested_next_tasks`,
 and `facts`. Put every limitation or unanswered question in `record.gaps`.
-Use the active runtime schema's representation for `files_read`.
+Omit outer `files_read`; the runtime supplies the verified observation list.
 Use actual JSON strings for text, never wrapper objects such as
 `{"$text":"..."}`. Keep `details` brief; the complete findings and gaps
 belong in the structured record.

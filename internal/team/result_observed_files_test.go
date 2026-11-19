@@ -18,7 +18,7 @@ func observedFilesTestSchema() string {
 }
 
 func TestRuntimeOwnedFilesReadAdmission(t *testing.T) {
-	for _, scenario := range []string{"full_id", "short_key", "empty", "unread", "other_model", "corrupt", "override", "null_override", "empty_override"} {
+	for _, scenario := range []string{"full_id", "short_key", "empty", "unread", "other_model", "corrupt", "override", "null_override", "empty_override", "typo_full_id", "typo_key", "typo_full_id_receipt", "typo_key_receipt"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := artifactKeysFixtureForSchema(t, observedFilesTestSchema())
 			if scenario != "unread" && scenario != "empty" {
@@ -28,11 +28,23 @@ func TestRuntimeOwnedFilesReadAdmission(t *testing.T) {
 			if scenario == "short_key" {
 				evidence = f.key
 			}
+			if strings.HasPrefix(scenario, "typo_full_id") {
+				last := "0"
+				if strings.HasSuffix(evidence, last) {
+					last = "1"
+				}
+				evidence = evidence[:len(evidence)-1] + last
+			} else if strings.HasPrefix(scenario, "typo_key") {
+				evidence = "ev_000000000000"
+			}
 			payload := fmt.Sprintf(`{"claims":[{"evidence":[%q]}]}`, evidence)
 			if scenario == "empty" {
 				payload = `{"claims":[]}`
 			}
 			fields := map[string]any{"status": "success", "summary": "reviewed", "structured_payload": jsontext.Value(payload)}
+			if strings.HasSuffix(scenario, "_receipt") {
+				fields["receipt_ids"] = []string{"forged"}
+			}
 			switch scenario {
 			case "other_model":
 				f.ctx = withInvocationMetadata(f.ctx, InvocationMetadata{RunID: "run-key", TaskID: f.item.ID, AgentName: f.item.Agent, Attempt: 1, ModelExecutionID: "different-model"})
@@ -64,6 +76,33 @@ func TestRuntimeOwnedFilesReadAdmission(t *testing.T) {
 			if !valid {
 				if result != nil {
 					t.Fatal("rejected evidence published")
+				}
+				if strings.HasSuffix(scenario, "_receipt") {
+					if submissionFailureMetadata(response.Metadata) != RepairFailureSource {
+						t.Fatal("citation typo concealed a forged receipt")
+					}
+					return
+				}
+				if strings.HasPrefix(scenario, "typo_") {
+					if reason, replay := classifyRepairFailure(failureResponseSteps(response), nil); reason != RepairFailureInvalidSchema || replay {
+						t.Fatalf("citation typo prevented result-only protocol repair: reason=%s work_replay=%t", reason, replay)
+					}
+					if !strings.Contains(response.Content, f.key) {
+						t.Fatal("invalid citation did not receive exact issued choices")
+					}
+					if !strings.Contains(response.Content, "/structured_payload/claims/0/evidence/0") {
+						t.Fatalf("invalid citation lacks an exact field path: %s", response.Content)
+					}
+					fields["structured_payload"] = jsontext.Value(fmt.Sprintf(`{"claims":[{"evidence":[%q]}]}`, f.key))
+					repaired, err := json.Marshal(fields)
+					if err != nil {
+						t.Fatal(err)
+					}
+					response, err = tool.Run(f.ctx, fantasy.ToolCall{Name: submitResultToolName, Input: string(repaired)})
+					accepted := f.c.GetTaskResult(f.item.ID)
+					if err != nil || response.IsError || accepted == nil || len(accepted.FilesRead) != 1 || accepted.FilesRead[0].Path != f.ref.ID {
+						t.Fatalf("same-work citation correction failed: %+v %v", response, err)
+					}
 				}
 				return
 			}
@@ -128,6 +167,55 @@ func TestRuntimeOwnedFilesReadPreflightsNativeCapability(t *testing.T) {
 			}
 			if err := validateResultDecisionCatalog(c.session, def, compiled); (err == nil) != (mode == "native") {
 				t.Fatalf("mode=%s err=%v", mode, err)
+			}
+		})
+	}
+}
+
+func TestRuntimeOwnedFilesReadSelectionSchema(t *testing.T) {
+	for _, shape := range []string{"array", "fixed_rows", "no_reads"} {
+		t.Run(shape, func(t *testing.T) {
+			f := artifactKeysFixtureForSchema(t, observedFilesTestSchema())
+			if shape != "no_reads" {
+				f.readSource(t)
+			}
+			compiled := f.c.session.ResultContracts["keys.json"]
+			refs, err := f.c.verifiedResultEvidenceKeyRefs(f.ctx, f.item.ID, compiled)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := collectionGuidanceInfo(f.c, f.item.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			schema := info.Parameters["structured_payload"].(map[string]any)
+			if shape == "fixed_rows" {
+				properties := schema["properties"].(map[string]any)
+				row := properties["claims"].(map[string]any)["items"]
+				properties["claims"] = map[string]any{"type": "object", "properties": map[string]any{"issued_row": row}, "required": []string{"issued_row"}, "additionalProperties": false}
+			}
+			constrainResultEvidenceChoices(schema, compiled.evidenceKeys, refs)
+			for _, value := range []string{f.key, f.ref.ID, "ev_000000000000"} {
+				claims := any([]any{map[string]any{"evidence": []string{value}}})
+				if shape == "fixed_rows" {
+					claims = map[string]any{"issued_row": map[string]any{"evidence": []string{value}}}
+				}
+				raw, err := json.Marshal(map[string]any{"status": "success", "summary": "unchanged judgment", "structured_payload": map[string]any{"claims": claims}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				valid := shape != "no_reads" && (value == f.key || value == f.ref.ID)
+				// The collector's complete schema/feedback validator supports
+				// impossible empty-source selections, including JSON Schema not.
+				issues, _, err := resultSubmissionIssues(string(raw), info)
+				if err != nil || (len(issues) == 0) != valid {
+					t.Fatalf("shape=%s choice=%s valid=%t issues=%v error=%v", shape, value, valid, issues, err)
+				}
+			}
+			if shape != "fixed_rows" {
+				if issues, _, err := resultSubmissionIssues(`{"status":"success","summary":"no findings","structured_payload":{"claims":[]}}`, info); err != nil || len(issues) != 0 {
+					t.Fatalf("empty sources cannot report an empty review: %v %v", issues, err)
+				}
 			}
 		})
 	}

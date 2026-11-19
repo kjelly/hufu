@@ -149,6 +149,15 @@ func (c *Coordinator) loadCollectionWork(ctx context.Context, item *TodoItem, ch
 	if checkpoint == nil {
 		return nil, errResultCollectionStale
 	}
+	if scope := c.collectionOriginValidation; scope != nil && checkpoint.TaskID == scope.cp.TaskID {
+		if !sameCanonicalEvidence(scope.cp, checkpoint) {
+			return nil, errResultCollectionStale
+		}
+		if _, _, err := c.collectionOriginLineage(ctx); err != nil {
+			return nil, err
+		}
+		return c.loadCollectionWorkAgainstPolicy(ctx, item, checkpoint, scope.source.Session.ExecutionPolicySnapshot, scope.source.Session)
+	}
 	policy, err := c.collectionPolicy(checkpoint.ExecutionTarget)
 	if err != nil {
 		return nil, err

@@ -18,6 +18,7 @@ import (
 type resultEvidenceInputsSpec struct {
 	RuntimeOwned    bool              `json:"runtime_owned,omitempty"`
 	RuntimeBind     bool              `json:"runtime_bind,omitzero"`
+	RuntimeComplete bool              `json:"runtime_complete,omitzero"`
 	ItemsPointer    string            `json:"items_pointer"`
 	TaskIDPointer   string            `json:"task_id_pointer"`
 	HashPointer     string            `json:"hash_pointer"`
@@ -29,6 +30,11 @@ type resultEvidenceInputsSpec struct {
 // Both spellings exist in pinned contracts and select the same runtime owner.
 func (s *resultEvidenceInputsSpec) runtimeOwned() bool {
 	return s != nil && (s.RuntimeOwned || s.RuntimeBind)
+}
+
+func (s *resultEvidenceInputsSpec) ownsTarget(pointer string) bool {
+	return s.runtimeOwned() && (resultPointersOverlap(pointer, s.ItemsPointer) ||
+		s.RuntimeComplete && resultPointersOverlap(pointer, s.CompletePointer))
 }
 
 func compileResultEvidenceInputs(root map[string]any) (*resultEvidenceInputsSpec, error) {
@@ -70,6 +76,12 @@ func compileResultEvidenceInputs(root map[string]any) (*resultEvidenceInputsSpec
 			return nil, err
 		}
 	}
+	if spec.RuntimeComplete {
+		complete, err := fixedCollectionSchemaAt(root, spec.CompletePointer)
+		if !spec.runtimeOwned() || err != nil || complete["type"] != "boolean" || complete["const"] != true {
+			return nil, fmt.Errorf("runtime_complete requires runtime-owned evidence inputs and a complete_pointer declared as boolean const true")
+		}
+	}
 	if spec.RuntimeOwned {
 		if err := validateRuntimeEvidenceInputSchema(root, spec); err != nil {
 			return nil, err
@@ -89,6 +101,9 @@ func validateResultEvidenceInputs(value any, spec *resultEvidenceInputsSpec, ids
 	complete, ok := completeValue.(bool)
 	if !ok {
 		return fmt.Errorf("input review completeness must be a boolean")
+	}
+	if spec.RuntimeComplete && !complete {
+		return fmt.Errorf("runtime-owned completion %s must be true", spec.CompletePointer)
 	}
 	raw, err := resolveJSONPointer(value, spec.ItemsPointer)
 	if err != nil {
@@ -151,7 +166,7 @@ func (c *Coordinator) validateEvidenceInputBindings(todoID string, payload *Resu
 	if err != nil {
 		return err
 	}
-	if compiled.evidenceInputs == nil && compiled.evidenceReferences == nil && compiled.worksetInputs == nil && len(compiled.fixedCollections) == 0 && len(compiled.runtimeInputs) == 0 {
+	if compiled.evidenceInputs == nil && compiled.evidenceReferences == nil && compiled.worksetInputs == nil && compiled.worksetPaths == nil && len(compiled.fixedCollections) == 0 && len(compiled.runtimeInputs) == 0 {
 		return nil
 	}
 	if payload == nil {
@@ -196,5 +211,17 @@ func (c *Coordinator) validateEvidenceInputBindings(todoID string, payload *Resu
 	if compiled.evidenceReferences != nil {
 		results = c.dependencyResultsForTask(todoID)
 	}
-	return validateResultEvidenceReferences(value, compiled.evidenceReferences, item.EvidenceFrom, results, nil)
+	if err := validateResultEvidenceReferences(value, compiled.evidenceReferences, item.EvidenceFrom, results, nil); err != nil {
+		return err
+	}
+	if compiled.worksetPaths != nil {
+		binding, err := c.verifiedResultWorksetBinding(context.Background(), todoID)
+		if err != nil {
+			return rejectResultReferenceSource(err)
+		}
+		if err := validateResultWorksetPaths(value, compiled.worksetPaths, binding); err != nil {
+			return err
+		}
+	}
+	return nil
 }

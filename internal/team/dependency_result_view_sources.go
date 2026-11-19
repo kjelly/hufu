@@ -18,6 +18,9 @@ type dependencyViewTerminalSource struct {
 // dependencyViewLineage uses the same verified event and fork-cutoff authority
 // as other canonical readers. It never opens or migrates a writable store.
 func (c *Coordinator) dependencyViewLineage(ctx context.Context) ([]RunEvent, error) {
+	if events, selected, err := c.collectionOriginLineage(ctx); selected {
+		return events, err
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

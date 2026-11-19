@@ -16,6 +16,8 @@ func (c *Coordinator) validateResumeSources(ctx context.Context) error {
 	if !resume {
 		return nil
 	}
+	progress := c.beginRuntimeValidation("resume_sources", "")
+	defer progress.close()
 	workspace := c.session.Workspace
 	fail := func(err error) error { return ResumeSourceError(workspace, err) }
 	source, err := ReadResumeSource(workspace, c.activeBranchID(), "")
@@ -63,6 +65,9 @@ func (c *Coordinator) validateResumeSources(ctx context.Context) error {
 		if item == nil || IsPrimaryOccurrence(item) {
 			continue
 		}
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
 		if err := c.validateResumeResultContract(item); err != nil {
 			return fail(err)
 		}
@@ -92,15 +97,17 @@ func (c *Coordinator) validateResumeSources(ctx context.Context) error {
 					return fail(fmt.Errorf("task %s target admission: %w", item.ID, err))
 				}
 			}
+			progress.checked("task " + item.ID)
 			continue
 		}
 		if err := c.validateCompletedResumeEvidence(ctx, item, snapshot); err != nil {
 			return fail(err)
 		}
+		progress.checked("task " + item.ID)
 	}
 	for _, item := range items {
 		if item != nil && isInterruptedStatus(item.Status) && !IsPrimaryOccurrence(item) {
-			if _, err := c.buildArtifactAccessScope(item.ID, 1); err != nil {
+			if _, err := c.buildArtifactAccessScope(ctx, item.ID, 1); err != nil {
 				return fail(fmt.Errorf("task %s artifact scope: %w", item.ID, err))
 			}
 		}
@@ -245,7 +252,10 @@ func (c *Coordinator) validateResumeRepairSources(ctx context.Context, taskID st
 	if _, err := c.restoreProtocolRepairToolEvidence(ctx, item); err != nil {
 		return fmt.Errorf("task %s tool evidence: %w", taskID, err)
 	}
-	results := c.dependencyResultsForTask(taskID)
+	results := c.dependencyResultsForTaskWithContext(ctx, taskID)
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	if len(results) != len(resultDependencyIDs(item)) {
 		return fmt.Errorf("task %s lacks accepted evidence_from results", taskID)
 	}

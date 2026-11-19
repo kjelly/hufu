@@ -54,9 +54,17 @@ func materializeRuntimeInputParents(root map[string]any, pointer string) error {
 
 // Runtime-owned scalars come from the immutable manifest occurrence assigned
 // to this child, never from model prose or a sibling's mutable task metadata.
-func (c *Coordinator) resultWorksetBindingValue(taskID, name string) (any, error) {
+func (c *Coordinator) resultWorksetBindingValues(taskID string) (map[string]string, error) {
+	binding, err := c.verifiedResultWorksetBinding(context.Background(), taskID)
+	if err != nil {
+		return nil, err
+	}
+	return binding.Bindings, nil
+}
+
+func (c *Coordinator) verifiedResultWorksetBinding(ctx context.Context, taskID string) (*WorksetBinding, error) {
 	if owner := c.dependencyViewOwner(taskID); owner != c {
-		return owner.resultWorksetBindingValue(taskID, name)
+		return owner.verifiedResultWorksetBinding(ctx, taskID)
 	}
 	item := c.todoItemByID(taskID)
 	if item == nil || item.WorksetBinding == nil {
@@ -72,11 +80,11 @@ func (c *Coordinator) resultWorksetBindingValue(taskID, name string) (any, error
 		!sameArtifactOccurrence(receipt.SourceArtifact, binding.SourceArtifact) {
 		return nil, fmt.Errorf("workset runtime input has a mismatched expansion receipt")
 	}
-	if err := c.verifyWorksetSource(context.Background(), receipt); err != nil {
+	if err := c.verifyWorksetSource(ctx, receipt); err != nil {
 		return nil, err
 	}
 	if receipt.RunID != c.executionRunID {
-		if err := c.validateRecoveredWorksetReceipt(context.Background(), receipt, item); err != nil {
+		if err := c.validateRecoveredWorksetReceipt(ctx, receipt, item); err != nil {
 			return nil, err
 		}
 	}
@@ -103,11 +111,7 @@ func (c *Coordinator) resultWorksetBindingValue(taskID, name string) (any, error
 			!sameCanonicalEvidence(row.RequiredReads, binding.RequiredReads) || !sameCanonicalEvidence(row.TouchedPaths, binding.TouchedPaths) {
 			return nil, fmt.Errorf("workset runtime input differs from its frozen manifest row")
 		}
-		value, ok := row.Bindings[name]
-		if !ok || len(value) > maxWorksetValueBytes {
-			return nil, fmt.Errorf("workset runtime input %q is missing or oversized", name)
-		}
-		return value, nil
+		return cloneWorksetBinding(binding), nil
 	}
 	return nil, fmt.Errorf("workset runtime input has no assigned manifest row")
 }

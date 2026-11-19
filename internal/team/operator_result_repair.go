@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 type resultOnlyRepairKey struct{}
@@ -17,13 +18,14 @@ func WithResultOnlyRepair(ctx context.Context, taskID string) context.Context {
 // Validated local completion receives zero additional model turns.
 // The grant is committed in the task transition before a repair lease opens.
 type ResultRepairGrant struct {
-	RunID              string                              `json:"run_id"`
-	BranchID           string                              `json:"branch_id"`
-	AfterAttempts      int                                 `json:"after_attempts"`
-	AdditionalAttempts int                                 `json:"additional_attempts"`
-	TranscriptRef      string                              `json:"transcript_ref"`
-	Model              string                              `json:"model,omitempty"`
-	Recovery           *ResultCollectionRecoveryAssessment `json:"recovery,omitempty"`
+	RunID               string                              `json:"run_id"`
+	BranchID            string                              `json:"branch_id"`
+	AfterAttempts       int                                 `json:"after_attempts"`
+	AdditionalAttempts  int                                 `json:"additional_attempts"`
+	TranscriptRef       string                              `json:"transcript_ref"`
+	Model               string                              `json:"model,omitempty"`
+	ReferenceProjection *AcceptedReferenceProjection        `json:"reference_projection,omitempty"`
+	Recovery            *ResultCollectionRecoveryAssessment `json:"recovery,omitempty"`
 }
 
 func validateResultRepairTarget(item *TodoItem) error {
@@ -78,6 +80,9 @@ func (c *Coordinator) authorizeOperatorResultRepair(ctx context.Context) error {
 		return nil
 	}
 	item := c.todoItemByID(taskID)
+	if item != nil && len(selectedAcceptedReferences(ctx)) > 0 && acceptedRepairProof(currentResultCollection(item)) == nil {
+		return fmt.Errorf("reference selection requires an accepted-result repair")
+	}
 	if item == nil || item.ExecutionReceipt == nil {
 		return fmt.Errorf("task %q has no repair receipt", taskID)
 	}
@@ -106,7 +111,13 @@ func (c *Coordinator) authorizeOperatorResultRepair(ctx context.Context) error {
 		if model, _ := ctx.Value(resultRepairModelKey{}).(string); model != "" {
 			return fmt.Errorf("collection repair must retain its original target")
 		}
-		grant := &ResultRepairGrant{RunID: c.executionRunID, BranchID: c.activeBranchID(), AfterAttempts: checkpoint.TurnsUsed, AdditionalAttempts: assessment.AdditionalTurns, TranscriptRef: item.ExecutionReceipt.TranscriptRef, Recovery: assessment}
+		grant := c.collectionResultRepairGrant(assessment)
+		if assessment.Disposition == RecoverySelectReferences {
+			grant.ReferenceProjection, err = c.prepareAcceptedReferenceProjection(ctx, assessment)
+			if err != nil {
+				return err
+			}
+		}
 		return c.CommitTaskTransition(ctx, taskID, item.Status, TaskProtocolIncomplete,
 			fmt.Sprintf("operator authorized %s after %s; at most %d additional collector turns; worker replay forbidden", assessment.Disposition, assessment.OriginalReason, assessment.AdditionalTurns), "", map[string]any{"result_repair_grant": grant})
 	}
@@ -134,30 +145,69 @@ func (c *Coordinator) authorizeOperatorResultRepair(ctx context.Context) error {
 		map[string]any{"result_repair_grant": grant})
 }
 
-func (c *Coordinator) validResultRepairGrant(item *TodoItem, next TaskStatus, grant *ResultRepairGrant) bool {
+func (c *Coordinator) collectionResultRepairGrant(a *ResultCollectionRecoveryAssessment) *ResultRepairGrant {
+	return &ResultRepairGrant{RunID: c.executionRunID, BranchID: c.activeBranchID(), AfterAttempts: a.TurnsUsed,
+		AdditionalAttempts: a.AdditionalTurns, TranscriptRef: a.TranscriptRef, Recovery: a}
+}
+
+func (c *Coordinator) validateResultRepairGrant(ctx context.Context, item *TodoItem, next TaskStatus, grant *ResultRepairGrant) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	if grant != nil && grant.Recovery != nil {
-		if validateRecoveryAssessment(grant.Recovery) != nil || next != TaskProtocolIncomplete || validateCollectionRecoveryTarget(item) != nil || grant.RunID == "" || grant.RunID != c.executionRunID || grant.BranchID != c.activeBranchID() || grant.Model != "" {
-			return false
+		if err := validateRecoveryAssessment(grant.Recovery); err != nil {
+			return fmt.Errorf("recovery assessment proof: %w", err)
 		}
-		fresh, err := c.AssessResultCollectionRecovery(context.Background(), item.ID)
-		if err != nil || validateRecoveryAssessment(fresh) != nil || fresh.Fingerprint != grant.Recovery.Fingerprint {
-			return false
+		if next != TaskProtocolIncomplete || validateCollectionRecoveryTarget(item) != nil || grant.RunID == "" || grant.RunID != c.executionRunID || grant.BranchID != c.activeBranchID() || grant.Model != "" {
+			return fmt.Errorf("recovery grant identity: %w", errResultCollectionStale)
 		}
-		return grant.AfterAttempts == fresh.TurnsUsed && grant.AdditionalAttempts == fresh.AdditionalTurns && grant.TranscriptRef == fresh.TranscriptRef
+		fresh, err := c.AssessResultCollectionRecovery(ctx, item.ID)
+		if err != nil {
+			return fmt.Errorf("recovery grant reassessment: %w", err)
+		}
+		if err := validateRecoveryAssessment(fresh); err != nil {
+			return fmt.Errorf("recovery grant reassessment %s: %w", recoveryGrantDiagnostic(fresh), err)
+		}
+		if fresh.Fingerprint != grant.Recovery.Fingerprint {
+			return fmt.Errorf("recovery grant assessment changed: before=%s after=%s: %w", recoveryGrantDiagnostic(grant.Recovery), recoveryGrantDiagnostic(fresh), errResultCollectionStale)
+		}
+		if grant.AfterAttempts != fresh.TurnsUsed || grant.AdditionalAttempts != fresh.AdditionalTurns || grant.TranscriptRef != fresh.TranscriptRef {
+			return fmt.Errorf("recovery grant budget or transcript changed: %w", errResultCollectionStale)
+		}
+		if fresh.Disposition == RecoverySelectReferences {
+			preview, _ := ctx.Value(referenceProjectionPreviewKey{}).(bool)
+			if grant.ReferenceProjection == nil {
+				if preview {
+					return nil
+				}
+				return errResultCollectionStale
+			}
+			if !strings.HasPrefix(grant.ReferenceProjection.InvocationID, "operator-reference-") {
+				return errResultCollectionStale
+			}
+			if err := c.validateAcceptedReferenceProjectionBlobs(ctx, grant); err != nil {
+				return err
+			}
+		} else if fresh.Disposition != RecoverySelectReferences && grant.ReferenceProjection != nil {
+			return errResultCollectionStale
+		}
+		return nil
 	}
 	if grant == nil || validateResultRepairTarget(item) != nil || next != TaskProtocolIncomplete {
-		return false
+		return fmt.Errorf("invalid result repair target: %w", errResultCollectionStale)
 	}
 	if grant.RunID == "" || grant.RunID != c.executionRunID || grant.BranchID != c.activeBranchID() || grant.AfterAttempts != item.ExecutionReceipt.RepairProvenance.RepairAttempts || grant.TranscriptRef != item.ExecutionReceipt.TranscriptRef {
-		return false
+		return fmt.Errorf("result repair grant identity: %w", errResultCollectionStale)
 	}
 	if item.ExecutionReceipt.ResultCollection != nil {
-		// New collection grants always carry a freshly verified assessment.
-		// Old grants remain readable through replay, not newly issuable here.
-		return false
+		return fmt.Errorf("collection grant requires a verified assessment: %w", errResultCollectionStale)
 	}
 	if item.ResultCandidate != nil && item.ResultCandidate.Prepared {
-		return grant.AdditionalAttempts == 0 && grant.Model == ""
+		if grant.AdditionalAttempts == 0 && grant.Model == "" {
+			return nil
+		}
+	} else if grant.AdditionalAttempts == 2 {
+		return nil
 	}
-	return grant.AdditionalAttempts == 2
+	return fmt.Errorf("result repair grant budget changed: %w", errResultCollectionStale)
 }

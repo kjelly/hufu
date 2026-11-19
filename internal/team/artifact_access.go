@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/media"
@@ -305,17 +306,20 @@ func (c *Coordinator) authorizedArtifactRef(ctx context.Context, id string) (Art
 // Durable projections remain the fallback for resume/declared-step paths, but
 // a live worker must bind managed skills from the same goal that selected the
 // skills in its prompt.
-func (c *Coordinator) buildArtifactAccessScope(todoID string, attempt int, goals ...string) (*ArtifactAccessScope, error) {
+func (c *Coordinator) buildArtifactAccessScope(ctx context.Context, todoID string, attempt int, goals ...string) (*ArtifactAccessScope, error) {
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return nil, fmt.Errorf("artifact scope requires task state")
 	}
-	item := c.todoItemByID(todoID)
+	authorizer := c.newArtifactInputAuthorizer(ctx, c.taskTracker.TodoList().Items())
+	item := authorizer.tasks[todoID]
 	if item == nil {
 		return nil, fmt.Errorf("artifact scope task %q does not exist", todoID)
 	}
 	if attempt <= 0 {
 		return nil, fmt.Errorf("artifact scope attempt must be positive")
 	}
+	progress := c.beginRuntimeValidation("artifact_scope", todoID)
+	defer progress.close()
 	runID := strings.TrimSpace(c.executionRunID)
 	if runID == "" {
 		runID = strings.TrimSpace(c.taskTracker.TodoList().RunID())
@@ -337,22 +341,23 @@ func (c *Coordinator) buildArtifactAccessScope(todoID string, attempt int, goals
 	if item.WorksetBinding != nil {
 		binding := item.WorksetBinding
 		for _, input := range binding.Inputs {
-			ref, _, err := c.resolveAuthorizedWorksetInput(item, input.ID)
+			ref, _, err := authorizer.resolve(item, input.ID)
 			if err != nil {
 				return nil, fmt.Errorf("artifact scope input %q is not authorized by the committed workset receipt: %w", input.ID, err)
 			}
 			addUnique(&scope.AuthorizedRefs, ref)
 		}
+		progress.checked("assigned workset inputs")
 	}
 
 	for _, dependencyID := range resultDependencyIDs(item) {
-		dependency := c.todoItemByID(dependencyID)
+		dependency := authorizer.tasks[dependencyID]
 		if dependency == nil || dependency.Status != TaskDone || dependency.TypedResult == nil || !taskResultStatusIsSuccessful(dependency.TypedResult.Status) {
 			continue
 		}
 		for _, ref := range artifactRefsFromTaskResult(dependency.TypedResult) {
 			if item.WorksetBinding == nil {
-				if err := c.validateCurrentProducerArtifactOccurrence(ref, dependency.ID, dependency.TypedResult); err != nil {
+				if err := authorizer.validateProducer(ref, dependency); err != nil {
 					return nil, fmt.Errorf("artifact scope dependency %q ref %q has invalid current producer occurrence: %w", dependency.ID, ref.ID, err)
 				}
 			}
@@ -362,11 +367,15 @@ func (c *Coordinator) buildArtifactAccessScope(todoID string, attempt int, goals
 			}
 		}
 		if item.WorksetBinding == nil && slices.Contains(item.EvidenceFrom, dependency.ID) {
-			for _, ref := range c.dependencyReviewedInputs(dependency) {
+			for _, ref := range authorizer.reviewedInputs(dependency) {
 				addUnique(&scope.DeniedRefs, ref)
 				addUnique(&scope.AuthorizedRefs, ref)
 			}
 		}
+		if err := context.Cause(ctx); err != nil {
+			return nil, err
+		}
+		progress.checked("dependency " + dependencyID)
 	}
 	for _, ref := range scope.AuthorizedRefs {
 		addUnique(&scope.DeniedRefs, ref)
@@ -500,49 +509,112 @@ func (c *Coordinator) artifactScopePathCandidates(scope *ArtifactAccessScope) []
 }
 
 func (c *Coordinator) authorizedWorksetInput(consumer *TodoItem, id string) (ArtifactRef, string, bool) {
-	ref, producerID, err := c.resolveAuthorizedWorksetInput(consumer, id)
+	if c == nil || c.taskTracker == nil || consumer == nil || consumer.WorksetBinding == nil {
+		return ArtifactRef{}, "", false
+	}
+	authorizer := c.newArtifactInputAuthorizer(context.Background(), c.taskTracker.TodoList().Items())
+	ref, producerID, err := authorizer.resolve(consumer, id)
 	return ref, producerID, err == nil
 }
 
-// Operator preflight preserves the rejection cause. Model-facing artifact
-// lookups retain the boolean boundary above and do not disclose storage errors.
-func (c *Coordinator) authorizedWorksetReceipt(consumer *TodoItem) (*WorksetExpansionReceipt, error) {
-	if c == nil || c.taskTracker == nil || consumer == nil || consumer.WorksetBinding == nil {
-		return nil, fmt.Errorf("missing workset input binding")
-	}
-	binding := consumer.WorksetBinding
+// artifactInputAuthorizer is scoped to one synchronous capability projection.
+// Task snapshots, canonical lineage and proven origins never cross calls.
+type artifactInputAuthorizer struct {
+	coordinator *Coordinator
+	ctx         context.Context
+	tasks       map[string]*TodoItem
+	receipts    map[string]*WorksetExpansionReceipt
+	conflicts   map[string]struct{}
+	replay      func() ([]*TodoItem, error)
+	origins     map[artifactProducerOccurrence]struct{}
+}
+
+func (c *Coordinator) newArtifactInputAuthorizer(ctx context.Context, items []*TodoItem) *artifactInputAuthorizer {
+	tasks := make(map[string]*TodoItem, len(items))
 	visible := make([]*WorksetExpansionReceipt, 0)
-	for _, item := range c.taskTracker.TodoList().Items() {
-		if item != nil && item.WorksetReceipt != nil {
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		tasks[item.ID] = item
+		if item.WorksetReceipt != nil {
 			visible = append(visible, item.WorksetReceipt)
 		}
 	}
 	receipts, conflicts := collectWorksetReceipts(visible)
-	if _, conflicted := conflicts[binding.WorksetID]; conflicted {
-		return nil, fmt.Errorf("conflicting workset expansion receipts")
+	replay := sync.OnceValues(func() ([]*TodoItem, error) {
+		lineage, err := c.dependencyViewLineage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return ReplayTodoList(lineage)
+	})
+	return &artifactInputAuthorizer{coordinator: c, ctx: ctx, tasks: tasks, receipts: receipts, conflicts: conflicts,
+		replay: replay, origins: make(map[artifactProducerOccurrence]struct{})}
+}
+
+func (v *artifactInputAuthorizer) validateWorksetReceipt(consumer *TodoItem) error {
+	binding := consumer.WorksetBinding
+	if _, conflicted := v.conflicts[binding.WorksetID]; conflicted {
+		return fmt.Errorf("conflicting workset expansion receipts")
 	}
-	receipt := receipts[binding.WorksetID]
+	receipt := v.receipts[binding.WorksetID]
 	if receipt == nil || receipt.Children[binding.ItemKey] != consumer.ID {
-		return nil, fmt.Errorf("workset receipt does not assign this child")
+		return fmt.Errorf("workset receipt does not assign this child")
 	}
 	if receipt.ParentTaskID != binding.ParentTaskID ||
 		receipt.SourceArtifactID != binding.SourceArtifactID ||
 		receipt.SourceSHA256 != binding.SourceSHA256 {
-		return nil, fmt.Errorf("workset source identity differs from its binding")
+		return fmt.Errorf("workset source identity differs from its binding")
 	}
+	c := v.coordinator
 	if receipt.RunID != c.executionRunID || slices.ContainsFunc(binding.Inputs, func(input ArtifactRef) bool { return input.RunID != c.executionRunID }) {
-		if err := c.validateRecoveredWorksetReceipt(context.Background(), receipt, consumer); err != nil {
-			return nil, fmt.Errorf("recovered workset receipt: %w", err)
+		snapshot, _ := c.terminalRunInputs(c.executionRunID)
+		if snapshot == nil || ValidateRunInputSnapshot(snapshot) != nil {
+			return fmt.Errorf("recovered workset receipt: workset recovery has no selected frozen inputs")
+		}
+		items, err := v.replay()
+		if err == nil {
+			err = validateRecoveredWorksetReplay(snapshot, items, receipt, consumer, func(id string) *TodoItem { return v.tasks[id] })
+		}
+		if err != nil {
+			return fmt.Errorf("recovered workset receipt: %w", err)
 		}
 	}
-	return receipt, nil
+	return nil
 }
 
-func (c *Coordinator) resolveAuthorizedWorksetInput(consumer *TodoItem, id string) (ArtifactRef, string, error) {
-	if id == "" {
+func (v *artifactInputAuthorizer) validateProducer(ref ArtifactRef, producer *TodoItem) error {
+	c := v.coordinator
+	if err := context.Cause(v.ctx); err != nil {
+		return err
+	}
+	if err := validateProducerArtifactIdentity(ref, producer.ID, producer.TypedResult, c.executionRunID); err != nil {
+		return err
+	}
+	if ref.RunID == c.executionRunID {
+		return nil
+	}
+	origin := artifactProducerOccurrence{ref.RunID, ref.TaskID, ref.Attempt, ref.Agent}
+	if _, validated := v.origins[origin]; !validated {
+		if err := c.validateRecoveredArtifactOrigin(ref, producer.ID, producer.TypedResult); err != nil {
+			return fmt.Errorf("belongs to run %q, want current run %q or an admitted recovery source: %w", ref.RunID, c.executionRunID, err)
+		}
+		v.origins[origin] = struct{}{}
+	}
+	return nil
+}
+
+// Operator preflight preserves the rejection cause. Model-facing artifact
+// lookups retain the boolean boundary and do not disclose storage errors.
+func (v *artifactInputAuthorizer) resolve(consumer *TodoItem, id string) (ArtifactRef, string, error) {
+	if err := context.Cause(v.ctx); err != nil {
+		return ArtifactRef{}, "", err
+	}
+	if id == "" || consumer == nil || consumer.WorksetBinding == nil {
 		return ArtifactRef{}, "", fmt.Errorf("missing workset input binding")
 	}
-	if _, err := c.authorizedWorksetReceipt(consumer); err != nil {
+	if err := v.validateWorksetReceipt(consumer); err != nil {
 		return ArtifactRef{}, "", err
 	}
 	binding := consumer.WorksetBinding
@@ -551,16 +623,19 @@ func (c *Coordinator) resolveAuthorizedWorksetInput(consumer *TodoItem, id strin
 			strings.TrimSpace(input.RunID) == "" || strings.TrimSpace(input.TaskID) == "" || input.Attempt <= 0 || strings.TrimSpace(input.Agent) == "" {
 			continue
 		}
-		producer := c.todoItemByID(input.TaskID)
+		producer := v.tasks[input.TaskID]
 		if producer == nil || producer.Status != TaskDone || producer.TypedResult == nil ||
 			!taskResultStatusIsSuccessful(producer.TypedResult.Status) {
 			return ArtifactRef{}, "", fmt.Errorf("input producer has no accepted result")
 		}
-		declared, ok := artifactRefByID(producer.TypedResult, id)
-		if !ok || !sameArtifactOccurrence(input, declared) {
+		declared, err := resolveTaskResultArtifact(producer.TypedResult, id)
+		if err != nil {
+			return ArtifactRef{}, "", fmt.Errorf("input producer declaration: %w", err)
+		}
+		if !sameArtifactOccurrence(input, declared) {
 			return ArtifactRef{}, "", fmt.Errorf("input occurrence differs from the producer's declared artifact")
 		}
-		if err := c.validateCurrentProducerArtifactOccurrence(input, input.TaskID, producer.TypedResult); err != nil {
+		if err := v.validateProducer(input, producer); err != nil {
 			return ArtifactRef{}, "", fmt.Errorf("input producer occurrence: %w", err)
 		}
 		return input, input.TaskID, nil

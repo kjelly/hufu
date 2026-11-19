@@ -133,6 +133,7 @@ func (c *Coordinator) resultRuntimeInputValues(compiled *CompiledResultContract,
 		return nil, nil
 	}
 	values := make(map[string]any, len(compiled.runtimeInputs))
+	var worksetBindings map[string]string
 	for _, spec := range compiled.runtimeInputs {
 		var value any
 		var err error
@@ -141,7 +142,17 @@ func (c *Coordinator) resultRuntimeInputValues(compiled *CompiledResultContract,
 			if taskID == "" {
 				return nil, fmt.Errorf("workset runtime input requires its owning task")
 			}
-			value, err = c.resultWorksetBindingValue(taskID, spec.Output)
+			if worksetBindings == nil {
+				worksetBindings, err = c.resultWorksetBindingValues(taskID)
+			}
+			if err == nil {
+				binding, ok := worksetBindings[spec.Output]
+				if !ok || len(binding) > maxWorksetValueBytes {
+					err = fmt.Errorf("workset runtime input %q is missing or oversized", spec.Output)
+				} else {
+					value = binding
+				}
+			}
 		case "runtime_media":
 			value, err = c.resolveRuntimeMediaValue(spec.SourceTask)
 		default:

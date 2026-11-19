@@ -43,19 +43,25 @@ func blockWorkflowCollectionRecovery(t *testing.T, c *Coordinator, id string, re
 		t.Fatal(err)
 	}
 	c.recordCollectionStopReceipt(id, &resultCollectionFailure{Reason: RepairFailureInvalidSchema, Checkpoint: cp, Cause: errors.New("rejected collection")})
-	c.PersistFailureWithClassAndStatusAndOutput(c.todoItemByID(id).Agent, "review", id, "rejected collection", NeedsHuman, FailureProtocol, TaskBlocked, "saved report")
+	c.PersistFailureWithClassAndStatusAndOutput(c.todoItemByID(id).Agent, "review", id, "rejected collection "+id, NeedsHuman, FailureProtocol, TaskBlocked, "saved report")
 	return cp
 }
 
 func TestResultCollectionWorkflowRecoveryRepairsSuccessivePhases(t *testing.T) {
-	for _, scenario := range []string{"completed", "earlier_result_changed", "failed_phase_changed"} {
+	for _, scenario := range []string{"completed", "same_phase", "earlier_result_changed", "failed_phase_changed"} {
 		t.Run(scenario, func(t *testing.T) {
+			firstPhase := PhasePrepare
+			initial := map[Phase]PhaseResult{}
+			if scenario == "same_phase" {
+				firstPhase = PhaseVerify
+				initial[PhasePrepare] = PhaseResult{Status: PhaseStatusSuccess}
+			}
 			c, first, _, receipt := resultCollectionTaskFixture(t, "http://127.0.0.1:1/v1", false, func(spec *TodoSpec) {
-				spec.Phase, spec.ContractID = PhasePrepare, "prepare"
+				spec.Phase, spec.ContractID = firstPhase, "setup"
 			}, func(c *Coordinator) {
 				c.session.Config.Workflow = agent.WorkflowConfig{Phases: []string{"prepare", "verify"}}
 				c.session.Config.Policies.AllowPhaseSkip = true
-				c.session.ContractTasks = []TaskDef{{ID: "prepare", Agent: "worker", Phase: PhasePrepare}, {ID: "review", Agent: "worker", Phase: PhaseVerify}}
+				c.session.ContractTasks = []TaskDef{{ID: "setup", Agent: "worker", Phase: firstPhase}, {ID: "review", Agent: "worker", Phase: PhaseVerify}}
 				var err error
 				c.phaseWorkflow, err = newRuntimeWorkflow(c.session)
 				if err != nil {
@@ -63,11 +69,11 @@ func TestResultCollectionWorkflowRecoveryRepairsSuccessivePhases(t *testing.T) {
 				}
 				c.SetSessionData(NewSession())
 			})
-			if err := c.phaseWorkflow.restore(PhasePrepare, map[Phase]PhaseResult{}, "", NewRetryState()); err != nil {
+			if err := c.phaseWorkflow.restore(firstPhase, initial, "", NewRetryState()); err != nil {
 				t.Fatal(err)
 			}
 			originals := make(map[string]*ResultCollectionCheckpoint)
-			for index, phase := range []Phase{PhasePrepare, PhaseVerify} {
+			for index, phase := range []Phase{firstPhase, PhaseVerify} {
 				id := first.ID
 				if index == 1 {
 					c.executionRunID = "later-phase-work"
@@ -127,7 +133,7 @@ func TestResultCollectionWorkflowRecoveryRepairsSuccessivePhases(t *testing.T) {
 					c.phaseWorkflow.results[phase] = PhaseResult{Status: PhaseStatusFailure, Errors: []ExecutionError{{Category: "CONFIGURATION"}}}
 				}
 				_, err = c.beginFollowUpWorkflow(WithSessionResume(t.Context()), "resume accepted collection")
-				if index == 1 && scenario != "completed" {
+				if index == 1 && (scenario == "earlier_result_changed" || scenario == "failed_phase_changed") {
 					if err == nil || c.phaseWorkflow.State() != PhaseFailed {
 						t.Fatal("changed evidence reopened the later failed phase")
 					}
@@ -136,7 +142,12 @@ func TestResultCollectionWorkflowRecoveryRepairsSuccessivePhases(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := c.reconcileRecoveredWorkflow(t.Context()); err != nil {
+				reconcile := c.reconcileRecoveredWorkflow
+				if scenario == "same_phase" && index == 0 {
+					// Reopen VERIFY with more work still to run in it.
+					reconcile = c.reconcileCollectedWorkflow
+				}
+				if err := reconcile(t.Context()); err != nil {
 					t.Fatal(err)
 				}
 				want := PhaseVerify
@@ -449,6 +460,10 @@ func TestResultCollectionWorkflowRecoverySurvivesCompletionCheckpoint(t *testing
 				t.Fatal("fixture did not stop between task completion and phase settlement")
 			}
 			c = reopenCollectedWorkflowCoordinator(t, c)
+			repaired := c.todoItemByID(item.ID)
+			if !hasCommittedWorkflowCollectionRepair(repaired, c.activeBranchID()) || hasCommittedWorkflowCollectionRepair(repaired, "descendant") {
+				t.Fatal("a durable collection grant must prove recovery only on its own branch")
+			}
 			if boundary == "workflow_changed" {
 				c.phaseWorkflow.results[PhaseVerify] = PhaseResult{Status: PhaseStatusFailure, Errors: []ExecutionError{{Category: "CONFIGURATION"}}}
 			}

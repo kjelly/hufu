@@ -30,3 +30,31 @@ func TestDispatchActionProgressShowsStage(t *testing.T) {
 		t.Fatalf("status = %q", w.b.String())
 	}
 }
+
+func TestValidationProgressLifecycleAndDisplay(t *testing.T) {
+	timer := newIdleWarningTimer(&lineWriter{}, time.Hour)
+	defer timer.stop()
+	for _, id := range []string{"outer", "inner"} {
+		for _, phase := range []string{"started", "progress"} {
+			event := team.StatusEvent{Type: "runtime_validation", Message: "Runtime validation: result_recovery / runtime_inputs", Data: map[string]any{"validation_id": id, "phase": phase, "scope": "result_recovery", "check": "runtime_inputs"}}
+			timer.ObserveValidation(event)
+			w := &testStatusWriter{}
+			dispatchStatusEvent(w, &reporterState{}, event)
+			if !timer.validations[id] || !strings.Contains(w.b.String(), "Runtime validation:") {
+				t.Fatalf("validation progress lost: id=%s status=%s", id, w.b.String())
+			}
+			identity := validationStatusIdentity(event)
+			if identity.ID != id || identity.Phase != phase || identity.Scope != "result_recovery" || identity.Check != "runtime_inputs" {
+				t.Fatalf("JSONL validation identity lost: %+v", identity)
+			}
+		}
+	}
+	timer.ObserveValidation(team.StatusEvent{Type: "runtime_validation", Data: map[string]any{"validation_id": "inner", "phase": "completed"}})
+	if len(timer.validations) != 1 || !timer.validations["outer"] {
+		t.Fatal("nested validation completion cleared its caller")
+	}
+	timer.ObserveValidation(team.StatusEvent{Type: "runtime_validation", Data: map[string]any{"validation_id": "outer", "phase": "completed"}})
+	if len(timer.validations) != 0 {
+		t.Fatal("validation remained active after completion")
+	}
+}

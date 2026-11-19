@@ -5,6 +5,8 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -53,6 +55,10 @@ func TestHufuCodeReviewRuntimeOwnsAll51GapIdentities(t *testing.T) {
 		inputs = append(inputs, map[string]any{"task_id": source.ID, "payload_sha256": payload.SHA256, "record": record})
 	}
 	ref := reportSchema.ref(true)
+	prompt := resultContractPromptSection(&ref, reportSchema, false)
+	if !strings.Contains(prompt, "```json\n") || !strings.Contains(prompt, `"gap_resolutions":`) {
+		t.Fatal("report submission schema does not fit in the runtime prompt")
+	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "synthesizer", ResultContract: &ref, EvidenceFrom: ids}})[0]
 	plans, err := c.fixedCollectionPlans(item.ID)
 	if err != nil || len(plans) != 1 || len(plans[0].rows) != 51 {
@@ -159,7 +165,13 @@ func TestHufuCodeReviewEmptyCritiqueOwnsSource(t *testing.T) {
 			criticSchema := session.ResultContracts["schemas/critique-v2.json"]
 			sourceRef, criticRef := sourceSchema.ref(true), criticSchema.ref(true)
 			source := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", ResultContract: &sourceRef, WorksetBinding: &WorksetBinding{Bindings: map[string]string{"reference_candidate_ids": "[]"}}}})[0]
-			raw := fmt.Appendf(nil, `{"record":{"kind":"review","review_revision":"head","workset_key":%q,"lens":%q,"findings":[],"gaps":[],"invariant_assessments":[],"reference_assessments":[]}}`, tc.key, tc.lens)
+			if tc.name == "documentation" {
+				// Match the source identity in the native final-audit fixture.
+				source.ID = "13"
+				source.ContractID = "review-documentation-workset"
+				c.taskTracker.TodoList().Restore([]*TodoItem{source})
+			}
+			raw := fmt.Appendf(nil, `{"record":{"kind":"review","review_revision":"frozen-head","workset_key":%q,"lens":%q,"findings":[],"gaps":[],"invariant_assessments":[],"reference_assessments":[]}}`, tc.key, tc.lens)
 			payload, err := validateStructuredResultPayload(sourceSchema, sourceRef, raw)
 			if err != nil {
 				t.Fatal(err)
@@ -168,21 +180,55 @@ func TestHufuCodeReviewEmptyCritiqueOwnsSource(t *testing.T) {
 			source.TypedResult = &TaskResult{TaskID: source.ID, Status: TaskResultStatusSuccess, StructuredPayload: payload}
 			item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "critic", ResultContract: &criticRef, EvidenceFrom: []string{source.ID}}})[0]
 			assertCritiqueClaimsHaveOneSemanticLocation(t, c, item.ID)
-			result, rejection := c.structuredPayloadForSubmission(item.ID, []byte(`{"audit_complete":true,"record":{"kind":"critique","decisions":{}}}`))
+			_, err = c.decodeCollectionClaims(item.ID, []byte(`{"status":"success","summary":"audit complete","audit_complete":true,"structured_payload":{"record":{"kind":"critique","decisions":{}}}}`))
+			if err == nil || localResultRejectionReason(err) != RepairFailureInvalidSchema || !strings.Contains(err.Error(), "audit_complete") {
+				t.Fatalf("historical collector accepted the misplaced completion field: %v", err)
+			}
+			for _, marker := range []string{"true", "false", "null"} {
+				raw := fmt.Appendf(nil, `{"audit_complete":%s,"record":{"kind":"critique","decisions":{}}}`, marker)
+				if result, rejection := c.structuredPayloadForSubmission(item.ID, raw); result != nil || !strings.Contains(rejection, "/audit_complete is runtime-owned") {
+					t.Fatalf("worker completion override %s was not rejected: %s", marker, rejection)
+				}
+			}
+			tool := (&submitResultTool{coordinator: c, todoID: item.ID}).Info()
+			shape := tool.Parameters["structured_payload"].(map[string]any)
+			if properties, _ := shape["properties"].(map[string]any); properties["audit_complete"] != nil {
+				t.Fatal("completion field was exposed to the model")
+			}
+			result, rejection := c.structuredPayloadForSubmission(item.ID, []byte(`{"record":{"kind":"critique","decisions":{}}}`))
 			if rejection != "" {
 				t.Fatal(rejection)
+			}
+			if tc.name == "documentation" {
+				fixture, err := os.ReadFile(filepath.Join(hufuCodeReviewTeamDir(t), "reviewgate", "testdata", "direct-empty-critique.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw, err := decodeResultContractJSON(fixture)
+				if err != nil {
+					t.Fatal(err)
+				}
+				expected, err := json.Marshal(raw, json.Deterministic(true))
+				if err != nil || !bytes.Equal(expected, result.Value) {
+					t.Fatalf("native audit fixture differs from runtime assembly: %s (%v)", result.Value, err)
+				}
 			}
 			value, err := decodeResultContractJSON(result.Value)
 			if err != nil {
 				t.Fatal(err)
 			}
-			record := value.(map[string]any)["record"].(map[string]any)
+			storedCritique := value.(map[string]any)
+			if storedCritique["audit_complete"] != true {
+				t.Fatal("runtime did not complete the validated empty collection")
+			}
+			record := storedCritique["record"].(map[string]any)
 			inputs := record["input_review"].([]any)
 			if len(inputs) != 1 || evidenceString(inputs[0], "/task_id") != source.ID || evidenceString(inputs[0], "/payload_sha256") != payload.SHA256 || len(record["decisions"].([]any)) != 0 {
 				t.Fatalf("incorrect canonical source or empty coverage: %s", result.Value)
 			}
 			// Even copying the exact accepted source is forbidden at the worker boundary.
 			record["decisions"] = map[string]any{}
+			delete(storedCritique, "audit_complete")
 			raw, err = json.Marshal(value)
 			if err != nil {
 				t.Fatal(err)

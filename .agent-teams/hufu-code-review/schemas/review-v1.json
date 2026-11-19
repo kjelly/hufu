@@ -103,8 +103,8 @@
               },
               "location": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 8192
+                "maxLength": 8192,
+                "pattern": "^[^\\r\\n]+:[1-9][0-9]*$"
               },
               "evidence": {
                 "type": "array",
@@ -581,6 +581,7 @@
     "binding": "reference_candidate_ids"
   },
   "x-hufu-evidence-keys": {
+    "runtime_owned_files_read": true,
     "pointers": [
       "/record/findings/*/evidence/*",
       "/record/reference_assessments/*/evidence/*"
@@ -591,5 +592,27 @@
     "invariant_assessments": "/record/invariant_assessments",
     "bind_invariant_severity": true
   },
-  "x-hufu-runtime-inputs": [{"target":"/record/workset_key","source_kind":"workset_binding","output":"key"},{"target":"/record/review_revision","source_kind":"workset_binding","output":"review_revision"},{"target":"/record/lens","source_kind":"workset_binding","output":"lens"}]
+  "x-hufu-runtime-inputs": [
+    {
+      "target": "/record/workset_key",
+      "source_kind": "workset_binding",
+      "output": "key"
+    },
+    {
+      "target": "/record/review_revision",
+      "source_kind": "workset_binding",
+      "output": "review_revision"
+    },
+    {
+      "target": "/record/lens",
+      "source_kind": "workset_binding",
+      "output": "lens"
+    }
+  ],
+  "x-hufu-workset-paths": {
+    "pointers": [
+      "/record/findings/*/location"
+    ],
+    "format": "path_line"
+  }
 }

@@ -176,6 +176,10 @@ type reporterState struct {
 func dispatchStatusEvent(w statusWriter, st *reporterState, event team.StatusEvent) {
 	width := previewTerminalWidth(120)
 	switch event.Type {
+	case "runtime_validation":
+		if phase, _ := event.Data["phase"].(string); phase != "completed" {
+			w.write(dimStyle.Render(event.Message) + "\n")
+		}
 	case "task_result_ready":
 		if opts.quietMode || opts.outputFormat == "json" {
 			return
@@ -801,6 +805,7 @@ func setupStatusReporter(w *lineWriter, coordinator *team.Coordinator, taskDisp 
 		defer mu.Unlock()
 		idleTimer.reset()
 		idleTimer.ObserveAction(event)
+		idleTimer.ObserveValidation(event)
 
 		if notifier != nil {
 			notifier.NotifyWithData(event.Type, event.Agent, event.Message, event.Output, event.Data)
@@ -1430,6 +1435,7 @@ type jsonStatusEvent struct {
 	ContextWindow   *team.ContextWindowTelemetryEvent `json:"context_window,omitempty"`
 	ModelProfile    *modelprofile.TelemetryProjection `json:"model_profile,omitempty"`
 	Result          *resultReadyIdentity              `json:"result,omitempty"`
+	Validation      *runtimeValidationStatus          `json:"validation,omitempty"`
 }
 
 type decisionJSONLEnvelope struct {
@@ -1461,6 +1467,7 @@ func makeJSONLReporter(notifier *notify.Notifier) team.StatusReporter {
 		}
 		encoded := jsonStatusEvent{Type: event.Type, Team: event.TeamName, InvocationID: opts.invocationID, Agent: event.Agent, TodoID: event.TodoID, Model: event.Model, ExecutionTarget: event.ExecutionTarget, Backend: event.Backend, BackendKind: event.BackendKind, Message: event.Message, Tool: event.ToolName, Time: time.Now().UTC().Format(time.RFC3339Nano), ContextWindow: event.ContextWindowTelemetry, ModelProfile: event.ModelProfile}
 		encoded.Result = resultStatusIdentity(event)
+		encoded.Validation = validationStatusIdentity(event)
 		if encoded.Result != nil {
 			encoded.RunID = encoded.Result.RunID
 		}
@@ -1678,7 +1685,7 @@ func makeTUIReporter(p *tea.Program) (team.StatusReporter, func()) {
 				p.Send(tuipkg.StatusBarMsg{Text: doneStyle.Render("✓ " + event.Message)})
 			}
 
-		case "memory_learning", "provider_quota":
+		case "memory_learning", "provider_quota", "runtime_validation":
 			if event.Message != "" {
 				p.Send(tuipkg.StatusBarMsg{Text: dimStyle.Render(event.Message)})
 			}

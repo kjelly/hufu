@@ -221,41 +221,49 @@ func openFileDescriptorsUnder(t *testing.T, root string) []string {
 
 // Exercise the production default reporter: maintenance never installs a UI.
 func TestCoordinatorDefaultReporterTracksProgressAndStillCancelsStalls(t *testing.T) {
-	c, err := newCoordinator(coordinatorParams{Session: &TeamSession{
-		Workspace: t.TempDir(), Dir: t.TempDir(),
-		Config: agent.TeamConfig{Name: "headless-progress", GoalMode: "exploratory"},
-	}}, RuntimeServices{})
-	if err != nil {
-		t.Fatal(err)
+	for _, mode := range []string{"status", "validation"} {
+		t.Run(mode, func(t *testing.T) {
+			c, err := newCoordinator(coordinatorParams{Session: &TeamSession{
+				Workspace: t.TempDir(), Dir: t.TempDir(),
+				Config: agent.TeamConfig{Name: "headless-progress", GoalMode: "exploratory"},
+			}}, RuntimeServices{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = c.Close() })
+			synctest.Test(t, func(t *testing.T) {
+				lease, err := c.acquireInvocationLease(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer lease.release()
+				ctx := c.beginContextPreflight(t.Context(), lease)
+				defer c.CloseContextPreflight()
+				progress := c.beginRuntimeValidation("result_recovery", "")
+				defer progress.close()
+				captured := c.reportStatus
+				for i := range 4 {
+					time.Sleep(2 * time.Minute)
+					if ctx.Err() != nil {
+						t.Fatalf("active headless invocation canceled: %v", context.Cause(ctx))
+					}
+					if mode == "validation" {
+						progress.checked("verified source")
+					} else if i%2 == 0 {
+						c.report(c.newEvent("model_profile_resolved"))
+					} else {
+						captured(c.newEvent("text"))
+					}
+				}
+				// A stall notification is not forward progress.
+				time.Sleep(4 * time.Minute)
+				c.report(c.newEvent(runStallEventType))
+				time.Sleep(2 * time.Minute)
+				synctest.Wait()
+				if !errors.Is(context.Cause(ctx), ErrInvocationStalled) {
+					t.Fatalf("silent invocation cause = %v, want stalled", context.Cause(ctx))
+				}
+			})
+		})
 	}
-	t.Cleanup(func() { _ = c.Close() })
-	synctest.Test(t, func(t *testing.T) {
-		lease, err := c.acquireInvocationLease(t.Context())
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer lease.release()
-		ctx := c.beginContextPreflight(t.Context(), lease)
-		defer c.CloseContextPreflight()
-		captured := c.reportStatus
-		for i := range 4 {
-			time.Sleep(2 * time.Minute)
-			if ctx.Err() != nil {
-				t.Fatalf("active headless invocation canceled: %v", context.Cause(ctx))
-			}
-			if i%2 == 0 {
-				c.report(c.newEvent("model_profile_resolved"))
-			} else {
-				captured(c.newEvent("text"))
-			}
-		}
-		// A stall notification is not forward progress.
-		time.Sleep(4 * time.Minute)
-		c.report(c.newEvent(runStallEventType))
-		time.Sleep(2 * time.Minute)
-		synctest.Wait()
-		if !errors.Is(context.Cause(ctx), ErrInvocationStalled) {
-			t.Fatalf("silent invocation cause = %v, want stalled", context.Cause(ctx))
-		}
-	})
 }

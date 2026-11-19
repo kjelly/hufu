@@ -16,21 +16,23 @@ import (
 )
 
 type idleWarningTimer struct {
-	w        *lineWriter
-	interval time.Duration
-	timer    *time.Timer
-	mu       sync.Mutex
-	warned   bool
-	deadline time.Time
-	model    string
-	actions  map[string]string
+	w           *lineWriter
+	interval    time.Duration
+	timer       *time.Timer
+	mu          sync.Mutex
+	warned      bool
+	deadline    time.Time
+	model       string
+	actions     map[string]string
+	validations map[string]bool
 }
 
 func newIdleWarningTimer(w *lineWriter, interval time.Duration) *idleWarningTimer {
 	t := &idleWarningTimer{
-		w:        w,
-		interval: interval,
-		actions:  make(map[string]string),
+		w:           w,
+		interval:    interval,
+		actions:     make(map[string]string),
+		validations: make(map[string]bool),
 	}
 	t.timer = time.AfterFunc(interval, t.warn)
 	t.deadline = time.Now().Add(t.interval)
@@ -58,6 +60,25 @@ func (t *idleWarningTimer) ObserveAction(event team.StatusEvent) {
 	}
 }
 
+func (t *idleWarningTimer) ObserveValidation(event team.StatusEvent) {
+	if event.Type != "runtime_validation" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	id, _ := event.Data["validation_id"].(string)
+	phase, _ := event.Data["phase"].(string)
+	if id == "" {
+		return
+	}
+	switch phase {
+	case "started", "progress":
+		t.validations[id] = true
+	case "completed":
+		delete(t.validations, id)
+	}
+}
+
 func (t *idleWarningTimer) warn() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -72,6 +93,9 @@ func (t *idleWarningTimer) warn() {
 	waiting := "LLM response"
 	if len(t.actions) > 0 {
 		waiting, modelStr = "action progress", ""
+	}
+	if len(t.validations) > 0 {
+		waiting, modelStr = "runtime validation", ""
 	}
 	t.w.write(fmt.Sprintf("\n%s Waiting for %s%s... (%v elapsed)\n",
 		stepStyle.Render("⏳"),

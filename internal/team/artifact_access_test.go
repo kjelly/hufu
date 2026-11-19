@@ -76,7 +76,7 @@ func TestScopedArtifactViewOpensCurrentUnboundDependencyArtifactSources(t *testi
 			c, producer, consumer, ref := newUnboundArtifactAccessFixture(t)
 			source.set(producer.TypedResult, ref)
 
-			scope, err := c.buildArtifactAccessScope(consumer.ID, 1)
+			scope, err := c.buildArtifactAccessScope(t.Context(), consumer.ID, 1)
 			if err != nil {
 				t.Fatalf("buildArtifactAccessScope: %v", err)
 			}
@@ -112,7 +112,7 @@ func TestScopedArtifactViewRequiresCurrentUnboundDependencyOccurrenceFromEverySo
 					mutation.mutate(&ref)
 					source.set(producer.TypedResult, ref)
 
-					if _, err := c.buildArtifactAccessScope(consumer.ID, 1); err == nil {
+					if _, err := c.buildArtifactAccessScope(t.Context(), consumer.ID, 1); err == nil {
 						t.Fatal("buildArtifactAccessScope succeeded for invalid producer occurrence")
 					}
 
@@ -235,7 +235,7 @@ func TestBuildArtifactAccessScopeBindsManagedSkillSnapshot(t *testing.T) {
 		executionRunID:   "run-1",
 	}
 
-	scope, err := c.buildArtifactAccessScope(item.ID, 1)
+	scope, err := c.buildArtifactAccessScope(t.Context(), item.ID, 1)
 	if err != nil {
 		t.Fatalf("buildArtifactAccessScope: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestBuildArtifactAccessScopeUsesStructuredSelectedManagedSkills(t *testing.
 		executionRunID:   "run-live-goal",
 	}
 
-	scope, err := c.buildArtifactAccessScope(item.ID, 1, "beta live goal")
+	scope, err := c.buildArtifactAccessScope(t.Context(), item.ID, 1, "beta live goal")
 	if err != nil {
 		t.Fatalf("buildArtifactAccessScope: %v", err)
 	}

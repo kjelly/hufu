@@ -57,6 +57,9 @@ func writeContractRecoveryPreview(w io.Writer, plan *team.ContractRecoveryPlan, 
 		if legacy := task.LegacySubmission; legacy != nil {
 			fmt.Fprintf(&out, "; transport: tool -> runtime; legacy submissions spent: %d; no turns granted by publication", legacy.AttemptsUsed)
 		}
+		if task.Collection != nil && task.Collection.AcceptedResult != nil {
+			fmt.Fprintf(&out, "; accepted result: %s; only invalid evidence pointers: %s", task.Collection.AcceptedResult.ResultSHA256, strings.Join(task.Collection.AcceptedResult.Pointers, ", "))
+		}
 		if len(task.AffectedBy) > 0 {
 			fmt.Fprintf(&out, "; affected by: %s", strings.Join(task.AffectedBy, ", "))
 		}
@@ -94,6 +97,8 @@ func writeContractRecoveryPreview(w io.Writer, plan *team.ContractRecoveryPlan, 
 
 func recoveryReasonText(reason string) string {
 	switch reason {
+	case "accepted_reference_invalid":
+		return "accepted result requires bounded reference-only repair; other claims are frozen"
 	case "legacy_submission":
 		return "rejected legacy submit_result candidate preserved for bounded collection"
 	case "original_failure":

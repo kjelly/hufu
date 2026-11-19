@@ -73,7 +73,10 @@ func validateRecoveryTerminalContext(workspace string, cp *ResultCollectionCheck
 }
 
 func (c *Coordinator) validateRecoveryIndependentClaims(ctx context.Context, cp *ResultCollectionCheckpoint, work *resultCollectionWork, compiled *CompiledResultContract, resolved string, check func(string, error) bool) bool {
-	taskID := cp.TaskID
+	return c.validateIndependentResultClaims(ctx, cp.TaskID, cp.Attempt, work.Workspace, compiled, resolved, check)
+}
+
+func (c *Coordinator) validateIndependentResultClaims(ctx context.Context, taskID string, attempt int, workspace string, compiled *CompiledResultContract, resolved string, check func(string, error) bool) bool {
 	var err error
 	// Independently inspect source references and receipt claims before any
 	// schema-format rejection. Invalid outer JSON is repairable only after the
@@ -88,6 +91,12 @@ func (c *Coordinator) validateRecoveryIndependentClaims(ctx context.Context, cp 
 	if !check("runtime_inputs", err) {
 		return false
 	}
+	if compiled != nil && compiled.worksetPaths != nil {
+		_, err := c.verifiedWorksetPathChoices(ctx, taskID)
+		if !check("workset_paths", err) {
+			return false
+		}
+	}
 	if independent == nil && compiled != nil && (compiled.evidenceReferences != nil || compiled.evidenceInputs != nil || len(compiled.runtimeInputs) > 0 || len(compiled.fixedCollections) > 0) {
 		check("payload_sources", errors.New("malformed JSON prevents independent verification of source references"))
 		return false
@@ -95,12 +104,11 @@ func (c *Coordinator) validateRecoveryIndependentClaims(ctx context.Context, cp 
 	if independent != nil {
 		input := *independent
 		res := input.taskResult()
-		res.Attempt = cp.Attempt
-		if len(res.AssumptionChecks) > 0 || len(res.MemoryUses) > 0 {
-			check("claims_context", fmt.Errorf("result-only recovery does not support nonempty assumption_checks or memory_uses; original context must be reconciled before recovery"))
+		res.Attempt = attempt
+		if !check("claims_context", c.validateRecoveryContextClaims(ctx, taskID, &res)) {
 			return false
 		}
-		if len(res.Artifacts) > 0 && !check("artifact_claims", validateSubmittedArtifactClaims(ctx, work.Workspace, res.Artifacts)) {
+		if len(res.Artifacts) > 0 && !check("artifact_claims", validateSubmittedArtifactClaims(ctx, workspace, res.Artifacts)) {
 			return false
 		}
 
@@ -121,6 +129,16 @@ func (c *Coordinator) validateRecoveryIndependentClaims(ctx context.Context, cp 
 		if len(payload) == 0 || bytes.Equal(payload, []byte("null")) {
 			return true
 		}
+		// Verify projection provenance too: a citation typo must not conceal a
+		// foreign invariant or stale context. Pure representation failures still
+		// belong to the ordinary model-schema repair boundary below.
+		projected, projectionErr := c.projectResultClaims(ctx, taskID, input)
+		if projectionErr == nil {
+			input = projected
+		} else if localResultRejectionReason(rejectProjectedClaims(projectionErr)) != RepairFailureInvalidSchema {
+			check("projection_sources", projectionErr)
+			return false
+		}
 		_, message, repairable := c.validateStructuredPayloadClaims(taskID, input.StructuredPayload, false, records)
 		if message != "" && !repairable {
 			// A model-facing schema shape failure can be repaired, but binding and
@@ -140,6 +158,36 @@ func (c *Coordinator) validateRecoveryIndependentClaims(ctx context.Context, cp 
 	}
 
 	return true
+}
+
+// An accepted reference repair may retain inert assumption reports, never
+// introduce new checks or replay decision transitions. Other context claims
+// still require a separate reconciliation mechanism.
+func (c *Coordinator) validateRecoveryContextClaims(ctx context.Context, taskID string, result *TaskResult) error {
+	if len(result.MemoryUses) > 0 {
+		return fmt.Errorf("result-only recovery requires memory attribution reconciliation")
+	}
+	cp := currentResultCollection(c.todoItemByID(taskID))
+	p := acceptedRepairProof(cp)
+	if p == nil {
+		if len(result.AssumptionChecks) > 0 {
+			return fmt.Errorf("result-only recovery requires assumption reconciliation")
+		}
+		return nil
+	}
+	original, err := c.readAcceptedRepairResult(ctx, cp.ContractUpgrade.Original, p.ResultSHA256)
+	if err != nil {
+		return err
+	}
+	if (len(original.AssumptionChecks) > 0 || len(result.AssumptionChecks) > 0) && !sameCanonicalEvidence(original.AssumptionChecks, result.AssumptionChecks) {
+		return fmt.Errorf("accepted-result repair must preserve original assumption checks")
+	}
+	if len(result.AssumptionChecks) > 0 {
+		if discipline := c.disciplineFor(taskID); discipline != nil && discipline.decisionID != "" {
+			return fmt.Errorf("accepted-result repair cannot replay governing decision checks")
+		}
+	}
+	return nil
 }
 
 // Ordinary resume validates every retained completed task, including tasks

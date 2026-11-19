@@ -126,7 +126,7 @@ func compileResultContractDocument(id string, raw []byte) (*CompiledResultContra
 		return nil, fmt.Errorf("schema %q: %w", id, err)
 	}
 	for _, binding := range runtimeInputs {
-		if inputs != nil && inputs.runtimeOwned() && resultPointersOverlap(binding.Target, inputs.ItemsPointer) {
+		if inputs.ownsTarget(binding.Target) {
 			return nil, fmt.Errorf("schema %q: runtime input and evidence input targets must not overlap", id)
 		}
 		for _, collection := range collections {
@@ -137,7 +137,7 @@ func compileResultContractDocument(id string, raw []byte) (*CompiledResultContra
 	}
 	if inputs != nil && inputs.runtimeOwned() {
 		for _, collection := range collections {
-			if resultPointersOverlap(collection.ItemsPointer, inputs.ItemsPointer) {
+			if inputs.ownsTarget(collection.ItemsPointer) {
 				return nil, fmt.Errorf("schema %q: runtime_bind and fixed collection targets must not overlap", id)
 			}
 		}
@@ -189,7 +189,7 @@ func compileResultContractDocument(id string, raw []byte) (*CompiledResultContra
 			return nil, fmt.Errorf("compile result envelope %q: %w", id, err)
 		}
 	}
-	evidenceKeys, err := compileResultEvidenceKeys(root, schema)
+	evidenceKeys, worksetPaths, err := compileResultReferenceSelectors(root, schema, runtimeInputs, inputs)
 	if err != nil {
 		return nil, fmt.Errorf("schema %q: %w", id, err)
 	}
@@ -206,7 +206,7 @@ func compileResultContractDocument(id string, raw []byte) (*CompiledResultContra
 		ID: id, SchemaSHA256: hex.EncodeToString(sum[:]), CanonicalSchema: canonical, schema: schema,
 		envelopeSchema: envelopeSchema, envelopeDocument: envelopeDocument,
 		toolEvidence: evidence, finalReport: report, evidenceInputs: inputs, evidenceReferences: references, worksetInputs: worksetInputs,
-		claimsProjection: projections, fixedCollections: collections, evidenceKeys: evidenceKeys, runtimeInputs: runtimeInputs, submissionFields: fields,
+		claimsProjection: projections, fixedCollections: collections, evidenceKeys: evidenceKeys, runtimeInputs: runtimeInputs, submissionFields: fields, worksetPaths: worksetPaths,
 	}, nil
 }
 

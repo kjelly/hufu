@@ -34,29 +34,7 @@
           "limitations": {
             "type": "array",
             "items": {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "enum": [
-                    "unavailable_path",
-                    "out_of_scope",
-                    "version_mismatch",
-                    "budget_exhausted",
-                    "invalid_request"
-                  ]
-                },
-                "detail": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 2048
-                }
-              },
-              "required": [
-                "kind",
-                "detail"
-              ],
-              "additionalProperties": false
+              "$ref": "#/$defs/review/properties/gaps/items/properties/limitations/items"
             },
             "maxItems": 17
           }
@@ -172,10 +150,7 @@
                           "type": "array",
                           "items": {
                             "type": "string",
-                            "minLength": 1,
-                            "maxLength": 8192,
-                            "pattern": "^sha256-[0-9a-f]{64}$",
-                            "description": "Exact opaque artifact ID; no annotations."
+                            "pattern": "^sha256-[0-9a-f]{64}$"
                           },
                           "minItems": 0,
                           "maxItems": 32
@@ -218,10 +193,7 @@
                                 "type": "array",
                                 "items": {
                                   "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 8192,
-                                  "pattern": "^sha256-[0-9a-f]{64}$",
-                                  "description": "Exact opaque artifact ID; no annotations."
+                                  "pattern": "^sha256-[0-9a-f]{64}$"
                                 },
                                 "minItems": 1,
                                 "maxItems": 32
@@ -474,33 +446,28 @@
                   "decisions"
                 ],
                 "additionalProperties": false,
-                "$comment": "Every decision satisfies items; separate allOf prefixItems enforces ascending indices without overriding items. Count-specific conditions bind exact source coverage.",
                 "allOf": [
                   {
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 0,
-                                      "maxItems": 0
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "maxItems": 0
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
                     "then": {
                       "properties": {
                         "decisions": {
-                          "minItems": 0,
                           "maxItems": 0
                         }
                       }
@@ -510,20 +477,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 1,
-                                      "maxItems": 1
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 1,
+                                    "maxItems": 1
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -540,20 +505,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 2,
-                                      "maxItems": 2
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 2,
+                                    "maxItems": 2
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -570,20 +533,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 3,
-                                      "maxItems": 3
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 3,
+                                    "maxItems": 3
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -600,20 +561,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 4,
-                                      "maxItems": 4
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 4,
+                                    "maxItems": 4
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -630,20 +589,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 5,
-                                      "maxItems": 5
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 5,
+                                    "maxItems": 5
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -660,20 +617,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 6,
-                                      "maxItems": 6
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 6,
+                                    "maxItems": 6
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -690,20 +645,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 7,
-                                      "maxItems": 7
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 7,
+                                    "maxItems": 7
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -720,20 +673,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 8,
-                                      "maxItems": 8
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 8,
+                                    "maxItems": 8
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -750,20 +701,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 9,
-                                      "maxItems": 9
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 9,
+                                    "maxItems": 9
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -780,20 +729,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 10,
-                                      "maxItems": 10
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 10,
+                                    "maxItems": 10
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -810,20 +757,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 11,
-                                      "maxItems": 11
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 11,
+                                    "maxItems": 11
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -840,20 +785,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 12,
-                                      "maxItems": 12
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 12,
+                                    "maxItems": 12
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -870,20 +813,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 13,
-                                      "maxItems": 13
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 13,
+                                    "maxItems": 13
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -900,20 +841,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 14,
-                                      "maxItems": 14
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 14,
+                                    "maxItems": 14
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -930,20 +869,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 15,
-                                      "maxItems": 15
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 15,
+                                    "maxItems": 15
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -960,20 +897,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 16,
-                                      "maxItems": 16
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 16,
+                                    "maxItems": 16
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -990,20 +925,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 17,
-                                      "maxItems": 17
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 17,
+                                    "maxItems": 17
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -1020,20 +953,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 18,
-                                      "maxItems": 18
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 18,
+                                    "maxItems": 18
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -1050,20 +981,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 19,
-                                      "maxItems": 19
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 19,
+                                    "maxItems": 19
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -1080,20 +1009,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 20,
-                                      "maxItems": 20
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 20,
+                                    "maxItems": 20
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -1110,20 +1037,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 21,
-                                      "maxItems": 21
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 21,
+                                    "maxItems": 21
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -1140,20 +1065,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 22,
-                                      "maxItems": 22
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 22,
+                                    "maxItems": 22
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -1170,20 +1093,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 23,
-                                      "maxItems": 23
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 23,
+                                    "maxItems": 23
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -1200,20 +1121,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 24,
-                                      "maxItems": 24
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 24,
+                                    "maxItems": 24
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -1230,20 +1149,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 25,
-                                      "maxItems": 25
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 25,
+                                    "maxItems": 25
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -1260,20 +1177,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 26,
-                                      "maxItems": 26
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 26,
+                                    "maxItems": 26
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -1290,20 +1205,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 27,
-                                      "maxItems": 27
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 27,
+                                    "maxItems": 27
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -1320,20 +1233,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 28,
-                                      "maxItems": 28
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 28,
+                                    "maxItems": 28
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -1350,20 +1261,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 29,
-                                      "maxItems": 29
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 29,
+                                    "maxItems": 29
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -1380,20 +1289,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 30,
-                                      "maxItems": 30
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 30,
+                                    "maxItems": 30
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -1410,20 +1317,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 31,
-                                      "maxItems": 31
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 31,
+                                    "maxItems": 31
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -1440,20 +1345,18 @@
                     "if": {
                       "properties": {
                         "input_review": {
-                          "prefixItems": [
-                            {
-                              "properties": {
-                                "record": {
-                                  "properties": {
-                                    "findings": {
-                                      "minItems": 32,
-                                      "maxItems": 32
-                                    }
+                          "items": {
+                            "properties": {
+                              "record": {
+                                "properties": {
+                                  "findings": {
+                                    "minItems": 32,
+                                    "maxItems": 32
                                   }
                                 }
                               }
                             }
-                          ]
+                          }
                         }
                       }
                     },
@@ -1511,10 +1414,7 @@
             "type": "array",
             "items": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 8192,
-              "pattern": "^sha256-[0-9a-f]{64}$",
-              "description": "Exact opaque artifact ID; no annotations."
+              "pattern": "^sha256-[0-9a-f]{64}$"
             },
             "minItems": 0,
             "maxItems": 1,
@@ -1555,10 +1455,7 @@
                   "type": "array",
                   "items": {
                     "type": "string",
-                    "minLength": 1,
-                    "maxLength": 8192,
-                    "pattern": "^sha256-[0-9a-f]{64}$",
-                    "description": "Exact opaque artifact ID; no annotations."
+                    "pattern": "^sha256-[0-9a-f]{64}$"
                   },
                   "minItems": 1,
                   "maxItems": 1
@@ -1730,7 +1627,7 @@
               "pattern": "^[a-f0-9]{64}$"
             },
             "files": {
-              "type": "array",
+              "type": ["array", "null"],
               "items": {
                 "type": "object",
                 "properties": {
@@ -1787,6 +1684,23 @@
             "worksets_per_batch": {
               "type": "integer",
               "minimum": 1
+            },
+            "file_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "inventory": {
+              "type": "object",
+              "properties": {
+                "id": {"type": "string", "pattern": "^sha256-[0-9a-f]{64}$"},
+                "path": {"type": "string", "minLength": 1},
+                "kind": {"const": "repository_snapshot_inventory"},
+                "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "bytes": {"type": "integer", "minimum": 1, "maximum": 33554432},
+                "description": {"type": "string"}
+              },
+              "required": ["id", "path", "kind", "sha256", "bytes"],
+              "additionalProperties": false
             }
           },
           "required": [
@@ -1798,7 +1712,13 @@
             "batch_count",
             "worksets_per_batch"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "if": {"required": ["inventory"]},
+          "then": {
+            "required": ["file_count"],
+            "properties": {"files": {"maxItems": 0}, "file_count": {"minimum": 1}}
+          },
+          "else": {"properties": {"files": {"type": "array"}}}
         }
       },
       "additionalProperties": false,
@@ -1986,11 +1906,7 @@
           "uniqueItems": true
         },
         "completed": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "uniqueItems": true
+          "$ref": "#/properties/snapshot_coverage/properties/expected"
         },
         "excluded": {
           "type": "array",
@@ -2014,25 +1930,55 @@
           }
         },
         "uncompleted": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "path": {
-                "type": "string",
-                "minLength": 1
-              },
-              "reason": {
-                "type": "string",
-                "minLength": 1
-              }
+          "$ref": "#/properties/snapshot_coverage/properties/excluded"
+        },
+        "expected_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "completed_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "excluded_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "uncompleted_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inventory": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^sha256-[0-9a-f]{64}$"
             },
-            "required": [
-              "path",
-              "reason"
-            ],
-            "additionalProperties": false
-          }
+            "path": {
+              "const": "snapshot-coverage.json"
+            },
+            "kind": {
+              "const": "repository_snapshot_coverage"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 33554432
+            }
+          },
+          "required": [
+            "id",
+            "path",
+            "kind",
+            "sha256",
+            "bytes"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -2041,13 +1987,46 @@
         "content_sha256",
         "revision",
         "batch",
-        "batch_count",
-        "expected",
-        "completed",
-        "excluded",
-        "uncompleted"
+        "batch_count"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "if": {
+        "required": [
+          "inventory"
+        ]
+      },
+      "then": {
+        "required": [
+          "expected_count",
+          "completed_count",
+          "excluded_count",
+          "uncompleted_count",
+          "inventory"
+        ],
+        "properties": {
+          "mode": {
+            "const": "repository_snapshot"
+          },
+          "expected": false,
+          "completed": false,
+          "excluded": false,
+          "uncompleted": false
+        }
+      },
+      "else": {
+        "required": [
+          "expected",
+          "completed",
+          "excluded",
+          "uncompleted"
+        ],
+        "properties": {
+          "expected_count": false,
+          "completed_count": false,
+          "excluded_count": false,
+          "uncompleted_count": false
+        }
+      }
     }
   },
   "required": [
@@ -2153,8 +2132,8 @@
               },
               "location": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 8192
+                "maxLength": 8192,
+                "pattern": "^[^\\r\\n]+:[1-9][0-9]*$"
               },
               "evidence": {
                 "type": "array",
@@ -2657,7 +2636,7 @@
       "/record": "/record"
     }
   },
-  "x-hufu-final-report": "{{define \"lens\"}}{{if eq . \"documentation-risk\"}}文件規範與一致性{{else if eq . \"documentation\"}}文件內容{{else if eq . \"runtime-integrity\"}}執行流程完整性{{else if eq . \"boundary-tui\"}}介面與邊界{{else if eq . \"security-tool\"}}工具安全性{{else if eq . \"noop\"}}無需深入審查{{else}}綜合審查{{end}}{{end}}{{define \"verdict\"}}{{if eq . \"confirmed\"}}已確認（confirmed）{{else if eq . \"downgraded\"}}嚴重度調降（downgraded）{{else if eq . \"rejected\"}}已駁回（rejected）{{else}}證據不足、尚未確認（unverified）{{end}}{{end}}{{define \"next\"}}{{if eq . \"confirmed\"}}依此判定的嚴重度處理已確認 finding，修正後重新驗證。{{else if eq . \"downgraded\"}}按 Critic 調整後的嚴重度評估與處理，不沿用原始提案等級。{{else if eq . \"rejected\"}}不列為已確認缺陷；保留原始提案與駁回理由供稽核。{{else}}先補齊證據再判定；目前不得宣稱此 finding 已確認或已排除。{{end}}{{end}}## 審查結論\n{{if eq .coverage \"complete\"}}審查證據覆蓋完整；程式風險依下列 findings 與獨立複核判定評估。\n{{else}}審查已完成，但仍有證據缺口；不能據此判定程式沒有問題。\n{{end}}Targeted Go tests：passed={{.test_verification.passed}}（revision {{printf \"%.12s\" .test_verification.reviewed_revision}}）。測試通過不代表所有 findings 已排除。{{if not .test_verification.passed}}\n**測試未通過（exit {{.test_verification.exit_code}}）；審查完成不代表程式通過測試。**\n測試診斷摘要：\n{{.test_verification.diagnostic}}\n{{end}}\n\n{{with index . \"snapshot_coverage\"}}{{if eq .mode \"repository_snapshot\"}}完整快照版本：{{printf \"%.12s\" .revision}}；批次 {{.batch}} / {{.batch_count}}。\n預期 {{len .expected}}；已完成 {{len .completed}}；排除 {{len .excluded}}；未完成 {{len .uncompleted}}。明細見稽核附錄。\n{{end}}{{end}}\n## Findings 摘要（原始提案）\n{{$findings := false}}{{range .input_review}}{{if eq .record.kind \"review\"}}{{range .record.findings}}{{$findings = true}}- [{{.severity}}] {{.summary}}\n  位置：{{.location}}{{if .requires_critique}}；需獨立複核{{end}}\n{{end}}{{end}}{{end}}{{if not $findings}}- 來源未提出具體 findings；此結果不代表程式沒有問題。\n{{end}}原始提案是否成立，請對照下列獨立複核判定。\n\n## Critic 判定與後續處理\n{{$critiques := false}}{{range .input_review}}{{if eq .record.kind \"critique\"}}{{$source := index .record.input_review 0}}{{range $i, $decision := .record.decisions}}{{$critiques = true}}{{$finding := index $source.record.findings $i}}\n### {{$finding.summary}}\n位置：{{$finding.location}}\n複核判定：{{template \"verdict\" $decision.verdict}}；嚴重度：{{$decision.severity}}\n{{if $finding.detail}}原始影響／說明：{{$finding.detail}}\n{{end}}複核依據：{{$decision.rationale}}\n{{if $decision.missing_evidence}}待補證據：{{$decision.missing_evidence}}\n{{end}}建議：{{template \"next\" $decision.verdict}}\n{{end}}{{end}}{{end}}{{if not $critiques}}- 本次沒有獨立複核判定；請依原始提案與證據閱讀。\n{{end}}原始證據、缺口與來源對應見稽核附錄。\n\n## 完整審查證據（稽核附錄）\n{{with index . \"snapshot_coverage\"}}{{if eq .mode \"repository_snapshot\"}}\n## 完整快照覆蓋\n版本：{{.revision}}；快照：{{.snapshot_id}}；內容 SHA-256：{{.content_sha256}}\n批次 {{.batch}} / {{.batch_count}}。審查完成不代表程式正確；沒有 finding 不保證沒有缺陷。\n預期審查 {{len .expected}} 個檔案；已完成 {{len .completed}}；排除 {{len .excluded}}；未完成 {{len .uncompleted}}。\n預期範圍：{{range .expected}}{{.}} {{end}}\n已完成：{{range .completed}}{{.}} {{end}}\n排除：\n{{range .excluded}}- {{.path}}：{{.reason}}\n{{end}}未完成：\n{{range .uncompleted}}- {{.path}}：{{.reason}}\n{{end}}{{end}}{{end}}\n範圍：{{.scope.requested}}；已選 commit：{{.scope.resolved.selected_commit_count}}；base {{.scope.resolved.base}}；head {{.scope.resolved.head}}\n已執行 targeted Go tests：{{.test_verification.command}}；revision {{.test_verification.reviewed_revision}}；結果 passed={{.test_verification.passed}}；artifact {{.test_verification.artifact_id}}{{with index .test_verification \"output_artifact_id\"}}；完整輸出 {{.}}{{end}}\n審查覆蓋：{{.coverage}}。此判定描述審查證據的完整性，程式風險見逐項 findings 與 critic 判定。\n{{range .input_review}}{{if eq .record.kind \"review\"}}\n### 原始審查：{{template \"lens\" .record.lens}}\n工作集 {{.record.workset_key}}；revision {{.record.review_revision}}\n{{range $i, $f := .record.findings}}- finding {{$i}} [{{$f.severity}}] {{$f.location}}：{{$f.summary}}{{if $f.detail}}；{{$f.detail}}{{end}}；需 critic：{{$f.requires_critique}}；證據：{{range $f.evidence}}{{.}} {{end}}\n{{else}}- 無具體 findings。\n{{end}}{{range $i, $g := .record.gaps}}- 原始局部缺口 {{$i}} [{{$g.kind}}]：{{$g.description}}；缺少證據：{{$g.missing_evidence}}{{range $g.requested_evidence}}；要求來源 {{.path}} bytes={{.ranges}}{{end}}{{range $g.limitations}}；限制 [{{.kind}}] {{.detail}}{{end}}\n{{end}}{{range .record.invariant_assessments}}- invariant {{.invariant_id}}：{{.status}}；{{.summary}}{{with index . \"missing_evidence\"}}；缺少證據：{{.}}{{end}}\n{{end}}追溯：原始審查 task {{.task_id}}；payload SHA-256：{{.payload_sha256}}\n{{else}}{{$critic := .}}{{$source := index .record.input_review 0}}\n### 獨立複核：{{template \"lens\" $source.record.lens}}\n複核 revision：{{$source.record.review_revision}}\n{{range $i, $decision := .record.decisions}}{{$finding := index $source.record.findings $i}}\n#### {{$finding.summary}}\n位置：{{$finding.location}}\n- finding {{$decision.finding_index}}：{{template \"verdict\" $decision.verdict}} [{{$decision.severity}}] {{$decision.rationale}}；證據：{{range $decision.evidence}}{{.}} {{end}}{{if $decision.missing_evidence}}；未解證據：{{$decision.missing_evidence}}{{end}}\n{{end}}追溯：原始審查 task {{$source.task_id}} → 獨立複核 task {{$critic.task_id}}\n原始 payload SHA-256：{{$source.payload_sha256}}\n複核 payload SHA-256：{{$critic.payload_sha256}}\n{{end}}{{end}}\n跨工作集缺口處理：\n{{range .gap_resolutions}}- task {{.source_task_id}} gap {{.gap_index}}：{{.status}}；{{.explanation}}{{if .resolving_task_id}}；解答 task {{.resolving_task_id}}；證據：{{range .evidence}}{{.}} {{end}}{{end}}\n{{else}}- 無原始缺口。\n{{end}}\n\n有界同版補證（最多一輪）：\n{{range .supplement_outcomes}}- 原task {{.source_task_id}} gap {{.gap_index}} [{{.kind}}]；補充工作集 {{.workset_key}}{{range .limitations}}；限制 [{{.kind}}] {{.detail}}{{end}}\n{{else}}- 無補證請求。\n{{end}}讀取覆蓋不等同理解；補證不刪除原始缺口或 findings。\n",
+  "x-hufu-final-report": "{{define \"lens\"}}{{if eq . \"documentation-risk\"}}文件規範與一致性{{else if eq . \"documentation\"}}文件內容{{else if eq . \"runtime-integrity\"}}執行流程完整性{{else if eq . \"boundary-tui\"}}介面與邊界{{else if eq . \"security-tool\"}}工具安全性{{else if eq . \"noop\"}}無需深入審查{{else}}綜合審查{{end}}{{end}}{{define \"verdict\"}}{{if eq . \"confirmed\"}}已確認（confirmed）{{else if eq . \"downgraded\"}}嚴重度調降（downgraded）{{else if eq . \"rejected\"}}已駁回（rejected）{{else}}證據不足、尚未確認（unverified）{{end}}{{end}}{{define \"next\"}}{{if eq . \"confirmed\"}}依此判定的嚴重度處理已確認 finding，修正後重新驗證。{{else if eq . \"downgraded\"}}按 Critic 調整後的嚴重度評估與處理，不沿用原始提案等級。{{else if eq . \"rejected\"}}不列為已確認缺陷；保留原始提案與駁回理由供稽核。{{else}}先補齊證據再判定；目前不得宣稱此 finding 已確認或已排除。{{end}}{{end}}## 審查結論\n{{if eq .coverage \"complete\"}}審查證據覆蓋完整；程式風險依下列 findings 與獨立複核判定評估。\n{{else}}審查已完成，但仍有證據缺口；不能據此判定程式沒有問題。\n{{end}}Targeted Go tests：passed={{.test_verification.passed}}（revision {{printf \"%.12s\" .test_verification.reviewed_revision}}）。測試通過不代表所有 findings 已排除。{{if not .test_verification.passed}}\n**測試未通過（exit {{.test_verification.exit_code}}）；審查完成不代表程式通過測試。**\n測試診斷摘要：\n{{.test_verification.diagnostic}}\n{{end}}\n\n{{with index . \"snapshot_coverage\"}}{{if eq .mode \"repository_snapshot\"}}完整快照版本：{{printf \"%.12s\" .revision}}；批次 {{.batch}} / {{.batch_count}}。\n{{if index . \"inventory\"}}預期 {{.expected_count}}；已完成 {{.completed_count}}；排除 {{.excluded_count}}；未完成 {{.uncompleted_count}}。{{else}}預期 {{len .expected}}；已完成 {{len .completed}}；排除 {{len .excluded}}；未完成 {{len .uncompleted}}。明細見稽核附錄。{{end}}\n{{end}}{{end}}\n## Findings 摘要（原始提案）\n{{$findings := false}}{{range .input_review}}{{if eq .record.kind \"review\"}}{{range .record.findings}}{{$findings = true}}- [{{.severity}}] {{.summary}}\n  位置：{{.location}}{{if .requires_critique}}；需獨立複核{{end}}\n{{end}}{{end}}{{end}}{{if not $findings}}- 來源未提出具體 findings；此結果不代表程式沒有問題。\n{{end}}原始提案是否成立，請對照下列獨立複核判定。\n\n## Critic 判定與後續處理\n{{$critiques := false}}{{range .input_review}}{{if eq .record.kind \"critique\"}}{{$source := index .record.input_review 0}}{{range $i, $decision := .record.decisions}}{{$critiques = true}}{{$finding := index $source.record.findings $i}}\n### {{$finding.summary}}\n位置：{{$finding.location}}\n複核判定：{{template \"verdict\" $decision.verdict}}；嚴重度：{{$decision.severity}}\n{{if $finding.detail}}原始影響／說明：{{$finding.detail}}\n{{end}}複核依據：{{$decision.rationale}}\n{{if $decision.missing_evidence}}待補證據：{{$decision.missing_evidence}}\n{{end}}建議：{{template \"next\" $decision.verdict}}\n{{end}}{{end}}{{end}}{{if not $critiques}}- 本次沒有獨立複核判定；請依原始提案與證據閱讀。\n{{end}}原始證據、缺口與來源對應見稽核附錄。\n\n## 完整審查證據（稽核附錄）\n{{with index . \"snapshot_coverage\"}}{{if eq .mode \"repository_snapshot\"}}\n## 完整快照覆蓋\n版本：{{.revision}}；快照：{{.snapshot_id}}；內容 SHA-256：{{.content_sha256}}\n批次 {{.batch}} / {{.batch_count}}。審查完成不代表程式正確；沒有 finding 不保證沒有缺陷。\n{{with index . \"inventory\"}}完整覆蓋明細 artifact {{.id}}。\n{{else}}預期範圍：{{range .expected}}{{.}} {{end}}\n已完成：{{range .completed}}{{.}} {{end}}\n排除：\n{{range .excluded}}- {{.path}}：{{.reason}}\n{{end}}未完成：\n{{range .uncompleted}}- {{.path}}：{{.reason}}\n{{end}}{{end}}{{end}}{{end}}\n範圍：{{.scope.requested}}；已選 commit：{{.scope.resolved.selected_commit_count}}；base {{.scope.resolved.base}}；head {{.scope.resolved.head}}\n已執行 targeted Go tests：{{.test_verification.command}}；revision {{.test_verification.reviewed_revision}}；結果 passed={{.test_verification.passed}}；artifact {{.test_verification.artifact_id}}{{with index .test_verification \"output_artifact_id\"}}；完整輸出 {{.}}{{end}}\n審查覆蓋：{{.coverage}}。此判定描述審查證據的完整性，程式風險見逐項 findings 與 critic 判定。\n{{range .input_review}}{{if eq .record.kind \"review\"}}\n### 原始審查：{{template \"lens\" .record.lens}}\n工作集 {{.record.workset_key}}；revision {{.record.review_revision}}\n{{range $i, $f := .record.findings}}- finding {{$i}} [{{$f.severity}}] {{$f.location}}：{{$f.summary}}{{if $f.detail}}；{{$f.detail}}{{end}}；需 critic：{{$f.requires_critique}}；證據：{{range $f.evidence}}{{.}} {{end}}\n{{else}}- 無具體 findings。\n{{end}}{{range $i, $g := .record.gaps}}- 原始局部缺口 {{$i}} [{{$g.kind}}]：{{$g.description}}；缺少證據：{{$g.missing_evidence}}{{range $g.requested_evidence}}；要求來源 {{.path}} bytes={{.ranges}}{{end}}{{range $g.limitations}}；限制 [{{.kind}}] {{.detail}}{{end}}\n{{end}}{{range .record.invariant_assessments}}- invariant {{.invariant_id}}：{{.status}}；{{.summary}}{{with index . \"missing_evidence\"}}；缺少證據：{{.}}{{end}}\n{{end}}追溯：原始審查 task {{.task_id}}；payload SHA-256：{{.payload_sha256}}\n{{else}}{{$critic := .}}{{$source := index .record.input_review 0}}\n### 獨立複核：{{template \"lens\" $source.record.lens}}\n複核 revision：{{$source.record.review_revision}}\n{{range $i, $decision := .record.decisions}}{{$finding := index $source.record.findings $i}}\n#### {{$finding.summary}}\n位置：{{$finding.location}}\n- finding {{$decision.finding_index}}：{{template \"verdict\" $decision.verdict}} [{{$decision.severity}}] {{$decision.rationale}}；證據：{{range $decision.evidence}}{{.}} {{end}}{{if $decision.missing_evidence}}；未解證據：{{$decision.missing_evidence}}{{end}}\n{{end}}追溯：原始審查 task {{$source.task_id}} → 獨立複核 task {{$critic.task_id}}\n原始 payload SHA-256：{{$source.payload_sha256}}\n複核 payload SHA-256：{{$critic.payload_sha256}}\n{{end}}{{end}}\n跨工作集缺口處理：\n{{range .gap_resolutions}}- task {{.source_task_id}} gap {{.gap_index}}：{{.status}}；{{.explanation}}{{if .resolving_task_id}}；解答 task {{.resolving_task_id}}；證據：{{range .evidence}}{{.}} {{end}}{{end}}\n{{else}}- 無原始缺口。\n{{end}}\n\n有界同版補證（最多一輪）：\n{{range .supplement_outcomes}}- 原task {{.source_task_id}} gap {{.gap_index}} [{{.kind}}]；補充工作集 {{.workset_key}}{{range .limitations}}；限制 [{{.kind}}] {{.detail}}{{end}}\n{{else}}- 無補證請求。\n{{end}}讀取覆蓋不等同理解；補證不刪除原始缺口或 findings。\n",
   "x-hufu-fixed-collections": [
     {
       "items_pointer": "/gap_resolutions",
@@ -2695,6 +2674,7 @@
     }
   },
   "x-hufu-evidence-keys": {
+    "runtime_owned_files_read": true,
     "pointers": [
       "/gap_resolutions/*/evidence/*"
     ]

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -159,11 +161,15 @@ func testTeamAuditDispatch(t *testing.T, rejected, invalidSource, supplement boo
 
 func TestTeamPrepareDispatchExecutesImmutableWorksetAndGoVerifier(t *testing.T) {
 	for _, failing := range []bool{false, true} {
-		t.Run(fmt.Sprint(failing), func(t *testing.T) { testPrepareDispatch(t, failing) })
+		t.Run(fmt.Sprint(failing), func(t *testing.T) { testPrepareDispatch(t, failing, false) })
 	}
 }
 
-func testPrepareDispatch(t *testing.T, failing bool) {
+func TestTeamPrepareDispatchPreservesLargeSnapshotInventory(t *testing.T) {
+	testPrepareDispatch(t, false, true)
+}
+
+func testPrepareDispatch(t *testing.T, failing, largeSnapshot bool) {
 	t.Helper()
 	teamDir, err := filepath.Abs("..")
 	if err != nil {
@@ -206,6 +212,11 @@ func testPrepareDispatch(t *testing.T, failing bool) {
 	}
 	write(".gitignore", "docs/tmp\n")
 	write("docs/reference/belief-state-validation.md", "The residual local scratch proposal was compared with the integrated plan and\nremoved from `docs/tmp`; that directory contains no remaining proposal files\nand no path under it is tracked.\n")
+	if largeSnapshot {
+		for i := range 4000 {
+			write(fmt.Sprintf("docs/%04d-%s.md", i, strings.Repeat("inventory", 15)), "excluded documentation\n")
+		}
+	}
 	git("add", ".")
 	git("commit", "-m", "feat: change value")
 	// A failing dirty test must be ignored by the reviewed-revision verifier.
@@ -215,17 +226,26 @@ func testPrepareDispatch(t *testing.T, failing bool) {
 		t.Fatal(err)
 	}
 	loaded.ExecutionRouteConfigs = map[string]config.ExecutionRouteConfig{"review": {Candidates: []string{"ollama/fixture"}}}
-	coordinator, err := team.NewCoordinator(loaded, "", "", nil, nil, team.RoleModels{Sidecar: "ollama/fixture"}, 0, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
+	coordinator, err := team.NewCoordinator(loaded, "", "", nil, nil, team.RoleModels{}, 0, false, false, false, nil, nil, nil, false, "", true, false, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = coordinator.Close() })
-	snapshot, err := team.ResolveRunInputSnapshot(loaded.RunInputDefinitions, []team.RunInputAssignment{{Name: "review.scope", RawValue: []byte(`{"kind":"last_n","count":1,"history":"first_parent","head":"HEAD","commit_type":"feat"}`), Source: team.RunInputSourceCLI}}, "run-prepare", "invocation-prepare", loaded.Config.Name)
+	scopeInput := `{"kind":"last_n","count":1,"history":"first_parent","head":"HEAD","commit_type":"feat"}`
+	if largeSnapshot {
+		scopeInput = `{"kind":"repository_snapshot","history":"first_parent","head":"HEAD"}`
+	}
+	snapshot, err := team.ResolveRunInputSnapshot(loaded.RunInputDefinitions, []team.RunInputAssignment{{Name: "review.scope", RawValue: []byte(scopeInput), Source: team.RunInputSourceCLI}}, "run-prepare", "invocation-prepare", loaded.Config.Name)
 	if err != nil {
 		t.Fatal(err)
 	}
 	coordinator.SetSessionData(&team.SessionData{ActiveRunInputSnapshotID: snapshot.ID, RunInputSnapshots: []team.RunInputSnapshot{*snapshot}, WorkflowState: team.PhasePrepare})
 	coordinator.TaskTracker().TodoList().SetRunID("run-prepare")
+	if largeSnapshot {
+		if err := coordinator.PrepareContextPreflightContext(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	output, err := coordinator.ExecuteTasks(t.Context(), []team.TaskDef{
 		{Agent: "reviewer", ContractID: "produce-workset", Goal: "Produce immutable worksets"},
 		{Agent: "reviewer", ContractID: "verify-targeted-go-tests", Goal: "Run snapshot-pinned tests"},
@@ -244,6 +264,34 @@ func testPrepareDispatch(t *testing.T, failing bool) {
 	}
 	if items[1].TypedResult.RuntimeOutputs["targeted_go_tests"] == nil || len(items[0].TypedResult.Artifacts) < 3 {
 		t.Fatal("PREPARE omitted test receipt or routed workset artifacts")
+	}
+	if largeSnapshot {
+		var scope snapshotAttestation
+		if err := json.Unmarshal(raw(t, items[0].TypedResult.RuntimeOutputs["scope"]), &scope); err != nil {
+			t.Fatal(err)
+		}
+		if scope.Snapshot == nil || scope.Snapshot.Inventory == nil || len(scope.Snapshot.Files) != 0 || scope.Snapshot.FileCount != 4005 {
+			t.Fatalf("missing compact inventory reference: %+v", scope.Snapshot)
+		}
+		store, err := team.NewFileArtifactStore(loaded.Workspace, loaded.Workspace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader, err := store.Open(t.Context(), scope.Snapshot.Inventory.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var inventory snapshotIdentity
+		err = json.NewDecoder(reader).Decode(&inventory)
+		_ = reader.Close()
+		if err != nil || len(inventory.Files) != scope.Snapshot.FileCount || inventory.ID != scope.Snapshot.ID || scope.Snapshot.Inventory.Bytes <= 900*1024 {
+			t.Fatalf("durable inventory lost: files=%d err=%v", len(inventory.Files), err)
+		}
+		if _, err := checkedSnapshotFiles(&snapshotAttestation{Satisfied: true, Resolved: scope.Resolved, Snapshot: &inventory}); err != nil {
+			t.Fatal(err)
+		}
+		assertPrepareFanoutAdmission(t, coordinator, items[0])
+		return
 	}
 	var tests struct {
 		Passed     bool   `json:"passed"`
@@ -316,4 +364,93 @@ func testPrepareDispatch(t *testing.T, failing bool) {
 	if empty == 0 || assigned == 0 {
 		t.Fatalf("embedded reports missed empty or assigned scopes: empty=%d assigned=%d", empty, assigned)
 	}
+}
+
+// Stop after the real admission/receipt boundary, before any model is called.
+func assertPrepareFanoutAdmission(t *testing.T, coordinator *team.Coordinator, producer *team.TodoItem) {
+	t.Helper()
+	stop := errors.New("fan-out admitted; stop before model execution")
+	var admitted []team.TaskDef
+	originalReceipt := raw(t, producer.ExecutionReceipt)
+	originalArtifacts := raw(t, producer.TypedResult.Artifacts)
+	coordinator.SetStepConfirmFn(func(_ context.Context, tasks []team.TaskDef) (bool, error) {
+		admitted = tasks
+		receipts := map[string]*team.WorksetExpansionReceipt{}
+		for _, item := range coordinator.TaskTracker().TodoList().Items() {
+			if item.WorksetReceipt != nil {
+				receipts[item.WorksetReceipt.WorksetID] = item.WorksetReceipt
+			}
+		}
+		if len(receipts) != 3 {
+			t.Fatalf("expected three route receipts, got %d", len(receipts))
+		}
+		children := 0
+		for _, item := range coordinator.TaskTracker().TodoList().Items() {
+			if item.WorksetBinding == nil {
+				continue
+			}
+			children++
+			receipt := receipts[item.WorksetBinding.WorksetID]
+			if receipt == nil || receipt.Children[item.WorksetBinding.ItemKey] != item.ID || receipt.SourceArtifactID != item.WorksetBinding.SourceArtifactID {
+				t.Fatal("fan-out receipt does not assign child")
+			}
+		}
+		if children != len(tasks) {
+			t.Fatalf("receipt children=%d admitted=%d", children, len(tasks))
+		}
+		return false, stop
+	})
+	_, err := coordinator.ExecuteTasks(t.Context(), []team.TaskDef{
+		{Agent: "reviewer", ContractID: "review-primary-workset", Goal: "Review the primary workset."},
+		{Agent: "documentation-reviewer", ContractID: "review-documentation-workset", Goal: "Review the documentation workset."},
+		{Agent: "critic", ContractID: "review-documentation-escalation", Goal: "Review the documentation escalation workset."},
+	})
+	if !errors.Is(err, stop) {
+		t.Fatalf("three-route fan-out did not reach model boundary: %v", err)
+	}
+	routes := map[string]int{}
+	shared := map[string]int{}
+	for _, task := range admitted {
+		routes[task.ContractID]++
+		if task.WorksetBinding == nil || task.WorksetBinding.SourceArtifactID == "" {
+			t.Fatal("missing receipt-bound workset")
+		}
+		for _, ref := range task.WorksetBinding.Inputs {
+			if ref.Kind != "review_evidence_inventory" || len(task.WorksetBinding.TouchedPaths) != 0 {
+				continue
+			}
+			if ref.TaskID != producer.ID || ref.RunID != producer.TypedResult.Artifacts[0].RunID || ref.Attempt != producer.TypedResult.Attempt {
+				t.Fatalf("producer occurrence changed: %+v", ref)
+			}
+			shared[ref.ID]++
+		}
+	}
+	if routes["review-primary-workset"] == 0 || routes["review-documentation-workset"] != 1 || routes["review-documentation-escalation"] != 1 {
+		t.Fatalf("routes=%v", routes)
+	}
+	collision := ""
+	for id, count := range shared {
+		if count == 2 {
+			collision = id
+		}
+	}
+	if collision == "" {
+		t.Fatalf("fixture did not exercise shared empty inventory: %v", shared)
+	}
+	declarations := 0
+	for _, ref := range producer.TypedResult.Artifacts {
+		if ref.ID == collision {
+			declarations++
+		}
+	}
+	if declarations != 2 {
+		t.Fatalf("original declarations were lost: %d", declarations)
+	}
+	if !equalJSON(originalReceipt, raw(t, producer.ExecutionReceipt)) || !equalJSON(originalArtifacts, raw(t, producer.TypedResult.Artifacts)) {
+		t.Fatal("fan-out rewrote producer evidence")
+	}
+	if len(coordinator.TaskTracker().TodoList().Items()) != 2 {
+		t.Fatal("stopped admission left pending children")
+	}
+
 }

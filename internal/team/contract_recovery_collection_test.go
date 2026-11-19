@@ -18,10 +18,18 @@ import (
 )
 
 type contractCollectionFixtureOptions struct {
+	Accepted       bool
+	Verbatim       bool
+	ValidAccepted  bool
+	Dependents     bool
 	StringEnvelope bool
 	PriorGrant     bool
 	Endpoint       string
 	ArtifactKeys   bool
+	LongOutput     bool
+	Exhausted      bool
+	FrozenPaths    []string
+	PendingPeer    bool
 }
 
 func contractCollectionFixture(t *testing.T, response string, effect SideEffectClass, options ...contractCollectionFixtureOptions) (*Coordinator, *ResumeSource, string) {
@@ -30,9 +38,37 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 	if len(options) > 0 {
 		fixture = options[0]
 	}
+	if fixture.LongOutput {
+		var claims map[string]any
+		if err := json.Unmarshal([]byte(response), &claims); err != nil {
+			t.Fatal(err)
+		}
+		claims["summary"] = strings.Repeat("complete original findings; preserve all judgments. ", 120)
+		raw, err := json.Marshal(claims)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response = string(raw)
+	}
 	oldDocument := `{"type":"object","required":["findings"],"properties":{"findings":{"type":"array","maxItems":12,"items":{"type":"string"}}},"additionalProperties":false}`
 	if fixture.ArtifactKeys {
 		oldDocument = strings.TrimSuffix(oldDocument, "}") + `,"x-hufu-evidence-keys":{"pointers":["/findings/*"],"runtime_owned_files_read":true}}`
+		if fixture.Accepted {
+			oldDocument = strings.Replace(oldDocument, `"runtime_owned_files_read":true`, `"runtime_owned_files_read":false`, 1)
+		}
+	}
+	if fixture.FrozenPaths != nil {
+		var document map[string]any
+		if err := json.Unmarshal([]byte(oldDocument), &document); err != nil {
+			t.Fatal(err)
+		}
+		document["properties"].(map[string]any)["locations"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+		document["required"] = append(document["required"].([]any), "locations")
+		raw, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldDocument = string(raw)
 	}
 	old, err := CompileResultContractDocument("research.json", []byte(oldDocument))
 	if err != nil {
@@ -41,6 +77,12 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 	ref := old.ref(true)
 	definition := TaskDef{ID: "research", Agent: "worker", Phase: PhasePrepare, SideEffect: effect, Recovery: RecoveryManual,
 		Execution: ExecutionContract{RequiresResult: true}, VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: []TaskResultAssertion{{Pointer: "/structured_payload/value/findings", Op: "min_items", Value: 14}}}, ResultContract: &ref, ResultContractSpec: &resultContractSpec{Schema: ref.ID, RequireStructured: true}}
+	if fixture.Accepted {
+		definition.VerifySpec.TaskResultAssertions[0].Value = 2
+	}
+	if fixture.Verbatim {
+		definition.OutputMode = TaskOutputModeVerbatim
+	}
 	hash, err := effectiveContractHash(definition.ID, definition.Agent, definition.Execution, definition.OutputMode, definition.SideEffect, definition.Recovery, definition.MaxRetries, definition.Action, definition.FanOut, definition.Optional, definition)
 	if err != nil {
 		t.Fatal(err)
@@ -50,14 +92,28 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 		t.Fatal(err)
 	}
 	var observedSource ArtifactRef
-	c, item, ctx, receipt := resultCollectionTaskFixture(t, cmp.Or(fixture.Endpoint, "http://127.0.0.1:1/v1"), fixture.Endpoint != "", func(spec *TodoSpec) {
+	var frozenBinding *WorksetBinding
+	c, item, ctx, receipt := resultCollectionIdentityFixture(t, cmp.Or(fixture.Endpoint, "http://127.0.0.1:1/v1"), fixture.Endpoint != "", func(spec *TodoSpec) {
 		spec.ContractID, spec.ContractHash, spec.Phase = definition.ID, hash, definition.Phase
+		spec.OutputMode = definition.OutputMode
 		spec.VerifySpec = definition.VerifySpec
 		spec.SideEffect, spec.Recovery, spec.ResultContract = effect, RecoveryManual, &ref
 		spec.RunInputSnapshotID, spec.RunInputSnapshotHash = snapshot.ID, snapshot.SnapshotHash
 		if fixture.ArtifactKeys {
 			spec.WorksetBinding = &WorksetBinding{WorksetID: "evidence", ItemKey: "sample", Inputs: []ArtifactRef{observedSource}, RequiredReads: []tools.ArtifactReadCoverage{{ArtifactID: observedSource.ID, SHA256: observedSource.SHA256, ByteSize: observedSource.ByteSize, Ranges: []tools.ArtifactByteRange{{Start: 0, End: observedSource.ByteSize}}}}}
 		}
+		if frozenBinding != nil {
+			spec.WorksetBinding = frozenBinding
+		}
+	}, func(c *Coordinator, spec *TodoSpec, ids []string) {
+		if frozenBinding == nil {
+			return
+		}
+		receipts, err := buildWorksetReceipts([]TaskDef{{WorksetBinding: frozenBinding}}, ids, c.executionRunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec.WorksetReceipt = receipts[frozenBinding.WorksetID]
 	}, func(c *Coordinator) {
 		if fixture.ArtifactKeys {
 			c.session.Agents["worker"].Tools = "view"
@@ -68,16 +124,45 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 		c.session.ResultContracts = map[string]*CompiledResultContract{ref.ID: old}
 		c.SetSessionData(&SessionData{RunInputSnapshots: []RunInputSnapshot{*snapshot}, ActiveRunInputSnapshotID: snapshot.ID})
 		c.session.WorkspaceVersion = WorkspaceVersionContext{Mode: versionstore.ModeOff, WorkspaceID: "metadata", ProjectID: "project", TeamName: "test", ControlRoot: c.session.Workspace, SubjectRoot: c.projectDir, StateDir: t.TempDir()}
+		if fixture.FrozenPaths != nil {
+			frozenBinding = collectionFrozenPathProducer(t, c, snapshot, &observedSource, fixture.FrozenPaths)
+		}
 	})
-	appendBranchEvent(t, c.eventStore, RunEvent{Type: string(EventRunInputsResolved), RunID: "run-test", Payload: mustProjectionJSON(t, snapshot)})
+	if fixture.FrozenPaths == nil {
+		appendBranchEvent(t, c.eventStore, RunEvent{Type: string(EventRunInputsResolved), RunID: "run-test", Payload: mustProjectionJSON(t, snapshot)})
+	}
 	receipt.RunInputSnapshotID, receipt.RunInputSnapshotHash = snapshot.ID, snapshot.SnapshotHash
 	if fixture.ArtifactKeys {
 		ctx, response = observeContractCollectionKeys(t, c, item, ctx, &receipt, response, observedSource)
+		if fixture.Accepted {
+			var body map[string]any
+			if err := json.Unmarshal([]byte(response), &body); err != nil {
+				t.Fatal(err)
+			}
+			if !fixture.ValidAccepted {
+				body["structured_payload"].(map[string]any)["findings"].([]any)[0] = "sha256-" + strings.Repeat("0", 64)
+			}
+			body["files_read"] = []FileRef{{Path: observedSource.ID}}
+			raw, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response = string(raw)
+		}
 	}
 	if fixture.StringEnvelope {
 		response = fmt.Sprintf(`{"result":%q}`, response)
 	}
-	cp, err := c.beginResultCollection(ctx, item.ID, receipt, "complete original research with every finding")
+	acceptedResponse := response
+	if fixture.Accepted && (fixture.PriorGrant || fixture.Exhausted) {
+		response = strings.Replace(response, `"status":"success"`, `"status":42`, 1)
+	}
+	workOutput, completedOutput := "complete original research with every finding", "complete original research"
+	if fixture.LongOutput {
+		workOutput = strings.Repeat(workOutput+"\n", 200)
+		completedOutput = workOutput
+	}
+	cp, err := c.beginResultCollection(ctx, item.ID, receipt, workOutput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,13 +188,72 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 			t.Fatal(err)
 		}
 	}
-	cp, err = c.blockResultCollection(ctx, cp, RepairFailureInvalidSchema)
-	if err != nil {
-		t.Fatal(err)
+	if fixture.Accepted {
+		if fixture.PriorGrant {
+			cp, err = c.blockResultCollection(ctx, cp, RepairFailureInvalidSchema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.recordCollectionStopReceipt(item.ID, &resultCollectionFailure{Reason: RepairFailureInvalidSchema, Checkpoint: cp, Cause: errors.New("original format rejection")})
+			c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "original format rejection", NeedsHuman, FailureProtocol, TaskBlocked, "complete original research")
+			c.executionRunID = "earlier-result-repair"
+			if err := c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), item.ID)); err != nil {
+				t.Fatal(err)
+			}
+			cp = currentResultCollection(c.todoItemByID(item.ID))
+			ctx, err = c.restoreCollectionContext(WithSessionResume(t.Context()), cp)
+			if err == nil {
+				cp, err = c.reserveResultCollection(ctx, cp, "earlier-granted-collector", []byte(`{"tools":[]}`))
+			}
+			if err == nil {
+				cp, err = c.recordCollectionResponse(ctx, cp, []byte(acceptedResponse))
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if fixture.Exhausted {
+			for cp.TurnsUsed < cp.TurnLimit {
+				raw, readErr := c.readCollectionBlob(ctx, cp, "response", cp.Response)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				_, rejection := c.decodeCollectionClaims(item.ID, raw)
+				if rejection == nil {
+					t.Fatal("exhausted fixture requires an actual rejected response")
+				}
+				cp, err = c.recordCollectionFormatFailure(ctx, cp, rejection)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cp, err = c.reserveResultCollection(ctx, cp, "spent-"+newTaskDispatchID(), []byte(`{"tools":[]}`))
+				if err == nil {
+					cp, err = c.recordCollectionResponse(ctx, cp, []byte(acceptedResponse))
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		cp, err = c.prepareCollectionClaims(ctx, cp)
+		if err == nil {
+			err = c.commitPreparedCollection(ctx, cp)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.finishProtocolRepair(ctx, c.todoItemByID(item.ID), definition, item.Agent, "ollama/test", c.GetTaskResult(item.ID), completedOutput); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		cp, err = c.blockResultCollection(ctx, cp, RepairFailureInvalidSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.recordCollectionStopReceipt(item.ID, &resultCollectionFailure{Reason: RepairFailureInvalidSchema, Checkpoint: cp, Cause: errors.New("original schema rejected claims")})
+		c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "original schema rejected claims", NeedsHuman, FailureProtocol, TaskBlocked, "complete original research")
 	}
-	c.recordCollectionStopReceipt(item.ID, &resultCollectionFailure{Reason: RepairFailureInvalidSchema, Checkpoint: cp, Cause: errors.New("original schema rejected claims")})
-	c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "original schema rejected claims", NeedsHuman, FailureProtocol, TaskBlocked, "complete original research")
-	if fixture.PriorGrant {
+	if fixture.PriorGrant && !fixture.Accepted {
 		c.executionRunID = "earlier-result-repair"
 		if err := c.authorizeOperatorResultRepair(WithResultOnlyRepair(t.Context(), item.ID)); err != nil {
 			t.Fatal(err)
@@ -126,6 +270,31 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 		c.recordCollectionStopReceipt(item.ID, &resultCollectionFailure{Reason: RepairFailureInvalidSchema, Checkpoint: cp, Cause: errors.New("same rejected claims")})
 		c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "same rejected claims", NeedsHuman, FailureProtocol, TaskBlocked, "complete original research")
 	}
+	if fixture.Dependents {
+		acceptedRepairDependents(t, c, item.ID, definition, snapshot, observedSource)
+	}
+	if fixture.PendingPeer {
+		pending := TodoSpec{Agent: item.Agent, Model: item.Model, ExecutionTarget: item.ExecutionTarget,
+			ContractID: definition.ID, ContractHash: item.ContractHash, Phase: item.Phase, SideEffect: SideEffectNone,
+			Recovery: RecoveryManual, Execution: definition.Execution, ResultContract: definition.ResultContract,
+			RunInputSnapshotID: snapshot.ID, RunInputSnapshotHash: snapshot.SnapshotHash}
+		if frozenBinding != nil {
+			producer := c.todoItemByID(frozenBinding.SourceArtifact.TaskID)
+			pending.ContractID, pending.ContractHash = producer.ContractID, producer.ContractHash
+			pending.Execution, pending.ResultContract = producer.Execution, producer.ResultContract
+		}
+		ids := c.taskTracker.TodoList().ReserveIDs(1)
+		projection, err := taskOccurrenceProjectionFromSpec(pending, ids[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.admitTaskOccurrence(t.Context(), projection, ids[0], 1); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.CommitTaskCreationResolved(t.Context(), []TodoSpec{pending}, ids); err != nil {
+			t.Fatal(err)
+		}
+	}
 	appendBranchEvent(t, c.eventStore, RunEvent{Type: string(EventWorkflowStateChanged), RunID: "run-test", Payload: []byte(`{"state":"PREPARE"}`)})
 	tree, err := LoadSessionTree(c.session.Workspace)
 	if err != nil {
@@ -134,7 +303,14 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 	if err := SaveSessionTree(c.session.Workspace, tree); err != nil {
 		t.Fatal(err)
 	}
-	next, err := CompileResultContractDocument("research.json", []byte(strings.Replace(oldDocument, `"maxItems":12,`, "", 1)))
+	nextDocument := strings.Replace(oldDocument, `"maxItems":12,`, "", 1)
+	if fixture.Accepted {
+		nextDocument = strings.Replace(oldDocument, `"runtime_owned_files_read":false`, `"runtime_owned_files_read":true`, 1)
+	}
+	if fixture.FrozenPaths != nil {
+		nextDocument = strings.TrimSuffix(nextDocument, "}") + `,"x-hufu-workset-paths":{"pointers":["/locations/*"],"format":"path_line"}}`
+	}
+	next, err := CompileResultContractDocument("research.json", []byte(nextDocument))
 	if err != nil {
 		t.Fatal(err)
 	}

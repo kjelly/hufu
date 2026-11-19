@@ -131,6 +131,47 @@ func TestRuntimeResultInputsBindFrozenWorksetValues(t *testing.T) {
 	}
 }
 
+func TestRuntimeResultInputsResolveWorksetOncePerSubmission(t *testing.T) {
+	c := newRecoveredArtifactCoordinator(t)
+	child := c.todoItemByID("2")
+	single, err := CompileResultContractDocument("single-binding.json", []byte(runtimeWorksetSchema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := c.eventStore.cacheHitCount
+	if _, err := c.resultRuntimeInputValues(single, child.ID); err != nil {
+		t.Fatal(err)
+	}
+	oneBindingReads := c.eventStore.cacheHitCount - before
+	before = c.eventStore.cacheHitCount
+	document := strings.Replace(runtimeWorksetSchema, `"scope":{"type":"string"}`, `"scope":{"type":"string"},"copy":{"type":"string"}`, 1)
+	document = strings.Replace(document, `"output":"label"}]`, `"output":"label"},{"target":"/record/copy","source_kind":"workset_binding","output":"label"}]`, 1)
+	compiled, err := CompileResultContractDocument("multiple-bindings.json", []byte(document))
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := c.resultRuntimeInputValues(compiled, child.ID)
+	if reads := c.eventStore.cacheHitCount - before; reads != oneBindingReads {
+		t.Fatalf("two scalars required %d event reads, one required %d", reads, oneBindingReads)
+	}
+	if err != nil || values["/record/scope"] != "frozen-value" || values["/record/copy"] != "frozen-value" {
+		t.Fatalf("bindings=%v err=%v", values, err)
+	}
+	// A later call must revalidate the frozen row, with no cached authority
+	// surviving a submission or allowing a mutated consumer binding.
+	list := c.taskTracker.TodoList()
+	list.mu.Lock()
+	for _, item := range list.items {
+		if item.ID == child.ID {
+			item.WorksetBinding.Bindings["label"] = "changed"
+		}
+	}
+	list.mu.Unlock()
+	if _, err := c.resultRuntimeInputValues(compiled, child.ID); err == nil {
+		t.Fatal("binding proof was reused across submissions")
+	}
+}
+
 func TestRuntimeResultInputsRecoveredWorksetValues(t *testing.T) {
 	c := newRecoveredArtifactCoordinator(t)
 	compiled, err := CompileResultContractDocument("workset-result.json", []byte(runtimeWorksetSchema))

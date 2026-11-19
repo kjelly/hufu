@@ -9,6 +9,18 @@ import (
 )
 
 type readOnlyActionRepairKey struct{}
+type unstartedActionConsumerUpgradeKey struct{}
+
+// WithUnstartedActionConsumerUpgrade selects the new schema for a static
+// consumer that has never been instantiated in the source lineage.
+func WithUnstartedActionConsumerUpgrade(ctx context.Context) context.Context {
+	return context.WithValue(ctx, unstartedActionConsumerUpgradeKey{}, true)
+}
+
+func actionConsumerUpgradeRequested(ctx context.Context) bool {
+	selected, _ := ctx.Value(unstartedActionConsumerUpgradeKey{}).(bool)
+	return selected
+}
 
 // WithReadOnlyActionRepair explicitly selects a failed native action and its
 // changed Go program. A shared resolver program may also change, but its frozen
@@ -112,7 +124,7 @@ func validateActionRepairProof(events []RunEvent, tasks []*TodoItem, plan *Contr
 	if proof == nil {
 		return nil
 	}
-	if plan.WorkRetry != nil || plan.Repaired != 0 || len(plan.ContractChanges) != 0 || !goProgramIdentity(proof.AcceptedProvider) || proof.AcceptedProvider == proof.OriginalProvider ||
+	if plan.WorkRetry != nil || plan.Repaired != 0 || !goProgramIdentity(proof.AcceptedProvider) || proof.AcceptedProvider == proof.OriginalProvider ||
 		!slices.IsSorted(proof.SharedCapabilities) || !slices.Contains(proof.SharedCapabilities, proof.Capability) {
 		return fmt.Errorf("invalid read-only action repair proof")
 	}
@@ -154,6 +166,42 @@ func validateActionRepairProof(events []RunEvent, tasks []*TodoItem, plan *Contr
 	}
 	if !selected {
 		return fmt.Errorf("action repair must retry the selected failed action")
+	}
+	return nil
+}
+
+func validateUnstartedActionConsumers(tasks []*TodoItem, events []RunEvent, changes []ContractRecoveryChange) error {
+	if len(changes) == 0 {
+		return nil
+	}
+	started := make(map[string]string)
+	for _, task := range tasks {
+		if task != nil && task.ContractID != "" {
+			started[normalizedName(task.ContractID)] = task.ID
+		}
+	}
+	for _, event := range events {
+		if event.Type != string(EventTaskCreated) && event.Type != string(EventTaskPlanned) {
+			continue
+		}
+		var occurrence struct {
+			ContractID string `json:"contract_id"`
+		}
+		if err := json.Unmarshal(event.Payload, &occurrence); err != nil {
+			return fmt.Errorf("read historical task %s contract: %w", event.TaskID, err)
+		}
+		if occurrence.ContractID != "" {
+			started[normalizedName(occurrence.ContractID)] = event.TaskID
+		}
+	}
+	for _, change := range changes {
+		id, static := strings.CutPrefix(change.Owner, "contract:")
+		if !static || id == "" || change.Original.ID == "" || change.Original.ID != change.Accepted.ID || change.Original.RequireStructured != change.Accepted.RequireStructured {
+			return fmt.Errorf("action repair cannot change result owner, schema name or requirement for %s", change.Owner)
+		}
+		if task, exists := started[normalizedName(id)]; exists {
+			return fmt.Errorf("action repair cannot upgrade started consumer %s (task %s)", id, task)
+		}
 	}
 	return nil
 }

@@ -14,7 +14,8 @@ type ContractRecoveryChange struct {
 	Accepted ResultContractRef `json:"accepted"`
 }
 
-func (c *Coordinator) describeContractRecovery(plan *ContractRecoveryPlan, source *SessionData, old, current *ExecutionPolicySnapshot) {
+func contractRecoveryChanges(old, current *ExecutionPolicySnapshot) []ContractRecoveryChange {
+	var changes []ContractRecoveryChange
 	oldRefs := map[string]ResultContractRef{}
 	for _, binding := range old.ResultContracts {
 		oldRefs[binding.Owner] = recoveryBindingRef(binding)
@@ -22,10 +23,15 @@ func (c *Coordinator) describeContractRecovery(plan *ContractRecoveryPlan, sourc
 	for _, binding := range current.ResultContracts {
 		ref := recoveryBindingRef(binding)
 		if previous := oldRefs[binding.Owner]; previous != ref {
-			plan.ContractChanges = append(plan.ContractChanges, ContractRecoveryChange{Owner: binding.Owner, Original: previous, Accepted: ref})
+			changes = append(changes, ContractRecoveryChange{Owner: binding.Owner, Original: previous, Accepted: ref})
 		}
 	}
-	slices.SortFunc(plan.ContractChanges, func(a, b ContractRecoveryChange) int { return cmp.Compare(a.Owner, b.Owner) })
+	slices.SortFunc(changes, func(a, b ContractRecoveryChange) int { return cmp.Compare(a.Owner, b.Owner) })
+	return changes
+}
+
+func (c *Coordinator) describeContractRecovery(plan *ContractRecoveryPlan, source *SessionData, old, current *ExecutionPolicySnapshot) {
+	plan.ContractChanges = contractRecoveryChanges(old, current)
 	patches := map[string]*ContractRecoveryTask{}
 	for i := range plan.Tasks {
 		patches[plan.Tasks[i].ID] = &plan.Tasks[i]

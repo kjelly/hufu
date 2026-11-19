@@ -23,11 +23,13 @@ func contractResultRepairID(ctx context.Context) string {
 // retaining the original sealed work, transcript, inputs and consumed budget.
 // Only a validated contract_recovery_created event can establish this proof.
 type ResultCollectionContractUpgrade struct {
-	Original         *ResultCollectionCheckpoint `json:"original"`
-	OriginalContract ResultContractRef           `json:"original_contract"`
-	AcceptedContract ResultContractRef           `json:"accepted_contract"`
-	AcceptedPolicy   string                      `json:"accepted_policy"`
-	SourceTaskSHA256 string                      `json:"source_task_sha256"`
+	SourceOrigin     *ResultCollectionSourceOrigin `json:"source_origin,omitempty"`
+	AcceptedResult   *AcceptedResultRepair         `json:"accepted_result,omitempty"`
+	Original         *ResultCollectionCheckpoint   `json:"original"`
+	OriginalContract ResultContractRef             `json:"original_contract"`
+	AcceptedContract ResultContractRef             `json:"accepted_contract"`
+	AcceptedPolicy   string                        `json:"accepted_policy"`
+	SourceTaskSHA256 string                        `json:"source_task_sha256"`
 }
 
 func validateCollectionContractUpgrade(cp *ResultCollectionCheckpoint) error {
@@ -36,15 +38,23 @@ func validateCollectionContractUpgrade(cp *ResultCollectionCheckpoint) error {
 		return nil
 	}
 	o := p.Original
-	if o == nil || o.ContractUpgrade != nil || validateResultCollectionCheckpoint(o) != nil || o.State == ResultCollectionCommitted ||
+	accepted := p.AcceptedResult != nil
+	if o == nil || o.ContractUpgrade != nil || validateResultCollectionCheckpoint(o) != nil || (o.State == ResultCollectionCommitted) != accepted ||
 		!validCollectionDigest(p.SourceTaskSHA256) || p.OriginalContract.ID == "" || p.AcceptedContract.ID == "" || !validCollectionDigest(p.OriginalContract.SchemaSHA256) || !validCollectionDigest(p.AcceptedContract.SchemaSHA256) ||
-		p.OriginalContract == p.AcceptedContract || p.AcceptedPolicy != cp.PolicySHA256 || p.AcceptedPolicy == o.PolicySHA256 ||
+		(!accepted && (p.OriginalContract == p.AcceptedContract || p.AcceptedPolicy == o.PolicySHA256)) || p.AcceptedPolicy != cp.PolicySHA256 ||
 		cp.BranchID == o.BranchID || cp.Work != o.Work || cp.SourceRunID != o.SourceRunID || cp.TaskID != o.TaskID || cp.Agent != o.Agent ||
 		cp.Attempt != o.Attempt || cp.ModelExecutionID != o.ModelExecutionID || cp.ExecutionTarget != o.ExecutionTarget || cp.FanoutLeaf ||
 		cp.WorkOccurrenceRevision != o.WorkOccurrenceRevision || cp.WorkDispatchID != o.WorkDispatchID ||
 		cp.InputsID != o.InputsID || cp.InputsSHA256 != o.InputsSHA256 || cp.WorkspaceIdentitySHA256 != o.WorkspaceIdentitySHA256 ||
 		cp.TurnsUsed < o.TurnsUsed || cp.TurnLimit < o.TurnLimit {
 		return fmt.Errorf("invalid collection contract-upgrade proof")
+	}
+	if accepted && !validAcceptedResultRepair(p.AcceptedResult) {
+		return fmt.Errorf("invalid accepted-result repair proof")
+	}
+	if p.SourceOrigin != nil && (!accepted || p.SourceOrigin.EventID == "" || !validCollectionDigest(p.SourceOrigin.EventHash) ||
+		!validCollectionDigest(p.SourceOrigin.TaskSHA256) || !validCollectionDigest(p.SourceOrigin.ContractHash)) {
+		return fmt.Errorf("invalid accepted collection source origin")
 	}
 	return nil
 }
@@ -87,6 +97,7 @@ func (c *Coordinator) assessContractResultRepair(ctx context.Context, source *Re
 		return nil
 	}
 	item := todoItemByID(source.Session.Tasks, id)
+	accepted := item != nil && item.Status == TaskDone
 	if legacySubmissionTarget(item) {
 		proof, err := c.assessLegacySubmission(ctx, source, item, plan)
 		if err != nil {
@@ -101,32 +112,69 @@ func (c *Coordinator) assessContractResultRepair(ctx context.Context, source *Re
 		}
 		return fmt.Errorf("legacy task missing from plan")
 	}
-	if err := validateCollectionRecoveryTarget(item); err != nil {
+	validateTarget := validateCollectionRecoveryTarget
+	if accepted {
+		validateTarget = validateAcceptedResultRepairTarget
+	}
+	if err := validateTarget(item); err != nil {
 		return err
 	}
-	if item.ResultContract == nil || currentResultCollection(item).LegacySubmission != nil || currentResultCollection(item).ContractUpgrade != nil || currentResultCollection(item).State == ResultCollectionCommitted {
+	if item.ResultContract == nil || currentResultCollection(item).LegacySubmission != nil || currentResultCollection(item).ContractUpgrade != nil {
 		return fmt.Errorf("contract result repair requires an original uncommitted structured collection")
 	}
 	if _, active := c.activeTaskResultOccurrence(id); active {
 		return errTaskResultStale
+	}
+	originalSource, originalItem, origin, err := retainedCollectionOrigin(source, item)
+	if err != nil {
+		return fmt.Errorf("selected collection origin: %w", err)
 	}
 	store, err := OpenEventStoreReadOnly(c.session.Workspace)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = store.Close() }()
-	restore := c.installResumeValidationSource(source, store)
+	var currentRuntimeInputs map[string]any
+	if origin != nil {
+		err := func() error {
+			restoreCurrent := c.installResumeValidationSource(source, store)
+			defer restoreCurrent()
+			if item.WorksetBinding != nil && item.WorksetBinding.SourceArtifact.ID != "" {
+				if _, err := c.verifiedResultWorksetBinding(ctx, id); err != nil {
+					return err
+				}
+			}
+			for _, patch := range plan.Tasks {
+				if patch.ID == id && patch.ResultContract != nil {
+					compiled := c.session.ResultContracts[patch.ResultContract.ID]
+					var err error
+					currentRuntimeInputs, err = c.resultRuntimeInputValues(compiled, id)
+					return err
+				}
+			}
+			return errResultCollectionStale
+		}()
+		if err != nil {
+			return fmt.Errorf("retained collection current sources: %w", err)
+		}
+	}
+	restore := c.installResumeValidationSource(originalSource, store)
 	defer restore()
-	cp := currentResultCollection(item)
-	if cp.PolicySHA256 != plan.SourcePolicy || cp.BranchID != source.BranchID {
+	previousOrigin := c.collectionOriginValidation
+	if origin != nil {
+		c.collectionOriginValidation = &collectionOriginValidation{source: originalSource, store: store, cp: currentResultCollection(originalItem)}
+	}
+	defer func() { c.collectionOriginValidation = previousOrigin }()
+	cp := currentResultCollection(originalItem)
+	if cp.PolicySHA256 != originalSource.Session.ExecutionPolicySnapshot.ConfigurationHash || cp.BranchID != originalSource.BranchID {
 		return errResultCollectionStale
 	}
-	snapshot := contractRecoveryInputSnapshot(item, source.Session)
+	snapshot := contractRecoveryInputSnapshot(originalItem, originalSource.Session)
 	if snapshot == nil || ValidateRunInputSnapshot(snapshot) != nil || snapshot.Team != c.session.Config.Name ||
 		snapshot.SnapshotHash != cp.InputsSHA256 || snapshot.ID != cp.InputsID {
 		return fmt.Errorf("contract result repair requires verified frozen inputs")
 	}
-	work, err := c.loadCollectionWorkAgainstPolicy(ctx, item, cp, source.Session.ExecutionPolicySnapshot, source.Session)
+	work, err := c.loadCollectionWorkAgainstPolicy(ctx, originalItem, cp, originalSource.Session.ExecutionPolicySnapshot, originalSource.Session)
 	if err != nil {
 		return err
 	}
@@ -139,10 +187,10 @@ func (c *Coordinator) assessContractResultRepair(ctx context.Context, source *Re
 	if _, err := c.restoreTranscriptEvidence(ctx, &work.Receipt, cp.SourceRunID); err != nil {
 		return err
 	}
-	if _, err := collectionContextManifest(item, cp, &work.Receipt); err != nil {
+	if _, err := collectionContextManifest(originalItem, cp, &work.Receipt); err != nil {
 		return err
 	}
-	if err := c.validateSelectedRepairContext(ctx, item, work.Receipt.ContextManifest); err != nil {
+	if err := c.validateSelectedRepairContext(ctx, originalItem, work.Receipt.ContextManifest); err != nil {
 		return err
 	}
 	for _, blob := range []struct {
@@ -155,12 +203,17 @@ func (c *Coordinator) assessContractResultRepair(ctx context.Context, source *Re
 			}
 		}
 	}
+	return c.assessCollectionRepairBinding(ctx, plan, originalItem, work, origin, currentRuntimeInputs)
+}
+
+func (c *Coordinator) assessCollectionRepairBinding(ctx context.Context, plan *ContractRecoveryPlan, item *TodoItem, work *resultCollectionWork, origin *ResultCollectionSourceOrigin, currentRuntimeInputs map[string]any) error {
+	cp, accepted := currentResultCollection(item), item.Status == TaskDone
 	for i := range plan.Tasks {
 		patch := &plan.Tasks[i]
-		if patch.ID != id {
+		if patch.ID != item.ID {
 			continue
 		}
-		if patch.ResultContract == nil || *patch.ResultContract == *item.ResultContract {
+		if patch.ResultContract == nil || !accepted && *patch.ResultContract == *item.ResultContract {
 			return fmt.Errorf("selected collection result contract is unchanged")
 		}
 		// New runtime-owned fields must have verified frozen sources before a
@@ -169,11 +222,23 @@ func (c *Coordinator) assessContractResultRepair(ctx context.Context, source *Re
 		if compiled == nil {
 			return fmt.Errorf("recovery target result schema is unavailable")
 		}
-		if _, err := c.resultRuntimeInputValues(compiled, id); err != nil {
+		inputs, err := c.resultRuntimeInputValues(compiled, item.ID)
+		if err != nil {
 			return fmt.Errorf("recovery target runtime inputs: %w", err)
 		}
-		patch.Collection = &ResultCollectionContractUpgrade{Original: cp, OriginalContract: *item.ResultContract,
+		if origin != nil && !sameCanonicalEvidence(inputs, currentRuntimeInputs) {
+			return fmt.Errorf("retained collection runtime sources changed: %w", errResultCollectionStale)
+		}
+		patch.Collection = &ResultCollectionContractUpgrade{SourceOrigin: origin, Original: cp, OriginalContract: *item.ResultContract,
 			AcceptedContract: *patch.ResultContract, AcceptedPolicy: plan.Policy.ConfigurationHash, SourceTaskSHA256: patch.SourceSHA256}
+		if accepted {
+			proof, err := c.assessAcceptedResultRepair(ctx, item, cp, work, compiled)
+			if err != nil {
+				return err
+			}
+			patch.Collection.AcceptedResult = proof
+			patch.Reason = "accepted_reference_invalid"
+		}
 		return nil
 	}
 	return fmt.Errorf("selected collection has no static recovery task")
@@ -187,6 +252,10 @@ func projectContractResultRepair(item *TodoItem, patch ContractRecoveryTask, pla
 	cp.Revision++
 	cp.Prepared, cp.Accepted = nil, nil
 	cp.State = ResultCollectionBlocked
+	if patch.Collection.AcceptedResult != nil {
+		cp.Response = nil // Original responses remain immutable in the proof.
+		cp.FailureReason = RepairFailureInvalidSchema
+	}
 	if cp.FailureReason == "" {
 		cp.FailureReason = RepairFailureInvalidSchema
 	}
@@ -194,6 +263,18 @@ func projectContractResultRepair(item *TodoItem, patch ContractRecoveryTask, pla
 	// The child requires ordinary resume --repair-result and its normal checks.
 	r := cloneExecutionReceipt(item.ExecutionReceipt)
 	r.ResultCollection = cp
+	if patch.Collection.AcceptedResult != nil {
+		if r.RepairProvenance == nil {
+			r.RepairProvenance = &RepairProvenance{}
+		}
+		// Retain spent reservations, prior grants and history. Only the child's
+		// active submission is reopened; the original success remains durable.
+		r.RepairProvenance.Attempted, r.RepairProvenance.Success = true, false
+		r.RepairProvenance.RepairAttempts, r.RepairProvenance.FailureReason = cp.TurnsUsed, RepairFailureInvalidSchema
+		r.RepairProvenance.SubmittedResult = nil
+		r.RepairProvenance.PreparedCandidateSHA256 = ""
+		item.FailureEvent = &FailureEventPayload{TaskID: item.ID, Phase: "protocol", FailureClass: FailureProtocol, FailureType: FailureTypeResultCollection, RetryDisposition: NeedsHuman}
+	}
 	item.ExecutionReceipt = &r
 	item.ExecutionReceipts = appendExecutionReceipt(item.ExecutionReceipts, r)
 	item.TypedResult, item.ResultCandidate, item.VerifyResult = nil, nil, nil
@@ -243,16 +324,27 @@ func validateContractResultRepairSource(item *TodoItem, patch ContractRecoveryTa
 		return validateLegacySubmissionSource(item, patch.LegacySubmission, plan)
 	}
 	p := patch.Collection
-	if p == nil || p.Original == nil || p.Original.ContractUpgrade != nil || validateCollectionRecoveryTarget(item) != nil ||
-		item.ResultContract == nil || patch.ResultContract == nil || p.OriginalContract != *item.ResultContract ||
-		p.AcceptedContract != *patch.ResultContract || p.OriginalContract == p.AcceptedContract ||
+	original, err := originalCollectionRepairItem(item, p)
+	if err != nil {
+		return err
+	}
+	validateTarget := validateCollectionRecoveryTarget
+	if p != nil && p.AcceptedResult != nil {
+		validateTarget = validateAcceptedResultRepairTarget
+		if err := validateAcceptedResultRepairProof(original, p.AcceptedResult, patch.ResultContract); err != nil {
+			return err
+		}
+	}
+	if p == nil || p.Original == nil || p.Original.ContractUpgrade != nil || validateTarget(item) != nil ||
+		original == nil || original.ResultContract == nil || patch.ResultContract == nil || p.OriginalContract != *original.ResultContract ||
+		p.AcceptedContract != *patch.ResultContract || p.AcceptedResult == nil && p.OriginalContract == p.AcceptedContract ||
 		p.SourceTaskSHA256 != patch.SourceSHA256 || p.AcceptedPolicy != plan.Policy.ConfigurationHash ||
-		p.Original.PolicySHA256 != plan.SourcePolicy || p.Original.BranchID != plan.SourceBranch ||
+		p.SourceOrigin == nil && (p.Original.PolicySHA256 != plan.SourcePolicy || p.Original.BranchID != plan.SourceBranch) ||
 		p.Original.InputsID != item.RunInputSnapshotID || p.Original.InputsSHA256 != item.RunInputSnapshotHash ||
 		!sameCanonicalEvidence(p.Original, currentResultCollection(item)) {
 		return fmt.Errorf("invalid original collection contract-recovery source")
 	}
-	digest, err := decisionTaskInputDigest(item)
+	digest, err := decisionTaskInputDigest(original)
 	if err != nil || digest != p.Original.TaskContractSHA256 {
 		return errResultCollectionStale
 	}

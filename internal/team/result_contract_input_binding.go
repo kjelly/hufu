@@ -57,12 +57,24 @@ func assembleRuntimeEvidenceInputs(raw []byte, spec *resultEvidenceInputsSpec, i
 	if _, err := resolveJSONPointer(value, spec.ItemsPointer); err == nil {
 		return nil, fmt.Errorf("omit runtime-owned evidence inputs %s; submit decisions only", spec.ItemsPointer)
 	}
+	if spec.RuntimeComplete {
+		if _, err := resolveJSONPointer(value, spec.CompletePointer); err == nil {
+			return nil, fmt.Errorf("%s is runtime-owned; omit the completion field", spec.CompletePointer)
+		}
+	}
 	entries, err := runtimeBoundEvidenceEntries(spec, ids, results)
 	if err != nil {
 		return nil, err
 	}
 	if err := setFixedCollectionValue(value, spec.ItemsPointer, entries); err != nil {
 		return nil, err
+	}
+	if spec.RuntimeComplete {
+		// This is still an assembled candidate. The runtime publishes it only
+		// after fixed rows, decisions, evidence and the canonical schema pass.
+		if err := setFixedCollectionValue(value, spec.CompletePointer, true); err != nil {
+			return nil, err
+		}
 	}
 	encoded, err := json.Marshal(value)
 	if err == nil && len(encoded) > resultPayloadMaxBytes {
@@ -138,7 +150,14 @@ func omitRuntimeEvidenceInputs(root map[string]any, spec *resultEvidenceInputsSp
 	if spec == nil || !spec.runtimeOwned() {
 		return
 	}
-	tokens := fixedCollectionPointerTokens(spec.ItemsPointer)
+	omitRuntimeEvidenceInputPath(root, spec.ItemsPointer)
+	if spec.RuntimeComplete {
+		omitRuntimeEvidenceInputPath(root, spec.CompletePointer)
+	}
+}
+
+func omitRuntimeEvidenceInputPath(root map[string]any, pointer string) {
+	tokens := fixedCollectionPointerTokens(pointer)
 	parent := root
 	for _, token := range tokens[:len(tokens)-1] {
 		properties, _ := parent["properties"].(map[string]any)

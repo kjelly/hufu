@@ -28,6 +28,10 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 	if err != nil {
 		return "", nil, nil, err
 	}
+	pathContext, err := c.resultWorksetPathContext(ctx, checkpoint.TaskID, compiled)
+	if err != nil {
+		return "", nil, nil, err
+	}
 	store, err := OpenFileArtifactStoreReadOnly(c.artifactStoreRootPath(), c.artifactStoreRootPath())
 	if err != nil {
 		return "", nil, nil, err
@@ -76,6 +80,15 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 	if work.StopReason == workStopToolLoop {
 		info.Parameters["status"] = map[string]any{"type": "string", "enum": []string{TaskResultStatusCompletedWithGaps, TaskResultStatusPartial, TaskResultStatusBlocked, TaskResultStatusFailed}}
 	}
+	if runtimeOwnsFilesRead(compiled) {
+		refs, err := c.verifiedResultEvidenceKeyRefs(ctx, checkpoint.TaskID, compiled)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		schema, _ := info.Parameters["structured_payload"].(map[string]any)
+		constrainResultEvidenceChoices(schema, compiled.evidenceKeys, refs)
+		collectionContext += "\nEvidence choices are restricted to this work attempt's successful reads. Prefer the short ev_ keys in the supplied enum; the runtime stores the corresponding exact full IDs. Correct a rejected reference by selecting the intended observed source, preserving every finding and judgment. Never guess, silently drop a claim, or use an unrelated source just to pass validation.\n"
+	}
 	if decisionDiagnostic != "" {
 		// Advertise the truthful blocked exception already supported by local
 		// admission. Do not demand an impossible audit payload or let the
@@ -89,6 +102,7 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 		return "", nil, nil, err
 	}
 	var previous []byte
+	var acceptedResponse []byte
 	var responseIssue *agent.StructuredResponseIssue
 	if checkpoint.Response != nil {
 		var response *resultCollectionBlob
@@ -101,6 +115,14 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 	if checkpoint.LegacySubmission != nil && checkpoint.Response == nil {
 		previous = work.Report
 		collectionContext += "\n## Legacy submission-only recovery\nThe original worker stopped because its result delivery sequence closed after a schema rejection. work_report is the authenticated completion candidate, not the later procedural blocked acknowledgment. Repair only its representation using the same accepted source results; preserve semantic claims, uncertainty and citations. The original exit code remains unsuccessful and is not proof of task completion. Do not treat this migration as proof that an audit, verification or acceptance passed. No work tools may run.\n"
+	}
+	if proof := acceptedRepairProof(checkpoint); proof != nil {
+		collectionContext += acceptedRepairPrompt(proof)
+		original := checkpoint.ContractUpgrade.Original
+		acceptedResponse, err = c.readCollectionBlob(ctx, original, "response", original.Response)
+		if err != nil {
+			return "", nil, nil, err
+		}
 	}
 	workInput, err := c.historicalResultCollectionInput(ctx, checkpoint.TaskID, work.Input)
 	if err != nil {
@@ -135,16 +157,17 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 		WorkReport       string                         `json:"work_report"`
 		Transcript       string                         `json:"work_transcript"`
 		PreviousResponse string                         `json:"previous_response,omitempty"`
+		AcceptedResponse string                         `json:"accepted_response,omitempty"`
 		Diagnostic       string                         `json:"format_diagnostic,omitempty"`
 		Feedback         *collectionFormatFeedback      `json:"format_feedback,omitempty"`
 		ResponseIssue    *agent.StructuredResponseIssue `json:"response_channel_failure,omitempty"`
 	}{claimsSchema,
 		localResultSubmissionContract(c, checkpoint.TaskID).SubmissionTaskResultAssertions,
-		workInput, string(work.Report), string(transcript), string(previous), diagnostic, feedback, responseIssue}, json.Deterministic(true))
+		workInput, string(work.Report), string(transcript), string(previous), string(acceptedResponse), diagnostic, feedback, responseIssue}, json.Deterministic(true))
 	if err != nil {
 		return "", nil, nil, err
 	}
-	return collectionContext + invariants + "Collect the result of the already returned work. Do not repeat work, explore sources, or change its outcome to satisfy a format requirement. Use only these frozen authorized inputs. Result assertions use canonical stored paths: /structured_payload/value refers to your structured_payload, and /invariant_verification/assessments is attested from your invariant_assessments when the schema permits them. For equals_by_items, choose the configured empty or non_empty label from the referenced array; preserve every array item, finding and evidence reference when correcting the label. For equals_projection, match array order and only the fields declared by the projection; each representation must obey its own schema. Do not copy extra domain fields into the outer envelope. Do not independently paraphrase or omit findings. Fix all reported format_feedback issues together. Object hints are local examples, never complete submissions. Preserve legal namesake fields and evidence at other paths. A truncated list is incomplete; check the full claims_schema too. When the claims schema declares payload projections, submit the claims there once and omit the projected outer fields. For an invariant-bound finding with runtime-owned severity, omit severity; retain its finding_index and judgment. Otherwise finding_index must name a finding with the invariant definition's exact severity. Keep each invariant summary concise, well below its schema maxLength; put extended explanations in details. Preserve the original judgments, findings and evidence when fixing representation.\n" + fenceUntrusted("json", string(data)), work, claimsSchema, nil
+	return pathContext + collectionContext + invariants + "Collect the result of the already returned work. Do not repeat work, explore sources, or change its outcome to satisfy a format requirement. Use only these frozen authorized inputs. Result assertions use canonical stored paths: /structured_payload/value refers to your structured_payload, and /invariant_verification/assessments is attested from your invariant_assessments when the schema permits them. For equals_by_items, choose the configured empty or non_empty label from the referenced array; preserve every array item, finding and evidence reference when correcting the label. For equals_projection, match array order and only the fields declared by the projection; each representation must obey its own schema. Do not copy extra domain fields into the outer envelope. Do not independently paraphrase or omit findings. Fix all reported format_feedback issues together. Object hints are local examples, never complete submissions. Preserve legal namesake fields and evidence at other paths. A truncated list is incomplete; check the full claims_schema too. When the claims schema declares payload projections, submit the claims there once and omit the projected outer fields. For an invariant-bound finding with runtime-owned severity, omit severity; retain its finding_index and judgment. Otherwise finding_index must name a finding with the invariant definition's exact severity. Keep each invariant summary concise, well below its schema maxLength; put extended explanations in details. Preserve the original judgments, findings and evidence when fixing representation.\n" + fenceUntrusted("json", string(data)), work, claimsSchema, nil
 }
 
 func (c *Coordinator) prepareCollectionInvocation(ctx context.Context, def *agent.AgentDef, checkpoint *ResultCollectionCheckpoint, id, diagnostic string) (context.Context, []byte, error) {

@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/kjelly/hufu/internal/utils"
 )
 
 func TestResumePreflightChecksActiveCheckpointProjection(t *testing.T) {
@@ -105,5 +107,81 @@ func TestResumePreflightChecksActiveCheckpointProjection(t *testing.T) {
 				t.Fatal("preview changed checkpoint, source or events")
 			}
 		})
+	}
+}
+
+func TestResumePreflightClearsProvenRedundantFailureOutputMismatch(t *testing.T) {
+	c := newFailureOutputCoordinator(t)
+	items, err := c.CommitTaskCreation(t.Context(), []TodoSpec{{Agent: "worker", Desc: "preserve sealed work"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := strings.Repeat("complete sealed work\n", 500)
+	if err := c.CommitTaskTransition(t.Context(), items[0].ID, TaskPending, TaskBlocked, "protocol failure", output, map[string]any{"failure_event": &FailureEventPayload{TaskID: items[0].ID, FailureClass: FailureProtocol, Summary: "protocol failure"}}); err != nil {
+		t.Fatal(err)
+	}
+	item := c.todoItemByID(items[0].ID)
+	legacy := taskTransitionPayload(item)
+	delete(legacy, "output_complete")
+	legacy["output"] = utils.TruncateString(output, 2000)
+	raw, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.eventStore.AppendPersisted(RunEvent{Type: "task_blocked", TaskID: item.ID, Actor: "worker", Payload: raw}); err != nil {
+		t.Fatal(err)
+	}
+	const reason = "event-store projection mismatch: legacy failure snapshot truncated output"
+	raw, err = json.Marshal(map[string]string{"reason": reason})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.eventStore.AppendPersisted(RunEvent{Type: "projection_mismatch", Actor: "coordinator", Payload: raw}); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := NewSession()
+	checkpoint.Tasks = []*TodoItem{item}
+	checkpoint.RecoveryRequired, checkpoint.RecoveryReason = true, reason
+	if err := SaveSession(c.session.Workspace, checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	before := mustReadEvents(t, c.eventStore)
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := newTestCoordinator(t, withCoordinatorWorkspace(c.session.Workspace))
+	reopened.sessionData = LoadSession(c.session.Workspace)
+	reopened.initEventStore()
+	if reopened.sessionData.RecoveryRequired || reopened.todoItemByID(item.ID).Output != output {
+		t.Fatal("proven canonical output was not restored on ordinary startup")
+	}
+	after := mustReadEvents(t, reopened.eventStore)
+	if !reflect.DeepEqual(before, after[:len(before)]) || CompareCanonicalProjection(reopened.sessionData, after) != nil {
+		t.Fatal("restart rewrote history or weakened canonical parity")
+	}
+}
+
+func TestResultCollectionRecoveryPreviewRejectsCheckpointDrift(t *testing.T) {
+	c, source, id := contractCollectionFixture(t, researchCollectionResponse(t, 14), SideEffectNone)
+	if source.activeBranch != source.BranchID {
+		t.Fatal("fixture must select the active branch")
+	}
+	checkpoint := *source.Session
+	checkpoint.Tasks = make([]*TodoItem, len(source.Session.Tasks))
+	for i, item := range source.Session.Tasks {
+		checkpoint.Tasks[i] = cloneTodoItem(item)
+	}
+	checkpoint.Tasks[0].Output = "unverified checkpoint replacement"
+	if err := SaveSession(c.session.Workspace, &checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	before := mustReadEvents(t, c.eventStore)
+	preview := newTestCoordinator(t)
+	preview.executionRunID, preview.session = "", c.session
+	if _, err := preview.AssessResumeResultCollection(t.Context(), source, id); err == nil || !strings.Contains(err.Error(), "checkpoint") {
+		t.Fatalf("result-only preview promised admission with checkpoint drift: %v", err)
+	}
+	if !reflect.DeepEqual(before, mustReadEvents(t, c.eventStore)) || LoadSession(c.session.Workspace).Tasks[0].Output != checkpoint.Tasks[0].Output {
+		t.Fatal("rejected preview changed checkpoint or history")
 	}
 }

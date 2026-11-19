@@ -50,6 +50,7 @@ type CompiledResultContract struct {
 	evidenceKeys       *resultEvidenceKeysSpec
 	evidenceReferences *resultEvidenceReferencesSpec
 	worksetInputs      *resultWorksetInputsSpec
+	worksetPaths       *resultWorksetPathsSpec
 	claimsProjection   *resultClaimsProjection
 	fixedCollections   []resultFixedCollectionSpec
 	runtimeInputs      []resultRuntimeInputSpec

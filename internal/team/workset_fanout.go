@@ -217,16 +217,30 @@ func (c *Coordinator) validateWorksetInputs(manifest WorksetManifest, producerTa
 			return WorksetManifest{}, fmt.Errorf("workset input producer task %q has no typed result", producerTaskReference)
 		}
 	}
+	// A retained producer's canonical result, frozen inputs and successful
+	// receipt authorize an execution occurrence, not an individual content ID.
+	// Reuse that proof only within this validation; check every declaration and
+	// every input's immutable bytes below. Nothing survives into another call.
+	validatedOrigins := make(map[artifactProducerOccurrence]bool)
 	for itemIndex := range manifest.Items {
 		for inputIndex := range manifest.Items[itemIndex].Inputs {
 			input := manifest.Items[itemIndex].Inputs[inputIndex]
+			var declaredRef ArtifactRef
 			if producerResult != nil {
-				declaredRef, declared := artifactRefByID(producerResult, input.ID)
-				if !declared {
-					return WorksetManifest{}, fmt.Errorf("workset item %q input %q was not declared by producer task %q", manifest.Items[itemIndex].Key, input.ID, producerTaskReference)
+				var declarationErr error
+				declaredRef, declarationErr = resolveTaskResultArtifact(producerResult, input.ID)
+				if declarationErr != nil {
+					return WorksetManifest{}, fmt.Errorf("workset item %q input %q in producer task %q: %w", manifest.Items[itemIndex].Key, input.ID, producerTaskReference, declarationErr)
 				}
-				if occurrenceErr := c.validateCurrentProducerArtifactOccurrence(declaredRef, producerTaskID, producerResult); occurrenceErr != nil {
+				if occurrenceErr := validateProducerArtifactIdentity(declaredRef, producerTaskID, producerResult, c.executionRunID); occurrenceErr != nil {
 					return WorksetManifest{}, fmt.Errorf("workset item %q input %q declaration has invalid current producer occurrence: %w", manifest.Items[itemIndex].Key, input.ID, occurrenceErr)
+				}
+				origin := artifactProducerOccurrence{declaredRef.RunID, declaredRef.TaskID, declaredRef.Attempt, declaredRef.Agent}
+				if declaredRef.RunID != c.executionRunID && !validatedOrigins[origin] {
+					if err := c.validateRecoveredArtifactOrigin(declaredRef, producerTaskID, producerResult); err != nil {
+						return WorksetManifest{}, fmt.Errorf("workset item %q input %q recovery origin: %w", manifest.Items[itemIndex].Key, input.ID, err)
+					}
+					validatedOrigins[origin] = true
 				}
 				if occurrenceErr := validateSuppliedArtifactOccurrence(input, declaredRef); occurrenceErr != nil {
 					return WorksetManifest{}, fmt.Errorf("workset item %q input %q has mismatched producer occurrence: %w", manifest.Items[itemIndex].Key, input.ID, occurrenceErr)
@@ -237,7 +251,6 @@ func (c *Coordinator) validateWorksetInputs(manifest WorksetManifest, producerTa
 				return WorksetManifest{}, fmt.Errorf("workset item %q input %q failed integrity verification: %w", manifest.Items[itemIndex].Key, input.ID, resolveErr)
 			}
 			if producerResult != nil {
-				declaredRef, _ := artifactRefByID(producerResult, input.ID)
 				resolved = artifactContentWithCurrentOccurrence(resolved, declaredRef)
 			}
 			manifest.Items[itemIndex].Inputs[inputIndex] = resolved
@@ -254,7 +267,28 @@ func (c *Coordinator) validateWorksetInputs(manifest WorksetManifest, producerTa
 // be resolved separately, but missing provenance is never repaired from
 // coordinator state. Admitted recovery sources retain their original run.
 func (c *Coordinator) validateCurrentProducerArtifactOccurrence(ref ArtifactRef, producerTaskID string, result *TaskResult) error {
-	if c == nil || result == nil {
+	if c == nil {
+		return fmt.Errorf("producer coordinator is missing")
+	}
+	if err := validateProducerArtifactIdentity(ref, producerTaskID, result, c.executionRunID); err != nil {
+		return err
+	}
+	if ref.RunID != c.executionRunID {
+		if err := c.validateRecoveredArtifactOrigin(ref, producerTaskID, result); err != nil {
+			return fmt.Errorf("belongs to run %q, want current run %q or an admitted recovery source: %w", ref.RunID, c.executionRunID, err)
+		}
+	}
+	return nil
+}
+
+type artifactProducerOccurrence struct {
+	run, task string
+	attempt   int
+	agent     string
+}
+
+func validateProducerArtifactIdentity(ref ArtifactRef, producerTaskID string, result *TaskResult, runID string) error {
+	if result == nil {
 		return fmt.Errorf("producer typed result is missing")
 	}
 	if strings.TrimSpace(ref.ID) == "" {
@@ -263,8 +297,8 @@ func (c *Coordinator) validateCurrentProducerArtifactOccurrence(ref ArtifactRef,
 	if strings.TrimSpace(result.TaskID) == "" || result.TaskID != producerTaskID {
 		return fmt.Errorf("typed result task %q does not match producer task %q", result.TaskID, producerTaskID)
 	}
-	if strings.TrimSpace(ref.RunID) == "" || strings.TrimSpace(c.executionRunID) == "" {
-		return fmt.Errorf("belongs to run %q, want current run %q", ref.RunID, c.executionRunID)
+	if strings.TrimSpace(ref.RunID) == "" || strings.TrimSpace(runID) == "" {
+		return fmt.Errorf("belongs to run %q, want current run %q", ref.RunID, runID)
 	}
 	if strings.TrimSpace(ref.TaskID) == "" || ref.TaskID != producerTaskID {
 		return fmt.Errorf("belongs to task %q, want %q", ref.TaskID, producerTaskID)
@@ -274,11 +308,6 @@ func (c *Coordinator) validateCurrentProducerArtifactOccurrence(ref ArtifactRef,
 	}
 	if strings.TrimSpace(result.Agent) == "" || strings.TrimSpace(ref.Agent) == "" || ref.Agent != result.Agent {
 		return fmt.Errorf("belongs to agent %q, want current agent %q", ref.Agent, result.Agent)
-	}
-	if ref.RunID != c.executionRunID {
-		if err := c.validateRecoveredArtifactOrigin(ref, producerTaskID, result); err != nil {
-			return fmt.Errorf("belongs to run %q, want current run %q or an admitted recovery source: %w", ref.RunID, c.executionRunID, err)
-		}
 	}
 	return nil
 }

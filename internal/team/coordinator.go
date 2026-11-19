@@ -625,27 +625,29 @@ type Coordinator struct {
 	decisionBlocksMu sync.Mutex
 	// modelExecutionID is set only on an isolated extra-model coordinator.
 	// It disambiguates receipts/manifests that share a Todo attempt.
-	modelExecutionID       string
-	modelFanout            *modelFanoutBinding
-	memoryOutcomeMu        sync.Mutex
-	executionProfileMu     sync.RWMutex
-	goalMode               GoalMode
-	goalModeMu             sync.RWMutex
-	capabilityCache        map[string]CapabilityResult
-	capabilityCacheMu      sync.Mutex
-	capabilityInflight     map[string]chan CapabilityResult
-	journal                *taskJournal // persistent task-result journal (nil when disabled)
-	taskProjectionMu       sync.Mutex   // serializes lifecycle snapshots and action observations
-	noJournal              bool
-	eventStore             *EventStore // append-only session event store
-	experienceLineage      experienceLineageCache
-	recoveryChanges        recoveryChangeLog
-	strategyChanges        strategyChangeLog
-	emittedTaskTransitions map[string]bool // all durable event idempotency keys; legacy name retained for compatibility
-	eventOnceMu            sync.Mutex
-	decisionJournalMu      sync.Mutex
-	decisionObservationMu  sync.Mutex // serializes bound-context read admission and publication
-	scopedDecisionJournal  EventJournal
+	modelExecutionID           string
+	modelFanout                *modelFanoutBinding
+	memoryOutcomeMu            sync.Mutex
+	executionProfileMu         sync.RWMutex
+	goalMode                   GoalMode
+	goalModeMu                 sync.RWMutex
+	capabilityCache            map[string]CapabilityResult
+	capabilityCacheMu          sync.Mutex
+	capabilityInflight         map[string]chan CapabilityResult
+	journal                    *taskJournal // persistent task-result journal (nil when disabled)
+	taskProjectionMu           sync.Mutex   // serializes lifecycle snapshots and action observations
+	noJournal                  bool
+	eventStore                 *EventStore // append-only session event store
+	collectionOriginValidation *collectionOriginValidation
+	recoveryProjectionCache    recoveryProjectionCache
+	experienceLineage          experienceLineageCache
+	recoveryChanges            recoveryChangeLog
+	strategyChanges            strategyChangeLog
+	emittedTaskTransitions     map[string]bool // all durable event idempotency keys; legacy name retained for compatibility
+	eventOnceMu                sync.Mutex
+	decisionJournalMu          sync.Mutex
+	decisionObservationMu      sync.Mutex // serializes bound-context read admission and publication
+	scopedDecisionJournal      EventJournal
 	// decisionControlPlane is pinned by the parent coordinator before an
 	// isolated extra-model leaf starts. It keeps decision artifacts, the
 	// cross-run index, and the branch-scoped journal in the parent control

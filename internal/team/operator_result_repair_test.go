@@ -2,6 +2,7 @@ package team
 
 import (
 	"bytes"
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"os"
@@ -140,6 +141,51 @@ func TestOperatorResultRepairReusesCompletedSourcesAndOriginalObservations(t *te
 	replayed, err := ReplayTodoList(events)
 	if err != nil || len(replayed) != 3 || !sameCanonicalEvidence(after.ExecutionReceipt.RepairProvenance, replayed[2].ExecutionReceipt.RepairProvenance) {
 		t.Fatalf("canonical replay lost operator grant or prior repairs: %v", err)
+	}
+}
+
+func TestResultCollectionRecoveryGrantDiagnostics(t *testing.T) {
+	for _, scenario := range []string{"proof", "source", "head", "budget", "cancelled"} {
+		t.Run(scenario, func(t *testing.T) {
+			c, id, cp := blockedRecoveryFixture(t, `{"status":"success","summary":"private original claim"}`, true, RepairFailureSource)
+			c.executionRunID = "operator-diagnostics"
+			a, err := c.AssessResultCollectionRecovery(t.Context(), id)
+			if err != nil || validateRecoveryAssessment(a) != nil {
+				t.Fatalf("assessment: %v", err)
+			}
+			grant := &ResultRepairGrant{RunID: c.executionRunID, BranchID: c.activeBranchID(), AfterAttempts: a.TurnsUsed, AdditionalAttempts: a.AdditionalTurns, TranscriptRef: a.TranscriptRef, Recovery: a}
+			want, sentinel := "assessment proof", errResultCollectionStale
+			ctx := t.Context()
+			switch scenario {
+			case "proof":
+				grant.Recovery.Fingerprint = "invalid"
+			case "source":
+				want, sentinel = "work_sources_policy", errResultCollectionBlocked
+				if err := os.WriteFile(filepath.Join(c.session.Workspace, logsDir, "artifacts", "data", cp.Work.ArtifactID), []byte("forged"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "head":
+				want = "assessment changed"
+				if _, err := c.EventJournal().Append(t.Context(), RunEvent{Type: runStallEventType, Actor: "operator", Payload: []byte(`{}`)}); err != nil {
+					t.Fatal(err)
+				}
+			case "cancelled":
+				want, sentinel = ErrInvocationStalled.Error(), ErrInvocationStalled
+				var cancel context.CancelCauseFunc
+				ctx, cancel = context.WithCancelCause(ctx)
+				cancel(ErrInvocationStalled)
+			case "budget":
+				want = "budget or transcript changed"
+				grant.AdditionalAttempts++
+			}
+			err = c.CommitTaskTransition(ctx, id, TaskBlocked, TaskProtocolIncomplete, "repair", "", map[string]any{"result_repair_grant": grant})
+			if !errors.Is(err, sentinel) || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "private original claim") {
+				t.Fatalf("grant diagnostic: %v", err)
+			}
+			if c.todoItemByID(id).Status != TaskBlocked || len(collectionRepairGrants(c.todoItemByID(id).ExecutionReceipt)) != 0 {
+				t.Fatal("failed grant changed task authority")
+			}
+		})
 	}
 }
 

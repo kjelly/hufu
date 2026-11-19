@@ -252,7 +252,7 @@ func TestContractRecoveryPreservesParentAndRevalidatesChild(t *testing.T) {
 			}
 			c.taskTracker.TodoList().Restore(child.Session.Tasks)
 			for _, id := range []string{"2", "3"} {
-				scope, err := c.buildArtifactAccessScope(id, 1)
+				scope, err := c.buildArtifactAccessScope(t.Context(), id, 1)
 				if err != nil || len(scope.AuthorizedRefs) != 1 || scope.AuthorizedRefs[0].RunID != "source-run" {
 					t.Fatalf("recovered workset dispatch lost its original artifact authority: scope=%+v err=%v", scope, err)
 				}

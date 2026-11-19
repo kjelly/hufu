@@ -37,6 +37,7 @@ func collectionGuidanceInfo(c *Coordinator, taskID string) (fantasy.ToolInfo, er
 	}
 	schema := fixedCollectionPayloadSchema(*ref, compiled, plans, false, true)
 	advertiseResultEvidenceKeys(schema, compiled.evidenceKeys)
+	advertiseResultWorksetPaths(schema, compiled.worksetPaths)
 	info.Parameters["structured_payload"] = providerResultIntegerStrings(schema, 0)
 	return info, nil
 }
@@ -134,16 +135,7 @@ func (c *Coordinator) commitPreparedCollection(ctx context.Context, expected *Re
 	if err != nil {
 		return rejectLocalResult(RepairFailureSource, err)
 	}
-	if _, err := c.decodeCollectionClaims(item.ID, raw); err != nil {
-		return err
-	}
-	// Resolve only keys issued by successful authorized views in the original
-	// work occurrence. Canonical validation and storage still require full IDs.
-	resolved, err := c.resolveResultEvidenceKeys(ctx, item.ID, string(raw))
-	if err != nil {
-		return rejectLocalResult(RepairFailureSource, err)
-	}
-	input, err := c.decodeCollectionClaims(item.ID, []byte(resolved))
+	input, err := c.decodeCollectionClaims(item.ID, raw)
 	if err != nil {
 		return err
 	}
@@ -162,13 +154,27 @@ func (c *Coordinator) commitPreparedCollection(ctx context.Context, expected *Re
 			return rejectLocalResult(RepairFailureSource, err)
 		}
 	}
+	// Resolve only keys issued by successful authorized views in the original
+	// work occurrence, after checking independent receipt and artifact claims.
+	resolved, err := c.resolveResultEvidenceKeys(ctx, item.ID, string(raw))
+	if err != nil {
+		return c.collectionEvidenceRejection(ctx, expected, work, string(raw), err)
+	}
+	input, err = c.decodeCollectionClaims(item.ID, []byte(resolved))
+	if err != nil {
+		return err
+	}
 	ctx = context.WithValue(ctx, resultCollectionAdmissionKey{}, expected)
 	admission := localResultAdmission{coordinator: c, todoID: item.ID}
-	return admission.admit(ctx, input, localResultSubmissionContract(c, item.ID), func() RepairFailureReason {
+	err = admission.admit(ctx, input, localResultSubmissionContract(c, item.ID), func() RepairFailureReason {
 		// validateStructuredPayloadClaims classifies canonical model-schema
 		// failures after independent source checks. Other failures stay closed.
 		return RepairFailureSource
 	})
+	if isResultReferenceChoiceError(err) {
+		return c.collectionEvidenceRejection(ctx, expected, work, resolved, err)
+	}
+	return err
 }
 
 func (c *Coordinator) acceptedCollectionResult(ctx context.Context, item *TodoItem, checkpoint *ResultCollectionCheckpoint) (*TaskResult, error) {

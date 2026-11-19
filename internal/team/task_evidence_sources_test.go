@@ -70,7 +70,7 @@ func TestEvidenceFromGivesCriticTheReviewedInputsAndFinding(t *testing.T) {
 	})
 	critic, other, dependent := items[0], items[1], items[2]
 
-	scope, err := c.buildArtifactAccessScope(critic.ID, 1)
+	scope, err := c.buildArtifactAccessScope(t.Context(), critic.ID, 1)
 	if err != nil {
 		t.Fatalf("critic scope: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestEvidenceFromGivesCriticTheReviewedInputsAndFinding(t *testing.T) {
 		if _, err := c.openArtifactRef(itemCtx, ref.ID); err == nil {
 			t.Fatalf("task %s without evidence_from opened the reviewer's input", item.PlanTaskID)
 		}
-		scope, err := c.buildArtifactAccessScope(item.ID, 1)
+		scope, err := c.buildArtifactAccessScope(t.Context(), item.ID, 1)
 		if err != nil {
 			t.Fatalf("scope for %s: %v", item.PlanTaskID, err)
 		}

@@ -116,6 +116,13 @@ malformed, mixed, or extra envelope fields remain rejected. Canonical validation
 source receipts, runtime-owned fields, and the two-turn format budget still apply.
 Historical malformed responses lacked raw HTTP captures; their upstream origin
 remains unresolved.
+Review source schemas also declare `x-hufu-workset-paths` for finding locations.
+The runtime offers path keys from the receipt-verified frozen assignment and
+expands `path_key:original_source_line` to the exact stored path. A copied
+misspelling is rejected during source submission rather than the later inventory.
+Snapshot audit still checks assignment and source-line bounds. Accepted path-only
+repair requires an explicit frozen path choice and preserves the original line,
+all findings, severities, gaps, judgments, receipts and spent model turns.
 Both critique schema versions use `x-hufu-submission-fields` to expose only
 `status`, `summary`, and `structured_payload` to the model and collector.
 Every judgment, full rationale, and evidence reference belongs in its keyed
@@ -123,9 +130,13 @@ decision row; the runtime binds the complete accepted source review. Optional
 outer copies such as `details`, `findings`, `evidence`, and `risks` are rejected,
 including null or empty values. This enforces the prompt's single location for
 critique claims without dropping source findings, inherited gaps, or decisions.
-The canonical payload, receipts, severity rules, and two-turn collection budget
-are unchanged. This narrows a team contract; it does not repair malformed JSON
-or establish the upstream cause of a historical malformed response.
+In new sessions, the critic uses `result-transport: tool` for finding critique
+and documentation escalation. It submits directly through `submit_result`
+after reading the required evidence and settling the applicable decisions.
+The active critique schema opts into `runtime_complete` at `/audit_complete`.
+Runtime binds that marker, the verified source and fixed rows, and saves a
+completed critique after schema, receipt and observation checks succeed.
+The final report and native audit still determine workflow acceptance.
 The audit re-derives request identity, outcome membership, observed resolver
 evidence and supplemental source/critic coverage. A supplemental resolver must
 bind the exact original task and gap. Original accepted records, findings and
@@ -258,7 +269,9 @@ another session, modify reviewed files, execute shell, or run additional tests.
 A rejected audit must remain a failed/partial run. An already accepted source
 or report must not be silently rewritten; use a fresh invocation to correct
 the review when the accepted evidence itself needs replacement. Changing the
-schemas or adapter changes the frozen execution policy, so use `--new`.
+schemas or adapter changes the frozen execution policy. For an existing session,
+preview supported controlled contract recovery before resuming; never edit
+accepted evidence or bypass drift. A fresh session is a separate full review.
 
 Result submission uses a complete `submit_result` envelope (`status`, `summary`,
 and the task's required fields). Its top-level findings contain only runtime
@@ -271,7 +284,8 @@ assessments carry the exact injected ID and a summary within the runtime's
 Evidence IDs in findings, critic decisions, and gap resolutions are schema-bound
 to exact `sha256-<64 lowercase hex>` references. Descriptions, source paths,
 and offsets belong in separate detail/rationale/explanation fields. The same
-bare IDs must appear in files_read paths; purpose text belongs in its own field.
+bare IDs appear in the runtime-owned `files_read` projection. Omit that field
+from model submissions; put semantic explanations in the record's detail fields.
 The record's workset_key is the manifest item key (`unit-0000` style), distinct
 from the runtime Workset ID. Each fan-out goal supplies the exact required
 item key, reviewed revision, and lens. The schema rejects Workset IDs in the
@@ -570,7 +584,7 @@ tools or network access. Changed schema hashes require a fresh `--new` run.
 
 Active source-review, typed-critique and report schemas opt into
 `x-hufu-evidence-keys` for worker-authored evidence arrays. After a successful
-runtime `view`, prefer its issued `ev_` keys in those arrays and `files_read.path`.
+runtime `view`, prefer its issued `ev_` keys in those arrays. Omit outer `files_read`; the runtime projects successful native observations.
 Do not copy keys from another task or attempt. The runtime expands them to
 verified full artifact IDs before normal validation, hashing and persistence.
 Forwarded source records remain canonical and are never rewritten with local
@@ -660,6 +674,18 @@ artifact and receipt. Workset bindings and source artifact headers carry the
 same identity. The native inventory and final audit reject differing reviewer
 or verifier identities. No runtime/core team-name special case is involved.
 
+The complete file inventory remains in the `repository_snapshot_inventory`
+artifact and workset manifests. Receipt-bound `scope.repository_snapshot`
+outputs contain identity, batch metadata, `file_count`, and an `inventory`
+reference (artifact ID, producer-relative path, SHA-256 and byte size), without
+the file list. Coverage gates resolve that reference only beneath the verified
+producer workspace, including an admitted recovery origin, and verify exact
+bytes, identity, counts and the content inventory hash before computing coverage.
+Missing, replaced or inconsistent inventories, or inventories exceeding the
+gate's bounded 32 MiB read, fail closed. Legacy accepted
+outputs with inline inventories remain readable. The 900 KiB action-response
+limit is unchanged; larger inventories are never silently truncated.
+
 Worksets contain package/directory file lists and complete primary source,
 with the existing bounded related caller/test context. Snapshot mode uses a
 single primary review route; the other routes emit explicit noops. Existing
@@ -688,11 +714,15 @@ coverage or silently marks unselected batches complete. Separate reports can be
 compared by their exact snapshot identity; automatic cross-run aggregation is
 not provided. If the requested batch is out of range, preparation fails clearly.
 
-The complete inventory remains durable in the producer scope and the declared
-`repository_snapshot_inventory` artifact. Models receive only compact scope
-context and runtime-owned workset bindings. `snapshot_coverage` is runtime-owned
-report data bound from `inventory-review-handoffs`: expected paths, completed
-paths, excluded paths/reasons, and unfinished paths/reasons. Completion requires
+The producer binds the snapshot identity and the declared
+`repository_snapshot_inventory` artifact. Models receive compact scope context
+and runtime-owned workset bindings. `inventory-review-handoffs` publishes a
+`repository_snapshot_coverage` artifact with the expected and completed paths
+and every excluded or unfinished path and reason. Its receipt binds
+`snapshot_coverage` with counts and the artifact ID, digest and byte size.
+The report uses that summary and artifact reference. Final audit recomputes
+coverage from accepted sources and checks the complete artifact against it.
+Completion requires
 an accepted, verified review that observed its assigned source artifact; a
 review declaring evidence gaps conservatively leaves its assigned files
 unfinished. This accounts for evidence and contract completion, not a proof that
@@ -751,3 +781,19 @@ from the assigned immutable workset. Frozen goal metadata describes the review
 scope; it is not a request to submit these fields. The collector submits only
 semantic claims and omits the runtime-owned identity fields. Critic and report
 source selectors accept this schema alongside primary/documentation sources.
+
+### Runtime-owned evidence selections
+
+Active primary, documentation, supplemental, critic and report contracts enable
+`x-hufu-evidence-keys.runtime_owned_files_read`. Workers and collectors omit
+outer `files_read`; native successful observations own that projection. New
+citations select issued short keys from the collector's observed evidence enum.
+Runtime resolves exact full IDs and checks observation membership before acceptance.
+Source records copied by runtime retain their original references verbatim.
+
+Ordinary submit_result and the collector share the same provenance checks and
+repair classification. An invalid model citation may use bounded result-only format repair
+after independent source, receipt and binding checks pass. Preserve all findings,
+severities and gaps; do not replay work or silently guess a corrected hash. A
+corrupt source, forged receipt, stale scope or repeated unrepaired response remains
+blocking. The inventory and final audit retain their exact evidence checks.

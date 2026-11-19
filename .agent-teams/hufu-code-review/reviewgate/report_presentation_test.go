@@ -152,7 +152,7 @@ func TestHumanReportRendersOptionalSnapshotCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"legacy", "diff", "repository_snapshot"} {
+	for _, mode := range []string{"legacy", "diff", "repository_snapshot", "artifact"} {
 		t.Run(mode, func(t *testing.T) {
 			_, report := reportV2CoverageFixture(0)
 			if mode != "legacy" {
@@ -165,12 +165,29 @@ func TestHumanReportRendersOptionalSnapshotCoverage(t *testing.T) {
 					"uncompleted": []any{map[string]any{"path": "next.go", "reason": "outside_selected_batch"}},
 				}
 			}
+			if mode == "artifact" {
+				hash := strings.Repeat("a", 64)
+				coverage := snapshotCoverage{Mode: "repository_snapshot", Revision: "reviewed-commit", SnapshotID: "sha256:" + hash,
+					ContentSHA256: hash, Batch: 1, BatchCount: 2, Expected: []string{"main.go"}, Completed: []string{"main.go"}}
+				summary := summarizeSnapshotCoverage(coverage, raw(t, coverage))
+				var bound map[string]any
+				if err := json.Unmarshal(raw(t, summary), &bound); err != nil {
+					t.Fatal(err)
+				}
+				report["snapshot_coverage"] = bound
+			}
 			if err := schema.Validate(report); err != nil {
 				t.Fatal(err)
 			}
 			var output bytes.Buffer
 			if err := renderer.Execute(&output, report); err != nil {
 				t.Fatal(err)
+			}
+			if mode == "artifact" {
+				if !strings.Contains(output.String(), "完整覆蓋明細 artifact sha256-") || !strings.Contains(output.String(), "預期 1；已完成 1；排除 0；未完成 0") {
+					t.Fatal("report omitted coverage counts or the complete artifact reference")
+				}
+				return
 			}
 			if mode != "repository_snapshot" {
 				if strings.Contains(output.String(), "## 完整快照覆蓋") {

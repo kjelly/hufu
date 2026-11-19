@@ -84,6 +84,7 @@ func localResultCandidateValidationInfo(c *Coordinator, taskID string) fantasy.T
 	}
 	schema := resultFixedCollectionPayloadSchema(*ref, compiled, plans, false)
 	advertiseResultEvidenceKeys(schema, compiled.evidenceKeys)
+	advertiseResultWorksetPaths(schema, compiled.worksetPaths)
 	info.Parameters["structured_payload"] = providerResultIntegerStrings(schema, 0)
 	return info
 }

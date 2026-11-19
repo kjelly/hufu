@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -76,6 +77,10 @@ func (c *Coordinator) resultEvidenceKeyRefs(ctx context.Context, todoID string, 
 }
 
 func (c *Coordinator) resolveResultEvidenceKeys(ctx context.Context, todoID, input string) (string, error) {
+	input, err := c.resolveResultWorksetPaths(ctx, todoID, input)
+	if err != nil {
+		return "", err
+	}
 	if !strings.Contains(input, evidenceKeyPrefix) {
 		return input, nil
 	}
@@ -104,13 +109,20 @@ func (c *Coordinator) resolveResultEvidenceKeys(ctx context.Context, todoID, inp
 	resolve := func(key string) (string, error) {
 		if refs == nil {
 			var readErr error
-			refs, readErr = c.resultEvidenceKeyRefs(ctx, todoID, compiled)
+			if runtimeOwnsFilesRead(compiled) {
+				refs, readErr = c.verifiedResultEvidenceKeyRefs(ctx, todoID, compiled)
+			} else {
+				refs, readErr = c.resultEvidenceKeyRefs(ctx, todoID, compiled)
+			}
 			if readErr != nil {
 				return "", readErr
 			}
 		}
 		source, exists := refs[key]
 		if !exists {
+			if runtimeOwnsFilesRead(compiled) {
+				return "", &resultEvidenceChoiceError{Reference: key, Hint: evidenceKeyCorrectionHint(refs)}
+			}
 			return "", fmt.Errorf("evidence_key_unknown_or_out_of_scope; %s", evidenceKeyCorrectionHint(refs))
 		}
 		current, authorized := c.authorizedDecisionEvidence(ctx, source.ID)
@@ -132,7 +144,7 @@ func (c *Coordinator) resolveResultEvidenceKeys(ctx context.Context, todoID, inp
 	}
 	changed := false
 	for _, pointer := range compiled.evidenceKeys.Pointers {
-		_, didChange, pathErr := transformEvidenceKeyPath(value, append([]string{"structured_payload"}, fixedCollectionPointerTokens(pointer)...), resolve)
+		_, didChange, pathErr := transformEvidenceKeyPath(value, append([]string{"structured_payload"}, fixedCollectionPointerTokens(pointer)...), "", resolve)
 		if pathErr != nil {
 			return "", pathErr
 		}
@@ -147,7 +159,7 @@ func (c *Coordinator) resolveResultEvidenceKeys(ctx context.Context, todoID, inp
 		if _, object := read.(map[string]any); object {
 			tokens = []string{"path"}
 		}
-		next, didChange, readErr := transformEvidenceKeyPath(read, tokens, resolve)
+		next, didChange, readErr := transformEvidenceKeyPath(read, tokens, "/files_read/"+strconv.Itoa(index), resolve)
 		if readErr != nil {
 			return "", readErr
 		}

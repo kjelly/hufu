@@ -14,7 +14,9 @@ func (c *Coordinator) newContractRecoveryPlan(ctx context.Context, source *Resum
 	if retryWork && old.ConfigurationHash != current.ConfigurationHash {
 		return nil, fmt.Errorf("work retry requires unchanged result contracts and execution policy; preview contract recovery separately")
 	}
-	if !retryWork && actionRepairID == "" && old.ConfigurationHash == current.ConfigurationHash {
+	selected := todoItemByID(source.Session.Tasks, contractResultRepairID(ctx))
+	acceptedRepair := selected != nil && selected.Status == TaskDone
+	if !retryWork && actionRepairID == "" && !acceptedRepair && old.ConfigurationHash == current.ConfigurationHash {
 		return nil, fmt.Errorf("result contracts are unchanged; use ordinary resume or result-only repair")
 	}
 	// The journal head protects publication against concurrent writes; the
@@ -54,4 +56,28 @@ func (c *Coordinator) newContractRecoveryPlan(ctx context.Context, source *Resum
 func validContractRecoveryJournalIdentity(plan *ContractRecoveryPlan) bool {
 	return (plan.JournalHead == "") == (plan.JournalHash == "") &&
 		(plan.JournalHash == "" || validCollectionDigest(plan.JournalHash))
+}
+
+// Replaying a source or repairing its accepted claims invalidates every
+// dependent result. Enforce this in replay as well as the planner.
+func validateRecoveryDependentResults(tasks []*TodoItem, plan *ContractRecoveryPlan) error {
+	patches := make(map[string]ContractRecoveryTask, len(plan.Tasks))
+	for _, patch := range plan.Tasks {
+		patches[patch.ID] = patch
+	}
+	for _, item := range tasks {
+		if item == nil {
+			continue
+		}
+		patch, exists := patches[item.ID]
+		if !exists || patch.Action != "retain" {
+			continue
+		}
+		for _, id := range resultDependencyIDs(item) {
+			if parent, ok := patches[id]; ok && (parent.Action == "retry" || parent.Action == "repair_result") {
+				return fmt.Errorf("retained task %s depends on changed source %s", item.ID, id)
+			}
+		}
+	}
+	return nil
 }

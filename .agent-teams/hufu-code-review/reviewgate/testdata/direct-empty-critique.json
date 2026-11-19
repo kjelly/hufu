@@ -1,0 +1,23 @@
+{
+  "audit_complete": true,
+  "record": {
+    "decisions": [],
+    "input_review": [
+      {
+        "payload_sha256": "295612726b22c94601dbc6c935c48d7e202d6037f144512e03c9b87b6c50e2be",
+        "record": {
+          "findings": [],
+          "gaps": [],
+          "invariant_assessments": [],
+          "kind": "review",
+          "lens": "documentation-risk",
+          "reference_assessments": [],
+          "review_revision": "frozen-head",
+          "workset_key": "unit-0000"
+        },
+        "task_id": "13"
+      }
+    ],
+    "kind": "critique"
+  }
+}

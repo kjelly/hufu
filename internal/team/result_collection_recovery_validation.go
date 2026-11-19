@@ -56,6 +56,15 @@ func validateRecoveryProofChecks(a *ResultCollectionRecoveryAssessment) error {
 	if a.ValidatorRevision >= 8 && a.Checkpoint.State != ResultCollectionCommitted && (a.Checkpoint.Prepared != nil || a.Checkpoint.Response != nil) {
 		required["runtime_inputs"] = false
 	}
+	if a.ValidatorRevision >= 10 && acceptedRepairProof(a.Checkpoint) != nil && a.Checkpoint.State != ResultCollectionCommitted {
+		required["accepted_repair_source"], required["accepted_repair_binding"], required["evidence_keys"] = false, false, false
+		if a.ValidatorRevision >= 11 {
+			required["claims_context"] = false
+		}
+		if a.ValidatorRevision >= 14 && a.Checkpoint.ContractUpgrade.SourceOrigin != nil {
+			required["accepted_origin"] = false
+		}
+	}
 	if a.ValidatorRevision >= 3 {
 		required["execution_ended"] = false
 	}
@@ -64,6 +73,13 @@ func validateRecoveryProofChecks(a *ResultCollectionRecoveryAssessment) error {
 	}
 	if a.ValidatorRevision >= 7 && a.Checkpoint.LegacySubmission != nil && a.Checkpoint.Response == nil {
 		required["legacy_submission"] = false
+	}
+	if a.Disposition == RecoverySelectReferences {
+		required["reference_selection"], required["canonical_claims"] = false, false
+		required["independent_claims"], required["runtime_inputs"] = false, false
+		if a.ValidatorRevision >= 13 && len(acceptedRepairProof(a.Checkpoint).PathPointers) > 0 {
+			required["workset_paths"] = false
+		}
 	}
 	for _, check := range a.Checks {
 		if a.ValidatorRevision >= 2 && check.Code == "canonical_claims" && !check.Passed && a.Disposition != RecoveryRepairClaims {

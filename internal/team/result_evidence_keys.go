@@ -4,6 +4,7 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -78,6 +79,10 @@ func advertiseResultEvidenceKeys(schema map[string]any, spec *resultEvidenceKeys
 }
 
 func advertiseEvidenceKeyPath(schema map[string]any, tokens []string) {
+	advertiseStringReferencePath(schema, tokens, evidenceKeyPattern, "Full artifact ID, or an ev_ evidence key issued by a successful view in this task attempt. Runtime resolves keys before canonical validation.")
+}
+
+func advertiseStringReferencePath(schema map[string]any, tokens []string, keyPattern, description string) {
 	if schema == nil {
 		return
 	}
@@ -85,46 +90,49 @@ func advertiseEvidenceKeyPath(schema map[string]any, tokens []string) {
 		if schema["type"] != "string" {
 			return
 		}
-		if pattern, ok := schema["pattern"].(string); ok && !strings.Contains(pattern, evidenceKeyPattern) {
-			schema["pattern"] = "(?:" + pattern + ")|(?:" + evidenceKeyPattern + ")"
+		if pattern, ok := schema["pattern"].(string); ok && !strings.Contains(pattern, keyPattern) {
+			schema["pattern"] = "(?:" + pattern + ")|(?:" + keyPattern + ")"
 		}
 		// The canonical schema still enforces these constraints after resolution.
 		for _, key := range []string{"enum", "const", "minLength", "maxLength", "format"} {
 			delete(schema, key)
 		}
-		schema["description"] = "Full artifact ID, or an ev_ evidence key issued by a successful view in this task attempt. Runtime resolves keys before canonical validation."
+		schema["description"] = description
 		return
 	}
 	properties, _ := schema["properties"].(map[string]any)
 	if tokens[0] == "*" {
 		if items, ok := schema["items"].(map[string]any); ok {
-			advertiseEvidenceKeyPath(items, tokens[1:])
+			advertiseStringReferencePath(items, tokens[1:], keyPattern, description)
 			return
 		}
 		// Fixed collection submission schemas replace arrays with issued row maps.
 		for _, raw := range properties {
 			child, _ := raw.(map[string]any)
-			advertiseEvidenceKeyPath(child, tokens[1:])
+			advertiseStringReferencePath(child, tokens[1:], keyPattern, description)
 		}
 		return
 	}
 	child, _ := properties[tokens[0]].(map[string]any)
-	advertiseEvidenceKeyPath(child, tokens[1:])
+	advertiseStringReferencePath(child, tokens[1:], keyPattern, description)
 }
 
 // transformEvidenceKeyPath never traverses undeclared fields or rewrites prose.
-func transformEvidenceKeyPath(value any, tokens []string, resolve func(string) (string, error)) (any, bool, error) {
+func transformEvidenceKeyPath(value any, tokens []string, pointer string, resolve func(string) (string, error)) (any, bool, error) {
 	if len(tokens) == 0 {
 		text, ok := value.(string)
 		if !ok || !strings.HasPrefix(text, evidenceKeyPrefix) {
 			return value, false, nil
 		}
 		next, err := resolve(text)
-		return next, err == nil, err
+		if err != nil {
+			return nil, false, fmt.Errorf("%s: %w", pointer, err)
+		}
+		return next, true, nil
 	}
 	changed := false
-	apply := func(child any) (any, error) {
-		next, didChange, err := transformEvidenceKeyPath(child, tokens[1:], resolve)
+	apply := func(child any, key string) (any, error) {
+		next, didChange, err := transformEvidenceKeyPath(child, tokens[1:], pointer+"/"+escapeJSONPointerToken(key), resolve)
 		changed = changed || didChange
 		return next, err
 	}
@@ -134,7 +142,7 @@ func transformEvidenceKeyPath(value any, tokens []string, resolve func(string) (
 			if tokens[0] != "*" && key != tokens[0] {
 				continue
 			}
-			next, err := apply(child)
+			next, err := apply(child, key)
 			if err != nil {
 				return nil, false, err
 			}
@@ -145,7 +153,7 @@ func transformEvidenceKeyPath(value any, tokens []string, resolve func(string) (
 			return value, false, nil
 		}
 		for index, child := range node {
-			next, err := apply(child)
+			next, err := apply(child, strconv.Itoa(index))
 			if err != nil {
 				return nil, false, err
 			}

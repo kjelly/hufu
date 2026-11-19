@@ -110,7 +110,7 @@ func TestUnboundWorkerCannotListOrViewArtifactBackingStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	scope, err := c.buildArtifactAccessScope(child.ID, 1)
+	scope, err := c.buildArtifactAccessScope(t.Context(), child.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestUnboundWorkerCannotListOrViewArtifactBackingStore(t *testing.T) {
 	}
 
 	unbound := c.taskTracker.TodoList().AddBatch([]TodoSpec{{PlanTaskID: "unbound", Agent: "reviewer", DependsOn: []string{producer.ID}}})[0]
-	unboundScope, err := c.buildArtifactAccessScope(unbound.ID, 1)
+	unboundScope, err := c.buildArtifactAccessScope(t.Context(), unbound.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestUnboundWorkerCannotListOrViewArtifactBackingStore(t *testing.T) {
 func TestUnboundDeclaredToolCannotReadArtifactBackingStore(t *testing.T) {
 	c, _, child, assigned, _ := newWorksetAuthorizationFixture(t)
 	child.WorksetBinding = nil
-	scope, err := c.buildArtifactAccessScope(child.ID, 1)
+	scope, err := c.buildArtifactAccessScope(t.Context(), child.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestUnboundDeclaredMCPToolCannotReadArtifactBackingStore(t *testing.T) {
 func TestBoundWorksetGatedRecursiveToolsHideArtifactDescendants(t *testing.T) {
 	c, _, child, assigned, receipt := newWorksetAuthorizationFixture(t)
 	child.WorksetReceipt = cloneWorksetReceipt(receipt)
-	scope, err := c.buildArtifactAccessScope(child.ID, 1)
+	scope, err := c.buildArtifactAccessScope(t.Context(), child.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

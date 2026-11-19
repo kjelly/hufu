@@ -1,6 +1,7 @@
 package team
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -87,7 +88,11 @@ func resultDependencyIDs(item *TodoItem) []string {
 // dependencyResultsForTask supplies the worker view, including separately
 // authorized inputs reviewed by direct evidence sources.
 func (c *Coordinator) dependencyResultsForTask(todoID string) []TaskResult {
-	return c.dependencyResultViews(todoID, true)
+	return c.dependencyResultsForTaskWithContext(context.Background(), todoID)
+}
+
+func (c *Coordinator) dependencyResultsForTaskWithContext(ctx context.Context, todoID string) []TaskResult {
+	return c.dependencyResultViews(ctx, todoID, true)
 }
 
 // dependencyResultsForBinding supplies accepted result data without adding
@@ -95,15 +100,16 @@ func (c *Coordinator) dependencyResultsForTask(todoID string) []TaskResult {
 // artifacts; re-authorizing them here repeatedly replays historical receipts
 // for every source in a large fan-in.
 func (c *Coordinator) dependencyResultsForBinding(todoID string) []TaskResult {
-	return c.dependencyResultViews(todoID, false)
+	return c.dependencyResultViews(context.Background(), todoID, false)
 }
 
-func (c *Coordinator) dependencyResultViews(todoID string, includeReviewedInputs bool) []TaskResult {
+func (c *Coordinator) dependencyResultViews(ctx context.Context, todoID string, includeReviewedInputs bool) []TaskResult {
 	if c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return nil
 	}
+	items := c.taskTracker.TodoList().Items()
 	var currentTodo *TodoItem
-	for _, item := range c.taskTracker.TodoList().Items() {
+	for _, item := range items {
 		if item.ID == todoID {
 			currentTodo = item
 			break
@@ -113,19 +119,30 @@ func (c *Coordinator) dependencyResultViews(todoID string, includeReviewedInputs
 	if len(dependencies) == 0 {
 		return nil
 	}
+	var authorizer *artifactInputAuthorizer
+	var progress *runtimeValidationProgress
+	if includeReviewedInputs && currentTodo.WorksetBinding == nil && len(currentTodo.EvidenceFrom) > 0 {
+		authorizer = c.newArtifactInputAuthorizer(ctx, items)
+		progress = c.beginRuntimeValidation("reviewed_inputs", todoID)
+		defer progress.close()
+	}
 	depSet := make(map[string]bool, len(dependencies))
 	for _, depID := range dependencies {
 		depSet[depID] = true
 	}
 	var depResults []TaskResult
-	for _, item := range c.taskTracker.TodoList().Items() {
+	for _, item := range items {
+		if authorizer != nil && ctx.Err() != nil {
+			return nil
+		}
 		if depSet[item.ID] && item.Status == TaskDone {
 			if res := c.GetTaskResult(item.ID); res != nil {
 				projected := projectDependencyResultForWorker(res, currentTodo.WorksetBinding)
-				if includeReviewedInputs && currentTodo.WorksetBinding == nil && slices.Contains(currentTodo.EvidenceFrom, item.ID) {
+				if authorizer != nil && slices.Contains(currentTodo.EvidenceFrom, item.ID) {
 					// Name the inputs the evidence task reviewed so the worker
 					// can open them by artifact_ref; its scope authorizes them.
-					projected.Artifacts = appendMissingArtifactRefs(projected.Artifacts, c.dependencyReviewedInputs(item))
+					projected.Artifacts = appendMissingArtifactRefs(projected.Artifacts, authorizer.reviewedInputs(item))
+					progress.checked("dependency " + item.ID)
 				}
 				depResults = append(depResults, projected)
 			}
@@ -140,12 +157,19 @@ func (c *Coordinator) dependencyResultViews(todoID string, includeReviewedInputs
 // critic, needs the diff and source it reviewed, which are not part of the
 // dependency's own result.
 func (c *Coordinator) dependencyReviewedInputs(dependency *TodoItem) []ArtifactRef {
-	if c == nil || dependency == nil || dependency.WorksetBinding == nil {
+	if c == nil || c.taskTracker == nil || dependency == nil || dependency.WorksetBinding == nil {
+		return nil
+	}
+	return c.newArtifactInputAuthorizer(context.Background(), c.taskTracker.TodoList().Items()).reviewedInputs(dependency)
+}
+
+func (v *artifactInputAuthorizer) reviewedInputs(dependency *TodoItem) []ArtifactRef {
+	if dependency.WorksetBinding == nil {
 		return nil
 	}
 	refs := make([]ArtifactRef, 0, len(dependency.WorksetBinding.Inputs))
 	for _, input := range dependency.WorksetBinding.Inputs {
-		if ref, _, ok := c.authorizedWorksetInput(dependency, input.ID); ok {
+		if ref, _, err := v.resolve(dependency, input.ID); err == nil {
 			refs = append(refs, ref)
 		}
 	}

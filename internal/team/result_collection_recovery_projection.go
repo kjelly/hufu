@@ -16,6 +16,12 @@ func applyCollectionRepairGrant(projected, current *TodoItem, grant *ResultRepai
 		// The grant event preserves recovery.Checkpoint with the old prepared
 		// reference. Only the live progress is reopened; work is immutable.
 		switch recovery.Disposition {
+		case RecoverySelectReferences:
+			projection := grant.ReferenceProjection
+			checkpoint.State, checkpoint.FailureReason = ResultCollectionPrepared, ""
+			checkpoint.InvocationID, checkpoint.InvocationRunID = projection.InvocationID, grant.RunID
+			checkpoint.Request, checkpoint.Response, checkpoint.Prepared = new(projection.Request), new(projection.Response), new(projection.Prepared)
+			checkpoint.ObservedUsage = nil
 		case RecoveryRepairClaims:
 			checkpoint.State, checkpoint.Prepared, checkpoint.FailureReason = ResultCollectionReceived, nil, RepairFailureInvalidSchema
 		case RecoveryCommitLocal:

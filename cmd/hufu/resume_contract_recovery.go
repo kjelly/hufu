@@ -20,6 +20,9 @@ func runContractRecoveryCommand(cmd *cobra.Command, source *team.ResumeSource, n
 	recoveryCtx := withResumeLaunchPolicy(commandContext(cmd), source)
 	if resumeRepairAction != "" {
 		recoveryCtx = team.WithReadOnlyActionRepair(recoveryCtx, resumeRepairAction)
+		if resumeUpgradeContracts {
+			recoveryCtx = team.WithUnstartedActionConsumerUpgrade(recoveryCtx)
+		}
 	}
 	if resumeRebuildActionPayloads {
 		recoveryCtx = team.WithActionPayloadReconstruction(recoveryCtx)

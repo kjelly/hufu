@@ -142,6 +142,15 @@ func cloneResultCollectionCheckpoint(value *ResultCollectionCheckpoint) *ResultC
 	if value.ContractUpgrade != nil {
 		clone.ContractUpgrade = new(*value.ContractUpgrade)
 		clone.ContractUpgrade.Original = cloneResultCollectionCheckpoint(value.ContractUpgrade.Original)
+		if origin := value.ContractUpgrade.SourceOrigin; origin != nil {
+			clone.ContractUpgrade.SourceOrigin = new(*origin)
+		}
+		if p := value.ContractUpgrade.AcceptedResult; p != nil {
+			clone.ContractUpgrade.AcceptedResult = new(*p)
+			clone.ContractUpgrade.AcceptedResult.Pointers = slices.Clone(p.Pointers)
+			clone.ContractUpgrade.AcceptedResult.PathPointers = slices.Clone(p.PathPointers)
+			clone.ContractUpgrade.AcceptedResult.Schema = slices.Clone(p.Schema)
+		}
 	}
 	if value.RepairIssue != nil {
 		clone.RepairIssue = new(*value.RepairIssue)

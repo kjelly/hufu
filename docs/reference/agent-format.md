@@ -424,6 +424,15 @@ runtime-owned 來源、非成功 outcome 的變更及已有 materialized artifac
 pointer 下的每個 evidence ID 確實有觀測；只獲授權但未讀取的 artifact 不算證據。
 這只證明觀測過指定 artifact 的有界片段，不代表完整覆蓋或語意上的支持。
 
+Result collector 的 model-facing schema 會把宣告的 evidence 欄位限制為該工作回合
+實際觀測且已驗證的短 `ev_` key／完整 ID enum；canonical schema 與儲存仍使用完整 ID。
+一般 `submit_result` 與 collector 共用引用錯誤分類及獨立來源檢查。
+模型選錯 key 或抄錯完整 ID 時，只有在原工作、全部觀測來源、獨立 receipts、bindings
+及 settled decisions 都通過驗證後，才沿用現有有界格式修復回合重新選擇。
+修復提示保留前次回應與精確選項；不重跑 work tools、不模糊替換 hash，也不刪除
+finding 或降低判斷。重複錯誤仍受原 turn limit／no-progress guard 限制；來源損壞、
+越權或過期證據仍拒絕，不因 citation 錯字取得修復權限。
+
 Collection 恢復沿用原工作觀測，不重跑工具；接受結果保留完整投影，事件重播不從
 後來的讀取重新產生它。新的執行重試使用新的 lifecycle occurrence，歷史 collection
 與收據保留供稽核，但不能代替新工作。既有 schema 未啟用此選項時維持原提交契約。
@@ -605,6 +614,15 @@ Schema 可選用下列通用 runtime 擴充（都包含在 schema hash 中）：
   task prose 或 model 自報清單推測範圍。team 必須將清單透過 goal-template
   或 item artifact 明確交給 worker。local/external 提交、commit、已接受依賴、
   replay/completion 與最終報告會重驗；拒絕後可在同一次任務修正提交。
+- `x-hufu-workset-paths`：用 `{"pointers":["/findings/*/location"],"format":"path_line"}`
+  宣告路徑與正整數來源行號欄位。runtime 驗證原始 producer、expansion receipt、
+  frozen manifest row 與指派路徑，提供穩定的 `path_…` 短鍵。模型可提交
+  `path_key:line`，runtime 在一般驗證及雜湊前還原精確路徑；完整路徑必須逐字
+  符合該 workset。字串以外的欄位與其他文字不會改寫，也不做模糊比對。
+  原生與 external 提交使用相同來源檢查，持久化資料只保留完整路徑，replay
+  重驗原本的綁定。行號是否在檔案範圍內、是否支持 finding，仍由 team 的
+  snapshot／語意驗證負責；此選擇不證明 finding 成立。選單遵循 workset 的
+  中繼資料上限並接受既有上下文 admission；診斷過長時引用完整選單而不截斷選項。
 - `x-hufu-final-report`：字串形式的 Go text/template。`finish` 直接從唯一
   已完成的報告 task 的 validated payload 產生最終回覆，保留其判定與限制，
   取代 coordinator 的自由摘要。無報告或多份報告不明確時 fail closed；
@@ -733,6 +751,14 @@ payload hash 與 `value_bindings`。來源缺失、hash 不符、重複 ID 或 w
 object 路徑與 array；綁定欄位及其他 runtime 集合路徑不得重疊。
 canonical schema、儲存格式與來源比對規則不變；重播驗證已儲存的來源副本，
 不會重新填入較新的來源。可搭配 fixed collection，讓模型只提交逐項判斷。
+
+若來源已由 `runtime_owned: true` 或 `runtime_bind: true` 綁定，可加上
+`"runtime_complete": true`，由 runtime 產生 `complete_pointer` 指定的值。
+該欄位須直接宣告為 `{"type":"boolean","const":true}`。模型提交 schema
+省略該欄位，任何手動傳值（包含 `true` 和 `null`）都會被拒絕。使用
+fixed collection 時，必需的每個 row、決策收據、證據與來源綁定都通過現有
+驗證後，runtime 才會保存包含 `true` 的完整結果。空的合法集合也可以完成。
+此欄位表示該份結果的完整性，整體 workflow 仍由最終驗收判定。
 
 ### Runtime output 結果綁定
 

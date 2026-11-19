@@ -98,7 +98,7 @@ func TestBoundFanOutReviewerResultCompletesVerifiedWorkset(t *testing.T) {
 	if err := c.CommitTaskTransition(context.Background(), child.ID, TaskPending, TaskInProgress, "reviewing assigned input", "", nil); err != nil {
 		t.Fatal(err)
 	}
-	scope, err := c.buildArtifactAccessScope(child.ID, 1)
+	scope, err := c.buildArtifactAccessScope(t.Context(), child.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

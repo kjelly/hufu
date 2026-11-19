@@ -7,6 +7,9 @@ import (
 
 func (c *Coordinator) resumeInvocationTasks(ctx context.Context, prompt string, newWorkflowCycle bool) (string, bool, error) {
 	resumed, resumeErr := c.ResumeInterruptedTasks(ctx)
+	if cause := context.Cause(ctx); cause != nil {
+		return "", true, c.finalizePublicInvocationFailureError(cause)
+	}
 	if _, explicit := ctx.Value(resultOnlyRepairKey{}).(string); explicit && resumeErr != nil {
 		return "", true, c.finalizePublicInvocationFailureError(resumeErr)
 	}

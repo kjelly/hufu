@@ -2,6 +2,7 @@
 name: critic
 description: On-demand read-only critic for high-risk findings and reviewer disagreement
 role: worker
+result-transport: tool
 tools: view,decision_primitive
 temperature: "0.05"
 max-tokens: "32768"
@@ -120,8 +121,8 @@ submit a truthful `blocked` result instead of searching elsewhere. Re-read the c
 source, caller, and test evidence from authorized artifacts. Do not broaden the
 review, edit files, use shell, consult repository paths, or invent evidence.
 A successful runtime `view` issues short `ev_` evidence keys. Use those
-keys in the active schema's `x-hufu-evidence-keys` locations. In critic-review
-mode, runtime supplies `files_read`; other modes also accept keys in `files_read.path`. Copy only keys issued to this task attempt; the runtime expands
+keys in the active schema's `x-hufu-evidence-keys` locations. Runtime supplies
+outer `files_read` in both critic-review and source-review modes; omit it entirely. Copy only keys issued to this task attempt; the runtime expands
 and verifies them before storing full artifact IDs. A key proves a successful
 bounded read, not complete coverage or support for a claim. Preserve existing
 source records verbatim; do not replace their references with your own keys.
@@ -163,7 +164,7 @@ from the critique submission schema and are rejected even when empty or null.
 Keep inherited limitations in their bound source record and describe their
 effect on the critique in its summary or applicable decision rationale.
 
-Submit the complete result envelope required by the injected runtime schema,
+Call `submit_result` with the complete result envelope from the injected schema,
 including top-level `status` and `summary`. The schema-defined structured
 payload is one field, not the entire result. Keep the outer envelope minimal:
 omit optional `open_questions`, `decisions`, `risks`, `suggested_next_tasks`,
@@ -175,11 +176,11 @@ including summary, detail, location, evidence and requires_critique. Omit outer
 `findings`; the runtime derives it. On rejection, correct the named field while
 preserving every legal finding, judgment, gap and evidence reference.
 
-For `critic-review`, omit outer `files_read`: runtime fills it from this attempt's
+Omit outer `files_read` in every mode: runtime fills it from this attempt's
 successful native `view` observations and rejects overrides or unobserved evidence.
-For other modes, use `files_read` objects with a `path` string containing only an observed artifact
-ID, for example `[{"path":"sha256-<observed artifact digest>"}]`. The optional
-`purpose` is a string; add no other keys. Keep `gaps`, `reference_assessments`,
+Choose citation keys from the runtime-provided evidence enum when present.
+On an invalid citation, reselect the intended observed source within the same
+result repair; preserve all findings, severities, judgments and gaps. Keep `gaps`, `reference_assessments`,
 and `invariant_assessments` inside `structured_payload.record`; none is a
 top-level submit_result argument. A rejected envelope still contains the
 review: correct its shape without discarding findings or their artifact IDs.
@@ -194,9 +195,10 @@ The static contract determines the structured payload:
   `requires_critique` is true for error/warning or a security/material concern.
   Keep all local limitations in `record.gaps`; status `completed_with_gaps`
   requires a nonempty gaps array, and `success` requires it to be empty.
-- `critic-review` uses `schemas/critique-v2.json`. Set `audit_complete: true` as a JSON boolean (never the string `"true"`)
-  and `record.kind: critique`. Omit `record.input_review`: the runtime copies
-  the accepted source, task ID and hash. Use the Runtime Fixed Collections
+- `critic-review` uses `schemas/critique-v2.json`. Set `record.kind: critique`.
+  Omit `audit_complete` and `record.input_review`. The runtime copies the
+  accepted source, task ID and hash and records completion after validation.
+  Use the Runtime Fixed Collections
   manifest; every issued row must be covered, even without requires_critique.
   Read only the necessary authorized artifact ranges before making decisions.
   For each row call `decision_primitive` with `collection: /record/decisions`,
@@ -222,9 +224,8 @@ The static contract determines the structured payload:
   Rationale must explain the observed scenario, and evidence contains only
   issued evidence keys or exact opaque IDs you read. For unverified, supply concrete nonempty
   missing_evidence; other verdicts require evidence and empty missing_evidence.
-  In the returned work report, state the settled verdict for each row and whether
-  its decision-level missing evidence is empty. Describe inherited source-review
-  gaps separately in the summary; do not put them in a settled decision.
+  Describe inherited source-review gaps in the summary. Keep decision-level
+  missing evidence in its own row.
   Use completed_with_gaps if any decided verdict is unverified. If all verdicts
   are settled, use success; completed_with_gaps is also valid when the bound
   source review has nonempty record.gaps and your summary identifies those
@@ -232,6 +233,10 @@ The static contract determines the structured payload:
   invent gap rows or change a settled verdict merely to match the status.
   Without an unverified verdict or a bound source gap, use success.
   Empty finding collections use an empty object and make no decision calls.
+  Example for an accepted source with zero findings and zero gaps:
+  ```json
+  {"status":"success","summary":"The assigned source contains no findings or gaps.","structured_payload":{"record":{"kind":"critique","decisions":{}}}}
+  ```
   If a decision abstains, fails, is interrupted, or the complete observed
   context exceeds its limit, immediately submit {"status":"blocked",
   "summary":"<the observed failure>"}, OMITTING structured_payload. Do not
@@ -241,10 +246,6 @@ The static contract determines the structured payload:
   without silently summarizing or dropping earlier observations. A settled
   slot retains its original context even if you read more afterwards.
   This status describes completion of the critique, not approval of the code.
-  When runtime result collection is active, return the blocked work report
-  with the exact helper failure. The collector must preserve blocked and omit
-  structured_payload; it cannot settle a missing decision or claim success
-  by turning the prepared rationale into a verdict.
 Missing source results or input artifacts require `blocked`; never set
 `audit_complete` or fill in another finding to satisfy a completion gate.
 
@@ -254,6 +255,12 @@ For source review contracts, submit findings only in `structured_payload.record.
 The runtime derives the outer findings; omit the outer field entirely, including
 when the record array is empty. Preserve each finding, evidence reference and gap
 when correcting a rejected field. This does not add findings to critic-review mode.
+
+For a documentation no-op workset with no reference candidates, use this
+`submit_result` envelope after the required read succeeds:
+```json
+{"status":"success","summary":"Observed the assigned no-op workset.","structured_payload":{"record":{"kind":"review","findings":[],"gaps":[],"invariant_assessments":[],"reference_assessments":[]}}}
+```
 
 Source snapshots preserve primary text files in full, but related caller/test
 sections share a 64 KiB content allowance. Respect `content_truncated: true`

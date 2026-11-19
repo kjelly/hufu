@@ -121,6 +121,10 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 	if err != nil {
 		return &resultCollectionFailure{Reason: RepairFailureSource, Checkpoint: checkpoint, Cause: err}
 	}
+	// A local reference selection has no model fallback, including after restart.
+	if acceptedReferenceProjectionFor(c.todoItemByID(checkpoint.TaskID), checkpoint) != nil {
+		return c.commitAcceptedReferenceSelection(ctx, checkpoint)
+	}
 	var diagnostic string
 	if receipt := collectionReceipt(c.todoItemByID(checkpoint.TaskID), checkpoint); receipt != nil && receipt.RepairProvenance != nil {
 		for _, grant := range receipt.RepairProvenance.OperatorGrants {
@@ -184,6 +188,9 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 				return c.collectionFailure(ctx, checkpoint, RepairFailureInvalidSchema, errors.New(diagnostic))
 			}
 			return c.collectionFailure(ctx, checkpoint, repairFailureCollectionBudget, errResultCollectionBudget)
+		}
+		if acceptedRepairProof(checkpoint) != nil {
+			return c.collectionFailure(ctx, checkpoint, RepairFailureInvalidSchema, errors.New("accepted-result repair requires an explicit observed reference selection"))
 		}
 		id := "result-collection-" + rand.Text()
 		invocation, request, err := c.prepareCollectionInvocation(ctx, def, checkpoint, id, diagnostic)

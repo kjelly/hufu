@@ -407,7 +407,7 @@ func validateResultProjectionTargets(projections *resultClaimsProjection, eviden
 					return fmt.Errorf("projection overlaps runtime input %s", binding.Target)
 				}
 			}
-			if inputs != nil && inputs.runtimeOwned() && resultPointersOverlap(pointer, inputs.ItemsPointer) {
+			if inputs.ownsTarget(pointer) {
 				return fmt.Errorf("projection overlaps runtime evidence input")
 			}
 			for _, collection := range collections {

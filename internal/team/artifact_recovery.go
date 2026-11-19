@@ -66,6 +66,10 @@ func (c *Coordinator) validateRecoveredWorksetReceipt(ctx context.Context, recei
 	if err != nil {
 		return err
 	}
+	return validateRecoveredWorksetReplay(snapshot, items, receipt, consumer, c.todoItemByID)
+}
+
+func validateRecoveredWorksetReplay(snapshot *RunInputSnapshot, items []*TodoItem, receipt *WorksetExpansionReceipt, consumer *TodoItem, currentTask func(string) *TodoItem) error {
 	if !canonicalRecoveryWorksetConsumer(items, consumer, snapshot, receipt) {
 		return fmt.Errorf("workset consumer differs from its canonical frozen binding")
 	}
@@ -74,7 +78,7 @@ func (c *Coordinator) validateRecoveredWorksetReceipt(ctx context.Context, recei
 			original.WorksetReceipt == nil || !equivalentWorksetReceipts(original.WorksetReceipt, receipt) {
 			continue
 		}
-		current := c.todoItemByID(original.ID)
+		current := currentTask(original.ID)
 		if current != nil && sameCanonicalEvidence(current.WorksetBinding, original.WorksetBinding) &&
 			sameCanonicalEvidence(current.WorksetReceipt, original.WorksetReceipt) {
 			return nil

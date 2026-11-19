@@ -1,15 +1,20 @@
 package team
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // validateTaskTransitionMode distinguishes normal lifecycle updates, explicit
 // worker resets and operator-authorized submission repair. The caller holds
 // the projection lock and commits through the same event-first owner.
-func (c *Coordinator) validateTaskTransitionMode(current *TodoItem, next TaskStatus, metadata map[string]any) (bool, *ResultRepairGrant, error) {
+func (c *Coordinator) validateTaskTransitionMode(ctx context.Context, current *TodoItem, next TaskStatus, metadata map[string]any) (bool, *ResultRepairGrant, error) {
 	reset, _ := metadata["reset_for_resume"].(bool)
 	grant, _ := metadata["result_repair_grant"].(*ResultRepairGrant)
-	if grant != nil && !c.validResultRepairGrant(current, next, grant) {
-		return false, nil, fmt.Errorf("commit task transition: invalid operator result repair grant")
+	if grant != nil {
+		if err := c.validateResultRepairGrant(ctx, current, next, grant); err != nil {
+			return false, nil, fmt.Errorf("commit task transition: invalid operator result repair grant: %w", err)
+		}
 	}
 	if reset && next != TaskPending {
 		return false, nil, fmt.Errorf("commit task transition: task %s resume reset must target pending", current.ID)

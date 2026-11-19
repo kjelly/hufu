@@ -52,17 +52,25 @@ func (c *Coordinator) resultObservationScope(ctx context.Context, taskID string,
 		if event.Type != string(EventContractRecovery) || event.BranchID != cp.BranchID {
 			continue
 		}
-		admitted, err := executionPolicySnapshotFromEvents(events[:index])
-		if err != nil {
-			return origin, err
-		}
-		plan, err := validateContractRecoveryLineage(event, events[:index], admitted)
+		plan, err := c.observationRecoveryPlan(ctx, event, events[:index])
 		if err != nil {
 			return origin, err
 		}
 		for _, patch := range plan.Tasks {
 			if patch.ID == taskID && patch.Action == "repair_result" && sameCanonicalEvidence(patch.Collection, proof) {
 				origin.branch, origin.schema, origin.events = proof.Original.BranchID, proof.OriginalContract.SchemaSHA256, events[:index]
+				if source := proof.SourceOrigin; source != nil {
+					found := false
+					for i, original := range origin.events {
+						if original.ID == source.EventID && original.Hash == source.EventHash && original.BranchID == origin.branch {
+							origin.events, found = origin.events[:i+1], true
+							break
+						}
+					}
+					if !found {
+						return origin, errResultCollectionStale
+					}
+				}
 				return origin, nil
 			}
 		}

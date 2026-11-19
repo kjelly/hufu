@@ -10,6 +10,25 @@ import (
 	"testing"
 )
 
+func TestRuntimeActionOutputSizeMatchesReceiptReplay(t *testing.T) {
+	// Compact JSON fits. The canonical bytes used for the receipt exceed the
+	// same boundary checked when downstream code loads the accepted result.
+	rows := make([]any, maxRuntimeOutputBytes/32)
+	for i := range rows {
+		rows[i] = map[string]any{"field": "fixture"}
+	}
+	outputs, hash, err := CanonicalizeRuntimeOutputs(map[string]any{"rows": rows})
+	if err == nil {
+		if _, replayHash, replayErr := hashCanonicalRuntimeOutputs(outputs); replayErr != nil || replayHash != hash {
+			t.Fatalf("admission returned a receipt that replay rejected: %v", replayErr)
+		}
+		t.Fatal("receipt limit was bypassed during admission and replay")
+	}
+	if !strings.Contains(err.Error(), "maximum") {
+		t.Fatalf("size limit did not explain the admission rejection: %v", err)
+	}
+}
+
 // oversizedOutputsWorksetProvider writes a valid workset manifest and declares
 // it, but returns more output keys than CanonicalizeRuntimeOutputs accepts.
 type oversizedOutputsWorksetProvider struct{}

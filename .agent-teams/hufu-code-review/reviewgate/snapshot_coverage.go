@@ -5,6 +5,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -40,6 +43,70 @@ type snapshotCoverage struct {
 	Uncompleted   []snapshotUnfinished `json:"uncompleted"`
 }
 
+const (
+	snapshotCoverageArtifactPath = "snapshot-coverage.json"
+	maxSnapshotArtifactBytes     = 32 * 1024 * 1024
+)
+
+type snapshotCoverageSummary struct {
+	Mode          string                     `json:"mode"`
+	SnapshotID    string                     `json:"snapshot_id"`
+	ContentSHA256 string                     `json:"content_sha256"`
+	Revision      string                     `json:"revision"`
+	Batch         int                        `json:"batch"`
+	BatchCount    int                        `json:"batch_count"`
+	Expected      int                        `json:"expected_count"`
+	Completed     int                        `json:"completed_count"`
+	Excluded      int                        `json:"excluded_count"`
+	Uncompleted   int                        `json:"uncompleted_count"`
+	Inventory     snapshotInventoryReference `json:"inventory"`
+}
+
+func summarizeSnapshotCoverage(coverage snapshotCoverage, data []byte) snapshotCoverageSummary {
+	sum := sha256.Sum256(data)
+	hash := hex.EncodeToString(sum[:])
+	return snapshotCoverageSummary{
+		Mode: coverage.Mode, SnapshotID: coverage.SnapshotID, ContentSHA256: coverage.ContentSHA256,
+		Revision: coverage.Revision, Batch: coverage.Batch, BatchCount: coverage.BatchCount,
+		Expected: len(coverage.Expected), Completed: len(coverage.Completed),
+		Excluded: len(coverage.Excluded), Uncompleted: len(coverage.Uncompleted),
+		Inventory: snapshotInventoryReference{ID: "sha256-" + hash, Kind: "repository_snapshot_coverage", Path: snapshotCoverageArtifactPath, SHA256: hash, Bytes: int64(len(data))},
+	}
+}
+
+func verifySnapshotCoverage(current sourceSession, coverage snapshotCoverage, report json.RawMessage) error {
+	data, err := json.Marshal(coverage)
+	if err != nil {
+		return err
+	}
+	// A historical handoff carries the full inline inventory. New handoffs
+	// must bind the exact expected summary and preserve its complete artifact.
+	for _, item := range current.Tasks {
+		if item.ContractID != "inventory-review-handoffs" || !item.VerifiedOutputs || item.Result == nil {
+			continue
+		}
+		bound := item.Result.RuntimeOutputs["snapshot_coverage"]
+		if !equalJSON(data, bound) {
+			summary := summarizeSnapshotCoverage(coverage, data)
+			encoded, err := json.Marshal(summary)
+			if err != nil {
+				return err
+			}
+			if !equalJSON(encoded, bound) {
+				return &sourceReviewError{cause: fmt.Errorf("task %s substituted /snapshot_coverage", item.ID)}
+			}
+			if _, err := readSnapshotArtifact(item.Workspace, summary.Inventory); err != nil {
+				return &sourceReviewError{cause: fmt.Errorf("task %s: /snapshot_coverage/inventory %s: %w", item.ID, summary.Inventory.ID, err)}
+			}
+		}
+		if !equalJSON(bound, report) {
+			return fmt.Errorf("report substituted /snapshot_coverage from task %s", item.ID)
+		}
+		return nil
+	}
+	return &sourceReviewError{cause: fmt.Errorf("/snapshot_coverage lacks a verified handoff source")}
+}
+
 type snapshotAttestation struct {
 	Requested struct {
 		Kind string `json:"kind"`
@@ -52,12 +119,23 @@ type snapshotAttestation struct {
 }
 
 type snapshotIdentity struct {
-	ID         string                  `json:"snapshot_id"`
-	Revision   string                  `json:"revision"`
-	Hash       string                  `json:"content_sha256"`
-	Batch      int                     `json:"batch"`
-	BatchCount int                     `json:"batch_count"`
-	Files      []snapshotInventoryFile `json:"files"`
+	ID               string                      `json:"snapshot_id"`
+	Revision         string                      `json:"revision"`
+	Hash             string                      `json:"content_sha256"`
+	Batch            int                         `json:"batch"`
+	BatchCount       int                         `json:"batch_count"`
+	Files            []snapshotInventoryFile     `json:"files"`
+	FileCount        int                         `json:"file_count"`
+	WorksetsPerBatch int                         `json:"worksets_per_batch"`
+	Inventory        *snapshotInventoryReference `json:"inventory,omitempty"`
+}
+
+type snapshotInventoryReference struct {
+	ID     string `json:"id"`
+	Path   string `json:"path"`
+	Kind   string `json:"kind"`
+	SHA256 string `json:"sha256"`
+	Bytes  int64  `json:"bytes"`
 }
 
 func collectSnapshotCoverage(current sourceSession) (snapshotCoverage, error) {
@@ -118,9 +196,71 @@ func acceptedSnapshotScope(current sourceSession) (*snapshotAttestation, error) 
 		if scope != nil || !item.VerifiedOutputs {
 			return nil, fmt.Errorf("snapshot producer lacks current accepted identity")
 		}
+		if candidate.Snapshot != nil && candidate.Snapshot.Inventory != nil {
+			if err := loadSnapshotInventory(item.Workspace, candidate.Snapshot); err != nil {
+				return nil, err
+			}
+		}
 		scope = &candidate
 	}
 	return scope, nil
+}
+
+// The workspace is supplied by ActionSources from the verified producer's
+// original receipt, including runtime-admitted recovery origins.
+func loadSnapshotInventory(workspace string, summary *snapshotIdentity) error {
+	ref := summary.Inventory
+	if len(summary.Files) != 0 || ref.Kind != "repository_snapshot_inventory" {
+		return fmt.Errorf("invalid snapshot inventory reference")
+	}
+	data, err := readSnapshotArtifact(workspace, *ref)
+	if err != nil {
+		return err
+	}
+	var full snapshotIdentity
+	if err := json.Unmarshal(data, &full); err != nil {
+		return err
+	}
+	if full.Inventory != nil || full.ID != summary.ID || full.Revision != summary.Revision || full.Hash != summary.Hash || full.Batch != summary.Batch || full.BatchCount != summary.BatchCount || full.WorksetsPerBatch != summary.WorksetsPerBatch || full.FileCount != summary.FileCount || len(full.Files) != summary.FileCount {
+		return fmt.Errorf("snapshot inventory differs from accepted summary")
+	}
+	summary.Files = full.Files
+	return nil
+}
+
+func readSnapshotArtifact(workspace string, ref snapshotInventoryReference) ([]byte, error) {
+	if workspace == "" || len(ref.SHA256) != 64 || ref.ID != "sha256-"+ref.SHA256 || ref.Bytes < 1 || ref.Bytes > maxSnapshotArtifactBytes {
+		return nil, fmt.Errorf("invalid snapshot artifact reference")
+	}
+	if ref.Path == "" || filepath.IsAbs(ref.Path) || strings.Contains(ref.Path, "\\") {
+		return nil, fmt.Errorf("invalid snapshot artifact path")
+	}
+	root, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Join(root, ref.Path))
+	if err != nil {
+		return nil, err
+	}
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return nil, fmt.Errorf("snapshot artifact escapes producer workspace")
+	}
+	file, err := os.Open(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("read snapshot artifact: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, ref.Bytes+1))
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(data)
+	if int64(len(data)) != ref.Bytes || hex.EncodeToString(digest[:]) != ref.SHA256 {
+		return nil, fmt.Errorf("snapshot artifact hash or size mismatch")
+	}
+	return data, nil
 }
 
 func checkedSnapshotFiles(scope *snapshotAttestation) (map[string]snapshotInventoryFile, error) {

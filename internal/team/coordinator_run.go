@@ -45,7 +45,7 @@ func ParseDirectAgent(prompt string) (agentName string, task string, ok bool) {
 // funcs so the caller can defer them.
 func (c *Coordinator) buildDirectAgentTaskContext(ctx context.Context, agentDef *agent.AgentDef, resolvedName, task, todoID, directModel string, authorizedToolNames []string) (context.Context, context.CancelFunc, context.CancelFunc, error) {
 	ctx = withoutCoordinatorRequestPreflight(ctx)
-	artifactScope, err := c.buildArtifactAccessScope(todoID, 1, task)
+	artifactScope, err := c.buildArtifactAccessScope(ctx, todoID, 1, task)
 	if err != nil {
 		return nil, nil, nil, err
 	}

@@ -37,6 +37,8 @@ type repositorySnapshotManifest struct {
 	Batch            int            `json:"batch"`
 	BatchCount       int            `json:"batch_count"`
 	WorksetsPerBatch int            `json:"worksets_per_batch"`
+	FileCount        int            `json:"file_count"`
+	Inventory        *artifact      `json:"inventory,omitempty"`
 }
 
 func (r reviewRange) isRepositorySnapshot() bool { return r.Source == "repository_snapshot" }
@@ -116,6 +118,7 @@ func repositorySnapshotInventory(ctx context.Context, repo string, snapshot *rev
 	}
 	result.ContentSHA256 = hex.EncodeToString(digest.Sum(nil))
 	result.ID = "sha256:" + result.ContentSHA256
+	result.FileCount = len(result.Files)
 	return result, nil
 }
 
@@ -338,6 +341,14 @@ func prepareRepositorySnapshot(ctx context.Context, repo, artifactRoot, outputDi
 		return actionResult{}, err
 	}
 	result.Artifacts = append(result.Artifacts, inventoryArtifact)
+	// Keep full membership in the sealed artifact and workset manifests. The
+	// receipt-bound output carries only identity, counts and its exact reference.
+	scope := result.Outputs["scope"].(scopeAttestation)
+	compact := *identity
+	compact.Files = nil
+	compact.Inventory = &inventoryArtifact
+	scope.RepositorySnapshot = &compact
+	result.Outputs["scope"] = scope
 	encoded, err := json.Marshal(result)
 	if err != nil {
 		return actionResult{}, err

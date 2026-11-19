@@ -9,7 +9,7 @@ import (
 
 const runtimeWorksetInputSchema = `{"type":"object","required":["record"],"properties":{"record":{"$ref":"#/$defs/record"}},"$defs":{"record":{"type":"object","additionalProperties":false,"required":["decision","identity"],"properties":{"decision":{"type":"boolean"},"identity":{"type":"string","minLength":1}}}},"x-hufu-runtime-inputs":[{"target":"/record/identity","source_kind":"workset_binding","output":"identity"}]}`
 
-func runtimeWorksetInputFixture(t *testing.T) (*Coordinator, *TodoItem, *TodoItem, *CompiledResultContract) {
+func runtimeWorksetInputFixture(t *testing.T, paths ...string) (*Coordinator, *TodoItem, *TodoItem, *CompiledResultContract) {
 	t.Helper()
 	compiled, err := CompileResultContractDocument("assigned.json", []byte(runtimeWorksetInputSchema))
 	if err != nil {
@@ -18,7 +18,11 @@ func runtimeWorksetInputFixture(t *testing.T) (*Coordinator, *TodoItem, *TodoIte
 	c := newTestCoordinator(t)
 	c.taskTracker.TodoList().SetRunID(c.executionRunID)
 	c.session.ResultContracts = map[string]*CompiledResultContract{compiled.ID: compiled}
-	producer, manifest := runtimeWorksetProducerFixture(t, c, []byte(`{"schema_version":1,"items":[{"key":"assigned-child","bindings":{"identity":"frozen-value"}}]}`))
+	body, err := json.Marshal(WorksetManifest{SchemaVersion: WorksetSchemaVersion, Items: []WorksetItem{{Key: "assigned-child", Bindings: map[string]string{"identity": "frozen-value"}, TouchedPaths: paths}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	producer, manifest := runtimeWorksetProducerFixture(t, c, body)
 	expanded, err := c.expandFanOutTasks([]TaskDef{{ID: "consume", Agent: "worker", FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "seed", Artifact: manifest.ID}, GoalTemplate: "Evaluate {identity}"}}})
 	if err != nil || len(expanded) != 1 {
 		t.Fatalf("expand: %v", err)

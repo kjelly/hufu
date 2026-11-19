@@ -11,6 +11,28 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 )
 
+func TestResumePreservesWatchdogCancellation(t *testing.T) {
+	c := newTestCoordinator(t)
+	session := NewSession()
+	session.Tasks = []*TodoItem{
+		{ID: "1", Agent: "worker", Desc: "completed source", Status: TaskDone, Output: "accepted evidence"},
+		{ID: "2", Agent: "worker", Desc: "pending dependent", Status: TaskPending, Recovery: RecoveryRetry},
+	}
+	c.SetSessionData(session)
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(ErrInvocationStalled)
+	_, stopped, err := c.resumeInvocationTasks(ctx, "resume", false)
+	if !stopped || !errors.Is(err, ErrInvocationStalled) {
+		t.Fatalf("resume stopped=%t with %v, want stall cause", stopped, err)
+	}
+	if result := c.LastRunResult(); result == nil || result.StopReason != StopReasonInvocationStalled || result.GoalSatisfied {
+		t.Fatalf("resume lost watchdog outcome: %+v", result)
+	}
+	if source := todoByID(t, c, "1"); source.Status != TaskDone || source.Output != "accepted evidence" {
+		t.Fatalf("resume altered completed evidence: %+v", source)
+	}
+}
+
 func TestRunStopsAfterRecoveryRequiresOperator(t *testing.T) {
 	c := newTestCoordinator(t)
 	c.session.Agents["coordinator"] = &agent.AgentDef{Name: "coordinator", Role: "coordinator"}

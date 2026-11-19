@@ -215,6 +215,9 @@ func (a *localResultAdmission) commit(ctx context.Context, input SubmitResultInp
 			return errors.New("invalid invariant assessment: " + err.Error())
 		}
 		a.coordinator.attachTaskKnowledgeCoverage(a.todoID, identity.Attempt, metadata.ModelExecutionID, res)
+		if err := a.coordinator.validateAcceptedRepairClaims(ctx, currentResultCollection(a.coordinator.todoItemByID(a.todoID)), res); err != nil {
+			return err
+		}
 		tx, txErr := a.coordinator.beginTaskResultSubmission(identity)
 		if txErr != nil {
 			return rejectLocalResultPersistence(fmt.Errorf("store submitted result: %w", txErr))

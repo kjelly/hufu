@@ -54,6 +54,50 @@ func TestEmbeddedReviewDefinitionsMatchAuthoritativeSchema(t *testing.T) {
 	}
 }
 
+func TestReviewLocationAdmissionMatchesSnapshotAudit(t *testing.T) {
+	schema, _ := contractSchema(t, "review-v1.json")
+	for _, tc := range []struct {
+		name, location    string
+		admitted, audited bool
+	}{
+		{"source_line", "runtime.go:4", true, true},
+		{"symbol_annotation", "runtime.go: archiveGitRevision, extractGitArchive", false, false},
+		{"multiple_symbols", "runtime.go: createArchivedSymlink; other.go: TestLinks", false, false},
+		{"missing_line", "runtime.go", false, false},
+		{"zero_line", "runtime.go:0", false, false},
+		{"negative_line", "runtime.go:-1", false, false},
+		{"line_annotation", "runtime.go:4 functionName", false, false},
+		{"newline_annotation", "runtime.go:4\nother.go:5", false, false},
+		{"outside_assignment", "other.go:4", true, false},
+		{"outside_source_lines", "runtime.go:11", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			review, _, _ := schemaFixture()
+			review["findings"].([]any)[0].(map[string]any)["location"] = tc.location
+			if err := schema.Validate(map[string]any{"record": review}); (err == nil) != tc.admitted {
+				t.Fatalf("producer admission=%t, want %t: %v", err == nil, tc.admitted, err)
+			}
+			var item sourceTask
+			if err := json.Unmarshal(raw(t, map[string]any{
+				"ID": "review", "workset_binding": map[string]any{
+					"touched_paths": []string{"runtime.go"},
+					"inputs":        []map[string]string{{"id": "snapshot-a", "kind": "review_source_snapshot", "sha256": strings.Repeat("a", 64)}},
+				}, "typed_result": map[string]any{"files_read": []map[string]string{{"path": "snapshot-a"}}},
+			}), &item); err != nil {
+				t.Fatal(err)
+			}
+			var record record
+			if err := json.Unmarshal(raw(t, review), &record); err != nil {
+				t.Fatal(err)
+			}
+			files := map[string]snapshotInventoryFile{"runtime.go": {Path: "runtime.go", Lines: 10, Disposition: "selected"}}
+			if err := checkSnapshotReviewFiles(item, record, files, map[string]bool{}, map[string]bool{}); (err == nil) != tc.audited {
+				t.Fatalf("snapshot audit=%t, want %t: %v", err == nil, tc.audited, err)
+			}
+		})
+	}
+}
+
 func TestReviewWorksetKeysMatchSchemaAndHandoffIdentity(t *testing.T) {
 	schema, _ := contractSchema(t, "review-v1.json")
 	for _, tc := range []struct {
@@ -413,7 +457,9 @@ func TestReportRequiresCompleteRuntimeAttestations(t *testing.T) {
 }
 
 func TestCompleteContractsFitRuntimePromptBudget(t *testing.T) {
-	for _, name := range []string{"review-v1.json", "documentation-review-v1.json", "critique-v1.json", "critique-v2.json", "report-v1.json", "report-v2.json"} {
+	// Report-v2 has a separate runtime prompt test. Its receipt-bound scope
+	// and other runtime-owned fields are omitted from the submission schema.
+	for _, name := range []string{"review-v1.json", "documentation-review-v1.json", "critique-v1.json", "critique-v2.json", "report-v1.json"} {
 		_, document := contractSchema(t, name)
 		canonical, err := json.Marshal(document)
 		if err != nil {

@@ -205,11 +205,16 @@ This task forbids result artifacts, so keep the review body in `details`. For
 artifact-backed input, cite the supplied opaque artifact identifier exactly;
 do not invent a filesystem path or claim evidence that you did not observe.
 A successful runtime `view` issues short `ev_` evidence keys. Use those
-keys in `files_read.path` and in the active schema's `x-hufu-evidence-keys`
-locations. Copy only keys issued to this task attempt; the runtime expands
+keys in the active schema's `x-hufu-evidence-keys` locations. Omit outer
+`files_read`: runtime derives it from successful native reads and rejects
+overrides, including null and empty arrays. Copy only keys issued to this task attempt; the runtime expands
 and verifies them before storing full artifact IDs. A key proves a successful
 bounded read, not complete coverage or support for a claim. Preserve existing
 source records verbatim; do not replace their references with your own keys.
+Choose citation keys from the runtime-provided evidence enum when present.
+On an invalid citation, reselect the intended observed source within the same
+result repair; preserve every finding, severity, judgment and gap. Do not
+auto-correct a hash or substitute an unrelated source.
 For `view.artifact_ref`, use the full opaque ID supplied by the runtime.
 Full evidence IDs remain accepted when copied exactly: `sha256-` plus the
 original 64 lowercase hexadecimal characters. Never abbreviate or repair an

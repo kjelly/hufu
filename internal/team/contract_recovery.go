@@ -134,6 +134,11 @@ func (c *Coordinator) assessPreparedContractRecovery(ctx context.Context, source
 	if err := c.assessContractResultRepair(ctx, source, plan); err != nil {
 		return nil, err
 	}
+	for _, patch := range plan.Tasks {
+		if patch.Collection != nil || patch.LegacySubmission != nil {
+			retry[patch.ID], changedResults[patch.ID] = true, true
+		}
+	}
 	// A downstream result must be regenerated whenever its source is replayed.
 	for changed := true; changed; {
 		changed = false
@@ -402,7 +407,11 @@ func validateContractRecoveryLineage(event RunEvent, preceding []RunEvent, admit
 	if admitted == nil || admitted.ConfigurationHash != plan.SourcePolicy {
 		return nil, fmt.Errorf("contract recovery original policy mismatch")
 	}
-	if plan.WorkRetry == nil && plan.ActionRepair == nil && plan.SourcePolicy == plan.Policy.ConfigurationHash {
+	acceptedRepair := false
+	for _, patch := range plan.Tasks {
+		acceptedRepair = acceptedRepair || patch.Collection != nil && patch.Collection.AcceptedResult != nil
+	}
+	if plan.WorkRetry == nil && plan.ActionRepair == nil && !acceptedRepair && plan.SourcePolicy == plan.Policy.ConfigurationHash {
 		return nil, fmt.Errorf("unchanged-policy recovery requires an explicit work retry proof")
 	}
 	if plan.WorkRetry != nil {
@@ -413,9 +422,6 @@ func validateContractRecoveryLineage(event RunEvent, preceding []RunEvent, admit
 			return nil, err
 		}
 	}
-	if plan.ActionRepair != nil && (!sameCanonicalEvidence(admitted.ResultContracts, plan.Policy.ResultContracts) || admitted.StaticWorkflowHash != plan.Policy.StaticWorkflowHash) {
-		return nil, fmt.Errorf("action repair cannot change result schemas or static contracts")
-	}
 	left, right := *cloneExecutionPolicySnapshot(admitted), *cloneExecutionPolicySnapshot(plan.Policy)
 	if plan.InputPolicyUpgrade != nil {
 		if err := validateRunInputPolicyRecovery(ReduceToSessionData(preceding), admitted, plan.Policy, plan.InputPolicyUpgrade); err != nil {
@@ -423,7 +429,17 @@ func validateContractRecoveryLineage(event RunEvent, preceding []RunEvent, admit
 		}
 		left.RunInputPolicyHash, right.RunInputPolicyHash = "", ""
 	}
-	if err := validateLegacyPolicyRecovery(&left, &right, plan, ReduceToTodoList(preceding)); err != nil {
+	tasks := ReduceToTodoList(preceding)
+	if plan.ActionRepair != nil {
+		changes := contractRecoveryChanges(admitted, plan.Policy)
+		if len(admitted.ResultContracts) != len(plan.Policy.ResultContracts) || !slices.Equal(changes, plan.ContractChanges) || len(changes) == 0 && admitted.StaticWorkflowHash != plan.Policy.StaticWorkflowHash {
+			return nil, fmt.Errorf("action repair result schema changes do not match its proof")
+		}
+		if err := validateUnstartedActionConsumers(tasks, preceding, changes); err != nil {
+			return nil, err
+		}
+	}
+	if err := validateLegacyPolicyRecovery(&left, &right, plan, tasks); err != nil {
 		return nil, err
 	}
 	left.ResultContracts, right.ResultContracts = nil, nil
@@ -441,7 +457,9 @@ func validateContractRecoveryLineage(event RunEvent, preceding []RunEvent, admit
 	if !found {
 		return nil, fmt.Errorf("contract recovery source head missing")
 	}
-	tasks := ReduceToTodoList(preceding)
+	if err := validateCollectionOriginalEvents(preceding, plan); err != nil {
+		return nil, err
+	}
 	if err := validateRecoveryTaskSources(tasks, plan); err != nil {
 		return nil, err
 	}
@@ -465,6 +483,9 @@ func validateContractRecoveryLineage(event RunEvent, preceding []RunEvent, admit
 }
 
 func validateRecoveryTaskSources(tasks []*TodoItem, plan *ContractRecoveryPlan) error {
+	if err := validateRecoveryDependentResults(tasks, plan); err != nil {
+		return err
+	}
 	originals := map[string]*TodoItem{}
 	for _, item := range tasks {
 		if !IsPrimaryOccurrence(item) {
@@ -473,6 +494,10 @@ func validateRecoveryTaskSources(tasks []*TodoItem, plan *ContractRecoveryPlan) 
 	}
 	if len(originals) != len(plan.Tasks) {
 		return fmt.Errorf("contract recovery source tasks changed")
+	}
+	patches := make(map[string]ContractRecoveryTask, len(plan.Tasks))
+	for _, patch := range plan.Tasks {
+		patches[patch.ID] = patch
 	}
 	for _, patch := range plan.Tasks {
 		item := originals[patch.ID]
@@ -491,6 +516,12 @@ func validateRecoveryTaskSources(tasks []*TodoItem, plan *ContractRecoveryPlan) 
 			return fmt.Errorf("metadata-only recovery refuses task %s side effects", item.ID)
 		}
 		if patch.Action == "repair_result" {
+			if binding := item.WorksetBinding; binding != nil && binding.SourceArtifact.TaskID != "" {
+				producer, exists := patches[binding.SourceArtifact.TaskID]
+				if !exists || producer.Action != "retain" {
+					return fmt.Errorf("result-only repair requires retained workset producer %s", binding.SourceArtifact.TaskID)
+				}
+			}
 			if err := validateContractResultRepairSource(item, patch, plan); err != nil {
 				return err
 			}
@@ -603,8 +634,14 @@ func (c *Coordinator) contractRecoveryPolicies(ctx context.Context, source *Resu
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if readOnlyActionRepairID(ctx) != "" && (!sameCanonicalEvidence(old.ResultContracts, current.ResultContracts) || old.StaticWorkflowHash != current.StaticWorkflowHash) {
-		return nil, nil, nil, fmt.Errorf("action repair cannot change result schemas or static contracts")
+	if readOnlyActionRepairID(ctx) != "" {
+		changes := contractRecoveryChanges(old, current)
+		if len(changes) > 0 && !actionConsumerUpgradeRequested(ctx) {
+			return nil, nil, nil, fmt.Errorf("action repair changing an unstarted result contract requires --upgrade-contracts")
+		}
+		if err := validateUnstartedActionConsumers(source.Session.Tasks, source.lineage, changes); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	// Reconstruct the current static workflow with original result refs. This
 	// proves that the opaque static hash changed only because of those refs.

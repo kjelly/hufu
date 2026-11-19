@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"encoding/json/v2"
 	"fmt"
 	"slices"
 )
@@ -17,6 +18,7 @@ func resultRepairWorkflowPhase(session *SessionData, taskID string) (Phase, erro
 	if err := validateCollectionRecoveryTarget(item); err != nil {
 		return "", err
 	}
+	branchID := currentResultCollection(item).BranchID
 	var failed []*TodoItem
 	for _, candidate := range session.Tasks {
 		if candidate == nil {
@@ -27,7 +29,7 @@ func resultRepairWorkflowPhase(session *SessionData, taskID string) (Phase, erro
 				return "", fmt.Errorf("failed workflow contains an unrelated unresolved task")
 			}
 			failed = append(failed, candidate)
-		} else if candidate.Phase == item.Phase && hasCommittedWorkflowCollectionRepair(candidate) {
+		} else if candidate.Phase == item.Phase && hasCommittedWorkflowCollectionRepair(candidate, branchID) {
 			failed = append(failed, candidate)
 		}
 	}
@@ -37,17 +39,26 @@ func resultRepairWorkflowPhase(session *SessionData, taskID string) (Phase, erro
 	return item.Phase, nil
 }
 
-func hasCommittedWorkflowCollectionRepair(item *TodoItem) bool {
-	if item.Status != TaskDone {
+func hasCommittedWorkflowCollectionRepair(item *TodoItem, branchID string) bool {
+	if item == nil || item.Status != TaskDone {
 		return false
 	}
 	cp := currentResultCollection(item)
-	if cp == nil || cp.State != ResultCollectionCommitted {
+	// Retention can carry accepted results across branches. A collection
+	// repair grant remains authority only on the branch where it was issued.
+	if cp == nil || cp.BranchID != branchID || cp.State != ResultCollectionCommitted {
 		return false
 	}
 	return slices.ContainsFunc(collectionRepairGrants(item.ExecutionReceipt), func(grant ResultRepairGrant) bool {
-		return grant.Recovery != nil && grant.Recovery.ValidatorRevision >= 4 && validateStoredRecoveryGrant(grant, cp) == nil
+		return isWorkflowCollectionRepairGrant(grant, cp)
 	})
+}
+
+func isWorkflowCollectionRepairGrant(grant ResultRepairGrant, cp *ResultCollectionCheckpoint) bool {
+	// Reference selection repairs accepted work. It grants no authority to
+	// reopen a later phase failure, including on a descendant branch.
+	return grant.Recovery != nil && grant.Recovery.ValidatorRevision >= 4 &&
+		grant.Recovery.Disposition != RecoverySelectReferences && validateStoredRecoveryGrant(grant, cp) == nil
 }
 
 // Match as a multiset: observe may record only the first blocked task, and
@@ -161,28 +172,38 @@ func (c *Coordinator) completedCollectionWorkflowProof(ctx context.Context) (*co
 		return nil, nil
 	}
 	items := current.Tasks
+	branchID := c.activeBranchID()
+	if !slices.ContainsFunc(items, func(item *TodoItem) bool {
+		return hasCommittedWorkflowCollectionRepair(item, branchID)
+	}) {
+		return nil, nil
+	}
+	if err := c.EventJournal().VerifyHashChain(ctx); err != nil {
+		return nil, err
+	}
+	events, err := c.readActiveLineageEvents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	replayed, err := ReplayTodoList(events)
+	if err != nil {
+		return nil, err
+	}
+	failureHeads, err := collectionFailureJournalHeads(events, branchID)
+	if err != nil {
+		return nil, err
+	}
 	var proof *collectionWorkflowProof
 	var completed []*TodoItem
 	required := make(map[string]bool)
 	for _, item := range items {
-		if item == nil || !hasCommittedWorkflowCollectionRepair(item) {
+		if !hasCommittedWorkflowCollectionRepair(item, branchID) {
 			continue
 		}
 		cp := currentResultCollection(item)
 		for _, grant := range collectionRepairGrants(item.ExecutionReceipt) {
-			if grant.Recovery == nil || grant.Recovery.ValidatorRevision < 4 || validateStoredRecoveryGrant(grant, cp) != nil {
+			if !isWorkflowCollectionRepairGrant(grant, cp) {
 				continue
-			}
-			if err := c.EventJournal().VerifyHashChain(ctx); err != nil {
-				return nil, err
-			}
-			events, err := c.readActiveLineageEvents(ctx)
-			if err != nil {
-				return nil, err
-			}
-			replayed, err := ReplayTodoList(events)
-			if err != nil {
-				return nil, err
 			}
 			canonical := todoItemByID(replayed, item.ID)
 			if canonical == nil || canonical.Status != TaskDone || !sameCanonicalEvidence(currentResultCollection(canonical), cp) || !sameCanonicalEvidence(canonical.TypedResult, item.TypedResult) || !sameCanonicalEvidence(collectionRepairGrants(canonical.ExecutionReceipt), collectionRepairGrants(item.ExecutionReceipt)) {
@@ -198,6 +219,9 @@ func (c *Coordinator) completedCollectionWorkflowProof(ctx context.Context) (*co
 			i := slices.IndexFunc(events, func(event RunEvent) bool { return event.ID == grant.Recovery.JournalHeadID })
 			if i < 0 {
 				return nil, errResultCollectionStale
+			}
+			if !failureHeads[grant.Recovery.JournalHeadID] {
+				continue
 			}
 			source := ReduceToSessionData(events[:i+1])
 			var phase Phase
@@ -221,7 +245,10 @@ func (c *Coordinator) completedCollectionWorkflowProof(ctx context.Context) (*co
 				return nil, err
 			}
 			for _, peer := range source.Tasks {
-				if peer != nil && peer.Phase == phase && (isUnresolvedTaskStatus(peer.Status) || hasCommittedWorkflowCollectionRepair(peer)) {
+				if peer == nil || peer.Phase != phase {
+					continue
+				}
+				if isUnresolvedTaskStatus(peer.Status) || collectionRepairBelongsToFailure(peer, branchID, failureHeads) {
 					required[peer.ID] = true
 				}
 			}
@@ -243,4 +270,37 @@ func (c *Coordinator) completedCollectionWorkflowProof(ctx context.Context) (*co
 		return nil, nil
 	}
 	return proof, nil
+}
+
+// A phase can fail again after it has reopened. Its earlier repair grants
+// remain valid provenance for accepted work, but cannot reopen this failure.
+func collectionFailureJournalHeads(events []RunEvent, branchID string) (map[string]bool, error) {
+	heads := make(map[string]bool)
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		if effectiveEventBranchID(event) != branchID {
+			continue
+		}
+		if event.Type == string(EventWorkflowStateChanged) {
+			var state WorkflowStateChangedPayload
+			if err := json.Unmarshal(event.Payload, &state); err != nil {
+				return nil, fmt.Errorf("decode workflow recovery boundary: %w", err)
+			}
+			if state.State != PhaseFailed {
+				break
+			}
+		}
+		heads[event.ID] = true
+	}
+	return heads, nil
+}
+
+func collectionRepairBelongsToFailure(item *TodoItem, branchID string, heads map[string]bool) bool {
+	if !hasCommittedWorkflowCollectionRepair(item, branchID) {
+		return false
+	}
+	cp := currentResultCollection(item)
+	return slices.ContainsFunc(collectionRepairGrants(item.ExecutionReceipt), func(grant ResultRepairGrant) bool {
+		return isWorkflowCollectionRepairGrant(grant, cp) && heads[grant.Recovery.JournalHeadID]
+	})
 }

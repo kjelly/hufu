@@ -50,6 +50,12 @@ func resultCollectionProviderFixture(t *testing.T, endpoint string, runtime bool
 }
 
 func resultCollectionTaskFixture(t *testing.T, endpoint string, runtime bool, configureTask func(*TodoSpec), options ...func(*Coordinator)) (*Coordinator, *TodoItem, context.Context, ExecutionReceipt) {
+	return resultCollectionIdentityFixture(t, endpoint, runtime, configureTask, nil, options...)
+}
+
+// Identity binding mirrors dispatch: expansion receipts need the reserved child
+// IDs, and must be complete before the canonical task_created event is emitted.
+func resultCollectionIdentityFixture(t *testing.T, endpoint string, runtime bool, configureTask func(*TodoSpec), bindIdentity func(*Coordinator, *TodoSpec, []string), options ...func(*Coordinator)) (*Coordinator, *TodoItem, context.Context, ExecutionReceipt) {
 	t.Helper()
 	c := newTestCoordinator(t)
 	c.maxConcurrent = 1
@@ -89,6 +95,9 @@ func resultCollectionTaskFixture(t *testing.T, endpoint string, runtime bool, co
 		configureTask(&spec)
 	}
 	ids := c.taskTracker.TodoList().ReserveIDs(1)
+	if bindIdentity != nil {
+		bindIdentity(c, &spec, ids)
+	}
 	projection, err := taskOccurrenceProjectionFromSpec(spec, ids[0])
 	if err != nil {
 		t.Fatal(err)

@@ -580,7 +580,7 @@ func (c *Coordinator) executeTask(parentCtx context.Context, task TaskDef, todoI
 		}
 	}
 
-	depResults := c.dependencyResultsForTask(todoID)
+	depResults := c.dependencyResultsForTaskWithContext(parentCtx, todoID)
 	if err := c.validateDependencyPayloads(depResults); err != nil {
 		return "", fmt.Errorf("worker dependency preflight failed: %w", err)
 	}
@@ -925,7 +925,7 @@ retryLoop:
 		}
 		attemptCtx = c.withIsolatedAttempt(attemptCtx, isolated)
 		request = c.newTaskContextRequest(task, todoID, attempt, trigger, agentName, agentDef.Role, failureContext)
-		attemptArtifactScope, scopeErr := c.buildArtifactAccessScope(todoID, attempt, task.Goal)
+		attemptArtifactScope, scopeErr := c.buildArtifactAccessScope(attemptModeCtx, todoID, attempt, task.Goal)
 		if scopeErr != nil {
 			closeTranscript()
 			return "", fmt.Errorf("artifact scope preflight failed: %w", scopeErr)
@@ -1225,6 +1225,16 @@ retryLoop:
 				err = c.blockTaskExecutionEnvelopePreflight(task, c.todoItemByID(todoID), inputErr)
 				return
 			}
+			pathContext, inputErr := c.resultWorksetPathContext(taskCtx, todoID, compiledResult)
+			if inputErr != nil {
+				err = c.blockTaskExecutionEnvelopePreflight(task, c.todoItemByID(todoID), inputErr)
+				return
+			}
+			currentPrompt += pathContext
+			var pathLookup func() (map[string]string, error)
+			if compiledResult != nil && compiledResult.worksetPaths != nil {
+				pathLookup = func() (map[string]string, error) { return c.verifiedWorksetPathChoices(taskCtx, todoID) }
+			}
 			var runtimeInputLookup func() (map[string]any, error)
 			if compiledResult != nil && len(compiledResult.runtimeInputs) > 0 {
 				runtimeInputLookup = func() (map[string]any, error) { return c.resultRuntimeInputValues(compiledResult, todoID) }
@@ -1277,8 +1287,9 @@ retryLoop:
 							ArtifactScope:               cloneArtifactAccessScope(attemptArtifactScope),
 							invariantRepairInstructions: invariantRepairPrompt,
 							resultContractSchema:        compiledResult,
-							resultEvidenceInputs:        c.dependencyResultsForTask(todoID),
+							resultEvidenceInputs:        c.dependencyResultsForTaskWithContext(taskCtx, todoID),
 							resultRuntimeInputs:         runtimeInputLookup,
+							resultWorksetPaths:          pathLookup,
 							resultProjectClaims: func(input SubmitResultInput) (SubmitResultInput, error) {
 								return c.projectResultClaims(withInvocationMetadata(taskCtx, invocationMetadataFromManifest(&contextManifest)), todoID, input)
 							},

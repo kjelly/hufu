@@ -18,7 +18,8 @@ const (
 	RecoveryRepairClaims            ResultCollectionRecoveryDisposition = "repair_claims"
 	RecoveryResumeCollection        ResultCollectionRecoveryDisposition = "resume_collection"
 	RecoveryBlocked                 ResultCollectionRecoveryDisposition = "blocked"
-	resultRecoveryValidatorRevision                                     = 8
+	RecoverySelectReferences        ResultCollectionRecoveryDisposition = "select_references"
+	resultRecoveryValidatorRevision                                     = 14
 )
 
 type ResultCollectionRecoveryCheck struct {
@@ -31,24 +32,27 @@ type ResultCollectionRecoveryCheck struct {
 // contains references, never report/prompt bytes. Its digest pins all consumed
 // turns, original response/prepared bytes, policy and source bindings.
 type ResultCollectionRecoveryAssessment struct {
-	TaskID            string                              `json:"task_id,omitempty"`
-	BranchID          string                              `json:"branch_id,omitempty"`
-	SourceRunID       string                              `json:"source_run_id,omitempty"`
-	JournalHeadID     string                              `json:"journal_head_id"`
-	Version           int                                 `json:"version"`
-	ValidatorRevision int                                 `json:"validator_revision"`
-	Disposition       ResultCollectionRecoveryDisposition `json:"disposition"`
-	Checkpoint        *ResultCollectionCheckpoint         `json:"checkpoint"`
-	CheckpointSHA256  string                              `json:"checkpoint_sha256"`
-	OriginalReason    RepairFailureReason                 `json:"original_reason"`
-	TranscriptRef     string                              `json:"transcript_ref"`
-	Checks            []ResultCollectionRecoveryCheck     `json:"checks"`
-	TurnsUsed         int                                 `json:"turns_used"`
-	RemainingTurns    int                                 `json:"remaining_turns"`
-	AdditionalTurns   int                                 `json:"additional_turns"`
-	AcceptedTasks     *int                                `json:"accepted_tasks,omitempty"`
-	ContinuesWorkflow bool                                `json:"continues_workflow"`
-	Fingerprint       string                              `json:"fingerprint"`
+	TaskID                string                              `json:"task_id,omitempty"`
+	BranchID              string                              `json:"branch_id,omitempty"`
+	SourceRunID           string                              `json:"source_run_id,omitempty"`
+	JournalHeadID         string                              `json:"journal_head_id"`
+	Version               int                                 `json:"version"`
+	ValidatorRevision     int                                 `json:"validator_revision"`
+	Disposition           ResultCollectionRecoveryDisposition `json:"disposition"`
+	Checkpoint            *ResultCollectionCheckpoint         `json:"checkpoint"`
+	CheckpointSHA256      string                              `json:"checkpoint_sha256"`
+	OriginalReason        RepairFailureReason                 `json:"original_reason"`
+	TranscriptRef         string                              `json:"transcript_ref"`
+	Checks                []ResultCollectionRecoveryCheck     `json:"checks"`
+	TurnsUsed             int                                 `json:"turns_used"`
+	RemainingTurns        int                                 `json:"remaining_turns"`
+	AdditionalTurns       int                                 `json:"additional_turns"`
+	AcceptedTasks         *int                                `json:"accepted_tasks,omitempty"`
+	ContinuesWorkflow     bool                                `json:"continues_workflow"`
+	ReferenceSelections   []AcceptedReferenceSelection        `json:"reference_selections,omitempty"`
+	ReferenceChoices      []AcceptedReferenceChoice           `json:"reference_choices,omitempty"`
+	ReferenceClaimsSHA256 string                              `json:"reference_claims_sha256,omitempty"`
+	Fingerprint           string                              `json:"fingerprint"`
 }
 
 func recoveryAssessmentFingerprint(a *ResultCollectionRecoveryAssessment) (string, error) {
@@ -67,6 +71,8 @@ func cloneRecoveryAssessment(a *ResultCollectionRecoveryAssessment) *ResultColle
 		copy.AcceptedTasks = new(*a.AcceptedTasks)
 	}
 	copy.Checks = slices.Clone(a.Checks)
+	copy.ReferenceSelections = slices.Clone(a.ReferenceSelections)
+	copy.ReferenceChoices = slices.Clone(a.ReferenceChoices)
 	return &copy
 }
 
@@ -116,15 +122,18 @@ func validateCollectionRecoveryTarget(item *TodoItem) error {
 // tool calls, provider construction, or decision inference. Both explicit
 // repair and the read-only CLI projection use this boundary.
 func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID string) (*ResultCollectionRecoveryAssessment, error) {
-	if err := ctx.Err(); err != nil {
+	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
+	progress := c.beginRuntimeValidation("result_recovery", taskID)
+	defer progress.close()
 	item := c.todoItemByID(taskID)
 	a := &ResultCollectionRecoveryAssessment{TaskID: taskID, BranchID: c.activeBranchID(), Version: 1, ValidatorRevision: resultRecoveryValidatorRevision, Disposition: RecoveryBlocked, Checks: []ResultCollectionRecoveryCheck{}, ContinuesWorkflow: true}
 	if item != nil && item.ExecutionReceipt != nil {
 		a.SourceRunID = item.ExecutionReceipt.RunID
 	}
 	check := func(code string, err error) bool {
+		progress.checked(code)
 		entry := ResultCollectionRecoveryCheck{Code: code, Passed: err == nil}
 		if err != nil {
 			entry.Diagnostic = schemaRepairDiagnostic(err.Error())
@@ -133,6 +142,9 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 		return err == nil
 	}
 	finish := func() (*ResultCollectionRecoveryAssessment, error) {
+		if err := context.Cause(ctx); err != nil {
+			return nil, err
+		}
 		if a.JournalHeadID != "" {
 			latest, err := c.EventJournal().ReadEvents(ctx)
 			if err != nil || len(latest) == 0 || latest[len(latest)-1].ID != a.JournalHeadID {
@@ -274,6 +286,9 @@ func validateRecoveryAssessment(a *ResultCollectionRecoveryAssessment) error {
 	if err := validateResultCollectionCheckpoint(a.Checkpoint); err != nil {
 		return err
 	}
+	if !supportsCollectionOriginRevision(a.Checkpoint, a.ValidatorRevision) {
+		return errResultCollectionStale
+	}
 	digest, err := collectionDigest(a.Checkpoint)
 	if err != nil || digest != a.CheckpointSHA256 {
 		return errResultCollectionStale
@@ -283,6 +298,10 @@ func validateRecoveryAssessment(a *ResultCollectionRecoveryAssessment) error {
 		return errResultCollectionStale
 	}
 	switch a.Disposition {
+	case RecoverySelectReferences:
+		if !validAcceptedReferenceAssessment(a) {
+			return errResultCollectionStale
+		}
 	case RecoveryCommitLocal:
 		if a.AdditionalTurns != 0 {
 			return errResultCollectionStale
@@ -311,6 +330,11 @@ func (c *Coordinator) AssessResumeResultCollection(ctx context.Context, source *
 	if c.eventStore != nil || c.executionRunID != "" || source == nil || source.Session == nil {
 		return nil, fmt.Errorf("recovery preview requires a fresh read-only coordinator and source")
 	}
+	// Ordinary startup keeps and compares an already active checkpoint. A
+	// result-only preview must not promise admission using only its replay.
+	if err := validateResumeCheckpointProjection(source); err != nil {
+		return nil, err
+	}
 	if err := c.prepareRecoveryValidation(); err != nil {
 		return nil, err
 	}
@@ -337,6 +361,13 @@ func (c *Coordinator) AssessResumeResultCollection(ctx context.Context, source *
 		a.Checks = append(a.Checks, ResultCollectionRecoveryCheck{Code: "resume_frozen_inputs", Diagnostic: "selected task has no matching canonical frozen input binding; automatic rebinding of historical work is unsupported, and supplying new inputs cannot repair it"})
 		a.Fingerprint, err = recoveryAssessmentFingerprint(a)
 	}
+	if a.Disposition != RecoveryBlocked {
+		if admissionErr := c.validateResultRepairGrant(context.WithValue(ctx, referenceProjectionPreviewKey{}, true), c.todoItemByID(taskID), TaskProtocolIncomplete, c.collectionResultRepairGrant(a)); admissionErr != nil {
+			a.Disposition, a.AdditionalTurns, a.ContinuesWorkflow = RecoveryBlocked, 0, false
+			a.Checks = append(a.Checks, ResultCollectionRecoveryCheck{Code: "grant_admission", Diagnostic: schemaRepairDiagnostic(admissionErr.Error())})
+			a.Fingerprint, err = recoveryAssessmentFingerprint(a)
+		}
+	}
 	return a, err
 }
 
@@ -344,6 +375,9 @@ func (c *Coordinator) AssessResumeResultCollection(ctx context.Context, source *
 // never by running today's evaluator on today's source results.
 func validateCollectionRecoveryGrantEvent(event RunEvent, grant *ResultRepairGrant, receipt *ExecutionReceipt) error {
 	a := grant.Recovery
+	if a != nil && a.Disposition != RecoverySelectReferences && grant.ReferenceProjection != nil {
+		return errResultCollectionStale
+	}
 	if err := validateRecoveryAssessment(a); err != nil {
 		return err
 	}
@@ -365,6 +399,10 @@ func validateCollectionRecoveryGrantEvent(event RunEvent, grant *ResultRepairGra
 		return err
 	}
 	switch a.Disposition {
+	case RecoverySelectReferences:
+		if err := validateAcceptedReferenceProjection(grant, next); err != nil {
+			return err
+		}
 	case RecoveryRepairClaims:
 		if next.State != ResultCollectionReceived || next.Prepared != nil || next.Response == nil || cp.Response == nil || *next.Response != *cp.Response || next.FailureReason != RepairFailureInvalidSchema {
 			return errResultCollectionStale
@@ -459,6 +497,9 @@ func validateMigratedCollectionProgress(prior, next *ResultCollectionCheckpoint)
 
 func validateStoredRecoveryGrant(grant ResultRepairGrant, checkpoint *ResultCollectionCheckpoint) error {
 	a := grant.Recovery
+	if a != nil && a.Disposition != RecoverySelectReferences && grant.ReferenceProjection != nil {
+		return errResultCollectionStale
+	}
 	if err := validateRecoveryAssessment(a); err != nil {
 		return err
 	}
@@ -564,6 +605,24 @@ func (c *Coordinator) assessRecoveryLineage(ctx context.Context, item *TodoItem,
 
 func (c *Coordinator) assessRecoveryClaims(ctx context.Context, item *TodoItem, a *ResultCollectionRecoveryAssessment, work *resultCollectionWork, compiled *CompiledResultContract, check func(string, error) bool) {
 	cp, taskID := a.Checkpoint, item.ID
+	if p := acceptedRepairProof(cp); p != nil {
+		if cp.ContractUpgrade.SourceOrigin != nil && !check("accepted_origin", c.validateAcceptedCollectionOrigin(ctx, cp)) {
+			return
+		}
+		original, err := c.readAcceptedRepairResult(ctx, cp.ContractUpgrade.Original, p.ResultSHA256)
+		if !check("accepted_repair_source", err) {
+			return
+		}
+		if !check("accepted_repair_binding", c.validateAcceptedRepairClaims(ctx, cp, original)) {
+			return
+		}
+		c.assessAcceptedReferenceSelection(ctx, a, work, compiled, check)
+		return
+	}
+	if len(selectedAcceptedReferences(ctx)) > 0 {
+		check("reference_selection", fmt.Errorf("reference selection requires an accepted-result repair"))
+		return
+	}
 	ref, kind := cp.Prepared, "claims"
 	if ref == nil {
 		ref, kind = cp.Response, "response"
@@ -597,45 +656,33 @@ func (c *Coordinator) assessRecoveryClaims(ctx context.Context, item *TodoItem, 
 	raw := blob.Data
 	inspection, _ := collectionResponseJSON(raw)
 	resolved, err := c.resolveResultEvidenceKeys(ctx, taskID, string(inspection))
-	if !check("evidence_keys", err) {
+	if err != nil {
+		if isResultReferenceChoiceError(err) {
+			// The observation registry was authenticated before this typed
+			// selection error. Only the model claim needs repair, not its sources.
+			check("evidence_keys", nil)
+			if c.validateRecoveryIndependentClaims(ctx, cp, work, compiled, string(inspection), check) {
+				check("canonical_claims", err)
+				a.Disposition, a.AdditionalTurns = RecoveryRepairClaims, 2
+			}
+		} else {
+			check("evidence_keys", err)
+		}
 		return
 	}
+	check("evidence_keys", nil)
 	if !c.validateRecoveryIndependentClaims(ctx, cp, work, compiled, resolved, check) {
 		return
 	}
 	claims := []byte(resolved)
-	input, err := c.decodeCollectionClaims(taskID, claims)
-	if blob.ResponseIssue != nil {
-		err = rejectLocalResult(RepairFailureInvalidSchema, errors.New(blob.ResponseIssue.Diagnostic()))
-	}
-	if err == nil {
-		input, err = c.projectResultClaims(ctx, taskID, input)
-		if err != nil {
-			err = rejectProjectedClaims(err)
-		}
-	}
-	if err == nil {
-		admission := localResultAdmission{coordinator: c, todoID: taskID}
-		var res *TaskResult
-		res, err = admission.validateClaims(ctx, input, localResultSubmissionContract(c, taskID), func() RepairFailureReason { return RepairFailureInvalidSchema }, false)
-		if err == nil {
-			err = c.attestInvariantClaims(taskID, cp.Attempt, cp.ModelExecutionID, input.InvariantAssessments, res)
-			if _, mismatch := errors.AsType[*invariantFindingSeverityMismatch](err); mismatch {
-				err = rejectLocalResult(RepairFailureInvalidSchema, err)
-			}
-		}
-		if err == nil {
-			contract := localResultSubmissionContract(c, taskID)
-			err = contract.validateFinalizableResult(res)
-			if err != nil && collectionProjectionFormatFailure(contract, res) {
-				err = rejectLocalResult(RepairFailureInvalidSchema, err)
-			}
-		}
-	}
+	err = c.validateRecoveryCanonicalClaims(ctx, cp, claims, blob.ResponseIssue)
 	if err == nil {
 		a.Disposition = RecoveryCommitLocal
 	} else {
 		check("canonical_claims", err)
+		if isResultReferenceChoiceError(err) {
+			err = c.collectionEvidenceRejection(ctx, cp, work, resolved, err)
+		}
 		reason := localResultRejectionReason(err)
 		if reason == RepairFailureInvalidSchema || reason == RepairFailureResultMissing {
 			a.Disposition, a.AdditionalTurns = RecoveryRepairClaims, 2

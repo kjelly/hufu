@@ -99,8 +99,8 @@
               },
               "location": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 8192
+                "maxLength": 8192,
+                "pattern": "^[^\\r\\n]+:[1-9][0-9]*$"
               },
               "evidence": {
                 "type": "array",
@@ -115,7 +115,8 @@
                 "maxItems": 32
               },
               "requires_critique": {
-                "type": "boolean", "description": "Must be true for every warning or error finding. Use true for an info finding when independent critique is needed. Preserve severity and findings when repairing this field."
+                "type": "boolean",
+                "description": "Must be true for every warning or error finding. Use true for an info finding when independent critique is needed. Preserve severity and findings when repairing this field."
               },
               "detail": {
                 "type": "string",
@@ -576,6 +577,7 @@
     "binding": "reference_candidate_ids"
   },
   "x-hufu-evidence-keys": {
+    "runtime_owned_files_read": true,
     "pointers": [
       "/record/findings/*/evidence/*",
       "/record/reference_assessments/*/evidence/*"
@@ -584,5 +586,27 @@
   "x-hufu-result-projections": {
     "findings": "/record/findings"
   },
-  "x-hufu-runtime-inputs": [{"target":"/record/workset_key","source_kind":"workset_binding","output":"key"},{"target":"/record/review_revision","source_kind":"workset_binding","output":"review_revision"},{"target":"/record/lens","source_kind":"workset_binding","output":"lens"}]
+  "x-hufu-runtime-inputs": [
+    {
+      "target": "/record/workset_key",
+      "source_kind": "workset_binding",
+      "output": "key"
+    },
+    {
+      "target": "/record/review_revision",
+      "source_kind": "workset_binding",
+      "output": "review_revision"
+    },
+    {
+      "target": "/record/lens",
+      "source_kind": "workset_binding",
+      "output": "lens"
+    }
+  ],
+  "x-hufu-workset-paths": {
+    "pointers": [
+      "/record/findings/*/location"
+    ],
+    "format": "path_line"
+  }
 }

@@ -82,6 +82,18 @@ func compareRunInputSnapshotProjection(live []RunInputSnapshot, liveActive strin
 	return nil
 }
 
+// Keep policy projection and its cache boundary on the same event vocabulary.
+func executionPolicyProjectionEvent(event RunEvent) bool {
+	if event.SchemaVersion < eventStoreSchemaVersion {
+		return false
+	}
+	switch EventType(event.Type) {
+	case EventExecutionPolicySnapshot, EventExecutionPolicySnapshotMigrated, EventContractRecovery, EventDerivedForkCreated:
+		return true
+	}
+	return false
+}
+
 // executionPolicySnapshotFromEvents returns the single immutable policy
 // snapshot visible in an event lineage. A current-schema lineage may not
 // change its policy after it has been admitted: accepting the last value would
@@ -90,7 +102,7 @@ func compareRunInputSnapshotProjection(live []RunInputSnapshot, liveActive strin
 func executionPolicySnapshotFromEvents(events []RunEvent) (*ExecutionPolicySnapshot, error) {
 	var admitted *ExecutionPolicySnapshot
 	for index, event := range events {
-		if event.SchemaVersion < eventStoreSchemaVersion {
+		if !executionPolicyProjectionEvent(event) {
 			continue
 		}
 		switch EventType(event.Type) {

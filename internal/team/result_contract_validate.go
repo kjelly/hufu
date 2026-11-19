@@ -318,12 +318,13 @@ func (c *Coordinator) validateStructuredPayloadClaims(todoID string, raw json.Ra
 	// Source checks are independent of model formatting. Run them even when
 	// canonical schema validation would fail first, so a format error cannot
 	// conceal an invalid receipt, source reference, or settled decision.
+	repairable := false
 	if err == nil {
 		if bindingErr := c.validateAssembledEvidenceInputs(todoID, compiled, assembled, bindings); bindingErr != nil {
 			err = fmt.Errorf("%s: bind evidence inputs: %w", structuredPayloadInvalidCode, bindingErr)
+			repairable = isResultReferenceChoiceError(bindingErr)
 		}
 	}
-	repairable := false
 	var payload *ResultPayload
 	if err == nil {
 		payload, err = validateStructuredResultPayload(compiled, *ref, assembled, observations...)
@@ -337,6 +338,7 @@ func (c *Coordinator) validateStructuredPayloadClaims(todoID string, raw json.Ra
 	if err == nil {
 		if bindingErr := c.validateSubmittedEvidenceInputs(todoID, payload); bindingErr != nil {
 			err = fmt.Errorf("%s: bind evidence inputs: %w", structuredPayloadInvalidCode, bindingErr)
+			repairable = isResultReferenceChoiceError(bindingErr)
 		}
 	}
 	if err != nil {
@@ -488,6 +490,9 @@ func resultContractPromptSection(ref *ResultContractRef, compiled *CompiledResul
 	} else if compiled != nil && compiled.evidenceKeys != nil && !external {
 		b.WriteString("Successful runtime view calls issue short ev_ evidence keys. Use these keys only in files_read.path (or string entries) and the x-hufu-evidence-keys pointers below. The runtime resolves them to full artifact IDs before all canonical validation and hashing. Keys are task/attempt/branch/model-execution scoped; never invent or borrow keys. They attest a successful bounded read, not full artifact coverage or support for a semantic claim.\n")
 	}
+	if compiled != nil && compiled.worksetPaths != nil {
+		b.WriteString("At x-hufu-workset-paths pointers, use runtime path keys followed by :positive_original_source_line when supplied. Runtime restores exact frozen paths before canonical validation. Full paths must exactly match this workset; never paraphrase a path. Preserve the source line and all semantic findings. Path selection does not attest that the line supports the finding.\n")
+	}
 	if compiled != nil && len(compiled.fixedCollections) > 0 {
 		b.WriteString("This schema describes the canonical STORED result. For fields declared in Runtime Fixed Collections, submit keyed decision objects according to that manifest instead of arrays. The runtime supplies the final array and its fixed fields before validating this schema.\n")
 	}
@@ -522,6 +527,9 @@ func resultContractPromptSection(ref *ResultContractRef, compiled *CompiledResul
 		}
 		if spec := compiled.evidenceInputs; spec != nil && spec.runtimeOwned() {
 			fmt.Fprintf(b, "The runtime supplies `%s` from every accepted evidence_from source. Omit this field entirely; the stored result retains all complete source records and hashes.\n", spec.ItemsPointer)
+			if spec.RuntimeComplete {
+				fmt.Fprintf(b, "Omit `%s` entirely. The runtime generates this completion field for the validated result.\n", spec.CompletePointer)
+			}
 			runtimeOwned = true
 		}
 		if runtimeOwned {
@@ -597,6 +605,11 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 		}
 		return nil, validateResultEnvelope(request.resultContractSchema, &TaskResult{Status: status})
 	}
+	var pathErr error
+	raw, pathErr = canonicalExternalWorksetPaths(request, raw)
+	if pathErr != nil {
+		return nil, pathErr
+	}
 	if spec := request.resultContractSchema.claimsProjection; spec != nil {
 		for name, p := range map[string]string{"findings": spec.Findings, "invariant_assessments": spec.Invariants} {
 			if _, supplied := proposal.suppliedFields[name]; p != "" && supplied {
@@ -662,6 +675,9 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 	if err := validateResultWorksetInputs(value, request.resultContractSchema.worksetInputs, request.Task.WorksetBinding); err != nil {
 		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
 	}
+	if err := validateResultWorksetPaths(value, request.resultContractSchema.worksetPaths, request.Task.WorksetBinding); err != nil {
+		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
+	}
 	if err := validateResultEvidenceInputs(value, request.resultContractSchema.evidenceInputs, request.Task.EvidenceFrom, request.resultEvidenceInputs); err != nil {
 		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
 	}
@@ -693,6 +709,9 @@ func collectionModelSchemaFailure(compiled *CompiledResultContract, plans []resu
 	}
 	if compiled.evidenceInputs.runtimeOwned() {
 		protected = append(protected, compiled.evidenceInputs.ItemsPointer)
+		if compiled.evidenceInputs.RuntimeComplete {
+			protected = append(protected, compiled.evidenceInputs.CompletePointer)
+		}
 	}
 	for _, plan := range plans {
 		fields := plan.spec.fixedFields()

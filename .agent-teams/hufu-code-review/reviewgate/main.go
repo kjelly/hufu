@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -88,6 +89,7 @@ type payload struct {
 }
 
 type sourceTask struct {
+	Workspace    string `json:"workspace"`
 	ID           string
 	Status       string
 	ContractID   string   `json:"contract_id"`
@@ -361,9 +363,8 @@ func verify(current sourceSession) (string, string, error) {
 		return "", "", err
 	}
 	if snapshotCoverage.Mode == "repository_snapshot" {
-		encodedCoverage, err := json.Marshal(snapshotCoverage)
-		if err != nil || !equalJSON(encodedCoverage, report.SnapshotCoverage) {
-			return "", "", fmt.Errorf("report substituted snapshot coverage")
+		if err := verifySnapshotCoverage(current, snapshotCoverage, report.SnapshotCoverage); err != nil {
+			return "", "", err
 		}
 		limited = limited || len(snapshotCoverage.Uncompleted) > 0
 	}
@@ -425,8 +426,16 @@ func verifyReview(item sourceTask, r record) error {
 		return fmt.Errorf("task %s omitted typed findings", item.ID)
 	}
 	for i, f := range r.Findings {
-		if f.Summary != item.Result.Findings[i].Summary || f.Detail != item.Result.Findings[i].Detail || f.Severity != item.Result.Findings[i].Severity || !observed(item, f.Evidence) || ((f.Severity == "error" || f.Severity == "warning") && !f.RequiresCritique) {
-			return fmt.Errorf("task %s finding %d is inconsistent or ungrounded", item.ID, i)
+		if f.Summary != item.Result.Findings[i].Summary || f.Detail != item.Result.Findings[i].Detail || f.Severity != item.Result.Findings[i].Severity || ((f.Severity == "error" || f.Severity == "warning") && !f.RequiresCritique) {
+			return fmt.Errorf("task %s /record/findings/%d is inconsistent with the accepted envelope", item.ID, i)
+		}
+		if len(f.Evidence) == 0 {
+			return fmt.Errorf("task %s /record/findings/%d/evidence has no observed source", item.ID, i)
+		}
+		for index, reference := range f.Evidence {
+			if !observed(item, []string{reference}) {
+				return fmt.Errorf("task %s /record/findings/%d/evidence/%d: reference %q was not observed by this task", item.ID, i, index, reference)
+			}
 		}
 	}
 	if (len(r.Gaps) > 0) != (item.Result.Status == "completed_with_gaps") {
@@ -654,7 +663,28 @@ func runGateAction(ctx context.Context, actionType string, current sourceSession
 		if err != nil {
 			return err
 		}
-		return json.NewEncoder(out).Encode(map[string]any{"outputs": map[string]any{"review_handoff_inventory": inventory, "snapshot_coverage": coverage, "supplement_outcomes": outcomes}})
+		outputs := map[string]any{"review_handoff_inventory": inventory, "snapshot_coverage": coverage, "supplement_outcomes": outcomes}
+		result := map[string]any{"outputs": outputs}
+		if coverage.Mode == "repository_snapshot" {
+			data, err := json.Marshal(coverage)
+			if err != nil {
+				return err
+			}
+			workspace := os.Getenv("HUFU_WORKSPACE")
+			if workspace == "" {
+				return fmt.Errorf("snapshot coverage requires the action workspace")
+			}
+			if len(data) > maxSnapshotArtifactBytes {
+				return fmt.Errorf("snapshot coverage artifact has %d bytes (maximum %d)", len(data), maxSnapshotArtifactBytes)
+			}
+			if err := os.WriteFile(filepath.Join(workspace, snapshotCoverageArtifactPath), data, 0o600); err != nil {
+				return fmt.Errorf("write snapshot coverage artifact: %w", err)
+			}
+			summary := summarizeSnapshotCoverage(coverage, data)
+			outputs["snapshot_coverage"] = summary
+			result["artifacts"] = []snapshotInventoryReference{summary.Inventory}
+		}
+		return json.NewEncoder(out).Encode(result)
 	}
 	reportID, reportHash, err := verify(current)
 	if err != nil {

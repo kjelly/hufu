@@ -2,6 +2,7 @@ package team
 
 import (
 	"encoding/json/v2"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -98,7 +99,7 @@ func TestRecoveredArtifactScopeRequiresCanonicalOrigin(t *testing.T) {
 					test.mutate(t, c, list.items)
 				}()
 			}
-			scope, err := c.buildArtifactAccessScope("2", 1)
+			scope, err := c.buildArtifactAccessScope(t.Context(), "2", 1)
 			if test.mutate != nil {
 				if err == nil {
 					t.Fatal("unadmitted recovered artifact was authorized")
@@ -176,6 +177,74 @@ func TestRecoveredArtifactActionEnvironmentRejectsInheritedGrants(t *testing.T) 
 	}
 }
 
+func TestRecoveredArtifactWorksetInputsReuseOnlyOperationLocalOriginProof(t *testing.T) {
+	for _, scenario := range []string{"valid", "later_digest", "later_attempt", "next_call_source"} {
+		t.Run(scenario, func(t *testing.T) {
+			c := newRecoveredArtifactCoordinator(t)
+			input := c.todoItemByID("2").WorksetBinding.Inputs[0]
+			manifest := WorksetManifest{SchemaVersion: WorksetSchemaVersion}
+			for i := range 32 {
+				manifest.Items = append(manifest.Items, WorksetItem{Key: fmt.Sprint(i), Inputs: []ArtifactRef{input}})
+			}
+			before := c.eventStore.cacheHitCount
+			if _, err := c.validateWorksetInputs(manifest, "1"); err != nil {
+				t.Fatal(err)
+			}
+			// The selected lineage is replayed once for the producer, rather
+			// than once for each input. Per-input integrity remains mandatory.
+			if reads := c.eventStore.cacheHitCount - before; reads != 1 {
+				t.Fatalf("32 inputs required %d canonical event reads, want one", reads)
+			}
+			switch scenario {
+			case "valid":
+				return
+			case "later_digest":
+				manifest.Items[31].Inputs[0].SHA256 = strings.Repeat("0", 64)
+			case "later_attempt":
+				manifest.Items[31].Inputs[0].Attempt++
+			case "next_call_source":
+				list := c.taskTracker.TodoList()
+				list.mu.Lock()
+				list.items[0].TypedResult.Summary = "substituted source"
+				list.mu.Unlock()
+			}
+			if _, err := c.validateWorksetInputs(manifest, "1"); err == nil {
+				t.Fatal("operation-local reuse bypassed a changed source or later input")
+			}
+		})
+	}
+}
+
+func TestRecoveredArtifactFanInReusesLineageAcrossReviewedInputs(t *testing.T) {
+	c := newRecoveredArtifactCoordinator(t)
+	list := c.taskTracker.TodoList()
+	items := list.Items()
+	for _, item := range items[1:] {
+		item.Status = TaskDone
+		item.TypedResult = &TaskResult{TaskID: item.ID, Status: TaskResultStatusSuccess}
+	}
+	list.Restore(append(items, &TodoItem{ID: "4", Agent: "worker", EvidenceFrom: []string{"2", "3"}}))
+	for _, projection := range []string{"scope", "worker results"} {
+		t.Run(projection, func(t *testing.T) {
+			before := c.eventStore.cacheHitCount
+			if projection == "scope" {
+				scope, err := c.buildArtifactAccessScope(t.Context(), "4", 1)
+				if err != nil || len(scope.AuthorizedRefs) != 1 {
+					t.Fatalf("shared input scope = %+v, err = %v", scope, err)
+				}
+			} else {
+				results := c.dependencyResultsForTask("4")
+				if len(results) != 2 || len(results[0].Artifacts) != 1 || len(results[1].Artifacts) != 1 {
+					t.Fatalf("reviewed input missing from worker results: %+v", results)
+				}
+			}
+			if reads := c.eventStore.cacheHitCount - before; reads != 2 {
+				t.Fatalf("two reviewed inputs required %d canonical event reads, want one workset replay and one producer proof", reads)
+			}
+		})
+	}
+}
+
 func TestRecoveredArtifactResumeRejectsChangedWorksetReceipt(t *testing.T) {
 	c := newRecoveredArtifactCoordinator(t)
 	list := c.taskTracker.TodoList()
@@ -227,7 +296,7 @@ func TestRecoveredArtifactForkPreservesPendingWorkAndOriginalReceipts(t *testing
 	if err := c.validateResumeSources(WithSessionResume(t.Context())); err != nil {
 		t.Fatal(err)
 	}
-	scope, err := c.buildArtifactAccessScope("2", 1)
+	scope, err := c.buildArtifactAccessScope(t.Context(), "2", 1)
 	if err != nil || len(scope.AuthorizedRefs) != 1 || scope.AuthorizedRefs[0].RunID != "source-run" {
 		t.Fatalf("fork lost original artifact authorization: scope=%+v err=%v", scope, err)
 	}

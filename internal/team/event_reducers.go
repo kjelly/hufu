@@ -484,6 +484,7 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 	result := newTodoReplayResult()
 	receiptObservations := make(map[string]*WorksetExpansionReceipt)
 	activeActions := make(map[string]string)
+	collectionOrigins := make(map[string]*collectionOriginalEvent)
 	// Only task_created establishes a durable occurrence contract. Older
 	// snapshot-only histories begin with lifecycle events such as
 	// task_completed; those events must retain their latest snapshot semantics
@@ -520,6 +521,7 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 			receiptObservations = make(map[string]*WorksetExpansionReceipt)
 			frozenContracts = make(map[string]bool)
 			activeActions = make(map[string]string)
+			collectionOrigins = make(map[string]*collectionOriginalEvent)
 			continue
 		}
 		if e.Type == "action_started" && e.TaskID != "" {
@@ -533,7 +535,16 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 		}
 		if e.Type == string(EventContractRecovery) {
 			if plan, err := decodeContractRecovery(e); err == nil {
-				_ = applyContractRecoveryTasks(taskMap, plan, effectiveEventBranchID(e))
+				valid := true
+				for _, patch := range plan.Tasks {
+					if p := patch.Collection; p != nil && p.SourceOrigin != nil && validateCollectionOriginalRecord(p, collectionOrigins[p.SourceOrigin.EventID]) != nil {
+						valid = false
+						break
+					}
+				}
+				if valid {
+					_ = applyContractRecoveryTasks(taskMap, plan, effectiveEventBranchID(e))
+				}
 			}
 			continue
 		}
@@ -827,6 +838,7 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 			MaxRetries                    int                         `json:"max_retries"`
 			Retries                       int                         `json:"retries"`
 			Output                        string                      `json:"output"`
+			OutputComplete                bool                        `json:"output_complete"`
 			Summary                       string                      `json:"summary"`
 			Agent                         string                      `json:"agent"`
 			Model                         string                      `json:"model"`
@@ -928,6 +940,7 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 		}
 
 		item, exists := taskMap[taskID]
+		legacyOutput := legacyFailureOutputSource(e.Type, item, payload.Output, payload.OutputComplete)
 		// Ordinary worker retries reopen a failed occurrence through a new
 		// attempt-start transition. Decide before applying its projected lease.
 		retryStart := isReplayRetryStart(item, e, payload.Status, payload.OccurrenceRevision, payload.DispatchID)
@@ -1408,6 +1421,12 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 			}
 		case "task_reset":
 			item.Status = TaskPending
+		}
+		restoreRedundantFailureOutput(legacyOutput, item)
+		if e.Type == string(EventTaskCompleted) {
+			if _, record, err := collectionOriginalCompletion(e, item); err == nil {
+				collectionOrigins[e.ID] = record
+			}
 		}
 	}
 

@@ -25,6 +25,7 @@ var (
 	resumeRetryAcceptance       bool
 	resumeAcceptanceTimeout     time.Duration
 	resumeRepairResult          string
+	resumeRepairReferences      []string
 	resumeRepairAction          string
 	resumeRebuildActionPayloads bool
 	resumeRetryWork             string
@@ -152,7 +153,7 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 		if err := bindResumePreflightVersionContext(cmd.Context(), tc.session, false); err != nil {
 			return err
 		}
-		assessment, err := tc.coordinator.AssessResumeResultCollection(cmd.Context(), source, resumeRepairResult)
+		assessment, err := tc.coordinator.AssessResumeResultCollection(resumeReferenceContext(cmd.Context()), source, resumeRepairResult)
 		if err != nil {
 			return err
 		}
@@ -181,7 +182,7 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 		ctx = team.WithFinalAcceptanceRetry(ctx, resumeRun, resumeAcceptanceTimeout)
 	}
 	if resumeRepairResult != "" {
-		ctx = team.WithResultOnlyRepair(ctx, resumeRepairResult)
+		ctx = team.WithResultOnlyRepair(resumeReferenceContext(ctx), resumeRepairResult)
 		ctx = team.WithResultRepairModel(ctx, resumeRepairModel)
 	}
 	injector := newPromptInjector(nil)
@@ -252,7 +253,8 @@ func init() {
 	f.StringVar(&resumeRecoveryPlan, "plan-hash", "", "Exact SHA-256 from the recovery preview")
 	f.BoolVar(&resumeRetryAcceptance, "retry-acceptance", false, "Retry unavailable final request acceptance against the saved answer; never redispatch workers or collectors")
 	f.DurationVar(&resumeAcceptanceTimeout, "acceptance-timeout", 5*time.Minute, "Per-review call timeout for --retry-acceptance; preserves frozen work and execution policy")
-	f.StringVar(&resumeRepairResult, "repair-result", "", "Authorize bounded result-only recovery; may combine with --upgrade-contracts; never replay worker tools")
+	f.StringArrayVar(&resumeRepairReferences, "repair-reference", nil, "Select an exact authenticated artifact or frozen path: /payload/pointer=key_or_exact_value (repeatable; requires --repair-result)")
+	f.StringVar(&resumeRepairResult, "repair-result", "", "Authorize bounded result-only recovery; accepted evidence-reference repairs require --upgrade-contracts and a child branch; never replay worker tools")
 	f.StringVar(&resumeRepairAction, "repair-action", "", "Preview or fork a changed read-only Go action source repair; retains verified work and frozen inputs")
 	f.BoolVar(&resumeRebuildActionPayloads, "rebuild-action-payloads", false, "Explicitly reconstruct redacted public numeric budgets with --repair-action, verified against original frozen payload hashes")
 	f.StringVar(&resumeRetryWork, "retry-work", "", "Preview or fork a controlled retry of one completed read-only work attempt whose required decisions never started")
@@ -327,6 +329,22 @@ func printResultRecoveryAssessment(cmd *cobra.Command, a *team.ResultCollectionR
 	if a.Checkpoint != nil {
 		turns = fmt.Sprintf("used: %d; remaining: %d; additional maximum: %d", a.TurnsUsed, a.RemainingTurns, a.AdditionalTurns)
 	}
+	if a.Checkpoint != nil && a.Checkpoint.ContractUpgrade != nil && a.Checkpoint.ContractUpgrade.AcceptedResult != nil {
+		for _, pointer := range a.Checkpoint.ContractUpgrade.AcceptedResult.Pointers {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Reference pointer: %s\n", pointer); err != nil {
+				return err
+			}
+		}
+	}
+	for _, choice := range a.ReferenceChoices {
+		value := choice.Artifact
+		if choice.Kind == "workset_path" {
+			value = choice.Path
+		}
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Reference choice: %s = %s (%s)\n", choice.Key, value, choice.Path); err != nil {
+			return err
+		}
+	}
 	_, err := fmt.Fprintf(cmd.OutOrStdout(), "Task: %s; branch: %s; source run: %s\nRecovery: %s\nAccepted tasks retained: %s\nCollector turns %s\n%s\n", cmp.Or(a.TaskID, "unknown"), cmp.Or(a.BranchID, "unknown"), cmp.Or(a.SourceRunID, "unknown"), a.Disposition, count, turns, continuation)
 	if err != nil {
 		return err
@@ -345,7 +363,20 @@ func resumeBranchRecoveryRequested() bool {
 	return resumeUpgradeContracts || resumeRetryWork != "" || resumeRepairAction != ""
 }
 
+func resumeReferenceContext(ctx context.Context) context.Context {
+	selections, _ := team.ParseAcceptedReferenceSelections(resumeRepairReferences)
+	return team.WithAcceptedReferenceSelections(ctx, selections)
+}
+
 func validateResumeRepairFlags() error {
+	if len(resumeRepairReferences) > 0 {
+		if resumeRepairResult == "" || resumeBranchRecoveryRequested() || resumeRepairModel != "" || resumeRetryAcceptance {
+			return fmt.Errorf("--repair-reference requires --repair-result alone, without branch recovery or model overrides")
+		}
+		if _, err := team.ParseAcceptedReferenceSelections(resumeRepairReferences); err != nil {
+			return err
+		}
+	}
 	if err := validateAcceptanceRetryFlags(); err != nil {
 		return err
 	}
@@ -406,8 +437,8 @@ func validateResumeActionRepairFlags() error {
 	if resumeRebuildActionPayloads && resumeRepairAction == "" {
 		return fmt.Errorf("--rebuild-action-payloads requires --repair-action")
 	}
-	if resumeRepairAction != "" && (strings.TrimSpace(resumeRepairAction) != resumeRepairAction || resumeUpgradeContracts || resumeUpgradeInputPolicy || resumeRetryWork != "" || resumeRepairResult != "") {
-		return fmt.Errorf("--repair-action requires one exact task ID and cannot combine with other repair modes")
+	if resumeRepairAction != "" && (strings.TrimSpace(resumeRepairAction) != resumeRepairAction || resumeUpgradeInputPolicy || resumeRetryWork != "" || resumeRepairResult != "") {
+		return fmt.Errorf("--repair-action requires one exact task ID and can combine only with unstarted result contract upgrades")
 	}
 	return nil
 }

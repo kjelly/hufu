@@ -198,7 +198,7 @@ func TestStructuredFanOutRejectsInputUndeclaredBySelectedProducer(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := expandWorksetWithInputResult(workspace, c, producer, store, input.ArtifactRef, false); err == nil || !strings.Contains(err.Error(), "was not declared by producer task") {
+	if _, err := expandWorksetWithInputResult(workspace, c, producer, store, input.ArtifactRef, false); err == nil || !strings.Contains(err.Error(), "was not declared by the task result") || !strings.Contains(err.Error(), `producer task "producer"`) {
 		t.Fatalf("undeclared input error = %v", err)
 	}
 }
@@ -385,4 +385,19 @@ func expandWorksetWithInputResult(_ string, c *Coordinator, producer *TodoItem, 
 	c.taskResults[producer.ID] = currentResult
 	producer.TypedResult = currentResult
 	return c.expandFanOutTasks([]TaskDef{{ID: "consumer", Agent: "reviewer", FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: "producer", Artifact: manifest.ID}, GoalTemplate: "process {name}"}}})
+}
+
+func TestStructuredFanOutReportsDeclarationConflict(t *testing.T) {
+	c := newTestCoordinator(t)
+	producers, err := c.CommitTaskCreation(t.Context(), []TodoSpec{{PlanTaskID: "producer", Agent: "producer", Desc: "produce inputs"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	producer := producers[0]
+	input := ArtifactRef{ID: "same", SHA256: "one"}
+	c.taskResults = map[string]*TaskResult{producer.ID: {Artifacts: []ArtifactRef{input, {ID: "same", SHA256: "two"}}}}
+	_, err = c.validateWorksetInputs(WorksetManifest{Items: []WorksetItem{{Key: "one", Inputs: []ArtifactRef{input}}}}, "producer")
+	if err == nil || !strings.Contains(err.Error(), "conflicting declarations") {
+		t.Fatalf("fan-out lost original conflict: %v", err)
+	}
 }

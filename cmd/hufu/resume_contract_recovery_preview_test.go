@@ -118,6 +118,31 @@ func TestResumeContractRecoveryLegacySubmissionPreview(t *testing.T) {
 	}
 }
 
+func TestResumeContractRecoveryAcceptedResultPreview(t *testing.T) {
+	proof := &team.AcceptedResultRepair{Schema: []byte(`{}`), ResultSHA256: strings.Repeat("a", 64), Pointers: []string{"/record/findings/3/evidence/0"}}
+	plan := &team.ContractRecoveryPlan{Retained: 33, Repaired: 1, Retried: 2, Tasks: []team.ContractRecoveryTask{{ID: "26", Action: "repair_result", Reason: "accepted_reference_invalid", SourceStatus: team.TaskDone, Collection: &team.ResultCollectionContractUpgrade{AcceptedResult: proof}}}}
+	for _, format := range []string{"text", "json"} {
+		t.Run(format, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := writeContractRecoveryPreview(&out, plan, format); err != nil {
+				t.Fatal(err)
+			}
+			if format == "json" {
+				var decoded team.ContractRecoveryPlan
+				if err := json.Unmarshal(out.Bytes(), &decoded); err != nil || !reflect.DeepEqual(decoded.Tasks[0].Collection.AcceptedResult, proof) {
+					t.Fatalf("lost accepted repair proof: %v", err)
+				}
+				return
+			}
+			for _, value := range []string{"reference-only repair", "accepted result: " + proof.ResultSHA256, proof.Pointers[0], "worker tools will not be replayed"} {
+				if !strings.Contains(out.String(), value) {
+					t.Fatalf("missing accepted repair detail %q", value)
+				}
+			}
+		})
+	}
+}
+
 func TestResumeContractRecoveryActionRepairPreview(t *testing.T) {
 	plan := &team.ContractRecoveryPlan{Retained: 7, Retried: 1, ActionRepair: &team.ReadOnlyActionRepair{TaskID: "8", Capability: "native", OriginalProvider: "old-program", AcceptedProvider: "fixed-program", SharedCapabilities: []string{"native", "resolver"}}}
 	plan.Tasks = []team.ContractRecoveryTask{{ID: "8", Action: "retry", PayloadReconstruction: &team.ActionPayloadReconstruction{StoredSHA256: "stored-budget-hash", MaterializedSHA256: "original-budget-hash", Paths: []string{"/max_analysis_input_tokens"}}}}

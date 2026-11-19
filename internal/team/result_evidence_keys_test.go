@@ -311,9 +311,22 @@ func TestArtifactEvidenceKeysLegacyAndLiteralCompatibility(t *testing.T) {
 	}
 }
 
-func TestArtifactEvidenceKeysWithBoundDecisionAssembly(t *testing.T) {
+func TestArtifactEvidenceKeysWithBoundDecisionAssemblyAfterRestart(t *testing.T) {
 	f := newBoundDecisionFixture(t, 1, func(root map[string]any) {
-		row := root["properties"].(map[string]any)["decisions"].(map[string]any)["items"].(map[string]any)
+		rootProperties := root["properties"].(map[string]any)
+		rootProperties["complete"] = map[string]any{"type": "boolean", "const": true}
+		rootProperties["sources"] = map[string]any{
+			"type": "array", "items": map[string]any{
+				"type": "object", "additionalProperties": false, "required": []string{"task", "hash"},
+				"properties": map[string]any{"task": map[string]any{"type": "string"}, "hash": map[string]any{"type": "string"}},
+			},
+		}
+		root["required"] = []string{"decisions", "complete", "sources"}
+		root["x-hufu-evidence-inputs"] = map[string]any{
+			"runtime_bind": true, "runtime_complete": true, "items_pointer": "/sources",
+			"task_id_pointer": "/task", "hash_pointer": "/hash", "complete_pointer": "/complete",
+		}
+		row := rootProperties["decisions"].(map[string]any)["items"].(map[string]any)
 		properties := row["properties"].(map[string]any)
 		properties["evidence"] = map[string]any{"type": "array", "items": map[string]any{"type": "string", "pattern": "^sha256-[0-9a-f]{64}$"}}
 		root["x-hufu-evidence-keys"] = map[string]any{"pointers": []string{"/decisions/*/evidence/*"}}
@@ -329,6 +342,37 @@ func TestArtifactEvidenceKeysWithBoundDecisionAssembly(t *testing.T) {
 	if response := f.call(t, 0, "choose"); response.IsError {
 		t.Fatal(response.Content)
 	}
+	// Reopen the journal before there is any submitted result. The accepted
+	// source projections and canonical worker occurrence are unchanged.
+	resumed := newTestCoordinator(t, withCoordinatorWorkspace(f.c.session.Workspace))
+	resumed.projectDir = f.c.projectDir
+	resumed.session.Config = f.c.session.Config
+	resumed.session.Agents = f.c.session.Agents
+	resumed.session.ResultContracts = f.c.session.ResultContracts
+	resumed.decisionPrimitives = f.c.decisionPrimitives
+	store, err := NewEventStore(resumed.session.Workspace, "run-test", "session-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.SetBranchID("main")
+	t.Cleanup(func() { _ = store.Close() })
+	resumed.eventStore, resumed.eventJournal = store, eventStoreJournal{store: store}
+	events, err := store.ReadEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := ReplayTodoList(events)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("replay worker occurrence: %v (%d items)", err, len(items))
+	}
+	resumed.taskTracker.TodoList().Restore(append(f.sources, items...))
+	resumed.setCurrentTaskAttempt(f.item.ID, 1)
+	identity, ok := resumed.activeTaskResultOccurrence(f.item.ID)
+	if !ok {
+		t.Fatal("restarted runtime did not open the original attempt")
+	}
+	ctx := withSubmitResultRuntimeIdentity(f.ctx, identity)
+
 	raw := f.submission(t, func(rows map[string]any) {
 		for _, r := range rows {
 			r.(map[string]any)["evidence"] = []string{key}
@@ -342,20 +386,48 @@ func TestArtifactEvidenceKeysWithBoundDecisionAssembly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tool := &submitResultTool{coordinator: f.c, todoID: f.item.ID}
+	tool := &submitResultTool{coordinator: resumed, todoID: f.item.ID}
 	if err := validateToolArguments(string(input), tool.Info()); err != nil {
 		t.Fatalf("keyed schema rejects evidence key: %v", err)
 	}
-	response, err := tool.Run(f.ctx, fantasy.ToolCall{Name: submitResultToolName, Input: string(input)})
+	for _, tc := range []struct{ name, payload, diagnostic string }{
+		{"missing", `{"decisions":{}}`, `"code":"missing_property"`},
+		{"duplicate", fmt.Sprintf(`{"decisions":{%q:{},%q:{}}}`, f.plans[0].rows[0].Key, f.plans[0].rows[0].Key), "duplicate"},
+		{"stale", `{"decisions":{"stale-key":{"reason":"old task"}}}`, `"code":"additional_property","pointer":"/structured_payload/decisions/stale-key"`},
+		{"unobserved", strings.ReplaceAll(string(raw), key, "ev_000000000000"), "evidence_key_unknown_or_out_of_scope"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad, err := tool.Run(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: `{"status":"success","summary":"done","structured_payload":` + tc.payload + `}`})
+			if err != nil || !bad.IsError || !strings.Contains(bad.Content, tc.diagnostic) || resumed.GetTaskResult(f.item.ID) != nil {
+				t.Fatalf("invalid result reached admission: %s (%v)", bad.Content, err)
+			}
+		})
+	}
+	response, err := tool.Run(ctx, fantasy.ToolCall{Name: submitResultToolName, Input: string(input)})
 	if err != nil || response.IsError {
 		t.Fatalf("submit: %#v %v", response, err)
 	}
-	result := f.c.GetTaskResult(f.item.ID)
+	result := resumed.GetTaskResult(f.item.ID)
 	if result == nil || result.StructuredPayload == nil || strings.Contains(string(result.StructuredPayload.Value), key) || !strings.Contains(string(result.StructuredPayload.Value), refs[key].ID) {
 		t.Fatalf("bad assembly: %#v", result)
 	}
 	if f.calls.Load() != 1 {
 		t.Fatalf("extra inference: %d", f.calls.Load())
+	}
+	var stored struct {
+		Complete bool `json:"complete"`
+		Sources  []struct {
+			Task string `json:"task"`
+			Hash string `json:"hash"`
+		} `json:"sources"`
+	}
+	if err := json.Unmarshal(result.StructuredPayload.Value, &stored); err != nil {
+		t.Fatal(err)
+	}
+	source := f.sources[0]
+	if !stored.Complete || len(stored.Sources) != 1 || stored.Sources[0].Task != source.ID || stored.Sources[0].Hash != source.TypedResult.StructuredPayload.SHA256 ||
+		len(result.StructuredPayload.CollectionBindings[0].Decisions) != 1 {
+		t.Fatalf("replay lost completion, source identity or the decision receipt: %s", result.StructuredPayload.Value)
 	}
 }
 

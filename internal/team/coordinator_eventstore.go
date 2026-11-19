@@ -837,7 +837,7 @@ func (c *Coordinator) commitTaskTransition(ctx context.Context, taskID string, e
 	if expected != nil && current.Status != *expected {
 		return fmt.Errorf("commit task transition: task %s expected %s, got %s", taskID, *expected, current.Status)
 	}
-	resetForResume, repairGrant, modeErr := c.validateTaskTransitionMode(current, next, metadata)
+	resetForResume, repairGrant, modeErr := c.validateTaskTransitionMode(ctx, current, next, metadata)
 	if modeErr != nil {
 		return modeErr
 	}
@@ -1706,7 +1706,10 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 			payload[key] = value
 		}
 		payload["summary"] = failureSummary(item)
-		payload["output"] = utils.TruncateString(utils.RedactSecrets(item.Output), 2000)
+		// Canonical lifecycle data must round-trip the checkpoint. Display
+		// summaries are bounded separately; truncating here loses durable work.
+		payload["output"] = utils.RedactSecrets(item.Output)
+		payload["output_complete"] = true
 	}
 	projectTaskActiveFailure(payload, item, failureTransition)
 	if item.Verify != "" {

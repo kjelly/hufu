@@ -37,11 +37,16 @@ even when its worker is named critic. Missing required critics must produce
 completed_with_gaps report from that incomplete dependency set. Do not repair
 the source records or invent decisions to fill the missing handoff.
 A successful runtime `view` issues short `ev_` evidence keys. Use those
-keys in `files_read.path` and in the active schema's `x-hufu-evidence-keys`
-locations. Copy only keys issued to this task attempt; the runtime expands
+keys in the active schema's `x-hufu-evidence-keys` locations. Omit outer
+`files_read`: runtime derives it from successful native reads and rejects
+overrides, including null and empty arrays. Copy only keys issued to this task attempt; the runtime expands
 and verifies them before storing full artifact IDs. A key proves a successful
 bounded read, not complete coverage or support for a claim. Preserve existing
 source records as evidence; the runtime copies them verbatim into input_review. Do not submit that array or replace source references with your own keys.
+Choose citation keys from the runtime-provided evidence enum when present.
+On an invalid citation, reselect the intended observed source within the same
+result repair; preserve every finding, severity, judgment and gap. Do not
+auto-correct a hash or substitute an unrelated source.
 For `view.artifact_ref`, use the full opaque ID supplied by the runtime.
 Full evidence IDs remain accepted when copied exactly: `sha256-` plus the
 original 64 lowercase hexadecimal characters. Never abbreviate or repair an
@@ -171,7 +176,7 @@ records consume no model output: never echo input_review. Do not spend output on
 the gap table. After bounded probes, generate the complete tool call directly.
 The ONLY inventory location is `structured_payload`; root `coverage`, `scope`,
 `input_review`, or `gap_resolutions` are invalid submit_result arguments.
-Start with the outer `status`, `summary`, and `files_read`, then add
+Start with the outer `status` and `summary`, omit `files_read`, then add
 `structured_payload` containing the model-authored report properties, with scope, snapshot_coverage, test_verification and input_review omitted. Never submit only
 status and summary. Supply the report as an object directly, without encoding
 it into a JSON string. The output allowance is reserved for that complete

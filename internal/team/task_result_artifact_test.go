@@ -3,6 +3,7 @@ package team
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestResolveTaskResultArtifactCanonicalProjections(t *testing.T) {
@@ -55,6 +56,45 @@ func TestResolveTaskResultArtifactCanonicalProjections(t *testing.T) {
 			}
 			if err != nil || got.ID != tc.wantID {
 				t.Fatalf("resolve = %#v, err=%v, want id %q", got, err, tc.wantID)
+			}
+		})
+	}
+}
+
+func TestResolveTaskResultArtifactEquivalentOccurrences(t *testing.T) {
+	base := ArtifactRef{ID: "sha256-content", SHA256: "content", Bytes: 3, ByteSize: 3, RunID: "run", TaskID: "task", Attempt: 1, Agent: "producer", Provider: "native", Kind: "input", Path: "first", CreatedAt: time.Unix(1, 0)}
+	for _, tc := range []struct {
+		name    string
+		change  func(*ArtifactRef)
+		allowed bool
+	}{
+		{"path_and_time", func(r *ArtifactRef) { r.Path = "second"; r.CreatedAt = time.Unix(2, 0) }, true},
+		{"hash", func(r *ArtifactRef) { r.SHA256 = "other" }, false},
+		{"size", func(r *ArtifactRef) { r.Bytes++ }, false},
+		{"byte_size", func(r *ArtifactRef) { r.ByteSize++ }, false},
+		{"run", func(r *ArtifactRef) { r.RunID = "other" }, false},
+		{"task", func(r *ArtifactRef) { r.TaskID = "other" }, false},
+		{"attempt", func(r *ArtifactRef) { r.Attempt++ }, false},
+		{"agent", func(r *ArtifactRef) { r.Agent = "other" }, false},
+		{"provider", func(r *ArtifactRef) { r.Provider = "other" }, false},
+		{"tool_call", func(r *ArtifactRef) { r.ToolCallID = "other" }, false},
+		{"kind", func(r *ArtifactRef) { r.Kind = "other" }, false},
+		{"missing_origin", func(r *ArtifactRef) { r.RunID = ""; r.Path = "second" }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			other := base
+			tc.change(&other)
+			result := &TaskResult{Artifacts: []ArtifactRef{base, other}}
+			got, err := resolveTaskResultArtifact(result, base.ID)
+			if tc.allowed {
+				if err != nil || got != base {
+					t.Fatalf("canonical=%+v err=%v", got, err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "conflicting declarations") {
+				t.Fatalf("conflict lost: %v", err)
+			}
+			if result.Artifacts[0] != base || result.Artifacts[1] != other {
+				t.Fatal("lookup rewrote declarations")
 			}
 		})
 	}

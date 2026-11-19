@@ -1,0 +1,160 @@
+package team
+
+import (
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	"strings"
+	"testing"
+)
+
+const worksetPathResultSchema = `{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"location":{"type":"string"},"summary":{"type":"string"}},"required":["location","summary"],"additionalProperties":false}}},"required":["findings"],"additionalProperties":false,"x-hufu-workset-paths":{"pointers":["/findings/*/location"],"format":"path_line"}}`
+
+func TestResultWorksetPathsCompile(t *testing.T) {
+	for _, tc := range []struct {
+		name, document string
+		valid          bool
+	}{
+		{"valid", worksetPathResultSchema, true},
+		{"unknown_format", strings.Replace(worksetPathResultSchema, "path_line", "fuzzy", 1), false},
+		{"unknown_member", strings.Replace(worksetPathResultSchema, `"format":"path_line"`, `"format":"path_line","guess":true`, 1), false},
+		{"not_string", strings.Replace(worksetPathResultSchema, `"location":{"type":"string"}`, `"location":{"type":"integer"}`, 1), false},
+		{"duplicate", strings.Replace(worksetPathResultSchema, `["/findings/*/location"]`, `["/findings/*/location","/findings/*/location"]`, 1), false},
+		{"artifact_overlap", strings.TrimSuffix(worksetPathResultSchema, "}") + `,"x-hufu-evidence-keys":{"pointers":["/findings/*/location"]}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := CompileResultContractDocument("paths.json", []byte(tc.document))
+			if (err == nil) != tc.valid {
+				t.Fatalf("compile valid=%t: %v", tc.valid, err)
+			}
+		})
+	}
+}
+
+func TestResultWorksetPathsResolveWithinFrozenAssignment(t *testing.T) {
+	c, producer, child, _ := runtimeWorksetInputFixture(t, "dir/source.go")
+	compiled, err := CompileResultContractDocument("paths.json", []byte(worksetPathResultSchema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.session.ResultContracts[compiled.ID] = compiled
+	ref := compiled.ref(true)
+	child.ResultContract = &ref
+	choices, err := c.verifiedWorksetPathChoices(t.Context(), child.ID)
+	if err != nil || len(choices) != 1 {
+		t.Fatalf("choices=%v: %v", choices, err)
+	}
+	var key string
+	for candidate := range choices {
+		key = candidate
+	}
+	for _, tc := range []struct {
+		name, location string
+		valid          bool
+	}{
+		{"key", key + ":7", true},
+		{"exact", "dir/source.go:7", true},
+		{"typo", "dir/soruce.go:7", false},
+		{"foreign_key", "path_000000000000:7", false},
+		{"symbol", "dir/source.go:Func", false},
+		{"range", "dir/source.go:7-9", false},
+		{"zero", key + ":0", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			submission := map[string]any{"status": "success", "summary": "unchanged", "details": "dir/soruce.go:7", "structured_payload": map[string]any{"findings": []any{map[string]any{"location": tc.location, "summary": "keep the original claim"}}}}
+			body, _ := json.Marshal(submission)
+			resolved, err := c.resolveResultEvidenceKeys(t.Context(), child.ID, string(body))
+			if (err == nil) != tc.valid {
+				t.Fatalf("resolve valid=%t: %v", tc.valid, err)
+			}
+			if !tc.valid {
+				return
+			}
+			var claims map[string]any
+			if err := json.Unmarshal([]byte(resolved), &claims); err != nil {
+				t.Fatal(err)
+			}
+			if claims["summary"] != "unchanged" || claims["details"] != "dir/soruce.go:7" {
+				t.Fatal("resolver rewrote unrelated claims")
+			}
+			payload, _ := json.Marshal(claims["structured_payload"])
+			for _, external := range []bool{false, true} {
+				var admitted *ResultPayload
+				if external {
+					original, _ := json.Marshal(submission["structured_payload"])
+					raw := string(original)
+					admitted, err = canonicalExternalStructuredPayload(AttemptRequest{Task: taskDefFromTodoItem(child), resultContractSchema: compiled,
+						resultWorksetPaths: func() (map[string]string, error) { return c.verifiedWorksetPathChoices(t.Context(), child.ID) }}, &WorkerResultProposal{StructuredPayloadJSON: &raw}, nil)
+				} else {
+					var rejection string
+					admitted, rejection = c.structuredPayloadForSubmission(child.ID, payload)
+					if rejection != "" {
+						t.Fatal(rejection)
+					}
+				}
+				if err != nil || admitted == nil || !strings.Contains(string(admitted.Value), `"location":"dir/source.go:7"`) {
+					t.Fatalf("admission external=%t: %v", external, err)
+				}
+				if err := c.validateSubmittedEvidenceInputs(child.ID, admitted); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+	if err := c.CommitTaskResetForRetry(t.Context(), producer.ID, "retry producer"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.CommitTaskTransition(t.Context(), producer.ID, TaskPending, TaskInProgress, "new producer occurrence", "", attemptStartMetadata(2)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.verifiedWorksetPathChoices(t.Context(), child.ID); err == nil {
+		t.Fatal("stale producer admitted")
+	}
+	_, err = c.resolveResultEvidenceKeys(t.Context(), child.ID, `{"status":"success","summary":"keep","structured_payload":{"findings":[{"location":"dir/soruce.go:7","summary":"keep"}]}}`)
+	if err == nil || localResultRejectionReason(err) != RepairFailureSource || isResultReferenceChoiceError(err) {
+		t.Fatal("path typo concealed a stale producer or earned format repair")
+	}
+}
+
+func TestAcceptedWorksetPathRepairPreservesLineAndClaims(t *testing.T) {
+	original := &TaskResult{Status: TaskResultStatusSuccess, Summary: "unchanged", Confidence: 1, Facts: map[string]any{"large": jsontext.Value(`9007199254740993`)}, StructuredPayload: &ResultPayload{Value: jsontext.Value(`{"findings":[{"location":"dir/soruce.go:7","summary":"unchanged","severity":"error"}]}`)}}
+	pointers := []string{"/findings/0/location"}
+	want, err := acceptedResultSemanticHashWithPaths(original, pointers, pointers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, location, summary string
+		same                    bool
+	}{
+		{"path_only", "dir/source.go:7", "unchanged", true},
+		{"line", "dir/source.go:8", "unchanged", false},
+		{"summary", "dir/source.go:7", "changed", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			next := cloneTaskResult(original)
+			body, _ := json.Marshal(map[string]any{"findings": []any{map[string]any{"location": tc.location, "summary": tc.summary, "severity": "error"}}})
+			next.StructuredPayload.Value = body
+			got, err := acceptedResultSemanticHashWithPaths(next, pointers, pointers)
+			if err != nil || (got == want) != tc.same {
+				t.Fatalf("semantic freeze same=%t: %v", tc.same, err)
+			}
+		})
+	}
+	for _, reference := range []string{"path_issued", "dir/source.go", "path_issued:8", "dir/foreign.go"} {
+		value, err := decodeUniqueJSON(original.StructuredPayload.Value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = replaceAcceptedWorksetPath(value, AcceptedReferenceSelection{Pointer: pointers[0], Reference: reference}, map[string]string{"path_issued": "dir/source.go"})
+		valid := reference == "path_issued" || reference == "dir/source.go"
+		if (err == nil) != valid {
+			t.Fatalf("selection %q: %v", reference, err)
+		}
+		if valid {
+			text, _ := resolveJSONPointer(value, pointers[0])
+			if text != "dir/source.go:7" {
+				t.Fatal("selection changed the original line")
+			}
+		}
+	}
+}

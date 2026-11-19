@@ -1846,8 +1846,8 @@
               },
               "location": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 8192
+                "maxLength": 8192,
+                "pattern": "^[^\\r\\n]+:[1-9][0-9]*$"
               },
               "evidence": {
                 "type": "array",

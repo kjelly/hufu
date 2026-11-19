@@ -175,6 +175,7 @@ func localResultSubmissionInfo(coordinator *Coordinator, todoID string) fantasy.
 			info = projectResultSubmissionFields(info, compiled.submissionFields)
 			schema, _ := info.Parameters["structured_payload"].(map[string]any)
 			advertiseResultEvidenceKeys(schema, compiled.evidenceKeys)
+			advertiseResultWorksetPaths(schema, compiled.worksetPaths)
 			info.Parameters["structured_payload"] = providerResultIntegerStrings(schema, 0)
 			if hasResultDecisions(compiled) {
 				// A failed bound decision cannot provide a successful payload.
@@ -507,7 +508,8 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 	if t.coordinator != nil {
 		normalized, err := t.coordinator.resolveResultEvidenceKeys(ctx, t.todoID, call.Input)
 		if err != nil {
-			return submissionFailureResponse(RepairFailureSource, "invalid evidence key: "+err.Error()), nil
+			err = t.coordinator.localEvidenceRejection(ctx, t.todoID, call.Input, err)
+			return submissionFailureResponse(localResultRejectionReason(err), "invalid evidence key: "+err.Error()), nil
 		}
 		call.Input = normalized
 	}
@@ -561,6 +563,9 @@ func (t *submitResultTool) runFull(ctx context.Context, call fantasy.ToolCall) (
 	if err != nil {
 		if missing, ok := errors.AsType[*artifactReadCoverageIncomplete](err); ok {
 			return fantasy.NewTextErrorResponse(missing.Error()), nil
+		}
+		if _, selection := errors.AsType[*resultEvidenceChoiceError](err); selection && t.coordinator != nil {
+			err = t.coordinator.localEvidenceRejection(ctx, t.todoID, call.Input, err)
 		}
 		return submissionFailureResponse(localResultRejectionReason(err), err.Error()), nil
 	}

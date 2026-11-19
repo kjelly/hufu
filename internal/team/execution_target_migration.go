@@ -284,6 +284,9 @@ func legacyExecutionTopologyNeedsHistoricalEvidence(item *TodoItem) (bool, error
 // readActiveLineageEvents returns the durable events visible on the active
 // branch: its own events after the parent prefix up to the fork point.
 func (c *Coordinator) readActiveLineageEvents(ctx context.Context) ([]RunEvent, error) {
+	if events, selected, err := c.collectionOriginLineage(ctx); selected {
+		return events, err
+	}
 	events, err := c.EventJournal().ReadEvents(context.WithoutCancel(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("read event journal: %w", err)

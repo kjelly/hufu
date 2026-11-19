@@ -151,13 +151,13 @@ func TestRecoveredArtifactOperatorDiagnosticPreservesModelBoundary(t *testing.T)
 	id := consumer.WorksetBinding.Inputs[0].ID
 	// Canonical replay cannot authorize a receipt without its event store.
 	c.eventStore = nil
-	if _, _, err := c.resolveAuthorizedWorksetInput(consumer, id); err == nil {
+	if _, _, err := c.newArtifactInputAuthorizer(t.Context(), c.taskTracker.TodoList().Items()).resolve(consumer, id); err == nil {
 		t.Fatal("operator preflight lost the underlying rejection")
 	}
 	if _, _, ok := c.authorizedWorksetInput(consumer, id); ok {
 		t.Fatal("a diagnostic change admitted the missing canonical source")
 	}
-	if _, err := c.buildArtifactAccessScope(consumer.ID, 1); err == nil {
+	if _, err := c.buildArtifactAccessScope(t.Context(), consumer.ID, 1); err == nil {
 		t.Fatal("scope preflight accepted the missing canonical source")
 	}
 }

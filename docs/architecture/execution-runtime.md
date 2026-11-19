@@ -924,7 +924,88 @@ the normal evidence manifest and CompletionGate. Cancellation preserves the
 completed tasks. Retry cannot combine with task repair, contract upgrades,
 media or new input assignments.
 
-A returned worker can instead use the explicit combined path:
+A returned worker can use the explicit combined path below. It also supports an
+explicitly selected **already accepted**
+successful, read-only local result whose declared evidence references are not
+in its original successful observations. The target schema must enable
+`x-hufu-evidence-keys.runtime_owned_files_read`. The preview authenticates the
+original accepted bytes, work seal, transcript, frozen inputs and observations;
+it pins the accepted-result hash, target schema and concrete invalid reference
+pointers in `tasks[].collection.accepted_result`. A valid accepted result cannot
+be reopened merely to revise its judgment. The canonical payload and envelope
+projections must otherwise remain valid under
+the target schema. A schema upgrade requiring new semantic claims or removed
+findings is refused before publication. Shared local work is supported;
+isolated worlds, model fan-out, uncertain side effects and active decision
+discipline require their existing reconciliation paths.
+
+Only the selected invalid string leaves may change. All other payload and
+envelope claims, findings, severities, array membership/order and judgments are
+hash-bound; runtime-owned read/identity projections are independently rebuilt.
+Verbatim transcript outputs and evidence are derived from the original sealed
+transcript, including a new process-local signature. The model never copies
+these fields; their runtime projection is checked before comparing claims.
+Accepted-reference recovery uses explicit finite source selection rather than
+asking a model to recopy accepted claims. The child preview reports
+`reference_choices` and the exact invalid pointers in
+`checkpoint.contract_upgrade.accepted_result.pointers`. Repeat
+`--repair-reference '/payload/pointer=observed_key_or_exact_artifact_id'` for
+every invalid leaf. No fuzzy matching is performed. The runtime reconstructs
+claims from the immutable original prepared submission, applies only those
+choices, rebinds runtime-owned fields and runs ordinary canonical admission.
+Unchanged facts retain their original JSON types and numeric precision.
+
+Assessment revision 13 also supports declared `x-hufu-workset-paths` references.
+For `path_pointers`, choose an exact `reference_choices` entry whose kind is
+`workset_path` using the same `--repair-reference '/pointer=path_key'` flag.
+Only the path prefix changes; the original numeric source-line suffix is
+preserved and independently included in the semantic hash. This cannot repair
+a wrong line, rewrite a finding, or widen its assigned scope. Missing/stale
+producer, receipt, manifest or selected path fails before a grant. Ordinary
+submissions may use `path_key:line`; runtime expands it before canonical
+validation, and rejects copied paths outside the frozen assignment.
+
+Assessment revision 14 also permits an accepted result retained from an ancestor
+recovery branch. The proof pins its original completion event and hash, canonical
+task digest, checkpoint, original policy and contract. Only verified schema
+metadata may differ from the retained source. The original observations are
+selected at that completion's frozen lineage cutoff; later ancestor writes and
+unrelated branches cannot replace them. Missing or forged origin evidence blocks
+publication and replay, and the operator assessment requires `accepted_origin`.
+Current runtime inputs must still match the original values, and a workset's
+producer must remain accepted and be retained by the same recovery plan.
+
+Historical policy and recovery projections may be reused within a coordinator
+only for identical input headers and payload bytes. This bounded in-memory cache
+does not cache leases, current task admission or artifact integrity checks.
+
+Assessment revisions 12 through 14 report `select_references` with zero additional model
+turns. The operator grant binds the selection, claims hash and local
+request/response/prepared CAS references. Its canonical transition commits before
+a submission lease opens. A crash resumes the same prepared bytes. Cancellation
+retains all original work and consumed model turns; an attempt whose cancellation
+has closed the submission lease requires a fresh explicit zero-turn selection
+grant before retry. A rejected local commit has
+no provider or worker fallback. Missing, duplicate, unauthorized or stale
+selections fail before a grant. Older historical grants retain their saved
+proof requirements; new accepted-reference repairs require this selection path.
+
+Assessment revision 11 also permits an accepted reference repair to preserve
+exactly the original assumption reports when no governing decision is armed.
+These reports remain inert, as in ordinary admission without a decision; repair
+cannot add, remove or alter them or replay decision transitions. Memory
+attribution still requires its own reconciliation and is not enabled by this
+path. Older saved assessment revisions retain their original proof requirements.
+
+The parent and its receipts remain immutable. Publication clears only the
+child's accepted submission, retains the original work and spent collector
+budget, and does not grant turns. Dependencies of the repaired result become
+read-only retries, with verification and acceptance reopened. Use the separate
+child `--repair-result` preview to select the exact observed references. This
+repair grants no additional collector turns, including when the previous budget
+is exhausted. Invalid choices remain blocked; cancellation retains the original
+work. Successful child publication alone does not establish that the
+repaired result or downstream workflow is accepted.
 
 ```sh
 hufu resume --team <team> --workspace <control-root> --branch <source> \
@@ -935,7 +1016,10 @@ hufu resume --team <team> --workspace <control-root> --branch <source> \
 hufu resume --team <team> --workspace <control-root> --branch <returned-branch-id> \
   --repair-result <task-id> --dry-run --output json
 hufu resume --team <team> --workspace <control-root> --branch <returned-branch-id> \
-  --repair-result <task-id>
+  --repair-result <task-id> \
+  --repair-reference '/payload/pointer=<reference_choices-key>' --dry-run --output json
+hufu resume --team <team> --workspace <control-root> --branch <returned-branch-id> \
+  --repair-result <task-id> --repair-reference '/payload/pointer=<reference_choices-key>'
 ```
 
 Omit `--metadata-only` for a managed required-versioning workspace. The plan
@@ -1031,8 +1115,14 @@ with a separate proof of the original failed action event, old/new program
 identities and every shared capability. It requires a settled execution failure,
 `side_effect: none`, retry recovery, static goal binding and read-only source and
 future contracts. The first version supports known Go provider families only.
-Result schemas, static tasks, models, tools, reachable environment, network
-policy and frozen input values must remain unchanged. A changed shared resolver
+Static task execution, models, tools, reachable environment, network policy
+and frozen input values stay pinned. A failed action and its unstarted static
+consumer may require a matching representation change. Include
+`--upgrade-contracts` in both the preview and publication to select that schema
+upgrade. The plan lists each exact schema digest. Result owners, schema names,
+and structured-result requirements stay pinned. The runtime refuses schema
+changes for any existing occurrence or agent-owned result contract.
+A changed shared resolver
 policy is explicitly included in the plan; the resolver is not called again.
 
 Preview and publication execute no action or model. Review the returned plan,
@@ -1183,7 +1273,7 @@ failure reason, including a historical `source_invalid` misclassification, is
 not sufficient authority by itself. The evaluator verifies the canonical task,
 input snapshot, policy, source payloads, transcript, CAS bytes and settled
 decisions before classifying `commit_local`, `repair_claims`,
-`resume_collection`, or `blocked`. Source checks precede model-format checks;
+`resume_collection`, `select_references`, or `blocked`. Source checks precede model-format checks;
 a simultaneous source failure cannot be repaired as formatting.
 
 `resume --branch <source> --run <source-run> --repair-result <task-id>
@@ -1195,6 +1285,29 @@ consumed/remaining turns, proposed additional allowance and accepted-task count.
 Unknown counts and turns are omitted from JSON and shown as unknown in text. Preview cannot be combined with
 `--repair-model`, `--report`, `--tui`, or new input assignments. A blocked preview
 is a successful inspection with `disposition: blocked`; no grant is created.
+
+The preview also checks admission through the ordinary repair-grant validator.
+It checks the active checkpoint against canonical replay before assessing
+result-only authority, just as ordinary startup does. Failure lifecycle events
+preserve complete output separately from bounded error summaries. Historical
+truncated failure snapshots may retain a preceding canonical full output only
+when the truncation is exact and the entire remaining canonical task is
+unchanged. A changed receipt, attempt, result or failure refuses this reuse;
+new events mark complete output explicitly, including deliberate short values.
+Admission reuses the caller's cancellation context and reports the underlying
+rejection (including changed source-head or proof metadata) instead of replacing
+it with a generic invalid-grant error. Historical grant proofs are still
+validated against their saved revision.
+
+Deterministic recovery validation reports ephemeral `runtime_validation` status
+with `started`, `progress` and `completed` phases. Only completed checks count
+as progress; no timer heartbeat masks a stuck validator. CLI and TUI display
+the validation stage, and the CLI idle indicator identifies runtime validation.
+These status updates never append journal events or change a proof's head.
+Within one workset-input validation, canonical recovery provenance is checked
+once per producer occurrence; every input still receives declaration,
+occurrence and content-integrity checks. One result submission resolves its
+workset's runtime-owned scalars together. Neither reuse survives another call.
 
 Assessment revision 5 also permits sequential result-only repairs when all
 unresolved tasks belong to the same failed phase and each phase error matches a

@@ -1083,7 +1083,7 @@ func (c *Coordinator) canonicalExecutionPolicySnapshot() (*ExecutionPolicySnapsh
 		}
 	}
 	branch := c.activeBranchID()
-	return executionPolicySnapshotFromEvents(FilterEventsForBranch(events, tree, branch))
+	return c.cachedExecutionPolicyProjection(context.Background(), FilterEventsForBranch(events, tree, branch))
 }
 
 // activeSemanticRetrievalHash pins semantic settings only in active and auto

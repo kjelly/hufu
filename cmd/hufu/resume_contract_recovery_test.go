@@ -49,7 +49,7 @@ func TestResumeContractRecoveryFlags(t *testing.T) {
 		{name: "action needs plan", action: "8"},
 		{name: "action cannot retry", dry: true, action: "8", retry: "8"},
 		{name: "action cannot repair result", dry: true, action: "8", repair: "8"},
-		{name: "action cannot upgrade", dry: true, action: "8", upgrade: true},
+		{name: "action with unstarted contract upgrade", dry: true, action: "8", upgrade: true, valid: true},
 		{name: "action cannot upgrade inputs", dry: true, action: "8", inputPolicy: true},
 		{name: "action exact id", dry: true, action: " 8"},
 		{name: "work preview", dry: true, retry: "32", valid: true},

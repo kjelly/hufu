@@ -85,7 +85,7 @@ func resolveTaskResultArtifact(result *TaskResult, selector string) (ArtifactRef
 
 	canonical := matches[0]
 	for _, match := range matches {
-		if *canonical.ref != *match.ref {
+		if !equivalentTaskArtifactDeclarations(*canonical.ref, *match.ref) {
 			kind := "ambiguous"
 			if selector == canonical.ref.ID || selector == match.ref.ID {
 				kind = "conflicting"
@@ -97,6 +97,22 @@ func resolveTaskResultArtifact(result *TaskResult, selector string) (ArtifactRef
 		return ArtifactRef{}, fmt.Errorf("structured output %q is not an immutable artifact declaration", selector)
 	}
 	return *canonical.ref, nil
+}
+
+// Content-addressed copies may have different materialization paths and write
+// times within one producer occurrence. Keep every identity, provenance and
+// semantic field strict; legacy references without a complete occurrence only
+// qualify when their entire declarations are identical.
+func equivalentTaskArtifactDeclarations(first, second ArtifactRef) bool {
+	if first == second {
+		return true
+	}
+	if first.ID == "" || first.SHA256 == "" || first.RunID == "" || first.TaskID == "" || first.Attempt <= 0 || first.Agent == "" {
+		return false
+	}
+	second.Path = first.Path
+	second.CreatedAt = first.CreatedAt
+	return first == second
 }
 
 func artifactDeclarationConflictError(selector string, labels []string, kind string) error {

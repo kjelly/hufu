@@ -47,6 +47,11 @@ func actionRecoveryProvider(digest string, fail bool, calls *int, origins *map[s
 
 func nativeActionRecoveryFixture(t *testing.T, payload ...string) (*Coordinator, *versionFixture, *ResumeSource, *int) {
 	t.Helper()
+	return nativeActionRecoveryWithReport(t, nil, payload...)
+}
+
+func nativeActionRecoveryWithReport(t *testing.T, report *CompiledResultContract, payload ...string) (*Coordinator, *versionFixture, *ResumeSource, *int) {
+	t.Helper()
 	f := &versionFixture{t: t, control: t.TempDir(), subject: t.TempDir()}
 	f.version = WorkspaceVersionContext{Mode: versionstore.ModeOff, WorkspaceID: "action-workspace", ProjectID: "action-project", TeamName: "generic-action", SubjectRoot: f.subject, ControlRoot: f.control, StateDir: t.TempDir()}
 	var err error
@@ -100,6 +105,13 @@ func nativeActionRecoveryFixture(t *testing.T, payload ...string) (*Coordinator,
 			c.session.ContractTasks[i].Action.Payload = payload[0]
 		}
 	}
+	nativeTasks := len(c.session.ContractTasks)
+	if report != nil {
+		ref := report.ref(true)
+		c.session.ResultContracts = map[string]*CompiledResultContract{report.ID: report}
+		c.session.ContractTasks = append(c.session.ContractTasks, TaskDef{ID: "report", Agent: "worker", Phase: PhaseVerify, SideEffect: SideEffectNone,
+			ResultContract: &ref, ResultContractSpec: &resultContractSpec{Schema: ref.ID, RequireStructured: true}})
+	}
 	manager, err := agent.NewProviderManager("http://127.0.0.1:1/v1", "", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +127,7 @@ func nativeActionRecoveryFixture(t *testing.T, payload ...string) (*Coordinator,
 	}
 	appendBranchEvent(t, f.events, RunEvent{Type: string(EventRunInputsResolved), RunID: "source-run", Payload: mustProjectionJSON(t, snapshot)})
 	c.SetSessionData(&SessionData{RunInputSnapshots: []RunInputSnapshot{*snapshot}, ActiveRunInputSnapshotID: snapshot.ID})
-	definitions := append([]TaskDef(nil), c.session.ContractTasks...)
+	definitions := append([]TaskDef(nil), c.session.ContractTasks[:nativeTasks]...)
 	for i := range definitions {
 		definition := &definitions[i]
 		definition.ContractID = definition.ID
@@ -150,6 +162,64 @@ func nativeActionRecoveryFixture(t *testing.T, payload ...string) (*Coordinator,
 
 func TestContractRecoveryActionRetainsCompletedTasksAndResumesChild(t *testing.T) {
 	testNativeActionRecoveryChild(t, false)
+}
+
+func TestContractRecoveryActionUpgradesUnstartedConsumer(t *testing.T) {
+	old, err := CompileResultContractDocument("report.json", []byte(`{"type":"object","properties":{"coverage":{"type":"array"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := CompileResultContractDocument(old.ID, []byte(`{"type":"object","properties":{"coverage":{"type":"object"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, f, source, calls := nativeActionRecoveryWithReport(t, old)
+	c.session.ResultContracts[next.ID] = next
+	c.session.ContractTasks[len(c.session.ContractTasks)-1].ResultContract = new(next.ref(true))
+	ctx := WithReadOnlyActionRepair(WithMetadataOnlyContractRecovery(t.Context()), "8")
+	if _, err := c.AssessContractRecovery(ctx, source); err == nil {
+		t.Fatal("action repair changed the consumer schema without selection")
+	}
+	ctx = WithUnstartedActionConsumerUpgrade(ctx)
+	plan, err := c.AssessContractRecovery(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Retained != 7 || plan.Retried != 1 || plan.Repaired != 0 || len(plan.ContractChanges) != 1 || plan.ContractChanges[0].Owner != "contract:report" {
+		t.Fatalf("unexpected action/consumer recovery plan: %+v", plan)
+	}
+	if err := validateUnstartedActionConsumers([]*TodoItem{{ID: "9", ContractID: "report", Status: TaskPending}}, nil, plan.ContractChanges); err == nil {
+		t.Fatal("action repair allowed a previously instantiated consumer to change contracts")
+	}
+	if err := validateUnstartedActionConsumers(nil, []RunEvent{{Type: string(EventTaskCreated), TaskID: "old-report", Payload: []byte(`{"contract_id":"report"}`)}}, plan.ContractChanges); err == nil {
+		t.Fatal("action repair ignored a consumer removed from the current projection")
+	}
+	forged := *plan
+	forged.ContractChanges = nil
+	forged.SHA256, err = recoveryPlanHash(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := RunEvent{SchemaVersion: eventStoreSchemaVersion, Type: string(EventContractRecovery), BranchID: "child", Payload: mustProjectionJSON(t, forged)}
+	if _, err := validateContractRecoveryLineage(event, source.lineage, source.Session.ExecutionPolicySnapshot); err == nil {
+		t.Fatal("replay allowed an undeclared consumer schema change")
+	}
+	branch, err := c.ApplyContractRecovery(ctx, source, "coverage-reference", plan.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := ReadResumeSource(f.control, branch, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.Session.ExecutionPolicySnapshot.ConfigurationHash != plan.Policy.ConfigurationHash || *calls != 8 {
+		t.Fatal("replay lost the approved consumer contract or ran original work")
+	}
+	for _, item := range child.Session.Tasks {
+		if item.ID != "8" && !sameCanonicalEvidence(item.TypedResult, todoItemByID(source.Session.Tasks, item.ID).TypedResult) {
+			t.Fatalf("task %s lost accepted evidence", item.ID)
+		}
+	}
 }
 
 func testNativeActionRecoveryChild(t *testing.T, rebuild bool) {
