@@ -7,7 +7,7 @@
 --
 -- Usage: before calling `lua`, capture each baseline command's output with
 -- its exit code appended as a trailing "EXIT:<code>" line, e.g.:
---   { go test ./... ; echo "EXIT:$?"; } > /tmp/gotest.log 2>&1
+--   { result=0; mise run test || result=$?; printf '\nEXIT:%s\n' "$result"; } > "$evidence_dir/gotest.log" 2>&1
 -- Then call the `lua` tool with a loader that sets INPUTS and executes this
 -- file instead of regenerating the parsing/aggregation logic every call:
 --   INPUTS = { gotest = "/tmp/gotest.log", govet = "/tmp/govet.log" }
@@ -33,16 +33,32 @@ local function parse_exit(content)
 end
 
 local function count_go_test(content)
-  local pass, fail, failing = 0, 0, {}
+  local packages_passed, packages_failed, packages_without_tests = 0, 0, 0
+  local tests_passed, tests_failed = 0, 0
+  local failing = {}
   for line in content:gmatch("[^\n]+") do
-    if line:match("^%-%-%- PASS") then
-      pass = pass + 1
-    elseif line:match("^%-%-%- FAIL") then
-      fail = fail + 1
+    if line:match("^ok%s+%S+%s+") then
+      packages_passed = packages_passed + 1
+    elseif line:match("^FAIL%s+%S+") then
+      packages_failed = packages_failed + 1
+      failing[#failing + 1] = line
+    elseif line:match("^%?%s+%S+%s+%[no test files%]") then
+      packages_without_tests = packages_without_tests + 1
+    elseif line:match("^%s*%-%-%- PASS:") then
+      tests_passed = tests_passed + 1
+    elseif line:match("^%s*%-%-%- FAIL:") then
+      tests_failed = tests_failed + 1
       failing[#failing + 1] = line
     end
   end
-  return pass, fail, failing
+  local summary = "no Go test records"
+  if packages_passed + packages_failed + packages_without_tests > 0 then
+    summary = string.format("%d packages passed, %d failed, %d without tests",
+      packages_passed, packages_failed, packages_without_tests)
+  elseif tests_passed + tests_failed > 0 then
+    summary = string.format("%d test results passed, %d failed", tests_passed, tests_failed)
+  end
+  return summary, failing
 end
 
 if type(INPUTS) ~= "table" then
@@ -51,7 +67,8 @@ if type(INPUTS) ~= "table" then
 end
 
 local order = { "gotest", "race", "govet", "lint" }
-local label = { gotest = "go test", race = "go test -race", govet = "go vet", lint = "golangci-lint run" }
+local label = { gotest = "mise run test", race = "mise exec -- go test -p 2 -race",
+  govet = "mise run vet", lint = "mise run lint" }
 
 print("| command | exit | result |")
 print("|---|---|---|")
@@ -70,9 +87,9 @@ for _, key in ipairs(order) do
       local exit_code = parse_exit(content)
       local result
       if key == "gotest" or key == "race" then
-        local pass, fail, failing = count_go_test(content)
-        result = string.format("%d pass, %d fail", pass, fail)
-        if fail > 0 then
+        local failing
+        result, failing = count_go_test(content)
+        if #failing > 0 then
           overall_pass = false
           for _, l in ipairs(failing) do
             fail_details[#fail_details + 1] = "  - " .. l
@@ -84,7 +101,10 @@ for _, key in ipairs(order) do
       if exit_code ~= 0 then
         overall_pass = false
       end
-      print(string.format("| %s | %s | %s |", label[key], tostring(exit_code), result))
+      if exit_code == nil then
+        result = result .. " (missing or invalid EXIT marker)"
+      end
+      print(string.format("| %s | %s | %s |", label[key], exit_code or "?", result))
     end
   end
 end
@@ -95,7 +115,7 @@ if overall_pass then
 else
   print("VERDICT: FAIL")
   if #fail_details > 0 then
-    print("Failing tests:")
+    print("Failure details:")
     for _, l in ipairs(fail_details) do
       print(l)
     end

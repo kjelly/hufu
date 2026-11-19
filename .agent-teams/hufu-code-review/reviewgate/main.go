@@ -302,7 +302,7 @@ func verify(current sourceSession) (string, string, error) {
 	}
 	snapshot, err := collectSnapshotCoverage(current)
 	if err != nil {
-		return "", "", err
+		return "", "", &sourceReviewError{cause: err}
 	}
 	coverage, completion, err := deriveReportCompletion(tasks, values, records, reportTestEvidence(current), snapshot)
 	if err != nil {

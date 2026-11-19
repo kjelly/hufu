@@ -50,3 +50,45 @@ func TestReviewGateSourceFailureDoesNotTakeReportRepairEdge(t *testing.T) {
 		t.Fatalf("source violation became report verification output: err=%v output=%s", err, output.String())
 	}
 }
+
+func TestReviewGateRoutesSnapshotFailureToItsOwner(t *testing.T) {
+	for _, sourceFailure := range []bool{true, false} {
+		name := "substituted_report_coverage"
+		if sourceFailure {
+			name = "invalid_producer_identity"
+		}
+		t.Run(name, func(t *testing.T) {
+			fixture := gateFixture(t)
+			view, err := projectedFixture(fixture, "run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			if sourceFailure {
+				scope := raw(t, map[string]any{"requested": map[string]string{"kind": "repository_snapshot"}, "satisfied": true})
+				fixture.Tasks[5].Result.RuntimeOutputs["scope"] = scope
+				sealFixtureOutputs(t, &fixture.Tasks[5])
+				replacePayload(t, &fixture.Tasks[4], func(p *payload) { p.Scope = scope })
+				view, err = projectedFixture(fixture, "run-1")
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = runGateAction(t.Context(), "verify_review_report", view, &output)
+				if _, ok := errors.AsType[*sourceReviewError](err); !ok || output.Len() != 0 || !strings.Contains(err.Error(), "invalid snapshot identity") {
+					t.Fatalf("snapshot source failure became report verification output: err=%v output=%s", err, output.String())
+				}
+				return
+			}
+			coverage := snapshotCoverage{Mode: "repository_snapshot", Revision: "frozen-head"}
+			for _, item := range view.Tasks {
+				if item.ContractID == "inventory-review-handoffs" {
+					item.Result.RuntimeOutputs["snapshot_coverage"] = raw(t, coverage)
+				}
+			}
+			err = verifySnapshotCoverage(view, coverage, raw(t, map[string]string{"revision": "different"}))
+			if _, ok := errors.AsType[*sourceReviewError](err); err == nil || ok || !strings.Contains(err.Error(), "report substituted") {
+				t.Fatalf("report-owned snapshot failure has wrong attribution: %v", err)
+			}
+		})
+	}
+}

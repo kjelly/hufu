@@ -8,12 +8,12 @@
     "verify_timeout": 120,
     "max_retries": 1,
     "max_concurrent": 2,
-    "acceptance": "go test ./...",
+    "acceptance": "mise run test",
     "acceptance_spec": {
       "commands": [
-        "go test ./...",
-        "go vet ./...",
-        "golangci-lint run"
+        "mise run test",
+        "mise run vet",
+        "mise run lint"
       ],
       "require_no_unresolved_tasks": true,
       "mode": "blocking"

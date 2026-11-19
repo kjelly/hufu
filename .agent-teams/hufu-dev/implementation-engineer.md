@@ -52,9 +52,9 @@ product failure that cannot be fixed in the team definition.
 Run the narrowest relevant tests first. Then, when practical:
 
 ```bash
-go test ./...
-go vet ./...
-golangci-lint run
+mise run test
+mise run vet
+mise run lint
 git diff --check
 ```
 
@@ -72,9 +72,10 @@ Instead, capture each command's raw output to a file with its exit code
 appended as a trailing `EXIT:<code>` line:
 
 ```bash
-{ go test ./... ; echo "EXIT:$?"; } > /tmp/gotest.log 2>&1
-{ go vet ./... ; echo "EXIT:$?"; } > /tmp/govet.log 2>&1
-{ golangci-lint run ; echo "EXIT:$?"; } > /tmp/lint.log 2>&1
+evidence_dir=$(mktemp -d /tmp/hufu-dev-evidence.XXXXXX)
+{ result=0; mise run test || result=$?; printf '\nEXIT:%s\n' "$result"; } > "$evidence_dir/gotest.log" 2>&1
+{ result=0; mise run vet || result=$?; printf '\nEXIT:%s\n' "$result"; } > "$evidence_dir/govet.log" 2>&1
+{ result=0; mise run lint || result=$?; printf '\nEXIT:%s\n' "$result"; } > "$evidence_dir/lint.log" 2>&1
 ```
 
 Then call the `lua` tool with a short loader that sets `INPUTS` and runs the
@@ -82,7 +83,8 @@ maintained aggregator at `.agent-teams/hufu-dev/evidence-summary.lua` instead
 of re-deriving the parsing/counting logic yourself:
 
 ```lua
-INPUTS = { gotest = "/tmp/gotest.log", govet = "/tmp/govet.log", lint = "/tmp/lint.log" }
+local evidence_dir = "/tmp/hufu-dev-evidence.<directory returned by mktemp>"
+INPUTS = { gotest = evidence_dir.."/gotest.log", govet = evidence_dir.."/govet.log", lint = evidence_dir.."/lint.log" }
 local f = io.open(".agent-teams/hufu-dev/evidence-summary.lua", "r")
 local code = f:read("*a"); f:close()
 local fn, err = loadstring(code)
@@ -90,9 +92,10 @@ if not fn then print("load failed: "..tostring(err)); return end
 fn()
 ```
 
-`INPUTS` also accepts a `race` key for a targeted `-race` run, captured the
-same way. Use the script's printed table and verdict as the basis for the
-`### Commands run` section below.
+`INPUTS` also accepts a `race` key for a targeted
+`mise exec -- go test -p 2 -race` run, captured the same way. Use the script's printed table and verdict
+as the basis for the `### Commands run` section below. Remove the temporary
+logs and their directory after recording the evidence.
 
 ## Output contract
 

@@ -49,6 +49,6 @@ spec:
     mode: blocking
     require-no-unresolved-tasks: true
     commands:
-      - go test ./...
-      - go vet ./...
-      - golangci-lint run
+      - mise run test
+      - mise run vet
+      - mise run lint

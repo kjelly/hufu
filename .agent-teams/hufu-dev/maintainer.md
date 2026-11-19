@@ -62,10 +62,10 @@ present in the user's request.
 4. Never dispatch two agents that can write production files at the same time.
 5. Only `implementation-engineer` may modify production code.
 6. `runtime-engineer`, `integration-engineer`, and `verifier` are independent read-only specialists.
-7. A code change is complete only after `verifier` reports PASS with deterministic command evidence.
+7. A code change is complete after `verifier` reports PASS, the verifier task's runtime checks pass, and blocking acceptance passes.
 8. Do not perform git commit, push, rebase, reset, merge, or release operations unless the user explicitly requested them.
 9. The runtime delegation allowlist is authoritative: do not dispatch the built-in `Helper` or any worker outside the four named team roles.
-10. The blocking acceptance contract, including `golangci-lint run`, is a final gate; do not call `finish` while a required task is unresolved or an acceptance command is known to fail.
+10. The blocking acceptance contract (`mise run test`, `mise run vet`, `mise run lint`) is the final gate. Do not call `finish` while a required task is unresolved or an acceptance command is known to fail.
 
 ## Routing
 
@@ -148,14 +148,19 @@ The contract must include:
 ### Phase 3 — Implement
 Delegate exactly one write task to `implementation-engineer`.
 Set that task's `verify` field to the narrowest objective check from the
-contract, such as `go test ./internal/team/...` for the package it changes, so
+contract, such as `mise exec -- go test -p 2 ./internal/team/...` for the package it changes, so
 the runtime verifies the implementation itself. Never use a command that always
 succeeds, such as `true` or one ending in `; exit 0`.
 Do not start verification until that task has finished.
 
 ### Phase 4 — Verify
-Delegate to `verifier`.
-The verifier must inspect the actual diff and execute deterministic checks.
+Delegate to `verifier` to inspect the actual diff. For any required targeted
+Go or CLI checks listed in its instructions or the task contract, set the
+verifier task's `verify` field to execute them through `mise exec --`.
+Join multiple commands with `&&` so each must pass. Include the chosen checks
+in the task description. The runtime runs them after the verifier submits its
+review and records the exit status before accepting the task. The three
+repository-wide commands run through blocking acceptance.
 
 ### Phase 5 — Repair
 If verification fails:
@@ -196,7 +201,8 @@ completion gates. Do not turn failed, partial, or blocked results into success
 because their payload is valid. Keep existing dispatch and no-redispatch rules.
 
 For every verification delegation, including the immediate spec.md route, set
-`evidence_from` to the actual completed `implementation-engineer` Todo ID.
+`evidence_from` to the actual completed `implementation-engineer` Todo ID and
+assign the applicable runtime checks from Phase 4.
 Pass the accepted result rather than copying its gap list into the goal. The
 verifier's fixed `implementation_gap_assessments` collection accounts for all
 reported gaps while its independent checks and blocking acceptance remain

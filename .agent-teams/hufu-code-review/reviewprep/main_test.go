@@ -192,8 +192,8 @@ func TestTargetedGoTestPackagesFallsBackWhenScopeCannotBeNarrowed(t *testing.T) 
 func TestEmbeddedRuntimeExecutesDocumentationRouting(t *testing.T) {
 	repo := newFixtureRepo(t)
 	writeFile(t, filepath.Join(repo, "README.md"), "See the [runtime documentation](docs/architecture/runtime.md).\n")
-	writeFile(t, filepath.Join(repo, "docs/architecture/runtime.md"), "# Runtime\n\n`RuntimeContract` accepts `context.Context` and is defined in [`runtime.go`](../../internal/team/runtime.go).\n")
-	writeFile(t, filepath.Join(repo, "internal/team/runtime.go"), "package team\n\nimport \"context\"\n\ntype RuntimeContract struct{ Context context.Context }\n")
+	writeFile(t, filepath.Join(repo, "docs/architecture/runtime.md"), "# Runtime\n\n`RuntimeContract` works with `ctx.CancelFunc` and is defined in [`runtime.go`](../../internal/team/runtime.go).\n")
+	writeFile(t, filepath.Join(repo, "internal/team/runtime.go"), "package team\n\nimport ctx \"context\"\n\ntype RuntimeContract struct{ Context ctx.Context }\n")
 	commit(t, repo, "mixed runtime and documentation changes", "2025-01-02T00:00:00Z")
 
 	scope := resolverScope{Kind: "last_n", Count: 1, History: "first_parent", Head: "HEAD"}
@@ -237,6 +237,13 @@ func TestEmbeddedRuntimeExecutesDocumentationRouting(t *testing.T) {
 	}
 	if len(actionOutput.Artifacts) == 0 {
 		t.Fatal("embedded runtime produced no artifacts")
+	}
+	var verification documentationVerification
+	if err := json.Unmarshal(mustJSON(t, actionOutput.Outputs["documentation_verification"]), &verification); err != nil {
+		t.Fatal(err)
+	}
+	if verification.CheckedSymbols != 2 || len(verification.ReferenceCandidates) != 0 {
+		t.Fatalf("embedded verification did not resolve the declaration and documentation-only alias: %+v", verification)
 	}
 }
 
@@ -817,11 +824,14 @@ var (
 func TestReviewSymbolExistsResolvesDependencyPackageName(t *testing.T) {
 	dependency := t.TempDir()
 	writeFile(t, filepath.Join(dependency, "go.mod"), "module example.test/dependency\n\ngo 1.26\n")
-	writeFile(t, filepath.Join(dependency, "nested", "symbol.go"), "package dep\n\ntype Symbol struct{}\n")
+	writeFile(t, filepath.Join(dependency, "nested", "symbol.go"), "package dep\n\ntype Symbol struct{}\ntype Documented struct{}\n")
+	writeFile(t, filepath.Join(dependency, "alternate", "doc.go"), "package alternate\n\ntype Documented struct{}\ntype Used struct{}\n")
 
 	repo := newFixtureRepo(t)
 	writeAndCommit(t, repo, "go.mod", fmt.Sprintf("module example.test/review\n\ngo 1.26\n\nrequire example.test/dependency v0.0.0\nreplace example.test/dependency => %s\n", filepath.ToSlash(dependency)), "add dependency", "2025-01-02T00:00:00Z")
-	writeAndCommit(t, repo, "consumer.go", "package review\n\nimport \"example.test/dependency/nested\"\n\nvar (\n\t_ dep.Symbol\n\t_ dep.Missing\n)\n", "use dependency", "2025-01-03T00:00:00Z")
+	writeAndCommit(t, repo, "consumer.go", "package review\n\nimport (\n\"example.test/dependency/nested\"\nrenamed \"example.test/dependency/alternate\"\n)\n\nvar (\n\t_ dep.Symbol\n\t_ dep.Missing\n\t_ renamed.Used\n)\n", "use dependency", "2025-01-03T00:00:00Z")
+	writeAndCommit(t, repo, "guide.md", "`dep.Documented` and `renamed.Documented` are exposed to users.\n", "document dependency symbols", "2025-01-04T00:00:00Z")
+	writeFile(t, filepath.Join(repo, "uncommitted.go"), "package review\nimport worktreealias \"example.test/dependency/alternate\"\nvar _ worktreealias.Used\n")
 	revision, err := git(t.Context(), repo, "rev-parse", "HEAD")
 	if err != nil {
 		t.Fatal(err)
@@ -836,15 +846,43 @@ func TestReviewSymbolExistsResolvesDependencyPackageName(t *testing.T) {
 		{name: "working tree", rangeValue: reviewRange{Source: "working_tree"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			found, err := reviewSymbolExists(t.Context(), repo, test.rangeValue, "dep.Symbol")
-			if err != nil || !found {
-				t.Fatalf("reviewSymbolExists(dep.Symbol) = %t, %v; want true", found, err)
-			}
-			found, err = reviewSymbolExists(t.Context(), repo, test.rangeValue, "dep.Missing")
-			if err != nil || found {
-				t.Fatalf("reviewSymbolExists(dep.Missing) = %t, %v; want false for an absent dependency declaration", found, err)
+			resolver := newReviewGoSymbolResolver(t.Context(), repo, test.rangeValue)
+			defer resolver.close()
+			for name, want := range map[string]bool{
+				"dep.Symbol": true, "dep.Documented": true, "renamed.Documented": true,
+				"dep.Missing": false, "worktreealias.Documented": test.rangeValue.isWorkingTree(),
+			} {
+				found, err := resolver.exists(name)
+				if err != nil || found != want {
+					t.Errorf("exists(%s) = %t, %v; want %t", name, found, err, want)
+				}
 			}
 		})
+	}
+}
+
+func TestReviewSymbolExistsRequiresBareDeclaration(t *testing.T) {
+	repo := newFixtureRepo(t)
+	source := "package review\n// CommentOnly is not a declaration.\nconst Text = \"StringOnly\"\ntype LongerNameSuffix struct{}\nfunc (LongerNameSuffix) DoWork() {}\n"
+	writeAndCommit(t, repo, "symbols.go", source, "declare symbols", "2025-01-02T00:00:00Z")
+	revision, err := git(t.Context(), repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision = strings.TrimSpace(revision)
+	writeFile(t, filepath.Join(repo, "symbols.go"), source+"\ntype WorktreeOnly struct{}\n")
+	for _, scope := range []reviewRange{{End: revision}, {Source: "working_tree"}} {
+		resolver := newReviewGoSymbolResolver(t.Context(), repo, scope)
+		for name, want := range map[string]bool{
+			"CommentOnly": false, "StringOnly": false, "LongerName": false,
+			"LongerNameSuffix": true, "DoWork": true, "WorktreeOnly": scope.isWorkingTree(),
+		} {
+			found, err := resolver.exists(name)
+			if err != nil || found != want {
+				t.Errorf("%s exists(%s) = %t, %v; want %t", reviewTargetLabel(scope), name, found, err, want)
+			}
+		}
+		resolver.close()
 	}
 }
 

@@ -36,33 +36,40 @@ Your job is to determine whether the actual workspace change satisfies the reque
 4. Check that tests cover the failure mode or new behavior.
 5. Check for accidental compatibility changes.
 
-## Baseline commands
+## Verification commands
 
-Run, when applicable:
+Inspect the diff from the repository root:
 
 ```bash
 git diff --check
-go test ./...
-go vet ./...
-golangci-lint run
 ```
 
-For changes involving coordinator execution, task scheduling, shared state, memory, context, event/recovery logic, or other concurrency-sensitive runtime paths, also run targeted race tests, for example:
+The runtime runs `mise run test`, `mise run vet`, and `mise run lint` as the
+team's blocking acceptance. The maintainer supplies targeted commands in this
+task's `verify` field. The runtime runs those commands to accept this task.
+Record only commands and exits you actually observe in your own checks.
+
+For coordinator execution, task scheduling, shared state, memory, context,
+event/recovery logic, or other concurrency-sensitive runtime changes, the
+task's `verify` should include targeted race tests, for example:
 
 ```bash
-go test -race ./internal/team/... ./internal/agent/... ./internal/context/... ./internal/memory/...
+mise exec -- go test -p 2 -race ./internal/team/... ./internal/agent/... ./internal/context/... ./internal/memory/...
 ```
 
-Narrow the package set if some listed packages are unrelated, but state exactly what was run.
+Check that the package set covers the changed boundary. Report any required
+check missing from the assigned runtime verification as a gap.
 
-For CLI/config/tool/MCP changes, add targeted package tests or command-level checks that exercise the changed boundary.
+For CLI/config/tool/MCP changes, check that the task includes targeted package
+tests or CLI checks that exercise the changed boundary.
 
-For agent-team or review-harness changes, also run:
+For agent-team or review-harness changes, include validation and discovery
+probes for each affected team. For example:
 
 ```bash
-go run ./cmd/hufu team validate --team hufu-dev
-go run ./cmd/hufu team validate --team hufu-code-review
-go run ./cmd/hufu list hufu-code-review
+mise exec -- go run -p 2 ./cmd/hufu team validate --team hufu-dev
+mise exec -- go run -p 2 ./cmd/hufu team validate --team hufu-code-review
+mise exec -- go run -p 2 ./cmd/hufu list hufu-code-review
 ```
 
 When a review report is part of the requested deliverable, inspect the actual
@@ -117,7 +124,9 @@ Map each required behavior to code/test evidence.
 ### Scope check
 State whether unrelated changes were found.
 
-Only return PASS when there are no BLOCKER findings and all required deterministic checks pass.
+Only return PASS when the diff satisfies the contract, its required runtime
+checks are assigned, and all required checks you run pass. The runtime
+determines the outcome of the assigned commands and blocking acceptance.
 
 ### Submitting the result
 
@@ -144,10 +153,10 @@ above in summary/details as useful; they do not replace the payload.
 {
   "checks": [
     {
-      "command": "go test ./...",
+      "command": "git diff --check",
       "outcome": "unverified",
       "exit_code": null,
-      "note": "The test process could not start."
+      "note": "The diff check could not start."
     }
   ],
   "implementation_gap_assessments": {},
@@ -169,9 +178,9 @@ an observed positive exit code. `unverified` requires a nonblank note and may
 have null or an observed exit code when infrastructure prevents a reliable
 verification conclusion. A check entry is a worker report, not a runtime receipt.
 
-Keep the existing status mapping: `success` only when every required check
-finished and passed; `failed` for an observed confirmed rejection; `partial` or
-`blocked` for unresolved execution/evidence gaps. Never use `completed_with_gaps`
+Keep the existing status mapping. Use `success` for a passing code review with
+the required runtime checks assigned, `failed` for a confirmed rejection, and
+`partial` or `blocked` for unresolved execution or evidence gaps. Never use `completed_with_gaps`
 for unfinished verification. Put confirmed defects in `failures`; put missing or
 ambiguous evidence in `gaps`. Do not add a second overall verdict to the payload.
 

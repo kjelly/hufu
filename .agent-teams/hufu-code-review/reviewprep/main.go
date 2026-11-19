@@ -359,25 +359,17 @@ type listedGoPackage struct {
 	CgoFiles   []string `json:"CgoFiles"`
 }
 
-type loadedGoPackage struct {
-	value listedGoPackage
-	err   error
-}
-
-type goImportCandidate struct {
-	path          string
-	explicitAlias bool
-	preferred     bool
-}
-
 type reviewGoSymbolResolver struct {
 	ctx              context.Context
 	repo             string
 	rangeDef         reviewRange
 	resolutionDir    string
 	resolutionErr    error
-	packages         map[string]loadedGoPackage
-	standardPackages map[string][]string
+	importedPackages map[string][]listedGoPackage
+	importErrors     map[string]error
+	importsLoaded    bool
+	importsErr       error
+	standardPackages map[string][]listedGoPackage
 	standardLoaded   bool
 	standardErr      error
 }
@@ -2260,30 +2252,6 @@ func resolveWorktreePath(repo, path string) (string, error) {
 	return resolved, nil
 }
 
-func gitGrepSymbol(ctx context.Context, repo, revision, symbol string) (bool, error) {
-	args := []string{"grep"}
-	if revision == "" {
-		args = append(args, "--untracked")
-	}
-	args = append(args, "-q", "-F", symbol)
-	if revision != "" {
-		args = append(args, revision)
-	}
-	args = append(args, "--", "*.go")
-	cmd := newGitCommand(ctx, repo, args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err == nil {
-		return true, nil
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-		return false, nil
-	}
-	return false, fmt.Errorf("check Go symbol %q: %w: %s", symbol, err, strings.TrimSpace(stderr.String()))
-}
-
 func reviewSymbolExists(ctx context.Context, repo string, r reviewRange, symbol string) (bool, error) {
 	resolver := newReviewGoSymbolResolver(ctx, repo, r)
 	defer resolver.close()
@@ -2293,33 +2261,31 @@ func reviewSymbolExists(ctx context.Context, repo string, r reviewRange, symbol 
 func newReviewGoSymbolResolver(ctx context.Context, repo string, r reviewRange) *reviewGoSymbolResolver {
 	return &reviewGoSymbolResolver{
 		ctx: ctx, repo: repo, rangeDef: r,
-		packages: make(map[string]loadedGoPackage), standardPackages: make(map[string][]string),
+		importedPackages: make(map[string][]listedGoPackage),
+		importErrors:     make(map[string]error),
+		standardPackages: make(map[string][]listedGoPackage),
 	}
 }
 
 func (r *reviewGoSymbolResolver) exists(symbol string) (bool, error) {
 	if !qualifiedGoSymbol.MatchString(symbol) {
-		if r.rangeDef.isWorkingTree() {
-			return gitGrepSymbol(r.ctx, r.repo, "", symbol)
-		}
-		return gitGrepSymbol(r.ctx, r.repo, r.rangeDef.End, symbol)
+		return r.repositoryGoSymbolExists("", symbol)
 	}
 	packageName, symbolName, _ := strings.Cut(symbol, ".")
-	found, recognized, err := r.importedQualifiedGoSymbolExists(packageName, symbolName)
-	if err != nil || found || recognized {
-		return found, err
+	found, imported, importErr := r.importedQualifiedGoSymbolExists(packageName, symbolName)
+	if found {
+		return true, nil
 	}
-	found, recognized, err = r.standardLibraryQualifiedGoSymbolExists(packageName, symbolName)
-	if err != nil || found || recognized {
-		return found, err
-	}
-	if r.rangeDef.isWorkingTree() {
-		found, err = worktreeQualifiedGoSymbolExists(r.ctx, r.repo, packageName, symbolName)
-	} else {
-		found, err = gitQualifiedGoSymbolExists(r.ctx, r.repo, r.rangeDef.End, packageName, symbolName)
-	}
+	found, recognized, err := r.standardLibraryQualifiedGoSymbolExists(packageName, symbolName)
 	if err != nil || found {
 		return found, err
+	}
+	found, err = r.repositoryGoSymbolExists(packageName, symbolName)
+	if err != nil || found {
+		return found, err
+	}
+	if importErr != nil || imported || recognized {
+		return false, importErr
 	}
 	return r.selectorMemberExists(packageName, symbolName)
 }
@@ -2332,11 +2298,7 @@ func (r *reviewGoSymbolResolver) exists(symbol string) (bool, error) {
 // name a package still fails closed, and a top-level function or type never
 // satisfies a selector.
 func (r *reviewGoSymbolResolver) selectorMemberExists(qualifier, member string) (bool, error) {
-	revision := r.rangeDef.End
-	if r.rangeDef.isWorkingTree() {
-		revision = ""
-	}
-	packagePaths, err := gitSymbolCandidatePaths(r.ctx, r.repo, revision, "package "+qualifier)
+	packagePaths, err := r.goCandidatePaths("package " + qualifier)
 	if err != nil {
 		return false, err
 	}
@@ -2353,7 +2315,7 @@ func (r *reviewGoSymbolResolver) selectorMemberExists(qualifier, member string) 
 			return false, nil
 		}
 	}
-	memberPaths, err := gitSymbolCandidatePaths(r.ctx, r.repo, revision, member)
+	memberPaths, err := r.goCandidatePaths(member)
 	if err != nil {
 		return false, err
 	}
@@ -2426,91 +2388,119 @@ func sourceDeclaresGoMember(filename string, content []byte, member string) (boo
 	return false, nil
 }
 
-// importedQualifiedGoSymbolExists resolves a selector through import
-// declarations at the reviewed revision before inspecting the selected
-// package's actual source. This distinguishes repository packages such as
-// rule.DecideFunc from standard-library and module dependencies such as
-// context.Context or yaml.Node without hard-coding package names.
+// Resolve package names and aliases from import declarations in the reviewed
+// source, including packages whose documented symbol has no Go call site.
 func (r *reviewGoSymbolResolver) importedQualifiedGoSymbolExists(packageName, symbol string) (bool, bool, error) {
-	revision := r.rangeDef.End
-	if r.rangeDef.isWorkingTree() {
-		revision = ""
+	if !r.importsLoaded {
+		r.importsLoaded = true
+		r.importsErr = r.loadImportedPackages()
 	}
-	paths, err := gitSymbolCandidatePaths(r.ctx, r.repo, revision, packageName+"."+symbol)
+	if r.importsErr != nil {
+		return false, false, r.importsErr
+	}
+	packages := r.importedPackages[packageName]
+	found, err := goPackagesDeclareSymbol(packages, symbol)
+	if !found && err == nil {
+		err = r.importErrors[packageName]
+	}
+	return found, len(packages) > 0, err
+}
+
+func (r *reviewGoSymbolResolver) loadImportedPackages() error {
+	files, err := r.goCandidatePaths("import")
+	if err != nil || len(files) == 0 {
+		return err
+	}
+	directory, err := r.goListDirectory()
 	if err != nil {
-		return false, false, err
+		return err
 	}
-	candidates := make([]goImportCandidate, 0)
-	seen := make(map[string]int)
-	for _, candidatePath := range paths {
-		content, readErr := reviewGoSource(r.ctx, r.repo, r.rangeDef, candidatePath)
-		if readErr != nil {
-			return false, false, readErr
-		}
-		parsed, parseErr := parser.ParseFile(token.NewFileSet(), candidatePath, content, parser.ImportsOnly)
-		if parseErr != nil {
-			return false, false, fmt.Errorf("parse imports for Go symbol candidate %q: %w", candidatePath, parseErr)
-		}
-		for _, imported := range parsed.Imports {
-			importPath, unquoteErr := strconv.Unquote(imported.Path.Value)
-			if unquoteErr != nil {
-				return false, false, fmt.Errorf("parse import path in %q: %w", candidatePath, unquoteErr)
+	imports := make(map[string]map[string]bool)
+	for _, name := range files {
+		// Reuse the revision materialized for go list, including its module
+		// configuration. Git still determines which files are in scope.
+		var content []byte
+		if r.rangeDef.isWorkingTree() {
+			content, err = reviewGoSource(r.ctx, r.repo, r.rangeDef, name)
+		} else {
+			content, err = os.ReadFile(filepath.Join(directory, name))
+			if errors.Is(err, os.ErrNotExist) {
+				// git archive omits files marked export-ignore.
+				content, err = reviewGoSource(r.ctx, r.repo, r.rangeDef, name)
 			}
-			explicitAlias := imported.Name != nil
-			preferred := false
-			if explicitAlias {
-				alias := imported.Name.Name
-				if alias == "_" || alias == "." || alias != packageName {
+		}
+		if err != nil {
+			return fmt.Errorf("read Go import candidate %q: %w", name, err)
+		}
+		parsed, err := parser.ParseFile(token.NewFileSet(), name, content, parser.ImportsOnly)
+		if err != nil {
+			// An unrelated broken Go file does not supply a valid import.
+			continue
+		}
+		for _, spec := range parsed.Imports {
+			importPath, err := strconv.Unquote(spec.Path.Value)
+			if err != nil || importPath == "" || importPath == "C" ||
+				importPath == "std" || importPath == "cmd" || importPath == "all" ||
+				strings.HasPrefix(importPath, ".") || path.IsAbs(importPath) || strings.Contains(importPath, "...") {
+				continue
+			}
+			alias := ""
+			if spec.Name != nil {
+				alias = spec.Name.Name
+				if alias == "." || alias == "_" {
 					continue
 				}
-				preferred = true
-			} else if path.Base(importPath) != packageName {
-				// The declared package name may intentionally differ from the
-				// import-path base (for example gopkg.in/yaml.v3 -> yaml).
-				// Keep it as a lower-priority candidate and confirm its actual
-				// package name through go list below.
-				explicitAlias = false
-			} else {
-				preferred = true
 			}
-			if index, duplicate := seen[importPath]; duplicate {
-				if explicitAlias {
-					candidates[index].explicitAlias = true
-				}
-				candidates[index].preferred = candidates[index].preferred || preferred
-				continue
+			if imports[importPath] == nil {
+				imports[importPath] = make(map[string]bool)
 			}
-			seen[importPath] = len(candidates)
-			candidates = append(candidates, goImportCandidate{path: importPath, explicitAlias: explicitAlias, preferred: preferred})
+			imports[importPath][alias] = true
 		}
 	}
-	recognized := false
-	for _, preferred := range []bool{true, false} {
-		for _, candidate := range candidates {
-			if candidate.preferred != preferred {
+	if len(imports) == 0 {
+		return nil
+	}
+	paths := make([]string, 0, len(imports))
+	for importPath := range imports {
+		paths = append(paths, importPath)
+	}
+	sort.Strings(paths)
+	// -find only loads package metadata. -e lets unrelated unavailable
+	// packages coexist with valid imports, without needing the network.
+	args := append([]string{"list", "-e", "-find", "-mod=readonly", "-json", "--"}, paths...)
+	cmd := exec.CommandContext(r.ctx, "go", args...)
+	cmd.Dir = directory
+	cmd.Env = r.goListEnvironment(directory)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("resolve Go imports without network access: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	decoder := json.NewDecoder(&stdout)
+	for {
+		var pkg listedGoPackage
+		if err := decoder.Decode(&pkg); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return fmt.Errorf("decode imported Go package metadata: %w", err)
+		}
+		for alias := range imports[pkg.ImportPath] {
+			name := alias
+			if name == "" {
+				name = pkg.Name
+			}
+			if pkg.Dir != "" && pkg.Name != "" {
+				r.importedPackages[name] = append(r.importedPackages[name], pkg)
 				continue
 			}
-			pkg, loadErr := r.loadGoPackage(candidate.path)
-			if loadErr != nil {
-				// An unresolved lower-priority import may still declare the
-				// requested package name. Do not turn an incomplete lookup into
-				// a false "symbol does not exist" result.
-				return false, true, loadErr
+			if name == "" {
+				name = path.Base(pkg.ImportPath)
 			}
-			if !candidate.explicitAlias && pkg.Name != packageName {
-				continue
-			}
-			recognized = true
-			found, declareErr := listedPackageDeclaresGoSymbol(pkg, symbol)
-			if declareErr != nil {
-				return false, true, declareErr
-			}
-			if found {
-				return true, true, nil
-			}
+			r.importErrors[name] = fmt.Errorf("could not resolve imported Go package %q without network access", pkg.ImportPath)
 		}
 	}
-	return false, recognized, nil
 }
 
 // standardLibraryQualifiedGoSymbolExists handles valid standard-library
@@ -2521,18 +2511,19 @@ func (r *reviewGoSymbolResolver) standardLibraryQualifiedGoSymbolExists(packageN
 	if err := r.loadStandardPackages(); err != nil {
 		return false, false, err
 	}
-	paths := r.standardPackages[packageName]
-	for _, importPath := range paths {
-		pkg := r.packages[importPath].value
+	packages := r.standardPackages[packageName]
+	found, err := goPackagesDeclareSymbol(packages, symbol)
+	return found, len(packages) > 0, err
+}
+
+func goPackagesDeclareSymbol(packages []listedGoPackage, symbol string) (bool, error) {
+	for _, pkg := range packages {
 		found, err := listedPackageDeclaresGoSymbol(pkg, symbol)
-		if err != nil {
-			return false, true, err
-		}
-		if found {
-			return true, true, nil
+		if found || err != nil {
+			return found, err
 		}
 	}
-	return false, len(paths) > 0, nil
+	return false, nil
 }
 
 func (r *reviewGoSymbolResolver) loadStandardPackages() error {
@@ -2568,8 +2559,7 @@ func (r *reviewGoSymbolResolver) loadStandardPackages() error {
 		if strings.TrimSpace(pkg.Dir) == "" || strings.TrimSpace(pkg.Name) == "" || strings.TrimSpace(pkg.ImportPath) == "" {
 			continue
 		}
-		r.packages[pkg.ImportPath] = loadedGoPackage{value: pkg}
-		r.standardPackages[pkg.Name] = append(r.standardPackages[pkg.Name], pkg.ImportPath)
+		r.standardPackages[pkg.Name] = append(r.standardPackages[pkg.Name], pkg)
 	}
 	return nil
 }
@@ -2591,42 +2581,6 @@ func reviewGoSource(ctx context.Context, repo string, r reviewRange, candidatePa
 		return nil, fmt.Errorf("read Go symbol candidate %q: %w", candidatePath, err)
 	}
 	return content, nil
-}
-
-func (r *reviewGoSymbolResolver) loadGoPackage(importPath string) (listedGoPackage, error) {
-	if cached, ok := r.packages[importPath]; ok {
-		return cached.value, cached.err
-	}
-	goListDir, err := r.goListDirectory()
-	if err != nil {
-		r.packages[importPath] = loadedGoPackage{err: err}
-		return listedGoPackage{}, err
-	}
-	cmd := exec.CommandContext(r.ctx, "go", "list", "-mod=readonly", "-json", "--", importPath)
-	cmd.Dir = goListDir
-	cmd.Env = r.goListEnvironment(goListDir)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err = cmd.Run()
-	if err != nil {
-		err = fmt.Errorf("resolve imported Go package %q without network access: %w: %s", importPath, err, strings.TrimSpace(stderr.String()))
-		r.packages[importPath] = loadedGoPackage{err: err}
-		return listedGoPackage{}, err
-	}
-	var pkg listedGoPackage
-	if err := json.Unmarshal(stdout.Bytes(), &pkg); err != nil {
-		err = fmt.Errorf("decode imported Go package %q metadata: %w", importPath, err)
-		r.packages[importPath] = loadedGoPackage{err: err}
-		return listedGoPackage{}, err
-	}
-	if strings.TrimSpace(pkg.Dir) == "" || strings.TrimSpace(pkg.Name) == "" {
-		err = fmt.Errorf("imported Go package %q has incomplete metadata", importPath)
-		r.packages[importPath] = loadedGoPackage{err: err}
-		return listedGoPackage{}, err
-	}
-	r.packages[importPath] = loadedGoPackage{value: pkg}
-	return pkg, nil
 }
 
 // goListDirectory returns the live worktree for worktree reviews and an
@@ -2949,47 +2903,27 @@ func listedPackageDeclaresGoSymbol(pkg listedGoPackage, symbol string) (bool, er
 	return false, nil
 }
 
-func gitQualifiedGoSymbolExists(ctx context.Context, repo, revision, packageName, symbol string) (bool, error) {
-	paths, err := gitSymbolCandidatePaths(ctx, repo, revision, symbol)
-	if err != nil {
-		return false, err
+func (r *reviewGoSymbolResolver) goCandidatePaths(text string) ([]string, error) {
+	revision := r.rangeDef.End
+	if r.rangeDef.isWorkingTree() {
+		revision = ""
 	}
-	for _, candidatePath := range paths {
-		content, readErr := git(ctx, repo, "show", revision+":"+candidatePath)
-		if readErr != nil {
-			return false, fmt.Errorf("read Go symbol candidate %q: %w", candidatePath, readErr)
-		}
-		found, parseErr := sourceDeclaresGoSymbol(candidatePath, []byte(content), packageName, symbol)
-		if parseErr != nil {
-			return false, parseErr
-		}
-		if found {
-			return true, nil
-		}
-	}
-	return false, nil
+	return gitSymbolCandidatePaths(r.ctx, r.repo, revision, text)
 }
 
-func worktreeQualifiedGoSymbolExists(ctx context.Context, repo, packageName, symbol string) (bool, error) {
-	paths, err := gitSymbolCandidatePaths(ctx, repo, "", symbol)
+func (r *reviewGoSymbolResolver) repositoryGoSymbolExists(packageName, symbol string) (bool, error) {
+	paths, err := r.goCandidatePaths(symbol)
 	if err != nil {
 		return false, err
 	}
 	for _, candidatePath := range paths {
-		resolved, resolveErr := resolveWorktreePath(repo, candidatePath)
-		if resolveErr != nil {
-			return false, resolveErr
+		content, err := reviewGoSource(r.ctx, r.repo, r.rangeDef, candidatePath)
+		if err != nil {
+			return false, err
 		}
-		content, readErr := os.ReadFile(resolved)
-		if readErr != nil {
-			return false, fmt.Errorf("read Go symbol candidate %q: %w", candidatePath, readErr)
-		}
-		found, parseErr := sourceDeclaresGoSymbol(candidatePath, content, packageName, symbol)
-		if parseErr != nil {
-			return false, parseErr
-		}
-		if found {
-			return true, nil
+		found, err := sourceDeclaresGoSymbol(candidatePath, content, packageName, symbol)
+		if found || err != nil {
+			return found, err
 		}
 	}
 	return false, nil
@@ -3000,7 +2934,7 @@ func gitSymbolCandidatePaths(ctx context.Context, repo, revision, symbol string)
 	if revision == "" {
 		args = append(args, "--untracked")
 	}
-	args = append(args, "-l", "-F", symbol)
+	args = append(args, "-l", "-z", "-F", "-e", symbol)
 	if revision != "" {
 		args = append(args, revision)
 	}
@@ -3019,8 +2953,7 @@ func gitSymbolCandidatePaths(ctx context.Context, repo, revision, symbol string)
 	}
 	prefix := revision + ":"
 	paths := make([]string, 0)
-	for _, line := range strings.Split(stdout.String(), "\n") {
-		candidatePath := strings.TrimSpace(line)
+	for _, candidatePath := range strings.Split(stdout.String(), "\x00") {
 		if revision != "" {
 			candidatePath = strings.TrimPrefix(candidatePath, prefix)
 		}
@@ -3036,20 +2969,20 @@ func sourceDeclaresGoSymbol(filename string, content []byte, packageName, symbol
 	if err != nil {
 		return false, fmt.Errorf("parse Go symbol candidate %q: %w", filename, err)
 	}
-	if parsed.Name.Name != packageName {
+	if packageName != "" && parsed.Name.Name != packageName {
 		return false, nil
 	}
 	for _, declaration := range parsed.Decls {
 		switch current := declaration.(type) {
 		case *ast.FuncDecl:
-			if current.Recv == nil && current.Name.Name == symbol {
+			if current.Name.Name == symbol && (current.Recv == nil || packageName == "") {
 				return true, nil
 			}
 		case *ast.GenDecl:
 			for _, spec := range current.Specs {
 				switch declared := spec.(type) {
 				case *ast.TypeSpec:
-					if declared.Name.Name == symbol {
+					if declared.Name.Name == symbol || (packageName == "" && typeDeclaresGoMember(declared.Type, symbol)) {
 						return true, nil
 					}
 				case *ast.ValueSpec:

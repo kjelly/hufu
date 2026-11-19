@@ -2,8 +2,8 @@ package main
 
 import "fmt"
 
-// A source error requires repair of the named accepted review or critique;
-// the synthesizer cannot rewrite those immutable inputs.
+// A source error requires repair of accepted evidence that the synthesizer
+// cannot rewrite.
 type sourceReviewError struct{ cause error }
 
 func (e *sourceReviewError) Error() string {
