@@ -27,6 +27,19 @@ truncating claims or weakening a gate needs a justified design, not a green run.
 
 ## Validation and completion
 
+For a result or handoff failure, record three checkpoints. The tool work and
+its receipt are durable, the result is validated against its bound contract,
+and the workflow meets its final acceptance criteria. If result validation
+fails after the work is durable, preserve the work and use result-only repair.
+After a result changes, reopen affected handoffs and final acceptance.
+
+Use this order for the offline regression. Reproduce the original failure at
+the rejecting boundary, verify the fix, reopen the persisted state, and drive
+the affected consumers through acceptance. Check unchanged work and receipts,
+bounded repeated failures, and cancellation or interruption where applicable.
+Then run the full validation gates. An authorized original-workload resume
+uses the proved path and records its own final acceptance.
+
 Verify the original failure, relevant neighboring cases and affected integration
 boundary before running broader required checks. Keep required gates and reuse
 passed results for unchanged source/settings. An existing test may be the
