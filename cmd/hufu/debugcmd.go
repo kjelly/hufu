@@ -276,7 +276,7 @@ var debugCmd = &cobra.Command{
 			}
 			runRows := addRunEvents()
 			addDerivedExecutionEvents(runRows)
-			addRunStallDumps(tw, workspacePath, runRows, inclusions)
+			addRunStallDumps(tw, workspacePath, runID, runRows, inclusions)
 			// The task journal lives in runtime.sqlite; the bundle carries its
 			// run's records as JSONL under the historical name.
 			var taskJournal bytes.Buffer
@@ -522,6 +522,10 @@ func addRedactedPathToTar(tw *tar.Writer, path, name string) (string, error) {
 }
 
 func addRedactedFileToTar(tw *tar.Writer, path, name string) (string, error) {
+	return addRedactedFileToTarWithLimit(tw, path, name, 0)
+}
+
+func addRedactedFileToTarWithLimit(tw *tar.Writer, path, name string, limit int64) (string, error) {
 	if isDebugSensitivePath(name) {
 		return "omitted (sensitive path)", nil
 	}
@@ -540,9 +544,19 @@ func addRedactedFileToTar(tw *tar.Writer, path, name string) (string, error) {
 	if !info.Mode().IsRegular() {
 		return "omitted (unsupported file type)", nil
 	}
-	data, err := io.ReadAll(file)
+	if limit > 0 && info.Size() > limit {
+		return "omitted (size limit exceeded)", nil
+	}
+	var reader io.Reader = file
+	if limit > 0 {
+		reader = io.LimitReader(reader, limit+1)
+	}
+	data, err := io.ReadAll(reader)
 	if err != nil {
 		return "", err
+	}
+	if limit > 0 && int64(len(data)) > limit {
+		return "omitted (size limit exceeded)", nil
 	}
 	if reason := debugTextOmissionReason(data); reason != "" {
 		return "omitted (binary/unknown content: " + reason + ")", nil

@@ -17,9 +17,11 @@ func TestDebugRunIncludesOnlyItsReferencedStallDumps(t *testing.T) {
 		t.Fatal(err)
 	}
 	paths := map[string]string{
-		"selected.txt":     "blocked in prompt.Run token=secret-stall-token",
-		"other.txt":        "other-run-private-content",
-		"unreferenced.txt": "unreferenced-private-content",
+		"stall-selected.txt":     "blocked in prompt.Run token=secret-stall-token",
+		"stall-relative.txt":     "relative dump marker",
+		"stall-other.txt":        "other-run-private-content",
+		"stall-unreferenced.txt": "unreferenced-private-content",
+		"unexpected.txt":         "unexpected-file-private-content",
 	}
 	for name, content := range paths {
 		if err := os.WriteFile(filepath.Join(stall, name), []byte(content), 0600); err != nil {
@@ -30,8 +32,18 @@ func TestDebugRunIncludesOnlyItsReferencedStallDumps(t *testing.T) {
 	if err := os.WriteFile(outside, []byte("external-private-content"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(outside, filepath.Join(stall, "link.txt")); err != nil {
+	if err := os.Symlink(outside, filepath.Join(stall, "stall-link.txt")); err != nil {
 		t.Fatal(err)
+	}
+	oversize := filepath.Join(stall, "stall-oversize.txt")
+	file, err := os.Create(oversize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	truncateErr := file.Truncate(debugStallDumpMaxBytes + 1)
+	closeErr := file.Close()
+	if truncateErr != nil || closeErr != nil {
+		t.Fatalf("oversize fixture: %v / %v", truncateErr, closeErr)
 	}
 	makeEvent := func(run, path string) team.RunEvent {
 		payload, err := json.Marshal(map[string]string{"dump_path": path})
@@ -42,12 +54,15 @@ func TestDebugRunIncludesOnlyItsReferencedStallDumps(t *testing.T) {
 	}
 	writeEventJournal(t, workspace,
 		team.RunEvent{RunID: "run-stall", Type: "run_started", Payload: []byte(`{}`)},
-		makeEvent("run-stall", filepath.Join(stall, "selected.txt")),
-		makeEvent("run-stall", filepath.Join(stall, "selected.txt")),
-		makeEvent("run-other", filepath.Join(stall, "other.txt")),
+		makeEvent("run-stall", filepath.Join(stall, "stall-selected.txt")),
+		makeEvent("run-stall", filepath.Join(stall, "stall-selected.txt")),
+		makeEvent("run-stall", filepath.Join("logs", "stall", "stall-relative.txt")),
+		makeEvent("run-other", filepath.Join(stall, "stall-other.txt")),
 		makeEvent("run-stall", outside),
-		makeEvent("run-stall", filepath.Join(stall, "link.txt")),
-		makeEvent("run-stall", filepath.Join(stall, "missing.txt")),
+		makeEvent("run-stall", filepath.Join(stall, "stall-link.txt")),
+		makeEvent("run-stall", filepath.Join(stall, "stall-missing.txt")),
+		makeEvent("run-stall", filepath.Join(stall, "unexpected.txt")),
+		makeEvent("run-stall", oversize),
 	)
 	t.Chdir(output)
 	relativeWorkspace, err := filepath.Rel(output, workspace)
@@ -60,17 +75,20 @@ func TestDebugRunIncludesOnlyItsReferencedStallDumps(t *testing.T) {
 		t.Fatal(err)
 	}
 	bundle := readDebugBundle(t, filepath.Join(output, "hufu-debug-run-stall.tar.gz"))
-	selected := string(bundle["logs/stall/selected.txt"])
+	selected := string(bundle["logs/stall/stall-selected.txt"])
 	if !strings.Contains(selected, "prompt.Run") || strings.Contains(selected, "secret-stall-token") {
 		t.Fatalf("missing or unredacted dump: %s", selected)
 	}
+	if !strings.Contains(string(bundle["logs/stall/stall-relative.txt"]), "relative dump marker") {
+		t.Fatal("dump with a workspace-relative reference was omitted")
+	}
 	for name, data := range bundle {
-		if name == "logs/stall/other.txt" || name == "logs/stall/unreferenced.txt" || strings.Contains(string(data), "external-private-content") {
+		if strings.HasPrefix(name, "logs/stall/") && name != "logs/stall/stall-selected.txt" && name != "logs/stall/stall-relative.txt" || strings.Contains(string(data), "external-private-content") {
 			t.Fatalf("export escaped run scope: %s", name)
 		}
 	}
 	manifest := string(bundle["bundle-manifest.json"])
-	for _, expected := range []string{"logs/stall/selected.txt", "outside logs/stall", "symlink", "logs/stall/missing.txt"} {
+	for _, expected := range []string{"logs/stall/stall-selected.txt", "outside logs/stall", "symlink", "logs/stall/stall-missing.txt", "unexpected stall dump filename", "size limit exceeded"} {
 		if !strings.Contains(manifest, expected) {
 			t.Fatalf("manifest omitted %s: %s", expected, manifest)
 		}
