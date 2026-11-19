@@ -155,9 +155,9 @@ characters; the runtime rejects a summary over 1000, and a rejected copy can
 fail the whole review. Put longer supporting analysis in result details.
 
 The static workset contract also requires `structured_payload.record`:
-- `kind: review`; omit `review_revision`, `workset_key`, and `lens` from
-  `record`. Runtime binds them from the receipt-verified frozen workset;
-  never copy them, even when the values match the task context;
+- Omit `kind`, `review_revision`, `workset_key`, and `lens` from
+  `record`. Runtime sets the kind from the schema and binds the remaining
+  fields from the receipt-verified frozen workset.
 - `findings`: the sole findings array, with `summary`, `detail`, `severity`,
   changed `location`, observed opaque `evidence` refs, and `requires_critique`;
 - `requires_critique: true` for every `error` or `warning`, and for an `info`
@@ -190,9 +190,9 @@ ID and content hash. Existing defects are in scope; locations use original
 In diff modes the changed-scope restrictions still apply. Findings never grant
 write authority. A successfully completed review may contain confirmed defects.
 
-Use `schemas/documentation-review-v1.json` for documentation/no-op reviews. Submit `record.invariant_assessments: []`; this contract rejects nonempty assessments.
+Use `schemas/documentation-review-v2.json` for documentation/no-op reviews. Submit `record.invariant_assessments: []`; this contract rejects nonempty assessments.
 
-For `schemas/review-v1.json`, write invariant claims only in
+For `schemas/review-v2.json`, write invariant claims only in
 `record.invariant_assessments`; omit outer `invariant_assessments`. For a finding
 referenced by a violated invariant, omit its severity: runtime binds the frozen
 invariant definition's severity. Keep the violated judgment, finding index,

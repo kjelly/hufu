@@ -76,7 +76,7 @@ func (c *Coordinator) coordinatorPolicyRepairPrompt(violation error) (string, bo
 	}
 	c.coordinatorPolicyRepairPending.Store(true)
 	c.report(c.newEvent("policy_decision").withTodoID(CoordTodoID).withMessage(fmt.Sprintf("coordinator delegation policy repair requested at attempt %d/%d: %s", attempt, maxCoordinatorPolicyRepairs, reason)))
-	return fmt.Sprintf("%s\nAttempt %d/%d\nViolation: %s\n\nDeterministic repair instructions:\n- The next coordinator action may only be a delegation of unfinished work or a direct finish call.\n- Do not dispatch any worker with a terminal done result.\n- Dispatch only unfinished work that is still required.\n- If no unfinished work remains, call finish directly.\n- Do not retry the rejected delegation unchanged.", coordinatorPolicyRepairPrefix, attempt, maxCoordinatorPolicyRepairs, reason), false
+	return fmt.Sprintf("%s\nAttempt %d/%d\nViolation: %s\n\nDeterministic repair instructions:\n- The next coordinator action may only be a delegation of unfinished work or a direct finish call.\n- Dispatch only unfinished work that is still required. For a declared evidence inventory, request its expansion contract so the runtime selects sources without a task occurrence.\n- If no unfinished work remains, call finish directly.\n- Do not retry the rejected delegation unchanged.", coordinatorPolicyRepairPrefix, attempt, maxCoordinatorPolicyRepairs, reason), false
 }
 
 func (c *Coordinator) exhaustedPolicyRepairMessage(violation error) string {

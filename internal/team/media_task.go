@@ -127,13 +127,7 @@ func (c *Coordinator) appendMediaTaskCreation(ctx context.Context, event RunEven
 	if !ok {
 		return media.Reject(media.DurabilityRequired, "media task requires atomic occurrence binding")
 	}
-	payload, err := json.Marshal(TaskMediaBoundPayload{Version: media.Version, OccurrenceRevision: item.OccurrenceRevision, Binding: *item.MediaBinding.Clone()})
-	if err != nil {
-		return err
-	}
-	bound := RunEvent{Type: string(EventTaskMediaBound), Actor: item.Agent, RunID: item.MediaBinding.RunID, BranchID: item.MediaBinding.BranchID, TaskID: item.ID,
-		IdempotencyKey: "task-media:" + item.MediaBinding.BranchID + ":" + item.ID + ":" + item.MediaBinding.Hash, Payload: payload}
-	policy, err := c.requiredMediaPolicy()
+	bound, err := taskMediaBoundEvent(item)
 	if err != nil {
 		return err
 	}
@@ -142,29 +136,44 @@ func (c *Coordinator) appendMediaTaskCreation(ctx context.Context, event RunEven
 		if err != nil {
 			return err
 		}
-		if view.policyHash != policy.Hash || item.MediaBinding.BranchID != view.branch || item.MediaBinding.RunID != c.executionRunID {
-			return media.Reject(media.AccessDenied, "media task admission changed before commit")
-		}
-		if err := mediaBindingSources(item.MediaBinding, view, policy.Policy.Image); err != nil {
-			return err
-		}
-		if item.MediaBinding.InvocationMode != "" {
-			if err := validateNativeMediaInvocation(item, c.executionPolicy.snapshot); err != nil {
-				return err
-			}
-			if err := validateNativeMediaSourceScope(item.MediaBinding, view.events); err != nil {
-				return err
-			}
-		} else if err := validateMediaInvocationSourceOwner(item.MediaBinding, view.events); err != nil {
+		if err := c.validateMediaTaskCreationAtHead(item, view); err != nil {
 			return err
 		}
 		_, err = journal.AppendBatchAtHead(ctx, []RunEvent{event, bound}, view.head)
-		if errors.Is(err, ErrEventHeadChanged) {
-			continue
+		if !errors.Is(err, ErrEventHeadChanged) {
+			return err
 		}
-		return err
 	}
 	return ErrEventHeadChanged
+}
+
+func taskMediaBoundEvent(item *TodoItem) (RunEvent, error) {
+	payload, err := json.Marshal(TaskMediaBoundPayload{Version: media.Version, OccurrenceRevision: item.OccurrenceRevision, Binding: *item.MediaBinding.Clone()})
+	if err != nil {
+		return RunEvent{}, err
+	}
+	return RunEvent{Type: string(EventTaskMediaBound), Actor: item.Agent, RunID: item.MediaBinding.RunID, BranchID: item.MediaBinding.BranchID, TaskID: item.ID,
+		IdempotencyKey: "task-media:" + item.MediaBinding.BranchID + ":" + item.ID + ":" + item.MediaBinding.Hash, Payload: payload}, nil
+}
+
+func (c *Coordinator) validateMediaTaskCreationAtHead(item *TodoItem, view mediaLineageView) error {
+	policy, err := c.requiredMediaPolicy()
+	if err != nil {
+		return err
+	}
+	if view.policyHash != policy.Hash || item.MediaBinding.BranchID != view.branch || item.MediaBinding.RunID != c.executionRunID {
+		return media.Reject(media.AccessDenied, "media task admission changed before commit")
+	}
+	if err := mediaBindingSources(item.MediaBinding, view, policy.Policy.Image); err != nil {
+		return err
+	}
+	if item.MediaBinding.InvocationMode == "" {
+		return validateMediaInvocationSourceOwner(item.MediaBinding, view.events)
+	}
+	if err := validateNativeMediaInvocation(item, c.executionPolicy.snapshot); err != nil {
+		return err
+	}
+	return validateNativeMediaSourceScope(item.MediaBinding, view.events)
 }
 
 // validateMediaAttempt checks the current durable owner and the exact lease.

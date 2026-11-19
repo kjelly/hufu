@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 )
 
 const workStopToolLoop = "tool_loop"
@@ -26,9 +28,18 @@ func collectableToolLoop(ctx context.Context, err error, task TaskDef, dispositi
 	return true
 }
 
-func validateStoppedWorkClaims(work *resultCollectionWork, input SubmitResultInput) error {
-	if work.StopReason == workStopToolLoop && input.Status == TaskResultStatusSuccess {
-		return rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("work stopped at a tool loop; preserve that limitation and use completed_with_gaps, partial, blocked or failed, not success"))
+func stoppedWorkStatuses(runtimeCompletes bool) []string {
+	statuses := []string{TaskResultStatusPartial, TaskResultStatusBlocked, TaskResultStatusFailed}
+	if !runtimeCompletes {
+		return append(statuses, TaskResultStatusCompletedWithGaps)
 	}
-	return nil
+	return statuses
+}
+
+func validateStoppedWorkClaims(work *resultCollectionWork, input SubmitResultInput, runtimeCompletes bool) error {
+	if work.StopReason != workStopToolLoop || slices.Contains(stoppedWorkStatuses(runtimeCompletes), input.Status) {
+		return nil
+	}
+	return rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf(
+		"work stopped at a tool loop; preserve that limitation and use %s", strings.Join(stoppedWorkStatuses(runtimeCompletes), ", ")))
 }

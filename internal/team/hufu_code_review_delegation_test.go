@@ -88,7 +88,7 @@ func TestHufuCodeReviewSupplementReusesReviewerAfterRestore(t *testing.T) {
 			// Native inventory and audit remain admissible after model reuse.
 			for _, requests := range [][]TaskDef{
 				{{Agent: "reviewer", ContractID: "inventory-review-handoffs"}},
-				{{Agent: "synthesizer", ContractID: "synthesize-review"}, {Agent: "reviewer", ContractID: "verify-review-report"}},
+				{{Agent: "reviewer", ContractID: "derive-review-report"}, {Agent: "synthesizer", ContractID: "synthesize-review"}, {Agent: "reviewer", ContractID: "verify-review-report"}},
 			} {
 				bound, _, err := CompileTaskGoalContracts(fresh.session, requests)
 				if err != nil {

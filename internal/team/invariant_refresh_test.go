@@ -93,6 +93,36 @@ func TestRefreshStaleGateVerifiersKeepsCurrentAndInterruptedTasks(t *testing.T) 
 	}
 }
 
+func TestRefreshStaleGateVerifierPreservesUnrelatedInventoryCacheKey(t *testing.T) {
+	for _, bound := range []bool{false, true} {
+		name := "ordinary_gate"
+		if bound {
+			name = "inventory_gate"
+		}
+		t.Run(name, func(t *testing.T) {
+			c := newTestCoordinator(t)
+			c.executionRunID = "run-current"
+			gate := invariantCompletionTodo("run-old", "gate", InvariantVerificationGate, TaskDone, nil)
+			gate.Desc = "verify evidence"
+			if bound {
+				gate.EvidenceInventoryBinding = &EvidenceInventoryBinding{InventoryTaskID: "inventory", SourceTaskID: "source"}
+			}
+			c.taskTracker.TodoList().Restore([]*TodoItem{gate})
+			cache := c.TaskCache().(*defaultTaskCache)
+			cache.Restore([]TaskCacheSeed{{AgentKey: gate.Agent, Task: gate.Desc, Output: "ordinary output", Pinned: true}})
+			if len(cache.entriesFor(gate.Agent)) != 1 {
+				t.Fatal("ordinary result was not seeded")
+			}
+			if count, err := c.RefreshStaleGateVerifiers(t.Context()); err != nil || count != 1 || c.todoItemByID(gate.ID).Status != TaskPending {
+				t.Fatalf("refresh stale gate = %d, %v", count, err)
+			}
+			if retained := len(cache.entriesFor(gate.Agent)) == 1; retained != bound {
+				t.Fatalf("ordinary cache retention = %t, inventory binding = %t", retained, bound)
+			}
+		})
+	}
+}
+
 func TestRuntimeAttestedInvariantRejectionCanonicalizesFailureClass(t *testing.T) {
 	item := invariantCompletionTodo("run-current", "gate", InvariantVerificationGate, TaskError, []InvariantAssessment{completionAssessment("safe", InvariantSeverityError, InvariantViolated)})
 	item.FailureEvent = &FailureEventPayload{FailureClass: FailureExecution}

@@ -93,6 +93,8 @@ func testTodoItemFromTask(task TaskDef, id string, ids []string) *TodoItem {
 		Execution: cloneExecutionContract(task.Execution), Optional: task.Optional, ResourceClaims: append([]string(nil), task.ResourceClaims...),
 		Resources: append([]ResourceClaim(nil), task.Resources...), Kind: task.Kind, Advances: append([]string(nil), task.Advances...),
 		ExpectedStateChange: task.ExpectedStateChange, RecoveryHypothesis: cloneRecoveryHypothesis(task.RecoveryHypothesis),
+		EvidenceFrom: append([]string(nil), task.EvidenceFrom...), EvidenceInventoryBinding: task.EvidenceInventoryBinding.clone(),
+		ResultContract: task.ResultContract.clone(),
 		WorksetBinding: cloneWorksetBinding(task.WorksetBinding), DecisionProfile: task.DecisionProfile,
 		DecisionOptions: append([]DecisionOption(nil), task.DecisionOptions...), DecisionAssumptions: cloneDecisionAssumptions(task.DecisionAssumptions),
 		DecisionFacts: cloneDecisionFacts(task.DecisionFacts), DecisionArtifacts: append([]ArtifactRef(nil), task.DecisionArtifacts...),

@@ -710,7 +710,7 @@ func (c *Coordinator) applyLiveTaskProjection(tasks []*TodoItem) {
 	if !prof.DisableHistoricalTaskReuse && !prof.DisableJournalRestore {
 		seeds := make([]TaskCacheSeed, 0, len(tasks))
 		for _, t := range tasks {
-			if t != nil && t.MediaBinding == nil && t.MediaInputDigest == "" && runtimeMediaHash(t.TypedResult) == "" && t.Status == TaskDone && t.Output != "" {
+			if t != nil && t.EvidenceInventoryBinding == nil && t.MediaBinding == nil && t.MediaInputDigest == "" && runtimeMediaHash(t.TypedResult) == "" && t.Status == TaskDone && t.Output != "" {
 				seeds = append(seeds, TaskCacheSeed{
 					AgentKey: strings.ToLower(t.Agent), Task: t.Desc, Output: t.Output,
 					VerifySpec: t.VerifySpec, Verify: t.Verify, VerifyMode: t.VerifyMode,
@@ -948,7 +948,7 @@ func todoIDLess(a, b string) bool {
 }
 
 // getInterruptedTasks finds tasks left in-flight by a previous run and returns
-// them in dependency-safe (ascending ID) order without mutating status.
+// them in dependency order without mutating status.
 func (c *Coordinator) getInterruptedTasks() []*TodoItem {
 	items := c.taskTracker.TodoList().Items()
 	var interrupted []*TodoItem
@@ -963,7 +963,67 @@ func (c *Coordinator) getInterruptedTasks() []*TodoItem {
 	sort.SliceStable(interrupted, func(i, j int) bool {
 		return todoIDLess(interrupted[i].ID, interrupted[j].ID)
 	})
-	return interrupted
+	return orderInterruptedTasks(interrupted)
+}
+
+// Dispatch order and dependency order may differ for named static edges.
+func orderInterruptedTasks(items []*TodoItem) []*TodoItem {
+	pending := make(map[string]*TodoItem, len(items))
+	for _, item := range items {
+		pending[item.ID] = item
+	}
+	ordered := make([]*TodoItem, 0, len(items))
+	var visit func(string)
+	visit = func(id string) {
+		item := pending[id]
+		if item == nil {
+			return
+		}
+		delete(pending, id)
+		for _, predecessor := range item.DependsOn {
+			visit(predecessor)
+		}
+		for _, predecessor := range item.OrderAfter {
+			visit(predecessor)
+		}
+		ordered = append(ordered, item)
+	}
+	for _, item := range items {
+		visit(item.ID)
+	}
+	return ordered
+}
+
+func (c *Coordinator) checkInterruptedDependencies(item *TodoItem) error {
+	for _, id := range item.DependsOn {
+		producer := c.todoItemByID(id)
+		if producer != nil && producer.Status == TaskDone {
+			continue
+		}
+		status := TaskStatus("missing")
+		if producer != nil {
+			status = producer.Status
+		}
+		detail := fmt.Sprintf("blocked by failed dependency: producer_task_id=%s producer_status=%s", id, status)
+		if producer == nil || isTerminalTaskStatus(status) {
+			class := FailureExecution
+			if producer != nil && producer.FailureEvent != nil && producer.FailureEvent.FailureClass != "" {
+				class = producer.FailureEvent.FailureClass
+			}
+			c.persistStrandedDependent(item, detail, class)
+		}
+		return fmt.Errorf("recover task %s: %s", item.ID, detail)
+	}
+	return nil
+}
+
+func (c *Coordinator) interruptedOrderPredecessorsSettled(item *TodoItem) bool {
+	for _, id := range item.OrderAfter {
+		if predecessor := c.todoItemByID(id); predecessor == nil || !isTerminalTaskStatus(predecessor.Status) {
+			return false
+		}
+	}
+	return true
 }
 
 // ResumeInterruptedTasks resumes tasks that a previous run left in-flight
@@ -1012,6 +1072,15 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 				firstErr = ctx.Err()
 			}
 			break
+		}
+		if err := c.checkInterruptedDependencies(it); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if !c.interruptedOrderPredecessorsSettled(it) {
+			continue
 		}
 		if err := c.migrateLegacyExecutionTarget(ctx, it); err != nil {
 			if firstErr == nil {
@@ -1320,7 +1389,9 @@ func (c *Coordinator) RefreshStaleGateVerifiers(ctx context.Context) (int, error
 		if validation.Valid {
 			continue
 		}
-		c.invalidateTaskCacheWithTypedVerification(strings.ToLower(item.Agent), item.Desc, item.VerifySpec, item.Verify, item.VerifyMode)
+		if item.EvidenceInventoryBinding == nil {
+			c.invalidateTaskCacheWithTypedVerification(strings.ToLower(item.Agent), item.Desc, item.VerifySpec, item.Verify, item.VerifyMode)
+		}
 		if err := c.CommitStaleGateVerifierReset(ctx, item.ID); err != nil {
 			return refreshed, err
 		}
@@ -1409,7 +1480,7 @@ func taskDefFromTodoItem(it *TodoItem) TaskDef {
 		OnFailureClasses: append([]TaskFailureClass(nil), it.OnFailureClasses...),
 		Escalate:         it.Escalate, AdversarialVerify: it.AdversarialVerify,
 		Recovery: it.Recovery, ReconcileTool: it.ReconcileTool, Execution: cloneExecutionContract(it.Execution),
-		Optional: it.Optional, ResourceClaims: append([]string(nil), it.ResourceClaims...), EvidenceFrom: append([]string(nil), it.EvidenceFrom...), Resources: append([]ResourceClaim(nil), it.Resources...),
+		Optional: it.Optional, ResourceClaims: append([]string(nil), it.ResourceClaims...), EvidenceFrom: append([]string(nil), it.EvidenceFrom...), EvidenceInventoryBinding: it.EvidenceInventoryBinding.clone(), Resources: append([]ResourceClaim(nil), it.Resources...),
 		Kind: it.Kind, Advances: append([]string(nil), it.Advances...),
 		ExpectedStateChange: it.ExpectedStateChange, RecoveryHypothesis: cloneRecoveryHypothesis(it.RecoveryHypothesis), WorksetBinding: cloneWorksetBinding(it.WorksetBinding),
 		DecisionProfile: it.DecisionProfile, DecisionOptions: append([]DecisionOption(nil), it.DecisionOptions...),

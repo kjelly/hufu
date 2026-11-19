@@ -12,6 +12,10 @@ import (
 func staticContractEdgesHash(session *TeamSession) (string, error) {
 	participants := make(map[string]bool)
 	for _, contract := range session.ContractTasks {
+		if contract.EvidenceInventory != nil {
+			participants[contractEdgeKey(contract.ID)] = true
+			participants[contractEdgeKey(contract.EvidenceInventory.TaskID)] = true
+		}
 		for _, target := range append(append([]string(nil), contract.DependsOnContracts...), contract.OnFailureContract) {
 			if target != "" {
 				participants[contractEdgeKey(contract.ID)] = true
@@ -113,6 +117,9 @@ func validateStaticContractEdges(session *TeamSession) error {
 	for _, contract := range session.ContractTasks {
 		declared[contractEdgeKey(contract.ID)] = contract
 	}
+	if err := validateEvidenceInventoryContracts(session, declared); err != nil {
+		return err
+	}
 	hasEdges := false
 	for _, contract := range session.ContractTasks {
 		hasEdges = hasEdges || len(contract.DependsOnContracts) > 0 || contract.OnFailureContract != ""
@@ -132,7 +139,7 @@ func validateStaticContractEdges(session *TeamSession) error {
 			if !ok {
 				return fmt.Errorf("contract %q references unknown workflow contract %q", contract.ID, target)
 			}
-			if contract.ID == "" || contract.FanOut != nil || peer.FanOut != nil || contract.Phase != peer.Phase {
+			if contract.ID == "" || contract.FanOut != nil || peer.FanOut != nil || peer.EvidenceInventory.isExpansion() || contract.Phase != peer.Phase {
 				return fmt.Errorf("static workflow edge %q -> %q requires named, non-fan-out contracts in the same phase", contract.ID, target)
 			}
 		}

@@ -47,15 +47,21 @@ func TestHufuCodeReviewCriticSubmitsDirectly(t *testing.T) {
 			}
 			task := loaded.ContractTasks[index]
 			var inputID string
-			payload := `{"record":{"kind":"critique","decisions":{}}}`
+			payload := `{"record":{"decisions":{}}}`
 			request := TaskDef{Agent: critic.Name, ContractID: id, Goal: "Complete the assigned review", Model: "ollama/test"}
 			if id == "critic-review" {
-				request.EvidenceFrom = []string{seedEmptyCriticReview(t, c)}
+				id := seedEmptyCriticReview(t, c)
+				seedReviewEvidenceInventory(t, c, []string{id}, []string{id})
 			} else {
 				inputID = seedEscalationWorkset(t, c, &task)
-				payload = `{"record":{"kind":"review","findings":[],"gaps":[],"invariant_assessments":[],"reference_assessments":[]}}`
+				payload = `{"record":{"findings":[],"gaps":[],"invariant_assessments":[],"reference_assessments":[]}}`
 			}
 			c.session.ContractTasks = []TaskDef{task}
+			if id == "critic-review" {
+				c.session.ContractTasks = append(c.session.ContractTasks, TaskDef{
+					ID: task.EvidenceInventory.TaskID, Agent: "worker", Action: &Action{Type: "inventory"},
+				})
+			}
 			c.executionPolicy, err = newExecutionPolicyState(c)
 			if err != nil {
 				t.Fatal(err)
@@ -108,7 +114,7 @@ func TestHufuCodeReviewCriticSubmitsDirectly(t *testing.T) {
 
 func seedEmptyCriticReview(t *testing.T, c *Coordinator) string {
 	t.Helper()
-	schema := c.session.ResultContracts["schemas/review-v1.json"]
+	schema := c.session.ResultContracts["schemas/review-v2.json"]
 	ref := schema.ref(true)
 	payload, err := validateStructuredResultPayload(schema, ref, []byte(`{"record":{"kind":"review","review_revision":"frozen","workset_key":"unit-0000","lens":"general","findings":[],"gaps":[],"invariant_assessments":[],"reference_assessments":[]}}`))
 	if err != nil {

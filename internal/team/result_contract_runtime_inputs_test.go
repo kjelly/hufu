@@ -226,6 +226,99 @@ func TestRuntimeResultInputsExternalRechecksReceipt(t *testing.T) {
 	}
 }
 
+func TestRuntimeResultInputsExternalCompletion(t *testing.T) {
+	c, source, consumer, _ := runtimeInputResultFixture(t)
+	compiled := compileFixtureJSONSchema(t, "completed.json", `{
+		"type":"object","additionalProperties":false,"required":["decision","kind","completion"],
+		"properties":{"decision":{"type":"boolean"},"kind":{"type":"string","const":"report"},"completion":{
+			"type":"object","required":["status","summary"],"properties":{"status":{"type":"string"},"summary":{"type":"string"}}
+		}},
+		"x-hufu-runtime-inputs":[{"target":"/kind","source_kind":"const"},{"target":"/completion","source_task":"prepare-outputs","output":"observation"}],
+		"x-hufu-runtime-completion":"/completion"
+	}`)
+	setRuntimeInputObservation(t, c, source, map[string]any{"status": "completed_with_gaps", "summary": "One gap remains"})
+	c.session.ResultContracts[compiled.ID] = compiled
+	ref := compiled.ref(true)
+	request := scopedAttemptRequest("codex", consumer.ID)
+	request.Task = taskDefFromTodoItem(consumer)
+	request.Task.ResultContract = &ref
+	request.resultContractSchema = compiled
+	request.resultRuntimeInputs = func() (map[string]any, error) { return c.resultRuntimeInputValues(compiled, "") }
+	root := t.TempDir()
+	submit := func(raw string) (*TaskResult, error) {
+		proposal, err := decodeWorkerResultProposal([]byte(raw), true)
+		if err != nil {
+			return nil, err
+		}
+		return NewExternalResultCanonicalizer().Canonicalize(t.Context(), request, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, root)
+	}
+	completed, err := submit(`{"status":null,"summary":null,"structured_payload_json":"{\"decision\":true}"}`)
+	if err != nil || completed.Status != TaskResultStatusCompletedWithGaps || completed.Summary != "One gap remains" ||
+		completed.StructuredPayload == nil || !bytes.Contains(completed.StructuredPayload.Value, []byte(`"kind":"report"`)) {
+		t.Fatalf("runtime did not assemble the external completion: %+v, %v", completed, err)
+	}
+	for _, raw := range []string{
+		`{"status":"completed_with_gaps","summary":"One gap remains","structured_payload_json":"{\"decision\":true}"}`,
+		`{"structured_payload_json":"{\"decision\":true,\"kind\":\"report\"}"}`,
+		`{"structured_payload_json":"{\"decision\":true,\"completion\":null}"}`,
+		`{"status":"blocked","summary":"Source unavailable","structured_payload_json":"{\"kind\":\"report\"}"}`,
+	} {
+		if _, err := submit(raw); err == nil {
+			t.Fatalf("accepted a runtime-owned override: %s", raw)
+		}
+	}
+	blocked, err := submit(`{"status":"blocked","summary":"Source unavailable"}`)
+	if err != nil || blocked.Status != TaskResultStatusBlocked || blocked.Summary != "Source unavailable" || blocked.StructuredPayload != nil {
+		t.Fatalf("lost external blocker: %+v, %v", blocked, err)
+	}
+	source.ExecutionReceipt.RuntimeOutputsHash = "changed"
+	if _, err := submit(`{"structured_payload_json":"{\"decision\":true}"}`); err == nil {
+		t.Fatal("completion accepted a changed native receipt")
+	}
+}
+
+func TestRuntimeResultInputsExternalCompletionPreservesCanonicalSummary(t *testing.T) {
+	for _, scenario := range []string{"long summary", "downgraded tool evidence"} {
+		t.Run(scenario, func(t *testing.T) {
+			c, source, consumer, _ := runtimeInputResultFixture(t)
+			schema := strings.Replace(evidenceTestSchema, `"properties":{"findings"`, `"properties":{
+				"completion":{"type":"object","required":["status","summary"],"properties":{"status":{"type":"string"},"summary":{"type":"string"}}},
+				"findings"`, 1)
+			schema = strings.Replace(schema, `"required":["findings"]`, `"required":["completion","findings"],
+				"x-hufu-runtime-inputs":[{"target":"/completion","source_task":"prepare-outputs","output":"observation"}],
+				"x-hufu-runtime-completion":"/completion"`, 1)
+			compiled := compileFixtureJSONSchema(t, "completion.json", schema)
+			summary := "Receipt-backed completion with gaps"
+			wantDowngrades := 1
+			claim := evidenceTestPayload
+			if scenario == "long summary" {
+				summary = strings.Repeat("界", workerResultProposalMaxTextRunes+1)
+				wantDowngrades = 0
+				claim = `{"findings":[]}`
+			}
+			setRuntimeInputObservation(t, c, source, map[string]any{"status": "completed_with_gaps", "summary": summary})
+			ref := compiled.ref(true)
+			request := scopedAttemptRequest("codex", consumer.ID)
+			request.Task = taskDefFromTodoItem(consumer)
+			request.Task.ResultContract = &ref
+			request.resultContractSchema = compiled
+			request.resultRuntimeInputs = func() (map[string]any, error) { return c.resultRuntimeInputValues(compiled, "") }
+			proposal := &WorkerResultProposal{StructuredPayloadJSON: &claim}
+			result, err := NewExternalResultCanonicalizer().Canonicalize(t.Context(), request, AttemptResult{ResultProposal: proposal}, WorkspaceDelta{}, t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Summary != summary || result.StructuredPayload == nil || result.StructuredPayload.EvidenceDowngrades != wantDowngrades {
+				t.Fatalf("canonical envelope summary has %d bytes, want %d; evidence summary matched=%t, payload=%v",
+					len(result.Summary), len(summary), result.Summary == summary, result.StructuredPayload != nil)
+			}
+			if err := validateResultEnvelope(compiled, result); err != nil {
+				t.Fatalf("canonical result failed envelope replay validation: %v", err)
+			}
+		})
+	}
+}
+
 func TestRuntimeResultInputsKeepAggregateBound(t *testing.T) {
 	c, source, consumer, _ := runtimeInputResultFixture(t)
 	setRuntimeInputObservation(t, c, source, map[string]any{"count": 1, "literal": strings.Repeat("a", 128<<10)})

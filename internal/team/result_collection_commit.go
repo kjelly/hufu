@@ -53,9 +53,14 @@ func (c *Coordinator) decodeCollectionClaims(taskID string, raw []byte) (SubmitR
 	if len(raw) > resultCollectionResponseMaxBytes || len(bytes.TrimSpace(raw)) == 0 || bytes.TrimSpace(raw)[0] != '{' {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("collection response must be one bounded JSON object"))
 	}
-	if _, err := decodeUniqueJSON(raw); err != nil {
+	claims, err := decodeUniqueJSON(raw)
+	if err != nil {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
 	}
+	fields, _ := claims.(map[string]any)
+	_, statusSupplied := fields["status"]
+	_, summarySupplied := fields["summary"]
+	input.completionFieldsSupplied = statusSupplied || summarySupplied
 	info := collectionSubmissionInfo(c, taskID)
 	if err := validateSubmissionFieldPresence(string(raw), info); err != nil {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
@@ -73,7 +78,7 @@ func (c *Coordinator) decodeCollectionClaims(taskID string, raw []byte) (SubmitR
 	if err := json.Unmarshal(normalized, &input, json.RejectUnknownMembers(true), collectionDurationFormat); err != nil {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
 	}
-	if input.Summary == "" {
+	if input.Summary == "" && (!localResultSubmissionContract(c, taskID).runtimeCompletion || input.Status != "") {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("summary is required"))
 	}
 	return input, nil
@@ -99,7 +104,7 @@ func (c *Coordinator) prepareCollectionClaims(ctx context.Context, expected *Res
 	if err != nil {
 		return nil, rejectLocalResult(RepairFailureSource, err)
 	}
-	if err := validateStoppedWorkClaims(work, input); err != nil {
+	if err := validateStoppedWorkClaims(work, input, localResultSubmissionContract(c, expected.TaskID).runtimeCompletion); err != nil {
 		return nil, err
 	}
 	return c.updateResultCollection(ctx, expected, func(next *ResultCollectionCheckpoint, _ *ExecutionReceipt) error {
@@ -139,7 +144,7 @@ func (c *Coordinator) commitPreparedCollection(ctx context.Context, expected *Re
 	if err != nil {
 		return err
 	}
-	if err := validateStoppedWorkClaims(work, input); err != nil {
+	if err := validateStoppedWorkClaims(work, input, localResultSubmissionContract(c, expected.TaskID).runtimeCompletion); err != nil {
 		return err
 	}
 	// A malformed model field must not conceal forged receipts or artifact

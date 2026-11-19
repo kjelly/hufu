@@ -542,6 +542,14 @@
       "optional": true
     },
     {
+      "id": "derive-review-report",
+      "agent": "reviewer",
+      "phase": "VERIFY",
+      "side_effect": "none",
+      "recovery": "retry",
+      "optional": true
+    },
+    {
       "id": "synthesize-review",
       "agent": "synthesizer",
       "phase": "VERIFY",

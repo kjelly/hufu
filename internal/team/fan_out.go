@@ -27,7 +27,7 @@ var fanOutPlaceholderPattern = regexp.MustCompile(`\{([a-zA-Z0-9_]+)\}`)
 func (c *Coordinator) expandFanOutTasks(tasks []TaskDef) ([]TaskDef, error) {
 	hasFanOut := false
 	for _, t := range tasks {
-		if t.FanOut != nil {
+		if t.FanOut != nil || t.EvidenceInventory.isExpansion() {
 			hasFanOut = true
 			break
 		}
@@ -41,6 +41,17 @@ func (c *Coordinator) expandFanOutTasks(tasks []TaskDef) ([]TaskDef, error) {
 	}
 	expanded := make([]TaskDef, 0, len(tasks))
 	for i, t := range tasks {
+		if t.EvidenceInventory.isExpansion() {
+			if len(tasks) != 1 || len(t.EvidenceFrom) != 0 || len(t.DependsOn) != 0 || t.Pipeline || t.OnFailure != nil {
+				return nil, fmt.Errorf("contract %q owns its fan-out and evidence_from; dispatch it alone without scheduling inputs", t.ContractID)
+			}
+			rows, err := c.expandEvidenceInventory(t)
+			if err != nil {
+				return nil, fmt.Errorf("tasks[%d].evidence-inventory: %w", i, err)
+			}
+			expanded = append(expanded, rows...)
+			continue
+		}
 		if t.FanOut == nil {
 			expanded = append(expanded, t)
 			continue

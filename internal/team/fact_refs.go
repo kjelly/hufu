@@ -102,27 +102,33 @@ func (c *Coordinator) resolveRuntimeOutputRef(ref FactRef, output string) (strin
 }
 
 func (c *Coordinator) resolveRuntimeOutputValue(ref FactRef, output string) (any, error) {
+	value, _, _, err := c.resolveVerifiedRuntimeOutput(ref, output)
+	return value, err
+}
+
+func (c *Coordinator) resolveVerifiedRuntimeOutput(ref FactRef, output string) (any, *TodoItem, *ExecutionReceipt, error) {
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
-		return nil, fmt.Errorf("fact_ref %q: canonical task occurrences are unavailable", ref.Name)
+		return nil, nil, nil, fmt.Errorf("fact_ref %q: canonical task occurrences are unavailable", ref.Name)
 	}
 	items := c.taskTracker.TodoList().Items()
 	runID := coordinatorRuntimeRunID(c)
 	origins, err := c.recoveredTaskOutputOrigins(items)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	spec := VerificationSpec{
 		Type: VerifyTaskOutputAssert, WorksetSourceTask: ref.TaskID, TaskOutputName: output,
 		Assertions: []JSONAssertion{{Pointer: "", Op: "exists"}},
 	}
 	if _, err := ReplayTaskOutputAssertions(items, runID, c.RunInputSnapshot(), spec, origins); err != nil {
-		return nil, fmt.Errorf("fact_ref %q: runtime output is not canonical: %w", ref.Name, err)
+		return nil, nil, nil, fmt.Errorf("fact_ref %q: runtime output is not canonical: %w", ref.Name, err)
 	}
 	source, err := uniqueTaskOutputSource(items, ref.TaskID, runID, origins)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
-	return source.TypedResult.RuntimeOutputs[output], nil
+	receipt := latestSuccessfulExecutionReceipt(source, taskOutputOriginRun(runID, source.ID, []map[string]string{origins}))
+	return source.TypedResult.RuntimeOutputs[output], source, receipt, nil
 }
 
 // stringifyFactValue renders a fact for text substitution: a plain string is

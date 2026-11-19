@@ -187,6 +187,11 @@ func (c *Coordinator) initEventStore() {
 	}
 	c.hydrateEmittedEventKeys(st, activeBranch)
 	c.checkCanonicalProjectionShadow(st, activeBranch)
+	// A decision admission can reserve an ID durably before task_created.
+	// Restore the reservation floor after rebuilding the live task list.
+	if c.taskTracker != nil {
+		c.taskTracker.TodoList().advanceIDFloor(workflowTaskIDHighWater(stepReceiptEvents))
+	}
 	c.repairMemoryLearningGaps(st, activeBranch)
 	// A canonical projection rebuild can replace recovery metadata. Validate
 	// receipt CAS after that rebuild so a new semantic integrity failure cannot
@@ -1275,6 +1280,10 @@ func (c *Coordinator) CommitTaskCreation(ctx context.Context, specs []TodoSpec) 
 // that cannot proceed with a partial batch must treat the returned items as
 // already-committed work, never as orphans to be recreated.
 func (c *Coordinator) CommitTaskCreationResolved(ctx context.Context, specs []TodoSpec, ids []string) ([]*TodoItem, error) {
+	return c.commitTaskCreationResolved(ctx, specs, ids, false)
+}
+
+func (c *Coordinator) commitTaskCreationResolved(ctx context.Context, specs []TodoSpec, ids []string, atomic bool) ([]*TodoItem, error) {
 	if c == nil || c.taskTracker == nil || c.taskTracker.TodoList() == nil {
 		return nil, fmt.Errorf("commit task creation: task tracker is unavailable")
 	}
@@ -1304,46 +1313,55 @@ func (c *Coordinator) CommitTaskCreationResolved(ctx context.Context, specs []To
 	}
 
 	appendCtx := context.WithoutCancel(ctx)
+	if atomic {
+		if err := c.appendTaskCreationBatch(appendCtx, items); err != nil {
+			return nil, fmt.Errorf("commit task creation batch: %w", err)
+		}
+		c.projectCreatedTasks(items)
+		return items, nil
+	}
+
 	var created []*TodoItem
 	for _, item := range items {
-		if err := c.validateTaskCreationAdmission(appendCtx, item); err != nil {
+		event, err := c.taskCreationEvent(appendCtx, item)
+		if err != nil {
 			return created, err
 		}
-		payload := c.taskTransitionPayloadWithCoordinator(item)
-		rawPayload, err := json.Marshal(payload)
-		if err != nil {
-			// created items were already added incrementally below; they are
-			// durable AND visible, so return them as the explicit partial result.
-			return created, fmt.Errorf("commit task creation payload: %w", err)
-		}
-		key := taskTransitionEventKey(item)
-		if err := c.appendMediaTaskCreation(appendCtx, RunEvent{
-			Type:           string(EventTaskCreated),
-			Actor:          item.Agent,
-			TaskID:         item.ID,
-			IdempotencyKey: key,
-			Payload:        rawPayload,
-		}, item); err != nil {
-			// created items were already added incrementally below; they are
-			// durable AND visible, so return them as the explicit partial result.
+		if err := c.appendMediaTaskCreation(appendCtx, event, item); err != nil {
 			return created, fmt.Errorf("commit task creation append: %w", err)
 		}
-		c.eventOnceMu.Lock()
-		if c.emittedTaskTransitions == nil {
-			c.emittedTaskTransitions = make(map[string]bool)
-		}
-		c.emittedTaskTransitions[key] = true
-		c.emittedTaskTransitions[taskTransitionEventKey(item)] = true
-		c.emittedTaskTransitions[fmt.Sprintf("%s:%s:%d", item.ID, item.Status, item.Retries)] = true
-		c.eventOnceMu.Unlock()
 		created = append(created, item)
-		c.markAdmittedTodoIDs([]*TodoItem{item})
-		// Make the item visible immediately so a partial append failure (or a
-		// crash mid-loop) never leaves a durable event without a projection
-		// entry and checkpoint.
-		tl.AddReserved([]*TodoItem{item})
+		c.projectCreatedTasks([]*TodoItem{item})
 	}
 	return created, nil
+}
+
+func (c *Coordinator) taskCreationEvent(ctx context.Context, item *TodoItem) (RunEvent, error) {
+	if err := c.validateTaskCreationAdmission(ctx, item); err != nil {
+		return RunEvent{}, err
+	}
+	payload, err := json.Marshal(c.taskTransitionPayloadWithCoordinator(item))
+	if err != nil {
+		return RunEvent{}, fmt.Errorf("commit task creation payload: %w", err)
+	}
+	return RunEvent{
+		Type: string(EventTaskCreated), Actor: item.Agent, TaskID: item.ID,
+		IdempotencyKey: taskTransitionEventKey(item), Payload: payload,
+	}, nil
+}
+
+func (c *Coordinator) projectCreatedTasks(items []*TodoItem) {
+	c.eventOnceMu.Lock()
+	if c.emittedTaskTransitions == nil {
+		c.emittedTaskTransitions = make(map[string]bool)
+	}
+	for _, item := range items {
+		c.emittedTaskTransitions[taskTransitionEventKey(item)] = true
+		c.emittedTaskTransitions[fmt.Sprintf("%s:%s:%d", item.ID, item.Status, item.Retries)] = true
+	}
+	c.eventOnceMu.Unlock()
+	c.markAdmittedTodoIDs(items)
+	c.taskTracker.TodoList().AddReserved(items)
 }
 
 // CommitTaskRemoval is the event-first boundary for removing tasks from the
@@ -1370,24 +1388,11 @@ func (c *Coordinator) CommitTaskRemoval(ctx context.Context, taskIDs ...string) 
 		if item == nil {
 			continue
 		}
-		payload := map[string]interface{}{
-			"id":     item.ID,
-			"status": string(item.Status),
-			"desc":   item.Desc,
-			"agent":  item.Agent,
-		}
-		rawPayload, err := json.Marshal(payload)
+		event, err := taskRemovalEvent(item)
 		if err != nil {
-			return fmt.Errorf("commit task removal payload: %w", err)
+			return err
 		}
-		key := "removed:" + taskTransitionEventKey(item)
-		if _, err := c.EventJournal().Append(appendCtx, RunEvent{
-			Type:           string(EventTaskRemoved),
-			Actor:          item.Agent,
-			TaskID:         item.ID,
-			IdempotencyKey: key,
-			Payload:        rawPayload,
-		}); err != nil {
+		if _, err := c.EventJournal().Append(appendCtx, event); err != nil {
 			// Keep the projection aligned with the durable events: remove the
 			// items whose removal was already appended before surfacing the
 			// error, so replay and checkpoint cannot disagree.
@@ -1400,6 +1405,37 @@ func (c *Coordinator) CommitTaskRemoval(ctx context.Context, taskIDs ...string) 
 	}
 	c.taskTracker.TodoList().DeleteIDs(taskIDs...)
 	return nil
+}
+
+func (c *Coordinator) commitTaskRemovalBatch(ctx context.Context, items []*TodoItem, ids []string) error {
+	if c.hasDurableEventJournal() {
+		events := make([]RunEvent, 0, len(items))
+		for _, item := range items {
+			event, err := taskRemovalEvent(item)
+			if err != nil {
+				return err
+			}
+			events = append(events, event)
+		}
+		if err := c.appendAtomicTaskEvents(ctx, events, nil); err != nil {
+			return err
+		}
+	}
+	c.taskTracker.TodoList().DeleteIDs(ids...)
+	return nil
+}
+
+func taskRemovalEvent(item *TodoItem) (RunEvent, error) {
+	payload, err := json.Marshal(map[string]string{
+		"id": item.ID, "status": string(item.Status), "desc": item.Desc, "agent": item.Agent,
+	})
+	if err != nil {
+		return RunEvent{}, fmt.Errorf("commit task removal payload: %w", err)
+	}
+	return RunEvent{
+		Type: string(EventTaskRemoved), Actor: item.Agent, TaskID: item.ID,
+		IdempotencyKey: "removed:" + taskTransitionEventKey(item), Payload: payload,
+	}, nil
 }
 
 // CommitTaskResolution is the event-first boundary for reconcile_task. It
@@ -1716,11 +1752,7 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 		payload["verify"] = item.Verify
 		payload["verify_mode"] = item.VerifyMode
 	}
-	if len(item.EvidenceFrom) > 0 {
-		// Written only when used, so every other task's payload and
-		// transition key stay byte-identical.
-		payload["evidence_from"] = append([]string(nil), item.EvidenceFrom...)
-	}
+	addTaskEvidenceBindingPayload(payload, item)
 	if item.VerifySpec != nil {
 		payload["verify_spec"] = item.VerifySpec
 	}
@@ -1776,6 +1808,16 @@ func taskTransitionPayloadWithCoordinator(item *TodoItem, c *Coordinator) map[st
 		payload["context_manifests"] = item.ContextManifests
 	}
 	return payload
+}
+
+func addTaskEvidenceBindingPayload(payload map[string]interface{}, item *TodoItem) {
+	// Write the bindings only when used to preserve historical task payloads.
+	if item.EvidenceInventoryBinding != nil {
+		payload["evidence_inventory_binding"] = item.EvidenceInventoryBinding
+	}
+	if len(item.EvidenceFrom) > 0 {
+		payload["evidence_from"] = append([]string(nil), item.EvidenceFrom...)
+	}
 }
 
 func isMemoryOutcomeTerminalEvent(eventType string) bool {

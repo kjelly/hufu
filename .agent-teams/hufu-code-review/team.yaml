@@ -20,9 +20,8 @@ spec:
   workspace: workspace
   goal-mode: outcome
   execution-profile: fresh-session
-  # Return complete claims through the data-only response function. Its single
-  # result argument contains status, summary and structured_payload; it has no
-  # executable handler. Canonical validation and the two-turn budget still apply.
+  # Return model-authored claims through a data-only response function. Runtime
+  # assembles and validates the complete result within the two-turn budget.
   collector-response-channel: function
   # Memory learning stays off. Every review task runs in the verify phase,
   # which receives only memory explicitly activated for verify, so reviews
@@ -436,7 +435,7 @@ spec:
       agent: reviewer
       phase: verify
       invariant-verification: report
-      result-contract: { schema: schemas/review-v1.json, require-structured: true }
+      result-contract: { schema: schemas/review-v2.json, require-structured: true }
       fan_out:
         source-artifact:
           task_id: produce-workset
@@ -482,7 +481,7 @@ spec:
       advances: [documentation-reviews-complete]
       agent: documentation-reviewer
       phase: verify
-      result-contract: { schema: schemas/documentation-review-v1.json, require-structured: true }
+      result-contract: { schema: schemas/documentation-review-v2.json, require-structured: true }
       fan_out:
         source-artifact:
           task_id: produce-workset
@@ -510,7 +509,7 @@ spec:
       advances: [documentation-escalation-complete]
       agent: critic
       phase: verify
-      result-contract: { schema: schemas/documentation-review-v1.json, require-structured: true }
+      result-contract: { schema: schemas/documentation-review-v2.json, require-structured: true }
       fan_out:
         source-artifact:
           task_id: produce-workset
@@ -539,7 +538,14 @@ spec:
       agent: critic
       phase: verify
       optional: true
-      result-contract: { schema: schemas/critique-v2.json, require-structured: true }
+      result-contract: { schema: schemas/critique-v3.json, require-structured: true }
+      evidence-inventory:
+        task-id: inventory-review-handoffs
+        output: review_handoff_inventory
+        ids-pointer: /required_critic_source_task_ids
+        hashes-pointer: /sources
+        max-sources: 32
+        goal: Audit every finding in source review task {source_task_id}. Submit one decision per runtime-issued finding key.
       execution:
         requires-result: true
         requires-grounded-result: true
@@ -600,7 +606,7 @@ spec:
       phase: verify
       optional: true
       invariant-verification: report
-      result-contract: { schema: schemas/supplement-review-v1.json, require-structured: true }
+      result-contract: { schema: schemas/supplement-review-v2.json, require-structured: true }
       fan_out:
         source-artifact:
           task_id: prepare-review-supplement
@@ -653,6 +659,27 @@ spec:
         task-result-assertions:
           - { pointer: /runtime_outputs/review_handoff_inventory/passed, op: equals, value: true }
 
+    - id: derive-review-report
+      kind: outcome
+      advances: [review-report-audited]
+      agent: reviewer
+      phase: verify
+      optional: true
+      side_effect: none
+      recovery: retry
+      action:
+        capability: verify-review-report
+        type: derive_review_report
+        payload: >-
+          {"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}}
+        input-bindings:
+          - input: review.scope
+            target: /scope
+      verify-spec:
+        type: task_result_assert
+        task-result-assertions:
+          - { pointer: /runtime_outputs/review_completion/summary, op: non_empty }
+
     - id: synthesize-review
       kind: outcome
       advances: [review-report-audited]
@@ -662,14 +689,22 @@ spec:
       side_effect: none
       recovery: retry
       max_retries: 1
-      result-contract: { schema: schemas/report-v2.json, require-structured: true }
+      result-contract: { schema: schemas/report-v3.json, require-structured: true }
+      depends-on-contracts: [derive-review-report]
+      evidence-inventory:
+        task-id: inventory-review-handoffs
+        output: review_handoff_inventory
+        ids-pointer: /source_task_ids
+        hashes-pointer: /sources
+        max-sources: 32
+        from-fan-out: critic-review
       constraints: |-
-        Scope, snapshot_coverage and test_verification are runtime-owned result fields. Omit them from your submission; runtime binding supplies the complete receipt-verified values, including the full diagnostic.
+        Omit audit_complete, coverage, completion, scope, snapshot_coverage and test_verification. The runtime binds the complete receipt-verified values, including the full diagnostic. Omit status and summary for completed work.
         supplement_outcomes is runtime-owned; omit it. Preserve all typed source kinds and limitations. The inventory includes accepted supplemental reviews as full review sources, with the same critic coverage rules.
         Supplemental evidence outcomes (for analysis only): {supplement_outcomes}
         Scope context (for analysis only): {scope_attestation}
         Test status (for analysis only): {test_status}
-        Review Handoff Inventory (receipt-verified; every listed required source must have a critic-review dependency):
+        Receipt-verified review handoff inventory:
         {handoff_inventory}
         Omit input_review from structured_payload: the runtime fills every accepted dependency record and hash. Do not spend model output copying source records.
         The runtime Fixed Collections manifest owns gap membership and identity. Submit gap_resolutions as an object keyed by its issued keys, with decision fields only. The runtime generates source_task_id, gap_index, order, and the final array from accepted review records; never recreate those fields or create indices from prose or nested critic records.

@@ -13,7 +13,7 @@ recovery: retry
 max-retries: 1
 ---
 
-Select the mode ONLY from the task's static result contract. `critic-review` / `schemas/critique-v2.json` always means finding critique, regardless of the source review's lens. The documentation workset mode uses `schemas/documentation-review-v1.json`. A documentation-risk source lens does not switch a `critic-review` task into documentation workset mode.
+Select the mode ONLY from the task's static result contract. `critic-review` / `schemas/critique-v3.json` always means finding critique, regardless of the source review's lens. The documentation workset mode uses `schemas/documentation-review-v2.json`. A documentation-risk source lens does not switch a `critic-review` task into documentation workset mode.
 
 In source-review mode, satisfy all runtime `required_reads` with actual
 successful `view` spans; search is not full observation. Repair missing-read
@@ -99,7 +99,7 @@ the receipt-verified frozen workset; do not copy them even when identical.
 later commit (`reference_tip`) provides; a plan that names work it has not
 done yet produces them, and they are not findings on their own.
 
-In `critic-review` mode (`schemas/critique-v2.json`), the helper's ENTIRE observed context is limited to
+In `critic-review` mode (`schemas/critique-v3.json`), the helper's ENTIRE observed context is limited to
 48 KiB, including the finding and every successful view response in this task.
 Read at most 12 KiB TOTAL across at most six focused view calls, counting every item of a batch separately. These limits apply to every `critic-review` task, including documentation findings. Start with a small search, never a whole-artifact read. If view returns decision_read_budget_exhausted after a successful read, stop reading and call the helper with the evidence already observed. If no read has succeeded yet, request one small search excerpt first. Never retry that denied read or increase its limit. Locate a
 cited file heading or symbol with view.search_text (exact literal text),
@@ -142,7 +142,7 @@ drains) merely because the code superficially compiles or looks sequential; veri
 whether the concurrent or state-machine invariant is demonstrably preserved.
 A clean critic result is valid.
 
-In `critic-review` mode (`schemas/critique-v2.json`), critique only the findings in the one dependency
+In `critic-review` mode (`schemas/critique-v3.json`), critique only the findings in the one dependency
 review. Never substitute a similarly named finding from a different workset. In
 documentation-risk mode, remain within the assigned workset item. In either
 mode, do not create a repository invariant assessment, reinterpret another
@@ -189,14 +189,15 @@ submit a concise result immediately; do not repeatedly deliberate over optional
 fields or restate findings in prose before submitting them.
 
 The static contract determines the structured payload:
-- Documentation-risk/no-op worksets use `schemas/documentation-review-v1.json`. Submit the
+- Documentation-risk/no-op worksets use `schemas/documentation-review-v2.json`. Submit the
   same review record fields and finding order described in the injected schema,
   with `record.invariant_assessments: []` (inside the structured record only);
+  omit runtime-owned `record.kind`, `review_revision`, `workset_key`, and `lens`.
   `requires_critique` is true for error/warning or a security/material concern.
   Keep all local limitations in `record.gaps`; status `completed_with_gaps`
   requires a nonempty gaps array, and `success` requires it to be empty.
-- `critic-review` uses `schemas/critique-v2.json`. Set `record.kind: critique`.
-  Omit `audit_complete` and `record.input_review`. The runtime copies the
+- `critic-review` uses `schemas/critique-v3.json`. Omit `record.kind`,
+  `audit_complete` and `record.input_review`. The runtime copies the
   accepted source, task ID and hash and records completion after validation.
   Use the Runtime Fixed Collections
   manifest; every issued row must be covered, even without requires_critique.
@@ -235,7 +236,7 @@ The static contract determines the structured payload:
   Empty finding collections use an empty object and make no decision calls.
   Example for an accepted source with zero findings and zero gaps:
   ```json
-  {"status":"success","summary":"The assigned source contains no findings or gaps.","structured_payload":{"record":{"kind":"critique","decisions":{}}}}
+  {"status":"success","summary":"The assigned source contains no findings or gaps.","structured_payload":{"record":{"decisions":{}}}}
   ```
   If a decision abstains, fails, is interrupted, or the complete observed
   context exceeds its limit, immediately submit {"status":"blocked",
@@ -259,7 +260,7 @@ when correcting a rejected field. This does not add findings to critic-review mo
 For a documentation no-op workset with no reference candidates, use this
 `submit_result` envelope after the required read succeeds:
 ```json
-{"status":"success","summary":"Observed the assigned no-op workset.","structured_payload":{"record":{"kind":"review","findings":[],"gaps":[],"invariant_assessments":[],"reference_assessments":[]}}}
+{"status":"success","summary":"Observed the assigned no-op workset.","structured_payload":{"record":{"findings":[],"gaps":[],"invariant_assessments":[],"reference_assessments":[]}}}
 ```
 
 Source snapshots preserve primary text files in full, but related caller/test
@@ -277,7 +278,7 @@ ID and content hash. Existing defects are in scope; locations use original
 In diff modes the changed-scope restrictions still apply. Findings never grant
 write authority. A successfully completed review may contain confirmed defects.
 
-For `schemas/review-v1.json`, write invariant claims only in
+For `schemas/review-v2.json`, write invariant claims only in
 `record.invariant_assessments`; omit outer `invariant_assessments`. For a finding
 referenced by a violated invariant, omit its severity: runtime binds the frozen
 invariant definition's severity. Keep the violated judgment, finding index,

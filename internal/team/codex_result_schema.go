@@ -122,3 +122,22 @@ func codexWorkerResultProposalSchemaForProjection(spec *resultClaimsProjection) 
 	schema["required"] = omitProjectedEnvelope(properties, required, spec)
 	return schema
 }
+
+// Codex strict output requires every property. Null represents an omitted
+// completion field on this transport.
+func codexWorkerResultSchema(spec *resultClaimsProjection, runtimeCompletion bool) map[string]any {
+	schema := codexWorkerResultProposalSchemaForProjection(spec)
+	if runtimeCompletion {
+		properties := schema["properties"].(map[string]any)
+		properties["status"] = map[string]any{
+			"type":        []string{"string", "null"},
+			"enum":        []any{TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked, nil},
+			"description": "Use null for completed work. Supply a status only for an unsuccessful outcome.",
+		}
+		properties["summary"] = map[string]any{
+			"type":        []string{"string", "null"},
+			"description": "Use null for completed work. Describe the blocker or failure for an unsuccessful outcome.",
+		}
+	}
+	return schema
+}

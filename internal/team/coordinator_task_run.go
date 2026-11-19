@@ -4290,11 +4290,15 @@ func (c *Coordinator) taskFinalizationBinding(todoID string, freeText bool) stri
 		fmt.Fprintf(&binding, "\n## Result Candidate Binding\nContract: %s\nThe runtime pins the candidate and original evidence. Call submit_result with edits only, according to the current tool schema; do not copy binding identifiers or resubmit a complete result.\n", item.ResultCandidate.ContractID)
 		return binding.String()
 	}
-	binding.WriteString("\n## Result Submission Format\nCall submit_result with the complete argument object, including outer `status` and a concise outer `summary`. `structured_payload` is one argument, not the complete tool call. ")
+	_, compiled, _ := c.boundResultContract(todoID)
+	if hasRuntimeCompletion(compiled) {
+		binding.WriteString("\n## Result Submission Format\nFor completed work call submit_result with structured_payload and omit outer status and summary. For unsuccessful work report status and the specific reason without a payload. ")
+	} else {
+		binding.WriteString("\n## Result Submission Format\nCall submit_result with the complete argument object, including outer `status` and a concise outer `summary`. `structured_payload` is one argument, not the complete tool call. ")
+	}
 	if item != nil && item.ResultContract != nil {
 		binding.WriteString("Put the schema-defined deliverable in `structured_payload` using the bound schema's exact fields, types, and enum values. Outer `details`, `facts`, `findings`, or `open_questions` do not satisfy payload requirements. If the task also requires matching outer fields, include them using their own tool schema; do not copy additional payload-only properties into those objects. Preserve all required fields, including those on every nested object and array item. Correct only invalid paths and keep valid evidence; shorten narrative rather than omitting required fields or sources. Never invent evidence to satisfy the schema.\n")
-		if item.ResultContract.RequireStructured {
-			_, compiled, _ := c.boundResultContract(todoID)
+		if item.ResultContract.RequireStructured && !hasRuntimeCompletion(compiled) {
 			if hasResultDecisions(compiled) {
 				binding.WriteString("Successful results require the complete schema-valid `structured_payload`. If required bound decisions cannot settle, submit only status=blocked and a summary; OMIT structured_payload instead of inventing or resubmitting incomplete decisions.\n")
 			} else {
@@ -5667,7 +5671,7 @@ func (c *Coordinator) resultProtocolInstructions(task TaskDef, granted map[strin
 			}
 		}
 	}
-	instructions := resultProtocolInstructionsForSubmission(task, granted, backendKind, fields, runtimeOwnsFilesRead(compiled))
+	instructions := resultProtocolInstructionsForSubmission(task, granted, backendKind, fields, compiled)
 	if instructions == "" || task.ResultContract == nil {
 		return instructions
 	}
@@ -5675,15 +5679,16 @@ func (c *Coordinator) resultProtocolInstructions(task TaskDef, granted map[strin
 }
 
 func resultProtocolInstructionsForBackendKind(task TaskDef, granted map[string]bool, backendKind execution.BackendKind) string {
-	return resultProtocolInstructionsForSubmission(task, granted, backendKind, nil, false)
+	return resultProtocolInstructionsForSubmission(task, granted, backendKind, nil, nil)
 }
 
-func resultProtocolInstructionsForSubmission(task TaskDef, granted map[string]bool, backendKind execution.BackendKind, submissionFields []string, runtimeOwnedReads bool) string {
+func resultProtocolInstructionsForSubmission(task TaskDef, granted map[string]bool, backendKind execution.BackendKind, submissionFields []string, compiled *CompiledResultContract) string {
+	runtimeOwnedReads := runtimeOwnsFilesRead(compiled)
 	if !task.Execution.RequiresResult {
 		return ""
 	}
 	if taskUsesExternalResultProtocol(task, backendKind) {
-		return externalResultProtocolInstructions(task)
+		return externalResultProtocolInstructionsWithContract(task, compiled)
 	}
 	if !granted["submit_result"] {
 		return ""
@@ -5695,8 +5700,12 @@ func resultProtocolInstructionsForSubmission(task TaskDef, granted map[string]bo
 	}
 	b.WriteString("This task is not complete until you call `submit_result`. A prose summary is NOT a result: if you end your turn without calling `submit_result`, the task is recorded as failed no matter how much work you finished.\n\n")
 	b.WriteString("- Call `submit_result` exactly once, as the last thing you do.\n")
-	b.WriteString("- Set `status` truthfully: use `success` when the goal is fully met without a known target limitation; use `completed_with_gaps` when the assigned work is complete but it discovered a target limitation, and record that limitation in findings/risks/open questions; otherwise use `partial`, `failed`, or `blocked`. A truthful `partial` is far more useful than an optimistic completion claim.\n")
-	if len(submissionFields) == 0 {
+	if hasRuntimeCompletion(compiled) {
+		b.WriteString("- Omit outer status and summary for completed work. Supply them only for an unsuccessful outcome, with the concrete reason.\n")
+	} else {
+		b.WriteString("- Set `status` truthfully: use `success` when the goal is fully met without a known target limitation; use `completed_with_gaps` when the assigned work is complete but it discovered a target limitation, and record that limitation in findings/risks/open questions; otherwise use `partial`, `failed`, or `blocked`. A truthful `partial` is far more useful than an optimistic completion claim.\n")
+	}
+	if len(submissionFields) == 0 && !hasRuntimeCompletion(compiled) {
 		b.WriteString("- Put the facts a later agent needs into `summary`, `details`, `findings`, and `decisions`. Use `details` for the complete textual plan, analysis, review, or handoff; do not create a report file merely to make that content available.\n")
 		b.WriteString("- `open_questions` accepts strings, or structured objects with required string `question` and optional string `context` and `detail`; do not send arbitrary object shapes.\n")
 	} else {
@@ -5704,6 +5713,7 @@ func resultProtocolInstructionsForSubmission(task TaskDef, granted map[string]bo
 	}
 	contract := taskResultSubmissionContractForTask(task)
 	contract.RuntimeOwnedFilesRead = runtimeOwnedReads
+	contract.runtimeCompletion = hasRuntimeCompletion(compiled)
 	info := submitResultToolInfo(contract)
 	if len(submissionFields) > 0 {
 		info.Parameters["structured_payload"] = map[string]any{"type": "object"}
@@ -5770,11 +5780,19 @@ func taskUsesExternalResultProtocol(task TaskDef, backendKind execution.BackendK
 // external provider returns a WorkerResultProposal through its own strict
 // response schema, and Hufu canonicalizes that untrusted response afterward.
 func externalResultProtocolInstructions(task TaskDef) string {
+	return externalResultProtocolInstructionsWithContract(task, nil)
+}
+
+func externalResultProtocolInstructionsWithContract(task TaskDef, compiled *CompiledResultContract) string {
 	b := &strings.Builder{}
 	b.WriteString("\n\n## External Provider Result Protocol\n\n")
 	b.WriteString("This task is not complete until the external provider returns one structured WorkerResultProposal matching its supplied strict schema. Do not call Hufu-local `submit_result`; the provider response is canonicalized by the runtime after the turn.\n\n")
 	b.WriteString("- Follow the provider-supplied WorkerResultProposal schema exactly, including its required nullable fields and allowed status values. Do not add runtime-owned fields such as task IDs, run IDs, receipts, verification, or evidence.\n")
-	b.WriteString("- Set `status` truthfully and put the useful review or handoff in `summary`, `details`, `findings`, `risks`, and `open_questions`.\n")
+	if hasRuntimeCompletion(compiled) {
+		b.WriteString("- For completed work set status and summary to null. For unsuccessful work supply the unsuccessful status and the concrete reason.\n")
+	} else {
+		b.WriteString("- Set `status` truthfully and put the useful review or handoff in `summary`, `details`, `findings`, `risks`, and `open_questions`.\n")
+	}
 	b.WriteString("- ")
 	b.WriteString(codexResultEncodingInstruction)
 	b.WriteString("\n")

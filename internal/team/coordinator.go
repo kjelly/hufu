@@ -90,10 +90,12 @@ type taskRequiresResultKey struct{}
 type delegationChainKey struct{}
 
 type TaskDef struct {
-	MediaBinding     *MediaTaskBinding          `json:"-" yaml:"-"`
-	MediaInputDigest string                     `json:"-" yaml:"-"`
-	ImageInputs      []media.ImageInputSelector `json:"image_inputs,omitempty" yaml:"-"`
-	ID               string                     `json:"id,omitempty"`
+	EvidenceInventory        *EvidenceInventorySpec     `json:"-" yaml:"evidence-inventory,omitempty"`
+	EvidenceInventoryBinding *EvidenceInventoryBinding  `json:"-" yaml:"-"`
+	MediaBinding             *MediaTaskBinding          `json:"-" yaml:"-"`
+	MediaInputDigest         string                     `json:"-" yaml:"-"`
+	ImageInputs              []media.ImageInputSelector `json:"image_inputs,omitempty" yaml:"-"`
+	ID                       string                     `json:"id,omitempty"`
 	// WhenGoalContains is retained only so legacy manifests fail with a focused
 	// validation finding. Runtime contract selection never reads goal prose.
 	WhenGoalContains string `json:"-" yaml:"when-goal-contains,omitempty"`
@@ -606,15 +608,16 @@ type Coordinator struct {
 	skillUsageMu          sync.Mutex
 	// resultValidationFailures counts structured payloads rejected since each
 	// Todo's previous receipt.
-	resultValidationMu       sync.Mutex
-	resultValidationFailures map[string]int
-	delegatedTasks           map[string]int
-	delegatedTasksMu         sync.Mutex
-	taskCache                TaskCache
-	evidenceService          EvidenceService
-	cachePolicy              CachePolicy
-	cachePolicyMu            sync.RWMutex
-	executionProfile         ExecutionProfile
+	resultValidationMu          sync.Mutex
+	resultValidationFailures    map[string]int
+	delegatedTasks              map[string]int
+	evidenceInventoryDispatchMu sync.Mutex
+	delegatedTasksMu            sync.Mutex
+	taskCache                   TaskCache
+	evidenceService             EvidenceService
+	cachePolicy                 CachePolicy
+	cachePolicyMu               sync.RWMutex
+	executionProfile            ExecutionProfile
 	// blockedThisRound holds tasks whose worker reported them blocked during
 	// this invocation. Guarded by delegatedTasksMu and reset with it, so a
 	// later user message can lift a block by dispatching the step again.

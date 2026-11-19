@@ -61,7 +61,7 @@ func collectReviewHandoffs(current sourceSession) (handoffInventory, error) {
 		}
 		requiresCritique := false
 		for _, f := range r.Findings {
-			requiresCritique = requiresCritique || f.RequiresCritique || f.Severity == "warning" || f.Severity == "error"
+			requiresCritique = requiresCritique || findingRequiresCritique(f)
 		}
 		inventory.Sources = append(inventory.Sources, handoffSource{
 			TaskID: item.ID, ContractID: item.ContractID, PayloadHash: item.Result.Payload.Hash,
@@ -100,6 +100,10 @@ func collectReviewHandoffs(current sourceSession) (handoffInventory, error) {
 		inventory.SnapshotStatus = map[string]any{"snapshot_id": coverage.SnapshotID, "expected": len(coverage.Expected), "completed": len(coverage.Completed), "excluded": len(coverage.Excluded), "uncompleted": len(coverage.Uncompleted), "batch": coverage.Batch, "batch_count": coverage.BatchCount}
 	}
 	return inventory, nil
+}
+
+func findingRequiresCritique(f finding) bool {
+	return f.RequiresCritique || f.Severity == "warning" || f.Severity == "error"
 }
 
 func readReferences(item sourceTask) []string {

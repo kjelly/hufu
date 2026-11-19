@@ -880,6 +880,7 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 			Execution                     ExecutionContract           `json:"execution"`
 			Optional                      bool                        `json:"optional"`
 			ResourceClaims                []string                    `json:"resource_claims"`
+			EvidenceInventoryBinding      *EvidenceInventoryBinding   `json:"evidence_inventory_binding"`
 			EvidenceFrom                  []string                    `json:"evidence_from"`
 			Resources                     []ResourceClaim             `json:"resources"`
 			RecoveryHypothesis            *RecoveryHypothesis         `json:"recovery_hypothesis"`
@@ -1006,6 +1007,7 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 				Execution:                     cloneExecutionContract(payload.Execution),
 				Optional:                      payload.Optional,
 				ResourceClaims:                append([]string(nil), payload.ResourceClaims...),
+				EvidenceInventoryBinding:      payload.EvidenceInventoryBinding.clone(),
 				EvidenceFrom:                  append([]string(nil), payload.EvidenceFrom...),
 				Resources:                     append([]ResourceClaim(nil), payload.Resources...),
 				RecoveryHypothesis:            cloneRecoveryHypothesis(payload.RecoveryHypothesis),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -113,6 +114,12 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	if err != nil {
 		return "", c.rejectDelegationPolicy(err.Error())
 	}
+	inventoryDispatch := slices.ContainsFunc(tasks, func(task TaskDef) bool { return task.EvidenceInventory != nil })
+	if inventoryDispatch {
+		c.evidenceInventoryDispatchMu.Lock()
+		defer c.evidenceInventoryDispatchMu.Unlock()
+	}
+	requestedTasks := tasks
 	// Fan-out must expand before the final goal-contract binding: the final
 	// pass matches against the real, substituted Goal text.
 	tasks, err = c.expandFanOutTasks(tasks)
@@ -123,6 +130,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 		// wrong tasks.
 		return "", c.rejectDelegationPolicy(err.Error())
 	}
+	emptyInventory := inventoryDispatch && len(tasks) == 0
 	tasks, err = c.bindInitialTaskContracts(tasks)
 	if err != nil {
 		// This is a compile-time configuration conflict, not a worker failure:
@@ -147,9 +155,19 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 		return "", c.rejectDelegationPolicy(err.Error())
 	}
 	if c.phaseWorkflow != nil {
-		if err := c.phaseWorkflow.validateTasks(tasks); err != nil {
+		phaseTasks := tasks
+		if emptyInventory {
+			// Validate the requested contract's phase even if every source
+			// already has an occurrence or the inventory is empty.
+			phaseTasks = requestedTasks
+		}
+		if err := c.phaseWorkflow.validateTasks(phaseTasks); err != nil {
 			return "", c.rejectDelegationPolicy(err.Error())
 		}
+	}
+	tasks, err = c.bindInventoryEvidence(tasks)
+	if err != nil {
+		return "", c.rejectDelegationPolicy(err.Error())
 	}
 	tasks, err = c.bindEvidenceSources(tasks)
 	if err != nil {
@@ -187,6 +205,9 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 		// finish; if it still does not, the run self-finalizes gracefully with the
 		// evidence already collected instead of terminating as coordinator failed.
 		return "", c.rejectDelegationPolicy("wrap-up in progress: refusing to delegate new tasks. Call finish immediately with your best summary of work completed so far")
+	}
+	if emptyInventory {
+		return "No new tasks required by the accepted evidence inventory.", nil
 	}
 
 	tasks = expandPipelineDeps(tasks)
@@ -311,17 +332,27 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	c.report(c.newEvent("step").withMessage(fmt.Sprintf("Round %d: delegating %d task(s)", c.round, len(tasks))))
 
 	duplicateWarnings, duplicateIndices, suppressedDuplicates := c.Planner().CheckDuplicate(ctx, tasks)
+	// An inventory join and its named static dependencies are admitted and
+	// withdrawn as a unit. A durable prefix cannot be safely dispatched again.
+	atomicBatch := slices.ContainsFunc(tasks, func(task TaskDef) bool {
+		return task.EvidenceInventory != nil && !task.EvidenceInventory.isExpansion()
+	})
 	// A batch that fails before its workers start must not leave anything
 	// that refuses the same work later in this round.
 	dispatched := false
 	var created []*TodoItem
 	defer func() {
 		if retErr != nil && !dispatched {
-			c.withdrawUndispatchedBatch(ctx, tasks, duplicateIndices, created, retErr)
+			if err := c.withdrawUndispatchedBatch(ctx, tasks, duplicateIndices, created, retErr, atomicBatch); err != nil {
+				retErr = markCoordinatorFatal(errors.Join(retErr, err))
+			}
 		}
 	}()
 	if len(duplicateWarnings) > 0 {
 		c.report(c.newEvent("loop_warning").withMessage(fmt.Sprintf("Duplicate task delegation detected: %v", duplicateWarnings)))
+	}
+	if atomicBatch && len(duplicateIndices) > 0 {
+		return "", c.rejectDelegationPolicy("bound task batch contains duplicate work: " + strings.Join(duplicateWarnings, "; "))
 	}
 
 	todoBatch := make([]TodoSpec, len(tasks))
@@ -426,6 +457,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 			Execution:                     cloneExecutionContract(t.Execution),
 			Optional:                      t.Optional,
 			ResourceClaims:                append([]string(nil), t.ResourceClaims...),
+			EvidenceInventoryBinding:      t.EvidenceInventoryBinding.clone(),
 			EvidenceFrom:                  append([]string(nil), t.EvidenceFrom...),
 			Resources:                     append([]ResourceClaim(nil), t.Resources...),
 			DecisionProfile:               t.DecisionProfile,
@@ -487,15 +519,8 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 		if t.OnFailure != nil && *t.OnFailure >= 0 && *t.OnFailure < len(ids) {
 			todoBatch[i].OnFailure = ids[*t.OnFailure]
 		}
-		if len(t.DependsOn) > 0 {
-			var depIDs []string
-			for _, depIdx := range t.DependsOn {
-				if depIdx >= 0 && depIdx < len(ids) && depIdx != i {
-					depIDs = append(depIDs, ids[depIdx])
-				}
-			}
-			todoBatch[i].DependsOn = depIDs
-		}
+		todoBatch[i].DependsOn = schedulerPredecessorIDs(t.DependsOn, ids, i)
+		todoBatch[i].OrderAfter = schedulerPredecessorIDs(t.OrderAfter, ids, i)
 		if t.WorksetBinding != nil && !firstReceipt[t.WorksetBinding.WorksetID] {
 			todoBatch[i].WorksetReceipt = cloneWorksetReceipt(worksetReceipts[t.WorksetBinding.WorksetID])
 			firstReceipt[t.WorksetBinding.WorksetID] = true
@@ -535,18 +560,8 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 		}
 	}
 	for i := range todoBatch {
-		todoBatch[i].DependsOn = nil
-		for _, depIdx := range tasks[i].DependsOn {
-			if depIdx >= 0 && depIdx < len(ids) && depIdx != i {
-				todoBatch[i].DependsOn = append(todoBatch[i].DependsOn, ids[depIdx])
-			}
-		}
-		todoBatch[i].OrderAfter = nil
-		for _, predecessor := range tasks[i].OrderAfter {
-			if predecessor >= 0 && predecessor < len(ids) && predecessor != i {
-				todoBatch[i].OrderAfter = append(todoBatch[i].OrderAfter, ids[predecessor])
-			}
-		}
+		todoBatch[i].DependsOn = schedulerPredecessorIDs(tasks[i].DependsOn, ids, i)
+		todoBatch[i].OrderAfter = schedulerPredecessorIDs(tasks[i].OrderAfter, ids, i)
 	}
 	envelopes, envelopeErr = c.prepareNewTaskExecutionEnvelopes(ctx, tasks, todoBatch, ids, false)
 	if envelopeErr != nil {
@@ -563,6 +578,29 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 			c.sessionData.DelegationPhase = DelegationPhaseInitialPending
 		}
 		return "", replanErr
+	}
+	c.stepConfirmFnMu.RLock()
+	stepFn := c.stepConfirmFn
+	c.stepConfirmFnMu.RUnlock()
+	if inventoryDispatch {
+		// Inventory occurrences can become runnable on recovery as soon as
+		// they are created. Confirm the resolved batch before that boundary.
+		if err := c.checkBatchPreflight(ctx, nil); err != nil {
+			return "", err
+		}
+		if stepFn != nil {
+			proposals := make([]TaskDef, len(tasks))
+			for i, task := range tasks {
+				proposals[i] = cloneTaskDef(task)
+			}
+			approved, err := stepFn(ctx, proposals)
+			if err != nil {
+				return "", err
+			}
+			if !approved {
+				return "", c.declineTaskBatch(ctx, nil)
+			}
+		}
 	}
 	// Freeze decision admission before task_created makes an occurrence
 	// recoverable. A failure leaves no executable task projection behind.
@@ -586,7 +624,7 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 			}
 		}
 	}
-	todoItems, err := c.CommitTaskCreationResolved(ctx, todoBatch, ids)
+	todoItems, err := c.commitTaskCreationResolved(ctx, todoBatch, ids, atomicBatch)
 	created = todoItems
 	if err != nil {
 		if advancedPhase && len(todoItems) == 0 && c.sessionData != nil {
@@ -603,26 +641,10 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 			return "", markCoordinatorFatal(err)
 		}
 	}
-	// No-progress budget (§8.1, WP-12): ordinary newly created tasks are one
-	// unit, while one validated artifact-backed workset expansion is one
-	// bounded delegation unit rather than one unit per child.
+	// Account for each validated bounded expansion as one delegation.
 	c.recordNoProgressTaskBatch(tasks)
-	if len(c.session.Config.Preflight) > 0 {
-		if _, err := c.checkCapabilityRequirements(ctx, c.session.Config.Preflight); err != nil {
-			if blocked, ok := isCapabilityBlockedError(err); ok {
-				detail := blocked.Reason
-				if detail == "" {
-					detail = "capability preflight blocked"
-				}
-				for _, item := range todoItems {
-					c.PersistFailureWithClassAndStatus(item.Agent, item.Desc, item.ID, detail, NeedsHuman, FailurePolicy, TaskBlocked)
-				}
-				c.reconcileTaskStatusProjection()
-				c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-				c.report(c.newEvent("needs_human").withMessage(detail))
-				c.PersistFailure("coordinator", "capability preflight failed", "", detail)
-				return "", fmt.Errorf("capability preflight failed: %s", detail)
-			}
+	if !inventoryDispatch {
+		if err := c.checkBatchPreflight(ctx, todoItems); err != nil {
 			return "", err
 		}
 	}
@@ -640,26 +662,13 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 
 	c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
 
-	c.stepConfirmFnMu.RLock()
-	stepFn := c.stepConfirmFn
-	c.stepConfirmFnMu.RUnlock()
-	if stepFn != nil {
+	if !inventoryDispatch && stepFn != nil {
 		approved, err := stepFn(ctx, tasks)
 		if err != nil {
 			return "", err
 		}
 		if !approved {
-			for _, item := range todoItems {
-				if err := c.commitTaskTransitionFromCurrent(ctx, item.ID, TaskSkipped, c.FailureDetail(fmt.Errorf("user declined task execution"), FailureSourceUserDeclined), "", nil); err != nil {
-					return "", err
-				}
-			}
-			c.reconcileTaskStatusProjection()
-			c.report(c.newEvent("todos_updated").withTodos(c.taskTracker.TodoList().Items()))
-			c.report(c.newEvent("step").withMessage("Steps: user declined task execution"))
-			c.wrapUp.Store(1)
-			c.PersistFailure("coordinator", "user declined task execution", "", c.FailureDetail(fmt.Errorf("user declined task execution"), FailureSourceUserDeclined))
-			return "", fmt.Errorf("user declined task execution: call finish immediately with your best summary of work completed so far")
+			return "", c.declineTaskBatch(ctx, todoItems)
 		}
 	}
 
@@ -722,6 +731,16 @@ func (c *Coordinator) ExecuteTasks(ctx context.Context, tasks []TaskDef) (_ stri
 	}
 
 	return formatTaskResults(results, len(tasks), duplicateWarnings)
+}
+
+func schedulerPredecessorIDs(positions []int, ids []string, current int) []string {
+	var predecessors []string
+	for _, position := range positions {
+		if position >= 0 && position < len(ids) && position != current {
+			predecessors = append(predecessors, ids[position])
+		}
+	}
+	return predecessors
 }
 
 // allowsFreeTextWorkerResult is an explicit compatibility escape hatch for

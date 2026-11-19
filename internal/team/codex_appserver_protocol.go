@@ -289,12 +289,13 @@ type codexTurnStartParams struct {
 }
 
 type codexTurnOptions struct {
-	Input            []codexUserInput
-	ResultProjection *resultClaimsProjection
-	ReasoningEffort  string
-	DetailedOutput   bool
-	OnTurnStarted    func(turnID string)
-	OnActivity       func(codexTurnActivity)
+	Input             []codexUserInput
+	ResultProjection  *resultClaimsProjection
+	RuntimeCompletion bool
+	ReasoningEffort   string
+	DetailedOutput    bool
+	OnTurnStarted     func(turnID string)
+	OnActivity        func(codexTurnActivity)
 }
 
 // codexTurnActivity is intentionally a safe summary rather than a raw JSON-
@@ -429,7 +430,7 @@ func codexRunTurn(ctx context.Context, client *CodexRPCClient, threadID, prompt 
 	if err != nil {
 		return CodexTurnResult{}, fmt.Errorf("codex turn/start: %w", err)
 	}
-	schema, err := json.Marshal(codexWorkerResultProposalSchemaForProjection(options.ResultProjection))
+	schema, err := json.Marshal(codexWorkerResultSchema(options.ResultProjection, options.RuntimeCompletion))
 	if err != nil {
 		return CodexTurnResult{}, fmt.Errorf("codex turn/start: marshal output schema: %w", err)
 	}
@@ -469,7 +470,7 @@ func codexRunTurn(ctx context.Context, client *CodexRPCClient, threadID, prompt 
 			&CodexProtocolIncompleteError{Reason: fmt.Errorf("turn/completed carried no final agent message")}
 	}
 
-	proposal, decodeErr := DecodeWorkerResultProposal([]byte(finalText))
+	proposal, decodeErr := decodeWorkerResultProposal([]byte(finalText), options.RuntimeCompletion)
 	if decodeErr != nil {
 		if options.DetailedOutput && options.OnActivity != nil {
 			reportCodexFinalResponse(options.OnActivity, finalText, "invalid")

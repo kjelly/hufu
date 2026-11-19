@@ -28,14 +28,10 @@ Typed unavailable/out-of-scope/version/budget limitations stay visible even if
 the source review has other valid findings. Never delete or weaken those
 findings to obtain a complete coverage label.
 Use `view` only with authorized opaque `artifact_ref` values.
-The receipt-verified Review Handoff Inventory in constraints lists the exact
-source_task_ids and required_critic_source_task_ids. Before any views or report
-generation, match every required source ID to an accepted critic dependency's
-record.input_review[0].task_id. A documentation-risk source remains a review
-even when its worker is named critic. Missing required critics must produce
-`blocked` immediately with the missing source IDs; never submit a success or
-completed_with_gaps report from that incomplete dependency set. Do not repair
-the source records or invent decisions to fill the missing handoff.
+The runtime checks that every required critique is accepted before dispatching
+synthesis. Use the receipt-verified Review Handoff Inventory to identify the
+source records and the supplied critique decisions. A documentation-risk source
+remains a review even when its worker is named critic.
 A successful runtime `view` issues short `ev_` evidence keys. Use those
 keys in the active schema's `x-hufu-evidence-keys` locations. Omit outer
 `files_read`: runtime derives it from successful native reads and rejects
@@ -95,25 +91,15 @@ every original finding, critic and source record. Never omit a gap decision or
 claim complete coverage to shorten the output. Do not restate the full inventory
 in reasoning; omit input_review from the submission so the runtime fills it.
 
-Submit the complete runtime result envelope, including top-level `status` and
-`summary`, with `structured_payload` following `schemas/report-v2.json` and the
-runtime's Fixed Collections submission format for `gap_resolutions`.
-Keep top-level summary at most 1000 runes (prefer at most 300). The inventory
-belongs in `structured_payload`, not in the summary or top-level findings.
-Omit optional outer `open_questions`, `decisions`, `risks`, `suggested_next_tasks`,
-and `facts`; preserve limitations in the structured gap decisions. Keep any
-`details` brief. Use actual JSON strings, never `{"$text":"..."}` wrappers.
+For completed work submit a `structured_payload` object following
+`schemas/report-v3.json` and the runtime's Fixed Collections submission
+format. Omit outer `status` and `summary`, and omit `audit_complete`,
+`coverage`, `completion`, `scope`, `snapshot_coverage`,
+`test_verification`, `supplement_outcomes` and `input_review` inside
+the payload. Runtime derives completion and counts and binds the complete
+source records, hashes and native outputs. Preserve semantic limitations in
+structured gap decisions or brief `details`. Use actual JSON strings.
 
-The structured payload must contain:
-
-- Omit `scope`, `snapshot_coverage`, `test_verification`, and `supplement_outcomes` entirely. The runtime binds the complete
-  receipt-verified native outputs, including the full diagnostic, before validation.
-  Use the compact scope context and test status only for coverage decisions.
-- `audit_complete: true` as a JSON boolean (never the string `"true"`). OMIT
-  `input_review`: it is runtime-owned. The runtime fills one entry per accepted
-  dependency, with its exact task ID, payload hash, and complete record,
-  including nested critic records. Do not copy these records or hashes into
-  the tool call. Source coverage and hash validation remain mandatory.
 - One `gap_resolutions` decision for each runtime-issued gap key. The manifest
   identifies its source todo ID and zero-based index; do not repeat those
   fixed fields in your decision. Read the other reviews' details
@@ -135,27 +121,15 @@ The structured payload must contain:
 - Use `retained` with empty resolving_task_id and evidence when the gap
   remains unresolved. Describe it as a limitation of the source review and
   the available evidence, without inventing a whole-run absence claim.
-- `coverage: completed_with_gaps` and result status `completed_with_gaps`
-  whenever any source review has an original gap (even one subsequently
-  resolved), any critic decision is `unverified`, the injected test_verification
-  status has `passed: false`, or its `output_truncated` is true. Failing tests describe
-  the reviewed snapshot or its execution environment, not a failed review
-  workflow. `diagnostic` is a bounded summary; `summary_truncated` alone does
-  not create an evidence gap when the complete `output_artifact_id` is present.
-  Preserve that reference and the reported outcome; do not claim tests passed. Otherwise use
-  `coverage: complete` and result status `success`. Code findings may remain
-  even when review coverage is complete.
 
-Use summary and details for a concise account of what was checked. The final
-consumer response is rendered from the validated inventory by a fixed
+The final consumer response is rendered from the validated inventory by a fixed
 template, preserving findings, critic decisions, original gaps and resolutions.
 Do not declare every change safe or every fail-closed property proved from
 test success, preserved invariants in one lens, or terminal task counts.
 Only the independent snapshot-pinned verifier can establish executed tests.
 
-If required dependency results are absent, submit `blocked` rather than
-pretending the supplied subset represents every workset. The team audit
-independently compares this inventory with all completed review occurrences.
+If required dependency results are absent, submit `status: blocked` with a
+specific reason in `summary` and omit the payload.
 
 The STORED input_review entries contain task_id, payload_sha256 and record.
 The runtime assembles these fields from accepted dependency payloads; you
@@ -174,13 +148,9 @@ secret-like additions only from your own newly written explanation fields.
 The stored deliverable includes runtime-owned dependency records. Those
 records consume no model output: never echo input_review. Do not spend output on narrating the planned JSON or repeating
 the gap table. After bounded probes, generate the complete tool call directly.
-The ONLY inventory location is `structured_payload`; root `coverage`, `scope`,
-`input_review`, or `gap_resolutions` are invalid submit_result arguments.
-Start with the outer `status` and `summary`, omit `files_read`, then add
-`structured_payload` containing the model-authored report properties, with scope, snapshot_coverage, test_verification and input_review omitted. Never submit only
-status and summary. Supply the report as an object directly, without encoding
-it into a JSON string. The output allowance is reserved for that complete
-inventory and any precise schema repair.
+Submit the model-authored report properties directly inside
+`structured_payload`. Runtime binds the source records and the execution
+evidence before validating and hashing the stored report.
 
 ## Reader-facing report order
 
@@ -206,14 +176,8 @@ A test failure does not remove any required source review or critic coverage.
 
 ## Snapshot coverage
 
-`snapshot_coverage` is runtime-owned, bound from the native handoff inventory
-action. Never submit, count, or copy its paths. Use the inventory's compact
-`snapshot_status`: if `uncompleted` is positive, report `coverage` and outer
-status as `completed_with_gaps`, even when every assigned worker succeeded.
-Excluded paths are explicit policy exclusions, not completed code review.
-Completed batches do not imply unselected batches were reviewed. Defects do not
-by themselves make coverage incomplete; missing evidence does. Zero findings
-is not a guarantee of correctness.
+The native handoff inventory carries snapshot coverage. Preserve specific
+limitations observed in the accepted evidence when explaining gap decisions.
 
 ## Cross-workset evidence priority
 
@@ -230,7 +194,6 @@ local scope limit. Preserve the original finding, source gap and settled
 critic decision verbatim: a gap resolution does not rewrite a critic verdict
 or establish a new verdict. When a verdict conflicts with sibling evidence,
 state that conflict in the relevant resolution explanation or brief details
-and keep coverage completed_with_gaps; do not silently endorse the original
-claim or manufacture a replacement critic. If the answer needs multiple
+and preserve the existing critique decision. If the answer needs multiple
 artifacts, retain the gap and describe the observed partial evidence under
 the existing single-artifact resolution contract.

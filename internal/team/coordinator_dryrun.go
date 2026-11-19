@@ -5,6 +5,7 @@ package team
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
@@ -267,6 +268,19 @@ func canonicalDryRunTarget(raw, defaultBackend string) string {
 
 func cloneTaskDef(td TaskDef) TaskDef {
 	clone := td
+	if td.EvidenceInventory != nil {
+		clone.EvidenceInventory = new(*td.EvidenceInventory)
+	}
+	clone.EvidenceInventoryBinding = td.EvidenceInventoryBinding.clone()
+	clone.OrderAfter = slices.Clone(td.OrderAfter)
+	clone.DependsOnContracts = slices.Clone(td.DependsOnContracts)
+	if td.OnFailure != nil {
+		clone.OnFailure = new(*td.OnFailure)
+	}
+	clone.OnFailureClasses = slices.Clone(td.OnFailureClasses)
+	clone.ResultContract = td.ResultContract.clone()
+	clone.WorkerWorkspace = td.WorkerWorkspace.clone()
+	clone.ExecutionRoute = td.ExecutionRoute.clone()
 	clone.MediaBinding = td.MediaBinding.Clone()
 	clone.DependencyResultView = td.DependencyResultView.clone()
 	clone.Execution = cloneExecutionContract(td.Execution)

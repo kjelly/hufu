@@ -99,7 +99,7 @@ func (t *runAgentsTool) Info() fantasy.ToolInfo {
 			if t.coordinator.initialDelegationPending() {
 				return fmt.Sprintf("Dispatch the required canonical initial batch %s. This is the only valid delegation while phase is initial_pending; malformed or later-worker calls are rejected by policy.", formatAgentNames(t.coordinator.session.Config.Delegation.InitialBatch))
 			}
-			return "Delegate new tasks to team workers. Runs all tasks in parallel and returns structured results. Never redispatch a worker whose task already completed successfully; use team_info with action=task_result to read that task's full result instead. A policy violation receives a deterministic repair instruction: dispatch only unfinished work or call finish."
+			return "Delegate new tasks to team workers. Runs tasks according to the admitted dependencies and returns structured results. Never redispatch completed work. Reuse its results through team_info with action=task_result. For an evidence inventory expansion, select its contract and let the runtime dispatch only missing occurrences. A policy violation receives a deterministic repair instruction: dispatch only unfinished work or call finish."
 		}(),
 		Parameters: map[string]any{
 			"tasks": tasksSchema,

@@ -15,6 +15,7 @@ import (
 // validation have one source of truth.
 type taskResultSubmissionContract struct {
 	claimsProjection     *resultClaimsProjection
+	runtimeCompletion    bool
 	RequiredFields       []string
 	TaskResultAssertions []TaskResultAssertion
 	// SubmissionTaskResultAssertions excludes only runtime transcript fields

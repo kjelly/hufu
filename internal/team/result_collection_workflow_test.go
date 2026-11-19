@@ -353,11 +353,11 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 			reviewSchema := ""
 			switch scenario {
 			case "runtime_review_typo", "runtime_review_invariant_typo", "runtime_review_invariant_foreign_typo":
-				reviewSchema = "schemas/review-v1.json"
+				reviewSchema = "schemas/review-v2.json"
 			case "runtime_documentation_typo", "runtime_documentation_empty":
-				reviewSchema = "schemas/documentation-review-v1.json"
+				reviewSchema = "schemas/documentation-review-v2.json"
 			case "runtime_supplement_typo":
-				reviewSchema = "schemas/supplement-review-v1.json"
+				reviewSchema = "schemas/supplement-review-v2.json"
 			}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/v1/chat/completions" {
@@ -410,7 +410,7 @@ func TestResultCollectionResolvesViewedEvidenceKeys(t *testing.T) {
 							if scenario != "runtime_documentation_empty" {
 								findings = append(findings, map[string]any{"summary": "original finding", "detail": "preserve this judgment", "severity": "info", "location": "source.txt:1", "requires_critique": false, "evidence": []string{key}})
 							}
-							record := map[string]any{"kind": "review", "findings": findings, "gaps": []any{}, "reference_assessments": []any{}, "invariant_assessments": []any{}}
+							record := map[string]any{"findings": findings, "gaps": []any{}, "reference_assessments": []any{}, "invariant_assessments": []any{}}
 							if strings.Contains(scenario, "review_invariant") {
 								finding := findings[0].(map[string]any)
 								delete(finding, "severity")

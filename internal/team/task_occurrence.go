@@ -412,7 +412,14 @@ func (tx *taskResultOccurrenceTransaction) commit(result *TaskResult) error {
 }
 
 func (tx *taskResultOccurrenceTransaction) validateCommit(result *TaskResult) error {
-	if !tx.coordinator.boundDecisionBlockedEnvelope(tx.identity.TaskID, result) {
+	_, compiled, err := tx.coordinator.boundResultContract(tx.identity.TaskID)
+	if err != nil {
+		return err
+	}
+	// An unsuccessful completion claim carries its reason in the envelope.
+	// It claims no verified evidence payload and cannot satisfy a dependency.
+	withoutPayload := result.StructuredPayload == nil && runtimeCompletionFailure(compiled, result.Status)
+	if !withoutPayload && !tx.coordinator.boundDecisionBlockedEnvelope(tx.identity.TaskID, result) {
 		if err := tx.coordinator.validateSubmittedEvidenceInputs(tx.identity.TaskID, result.StructuredPayload); err != nil {
 			return err
 		}

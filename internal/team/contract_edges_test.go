@@ -121,7 +121,7 @@ func TestStaticContractEdgesPinExecutionPolicyAndEffectiveHash(t *testing.T) {
 
 func TestHufuCodeReviewDeclaresFinalReportGraph(t *testing.T) {
 	s := loadHufuCodeReviewTeam(t)
-	requests, err := decodeModelTaskDefsForMode([]byte(`{"tasks":[{"agent":"synthesizer","contract_id":"synthesize-review","goal":"Synthesize accepted evidence"},{"agent":"reviewer","contract_id":"verify-review-report","goal":"Audit the report"}]}`), true)
+	requests, err := decodeModelTaskDefsForMode([]byte(`{"tasks":[{"agent":"reviewer","contract_id":"derive-review-report","goal":"Derive completion"},{"agent":"synthesizer","contract_id":"synthesize-review","goal":"Synthesize accepted evidence"},{"agent":"reviewer","contract_id":"verify-review-report","goal":"Audit the report"}]}`), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,8 +129,8 @@ func TestHufuCodeReviewDeclaresFinalReportGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(bound[1].DependsOn, []int{0}) || bound[1].OnFailure == nil || *bound[1].OnFailure != 0 || bound[1].MaxRetries != 1 || !slices.Equal(bound[1].OnFailureClasses, []TaskFailureClass{FailureVerify}) {
-		t.Fatalf("report workflow not bound from YAML: %+v", bound[1])
+	if !slices.Equal(bound[1].DependsOn, []int{0}) || !slices.Equal(bound[2].DependsOn, []int{1}) || bound[2].OnFailure == nil || *bound[2].OnFailure != 1 || bound[2].MaxRetries != 1 || !slices.Equal(bound[2].OnFailureClasses, []TaskFailureClass{FailureVerify}) {
+		t.Fatalf("report workflow not bound from YAML: %+v", bound)
 	}
 	for _, task := range requests {
 		if _, _, err := CompileTaskGoalContracts(s, []TaskDef{task}); err == nil {

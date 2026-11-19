@@ -479,7 +479,9 @@ func resultContractPromptSection(ref *ResultContractRef, compiled *CompiledResul
 	if external {
 		field = "`structured_payload_json` (the JSON value encoded as a string)"
 	}
-	if ref.RequireStructured {
+	if hasRuntimeCompletion(compiled) {
+		fmt.Fprintf(b, " Supply %s for completed work. The runtime supplies successful status and summary. Omit both fields for completed work, or set them to null in a strict external response. For unsuccessful work, give the unsuccessful status and a specific summary without a payload.\n", field)
+	} else if ref.RequireStructured {
 		fmt.Fprintf(b, " A structured payload is required: the task cannot complete without %s that satisfies the schema below.\n", field)
 	} else {
 		fmt.Fprintf(b, " Include %s that satisfies the schema below when you can.\n", field)
@@ -595,6 +597,12 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 	if request.resultContractSchema == nil {
 		return nil, fmt.Errorf("%s: result contract is not loaded", resultContractDriftCode)
 	}
+	if proposal != nil && runtimeCompletionFailure(request.resultContractSchema, proposal.Status) {
+		if raw != "" {
+			return nil, fmt.Errorf("%s: omit structured_payload_json for an unsuccessful runtime-completion result", structuredPayloadInvalidCode)
+		}
+		return nil, nil
+	}
 	if raw == "" {
 		if ref.RequireStructured {
 			return nil, fmt.Errorf("%s: result contract %q requires structured_payload_json", structuredPayloadMissingCode, ref.ID)
@@ -684,7 +692,7 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 	if err := validateResultEvidenceReferences(value, request.resultContractSchema.evidenceReferences, request.Task.EvidenceFrom, request.resultEvidenceInputs, &filesRead); err != nil {
 		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
 	}
-	if err := validateResultEnvelope(request.resultContractSchema, &TaskResult{Status: proposal.Status, StructuredPayload: payload}); err != nil {
+	if err := validateResultEnvelope(request.resultContractSchema, &TaskResult{Status: proposal.Status, Summary: proposal.Summary, StructuredPayload: payload}); err != nil {
 		return nil, err
 	}
 	return payload, nil

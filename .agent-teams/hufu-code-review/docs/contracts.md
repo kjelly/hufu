@@ -64,7 +64,7 @@ Accepted nonsemantic gaps require `inventory-review-supplement-requests`
 (`inventory_review_supplement_requests`, capability
 `inventory-review-handoffs`), followed by `prepare-review-supplement`
 (`prepare_review_supplement`, capability `prepare-review-supplement`) and the
-optional `review-supplement-workset` fan-out using `review-v1.json`. Dispatch
+optional `review-supplement-workset` fan-out using `review-v2.json`. Dispatch
 the fan-out only when `item_count > 0`; empty manifests remain audit outputs.
 The native inventory derives original task/gap/hash identities from accepted
 records and emits receipt-bound runtime outputs. The producer consumes those
@@ -151,25 +151,17 @@ including nonempty restrictions for requests that could not be materialized.
 3. Run `inventory-review-handoffs` after all review children complete. This
    native action validates their accepted records and emits exact source IDs,
    payload hashes, finding/gap counts, workset keys, lenses, each source's
-   accepted artifact reads, and the required critic source IDs. Dispatch
-   one critic per source ID in this runtime-owned checklist, not per agent name.
-   Documentation escalation is a `review` record even when its worker is
-   named `critic`; flagged findings still require a separate `critic-review`.
-   Dispatch one critic per source review that has a finding marked
-   `requires_critique`. That critic receives exactly one `evidence_from` and
-   evaluates every finding index in that source. Error/warning findings always
-   require critique; the reviewer also marks security concerns and material
-   disagreements. Missing evidence yields `blocked` or an explicit `unverified`
-   verdict, never a substituted finding.
-4. The synthesizer receives every review and accepted critic. It copies their
-   records and payload hashes exactly, preserves original gaps, and reads
-   sibling artifacts to resolve local evidence limitations. Scope and executed
-   test receipts are forwarded from the PREPARE runtime outputs as JSON by
-   static `fact_refs` with the `runtime_output` selector. The runtime injects
-   these values into the synthesizer's constraints independently of the
-   coordinator's prose, after checking the current-run receipt, output hash,
-   and frozen input snapshot. No guessed metadata path or manual retyping is
-   needed.
+   accepted artifact reads, and the required critic source IDs. The
+   `critic-review` contract expands the receipt-verified list in order and
+   persists one occurrence and its source hash per ID. Its one evidence
+   dependency is the source review. Critiques cover every finding of that
+   source and retain unverified decisions and their supporting evidence.
+4. Synthesis receives every accepted review and its required accepted critic.
+   The runtime builds and verifies this dependency list, then copies the
+   records and payload hashes. The synthesizer preserves original gaps and
+   uses sibling artifacts to resolve local evidence limitations.
+   The runtime binds the scope and test evidence from PREPARE receipts
+   and the completion, counts and coverage from `derive-review-report`.
    The native review handoff inventory is forwarded through the same mechanism.
    It includes each source's `gap_count` and the ordered `required_gap_refs`
    list of `(source_task_id, gap_index)` pairs. Synthesis must return exactly
@@ -179,12 +171,13 @@ including nonempty restrictions for requests that could not be materialized.
    accepted critic dependency. The final audit independently re-derives the
    inventory, checks its current action receipt and snapshot, and compares
    every source hash and required ID before accepting the report.
-5. Dispatch synthesis and `verify-review-report` in the same batch. The audit
+5. Dispatch derivation, synthesis and `verify-review-report` in the same
+   batch. Derivation and the final audit use the same coverage rules. The audit
    declares `depends-on-contracts: [synthesize-review]` and
    `on-failure-contract: synthesize-review` in team.yaml. The runtime resolves
    these names to batch dependencies and durable occurrence IDs. The
    coordinator supplies neither numeric edges nor a pipeline flag; an
-   incomplete or duplicated pair is rejected before task creation. The
+   incomplete or duplicated group is rejected before task creation. The
    declarations and retry policy are pinned for resume.
    The report schema's `x-hufu-evidence-references` declaration rejects a
    wrong resolving task/artifact pairing during submission, with the accepted
@@ -269,12 +262,15 @@ another session, modify reviewed files, execute shell, or run additional tests.
 A rejected audit must remain a failed/partial run. An already accepted source
 or report must not be silently rewritten; use a fresh invocation to correct
 the review when the accepted evidence itself needs replacement. Changing the
-schemas or adapter changes the frozen execution policy. For an existing session,
-preview supported controlled contract recovery before resuming; never edit
-accepted evidence or bypass drift. A fresh session is a separate full review.
+schemas or adapter changes the frozen execution policy. Start a fresh session
+for the inventory and report contracts introduced here. For an older invocation,
+point `hufu resume --agent-team-search-path` at the `.agent-teams` directory of
+its original revision so the original team, schemas, and adapter match the
+frozen policy. For an intentional contract upgrade, preview supported controlled
+contract recovery before resuming.
 
-Result submission uses a complete `submit_result` envelope (`status`, `summary`,
-and the task's required fields). Its top-level findings contain only runtime
+Result submission uses the bound contract's model-facing fields. The report
+collector omits `status` and `summary` for completed work. Stored top-level findings contain only runtime
 fields (`category`, `summary`, `detail`, `severity`). Rich review locations,
 opaque evidence references, and critique requirements live exclusively in
 `structured_payload.record.findings`. Rejected submissions must repair the
@@ -291,8 +287,10 @@ from the runtime Workset ID. Each fan-out goal supplies the exact required
 item key, reviewed revision, and lens. The schema rejects Workset IDs in the
 item-key field, and the final audit requires equality with the durable binding.
 
-Dispatch critiques sequentially, with one `critic-review` task and one source
-per `agent` call. Before a primary review is accepted, its ordered invariant
+Request `critic-review` once. The runtime verifies the inventory receipt and
+expands one task per required source in inventory order. It binds each task to
+its source and resumes the remaining expansion from the persisted occurrences.
+Before a primary review is accepted, its ordered invariant
 copies must match the attested ID, status, summary, finding index, and missing
 evidence. The projection explicitly defaults an omitted index to null and an
 omitted/empty evidence list to `[]`, matching the inventory gate. An invented
@@ -303,8 +301,9 @@ A non-fan-out workflow contract cannot appear twice in one
 batch. The synthesis contract declares `max-evidence-sources: 64`, covering the
 producer's 32-review budget plus one accepted critique per review. Its full
 source inventory must not be reduced to the default eight-source handoff.
-Select unique source review IDs, never individual finding IDs. A single
-accepted critic covers all findings in its source, including unflagged ones.
+The runtime joins the inventory's accepted primary reviews and their required
+accepted critics into one synthesis dependency list. A single accepted critic
+covers all findings in its source, including unflagged ones.
 The critique schema declares `x-hufu-evidence-inputs.runtime_bind: true`:
 the runtime copies the source ID, accepted payload hash, and exact source record
 into `record.input_review`. The critic omits this field. A fixed collection
@@ -315,8 +314,9 @@ and payload hash, so a replacement source cannot reuse previous decisions.
 The report schema uses the same runtime binding for `/input_review`: synthesis
 omits the complete source inventory from its submission. Runtime copies every
 accepted review and critique dependency, including each critique's nested source
-record. Synthesis still declares `audit_complete` and supplies every semantic
-gap-resolution decision; source-copy automation does not replace that review.
+record. Runtime supplies `audit_complete`, each source and critique record kind, and the
+report's derived coverage, status, and counts. Synthesis supplies semantic gap-resolution
+decisions, supporting evidence, and concrete limitations.
 The critique and report schemas use the existing 32-finding bound to require
 exactly that many decisions, in ascending finding-index order. Missing,
 duplicate, reordered, and out-of-range decisions fail at result submission;
@@ -336,8 +336,8 @@ claims into confirmed defects. Existing saved response bodies are not rewritten.
 Synthesis uses low reasoning effort and a 12-step budget because source review
 and critique already own semantic investigation. It groups gaps, reads sibling
 records, and uses at most two evidence-gathering rounds (four focused views per
-round, 8192 bytes per view). It then submits the complete unchanged inventory,
-reserving remaining steps for result repairs. Unresolved bounded probes produce
+round, 8192 bytes per view). It then records the semantic gap resolutions and reserves remaining steps for
+result repairs. Unresolved bounded probes produce
 truthful `retained` resolutions, never whole-run absence claims. This limits
 repeated investigation and repeated inventory reasoning without increasing
 the runtime's per-attempt token limit or weakening report acceptance.
@@ -357,7 +357,12 @@ golangci-lint run
 
 Result schemas must fit the runtime full-schema prompt budget (32 KiB canonical JSON). Ordered critic finding indices use one shared prefixItems rule; the per-count conditions only enforce exact coverage lengths. The team schema tests reject missing, duplicate, reordered, and out-of-range decisions and prevent schema growth from silently removing the full model-visible contract.
 
-The synthesizer reserves 65,536 output tokens for its semantic report fields. Report-v2 declares scope and test_verification through x-hufu-runtime-inputs, and input_review runtime-owned: the model omits all three fields, and generic runtime bindings copy complete receipt-verified native outputs and accepted source records and hashes before canonical validation. This avoids generating a large duplicate inventory over the provider stream. The stored inventory, render template, source coverage and final audit remain complete. Both normal synthesis and result-only repair receive the admitted submission shape.
+The synthesizer reserves 65,536 output tokens for its semantic report fields.
+Report-v3 binds scope, test verification, coverage, completion and audit
+bookkeeping through `x-hufu-runtime-inputs`. It binds `input_review` from
+accepted result records and hashes. The runtime also sets the successful
+status and count summary from the native completion output. Both submission
+and result-only repair omit these fields and validate the assembled report.
 
 A bounded cross-workset gap resolution cites one artifact from one other
 accepted review. The schema rejects combined-artifact claims during submission,
@@ -555,7 +560,7 @@ binding validation. Native handoff inventory remains an independent final gate.
 
 The report schema declares the generic `x-hufu-fixed-collections` contract for
 `/gap_resolutions`. Membership comes only from `/record/gaps` in accepted
-`schemas/review-v1.json` evidence sources. The runtime supplies source task IDs,
+`schemas/review-v2.json` evidence sources. The runtime supplies source task IDs,
 zero-based gap indices and array order. Critic records and prose cannot create
 additional gaps. The handoff inventory and final native audit remain independent
 checks against all admitted review occurrences.
@@ -775,7 +780,7 @@ an allowed key from another item cannot substitute for that identity. Historical
 schema drift uses ordinary controlled contract recovery and result-only repair,
 preserving accepted sources and the completed worker transcript.
 
-Supplemental results use `schemas/supplement-review-v1.json`. The runtime owns
+Supplemental results use `schemas/supplement-review-v2.json`. The runtime owns
 `record.workset_key`, `record.review_revision` and `record.lens`, binding them
 from the assigned immutable workset. Frozen goal metadata describes the review
 scope; it is not a request to submit these fields. The collector submits only

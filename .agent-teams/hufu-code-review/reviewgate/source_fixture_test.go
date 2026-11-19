@@ -48,6 +48,7 @@ type task struct {
 		RuntimeOutputs     map[string]json.RawMessage `json:"runtime_outputs"`
 		RuntimeOutputsHash string                     `json:"runtime_outputs_hash"`
 		Status             string                     `json:"status"`
+		Summary            string                     `json:"summary,omitempty"`
 		Findings           []finding                  `json:"findings"`
 		Invariants         *struct {
 			Assessments []invariantAssessment `json:"assessments"`

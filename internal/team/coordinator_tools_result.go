@@ -28,28 +28,29 @@ type SubmitArtifactInput struct {
 // claims and descriptive handoff data; runtime-owned TaskResult identity,
 // outputs, and transcript references cannot be decoded through this boundary.
 type SubmitResultInput struct {
-	projectionBound      bool
-	Status               string                      `json:"status"`
-	Summary              string                      `json:"summary"`
-	Details              string                      `json:"details,omitempty"`
-	Artifacts            []SubmitArtifactInput       `json:"artifacts,omitempty"`
-	Evidence             []EvidenceRef               `json:"evidence,omitempty"`
-	FilesRead            []FileRef                   `json:"files_read,omitempty"`
-	FilesModified        []FileRef                   `json:"files_modified,omitempty"`
-	Commands             []CommandResult             `json:"commands,omitempty"`
-	Verification         []VerificationResult        `json:"verification,omitempty"`
-	Decisions            []Decision                  `json:"decisions,omitempty"`
-	Findings             []Finding                   `json:"findings,omitempty"`
-	Risks                []Risk                      `json:"risks,omitempty"`
-	OpenQuestions        OpenQuestions               `json:"open_questions,omitempty"`
-	SuggestedNextTasks   []TaskProposal              `json:"suggested_next_tasks,omitempty"`
-	RetryHint            string                      `json:"retry_hint,omitempty"`
-	ReceiptIDs           []string                    `json:"receipt_ids,omitempty"`
-	MemoryUses           []MemoryUseRef              `json:"memory_uses,omitempty"`
-	AssumptionChecks     []AssumptionCheck           `json:"assumption_checks,omitempty"`
-	InvariantAssessments *[]InvariantAssessmentClaim `json:"invariant_assessments,omitempty"`
-	Facts                map[string]any              `json:"facts,omitempty"`
-	Confidence           float64                     `json:"confidence,omitempty"`
+	projectionBound          bool
+	completionFieldsSupplied bool
+	Status                   string                      `json:"status,omitempty"`
+	Summary                  string                      `json:"summary,omitempty"`
+	Details                  string                      `json:"details,omitempty"`
+	Artifacts                []SubmitArtifactInput       `json:"artifacts,omitempty"`
+	Evidence                 []EvidenceRef               `json:"evidence,omitempty"`
+	FilesRead                []FileRef                   `json:"files_read,omitempty"`
+	FilesModified            []FileRef                   `json:"files_modified,omitempty"`
+	Commands                 []CommandResult             `json:"commands,omitempty"`
+	Verification             []VerificationResult        `json:"verification,omitempty"`
+	Decisions                []Decision                  `json:"decisions,omitempty"`
+	Findings                 []Finding                   `json:"findings,omitempty"`
+	Risks                    []Risk                      `json:"risks,omitempty"`
+	OpenQuestions            OpenQuestions               `json:"open_questions,omitempty"`
+	SuggestedNextTasks       []TaskProposal              `json:"suggested_next_tasks,omitempty"`
+	RetryHint                string                      `json:"retry_hint,omitempty"`
+	ReceiptIDs               []string                    `json:"receipt_ids,omitempty"`
+	MemoryUses               []MemoryUseRef              `json:"memory_uses,omitempty"`
+	AssumptionChecks         []AssumptionCheck           `json:"assumption_checks,omitempty"`
+	InvariantAssessments     *[]InvariantAssessmentClaim `json:"invariant_assessments,omitempty"`
+	Facts                    map[string]any              `json:"facts,omitempty"`
+	Confidence               float64                     `json:"confidence,omitempty"`
 	// StructuredPayload is validated against the task's result contract by
 	// the runtime; it never becomes part of the TaskResult unvalidated.
 	StructuredPayload json.RawMessage `json:"structured_payload,omitempty"`
@@ -125,6 +126,9 @@ func decodeSubmitResultInput(raw []byte, contract taskResultSubmissionContract) 
 			}
 		}
 	}
+	_, statusSupplied := fields["status"]
+	_, summarySupplied := fields["summary"]
+	input.completionFieldsSupplied = statusSupplied || summarySupplied
 	decoder := json.NewDecoder(bytes.NewReader(normalized))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil {
@@ -217,6 +221,7 @@ func localResultSubmissionContract(coordinator *Coordinator, todoID string) task
 		compiled, _ := coordinator.compiledResultContract(item.ResultContract)
 		if compiled != nil {
 			contract.claimsProjection = compiled.claimsProjection
+			contract.runtimeCompletion = compiled.runtimeCompletion != ""
 		}
 		contract.RuntimeOwnedFilesRead = runtimeOwnsFilesRead(compiled)
 		contract.ResultContract = item.ResultContract.clone()
@@ -482,6 +487,9 @@ func submitResultToolInfo(contract taskResultSubmissionContract) fantasy.ToolInf
 		info.Required = append(info.Required, field)
 	}
 	info.Required = omitProjectedEnvelope(info.Parameters, info.Required, contract.claimsProjection)
+	if contract.runtimeCompletion {
+		info.Required = omitRuntimeCompletionRequirements(info.Parameters, info.Required)
+	}
 
 	return info
 }

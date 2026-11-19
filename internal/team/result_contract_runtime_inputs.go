@@ -15,6 +15,7 @@ type resultRuntimeInputSpec struct {
 	Target      string `json:"target"`
 	SourceTask  string `json:"source_task"`
 	Output      string `json:"output,omitempty"`
+	constant    any
 	SourceKind  string `json:"source_kind,omitempty"`
 	valueSchema *jsonschema.Schema
 }
@@ -42,7 +43,7 @@ func compileResultRuntimeInputs(root map[string]any) ([]resultRuntimeInputSpec, 
 		if len(spec.SourceTask) > maxTaskResultPointerBytes || len(spec.Output) > maxTaskResultPointerBytes {
 			return nil, fmt.Errorf("runtime input %d requires bounded source_task and output names", i)
 		}
-		if spec.SourceKind != "workset_binding" && spec.SourceTask == "" {
+		if spec.SourceKind != "workset_binding" && spec.SourceKind != "const" && spec.SourceTask == "" {
 			return nil, fmt.Errorf("runtime input %d requires source_task", i)
 		}
 		switch spec.SourceKind {
@@ -53,6 +54,10 @@ func compileResultRuntimeInputs(root map[string]any) ([]resultRuntimeInputSpec, 
 		case "runtime_media":
 			if spec.SourceTask == "" || spec.Output != "" {
 				return nil, fmt.Errorf("runtime media input %d must omit output", i)
+			}
+		case "const":
+			if spec.SourceTask != "" || spec.Output != "" {
+				return nil, fmt.Errorf("constant runtime input %d must omit source_task and output", i)
 			}
 		case "workset_binding":
 			if spec.SourceTask != "" || spec.Output == "" || len(spec.Output) > maxWorksetKeyBytes {
@@ -67,8 +72,16 @@ func compileResultRuntimeInputs(root map[string]any) ([]resultRuntimeInputSpec, 
 		if err := validateJSONPointer(spec.Target); err != nil {
 			return nil, fmt.Errorf("runtime input %d: %w", i, err)
 		}
-		if _, err := runtimeInputSchemaAt(root, spec.Target); err != nil {
+		node, err := runtimeInputSchemaAt(root, spec.Target)
+		if err != nil {
 			return nil, fmt.Errorf("runtime input %d target must select declared object properties: %w", i, err)
+		}
+		if spec.SourceKind == "const" {
+			var present bool
+			spec.constant, present = node["const"]
+			if !present {
+				return nil, fmt.Errorf("constant runtime input %d requires a const on the target schema", i)
+			}
 		}
 		for _, previous := range specs[:i] {
 			if resultPointersOverlap(previous.Target, spec.Target) {
@@ -102,7 +115,7 @@ func validateRuntimeInputSources(session *TeamSession, contracts map[string]*Com
 	}
 	for id, compiled := range contracts {
 		for _, spec := range compiled.runtimeInputs {
-			if spec.SourceKind == "workset_binding" {
+			if spec.SourceKind == "workset_binding" || spec.SourceKind == "const" {
 				continue
 			}
 			source, exists := sources[strings.ToLower(spec.SourceTask)]
@@ -138,6 +151,8 @@ func (c *Coordinator) resultRuntimeInputValues(compiled *CompiledResultContract,
 		var value any
 		var err error
 		switch spec.SourceKind {
+		case "const":
+			value = spec.constant
 		case "workset_binding":
 			if taskID == "" {
 				return nil, fmt.Errorf("workset runtime input requires its owning task")

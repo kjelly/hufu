@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -78,14 +77,15 @@ type gapResolution struct {
 }
 
 type payload struct {
-	Scope              json.RawMessage `json:"scope"`
-	Tests              json.RawMessage `json:"test_verification"`
-	SnapshotCoverage   json.RawMessage `json:"snapshot_coverage"`
-	Record             json.RawMessage `json:"record"`
-	InputReview        []inputReview   `json:"input_review"`
-	Coverage           string          `json:"coverage"`
-	GapResolutions     []gapResolution `json:"gap_resolutions"`
-	SupplementOutcomes json.RawMessage `json:"supplement_outcomes,omitempty"`
+	Scope              json.RawMessage   `json:"scope"`
+	Tests              json.RawMessage   `json:"test_verification"`
+	SnapshotCoverage   json.RawMessage   `json:"snapshot_coverage"`
+	Record             json.RawMessage   `json:"record"`
+	InputReview        []inputReview     `json:"input_review"`
+	Coverage           string            `json:"coverage"`
+	Completion         *reportCompletion `json:"completion,omitempty"`
+	GapResolutions     []gapResolution   `json:"gap_resolutions"`
+	SupplementOutcomes json.RawMessage   `json:"supplement_outcomes,omitempty"`
 }
 
 type sourceTask struct {
@@ -110,6 +110,7 @@ type sourceTask struct {
 
 	Result *struct {
 		RuntimeOutputs map[string]json.RawMessage `json:"runtime_outputs"`
+		Summary        string                     `json:"summary"`
 		Status         string                     `json:"status"`
 		Findings       []finding                  `json:"findings"`
 		Invariants     *struct {
@@ -148,7 +149,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	if err := decoder.Decode(&envelope); err != nil {
 		return err
 	}
-	if envelope.Type != "verify_review_report" && envelope.Type != "inventory_review_handoffs" && envelope.Type != "inventory_review_supplement_requests" {
+	if envelope.Type != "verify_review_report" && envelope.Type != "inventory_review_handoffs" && envelope.Type != "inventory_review_supplement_requests" && envelope.Type != "derive_review_report" {
 		return fmt.Errorf("unsupported review gate action")
 	}
 	var arguments struct {
@@ -181,6 +182,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer) error {
 	matched := false
 	for _, item := range current.Tasks {
 		isGate := (envelope.Type == "verify_review_report" && item.ContractID == "verify-review-report") ||
+			(envelope.Type == "derive_review_report" && item.ContractID == "derive-review-report") ||
 			(envelope.Type == "inventory_review_handoffs" && item.ContractID == "inventory-review-handoffs") ||
 			(envelope.Type == "inventory_review_supplement_requests" && item.ContractID == "inventory-review-supplement-requests")
 		if item.ID == os.Getenv("HUFU_TASK_ID") && isGate {
@@ -276,97 +278,43 @@ func observed(item sourceTask, evidence []string) bool {
 }
 
 func verify(current sourceSession) (string, string, error) {
-	tasks := make(map[string]sourceTask)
-	values := make(map[string]payload)
-	records := make(map[string]record)
+	tasks, values, records, err := collectReportSources(current)
+	if err != nil {
+		return "", "", err
+	}
 	var reportID string
+	var report payload
 	for _, item := range current.Tasks {
-		switch item.ContractID {
-		case "review-primary-workset", "review-documentation-workset", "review-documentation-escalation", "review-supplement-workset", "critic-review", "synthesize-review":
-		default:
+		if item.ContractID != "synthesize-review" {
 			continue
 		}
-		if _, duplicate := tasks[item.ID]; duplicate {
-			return "", "", fmt.Errorf("duplicate task ID")
+		if reportID != "" || tasks[item.ID].ID != "" {
+			return "", "", fmt.Errorf("ambiguous report tasks")
 		}
-		value, err := accepted(item)
+		report, err = accepted(item)
 		if err != nil {
-			if item.ContractID != "synthesize-review" {
-				return "", "", &sourceReviewError{cause: err}
-			}
 			return "", "", err
 		}
-		tasks[item.ID], values[item.ID] = item, value
-		if item.ContractID == "synthesize-review" {
-			if reportID != "" {
-				return "", "", fmt.Errorf("ambiguous report tasks")
-			}
-			reportID = item.ID
-			continue
-		}
-		var r record
-		if err := json.Unmarshal(value.Record, &r); err != nil {
-			return "", "", &sourceReviewError{cause: fmt.Errorf("task %s has an invalid source record: %w", item.ID, err)}
-		}
-		records[item.ID] = r
+		reportID, tasks[item.ID] = item.ID, item
 	}
-	if reportID == "" || len(records) == 0 {
-		return "", "", fmt.Errorf("review report or workset results missing")
+	if reportID == "" {
+		return "", "", fmt.Errorf("review report missing")
 	}
-	critiqued := make(map[string]bool)
-	limited := false
-	ids := make([]string, 0, len(records))
-	for id := range records {
-		ids = append(ids, id)
+	snapshot, err := collectSnapshotCoverage(current)
+	if err != nil {
+		return "", "", err
 	}
-	sort.Strings(ids)
-	var sourceErrors []error
-	for _, id := range ids {
-		r := records[id]
-		item := tasks[id]
-		if item.ContractID != "critic-review" {
-			if err := verifyReview(item, r); err != nil {
-				sourceErrors = append(sourceErrors, err)
-			}
-			limited = limited || len(r.Gaps) > 0
-			continue
-		}
-		sourceID, critiqueLimited, err := verifyCritique(item, r, tasks, values, records, critiqued)
-		if err != nil {
-			sourceErrors = append(sourceErrors, err)
-			continue
-		}
-		limited = limited || critiqueLimited
-		critiqued[sourceID] = true
+	coverage, completion, err := deriveReportCompletion(tasks, values, records, reportTestEvidence(current), snapshot)
+	if err != nil {
+		return "", "", err
 	}
-	if len(sourceErrors) > 0 {
-		return "", "", &sourceReviewError{cause: errors.Join(sourceErrors...)}
-	}
-	for id, r := range records {
-		for _, f := range r.Findings {
-			if f.RequiresCritique && !critiqued[id] {
-				return "", "", fmt.Errorf("task %s has an unassigned required critique", id)
-			}
-		}
-	}
-	report := values[reportID]
 	if err := verifyActionEvidence(current, report); err != nil {
 		return "", "", err
 	}
-	testLimited, err := verifyTestEvidence(report.Tests)
-	if err != nil {
-		return "", "", err
-	}
-	limited = limited || testLimited
-	snapshotCoverage, err := collectSnapshotCoverage(current)
-	if err != nil {
-		return "", "", err
-	}
-	if snapshotCoverage.Mode == "repository_snapshot" {
-		if err := verifySnapshotCoverage(current, snapshotCoverage, report.SnapshotCoverage); err != nil {
+	if snapshot.Mode == "repository_snapshot" {
+		if err := verifySnapshotCoverage(current, snapshot, report.SnapshotCoverage); err != nil {
 			return "", "", err
 		}
-		limited = limited || len(snapshotCoverage.Uncompleted) > 0
 	}
 	if err := verifyReportHandoffEvidence(current, report); err != nil {
 		return "", "", err
@@ -382,12 +330,12 @@ func verify(current sourceSession) (string, string, error) {
 			return "", "", fmt.Errorf("report included a non-review source")
 		}
 	}
-	coverage, resultStatus := "complete", "success"
-	if limited {
-		coverage, resultStatus = "completed_with_gaps", "completed_with_gaps"
-	}
-	if report.Coverage != coverage || tasks[reportID].Result.Status != resultStatus {
+
+	if report.Coverage != coverage || tasks[reportID].Result.Status != completion.Status {
 		return "", "", fmt.Errorf("report overstated coverage")
+	}
+	if err := verifyReportCompletion(current, report, coverage, completion, tasks[reportID].Result.Summary); err != nil {
+		return "", "", err
 	}
 	if err := verifyGaps(report, records, tasks); err != nil {
 		return "", "", err
@@ -640,6 +588,9 @@ func findReportID(tasks map[string]sourceTask) string {
 }
 
 func runGateAction(ctx context.Context, actionType string, current sourceSession, out io.Writer) error {
+	if actionType == "derive_review_report" {
+		return deriveReportAction(current, out)
+	}
 	if actionType == "inventory_review_supplement_requests" {
 		requests, err := collectSupplementRequests(current)
 		if err != nil {

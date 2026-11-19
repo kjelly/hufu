@@ -763,12 +763,13 @@ func (p *CodexSubagentProvider) RunAttempt(ctx context.Context, request AttemptR
 	go func() {
 		defer close(turnDone)
 		turnResult, turnErr = codexRunTurn(ctx, proc.Client, effective.ThreadID, request.Prompt, codexTurnOptions{
-			Input:            nativeInput,
-			ResultProjection: projectionForContract(request.resultContractSchema),
-			ReasoningEffort:  request.ReasoningEffort,
-			DetailedOutput:   p.coordinator.verbose,
-			OnTurnStarted:    onTurnStarted,
-			OnActivity:       reportCodexActivity,
+			Input:             nativeInput,
+			ResultProjection:  projectionForContract(request.resultContractSchema),
+			RuntimeCompletion: hasRuntimeCompletion(request.resultContractSchema),
+			ReasoningEffort:   request.ReasoningEffort,
+			DetailedOutput:    p.coordinator.verbose,
+			OnTurnStarted:     onTurnStarted,
+			OnActivity:        reportCodexActivity,
 		})
 	}()
 
@@ -967,10 +968,11 @@ func (p *CodexSubagentProvider) attemptResultRepair(
 
 	repairPrompt := codexResultRepairPrompt + request.invariantRepairInstructions
 	turnResult, turnErr := codexRunTurn(ctx, repairProc.Client, effective.ThreadID, repairPrompt, codexTurnOptions{
-		ResultProjection: projectionForContract(request.resultContractSchema),
-		ReasoningEffort:  request.ReasoningEffort,
-		DetailedOutput:   p.coordinator.verbose,
-		OnActivity:       onActivity,
+		ResultProjection:  projectionForContract(request.resultContractSchema),
+		RuntimeCompletion: hasRuntimeCompletion(request.resultContractSchema),
+		ReasoningEffort:   request.ReasoningEffort,
+		DetailedOutput:    p.coordinator.verbose,
+		OnActivity:        onActivity,
 	})
 	if turnErr != nil {
 		transcript.record("repair: turn failed: %v", turnErr)

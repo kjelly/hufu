@@ -30,11 +30,11 @@ func resultFixedCollectionContextForStage(plans []resultFixedCollectionPlan, run
 	}
 	var b strings.Builder
 	if collector {
-		b.WriteString("\n## Runtime Fixed Collections\nReturn one complete JSON claims object, including status, summary and structured_payload, using only frozen work evidence and already settled decisions. ")
+		b.WriteString("\n## Runtime Fixed Collections\nReturn one complete JSON claims object, following the claims schema, using only frozen work evidence and already settled decisions. ")
 	} else if runtime {
-		b.WriteString("\n## Runtime Fixed Collections\nThe runtime collects one complete JSON claims object after work. Return the work report and all semantic decisions; the collector supplies status, summary and structured_payload according to the following schema. ")
+		b.WriteString("\n## Runtime Fixed Collections\nThe runtime collects one complete JSON claims object after work. Return the work report and all semantic decisions; the collector supplies the fields in the claims schema. ")
 	} else {
-		b.WriteString("\n## Runtime Fixed Collections\nCall submit_result with the complete outer argument object, including status, summary and structured_payload. ")
+		b.WriteString("\n## Runtime Fixed Collections\nCall submit_result with the complete outer argument object, following the claims schema. ")
 	}
 	b.WriteString("Each items_pointer below is relative to structured_payload; submission_pointer gives its path in the complete tool arguments. Put the collection at that path as an OBJECT keyed by the exact runtime-issued keys, with one decision object per key. Never put row keys or decision fields at the outer tool level. Supply only the decision fields inside each row; the runtime generates the final array, order, identities and copied values. Preserve all other payload fields required by the result schema. Do not submit arrays or runtime-owned fields. Interpret meaning using the supplied evidence and choose only schema enum values. Do not guess a choice when evidence is insufficient; use an explicitly declared uncertainty option or report blocked. Invalid submissions return corrective feedback within the current attempt.\n")
 	if collector {

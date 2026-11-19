@@ -83,9 +83,28 @@ func (a *localResultAdmission) validateClaims(ctx context.Context, input SubmitR
 			return nil, rejectProjectedClaims(err)
 		}
 	}
+	var compiled *CompiledResultContract
+	if a.coordinator != nil {
+		var err error
+		_, compiled, err = a.coordinator.boundResultContract(a.todoID)
+		if err != nil {
+			return nil, rejectLocalResult(RepairFailureContract, err)
+		}
+		if compiled != nil && compiled.runtimeCompletion != "" {
+			input.Status, input.Summary, err = bindRuntimeCompletion(compiled.runtimeCompletion, strings.ToLower(strings.TrimSpace(input.Status)), input.Summary, input.completionFieldsSupplied, func() (map[string]any, error) {
+				return a.coordinator.resultRuntimeInputValues(compiled, a.todoID)
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	res := input.taskResult()
 	if err := validateResultSummaryAndStatus(&res); err != nil {
 		return nil, err
+	}
+	if runtimeCompletionFailure(compiled, res.Status) && len(bytes.TrimSpace(input.StructuredPayload)) != 0 {
+		return nil, fmt.Errorf("omit structured_payload for an unsuccessful runtime-completion result")
 	}
 	reason = RepairFailureContract
 	if err := a.coordinator.validateRequiredArtifactReadSubmission(ctx, a.todoID); err != nil {
@@ -111,34 +130,8 @@ func (a *localResultAdmission) validateClaims(ctx context.Context, input SubmitR
 		return nil, errors.New("submit_result contract violation: ordinary task must omit invariant_assessments or submit null")
 	}
 	if a.coordinator != nil {
-		var observations []taskTranscriptRecord
-		_, compiled, contractErr := a.coordinator.boundResultContract(a.todoID)
-		if contractErr != nil {
-			return nil, rejectLocalResult(RepairFailureContract, contractErr)
-		}
-		if compiled != nil && compiled.toolEvidence != nil {
-			var evidenceErr error
-			observations, evidenceErr = submissionToolEvidence(ctx, a.coordinator, a.todoID)
-			if evidenceErr != nil {
-				return nil, rejectLocalResult(RepairFailureSource, evidenceErr)
-			}
-		}
-		if res.Status != TaskResultStatusBlocked || len(bytes.TrimSpace(input.StructuredPayload)) != 0 || !hasResultDecisions(compiled) {
-			payload, rejection, payloadFormat := a.coordinator.validateStructuredPayloadClaims(a.todoID, input.StructuredPayload, recordFailure, observations)
-			if rejection != "" {
-				payloadReason := RepairFailureSource
-				if classifyPayloadRejection != nil {
-					payloadReason = classifyPayloadRejection()
-					if payloadFormat {
-						payloadReason = RepairFailureInvalidSchema
-					}
-				}
-				return nil, rejectLocalResult(payloadReason, errors.New(rejection))
-			}
-			res.StructuredPayload = payload
-			if payload != nil && payload.EvidenceDowngrades > 0 {
-				res.Summary = "Result includes claims without matching successful tool evidence; consult the structured payload for downgraded findings."
-			}
+		if err := a.bindStructuredClaims(ctx, compiled, input, &res, classifyPayloadRejection, recordFailure); err != nil {
+			return nil, err
 		}
 		if err := a.bindResultEnvelope(ctx, compiled, input, &res, contract, recordFailure); err != nil {
 			return nil, err
@@ -182,6 +175,36 @@ func (a *localResultAdmission) validateClaims(ctx context.Context, input SubmitR
 		res.Evidence[i].SystemHMAC = ""
 	}
 	return &res, nil
+}
+
+func (a *localResultAdmission) bindStructuredClaims(ctx context.Context, compiled *CompiledResultContract, input SubmitResultInput, res *TaskResult, classifyPayloadRejection func() RepairFailureReason, recordFailure bool) error {
+	var observations []taskTranscriptRecord
+	if compiled != nil && compiled.toolEvidence != nil {
+		var err error
+		observations, err = submissionToolEvidence(ctx, a.coordinator, a.todoID)
+		if err != nil {
+			return rejectLocalResult(RepairFailureSource, err)
+		}
+	}
+	if runtimeCompletionFailure(compiled, res.Status) || (res.Status == TaskResultStatusBlocked && len(bytes.TrimSpace(input.StructuredPayload)) == 0 && hasResultDecisions(compiled)) {
+		return nil
+	}
+	payload, rejection, payloadFormat := a.coordinator.validateStructuredPayloadClaims(a.todoID, input.StructuredPayload, recordFailure, observations)
+	if rejection != "" {
+		payloadReason := RepairFailureSource
+		if classifyPayloadRejection != nil {
+			payloadReason = classifyPayloadRejection()
+			if payloadFormat {
+				payloadReason = RepairFailureInvalidSchema
+			}
+		}
+		return rejectLocalResult(payloadReason, errors.New(rejection))
+	}
+	res.StructuredPayload = payload
+	if payload != nil && payload.EvidenceDowngrades > 0 && !hasRuntimeCompletion(compiled) {
+		res.Summary = "Result includes claims without matching successful tool evidence; consult the structured payload for downgraded findings."
+	}
+	return nil
 }
 
 // commit reserves the occurrence before materializing artifacts and publishing

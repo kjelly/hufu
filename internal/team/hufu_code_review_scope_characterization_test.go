@@ -157,51 +157,19 @@ func TestHufuCodeReviewChecksInvariantCopiesBeforeHandoff(t *testing.T) {
 	}
 }
 
-func TestHufuCodeReviewSequentialCritiquesAndFullSynthesisHandoff(t *testing.T) {
-	session := loadHufuCodeReviewTeam(t)
-	session.Workspace = t.TempDir()
-	w, err := newRuntimeWorkflow(session)
+func hufuCodeReviewLegacySchema(t *testing.T, session *TeamSession, name string) *CompiledResultContract {
+	t.Helper()
+	compiled, err := compileResultContractSchema(hufuCodeReviewTeamDir(t), name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.state = PhaseVerify
-	w.results[PhaseVerify] = PhaseResult{Status: PhaseStatusSuccess}
-	c := &Coordinator{session: session, taskTracker: NewTaskTracker()}
-	ids := completedEvidenceSources(c, 11)
-	// A successful documentation review by critic must not prevent a distinct
-	// critique contract from checking another source in a later call.
-	c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "critic"}})[0].Status = TaskDone
-	for _, source := range ids[:2] {
-		bound, _, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "critic", ContractID: "critic-review", EvidenceFrom: []string{source}}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := w.validateTasks(bound); err != nil {
-			t.Fatalf("single critique dispatch rejected: %v", err)
-		}
-		if err := c.validateDelegationPolicy(bound); err != nil {
-			t.Fatalf("completed critic prevented a new source critique: %v", err)
-		}
-		if _, err := c.bindEvidenceSources(bound); err != nil {
-			t.Fatal(err)
-		}
-	}
-	bound, _, err := CompileTaskGoalContracts(session, []TaskDef{{Agent: "synthesizer", ContractID: "synthesize-review", EvidenceFrom: ids}, {Agent: "reviewer", ContractID: "verify-review-report"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := w.validateTasks(bound); err != nil {
-		t.Fatal(err)
-	}
-	handoff, err := c.bindEvidenceSources(bound)
-	if err != nil || !slices.Equal(handoff[0].EvidenceFrom, ids) {
-		t.Fatalf("eleven-source synthesis handoff rejected or truncated: %#v %v", handoff, err)
-	}
+	session.ResultContracts[name] = compiled
+	return compiled
 }
 
 func TestHufuCodeReviewRepairExampleSatisfiesResultSchema(t *testing.T) {
 	session := loadHufuCodeReviewTeam(t)
-	compiled := session.ResultContracts["schemas/review-v1.json"]
+	compiled := session.ResultContracts["schemas/review-v2.json"]
 	if compiled == nil {
 		t.Fatal("review result contract missing")
 	}
@@ -591,7 +559,7 @@ func TestHufuCodeReviewReferenceScopeReachesWorkerPromptAndSubmission(t *testing
 					if include {
 						refs = append(refs, map[string]any{"reference_id": "ref-000000", "kind": "deleted", "rationale": "The assigned source records scratch removal", "evidence": []string{"sha256-" + strings.Repeat("a", 64)}, "finding_index": nil, "gap_index": nil})
 					}
-					data, err := json.Marshal(map[string]any{"record": map[string]any{"kind": "review", "findings": []any{}, "gaps": []any{}, "invariant_assessments": []any{}, "reference_assessments": refs}})
+					data, err := json.Marshal(map[string]any{"record": map[string]any{"findings": []any{}, "gaps": []any{}, "invariant_assessments": []any{}, "reference_assessments": refs}})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -618,7 +586,7 @@ func TestDocumentationReviewContractsRejectInvariantClaims(t *testing.T) {
 					ref = task.ResultContract
 				}
 			}
-			if ref == nil || ref.ID != "schemas/documentation-review-v1.json" {
+			if ref == nil || ref.ID != "schemas/documentation-review-v2.json" {
 				t.Fatalf("unexpected contract: %#v", ref)
 			}
 			compiled := session.ResultContracts[ref.ID]

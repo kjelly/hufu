@@ -538,7 +538,7 @@ func (w *runtimeWorkflow) validateTasks(tasks []TaskDef) error {
 		// Fan-out creates one child per workset item under one static contract.
 		// Keep rejecting duplicate ordinary dispatches while allowing those
 		// immutable, item-bound children.
-		if providedContracts[task.ContractID] && task.WorksetBinding == nil {
+		if providedContracts[task.ContractID] && task.WorksetBinding == nil && task.EvidenceInventoryBinding == nil {
 			return fmt.Errorf("workflow contract %q was dispatched more than once in phase %s", task.ContractID, w.state)
 		}
 		providedContracts[task.ContractID] = true

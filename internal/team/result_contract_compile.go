@@ -125,6 +125,10 @@ func compileResultContractDocument(id string, raw []byte) (*CompiledResultContra
 	if err != nil {
 		return nil, fmt.Errorf("schema %q: %w", id, err)
 	}
+	completion, err := compileRuntimeCompletion(root, runtimeInputs)
+	if err != nil {
+		return nil, fmt.Errorf("schema %q: %w", id, err)
+	}
 	for _, binding := range runtimeInputs {
 		if inputs.ownsTarget(binding.Target) {
 			return nil, fmt.Errorf("schema %q: runtime input and evidence input targets must not overlap", id)
@@ -206,7 +210,7 @@ func compileResultContractDocument(id string, raw []byte) (*CompiledResultContra
 		ID: id, SchemaSHA256: hex.EncodeToString(sum[:]), CanonicalSchema: canonical, schema: schema,
 		envelopeSchema: envelopeSchema, envelopeDocument: envelopeDocument,
 		toolEvidence: evidence, finalReport: report, evidenceInputs: inputs, evidenceReferences: references, worksetInputs: worksetInputs,
-		claimsProjection: projections, fixedCollections: collections, evidenceKeys: evidenceKeys, runtimeInputs: runtimeInputs, submissionFields: fields, worksetPaths: worksetPaths,
+		claimsProjection: projections, fixedCollections: collections, evidenceKeys: evidenceKeys, runtimeInputs: runtimeInputs, runtimeCompletion: completion, submissionFields: fields, worksetPaths: worksetPaths,
 	}, nil
 }
 

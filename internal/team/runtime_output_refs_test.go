@@ -199,7 +199,7 @@ func TestHufuCodeReviewSynthesisReceivesCompactPrepareStatusWithoutCoordinatorCo
 	inventory.TypedResult.RuntimeOutputs, inventory.TypedResult.RuntimeOutputsHash = outputs, digest
 	inventory.ExecutionReceipt.RuntimeOutputsHash = digest
 	c.taskTracker.TodoList().Restore([]*TodoItem{item, &verifier, &inventory})
-	bound, _, err := CompileTaskGoalContracts(c.session, []TaskDef{{Agent: "synthesizer", ContractID: "synthesize-review", Goal: "Synthesize all results"}, {Agent: "reviewer", ContractID: "verify-review-report", Goal: "Audit synthesized results"}})
+	bound, _, err := CompileTaskGoalContracts(c.session, []TaskDef{{Agent: "reviewer", ContractID: "derive-review-report", Goal: "Derive completion"}, {Agent: "synthesizer", ContractID: "synthesize-review", Goal: "Synthesize all results"}, {Agent: "reviewer", ContractID: "verify-review-report", Goal: "Audit synthesized results"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,15 +211,15 @@ func TestHufuCodeReviewSynthesisReceivesCompactPrepareStatusWithoutCoordinatorCo
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(final[0].Constraints, "DIAGNOSTIC_MODEL_MUST_NOT_ECHO") || !strings.Contains(final[0].Constraints, "Omit them from your submission") {
+	if strings.Contains(final[1].Constraints, "DIAGNOSTIC_MODEL_MUST_NOT_ECHO") || !strings.Contains(final[1].Constraints, "Omit audit_complete, coverage, completion") {
 		t.Fatal("model context still requires echoing complete receipts")
 	}
 	for _, want := range []string{`Scope context (for analysis only): {"requested":{"count":10},"satisfied":true}`, `Test status (for analysis only): {"completed":true,"output_truncated":false,"passed":false,"timed_out":false}`, `"required_critic_source_task_ids":["13"]`} {
-		if !strings.Contains(final[0].Constraints, want) {
-			t.Fatalf("static synthesis context omitted %s: %s", want, final[0].Constraints)
+		if !strings.Contains(final[1].Constraints, want) {
+			t.Fatalf("static synthesis context omitted %s: %s", want, final[1].Constraints)
 		}
 	}
-	if strings.Contains(final[0].Constraints, "should-not-reach-model") || strings.Contains(final[0].Constraints, "SCOPE_DETAILS_MODEL_MUST_NOT_ECHO") {
+	if strings.Contains(final[1].Constraints, "should-not-reach-model") || strings.Contains(final[1].Constraints, "SCOPE_DETAILS_MODEL_MUST_NOT_ECHO") {
 		t.Fatal("synthesis context asks the model to transcribe a large diagnostic")
 	}
 }

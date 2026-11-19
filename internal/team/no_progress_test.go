@@ -626,6 +626,39 @@ func TestNoProgressAccountingTreatsValidatedWorksetAsOneBoundedUnit(t *testing.T
 	}
 }
 
+func TestNoProgressAccountingTreatsValidatedInventoryAsOneBoundedUnit(t *testing.T) {
+	c := newNoProgressTestCoordinator(t)
+	c.recordNoProgressTasks(6)
+	spec := &EvidenceInventorySpec{TaskID: "inventory", MaxSources: 24}
+	children := make([]TaskDef, spec.MaxSources)
+	for i := range children {
+		children[i] = TaskDef{
+			ContractID:        "critic-review",
+			EvidenceInventory: spec,
+			EvidenceInventoryBinding: &EvidenceInventoryBinding{
+				InventoryTaskID: "inventory-occurrence",
+				SourceTaskID:    fmt.Sprintf("source-%d", i),
+			},
+		}
+	}
+	c.recordNoProgressTaskBatch(children)
+	if got := c.noProgressCounters().Tasks; got != 7 {
+		t.Fatalf("tasks after validated inventory expansion = %d, want 7", got)
+	}
+	c.recordNoProgressTaskBatch([]TaskDef{
+		{ContractID: "derive-review-report"},
+		{ContractID: "synthesize-review", EvidenceInventory: &EvidenceInventorySpec{FromFanOut: "critic-review"}},
+		{ContractID: "verify-review-report"},
+	})
+	if got := c.noProgressCounters().Tasks; got != 10 {
+		t.Fatalf("tasks after report chain = %d, want 10", got)
+	}
+	limits := NoProgressLimits{MaxTasks: agent.DefaultReliabilityConfig().MaxTasksWithoutProgress}
+	if disposition, reason := decideNoProgress(c.noProgressCounters(), limits, true); disposition != NoProgressContinue || reason != "" {
+		t.Fatalf("default budget blocked report after inventory expansion: disposition=%s reason=%q", disposition, reason)
+	}
+}
+
 func TestSchedulerErrorPostconditionPreservesCanonicalDiagnostic(t *testing.T) {
 	c := newNoProgressTestCoordinator(t)
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "bound preflight"}})[0]

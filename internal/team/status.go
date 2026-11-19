@@ -367,8 +367,9 @@ type TodoItem struct {
 	// EvidenceFrom names completed tasks whose results this task checks. Unlike
 	// DependsOn it may name tasks from earlier batches and never orders
 	// scheduling; it grants the worker their results and reviewed inputs.
-	EvidenceFrom []string        `json:"evidence_from,omitempty"`
-	Resources    []ResourceClaim `json:"resources,omitempty"`
+	EvidenceInventoryBinding *EvidenceInventoryBinding `json:"evidence_inventory_binding,omitempty"`
+	EvidenceFrom             []string                  `json:"evidence_from,omitempty"`
+	Resources                []ResourceClaim           `json:"resources,omitempty"`
 	// Decision admission is immutable task-contract state. It is persisted on
 	// the todo before execution so crash recovery cannot silently downgrade a
 	// configured decision task to the off-profile path.
@@ -501,30 +502,31 @@ type TodoSpec struct {
 	// taskDefFromTodoItem and rejects any mismatch) exactly like SideEffect/
 	// Recovery already do, or a real hufu-coding dispatch fails admission
 	// before a dagScheduler is ever constructed.
-	OnFailureClasses    []TaskFailureClass
-	Escalate            bool
-	AdversarialVerify   int
-	DependsOn           []string
-	OrderAfter          []string
-	SideEffect          SideEffectClass
-	Recovery            RecoveryPolicy
-	ReconcileTool       string
-	Kind                TaskKind
-	Advances            []string
-	ExpectedStateChange string
-	RecoveryHypothesis  *RecoveryHypothesis
-	Execution           ExecutionContract
-	Optional            bool
-	ResourceClaims      []string
-	EvidenceFrom        []string
-	Resources           []ResourceClaim
-	DecisionProfile     string
-	DecisionOptions     []DecisionOption
-	DecisionAssumptions []DecisionAssumption
-	DecisionFacts       map[string]any
-	DecisionArtifacts   []ArtifactRef
-	DecisionBaseRates   []BaseRateEvidence
-	DecisionProvenance  []EvidenceProvenance
+	OnFailureClasses         []TaskFailureClass
+	Escalate                 bool
+	AdversarialVerify        int
+	DependsOn                []string
+	OrderAfter               []string
+	SideEffect               SideEffectClass
+	Recovery                 RecoveryPolicy
+	ReconcileTool            string
+	Kind                     TaskKind
+	Advances                 []string
+	ExpectedStateChange      string
+	RecoveryHypothesis       *RecoveryHypothesis
+	Execution                ExecutionContract
+	Optional                 bool
+	ResourceClaims           []string
+	EvidenceInventoryBinding *EvidenceInventoryBinding
+	EvidenceFrom             []string
+	Resources                []ResourceClaim
+	DecisionProfile          string
+	DecisionOptions          []DecisionOption
+	DecisionAssumptions      []DecisionAssumption
+	DecisionFacts            map[string]any
+	DecisionArtifacts        []ArtifactRef
+	DecisionBaseRates        []BaseRateEvidence
+	DecisionProvenance       []EvidenceProvenance
 	// SubagentProvider and ProviderBinding follow TaskDef's field of the same
 	// name (docs/architecture/execution-runtime.md). Callers
 	// normally only set SubagentProvider; todoItemFromSpec derives a minimal
@@ -646,6 +648,7 @@ func todoItemFromSpec(item TodoSpec, id string) *TodoItem {
 		Execution:                     cloneExecutionContract(item.Execution),
 		Optional:                      item.Optional,
 		ResourceClaims:                append([]string(nil), item.ResourceClaims...),
+		EvidenceInventoryBinding:      item.EvidenceInventoryBinding.clone(),
 		EvidenceFrom:                  append([]string(nil), item.EvidenceFrom...),
 		Resources:                     append([]ResourceClaim(nil), item.Resources...),
 		DecisionProfile:               item.DecisionProfile,
@@ -693,6 +696,12 @@ func (tl *TodoList) ReserveIDs(count int) []string {
 		ids[i] = fmt.Sprintf("%d", tl.next)
 	}
 	return ids
+}
+
+func (tl *TodoList) advanceIDFloor(floor int) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	tl.next = max(tl.next, floor)
 }
 
 // AddReserved appends already-constructed items (with pre-reserved IDs) and
@@ -1454,6 +1463,7 @@ func cloneTodoItem(item *TodoItem) *TodoItem {
 		Execution:                     cloneExecutionContract(item.Execution),
 		Optional:                      item.Optional,
 		ResourceClaims:                append([]string(nil), item.ResourceClaims...),
+		EvidenceInventoryBinding:      item.EvidenceInventoryBinding.clone(),
 		EvidenceFrom:                  append([]string(nil), item.EvidenceFrom...),
 		Resources:                     append([]ResourceClaim(nil), item.Resources...),
 		DecisionProfile:               item.DecisionProfile,
@@ -1621,6 +1631,7 @@ func restoreTodoOccurrenceContract(dst, src *TodoItem) {
 	dst.Execution = cloneExecutionContract(src.Execution)
 	dst.Optional = src.Optional
 	dst.ResourceClaims = append([]string(nil), src.ResourceClaims...)
+	dst.EvidenceInventoryBinding = src.EvidenceInventoryBinding.clone()
 	dst.EvidenceFrom = append([]string(nil), src.EvidenceFrom...)
 	dst.Resources = append([]ResourceClaim(nil), src.Resources...)
 	dst.RecoveryHypothesis = cloneRecoveryHypothesis(src.RecoveryHypothesis)

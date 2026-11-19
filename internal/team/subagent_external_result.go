@@ -74,6 +74,15 @@ const (
 	workerResultProposalMaxFactsBytes    = 16 * 1024
 )
 
+func (p *WorkerResultProposal) suppliedCompletionFields() bool {
+	for _, name := range []string{"status", "summary"} {
+		if value := p.suppliedFields[name]; len(value) > 0 && !bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return true
+		}
+	}
+	return false
+}
+
 func validWorkerResultProposalStatus(status string) bool {
 	switch status {
 	case TaskResultStatusSuccess, TaskResultStatusCompletedWithGaps, TaskResultStatusPartial, TaskResultStatusFailed, TaskResultStatusBlocked:
@@ -90,6 +99,10 @@ func validWorkerResultProposalStatus(status string) bool {
 // (§9.1: "Any such fields supplied by the provider MUST cause strict schema
 // decode failure").
 func DecodeWorkerResultProposal(data []byte) (*WorkerResultProposal, error) {
+	return decodeWorkerResultProposal(data, false)
+}
+
+func decodeWorkerResultProposal(data []byte, runtimeCompletion bool) (*WorkerResultProposal, error) {
 	if _, err := decodeUniqueJSON(data); err != nil {
 		return nil, fmt.Errorf("decode worker result proposal: %w", err)
 	}
@@ -102,14 +115,16 @@ func DecodeWorkerResultProposal(data []byte) (*WorkerResultProposal, error) {
 	if err := json.Unmarshal(data, &proposal.suppliedFields); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(proposal.Status) == "" {
-		return nil, fmt.Errorf("decode worker result proposal: status is required")
-	}
-	if strings.TrimSpace(proposal.Summary) == "" {
-		return nil, fmt.Errorf("decode worker result proposal: summary is required")
-	}
-	if !validWorkerResultProposalStatus(proposal.Status) {
-		return nil, fmt.Errorf("decode worker result proposal: unknown status %q", proposal.Status)
+	if !runtimeCompletion || proposal.suppliedCompletionFields() {
+		if strings.TrimSpace(proposal.Status) == "" {
+			return nil, fmt.Errorf("decode worker result proposal: status is required")
+		}
+		if strings.TrimSpace(proposal.Summary) == "" {
+			return nil, fmt.Errorf("decode worker result proposal: summary is required")
+		}
+		if !validWorkerResultProposalStatus(proposal.Status) {
+			return nil, fmt.Errorf("decode worker result proposal: unknown status %q", proposal.Status)
+		}
 	}
 	if err := validateFindingSeverities(proposal.Findings); err != nil {
 		return nil, fmt.Errorf("decode worker result proposal: %w", err)
@@ -159,6 +174,18 @@ func (defaultExternalResultCanonicalizer) Canonicalize(ctx context.Context, requ
 	proposal := result.ResultProposal
 	if proposal == nil {
 		return nil, fmt.Errorf("canonicalize external result: provider result proposal is missing")
+	}
+	if compiled := request.resultContractSchema; hasRuntimeCompletion(compiled) {
+		bound := *proposal
+		var err error
+		bound.Status, bound.Summary, err = bindRuntimeCompletion(compiled.runtimeCompletion, proposal.Status, proposal.Summary, proposal.suppliedCompletionFields(), request.resultRuntimeInputs)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(bound.Summary) == "" {
+			return nil, fmt.Errorf("unsuccessful result requires a summary")
+		}
+		proposal = &bound
 	}
 	if !validWorkerResultProposalStatus(proposal.Status) {
 		return nil, fmt.Errorf("canonicalize external result: unknown proposal status %q", proposal.Status)
@@ -268,9 +295,12 @@ func (defaultExternalResultCanonicalizer) Canonicalize(ctx context.Context, requ
 			findings = projected.Findings
 		}
 	}
-	summary := utils.TruncateRunes(proposal.Summary, workerResultProposalMaxTextRunes)
-	if structuredPayload != nil && structuredPayload.EvidenceDowngrades > 0 {
-		summary = "Result includes claims without matching successful tool evidence; consult the structured payload for downgraded findings."
+	summary := proposal.Summary
+	if !hasRuntimeCompletion(request.resultContractSchema) || !taskResultStatusIsSuccessful(proposal.Status) {
+		summary = utils.TruncateRunes(summary, workerResultProposalMaxTextRunes)
+		if structuredPayload != nil && structuredPayload.EvidenceDowngrades > 0 {
+			summary = "Result includes claims without matching successful tool evidence; consult the structured payload for downgraded findings."
+		}
 	}
 
 	return &TaskResult{

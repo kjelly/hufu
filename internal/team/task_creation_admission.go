@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -110,4 +111,68 @@ func validateActionOccurrenceBinding(item *TodoItem) error {
 // creation begins.
 func (c *Coordinator) requiresTaskCreationAdmission() bool {
 	return c != nil && c.hasDurableEventJournal() && strings.TrimSpace(c.executionRunID) != ""
+}
+
+// appendTaskCreationBatch publishes a complete static chain in one durable
+// transaction. Media tasks retain their occurrence binding in that transaction.
+func (c *Coordinator) appendTaskCreationBatch(ctx context.Context, items []*TodoItem) error {
+	events := make([]RunEvent, 0, len(items))
+	var mediaTasks []*TodoItem
+	for _, item := range items {
+		event, err := c.taskCreationEvent(ctx, item)
+		if err != nil {
+			return err
+		}
+		events = append(events, event)
+		if item.MediaBinding != nil {
+			bound, err := taskMediaBoundEvent(item)
+			if err != nil {
+				return err
+			}
+			events = append(events, bound)
+			mediaTasks = append(mediaTasks, item)
+		}
+	}
+	return c.appendAtomicTaskEvents(ctx, events, mediaTasks)
+}
+
+func (c *Coordinator) appendAtomicTaskEvents(ctx context.Context, events []RunEvent, mediaTasks []*TodoItem) error {
+	journal, ok := c.EventJournal().(AtomicEventJournal)
+	if !ok {
+		return fmt.Errorf("bound task batch requires an atomic journal")
+	}
+	for range 16 {
+		head, err := c.atomicTaskBatchHead(ctx, journal, mediaTasks)
+		if err != nil {
+			return err
+		}
+		_, err = journal.AppendBatchAtHead(ctx, events, head)
+		if !errors.Is(err, ErrEventHeadChanged) {
+			return err
+		}
+	}
+	return ErrEventHeadChanged
+}
+
+func (c *Coordinator) atomicTaskBatchHead(ctx context.Context, journal EventJournal, mediaTasks []*TodoItem) (string, error) {
+	if len(mediaTasks) > 0 {
+		view, err := c.mediaLineage(ctx)
+		if err != nil {
+			return "", err
+		}
+		for _, item := range mediaTasks {
+			if err := c.validateMediaTaskCreationAtHead(item, view); err != nil {
+				return "", err
+			}
+		}
+		return view.head, nil
+	}
+	if err := journal.VerifyHashChain(ctx); err != nil {
+		return "", err
+	}
+	events, err := journal.ReadEvents(ctx)
+	if err != nil || len(events) == 0 {
+		return "", err
+	}
+	return events[len(events)-1].ID, nil
 }

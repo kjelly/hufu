@@ -54,6 +54,7 @@ type CompiledResultContract struct {
 	claimsProjection   *resultClaimsProjection
 	fixedCollections   []resultFixedCollectionSpec
 	runtimeInputs      []resultRuntimeInputSpec
+	runtimeCompletion  string
 	submissionFields   []string
 	finalReport        *template.Template
 }

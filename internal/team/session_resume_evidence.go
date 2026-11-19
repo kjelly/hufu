@@ -31,26 +31,8 @@ func (c *Coordinator) validateResumeSources(ctx context.Context) error {
 		return fail(fmt.Errorf("coordinator conversation for branch %q: %w", source.BranchID, err))
 	}
 	items := c.taskTracker.TodoList().Items()
-	canonical := make(map[string]*TodoItem, len(source.Session.Tasks))
-	for _, item := range source.Session.Tasks {
-		if !IsPrimaryOccurrence(item) {
-			verified := cloneTodoItem(item)
-			restoreLegacyBoundInvariantVerification([]*TodoItem{verified}, c.session.ContractTasks)
-			canonical[item.ID] = verified
-		}
-	}
-	for _, item := range items {
-		if IsPrimaryOccurrence(item) {
-			continue
-		}
-		stored := canonical[item.ID]
-		if !sameResumeTaskEvidence(stored, item) {
-			return fail(fmt.Errorf("loaded task %s does not match branch %q canonical replay", item.ID, source.BranchID))
-		}
-		delete(canonical, item.ID)
-	}
-	if len(canonical) != 0 {
-		return fail(fmt.Errorf("loaded tasks omit canonical tasks in branch %q", source.BranchID))
+	if err := c.validateCanonicalResumeTasks(source, items); err != nil {
+		return fail(err)
 	}
 	snapshot := c.RunInputSnapshot()
 	if snapshot == nil || ValidateRunInputSnapshot(snapshot) != nil {
@@ -60,6 +42,9 @@ func (c *Coordinator) validateResumeSources(ctx context.Context) error {
 		return original.ID == snapshot.ID && sameCanonicalEvidence(&original, snapshot)
 	}) {
 		return fail(fmt.Errorf("frozen inputs have no matching canonical source for this team and branch"))
+	}
+	if err := c.validateInventoryOccurrences(items); err != nil {
+		return fail(err)
 	}
 	for _, item := range items {
 		if item == nil || IsPrimaryOccurrence(item) {
@@ -118,6 +103,30 @@ func (c *Coordinator) validateResumeSources(ctx context.Context) error {
 		}
 	}
 
+	return nil
+}
+
+func (c *Coordinator) validateCanonicalResumeTasks(source *ResumeSource, items []*TodoItem) error {
+	canonical := make(map[string]*TodoItem, len(source.Session.Tasks))
+	for _, item := range source.Session.Tasks {
+		if !IsPrimaryOccurrence(item) {
+			verified := cloneTodoItem(item)
+			restoreLegacyBoundInvariantVerification([]*TodoItem{verified}, c.session.ContractTasks)
+			canonical[item.ID] = verified
+		}
+	}
+	for _, item := range items {
+		if IsPrimaryOccurrence(item) {
+			continue
+		}
+		if !sameResumeTaskEvidence(canonical[item.ID], item) {
+			return fmt.Errorf("loaded task %s does not match branch %q canonical replay", item.ID, source.BranchID)
+		}
+		delete(canonical, item.ID)
+	}
+	if len(canonical) != 0 {
+		return fmt.Errorf("loaded tasks omit canonical tasks in branch %q", source.BranchID)
+	}
 	return nil
 }
 
@@ -190,7 +199,9 @@ func sameResumeTaskEvidence(stored, loaded *TodoItem) bool {
 		sameCanonicalEvidence(stored.ContractRevalidation, loaded.ContractRevalidation) && sameCanonicalEvidence(stored.ResultCandidate, loaded.ResultCandidate) && sameCanonicalEvidence(stored.ResultContract, loaded.ResultContract) && sameCanonicalEvidence(stored.TypedResult, loaded.TypedResult) &&
 		sameCanonicalEvidence(stored.ExecutionReceipt, loaded.ExecutionReceipt) && sameCanonicalEvidence(stored.ExecutionReceipts, loaded.ExecutionReceipts) &&
 		sameCanonicalEvidence(stored.VerifyResult, loaded.VerifyResult) && sameCanonicalEvidence(stored.EvidenceFrom, loaded.EvidenceFrom) &&
-		sameCanonicalEvidence(stored.DependsOn, loaded.DependsOn) && sameCanonicalEvidence(stored.WorksetBinding, loaded.WorksetBinding) && sameCanonicalEvidence(stored.WorksetReceipt, loaded.WorksetReceipt) &&
+		sameCanonicalEvidence(stored.EvidenceInventoryBinding, loaded.EvidenceInventoryBinding) &&
+		sameCanonicalEvidence(stored.DependsOn, loaded.DependsOn) && slices.Equal(stored.OrderAfter, loaded.OrderAfter) &&
+		sameCanonicalEvidence(stored.WorksetBinding, loaded.WorksetBinding) && sameCanonicalEvidence(stored.WorksetReceipt, loaded.WorksetReceipt) &&
 		sameCanonicalEvidence(taskDefFromTodoItem(stored), taskDefFromTodoItem(loaded))
 }
 

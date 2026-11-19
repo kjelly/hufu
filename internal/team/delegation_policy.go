@@ -87,6 +87,11 @@ func (c *Coordinator) validateDelegationPolicy(tasks []TaskDef) error {
 		}
 		var duplicates []string
 		for _, task := range ordinary {
+			// Inventory expansion already verified that this source has no
+			// occurrence. Other completed work by the role is independent.
+			if isExpandedInventoryTask(task) {
+				continue
+			}
 			agentName := strings.ToLower(strings.TrimSpace(task.Agent))
 			if task.Action == nil && hasDone[agentName] && !hasUnfinished[agentName] {
 				duplicates = append(duplicates, task.Agent)

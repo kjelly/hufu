@@ -1433,6 +1433,25 @@ MCP native action 的圖片成果可選擇 `source_kind: "runtime_media"`，並�
 應使用 `x-hufu-evidence-inputs` 的 `runtime_owned: true` 綁定，native 輸出
 使用 `x-hufu-runtime-inputs`；不可要求模型重抄，也不可由模型覆寫。
 
+常數可宣告為 `{"target":"/record/kind","source_kind":"const"}`。目標屬性必須
+在 JSON Schema 宣告 `const`，由 runtime 直接填值。若 receipt-verified 輸入
+包含成功狀態和摘要，可用 `"x-hufu-runtime-completion":"/completion"` 指定該
+輸入物件。runtime 從物件的 `status` 和 `summary` 填入結果外層，並在驗證及
+重放時比對。模型提交已完成的工作時省略這兩個外層欄位。若工作無法完成，
+模型可另提 `blocked`、`failed` 或 `partial`，在 `summary` 說明原因並省略 payload。
+
+啟用靜態目標契約綁定的團隊可在任務上宣告 `evidence-inventory`。`task-id`
+及 `output` 選擇已完成 native action 的收據驗證輸出。`ids-pointer` 選擇 JSON
+字串陣列，`hashes-pointer` 選擇含 `task_id` 及 `payload_sha256` 的物件陣列。
+`max-sources` 限制所選來源數。宣告 `goal` 並以 `{source_task_id}` 引用來源
+可依序展開一份來源一個任務，每筆自動設定一個證據來源。單獨請求此契約
+即可展開。runtime 保存收據識別、來源雜湊和子任務，空清單產生零個子任務，
+重啟後既有任務沿用原綁定。
+
+聚合契約用 `from-fan-out` 指向同一收據來源的展開契約。它的
+`ids-pointer` 選擇完整來源清單，runtime 另加每個必要來源唯一一份已接受
+的子任務結果。協調器只需請求靜態契約，`evidence_from` 由 runtime 組裝。
+
 結構錯誤會附上 `code`、`pointer`、`expected` 診斷。Pointer 相對於完整
 `submit_result` 參數，例如 `/structured_payload/findings/0/verdict`。
 有效 JSON object、具備綁定契約及工作區且不超過 256 KiB 的拒絕提交，可保存為

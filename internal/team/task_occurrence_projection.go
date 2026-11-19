@@ -58,6 +58,7 @@ type TaskOccurrenceProjection struct {
 	Verify                        string
 	VerifyMode                    string
 	VerifySpec                    *VerificationSpec
+	EvidenceInventoryBinding      *EvidenceInventoryBinding `json:"EvidenceInventoryBinding,omitempty"`
 	WorksetBinding                *WorksetBinding
 	WorksetReceipt                *WorksetExpansionReceipt
 	MaxRetries                    int
@@ -148,7 +149,8 @@ func newTaskOccurrenceProjection(item *TodoItem) (TaskOccurrenceProjection, erro
 		ContextFiles: append([]string(nil), item.ContextFiles...), Requires: append([]string(nil), item.Requires...),
 		DependsOn: append([]string(nil), item.DependsOn...), OrderAfter: append([]string(nil), item.OrderAfter...), OnFailure: item.OnFailure,
 		Verify: item.Verify, VerifyMode: item.VerifyMode, VerifySpec: cloneVerificationSpecPtr(item.VerifySpec),
-		WorksetBinding: cloneWorksetBinding(item.WorksetBinding), WorksetReceipt: cloneWorksetReceipt(item.WorksetReceipt),
+		EvidenceInventoryBinding: item.EvidenceInventoryBinding.clone(),
+		WorksetBinding:           cloneWorksetBinding(item.WorksetBinding), WorksetReceipt: cloneWorksetReceipt(item.WorksetReceipt),
 		DynamicToolAuthorization: cloneDynamicToolAuthorizationSnapshot(item.DynamicToolAuthorization),
 		ResourceScopeSnapshot:    cloneTaskResourceScopeSnapshot(item.ResourceScopeSnapshot),
 		ResultContract:           item.ResultContract.clone(),
@@ -194,7 +196,8 @@ func taskOccurrenceProjectionFromTaskDef(task TaskDef, runtimeID string) (TaskOc
 	goal := task.Goal
 	desc := goal
 	item := todoItemFromSpec(TodoSpec{
-		PlanTaskID: task.ID, PlanFirst: task.PlanFirst, PlanID: task.PlanID, Phase: task.Phase,
+		EvidenceInventoryBinding: task.EvidenceInventoryBinding.clone(),
+		PlanTaskID:               task.ID, PlanFirst: task.PlanFirst, PlanID: task.PlanID, Phase: task.Phase,
 		Action: cloneActionPtr(task.Action), ActionInputBindings: append([]ActionInputBinding(nil), task.ActionInputBindings...), RunInputSnapshotID: task.RunInputSnapshotID, RunInputSnapshotHash: task.RunInputSnapshotHash, MediaBinding: task.MediaBinding.Clone(), MediaInputDigest: task.MediaInputDigest,
 		MaterializedActionPayloadHash: task.MaterializedActionPayloadHash, BoundInputs: cloneStringMap(task.BoundInputs),
 		InvariantVerification: task.InvariantVerification, ContractID: task.ContractID, ContractHash: task.ContractHash,
@@ -271,6 +274,7 @@ func compareTaskDefWithTodoOccurrence(task TaskDef, item *TodoItem, indexByID ma
 	// the durable execution contract.
 	task.Pipeline = false
 	task.FanOut = nil
+	task.EvidenceInventory = nil
 	want.Pipeline = false
 	task.PlanID = ""
 	want.PlanID = ""

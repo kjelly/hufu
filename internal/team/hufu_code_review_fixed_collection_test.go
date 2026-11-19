@@ -18,8 +18,8 @@ func TestHufuCodeReviewRuntimeOwnsAll51GapIdentities(t *testing.T) {
 	session := loadHufuCodeReviewTeam(t)
 	c := newBudgetCoordinator(t)
 	c.session.ResultContracts = session.ResultContracts
-	sourceSchema := session.ResultContracts["schemas/review-v1.json"]
-	reportSchema := session.ResultContracts["schemas/report-v2.json"]
+	sourceSchema := hufuCodeReviewLegacySchema(t, session, "schemas/review-v1.json")
+	reportSchema := hufuCodeReviewLegacySchema(t, session, "schemas/report-v2.json")
 	if sourceSchema == nil || reportSchema == nil {
 		t.Fatal("loaded team lacks its review/report contracts")
 	}
@@ -28,7 +28,7 @@ func TestHufuCodeReviewRuntimeOwnsAll51GapIdentities(t *testing.T) {
 	for i, count := range []int{25, 24, 2} {
 		schema, lens := sourceSchema, "general"
 		if i == 2 {
-			schema, lens = session.ResultContracts["schemas/documentation-review-v1.json"], "documentation-risk"
+			schema, lens = hufuCodeReviewLegacySchema(t, session, "schemas/documentation-review-v1.json"), "documentation-risk"
 		}
 		gaps := make([]any, 0, count)
 		for j := range count {
@@ -161,8 +161,8 @@ func TestHufuCodeReviewEmptyCritiqueOwnsSource(t *testing.T) {
 			t.Cleanup(func() { _ = store.Close() })
 			store.SetBranchID("main")
 			c.eventStore, c.eventJournal = store, eventStoreJournal{store: store}
-			sourceSchema := session.ResultContracts[tc.schema]
-			criticSchema := session.ResultContracts["schemas/critique-v2.json"]
+			sourceSchema := hufuCodeReviewLegacySchema(t, session, tc.schema)
+			criticSchema := hufuCodeReviewLegacySchema(t, session, "schemas/critique-v2.json")
 			sourceRef, criticRef := sourceSchema.ref(true), criticSchema.ref(true)
 			source := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", ResultContract: &sourceRef, WorksetBinding: &WorksetBinding{Bindings: map[string]string{"reference_candidate_ids": "[]"}}}})[0]
 			if tc.name == "documentation" {
@@ -240,7 +240,7 @@ func TestHufuCodeReviewEmptyCritiqueOwnsSource(t *testing.T) {
 			// stored report must preserve both complete accepted records and hashes.
 			item.Status = TaskDone
 			item.TypedResult = &TaskResult{TaskID: item.ID, Status: TaskResultStatusSuccess, StructuredPayload: result}
-			reportRef := session.ResultContracts["schemas/report-v2.json"].ref(true)
+			reportRef := hufuCodeReviewLegacySchema(t, session, "schemas/report-v2.json").ref(true)
 			reportItem := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "synthesizer", ResultContract: &reportRef, EvidenceFrom: []string{source.ID, item.ID}}})[0]
 			reportValue, err := decodeResultContractJSON([]byte(hufuCodeReviewReportFixture))
 			if err != nil {
@@ -370,8 +370,8 @@ func TestHufuCodeReviewCriticSubmitsOnlyDecisionsForAllFindings(t *testing.T) {
 			session := loadHufuCodeReviewTeam(t)
 			c := newBudgetCoordinator(t)
 			c.session.ResultContracts = session.ResultContracts
-			sourceSchema := session.ResultContracts["schemas/review-v1.json"]
-			// The active team uses v2 bound decisions. Retain v1 submission
+			sourceSchema := hufuCodeReviewLegacySchema(t, session, "schemas/review-v1.json")
+			// The active team uses v3 bound decisions. Retain v1 submission
 			// compatibility coverage for both local and external workers.
 			criticSchema, err := compileResultContractSchema(hufuCodeReviewTeamDir(t), "schemas/critique-v1.json")
 			if err != nil {
@@ -507,7 +507,14 @@ func TestHufuCodeReviewContractSourcesReachCritiqueAndReport(t *testing.T) {
 				for i := range count {
 					findings[i] = map[string]any{"summary": fmt.Sprintf("finding %d", i), "detail": "bounded observation", "severity": "info", "location": "doc.md:1", "evidence": []any{"sha256-" + strings.Repeat("a", 64)}, "requires_critique": false}
 				}
-				raw, err := json.Marshal(map[string]any{"record": map[string]any{"kind": "review", "review_revision": "head", "workset_key": key, "lens": lens, "findings": findings, "gaps": []any{map[string]any{"description": "bounded review", "missing_evidence": "caller", "kind": "semantic_uncertainty", "requested_evidence": []any{}, "limitations": []any{}}}, "invariant_assessments": []any{}, "reference_assessments": []any{}}})
+				record := map[string]any{"findings": findings, "gaps": []any{map[string]any{"description": "bounded review", "missing_evidence": "caller", "kind": "semantic_uncertainty", "requested_evidence": []any{}, "limitations": []any{}}}, "invariant_assessments": []any{}, "reference_assessments": []any{}}
+				claims := map[string]any{"record": record}
+				raw, err := json.Marshal(claims)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sources := map[string]any{"/record/kind": "review", "/record/review_revision": "head", "/record/workset_key": key, "/record/lens": lens}
+				raw, err = assembleResultRuntimeInputs(raw, schema.runtimeInputs, sources)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -516,13 +523,21 @@ func TestHufuCodeReviewContractSourcesReachCritiqueAndReport(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				record["kind"] = "review"
+				override, err := json.Marshal(claims)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := assembleResultRuntimeInputs(override, schema.runtimeInputs, sources); err == nil || !strings.Contains(err.Error(), "/record/kind") {
+					t.Fatalf("source accepted a manual kind override: %v", err)
+				}
 				source := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: task.Agent, ResultContract: &ref}})[0]
 				source.Status = TaskDone
 				source.TypedResult = &TaskResult{TaskID: source.ID, Status: TaskResultStatusCompletedWithGaps, StructuredPayload: payload}
 				for _, consumer := range []struct {
 					schema string
 					rows   int
-				}{{"schemas/critique-v2.json", count}, {"schemas/report-v2.json", 1}} {
+				}{{"schemas/critique-v3.json", count}, {"schemas/report-v3.json", 1}} {
 					consumerRef := session.ResultContracts[consumer.schema].ref(true)
 					item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "consumer", ResultContract: &consumerRef, EvidenceFrom: []string{source.ID}}})[0]
 					plans, err := c.fixedCollectionPlans(item.ID)

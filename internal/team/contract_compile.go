@@ -111,6 +111,7 @@ func CompileInitialTaskContracts(session *TeamSession, tasks []TaskDef) ([]TaskD
 		bound[i].Phase = contract.Phase
 		bound[i].Action = cloneActionPtr(contract.Action)
 		bound[i].FanOut = cloneFanOutSpec(contract.FanOut)
+		bound[i].EvidenceInventory = contract.EvidenceInventory
 		bound[i].Optional = contract.Optional
 		bound[i].InvariantVerification = contract.InvariantVerification
 		bound[i].OnFailureClasses = append([]TaskFailureClass(nil), contract.OnFailureClasses...)
@@ -201,6 +202,7 @@ func CompileTaskGoalContracts(session *TeamSession, tasks []TaskDef) ([]TaskDef,
 		bound[i].Phase = contract.Phase
 		bound[i].Action = cloneActionPtr(contract.Action)
 		bound[i].FanOut = cloneFanOutSpec(contract.FanOut)
+		bound[i].EvidenceInventory = contract.EvidenceInventory
 		bound[i].Optional = contract.Optional
 		bound[i].InvariantVerification = contract.InvariantVerification
 		bound[i].OnFailureClasses = append([]TaskFailureClass(nil), contract.OnFailureClasses...)
@@ -379,7 +381,8 @@ func effectiveContractHash(id, agent string, execution ExecutionContract, output
 		DependsOnContracts    []string                  `json:"depends_on_contracts,omitempty"`
 		OnFailureContract     string                    `json:"on_failure_contract,omitempty"`
 		DependencyResultView  *DependencyResultViewSpec `json:"dependency_result_view,omitempty"`
-	}{id, effectiveTaskContractRevision, agent, execution, outputMode, sideEffect, recovery, maxRetries, actionContractIdentity(action), cloneFanOutSpec(fanOut), optional, "", nil, nil, nil, nil, nil, nil, nil, "", nil, nil, "", nil}
+		EvidenceInventory     *EvidenceInventorySpec    `json:"evidence_inventory,omitempty"`
+	}{id, effectiveTaskContractRevision, agent, execution, outputMode, sideEffect, recovery, maxRetries, actionContractIdentity(action), cloneFanOutSpec(fanOut), optional, "", nil, nil, nil, nil, nil, nil, nil, "", nil, nil, "", nil, nil}
 	if len(evidence) > 0 {
 		declared := evidence[0]
 		view, err := declared.DependencyResultView.normalized()
@@ -387,6 +390,7 @@ func effectiveContractHash(id, agent string, execution ExecutionContract, output
 			return "", err
 		}
 		payload.DependencyResultView = view
+		payload.EvidenceInventory = declared.EvidenceInventory
 		payload.Revision = dependencyContractRevision(view)
 		payload.DependsOnContracts = append([]string(nil), declared.DependsOnContracts...)
 		payload.OnFailureContract = declared.OnFailureContract

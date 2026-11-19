@@ -707,9 +707,8 @@ func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, d
 		if item != nil && (item.MediaBinding != nil || item.MediaInputDigest != "" || runtimeMediaHash(item.TypedResult) != "") {
 			continue
 		}
-		// A catalog task's goal is display text; its identity is the catalog
-		// binding, so it never suppresses an ordinary task.
-		if item == nil || strings.ToLower(item.Agent) != agentKey || item.CatalogAction != nil {
+		// Catalog and inventory tasks are identified by their bindings.
+		if item == nil || strings.ToLower(item.Agent) != agentKey || item.CatalogAction != nil || item.EvidenceInventoryBinding != nil {
 			continue
 		}
 
@@ -779,6 +778,10 @@ func (c *Coordinator) findExistingTodoDuplicate(ctx context.Context, agentKey, d
 	return &duplicateTodoMatch{Item: item, Reason: reason}
 }
 
+func (c *Coordinator) taskRequiresOwnEvidence(ctx context.Context, task TaskDef) bool {
+	return task.EvidenceInventoryBinding != nil || c.taskNeedsOwnMediaExecution(ctx, task)
+}
+
 func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) ([]string, map[int]bool, map[int]*duplicateTodoMatch) {
 	var warnings []string
 	duplicates := make(map[int]bool)
@@ -787,7 +790,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 	// First pass: build local counts for this batch to handle duplicates within the batch
 	localCounts := make(map[string]int)
 	for _, t := range tasks {
-		if c.taskNeedsOwnMediaExecution(ctx, t) || t.InvariantVerification != "" || t.CatalogAction != nil {
+		if c.taskRequiresOwnEvidence(ctx, t) || t.InvariantVerification != "" || t.CatalogAction != nil {
 			continue
 		}
 		desc := t.Goal
@@ -804,7 +807,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 	// Track how many we've seen in this batch so far (for in-batch dedup: first instance proceeds, rest are duplicates)
 	batchSeen := make(map[string]int)
 	for i, t := range tasks {
-		if c.taskNeedsOwnMediaExecution(ctx, t) || t.InvariantVerification != "" || t.CatalogAction != nil {
+		if c.taskRequiresOwnEvidence(ctx, t) || t.InvariantVerification != "" || t.CatalogAction != nil {
 			continue
 		}
 		desc := t.Goal
@@ -831,7 +834,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 
 	// Increment global counts for all non-duplicate tasks
 	for i, t := range tasks {
-		if duplicates[i] || c.taskNeedsOwnMediaExecution(ctx, t) || t.InvariantVerification != "" || t.CatalogAction != nil {
+		if duplicates[i] || c.taskRequiresOwnEvidence(ctx, t) || t.InvariantVerification != "" || t.CatalogAction != nil {
 			continue
 		}
 		desc := t.Goal
@@ -845,7 +848,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 
 	// Third pass: current todo-list duplicate check (active work and recent failures).
 	for i, t := range tasks {
-		if duplicates[i] || c.taskNeedsOwnMediaExecution(ctx, t) || t.InvariantVerification != "" || t.CatalogAction != nil {
+		if duplicates[i] || c.taskRequiresOwnEvidence(ctx, t) || t.InvariantVerification != "" || t.CatalogAction != nil {
 			continue
 		}
 		desc := t.Goal
@@ -866,7 +869,7 @@ func (c *Coordinator) checkDuplicateTasks(ctx context.Context, tasks []TaskDef) 
 	// duplicate of last run's work.
 	if !c.ExecutionProfile().DisableSemanticDedup {
 		for i, t := range tasks {
-			if duplicates[i] || c.taskNeedsOwnMediaExecution(ctx, t) || t.InvariantVerification != "" || t.CatalogAction != nil {
+			if duplicates[i] || c.taskRequiresOwnEvidence(ctx, t) || t.InvariantVerification != "" || t.CatalogAction != nil {
 				continue
 			}
 			desc := t.Goal

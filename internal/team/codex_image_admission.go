@@ -80,7 +80,7 @@ func (p *CodexSubagentProvider) prepareImageAttempt(ctx context.Context, request
 		DeveloperInstructions string           `json:"developer_instructions"`
 		Input                 []codexUserInput `json:"input"`
 		OutputSchema          any              `json:"output_schema"`
-	}{codexWorkerDeveloperInstructions, codexImageInputs(codexImageProjectionPath(c.artifactStoreRootPath(), projectionHash), request.Prompt, item.MediaBinding.Refs), codexWorkerResultProposalSchemaForProjection(projectionForContract(request.resultContractSchema))})
+	}{codexWorkerDeveloperInstructions, codexImageInputs(codexImageProjectionPath(c.artifactStoreRootPath(), projectionHash), request.Prompt, item.MediaBinding.Refs), codexWorkerResultSchema(projectionForContract(request.resultContractSchema), hasRuntimeCompletion(request.resultContractSchema))})
 	if err != nil {
 		return nil, err
 	}
