@@ -102,7 +102,7 @@ func TestContractRecoveryInputPolicyPreservesFrozenEvidence(t *testing.T) {
 			if err := fresh.resolveRunInputsForInvocation(WithSessionResume(t.Context()), "continue"); err != nil {
 				t.Fatal(err)
 			}
-			if err := fresh.validateRecoveredArtifactOrigin(retained.TypedResult.Artifacts[0], retained.ID, retained.TypedResult); err != nil {
+			if err := fresh.validateRecoveredArtifactOrigin(t.Context(), retained.TypedResult.Artifacts[0], retained.ID, retained.TypedResult); err != nil {
 				t.Fatalf("retained artifact origin: %v", err)
 			}
 			if err := fresh.validateResumeSources(WithSessionResume(t.Context())); err != nil {

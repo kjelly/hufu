@@ -8,7 +8,7 @@ import (
 
 func (c *Coordinator) recoveredTaskOutputOrigins(items []*TodoItem) (map[string]string, error) {
 	request := EvidenceBuildRequest{RunID: coordinatorRuntimeRunID(c), Workspace: c.artifactStoreRootPath(), Items: items}
-	if err := c.bindRecoveredEvidence(&request); err != nil {
+	if err := c.bindRecoveredEvidence(context.Background(), &request); err != nil {
 		return nil, err
 	}
 	return request.RecoveredTaskRuns, nil
@@ -31,13 +31,13 @@ func (c *Coordinator) runtimeActionRecoveryOrigins() (map[string]string, error) 
 
 // validateRecoveredArtifactOrigin uses the same selected-lineage authority as
 // terminal evidence. Loading a receipt or an old result alone grants nothing.
-func (c *Coordinator) validateRecoveredArtifactOrigin(ref ArtifactRef, producerTaskID string, result *TaskResult) error {
+func (c *Coordinator) validateRecoveredArtifactOrigin(ctx context.Context, ref ArtifactRef, producerTaskID string, result *TaskResult) error {
 	item := c.todoItemByID(producerTaskID)
 	if item == nil || item.Status != TaskDone || !sameCanonicalEvidence(item.TypedResult, result) {
 		return fmt.Errorf("artifact producer is not a retained canonical result")
 	}
 	request := EvidenceBuildRequest{RunID: c.executionRunID, Workspace: c.artifactStoreRootPath(), Items: []*TodoItem{item}}
-	if err := c.bindRecoveredEvidence(&request); err != nil {
+	if err := c.bindRecoveredEvidence(ctx, &request); err != nil {
 		return err
 	}
 	if request.RecoveredTaskRuns[producerTaskID] != ref.RunID {
@@ -48,7 +48,7 @@ func (c *Coordinator) validateRecoveredArtifactOrigin(ref ArtifactRef, producerT
 	if receipt == nil || receipt.RunID != ref.RunID || receipt.Attempt != ref.Attempt || receipt.ProducerID != ref.Agent {
 		return fmt.Errorf("artifact origin differs from the original successful receipt")
 	}
-	return c.validateCompletedResumeEvidence(context.Background(), item, snapshot)
+	return c.validateCompletedResumeEvidence(ctx, item, snapshot)
 }
 
 // An expansion can outlive its invocation, but only its exact canonical
@@ -58,15 +58,32 @@ func (c *Coordinator) validateRecoveredWorksetReceipt(ctx context.Context, recei
 	if snapshot == nil || ValidateRunInputSnapshot(snapshot) != nil {
 		return fmt.Errorf("workset recovery has no selected frozen inputs")
 	}
-	lineage, err := c.dependencyViewLineage(ctx)
-	if err != nil {
+	if err := context.Cause(ctx); err != nil {
 		return err
 	}
-	items, err := ReplayTodoList(lineage)
+	items, err := c.recoveredWorksetTasks(ctx)
 	if err != nil {
 		return err
 	}
 	return validateRecoveredWorksetReplay(snapshot, items, receipt, consumer, c.todoItemByID)
+}
+
+func (c *Coordinator) recoveredWorksetTasks(ctx context.Context) ([]*TodoItem, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	if replay := c.recoveryEvidenceReplay(ctx); replay != nil {
+		return replay.worksetTasks()
+	}
+	return c.loadRecoveredWorksetTasks(ctx)
+}
+
+func (c *Coordinator) loadRecoveredWorksetTasks(ctx context.Context) ([]*TodoItem, error) {
+	lineage, err := c.dependencyViewLineage(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return ReplayTodoList(lineage)
 }
 
 func validateRecoveredWorksetReplay(snapshot *RunInputSnapshot, items []*TodoItem, receipt *WorksetExpansionReceipt, consumer *TodoItem, currentTask func(string) *TodoItem) error {

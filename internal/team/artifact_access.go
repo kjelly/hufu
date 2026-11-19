@@ -289,7 +289,7 @@ func (c *Coordinator) authorizedArtifactRef(ctx context.Context, id string) (Art
 			continue
 		}
 		if ref, ok := artifactRefByID(result, id); ok {
-			if err := c.validateCurrentProducerArtifactOccurrence(ref, item.ID, result); err != nil {
+			if err := c.validateCurrentProducerArtifactOccurrence(ctx, ref, item.ID, result); err != nil {
 				continue
 			}
 			return ref, item.ID, true
@@ -543,11 +543,7 @@ func (c *Coordinator) newArtifactInputAuthorizer(ctx context.Context, items []*T
 	}
 	receipts, conflicts := collectWorksetReceipts(visible)
 	replay := sync.OnceValues(func() ([]*TodoItem, error) {
-		lineage, err := c.dependencyViewLineage(ctx)
-		if err != nil {
-			return nil, err
-		}
-		return ReplayTodoList(lineage)
+		return c.recoveredWorksetTasks(ctx)
 	})
 	return &artifactInputAuthorizer{coordinator: c, ctx: ctx, tasks: tasks, receipts: receipts, conflicts: conflicts,
 		replay: replay, origins: make(map[artifactProducerOccurrence]struct{})}
@@ -597,7 +593,7 @@ func (v *artifactInputAuthorizer) validateProducer(ref ArtifactRef, producer *To
 	}
 	origin := artifactProducerOccurrence{ref.RunID, ref.TaskID, ref.Attempt, ref.Agent}
 	if _, validated := v.origins[origin]; !validated {
-		if err := c.validateRecoveredArtifactOrigin(ref, producer.ID, producer.TypedResult); err != nil {
+		if err := c.validateRecoveredArtifactOrigin(v.ctx, ref, producer.ID, producer.TypedResult); err != nil {
 			return fmt.Errorf("belongs to run %q, want current run %q or an admitted recovery source: %w", ref.RunID, c.executionRunID, err)
 		}
 		v.origins[origin] = struct{}{}

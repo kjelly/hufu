@@ -38,7 +38,7 @@ func TestTaskTranscriptArtifactCarriesProducerAgent(t *testing.T) {
 			}
 			c := &Coordinator{executionRunID: "run-1"}
 			for _, dependencyRef := range artifactRefsFromTaskResult(result) {
-				err := c.validateCurrentProducerArtifactOccurrence(dependencyRef, "1", result)
+				err := c.validateCurrentProducerArtifactOccurrence(t.Context(), dependencyRef, "1", result)
 				if gotValid := err == nil; gotValid != tc.wantValid {
 					t.Fatalf("validateCurrentProducerArtifactOccurrence(%s) = %v, want valid=%v", dependencyRef.ID, err, tc.wantValid)
 				}

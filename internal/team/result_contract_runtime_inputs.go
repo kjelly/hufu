@@ -1,6 +1,7 @@
 package team
 
 import (
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"reflect"
@@ -142,6 +143,10 @@ func validateRuntimeInputSources(session *TeamSession, contracts map[string]*Com
 }
 
 func (c *Coordinator) resultRuntimeInputValues(compiled *CompiledResultContract, taskID string) (map[string]any, error) {
+	return c.resultRuntimeInputValuesWithContext(context.Background(), compiled, taskID)
+}
+
+func (c *Coordinator) resultRuntimeInputValuesWithContext(ctx context.Context, compiled *CompiledResultContract, taskID string) (map[string]any, error) {
 	if compiled == nil || len(compiled.runtimeInputs) == 0 {
 		return nil, nil
 	}
@@ -158,7 +163,7 @@ func (c *Coordinator) resultRuntimeInputValues(compiled *CompiledResultContract,
 				return nil, fmt.Errorf("workset runtime input requires its owning task")
 			}
 			if worksetBindings == nil {
-				worksetBindings, err = c.resultWorksetBindingValues(taskID)
+				worksetBindings, err = c.resultWorksetBindingValues(ctx, taskID)
 			}
 			if err == nil {
 				binding, ok := worksetBindings[spec.Output]

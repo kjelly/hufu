@@ -29,7 +29,8 @@ func (c *Coordinator) expandStructuredFanOutTask(task TaskDef) ([]TaskDef, error
 	if strings.TrimSpace(spec.GoalTemplate) == "" {
 		return nil, fmt.Errorf("goal_template is required")
 	}
-	data, source, err := c.readStructuredWorksetSource(task)
+	ctx := context.Background()
+	data, source, err := c.readStructuredWorksetSource(ctx, task)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +38,7 @@ func (c *Coordinator) expandStructuredFanOutTask(task TaskDef) ([]TaskDef, error
 	if err != nil {
 		return nil, err
 	}
-	manifest, err = c.validateWorksetInputs(manifest, spec.SourceArtifact.TaskID)
+	manifest, err = c.validateWorksetInputs(ctx, manifest, spec.SourceArtifact.TaskID)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +73,10 @@ func (c *Coordinator) expandStructuredFanOutTask(task TaskDef) ([]TaskDef, error
 	return expanded, nil
 }
 
-func (c *Coordinator) readStructuredWorksetSource(task TaskDef) ([]byte, ArtifactRef, error) {
+func (c *Coordinator) readStructuredWorksetSource(ctx context.Context, task TaskDef) ([]byte, ArtifactRef, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, ArtifactRef{}, err
+	}
 	spec := task.FanOut
 	if strings.TrimSpace(spec.SourceArtifact.TaskID) != "" || strings.TrimSpace(spec.SourceArtifact.Artifact) != "" {
 		if c == nil || c.session == nil {
@@ -94,7 +98,7 @@ func (c *Coordinator) readStructuredWorksetSource(task TaskDef) ([]byte, Artifac
 		if ref.TaskID != "" && ref.TaskID != runtimeTaskID {
 			return nil, ArtifactRef{}, fmt.Errorf("source_artifact %q has mismatched producer task", ref.ID)
 		}
-		if err := c.validateCurrentProducerArtifactOccurrence(ref, runtimeTaskID, result); err != nil {
+		if err := c.validateCurrentProducerArtifactOccurrence(ctx, ref, runtimeTaskID, result); err != nil {
 			return nil, ArtifactRef{}, fmt.Errorf("source_artifact %q has invalid current producer occurrence: %w", ref.ID, err)
 		}
 		currentOccurrence := ref
@@ -103,12 +107,12 @@ func (c *Coordinator) readStructuredWorksetSource(task TaskDef) ([]byte, Artifac
 			return nil, ArtifactRef{}, err
 		}
 		sourceID := ref.ID
-		ref, err = resolveWorksetArtifactContent(context.Background(), store, ref)
+		ref, err = resolveWorksetArtifactContent(ctx, store, ref)
 		if err != nil {
 			return nil, ArtifactRef{}, fmt.Errorf("source_artifact %q failed integrity verification: %w", sourceID, err)
 		}
 		ref = artifactContentWithCurrentOccurrence(ref, currentOccurrence)
-		reader, err := store.Open(context.Background(), ref.ID)
+		reader, err := store.Open(ctx, ref.ID)
 		if err != nil {
 			return nil, ArtifactRef{}, err
 		}
@@ -144,7 +148,7 @@ func (c *Coordinator) readStructuredWorksetSource(task TaskDef) ([]byte, Artifac
 		if storeErr != nil {
 			return nil, ArtifactRef{}, storeErr
 		}
-		putResult, putErr := store.Put(context.Background(), PutArtifactRequest{SourcePath: spec.Source, Path: spec.Source, Kind: "workset_manifest", RunID: c.executionRunID, TaskID: task.ID})
+		putResult, putErr := store.Put(ctx, PutArtifactRequest{SourcePath: spec.Source, Path: spec.Source, Kind: "workset_manifest", RunID: c.executionRunID, TaskID: task.ID})
 		if putErr != nil {
 			return nil, ArtifactRef{}, fmt.Errorf("snapshot workset source: %w", putErr)
 		}
@@ -197,7 +201,7 @@ func normalizeStructuredWorkset(data []byte) (WorksetManifest, error) {
 	return manifest, nil
 }
 
-func (c *Coordinator) validateWorksetInputs(manifest WorksetManifest, producerTaskReference string) (WorksetManifest, error) {
+func (c *Coordinator) validateWorksetInputs(ctx context.Context, manifest WorksetManifest, producerTaskReference string) (WorksetManifest, error) {
 	if c == nil || c.session == nil {
 		return manifest, nil
 	}
@@ -223,6 +227,9 @@ func (c *Coordinator) validateWorksetInputs(manifest WorksetManifest, producerTa
 	// every input's immutable bytes below. Nothing survives into another call.
 	validatedOrigins := make(map[artifactProducerOccurrence]bool)
 	for itemIndex := range manifest.Items {
+		if err := context.Cause(ctx); err != nil {
+			return WorksetManifest{}, err
+		}
 		for inputIndex := range manifest.Items[itemIndex].Inputs {
 			input := manifest.Items[itemIndex].Inputs[inputIndex]
 			var declaredRef ArtifactRef
@@ -237,7 +244,7 @@ func (c *Coordinator) validateWorksetInputs(manifest WorksetManifest, producerTa
 				}
 				origin := artifactProducerOccurrence{declaredRef.RunID, declaredRef.TaskID, declaredRef.Attempt, declaredRef.Agent}
 				if declaredRef.RunID != c.executionRunID && !validatedOrigins[origin] {
-					if err := c.validateRecoveredArtifactOrigin(declaredRef, producerTaskID, producerResult); err != nil {
+					if err := c.validateRecoveredArtifactOrigin(ctx, declaredRef, producerTaskID, producerResult); err != nil {
 						return WorksetManifest{}, fmt.Errorf("workset item %q input %q recovery origin: %w", manifest.Items[itemIndex].Key, input.ID, err)
 					}
 					validatedOrigins[origin] = true
@@ -246,7 +253,7 @@ func (c *Coordinator) validateWorksetInputs(manifest WorksetManifest, producerTa
 					return WorksetManifest{}, fmt.Errorf("workset item %q input %q has mismatched producer occurrence: %w", manifest.Items[itemIndex].Key, input.ID, occurrenceErr)
 				}
 			}
-			resolved, resolveErr := store.Resolve(context.Background(), input)
+			resolved, resolveErr := store.Resolve(ctx, input)
 			if resolveErr != nil {
 				return WorksetManifest{}, fmt.Errorf("workset item %q input %q failed integrity verification: %w", manifest.Items[itemIndex].Key, input.ID, resolveErr)
 			}
@@ -266,7 +273,7 @@ func (c *Coordinator) validateWorksetInputs(manifest WorksetManifest, producerTa
 // the current producer typed result committed. Content-addressed metadata may
 // be resolved separately, but missing provenance is never repaired from
 // coordinator state. Admitted recovery sources retain their original run.
-func (c *Coordinator) validateCurrentProducerArtifactOccurrence(ref ArtifactRef, producerTaskID string, result *TaskResult) error {
+func (c *Coordinator) validateCurrentProducerArtifactOccurrence(ctx context.Context, ref ArtifactRef, producerTaskID string, result *TaskResult) error {
 	if c == nil {
 		return fmt.Errorf("producer coordinator is missing")
 	}
@@ -274,7 +281,7 @@ func (c *Coordinator) validateCurrentProducerArtifactOccurrence(ref ArtifactRef,
 		return err
 	}
 	if ref.RunID != c.executionRunID {
-		if err := c.validateRecoveredArtifactOrigin(ref, producerTaskID, result); err != nil {
+		if err := c.validateRecoveredArtifactOrigin(ctx, ref, producerTaskID, result); err != nil {
 			return fmt.Errorf("belongs to run %q, want current run %q or an admitted recovery source: %w", ref.RunID, c.executionRunID, err)
 		}
 	}

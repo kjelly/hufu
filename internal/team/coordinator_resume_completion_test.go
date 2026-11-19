@@ -33,6 +33,48 @@ func TestResumePreservesWatchdogCancellation(t *testing.T) {
 	}
 }
 
+func TestResumeDoesNotLaunchTaskWithUnacceptedDependency(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		evidence   bool
+		wantStatus TaskStatus
+	}{
+		{name: "declared dependency", wantStatus: TaskBlocked},
+		{name: "evidence source", evidence: true, wantStatus: TaskPending},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c, producer, _, _ := resultCollectionFixture(t)
+			spec := TodoSpec{Agent: producer.Agent, Desc: "audit the accepted result", Model: producer.Model, ExecutionTarget: producer.ExecutionTarget,
+				ExecutionTopology: producer.ExecutionTopology, Recovery: RecoveryRetry, SideEffect: SideEffectNone}
+			if test.evidence {
+				spec.EvidenceFrom = []string{producer.ID}
+			} else {
+				spec.DependsOn = []string{producer.ID}
+			}
+			ids := c.taskTracker.TodoList().ReserveIDs(1)
+			projection, err := taskOccurrenceProjectionFromSpec(spec, ids[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.admitTaskOccurrence(t.Context(), projection, ids[0], 1); err != nil {
+				t.Fatal(err)
+			}
+			items, err := c.CommitTaskCreationResolved(t.Context(), []TodoSpec{spec}, ids)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.PersistFailureWithClassAndStatus(producer.Agent, producer.Desc, producer.ID, "producer failed", NeedsHuman, FailureProtocol, TaskBlocked)
+			worker := scriptWorker(textTurn("must wait for the producer"))
+			c.workerAgentOverride = worker
+			resumed, err := c.ResumeInterruptedTasks(t.Context())
+			status := c.todoItemByID(items[0].ID).Status
+			if resumed != 0 || worker.Calls() != 0 || status != test.wantStatus || (err != nil) != (test.wantStatus == TaskBlocked) {
+				t.Fatalf("resume with unaccepted source: resumed=%d calls=%d status=%s, want %s, err=%v", resumed, worker.Calls(), status, test.wantStatus, err)
+			}
+		})
+	}
+}
+
 func TestRunStopsAfterRecoveryRequiresOperator(t *testing.T) {
 	c := newTestCoordinator(t)
 	c.session.Agents["coordinator"] = &agent.AgentDef{Name: "coordinator", Role: "coordinator"}

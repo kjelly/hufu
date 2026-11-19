@@ -145,7 +145,7 @@ func (c *Coordinator) verifyWorksetSource(ctx context.Context, receipt *WorksetE
 			return fmt.Errorf("workset receipt belongs to run %q, want current run %q or an admitted recovery source: %w", receipt.RunID, c.executionRunID, err)
 		}
 	}
-	producerRef, _, err := c.currentWorksetSourceOccurrence(receipt)
+	producerRef, _, err := c.currentWorksetSourceOccurrence(ctx, receipt)
 	if err != nil {
 		return err
 	}
@@ -172,7 +172,7 @@ func (c *Coordinator) verifyWorksetSource(ctx context.Context, receipt *WorksetE
 // reference identifies the producer task. This also supports replay seams
 // where the canonical result is present in the coordinator cache without a
 // corresponding Todo projection.
-func (c *Coordinator) currentWorksetSourceOccurrence(receipt *WorksetExpansionReceipt) (ArtifactRef, string, error) {
+func (c *Coordinator) currentWorksetSourceOccurrence(ctx context.Context, receipt *WorksetExpansionReceipt) (ArtifactRef, string, error) {
 	if c == nil || receipt == nil {
 		return ArtifactRef{}, "", errors.New("workset source occurrence is unavailable")
 	}
@@ -183,7 +183,7 @@ func (c *Coordinator) currentWorksetSourceOccurrence(receipt *WorksetExpansionRe
 	if err != nil {
 		return ArtifactRef{}, "", err
 	}
-	if _, err := resolveWorksetArtifactContent(context.Background(), store, receipt.SourceArtifact); err != nil {
+	if _, err := resolveWorksetArtifactContent(ctx, store, receipt.SourceArtifact); err != nil {
 		return ArtifactRef{}, "", fmt.Errorf("source artifact %q has invalid persisted content claims: %w", receipt.SourceArtifactID, err)
 	}
 	producerTaskID := receipt.SourceArtifact.TaskID
@@ -192,10 +192,10 @@ func (c *Coordinator) currentWorksetSourceOccurrence(receipt *WorksetExpansionRe
 	if err != nil {
 		return ArtifactRef{}, "", fmt.Errorf("source artifact %q is not declared by its intended canonical producer task %q: %w", receipt.SourceArtifactID, producerTaskID, err)
 	}
-	if err := c.validateCurrentProducerArtifactOccurrence(ref, producerTaskID, result); err != nil {
+	if err := c.validateCurrentProducerArtifactOccurrence(ctx, ref, producerTaskID, result); err != nil {
 		return ArtifactRef{}, "", fmt.Errorf("source artifact %q has invalid current producer occurrence: %w", receipt.SourceArtifactID, err)
 	}
-	if _, err := resolveWorksetArtifactContent(context.Background(), store, ref); err != nil {
+	if _, err := resolveWorksetArtifactContent(ctx, store, ref); err != nil {
 		return ArtifactRef{}, "", fmt.Errorf("source artifact %q has invalid current producer content claims: %w", receipt.SourceArtifactID, err)
 	}
 	if !sameArtifactOccurrence(ref, receipt.SourceArtifact) {

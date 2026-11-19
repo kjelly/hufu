@@ -1,7 +1,9 @@
 package team
 
 import (
+	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -187,7 +189,7 @@ func TestRecoveredArtifactWorksetInputsReuseOnlyOperationLocalOriginProof(t *tes
 				manifest.Items = append(manifest.Items, WorksetItem{Key: fmt.Sprint(i), Inputs: []ArtifactRef{input}})
 			}
 			before := c.eventStore.cacheHitCount
-			if _, err := c.validateWorksetInputs(manifest, "1"); err != nil {
+			if _, err := c.validateWorksetInputs(t.Context(), manifest, "1"); err != nil {
 				t.Fatal(err)
 			}
 			// The selected lineage is replayed once for the producer, rather
@@ -208,7 +210,7 @@ func TestRecoveredArtifactWorksetInputsReuseOnlyOperationLocalOriginProof(t *tes
 				list.items[0].TypedResult.Summary = "substituted source"
 				list.mu.Unlock()
 			}
-			if _, err := c.validateWorksetInputs(manifest, "1"); err == nil {
+			if _, err := c.validateWorksetInputs(t.Context(), manifest, "1"); err == nil {
 				t.Fatal("operation-local reuse bypassed a changed source or later input")
 			}
 		})
@@ -242,6 +244,49 @@ func TestRecoveredArtifactFanInReusesLineageAcrossReviewedInputs(t *testing.T) {
 				t.Fatalf("two reviewed inputs required %d canonical event reads, want one workset replay and one producer proof", reads)
 			}
 		})
+	}
+}
+
+func TestCompletedEvidenceReusesCanonicalReplayAcrossWorksetResults(t *testing.T) {
+	c := newRecoveredArtifactCoordinator(t)
+	compiled, err := CompileResultContractDocument("workset-result.json", []byte(runtimeWorksetSchema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.session.ResultContracts[compiled.ID] = compiled
+	contract := compiled.ref(true)
+	payload, err := validateStructuredResultPayload(compiled, contract, []byte(`{"record":{"scope":"frozen-value","judgment":"accepted"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := c.taskTracker.TodoList()
+	items := list.Items()
+	for _, item := range items[1:] {
+		item.Status = TaskDone
+		item.ResultContract = &contract
+		item.TypedResult = &TaskResult{TaskID: item.ID, Agent: item.Agent, Attempt: 1, Status: TaskResultStatusSuccess, StructuredPayload: payload}
+	}
+	list.Restore(items)
+
+	before := c.eventStore.cacheHitCount
+	if err := c.validateCompletedEvidenceDeliveries(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if reads := c.eventStore.cacheHitCount - before; reads != 2 {
+		t.Fatalf("two workset results required %d event reads, want one per recovery projection", reads)
+	}
+
+	items = list.Items()
+	items[2].WorksetBinding.Bindings["label"] = "substituted later row"
+	list.Restore(items)
+	if err := c.validateCompletedEvidenceDeliveries(t.Context()); err == nil {
+		t.Fatal("a later result's changed row was accepted using the first result's proof")
+	}
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(ErrInvocationStalled)
+	before = c.eventStore.cacheHitCount
+	if err := c.validateCompletedEvidenceDeliveries(ctx); !errors.Is(err, ErrInvocationStalled) || c.eventStore.cacheHitCount != before {
+		t.Fatalf("cancelled finish should return the watchdog cause without replay, got %v", err)
 	}
 }
 

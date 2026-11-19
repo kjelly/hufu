@@ -55,6 +55,19 @@ type ResultCollectionRecoveryAssessment struct {
 	Fingerprint           string                              `json:"fingerprint"`
 }
 
+func (a *ResultCollectionRecoveryAssessment) requirePreparedLocalCommit(check func(string, error) bool) {
+	if a.Disposition == RecoveryBlocked {
+		return
+	}
+	if a.Disposition != RecoveryCommitLocal || a.AdditionalTurns != 0 {
+		check("prepared_local_commit", fmt.Errorf("failed workflow permits only a local commit of the saved claims"))
+		a.Disposition, a.AdditionalTurns = RecoveryBlocked, 0
+	} else {
+		check("prepared_local_commit", nil)
+	}
+	a.ContinuesWorkflow = false
+}
+
 func recoveryAssessmentFingerprint(a *ResultCollectionRecoveryAssessment) (string, error) {
 	copy := *a
 	copy.Fingerprint = ""
@@ -132,6 +145,7 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 	if item != nil && item.ExecutionReceipt != nil {
 		a.SourceRunID = item.ExecutionReceipt.RunID
 	}
+	var localCommitOnly bool
 	check := func(code string, err error) bool {
 		progress.checked(code)
 		entry := ResultCollectionRecoveryCheck{Code: code, Passed: err == nil}
@@ -152,6 +166,9 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 				a.AdditionalTurns = 0
 				check("stable_journal", ErrEventHeadChanged)
 			}
+		}
+		if localCommitOnly {
+			a.requirePreparedLocalCommit(check)
 		}
 		if a.Disposition == RecoveryBlocked {
 			a.ContinuesWorkflow = false
@@ -184,7 +201,7 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 	if !c.assessRecoveryLineage(ctx, item, a, check, validateCollectionRecoveryTarget) {
 		return finish()
 	}
-	_, workflowErr := resultRepairWorkflowPhase(c.collectionWorkflowSnapshot(), taskID)
+	localCommitOnly, workflowErr := resultRepairLocalCommitOnly(c.collectionWorkflowSnapshot(), taskID)
 	if !check("workflow_recovery", workflowErr) {
 		return finish()
 	}

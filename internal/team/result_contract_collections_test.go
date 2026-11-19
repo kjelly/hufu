@@ -307,7 +307,7 @@ func TestFixedCollectionProvenanceSurvivesSQLiteReplay(t *testing.T) {
 	if restored.ExecutionReceipt == nil || restored.ExecutionReceipt.ResultPayloadSHA256 != original.SHA256 {
 		t.Fatal("receipt did not bind the assembled canonical array")
 	}
-	if err := c.validateCompletedEvidenceDeliveries(); err != nil {
+	if err := c.validateCompletedEvidenceDeliveries(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	c.session.ResultContracts["decisions.json"].finalReport = template.Must(template.New("fixed").Parse("{{len .decisions}} rows"))
@@ -322,7 +322,7 @@ func TestFixedCollectionProvenanceSurvivesSQLiteReplay(t *testing.T) {
 	if err := c.taskTracker.TodoList().SetTypedResult(source.ID, source.TypedResult); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.validateCompletedEvidenceDeliveries(); err == nil {
+	if err := c.validateCompletedEvidenceDeliveries(t.Context()); err == nil {
 		t.Fatal("replayed completion accepted changed source content")
 	}
 	if _, _, err := c.renderedContractFinalReport(); err == nil {

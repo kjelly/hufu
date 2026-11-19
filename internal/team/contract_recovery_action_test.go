@@ -368,7 +368,7 @@ func testNativeActionRecoveryChild(t *testing.T, rebuild bool) {
 		t.Fatal(err)
 	}
 	retained := fresh.todoItemByID("1")
-	if err = fresh.validateRecoveredArtifactOrigin(retained.TypedResult.Artifacts[0], retained.ID, retained.TypedResult); err != nil {
+	if err = fresh.validateRecoveredArtifactOrigin(t.Context(), retained.TypedResult.Artifacts[0], retained.ID, retained.TypedResult); err != nil {
 		t.Fatal(err)
 	}
 	resumed, err := fresh.ResumeInterruptedTasks(resumeCtx)

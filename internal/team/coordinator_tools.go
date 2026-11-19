@@ -374,6 +374,17 @@ func (t *finishTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	return response, err
 }
 
+func (t *finishTool) completedEvidenceFailure(ctx context.Context) (fantasy.ToolResponse, bool, error) {
+	err := t.coordinator.validateCompletedEvidenceDeliveries(ctx)
+	if err == nil {
+		return fantasy.ToolResponse{}, false, nil
+	}
+	if cause := context.Cause(ctx); cause != nil {
+		return fantasy.ToolResponse{}, true, cause
+	}
+	return fantasy.NewTextErrorResponse("cannot finish: " + err.Error()), true, nil
+}
+
 func (t *finishTool) run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	var args struct {
 		Response               string `json:"response"`
@@ -396,8 +407,8 @@ func (t *finishTool) run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	if err := t.coordinator.requireCoordinatorImageWork(ctx); err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
-	if err := t.coordinator.validateCompletedEvidenceDeliveries(); err != nil {
-		return fantasy.NewTextErrorResponse("cannot finish: " + err.Error()), nil
+	if response, rejected, err := t.completedEvidenceFailure(ctx); rejected {
+		return response, err
 	}
 
 	if len(failedTasks) > 0 {

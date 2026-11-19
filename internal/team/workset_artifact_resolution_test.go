@@ -396,7 +396,7 @@ func TestStructuredFanOutReportsDeclarationConflict(t *testing.T) {
 	producer := producers[0]
 	input := ArtifactRef{ID: "same", SHA256: "one"}
 	c.taskResults = map[string]*TaskResult{producer.ID: {Artifacts: []ArtifactRef{input, {ID: "same", SHA256: "two"}}}}
-	_, err = c.validateWorksetInputs(WorksetManifest{Items: []WorksetItem{{Key: "one", Inputs: []ArtifactRef{input}}}}, "producer")
+	_, err = c.validateWorksetInputs(t.Context(), WorksetManifest{Items: []WorksetItem{{Key: "one", Inputs: []ArtifactRef{input}}}}, "producer")
 	if err == nil || !strings.Contains(err.Error(), "conflicting declarations") {
 		t.Fatalf("fan-out lost original conflict: %v", err)
 	}

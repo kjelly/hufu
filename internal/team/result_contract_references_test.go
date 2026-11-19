@@ -213,7 +213,7 @@ func TestReplayedResultReferenceChecksWithoutRequiredDelivery(t *testing.T) {
 				t.Fatal(err)
 			}
 			c.taskTracker = &TaskTracker{todo: &TodoList{items: items}}
-			err = c.validateCompletedEvidenceDeliveries()
+			err = c.validateCompletedEvidenceDeliveries(t.Context())
 			if (err == nil) != (name == "valid") {
 				t.Fatalf("replay reference validation: %v", err)
 			}

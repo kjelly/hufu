@@ -274,7 +274,7 @@ func TestBoundDecisionContractRevalidationPreservesAncestorScope(t *testing.T) {
 			if name == "forged_digest" {
 				payload.CollectionBindings[0].Decisions[0].BindingDigest = strings.Repeat("a", 64)
 			}
-			err = f.c.validateCompletedEvidenceDeliveries()
+			err = f.c.validateCompletedEvidenceDeliveries(t.Context())
 			if (err == nil) != (name == "retained") {
 				t.Fatalf("completed evidence revalidation: %v", err)
 			}

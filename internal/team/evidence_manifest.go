@@ -23,7 +23,7 @@ func (c *Coordinator) buildEvidenceManifest(ctx context.Context, strict bool) (*
 		RunID: runID, Workspace: c.session.Workspace,
 		Items: c.taskTracker.TodoList().Items(), Strict: strict,
 	}
-	if err := c.bindRecoveredEvidence(&req); err != nil {
+	if err := c.bindRecoveredEvidence(ctx, &req); err != nil {
 		return nil, err
 	}
 	manifest, err := c.EvidenceService().BuildRunManifest(ctx, req)

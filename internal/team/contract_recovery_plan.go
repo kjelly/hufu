@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"fmt"
+	"slices"
 )
 
 // newContractRecoveryPlan selects one explicit repair mode before evaluating
@@ -16,7 +17,8 @@ func (c *Coordinator) newContractRecoveryPlan(ctx context.Context, source *Resum
 	}
 	selected := todoItemByID(source.Session.Tasks, contractResultRepairID(ctx))
 	acceptedRepair := selected != nil && selected.Status == TaskDone
-	if !retryWork && actionRepairID == "" && !acceptedRepair && old.ConfigurationHash == current.ConfigurationHash {
+	if !retryWork && actionRepairID == "" && !acceptedRepair && old.ConfigurationHash == current.ConfigurationHash &&
+		(!metadataContractRecoveryRequested(ctx) || recoveredCollectionVerifierID(source.Session.Tasks, source.lineage, source.BranchID) == "") {
 		return nil, fmt.Errorf("result contracts are unchanged; use ordinary resume or result-only repair")
 	}
 	// The journal head protects publication against concurrent writes; the
@@ -51,6 +53,78 @@ func (c *Coordinator) newContractRecoveryPlan(ctx context.Context, source *Resum
 		}
 	}
 	return plan, nil
+}
+
+// A prepared result can be settled without re-opening a failed workflow.
+// Its repair grant pins the failed downstream verifier that remains to run.
+func recoveredCollectionVerifierID(tasks []*TodoItem, events []RunEvent, branchID string) string {
+	unresolved := UnresolvedTaskReferences(tasks)
+	if len(unresolved) != 1 {
+		return ""
+	}
+	verifier := todoItemByID(tasks, unresolved[0].ID)
+	if verifier == nil {
+		return ""
+	}
+	for _, sourceID := range verifier.DependsOn {
+		source := todoItemByID(tasks, sourceID)
+		if !failedReadOnlyCollectionVerifier(verifier, source) || !hasCommittedWorkflowCollectionRepair(source, branchID) {
+			continue
+		}
+		for _, grant := range collectionRepairGrants(source.ExecutionReceipt) {
+			if provenCollectionVerifierRetry(events, branchID, verifier, source, grant) {
+				return verifier.ID
+			}
+		}
+	}
+	return ""
+}
+
+func provenCollectionVerifierRetry(events []RunEvent, branchID string, verifier, producer *TodoItem, grant ResultRepairGrant) bool {
+	assessment := grant.Recovery
+	if !isWorkflowCollectionRepairGrant(grant, currentResultCollection(producer)) || assessment.Disposition != RecoveryCommitLocal ||
+		!slices.ContainsFunc(assessment.Checks, func(check ResultCollectionRecoveryCheck) bool {
+			return check.Code == "prepared_local_commit" && check.Passed
+		}) {
+		return false
+	}
+	i := slices.IndexFunc(events, func(event RunEvent) bool {
+		return event.ID == assessment.JournalHeadID && effectiveEventBranchID(event) == branchID
+	})
+	if i < 0 {
+		return false
+	}
+	before := ReduceToSessionData(events[:i+1])
+	localOnly, err := resultRepairLocalCommitOnly(before, producer.ID)
+	if err != nil || !localOnly {
+		return false
+	}
+	previous := todoItemByID(before.Tasks, verifier.ID)
+	checkpoint := currentResultCollection(todoItemByID(before.Tasks, producer.ID))
+	digest, err := collectionDigest(checkpoint)
+	return err == nil && digest == assessment.CheckpointSHA256 && sameResumeTaskEvidence(previous, verifier) &&
+		previous.OccurrenceRevision == verifier.OccurrenceRevision && sameCanonicalEvidence(previous.FailureEvent, verifier.FailureEvent)
+}
+
+func validateUnchangedContractVerifierRetry(tasks []*TodoItem, events []RunEvent, plan *ContractRecoveryPlan) error {
+	if plan.WorkRetry != nil || plan.ActionRepair != nil || plan.SourcePolicy != plan.Policy.ConfigurationHash {
+		return nil
+	}
+	for _, patch := range plan.Tasks {
+		if patch.Collection != nil && patch.Collection.AcceptedResult != nil {
+			return nil
+		}
+	}
+	if !plan.MetadataOnly || plan.Repaired != 0 || plan.Retried != 1 || len(plan.ContractChanges) != 0 || plan.InputPolicyUpgrade != nil {
+		return fmt.Errorf("unchanged-policy recovery requires an explicit retry proof")
+	}
+	verifierID := recoveredCollectionVerifierID(tasks, events, plan.SourceBranch)
+	for _, patch := range plan.Tasks {
+		if patch.Action == "retry" && patch.ID == verifierID {
+			return nil
+		}
+	}
+	return fmt.Errorf("unchanged-policy recovery requires the failed verifier bound to the repaired result")
 }
 
 func validContractRecoveryJournalIdentity(plan *ContractRecoveryPlan) bool {

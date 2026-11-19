@@ -157,6 +157,10 @@ func validateRequiredEvidenceContext(input WorkerContextInput, compiled Compiled
 // The canonical manifest is the durable proof of delivery, also after replay.
 // Old manifests without a dependency hash cannot prove a complete audit.
 func (c *Coordinator) validateRequiredEvidenceDelivery(todoID string, attempt int, runIDs ...string) error {
+	return c.validateRequiredEvidenceDeliveryWithContext(context.Background(), todoID, attempt, runIDs...)
+}
+
+func (c *Coordinator) validateRequiredEvidenceDeliveryWithContext(ctx context.Context, todoID string, attempt int, runIDs ...string) error {
 	if err := c.validateHistoricalResultDelivery(todoID, attempt, runIDs...); err != nil {
 		return err
 	}
@@ -170,16 +174,10 @@ func (c *Coordinator) validateRequiredEvidenceDelivery(todoID string, attempt in
 	// Schema-owned reference bindings apply independently of the opt-in
 	// context-delivery proof, including external results and replayed tasks.
 	if item.TypedResult != nil {
-		if err := c.validateResultReferenceReads(todoID, item.TypedResult); err != nil {
+		if err := c.validateResultReferenceReadsWithContext(ctx, todoID, item.TypedResult); err != nil {
 			return err
 		}
-		var err error
-		if item.Status == TaskDone {
-			err = c.validateAcceptedEvidenceInputs(todoID, item.TypedResult.StructuredPayload)
-		} else {
-			err = c.validateSubmittedEvidenceInputs(todoID, item.TypedResult.StructuredPayload)
-		}
-		if err != nil {
+		if err := c.validateEvidenceInputBindings(ctx, todoID, item.TypedResult.StructuredPayload, item.Status == TaskDone); err != nil {
 			return err
 		}
 	}
@@ -187,7 +185,10 @@ func (c *Coordinator) validateRequiredEvidenceDelivery(todoID string, attempt in
 		return nil
 	}
 	task := taskDefFromTodoItem(item)
-	results := c.dependencyResultsForTask(todoID)
+	results := c.dependencyResultsForTaskWithContext(ctx, todoID)
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	if err := validateRequiredEvidenceInputs(task, results); err != nil {
 		return err
 	}
@@ -232,20 +233,24 @@ func (c *Coordinator) validateRequiredEvidenceDelivery(todoID string, attempt in
 	return nil
 }
 
-func (c *Coordinator) validateCompletedEvidenceDeliveries() error {
+func (c *Coordinator) validateCompletedEvidenceDeliveries(ctx context.Context) error {
+	ctx = c.withRecoveryEvidenceReplay(ctx)
 	for _, item := range c.taskTracker.TodoList().Items() {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
 		if item.Status == TaskDone {
-			if err := c.validateResultReferenceReads(item.ID, item.TypedResult); err != nil {
+			if err := c.validateResultReferenceReadsWithContext(ctx, item.ID, item.TypedResult); err != nil {
 				return err
 			}
 			attempt := c.taskAttempt(item.ID)
 			if item.TypedResult != nil && item.TypedResult.Attempt > 0 {
 				attempt = item.TypedResult.Attempt
 			}
-			if err := c.validateRequiredEvidenceDelivery(item.ID, attempt); err != nil {
+			if err := c.validateRequiredEvidenceDeliveryWithContext(ctx, item.ID, attempt); err != nil {
 				return err
 			}
 		}
 	}
-	return nil
+	return context.Cause(ctx)
 }

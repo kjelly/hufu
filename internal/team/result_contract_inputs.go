@@ -148,16 +148,19 @@ func validateResultEvidenceInputs(value any, spec *resultEvidenceInputsSpec, ids
 }
 
 func (c *Coordinator) validateSubmittedEvidenceInputs(todoID string, payload *ResultPayload) error {
-	return c.validateEvidenceInputBindings(todoID, payload, false)
+	return c.validateEvidenceInputBindings(context.Background(), todoID, payload, false)
 }
 
 // Accepted results retain their recorded decision provenance across forks.
 // New submissions must still resolve decisions only in the current scope.
 func (c *Coordinator) validateAcceptedEvidenceInputs(todoID string, payload *ResultPayload) error {
-	return c.validateEvidenceInputBindings(todoID, payload, true)
+	return c.validateEvidenceInputBindings(context.Background(), todoID, payload, true)
 }
 
-func (c *Coordinator) validateEvidenceInputBindings(todoID string, payload *ResultPayload, accepted bool) error {
+func (c *Coordinator) validateEvidenceInputBindings(ctx context.Context, todoID string, payload *ResultPayload, accepted bool) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	item := c.todoItemByID(todoID)
 	if item == nil || item.ResultContract == nil {
 		return nil
@@ -179,7 +182,7 @@ func (c *Coordinator) validateEvidenceInputBindings(todoID string, payload *Resu
 	if err := validateResultWorksetInputs(value, compiled.worksetInputs, item.WorksetBinding); err != nil {
 		return err
 	}
-	runtimeInputs, err := c.resultRuntimeInputValues(compiled, todoID)
+	runtimeInputs, err := c.resultRuntimeInputValuesWithContext(ctx, compiled, todoID)
 	if err != nil {
 		return err
 	}
@@ -195,9 +198,9 @@ func (c *Coordinator) validateEvidenceInputBindings(todoID string, payload *Resu
 		return err
 	}
 	if accepted {
-		plans, err = c.resolveDecisionPlans(context.Background(), todoID, plans, payload.CollectionBindings)
+		plans, err = c.resolveDecisionPlans(ctx, todoID, plans, payload.CollectionBindings)
 	} else {
-		plans, err = c.resolveDecisionCollectionPlans(context.Background(), todoID, plans)
+		plans, err = c.resolveDecisionCollectionPlans(ctx, todoID, plans)
 	}
 	if err != nil {
 		return err
@@ -209,13 +212,16 @@ func (c *Coordinator) validateEvidenceInputBindings(todoID string, payload *Resu
 		return err
 	}
 	if compiled.evidenceReferences != nil {
-		results = c.dependencyResultsForTask(todoID)
+		results = c.dependencyResultsForTaskWithContext(ctx, todoID)
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
 	}
 	if err := validateResultEvidenceReferences(value, compiled.evidenceReferences, item.EvidenceFrom, results, nil); err != nil {
 		return err
 	}
 	if compiled.worksetPaths != nil {
-		binding, err := c.verifiedResultWorksetBinding(context.Background(), todoID)
+		binding, err := c.verifiedResultWorksetBinding(ctx, todoID)
 		if err != nil {
 			return rejectResultReferenceSource(err)
 		}

@@ -54,6 +54,48 @@ func hasCommittedWorkflowCollectionRepair(item *TodoItem, branchID string) bool 
 	})
 }
 
+// resultRepairLocalCommitOnly permits settling a prepared producer after a
+// downstream verifier ran before its source result was accepted. This does
+// not grant workflow reopening or permission to work on the failed verifier.
+func resultRepairLocalCommitOnly(session *SessionData, taskID string) (bool, error) {
+	_, workflowErr := resultRepairWorkflowPhase(session, taskID)
+	if workflowErr == nil || session == nil || session.WorkflowState != PhaseFailed {
+		return false, workflowErr
+	}
+	item := todoItemByID(session.Tasks, taskID)
+	if validateCollectionRecoveryTarget(item) != nil || !metadataReadOnlyTask(item.SideEffect, item.Execution) {
+		return false, workflowErr
+	}
+	cp := currentResultCollection(item)
+	if cp.State != ResultCollectionPrepared || item.ExecutionReceipt.RepairProvenance == nil || item.ExecutionReceipt.RepairProvenance.FailureReason != RepairFailureCommit {
+		return false, workflowErr
+	}
+	status := session.PhaseResults[item.Phase].Status
+	if status != PhaseStatusCancelled && status != PhaseStatusBlocked {
+		return false, workflowErr
+	}
+	failedConsumer := false
+	for _, peer := range session.Tasks {
+		if peer == nil || peer.ID == taskID || !isUnresolvedTaskStatus(peer.Status) {
+			continue
+		}
+		if !failedReadOnlyCollectionVerifier(peer, item) {
+			return false, workflowErr
+		}
+		failedConsumer = true
+	}
+	if !failedConsumer {
+		return false, workflowErr
+	}
+	return true, nil
+}
+
+func failedReadOnlyCollectionVerifier(verifier, producer *TodoItem) bool {
+	return verifier != nil && producer != nil && verifier.Status == TaskError && verifier.Phase == producer.Phase &&
+		verifier.Action != nil && verifier.FailureEvent != nil && verifier.FailureEvent.FailureClass == FailureVerify &&
+		metadataReadOnlyTask(verifier.SideEffect, verifier.Execution) && slices.Contains(verifier.DependsOn, producer.ID)
+}
+
 func isWorkflowCollectionRepairGrant(grant ResultRepairGrant, cp *ResultCollectionCheckpoint) bool {
 	// Reference selection repairs accepted work. It grants no authority to
 	// reopen a later phase failure, including on a descendant branch.
@@ -132,7 +174,7 @@ func (c *Coordinator) admitFailedWorkflowResultRepair(ctx context.Context) error
 	if id == "" {
 		return fmt.Errorf("workflow is failed; use an eligible explicit result-only repair or targeted reconciliation")
 	}
-	_, err := resultRepairWorkflowPhase(c.collectionWorkflowSnapshot(), id)
+	_, err := resultRepairLocalCommitOnly(c.collectionWorkflowSnapshot(), id)
 	return err
 }
 

@@ -6,12 +6,61 @@ import (
 	jsonv1 "encoding/json"
 	"encoding/json/v2"
 	"fmt"
+	"sync"
 )
+
+type recoveryEvidenceReplayKey struct{}
+
+// Recovery evidence shares immutable canonical projections within a single
+// synchronous validation. Each caller still compares its live task, receipt
+// and artifact to the replayed authority and verifies the content it reads.
+type recoveryEvidenceReplay struct {
+	owner          *Coordinator
+	store          *EventStore
+	branch         string
+	recoveryBranch string
+	collection     *collectionOriginValidation
+	runID          string
+	workspace      string
+	snapshot       *RunInputSnapshot
+	producerTasks  func() (map[string]*TodoItem, error)
+	worksetTasks   func() ([]*TodoItem, error)
+}
+
+func (c *Coordinator) withRecoveryEvidenceReplay(ctx context.Context) context.Context {
+	if c.eventStore == nil || c.recoveryEvidenceReplay(ctx) != nil {
+		return ctx
+	}
+	snapshot, _ := c.terminalRunInputs(c.executionRunID)
+	replay := &recoveryEvidenceReplay{
+		owner: c, store: c.eventStore, branch: c.eventStore.BranchID(), recoveryBranch: c.recoveryBranch,
+		collection: c.collectionOriginValidation, runID: c.executionRunID, workspace: c.artifactStoreRootPath(), snapshot: snapshot,
+	}
+	replay.producerTasks = sync.OnceValues(func() (map[string]*TodoItem, error) {
+		return c.loadRecoveredEvidenceTasks(ctx, replay.workspace, replay.snapshot)
+	})
+	replay.worksetTasks = sync.OnceValues(func() ([]*TodoItem, error) {
+		return c.loadRecoveredWorksetTasks(ctx)
+	})
+	return context.WithValue(ctx, recoveryEvidenceReplayKey{}, replay)
+}
+
+func (c *Coordinator) recoveryEvidenceReplay(ctx context.Context) *recoveryEvidenceReplay {
+	replay, _ := ctx.Value(recoveryEvidenceReplayKey{}).(*recoveryEvidenceReplay)
+	if replay == nil || replay.owner != c || replay.store != c.eventStore || replay.branch != c.eventStore.BranchID() ||
+		replay.recoveryBranch != c.recoveryBranch || replay.collection != c.collectionOriginValidation || replay.runID != c.executionRunID {
+		return nil
+	}
+	return replay
+}
 
 // bindRecoveredEvidence authorizes reuse from the selected canonical lineage,
 // never from an arbitrary receipt or an unadmitted session snapshot. Original
 // execution identities and immutable transcript contents remain unchanged.
-func (c *Coordinator) bindRecoveredEvidence(req *EvidenceBuildRequest) error {
+func (c *Coordinator) bindRecoveredEvidence(ctx context.Context, req *EvidenceBuildRequest) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	var recovered []*TodoItem
 	for _, item := range req.Items {
 		if item != nil && item.Status == TaskDone && !IsPrimaryOccurrence(item) && latestSuccessfulExecutionReceipt(item, req.RunID) == nil {
@@ -27,41 +76,20 @@ func (c *Coordinator) bindRecoveredEvidence(req *EvidenceBuildRequest) error {
 		// behavior; loading a session alone does not authorize cross-run reuse.
 		return nil
 	}
-	events, err := c.eventStore.ReadEvents()
+	var byID map[string]*TodoItem
+	var err error
+	if replay := c.recoveryEvidenceReplay(ctx); replay != nil && replay.workspace == req.Workspace && sameCanonicalEvidence(replay.snapshot, snapshot) {
+		byID, err = replay.producerTasks()
+	} else {
+		byID, err = c.loadRecoveredEvidenceTasks(ctx, req.Workspace, snapshot)
+	}
 	if err != nil {
 		return err
-	}
-	tree, err := c.loadJournalSessionTree(context.Background(), req.Workspace)
-	if err != nil {
-		return err
-	}
-	lineage, err := ProjectValidatedEventsForBranch(events, tree, c.eventStore.BranchID())
-	if err != nil {
-		return err
-	}
-	foundInputs := false
-	for _, event := range lineage {
-		if event.Type != string(EventRunInputsResolved) || event.RunID != snapshot.RunID {
-			continue
-		}
-		var source RunInputSnapshot
-		if json.Unmarshal(event.Payload, &source) == nil && ValidateRunInputSnapshot(&source) == nil && sameCanonicalEvidence(&source, snapshot) {
-			foundInputs = true
-			break
-		}
-	}
-	if !foundInputs {
-		return fmt.Errorf("evidence recovery inputs have no matching canonical source in the selected branch")
-	}
-	canonical, err := ReplayTodoList(lineage)
-	if err != nil {
-		return err
-	}
-	byID := make(map[string]*TodoItem, len(canonical))
-	for _, item := range canonical {
-		byID[item.ID] = item
 	}
 	for _, item := range recovered {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
 		source := byID[item.ID]
 		if source == nil || source.Status != TaskDone || source.Agent != item.Agent || source.ContractID != item.ContractID || source.ContractHash != item.ContractHash ||
 			source.RunInputSnapshotID != snapshot.ID || source.RunInputSnapshotHash != snapshot.SnapshotHash ||
@@ -82,6 +110,47 @@ func (c *Coordinator) bindRecoveredEvidence(req *EvidenceBuildRequest) error {
 		req.RecoverySnapshotID, req.RecoverySnapshotHash = snapshot.ID, snapshot.SnapshotHash
 	}
 	return nil
+}
+
+func (c *Coordinator) loadRecoveredEvidenceTasks(ctx context.Context, workspace string, snapshot *RunInputSnapshot) (map[string]*TodoItem, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	events, err := c.eventStore.ReadEvents()
+	if err != nil {
+		return nil, err
+	}
+	tree, err := c.loadJournalSessionTree(ctx, workspace)
+	if err != nil {
+		return nil, err
+	}
+	lineage, err := ProjectValidatedEventsForBranch(events, tree, c.eventStore.BranchID())
+	if err != nil {
+		return nil, err
+	}
+	foundInputs := false
+	for _, event := range lineage {
+		if event.Type != string(EventRunInputsResolved) || event.RunID != snapshot.RunID {
+			continue
+		}
+		var source RunInputSnapshot
+		if json.Unmarshal(event.Payload, &source) == nil && ValidateRunInputSnapshot(&source) == nil && sameCanonicalEvidence(&source, snapshot) {
+			foundInputs = true
+			break
+		}
+	}
+	if !foundInputs {
+		return nil, fmt.Errorf("evidence recovery inputs have no matching canonical source in the selected branch")
+	}
+	canonical, err := ReplayTodoList(lineage)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]*TodoItem, len(canonical))
+	for _, item := range canonical {
+		byID[item.ID] = item
+	}
+	return byID, nil
 }
 
 func sameCanonicalEvidence(left, right any) bool {

@@ -1,6 +1,7 @@
 package team
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
@@ -142,6 +143,10 @@ func validateResultEvidenceReferences(value any, spec *resultEvidenceReferencesS
 }
 
 func (c *Coordinator) validateResultReferenceReads(todoID string, result *TaskResult) error {
+	return c.validateResultReferenceReadsWithContext(context.Background(), todoID, result)
+}
+
+func (c *Coordinator) validateResultReferenceReadsWithContext(ctx context.Context, todoID string, result *TaskResult) error {
 	item := c.todoItemByID(todoID)
 	if item == nil || item.ResultContract == nil {
 		return nil
@@ -160,5 +165,9 @@ func (c *Coordinator) validateResultReferenceReads(todoID string, result *TaskRe
 	if err != nil {
 		return err
 	}
-	return validateResultEvidenceReferences(value, compiled.evidenceReferences, item.EvidenceFrom, c.dependencyResultsForTask(todoID), &result.FilesRead)
+	results := c.dependencyResultsForTaskWithContext(ctx, todoID)
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	return validateResultEvidenceReferences(value, compiled.evidenceReferences, item.EvidenceFrom, results, &result.FilesRead)
 }

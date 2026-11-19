@@ -189,6 +189,9 @@ func (c *Coordinator) assessPreparedContractRecovery(ctx context.Context, source
 		return nil, err
 	}
 	c.describeContractRecovery(plan, source.Session, old, current)
+	if err := validateUnchangedContractVerifierRetry(source.Session.Tasks, source.lineage, plan); err != nil {
+		return nil, err
+	}
 	if plan.WorkRetry != nil {
 		if err := validateWorkRetryScope(source.Session.Tasks, plan); err != nil {
 			return nil, err
@@ -407,13 +410,6 @@ func validateContractRecoveryLineage(event RunEvent, preceding []RunEvent, admit
 	if admitted == nil || admitted.ConfigurationHash != plan.SourcePolicy {
 		return nil, fmt.Errorf("contract recovery original policy mismatch")
 	}
-	acceptedRepair := false
-	for _, patch := range plan.Tasks {
-		acceptedRepair = acceptedRepair || patch.Collection != nil && patch.Collection.AcceptedResult != nil
-	}
-	if plan.WorkRetry == nil && plan.ActionRepair == nil && !acceptedRepair && plan.SourcePolicy == plan.Policy.ConfigurationHash {
-		return nil, fmt.Errorf("unchanged-policy recovery requires an explicit work retry proof")
-	}
 	if plan.WorkRetry != nil {
 		if admitted.ConfigurationHash != plan.Policy.ConfigurationHash || plan.InputPolicyUpgrade != nil || len(plan.ContractChanges) != 0 {
 			return nil, fmt.Errorf("work retry cannot change execution policy or result contracts")
@@ -430,6 +426,9 @@ func validateContractRecoveryLineage(event RunEvent, preceding []RunEvent, admit
 		left.RunInputPolicyHash, right.RunInputPolicyHash = "", ""
 	}
 	tasks := ReduceToTodoList(preceding)
+	if err := validateUnchangedContractVerifierRetry(tasks, preceding, plan); err != nil {
+		return nil, err
+	}
 	if plan.ActionRepair != nil {
 		changes := contractRecoveryChanges(admitted, plan.Policy)
 		if len(admitted.ResultContracts) != len(plan.Policy.ResultContracts) || !slices.Equal(changes, plan.ContractChanges) || len(changes) == 0 && admitted.StaticWorkflowHash != plan.Policy.StaticWorkflowHash {

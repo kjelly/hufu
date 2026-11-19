@@ -54,8 +54,8 @@ func materializeRuntimeInputParents(root map[string]any, pointer string) error {
 
 // Runtime-owned scalars come from the immutable manifest occurrence assigned
 // to this child, never from model prose or a sibling's mutable task metadata.
-func (c *Coordinator) resultWorksetBindingValues(taskID string) (map[string]string, error) {
-	binding, err := c.verifiedResultWorksetBinding(context.Background(), taskID)
+func (c *Coordinator) resultWorksetBindingValues(ctx context.Context, taskID string) (map[string]string, error) {
+	binding, err := c.verifiedResultWorksetBinding(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -63,6 +63,9 @@ func (c *Coordinator) resultWorksetBindingValues(taskID string) (map[string]stri
 }
 
 func (c *Coordinator) verifiedResultWorksetBinding(ctx context.Context, taskID string) (*WorksetBinding, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
 	if owner := c.dependencyViewOwner(taskID); owner != c {
 		return owner.verifiedResultWorksetBinding(ctx, taskID)
 	}
@@ -80,6 +83,7 @@ func (c *Coordinator) verifiedResultWorksetBinding(ctx context.Context, taskID s
 		!sameArtifactOccurrence(receipt.SourceArtifact, binding.SourceArtifact) {
 		return nil, fmt.Errorf("workset runtime input has a mismatched expansion receipt")
 	}
+	ctx = c.withRecoveryEvidenceReplay(ctx)
 	if err := c.verifyWorksetSource(ctx, receipt); err != nil {
 		return nil, err
 	}
@@ -88,7 +92,7 @@ func (c *Coordinator) verifiedResultWorksetBinding(ctx context.Context, taskID s
 			return nil, err
 		}
 	}
-	data, source, err := c.readStructuredWorksetSource(TaskDef{FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: receipt.SourceArtifact.TaskID, Artifact: receipt.SourceArtifactID}}})
+	data, source, err := c.readStructuredWorksetSource(ctx, TaskDef{FanOut: &FanOutSpec{SourceArtifact: FactRef{TaskID: receipt.SourceArtifact.TaskID, Artifact: receipt.SourceArtifactID}}})
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +100,7 @@ func (c *Coordinator) verifiedResultWorksetBinding(ctx context.Context, taskID s
 	if err != nil {
 		return nil, err
 	}
-	manifest, err = c.validateWorksetInputs(manifest, receipt.SourceArtifact.TaskID)
+	manifest, err = c.validateWorksetInputs(ctx, manifest, receipt.SourceArtifact.TaskID)
 	if err != nil {
 		return nil, err
 	}

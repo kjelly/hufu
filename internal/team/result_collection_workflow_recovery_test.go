@@ -1,12 +1,146 @@
 package team
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"testing"
 
 	"github.com/kjelly/hufu/internal/agent"
 )
+
+func TestResultCollectionWorkflowRecoveryCommitsPreparedResultWithFailedConsumer(t *testing.T) {
+	for _, dependency := range []bool{true, false} {
+		name := "unrelated_failure"
+		if dependency {
+			name = "dependent_verifier"
+		}
+		t.Run(name, func(t *testing.T) {
+			c, producer, workCtx, receipt := resultCollectionTaskFixture(t, "http://127.0.0.1:1/v1", false, func(spec *TodoSpec) {
+				spec.ContractID, spec.Phase, spec.SideEffect = "report", PhaseVerify, SideEffectNone
+			}, func(c *Coordinator) {
+				c.session.Config.Workflow = agent.WorkflowConfig{Phases: []string{"prepare", "verify"}}
+				c.session.Config.Policies.AllowPhaseSkip = true
+				c.session.ContractTasks = []TaskDef{{ID: "prepare", Agent: "worker", Phase: PhasePrepare}, {ID: "report", Agent: "worker", Phase: PhaseVerify}, {ID: "verify-report", Agent: "worker", Phase: PhaseVerify}}
+				workflow, err := newRuntimeWorkflow(c.session)
+				if err != nil {
+					t.Fatal(err)
+				}
+				c.phaseWorkflow = workflow
+				c.SetSessionData(NewSession())
+			})
+			if err := c.phaseWorkflow.restore(PhaseVerify, map[Phase]PhaseResult{PhasePrepare: {Status: PhaseStatusSuccess}}, "", NewRetryState()); err != nil {
+				t.Fatal(err)
+			}
+			cp, err := c.beginResultCollection(workCtx, producer.ID, receipt, "original report")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cp, err = c.reserveResultCollection(workCtx, cp, "report-collector", []byte(`{"tools":[]}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cp, err = c.recordCollectionResponse(workCtx, cp, []byte(`{"status":"success","summary":"original report"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cp, err = c.prepareCollectionClaims(workCtx, cp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.recordCollectionStopReceipt(producer.ID, &resultCollectionFailure{Reason: RepairFailureCommit, Checkpoint: cp, Cause: context.DeadlineExceeded})
+			c.PersistFailureWithClassAndStatusAndOutput(producer.Agent, producer.Goal, producer.ID, "commit deadline exceeded", NeedsHuman, FailureProtocol, TaskBlocked, "original report")
+			spec := TodoSpec{Agent: "worker", Desc: "verify the accepted report", ContractID: "verify-report", Phase: PhaseVerify, SideEffect: SideEffectNone,
+				Action: &Action{Capability: "verify-report", Type: "verify"}}
+			if dependency {
+				spec.DependsOn = []string{producer.ID}
+			}
+			ids := c.taskTracker.TodoList().ReserveIDs(1)
+			projection, err := taskOccurrenceProjectionFromSpec(spec, ids[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.admitTaskOccurrence(t.Context(), projection, ids[0], 1); err != nil {
+				t.Fatal(err)
+			}
+			items, err := c.CommitTaskCreationResolved(t.Context(), []TodoSpec{spec}, ids)
+			if err != nil {
+				t.Fatal(err)
+			}
+			consumer := items[0]
+			if err := c.CommitTaskTransition(t.Context(), consumer.ID, TaskPending, TaskInProgress, "verifying", "", nil); err != nil {
+				t.Fatal(err)
+			}
+			c.PersistFailureWithClassAndStatus(consumer.Agent, consumer.Desc, consumer.ID, "report unavailable", RetryNone, FailureVerify, TaskError)
+			if err := c.phaseWorkflow.cancel("coordinator", "operator", "close unsuccessful verification"); err == nil {
+				t.Fatal("cancellation did not close the phase")
+			}
+			c.saveCheckpoint()
+			c = reopenCollectedWorkflowCoordinator(t, c)
+			if c.phaseWorkflow.State() != PhaseFailed {
+				t.Fatal("replay lost the failed workflow")
+			}
+			assessment, err := c.AssessResultCollectionRecovery(t.Context(), producer.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !dependency {
+				if assessment.Disposition != RecoveryBlocked {
+					t.Fatalf("unrelated failure was accepted: %+v", assessment)
+				}
+				return
+			}
+			if assessment.Disposition != RecoveryCommitLocal || assessment.AdditionalTurns != 0 || assessment.ContinuesWorkflow {
+				t.Fatalf("prepared report was not eligible for local commit: %+v", assessment.Checks)
+			}
+			c.executionRunID = "commit-report-after-restart"
+			repairCtx := WithResultOnlyRepair(WithSessionResume(t.Context()), producer.ID)
+			if err := c.authorizeOperatorResultRepair(repairCtx); err != nil {
+				t.Fatal(err)
+			}
+			worker := scriptWorker(textTurn("must not repeat saved work"))
+			c.workerAgentOverride = worker
+			if _, err := c.executeTask(repairCtx, taskDefFromTodoItem(c.todoItemByID(producer.ID)), producer.ID); err != nil {
+				t.Fatal(err)
+			}
+			c = reopenCollectedWorkflowCoordinator(t, c)
+			if err := c.reconcileRecoveredWorkflow(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			settled := c.todoItemByID(producer.ID)
+			committed := currentResultCollection(settled)
+			if worker.Calls() != 0 || settled.Status != TaskDone || committed == nil || committed.Work != cp.Work || committed.TurnsUsed != cp.TurnsUsed ||
+				c.todoItemByID(consumer.ID).Status != TaskError || c.phaseWorkflow.State() != PhaseFailed {
+				t.Fatal("local commit changed completed work, the failed dependent, or the workflow boundary")
+			}
+			events, err := c.readActiveLineageEvents(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy := c.ExecutionPolicySnapshot()
+			plan := &ContractRecoveryPlan{MetadataOnly: true, SourceBranch: c.activeBranchID(), SourcePolicy: policy.ConfigurationHash, Policy: policy,
+				Retained: 1, Retried: 1, Tasks: []ContractRecoveryTask{{ID: producer.ID, Action: "retain"}, {ID: consumer.ID, Action: "retry"}}}
+			tasks := c.taskTracker.TodoList().Items()
+			if err := validateUnchangedContractVerifierRetry(tasks, events, plan); err != nil {
+				t.Fatalf("current verifier must be eligible after canonical replay: %v", err)
+			}
+			otherBranch := *plan
+			otherBranch.SourceBranch = "unrelated"
+			if err := validateUnchangedContractVerifierRetry(tasks, events, &otherBranch); err == nil {
+				t.Fatal("a different branch acquired retry authority")
+			}
+			changed := cloneTodoItem(todoItemByID(tasks, consumer.ID))
+			changed.OccurrenceRevision++
+			if err := validateUnchangedContractVerifierRetry([]*TodoItem{settled, changed}, events, plan); err == nil {
+				t.Fatal("a different verifier occurrence acquired retry authority")
+			}
+			plan.Tasks[0].Action, plan.Tasks[1].Action = "retry", "retain"
+			if err := validateUnchangedContractVerifierRetry(tasks, events, plan); err == nil {
+				t.Fatal("retry authority replayed the completed producer")
+			}
+		})
+	}
+}
 
 func blockWorkflowCollectionRecovery(t *testing.T, c *Coordinator, id string, receipt ExecutionReceipt) *ResultCollectionCheckpoint {
 	t.Helper()

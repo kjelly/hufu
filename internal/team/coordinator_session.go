@@ -1082,6 +1082,12 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 		if !c.interruptedOrderPredecessorsSettled(it) {
 			continue
 		}
+		if slices.ContainsFunc(it.EvidenceFrom, func(id string) bool {
+			dependency := c.todoItemByID(id)
+			return dependency == nil || dependency.Status != TaskDone
+		}) {
+			continue
+		}
 		if err := c.migrateLegacyExecutionTarget(ctx, it); err != nil {
 			if firstErr == nil {
 				firstErr = err
