@@ -4,7 +4,7 @@ description: Read-only reviewer for every bounded workset item across runtime, C
 role: worker
 tools: view
 temperature: "0.15"
-max-tokens: "32768"
+max-tokens: "65536"
 reasoning-effort: high
 max-steps: 120
 # Large workset items routinely need close to an hour on the review route;

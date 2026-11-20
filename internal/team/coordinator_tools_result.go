@@ -30,6 +30,9 @@ type SubmitArtifactInput struct {
 type SubmitResultInput struct {
 	projectionBound          bool
 	completionFieldsSupplied bool
+	collectionSourcesBound   bool
+	receiptIDsSupplied       bool
+	memoryUsesSupplied       bool
 	Status                   string                      `json:"status,omitempty"`
 	Summary                  string                      `json:"summary,omitempty"`
 	Details                  string                      `json:"details,omitempty"`

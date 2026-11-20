@@ -114,7 +114,7 @@ func buildRegisteredArgv(command string, target ActionTarget) []string {
 			return []string{}
 		}
 		argv := []string{"hufu", "resume", "--workspace", target.Workspace, "--run", target.RunID, "--branch", target.BranchID,
-			"--execution-profile", "default", "--repair-result", target.TaskID, "--dry-run"}
+			"--repair-result", target.TaskID, "--dry-run"}
 		return appendFlag(argv, "--team", target.TeamID)
 	}
 	var argv []string

@@ -902,6 +902,7 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 			MemoryManifests               []MemoryInjectionManifest   `json:"memory_manifests"`
 			ContextManifests              []ContextInjectionManifest  `json:"context_manifests"`
 			ResetForRetry                 bool                        `json:"reset_for_retry"`
+			ReleaseDeferredDispatch       bool                        `json:"release_deferred_dispatch"`
 			SubagentProvider              string                      `json:"subagent_provider"`
 			ProviderBinding               *ProviderBinding            `json:"provider_binding"`
 			BackendBinding                *BackendBinding             `json:"backend_binding"`
@@ -941,6 +942,10 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 		}
 
 		item, exists := taskMap[taskID]
+		if payload.ReleaseDeferredDispatch && (!collectionDispatchDeferred(item, item) ||
+			payload.Detail != collectionDispatchResumeDetail || payload.Retries != item.Retries) {
+			continue
+		}
 		legacyOutput := legacyFailureOutputSource(e.Type, item, payload.Output, payload.OutputComplete)
 		// Ordinary worker retries reopen a failed occurrence through a new
 		// attempt-start transition. Decide before applying its projected lease.
@@ -1342,8 +1347,11 @@ func reduceTodoEventStream(events iter.Seq[RunEvent]) todoReplayResult {
 
 		switch e.Type {
 		case "task_created":
-			if (!isReducerTerminalTaskStatus(item.Status) || payload.ResetForRetry) && payload.Status != "" {
+			if (!isReducerTerminalTaskStatus(item.Status) || payload.ResetForRetry || payload.ReleaseDeferredDispatch) && payload.Status != "" {
 				item.Status = TaskStatus(payload.Status)
+				if payload.ReleaseDeferredDispatch {
+					setResumePendingProjection(item, payload.Detail, true)
+				}
 				if payload.ResetForRetry {
 					item.ResultCandidate = nil
 					item.Output = ""

@@ -50,12 +50,12 @@ func resultCollectionProviderFixture(t *testing.T, endpoint string, runtime bool
 }
 
 func resultCollectionTaskFixture(t *testing.T, endpoint string, runtime bool, configureTask func(*TodoSpec), options ...func(*Coordinator)) (*Coordinator, *TodoItem, context.Context, ExecutionReceipt) {
-	return resultCollectionIdentityFixture(t, endpoint, runtime, configureTask, nil, options...)
+	return resultCollectionIdentityFixture(t, endpoint, runtime, "", configureTask, nil, options...)
 }
 
 // Identity binding mirrors dispatch: expansion receipts need the reserved child
 // IDs, and must be complete before the canonical task_created event is emitted.
-func resultCollectionIdentityFixture(t *testing.T, endpoint string, runtime bool, configureTask func(*TodoSpec), bindIdentity func(*Coordinator, *TodoSpec, []string), options ...func(*Coordinator)) (*Coordinator, *TodoItem, context.Context, ExecutionReceipt) {
+func resultCollectionIdentityFixture(t *testing.T, endpoint string, runtime bool, workRunID string, configureTask func(*TodoSpec), bindIdentity func(*Coordinator, *TodoSpec, []string), options ...func(*Coordinator)) (*Coordinator, *TodoItem, context.Context, ExecutionReceipt) {
 	t.Helper()
 	c := newTestCoordinator(t)
 	c.maxConcurrent = 1
@@ -110,6 +110,9 @@ func resultCollectionIdentityFixture(t *testing.T, endpoint string, runtime bool
 		t.Fatal(err)
 	}
 	item := items[0]
+	if workRunID != "" {
+		c.executionRunID = workRunID
+	}
 	if err := c.CommitTaskTransition(t.Context(), item.ID, TaskPending, TaskInProgress, "working", "", nil); err != nil {
 		t.Fatal(err)
 	}

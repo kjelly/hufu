@@ -61,6 +61,8 @@ func (c *Coordinator) decodeCollectionClaims(taskID string, raw []byte) (SubmitR
 	_, statusSupplied := fields["status"]
 	_, summarySupplied := fields["summary"]
 	input.completionFieldsSupplied = statusSupplied || summarySupplied
+	_, input.receiptIDsSupplied = fields["receipt_ids"]
+	_, input.memoryUsesSupplied = fields["memory_uses"]
 	info := collectionSubmissionInfo(c, taskID)
 	if err := validateSubmissionFieldPresence(string(raw), info); err != nil {
 		return input, rejectLocalResult(RepairFailureInvalidSchema, err)
@@ -147,10 +149,18 @@ func (c *Coordinator) commitPreparedCollection(ctx context.Context, expected *Re
 	if err := validateStoppedWorkClaims(work, input, localResultSubmissionContract(c, expected.TaskID).runtimeCompletion); err != nil {
 		return err
 	}
+	if err := c.bindCollectionReceiptFields(ctx, expected, &input); err != nil {
+		return err
+	}
 	// A malformed model field must not conceal forged receipts or artifact
 	// claims and earn a new model turn before those sources are checked.
 	claims := input.taskResult()
 	claims.Attempt = expected.Attempt
+	if len(claims.AssumptionChecks) > 0 && len(collectionRepairGrants(collectionReceipt(item, expected))) > 0 {
+		if err := c.validateInertCollectionAssumptions(ctx, expected, claims.AssumptionChecks); err != nil {
+			return rejectLocalResult(RepairFailureSource, err)
+		}
+	}
 	if err := c.validateTaskResultReceiptClaims(item.ID, &claims); err != nil {
 		return rejectLocalResult(RepairFailureSource, err)
 	}
@@ -165,13 +175,14 @@ func (c *Coordinator) commitPreparedCollection(ctx context.Context, expected *Re
 	if err != nil {
 		return c.collectionEvidenceRejection(ctx, expected, work, string(raw), err)
 	}
-	input, err = c.decodeCollectionClaims(item.ID, []byte(resolved))
+	decoded, err := c.decodeCollectionClaims(item.ID, []byte(resolved))
 	if err != nil {
 		return err
 	}
+	decoded.ReceiptIDs, decoded.collectionSourcesBound = input.ReceiptIDs, input.collectionSourcesBound
 	ctx = context.WithValue(ctx, resultCollectionAdmissionKey{}, expected)
 	admission := localResultAdmission{coordinator: c, todoID: item.ID}
-	err = admission.admit(ctx, input, localResultSubmissionContract(c, item.ID), func() RepairFailureReason {
+	err = admission.admit(ctx, decoded, localResultSubmissionContract(c, item.ID), func() RepairFailureReason {
 		// validateStructuredPayloadClaims classifies canonical model-schema
 		// failures after independent source checks. Other failures stay closed.
 		return RepairFailureSource

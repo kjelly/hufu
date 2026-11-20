@@ -311,7 +311,7 @@ func TestResultCollectionWorkflowRecoveryRepairsSuccessivePhases(t *testing.T) {
 }
 
 func TestResultCollectionWorkflowRecoveryRepairsParallelTasksSequentially(t *testing.T) {
-	for _, scenario := range []string{"forward", "reverse", "prepare_phase", "changed_peer_result", "missing_peer_grant"} {
+	for _, scenario := range []string{"forward", "reverse", "prepare_phase", "changed_peer_result", "missing_peer_grant", "deferred_dispatch", "restart_after_release"} {
 		t.Run(scenario, func(t *testing.T) {
 			phase, next := PhaseVerify, PhaseDone
 			if scenario == "prepare_phase" {
@@ -360,6 +360,27 @@ func TestResultCollectionWorkflowRecoveryRepairsParallelTasksSequentially(t *tes
 			for _, id := range []string{first.ID, created[0].ID} {
 				originals[id] = blockWorkflowCollectionRecovery(t, c, id, receipt)
 			}
+			var deferredID string
+			if scenario == "deferred_dispatch" || scenario == "restart_after_release" {
+				pending := spec
+				pending.Desc, pending.SideEffect, pending.Execution = "undispatched peer", SideEffectNone, ExecutionContract{}
+				ids := c.taskTracker.TodoList().ReserveIDs(1)
+				projection, err := taskOccurrenceProjectionFromSpec(pending, ids[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := c.admitTaskOccurrence(ctx, projection, ids[0], 1); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := c.CommitTaskCreationResolved(ctx, []TodoSpec{pending}, ids); err != nil {
+					t.Fatal(err)
+				}
+				deferredID = ids[0]
+				c.PersistFailureWithClassAndStatus(pending.Agent, pending.Desc, deferredID, dispatchDeferredDetail, NeedsHuman, FailurePolicy, TaskBlocked)
+				if item := c.todoItemByID(deferredID); !collectionDispatchDeferred(item, first) || len(item.FailureFingerprints) != 0 {
+					t.Fatalf("undispatched task was counted as a runtime failure: %+v", item.FailureEvent)
+				}
+			}
 			if err := c.phaseWorkflow.observe(c.taskTracker.TodoList().Items()); err == nil {
 				t.Fatal("workflow did not fail on blocked collections")
 			}
@@ -371,8 +392,11 @@ func TestResultCollectionWorkflowRecoveryRepairsParallelTasksSequentially(t *tes
 			for index, id := range order {
 				c = reopenCollectedWorkflowCoordinator(t, c)
 				a, err := c.AssessResultCollectionRecovery(t.Context(), id)
-				if err != nil || a.Disposition != RecoveryCommitLocal || a.ContinuesWorkflow != (index == 1) {
+				if err != nil || a.Disposition != RecoveryCommitLocal || a.ContinuesWorkflow != (index == 1 && deferredID == "") {
 					t.Fatalf("task %s assessment=%+v err=%v", id, a, err)
+				}
+				if deferredID != "" && !slices.Equal(a.DeferredDispatch, []string{deferredID}) {
+					t.Fatalf("preview did not identify the deferred peer: %v", a.DeferredDispatch)
 				}
 				c.executionRunID = "repair-" + id
 				repair := WithResultOnlyRepair(t.Context(), id)
@@ -408,6 +432,20 @@ func TestResultCollectionWorkflowRecoveryRepairsParallelTasksSequentially(t *tes
 					}
 					return
 				}
+				if index == 1 && scenario == "restart_after_release" {
+					proof, err := c.completedCollectionWorkflowProof(t.Context())
+					if err != nil || proof == nil || !slices.Equal(proof.deferred, []string{deferredID}) {
+						t.Fatalf("missing durable release proof: %+v, %v", proof, err)
+					}
+					metadata := map[string]any{"reset_for_resume": true, "release_deferred_dispatch": true}
+					if err := c.CommitTaskTransition(t.Context(), deferredID, TaskBlocked, TaskPending, collectionDispatchResumeDetail, "", metadata); err != nil {
+						t.Fatal(err)
+					}
+					c = reopenCollectedWorkflowCoordinator(t, c)
+					if c.phaseWorkflow.State() != PhaseFailed || !collectionDispatchRequeued(c.todoItemByID(deferredID)) {
+						t.Fatal("restart lost the release or reopened the failed phase early")
+					}
+				}
 				if err := c.reconcileRecoveredWorkflow(t.Context()); err != nil {
 					t.Fatal(err)
 				}
@@ -417,6 +455,19 @@ func TestResultCollectionWorkflowRecoveryRepairsParallelTasksSequentially(t *tes
 					}
 					if _, err := c.beginFollowUpWorkflow(WithSessionResume(t.Context()), "ordinary resume"); err == nil {
 						t.Fatal("ordinary resume bypassed the remaining blocked task")
+					}
+				} else if deferredID != "" {
+					item := c.todoItemByID(deferredID)
+					if c.phaseWorkflow.State() != phase || !collectionDispatchRequeued(item) || worker.Calls() != 0 {
+						t.Fatal("recovery did not durably release the first dispatch without executing work")
+					}
+					c = reopenCollectedWorkflowCoordinator(t, c)
+					c.workerAgentOverride = scriptWorker(textTurn("first dispatch after recovery"))
+					if n, err := c.ResumeInterruptedTasks(WithSessionResume(t.Context())); err != nil || n != 1 {
+						t.Fatalf("ordinary resume dispatched %d tasks: %v", n, err)
+					}
+					if c.todoItemByID(deferredID).Status != TaskDone || c.phaseWorkflow.State() != next {
+						t.Fatalf("ordinary resume left task %s and phase %s", c.todoItemByID(deferredID).Status, c.phaseWorkflow.State())
 					}
 				} else if c.phaseWorkflow.State() != next {
 					t.Fatalf("complete recovery left workflow in %s", c.phaseWorkflow.State())
@@ -432,6 +483,12 @@ func TestResultCollectionWorkflowRecoveryRepairsParallelTasksSequentially(t *tes
 			}
 			for _, item := range replayed {
 				original := originals[item.ID]
+				if item.ID == deferredID {
+					if item.Status != TaskDone || item.Retries != 0 {
+						t.Fatal("replay counted the deferral as an attempt")
+					}
+					continue
+				}
 				cp := currentResultCollection(item)
 				if item.Status != TaskDone || cp.Work != original.Work || cp.TurnsUsed != original.TurnsUsed || item.TypedResult.Summary != "saved independent result" {
 					t.Fatal("replay changed saved work, claims or collector turns")
@@ -442,7 +499,7 @@ func TestResultCollectionWorkflowRecoveryRepairsParallelTasksSequentially(t *tes
 }
 
 func TestResultCollectionWorkflowRecoveryRequiresFailureAttribution(t *testing.T) {
-	for _, kind := range []string{"matching", "optional", "wrong_optional_category", "ordinary", "completed", "structural", "different_task", "different_phase", "different_failure", "repair_progress", "other_unresolved", "parallel_collections", "parallel_wrong_phase", "parallel_unsafe", "extra_failure", "uncertain_effect"} {
+	for _, kind := range []string{"matching", "optional", "wrong_optional_category", "ordinary", "completed", "structural", "different_task", "different_phase", "different_failure", "repair_progress", "other_unresolved", "parallel_collections", "parallel_wrong_phase", "parallel_unsafe", "extra_failure", "uncertain_effect", "legacy_deferred", "dispatched_peer"} {
 		t.Run(kind, func(t *testing.T) {
 			c, id, _ := blockedRecoveryFixture(t, `{"status":"success","summary":"saved work"}`, false, RepairFailureInvalidSchema)
 			item := cloneTodoItem(c.todoItemByID(id))
@@ -485,6 +542,17 @@ func TestResultCollectionWorkflowRecoveryRequiresFailureAttribution(t *testing.T
 				}
 			case "uncertain_effect":
 				item.RecoveryState = RecoveryStateUnknown
+			case "legacy_deferred", "dispatched_peer":
+				fp := NewFailureFingerprint("", item.Agent, stableOperation(item), FailurePolicy, dispatchDeferredDetail)
+				peer := &TodoItem{ID: "deferred", Agent: item.Agent, Phase: item.Phase, Status: TaskBlocked,
+					SideEffect: SideEffectNone, Verify: item.Verify, VerifySpec: item.VerifySpec, Kind: item.Kind,
+					FailureFingerprints: []FailureFingerprint{fp},
+					FailureEvent: &FailureEventPayload{TaskID: "deferred", Phase: "coordination", FailureClass: FailurePolicy,
+						RetryDisposition: NeedsHuman, Fingerprint: fp.Digest}}
+				if kind == "dispatched_peer" {
+					peer.ExecutionReceipt = &ExecutionReceipt{Attempt: 1}
+				}
+				source.Tasks = append(source.Tasks, peer)
 			}
 			source.PhaseResults[PhaseVerify] = PhaseResult{Status: PhaseStatusBlocked, Errors: []ExecutionError{failure}}
 			if kind == "parallel_collections" || kind == "parallel_wrong_phase" || kind == "parallel_unsafe" || kind == "extra_failure" {
@@ -497,7 +565,7 @@ func TestResultCollectionWorkflowRecoveryRequiresFailureAttribution(t *testing.T
 				t.Fatal(err)
 			}
 			phase, err := resultRepairWorkflowPhase(source, id)
-			wantAllowed := kind == "matching" || kind == "optional" || kind == "ordinary" || kind == "repair_progress" || kind == "parallel_collections"
+			wantAllowed := kind == "matching" || kind == "optional" || kind == "ordinary" || kind == "repair_progress" || kind == "parallel_collections" || kind == "legacy_deferred"
 			if (err == nil) != wantAllowed || (kind == "matching" && phase != PhaseVerify) {
 				t.Fatalf("phase=%s error=%v", phase, err)
 			}

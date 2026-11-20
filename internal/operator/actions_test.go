@@ -53,7 +53,7 @@ func TestSelectActionsOffersOnlyReadOnlyResultRepairAssessment(t *testing.T) {
 				return
 			}
 			action := secondary[0]
-			want := []string{"hufu", "resume", "--workspace", snapshot.Scope.WorkspaceExact, "--run", snapshot.Scope.RunID, "--branch", snapshot.Scope.BranchID, "--execution-profile", "default", "--repair-result", "11", "--dry-run"}
+			want := []string{"hufu", "resume", "--workspace", snapshot.Scope.WorkspaceExact, "--run", snapshot.Scope.RunID, "--branch", snapshot.Scope.BranchID, "--repair-result", "11", "--dry-run"}
 			if snapshot.Scope.TeamName != "" {
 				want = append(want, "--team", snapshot.Scope.TeamName)
 			}

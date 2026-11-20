@@ -2,11 +2,70 @@ package team
 
 import (
 	"encoding/json/v2"
+	"slices"
 	"strings"
 	"testing"
 )
 
 const projectionTestSchema = `{"type":"object","required":["findings","assessments"],"properties":{"findings":{"type":"array","maxItems":32,"items":{"type":"object","properties":{"summary":{"type":"string"},"severity":{"type":"string","enum":["error","warning","info"]}},"required":["summary","severity"],"additionalProperties":false}},"assessments":{"type":"array","maxItems":64,"items":{"type":"object","properties":{"invariant_id":{"type":"string"},"status":{"type":"string","enum":["preserved","violated","unknown"]},"summary":{"type":"string"},"finding_index":{"type":"integer"}},"required":["invariant_id","status","summary"],"additionalProperties":false}}},"additionalProperties":false,"x-hufu-result-projections":{"findings":"/findings","invariant_assessments":"/assessments","bind_invariant_severity":true}}`
+
+func TestResultClaimsProjectionRecoveryUsesFrozenInvariantScope(t *testing.T) {
+	c, item, manifest := invariantAttestationFixture(t, InvariantVerificationReport,
+		InvariantDefinition{ID: "safe", Statement: "preserve boundary", Severity: InvariantSeverityError},
+		InvariantDefinition{ID: "excluded", Statement: "different scope", Severity: InvariantSeverityWarning})
+	manifest.Items[1].Included = false
+	manifest.Items[1].Reason = ContextOmittedNotApplicable
+	manifest.Fingerprint = contextManifestFingerprint(manifest)
+	item.ContextManifests = []ContextInjectionManifest{manifest}
+	item.ExecutionReceipt = &ExecutionReceipt{Attempt: 1, ModelExecutionID: manifest.ModelExecutionID}
+	compiled, err := CompileResultContractDocument("projected.json", []byte(projectionTestSchema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := compiled.ref(true)
+	item.ResultContract = &ref
+	c.session.ResultContracts = map[string]*CompiledResultContract{ref.ID: compiled}
+	c.taskTracker.TodoList().Restore([]*TodoItem{item})
+	info, err := collectionGuidanceInfo(c, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp := &ResultCollectionCheckpoint{TaskID: item.ID, Attempt: 1, ModelExecutionID: manifest.ModelExecutionID}
+	if err := c.constrainCollectionInvariantClaims(cp, compiled, info.Parameters); err != nil {
+		t.Fatal(err)
+	}
+	schema := info.Parameters["structured_payload"].(map[string]any)
+	ids, _ := resultProjectionSchemaAt(schema, "/assessments/0/invariant_id")["enum"].([]string)
+	if !slices.Equal(ids, []string{"safe"}) {
+		t.Fatalf("collector schema advertises %v, want only the frozen applicable ID", ids)
+	}
+	for _, tc := range []struct {
+		name, extra string
+		want        RepairFailureReason
+	}{
+		{"out-of-scope attestation", `{"invariant_id":"excluded","status":"preserved","summary":"observed"}`, RepairFailureInvalidSchema},
+		{"out-of-scope violation", `{"invariant_id":"excluded","status":"violated","summary":"observed","finding_index":0}`, RepairFailureContract},
+		{"unrecognized ID", `{"invariant_id":"unknown","status":"preserved","summary":"observed"}`, RepairFailureContract},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			claims := SubmitResultInput{StructuredPayload: []byte(`{"findings":[{"summary":"retain this finding","severity":"info"}],"assessments":[{"invariant_id":"safe","status":"preserved","summary":"verified"},` + tc.extra + `]}`)}
+			if _, err := c.projectResultClaims(t.Context(), item.ID, claims); localResultRejectionReason(err) != tc.want {
+				t.Fatalf("submission result: %v", err)
+			}
+			independent, err := c.projectResultClaimsWithRecovery(t.Context(), item.ID, claims, true)
+			if tc.want == RepairFailureContract {
+				if localResultRejectionReason(err) != RepairFailureContract {
+					t.Fatalf("independent check admitted an unproven violation or invariant ID: %v", err)
+				}
+				return
+			}
+			if err != nil || len(independent.Findings) != 1 || independent.Findings[0].Summary != "retain this finding" ||
+				independent.InvariantAssessments == nil || len(*independent.InvariantAssessments) != 1 {
+				t.Fatalf("independent proof lost its legitimate claims: %+v, %v", independent, err)
+			}
+		})
+	}
+}
 
 func TestResultClaimsProjectionBindsInvariantSeverity(t *testing.T) {
 	for _, test := range []struct {

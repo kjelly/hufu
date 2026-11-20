@@ -327,10 +327,11 @@ func (c *Coordinator) persistFailureRecord(agentName, taskDesc, todoID, detail s
 	// forensics reflect the cancellation.
 	// Refs: docs/archive/implementation-plans/generic-task-reliability.md §5.3, WP-05
 	cancelled := IsCancelledClass(class)
+	deferred := class == FailurePolicy && rawDetail == dispatchDeferredDetail && collectionUndispatched(item)
 	var repeated, limited, systemic bool
 	var hypothesisInvalid bool
 	priorStrategy := RecoveryStrategy("")
-	if !cancelled {
+	if !cancelled && !deferred {
 		c.metricsMu.Lock()
 		priorStrategy = c.antiThrashing.LastStrategy[fp.Digest]
 		if item != nil && item.RecoveryHypothesis != nil {
@@ -422,6 +423,9 @@ func (c *Coordinator) persistFailureRecord(agentName, taskDesc, todoID, detail s
 		}
 		disposition = c.recordDiagnosticPacket(item, class, disposition, persistedDetail, fp, repeated, systemic)
 		failureEvent = c.failureEventForItem(item, class, disposition, persistedDetail, fp, todoID)
+		if deferred {
+			failureEvent.FailureType = failureTypeDispatchDeferred
+		}
 		persistedFailureOutput = utils.TruncateString(utils.RedactSecrets(output), 2000)
 		if c.reportStatus != nil {
 			data := map[string]any{
@@ -640,7 +644,7 @@ func (c *Coordinator) releaseRecoveredTaskWrapUp() {
 		return
 	}
 	for _, item := range c.taskTracker.TodoList().Items() {
-		if item.Status == TaskDone {
+		if item.Status == TaskDone || collectionDispatchRequeued(item) {
 			delete(c.blockedWrapUpTasks, item.ID)
 		}
 	}

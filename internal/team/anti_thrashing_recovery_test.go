@@ -61,6 +61,37 @@ func TestRebuildCountsOnlyTasksThatAreStillFailing(t *testing.T) {
 	}
 }
 
+func TestVerifiedWorksetOutcomeDoesNotSpendSiblingRetryBudget(t *testing.T) {
+	limits := defaultReliabilityLimits()
+	fp := NewFailureFingerprint("reviewed", "reviewer", "verify:task_result_assert", FailureExecution, ErrDegenerateRepetitionLoop.Error())
+	verified := &TodoItem{
+		ID: "verified", Status: TaskDone, Kind: TaskKindOutcome, SideEffect: SideEffectNone, Advances: []string{"reviewed"},
+		WorksetBinding: &WorksetBinding{ItemKey: "first"}, FailureFingerprints: []FailureFingerprint{fp},
+		TypedResult: &TaskResult{Status: TaskResultStatusSuccess}, VerifyResult: &VerificationResult{ExitCode: 0},
+	}
+	failed := &TodoItem{
+		ID: "failed", Status: TaskInProgress, Kind: TaskKindOutcome, SideEffect: SideEffectNone, Advances: []string{"reviewed"},
+		WorksetBinding: &WorksetBinding{ItemKey: "second"},
+	}
+	var state AntiThrashingState
+	state.rebuild([]*TodoItem{verified, failed}, limits)
+	if len(verified.FailureFingerprints) != 1 || state.Counts[fp.Digest] != 0 {
+		t.Fatalf("verified history spent a live retry: history=%+v count=%d", verified.FailureFingerprints, state.Counts[fp.Digest])
+	}
+	if repeated, limited, _ := state.record(failed, fp, "", limits); repeated || limited {
+		t.Fatalf("independent first failure was suppressed: repeated=%t limited=%t", repeated, limited)
+	}
+	if repeated, limited, _ := state.record(failed, fp, "", limits); !repeated || !limited {
+		t.Fatalf("second failure lost its configured bound: repeated=%t limited=%t", repeated, limited)
+	}
+	fp.Occurrences = 2
+	failed.FailureFingerprints = []FailureFingerprint{fp}
+	state.rebuild([]*TodoItem{verified, failed}, limits)
+	if state.Counts[fp.Digest] != 2 || !state.blocksTask(taskDefFromTodoItem(failed), failed) {
+		t.Fatalf("remaining failures did not survive replay: count=%d blocked=%t", state.Counts[fp.Digest], state.HardBlocked)
+	}
+}
+
 // TestRecoveredFailuresReleaseTheirScope replays the shape of a real run:
 // three reviewer workset items each time out once and succeed on retry. The
 // escalation their first attempts caused must not keep blocking a sibling.

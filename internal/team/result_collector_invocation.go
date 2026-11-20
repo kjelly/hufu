@@ -32,15 +32,7 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 	if err != nil {
 		return "", nil, nil, err
 	}
-	store, err := OpenFileArtifactStoreReadOnly(c.artifactStoreRootPath(), c.artifactStoreRootPath())
-	if err != nil {
-		return "", nil, nil, err
-	}
-	ref, err := store.Get(ctx, work.Receipt.TranscriptRef)
-	if err != nil {
-		return "", nil, nil, err
-	}
-	transcript, err := c.readCollectionBytes(ctx, ResultCollectionRef{ArtifactID: ref.ID, SHA256: ref.SHA256, Bytes: ref.Bytes}, 16<<20)
+	transcript, err := c.collectionPromptTranscript(ctx, work.Receipt.TranscriptRef)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -82,6 +74,10 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 	if err != nil {
 		return "", nil, nil, err
 	}
+	if err := c.constrainCollectionSourceFields(checkpoint, info.Parameters); err != nil {
+		return "", nil, nil, err
+	}
+	collectionContext += "\nThe runtime binds execution receipts. Omit receipt_ids. If the schema offers memory_uses, select only an injected context_item_id from its enum and omit retrieval_id; the runtime binds the original retrieval. Omit memory_uses when the schema does not offer it.\n"
 	if work.StopReason == workStopToolLoop {
 		info.Parameters["status"] = map[string]any{"type": "string", "enum": stoppedWorkStatuses(hasRuntimeCompletion(compiled))}
 		info.Required = appendUnique(appendUnique(info.Required, "status"), "summary")
@@ -107,7 +103,7 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 		delete(info.Parameters, "structured_payload")
 		info.Required = slices.DeleteFunc(info.Required, func(field string) bool { return field == "structured_payload" })
 	}
-	invariants, _, err := c.invariantRepairInstructions(checkpoint.TaskID, checkpoint.Attempt, checkpoint.ModelExecutionID)
+	invariants, err := c.collectionInvariantGuidance(checkpoint, compiled, info.Parameters)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -180,6 +176,18 @@ func (c *Coordinator) collectionPrompt(ctx context.Context, checkpoint *ResultCo
 	return pathContext + collectionContext + invariants + "Collect the result of the already returned work. Do not repeat work, explore sources, or change its outcome to satisfy a format requirement. Use only these frozen authorized inputs. Result assertions use canonical stored paths: /structured_payload/value refers to your structured_payload, and /invariant_verification/assessments is attested from your invariant_assessments when the schema permits them. For equals_by_items, choose the configured empty or non_empty label from the referenced array; preserve every array item, finding and evidence reference when correcting the label. For equals_projection, match array order and only the fields declared by the projection; each representation must obey its own schema. Do not copy extra domain fields into the outer envelope. Do not independently paraphrase or omit findings. Fix all reported format_feedback issues together. Object hints are local examples, never complete submissions. Preserve legal namesake fields and evidence at other paths. A truncated list is incomplete; check the full claims_schema too. When the claims schema declares payload projections, submit the claims there once and omit the projected outer fields. For an invariant-bound finding with runtime-owned severity, omit severity; retain its finding_index and judgment. Otherwise finding_index must name a finding with the invariant definition's exact severity. Keep each invariant summary concise, well below its schema maxLength; put extended explanations in details. Preserve the original judgments, findings and evidence when fixing representation.\n" + fenceUntrusted("json", string(data)), work, claimsSchema, nil
 }
 
+func (c *Coordinator) collectionPromptTranscript(ctx context.Context, transcriptID string) ([]byte, error) {
+	store, err := OpenFileArtifactStoreReadOnly(c.artifactStoreRootPath(), c.artifactStoreRootPath())
+	if err != nil {
+		return nil, err
+	}
+	ref, err := store.Get(ctx, transcriptID)
+	if err != nil {
+		return nil, err
+	}
+	return c.readCollectionBytes(ctx, ResultCollectionRef{ArtifactID: ref.ID, SHA256: ref.SHA256, Bytes: ref.Bytes}, 16<<20)
+}
+
 func (c *Coordinator) prepareCollectionInvocation(ctx context.Context, def *agent.AgentDef, checkpoint *ResultCollectionCheckpoint, id, diagnostic string) (context.Context, []byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
@@ -196,6 +204,7 @@ func (c *Coordinator) prepareCollectionInvocation(ctx context.Context, def *agen
 	if work.GenerationCaptured {
 		collector.Generation = work.Generation
 	}
+	c.applyCollectionRecoveryOutputLimit(&collector.Generation, checkpoint)
 	model := c.executionModelIDForTarget(checkpoint.ExecutionTarget, work.Receipt.Model)
 	collector.Generation.Model = model
 	ctx = withProviderCostContext(ctx, providerCostContext{Agent: checkpoint.Agent, Role: def.Role, Purpose: cost.PurposeWorker})
@@ -235,7 +244,7 @@ func (c *Coordinator) prepareCollectionInvocation(ctx context.Context, def *agen
 	if work.GenerationCaptured {
 		teamGeneration = work.TeamGeneration
 	}
-	request, err := json.Marshal(frozenCollectionRequest{Version: resultCollectionVersion, InvocationID: id, Model: model,
+	request, err := json.Marshal(frozenCollectionRequest{Version: resultCollectionVersion, BoundSourceFields: true, InvocationID: id, Model: model,
 		System: collector.System, ResponseChannel: channel, Prompt: prompt, ManifestFingerprint: manifest.Fingerprint, Generation: collector.Generation, TeamGeneration: teamGeneration, Tools: []any{}, ClaimsSchema: claimsSchema}, json.Deterministic(true))
 	return ctx, request, err
 }

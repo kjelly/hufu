@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -72,6 +73,10 @@ func (c *Coordinator) validateMemoryUseClaims(ctx context.Context, taskID string
 	if manifest == nil {
 		return fmt.Errorf("memory attribution has no manifest for task %q attempt %d", taskID, attempt)
 	}
+	return c.bindMemoryUseClaims(ctx, taskID, taskAgent, attempt, manifest, result)
+}
+
+func (c *Coordinator) bindMemoryUseClaims(ctx context.Context, taskID, taskAgent string, attempt int, manifest *MemoryInjectionManifest, result *TaskResult) error {
 	// Identity is runtime-owned. submit_result does not expose an attempt field,
 	// so seal the resolved current attempt onto the durable typed result before
 	// usage events and receipts are produced.
@@ -118,11 +123,11 @@ func (c *Coordinator) validateMemoryUseClaims(ctx context.Context, taskID string
 		}
 		ids = append(ids, use.ContextItemID)
 	}
-	return c.validateMemoryUseRecords(ctx, ids, allowed)
+	return c.validateMemoryUseRecords(ctx, manifest.Agent, ids, allowed)
 }
 
-func (c *Coordinator) validateMemoryUseRecords(ctx context.Context, ids []string, allowed map[string]MemoryInjectionItem) error {
-	records, err := c.contextRepo.GetMany(ctx, ids)
+func (c *Coordinator) validateMemoryUseRecords(ctx context.Context, agentName string, ids []string, allowed map[string]MemoryInjectionItem) error {
+	records, err := c.memoryUseRecords(ctx, agentName, ids)
 	if err != nil {
 		return fmt.Errorf("validate memory lifecycle: %w", err)
 	}
@@ -141,6 +146,25 @@ func (c *Coordinator) validateMemoryUseRecords(ctx context.Context, ids []string
 		}
 	}
 	return nil
+}
+
+func (c *Coordinator) memoryUseRecords(ctx context.Context, agentName string, ids []string) ([]contextstore.ContextItem, error) {
+	if c.contextRepo != nil {
+		return c.contextRepo.GetMany(ctx, ids)
+	}
+	// Recovery dry runs have no writable context repository. Check only the
+	// manifest IDs that the historical worker's scope authorizes.
+	def := c.agentDefByName(agentName)
+	if def == nil {
+		return nil, fmt.Errorf("memory attribution requires the original worker definition")
+	}
+	repo, err := contextstore.OpenSQLiteReadOnly(filepath.Join(c.session.Workspace, "context.sqlite"))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = repo.Close() }()
+	scope := resolveWorkerScope(c.contextScope(), def, c.activeBranchID())
+	return repo.Query(ctx, contextstore.RepositoryQuery{Scope: scope, IDs: ids, Limit: len(ids)})
 }
 
 func (c *Coordinator) emitMemoryUsageEvents(result *TaskResult) {

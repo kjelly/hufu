@@ -63,15 +63,24 @@ func TestResolveCommandWorkspaceAndTeam(t *testing.T) {
 
 func TestResumeRecoveryPreviewFlags(t *testing.T) {
 	oldOpts, oldResult, oldModel := opts, resumeRepairResult, resumeRepairModel
-	t.Cleanup(func() { opts, resumeRepairResult, resumeRepairModel = oldOpts, oldResult, oldModel })
+	oldLimit := resumeRepairMaxTokens
+	t.Cleanup(func() {
+		opts, resumeRepairResult, resumeRepairModel = oldOpts, oldResult, oldModel
+		resumeRepairMaxTokens = oldLimit
+	})
 	for _, tc := range []struct {
 		name             string
 		dry, report, tui bool
 		task, model      string
+		limit            int
 		wantErr          bool
 	}{
 		{name: "ordinary resume"},
 		{name: "preview", dry: true, task: "7"},
+		{name: "preview increased limit", dry: true, task: "7", limit: 65536},
+		{name: "execute increased limit", task: "7", limit: 65536},
+		{name: "limit without task", limit: 65536, wantErr: true},
+		{name: "negative limit", task: "7", limit: -1, wantErr: true},
 		{name: "ordinary source preflight", dry: true},
 		{name: "model without task", model: "ollama/test", wantErr: true},
 		{name: "preview model", dry: true, task: "7", model: "ollama/test", wantErr: true},
@@ -81,6 +90,7 @@ func TestResumeRecoveryPreviewFlags(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			opts.dryRun, opts.reportMode, opts.tuiMode = tc.dry, tc.report, tc.tui
 			resumeRepairResult, resumeRepairModel = tc.task, tc.model
+			resumeRepairMaxTokens = tc.limit
 			if err := validateResumeRepairFlags(); (err != nil) != tc.wantErr {
 				t.Fatalf("error=%v", err)
 			}

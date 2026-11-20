@@ -271,8 +271,8 @@ func (a *localResultAdmission) commit(ctx context.Context, input SubmitResultInp
 			}
 			return errors.New(prefix)
 		}
-		if err := a.coordinator.validateMemoryUseClaims(ctx, a.todoID, res); err != nil {
-			return rollback(err.Error())
+		if err := a.validateMemoryClaims(ctx, input, res); err != nil {
+			return rejectLocalResult(localResultRejectionReason(err), rollback(err.Error()))
 		}
 		// Only a success claim can be mechanically contradicted by terminal
 		// evidence. Check it while the occurrence is reserved so no projection
@@ -344,6 +344,13 @@ func (a *localResultAdmission) commit(ctx context.Context, input SubmitResultInp
 		}
 	}
 	return nil
+}
+
+func (a *localResultAdmission) validateMemoryClaims(ctx context.Context, input SubmitResultInput, result *TaskResult) error {
+	if cp, collecting := ctx.Value(resultCollectionAdmissionKey{}).(*ResultCollectionCheckpoint); collecting && input.collectionSourcesBound {
+		return a.coordinator.validateCollectedMemoryInput(ctx, cp, input, result)
+	}
+	return a.coordinator.validateMemoryUseClaims(ctx, a.todoID, result)
 }
 
 func (a *localResultAdmission) forbidsArtifacts() bool {

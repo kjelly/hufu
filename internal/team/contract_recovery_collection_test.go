@@ -18,18 +18,19 @@ import (
 )
 
 type contractCollectionFixtureOptions struct {
-	Accepted       bool
-	Verbatim       bool
-	ValidAccepted  bool
-	Dependents     bool
-	StringEnvelope bool
-	PriorGrant     bool
-	Endpoint       string
-	ArtifactKeys   bool
-	LongOutput     bool
-	Exhausted      bool
-	FrozenPaths    []string
-	PendingPeer    bool
+	Accepted         bool
+	Verbatim         bool
+	ValidAccepted    bool
+	Dependents       bool
+	StringEnvelope   bool
+	PriorGrant       bool
+	Endpoint         string
+	ArtifactKeys     bool
+	LongOutput       bool
+	Exhausted        bool
+	FrozenPaths      []string
+	PendingPeer      bool
+	PreserveContract bool
 }
 
 func contractCollectionFixture(t *testing.T, response string, effect SideEffectClass, options ...contractCollectionFixtureOptions) (*Coordinator, *ResumeSource, string) {
@@ -77,7 +78,7 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 	ref := old.ref(true)
 	definition := TaskDef{ID: "research", Agent: "worker", Phase: PhasePrepare, SideEffect: effect, Recovery: RecoveryManual,
 		Execution: ExecutionContract{RequiresResult: true}, VerifySpec: &VerificationSpec{Type: VerifyTaskResultAssert, TaskResultAssertions: []TaskResultAssertion{{Pointer: "/structured_payload/value/findings", Op: "min_items", Value: 14}}}, ResultContract: &ref, ResultContractSpec: &resultContractSpec{Schema: ref.ID, RequireStructured: true}}
-	if fixture.Accepted {
+	if fixture.Accepted || fixture.PreserveContract {
 		definition.VerifySpec.TaskResultAssertions[0].Value = 2
 	}
 	if fixture.Verbatim {
@@ -93,7 +94,7 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 	}
 	var observedSource ArtifactRef
 	var frozenBinding *WorksetBinding
-	c, item, ctx, receipt := resultCollectionIdentityFixture(t, cmp.Or(fixture.Endpoint, "http://127.0.0.1:1/v1"), fixture.Endpoint != "", func(spec *TodoSpec) {
+	c, item, ctx, receipt := resultCollectionIdentityFixture(t, cmp.Or(fixture.Endpoint, "http://127.0.0.1:1/v1"), fixture.Endpoint != "", "", func(spec *TodoSpec) {
 		spec.ContractID, spec.ContractHash, spec.Phase = definition.ID, hash, definition.Phase
 		spec.OutputMode = definition.OutputMode
 		spec.VerifySpec = definition.VerifySpec
@@ -314,9 +315,11 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.session.ResultContracts[ref.ID] = next
-	nextRef := next.ref(true)
-	c.session.ContractTasks[0].ResultContract = &nextRef
+	if !fixture.PreserveContract {
+		c.session.ResultContracts[ref.ID] = next
+		nextRef := next.ref(true)
+		c.session.ContractTasks[0].ResultContract = &nextRef
+	}
 	source, err := ReadResumeSource(c.session.Workspace, "main", "run-test")
 	if err != nil {
 		t.Fatal(err)

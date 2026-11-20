@@ -3,6 +3,7 @@ package team
 import (
 	"context"
 	"fmt"
+	"slices"
 )
 
 // ResumePreflightAssessment describes source readiness, not an execution or
@@ -58,6 +59,7 @@ func (c *Coordinator) AssessResumeSource(ctx context.Context, source *ResumeSour
 	if source.Session.WorkflowState == PhaseDone && !finalAcceptanceRetryRequested(ctx) {
 		return nil, fmt.Errorf("workflow is already complete; start a follow-up request instead of resume")
 	}
+	var released []string
 	if source.Session.WorkflowState == PhaseFailed {
 		proof, err := c.completedCollectionWorkflowProof(ctx)
 		if err != nil {
@@ -66,6 +68,7 @@ func (c *Coordinator) AssessResumeSource(ctx context.Context, source *ResumeSour
 		if proof == nil {
 			return nil, fmt.Errorf("workflow is failed; use an eligible explicit result-only repair or targeted reconciliation")
 		}
+		released = proof.deferred
 	}
 	assessment := &ResumePreflightAssessment{Branch: source.BranchID, PolicySHA256: source.Session.ExecutionPolicySnapshot.ConfigurationHash}
 	for _, item := range c.taskTracker.TodoList().Items() {
@@ -75,7 +78,7 @@ func (c *Coordinator) AssessResumeSource(ctx context.Context, source *ResumeSour
 		switch {
 		case item.Status == TaskDone:
 			assessment.Accepted++
-		case isInterruptedStatus(item.Status):
+		case isInterruptedStatus(item.Status) || slices.Contains(released, item.ID):
 			assessment.Resumable++
 		default:
 			assessment.TerminalUnresolved++

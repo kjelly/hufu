@@ -43,16 +43,13 @@ task. The complete command has this form:
 
 ```sh
 hufu resume --workspace ./workspace/dev-team --team dev-team \
-  --run <run-id> --branch <branch-id> --execution-profile default \
+  --run <run-id> --branch <branch-id> \
   --repair-result <task-id> --dry-run
 ```
 
-Copy the complete suggested argv, including its workspace, run, branch, task,
-and execution profile, and use its working directory. The current action
-builder explicitly selects `--execution-profile default` for this read-only
-preview. This does not replace the source run's frozen policy; incompatible
-profiles remain subject to ordinary resume preflight. These repair-preview flags
-belong to `hufu resume`; `hufu session resume` does not accept them.
+Copy the complete suggested argv and use its working directory. Hufu restores
+the source run's saved execution profile before checking policy compatibility.
+These repair-preview flags belong to the top-level `hufu resume` command.
 Each blocked collection has its own
 preview, even when the primary action prioritizes another task's unknown
 external effect. The primary action retains that safety priority. Availability
@@ -61,6 +58,25 @@ repair will succeed. Run the preview from the original project directory with th
 configuration and model overrides; it may still report policy drift, stale
 sources, or exhausted recovery authority. Status itself does not call a model,
 assess live repair eligibility, grant turns, or resume execution.
+
+When a saved collection ran out of output, add `--repair-max-tokens 65536` to
+its preview to assess a higher ceiling. Use the same value on the admitted
+repair command. The grant applies to new collector calls for the chosen task.
+It preserves the original worker receipt and consumed turns. Provider admission
+and the result contract still apply.
+
+Collection binds execution receipts from the original work and offers memory
+attribution only for IDs injected into that attempt. For verified read-only
+work, a preview can admit one bounded recollection cycle to correct an artifact
+ID placed in the receipt field or a claim of memory use when attribution was
+disabled and no memory manifest exists. The journal retains the immutable
+reference to the original rejected response. Replacement results must pass the
+normal result and source checks before they can be accepted.
+
+Repair each eligible collection in the failed phase. Once all causal
+collections are accepted, Hufu can release read-only tasks whose first
+dispatch was deferred by the same policy scope. Ordinary resume dispatches
+them and continues through the existing verification and acceptance.
 
 ## Interrupted work with known-safe effects
 

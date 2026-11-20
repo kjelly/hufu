@@ -38,14 +38,11 @@ func (c *Coordinator) prepareRecoveryValidation() error {
 	return err
 }
 
-func validateRecoveryProofChecks(a *ResultCollectionRecoveryAssessment) error {
+func requiredRecoveryProofChecks(a *ResultCollectionRecoveryAssessment) map[string]bool {
 	// Validate each saved revision against its original proof requirements;
 	// replays must never rerun today's evaluator against historical claims.
 	required := map[string]bool{"target": false, "lineage": false, "canonical_replay": false, "work_sources_policy": false, "settled_decisions": false, "transcript": false}
 	if a.ValidatorRevision >= 2 {
-		if a.TaskID != a.Checkpoint.TaskID || a.BranchID != a.Checkpoint.BranchID || a.SourceRunID != a.Checkpoint.SourceRunID {
-			return errResultCollectionStale
-		}
 		for _, code := range []string{"canonical_target", "terminal_context", "context_manifest"} {
 			required[code] = false
 		}
@@ -71,6 +68,9 @@ func validateRecoveryProofChecks(a *ResultCollectionRecoveryAssessment) error {
 	if a.ValidatorRevision >= 4 {
 		required["workflow_recovery"] = false
 	}
+	if a.MaxOutputTokens != 0 {
+		required["collector_output_limit"] = false
+	}
 	if a.ValidatorRevision >= 7 && a.Checkpoint.LegacySubmission != nil && a.Checkpoint.Response == nil {
 		required["legacy_submission"] = false
 	}
@@ -81,7 +81,18 @@ func validateRecoveryProofChecks(a *ResultCollectionRecoveryAssessment) error {
 			required["workset_paths"] = false
 		}
 	}
+	return required
+}
+
+func validateRecoveryProofChecks(a *ResultCollectionRecoveryAssessment) error {
+	if a.ValidatorRevision >= 2 && (a.TaskID != a.Checkpoint.TaskID || a.BranchID != a.Checkpoint.BranchID || a.SourceRunID != a.Checkpoint.SourceRunID) {
+		return errResultCollectionStale
+	}
+	required := requiredRecoveryProofChecks(a)
 	for _, check := range a.Checks {
+		if check.Code == collectionSourceFieldRepairCheck && (a.ValidatorRevision < 17 || a.Disposition != RecoveryRepairClaims || a.Checkpoint.Response == nil) {
+			return errResultCollectionStale
+		}
 		if a.ValidatorRevision >= 2 && check.Code == "canonical_claims" && !check.Passed && a.Disposition != RecoveryRepairClaims {
 			return errResultCollectionStale
 		}

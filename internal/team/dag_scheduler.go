@@ -1230,7 +1230,7 @@ func detectTaskCycle(tasks []TaskDef) bool {
 // receives the reason and can change approach; any other block needs a human
 // and stops the run as before. The coordinator sees the reason in either case.
 func (s *dagScheduler) blockDispatch(i int, disposition RetryDisposition) {
-	detail := "anti-thrashing limit reached for this task's scope; strategy change or human review required"
+	detail := dispatchDeferredDetail
 	status := TaskBlocked
 	if disposition == ReplanRequired {
 		detail = "systemic defect escalated for this task's scope (replan_required); dispatch a different approach or agent instead of repeating this task"

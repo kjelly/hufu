@@ -145,6 +145,13 @@ func projectClaimsInput(input SubmitResultInput, compiled *CompiledResultContrac
 }
 
 func (c *Coordinator) projectResultClaims(ctx context.Context, id string, input SubmitResultInput) (SubmitResultInput, error) {
+	return c.projectResultClaimsWithRecovery(ctx, id, input, false)
+}
+
+// A rejected non-violation assessment of a known but out-of-scope invariant
+// does not establish provenance for another claim. Omit it from the
+// independent preflight view only, then validate the actual replacement.
+func (c *Coordinator) projectResultClaimsWithRecovery(ctx context.Context, id string, input SubmitResultInput, independentRecovery bool) (SubmitResultInput, error) {
 	if c == nil {
 		return input, nil
 	}
@@ -198,6 +205,25 @@ func (c *Coordinator) projectResultClaims(ctx context.Context, id string, input 
 		for _, entry := range included {
 			definitions[entry.definition.ID] = string(entry.definition.Severity)
 		}
+		eligible := claims[:0]
+		for _, claim := range claims {
+			if _, exists := definitions[claim.InvariantID]; exists {
+				eligible = append(eligible, claim)
+				continue
+			}
+			contextID := "invariant:" + normalizedName(c.session.Config.Name) + ":" + claim.InvariantID
+			excluded := slices.ContainsFunc(manifest.Items, func(item ContextManifestItem) bool {
+				return item.ID == contextID && item.Source == repositoryInvariantSource && !item.Included
+			})
+			if excluded && claim.Status != InvariantViolated {
+				if independentRecovery {
+					continue
+				}
+				return input, rejectLocalResult(RepairFailureInvalidSchema, fmt.Errorf("invariant %q was outside the frozen work context; omit only its out-of-scope attestation and retain findings", claim.InvariantID))
+			}
+			return input, rejectLocalResult(RepairFailureContract, fmt.Errorf("invariant %q was not included in the work context", claim.InvariantID))
+		}
+		claims = eligible
 		value, err := decodeUniqueJSON(input.StructuredPayload)
 		if err != nil {
 			return input, err
@@ -224,10 +250,7 @@ func (c *Coordinator) projectResultClaims(ctx context.Context, id string, input 
 		}
 		assigned := map[int]string{}
 		for _, claim := range claims {
-			severity, exists := definitions[claim.InvariantID]
-			if !exists {
-				return input, rejectLocalResult(RepairFailureContract, fmt.Errorf("invariant %q was not included in the work context", claim.InvariantID))
-			}
+			severity := definitions[claim.InvariantID]
 			if claim.Status != InvariantViolated {
 				continue
 			}

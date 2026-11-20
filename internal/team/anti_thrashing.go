@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -542,7 +543,7 @@ func failureOccurrenceCount(item *TodoItem) int {
 func (s *AntiThrashingState) rebuild(items []*TodoItem, limits ReliabilityConfig) {
 	s.reset()
 	for _, item := range items {
-		if item == nil {
+		if item == nil || schedulerDispatchDeferred(item) {
 			continue
 		}
 		if item.Kind == TaskKindDiagnostic && (len(item.FailureFingerprints) > 0 || item.Status == TaskDone || item.Status == TaskError || item.Status == TaskBlocked) {
@@ -620,7 +621,7 @@ func (s *AntiThrashingState) rebuild(items []*TodoItem, limits ReliabilityConfig
 	}
 
 	for _, item := range items {
-		if item == nil {
+		if item == nil || schedulerDispatchDeferred(item) {
 			continue
 		}
 		for _, fp := range countedFailureFingerprints(item) {
@@ -659,23 +660,33 @@ func (s *AntiThrashingState) rebuild(items []*TodoItem, limits ReliabilityConfig
 // criterion and that failed and then succeeded on a later attempt recovered:
 // its failures stay in its history but no longer count, so only tasks that
 // are still failing drive the same-fingerprint and systemic limits. Failure
-// evidence tied to an acceptance criterion keeps counting after the task
-// completes, because the criterion can still be failing; criterion progress
-// (resetAfterCriterionProgress) is what clears it.
+// evidence tied to an acceptance criterion ordinarily keeps counting until
+// criterion progress. A verified independent workset outcome resolves its
+// own execution failure even if other items still owe the shared criterion.
 func countedFailureFingerprints(item *TodoItem) []FailureFingerprint {
 	if item == nil {
 		return nil
 	}
-	if item.Status != TaskDone || len(item.Advances) > 0 {
-		return item.FailureFingerprints
-	}
-	counted := make([]FailureFingerprint, 0, len(item.FailureFingerprints))
-	for _, fp := range item.FailureFingerprints {
-		if strings.TrimSpace(fp.CriterionID) != "" {
-			counted = append(counted, fp)
+	var collectionFailure string
+	if cp := currentResultCollection(item); item.Status == TaskDone && cp != nil {
+		for _, grant := range slices.Backward(collectionRepairGrants(item.ExecutionReceipt)) {
+			if isWorkflowCollectionRepairGrant(grant, cp) && grant.BranchID == cp.BranchID {
+				collectionFailure = "result collection " + string(grant.Recovery.OriginalReason) + ":"
+				break
+			}
 		}
 	}
-	return counted
+	return slices.DeleteFunc(slices.Clone(item.FailureFingerprints), func(fp FailureFingerprint) bool {
+		return collectionFailure != "" && fp.Class == FailureProtocol && strings.Contains(fp.NormalizedError, collectionFailure) ||
+			fp.Class == FailureExecution && verifiedReadOnlyWorksetOutcome(item) ||
+			item.Status == TaskDone && len(item.Advances) == 0 && strings.TrimSpace(fp.CriterionID) == ""
+	})
+}
+
+func verifiedReadOnlyWorksetOutcome(item *TodoItem) bool {
+	return item.Status == TaskDone && item.Kind == TaskKindOutcome && item.WorksetBinding != nil &&
+		metadataReadOnlyTask(item.SideEffect, item.Execution) && item.TypedResult != nil &&
+		taskResultStatusIsSuccessful(item.TypedResult.Status) && isVerifySuccess(item.VerifyResult)
 }
 
 func (s *AntiThrashingState) recordDiagnostic(item *TodoItem) bool {

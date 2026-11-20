@@ -30,6 +30,7 @@ var (
 	resumeRebuildActionPayloads bool
 	resumeRetryWork             string
 	resumeRepairModel           string
+	resumeRepairMaxTokens       int
 	resumeUpgradeContracts      bool
 	resumeUpgradeInputPolicy    bool
 	resumeMetadataOnly          bool
@@ -153,7 +154,7 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 		if err := bindResumePreflightVersionContext(cmd.Context(), tc.session, false); err != nil {
 			return err
 		}
-		assessment, err := tc.coordinator.AssessResumeResultCollection(resumeReferenceContext(cmd.Context()), source, resumeRepairResult)
+		assessment, err := tc.coordinator.AssessResumeResultCollection(team.WithResultRepairMaxOutput(resumeReferenceContext(cmd.Context()), resumeRepairMaxTokens), source, resumeRepairResult)
 		if err != nil {
 			return err
 		}
@@ -184,6 +185,7 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	if resumeRepairResult != "" {
 		ctx = team.WithResultOnlyRepair(resumeReferenceContext(ctx), resumeRepairResult)
 		ctx = team.WithResultRepairModel(ctx, resumeRepairModel)
+		ctx = team.WithResultRepairMaxOutput(ctx, resumeRepairMaxTokens)
 	}
 	injector := newPromptInjector(nil)
 	activeCoord := new(activeCoordinator)
@@ -259,6 +261,7 @@ func init() {
 	f.BoolVar(&resumeRebuildActionPayloads, "rebuild-action-payloads", false, "Explicitly reconstruct redacted public numeric budgets with --repair-action, verified against original frozen payload hashes")
 	f.StringVar(&resumeRetryWork, "retry-work", "", "Preview or fork a controlled retry of one completed read-only work attempt whose required decisions never started")
 	f.StringVar(&resumeRepairModel, "repair-model", "", "Auxiliary result submission model (must already be frozen in the source policy); preserves the original worker target")
+	f.IntVar(&resumeRepairMaxTokens, "repair-max-tokens", 0, "Raise the output ceiling for bounded result-only collector requests; use the same value in the preview")
 	registerTeamSelectionFlags(f, &resumeTeamName, "Agent team name (inferred from --workspace when omitted)")
 	f.StringVar(&resumeSearch, "agent-team-search-path", "", "Comma-separated team search paths")
 	f.StringVar(&opts.providerURL, "provider-url", "", "Provider API base URL")
@@ -328,6 +331,16 @@ func printResultRecoveryAssessment(cmd *cobra.Command, a *team.ResultCollectionR
 	turns := "unknown (no verified collection checkpoint)"
 	if a.Checkpoint != nil {
 		turns = fmt.Sprintf("used: %d; remaining: %d; additional maximum: %d", a.TurnsUsed, a.RemainingTurns, a.AdditionalTurns)
+	}
+	if a.MaxOutputTokens > 0 {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Collector output limit: %d tokens per new request\n", a.MaxOutputTokens); err != nil {
+			return err
+		}
+	}
+	if len(a.DeferredDispatch) > 0 && a.Disposition != team.RecoveryBlocked {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "First dispatch eligible after phase repair: %s\n", strings.Join(a.DeferredDispatch, ", ")); err != nil {
+			return err
+		}
 	}
 	if a.Checkpoint != nil && a.Checkpoint.ContractUpgrade != nil && a.Checkpoint.ContractUpgrade.AcceptedResult != nil {
 		for _, pointer := range a.Checkpoint.ContractUpgrade.AcceptedResult.Pointers {
@@ -419,6 +432,14 @@ func validateResumeRepairFlags() error {
 	return nil
 }
 
+func validateResumeRepairOutputLimit() error {
+	if resumeRepairMaxTokens != 0 && (resumeRepairMaxTokens < 0 || resumeRepairResult == "" ||
+		len(resumeRepairReferences) > 0 || resumeBranchRecoveryRequested() || resumeRepairModel != "" || resumeRetryAcceptance) {
+		return fmt.Errorf("--repair-max-tokens requires a positive limit and --repair-result without other recovery modes")
+	}
+	return nil
+}
+
 func validateAcceptanceRetryFlags() error {
 	if resumeRetryAcceptance {
 		if strings.TrimSpace(resumeRun) == "" || strings.TrimSpace(resumeRun) != resumeRun || resumeAcceptanceTimeout <= 0 {
@@ -434,6 +455,9 @@ func validateAcceptanceRetryFlags() error {
 }
 
 func validateResumeActionRepairFlags() error {
+	if err := validateResumeRepairOutputLimit(); err != nil {
+		return err
+	}
 	if resumeRebuildActionPayloads && resumeRepairAction == "" {
 		return fmt.Errorf("--rebuild-action-payloads requires --repair-action")
 	}

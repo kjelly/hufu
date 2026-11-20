@@ -13,6 +13,9 @@ func (c *Coordinator) validateRecoveryCanonicalClaims(ctx context.Context, cp *R
 		err = rejectLocalResult(RepairFailureInvalidSchema, errors.New(issue.Diagnostic()))
 	}
 	if err == nil {
+		err = c.bindCollectionReceiptFields(ctx, cp, &input)
+	}
+	if err == nil {
 		input, err = c.projectResultClaims(ctx, cp.TaskID, input)
 		if err != nil {
 			err = rejectProjectedClaims(err)
@@ -22,6 +25,9 @@ func (c *Coordinator) validateRecoveryCanonicalClaims(ctx context.Context, cp *R
 		admission := localResultAdmission{coordinator: c, todoID: cp.TaskID}
 		var res *TaskResult
 		res, err = admission.validateClaims(ctx, input, localResultSubmissionContract(c, cp.TaskID), func() RepairFailureReason { return RepairFailureInvalidSchema }, false)
+		if err == nil && input.collectionSourcesBound {
+			err = c.validateCollectedMemoryInput(ctx, cp, input, res)
+		}
 		if err == nil {
 			err = c.attestInvariantClaims(cp.TaskID, cp.Attempt, cp.ModelExecutionID, input.InvariantAssessments, res)
 			if _, mismatch := errors.AsType[*invariantFindingSeverityMismatch](err); mismatch {

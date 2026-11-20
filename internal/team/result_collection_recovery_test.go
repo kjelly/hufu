@@ -402,6 +402,7 @@ func TestResultCollectionRecoveryAssessmentPreservesEvidence(t *testing.T) {
 	}{
 		{"valid prepared previously source invalid", `{"status":"success","summary":"limitations retained in original report"}`, true, RepairFailureSource, RecoveryCommitLocal, 0},
 		{"valid received", `{"status":"success","summary":"complete"}`, false, RepairFailureSource, RecoveryCommitLocal, 0},
+		{"inert assumption report", `{"status":"success","summary":"original report","assumption_checks":[{"assumption_id":"observed","status":"supported"}]}`, true, RepairFailureSource, RecoveryCommitLocal, 0},
 		{"malformed response", `{"status":`, false, RepairFailureSource, RecoveryRepairClaims, 2},
 		{"missing response unavailable", "", false, repairFailureCollectionUnavailable, RecoveryResumeCollection, 2},
 		{"missing source claims", "", false, RepairFailureSource, RecoveryBlocked, 0},

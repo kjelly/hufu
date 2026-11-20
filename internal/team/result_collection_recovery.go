@@ -1,6 +1,7 @@
 package team
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -19,7 +20,7 @@ const (
 	RecoveryResumeCollection        ResultCollectionRecoveryDisposition = "resume_collection"
 	RecoveryBlocked                 ResultCollectionRecoveryDisposition = "blocked"
 	RecoverySelectReferences        ResultCollectionRecoveryDisposition = "select_references"
-	resultRecoveryValidatorRevision                                     = 14
+	resultRecoveryValidatorRevision                                     = 17
 )
 
 type ResultCollectionRecoveryCheck struct {
@@ -47,8 +48,10 @@ type ResultCollectionRecoveryAssessment struct {
 	TurnsUsed             int                                 `json:"turns_used"`
 	RemainingTurns        int                                 `json:"remaining_turns"`
 	AdditionalTurns       int                                 `json:"additional_turns"`
+	MaxOutputTokens       int                                 `json:"collector_output_limit,omitempty"`
 	AcceptedTasks         *int                                `json:"accepted_tasks,omitempty"`
 	ContinuesWorkflow     bool                                `json:"continues_workflow"`
+	DeferredDispatch      []string                            `json:"deferred_dispatch,omitempty"`
 	ReferenceSelections   []AcceptedReferenceSelection        `json:"reference_selections,omitempty"`
 	ReferenceChoices      []AcceptedReferenceChoice           `json:"reference_choices,omitempty"`
 	ReferenceClaimsSHA256 string                              `json:"reference_claims_sha256,omitempty"`
@@ -84,6 +87,7 @@ func cloneRecoveryAssessment(a *ResultCollectionRecoveryAssessment) *ResultColle
 		copy.AcceptedTasks = new(*a.AcceptedTasks)
 	}
 	copy.Checks = slices.Clone(a.Checks)
+	copy.DeferredDispatch = slices.Clone(a.DeferredDispatch)
 	copy.ReferenceSelections = slices.Clone(a.ReferenceSelections)
 	copy.ReferenceChoices = slices.Clone(a.ReferenceChoices)
 	return &copy
@@ -201,35 +205,53 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 	if !c.assessRecoveryLineage(ctx, item, a, check, validateCollectionRecoveryTarget) {
 		return finish()
 	}
-	localCommitOnly, workflowErr := resultRepairLocalCommitOnly(c.collectionWorkflowSnapshot(), taskID)
+	workflow := c.collectionWorkflowSnapshot()
+	localCommitOnly, workflowErr := resultRepairLocalCommitOnly(workflow, taskID)
 	if !check("workflow_recovery", workflowErr) {
 		return finish()
 	}
+	if workflow.WorkflowState == PhaseFailed && !localCommitOnly {
+		for _, peer := range workflow.Tasks {
+			if collectionDispatchDeferred(peer, item) {
+				a.DeferredDispatch = append(a.DeferredDispatch, peer.ID)
+			}
+		}
+	}
+	c.assessResultCollectionWork(ctx, item, a, check)
+	return finish()
+}
+
+func (c *Coordinator) assessResultCollectionWork(ctx context.Context, item *TodoItem, a *ResultCollectionRecoveryAssessment, check func(string, error) bool) {
+	cp, taskID := a.Checkpoint, item.ID
 	work, err := c.loadCollectionWork(ctx, item, cp)
 	if !check("work_sources_policy", err) {
-		return finish()
+		return
+	}
+	a.MaxOutputTokens, _ = ctx.Value(resultRepairMaxOutputKey{}).(int)
+	if a.MaxOutputTokens != 0 && !check("collector_output_limit", c.validateCollectionOutputIncrease(item, work, a.MaxOutputTokens)) {
+		return
 	}
 	if !collectionWorkCompleted(&work.Receipt, HasCancelledCollectionWork(item)) {
 		check("execution_ended", fmt.Errorf("work receipt is unfinished or cancelled work did not complete successfully"))
-		return finish()
+		return
 	}
 	// No ordinary worker can be active once a blocked protocol task has sealed
 	// work. Refuse a locally held lease as well as an unfinished work receipt.
 	if _, active := c.activeTaskResultOccurrence(taskID); active {
 		check("execution_ended", errTaskResultStale)
-		return finish()
+		return
 	}
 	check("execution_ended", nil)
 	_, compiled, err := c.boundResultContract(taskID)
 	if !check("contract", err) {
-		return finish()
+		return
 	}
 	plans, err := c.fixedCollectionPlans(taskID)
 	if err == nil {
 		_, err = c.resolveDecisionCollectionPlans(ctx, taskID, plans)
 	}
 	if !check("settled_decisions", err) {
-		return finish()
+		return
 	}
 	for _, blob := range []struct {
 		kind string
@@ -238,16 +260,16 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 		if blob.ref != nil {
 			_, err = c.readCollectionBlob(ctx, cp, blob.kind, blob.ref)
 			if !check(blob.kind+"_integrity", err) {
-				return finish()
+				return
 			}
 		}
 	}
 	evidence, err := c.restoreTranscriptEvidence(ctx, &work.Receipt, cp.SourceRunID)
 	if !check("transcript", err) {
-		return finish()
+		return
 	}
 	if !check("terminal_context", validateRecoveryTerminalContext(c.session.Workspace, cp)) {
-		return finish()
+		return
 	}
 	ctx = context.WithValue(ctx, resultCollectionEvidenceKey{}, evidence)
 	ctx = context.WithValue(ctx, tools.AgentNameKey, cp.Agent)
@@ -257,11 +279,11 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 	ctx = withInvocationMetadata(ctx, InvocationMetadata{RunID: cp.SourceRunID, TaskID: taskID, Attempt: cp.Attempt, AgentName: cp.Agent, AgentRole: "worker", ModelExecutionID: cp.ModelExecutionID})
 	manifest, err := collectionContextManifest(item, cp, &work.Receipt)
 	if !check("context_manifest", err) {
-		return finish()
+		return
 	}
 	if item.DependencyResultView != nil {
 		if !check("dependency_view", c.validateSelectedRepairContext(ctx, item, manifest)) {
-			return finish()
+			return
 		}
 	}
 	if manifest != nil {
@@ -269,9 +291,13 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 	}
 	if denial := c.checkpointDenial(taskID); denial != "" {
 		check("checkpoint", errors.New(denial))
-		return finish()
+		return
 	}
 	ctx = c.withCollectedWorkArtifactScope(ctx, work)
+	if cp.State == ResultCollectionCommitted && a.MaxOutputTokens != 0 {
+		check("collector_output_limit", fmt.Errorf("a committed collection has no model-based repair"))
+		return
+	}
 	if cp.State == ResultCollectionCommitted {
 		result, err := c.acceptedCollectionResult(ctx, item, cp)
 		if err == nil {
@@ -282,10 +308,18 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 		if check("accepted_result", err) {
 			a.Disposition = RecoveryCommitLocal
 		}
-		return finish()
+		return
 	}
 	c.assessRecoveryClaims(ctx, item, a, work, compiled, check)
-	return finish()
+	if a.AdditionalTurns > 0 && hasSourceFieldRecollectionGrant(collectionReceipt(item, cp), cp) {
+		check("collection_turn_grant", fmt.Errorf("the sealed work has already received its source-field recollection budget"))
+		a.Disposition, a.AdditionalTurns = RecoveryBlocked, 0
+		return
+	}
+	if a.MaxOutputTokens != 0 && a.Disposition != RecoveryBlocked && a.AdditionalTurns == 0 {
+		check("collector_output_limit", fmt.Errorf("increasing the limit requires a model-based collection repair"))
+		a.Disposition = RecoveryBlocked
+	}
 }
 
 func collectionWorkCompleted(receipt *ExecutionReceipt, cancelled bool) bool {
@@ -312,6 +346,10 @@ func validateRecoveryAssessment(a *ResultCollectionRecoveryAssessment) error {
 	}
 	hash, err := recoveryAssessmentFingerprint(a)
 	if err != nil || hash != a.Fingerprint || a.TurnsUsed != a.Checkpoint.TurnsUsed || a.RemainingTurns != max(0, a.Checkpoint.TurnLimit-a.TurnsUsed) {
+		return errResultCollectionStale
+	}
+	if a.MaxOutputTokens != 0 && (a.ValidatorRevision < 15 || a.MaxOutputTokens < 1 ||
+		a.MaxOutputTokens > maxResultRepairOutputTokens || a.AdditionalTurns == 0) {
 		return errResultCollectionStale
 	}
 	switch a.Disposition {
@@ -444,6 +482,7 @@ func validateCollectionRecoveryGrantEvent(event RunEvent, grant *ResultRepairGra
 
 func validateCollectionRecoveryReplay(events []RunEvent) error {
 	checkpoints := make(map[string]*ResultCollectionCheckpoint)
+	sourceFieldGrants := make(map[[2]string]bool)
 	for index, event := range events {
 		if event.Type == string(EventContractRecovery) {
 			for _, item := range ReduceToTodoList(events[:index+1]) {
@@ -482,6 +521,13 @@ func validateCollectionRecoveryReplay(events []RunEvent) error {
 			digest, err := collectionDigest(prior)
 			if err != nil || prior == nil || digest != payload.Grant.Recovery.CheckpointSHA256 {
 				return fmt.Errorf("recovery grant at %s has stale prior checkpoint", event.ID)
+			}
+			key := [2]string{event.BranchID, prior.Work.ArtifactID}
+			if sourceFieldGrants[key] && payload.Grant.AdditionalAttempts > 0 {
+				return fmt.Errorf("additional recollection turns after a source-field grant at %s", event.ID)
+			}
+			if isCollectionSourceFieldRecollection(payload.Grant.Recovery) {
+				sourceFieldGrants[key] = true
 			}
 		}
 		if payload.Receipt != nil && payload.Receipt.ResultCollection != nil {
@@ -671,16 +717,33 @@ func (c *Coordinator) assessRecoveryClaims(ctx context.Context, item *TodoItem, 
 		return
 	}
 	raw := blob.Data
+	if blob.ResponseIssue == nil && len(bytes.TrimSpace(raw)) == 0 {
+		check("evidence_keys", nil)
+		if c.validateRecoveryIndependentClaims(ctx, cp, work, compiled, "", check) {
+			check("canonical_claims", fmt.Errorf("collector returned no result"))
+			a.Disposition, a.AdditionalTurns = RecoveryRepairClaims, 2
+		}
+		return
+	}
 	inspection, _ := collectionResponseJSON(raw)
-	resolved, err := c.resolveResultEvidenceKeys(ctx, taskID, string(inspection))
+	probe, sourceFieldDiagnostic, err := c.collectionSourceFieldRepair(ctx, cp, compiled, string(inspection))
+	if err != nil {
+		check(collectionSourceFieldRepairCheck, err)
+		return
+	}
+	resolved, err := c.resolveResultEvidenceKeys(ctx, taskID, probe)
 	if err != nil {
 		if isResultReferenceChoiceError(err) {
 			// The observation registry was authenticated before this typed
 			// selection error. Only the model claim needs repair, not its sources.
 			check("evidence_keys", nil)
-			if c.validateRecoveryIndependentClaims(ctx, cp, work, compiled, string(inspection), check) {
-				check("canonical_claims", err)
-				a.Disposition, a.AdditionalTurns = RecoveryRepairClaims, 2
+			if c.validateRecoveryIndependentClaims(ctx, cp, work, compiled, probe, check) {
+				if sourceFieldDiagnostic != "" {
+					assessCollectionSourceFieldRecollection(a, sourceFieldDiagnostic, check)
+				} else {
+					check("canonical_claims", err)
+					a.Disposition, a.AdditionalTurns = RecoveryRepairClaims, 2
+				}
 			}
 		} else {
 			check("evidence_keys", err)
@@ -689,6 +752,10 @@ func (c *Coordinator) assessRecoveryClaims(ctx context.Context, item *TodoItem, 
 	}
 	check("evidence_keys", nil)
 	if !c.validateRecoveryIndependentClaims(ctx, cp, work, compiled, resolved, check) {
+		return
+	}
+	if sourceFieldDiagnostic != "" {
+		assessCollectionSourceFieldRecollection(a, sourceFieldDiagnostic, check)
 		return
 	}
 	claims := []byte(resolved)

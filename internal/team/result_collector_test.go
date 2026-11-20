@@ -306,7 +306,8 @@ func TestResultCollectorUsesDataOnlyRequestsAndBoundedFormatRepair(t *testing.T)
 	}{
 		{replies: []string{`{"status":"success","summary":"analysis complete"}`}},
 		{entry: "native_response", replies: []string{`{"status":"success","summary":"analysis complete"}`}},
-		{entry: "native_response", replies: []string{`{"status":"success","summary":"analysis complete","assumption_checks":[],"commands":[],"files_modified":[],"memory_uses":[],"receipt_ids":[],"suggested_next_tasks":[],"verification":[]}`}},
+		{entry: "native_response", replies: []string{`{"status":"success","summary":"analysis complete","assumption_checks":[],"commands":[],"files_modified":[],"suggested_next_tasks":[],"verification":[]}`}},
+		{entry: "native_response", replies: []string{`{"status":"success","summary":"analysis complete","memory_uses":[],"receipt_ids":[]}`, `{"status":"success","summary":"analysis complete"}`}},
 		{entry: "native_response", replies: []string{`{"status":"success","summary":""}`, `{"status":"success","summary":"analysis complete"}`}},
 		{replies: []string{`invalid JSON`, `{"status":"success","summary":"analysis complete"}`}},
 		{replies: []string{`{"status":"success","summary":""}`, `{"status":"success","summary":"analysis complete"}`}},

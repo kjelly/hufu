@@ -309,6 +309,48 @@ func (c *Coordinator) invariantRepairInstructions(todoID string, attempt int, mo
 	return prompt.String(), metadata, nil
 }
 
+func (c *Coordinator) constrainCollectionInvariantClaims(cp *ResultCollectionCheckpoint, compiled *CompiledResultContract, parameters map[string]any) error {
+	manifest, err := c.invariantContextManifest(c.todoItemByID(cp.TaskID), cp.Attempt, cp.ModelExecutionID)
+	if err != nil {
+		return err
+	}
+	included, err := c.includedInvariantAssessments(manifest)
+	if err != nil {
+		return err
+	}
+	invariants, _ := parameters["invariant_assessments"].(map[string]any)
+	if spec := projectionForContract(compiled); spec != nil && spec.Invariants != "" {
+		payload, _ := parameters["structured_payload"].(map[string]any)
+		invariants = resultProjectionSchemaAt(payload, spec.Invariants)
+	}
+	if invariants == nil {
+		return nil
+	}
+	if len(included) == 0 {
+		invariants["maxItems"] = 0
+		return nil
+	}
+	ids := make([]string, 0, len(included))
+	for _, item := range included {
+		ids = append(ids, item.definition.ID)
+	}
+	if id := resultProjectionSchemaAt(invariants, "/0/invariant_id"); id != nil {
+		id["enum"] = ids
+	}
+	return nil
+}
+
+func (c *Coordinator) collectionInvariantGuidance(cp *ResultCollectionCheckpoint, compiled *CompiledResultContract, parameters map[string]any) (string, error) {
+	prompt, _, err := c.invariantRepairInstructions(cp.TaskID, cp.Attempt, cp.ModelExecutionID)
+	if err != nil || prompt == "" {
+		return prompt, err
+	}
+	if err := c.constrainCollectionInvariantClaims(cp, compiled, parameters); err != nil {
+		return "", err
+	}
+	return prompt + "\nAssess only the invariant IDs listed in Required invariant assessments. Reports and transcripts may mention additional invariants; omit their attestations and retain all supported findings and evidence.\n", nil
+}
+
 func (c *Coordinator) invariantRepairIdentity(todo *TodoItem, attempt int) (InvocationMetadata, error) {
 	if todo == nil || todo.InvariantVerification == "" {
 		return InvocationMetadata{}, nil

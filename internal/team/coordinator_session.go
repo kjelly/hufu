@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"charm.land/fantasy"
 
@@ -1096,6 +1095,14 @@ func (c *Coordinator) ResumeInterruptedTasks(ctx context.Context) (int, error) {
 		}
 		pol := ResolveRecoveryPolicy(it.Recovery, it.SideEffect, isUnattended, c.ExecutionProfile())
 		task := taskDefFromTodoItem(it)
+		if collectionDispatchRequeued(it) {
+			if blocked, _ := c.antiThrashingDispatchBlock(task, it); blocked {
+				if err := c.PersistFailureWithClassAndStatusError(it.Agent, it.Desc, it.ID, dispatchDeferredDetail, NeedsHuman, FailurePolicy, TaskBlocked); err != nil {
+					return count, err
+				}
+				continue
+			}
+		}
 		ensureAdmission := func() bool {
 			if err := c.ensureExecutionPolicySnapshot(); err != nil {
 				detail := fmt.Sprintf("task recovery blocked by execution policy admission: %v", err)
@@ -1436,20 +1443,7 @@ func (c *Coordinator) prepareInterruptedTaskForResume(ctx context.Context, taskI
 	}
 	projected.DispatchID = ""
 	projected.CheckpointPause = false
-	projected.Status = TaskPending
-	projected.Detail = detail
-	projected.Output = ""
-	projected.VerifyResult = nil
-	projected.RuntimeError = nil
-	projected.FailureEvent = nil
-	projected.RecoveryState = RecoveryStateNotStarted
-	projected.LastOperation = ""
-	projected.Progress = ProgressUnknown
-	projected.ProgressCriteria = nil
-	projected.StartedAt = time.Time{}
-	projected.EndedAt = time.Time{}
-	projected.ModelTime = 0
-	projected.ToolTime = 0
+	setResumePendingProjection(projected, detail, false)
 	if c.hasDurableEventJournal() {
 		if _, err := c.appendTaskTransition(ctx, projected, map[string]interface{}{
 			"reset_for_resume": true,

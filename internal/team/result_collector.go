@@ -125,18 +125,9 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 	if acceptedReferenceProjectionFor(c.todoItemByID(checkpoint.TaskID), checkpoint) != nil {
 		return c.commitAcceptedReferenceSelection(ctx, checkpoint)
 	}
-	var diagnostic string
-	if receipt := collectionReceipt(c.todoItemByID(checkpoint.TaskID), checkpoint); receipt != nil && receipt.RepairProvenance != nil {
-		for _, grant := range receipt.RepairProvenance.OperatorGrants {
-			if grant.RunID == c.executionRunID && grant.Recovery != nil {
-				for _, check := range grant.Recovery.Checks {
-					if !check.Passed {
-						diagnostic += check.Diagnostic + "\n"
-					}
-				}
-			}
-		}
-	}
+	receipt := collectionReceipt(c.todoItemByID(checkpoint.TaskID), checkpoint)
+	sourceRecollection := grantedSourceFieldRecollection(receipt, checkpoint)
+	diagnostic := collectionRepairDiagnostic(receipt, c.executionRunID, sourceRecollection)
 	for {
 		if err := ctx.Err(); err != nil {
 			return &resultCollectionFailure{Reason: repairFailureCollectionUnavailable, Checkpoint: checkpoint, Cause: err}
@@ -162,6 +153,12 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 				return &resultCollectionFailure{Reason: RepairFailureCommit, Cause: err}
 			}
 		case ResultCollectionReceived:
+			if sourceRecollection != nil {
+				// This exact response was already rejected and independently
+				// assessed. Recollect from it without attempting to commit it.
+				sourceRecollection = nil
+				break
+			}
 			prepared, err := c.prepareCollectionClaims(ctx, checkpoint)
 			if err == nil {
 				checkpoint = prepared
@@ -224,7 +221,22 @@ func (c *Coordinator) collectWorkResult(ctx context.Context, def *agent.AgentDef
 	}
 }
 
+func collectionRepairDiagnostic(receipt *ExecutionReceipt, runID string, sourceRecollection *ResultCollectionRecoveryAssessment) string {
+	var diagnostic string
+	for _, grant := range collectionRepairGrants(receipt) {
+		if grant.Recovery != nil && (grant.RunID == runID || grant.Recovery == sourceRecollection) {
+			for _, check := range grant.Recovery.Checks {
+				if !check.Passed {
+					diagnostic += check.Diagnostic + "\n"
+				}
+			}
+		}
+	}
+	return diagnostic
+}
+
 type frozenCollectionRequest struct {
+	BoundSourceFields   bool                           `json:"bound_source_fields,omitempty"`
 	ResponseChannel     agent.CollectorResponseChannel `json:"response_channel,omitempty"`
 	Version             int                            `json:"version"`
 	InvocationID        string                         `json:"invocation_id"`

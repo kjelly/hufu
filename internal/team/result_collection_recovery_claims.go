@@ -34,6 +34,8 @@ func independentRecoveryClaims(raw string) (*SubmitResultInput, error) {
 	if err := json.Unmarshal(body, &input, json.RejectUnknownMembers(true), collectionDurationFormat); err != nil {
 		return nil, fmt.Errorf("invalid recovery reference claims: %w", err)
 	}
+	_, input.receiptIDsSupplied = fields["receipt_ids"]
+	_, input.memoryUsesSupplied = fields["memory_uses"]
 	// An invalid or absent status must not weaken successful-receipt checks.
 	input.Status = TaskResultStatusSuccess
 	if status, ok := fields["status"]; ok {
@@ -97,12 +99,17 @@ func (c *Coordinator) validateIndependentResultClaims(ctx context.Context, taskI
 			return false
 		}
 	}
-	if independent == nil && compiled != nil && (compiled.evidenceReferences != nil || compiled.evidenceInputs != nil || len(compiled.runtimeInputs) > 0 || len(compiled.fixedCollections) > 0) {
+	if independent == nil && len(bytes.TrimSpace([]byte(resolved))) != 0 && compiled != nil && (compiled.evidenceReferences != nil || compiled.evidenceInputs != nil || len(compiled.runtimeInputs) > 0 || len(compiled.fixedCollections) > 0) {
 		check("payload_sources", errors.New("malformed JSON prevents independent verification of source references"))
 		return false
 	}
 	if independent != nil {
 		input := *independent
+		cp := currentResultCollection(c.todoItemByID(taskID))
+		input.receiptIDsSupplied = len(input.ReceiptIDs) > 0
+		if cp != nil && !check("receipt_binding", c.bindCollectionReceiptFields(ctx, cp, &input)) {
+			return false
+		}
 		res := input.taskResult()
 		res.Attempt = attempt
 		if !check("claims_context", c.validateRecoveryContextClaims(ctx, taskID, &res)) {
@@ -112,7 +119,7 @@ func (c *Coordinator) validateIndependentResultClaims(ctx context.Context, taskI
 			return false
 		}
 
-		if !check("receipt_claims", c.validateTaskResultReceiptClaims(taskID, &res)) {
+		if !input.collectionSourcesBound && !check("receipt_claims", c.validateTaskResultReceiptClaims(taskID, &res)) {
 			return false
 		}
 		var records []taskTranscriptRecord
@@ -132,7 +139,7 @@ func (c *Coordinator) validateIndependentResultClaims(ctx context.Context, taskI
 		// Verify projection provenance too: a citation typo must not conceal a
 		// foreign invariant or stale context. Pure representation failures still
 		// belong to the ordinary model-schema repair boundary below.
-		projected, projectionErr := c.projectResultClaims(ctx, taskID, input)
+		projected, projectionErr := c.projectResultClaimsWithRecovery(ctx, taskID, input, true)
 		if projectionErr == nil {
 			input = projected
 		} else if localResultRejectionReason(rejectProjectedClaims(projectionErr)) != RepairFailureInvalidSchema {
@@ -160,20 +167,29 @@ func (c *Coordinator) validateIndependentResultClaims(ctx context.Context, taskI
 	return true
 }
 
-// An accepted reference repair may retain inert assumption reports, never
-// introduce new checks or replay decision transitions. Other context claims
-// still require a separate reconciliation mechanism.
+// Collection repair may carry inert assumption reports only when the frozen
+// occurrence cannot apply them to a governing decision. Accepted reference
+// repair also preserves all of its original reports exactly.
 func (c *Coordinator) validateRecoveryContextClaims(ctx context.Context, taskID string, result *TaskResult) error {
-	if len(result.MemoryUses) > 0 {
-		return fmt.Errorf("result-only recovery requires memory attribution reconciliation")
-	}
 	cp := currentResultCollection(c.todoItemByID(taskID))
 	p := acceptedRepairProof(cp)
-	if p == nil {
-		if len(result.AssumptionChecks) > 0 {
-			return fmt.Errorf("result-only recovery requires assumption reconciliation")
+	if len(result.MemoryUses) > 0 {
+		if cp == nil || p != nil {
+			return fmt.Errorf("result-only recovery requires memory attribution reconciliation")
 		}
-		return nil
+		bound, err := c.collectionSourceFieldsBound(ctx, cp)
+		if err != nil {
+			return err
+		}
+		if !bound {
+			return fmt.Errorf("result-only recovery requires memory attribution reconciliation")
+		}
+		if err := c.validateCollectedMemoryInput(ctx, cp, SubmitResultInput{memoryUsesSupplied: true}, result); err != nil {
+			return err
+		}
+	}
+	if p == nil {
+		return c.validateInertCollectionAssumptions(ctx, cp, result.AssumptionChecks)
 	}
 	original, err := c.readAcceptedRepairResult(ctx, cp.ContractUpgrade.Original, p.ResultSHA256)
 	if err != nil {
@@ -186,6 +202,29 @@ func (c *Coordinator) validateRecoveryContextClaims(ctx context.Context, taskID 
 		if discipline := c.disciplineFor(taskID); discipline != nil && discipline.decisionID != "" {
 			return fmt.Errorf("accepted-result repair cannot replay governing decision checks")
 		}
+	}
+	return nil
+}
+
+func (c *Coordinator) validateInertCollectionAssumptions(ctx context.Context, cp *ResultCollectionCheckpoint, checks []AssumptionCheck) error {
+	if len(checks) == 0 {
+		return nil
+	}
+	if cp == nil {
+		return fmt.Errorf("result-only recovery requires the frozen occurrence for assumption reports")
+	}
+	if discipline := c.disciplineFor(cp.TaskID); discipline != nil && discipline.decisionID != "" {
+		return fmt.Errorf("result-only recovery requires reconciliation of the governing decision")
+	}
+	item := c.todoItemByID(cp.TaskID)
+	admission, found, err := c.validateTaskOccurrenceAdmission(ctx, taskDefFromTodoItem(item), cp.TaskID, cp.Attempt)
+	if err != nil {
+		return err
+	}
+	// The admission belongs to the task occurrence on this lineage. A resumed
+	// dispatch can finish that same occurrence under a different execution run.
+	if !found || admission.Enabled {
+		return fmt.Errorf("result-only recovery requires proof that assumption reports cannot change a governing decision")
 	}
 	return nil
 }

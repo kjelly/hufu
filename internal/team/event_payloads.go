@@ -21,10 +21,11 @@ type SessionMessageEventPayload struct {
 }
 
 type TaskTransitionEventPayload struct {
-	ID                string             `json:"id"`
-	Status            string             `json:"status"`
-	ResultRepairGrant *ResultRepairGrant `json:"result_repair_grant,omitempty"`
-	ExecutionReceipt  *ExecutionReceipt  `json:"execution_receipt,omitempty"`
+	ID                      string             `json:"id"`
+	Status                  string             `json:"status"`
+	ResultRepairGrant       *ResultRepairGrant `json:"result_repair_grant,omitempty"`
+	ExecutionReceipt        *ExecutionReceipt  `json:"execution_receipt,omitempty"`
+	ReleaseDeferredDispatch bool               `json:"release_deferred_dispatch,omitempty"`
 }
 
 type RunFinishedEventPayload struct {
@@ -170,23 +171,7 @@ func validateNonMediaEventPayload(event RunEvent) error {
 	case EventTaskResultCollectionCheckpointed:
 		return validateResultCollectionEvent(event)
 	case EventTaskCreated, EventTaskPlanned, EventTaskStarted, EventTaskVerifying, EventTaskPaused, EventTaskCompleted, EventTaskFailed, EventTaskBlocked, EventTaskSkipped, EventTaskProtocolIncomplete, EventTaskCancelled, EventTaskRemoved, EventTaskResolution:
-		if strings.TrimSpace(event.TaskID) == "" {
-			return fmt.Errorf("%s event has empty task id", event.Type)
-		}
-		var payload TaskTransitionEventPayload
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return fmt.Errorf("decode %s payload: %w", event.Type, err)
-		}
-		if grant := payload.ResultRepairGrant; grant != nil && grant.Recovery != nil {
-			if err := validateCollectionRecoveryGrantEvent(event, grant, payload.ExecutionReceipt); err != nil {
-				return err
-			}
-		}
-		// Old task_started records did not always carry id/status. Keep schema
-		// v1 replayable while enforcing the complete v2 transition contract.
-		if strings.TrimSpace(payload.ID) == "" || strings.TrimSpace(payload.Status) == "" {
-			return fmt.Errorf("%s payload lacks task transition identity", event.Type)
-		}
+		return validateTaskTransitionEventPayload(event)
 	case EventRunFinished:
 		return validateRunFinishedEventPayload(event)
 	case EventTeamActionProposed:
@@ -235,6 +220,30 @@ func validateNonMediaEventPayload(event RunEvent) error {
 		EventDecisionRoleCallSettled, EventPrimaryDecisionBlocked,
 		EventPrimaryDecisionBound, EventPrimaryDecisionInvalidated:
 		return validateDecisionCorrectnessEvent(event)
+	}
+	return nil
+}
+
+func validateTaskTransitionEventPayload(event RunEvent) error {
+	if strings.TrimSpace(event.TaskID) == "" {
+		return fmt.Errorf("%s event has empty task id", event.Type)
+	}
+	var payload TaskTransitionEventPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return fmt.Errorf("decode %s payload: %w", event.Type, err)
+	}
+	if grant := payload.ResultRepairGrant; grant != nil && grant.Recovery != nil {
+		if err := validateCollectionRecoveryGrantEvent(event, grant, payload.ExecutionReceipt); err != nil {
+			return err
+		}
+	}
+	if payload.ReleaseDeferredDispatch && (event.Type != string(EventTaskCreated) || payload.Status != string(TaskPending) || payload.ExecutionReceipt != nil) {
+		return fmt.Errorf("invalid deferred dispatch release event")
+	}
+	// Old task_started records did not always carry id/status. Keep schema
+	// v1 replayable while enforcing the complete v2 transition contract.
+	if strings.TrimSpace(payload.ID) == "" || strings.TrimSpace(payload.Status) == "" {
+		return fmt.Errorf("%s payload lacks task transition identity", event.Type)
 	}
 	return nil
 }

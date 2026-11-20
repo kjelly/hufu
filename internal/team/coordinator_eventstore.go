@@ -889,20 +889,8 @@ func (c *Coordinator) commitTaskTransition(ctx context.Context, taskID string, e
 	}
 
 	if resetForResume {
-		projected.Status = TaskPending
-		projected.Detail = detail
-		projected.Output = ""
-		projected.VerifyResult = nil
-		projected.RuntimeError = nil
-		projected.FailureEvent = nil
-		projected.RecoveryState = RecoveryStateNotStarted
-		projected.LastOperation = ""
-		projected.Progress = ProgressUnknown
-		projected.ProgressCriteria = nil
-		projected.StartedAt = time.Time{}
-		projected.EndedAt = time.Time{}
-		projected.ModelTime = 0
-		projected.ToolTime = 0
+		release, _ := metadata["release_deferred_dispatch"].(bool)
+		setResumePendingProjection(&projected, detail, release)
 	} else {
 		projected.Status = next
 		if detail != "" {

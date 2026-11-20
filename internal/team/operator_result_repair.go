@@ -87,6 +87,9 @@ func (c *Coordinator) authorizeOperatorResultRepair(ctx context.Context) error {
 		return fmt.Errorf("task %q has no repair receipt", taskID)
 	}
 	if item.ExecutionReceipt.ResultCollection == nil {
+		if tokens, _ := ctx.Value(resultRepairMaxOutputKey{}).(int); tokens != 0 {
+			return fmt.Errorf("collector output limit requires a frozen collection checkpoint")
+		}
 		if err := validateResultRepairTarget(item); err != nil {
 			return fmt.Errorf("task %q: %w", taskID, err)
 		}

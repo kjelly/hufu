@@ -40,7 +40,7 @@ func observeContractCollectionKeys(t *testing.T, c *Coordinator, item *TodoItem,
 	f := &artifactKeysFixture{c: c, item: item, ctx: ctx, ref: source, view: c.gatePolicyTools([]fantasy.AgentTool{tools.NewViewTool(tools.WithArtifactOpener(c.openArtifactRef))})[0]}
 	f.read(t, fmt.Sprintf(`{"artifact_ref":%q}`, source.ID), "read-source")
 	receipt.ArtifactScope = cloneArtifactAccessScope(scope)
-	value, err := decodeUniqueJSON([]byte(response))
+	value, err := decodeUniqueJSON([]byte(strings.ReplaceAll(response, "fixture-observed-artifact", source.ID)))
 	if err != nil {
 		t.Fatal(err)
 	}

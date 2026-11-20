@@ -11,6 +11,10 @@ import (
 // settles only the explicitly selected protocol task. Match typed
 // failure provenance rather than message text, which can change during repair.
 func resultRepairWorkflowPhase(session *SessionData, taskID string) (Phase, error) {
+	return resultRepairWorkflowPhaseWithDeferrals(session, taskID, true)
+}
+
+func resultRepairWorkflowPhaseWithDeferrals(session *SessionData, taskID string, allowDeferred bool) (Phase, error) {
 	if session == nil || session.WorkflowState != PhaseFailed {
 		return blockedCollectionWorkflowPhase(session, taskID, validateCollectionRecoveryTarget)
 	}
@@ -25,6 +29,9 @@ func resultRepairWorkflowPhase(session *SessionData, taskID string) (Phase, erro
 			continue
 		}
 		if isUnresolvedTaskStatus(candidate.Status) {
+			if allowDeferred && collectionDispatchDeferred(candidate, item) {
+				continue
+			}
 			if candidate.Phase != item.Phase || validateCollectionRecoveryTarget(candidate) != nil {
 				return "", fmt.Errorf("failed workflow contains an unrelated unresolved task")
 			}
@@ -190,6 +197,17 @@ func (c *Coordinator) reconcileCollectedWorkflow(ctx context.Context) error {
 	if err != nil || proof == nil {
 		return err
 	}
+	for _, id := range proof.deferred {
+		item := c.todoItemByID(id)
+		if collectionDispatchRequeued(item) {
+			continue
+		}
+		metadata := map[string]any{"reset_for_resume": true, "release_deferred_dispatch": true}
+		if err := c.CommitTaskTransition(ctx, id, TaskBlocked, TaskPending, collectionDispatchResumeDetail, "", metadata); err != nil {
+			return err
+		}
+	}
+	c.rebuildAntiThrashingState()
 	if !w.reconcileCollectedFailure(proof.taskID, proof.phase, proof.results) {
 		return errResultCollectionStale
 	}
@@ -198,9 +216,10 @@ func (c *Coordinator) reconcileCollectedWorkflow(ctx context.Context) error {
 }
 
 type collectionWorkflowProof struct {
-	taskID  string
-	phase   Phase
-	results map[Phase]PhaseResult
+	taskID   string
+	phase    Phase
+	results  map[Phase]PhaseResult
+	deferred []string
 }
 
 func (c *Coordinator) completedCollectionWorkflowProof(ctx context.Context) (*collectionWorkflowProof, error) {
@@ -208,10 +227,12 @@ func (c *Coordinator) completedCollectionWorkflowProof(ctx context.Context) (*co
 	if current.WorkflowState != PhaseFailed {
 		return nil, nil
 	}
-	// A repair grant never authorizes the other blocked tasks or delegation.
-	// Keep the original phase failure intact across partial repairs and crashes.
-	if len(UnresolvedTaskReferences(current.Tasks)) != 0 {
-		return nil, nil
+	// An unresolved task that ran still needs its own repair. A deferral
+	// may be cleared only by the later journal proof of the original failure.
+	for _, item := range current.Tasks {
+		if item != nil && isUnresolvedTaskStatus(item.Status) && !collectionDispatchDeferred(item, item) && !collectionDispatchRequeued(item) {
+			return nil, nil
+		}
 	}
 	items := current.Tasks
 	branchID := c.activeBranchID()
@@ -238,6 +259,7 @@ func (c *Coordinator) completedCollectionWorkflowProof(ctx context.Context) (*co
 	var proof *collectionWorkflowProof
 	var completed []*TodoItem
 	required := make(map[string]bool)
+	deferred := make(map[string]bool)
 	for _, item := range items {
 		if !hasCommittedWorkflowCollectionRepair(item, branchID) {
 			continue
@@ -247,16 +269,8 @@ func (c *Coordinator) completedCollectionWorkflowProof(ctx context.Context) (*co
 			if !isWorkflowCollectionRepairGrant(grant, cp) {
 				continue
 			}
-			canonical := todoItemByID(replayed, item.ID)
-			if canonical == nil || canonical.Status != TaskDone || !sameCanonicalEvidence(currentResultCollection(canonical), cp) || !sameCanonicalEvidence(canonical.TypedResult, item.TypedResult) || !sameCanonicalEvidence(collectionRepairGrants(canonical.ExecutionReceipt), collectionRepairGrants(item.ExecutionReceipt)) {
-				return nil, errResultCollectionStale
-			}
-			accepted, err := c.acceptedCollectionResult(ctx, item, cp)
-			if err != nil {
+			if err := c.validateWorkflowCollectionCompletion(ctx, item, todoItemByID(replayed, item.ID), cp); err != nil {
 				return nil, err
-			}
-			if !sameCanonicalEvidence(accepted, item.TypedResult) {
-				return nil, errResultCollectionStale
 			}
 			i := slices.IndexFunc(events, func(event RunEvent) bool { return event.ID == grant.Recovery.JournalHeadID })
 			if i < 0 {
@@ -270,7 +284,7 @@ func (c *Coordinator) completedCollectionWorkflowProof(ctx context.Context) (*co
 			if grant.Recovery.ValidatorRevision < 5 {
 				phase, err = blockedCollectionWorkflowPhase(source, item.ID, validateCollectionRecoveryTarget)
 			} else {
-				phase, err = resultRepairWorkflowPhase(source, item.ID)
+				phase, err = resultRepairWorkflowPhaseWithDeferrals(source, item.ID, grant.Recovery.ValidatorRevision >= 15)
 			}
 			if err != nil || phase == "" {
 				continue
@@ -288,6 +302,10 @@ func (c *Coordinator) completedCollectionWorkflowProof(ctx context.Context) (*co
 			}
 			for _, peer := range source.Tasks {
 				if peer == nil || peer.Phase != phase {
+					continue
+				}
+				if grant.Recovery.ValidatorRevision >= 15 && collectionDispatchDeferred(peer, item) {
+					deferred[peer.ID] = true
 					continue
 				}
 				if isUnresolvedTaskStatus(peer.Status) || collectionRepairBelongsToFailure(peer, branchID, failureHeads) {
@@ -311,7 +329,58 @@ func (c *Coordinator) completedCollectionWorkflowProof(ctx context.Context) (*co
 	if len(required) != 0 {
 		return nil, nil
 	}
+	released, err := c.verifyDeferredCollectionDispatches(events, items, replayed, deferred)
+	if err != nil || len(released) != len(deferred) {
+		return nil, err
+	}
+	proof.deferred = released
 	return proof, nil
+}
+
+func (c *Coordinator) validateWorkflowCollectionCompletion(ctx context.Context, item, canonical *TodoItem, cp *ResultCollectionCheckpoint) error {
+	if canonical == nil || canonical.Status != TaskDone ||
+		!sameCanonicalEvidence(currentResultCollection(canonical), cp) ||
+		!sameCanonicalEvidence(canonical.TypedResult, item.TypedResult) ||
+		!sameCanonicalEvidence(collectionRepairGrants(canonical.ExecutionReceipt), collectionRepairGrants(item.ExecutionReceipt)) {
+		return errResultCollectionStale
+	}
+	accepted, err := c.acceptedCollectionResult(ctx, item, cp)
+	if err != nil {
+		return err
+	}
+	if !sameCanonicalEvidence(accepted, item.TypedResult) {
+		return errResultCollectionStale
+	}
+	return nil
+}
+
+func (c *Coordinator) verifyDeferredCollectionDispatches(events []RunEvent, items, replayed []*TodoItem, deferred map[string]bool) ([]string, error) {
+	for _, event := range events {
+		if deferred[event.TaskID] {
+			switch EventType(event.Type) {
+			case EventTaskStarted, EventTaskResultCollectionCheckpointed, EventStructuredStepReceiptRecorded:
+				return nil, fmt.Errorf("deferred task %q already has execution events: %w", event.TaskID, errResultCollectionStale)
+			}
+		}
+	}
+	var reliability AntiThrashingState
+	reliability.rebuild(items, c.reliabilityConfig())
+	var released []string
+	for _, item := range items {
+		if item == nil || !isUnresolvedTaskStatus(item.Status) {
+			continue
+		}
+		canonical := todoItemByID(replayed, item.ID)
+		if !deferred[item.ID] || !sameResumeTaskEvidence(canonical, item) ||
+			!sameCanonicalEvidence(canonical.FailureEvent, item.FailureEvent) || canonical.Detail != item.Detail {
+			return nil, nil
+		}
+		if blocked, _ := reliability.dispatchBlock(taskDefFromTodoItem(item), item); blocked {
+			return nil, fmt.Errorf("deferred task %q is still blocked by a reliability policy", item.ID)
+		}
+		released = append(released, item.ID)
+	}
+	return released, nil
 }
 
 // A phase can fail again after it has reopened. Its earlier repair grants

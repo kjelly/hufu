@@ -166,17 +166,21 @@ func TestResultCollectionRecoveryRestartsAtDurableBoundaries(t *testing.T) {
 
 func TestResultCollectionRecoveryIndependentClaims(t *testing.T) {
 	for _, tc := range []struct {
-		name, body string
-		want       ResultCollectionRecoveryDisposition
+		name, body        string
+		governingDecision bool
+		want              ResultCollectionRecoveryDisposition
 	}{
-		{"invalid summary with forged receipt", `{"status":"success","summary":42,"receipt_ids":["invented"]}`, RecoveryBlocked},
-		{"invalid status with malformed receipt", `{"status":42,"summary":"report","receipt_ids":42}`, RecoveryBlocked},
-		{"invalid summary only", `{"status":"success","summary":42}`, RecoveryRepairClaims},
-		{"memory context unsupported", `{"status":"success","summary":"report","memory_uses":[{"context_item_id":"x"}]}`, RecoveryBlocked},
-		{"assumption context unsupported", `{"status":"success","summary":"report","assumption_checks":[{"assumption_id":"x","status":"supported"}]}`, RecoveryBlocked},
+		{"invalid summary with forged receipt", `{"status":"success","summary":42,"receipt_ids":["invented"]}`, false, RecoveryBlocked},
+		{"invalid status with malformed receipt", `{"status":42,"summary":"report","receipt_ids":42}`, false, RecoveryBlocked},
+		{"invalid summary only", `{"status":"success","summary":42}`, false, RecoveryRepairClaims},
+		{"memory context unsupported", `{"status":"success","summary":"report","memory_uses":[{"context_item_id":"x"}]}`, false, RecoveryBlocked},
+		{"assumption attached to governing decision", `{"status":"success","summary":"report","assumption_checks":[{"assumption_id":"x","status":"supported"}]}`, true, RecoveryBlocked},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, id, _ := blockedRecoveryFixture(t, tc.body, false, RepairFailureSource)
+			if tc.governingDecision {
+				c.disciplines = map[string]*taskDiscipline{id: {decisionID: "governing"}}
+			}
 			a, err := c.AssessResultCollectionRecovery(t.Context(), id)
 			if err != nil || a.Disposition != tc.want {
 				t.Fatalf("assessment=%+v err=%v", a, err)
@@ -185,6 +189,50 @@ func TestResultCollectionRecoveryIndependentClaims(t *testing.T) {
 				t.Fatalf("missing assessment identity: %+v", a)
 			}
 		})
+	}
+}
+
+func TestResultCollectionRecoveryReusesFrozenDecisionAdmission(t *testing.T) {
+	const workRunID = "resumed-work"
+	c, item, ctx, receipt := resultCollectionIdentityFixture(t, "http://127.0.0.1:1/v1", false, workRunID, nil, nil)
+	cp, err := c.beginResultCollection(ctx, item.ID, receipt, "complete work report")
+	if err == nil {
+		cp, err = c.reserveResultCollection(ctx, cp, "collector", []byte(`{"tools":[]}`))
+	}
+	if err == nil {
+		cp, err = c.recordCollectionResponse(ctx, cp, []byte(`{"status":"success","summary":"complete work report","assumption_checks":[{"assumption_id":"observed","status":"supported"}]}`))
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := c.collectionFailure(ctx, cp, RepairFailureSource, errResultCollectionStale)
+	c.recordCollectionStopReceipt(item.ID, stop)
+	c.PersistFailureWithClassAndStatusAndOutput(item.Agent, item.Goal, item.ID, "collection blocked", NeedsHuman, FailureProtocol, TaskBlocked, "")
+
+	c = reopenRecoveryCoordinator(t, c)
+	c.executionRunID = "operator-result-repair"
+	admission, found, err := c.validateTaskOccurrenceAdmission(t.Context(), taskDefFromTodoItem(c.todoItemByID(item.ID)), item.ID, cp.Attempt)
+	if err != nil || !found || admission.Enabled || admission.RunID != "run-test" || cp.SourceRunID != workRunID {
+		t.Fatalf("expected inherited disabled admission: %+v, work run %s, err %v", admission, cp.SourceRunID, err)
+	}
+	assessment, err := c.AssessResultCollectionRecovery(t.Context(), item.ID)
+	if err != nil || assessment.Disposition != RecoveryCommitLocal || assessment.AdditionalTurns != 0 {
+		t.Fatalf("expected local result commit: %+v, err %v", assessment, err)
+	}
+	ctx = WithResultOnlyRepair(t.Context(), item.ID)
+	if err := c.authorizeOperatorResultRepair(ctx); err != nil {
+		t.Fatal(err)
+	}
+	worker := scriptWorker(textTurn("must never replay work"))
+	c.workerAgentOverride = worker
+	if _, err := c.executeTask(ctx, taskDefFromTodoItem(c.todoItemByID(item.ID)), item.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := c.todoItemByID(item.ID)
+	checkpoint := currentResultCollection(done)
+	if done.Status != TaskDone || worker.Calls() != 0 || checkpoint.Work != cp.Work || checkpoint.TurnsUsed != cp.TurnsUsed ||
+		done.TypedResult == nil || len(done.TypedResult.AssumptionChecks) != 1 {
+		t.Fatal("local commit lost saved work, original assumptions, or collector budget")
 	}
 }
 
