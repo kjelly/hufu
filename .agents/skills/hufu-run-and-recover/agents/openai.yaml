@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hufu Run and Recover"
+  short_description: "Run Hufu tasks through recovery and final acceptance"
+  default_prompt: "Use $hufu-run-and-recover to run this Hufu task through final acceptance and recover it if needed."
