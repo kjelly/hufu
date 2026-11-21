@@ -43,7 +43,7 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	opts.requestAcceptanceSet = cmd.Flags().Changed("request-acceptance")
 	if opts.eventFormat == "jsonl" {
 		cmd.Root().SilenceErrors = true
-		defer func() { emitJSONLCommandError(runErr) }()
+		defer func() { emitJSONLCommandError(cmd.ErrOrStderr(), opts.invocationID, runErr) }()
 	}
 	if err := validateAndCaptureRunScope(); err != nil {
 		return err
@@ -55,18 +55,14 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	// Warnings may show an explicit argument verbatim but must never expose the
 	// default or resolved absolute path.
 	compatibilityWarnings := newExecutionCompatibilityWarningState(opts.workspace)
-	configureOutputRendering()
+	configureRunPresentation()
 	activeCoord := new(atomic.Pointer[team.Coordinator])
 	stopIdentityHeartbeat := startInvocationIdentityHeartbeat(os.Stderr, opts.invocationID, invocationIdentityHeartbeatInterval, func() bool {
 		return activeCoord.Load().ProviderQuotaWaiting()
 	})
 	defer stopIdentityHeartbeat()
 
-	pr, err := readline.NewPromptReaderWithHistoryFilter(defaultHistoryPath(), nil, chatHistoryAllowsLine)
-	if err != nil {
-		stderrLog("%s Readline initialization failed, falling back to basic input: %v\n", errStyle.Render("⚠"), err)
-		pr = nil
-	}
+	pr := newRunPromptReader()
 	globalPromptReader.Store(pr)
 	if opts.tempWorkspace {
 		tmpDir, err := os.MkdirTemp("", "hufu-*")
@@ -185,7 +181,7 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	}
 
 	if opts.dryRun {
-		return executeDryRun(ctx, segments, prompt, loadedTeams)
+		return executeDryRun(ctx, dryRunOutputWriter(cmd), segments, prompt, loadedTeams)
 	}
 	if opts.intent == "decision" {
 		if err := configureDecisionIntent(loadedTeams, prompt, resumeInfo); err != nil {
@@ -197,6 +193,13 @@ func runTeam(cmd *cobra.Command, args []string) (runErr error) {
 	}
 
 	return executeAndReport(ctx, cancel, prompt, originalPrompt, segments, registry, loadedTeams, injector, activeCoord, pathConsent, vars, routeDecision)
+}
+
+func configureRunPresentation() {
+	configureOutputRendering()
+	if opts.canonicalRun {
+		configureLLMTimeouts()
+	}
 }
 
 func prepareRunSegments(ctx context.Context, prompt, initialTeam string, registry *team.TeamRegistry, pr *readline.PromptReader) (context.Context, []team.PromptSegment, error) {

@@ -70,7 +70,7 @@ func runResumeCommand(cmd *cobra.Command, _ []string) (runErr error) {
 	}
 	if opts.eventFormat == "jsonl" {
 		cmd.Root().SilenceErrors = true
-		defer func() { emitJSONLCommandError(runErr) }()
+		defer func() { emitJSONLCommandError(cmd.ErrOrStderr(), opts.invocationID, runErr) }()
 	}
 	opts.requestAcceptanceSet = cmd.Flags().Changed("request-acceptance")
 	resumeAcceptanceTimeoutSet = cmd.Flags().Changed("acceptance-timeout")

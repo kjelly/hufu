@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"github.com/kjelly/hufu/internal/decisionrt/control"
 	"github.com/kjelly/hufu/internal/decisionrt/settings"
 	"github.com/kjelly/hufu/internal/llmtimeout"
+	hulog "github.com/kjelly/hufu/internal/log"
 	"github.com/kjelly/hufu/internal/media"
 	"github.com/kjelly/hufu/internal/notify"
 	"github.com/kjelly/hufu/internal/semantic"
@@ -232,7 +234,7 @@ func (c *Config) GetVars() map[string]string {
 	switch vars := c.RawVars.(type) {
 	case map[string]interface{}:
 		if err := yamlutil.FlattenYAML(vars, "", result); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to flatten config vars: %v\n", err)
+			hulog.Printf("warning: failed to flatten config vars: %v\n", err)
 		}
 	case map[interface{}]interface{}:
 		stringMap := make(map[string]interface{}, len(vars))
@@ -240,7 +242,7 @@ func (c *Config) GetVars() map[string]string {
 			stringMap[fmt.Sprintf("%v", k)] = v
 		}
 		if err := yamlutil.FlattenYAML(stringMap, "", result); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to flatten config vars: %v\n", err)
+			hulog.Printf("warning: failed to flatten config vars: %v\n", err)
 		}
 	}
 	if len(result) == 0 {
@@ -250,20 +252,37 @@ func (c *Config) GetVars() map[string]string {
 }
 
 func LoadConfig() *Config {
+	return LoadConfigWithDiagnostics(configDiagnosticWriter())
+}
+
+// LoadConfigWithDiagnostics sends configuration warnings to the supplied
+// writer so a command can choose their format after resolving its profile.
+func LoadConfigWithDiagnostics(diagnostics io.Writer) *Config {
 	cfg := &Config{}
 	homeDir, _ := os.UserHomeDir()
 	homeConfigPath := filepath.Join(homeDir, ".config", "hufu", "hufu.yaml")
 
-	cfg.mergeFromFile(homeConfigPath)
+	cfg.mergeFromFileWithDiagnostics(homeConfigPath, diagnostics)
 	// The default run profile belongs to the current project, not the user
 	// config, even though named profiles themselves merge across both files.
 	cfg.DefaultProfile = ""
-	cfg.mergeFromFile("hufu.yaml")
+	cfg.mergeFromFileWithDiagnostics("hufu.yaml", diagnostics)
 
 	return cfg
 }
 
 func (c *Config) mergeFromFile(path string) {
+	c.mergeFromFileWithDiagnostics(path, configDiagnosticWriter())
+}
+
+func configDiagnosticWriter() io.Writer {
+	if hulog.IsQuiet() {
+		return io.Discard
+	}
+	return os.Stderr
+}
+
+func (c *Config) mergeFromFileWithDiagnostics(path string, diagnostics io.Writer) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -280,10 +299,12 @@ func (c *Config) mergeFromFile(path string) {
 		// Keep optional missing files valid, but refuse inference from an
 		// unreadable or unparseable file instead of silently using defaults.
 		c.decisionRuntimeError = fmt.Errorf("%s: invalid configuration", path)
-		fmt.Fprintf(os.Stderr, "warning: failed to parse %s: %v\n", path, err)
+		_, _ = fmt.Fprintf(diagnostics, "warning: failed to parse %s: %v\n", path, err)
 		return
 	}
-	warnUnknownConfigKeys(os.Stderr, path, data)
+	if diagnostics != io.Discard {
+		warnUnknownConfigKeys(diagnostics, path, data)
+	}
 	c.mergeScalarFields(&fileCfg)
 	c.recordSources(&fileCfg, path)
 	c.WorkspaceVersioning.merge(fileCfg.WorkspaceVersioning)
@@ -294,7 +315,7 @@ func (c *Config) mergeFromFile(path string) {
 		c.DecisionRuntime = settings.Merge(c.DecisionRuntime, normalized)
 	}
 	if fileCfg.ControlDecisions.HasTransport() {
-		fmt.Fprintf(os.Stderr, "warning: %s: control-decisions transport is deprecated; use decision-runtime\n", path)
+		_, _ = fmt.Fprintf(diagnostics, "warning: %s: control-decisions transport is deprecated; use decision-runtime\n", path)
 	}
 	c.ControlDecisions = control.Merge(c.ControlDecisions, fileCfg.ControlDecisions.PolicyOnly())
 	c.SemanticRetrieval = semantic.Merge(c.SemanticRetrieval, fileCfg.SemanticRetrieval)

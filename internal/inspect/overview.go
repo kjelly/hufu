@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -13,6 +14,8 @@ import (
 	operatorpkg "github.com/kjelly/hufu/internal/operator"
 	"github.com/kjelly/hufu/internal/team"
 )
+
+var ErrWorkspaceNotFound = fmt.Errorf("%w: workspace directory was not found", ErrNotFound)
 
 func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error) {
 	if err := query.Validate(KindOverview); err != nil {
@@ -24,6 +27,16 @@ func InspectOverview(ctx context.Context, query InspectQuery) (*Envelope, error)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidQuery, err)
+	}
+	info, err := os.Stat(workspace.WorkspaceExact)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, ErrWorkspaceNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: access workspace directory: %w", ErrIntegrity, err)
+	}
+	if !info.IsDir() {
+		return nil, ErrWorkspaceNotFound
 	}
 	bound, err := bindOverviewReadTarget(ctx, operatorpkg.BindingRequest{
 		Workspace: workspace,
@@ -168,21 +181,24 @@ func OverviewFailure(query InspectQuery, err error) *Envelope {
 }
 
 func classifyOverviewError(err error) OperatorErrorView {
+	const checkSelectors = "Use 'hufu session list' to check branches and labels, or 'hufu results runs --all-branches' to find saved run IDs, with the same workspace directory"
 	switch {
 	case errors.Is(err, ErrInvalidQuery):
-		return OperatorErrorView{Kind: "usage", Code: "invalid_query", Message: "operator overview query is invalid"}
+		return OperatorErrorView{Kind: "usage", Code: "invalid_query", Message: "operator overview query is invalid", NextAction: "Use 'hufu inspect overview --help' to check the accepted selectors"}
 	case errors.Is(err, ErrScopeConflict):
-		return OperatorErrorView{Kind: "scope", Code: "workspace_scope_conflict", Message: "requested scope conflicts with persisted binding"}
+		return OperatorErrorView{Kind: "scope", Code: "workspace_scope_conflict", Message: "requested scope conflicts with persisted binding", NextAction: checkSelectors}
 	case errors.Is(err, ErrAmbiguous):
-		return OperatorErrorView{Kind: "scope", Code: "target_ambiguous", Message: "operator target is ambiguous"}
+		return OperatorErrorView{Kind: "scope", Code: "target_ambiguous", Message: "operator target is ambiguous", NextAction: checkSelectors}
+	case errors.Is(err, ErrWorkspaceNotFound):
+		return OperatorErrorView{Kind: "scope", Code: "target_not_found", Message: "workspace directory was not found", NextAction: "Check the directory path or use 'hufu workspace status' to find a registered workspace"}
 	case errors.Is(err, ErrNotFound):
-		return OperatorErrorView{Kind: "scope", Code: "target_not_found", Message: "operator target was not found"}
+		return OperatorErrorView{Kind: "scope", Code: "target_not_found", Message: "operator target was not found", NextAction: checkSelectors}
 	case errors.Is(err, ErrUnauthorized):
-		return OperatorErrorView{Kind: "policy", Code: "target_unauthorized", Message: "operator target is not authorized"}
+		return OperatorErrorView{Kind: "policy", Code: "target_unauthorized", Message: "operator target is not authorized", NextAction: "Check your read access to the workspace and its files"}
 	case errors.Is(err, ErrIntegrity):
-		return OperatorErrorView{Kind: "integrity", Code: "integrity_failure", Message: "canonical operator evidence failed integrity validation"}
+		return OperatorErrorView{Kind: "integrity", Code: "integrity_failure", Message: "canonical operator evidence could not be read or failed integrity validation", NextAction: "Check read permissions on the workspace, runtime.sqlite and its WAL. Use 'hufu audit verify' with a known run ID to check the recorded evidence"}
 	default:
-		return OperatorErrorView{Kind: "runtime", Code: "inspect_failed", Message: "operator overview could not be produced"}
+		return OperatorErrorView{Kind: "runtime", Code: "inspect_failed", Message: "operator overview could not be produced", NextAction: "Use 'hufu status' with the workspace directory to check the saved session"}
 	}
 }
 

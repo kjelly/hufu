@@ -204,7 +204,7 @@ are not execution failures or a claim that the latest repair failed.
 
 ```bash
 hufu inspect beliefs run-123 --workspace ./workspace
-hufu inspect beliefs run-123 --workspace ./workspace --format json
+hufu inspect beliefs run-123 --workspace ./workspace --output json
 hufu inspect beliefs run-123 --workspace ./workspace --task task-7 --branch main
 ```
 

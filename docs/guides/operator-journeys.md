@@ -89,8 +89,14 @@ refreshes; it does not alter runtime state.
 ## F. Automation and CI
 
 ```sh
+hufu run --team dev-team --dry-run --output json --event-format jsonl -- "run checks"
 hufu run --team dev-team --quiet --output json --event-format jsonl -- "run checks"
 ```
+
+With `--output json`, dry-run writes one versioned object to stdout with
+`dry_run: true`, the selected team, and preview details. With
+`--event-format jsonl`, each stderr line is a JSON event, including command
+errors such as a missing task. In that mode the text preview also uses stdout.
 
 Non-TTY execution never enters the wizard. Pass exact selectors, keep JSON
 stdout separate from diagnostics, and treat scope ambiguity as an error rather

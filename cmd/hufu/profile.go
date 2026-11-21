@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -21,23 +24,49 @@ import (
 // worker-model is the one keyed flag: see applyProfileWorkerModels.
 func applyProfile(cmd *cobra.Command) error {
 	profileName := opts.profileName
+	var diagnostics bytes.Buffer
+	var cfg *config.Config
 	if cmd.Name() == "run" && profileName == "" {
 		explicitProfile := cmd.Flags().Changed("profile")
 		if root := cmd.Root(); root != nil {
 			explicitProfile = explicitProfile || root.PersistentFlags().Changed("profile")
 		}
 		if !explicitProfile {
-			profileName = config.LoadConfig().DefaultProfile
+			cfg = config.LoadConfigWithDiagnostics(&diagnostics)
+			profileName = cfg.DefaultProfile
 		}
 	}
-	return applyNamedProfile(cmd, profileName)
+	if profileName != "" && cfg == nil {
+		cfg = config.LoadConfigWithDiagnostics(&diagnostics)
+	}
+	if cfg == nil {
+		return nil
+	}
+	defer func() {
+		if flag := cmd.Flag("event-format"); flag != nil && flag.Value.String() == "jsonl" {
+			for line := range bytes.SplitSeq(bytes.TrimSuffix(diagnostics.Bytes(), []byte("\n")), []byte("\n")) {
+				if len(line) > 0 {
+					writeJSONLStatusEvent(cmd.ErrOrStderr(), jsonStatusEvent{Type: "warning", Message: string(line), Time: time.Now().UTC().Format(time.RFC3339Nano)})
+				}
+			}
+			return
+		}
+		_, _ = io.Copy(cmd.ErrOrStderr(), &diagnostics)
+	}()
+	return applyConfiguredProfile(cmd, cfg, profileName)
 }
 
 func applyNamedProfile(cmd *cobra.Command, profileName string) error {
 	if profileName == "" {
 		return nil
 	}
-	cfg := config.LoadConfig()
+	return applyConfiguredProfile(cmd, config.LoadConfig(), profileName)
+}
+
+func applyConfiguredProfile(cmd *cobra.Command, cfg *config.Config, profileName string) error {
+	if profileName == "" {
+		return nil
+	}
 	profile, ok := cfg.Profiles[profileName]
 	if !ok {
 		var names []string
@@ -66,6 +95,14 @@ func applyNamedProfile(cmd *cobra.Command, profileName string) error {
 			}
 		}
 		return nil
+	}
+	if profile["event-format"] == "jsonl" {
+		if fs := lookup("event-format"); fs != nil && !fs.Changed("event-format") {
+			// Select framing before validating the rest of the profile.
+			if err := fs.Set("event-format", "jsonl"); err != nil {
+				return err
+			}
+		}
 	}
 
 	// Capture this before any profile value is applied: fs.Set marks a flag

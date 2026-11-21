@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	json "encoding/json/v2"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +15,112 @@ import (
 	"github.com/kjelly/hufu/internal/agent"
 	"github.com/kjelly/hufu/internal/team"
 )
+
+func TestRunDryRunOutput(t *testing.T) {
+	binary := buildTestBinary(t)
+	dir := t.TempDir()
+	project := filepath.Join(dir, "project")
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(dir, "state")
+	writeHufuYAML(t, project, "unknown-preview-setting: true\nprofiles:\n  events:\n    event-format: jsonl\n  invalid-events:\n    bad-flag: invalid\n    event-format: jsonl\n")
+	tests := []struct {
+		name          string
+		flags         []string
+		task          bool
+		jsonOutput    bool
+		jsonl         bool
+		configWarning bool
+		errorContains string
+	}{
+		{name: "text preview", task: true},
+		{name: "JSON preview", flags: []string{"--output", "json"}, task: true, jsonOutput: true},
+		{name: "JSON and events", flags: []string{"--output", "json", "--event-format", "jsonl", "--report", "--skill", "missing-preview-skill"}, task: true, jsonOutput: true, jsonl: true, configWarning: true},
+		{name: "text and events", flags: []string{"--event-format=jsonl"}, task: true, jsonl: true, configWarning: true},
+		{name: "missing task", flags: []string{"--output", "json", "--event-format", "jsonl"}, jsonl: true, errorContains: "<task>"},
+		{name: "empty task", flags: []string{"--event-format", "jsonl", "--", " "}, jsonl: true, errorContains: "<task>"},
+		{name: "missing task with profile", flags: []string{"--profile", "events"}, jsonl: true, configWarning: true, errorContains: "<task>"},
+		{name: "invalid JSONL profile", flags: []string{"--profile", "invalid-events"}, task: true, jsonl: true, configWarning: true, errorContains: "bad-flag"},
+		{name: "unknown flag before event format", flags: []string{"--unknown-flag", "--event-format", "jsonl"}, task: true, jsonl: true, errorContains: "unknown flag"},
+		{name: "invalid flag value before event format", flags: []string{"--timeout=oops", "--event-format", "jsonl"}, task: true, jsonl: true, errorContains: "--timeout"},
+		{name: "invalid output", flags: []string{"--output", "xml", "--event-format", "jsonl"}, task: true, jsonl: true, errorContains: "invalid --output"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			args := append([]string{"run", "--dry-run", "--default", "--model", "ollama/preview-model", "--coordinator-model", "ollama/preview-model"}, test.flags...)
+			if test.task {
+				args = append(args, "--", "check files")
+			}
+			command := exec.CommandContext(t.Context(), binary, args...)
+			command.Dir = project
+			command.Env = append(command.Environ(), "HOME="+dir, "XDG_CONFIG_HOME="+dir, "HUFU_STATE_HOME="+state, "NO_COLOR=1")
+			var stdout, stderr bytes.Buffer
+			command.Stdout, command.Stderr = &stdout, &stderr
+			err := command.Run()
+			if (err != nil) != (test.errorContains != "") {
+				t.Fatalf("exit: %v, stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+			}
+			if test.jsonl {
+				var messages []string
+				var configWarning bool
+				for line := range bytes.SplitSeq(bytes.TrimSuffix(stderr.Bytes(), []byte("\n")), []byte("\n")) {
+					var event jsonStatusEvent
+					if err := json.Unmarshal(line, &event); err != nil || event.Type == "" || event.Time == "" {
+						t.Fatalf("invalid JSONL event %q: %v", line, err)
+					}
+					if event.Type == "error" {
+						messages = append(messages, event.Message)
+					}
+					if event.Type == "warning" && strings.Contains(event.Message, "unknown-preview-setting") {
+						configWarning = true
+					}
+				}
+				if test.configWarning && !configWarning {
+					t.Fatal("configuration warning was not emitted as an event")
+				}
+				if test.errorContains != "" && (len(messages) != 1 || !strings.Contains(messages[0], test.errorContains)) {
+					t.Fatalf("command error events = %q, want one containing %q", messages, test.errorContains)
+				}
+				if test.errorContains == "" && len(messages) > 0 {
+					t.Fatalf("unexpected error events: %q", messages)
+				}
+			}
+			switch {
+			case test.errorContains != "":
+				if stdout.Len() != 0 {
+					t.Fatalf("failure wrote stdout: %q", stdout.String())
+				}
+			case test.jsonOutput:
+				var preview struct {
+					SchemaVersion int              `json:"schema_version"`
+					DryRun        bool             `json:"dry_run"`
+					Team          string           `json:"team"`
+					Prompt        string           `json:"prompt"`
+					Agents        []map[string]any `json:"agents"`
+					RoleTargets   map[string]any   `json:"role_targets"`
+				}
+				if err := json.Unmarshal(stdout.Bytes(), &preview); err != nil || preview.SchemaVersion != 1 || !preview.DryRun ||
+					preview.Team != "default" || preview.Prompt != "check files" || len(preview.Agents) == 0 || len(preview.RoleTargets) == 0 {
+					t.Fatalf("invalid preview document: %v, stdout=%q", err, stdout.String())
+				}
+			default:
+				preview := stderr.String()
+				if test.jsonl {
+					preview = stdout.String()
+				} else if stdout.Len() != 0 {
+					t.Fatalf("plain dry run wrote stdout: %q", stdout.String())
+				}
+				if !strings.Contains(preview, "DRY RUN COMPLETE") {
+					t.Fatalf("missing text preview: %q", preview)
+				}
+			}
+			if _, err := os.Stat(state); !os.IsNotExist(err) {
+				t.Fatalf("preview created managed state: %v", err)
+			}
+		})
+	}
+}
 
 func TestCanonicalRunWorkspaceSemantics(t *testing.T) {
 	previous := opts

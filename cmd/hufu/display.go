@@ -1478,17 +1478,17 @@ func makeJSONLReporter(notifier *notify.Notifier) team.StatusReporter {
 // emitJSONLCommandError keeps Cobra's terminal error from corrupting a JSONL
 // status stream. Runtime status events and the command-boundary failure use
 // the same stable envelope; successful commands emit nothing here.
-func emitJSONLCommandError(err error) {
+func emitJSONLCommandError(writer io.Writer, invocationID string, err error) {
 	if err == nil {
 		return
 	}
 	encoded := jsonStatusEvent{
 		Type:         "error",
-		InvocationID: opts.invocationID,
+		InvocationID: invocationID,
 		Message:      err.Error(),
 		Time:         time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	writeJSONLStatusEvent(os.Stderr, encoded)
+	writeJSONLStatusEvent(writer, encoded)
 }
 
 // thinkingEntry tracks one agent's LLM wait so the TUI status bar keeps
@@ -2153,10 +2153,6 @@ func waitWithTimeoutAndFinalize(finished chan struct{}, emergencyFinalize func()
 	}
 }
 
-func renderDryRun(result *team.DryRunResult, roleSources []roleModelSource) {
-	fmt.Fprint(os.Stderr, formatDryRun(result, roleSources))
-}
-
 // formatDryRun renders the preview; roleSources, when known, name the
 // configuration layer behind each role target.
 func formatDryRun(result *team.DryRunResult, roleSources []roleModelSource) string {
@@ -2186,26 +2182,16 @@ func formatDryRun(result *team.DryRunResult, roleSources []roleModelSource) stri
 		)
 	}
 	fmt.Fprintf(&b, "  %s %s\n", boldStyle.Render("Model:"), result.Model)
-	workerTarget := result.WorkerTarget
-	if result.WorkerRoute != "" {
-		workerTarget = "route " + result.WorkerRoute + " → " + strings.Join(result.WorkerRouteCandidates, ", ")
-	}
-	for _, target := range []struct {
-		role   string
-		target string
-	}{
-		{"Worker", workerTarget},
-		{"Coordinator", result.CoordinatorTarget},
-		{"Sidecar", result.SidecarTarget},
-		{"Guard", result.GuardTarget},
-		{"Judge", result.JudgeTarget},
-		{"Plan reviewer", result.PlanReviewerTarget},
-	} {
-		if target.target == "" {
+	for _, role := range dryRunRoleTargets(result) {
+		target := role.target
+		if role.key == "worker" && result.WorkerRoute != "" {
+			target = "route " + result.WorkerRoute + " → " + strings.Join(result.WorkerRouteCandidates, ", ")
+		}
+		if target == "" {
 			continue
 		}
-		fmt.Fprintf(&b, "  %s %s", boldStyle.Render(target.role+":"), target.target)
-		if source := roleSourceFor(roleSources, target.role); source != "" {
+		fmt.Fprintf(&b, "  %s %s", boldStyle.Render(role.name+":"), target)
+		if source := roleSourceFor(roleSources, role.name); source != "" {
 			fmt.Fprintf(&b, "  %s", dimStyle.Render("("+source+")"))
 		}
 		b.WriteString("\n")

@@ -248,9 +248,10 @@ type OperationView struct {
 }
 
 type OperatorErrorView struct {
-	Kind    string `json:"kind"`
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Kind       string `json:"kind"`
+	Code       string `json:"code"`
+	Message    string `json:"message"`
+	NextAction string `json:"next_action,omitempty"`
 }
 
 type ProjectionCheck struct {

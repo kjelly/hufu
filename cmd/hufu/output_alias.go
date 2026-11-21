@@ -4,7 +4,23 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
+
+func addTextJSONOutputFlag(command *cobra.Command) {
+	command.Flags().String("output", "text", "Output format: text or json")
+	registerStaticFlagCompletion(command, "output", []string{"text", "json"})
+}
+
+func resolveTextJSONOutput(command *cobra.Command, asJSON bool) (string, error) {
+	output := "text"
+	if flag := command.Flag("output"); flag != nil {
+		output = flag.Value.String()
+	}
+	return resolveOutputAlias("output", output, flagChanged(command, "output"),
+		"json", outputForJSONAlias(asJSON), asJSON || flagChanged(command, "json"), "text", []string{"text", "json"})
+}
 
 func outputForJSONAlias(enabled bool) string {
 	if enabled {

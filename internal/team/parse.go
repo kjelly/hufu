@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/kjelly/hufu/internal/media"
-	"github.com/kjelly/hufu/internal/semantic"
 	"io"
 	"os"
 	"path/filepath"
@@ -23,7 +21,10 @@ import (
 	"github.com/kjelly/hufu/internal/decisionrt/catalog"
 	"github.com/kjelly/hufu/internal/decisionrt/control"
 	"github.com/kjelly/hufu/internal/decisionrt/settings"
+	hulog "github.com/kjelly/hufu/internal/log"
 	"github.com/kjelly/hufu/internal/mcp"
+	"github.com/kjelly/hufu/internal/media"
+	"github.com/kjelly/hufu/internal/semantic"
 	"github.com/kjelly/hufu/internal/skill"
 	"github.com/kjelly/hufu/internal/team/preset"
 	"github.com/kjelly/hufu/internal/yamlutil"
@@ -606,7 +607,7 @@ func parseAgentContent(raw []byte, path string, vars map[string]string) (*agent.
 			if resultContractFrontmatterKey.MatchString(rest[:idx]) {
 				return nil, fmt.Errorf("agent file %s: %w", path, err)
 			}
-			fmt.Fprintf(os.Stderr, "warning: YAML parse failed in %s, using fallback: %v\n", path, err)
+			hulog.Printf("warning: YAML parse failed in %s, using fallback: %v\n", path, err)
 			fm = agentFrontmatterFromSimple(yamlutil.ParseSimpleYAML(rest[:idx]))
 		}
 		body = strings.TrimSpace(rest[idx+5:])
@@ -1255,7 +1256,7 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 		return cfg, DecisionAuthoringMetadata{}, err
 	}
 	if yc.ControlDecisions.HasTransport() {
-		fmt.Fprintln(os.Stderr, "warning: team control-decisions transport is deprecated; use decision-runtime")
+		hulog.Println("warning: team control-decisions transport is deprecated; use decision-runtime")
 	}
 	if _, err := catalog.New(yc.DecisionPrimitives, catalog.ValidationOnly(), catalog.WithRuntimeConfig(shared), catalog.AllowInheritedTransport()); err != nil {
 		return cfg, DecisionAuthoringMetadata{}, err
@@ -1830,7 +1831,7 @@ func loadTeamWithOptions(teamDir string, vars map[string]string, forcedSkills []
 		for _, name := range forcedSkills {
 			trimmed := strings.TrimSpace(name)
 			if trimmed != "" && !knownSkills[strings.ToLower(trimmed)] {
-				fmt.Fprintf(os.Stderr, "warning: forced skill %q not found in discovered skills\n", trimmed)
+				hulog.Printf("warning: forced skill %q not found in discovered skills\n", trimmed)
 			}
 		}
 		for _, sk := range allSkills {

@@ -73,12 +73,16 @@ func runDoctorReport(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	output, err := resolveTextJSONOutput(cmd, asJSON)
+	if err != nil {
+		return err
+	}
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	report := collectDoctorReport(ctx)
-	if asJSON {
+	if output == "json" {
 		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(report); err != nil {
 			return err
 		}

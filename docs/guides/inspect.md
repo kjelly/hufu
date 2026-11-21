@@ -38,12 +38,18 @@ All subcommands accept workspace and format:
 
 ```text
 --workspace, -w <path>   exact workspace override; defaults to the active managed workspace
---format text|json       output format; defaults to text
+--output text|json      output format, defaults to text
 ```
+
+`--format` is an alias for `--output`.
 
 Run-scoped subcommands also accept `--branch <id|name|label>` and optional
 `--session <id>`. Storage diagnostics reject those selectors because they
 describe the single canonical database, not a branch or session projection.
+
+When `inspect overview` cannot resolve its target, the text error suggests a
+read-only check for the directory, run, or branch. The JSON error includes
+the same guidance in `data.error.next_action`.
 
 When `--branch` is omitted, inspection is limited to the active branch. It
 does not search sibling branches for a matching ID. Task and context queries
@@ -59,14 +65,14 @@ Typical operator queries:
 
 ```bash
 hufu inspect run run-123 --workspace ./workspace
-hufu inspect task task-7 --run run-123 --format json
+hufu inspect task task-7 --run run-123 --output json
 hufu inspect evidence run-123
 hufu inspect context task-7 --run run-123 --project project-1 --agent worker-1
 hufu inspect trace run-123 --branch incident-fix
-hufu inspect cost run-123 --task task-7 --format json
-hufu inspect replay run-123 --format json
+hufu inspect cost run-123 --task task-7 --output json
+hufu inspect replay run-123 --output json
 hufu inspect semantic-retrieval run-123 --task task-7
-hufu inspect storage --workspace ./workspace --format json
+hufu inspect storage --workspace ./workspace --output json
 ```
 
 `inspect semantic-retrieval` summarizes the workspace's content-free semantic
@@ -156,8 +162,8 @@ running attempts never receive a live elapsed duration in this observation.
 ## Comparing declared groups of runs
 
 ```sh
-hufu inspect economics-compare --manifest comparison.json --format json
-hufu inspect economics-compare --manifest comparison.json --format text
+hufu inspect economics-compare --manifest comparison.json --output json
+hufu inspect economics-compare --manifest comparison.json --output text
 ```
 
 The manifest is strict JSON (unknown and duplicate fields are rejected), at most
@@ -300,7 +306,7 @@ remain available and retain their specialized semantics:
 Use `hufu inspect` when one safe, correlated operator view is needed; use the
 specialized command when maintaining or deeply diagnosing that subsystem.
 For scripts, migrate ad-hoc parsing of reports, `runtime.sqlite` rows, or multiple
-command outputs to `hufu inspect ... --format json`. There is no separate
+command outputs to `hufu inspect ... --output json`. There is no separate
 `--json` mode for this command.
 ## Fixed-scope MCP stdio service
 

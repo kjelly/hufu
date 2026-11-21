@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,19 +13,96 @@ import (
 	"github.com/spf13/cobra"
 
 	operatorpkg "github.com/kjelly/hufu/internal/operator"
+	"github.com/kjelly/hufu/internal/runtimestore"
 	"github.com/kjelly/hufu/internal/team"
 )
 
-func TestSummarizeWorkspaceSession(t *testing.T) {
-	status := summarizeWorkspaceSession("/tmp/workspace", &team.SessionData{
+func TestStatusTaskCountsBySavedState(t *testing.T) {
+	workspace := t.TempDir()
+	session := &team.SessionData{
 		Rounds: 2,
 		Tasks: []*team.TodoItem{
-			{Status: team.TaskDone}, {Status: team.TaskError}, {Status: team.TaskBlocked},
-			{Status: team.TaskSkipped}, {Status: team.TaskPending},
+			{ID: "1", Status: team.TaskDone}, {ID: "2", Status: team.TaskError}, {ID: "3", Status: team.TaskBlocked},
+			{ID: "4", Status: team.TaskSkipped}, {ID: "5", Status: team.TaskPending}, {ID: "6", Status: team.TaskInProgress},
+			{ID: "7", Status: team.TaskVerifying}, {ID: "8", Status: team.TaskPlanned}, {ID: "9", Status: team.TaskPaused},
+			{ID: "10", Status: team.TaskProtocolIncomplete}, {ID: "11", Status: "future_status"},
 		},
-	})
-	if status.Total != 5 || status.Done != 1 || status.Error != 2 || status.Skipped != 1 || status.Pending != 1 {
-		t.Errorf("unexpected status: %#v", status)
+	}
+	if err := team.SaveSession(workspace, session); err != nil {
+		t.Fatal(err)
+	}
+	binary := buildTestBinary(t)
+	for _, flags := range [][]string{{}, {"--output", "json"}, {"--json"}, {"--json", "--output", "json"}} {
+		args := append([]string{"status", "--workspace", workspace}, flags...)
+		command := exec.CommandContext(t.Context(), binary, args...)
+		command.Dir = workspace
+		out, err := command.Output()
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if len(flags) == 0 {
+			for _, count := range []string{"1 pending", "1 in progress", "1 verifying", "1 blocked", "1 error", "1 paused", "1 planned", "1 protocol incomplete", "1 unknown", "(11 total)"} {
+				if !strings.Contains(string(out), count) {
+					t.Fatalf("missing %q in %s", count, out)
+				}
+			}
+			continue
+		}
+		var counts map[string]json.RawMessage
+		if err := json.Unmarshal(out, &counts); err != nil {
+			t.Fatalf("invalid JSON: %v, stdout=%s", err, out)
+		}
+		for _, key := range []string{"done", "error", "blocked", "skipped", "pending", "in_progress", "verifying", "planned", "paused", "protocol_incomplete", "unknown"} {
+			if string(counts[key]) != "1" {
+				t.Errorf("%v: count %s = %s, want 1", flags, key, counts[key])
+			}
+		}
+		if string(counts["total"]) != "11" {
+			t.Errorf("%v: total = %s, want 11", flags, counts["total"])
+		}
+	}
+}
+
+func TestStatusWorkspaceReadErrors(t *testing.T) {
+	dir := t.TempDir()
+	empty, corrupt, missing := filepath.Join(dir, "empty"), filepath.Join(dir, "corrupt"), filepath.Join(dir, "missing")
+	for _, workspace := range []string{empty, corrupt} {
+		if err := os.Mkdir(workspace, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	database := runtimestore.Path(corrupt)
+	original := []byte("corrupt fixture")
+	if err := os.WriteFile(database, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previous := statusWorkspace
+	t.Cleanup(func() { statusWorkspace = previous })
+	for _, test := range []struct {
+		workspace, problem, next string
+	}{
+		{missing, "does not exist", "hufu workspace status"},
+		{empty, "no saved session", "locate recorded runs"},
+		{corrupt, "cannot read the session", "PRAGMA quick_check"},
+	} {
+		statusWorkspace = test.workspace
+		command := &cobra.Command{}
+		var stdout bytes.Buffer
+		command.SetOut(&stdout)
+		err := runStatus(command, nil)
+		if err == nil || !strings.Contains(err.Error(), test.problem) || !strings.Contains(err.Error(), test.next) ||
+			strings.Contains(err.Error(), "--workspace") || stdout.Len() != 0 {
+			t.Fatalf("status error = %v, stdout=%q", err, stdout.String())
+		}
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("missing workspace was created: %v", err)
+	}
+	if entries, err := os.ReadDir(empty); err != nil || len(entries) != 0 {
+		t.Fatalf("empty workspace changed: %v, %v", entries, err)
+	}
+	if contents, err := os.ReadFile(database); err != nil || !bytes.Equal(contents, original) {
+		t.Fatalf("corrupt database changed: %q, %v", contents, err)
 	}
 }
 

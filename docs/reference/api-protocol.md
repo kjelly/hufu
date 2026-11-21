@@ -96,7 +96,7 @@ a different protocol.
 
 ## Diagnostics
 
-`hufu doctor --json` and `hufu team check <team> --output json` report requested
+`hufu doctor --output json` and `hufu team check <team> --output json` report requested
 and effective protocol, source and binding version. Requested `legacy` is a
 diagnostic label for an omitted value, not a valid configuration value.
 

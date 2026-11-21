@@ -225,7 +225,7 @@ warmup, and refresh counts.
 ## Inspecting
 
 ```bash
-hufu inspect semantic-retrieval [run-id] [--task <task-id>] [--format json]
+hufu inspect semantic-retrieval [run-id] [--task <task-id>] [--output json]
 ```
 
 Shows the runtime status recorded when the run (or the latest run) finished, a table

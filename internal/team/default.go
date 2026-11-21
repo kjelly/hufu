@@ -1,12 +1,12 @@
 package team
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
+	hulog "github.com/kjelly/hufu/internal/log"
 	"github.com/kjelly/hufu/internal/mcp"
 	"github.com/kjelly/hufu/internal/skill"
 )
@@ -139,7 +139,7 @@ func LoadDefaultTeam(workspace string, forcedSkills []string, helperTools string
 		for _, name := range forcedSkills {
 			trimmed := strings.TrimSpace(name)
 			if trimmed != "" && !knownSkills[strings.ToLower(trimmed)] {
-				fmt.Fprintf(os.Stderr, "warning: forced skill %q not found in discovered skills\n", trimmed)
+				hulog.Printf("warning: forced skill %q not found in discovered skills\n", trimmed)
 			}
 		}
 		for _, sk := range allSkills {

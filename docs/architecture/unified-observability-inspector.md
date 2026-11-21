@@ -228,7 +228,7 @@ legacy_schema_unsupported
 
 ### 5.3 Common JSON envelope
 
-所有 `--format json` 輸出使用以下 envelope；欄位順序由 struct 定義固定，陣列必須
+所有 `--output json` 輸出使用以下 envelope；欄位順序由 struct 定義固定，陣列必須
 明確排序：
 
 ```json
@@ -268,12 +268,12 @@ metadata projection：
 ## 6. CLI contract
 
 ```bash
-hufu inspect run <run-id> [--branch <branch>] [--format text|json]
-hufu inspect task <task-id> --run <run-id> [--attempt <n>] [--branch <branch>] [--format text|json]
-hufu inspect trace <run-id> [--branch <branch>] [--format text|json]
-hufu inspect evidence <run-id> [--branch <branch>] [--format text|json]
+hufu inspect run <run-id> [--branch <branch>] [--output text|json]
+hufu inspect task <task-id> --run <run-id> [--attempt <n>] [--branch <branch>] [--output text|json]
+hufu inspect trace <run-id> [--branch <branch>] [--output text|json]
+hufu inspect evidence <run-id> [--branch <branch>] [--output text|json]
 hufu inspect context <task-id> --run <run-id> [--attempt <n>] [context flags]
-hufu inspect replay <run-id> [--branch <branch>] [--format text|json]
+hufu inspect replay <run-id> [--branch <branch>] [--output text|json]
 ```
 
 `inspect` 的 flags：
@@ -284,7 +284,8 @@ hufu inspect replay <run-id> [--branch <branch>] [--format text|json]
 --session
 --run              # task/context 子命令必填
 --attempt
---format           # text (default) 或 json
+--output           # text (default) 或 json
+--format           # --output 的相容別名
 --project          # context 子命令必填
 --team
 --agent
@@ -303,8 +304,7 @@ Process exit code 固定為：
 optional projection 缺失而沒有證據顯示 drift 時，輸出 `unavailable/skipped` 並回傳
 0；canonical event store 不可讀或 required payload 不合法則回傳 1。
 
-不得另造 `--json` 語意；若要相容既有 CLI，可接受 `--json` 作為 `--format json`
-的 deprecated alias，但 help 與文件以 `--format` 為準。
+Help 與文件使用 `--output json`。既有的 `--format json` 為同一格式的相容別名。
 
 ### 6.1 `inspect run`
 

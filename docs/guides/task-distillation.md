@@ -157,7 +157,7 @@ workspace or making model calls:
 hufu workspace distill list --team my-team
 ```
 
-Use the listed audit workspace with `hufu status --workspace PATH --json`,
+Use the listed audit workspace with `hufu status --workspace PATH --output json`,
 `hufu inspect`, or `hufu debug` to examine that maintenance invocation.
 
 Validated extraction and merge batches are checkpointed in the destination.

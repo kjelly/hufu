@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/kjelly/hufu/internal/agent"
 )
@@ -62,12 +63,6 @@ func newCanonicalRunCommandWithOptions(name, defaultIntent string) (*cobra.Comma
 --workspace is the exact team workspace. --workspace-root is a parent under
 which the team name is joined exactly once. Omit both to use the registered
 managed workspace for the discovered project and selected team.`,
-		Args: func(command *cobra.Command, args []string) error {
-			if strings.TrimSpace(options.resumeDecision) != "" {
-				return cobra.NoArgs(command, args)
-			}
-			return cobra.ExactArgs(1)(command, args)
-		},
 		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(command *cobra.Command, args []string) (runErr error) {
 			previous := opts
@@ -85,9 +80,19 @@ managed workspace for the discovered project and selected team.`,
 				command.Root().SilenceErrors = true
 				defer func() {
 					if !delegated {
-						emitJSONLCommandError(runErr)
+						emitJSONLCommandError(command.ErrOrStderr(), "", runErr)
 					}
 				}()
+			}
+			if err != nil {
+				return err
+			}
+			if resolved.resumeDecision != "" {
+				err = cobra.NoArgs(command, args)
+			} else if len(args) == 0 || (len(args) == 1 && strings.TrimSpace(args[0]) == "") {
+				err = fmt.Errorf("hufu %s requires <task>", command.Name())
+			} else {
+				err = cobra.ExactArgs(1)(command, args)
 			}
 			if err != nil {
 				return err
@@ -180,6 +185,32 @@ managed workspace for the discovered project and selected team.`,
 	registerStaticFlagCompletion(command, "intent", []string{"execute", "decision"})
 	registerStaticFlagCompletion(command, "rigor", []string{"light", "standard", "high"})
 	return command, options
+}
+
+// Cobra can stop parsing at a bad flag before reaching --event-format.
+// Read the requested transport with pflag's token rules without setting any
+// values or replacing the original parse error.
+func installRunFlagErrorHandler(root *cobra.Command, args []string) {
+	root.SetFlagErrorFunc(func(command *cobra.Command, err error) error {
+		if command.Name() != "run" && command.Name() != "decide" {
+			return err
+		}
+		flags := pflag.NewFlagSet(command.Name(), pflag.ContinueOnError)
+		flags.ParseErrorsAllowlist.UnknownFlags = true
+		flags.AddFlagSet(command.Flags())
+		var eventFormat string
+		_ = flags.ParseAll(args, func(flag *pflag.Flag, value string) error {
+			if flag.Name == "event-format" {
+				eventFormat = value
+			}
+			return nil
+		})
+		if eventFormat == "jsonl" {
+			root.SilenceErrors = true
+			emitJSONLCommandError(command.ErrOrStderr(), "", err)
+		}
+		return err
+	})
 }
 
 // resolveCanonicalRunOptions applies the profile to the command-local flags

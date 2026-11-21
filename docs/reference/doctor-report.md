@@ -9,8 +9,8 @@
 `hufu doctor` runs provider, model, workspace, team-contract, event-integrity,
 and recovery-readiness checks without starting an agent or performing recovery.
 The default rendering writes human-readable diagnostics to stderr. Use
-`hufu doctor --json` to write exactly one versioned JSON object to stdout,
-including when a check fails and the command exits nonzero.
+`hufu doctor --output json` to write exactly one versioned JSON object to stdout,
+including when a check fails and the command exits nonzero. `--json` is an alias.
 
 ```json
 {

@@ -40,7 +40,10 @@ Set the model with --model <name> (highest priority), in team.yaml, or in hufu.y
 		RunE:         runTeam,
 		Version:      buildinfo.Current().String(),
 		SilenceUsage: true,
-		PersistentPreRun: func(_ *cobra.Command, _ []string) {
+		PersistentPreRun: func(command *cobra.Command, _ []string) {
+			if command.Name() == "run" || command.Name() == "decide" {
+				return // The canonical runner configures presentation after resolving its profile.
+			}
 			configureOutputRendering()
 			configureLLMTimeouts()
 		},

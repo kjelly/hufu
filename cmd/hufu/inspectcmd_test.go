@@ -226,6 +226,9 @@ func TestInspectOverviewJSONFailureIsSingleDocumentAndSilentOnStderr(t *testing.
 	if envelope.Kind != inspectpkg.KindOverview || envelope.Data.Operation.Status != "failed" || envelope.Data.Snapshot != nil || envelope.Data.Error == nil || envelope.Data.Error.Code != "target_not_found" {
 		t.Fatalf("failure envelope = %#v", envelope)
 	}
+	if !strings.Contains(envelope.Data.Error.Message, "workspace directory") || !strings.Contains(envelope.Data.Error.NextAction, "hufu workspace status") {
+		t.Fatalf("missing workspace diagnosis = %#v", envelope.Data.Error)
+	}
 	if stderr.Len() != 0 {
 		t.Fatalf("JSON failure duplicated stderr: %q", stderr.String())
 	}
@@ -247,8 +250,24 @@ func TestInspectOverviewTextFailureUsesOneStderrTemplate(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("text failure wrote stdout: %q", stdout.String())
 	}
-	if strings.Count(stderr.String(), "Error [target_not_found]") != 1 || !strings.Contains(stderr.String(), "no data was modified") {
+	if strings.Count(stderr.String(), "Error [target_not_found]") != 1 || !strings.Contains(stderr.String(), "no data was modified") ||
+		!strings.Contains(stderr.String(), "hufu workspace status") || strings.Contains(stderr.String(), "with inspect overview") {
 		t.Fatalf("text failure stderr = %q", stderr.String())
+	}
+}
+
+func TestInspectOverviewMissingRunSuggestsSelectorDiscovery(t *testing.T) {
+	workspace, _, _ := buildInspectCommandFixture(t)
+	command := newInspectCommand()
+	var stdout, stderr bytes.Buffer
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+	command.SetArgs([]string{"overview", "--workspace", workspace, "--run", "missing"})
+	if err := command.Execute(); !errors.Is(err, inspectpkg.ErrNotFound) {
+		t.Fatalf("overview error = %v", err)
+	}
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "hufu session list") || !strings.Contains(stderr.String(), "hufu results runs") {
+		t.Fatalf("overview diagnostics: stdout=%q, stderr=%q", stdout.String(), stderr.String())
 	}
 }
 

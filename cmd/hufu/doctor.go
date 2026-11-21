@@ -39,7 +39,8 @@ Run this first to find them in seconds instead of waiting for a timeout.`,
 }
 
 func init() {
-	doctorCmd.Flags().Bool("json", false, "Print one machine-readable preflight report to stdout")
+	addTextJSONOutputFlag(doctorCmd)
+	doctorCmd.Flags().Bool("json", false, "Alias for --output json")
 }
 
 // modelsResponse matches the OpenAI-compatible GET /models payload that both

@@ -2,11 +2,11 @@ package team
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/agent"
+	hulog "github.com/kjelly/hufu/internal/log"
 )
 
 type PromptSegmentType string
@@ -61,7 +61,7 @@ func ParsePromptWithLazyAgents(rawPrompt string, registry *TeamRegistry, default
 			}
 		}
 		if bestScore >= 0.75 && bestMatch != "" && bestMatch != name {
-			fmt.Fprintf(os.Stderr, "Note: Corrected typo @%s to @%s (similarity: %.0f%%)\n", name, bestMatch, bestScore*100)
+			hulog.Printf("Note: Corrected typo @%s to @%s (similarity: %.0f%%)\n", name, bestMatch, bestScore*100)
 			content := strings.TrimSpace(rawPrompt[loc.end:])
 			return []PromptSegment{{Type: SegmentSwitchTeam, Name: bestMatch, Content: content}}, nil
 		}
@@ -141,7 +141,7 @@ func resolveMentionName(name string, registry *TeamRegistry, currentAgents []*ag
 		}
 	}
 	if bestScore >= 0.75 && bestMatch != "" && bestMatch != name {
-		fmt.Fprintf(os.Stderr, "Note: Corrected typo @%s to @%s (similarity: %.0f%%)\n", name, bestMatch, bestScore*100)
+		hulog.Printf("Note: Corrected typo @%s to @%s (similarity: %.0f%%)\n", name, bestMatch, bestScore*100)
 		return bestMatch, true
 	}
 	return "", false

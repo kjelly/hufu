@@ -722,6 +722,9 @@ func promptForMissingTemplateVars(ctx context.Context, segName string, registry 
 	if err != nil || len(missingVars) == 0 {
 		return vars, nil
 	}
+	if opts.dryRun && opts.eventFormat == "jsonl" {
+		return vars, fmt.Errorf("team %q requires template variables %s; provide them with --var or --var-file", segName, strings.Join(missingVars, ", "))
+	}
 	fmt.Fprintf(os.Stderr, "\n%s Some template variables are required for team %s:\n", boldStyle.Render("📋"), teamStyle.Render(segName))
 	for _, mv := range missingVars {
 		var val string

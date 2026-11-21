@@ -218,6 +218,10 @@ func TestRenderExecutionSummary(t *testing.T) {
 			t.Errorf("summary missing %q: %q", want, out)
 		}
 	}
+	outcome, next := strings.Index(out, "Outcome:"), strings.Index(out, "Next:")
+	if outcome < 0 || next <= outcome || next >= strings.Index(out, "Tasks:") || next >= strings.Index(out, "Duration:") || next >= strings.Index(out, "Cost:") {
+		t.Fatalf("outcome and next action must precede execution metrics:\n%s", out)
+	}
 }
 
 func TestExecutionSummaryShowsRecoveredAttemptsWithoutChangingTaskOutcome(t *testing.T) {

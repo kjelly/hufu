@@ -35,7 +35,7 @@ func (e *inspectExitError) Unwrap() error        { return e.err }
 func (e *inspectExitError) ProcessExitCode() int { return e.code }
 
 func newInspectCommand() *cobra.Command {
-	options := &inspectCLIOptions{format: string(inspectpkg.FormatText)}
+	options := &inspectCLIOptions{}
 	command := &cobra.Command{
 		Use:   "inspect",
 		Short: "Inspect persisted run facts without executing runtime behavior",
@@ -45,22 +45,22 @@ providers, verifiers, migrations, or recovery actions, and it does not replace
 the detailed audit, context, or decision maintenance commands.`,
 		Example: `  hufu inspect run run-123 --workspace ./workspace
   hufu inspect overview --workspace ./workspace --output json
-  hufu inspect task task-7 --run run-123 --format json
+  hufu inspect task task-7 --run run-123 --output json
   hufu inspect trace run-123 --branch incident-fix
-  hufu inspect cost run-123 --task task-7 --format json
-  hufu inspect economics-compare --manifest comparison.json --format json
-  hufu inspect replay run-123 --format json
+  hufu inspect cost run-123 --task task-7 --output json
+  hufu inspect economics-compare --manifest comparison.json --output json
+  hufu inspect replay run-123 --output json
   hufu inspect control-decisions --workspace ./workspace
   hufu inspect semantic-retrieval run-123 --workspace ./workspace
-  hufu inspect storage --workspace ./workspace --format json`,
+  hufu inspect storage --workspace ./workspace --output json`,
 		Args:              cobra.NoArgs,
 		ValidArgsFunction: cobra.NoFileCompletions,
 	}
 	command.PersistentFlags().StringVarP(&options.workspace, "workspace", "w", "", "Workspace directory (default: active managed workspace)")
 	command.PersistentFlags().StringVar(&options.branch, "branch", "", "Exact branch ID, name, or branch label (default: active branch)")
 	command.PersistentFlags().StringVar(&options.session, "session", "", "Optional exact session ID filter")
-	command.PersistentFlags().StringVar(&options.format, "format", string(inspectpkg.FormatText), "Output format: text or json")
-	command.PersistentFlags().StringVar(&options.output, "output", "", "Output format alias: text or json")
+	command.PersistentFlags().StringVar(&options.output, "output", string(inspectpkg.FormatText), "Output format: text or json")
+	command.PersistentFlags().StringVar(&options.format, "format", "", "Alias for --output")
 	registerStaticFlagCompletion(command, "format", []string{string(inspectpkg.FormatText), string(inspectpkg.FormatJSON)})
 	registerStaticFlagCompletion(command, "output", []string{string(inspectpkg.FormatText), string(inspectpkg.FormatJSON)})
 	command.AddCommand(
@@ -125,7 +125,7 @@ func newInspectOverviewCommand(options *inspectCLIOptions) *cobra.Command {
 			}
 			query, err := options.query()
 			if err != nil {
-				return err
+				return finishInspectOverview(command, format, query, nil, inspectpkg.ErrWorkspaceNotFound)
 			}
 			query.RunID = runID
 			envelope, inspectErr := inspectpkg.InspectOverview(command.Context(), query)
@@ -313,14 +313,10 @@ func newInspectTaskCommand(options *inspectCLIOptions) *cobra.Command {
 }
 
 func (options *inspectCLIOptions) resolveFormat(command *cobra.Command) (string, error) {
-	format, err := resolveOutputAlias("format", options.format, flagChanged(command, "format"), "output", options.output, flagChanged(command, "output"), string(inspectpkg.FormatText), []string{string(inspectpkg.FormatText), string(inspectpkg.FormatJSON)})
+	format, err := resolveOutputAlias("output", options.output, flagChanged(command, "output"), "format", options.format, flagChanged(command, "format"), string(inspectpkg.FormatText), []string{string(inspectpkg.FormatText), string(inspectpkg.FormatJSON)})
 	if err != nil {
-		if strings.HasPrefix(err.Error(), "invalid --format") {
-			value := options.format
-			if flagChanged(command, "output") {
-				value = options.output
-			}
-			err = fmt.Errorf("invalid format %q (must be text or json)", value)
+		if strings.HasPrefix(err.Error(), "invalid --output") {
+			err = fmt.Errorf("invalid format: %w", err)
 		}
 		return "", &inspectExitError{code: inspectpkg.ExitUsage, err: fmt.Errorf("hufu inspect: %w", err)}
 	}
@@ -397,8 +393,8 @@ func renderOverviewError(writer io.Writer, view *inspectpkg.OperatorErrorView, t
 	if view == nil {
 		return fmt.Errorf("nil operator error")
 	}
-	_, err := fmt.Fprintf(writer, "Error [%s]\nState: Operation did not start; no data was modified.\nWhat: %s.\nTarget: %s\nNext: Verify the exact workspace and selectors with inspect overview.\n",
-		view.Code, view.Message, valueOrUnavailable(target))
+	_, err := fmt.Fprintf(writer, "Error [%s]\nState: Read-only inspection failed; no data was modified.\nWhat: %s.\nTarget: %s\nNext: %s.\n",
+		view.Code, view.Message, safeOverviewValue(valueOrUnavailable(target)), view.NextAction)
 	return err
 }
 

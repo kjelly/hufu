@@ -20,9 +20,9 @@ import (
 )
 
 // executeDryRun handles dry run path for the CLI.
-func executeDryRun(ctx context.Context, segments []team.PromptSegment, prompt string, loadedTeams map[string]*teamContext) error {
+func executeDryRun(ctx context.Context, writer io.Writer, segments []team.PromptSegment, prompt string, loadedTeams map[string]*teamContext) error {
 	if len(opts.imagePaths) > 0 {
-		return executeNativeImageDryRun(ctx, segments, loadedTeams)
+		return executeNativeImageDryRun(ctx, writer, segments, loadedTeams)
 	}
 	var dryRunTeamName string
 	for _, seg := range segments {
@@ -71,18 +71,25 @@ func executeDryRun(ctx context.Context, segments []team.PromptSegment, prompt st
 			return outputErr
 		}
 		if opts.outputFormat == "json" || opts.eventFormat == "jsonl" {
-			if outputErr = writeDecisionOutput(os.Stdout, output, opts.eventFormat != "jsonl"); outputErr != nil {
+			if outputErr = writeDecisionOutput(writer, output, opts.eventFormat != "jsonl"); outputErr != nil {
 				return outputErr
 			}
 			return decisionOutputProcessResult(output)
 		}
-		if outputErr = renderDecisionOutputText(os.Stdout, output); outputErr != nil {
+		if outputErr = renderDecisionOutputText(writer, output); outputErr != nil {
 			return outputErr
 		}
 		return decisionOutputProcessResult(output)
 	}
-	renderDryRun(result, tc.roleSources)
-	generateRequestedReports(loadedTeams, "(dry-run — no tasks executed)")
+	if opts.outputFormat == "json" {
+		return writeDryRunJSON(writer, result, tc.roleSources)
+	}
+	if _, err := io.WriteString(writer, formatDryRun(result, tc.roleSources)); err != nil {
+		return err
+	}
+	if opts.eventFormat != "jsonl" {
+		generateRequestedReports(loadedTeams, "(dry-run — no tasks executed)")
+	}
 	return nil
 }
 
@@ -521,6 +528,24 @@ func formatExecutionSummary(summary executionSummary, duration time.Duration, ru
 	b.WriteString("\n")
 	b.WriteString(headerStyle.Render("─── Summary ───"))
 	b.WriteString("\n")
+	if len(runResults) > 0 {
+		canonical := team.AggregateRunResults(runResults, nil, team.RunStats{})
+		fmt.Fprintf(&b, "  Outcome:   %s (satisfied: %t, mode: %s, stop reason: %s)\n",
+			canonical.Outcome, canonical.GoalSatisfied, canonical.GoalMode, canonical.StopReason)
+		fmt.Fprintf(&b, "  Status:    %s\n", team.FormatCanonicalStatus(&canonical))
+		if disposition := team.RunRecoveryDisposition(canonical.UnresolvedTasks); disposition != "" {
+			fmt.Fprintf(&b, "  Recovery:  %s\n", disposition)
+			for _, task := range canonical.UnresolvedTasks {
+				nextAction := task.NextAction
+				if nextAction == "" {
+					nextAction = team.RecoveryNextAction(task.RetryDisposition)
+				}
+				if nextAction != "" {
+					fmt.Fprintf(&b, "  Next:      task %s — %s\n", task.ID, nextAction)
+				}
+			}
+		}
+	}
 	if len(summary.teams) > 0 {
 		fmt.Fprintf(&b, "  Team:      %s\n", strings.Join(summary.teams, ", "))
 	}
@@ -547,24 +572,6 @@ func formatExecutionSummary(summary executionSummary, duration time.Duration, ru
 	}
 	for _, teamName := range summary.costErrors {
 		fmt.Fprintf(&b, "  Cost %s: unavailable (integrity degraded)\n", teamName)
-	}
-	if len(runResults) > 0 {
-		canonical := team.AggregateRunResults(runResults, nil, team.RunStats{})
-		fmt.Fprintf(&b, "  Outcome:   %s (satisfied: %t, mode: %s, stop reason: %s)\n",
-			canonical.Outcome, canonical.GoalSatisfied, canonical.GoalMode, canonical.StopReason)
-		fmt.Fprintf(&b, "  Status:    %s\n", team.FormatCanonicalStatus(&canonical))
-		if disposition := team.RunRecoveryDisposition(canonical.UnresolvedTasks); disposition != "" {
-			fmt.Fprintf(&b, "  Recovery:  %s\n", disposition)
-			for _, task := range canonical.UnresolvedTasks {
-				nextAction := task.NextAction
-				if nextAction == "" {
-					nextAction = team.RecoveryNextAction(task.RetryDisposition)
-				}
-				if nextAction != "" {
-					fmt.Fprintf(&b, "  Next:      task %s — %s\n", task.ID, nextAction)
-				}
-			}
-		}
 	}
 	return b.String()
 }

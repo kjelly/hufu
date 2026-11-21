@@ -352,7 +352,7 @@ func TestDoctorModelStateDistinguishesDeferredConfiguration(t *testing.T) {
 	}
 }
 
-func TestDoctorJSONWarningKeepsZeroExit(t *testing.T) {
+func TestDoctorOutputJSONWarningKeepsZeroExit(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"data":[]}`))
@@ -363,10 +363,19 @@ func TestDoctorJSONWarningKeepsZeroExit(t *testing.T) {
 	opts.workspace = t.TempDir()
 	opts.agentTeamSearchPath = t.TempDir()
 	opts.providerURL = server.URL
-	if err := doctorCmd.Flags().Set("json", "true"); err != nil {
+	outputFlag := doctorCmd.Flags().Lookup("output")
+	oldOutput, outputChanged := outputFlag.Value.String(), outputFlag.Changed
+	jsonFlag := doctorCmd.Flags().Lookup("json")
+	jsonChanged := jsonFlag.Changed
+	jsonFlag.Changed = false
+	t.Cleanup(func() {
+		_ = outputFlag.Value.Set(oldOutput)
+		outputFlag.Changed = outputChanged
+		jsonFlag.Changed = jsonChanged
+	})
+	if err := doctorCmd.Flags().Set("output", "json"); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = doctorCmd.Flags().Set("json", "false") }()
 	var stdout, stderr bytes.Buffer
 	doctorCmd.SetOut(&stdout)
 	doctorCmd.SetErr(&stderr)

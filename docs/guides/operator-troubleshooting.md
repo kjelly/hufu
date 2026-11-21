@@ -32,11 +32,24 @@ branch or combine `--workspace` with `--workspace-root`.
 
 ```sh
 hufu status --team dev-team
-hufu status --team dev-team --json
+hufu status --team dev-team --output json
 ```
 
+`--json` is an alias for `--output json`. The JSON task counters still
+include `total`, `done`, `error`, `skipped`, and `pending`. Counters now
+match the saved task state. Use `pending` for queued tasks, `in_progress`
+for running tasks, `verifying` for tasks under verification, and `blocked`
+for blocked tasks. `error` counts failed tasks. Other available counts are
+`planned`, `paused`, `protocol_incomplete`, and `unknown`.
+
+If `status` reports a missing workspace, check the directory or list registered
+workspaces with `hufu workspace status`. If the directory exists with no saved
+session, check it for `runtime.sqlite`. If the database cannot be read, check
+file permissions and run `PRAGMA quick_check` on a copy of the database and its
+WAL, when present.
+
 Plain `hufu status` also shows recovery hints for the canonically selected
-run, without requiring `--workers`. `--json` includes the same information
+run, without requiring `--workers`. `--output json` includes the same information
 under `recovery`: unresolved task IDs, scoped inspection actions, and, for a
 blocked result collection, an `assess-result-repair` action for each affected
 task. The complete command has this form:

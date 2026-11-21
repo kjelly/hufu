@@ -346,7 +346,7 @@ HUFU_TEST_CHROME=1 mise exec -- go test -p 2 ./internal/browser -run '^TestCDPCh
 
 ### Verification observations
 
-`hufu inspect trace <run-id> --workspace <workspace> --format json` exposes
+`hufu inspect trace <run-id> --workspace <workspace> --output json` exposes
 `human_verification_observed` events, including task/attempt identity, status,
 and request ID / URL SHA-256 refs. `requested` means preparation began;
 `prompt_requested` means interactive input was requested, not proof that the

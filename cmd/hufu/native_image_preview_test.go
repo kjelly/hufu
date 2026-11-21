@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	json "encoding/json/v2"
 	"fmt"
 	"image"
 	"image/png"
@@ -49,13 +50,26 @@ spec:
 		t.Fatal(err)
 	}
 	opts.imagePaths, opts.agentTeamName = []string{path, path}, "image-preview"
+	opts.outputFormat = "json"
 	for _, segments := range [][]team.PromptSegment{
 		{{Type: team.SegmentSwitchTeam, Name: "image-preview"}, {Type: team.SegmentInvokeAgent, Name: "analyst", Content: "Describe these images."}},
 		{{Type: team.SegmentSwitchTeam, Name: "image-preview", Content: "Describe these images."}},
 		{{Type: team.SegmentSwitchTeam, Name: "image-preview"}, {Type: team.SegmentText, Content: "Describe these images."}},
 	} {
-		if err := executeNativeImageDryRun(t.Context(), segments, map[string]*teamContext{"image-preview": tc}); err != nil {
+		var stdout bytes.Buffer
+		if err := executeNativeImageDryRun(t.Context(), &stdout, segments, map[string]*teamContext{"image-preview": tc}); err != nil {
 			t.Fatal(err)
+		}
+		var output struct {
+			DryRun bool `json:"dry_run"`
+			Image  struct {
+				ImageCount   int  `json:"image_count"`
+				MetadataOnly bool `json:"metadata_only"`
+			} `json:"image_preview"`
+		}
+		if err := json.Unmarshal(stdout.Bytes(), &output); err != nil || !output.DryRun || output.Image.ImageCount != 2 ||
+			output.Image.MetadataOnly != (segments[len(segments)-1].Type != team.SegmentInvokeAgent) {
+			t.Fatalf("invalid image preview: %v, stdout=%q", err, stdout.String())
 		}
 	}
 	if requests.Load() != 0 || len(tc.coordinator.TaskTracker().TodoList().Items()) != 0 {

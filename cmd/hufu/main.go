@@ -31,7 +31,9 @@ func main() {
 	// stdin; a live per-call probe would flip tool permissions mid-session.
 	tools.CaptureInteractiveEnvironment()
 	exitCode := 0
-	if err := newRootCommand().Execute(); err != nil {
+	root := newRootCommand()
+	installRunFlagErrorHandler(root, os.Args[1:])
+	if err := root.Execute(); err != nil {
 		var outcomeErr interface{ ProcessExitCode() int }
 		var interrupted errInterrupted
 		if errors.As(err, &outcomeErr) {

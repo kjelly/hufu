@@ -25,7 +25,7 @@ import (
 // they can read the docs. In a non-TTY environment it falls back to a
 // plain error message.
 func offerFirstTimeWizard(searchPaths []string) error {
-	if !tools.IsInteractiveEnvironment() {
+	if !tools.IsInteractiveEnvironment() || (opts.dryRun && opts.eventFormat == "jsonl") {
 		return fmt.Errorf("no agent teams found in search paths: %s\n  Use --default for the built-in team, or scaffold one with `hufu init <team>`", strings.Join(searchPaths, ", "))
 	}
 
@@ -98,6 +98,18 @@ func readStdin() string {
 	return strings.TrimSpace(string(data))
 }
 
+func newRunPromptReader() *readline.PromptReader {
+	if opts.canonicalRun && opts.dryRun && opts.eventFormat == "jsonl" {
+		return nil
+	}
+	pr, err := readline.NewPromptReaderWithHistoryFilter(defaultHistoryPath(), nil, chatHistoryAllowsLine)
+	if err != nil {
+		stderrLog("%s Readline initialization failed, falling back to basic input: %v\n", errStyle.Render("⚠"), err)
+		return nil
+	}
+	return pr
+}
+
 func askUserForPrompt(pr *readline.PromptReader) (string, error) {
 	fmt.Fprintf(os.Stderr, "\n%s\n", boldStyle.Render("─── Enter Prompt ───"))
 	fmt.Fprintf(os.Stderr, "Describe the task (use @team-name or @agent-name in the prompt):\n%s\n", taskPromptHint)
@@ -129,7 +141,7 @@ func askUserForTeamWithPromptUI(teams []string) (string, error) {
 	teams = append([]string(nil), teams...)
 	sort.Strings(teams)
 
-	if opts.unattended || !tools.IsInteractiveEnvironment() {
+	if opts.unattended || !tools.IsInteractiveEnvironment() || (opts.dryRun && opts.eventFormat == "jsonl") {
 		if len(teams) == 1 {
 			return teams[0], nil
 		}

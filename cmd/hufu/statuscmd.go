@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -32,21 +33,28 @@ var statusCmd = &cobra.Command{
 }
 
 type workspaceStatus struct {
-	Failures     []team.FailureEventPayload `json:"failures,omitempty"`
-	Workspace    string                     `json:"workspace"`
-	Team         string                     `json:"team,omitempty"`
-	RunID        string                     `json:"run_id,omitempty"`
-	InvocationID string                     `json:"invocation_id,omitempty"`
-	BranchID     string                     `json:"branch_id,omitempty"`
-	Session      string                     `json:"session"`
-	CreatedAt    string                     `json:"created_at,omitempty"`
-	UpdatedAt    string                     `json:"updated_at,omitempty"`
-	Rounds       int                        `json:"rounds"`
-	Total        int                        `json:"total"`
-	Done         int                        `json:"done"`
-	Error        int                        `json:"error"`
-	Skipped      int                        `json:"skipped"`
-	Pending      int                        `json:"pending"`
+	Failures           []team.FailureEventPayload `json:"failures,omitempty"`
+	Workspace          string                     `json:"workspace"`
+	Team               string                     `json:"team,omitempty"`
+	RunID              string                     `json:"run_id,omitempty"`
+	InvocationID       string                     `json:"invocation_id,omitempty"`
+	BranchID           string                     `json:"branch_id,omitempty"`
+	Session            string                     `json:"session"`
+	CreatedAt          string                     `json:"created_at,omitempty"`
+	UpdatedAt          string                     `json:"updated_at,omitempty"`
+	Rounds             int                        `json:"rounds"`
+	Total              int                        `json:"total"`
+	Done               int                        `json:"done"`
+	Error              int                        `json:"error"`
+	Skipped            int                        `json:"skipped"`
+	Pending            int                        `json:"pending"`
+	InProgress         int                        `json:"in_progress"`
+	Verifying          int                        `json:"verifying"`
+	Blocked            int                        `json:"blocked"`
+	Planned            int                        `json:"planned"`
+	Paused             int                        `json:"paused"`
+	ProtocolIncomplete int                        `json:"protocol_incomplete"`
+	Unknown            int                        `json:"unknown"`
 	// Workers is present only with --workers.
 	Workers     *inspectpkg.WorkerAttempts   `json:"workers,omitempty"`
 	Recovery    *workspaceRecovery           `json:"recovery,omitempty"`
@@ -56,33 +64,47 @@ type workspaceStatus struct {
 func init() {
 	statusCmd.Flags().StringVarP(&statusWorkspace, "workspace", "w", "", "Workspace directory (default: active managed workspace)")
 	statusCmd.Flags().StringVar(&statusTeam, "team", "", "Team name when the project has multiple active managed workspaces")
-	statusCmd.Flags().BoolVar(&statusJSON, "json", false, "Write machine-readable JSON to stdout")
+	addTextJSONOutputFlag(statusCmd)
+	statusCmd.Flags().BoolVar(&statusJSON, "json", false, "Alias for --output json")
 	statusCmd.Flags().BoolVar(&statusWorkers, "workers", false, "Show every worker attempt of the active branch")
 	statusCmd.Flags().BoolVar(&statusVerbose, "verbose", false, "With --workers, show each attempt's route, usage, result contract, failure, world, and identity")
 }
 
 func runStatus(command *cobra.Command, _ []string) error {
+	output, err := resolveTextJSONOutput(command, statusJSON)
+	if err != nil {
+		return err
+	}
 	ws := statusWorkspace
 	if ws == "" {
 		teamName := statusTeam
 		if teamName == "" {
 			teamName = opts.agentTeamName
 		}
-		var err error
 		ws, err = resolveExistingManagedWorkspacePath(command.Context(), runtimeStartDir(), teamName)
 		if err != nil {
-			if errors.Is(err, workspacepkg.ErrAmbiguous) {
-				return err
+			if errors.Is(err, workspacepkg.ErrNotFound) {
+				return fmt.Errorf("managed workspace not found: %w\nNext: Use 'hufu workspace status' to check registered team workspaces", err)
 			}
-			return fmt.Errorf("managed workspace not found; run hufu first or pass --workspace: %w", err)
+			return fmt.Errorf("resolve managed workspace: %w\nNext: Use 'hufu workspace status' to check registered team workspaces", err)
 		}
 	}
-	if ws == "" {
-		return fmt.Errorf("managed workspace not found; run hufu first or pass --workspace")
+	info, err := os.Stat(ws)
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("workspace directory %q does not exist\nNext: Check the path or use 'hufu workspace status' to find a registered workspace", ws)
 	}
-	data := team.LoadSession(ws)
-	if data == nil {
-		return fmt.Errorf("no session found in %s; run hufu first or pass --workspace", ws)
+	if err != nil {
+		return fmt.Errorf("cannot access workspace %q: %w\nNext: Check directory permissions", ws, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("workspace %q is not a directory\nNext: Use the directory that contains runtime.sqlite", ws)
+	}
+	data, exists, err := team.LoadSessionReadOnly(ws)
+	if err != nil {
+		return fmt.Errorf("cannot read the session from %q: %w\nNext: Check permissions on runtime.sqlite and its WAL. Run SQLite PRAGMA quick_check on a copy of those files to check database integrity", runtimestore.Path(ws), err)
+	}
+	if !exists {
+		return fmt.Errorf("no saved session in workspace %q\nNext: Check for runtime.sqlite in that directory or use 'hufu workspace status' to locate recorded runs", ws)
 	}
 	status := summarizeWorkspaceSession(ws, data)
 	if err := attachCanonicalWorkspaceStatus(command.Context(), ws, &status); err != nil {
@@ -102,7 +124,7 @@ func runStatus(command *cobra.Command, _ []string) error {
 		}
 		status.Workers = &hub
 	}
-	if statusJSON {
+	if output == "json" {
 		return json.NewEncoder(command.OutOrStdout()).Encode(status)
 	}
 	_, _ = fmt.Fprintf(command.OutOrStdout(), "Workspace:  %s\n", status.Workspace)
@@ -114,7 +136,21 @@ func runStatus(command *cobra.Command, _ []string) error {
 	_, _ = fmt.Fprintf(command.OutOrStdout(), "Session:    %s\n", status.Session)
 	_, _ = fmt.Fprintf(command.OutOrStdout(), "Updated:    %s\n", status.UpdatedAt)
 	_, _ = fmt.Fprintf(command.OutOrStdout(), "Rounds:     %d\n", status.Rounds)
-	_, _ = fmt.Fprintf(command.OutOrStdout(), "Tasks:      %d done · %d error · %d skipped · %d pending (%d total)\n", status.Done, status.Error, status.Skipped, status.Pending, status.Total)
+	writer := command.OutOrStdout()
+	_, _ = fmt.Fprintf(writer, "Tasks:      %d done · %d error · %d blocked · %d skipped · %d pending · %d in progress · %d verifying",
+		status.Done, status.Error, status.Blocked, status.Skipped, status.Pending, status.InProgress, status.Verifying)
+	for _, state := range []struct {
+		count int
+		label string
+	}{
+		{status.Planned, "planned"}, {status.Paused, "paused"},
+		{status.ProtocolIncomplete, "protocol incomplete"}, {status.Unknown, "unknown"},
+	} {
+		if state.count > 0 {
+			_, _ = fmt.Fprintf(writer, " · %d %s", state.count, state.label)
+		}
+	}
+	_, _ = fmt.Fprintf(writer, " (%d total)\n", status.Total)
 	for _, failure := range status.Failures {
 		_, _ = fmt.Fprintln(command.OutOrStdout(), team.RenderFailureText(&failure))
 	}
@@ -131,7 +167,7 @@ func attachCanonicalWorkspaceStatus(ctx context.Context, workspace string, statu
 		if errors.Is(err, inspectpkg.ErrNotFound) {
 			return nil
 		}
-		return fmt.Errorf("resolve canonical status identity: %w", err)
+		return fmt.Errorf("read canonical status from %q: %w\nNext: Check storage with 'hufu inspect storage' for this workspace", runtimestore.Path(workspace), err)
 	}
 	data, ok := envelope.Data.(inspectpkg.OverviewData)
 	if !ok || data.Snapshot == nil {
@@ -163,16 +199,33 @@ func summarizeWorkspaceSession(workspace string, session *team.SessionData) work
 		Rounds:    session.Rounds,
 	}
 	for _, item := range session.Tasks {
+		if item == nil {
+			continue
+		}
 		status.Total++
 		switch item.Status {
 		case team.TaskDone:
 			status.Done++
-		case team.TaskError, team.TaskBlocked:
+		case team.TaskError:
 			status.Error++
+		case team.TaskBlocked:
+			status.Blocked++
 		case team.TaskSkipped:
 			status.Skipped++
-		default:
+		case team.TaskPending:
 			status.Pending++
+		case team.TaskInProgress:
+			status.InProgress++
+		case team.TaskVerifying:
+			status.Verifying++
+		case team.TaskPlanned:
+			status.Planned++
+		case team.TaskPaused:
+			status.Paused++
+		case team.TaskProtocolIncomplete:
+			status.ProtocolIncomplete++
+		default:
+			status.Unknown++
 		}
 	}
 	return status

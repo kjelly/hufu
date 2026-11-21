@@ -3,12 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/kjelly/hufu/internal/team"
 )
 
-func executeNativeImageDryRun(ctx context.Context, segments []team.PromptSegment, loadedTeams map[string]*teamContext) error {
+func executeNativeImageDryRun(ctx context.Context, writer io.Writer, segments []team.PromptSegment, loadedTeams map[string]*teamContext) error {
 	if err := validateNativeImageSegments(segments); err != nil {
 		return err
 	}
@@ -34,12 +35,7 @@ func executeNativeImageDryRun(ctx context.Context, segments []team.PromptSegment
 		if err != nil {
 			return err
 		}
-		if preview.MetadataOnly {
-			stderrLog("Image preview: %d image(s), %d bytes, coordinator %s receives metadata only. Worker selection and vision capability remain unverified; no input has been admitted.\n", preview.ImageCount, preview.TotalBytes, preview.Target.String())
-		} else {
-			stderrLog("Image preview: %d image(s), %d bytes, target %s. Local validation only; model vision capability is unverified and no input has been admitted.\n", preview.ImageCount, preview.TotalBytes, preview.Target.String())
-		}
-		return nil
+		return writeNativeImageDryRun(writer, selected, preview)
 	}
 	return fmt.Errorf("image preview requires one nonempty coordinator or explicit worker task")
 }

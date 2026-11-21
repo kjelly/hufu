@@ -721,7 +721,7 @@ Add:
 
 ```bash
 hufu inspect cost [run-id] --workspace <workspace>
-hufu inspect cost [run-id] --task <task-id> --format json
+hufu inspect cost [run-id] --task <task-id> --output json
 ```
 
 If run ID is omitted, use the same exact-scope resolution rules as other
