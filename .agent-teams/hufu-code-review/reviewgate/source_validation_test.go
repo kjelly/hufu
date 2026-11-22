@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -48,6 +49,45 @@ func TestReviewGateSourceFailureDoesNotTakeReportRepairEdge(t *testing.T) {
 	err = Run(t.Context(), bytes.NewReader(raw(t, team.Action{Type: "verify_review_report", Payload: `{"scope":{"kind":"last_n","count":10,"history":"first_parent","head":"HEAD"}}`})), &output)
 	if _, ok := errors.AsType[*sourceReviewError](err); !ok || output.Len() != 0 {
 		t.Fatalf("source violation became report verification output: err=%v output=%s", err, output.String())
+	}
+}
+
+func TestReviewGateAttributesInvalidAuditInputsToSources(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		edit       func(*sourceSession)
+		diagnostic string
+	}{
+		{"no_sources", func(view *sourceSession) { view.Tasks = nil }, "review workset results missing"},
+		{"duplicate_source", func(view *sourceSession) { view.Tasks = append(view.Tasks, view.Tasks[0]) }, "duplicate task ID"},
+		{"missing_critique", func(view *sourceSession) {
+			view.Tasks = slices.DeleteFunc(view.Tasks, func(item sourceTask) bool { return item.ID == "6" })
+		}, "unassigned required critique"},
+		{"missing_test_evidence", func(view *sourceSession) {
+			view.Tasks = slices.DeleteFunc(view.Tasks, func(item sourceTask) bool { return item.ContractID == "verify-targeted-go-tests" })
+		}, "targeted test evidence"},
+		{"missing_prepare_scope", func(view *sourceSession) {
+			view.Tasks = slices.DeleteFunc(view.Tasks, func(item sourceTask) bool { return item.ContractID == "produce-workset" })
+		}, "missing PREPARE evidence"},
+		{"missing_inventory", func(view *sourceSession) {
+			view.Tasks = slices.DeleteFunc(view.Tasks, func(item sourceTask) bool { return item.ContractID == "inventory-review-handoffs" })
+		}, "review handoff inventory missing"},
+		{"incomplete_supplement_round", func(view *sourceSession) {
+			view.Tasks = append(view.Tasks, sourceTask{ContractID: "inventory-review-supplement-requests"})
+		}, "bounded supplement request and prepare actions"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			view, err := projectedFixture(gateFixture(t), "run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.edit(&view)
+			var output bytes.Buffer
+			err = runGateAction(t.Context(), "verify_review_report", view, &output)
+			if source, ok := errors.AsType[*sourceReviewError](err); !ok || !strings.Contains(source.Error(), test.diagnostic) || output.Len() != 0 {
+				t.Fatalf("source problem became report verification output: err=%v output=%s", err, output.String())
+			}
+		})
 	}
 }
 

@@ -67,6 +67,10 @@ race check. Use the tool's final `Exit code:` line for each entry in
 `### Commands run` and `structured_payload.checks`. A missing exit code, tool
 denial, or timeout leaves the check `unverified`. Report relevant failure
 details from the command output. Counts and an aggregate verdict are optional.
+Report an aggregate pass only when `mise run test`, `mise run vet`, and
+`mise run lint` each returned zero and the test output shows package test
+results. Any failed or unverified targeted race check also precludes an
+aggregate pass.
 The runtime runs the blocking test, vet, and lint checks independently.
 
 ## Output contract

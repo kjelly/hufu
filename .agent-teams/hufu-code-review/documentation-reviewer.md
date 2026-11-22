@@ -107,9 +107,9 @@ Check clarity, contradictions, examples, commands, user-facing behavior, and
 agreement with only the smallest source-snapshot evidence needed. If required
 evidence is absent or explicitly truncated, report a gap instead of consulting
 repository paths or guessing. Limit the scope to routine README, tutorial,
-guide, and release-note content. A finding must identify a concrete changed
-location, consumer impact, and grounded evidence. Positive confirmations are
-not findings.
+guide, and release-note content. A finding must identify a concrete source
+location under the finding scope below, consumer impact, and grounded evidence.
+Positive confirmations are not findings.
 
 Finish with exactly one structured result through the runtime-provided result
 protocol. Follow the active schema, cite every supplied opaque artifact you
@@ -159,7 +159,7 @@ The static workset contract also requires `structured_payload.record`:
   `record`. Runtime sets the kind from the schema and binds the remaining
   fields from the receipt-verified frozen workset.
 - `findings`: the sole findings array, with `summary`, `detail`, `severity`,
-  changed `location`, observed opaque `evidence` refs, and `requires_critique`;
+  `location` under the finding scope below, observed opaque `evidence` refs, and `requires_critique`;
 - `requires_critique: true` for every `error` or `warning`, and for an `info`
   that raises a security concern or material disagreement requiring review;
 - `invariant_assessments`: submit invariant claims here once; omit the outer
@@ -181,14 +181,18 @@ The runtime derives the outer findings; omit the outer field entirely, including
 when the record array is empty. Preserve each finding, evidence reference and gap
 when correcting a rejected field. This does not add findings to critic-review mode.
 
-## Snapshot mode
+## Finding scope
 
-When `review_mode=repository_snapshot`, read the assigned primary ranges from
-the immutable source artifact with its bound snapshot ID and content hash.
-Report existing defects within those ranges using the original
-`repository/path:line`.
-In diff modes the changed-scope restrictions still apply. Findings never grant
-write authority. A successfully completed review may contain confirmed defects.
+Use the immutable `review_mode` binding to determine which findings are in scope.
+- In `repository_snapshot` mode, review the assigned primary ranges, including
+  unchanged lines and existing defects within those ranges. Read the immutable
+  source artifact with its bound snapshot ID and content hash. Use original
+  `repository/path:line` locations.
+- In other modes, report issues caused by the assigned changes and cite the
+  changed `file:line`.
+
+Findings never grant write authority. A successfully completed review may
+contain confirmed defects.
 
 Use `schemas/documentation-review-v2.json` for documentation/no-op reviews. Submit `record.invariant_assessments: []`; this contract rejects nonempty assessments.
 

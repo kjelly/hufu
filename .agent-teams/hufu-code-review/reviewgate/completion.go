@@ -34,7 +34,7 @@ func collectReportSources(current sourceSession) (map[string]sourceTask, map[str
 			continue
 		}
 		if _, duplicate := tasks[item.ID]; duplicate {
-			return nil, nil, nil, fmt.Errorf("duplicate task ID")
+			return nil, nil, nil, &sourceReviewError{cause: fmt.Errorf("duplicate task ID %s", item.ID)}
 		}
 		value, err := accepted(item)
 		if err != nil {
@@ -48,7 +48,7 @@ func collectReportSources(current sourceSession) (map[string]sourceTask, map[str
 		records[item.ID] = r
 	}
 	if len(records) == 0 {
-		return nil, nil, nil, fmt.Errorf("review workset results missing")
+		return nil, nil, nil, &sourceReviewError{cause: fmt.Errorf("review workset results missing")}
 	}
 	return tasks, values, records, nil
 }
@@ -96,17 +96,17 @@ func deriveReportCompletion(tasks map[string]sourceTask, values map[string]paylo
 	if len(sourceErrors) > 0 {
 		return "", reportCompletion{}, &sourceReviewError{cause: errors.Join(sourceErrors...)}
 	}
-	for id, r := range records {
-		for _, f := range r.Findings {
+	for _, id := range ids {
+		for _, f := range records[id].Findings {
 			if findingRequiresCritique(f) && !critiqued[id] {
-				return "", reportCompletion{}, fmt.Errorf("task %s has an unassigned required critique", id)
+				return "", reportCompletion{}, &sourceReviewError{cause: fmt.Errorf("task %s has an unassigned required critique", id)}
 			}
 		}
 	}
 
 	testLimited, err := verifyTestEvidence(tests)
 	if err != nil {
-		return "", reportCompletion{}, err
+		return "", reportCompletion{}, &sourceReviewError{cause: fmt.Errorf("targeted test evidence: %w", err)}
 	}
 	coverage, status := "complete", "success"
 	if limited || testLimited || len(snapshot.Uncompleted) > 0 {

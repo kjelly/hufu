@@ -346,6 +346,9 @@ func verify(current sourceSession) (string, string, error) {
 // A completed review may expose failing target tests. Execution failures remain
 // blocking; negative or truncated test evidence must remain visible as a gap.
 func verifyTestEvidence(data json.RawMessage) (bool, error) {
+	if len(data) == 0 {
+		return false, fmt.Errorf("missing verified execution output")
+	}
 	var tests struct {
 		Completed       bool   `json:"completed"`
 		Passed          *bool  `json:"passed"`
@@ -521,12 +524,12 @@ func verifyActionEvidence(current sourceSession, report payload) error {
 			continue
 		}
 		if seen[item.ContractID] || !item.VerifiedOutputs || item.Result == nil {
-			return fmt.Errorf("missing or ambiguous PREPARE evidence")
+			return &sourceReviewError{cause: fmt.Errorf("missing or ambiguous PREPARE evidence for %s", item.ContractID)}
 		}
 		seen[item.ContractID] = true
 		first, err := canonicalJSON(source)
 		if err != nil {
-			return err
+			return &sourceReviewError{cause: fmt.Errorf("invalid PREPARE evidence for %s: %w", item.ContractID, err)}
 		}
 		second, err := canonicalJSON(target)
 		if err != nil || !bytes.Equal(first, second) {
@@ -534,7 +537,7 @@ func verifyActionEvidence(current sourceSession, report payload) error {
 		}
 	}
 	if len(seen) != 2 {
-		return fmt.Errorf("report lacks PREPARE scope or executed-test evidence")
+		return &sourceReviewError{cause: fmt.Errorf("missing PREPARE evidence for scope or executed tests")}
 	}
 	return nil
 }
@@ -659,15 +662,18 @@ func runGateAction(ctx context.Context, actionType string, current sourceSession
 
 func verifyReportHandoffEvidence(current sourceSession, report payload) error {
 	if err := verifyHandoffInventory(current); err != nil {
-		return err
+		return &sourceReviewError{cause: err}
 	}
 	outcomes, err := collectSupplementOutcomes(current)
 	if err != nil {
-		return err
+		return &sourceReviewError{cause: err}
 	}
 	if len(outcomes) > 0 || len(report.SupplementOutcomes) > 0 {
-		expected, marshalErr := json.Marshal(outcomes)
-		if marshalErr != nil || !equalJSON(expected, report.SupplementOutcomes) {
+		expected, err := json.Marshal(outcomes)
+		if err != nil {
+			return &sourceReviewError{cause: err}
+		}
+		if !equalJSON(expected, report.SupplementOutcomes) {
 			return fmt.Errorf("report substituted native supplement outcomes or limitations")
 		}
 	}
