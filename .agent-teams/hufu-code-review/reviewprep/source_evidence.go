@@ -60,6 +60,10 @@ func requiredArtifactRead(input artifact) tools.ArtifactReadCoverage {
 // available_spans map those bytes to the actual assigned artifact. Neither a
 // missing file nor an unlisted path is an assertion of repository absence.
 func (s *reviewSourceSnapshot) bundleDataWithScopes(partition string, primaryPaths []string, scopes map[string][]tools.ArtifactByteRange, relatedBudget int) ([]byte, []byte, error) {
+	return s.bundleDataWithPrimary(partition, primaryPaths, scopes, relatedBudget, nil)
+}
+
+func (s *reviewSourceSnapshot) bundleDataWithPrimary(partition string, primaryPaths []string, scopes map[string][]tools.ArtifactByteRange, relatedBudget int, primary *[]sourceEvidence) ([]byte, []byte, error) {
 	if s == nil || s.root == "" {
 		return nil, nil, errors.New("reviewed source snapshot is unavailable")
 	}
@@ -88,6 +92,9 @@ func (s *reviewSourceSnapshot) bundleDataWithScopes(partition string, primaryPat
 			return nil, nil, err
 		}
 		inventory.Sources = append(inventory.Sources, row)
+	}
+	if primary != nil {
+		*primary = inventory.Sources
 	}
 	remaining := relatedBudget
 	for index, current := range related {

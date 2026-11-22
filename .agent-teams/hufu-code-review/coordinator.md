@@ -169,6 +169,8 @@ limitations belong in `record.gaps`. Preserve these fields in the record.
 including unchanged files and existing defects. It does not include dirty or
 untracked files. The producer freezes a SHA-256 content inventory and pins the
 verifier to its resolved commit. Every child carries that same identity.
+The producer fits worksets to the full evidence budget before assigning batch
+numbers. A file can have assigned ranges in multiple worksets or batches.
 Read only compact `scope_context` and the native handoff inventory's
 `snapshot_status`; do not copy the full inventory into model task goals.
 Batch limits produce explicit uncompleted paths, never an implicit clean result.

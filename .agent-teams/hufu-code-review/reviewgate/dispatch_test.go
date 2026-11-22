@@ -216,6 +216,7 @@ func testPrepareDispatch(t *testing.T, failing, largeSnapshot bool) {
 		for i := range 4000 {
 			write(fmt.Sprintf("docs/%04d-%s.md", i, strings.Repeat("inventory", 15)), "excluded documentation\n")
 		}
+		write("catalog.txt", strings.Repeat("原始碼", 48_000))
 	}
 	git("add", ".")
 	git("commit", "-m", "feat: change value")
@@ -270,7 +271,7 @@ func testPrepareDispatch(t *testing.T, failing, largeSnapshot bool) {
 		if err := json.Unmarshal(raw(t, items[0].TypedResult.RuntimeOutputs["scope"]), &scope); err != nil {
 			t.Fatal(err)
 		}
-		if scope.Snapshot == nil || scope.Snapshot.Inventory == nil || len(scope.Snapshot.Files) != 0 || scope.Snapshot.FileCount != 4005 {
+		if scope.Snapshot == nil || scope.Snapshot.Inventory == nil || len(scope.Snapshot.Files) != 0 || scope.Snapshot.Plan != nil || scope.Snapshot.FileCount != 4006 {
 			t.Fatalf("missing compact inventory reference: %+v", scope.Snapshot)
 		}
 		store, err := team.NewFileArtifactStore(loaded.Workspace, loaded.Workspace)
@@ -287,8 +288,25 @@ func testPrepareDispatch(t *testing.T, failing, largeSnapshot bool) {
 		if err != nil || len(inventory.Files) != scope.Snapshot.FileCount || inventory.ID != scope.Snapshot.ID || scope.Snapshot.Inventory.Bytes <= 900*1024 {
 			t.Fatalf("durable inventory lost: files=%d err=%v", len(inventory.Files), err)
 		}
-		if _, err := checkedSnapshotFiles(&snapshotAttestation{Satisfied: true, Resolved: scope.Resolved, Snapshot: &inventory}); err != nil {
+		files, err := checkedSnapshotFiles(&snapshotAttestation{Satisfied: true, Resolved: scope.Resolved, Snapshot: &inventory})
+		if err != nil {
 			t.Fatal(err)
+		}
+		if inventory.Plan == nil {
+			t.Fatal("native producer omitted the snapshot workset plan")
+		}
+		page, err := checkSnapshotPlan(&inventory, files)
+		if err != nil || len(page.worksets) == 0 {
+			t.Fatalf("native producer emitted an invalid plan: %v", err)
+		}
+		fragments := 0
+		for _, workset := range page.worksets {
+			if len(workset.files["catalog.txt"]) > 0 {
+				fragments++
+			}
+		}
+		if fragments < 2 {
+			t.Fatal("native producer did not split the oversized line")
 		}
 		assertPrepareFanoutAdmission(t, coordinator, items[0])
 		return

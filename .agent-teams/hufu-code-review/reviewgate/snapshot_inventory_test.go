@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	jsonv1 "encoding/json"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,16 +22,27 @@ func TestSnapshotHandoffFitsRuntimeOutputAndPassesFinalAudit(t *testing.T) {
 	fixture := gateFixture(t)
 	fixture.Tasks = append(fixture.Tasks[:2:2], fixture.Tasks[4:]...)
 	producer, verifier, handoff := &fixture.Tasks[3], &fixture.Tasks[4], &fixture.Tasks[5]
-	identity := snapshotIdentity{Revision: "frozen-head", Batch: 1, BatchCount: 2, WorksetsPerBatch: 30, FileCount: 2800}
+	identity := snapshotIdentity{Revision: "frozen-head", Batch: 1, BatchCount: 1, WorksetsPerBatch: 30, FileCount: 2800}
 	digest := sha256.New()
+	const primaryPath = "large.go"
 	for i := range identity.FileCount {
 		file := snapshotInventoryFile{
 			Path: fmt.Sprintf("docs/%04d-%s.md", i, strings.Repeat("inventory", 12)), Mode: "100644",
 			SHA256: strings.Repeat("a", 64), Bytes: 20, Lines: 1, Disposition: "excluded", Reason: "documentation_outside_code_audit",
 		}
+		if i == identity.FileCount-1 {
+			file.Path, file.Lines, file.Disposition, file.Reason = primaryPath, 2, "selected", ""
+		}
 		identity.Files = append(identity.Files, file)
 		entry := raw(t, []any{file.Path, file.Mode, file.SHA256, file.Bytes})
 		_, _ = digest.Write(append(entry, '\n'))
+	}
+	identity.Plan = &snapshotPlan{
+		Worksets: []snapshotPlannedWorkset{
+			{Sources: []snapshotPlannedSource{{Path: primaryPath, Spans: []snapshotSpan{{Start: 0, End: 10, StartLine: 1, EndLine: 1}}}}},
+			{Sources: []snapshotPlannedSource{{Path: primaryPath, Spans: []snapshotSpan{{Start: 10, End: 20, StartLine: 2, EndLine: 2}}}}},
+		},
+		BatchSourceSHA256: []string{strings.Repeat("c", 64), strings.Repeat("d", 64)},
 	}
 	identity.Hash = hex.EncodeToString(digest.Sum(nil))
 	identity.ID = "sha256:" + identity.Hash
@@ -44,7 +57,9 @@ func TestSnapshotHandoffFitsRuntimeOutputAndPassesFinalAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	artifactHash := fmt.Sprintf("%x", sha256.Sum256(fullInventory))
+	plan := identity.Plan
 	identity.Files = nil
+	identity.Plan = nil
 	identity.Inventory = &snapshotInventoryReference{ID: "sha256-" + artifactHash, Path: "inventory.json", Kind: "repository_snapshot_inventory", SHA256: artifactHash, Bytes: int64(len(fullInventory))}
 	scope := `{"kind":"repository_snapshot","history":"first_parent","head":"HEAD"}`
 	producer.Result.RuntimeOutputs["scope"] = raw(t, map[string]any{
@@ -94,11 +109,20 @@ func TestSnapshotHandoffFitsRuntimeOutputAndPassesFinalAudit(t *testing.T) {
 	var reviews []inputReview
 	for i := range 2 {
 		prior := fixture.Tasks[i]
-		r := record{Kind: "review", Revision: identity.Revision, Key: prior.Binding.Bindings["key"], Lens: "noop", Findings: []finding{}}
+		r := record{Kind: "review", Revision: identity.Revision, Key: fmt.Sprintf("unit-%04d", i), Lens: "general", Findings: []finding{}}
 		item := fixtureTask(t, prior.ID, prior.ContractID, "success", payload{Record: raw(t, r)}, r, nil)
 		item.Binding.Bindings["review_mode"] = "repository_snapshot"
 		item.Binding.Bindings["snapshot_id"] = identity.ID
 		item.Binding.Bindings["content_sha256"] = identity.Hash
+		item.Binding.TouchedPaths = []string{primaryPath}
+		sha := plan.BatchSourceSHA256[i]
+		id := "sha256-" + sha
+		item.Binding.Inputs = append(item.Binding.Inputs, struct {
+			ID     string `json:"id"`
+			Kind   string `json:"kind"`
+			SHA256 string `json:"sha256"`
+		}{ID: id, Kind: "review_source_snapshot", SHA256: sha})
+		item.Result.FilesRead[0].Path = id
 		fixture.Tasks[i] = item
 		reviews = append(reviews, entry(item, r, t))
 	}
@@ -149,6 +173,92 @@ func TestSnapshotHandoffFitsRuntimeOutputAndPassesFinalAudit(t *testing.T) {
 	if len(result.Artifacts) != 1 || result.Artifacts[0].Kind != "repository_snapshot_coverage" {
 		t.Fatalf("complete coverage was not declared: %#v", result.Artifacts)
 	}
+	artifactPath := filepath.Join(actions, "action-"+handoff.ID, result.Artifacts[0].Path)
+	data, err := os.ReadFile(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var coverage snapshotCoverage
+	if err := json.Unmarshal(data, &coverage); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(coverage.Completed, []string{primaryPath}) || !slices.Equal(coverage.ReviewedWorksets, []int{1, 2}) || len(coverage.WorksetPlanSHA256) != 64 {
+		t.Fatalf("coverage did not include both assigned fragments: %v, %v", coverage.Completed, coverage.ReviewedWorksets)
+	}
+	for _, tc := range []struct {
+		name       string
+		change     func(*sourceSession)
+		wantError  string
+		wantReason string
+	}{
+		{"missing review", func(view *sourceSession) { view.Tasks = append(view.Tasks[:1:1], view.Tasks[2:]...) }, "no accepted review", ""},
+		{"duplicate review", func(view *sourceSession) { view.Tasks[1] = view.Tasks[0] }, "duplicated snapshot workset", ""},
+		{"substituted source", func(view *sourceSession) { view.Tasks[0].Binding.Inputs = view.Tasks[1].Binding.Inputs }, "did not observe its planned snapshot source", ""},
+		{"finding outside fragment", func(view *sourceSession) {
+			item := &view.Tasks[0]
+			item.Result.Findings = []finding{{Location: primaryPath + ":2", Summary: "outside", Severity: "info", Evidence: []string{item.Binding.Inputs[0].ID}}}
+			r := record{Kind: "review", Revision: identity.Revision, Key: item.Binding.Bindings["key"], Lens: "general", Findings: item.Result.Findings}
+			item.Result.Payload.Value = raw(t, payload{Record: raw(t, r)})
+		}, "outside the assigned snapshot fragment", ""},
+		{"evidence gap in one fragment", func(view *sourceSession) {
+			item := &view.Tasks[1]
+			item.Result.Status = "completed_with_gaps"
+			r := record{Kind: "review", Revision: identity.Revision, Key: item.Binding.Bindings["key"], Lens: "general",
+				Gaps: []jsonv1.RawMessage{raw(t, map[string]string{"kind": "semantic_uncertainty"})}}
+			item.Result.Payload.Value = raw(t, payload{Record: raw(t, r)})
+		}, "", "review_evidence_gap"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			view, err := projectedFixture(fixture, "run-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			view.Tasks[3].Workspace = workspace
+			tc.change(&view)
+			result, err := collectSnapshotCoverage(view)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("expected %q, got %v", tc.wantError, err)
+				}
+				return
+			}
+			if err != nil || len(result.Completed) != 0 || !slices.Equal(result.Uncompleted, []snapshotUnfinished{{Path: primaryPath, Reason: tc.wantReason}}) || !slices.Equal(result.ReviewedWorksets, []int{1}) {
+				t.Fatalf("unexpected coverage: %v, reviewed %v, error %v", result.Uncompleted, result.ReviewedWorksets, err)
+			}
+		})
+	}
+	t.Run("fragment outside selected batch", func(t *testing.T) {
+		view, err := projectedFixture(fixture, "run-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var split snapshotIdentity
+		if err := json.Unmarshal(fullInventory, &split); err != nil {
+			t.Fatal(err)
+		}
+		split.WorksetsPerBatch, split.BatchCount = 1, 2
+		split.Plan.BatchSourceSHA256 = split.Plan.BatchSourceSHA256[:1]
+		data := raw(t, split)
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "inventory.json"), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		hash := fmt.Sprintf("%x", sha256.Sum256(data))
+		split.Files, split.Plan = nil, nil
+		split.Inventory = &snapshotInventoryReference{ID: "sha256-" + hash, Path: "inventory.json", Kind: "repository_snapshot_inventory", SHA256: hash, Bytes: int64(len(data))}
+		var scope snapshotAttestation
+		if err := json.Unmarshal(view.Tasks[3].Result.RuntimeOutputs["scope"], &scope); err != nil {
+			t.Fatal(err)
+		}
+		scope.Snapshot = &split
+		view.Tasks[3].Workspace = root
+		view.Tasks[3].Result.RuntimeOutputs["scope"] = raw(t, scope)
+		view.Tasks = append(view.Tasks[:1:1], view.Tasks[2:]...)
+		result, err := collectSnapshotCoverage(view)
+		if err != nil || len(result.Completed) != 0 || !slices.Equal(result.Uncompleted, []snapshotUnfinished{{Path: primaryPath, Reason: "outside_selected_batch"}}) || !slices.Equal(result.ReviewedWorksets, []int{1}) {
+			t.Fatalf("cross-batch fragment counted incorrectly: %v, reviewed %v, error %v", result.Uncompleted, result.ReviewedWorksets, err)
+		}
+	})
 	fixture.Tasks[2] = fixtureTask(t, "7", "synthesize-review", "success", payload{
 		Scope: producer.Result.RuntimeOutputs["scope"], Tests: verifier.Result.RuntimeOutputs["targeted_go_tests"],
 		SnapshotCoverage: raw(t, result.Outputs["snapshot_coverage"]), Coverage: "complete", InputReview: reviews,
@@ -163,7 +273,6 @@ func TestSnapshotHandoffFitsRuntimeOutputAndPassesFinalAudit(t *testing.T) {
 	if err != nil || !bytes.Contains(raw(t, audit), []byte(`"passed":true`)) {
 		t.Fatalf("final audit rejected the verified artifact: %v, %s", err, raw(t, audit))
 	}
-	artifactPath := filepath.Join(actions, "action-"+handoff.ID, result.Artifacts[0].Path)
 	if err := os.WriteFile(artifactPath, []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}

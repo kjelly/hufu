@@ -17,6 +17,8 @@ import (
 	"github.com/kjelly/hufu/internal/actionstate"
 )
 
+const maxSnapshotInventoryBytes = 32 * 1024 * 1024 // bounded read by reviewgate
+
 // These wire types use json v1 and exported, non-generic helpers because the
 // trusted-static action interpreter does not expose json/v2 or Go iterators.
 type snapshotFile struct {
@@ -38,7 +40,31 @@ type repositorySnapshotManifest struct {
 	BatchCount       int            `json:"batch_count"`
 	WorksetsPerBatch int            `json:"worksets_per_batch"`
 	FileCount        int            `json:"file_count"`
+	Plan             *snapshotPlan  `json:"workset_plan,omitempty"`
 	Inventory        *artifact      `json:"inventory,omitempty"`
+}
+
+// The full plan lives in the receipt-bound inventory artifact. Source hashes
+// refer to the selected page's actual artifacts in page-local workset order.
+type snapshotPlan struct {
+	Worksets          []snapshotPlannedWorkset `json:"worksets"`
+	BatchSourceSHA256 []string                 `json:"batch_source_sha256"`
+}
+
+type snapshotPlannedWorkset struct {
+	Sources []snapshotPlannedSource `json:"sources"`
+}
+
+type snapshotPlannedSource struct {
+	Path  string         `json:"path"`
+	Spans []snapshotSpan `json:"spans"`
+}
+
+type snapshotSpan struct {
+	Start     int64 `json:"start"`
+	End       int64 `json:"end"`
+	StartLine int   `json:"start_line"`
+	EndLine   int   `json:"end_line"`
 }
 
 func (r reviewRange) isRepositorySnapshot() bool { return r.Source == "repository_snapshot" }
@@ -213,44 +239,86 @@ func eligibleSnapshotPaths(identity *repositorySnapshotManifest) []string {
 }
 
 // Every inventory unit is grouped by package/directory and lens. The payload is
-// a file list, never a fabricated patch. Complete source is in the source bundle.
-func buildSnapshotBatches(ctx context.Context, repo string, r reviewRange, paths []string, config Config) ([]*batch, error) {
+// a file list. Assigned source ranges are carried by the source bundle.
+func buildSnapshotBatches(files []snapshotFile, config Config) []*batch {
 	batches := []*batch{}
 	var current *batch
 	group := ""
-	sourceBytes := 0
-	for _, name := range paths {
-		content, err := git(ctx, repo, "show", r.End+":"+name)
-		if err != nil {
-			return nil, err
+	var sourceBytes int64
+	for _, file := range files {
+		if file.Disposition == "excluded" {
+			continue
 		}
+		name := file.Path
 		lens := lensForPath(name)
 		if isDocumentationPath(name) {
 			lens = "documentation-risk"
 		}
 		nextGroup := filepath.ToSlash(filepath.Dir(name)) + "/" + lens
-		if current == nil || group != nextGroup || len(current.paths) >= config.MaxPaths || sourceBytes+len(content)+96*1024 > config.MaxSourceSnapshotBytes || estimateReviewInputTokens(sourceBytes+len(content)+96*1024) > config.MaxReviewInputTokens {
+		projected := sourceBytes + file.Bytes + 96*1024
+		if current == nil || group != nextGroup || len(current.paths) >= config.MaxPaths || projected > int64(config.MaxSourceSnapshotBytes) || estimateReviewInputTokens(int(projected)) > config.MaxReviewInputTokens {
 			current = &batch{lens: lens, pathSeen: make(map[string]struct{})}
 			batches = append(batches, current)
 			group, sourceBytes = nextGroup, 0
 		}
 		unit := []byte(fmt.Sprintf("snapshot_file %s\n", name))
 		current.add(name, unit, 1)
-		sourceBytes += len(content)
+		sourceBytes += file.Bytes
 	}
-	return batches, nil
+	return batches
+}
+
+func planSnapshotWorksets(ctx context.Context, artifactRoot, primaryDir string, snapshot *reviewSourceSnapshot, config Config, verification *documentationVerification, batchNumber, perBatch int) (*snapshotPlan, []*batch, error) {
+	candidates := buildSnapshotBatches(snapshot.identity.Files, config)
+	annotateBatches(candidates, "primary")
+	plan := &snapshotPlan{Worksets: []snapshotPlannedWorkset{}, BatchSourceSHA256: []string{}}
+	selected := []*batch{}
+	next := func() (int, error) {
+		return len(plan.Worksets) % perBatch, ctx.Err()
+	}
+	accept := func(current *batch, primary []sourceEvidence) error {
+		workset := snapshotPlannedWorkset{Sources: []snapshotPlannedSource{}}
+		for _, evidence := range primary {
+			if evidence.Status != "present" || evidence.Truncated || evidence.Omitted {
+				return fmt.Errorf("snapshot primary source %q is incomplete", evidence.Path)
+			}
+			source := snapshotPlannedSource{Path: evidence.Path, Spans: []snapshotSpan{}}
+			for _, span := range evidence.AvailableSpans {
+				source.Spans = append(source.Spans, snapshotSpan{Start: span.Start, End: span.End, StartLine: span.StartLine, EndLine: span.EndLine})
+			}
+			workset.Sources = append(workset.Sources, source)
+		}
+		if len(plan.Worksets)/perBatch+1 == batchNumber {
+			selected = append(selected, current)
+			plan.BatchSourceSHA256 = append(plan.BatchSourceSHA256, sha256Hex(current.sourceBundle))
+		}
+		plan.Worksets = append(plan.Worksets, workset)
+		return nil
+	}
+	for index, candidate := range candidates {
+		if err := visitBoundReviewBatch(candidate, artifactRoot, primaryDir, snapshot, config, "primary", verification, next, accept); err != nil {
+			return nil, nil, err
+		}
+		// Retain metadata for every page and full evidence for the requested
+		// page only, including when a coarse candidate fitted without a split.
+		candidates[index] = nil
+	}
+	return plan, selected, nil
 }
 
 func prepareRepositorySnapshot(ctx context.Context, repo, artifactRoot, outputDir string, resolution rangeResolution, config Config) (actionResult, error) {
-	// Enforce the same review/critic bound after source-budget refinement.
-	if config.MaxWorksetItems > 32 {
-		config.MaxWorksetItems = 32
+	perBatch := config.MaxWorksetItems - 2 // reserve the two required no-op routes
+	if perBatch > 30 {
+		perBatch = 30
 	}
-	paths, err := repositoryTreePaths(ctx, repo, resolution.Range.End)
-	if err != nil {
-		return actionResult{}, err
+	if perBatch < 1 {
+		return actionResult{}, fmt.Errorf("snapshot requires at least three workset slots")
 	}
-	snapshot, err := createReviewSourceSnapshot(ctx, repo, resolution.Range, paths)
+	batchNumber := config.Scope.Batch
+	if batchNumber == 0 {
+		batchNumber = 1
+	}
+	snapshot, err := createReviewSourceSnapshot(ctx, repo, resolution.Range, nil)
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -260,32 +328,12 @@ func prepareRepositorySnapshot(ctx context.Context, repo, artifactRoot, outputDi
 		return actionResult{}, err
 	}
 	snapshot.identity = identity
-	candidates := []string{}
-	for index := range identity.Files {
-		file := &identity.Files[index]
-		if file.Disposition == "excluded" {
-			continue
-		}
-		// The shared source-budget partitioner splits large primary files at
-		// declaration/line boundaries; size alone must not hide them from review.
-		candidates = append(candidates, file.Path)
-	}
-	batches, err := buildSnapshotBatches(ctx, repo, resolution.Range, candidates, config)
+	verification := documentationVerification{Passed: true, CheckedFiles: []string{}, ReviewedRevision: resolution.Range.End}
+	plan, batches, err := planSnapshotWorksets(ctx, artifactRoot, filepath.Join(outputDir, "primary"), snapshot, config, &verification, batchNumber, perBatch)
 	if err != nil {
 		return actionResult{}, err
 	}
-	perBatch := config.MaxWorksetItems - 2 // reserve the two required no-op routes
-	if perBatch > 30 {
-		perBatch = 30
-	} // at most 32 sources plus their critics fit synthesis
-	if perBatch < 1 {
-		return actionResult{}, fmt.Errorf("snapshot requires at least three workset slots")
-	}
-	batchNumber := config.Scope.Batch
-	if batchNumber == 0 {
-		batchNumber = 1
-	}
-	count := (len(batches) + perBatch - 1) / perBatch
+	count := (len(plan.Worksets) + perBatch - 1) / perBatch
 	if count == 0 {
 		count = 1
 	}
@@ -293,19 +341,13 @@ func prepareRepositorySnapshot(ctx context.Context, repo, artifactRoot, outputDi
 		return actionResult{}, fmt.Errorf("snapshot batch %d exceeds batch_count %d", batchNumber, count)
 	}
 	selected := make(map[string]bool)
-	start, end := (batchNumber-1)*perBatch, batchNumber*perBatch
-	if end > len(batches) {
-		end = len(batches)
-	}
-	if start > len(batches) {
-		start = len(batches)
-	}
-	for _, workset := range batches[start:end] {
+	for _, workset := range batches {
 		for _, name := range workset.paths {
 			selected[name] = true
 		}
 	}
 	identity.Batch, identity.BatchCount, identity.WorksetsPerBatch = batchNumber, count, perBatch
+	identity.Plan = plan
 	selectedPaths := []string{}
 	for index := range identity.Files {
 		file := &identity.Files[index]
@@ -319,11 +361,29 @@ func prepareRepositorySnapshot(ctx context.Context, repo, artifactRoot, outputDi
 			file.Disposition, file.Reason = "unreviewed", "outside_selected_batch"
 		}
 	}
-	// Empty eligible inventories retain their exclusions through the no-op routes.
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+	data, err := json.MarshalIndent(identity, "", "  ")
+	if err != nil {
 		return actionResult{}, err
 	}
-	data, err := json.MarshalIndent(identity, "", "  ")
+	if len(data)+1 > maxSnapshotInventoryBytes {
+		return actionResult{}, fmt.Errorf("snapshot_inventory_too_large: %d bytes; inventory limit is %d", len(data)+1, maxSnapshotInventoryBytes)
+	}
+	// Empty eligible inventories retain their exclusions through the no-op routes.
+	worksets := []routedWorkset{
+		{name: "primary", description: "primary review workset manifest", paths: selectedPaths, batches: batches, verification: verification},
+		{name: "documentation", description: "documentation review workset manifest", verification: verification},
+		{name: "documentation-escalation", description: "documentation escalation workset manifest", verification: verification},
+	}
+	for index := range worksets {
+		route := &worksets[index]
+		if len(route.batches) == 0 {
+			route.batches, err = boundReviewBatches(artifactRoot, filepath.Join(outputDir, route.name), []*batch{noopBatch(route.name)}, snapshot, config, route.name, &verification)
+			if err != nil {
+				return actionResult{}, err
+			}
+		}
+	}
+	result, err := publishRoutedReview(artifactRoot, outputDir, selectedPaths, resolution, snapshot, config, worksets, verification)
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -335,17 +395,14 @@ func prepareRepositorySnapshot(ctx context.Context, repo, artifactRoot, outputDi
 	if err != nil {
 		return actionResult{}, err
 	}
-	inventoryArtifact.Description = "complete repository snapshot inventory and exclusions"
-	result, err := prepareRoutedReview(ctx, repo, artifactRoot, outputDir, selectedPaths, resolution, selectedCommitDiffPlan{}, snapshot, config)
-	if err != nil {
-		return actionResult{}, err
-	}
+	inventoryArtifact.Description = "complete repository snapshot inventory, exclusions, and workset plan"
 	result.Artifacts = append(result.Artifacts, inventoryArtifact)
 	// Keep full membership in the sealed artifact and workset manifests. The
 	// receipt-bound output carries only identity, counts and its exact reference.
 	scope := result.Outputs["scope"].(scopeAttestation)
 	compact := *identity
 	compact.Files = nil
+	compact.Plan = nil
 	compact.Inventory = &inventoryArtifact
 	scope.RepositorySnapshot = &compact
 	result.Outputs["scope"] = scope

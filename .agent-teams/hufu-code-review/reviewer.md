@@ -128,8 +128,9 @@ record a coverage gap or open question; do not consult repository paths to fill
 it. Stop once the bounded evidence is sufficient and preserve enough budget for
 the final structured result.
 
-The producer budgets the diff, source snapshot, and reference report together.
-Primary text files are complete. Related caller/test sections share a 64 KiB
+The producer budgets the diff, source snapshot, evidence inventory, and
+reference report together. Primary text is complete within the assigned
+ranges. Related caller/test sections share a 64 KiB
 content allowance and may declare `content_truncated: true` and `omitted_bytes`.
 Record a concrete gap when an omitted suffix prevents a conclusion; never
 claim that behavior or tests are absent from that suffix. Read relevant byte
@@ -163,11 +164,11 @@ In typed findings, `severity` takes only `error` (a BLOCKER), `warning` (a WARNI
 `info` (an observation); the BLOCKER/WARNING labels are report headings, not severity values.
 
 Use the immutable binding `review_mode` to select the finding scope:
-- `repository_snapshot`: review the assigned complete files, including unchanged
-  lines and pre-existing defects. Read every assigned primary file completely
-  using bounded artifact views; record a coverage gap if any primary content
-  could not be inspected. Use exactly `repository/path:line` in the
-  original source. The native audit checks membership and source line bounds.
+- `repository_snapshot`: read every assigned primary source range using bounded
+  artifact views. Large files may have ranges assigned to other worksets.
+  Record a coverage gap if any assigned primary content could not be inspected.
+  Report existing defects within the assigned ranges using the original
+  `repository/path:line`. The native audit checks findings against those ranges.
 - Other modes: report only issues caused by the assigned changes, at a changed
   `file:line`; unrelated pre-existing issues are outside scope.
 

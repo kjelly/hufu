@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/kjelly/hufu/internal/tools"
 )
@@ -30,25 +31,37 @@ func estimateReviewInputTokens(byteCount int) int {
 
 func boundReviewBatches(artifactRoot, outputDir string, batches []*batch, snapshot *reviewSourceSnapshot, config Config, route string, verification *documentationVerification) ([]*batch, error) {
 	var result []*batch
+	next := func() (int, error) {
+		if config.MaxWorksetItems > 0 && len(result) >= config.MaxWorksetItems {
+			return 0, fmt.Errorf("scope_too_large: source partitioning exceeds max_workset_items=%d; remediation: narrow review.scope or split the review run", config.MaxWorksetItems)
+		}
+		return len(result), nil
+	}
+	accept := func(current *batch, _ []sourceEvidence) error {
+		result = append(result, current)
+		return nil
+	}
 	for _, current := range batches {
-		var err error
-		result, err = appendBoundReviewBatch(result, current, artifactRoot, outputDir, snapshot, config, route, verification)
-		if err != nil {
+		if err := visitBoundReviewBatch(current, artifactRoot, outputDir, snapshot, config, route, verification, next, accept); err != nil {
 			return nil, err
 		}
 	}
 	return result, nil
 }
 
-func appendBoundReviewBatch(result []*batch, current *batch, artifactRoot, outputDir string, snapshot *reviewSourceSnapshot, config Config, route string, verification *documentationVerification) ([]*batch, error) {
-	if config.MaxWorksetItems > 0 && len(result) >= config.MaxWorksetItems {
-		return nil, fmt.Errorf("scope_too_large: source partitioning exceeds max_workset_items=%d; remediation: narrow review.scope or split the review run", config.MaxWorksetItems)
-	}
-	key := fmt.Sprintf("unit-%04d", len(result))
-	directory := filepath.Join(outputDir, "batches", key)
-	partition, err := filepath.Rel(artifactRoot, directory)
+func visitBoundReviewBatch(current *batch, artifactRoot, outputDir string, snapshot *reviewSourceSnapshot, config Config, route string, verification *documentationVerification, next func() (int, error), accept func(*batch, []sourceEvidence) error) error {
+	index, err := next()
 	if err != nil {
-		return nil, fmt.Errorf("identify source snapshot partition: %w", err)
+		return err
+	}
+	key := fmt.Sprintf("unit-%04d", index)
+	partition := filepath.Join(route, "batches", key)
+	if snapshot.identity == nil {
+		directory := filepath.Join(outputDir, "batches", key)
+		partition, err = filepath.Rel(artifactRoot, directory)
+		if err != nil {
+			return fmt.Errorf("identify source snapshot partition: %w", err)
+		}
 	}
 	// Keep caller/test content in every partition, while leaving most of each
 	// finite item budget for primary source, inventory, and diff evidence.
@@ -59,16 +72,17 @@ func appendBoundReviewBatch(result []*batch, current *batch, artifactRoot, outpu
 	if cap := config.MaxReviewInputTokens / 4; cap < relatedBudget {
 		relatedBudget = cap
 	}
-	source, inventory, err := snapshot.bundleDataWithScopes(filepath.ToSlash(partition), current.paths, current.sourceScopes, relatedBudget)
+	var primary []sourceEvidence
+	source, inventory, err := snapshot.bundleDataWithPrimary(filepath.ToSlash(partition), current.paths, current.sourceScopes, relatedBudget, &primary)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	tokens := estimateReviewInputTokens(len(source)) + estimateReviewInputTokens(len(inventory)) + estimateReviewInputTokens(current.diff.Len())
 	if verification != nil {
 		entry := &item{Key: key, TouchedPaths: current.paths, Bindings: make(map[string]string)}
 		report, reportErr := itemReferenceReportData(route, entry, *verification)
 		if reportErr != nil {
-			return nil, reportErr
+			return reportErr
 		}
 		tokens += estimateReviewInputTokens(len(report))
 	}
@@ -76,7 +90,7 @@ func appendBoundReviewBatch(result []*batch, current *batch, artifactRoot, outpu
 		current.sourceBundle = source
 		current.evidenceInventory = inventory
 		current.relatedBudget = relatedBudget
-		return append(result, current), nil
+		return accept(current, primary)
 	}
 	left, right := splitReviewBatch(current)
 	if left == nil && estimateReviewInputTokens(current.diff.Len()) > config.MaxReviewInputTokens/2 {
@@ -85,20 +99,19 @@ func appendBoundReviewBatch(result []*batch, current *batch, artifactRoot, outpu
 	if left == nil {
 		left, right, err = splitPrimarySource(current, snapshot)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if left == nil {
 		left, right = splitDiffFragment(current)
 	}
 	if left == nil {
-		return nil, oversizedReviewInputError(current, source, inventory, tokens, config)
+		return oversizedReviewInputError(current, source, inventory, tokens, config)
 	}
-	result, err = appendBoundReviewBatch(result, left, artifactRoot, outputDir, snapshot, config, route, verification)
-	if err != nil {
-		return nil, err
+	if err := visitBoundReviewBatch(left, artifactRoot, outputDir, snapshot, config, route, verification, next, accept); err != nil {
+		return err
 	}
-	return appendBoundReviewBatch(result, right, artifactRoot, outputDir, snapshot, config, route, verification)
+	return visitBoundReviewBatch(right, artifactRoot, outputDir, snapshot, config, route, verification, next, accept)
 }
 
 func cloneReviewBatch(current *batch) *batch {
@@ -148,7 +161,8 @@ func splitReviewBatch(current *batch) (*batch, *batch) {
 
 // Partition the largest primary interval. Go declaration starts within the
 // middle half are preferred; a large declaration falls back to original line
-// boundaries. Overlap supplies adjacent context but always makes progress.
+// boundaries. A snapshot line with no usable boundary can be split at a UTF-8
+// rune. Overlap supplies adjacent context but always makes progress.
 func splitPrimarySource(current *batch, snapshot *reviewSourceSnapshot) (*batch, *batch, error) {
 	var chosen string
 	var chosenData []byte
@@ -195,6 +209,12 @@ func splitPrimarySource(current *batch, snapshot *reviewSourceSnapshot) (*batch,
 				boundary = int64(index + 1)
 				break
 			}
+		}
+	}
+	if boundary < 0 && snapshot.identity != nil {
+		boundary = middle
+		for boundary < span.End && !utf8.RuneStart(chosenData[boundary]) {
+			boundary++
 		}
 	}
 	if boundary <= span.Start || boundary >= span.End {

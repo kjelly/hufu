@@ -31,16 +31,18 @@ type snapshotUnfinished struct {
 }
 
 type snapshotCoverage struct {
-	Mode          string               `json:"mode"`
-	SnapshotID    string               `json:"snapshot_id"`
-	ContentSHA256 string               `json:"content_sha256"`
-	Revision      string               `json:"revision"`
-	Batch         int                  `json:"batch"`
-	BatchCount    int                  `json:"batch_count"`
-	Expected      []string             `json:"expected"`
-	Completed     []string             `json:"completed"`
-	Excluded      []snapshotUnfinished `json:"excluded"`
-	Uncompleted   []snapshotUnfinished `json:"uncompleted"`
+	Mode              string               `json:"mode"`
+	SnapshotID        string               `json:"snapshot_id"`
+	ContentSHA256     string               `json:"content_sha256"`
+	Revision          string               `json:"revision"`
+	Batch             int                  `json:"batch"`
+	BatchCount        int                  `json:"batch_count"`
+	Expected          []string             `json:"expected"`
+	Completed         []string             `json:"completed"`
+	Excluded          []snapshotUnfinished `json:"excluded"`
+	Uncompleted       []snapshotUnfinished `json:"uncompleted"`
+	WorksetPlanSHA256 string               `json:"workset_plan_sha256,omitempty"`
+	ReviewedWorksets  []int                `json:"reviewed_worksets,omitempty"`
 }
 
 const (
@@ -128,6 +130,7 @@ type snapshotIdentity struct {
 	FileCount        int                         `json:"file_count"`
 	WorksetsPerBatch int                         `json:"worksets_per_batch"`
 	Inventory        *snapshotInventoryReference `json:"inventory,omitempty"`
+	Plan             *snapshotPlan               `json:"workset_plan,omitempty"`
 }
 
 type snapshotInventoryReference struct {
@@ -151,12 +154,30 @@ func collectSnapshotCoverage(current sourceSession) (snapshotCoverage, error) {
 	}
 	result.Mode, result.SnapshotID, result.ContentSHA256, result.Revision = "repository_snapshot", identity.ID, identity.Hash, identity.Revision
 	result.Batch, result.BatchCount = identity.Batch, identity.BatchCount
-	covered, limited, err := checkedSnapshotReviews(current, identity, files)
+	var page *snapshotPage
+	if identity.Plan != nil {
+		page, err = checkSnapshotPlan(identity, files)
+		if err != nil {
+			return result, err
+		}
+		result.WorksetPlanSHA256 = page.planHash
+	}
+	covered, limited, err := checkedSnapshotReviews(current, identity, files, page)
 	if err != nil {
 		return result, err
 	}
 	if err := checkedSnapshotVerifier(current, identity); err != nil {
 		return result, err
+	}
+	if page != nil {
+		for _, workset := range page.worksets {
+			if !workset.accepted {
+				return result, fmt.Errorf("snapshot workset %d has no accepted review", workset.number)
+			}
+			if !workset.limited {
+				result.ReviewedWorksets = append(result.ReviewedWorksets, workset.number)
+			}
+		}
 	}
 	for _, file := range identity.Files {
 		switch file.Disposition {
@@ -167,6 +188,8 @@ func collectSnapshotCoverage(current sourceSession) (snapshotCoverage, error) {
 			}
 			if limited[file.Path] {
 				result.Uncompleted = append(result.Uncompleted, snapshotUnfinished{Path: file.Path, Reason: "review_evidence_gap"})
+			} else if page != nil && page.outside[file.Path] {
+				result.Uncompleted = append(result.Uncompleted, snapshotUnfinished{Path: file.Path, Reason: "outside_selected_batch"})
 			} else {
 				result.Completed = append(result.Completed, file.Path)
 			}
@@ -200,6 +223,8 @@ func acceptedSnapshotScope(current sourceSession) (*snapshotAttestation, error) 
 			if err := loadSnapshotInventory(item.Workspace, candidate.Snapshot); err != nil {
 				return nil, err
 			}
+		} else if candidate.Snapshot != nil && candidate.Snapshot.Plan != nil {
+			return nil, fmt.Errorf("snapshot workset plan requires a verified inventory artifact")
 		}
 		scope = &candidate
 	}
@@ -210,7 +235,7 @@ func acceptedSnapshotScope(current sourceSession) (*snapshotAttestation, error) 
 // original receipt, including runtime-admitted recovery origins.
 func loadSnapshotInventory(workspace string, summary *snapshotIdentity) error {
 	ref := summary.Inventory
-	if len(summary.Files) != 0 || ref.Kind != "repository_snapshot_inventory" {
+	if len(summary.Files) != 0 || summary.Plan != nil || ref.Kind != "repository_snapshot_inventory" {
 		return fmt.Errorf("invalid snapshot inventory reference")
 	}
 	data, err := readSnapshotArtifact(workspace, *ref)
@@ -225,6 +250,7 @@ func loadSnapshotInventory(workspace string, summary *snapshotIdentity) error {
 		return fmt.Errorf("snapshot inventory differs from accepted summary")
 	}
 	summary.Files = full.Files
+	summary.Plan = full.Plan
 	return nil
 }
 
@@ -300,7 +326,7 @@ func checkedSnapshotFiles(scope *snapshotAttestation) (map[string]snapshotInvent
 	return files, nil
 }
 
-func checkedSnapshotReviews(current sourceSession, identity *snapshotIdentity, files map[string]snapshotInventoryFile) (map[string]bool, map[string]bool, error) {
+func checkedSnapshotReviews(current sourceSession, identity *snapshotIdentity, files map[string]snapshotInventoryFile, page *snapshotPage) (map[string]bool, map[string]bool, error) {
 	covered, limited := make(map[string]bool), make(map[string]bool)
 	for _, item := range current.Tasks {
 		switch item.ContractID {
@@ -322,7 +348,12 @@ func checkedSnapshotReviews(current sourceSession, identity *snapshotIdentity, f
 		if err := verifyReview(item, review); err != nil {
 			return nil, nil, err
 		}
-		if err := checkSnapshotReviewFiles(item, review, files, covered, limited); err != nil {
+		if page != nil {
+			err = page.checkReview(item, review, covered, limited)
+		} else {
+			err = checkSnapshotReviewFiles(item, review, files, covered, limited)
+		}
+		if err != nil {
 			return nil, nil, err
 		}
 	}

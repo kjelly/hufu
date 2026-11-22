@@ -183,10 +183,10 @@ when correcting a rejected field. This does not add findings to critic-review mo
 
 ## Snapshot mode
 
-When `review_mode=repository_snapshot`, the assigned inventory is a file list,
-not a patch. Read the immutable complete source artifact with its bound snapshot
-ID and content hash. Existing defects are in scope; locations use original
-`repository/path:line`. Do not reject a finding because that line is unchanged.
+When `review_mode=repository_snapshot`, read the assigned primary ranges from
+the immutable source artifact with its bound snapshot ID and content hash.
+Report existing defects within those ranges using the original
+`repository/path:line`.
 In diff modes the changed-scope restrictions still apply. Findings never grant
 write authority. A successfully completed review may contain confirmed defects.
 

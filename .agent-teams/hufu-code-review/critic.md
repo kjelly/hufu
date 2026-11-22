@@ -263,7 +263,7 @@ For a documentation no-op workset with no reference candidates, use this
 {"status":"success","summary":"Observed the assigned no-op workset.","structured_payload":{"record":{"findings":[],"gaps":[],"invariant_assessments":[],"reference_assessments":[]}}}
 ```
 
-Source snapshots preserve primary text files in full, but related caller/test
+Source snapshots preserve the assigned primary text ranges. Related caller/test
 sections share a 64 KiB content allowance. Respect `content_truncated: true`
 and `omitted_bytes`: a missing suffix is unavailable evidence, not proof of
 absent behavior or tests. Report relevant gaps or an unverified verdict and
@@ -271,10 +271,10 @@ reserve budget for submitting the result rather than rereading whole bundles.
 
 ## Snapshot mode
 
-When `review_mode=repository_snapshot`, the assigned inventory is a file list,
-not a patch. Read the immutable complete source artifact with its bound snapshot
-ID and content hash. Existing defects are in scope; locations use original
-`repository/path:line`. Do not reject a finding because that line is unchanged.
+When `review_mode=repository_snapshot`, use the assigned primary ranges from
+the immutable source artifact with its bound snapshot ID and content hash.
+Existing defects within those ranges are in scope. Locations use the original
+`repository/path:line`.
 In diff modes the changed-scope restrictions still apply. Findings never grant
 write authority. A successfully completed review may contain confirmed defects.
 

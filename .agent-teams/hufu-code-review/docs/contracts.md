@@ -691,14 +691,13 @@ gate's bounded 32 MiB read, fail closed. Legacy accepted
 outputs with inline inventories remain readable. The 900 KiB action-response
 limit is unchanged; larger inventories are never silently truncated.
 
-Worksets contain package/directory file lists and complete primary source,
-with the existing bounded related caller/test context. Snapshot mode uses a
-single primary review route; the other routes emit explicit noops. Existing
-issues are valid findings at `repository/path:line`; the native gate verifies
-assigned-file membership and original source line bounds. Diff review retains
+Worksets contain package/directory file lists, assigned primary source ranges
+and bounded related caller/test context. Snapshot mode uses a single primary
+review route. The other routes emit explicit noops. Existing issues within the
+assigned primary ranges are valid findings at the original `repository/path:line`.
+The native gate checks each finding against those ranges. Diff review retains
 its changed-scope rules. Snapshot reference reports have zero deterministic
-link/path checks: this is not proof that references are valid; semantic review
-of the supplied source remains mandatory.
+link/path checks, so semantic review of the supplied source remains mandatory.
 
 ### Bounded batches and truthful coverage
 
@@ -711,39 +710,38 @@ snapshot mode; coverage uses the explicit inventory dispositions instead.
 This preserves the 64-source synthesis limit when each review needs
 a critic, and the existing no-progress budgets. It does not widen runtime caps.
 
-A large inventory is divided into deterministic numbered batches. The default
-is batch 1; request batch 2 and the same reviewed commit in the prompt.
-Automation may set the corresponding typed `batch` value explicitly. Keep the same resolved commit for every batch. Each run
-reports its batch number and total batch count; it never claims other runs'
-coverage or silently marks unselected batches complete. Separate reports can be
-compared by their exact snapshot identity; automatic cross-run aggregation is
-not provided. If the requested batch is out of range, preparation fails clearly.
+The producer budgets the source bundle, evidence inventory, file list and
+reference report together for each workset. It splits worksets to fit that
+budget, then assigns the resulting worksets to numbered batches. Oversized
+single lines can be split at UTF-8 boundaries and retain their original line
+number. The total batch count comes from the final workset count. The default
+is batch 1. Automation can set the typed `batch` value explicitly. Use the same
+resolved commit and team budget for each batch. An out-of-range batch fails
+during preparation.
 
-The producer binds the snapshot identity and the declared
-`repository_snapshot_inventory` artifact. Models receive compact scope context
-and runtime-owned workset bindings. `inventory-review-handoffs` publishes a
+The receipt-bound `repository_snapshot_inventory` records the ordered plan of
+primary byte and line ranges and the selected batch's exact source artifact
+hashes. Models receive compact scope context and runtime-owned workset bindings.
+`inventory-review-handoffs` publishes a
 `repository_snapshot_coverage` artifact with the expected and completed paths
 and every excluded or unfinished path and reason. Its receipt binds
 `snapshot_coverage` with counts and the artifact ID, digest and byte size.
 The report uses that summary and artifact reference. Final audit recomputes
 coverage from accepted sources and checks the complete artifact against it.
-Completion requires
-an accepted, verified review that observed its assigned source artifact; a
-review declaring evidence gaps conservatively leaves its assigned files
-unfinished. This accounts for evidence and contract completion, not a proof that
-every possible semantic defect was discovered. An unfinished selected review
-blocks the gate; budget omissions remain explicit unfinished coverage.
+Every assigned workset requires an accepted review that observed the exact
+source artifact bound by the plan. A file counts as completed only when all its
+planned worksets were reviewed in the selected batch without evidence gaps. A
+missing assigned review blocks the gate. Evidence gaps and ranges assigned to
+other batches keep the file unfinished. The coverage artifact includes the
+plan digest and the one-based global numbers of gap-free reviewed worksets.
+These fields let operators compare reports that share a snapshot and plan.
+Each report records the work performed by its own run.
 
 Any unfinished coverage forces report coverage and terminal task status to
 `completed_with_gaps`. Findings alone do not. Failed target tests also remain
 visible review evidence under the existing outcome contract. Successful audit
 acceptance means evidence, scope and reporting were checked; it does not mean
 the program is correct. Zero findings does not guarantee zero defects.
-
-The complete native output is bounded below the adapter's 1 MiB output cap. An
-inventory that exceeds that limit fails with `snapshot_inventory_too_large`; it
-is not silently truncated. Automatic aggregation across repositories/modules is
-not implemented.
 
 ## Workset evidence boundaries and cross-workset reconciliation
 

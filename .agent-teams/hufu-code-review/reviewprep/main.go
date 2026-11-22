@@ -1015,10 +1015,6 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 	routineDocumentationPaths := make([]string, 0)
 	escalatedDocumentationPaths := make([]string, 0)
 	for _, path := range paths {
-		if r.isRepositorySnapshot() {
-			primaryPaths = append(primaryPaths, path)
-			continue
-		}
 		switch classifyReviewPath(ctx, repo, r, path) {
 		case "documentation":
 			documentationPaths = append(documentationPaths, path)
@@ -1032,11 +1028,7 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 		}
 	}
 
-	verification := documentationVerification{Passed: true, CheckedFiles: []string{}, ReviewedRevision: r.End}
-	var err error
-	if !r.isRepositorySnapshot() {
-		verification, err = verifyDocumentationChanges(ctx, repo, r, diffPlan, documentationPaths)
-	}
+	verification, err := verifyDocumentationChanges(ctx, repo, r, diffPlan, documentationPaths)
 	if err != nil {
 		return actionResult{}, err
 	}
@@ -1086,7 +1078,20 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 	if err != nil {
 		return actionResult{}, err
 	}
-	allBatches := append(append(append([]*batch(nil), primaryBatches...), documentationBatches...), escalationBatches...)
+	worksets := []routedWorkset{
+		{name: "primary", description: "primary review workset manifest", paths: primaryPaths, batches: primaryBatches, verification: verification},
+		{name: "documentation", description: "documentation review workset manifest", paths: routineDocumentationPaths, batches: documentationBatches, verification: verification},
+		{name: "documentation-escalation", description: "documentation escalation workset manifest", paths: escalatedDocumentationPaths, batches: escalationBatches, verification: verification},
+	}
+	return publishRoutedReview(artifactRoot, outputDir, paths, resolution, snapshot, config, worksets, verification)
+}
+
+func publishRoutedReview(artifactRoot, outputDir string, paths []string, resolution rangeResolution, snapshot *reviewSourceSnapshot, config Config, worksets []routedWorkset, verification documentationVerification) (actionResult, error) {
+	r := resolution.Range
+	var allBatches []*batch
+	for _, workset := range worksets {
+		allBatches = append(allBatches, workset.batches...)
+	}
 	observed := observeBudget(allBatches, paths)
 	if snapshot.identity != nil {
 		observed.ChangedPaths = len(snapshot.identity.Files)
@@ -1102,9 +1107,13 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 			SelectedCommitCount: r.CommitCount, AvailableCommitCount: resolution.AvailableCommitCount,
 			HistoryExhausted: resolution.HistoryExhausted, RepositoryShallow: resolution.RepositoryShallow,
 		},
-		ObservedBudget:     observed,
-		Satisfied:          true,
-		RepositorySnapshot: snapshot.identity,
+		ObservedBudget: observed,
+		Satisfied:      true,
+	}
+	if snapshot.identity != nil {
+		identity := *snapshot.identity
+		identity.Plan = nil // carried only in the repository inventory artifact
+		scope.RepositorySnapshot = &identity
 	}
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return actionResult{}, fmt.Errorf("create output directory: %w", err)
@@ -1125,11 +1134,6 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 	}
 	verificationArtifact.Description = "documentation verification report"
 
-	worksets := []routedWorkset{
-		{name: "primary", description: "primary review workset manifest", paths: primaryPaths, batches: primaryBatches, verification: verification},
-		{name: "documentation", description: "documentation review workset manifest", paths: routineDocumentationPaths, batches: documentationBatches, verification: verification},
-		{name: "documentation-escalation", description: "documentation escalation workset manifest", paths: escalatedDocumentationPaths, batches: escalationBatches, verification: verification},
-	}
 	artifacts := make([]artifact, 0, 1+len(worksets)*2)
 	outputs := map[string]any{
 		"scope":                      scope,
@@ -1156,7 +1160,7 @@ func prepareRoutedReview(ctx context.Context, repo, artifactRoot, outputDir stri
 		artifacts = append(artifacts, worksetArtifacts...)
 	}
 	artifacts = append(artifacts, verificationArtifact)
-	outputs["item_count"] = len(primaryBatches) + len(documentationBatches) + len(escalationBatches)
+	outputs["item_count"] = len(allBatches)
 	return actionResult{Outputs: outputs, Artifacts: artifacts}, nil
 }
 
@@ -3006,9 +3010,6 @@ func reviewTargetLabel(r reviewRange) string {
 }
 
 func buildBatches(ctx context.Context, repo string, r reviewRange, diffPlan selectedCommitDiffPlan, paths []string, config Config) ([]*batch, error) {
-	if r.isRepositorySnapshot() {
-		return buildSnapshotBatches(ctx, repo, r, paths, config)
-	}
 	var batches []*batch
 	for _, path := range paths {
 		diff, err := reviewDiff(ctx, repo, r, diffPlan, path)
