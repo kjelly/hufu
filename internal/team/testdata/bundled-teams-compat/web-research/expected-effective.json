@@ -28,7 +28,6 @@
       "sudo",
       "ssh",
       "scp",
-      "lua",
       "golang",
       "download",
       "fetch",

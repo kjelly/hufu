@@ -593,7 +593,7 @@ Semantic Retrieval Runtime section. See
 | `--enable-pty-terminal` | — | `bool` | `false` | Eagerly initialize experimental Linux/macOS PTY handoff; `pty:true` starts it automatically |
 | `--rbash` | — | `bool` | `false` | Use restricted bash (rbash) for the bash tool |
 | `--no-net` | — | `bool` | `false` | Block all network access for agent subprocesses |
-| `--force-mcp` | — | `bool` | `false` | Force MCP mode: disable built-in execution/network tools (bash, sudo, ssh, golang, lua, download, fetch, agentic_fetch), require MCP servers |
+| `--force-mcp` | — | `bool` | `false` | Force MCP mode: disable built-in execution/network tools (bash, sudo, ssh, golang, download, fetch, agentic_fetch), require MCP servers |
 | `--direnv` | — | `bool` | `false` | Load `.envrc` / `.env` environment for the bash tool |
 | `--think` | — | `bool` | `false` | Show coordinator decision reasoning |
 | `--plan` | — | `bool` | `false` | Force plan-first mode: agents must submit plans before executing |
@@ -1640,9 +1640,9 @@ If the skeptic votes fail, the task is rejected and retried.
 
 ## Worker Tools Reference
 
-`hufu` provides 18 worker tools, along with 4 always-included tools and 5 coordinator tools:
+`hufu` provides worker tools, along with 4 always-included tools and 5 coordinator tools:
 
-### 18 Worker Tools
+### Worker Tools
 
 | Tool | Description |
 |------|-------------|
@@ -1656,9 +1656,7 @@ If the skeptic votes fail, the task is rejected and retried.
 | `grep` | Search file contents using regular expressions |
 | `glob` | Search files using glob patterns |
 | `ls` | List directory contents in a tree structure |
-| `lua` | Execute Lua code in a sandbox |
 | `golang` | Execute Go code via the yaegi interpreter |
-| `javascript` | Deterministic structured-data computation in an isolated goja sandbox (no fs/network/process/timers) |
 | `ask_user` | Ask the user a question (multiple choice / free text) |
 | `download` | Download a file from a URL |
 | `fetch` | Fetch URL content (text/markdown/html) |
@@ -2045,7 +2043,6 @@ Complete reference for all default values, including their source files:
 | Bash Timeout | 120s | `bash.go` |
 | Max Bash Timeout | 600s | `bash.go` |
 | SSH Timeout | 30s | `ssh.go` |
-| Lua Timeout | 120s | `lua.go` |
 | Golang Timeout | 120s | `golang.go` |
 | Download Timeout | 300s | `download.go` |
 | Fetch Timeout | 30s | `fetch.go` |

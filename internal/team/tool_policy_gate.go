@@ -104,7 +104,7 @@ func (t *policyGatedTool) invalidBashInputResponse(ctx context.Context, call fan
 
 func artifactScopeUnsupportedTool(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "bash", "sudo", "wait_for", "lua", "golang", "terminal", "terminal_start", "terminal_write", "terminal_wait", "terminal_reconcile", "ssh", "scp", "create_skill":
+	case "bash", "sudo", "wait_for", "golang", "terminal", "terminal_start", "terminal_write", "terminal_wait", "terminal_reconcile", "ssh", "scp", "create_skill":
 		return true
 	default:
 		return false

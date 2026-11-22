@@ -172,7 +172,7 @@ func TestDirectAgentContextEnforcesUnboundArtifactIsolation(t *testing.T) {
 	}
 	item := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "reviewer", Desc: "inspect artifacts"}})[0]
 	def := &agent.AgentDef{Name: "reviewer", Role: "worker"}
-	ctx, cancel, roundCancel, err := c.buildDirectAgentTaskContext(t.Context(), def, "reviewer", item.Desc, item.ID, "test", []string{"view", "ls", "lua", "external_ls"})
+	ctx, cancel, roundCancel, err := c.buildDirectAgentTaskContext(t.Context(), def, "reviewer", item.Desc, item.ID, "test", []string{"view", "ls", "golang", "external_ls"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,9 +190,9 @@ func TestDirectAgentContextEnforcesUnboundArtifactIsolation(t *testing.T) {
 
 	view := tools.NewViewTool(tools.WithWorkDir(root), tools.WithAllowedPaths([]string{root}))
 	ls := tools.NewLsTool(tools.WithWorkDir(root), tools.WithAllowedPaths([]string{root}))
-	lua := tools.NewLuaTool(tools.WithWorkDir(root), tools.WithAllowedPaths([]string{root}))
+	golang := tools.NewGolangTool(tools.WithWorkDir(root))
 	external := &recordingTool{name: "external_ls"}
-	gated := c.gatePolicyTools([]fantasy.AgentTool{view, ls, lua, external})
+	gated := c.gatePolicyTools([]fantasy.AgentTool{view, ls, golang, external})
 	byName := make(map[string]fantasy.AgentTool, len(gated))
 	for _, tool := range gated {
 		byName[tool.Info().Name] = tool
@@ -208,7 +208,7 @@ func TestDirectAgentContextEnforcesUnboundArtifactIsolation(t *testing.T) {
 		{name: "view artifact metadata", tool: "view", input: `{"file_path":"logs/artifacts/meta/blocked.json"}`, want: "runtime-managed artifact path"},
 		{name: "ls artifact data", tool: "ls", input: `{"path":"logs/artifacts/data"}`, want: "runtime-managed artifact path"},
 		{name: "ls artifact metadata", tool: "ls", input: `{"path":"logs/artifacts/meta"}`, want: "runtime-managed artifact path"},
-		{name: "lua bypass", tool: "lua", input: `{"code":"print('must not execute')"}`, want: "unbound task"},
+		{name: "golang bypass", tool: "golang", input: `{"code":"package main; import \"fmt\"; func main() { fmt.Println(1) }"}`, want: "unbound task"},
 		{name: "declared external bypass", tool: "external_ls", input: `{}`, want: "declared external tools"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

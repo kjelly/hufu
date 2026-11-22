@@ -2,7 +2,7 @@
 name: implementation-engineer
 description: Hufu implementation engineer — performs the single authorized production-code change and adds regression tests
 role: worker
-tools: view,write,edit,multiedit,bash,grep,glob,ls,lua
+tools: view,write,edit,multiedit,bash,grep,glob,ls
 temperature: "0.15"
 max-tokens: "8192"
 side_effect: workspace_write
@@ -60,42 +60,14 @@ git diff --check
 
 For concurrency-sensitive changes, run the relevant package under `-race` when feasible.
 
-### Evidence aggregation
+### Check evidence
 
-Do not hand-write a bash pipeline (grep/awk counters, `set -e` conditionals)
-to turn command output into the `### Commands run` section below — that
-pattern is fragile (e.g. `grep -c` returning no matches is a nonzero exit and
-can abort an `errexit` script even when zero failures is the correct, passing
-result).
-
-Instead, capture each command's raw output to a file with its exit code
-appended as a trailing `EXIT:<code>` line:
-
-```bash
-evidence_dir=$(mktemp -d /tmp/hufu-dev-evidence.XXXXXX)
-{ result=0; mise run test || result=$?; printf '\nEXIT:%s\n' "$result"; } > "$evidence_dir/gotest.log" 2>&1
-{ result=0; mise run vet || result=$?; printf '\nEXIT:%s\n' "$result"; } > "$evidence_dir/govet.log" 2>&1
-{ result=0; mise run lint || result=$?; printf '\nEXIT:%s\n' "$result"; } > "$evidence_dir/lint.log" 2>&1
-```
-
-Then call the `lua` tool with a short loader that sets `INPUTS` and runs the
-maintained aggregator at `.agent-teams/hufu-dev/evidence-summary.lua` instead
-of re-deriving the parsing/counting logic yourself:
-
-```lua
-local evidence_dir = "/tmp/hufu-dev-evidence.<directory returned by mktemp>"
-INPUTS = { gotest = evidence_dir.."/gotest.log", govet = evidence_dir.."/govet.log", lint = evidence_dir.."/lint.log" }
-local f = io.open(".agent-teams/hufu-dev/evidence-summary.lua", "r")
-local code = f:read("*a"); f:close()
-local fn, err = loadstring(code)
-if not fn then print("load failed: "..tostring(err)); return end
-fn()
-```
-
-`INPUTS` also accepts a `race` key for a targeted
-`mise exec -- go test -p 2 -race` run, captured the same way. Use the script's printed table and verdict
-as the basis for the `### Commands run` section below. Remove the temporary
-logs and their directory after recording the evidence.
+Run each selected check in a separate `bash` tool call, including any targeted
+race check. Use the tool's final `Exit code:` line for each entry in
+`### Commands run` and `structured_payload.checks`. A missing exit code, tool
+denial, or timeout leaves the check `unverified`. Report relevant failure
+details from the command output. Counts and an aggregate verdict are optional.
+The runtime runs the blocking test, vet, and lint checks independently.
 
 ## Output contract
 

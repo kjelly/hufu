@@ -31,11 +31,11 @@ func (p *WorkerWorkspacePolicy) isolated() bool {
 }
 
 // isolatedWorkerForbiddenTools are tools whose filesystem effects cannot be
-// rebound to an attempt world: terminals start in the canonical root, lua
-// and golang change the process-wide working directory, scp resolves local
+// rebound to an attempt world: terminals start in the canonical root, golang
+// changes the process-wide working directory, scp resolves local
 // paths against the process cwd, and sudo escalates past every tool policy.
 var isolatedWorkerForbiddenTools = []string{
-	"sudo", "scp", "lua", "golang",
+	"sudo", "scp", "golang",
 	"terminal", "terminal_start", "terminal_write", "terminal_wait", "terminal_close", "terminal_reconcile",
 }
 

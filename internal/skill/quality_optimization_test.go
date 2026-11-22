@@ -25,7 +25,6 @@ func TestHasActionTool(t *testing.T) {
 		{"bash tool", []string{"view", "bash"}, true},
 		{"sudo tool", []string{"view", "sudo"}, true},
 		{"ssh tool", []string{"view", "ssh"}, true},
-		{"lua tool", []string{"view", "lua"}, true},
 		{"golang tool", []string{"view", "golang"}, true},
 		{"download tool", []string{"view", "download"}, true},
 

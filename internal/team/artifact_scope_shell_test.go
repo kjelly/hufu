@@ -21,7 +21,7 @@ func TestDeclaredShellTools(t *testing.T) {
 		{name: "empty grant inherits every tool", def: &agent.AgentDef{Tools: ""}, want: nil},
 		{name: "all grant inherits every tool", def: &agent.AgentDef{Tools: "all"}, want: nil},
 		{name: "explicit shell tools", def: &agent.AgentDef{Tools: "bash,sudo,ssh,view,write,wait_for"}, want: []string{"bash", "sudo", "ssh", "wait_for"}},
-		{name: "case and spacing are normalized", def: &agent.AgentDef{Tools: " View , BASH ,lua"}, want: []string{"bash", "lua"}},
+		{name: "case and spacing are normalized", def: &agent.AgentDef{Tools: " View , BASH ,golang"}, want: []string{"bash", "golang"}},
 		{name: "no shell tools declared", def: &agent.AgentDef{Tools: "view,grep,ls"}, want: nil},
 	}
 	for _, tc := range cases {
@@ -36,7 +36,7 @@ func TestDeclaredShellTools(t *testing.T) {
 func TestArtifactScopeShellToolsFollowTheAgentGrant(t *testing.T) {
 	root := t.TempDir()
 	bash := tools.NewBashTool(tools.WithWorkDir(root), tools.WithAllowedPaths([]string{root}))
-	lua := tools.NewLuaTool(tools.WithWorkDir(root), tools.WithAllowedPaths([]string{root}))
+	golang := tools.NewGolangTool(tools.WithWorkDir(root))
 	external := &recordingTool{name: "external_shell"}
 	blocked := []string{root + "/logs/artifacts/data", root + "/logs/artifacts/meta"}
 	cases := []struct {
@@ -57,15 +57,15 @@ func TestArtifactScopeShellToolsFollowTheAgentGrant(t *testing.T) {
 			wantDenied: true,
 		},
 		{
-			name:       "declaring bash does not grant lua",
-			tool:       lua,
+			name:       "declaring bash does not grant golang",
+			tool:       golang,
 			policy:     tools.ArtifactPathPolicy{BlockedPaths: blocked, DenyUnsupportedDeclaredTools: true, DeclaredShellTools: []string{"bash"}},
 			wantDenied: true,
 		},
 		{
-			name:   "unbound task may run a declared lua",
-			tool:   lua,
-			policy: tools.ArtifactPathPolicy{BlockedPaths: blocked, DenyUnsupportedDeclaredTools: true, DeclaredShellTools: []string{"lua"}},
+			name:   "unbound task may run a declared golang",
+			tool:   golang,
+			policy: tools.ArtifactPathPolicy{BlockedPaths: blocked, DenyUnsupportedDeclaredTools: true, DeclaredShellTools: []string{"golang"}},
 		},
 		{
 			name:       "bound workset task never runs shell tools",

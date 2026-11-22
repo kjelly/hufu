@@ -345,7 +345,7 @@ Semantic Retrieval Runtime 區段查看。詳見 [Semantic memory retrieval](doc
 | `--tui` | — | `bool` | `false` | 顯示 Bubble Tea TUI 即時任務追蹤 |
 | `--rbash` | — | `bool` | `false` | 對 bash tool 使用 restricted bash (rbash) |
 | `--no-net` | — | `bool` | `false` | 封鎖 Agent 子程序的所有網路存取 |
-| `--force-mcp` | — | `bool` | `false` | 強制 MCP 模式：停用內建執行/網路工具（bash, sudo, ssh, golang, lua, download, fetch, agentic_fetch），需使用 MCP servers |
+| `--force-mcp` | — | `bool` | `false` | 強制 MCP 模式：停用內建執行/網路工具（bash, sudo, ssh, golang, download, fetch, agentic_fetch），需使用 MCP servers |
 | `--direnv` | — | `bool` | `false` | 為 bash tool 載入 `.envrc` / `.env` 環境 |
 | `--think` | — | `bool` | `false` | 顯示 Coordinator 決策推理 |
 | `--plan` | — | `bool` | `false` | 強制 plan-first 模式：Agent 必須先提交計畫 |
@@ -1117,9 +1117,9 @@ guard:
 
 ## Worker Tools 參考
 
-`hufu` 提供 18 種 Worker Tools，以及 4 種 Always-included Tools 和 5 種 Coordinator Tools：
+`hufu` 提供 Worker Tools，以及 4 種 Always-included Tools 和 5 種 Coordinator Tools：
 
-### 18 種 Worker Tools
+### Worker Tools
 
 | Tool | 說明 |
 |------|------|
@@ -1133,9 +1133,7 @@ guard:
 | `grep` | 使用正規表達式搜尋檔案內容 |
 | `glob` | 使用 glob 模式搜尋檔案 |
 | `ls` | 以樹狀結構列出目錄內容 |
-| `lua` | 在沙盒中執行 Lua 程式碼 |
 | `golang` | 透過 yaegi 直譯器執行 Go 程式碼 |
-| `javascript` | 在隔離的 goja 沙盒中進行確定性結構化資料運算（無檔案系統/網路/行程/計時器存取） |
 | `ask_user` | 向使用者提問（多選/自由文字） |
 | `download` | 從 URL 下載檔案 |
 | `fetch` | 取得 URL 內容（text/markdown/html） |
@@ -1390,7 +1388,6 @@ CLI flag > hufu.yaml > 預設值
 | Bash Timeout | 120s | `bash.go` |
 | Max Bash Timeout | 600s | `bash.go` |
 | SSH Timeout | 30s | `ssh.go` |
-| Lua Timeout | 120s | `lua.go` |
 | Golang Timeout | 120s | `golang.go` |
 | Download Timeout | 300s | `download.go` |
 | Fetch Timeout | 30s | `fetch.go` |

@@ -164,7 +164,6 @@ var writeTools = map[string]bool{
 	"ltm_update":    true,
 	"bash":          true,
 	"golang":        true,
-	"lua":           true,
 	"write":         true,
 	"edit":          true,
 	"multiedit":     true,
@@ -179,7 +178,7 @@ var writeTools = map[string]bool{
 //
 //	sudo              → infra_mutation
 //	ssh               → external_write
-//	bash/golang/lua/  → workspace_write
+//	bash/golang/      → workspace_write
 //	write/edit/...
 //	(read-only only)  → none
 //	(empty)           → none

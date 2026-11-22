@@ -969,7 +969,7 @@ verification 在副本中執行；verification 與其他完成檢查都通過後
   project 中執行。
 - 需要 managed workspace（control root 與 project 不重疊）。
 - 不能與 `extra-models`、external agent backend（例如 Codex）、MCP tools、
-  phase workflow、`tools: all`，以及 `sudo`、`scp`、`lua`、`golang`、terminal
+  phase workflow、`tools: all`，以及 `sudo`、`scp`、`golang`、terminal
   系列 tool 同時使用；team 載入時就會拒絕（`workspace_isolation_unsupported`）。
 - 帶 structured steps 或 action 的 task，以及 `request_agent` 的 sub-agent，
   都不能 isolated。

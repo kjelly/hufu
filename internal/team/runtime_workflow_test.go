@@ -861,26 +861,23 @@ func TestRuntimeWorkflowWriteIsolationIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The test needs to run execution tools (bash, lua, write), which are now restricted
+	// The test needs to run execution tools (bash, sudo, write), which are now restricted
 	// to the EXECUTE phase by runtime enforcement. Transition the workflow to EXECUTE.
 	w.state = PhaseExecute
 	c := &Coordinator{phaseWorkflow: w, session: session}
 
 	ctx := context.Background()
-	ctx = c.withEffectiveToolsAllowed(ctx, session.Agents["preparer"], []string{"bash", "sudo", "lua", "create_skill", "write"})
+	ctx = c.withEffectiveToolsAllowed(ctx, session.Agents["preparer"], []string{"bash", "sudo", "create_skill", "write"})
 	ctx = context.WithValue(ctx, tools.AgentAllowedWritePathsKey, c.runtimeAllowedPaths(nil))
 
 	cwd, _ := os.Getwd()
 	builtTools := agent.BuildAllAgentTools(cwd)
 
 	tmpBash := filepath.Join(t.TempDir(), "workflow-escape-bash")
-	tmpLua := filepath.Join(t.TempDir(), "workflow-escape-lua")
 	randomSuffix := filepath.Base(t.TempDir())
 	cwdBash := filepath.Join(cwd, "workflow-escape-bash-test-"+randomSuffix)
-	cwdLua := filepath.Join(cwd, "workflow-escape-lua-test-"+randomSuffix)
 	cwdSkill := filepath.Join(cwd, "skills", "workflow-escape-skill-"+randomSuffix)
 	defer os.RemoveAll(cwdBash)
-	defer os.RemoveAll(cwdLua)
 	defer os.RemoveAll(cwdSkill)
 
 	tests := []struct {
@@ -892,13 +889,8 @@ func TestRuntimeWorkflowWriteIsolationIntegration(t *testing.T) {
 	}{
 		{"bash tmp", "bash", `{"command": "printf x > ` + tmpBash + `"}`, true, tmpBash},
 		{"bash cwd", "bash", `{"command": "printf x > ` + cwdBash + `"}`, true, cwdBash},
-		{"lua tmp", "lua", `{"code": "assert(io.open('` + tmpLua + `', 'w'))"}`, true, tmpLua},
-		{"lua cwd", "lua", `{"code": "assert(io.open('` + cwdLua + `', 'w'))"}`, true, cwdLua},
-		{"lua output tmp", "lua", `{"code": "io.output('` + tmpLua + `'); io.write('x')"}`, true, tmpLua},
-		{"lua output cwd", "lua", `{"code": "io.output('` + cwdLua + `'); io.write('x')"}`, true, cwdLua},
 		{"create_skill cwd", "create_skill", `{"name": "workflow-escape-skill-` + randomSuffix + `", "description": "d", "content": "c"}`, true, cwdSkill},
 		{"write allowed", "write", `{"file_path": "` + filepath.Join(session.Workspace, "runtime", "allowed.txt") + `", "content": "allowed"}`, false, filepath.Join(session.Workspace, "runtime", "allowed.txt")},
-		{"lua open allowed", "lua", `{"code": "assert(io.open('` + filepath.Join(session.Workspace, "runtime", "allowed.lua") + `', 'w'))"}`, false, filepath.Join(session.Workspace, "runtime", "allowed.lua")},
 	}
 
 	for _, tt := range tests {

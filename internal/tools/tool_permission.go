@@ -20,8 +20,6 @@ const (
 // High-risk tools that require explicit allow in config
 var highRiskTools = map[string]bool{
 	"golang":         true,
-	"lua":            true,
-	"javascript":     true,
 	"bash":           true,
 	"mcp":            true,
 	"terminal":       true,
@@ -45,8 +43,6 @@ var ForceMCPBlockedTools = map[string]bool{
 	"scp":                true,
 	"ssh_disconnect":     true,
 	"golang":             true,
-	"lua":                true,
-	"javascript":         true,
 	"download":           true,
 	"fetch":              true,
 	"agentic_fetch":      true,

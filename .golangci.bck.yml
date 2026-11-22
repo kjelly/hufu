@@ -77,9 +77,6 @@ issues:
     - path: internal/tools/golang\.go
       linters:
         - errcheck
-    - path: internal/tools/lua\.go
-      linters:
-        - errcheck
     - path: internal/tools/ssh_config\.go
       linters:
         - errcheck

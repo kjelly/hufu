@@ -607,7 +607,7 @@ Admission freezes the policy on the occurrence. Only a `workspace_write`
 task of an LLM-backend worker runs isolated; a read-only task of the same
 agent runs shared. Team load rejects isolated agents that combine the mode
 with extra-models, an external agent backend, MCP tools, a phase workflow,
-`tools: all`, or the sudo, scp, lua, golang, or terminal tools, and task
+`tools: all`, or the sudo, scp, golang, or terminal tools, and task
 admission rejects structured steps, actions, fan-out, and a non-managed
 workspace. `request_agent` refuses isolated sub-agents, which it would run
 inline in the subject root. An isolated setting is never silently downgraded:

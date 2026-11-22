@@ -444,7 +444,6 @@ var executionCapabilityTools = map[string]bool{
 	"edit":               true,
 	"multiedit":          true,
 	"golang":             true,
-	"lua":                true,
 	"scp":                true,
 	"create_skill":       true,
 	"wait_for":           true,

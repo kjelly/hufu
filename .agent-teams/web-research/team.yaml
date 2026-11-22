@@ -22,7 +22,7 @@ policies:
 verification:
   required: true
 tools:
-  denied: [web_fetch, write, edit, multiedit, bash, sudo, ssh, scp, lua, golang, download, fetch, agentic_fetch, grep, glob, ls, random, math]
+  denied: [web_fetch, write, edit, multiedit, bash, sudo, ssh, scp, golang, download, fetch, agentic_fetch, grep, glob, ls, random, math]
 requires:
   environment: [OLLAMA_API_KEY]
 # Research goals are mostly Chinese, which lexical retrieval cannot read; the

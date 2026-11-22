@@ -151,7 +151,7 @@ The command must complete successfully with no errors before the task is conside
 |---------|------|---------|
 | `main` | `cmd/hufu/` | CLI entry, cobra flags, segment execution, status display, TUI |
 | `agent` | `internal/agent/` | Agent definitions, provider manager (multi-provider), agent creation, tool selection |
-| `tools` | `internal/tools/` | Built-in agent tools: bash, sudo, ssh, view, write, edit, multiedit, grep, glob, ls, download, fetch, agentic_fetch, lua, golang, ask_user, random, math |
+| `tools` | `internal/tools/` | Built-in agent tools: bash, sudo, ssh, view, write, edit, multiedit, grep, glob, ls, download, fetch, agentic_fetch, golang, ask_user, random, math |
 | `team` | `internal/team/` | Team loading/parsing, coordinator, session persistence, workspace I/O, discovery, prompt parsing, todo tracking, sidecar integration |
 | `skill` | `internal/skill/` | Skill discovery, parsing, filtering, workspace copying |
 | `mcp` | `internal/mcp/` | MCP server management, local & remote transports |
@@ -297,7 +297,7 @@ Results joined and printed to stdout
 | `--no-summary` | — | `false` | Suppress the operator execution summary while preserving the final result and runtime behavior |
 | `--rbash` | — | `false` | Use restricted bash (rbash) for the bash tool |
 | `--no-net` | — | `false` | Block all network access for agent subprocesses |
-| `--force-mcp` | — | `false` | Force MCP mode: disable built-in execution/network tools (bash, sudo, ssh, golang, lua, download, fetch, agentic_fetch), require MCP servers |
+| `--force-mcp` | — | `false` | Force MCP mode: disable built-in execution/network tools (bash, sudo, ssh, golang, download, fetch, agentic_fetch), require MCP servers |
 | `--direnv` | — | `false` | Load `.envrc` / `.env` environment for the bash tool |
 | `--think` | — | `false` | Show coordinator decision reasoning |
 | `--plan` | — | `false` | Force plan-first mode: agents must submit plans before executing |
@@ -1035,7 +1035,6 @@ func (r *PromptReader) Close() error
 - `grep` — Search file contents using regular expressions
 - `glob` — Search files using glob patterns
 - `ls` — List directory contents in a tree structure
-- `lua` — Execute Lua code in a sandbox
 - `golang` — Execute Go code via the yaegi interpreter
 - `ask_user` — Ask the user a question (multiple choice / free text)
 - `download` — Download a file from a URL
@@ -1219,16 +1218,15 @@ Follow the **Speckit x OpenCode** workflow defined in `internal/tui/OPENCODE_INT
 - Tools in this implicit allowlist **bypass** the global `team.yaml` restrictions and will not prompt the user for permission.
 - This allows for fine-grained, agent-specific capabilities while maintaining global safety defaults.
 
-### 2. Sandbox Hardening (Golang & Lua)
+### 2. Go Tool Restrictions
 
-- **Golang**: Dangerous packages like `os/exec`, `net`, `syscall`, and `unsafe` are blocked in the `yaegi` interpreter. Standard file I/O via `os` is permitted within the workspace.
-- **Lua**: Native `os.execute` and `io.popen` are restricted to prevent unauthorized shell command execution.
+- **Golang**: The model-facing `golang` tool filters packages such as `os`, `os/exec`, `net`, `syscall`, and `unsafe` in its Yaegi interpreter.
 
 ### 3. Bash Tool Security
 
 - `--rbash` flag enables restricted bash mode
 - `--no-net` blocks network access for agent subprocesses
-- `--force-mcp` disables built-in execution/network tools (bash, sudo, ssh, golang, lua, download, fetch, agentic_fetch), forcing use of MCP servers
+- `--force-mcp` disables built-in execution/network tools (bash, sudo, ssh, golang, download, fetch, agentic_fetch), forcing use of MCP servers
 - `--direnv` loads `.envrc`/`.env` environment files
 - Dangerous commands (curl, wget, sudo, apt, etc.) are blocked by default
 
@@ -1426,7 +1424,7 @@ CLI flags are only applied when their values are non-empty. The `--default` team
 
 40. **TUI `View()` priority is hardcoded** — The strict 9-layer overlay priority in `View()` is not derived from any data structure. Adding a new overlay mode requires manually inserting the bool check in the correct position.
 
-41. **`--force-mcp` disables 8 built-in tools** — When enabled, blocks bash, sudo, ssh, golang, lua, download, fetch, agentic_fetch. Agents must use MCP servers for these operations. Supports 3-level resolution: CLI flag OR global config OR team config, plus per-agent override via `force-mcp: true` in agent .md frontmatter.
+41. **`--force-mcp` disables built-in execution and network tools** — When enabled, blocks bash, sudo, ssh, golang, download, fetch, agentic_fetch. Agents must use MCP servers for these operations. Supports 3-level resolution: CLI flag OR global config OR team config, plus per-agent override via `force-mcp: true` in agent .md frontmatter.
 
 ## Skill Usage Tracking
 

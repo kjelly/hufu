@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json/v2"
 	"path/filepath"
-	"strconv"
 	"testing"
 
 	"charm.land/fantasy"
@@ -31,7 +30,7 @@ func TestResolvePathWithWorkDir_ExpandsHomeAndTilde(t *testing.T) {
 // ============== GetToolLevel Tests ==============
 
 func TestGetToolLevel_HighRisk(t *testing.T) {
-	highRiskTools := []string{"golang", "lua", "javascript", "bash", "mcp"}
+	highRiskTools := []string{"golang", "bash", "mcp"}
 
 	for _, tool := range highRiskTools {
 		t.Run(tool, func(t *testing.T) {
@@ -298,10 +297,6 @@ func TestCheckToolPermission_AllTools(t *testing.T) {
 		{"bash allowed", "bash", []string{"view", "bash"}, true, false},
 		{"golang denied", "golang", []string{"view"}, false, false},
 		{"golang allowed", "golang", []string{"view", "golang"}, true, false},
-		{"lua denied", "lua", []string{"view"}, false, false},
-		{"lua allowed", "lua", []string{"view", "lua"}, true, false},
-		{"javascript denied", "javascript", []string{"view"}, false, false},
-		{"javascript allowed", "javascript", []string{"view", "javascript"}, true, false},
 		{"mcp denied", "mcp", []string{"view"}, false, false},
 		{"mcp allowed", "mcp", []string{"view", "mcp"}, true, false},
 
@@ -706,25 +701,6 @@ func TestPathDenialEmitsNativeDisposition(t *testing.T) {
 		t.Fatalf("denial = %#v, %v", response, err)
 	}
 	if len(got) != 1 || got[0].ReasonCode != "path_out_of_scope" || got[0].Executed || got[0].ToolCallID != "path-call" || got[0].ToolName != "view" {
-		t.Fatalf("disposition = %#v", got)
-	}
-}
-
-func TestLuaPathDenialDoesNotClaimUnexecutedCall(t *testing.T) {
-	allowed, outside := t.TempDir(), t.TempDir()
-	ctx := SetToolsAllowed(t.Context(), []string{"lua"})
-	var got []ToolExecutionDisposition
-	ctx = context.WithValue(ctx, ToolExecutionDispositionReporterKey, ToolExecutionDispositionReporter(func(d ToolExecutionDisposition) { got = append(got, d) }))
-	code := "print('started'); assert(io.open(" + strconv.Quote(filepath.Join(outside, "file.txt")) + ", 'r'))"
-	input, err := json.Marshal(map[string]string{"code": code})
-	if err != nil {
-		t.Fatal(err)
-	}
-	response, err := NewLuaTool(WithWorkDir(allowed), WithAllowedPaths([]string{allowed})).Run(ctx, fantasy.ToolCall{ID: "lua-path", Name: "lua", Input: string(input)})
-	if err != nil || !response.IsError {
-		t.Fatalf("denial = %#v, %v", response, err)
-	}
-	if len(got) != 1 || got[0].ReasonCode != "path_out_of_scope" || !got[0].Executed || got[0].ToolCallID != "lua-path" {
 		t.Fatalf("disposition = %#v", got)
 	}
 }

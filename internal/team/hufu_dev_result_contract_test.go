@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"charm.land/fantasy"
-	lua "github.com/yuin/gopher-lua"
 )
 
 // Copy the real team, keeping schema loading and any runtime state inside the
@@ -56,7 +55,7 @@ func TestHufuDevResultContractsPreserveWorkerBoundaries(t *testing.T) {
 	roles := []struct{ name, schema, tools, effect, recovery string }{
 		{"runtime-engineer", "analysis", "view,grep,glob,ls,bash", "none", "retry"},
 		{"integration-engineer", "analysis", "view,grep,glob,ls,bash", "none", "retry"},
-		{"implementation-engineer", "implementation", "view,write,edit,multiedit,bash,grep,glob,ls,lua", "workspace_write", "manual"},
+		{"implementation-engineer", "implementation", "view,write,edit,multiedit,bash,grep,glob,ls", "workspace_write", "manual"},
 		{"verifier", "verification", "view,bash,grep,glob,ls", "none", "retry"},
 	}
 	for _, role := range roles {
@@ -99,67 +98,6 @@ func TestHufuDevResultContractsPreserveWorkerBoundaries(t *testing.T) {
 	if acceptance == nil || acceptance.Mode != "blocking" || !acceptance.RequireNoUnresolvedTasks ||
 		!slices.Equal(acceptance.Commands, []string{"mise run test", "mise run vet", "mise run lint"}) {
 		t.Fatalf("blocking acceptance changed: %#v", acceptance)
-	}
-}
-
-func TestHufuDevEvidenceSummaryReportsGoCommandOutcomes(t *testing.T) {
-	script := filepath.Join(bundledTeamsDir(t), "hufu-dev", "evidence-summary.lua")
-	for _, test := range []struct {
-		name, input, log string
-		want             []string
-	}{
-		{
-			name: "non_verbose_pass", input: "gotest",
-			log:  "ok\texample.test/one\t0.029s\nok\texample.test/two\t(cached)\n?\texample.test/none\t[no test files]\nEXIT:0\n",
-			want: []string{"2 packages passed, 0 failed, 1 without tests", "VERDICT: PASS"},
-		},
-		{
-			name: "failed_packages_and_subtest", input: "gotest",
-			log:  "--- FAIL: TestExample\n    --- FAIL: TestExample/child\nFAIL\texample.test/one\t0.001s\nFAIL\texample.test/two [build failed]\nFAIL\texample.test/three [setup failed]\nFAIL\nEXIT:1\n",
-			want: []string{"0 packages passed, 3 failed, 0 without tests", "TestExample/child", "[build failed]", "[setup failed]", "VERDICT: FAIL"},
-		},
-		{
-			name: "verbose_only_race", input: "race",
-			log:  "--- PASS: TestExample\n    --- PASS: TestExample/child\nEXIT:0\n",
-			want: []string{"2 test results passed, 0 failed", "VERDICT: PASS"},
-		},
-		{
-			name: "missing_exit_marker", input: "gotest",
-			log:  "ok\texample.test/one\t0.029s\n",
-			want: []string{"missing or invalid EXIT marker", "VERDICT: FAIL"},
-		},
-		{
-			name: "failed_to_start", input: "gotest",
-			log:  "mise ERROR task could not start\nEXIT:1\n",
-			want: []string{"no Go test records", "VERDICT: FAIL"},
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "command.log")
-			if err := os.WriteFile(path, []byte(test.log), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			state := lua.NewState()
-			defer state.Close()
-			state.SetContext(t.Context())
-			inputs := state.NewTable()
-			inputs.RawSetString(test.input, lua.LString(path))
-			state.SetGlobal("INPUTS", inputs)
-			var output strings.Builder
-			state.SetGlobal("print", state.NewFunction(func(current *lua.LState) int {
-				output.WriteString(current.CheckString(1))
-				output.WriteByte('\n')
-				return 0
-			}))
-			if err := state.DoFile(script); err != nil {
-				t.Fatal(err)
-			}
-			for _, want := range test.want {
-				if !strings.Contains(output.String(), want) {
-					t.Errorf("summary lacks %q:\n%s", want, output.String())
-				}
-			}
-		})
 	}
 }
 

@@ -527,7 +527,7 @@ Your system prompt here. Describe the agent's persona, workflow, and output form
 
 **Coordinator tools:** `agent` (delegate), `load_skill`, `save_skill`, `finish`, `ask_user`, `todo`, `memory_save`, `memory_query`
 
-**Worker tools (18):** `bash`, `sudo`, `ssh`, `scp`, `view`, `write`, `edit`, `multiedit`, `grep`, `glob`, `ls`, `lua`, `golang`, `ask_user`, `download`, `fetch`, `agentic_fetch`, `random`, `math`
+**Worker tools:** `bash`, `sudo`, `ssh`, `scp`, `view`, `write`, `edit`, `multiedit`, `grep`, `glob`, `ls`, `golang`, `ask_user`, `download`, `fetch`, `agentic_fetch`, `random`, `math`
 
 **Always-included:** `agent`, `todo`, `memory_save`, `memory_query`
 
@@ -535,7 +535,7 @@ Your system prompt here. Describe the agent's persona, workflow, and output form
 
 **Security flags:**
 - `--rbash` / `no-net: true` → restricted bash / no network
-- `force-mcp: true` → disables bash, sudo, ssh, golang, lua, download, fetch, agentic_fetch
+- `force-mcp: true` → disables built-in execution and network tools
 - `allowed-paths` / `restricted-path` → filesystem sandbox
 
 ## Template Catalog

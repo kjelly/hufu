@@ -23,8 +23,7 @@ and strategic-team preset migration.
 **Language:** English identifiers and API names; explanatory text in Traditional Chinese.
 
 > **關於檔名**：`spec.md` 這個檔名在本 repo 被重複覆寫過多次，且
-> `internal/improve/sqlite_analytics_error.go`、`internal/auditverify/archive.go`、
-> `internal/tools/javascript.go` 等處的註解仍以「spec.md §N」指向**不同的舊規格**。
+> `internal/improve/sqlite_analytics_error.go` 與 `internal/auditverify/archive.go` 等處的註解仍以「spec.md §N」指向**不同的舊規格**。
 > 本規格一律以本檔名 `docs/architecture/decision-runtime.md` 被引用；
 > 新增程式碼註解必須引用本檔名，不得再寫 bare `spec.md`。
 

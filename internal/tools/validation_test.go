@@ -68,7 +68,7 @@ func TestValidateParamType(t *testing.T) {
 
 func TestValidateToolInput(t *testing.T) {
 	info := fantasy.ToolInfo{
-		Name: "lua",
+		Name: "golang",
 		Parameters: map[string]any{
 			"code": map[string]any{
 				"type": "string",

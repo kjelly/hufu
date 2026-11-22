@@ -1200,7 +1200,6 @@ func (d *SkillPatternDetector) hasActionTool(seq *ToolSequence) bool {
 		"bash":      true,
 		"sudo":      true,
 		"ssh":       true,
-		"lua":       true,
 		"golang":    true,
 		"download":  true,
 	}

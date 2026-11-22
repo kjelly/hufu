@@ -15,7 +15,7 @@ func TestInferSideEffectClass(t *testing.T) {
 		{"memory_save", SideEffectWorkspaceWrite},
 		{"stm_write", SideEffectWorkspaceWrite},
 		{"ltm_update", SideEffectWorkspaceWrite},
-		{"golang,lua", SideEffectWorkspaceWrite},
+		{"golang", SideEffectWorkspaceWrite},
 		{"view,download,fetch", SideEffectWorkspaceWrite},
 		{"view,ssh", SideEffectExternalWrite},
 		{"bash,ssh", SideEffectExternalWrite},      // ssh present, no sudo

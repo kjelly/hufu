@@ -80,7 +80,6 @@ func TestValidateTeamWorkerWorkspacesRejectsUnsupportedAgents(t *testing.T) {
 		{name: "sudo", def: &agent.AgentDef{Name: "coder", Role: "worker", Tools: "write,sudo", WorkerWorkspace: isolatedSpec()}, want: "sudo"},
 		{name: "scp", def: &agent.AgentDef{Name: "coder", Role: "worker", Tools: "write,scp", WorkerWorkspace: isolatedSpec()}, want: "scp"},
 		{name: "terminal", def: &agent.AgentDef{Name: "coder", Role: "worker", Tools: "terminal_start", WorkerWorkspace: isolatedSpec()}, want: "terminal_start"},
-		{name: "lua", def: &agent.AgentDef{Name: "coder", Role: "worker", Tools: "lua", WorkerWorkspace: isolatedSpec()}, want: "lua"},
 		{name: "golang", def: &agent.AgentDef{Name: "coder", Role: "worker", Tools: "golang", WorkerWorkspace: isolatedSpec()}, want: "golang"},
 		{name: "all tools", def: &agent.AgentDef{Name: "coder", Role: "worker", Tools: "all", WorkerWorkspace: isolatedSpec()}, want: "tools: all"},
 		{name: "coordinator", def: &agent.AgentDef{Name: "lead", Role: "coordinator", WorkerWorkspace: isolatedSpec()}, want: "only to workers"},
