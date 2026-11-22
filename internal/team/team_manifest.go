@@ -141,6 +141,7 @@ type teamManifestSpecFields struct {
 	// value of a plain int is indistinguishable from an explicit 0.
 	MaxRetries           *int                              `yaml:"max-retries,omitempty"`
 	AutoReport           bool                              `yaml:"auto-report,omitempty"`
+	ExecutionReport      agent.ExecutionReportConfig       `yaml:"execution-report,omitempty"`
 	AllowFreeTextResults bool                              `yaml:"allow-free-text-results,omitempty"`
 	Model                string                            `yaml:"model,omitempty"`
 	WorkerModel          string                            `yaml:"worker-model,omitempty"`

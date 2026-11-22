@@ -8,6 +8,7 @@ workspace
 # managed-workspace Go packages live in internal/workspace and stay tracked.
 !internal/workspace/
 reports
+!/.agent-teams/hufu-code-review/reports/
 ignores/
 dist/
 coverage.out

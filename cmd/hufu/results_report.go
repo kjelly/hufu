@@ -21,10 +21,6 @@ func reportDataFromSaved(saved *team.RunReport) *reportData {
 		AuditUnavailableReason: "live artifact verification is not part of this immutable historical snapshot",
 		CostUnavailableReason:  saved.CostUnavailableReason, Cost: saved.Cost, ModelProfiles: saved.ModelProfiles, ContextRouting: saved.ContextRouting, ControlDecisions: saved.ControlDecisions, DeprecatedMemory: saved.DeprecatedMemory,
 	}
-	data.ReviewScope = gatherRuntimeReviewScope(saved.Tasks)
-	if !reviewScopeBoundToRunResult(data.ReviewScope, saved.Result) {
-		data.ReviewScope = nil
-	}
 	if manifest := saved.Result.EvidenceManifest; manifest != nil {
 		data.EvidenceIdentity = manifest.ManifestHash
 	}
@@ -32,7 +28,7 @@ func reportDataFromSaved(saved *team.RunReport) *reportData {
 }
 
 func renderSavedRunReport(saved *team.RunReport) string {
-	return buildReportMD(reportDataFromSaved(saved), saved.Team, saved.Result.Response)
+	return utils.RedactSecrets(buildReportMD(reportDataFromSaved(saved), saved.Team, saved.Result.Response))
 }
 
 func presentRunReport(command *cobra.Command, options *resultsCLIOptions, deps resultsDeps, response resultsEnvelope) error {
@@ -56,7 +52,7 @@ func presentRunReport(command *cobra.Command, options *resultsCLIOptions, deps r
 		return resultsExit(1, errors.New("saved report does not match the selected result"))
 	}
 	response.Report = saved
-	response.ReportMarkdown = utils.RedactSecrets(renderSavedRunReport(saved))
+	response.ReportMarkdown = renderSavedRunReport(saved)
 	if options.exportPath != "" {
 		if err := exportRunReport(options.exportPath, response.ReportMarkdown); err != nil {
 			return resultsExit(2, err)

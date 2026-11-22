@@ -18,6 +18,19 @@ spec:
   max-retries: 1
   max-concurrent: 3
   workspace: workspace
+  execution-report:
+    sections:
+      - id: review-scope
+        title: Resolved Review Scope
+        source:
+          task: produce-workset
+          output: scope
+          require: passed-task-output-assertion
+        renderer:
+          runtime: golang
+          source: ./reports/review-scope
+          mode: trusted-static
+          timeout: 5
   goal-mode: outcome
   execution-profile: fresh-session
   # Return model-authored claims through a data-only response function. Runtime

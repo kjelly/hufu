@@ -148,6 +148,11 @@ func (c *Coordinator) finalizeRunPrepared(ctx context.Context, result *RunResult
 		result.Telemetry = &telemetry
 	}
 	if activeLifecycle {
+		// Prepare optional report content before starting the durability window.
+		sections := c.renderRunReportSections(ctx, result)
+		c.terminalLifecycleMu.Lock()
+		c.terminalReportSections = sections
+		c.terminalLifecycleMu.Unlock()
 		c.finishTerminalPreparation()
 		// Persistence receives a fresh full window; preparation time must not
 		// reduce the durability boundary's budget.
@@ -525,7 +530,11 @@ func (c *Coordinator) appendTerminalCandidate(ctx context.Context, candidate *Ru
 	snapshot, err := cloneRunResult(candidate)
 	if err == nil {
 		var payload []byte
-		payload, err = json.Marshal(terminalLifecyclePayload(c, snapshot))
+		terminal := terminalLifecyclePayload(c, snapshot)
+		c.terminalLifecycleMu.Lock()
+		terminal.ReportSections = c.terminalReportSections
+		c.terminalLifecycleMu.Unlock()
+		payload, err = json.Marshal(terminal)
 		if err == nil {
 			if c.eventStore == nil {
 				err = errors.New("canonical event store is unavailable")

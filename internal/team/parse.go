@@ -891,6 +891,10 @@ func parseTeamYMLWithAuthoring(teamDir string, vars map[string]string) (agent.Te
 	if yc.AutoReport {
 		cfg.AutoReport = true
 	}
+	if err := validateExecutionReportConfig(yc.ExecutionReport); err != nil {
+		return cfg, authoringMetadata, err
+	}
+	cfg.ExecutionReport = yc.ExecutionReport
 	if yc.AllowFreeTextResults {
 		cfg.AllowFreeTextResults = true
 	}

@@ -60,6 +60,13 @@ func BuildInventory(teamDir string, spec *team.EffectiveTeamSpec) (Inventory, er
 	if err := builder.addGoActions(spec.RuntimeSession()); err != nil {
 		return Inventory{}, err
 	}
+	for _, section := range spec.RuntimeSession().Config.ExecutionReport.Sections {
+		if section.Renderer.Runtime == "golang" {
+			if err := builder.addGoPackage(section.Renderer.Source); err != nil {
+				return Inventory{}, fmt.Errorf("inventory Go report renderer %q: %w", section.ID, err)
+			}
+		}
+	}
 	paths := make([]string, 0, len(builder.files))
 	for path := range builder.files {
 		paths = append(paths, path)
@@ -178,18 +185,25 @@ func (b *inventoryBuilder) addGoActions(session *team.TeamSession) error {
 		if !strings.EqualFold(strings.TrimSpace(config.Runtime), "golang") {
 			continue
 		}
-		program, err := golangruntime.Prepare(b.root, config.Source)
-		if err != nil {
+		if err := b.addGoPackage(config.Source); err != nil {
 			return fmt.Errorf("inventory Go action %q: %w", capability, err)
 		}
-		files, err := golangruntime.SourceFiles(program)
-		if err != nil {
-			return fmt.Errorf("inventory Go action %q: %w", capability, err)
-		}
-		for _, name := range files {
-			if err := b.addSource(filepath.Join(program.Source, name)); err != nil {
-				return fmt.Errorf("inventory Go action %q: %w", capability, err)
-			}
+	}
+	return nil
+}
+
+func (b *inventoryBuilder) addGoPackage(source string) error {
+	program, err := golangruntime.Prepare(b.root, source)
+	if err != nil {
+		return err
+	}
+	files, err := golangruntime.SourceFiles(program)
+	if err != nil {
+		return err
+	}
+	for _, name := range files {
+		if err := b.addSource(filepath.Join(program.Source, name)); err != nil {
+			return err
 		}
 	}
 	return nil

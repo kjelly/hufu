@@ -243,6 +243,8 @@ run outcome／metrics，以及事件中保存的成本、模型與 context routi
 不讀取可變 STM、任務 Markdown 或即時 workspace 診斷，不重新查驗外部 artifact；
 缺少的觀測資料不宣稱為已量測。這是執行當時的報告，不代表目前 artifact 仍存在。
 Markdown 由版本化結構快照渲染；未保存 Markdown 的舊版排版副本。
+Team 可以宣告[自訂報告區塊](../reference/execution-report.md)，將已驗證的輸出排成 Markdown。
+這些區塊的內容、來源識別及 renderer 雜湊會隨快照保存，讀取歷史報告時直接顯示當時的內容。
 
 本功能啟用前的 run 沒有報告快照時，會明確回報 unavailable；不會以最新 checkpoint
 或舊 `report.md` 補成歷史報告，也不會在查詢時寫入／遷移 DB。

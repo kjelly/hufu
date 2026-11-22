@@ -314,7 +314,8 @@ type TeamConfig struct {
 	MaxRetries               int
 	// AutoReport writes the execution report after every run for this team,
 	// even when the caller did not pass the global --report flag.
-	AutoReport bool
+	AutoReport      bool
+	ExecutionReport ExecutionReportConfig `yaml:"execution-report,omitempty" json:"execution_report,omitzero"`
 	// AllowFreeTextResults permits a narrowly scoped compatibility path for
 	// explicitly read-only workers that return a final textual report but do
 	// not support the submit_result tool protocol. It never applies to a task

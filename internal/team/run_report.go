@@ -39,6 +39,7 @@ type RunReport struct {
 	CostUnavailableReason string                             `json:"cost_unavailable_reason,omitempty"`
 	ModelProfiles         []modelprofile.TelemetryProjection `json:"model_profiles,omitempty"`
 	StructuredSteps       []StructuredStepMetadata           `json:"structured_steps,omitempty"`
+	Sections              []RunReportSection                 `json:"sections,omitempty"`
 	ContextRouting        ContextManifestSummary             `json:"context_routing"`
 	ControlDecisions      []ControlDecisionSummary           `json:"control_decisions,omitempty"`
 
@@ -114,9 +115,10 @@ func projectRunReport(events []RunEvent, tree *SessionTree, terminal RunEvent) (
 		return nil, err
 	}
 	var payload struct {
-		Team    string      `json:"team"`
-		Stats   *RunStats   `json:"stats"`
-		Metrics *RunMetrics `json:"metrics"`
+		Team     string             `json:"team"`
+		Stats    *RunStats          `json:"stats"`
+		Metrics  *RunMetrics        `json:"metrics"`
+		Sections []RunReportSection `json:"report_sections"`
 	}
 	if err := json.Unmarshal(terminal.Payload, &payload); err != nil {
 		return nil, err
@@ -135,10 +137,13 @@ func projectRunReport(events []RunEvent, tree *SessionTree, terminal RunEvent) (
 				report.StartedAt, _ = time.Parse(time.RFC3339Nano, event.Timestamp)
 			}
 			if report.Team == "" {
-				if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				var start struct {
+					Team string `json:"team"`
+				}
+				if err := json.Unmarshal(event.Payload, &start); err != nil {
 					return nil, err
 				}
-				report.Team = strings.ToLower(strings.TrimSpace(payload.Team))
+				report.Team = strings.ToLower(strings.TrimSpace(start.Team))
 			}
 		case string(EventUserMessageAdded), string(EventWorkflowCycleStarted):
 			if report.OriginalPrompt == "" {
@@ -162,6 +167,7 @@ func projectRunReport(events []RunEvent, tree *SessionTree, terminal RunEvent) (
 		return nil, errors.New("canonical run cannot be projected")
 	}
 	report.Result = scoped.RunResult
+	report.Sections = projectRunReportSections(reportSectionPins(current, terminal.RunID), payload.Sections)
 	report.HufuBuild = scoped.RunResult.HufuBuild
 	if manifest := report.Result.EvidenceManifest; manifest != nil {
 		sealed := *manifest

@@ -134,6 +134,11 @@ func TestRequestedReportsExportEachCurrentRunWithoutCombinedResponse(t *testing.
 	for _, name := range []string{"auto", "manual"} {
 		workspace := t.TempDir()
 		session := &team.TeamSession{Dir: workspace, Workspace: workspace, Config: agent.TeamConfig{Name: name, AutoReport: name == "auto"}}
+		session.Config.ExecutionReport.Sections = []agent.ReportSectionConfig{{
+			ID: "test-observation", Title: "Fixture Observation",
+			Source:   agent.ReportSectionSource{Task: "missing", Output: "observation", Require: "passed-task-output-assertion"},
+			Renderer: agent.ReportRendererConfig{Template: "{{.Output}}"},
+		}}
 		coordinator, err := team.NewCoordinator(session, "", "", nil, nil, team.RoleModels{}, 1, false, false, false, nil, nil, nil, false, "", false, false, nil, false, false)
 		if err != nil {
 			t.Fatal(err)
@@ -155,6 +160,10 @@ func TestRequestedReportsExportEachCurrentRunWithoutCombinedResponse(t *testing.
 	if _, err := os.Stat(filepath.Join(contexts["manual"].session.Workspace, "report.md")); !os.IsNotExist(err) {
 		t.Fatalf("auto-report exported manual team: %v", err)
 	}
+	autoExport, err := os.ReadFile(filepath.Join(contexts["auto"].session.Workspace, "report.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"auto", "manual"} {
 		opts.reportMode = true
 		generateRequestedReports(contexts, "COMBINED_RESPONSE_MUST_NOT_APPEAR")
@@ -165,6 +174,13 @@ func TestRequestedReportsExportEachCurrentRunWithoutCombinedResponse(t *testing.
 		own := contexts[name].coordinator.LastRunResult()
 		if !strings.Contains(string(data), own.RunID) || !strings.Contains(string(data), "# Execution Report — "+name) || strings.Contains(string(data), "COMBINED_RESPONSE_MUST_NOT_APPEAR") {
 			t.Fatalf("wrong team export: %s", data)
+		}
+		saved, _, err := executeResultsTest(t, resultsTestDeps(t), "report", "--workspace", contexts[name].session.Workspace,
+			"--team", name, "--run", own.RunID, "--output", "json")
+		if err != nil || saved.Report == nil || len(saved.Report.Sections) != 1 ||
+			saved.Report.Sections[0].UnavailableReason == "" || !strings.Contains(string(data), "## Fixture Observation") ||
+			saved.ReportMarkdown != string(data) || (name == "auto" && !bytes.Equal(autoExport, data)) {
+			t.Fatalf("report exports differ from saved section snapshot for %s: %v", name, err)
 		}
 		other := "auto"
 		if name == "auto" {

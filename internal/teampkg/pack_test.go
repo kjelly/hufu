@@ -127,6 +127,12 @@ action-providers:
     runtime: golang
     source: actions/transform
     mode: trusted-static
+execution-report:
+  sections:
+    - id: transform-summary
+      title: Transform Summary
+      source: {task: transform, output: summary, require: passed-task-output-assertion}
+      renderer: {runtime: golang, source: reports/summary, mode: trusted-static}
 `)
 	writeFixture(t, dir, "worker.md", "---\nname: worker\nrole: worker\nresult-contract:\n  schema: schemas/result.json\n  require-structured: true\n---\nDo the work.\n")
 	writeFixture(t, dir, "README.md", "# Portable team\n")
@@ -135,6 +141,7 @@ action-providers:
 	writeFixture(t, dir, "skills/cp201-portable-skill/references/nested.md", "nested\n")
 	writeFixture(t, dir, "actions/transform/main.go", "package main\nimport (\"context\"; \"io\")\nfunc Run(_ context.Context, _ io.Reader, _ io.Writer) error { return nil }\n")
 	writeFixture(t, dir, "actions/transform/main_test.go", "package main\n")
+	writeFixture(t, dir, "reports/summary/main.go", "package main\nimport (\"context\"; \"io\")\nfunc Run(_ context.Context, _ io.Reader, _ io.Writer) error { return nil }\n")
 	writeFixture(t, dir, "notes.txt", "not structurally owned\n")
 	output := filepath.Join(t.TempDir(), "team.hufu")
 	if _, err := Pack(PackOptions{TeamDir: dir, Version: "build-7", Output: output}); err != nil {
@@ -143,7 +150,7 @@ action-providers:
 	entries, _ := archiveEntries(t, output)
 	want := []string{
 		LockFilename, ManifestFilename, "README.md", "actions/transform/main.go",
-		"schemas/result.json", "skills/cp201-portable-skill/SKILL.md",
+		"reports/summary/main.go", "schemas/result.json", "skills/cp201-portable-skill/SKILL.md",
 		"skills/cp201-portable-skill/references/nested.md", "team.yaml", "worker.md",
 	}
 	got := make([]string, 0, len(entries))

@@ -129,6 +129,8 @@ type LifecycleEventPayload struct {
 	// TeamRevision hashes the team and agent definitions a run started with
 	// (teamDefinitionRevision). run_started carries it for telemetry.
 	TeamRevision                  string                       `json:"team_revision,omitempty"`
+	ReportSectionPins             []RunReportSection           `json:"report_section_pins,omitempty"`
+	ReportSections                []RunReportSection           `json:"report_sections,omitempty"`
 	Outcome                       RunOutcome                   `json:"outcome"`
 	GoalSatisfied                 bool                         `json:"goal_satisfied"`
 	GoalMode                      GoalMode                     `json:"goal_mode,omitempty"`
@@ -331,6 +333,7 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 	c.terminalLifecycleState = terminalLifecycleOpen
 	c.terminalLifecycleCandidate = nil
 	c.terminalLifecycleSnapshot = nil
+	c.terminalReportSections = nil
 	c.terminalLifecycleDone = make(chan struct{})
 	c.terminalLifecyclePrepareDone = make(chan struct{})
 	c.terminalLifecyclePrepared = false
@@ -354,6 +357,7 @@ func (c *Coordinator) beginInvocationExecutionRunWithLease(parent context.Contex
 	runStartedDurable := c.eventStore != nil
 	if err := c.emitEvent("run_started", "coordinator", "", LifecycleEventPayload{
 		Team: teamName, TeamRevision: teamRevision, HufuBuild: new(buildinfo.Current()),
+		ReportSectionPins: c.pinRunReportSections(),
 	}); err == nil && runStartedDurable {
 		c.clearSupersededPendingWrapUp(runID)
 	}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -484,60 +483,32 @@ func TestBuildReportMDIncludesCanonicalRunOutcome(t *testing.T) {
 	}
 }
 
-func TestBuildReportMDUsesRuntimeProducerScopeInsteadOfFinalResult(t *testing.T) {
+func TestBuildReportMDUsesSavedSections(t *testing.T) {
 	data := &reportData{
 		StartedAt: time.Now(),
-		Todos: []*team.TodoItem{{
-			ID: "producer", PlanTaskID: "produce-workset", Status: team.TaskDone,
-			TypedResult: &team.TaskResult{Source: "runtime", RuntimeOutputs: map[string]any{
-				"scope": map[string]any{
-					"requested": map[string]any{"kind": "last_n", "count": 10, "history": "first_parent", "head": "HEAD"},
-					"resolved": map[string]any{
-						"base": "base-sha", "head": "head-sha", "selected_commit_count": 10,
-						"available_commit_count": 12, "history_exhausted": false, "repository_shallow": false,
-					},
-					"satisfied": true, "requested_input_hash": "sha256:attested",
-				},
-			}},
+		ReportSource: &team.RunReport{Sections: []team.RunReportSection{
+			{ID: "stock", Title: "Inventory", Markdown: "| Item | Count |\n| --- | ---: |\n| bolts | 10 |"},
+			{ID: "supply", Title: "Supply", UnavailableReason: "verified task output unavailable"},
 		}},
 		RunResult: &team.RunResult{
-			RunID:         "run-review",
-			Outcome:       team.RunOutcomeCompleted,
-			GoalSatisfied: true,
+			RunID: "run-inventory", Outcome: team.RunOutcomeCompleted, GoalSatisfied: true,
 			RunInputs: &team.RunInputSnapshot{ID: "input-1", SnapshotHash: "sha256:snapshot", Inputs: []team.ResolvedRunInput{{
-				Name: "review.scope", CanonicalValue: json.RawMessage(`{"count":10,"head":"HEAD","history":"first_parent","kind":"last_n"}`),
-				ValueHash: "sha256:attested", Source: team.RunInputSourceResolver, ResolverID: "review-scope-v1", ResolverVersion: "1",
+				Name: "stock.location", CanonicalValue: []byte(`"north"`),
+				ValueHash: "sha256:attested", Source: team.RunInputSourceResolver, ResolverID: "stock-location", ResolverVersion: "1",
 			}}},
 			InputBoundAssertions: []team.InputBoundAssertionSummary{{
-				Criterion: "scope-binding", SourceTask: "produce-workset", Output: "scope", Assertion: "/requested equals_input `review.scope`", State: "passed",
+				Criterion: "location-binding", SourceTask: "collect-stock", Output: "stock", Assertion: "/location equals_input", State: "passed",
 			}},
 		},
 	}
-	data.ReviewScope = gatherRuntimeReviewScope(data.Todos)
-	report := buildReportMD(data, "hufu-code-review", "# Review of the Last 99 Commits")
+	report := buildReportMD(data, "warehouse", "# Original response")
 	for _, want := range []string{
-		"## Resolved Run Inputs", "review.scope", "review-scope-v1@1", "## Input-bound Assertions", "scope-binding",
-		"## Resolved Review Scope", "`last_n` ending at `HEAD` (count: 10)", "`base-sha..head-sha`",
-		"Selected commits:** 10", "Scope source:** `runtime_output`",
-		"Scope assertion:** `core_bound`", "`sha256:attested`", "Model-authored heading names 99 commits",
+		"## Resolved Run Inputs", "stock.location", "stock-location@1", "## Input-bound Assertions", "location-binding",
+		"## Inventory", "| bolts | 10 |", "## Supply", "Section unavailable — verified task output unavailable", "# Original response",
 	} {
 		if !strings.Contains(report, want) {
-			t.Fatalf("report missing runtime scope %q:\n%s", want, report)
+			t.Fatalf("report missing %q:\n%s", want, report)
 		}
-	}
-	if strings.Contains(report, "Configured review scope:** last 99") {
-		t.Fatalf("report inferred scope from model-authored final result:\n%s", report)
-	}
-}
-
-func TestGatherRuntimeReviewScopeRejectsModelOwnedFacts(t *testing.T) {
-	scope := map[string]any{
-		"requested": map[string]any{"kind": "last_n", "count": 10, "history": "first_parent", "head": "HEAD"},
-		"resolved":  map[string]any{"base": "a", "head": "b", "selected_commit_count": 10, "available_commit_count": 10},
-		"satisfied": true, "input_digest": "sha256:digest",
-	}
-	if got := gatherRuntimeReviewScope([]*team.TodoItem{{TypedResult: &team.TaskResult{Source: "submitted", Facts: map[string]any{"scope": scope}, RuntimeOutputs: map[string]any{"scope": scope}}}}); got != nil {
-		t.Fatalf("model-owned scope entered report: %#v", got)
 	}
 }
 

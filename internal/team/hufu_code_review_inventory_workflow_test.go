@@ -212,7 +212,8 @@ func runOfflineReviewReport(t *testing.T, blocker string, primaryCount int) {
 		return
 	}
 	mustDispatch(reportBatch...)
-	if acceptance, err := c.runTeamAcceptance(ctx); err != nil || !acceptance.Passed {
+	acceptance, err := c.runTeamAcceptance(ctx)
+	if err != nil || !acceptance.Passed {
 		t.Fatalf("production audit did not satisfy blocking acceptance: %+v, %v", acceptance, err)
 	}
 	report := inventoryWorkflowOccurrences(c, "synthesize-review")[0]
@@ -227,6 +228,17 @@ func runOfflineReviewReport(t *testing.T, blocker string, primaryCount int) {
 		if !slices.Contains(report.EvidenceFrom, critic.ID) {
 			t.Fatalf("report is missing critique %s", critic.ID)
 		}
+	}
+	final := c.finalizeRunPrepared(ctx, &RunResult{Outcome: RunOutcomeCompleted, GoalSatisfied: true, Response: report.TypedResult.Summary}, acceptance)
+	if final.Outcome != RunOutcomeCompleted || !c.TerminalLifecycleConfirmed() {
+		t.Fatalf("review finalization failed: %+v", final)
+	}
+	saved := loadTerminalReport(t, c)
+	if len(saved.Sections) != 1 || saved.Sections[0].UnavailableReason != "" ||
+		!strings.Contains(saved.Sections[0].Markdown, "last 1 commit ending at `HEAD`") ||
+		!strings.Contains(saved.Sections[0].Markdown, "`base..head`") ||
+		saved.Sections[0].Source.Task != "produce-workset" {
+		t.Fatalf("review scope section: %+v", saved.Sections)
 	}
 }
 

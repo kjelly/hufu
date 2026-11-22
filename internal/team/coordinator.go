@@ -909,6 +909,7 @@ type Coordinator struct {
 	terminalLifecycleState        terminalLifecycleState
 	terminalLifecycleCandidate    *RunResult
 	terminalLifecycleSnapshot     *RunResult
+	terminalReportSections        []RunReportSection
 	terminalLifecycleDone         chan struct{}
 	terminalLifecyclePrepareDone  chan struct{}
 	terminalLifecyclePrepared     bool
