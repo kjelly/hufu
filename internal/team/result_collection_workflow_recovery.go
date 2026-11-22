@@ -61,10 +61,10 @@ func hasCommittedWorkflowCollectionRepair(item *TodoItem, branchID string) bool 
 	})
 }
 
-// resultRepairLocalCommitOnly permits settling a prepared producer after a
-// downstream verifier ran before its source result was accepted. This does
-// not grant workflow reopening or permission to work on the failed verifier.
-func resultRepairLocalCommitOnly(session *SessionData, taskID string) (bool, error) {
+// resultRepairLocalCommitOnly permits settling a prepared producer when its
+// downstream verifier failed or was blocked before the source was accepted.
+// This grants authority only to commit the saved result.
+func resultRepairLocalCommitOnly(session *SessionData, taskID string, allowStranded bool) (bool, error) {
 	_, workflowErr := resultRepairWorkflowPhase(session, taskID)
 	if workflowErr == nil || session == nil || session.WorkflowState != PhaseFailed {
 		return false, workflowErr
@@ -77,16 +77,22 @@ func resultRepairLocalCommitOnly(session *SessionData, taskID string) (bool, err
 	if cp.State != ResultCollectionPrepared || item.ExecutionReceipt.RepairProvenance == nil || item.ExecutionReceipt.RepairProvenance.FailureReason != RepairFailureCommit {
 		return false, workflowErr
 	}
-	status := session.PhaseResults[item.Phase].Status
+	result := session.PhaseResults[item.Phase]
+	status := result.Status
 	if status != PhaseStatusCancelled && status != PhaseStatusBlocked {
 		return false, workflowErr
 	}
+	strandedPhase := allowStranded && collectionFailuresMatchTasks(result, item.Phase, []*TodoItem{item})
 	failedConsumer := false
 	for _, peer := range session.Tasks {
 		if peer == nil || peer.ID == taskID || !isUnresolvedTaskStatus(peer.Status) {
 			continue
 		}
-		if !failedReadOnlyCollectionVerifier(peer, item) {
+		if !readOnlyCollectionVerifier(peer, item) {
+			return false, workflowErr
+		}
+		failed := peer.Status == TaskError && peer.FailureEvent != nil && peer.FailureEvent.FailureClass == FailureVerify
+		if !failed && (!strandedPhase || !strandedCollectionVerifier(peer, item)) {
 			return false, workflowErr
 		}
 		failedConsumer = true
@@ -97,10 +103,37 @@ func resultRepairLocalCommitOnly(session *SessionData, taskID string) (bool, err
 	return true, nil
 }
 
-func failedReadOnlyCollectionVerifier(verifier, producer *TodoItem) bool {
-	return verifier != nil && producer != nil && verifier.Status == TaskError && verifier.Phase == producer.Phase &&
-		verifier.Action != nil && verifier.FailureEvent != nil && verifier.FailureEvent.FailureClass == FailureVerify &&
+func readOnlyCollectionVerifier(verifier, producer *TodoItem) bool {
+	return verifier != nil && producer != nil && verifier.Phase == producer.Phase && verifier.Action != nil &&
 		metadataReadOnlyTask(verifier.SideEffect, verifier.Execution) && slices.Contains(verifier.DependsOn, producer.ID)
+}
+
+// Historical scheduler blocks have no typed dependency cause. Match the
+// fingerprint of the runtime-generated detail against the frozen dependency
+// and producer failure, and require that the verifier never dispatched.
+func strandedCollectionVerifier(verifier, producer *TodoItem) bool {
+	failure := verifier.FailureEvent
+	if verifier.Status != TaskBlocked || !collectionUndispatched(verifier) || verifier.CheckpointPause ||
+		failure == nil || failure.TaskID != verifier.ID || producer.FailureEvent == nil || len(verifier.FailureFingerprints) != 1 {
+		return false
+	}
+	fingerprint := verifier.FailureFingerprints[0]
+	if fingerprint.Digest == "" || fingerprint.Digest != failure.Fingerprint || fingerprint.Occurrences != 1 {
+		return false
+	}
+	dep := strandedDependency{taskID: producer.ID, status: producer.Status, verify: producer.VerifyResult, fail: producer.FailureEvent}
+	full, class := formatStrandedDependencies([]strandedDependency{dep})
+	if matchesStrandedFailureFingerprint(verifier, fingerprint, full, class) {
+		return true
+	}
+	// Resuming an interrupted task records the producer identity and status only.
+	header := strandedDependencyPrefix + strandedDependencyHeader(producer.ID, producer.Status)
+	return matchesStrandedFailureFingerprint(verifier, fingerprint, header, producer.FailureEvent.FailureClass)
+}
+
+func matchesStrandedFailureFingerprint(verifier *TodoItem, actual FailureFingerprint, detail string, class TaskFailureClass) bool {
+	expected := NewFailureFingerprint(actual.CriterionID, verifier.Agent, stableOperation(verifier), class, failureDetailWithoutCoordinatorFields(detail))
+	return verifier.FailureEvent.FailureClass == class && SameFailureFingerprint(actual, expected)
 }
 
 func isWorkflowCollectionRepairGrant(grant ResultRepairGrant, cp *ResultCollectionCheckpoint) bool {
@@ -181,7 +214,7 @@ func (c *Coordinator) admitFailedWorkflowResultRepair(ctx context.Context) error
 	if id == "" {
 		return fmt.Errorf("workflow is failed; use an eligible explicit result-only repair or targeted reconciliation")
 	}
-	_, err := resultRepairLocalCommitOnly(c.collectionWorkflowSnapshot(), id)
+	_, err := resultRepairLocalCommitOnly(c.collectionWorkflowSnapshot(), id, true)
 	return err
 }
 

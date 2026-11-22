@@ -94,9 +94,9 @@ func (c *Coordinator) acceptedReferenceClaims(ctx context.Context, cp *ResultCol
 		return nil, fmt.Errorf("accepted baseline claims are not an object")
 	}
 	payload := claims["structured_payload"]
-	var paths map[string]string
+	var paths worksetPathSelection
 	if len(proof.PathPointers) > 0 {
-		paths, err = c.verifiedWorksetPathChoices(ctx, cp.TaskID)
+		paths, err = c.verifiedWorksetPathSelection(ctx, cp.TaskID, compiled.worksetPaths)
 		if err != nil {
 			return nil, err
 		}
@@ -257,11 +257,11 @@ func (c *Coordinator) assessAcceptedReferenceSelection(ctx context.Context, a *R
 		a.ReferenceChoices = append(a.ReferenceChoices, AcceptedReferenceChoice{Key: key, Artifact: ref.ID, Path: ref.Path})
 	}
 	if proof := acceptedRepairProof(a.Checkpoint); proof != nil && len(proof.PathPointers) > 0 {
-		paths, err := c.verifiedWorksetPathChoices(ctx, a.TaskID)
+		paths, err := c.verifiedWorksetPathSelection(ctx, a.TaskID, compiled.worksetPaths)
 		if !check("workset_paths", err) {
 			return
 		}
-		for key, path := range paths {
+		for key, path := range paths.paths {
 			a.ReferenceChoices = append(a.ReferenceChoices, AcceptedReferenceChoice{Key: key, Path: path, Kind: "workset_path"})
 		}
 	}

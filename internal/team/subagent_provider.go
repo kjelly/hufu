@@ -59,7 +59,7 @@ type AttemptRequest struct {
 	// Hufu-owned lookup rechecks native receipts at proposal canonicalization,
 	// just like local submit_result. It never crosses the provider JSON boundary.
 	resultRuntimeInputs func() (map[string]any, error)
-	resultWorksetPaths  func() (map[string]string, error)
+	resultWorksetPaths  func() (worksetPathSelection, error)
 	resultProjectClaims func(SubmitResultInput) (SubmitResultInput, error)
 	// Provider and ProviderBinding remain adapter-only compatibility fields for
 	// legacy SubagentProvider implementations. ExecutionRegistry adapters fill

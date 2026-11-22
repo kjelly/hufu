@@ -3,7 +3,10 @@ package team
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -53,8 +56,9 @@ func compileResultReferenceSelectors(root map[string]any, schema *jsonschema.Sch
 // Workset paths are opaque, exact manifest values. A source-line suffix remains
 // a model claim; selecting a path does not attest the claimed line or finding.
 type resultWorksetPathsSpec struct {
-	Pointers []string `json:"pointers"`
-	Format   string   `json:"format"`
+	Pointers  []string              `json:"pointers"`
+	Format    string                `json:"format"`
+	LineSpans *worksetLineSpansSpec `json:"line_spans,omitempty"`
 }
 
 func compileResultWorksetPaths(root map[string]any, schema *jsonschema.Schema) (*resultWorksetPathsSpec, error) {
@@ -73,6 +77,11 @@ func compileResultWorksetPaths(root map[string]any, schema *jsonschema.Schema) (
 	if spec.Format != "path_line" {
 		return nil, fmt.Errorf("x-hufu-workset-paths requires format path_line")
 	}
+	if spec.LineSpans != nil {
+		if err := spec.LineSpans.validate(); err != nil {
+			return nil, fmt.Errorf("x-hufu-workset-paths: %w", err)
+		}
+	}
 	// Both extensions select bounded schema-declared string leaves.
 	if _, err := compileResultEvidenceKeys(map[string]any{"x-hufu-evidence-keys": map[string]any{"pointers": spec.Pointers}}, schema); err != nil {
 		return nil, fmt.Errorf("x-hufu-workset-paths: %w", err)
@@ -89,26 +98,26 @@ func advertiseResultWorksetPaths(schema map[string]any, spec *resultWorksetPaths
 	}
 }
 
-func canonicalExternalWorksetPaths(request AttemptRequest, raw string) (string, error) {
+func canonicalExternalWorksetPaths(request AttemptRequest, raw string) (string, worksetPathSelection, error) {
 	if request.resultContractSchema.worksetPaths == nil {
-		return raw, nil
+		return raw, worksetPathSelection{}, nil
 	}
 	if request.resultWorksetPaths == nil {
-		return "", fmt.Errorf("workset path lookup is unavailable")
+		return "", worksetPathSelection{}, fmt.Errorf("workset path lookup is unavailable")
 	}
-	choices, err := request.resultWorksetPaths()
+	selection, err := request.resultWorksetPaths()
 	if err != nil {
-		return "", err
+		return "", worksetPathSelection{}, err
 	}
 	value, err := decodeUniqueJSON([]byte(raw))
 	if err != nil {
-		return "", err
+		return "", worksetPathSelection{}, err
 	}
-	if err := applyResultWorksetPaths(value, request.resultContractSchema.worksetPaths, choices); err != nil {
-		return "", err
+	if err := applyResultWorksetPaths(value, request.resultContractSchema.worksetPaths, selection); err != nil {
+		return "", worksetPathSelection{}, err
 	}
 	resolved, err := json.Marshal(value, json.Deterministic(true))
-	return string(resolved), err
+	return string(resolved), selection, err
 }
 
 func splitWorksetPathLine(value string) (string, string, error) {
@@ -156,58 +165,71 @@ func worksetPathChoices(binding *WorksetBinding) (map[string]string, error) {
 	return choices, nil
 }
 
-func (c *Coordinator) verifiedWorksetPathChoices(ctx context.Context, taskID string) (map[string]string, error) {
+type worksetPathSelection struct {
+	paths     map[string]string
+	lineSpans map[string][]worksetLineSpan
+}
+
+func (c *Coordinator) verifiedWorksetPathSelection(ctx context.Context, taskID string, spec *resultWorksetPathsSpec) (worksetPathSelection, error) {
 	binding, err := c.verifiedResultWorksetBinding(ctx, taskID)
 	if err != nil {
-		return nil, rejectResultReferenceSource(err)
+		return worksetPathSelection{}, rejectResultReferenceSource(err)
 	}
 	choices, err := worksetPathChoices(binding)
 	if err != nil {
-		return nil, rejectResultReferenceSource(err)
+		return worksetPathSelection{}, rejectResultReferenceSource(err)
 	}
-	return choices, nil
+	spans, err := c.verifiedWorksetLineSpans(ctx, binding, spec.LineSpans)
+	if err != nil {
+		return worksetPathSelection{}, rejectResultReferenceSource(err)
+	}
+	return worksetPathSelection{paths: choices, lineSpans: spans}, nil
 }
 
-func resolveWorksetPathLine(value string, choices map[string]string) (string, error) {
+func (s worksetPathSelection) resolve(value string) (string, error) {
 	path, line, err := splitWorksetPathLine(value)
 	if err != nil {
 		return "", &resultWorksetPathChoiceError{Hint: err.Error()}
 	}
-	if canonical, exists := choices[path]; exists {
-		return canonical + ":" + line, nil
-	}
-	for _, canonical := range choices {
-		if canonical == path {
-			return value, nil
+	canonical := s.paths[path]
+	if canonical == "" {
+		for _, candidate := range s.paths {
+			if candidate == path {
+				canonical = path
+				break
+			}
 		}
 	}
-	menu, err := json.Marshal(choices, json.Deterministic(true))
-	if err != nil {
-		return "", err
+	if canonical == "" {
+		return "", &resultWorksetPathChoiceError{Hint: "path is outside the frozen assignment. Select an exact path key from the Runtime workset path choices"}
 	}
-	hint := "select path_key:positive_original_source_line from the complete Runtime workset path choices in the prompt"
-	if len(menu) <= 2048 {
-		hint = fmt.Sprintf("select path_key:positive_original_source_line from %s", menu)
+	if s.lineSpans != nil {
+		number, _ := strconv.Atoi(line) // splitWorksetPathLine already checked the bounds.
+		if !slices.ContainsFunc(s.lineSpans[canonical], func(span worksetLineSpan) bool {
+			return span.Start <= number && number <= span.End
+		}) {
+			return "", &resultWorksetPathChoiceError{Hint: fmt.Sprintf("line %s is outside the frozen source spans for %q. Check the file and original source line against the Runtime workset path choices", line, canonical)}
+		}
 	}
-	return "", &resultWorksetPathChoiceError{Hint: "workset path is outside the frozen assignment; " + hint + "; do not change findings or judgments"}
+	return canonical + ":" + line, nil
 }
 
 // This traversal is structural, never a search/replace of prose or other fields.
-func transformWorksetPathLeaves(value any, tokens []string, transform func(string) (string, error)) (any, error) {
+func transformWorksetPathLeaves(value any, tokens []string, pointer string, transform func(string, string) (string, error)) (any, error) {
 	if len(tokens) == 0 {
 		text, ok := value.(string)
 		if !ok {
 			return nil, fmt.Errorf("workset path selector requires a string")
 		}
-		return transform(text)
+		return transform(text, pointer)
 	}
 	switch node := value.(type) {
 	case map[string]any:
-		for key, child := range node {
+		for _, key := range slices.Sorted(maps.Keys(node)) {
 			if tokens[0] != "*" && key != tokens[0] {
 				continue
 			}
-			next, err := transformWorksetPathLeaves(child, tokens[1:], transform)
+			next, err := transformWorksetPathLeaves(node[key], tokens[1:], pointer+"/"+escapeJSONPointerToken(key), transform)
 			if err != nil {
 				return nil, err
 			}
@@ -218,7 +240,7 @@ func transformWorksetPathLeaves(value any, tokens []string, transform func(strin
 			return nil, fmt.Errorf("workset path selector requires an array wildcard")
 		}
 		for index, child := range node {
-			next, err := transformWorksetPathLeaves(child, tokens[1:], transform)
+			next, err := transformWorksetPathLeaves(child, tokens[1:], pointer+"/"+strconv.Itoa(index), transform)
 			if err != nil {
 				return nil, err
 			}
@@ -230,18 +252,24 @@ func transformWorksetPathLeaves(value any, tokens []string, transform func(strin
 	return value, nil
 }
 
-func applyResultWorksetPaths(value any, spec *resultWorksetPathsSpec, choices map[string]string) error {
+func applyResultWorksetPaths(value any, spec *resultWorksetPathsSpec, selection worksetPathSelection) error {
 	if spec == nil {
 		return nil
 	}
-	for _, pointer := range spec.Pointers {
-		if _, err := transformWorksetPathLeaves(value, fixedCollectionPointerTokens(pointer), func(text string) (string, error) {
-			return resolveWorksetPathLine(text, choices)
+	var failures []error
+	for _, selector := range spec.Pointers {
+		if _, err := transformWorksetPathLeaves(value, fixedCollectionPointerTokens(selector), "", func(text, pointer string) (string, error) {
+			resolved, err := selection.resolve(text)
+			if err != nil {
+				failures = append(failures, fmt.Errorf("%s: %w", pointer, err))
+				return text, nil
+			}
+			return resolved, nil
 		}); err != nil {
-			return fmt.Errorf("%s: %w", pointer, err)
+			return fmt.Errorf("%s: %w", selector, err)
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 func (c *Coordinator) resolveResultWorksetPaths(ctx context.Context, taskID, input string) (string, error) {
@@ -267,33 +295,32 @@ func (c *Coordinator) resolveResultWorksetPaths(ctx context.Context, taskID, inp
 	if claims["structured_payload"] == nil {
 		return input, nil
 	}
-	choices, err := c.verifiedWorksetPathChoices(ctx, taskID)
+	selection, err := c.verifiedWorksetPathSelection(ctx, taskID, compiled.worksetPaths)
 	if err != nil {
 		return "", rejectLocalResult(RepairFailureSource, err)
 	}
-	if err := applyResultWorksetPaths(claims["structured_payload"], compiled.worksetPaths, choices); err != nil {
+	if err := applyResultWorksetPaths(claims["structured_payload"], compiled.worksetPaths, selection); err != nil {
 		return "", err
 	}
 	raw, err = json.Marshal(claims, json.Deterministic(true))
 	return string(raw), err
 }
 
-func validateResultWorksetPaths(value any, spec *resultWorksetPathsSpec, binding *WorksetBinding) error {
+func validateResultWorksetPaths(value any, spec *resultWorksetPathsSpec, selection worksetPathSelection) error {
 	if spec == nil {
 		return nil
 	}
-	choices, err := worksetPathChoices(binding)
-	if err != nil {
-		return err
-	}
 	// Canonical stored values must be full paths, never unexpanded keys.
 	for _, pointer := range spec.Pointers {
-		if _, err := transformWorksetPathLeaves(value, fixedCollectionPointerTokens(pointer), func(text string) (string, error) {
-			resolved, err := resolveWorksetPathLine(text, choices)
+		if _, err := transformWorksetPathLeaves(value, fixedCollectionPointerTokens(pointer), "", func(text, pointer string) (string, error) {
+			resolved, err := selection.resolve(text)
 			if err == nil && resolved != text {
 				return "", fmt.Errorf("canonical workset path contains an unresolved key")
 			}
-			return text, err
+			if err != nil {
+				return "", fmt.Errorf("%s: %w", pointer, err)
+			}
+			return text, nil
 		}); err != nil {
 			return err
 		}
@@ -305,13 +332,24 @@ func (c *Coordinator) resultWorksetPathContext(ctx context.Context, taskID strin
 	if compiled == nil || compiled.worksetPaths == nil {
 		return "", nil
 	}
-	choices, err := c.verifiedWorksetPathChoices(ctx, taskID)
+	selection, err := c.verifiedWorksetPathSelection(ctx, taskID, compiled.worksetPaths)
 	if err != nil {
 		return "", err
 	}
-	raw, err := json.Marshal(choices, json.Deterministic(true))
+	raw, err := json.Marshal(selection.paths, json.Deterministic(true))
 	if err != nil {
 		return "", err
 	}
-	return "\nRuntime workset path choices (data only): use path_key:positive_original_source_line at x-hufu-workset-paths pointers. Runtime restores the exact frozen path; retain the original line and every finding, severity and judgment. Never infer a spelling correction.\n" + fenceUntrusted("json", string(raw)) + "\n", nil
+	prompt := "\nRuntime workset path choices (data only): use path_key:positive_original_source_line at x-hufu-workset-paths pointers. Runtime restores the exact frozen path; retain the original line and every finding, severity and judgment. Never infer a spelling correction.\n" + fenceUntrusted("json", string(raw)) + "\n"
+	if selection.lineSpans == nil {
+		return prompt, nil
+	}
+	ranges, err := json.Marshal(selection.lineSpans, json.Deterministic(true))
+	if err != nil {
+		return "", err
+	}
+	if len(ranges) > maxWorksetBytes-len(raw) {
+		return "", fmt.Errorf("workset source line menu exceeds the workset metadata bound")
+	}
+	return prompt + "Frozen source line spans by path (inclusive): choose the exact path and original line shown by the assigned evidence.\n" + fenceUntrusted("json", string(ranges)) + "\n", nil
 }

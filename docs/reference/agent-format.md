@@ -620,9 +620,13 @@ Schema 可選用下列通用 runtime 擴充（都包含在 schema hash 中）：
   `path_key:line`，runtime 在一般驗證及雜湊前還原精確路徑；完整路徑必須逐字
   符合該 workset。字串以外的欄位與其他文字不會改寫，也不做模糊比對。
   原生與 external 提交使用相同來源檢查，持久化資料只保留完整路徑，replay
-  重驗原本的綁定。行號是否在檔案範圍內、是否支持 finding，仍由 team 的
-  snapshot／語意驗證負責；此選擇不證明 finding 成立。選單遵循 workset 的
-  中繼資料上限並接受既有上下文 admission；診斷過長時引用完整選單而不截斷選項。
+  重驗原本的綁定。可加上 `"line_spans":{"artifact_kind":"source_inventory"}`
+  啟用原始行號範圍檢查，並用選用的 `when_binding` 鍵值組限定適用的 frozen
+  workset 項目。runtime 從指派的 inputs 讀取唯一符合 kind 的驗證產物。
+  JSON 的 `sources` 陣列須為每個指派路徑提供一筆 `path` 與 `available_spans`。
+  每段用 `start_line` 和 `end_line` 宣告含首尾的原始行號，空陣列代表無可引用的行。
+  提交與恢復共用此範圍，恢復只能改選涵蓋原行號的指派路徑。引用是否支持
+  finding 仍由 team 驗證。選單遵循 workset 中繼資料上限及既有上下文 admission。
 - `x-hufu-final-report`：字串形式的 Go text/template。`finish` 直接從唯一
   已完成的報告 task 的 validated payload 產生最終回覆，保留其判定與限制，
   取代 coordinator 的自由摘要。無報告或多份報告不明確時 fail closed；

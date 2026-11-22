@@ -613,8 +613,7 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 		}
 		return nil, validateResultEnvelope(request.resultContractSchema, &TaskResult{Status: status})
 	}
-	var pathErr error
-	raw, pathErr = canonicalExternalWorksetPaths(request, raw)
+	raw, pathSelection, pathErr := canonicalExternalWorksetPaths(request, raw)
 	if pathErr != nil {
 		return nil, pathErr
 	}
@@ -683,7 +682,7 @@ func canonicalExternalStructuredPayload(request AttemptRequest, proposal *Worker
 	if err := validateResultWorksetInputs(value, request.resultContractSchema.worksetInputs, request.Task.WorksetBinding); err != nil {
 		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
 	}
-	if err := validateResultWorksetPaths(value, request.resultContractSchema.worksetPaths, request.Task.WorksetBinding); err != nil {
+	if err := validateResultWorksetPaths(value, request.resultContractSchema.worksetPaths, pathSelection); err != nil {
 		return nil, fmt.Errorf("%s: %w", structuredPayloadInvalidCode, err)
 	}
 	if err := validateResultEvidenceInputs(value, request.resultContractSchema.evidenceInputs, request.Task.EvidenceFrom, request.resultEvidenceInputs); err != nil {

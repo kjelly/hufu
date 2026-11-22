@@ -737,6 +737,12 @@ type strandedDependency struct {
 	fail   *FailureEventPayload
 }
 
+const strandedDependencyPrefix = "blocked by failed dependency: "
+
+func strandedDependencyHeader(taskID string, status TaskStatus) string {
+	return fmt.Sprintf("producer_task_id=%s producer_status=%s", taskID, status)
+}
+
 // strandedDependencyDetail produces stable, bounded producer evidence for a
 // dependent that cannot launch. The downstream failure event stores this text
 // as its summary, preserving causality through checkpoints and event replay
@@ -772,10 +778,14 @@ func (s *dagScheduler) strandedDependencyDetail(idx int) (string, TaskFailureCla
 		return "dependency did not complete successfully", FailureExecution
 	}
 	sort.Slice(deps, func(i, j int) bool { return deps[i].taskID < deps[j].taskID })
+	return formatStrandedDependencies(deps)
+}
+
+func formatStrandedDependencies(deps []strandedDependency) (string, TaskFailureClass) {
 	parts := make([]string, 0, len(deps))
 	class := FailureExecution
 	for _, dep := range deps {
-		part := fmt.Sprintf("producer_task_id=%s producer_status=%s", dep.taskID, dep.status)
+		part := strandedDependencyHeader(dep.taskID, dep.status)
 		if dep.verify != nil {
 			class = FailureVerify
 			part += fmt.Sprintf(" verifier_command=%q verifier_exit_code=%d", utils.TruncateString(dep.verify.Command, 200), dep.verify.ExitCode)
@@ -792,7 +802,7 @@ func (s *dagScheduler) strandedDependencyDetail(idx int) (string, TaskFailureCla
 		}
 		parts = append(parts, part)
 	}
-	return "blocked by failed dependency: " + strings.Join(parts, "; "), class
+	return strandedDependencyPrefix + strings.Join(parts, "; "), class
 }
 
 func (s *dagScheduler) taskDesc(i int) string {

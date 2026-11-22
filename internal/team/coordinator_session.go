@@ -1003,7 +1003,7 @@ func (c *Coordinator) checkInterruptedDependencies(item *TodoItem) error {
 		if producer != nil {
 			status = producer.Status
 		}
-		detail := fmt.Sprintf("blocked by failed dependency: producer_task_id=%s producer_status=%s", id, status)
+		detail := strandedDependencyPrefix + strandedDependencyHeader(id, status)
 		if producer == nil || isTerminalTaskStatus(status) {
 			class := FailureExecution
 			if producer != nil && producer.FailureEvent != nil && producer.FailureEvent.FailureClass != "" {

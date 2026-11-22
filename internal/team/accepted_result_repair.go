@@ -289,12 +289,12 @@ func (c *Coordinator) assessAcceptedResultRepair(ctx context.Context, item *Todo
 	}
 	var pathPointers []string
 	if compiled.worksetPaths != nil {
-		choices, err := c.verifiedWorksetPathChoices(ctx, cp.TaskID)
+		paths, err := c.verifiedWorksetPathSelection(ctx, cp.TaskID, compiled.worksetPaths)
 		if err != nil {
 			return nil, err
 		}
 		for _, selector := range compiled.worksetPaths.Pointers {
-			if err := invalidAcceptedWorksetPaths(value, fixedCollectionPointerTokens(selector), "", choices, &pathPointers); err != nil {
+			if err := invalidAcceptedWorksetPaths(value, fixedCollectionPointerTokens(selector), paths, &pathPointers); err != nil {
 				return nil, err
 			}
 		}

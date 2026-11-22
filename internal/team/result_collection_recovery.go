@@ -15,12 +15,13 @@ import (
 type ResultCollectionRecoveryDisposition string
 
 const (
-	RecoveryCommitLocal             ResultCollectionRecoveryDisposition = "commit_local"
-	RecoveryRepairClaims            ResultCollectionRecoveryDisposition = "repair_claims"
-	RecoveryResumeCollection        ResultCollectionRecoveryDisposition = "resume_collection"
-	RecoveryBlocked                 ResultCollectionRecoveryDisposition = "blocked"
-	RecoverySelectReferences        ResultCollectionRecoveryDisposition = "select_references"
-	resultRecoveryValidatorRevision                                     = 17
+	RecoveryCommitLocal                    ResultCollectionRecoveryDisposition = "commit_local"
+	RecoveryRepairClaims                   ResultCollectionRecoveryDisposition = "repair_claims"
+	RecoveryResumeCollection               ResultCollectionRecoveryDisposition = "resume_collection"
+	RecoveryBlocked                        ResultCollectionRecoveryDisposition = "blocked"
+	RecoverySelectReferences               ResultCollectionRecoveryDisposition = "select_references"
+	resultRecoveryStrandedVerifierRevision                                     = 18
+	resultRecoveryValidatorRevision                                            = resultRecoveryStrandedVerifierRevision
 )
 
 type ResultCollectionRecoveryCheck struct {
@@ -206,7 +207,7 @@ func (c *Coordinator) AssessResultCollectionRecovery(ctx context.Context, taskID
 		return finish()
 	}
 	workflow := c.collectionWorkflowSnapshot()
-	localCommitOnly, workflowErr := resultRepairLocalCommitOnly(workflow, taskID)
+	localCommitOnly, workflowErr := resultRepairLocalCommitOnly(workflow, taskID, true)
 	if !check("workflow_recovery", workflowErr) {
 		return finish()
 	}

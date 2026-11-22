@@ -10,12 +10,20 @@ import (
 )
 
 func TestResultCollectionWorkflowRecoveryCommitsPreparedResultWithFailedConsumer(t *testing.T) {
-	for _, dependency := range []bool{true, false} {
-		name := "unrelated_failure"
-		if dependency {
-			name = "dependent_verifier"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		dependency bool
+		stranded   bool
+		dag        bool
+		unrelated  bool
+	}{
+		{name: "dependent_verifier", dependency: true},
+		{name: "unrelated_failure"},
+		{name: "stranded_verifier", dependency: true, stranded: true},
+		{name: "stranded_dag_verifier", dependency: true, stranded: true, dag: true},
+		{name: "unrelated_block", dependency: true, stranded: true, unrelated: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			c, producer, workCtx, receipt := resultCollectionTaskFixture(t, "http://127.0.0.1:1/v1", false, func(spec *TodoSpec) {
 				spec.ContractID, spec.Phase, spec.SideEffect = "report", PhaseVerify, SideEffectNone
 			}, func(c *Coordinator) {
@@ -52,7 +60,7 @@ func TestResultCollectionWorkflowRecoveryCommitsPreparedResultWithFailedConsumer
 			c.PersistFailureWithClassAndStatusAndOutput(producer.Agent, producer.Goal, producer.ID, "commit deadline exceeded", NeedsHuman, FailureProtocol, TaskBlocked, "original report")
 			spec := TodoSpec{Agent: "worker", Desc: "verify the accepted report", ContractID: "verify-report", Phase: PhaseVerify, SideEffect: SideEffectNone,
 				Action: &Action{Capability: "verify-report", Type: "verify"}}
-			if dependency {
+			if test.dependency {
 				spec.DependsOn = []string{producer.ID}
 			}
 			ids := c.taskTracker.TodoList().ReserveIDs(1)
@@ -68,12 +76,31 @@ func TestResultCollectionWorkflowRecoveryCommitsPreparedResultWithFailedConsumer
 				t.Fatal(err)
 			}
 			consumer := items[0]
-			if err := c.CommitTaskTransition(t.Context(), consumer.ID, TaskPending, TaskInProgress, "verifying", "", nil); err != nil {
-				t.Fatal(err)
-			}
-			c.PersistFailureWithClassAndStatus(consumer.Agent, consumer.Desc, consumer.ID, "report unavailable", RetryNone, FailureVerify, TaskError)
-			if err := c.phaseWorkflow.cancel("coordinator", "operator", "close unsuccessful verification"); err == nil {
-				t.Fatal("cancellation did not close the phase")
+			consumerStatus := TaskError
+			if test.stranded {
+				consumerStatus = TaskBlocked
+				if test.unrelated {
+					c.PersistFailureWithClassAndStatus(consumer.Agent, consumer.Desc, consumer.ID, "independent protocol error", RetryNone, FailureProtocol, TaskBlocked)
+				} else if test.dag {
+					scheduler := &dagScheduler{coord: c, tasks: []TaskDef{{}, {DependsOn: []int{0}}}, todoItems: []*TodoItem{c.todoItemByID(producer.ID), consumer}, states: []TaskStatus{TaskError, TaskPending}}
+					detail, class := scheduler.strandedDependencyDetail(1)
+					c.persistStrandedDependent(consumer, detail, class)
+				} else {
+					if err := c.checkInterruptedDependencies(consumer); err == nil {
+						t.Fatal("dependent verifier was admitted before its producer had a result")
+					}
+				}
+				if err := c.phaseWorkflow.observe(c.taskTracker.TodoList().Items()); err == nil {
+					t.Fatal("workflow did not fail on the blocked producer")
+				}
+			} else {
+				if err := c.CommitTaskTransition(t.Context(), consumer.ID, TaskPending, TaskInProgress, "verifying", "", nil); err != nil {
+					t.Fatal(err)
+				}
+				c.PersistFailureWithClassAndStatus(consumer.Agent, consumer.Desc, consumer.ID, "report unavailable", RetryNone, FailureVerify, TaskError)
+				if err := c.phaseWorkflow.cancel("coordinator", "operator", "close unsuccessful verification"); err == nil {
+					t.Fatal("cancellation did not close the phase")
+				}
 			}
 			c.saveCheckpoint()
 			c = reopenCollectedWorkflowCoordinator(t, c)
@@ -84,7 +111,7 @@ func TestResultCollectionWorkflowRecoveryCommitsPreparedResultWithFailedConsumer
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !dependency {
+			if !test.dependency || test.unrelated {
 				if assessment.Disposition != RecoveryBlocked {
 					t.Fatalf("unrelated failure was accepted: %+v", assessment)
 				}
@@ -110,7 +137,7 @@ func TestResultCollectionWorkflowRecoveryCommitsPreparedResultWithFailedConsumer
 			settled := c.todoItemByID(producer.ID)
 			committed := currentResultCollection(settled)
 			if worker.Calls() != 0 || settled.Status != TaskDone || committed == nil || committed.Work != cp.Work || committed.TurnsUsed != cp.TurnsUsed ||
-				c.todoItemByID(consumer.ID).Status != TaskError || c.phaseWorkflow.State() != PhaseFailed {
+				c.todoItemByID(consumer.ID).Status != consumerStatus || c.phaseWorkflow.State() != PhaseFailed {
 				t.Fatal("local commit changed completed work, the failed dependent, or the workflow boundary")
 			}
 			events, err := c.readActiveLineageEvents(t.Context())

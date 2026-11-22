@@ -221,11 +221,11 @@ func (c *Coordinator) validateEvidenceInputBindings(ctx context.Context, todoID 
 		return err
 	}
 	if compiled.worksetPaths != nil {
-		binding, err := c.verifiedResultWorksetBinding(ctx, todoID)
+		selection, err := c.verifiedWorksetPathSelection(ctx, todoID, compiled.worksetPaths)
 		if err != nil {
-			return rejectResultReferenceSource(err)
+			return err
 		}
-		if err := validateResultWorksetPaths(value, compiled.worksetPaths, binding); err != nil {
+		if err := validateResultWorksetPaths(value, compiled.worksetPaths, selection); err != nil {
 			return err
 		}
 	}

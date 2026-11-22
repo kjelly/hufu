@@ -120,9 +120,12 @@ Review source schemas also declare `x-hufu-workset-paths` for finding locations.
 The runtime offers path keys from the receipt-verified frozen assignment and
 expands `path_key:original_source_line` to the exact stored path. A copied
 misspelling is rejected during source submission rather than the later inventory.
-Snapshot audit still checks assignment and source-line bounds. Accepted path-only
-repair requires an explicit frozen path choice and preserves the original line,
-all findings, severities, gaps, judgments, receipts and spent model turns.
+In repository snapshot mode, the primary review schema also checks each cited
+line against the assigned `review_evidence_inventory` before accepting the
+result. The snapshot audit independently checks assigned paths and line bounds.
+Accepted path-only repair requires an explicit frozen path that covers the
+original line and preserves all findings, severities, gaps, judgments, receipts
+and spent model turns.
 Both critique schema versions use `x-hufu-submission-fields` to expose only
 `status`, `summary`, and `structured_payload` to the model and collector.
 Every judgment, full rationale, and evidence reference belongs in its keyed

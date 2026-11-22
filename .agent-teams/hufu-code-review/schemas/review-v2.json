@@ -617,6 +617,12 @@
     "pointers": [
       "/record/findings/*/location"
     ],
-    "format": "path_line"
+    "format": "path_line",
+    "line_spans": {
+      "artifact_kind": "review_evidence_inventory",
+      "when_binding": {
+        "review_mode": "repository_snapshot"
+      }
+    }
   }
 }

@@ -1231,9 +1231,11 @@ retryLoop:
 				return
 			}
 			currentPrompt += pathContext
-			var pathLookup func() (map[string]string, error)
+			var pathLookup func() (worksetPathSelection, error)
 			if compiledResult != nil && compiledResult.worksetPaths != nil {
-				pathLookup = func() (map[string]string, error) { return c.verifiedWorksetPathChoices(taskCtx, todoID) }
+				pathLookup = func() (worksetPathSelection, error) {
+					return c.verifiedWorksetPathSelection(taskCtx, todoID, compiledResult.worksetPaths)
+				}
 			}
 			var runtimeInputLookup func() (map[string]any, error)
 			if compiledResult != nil && len(compiledResult.runtimeInputs) > 0 {

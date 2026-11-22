@@ -38,12 +38,34 @@ func runtimeWorksetInputFixture(t *testing.T, paths ...string) (*Coordinator, *T
 	return c, producer, child, compiled
 }
 
-func runtimeWorksetProducerFixture(t *testing.T, c *Coordinator, content []byte) (*TodoItem, ArtifactRef) {
+func runtimeWorksetProducerFixture(t *testing.T, c *Coordinator, content []byte, sharedInputs ...PutArtifactRequest) (*TodoItem, ArtifactRef) {
 	t.Helper()
 	producer := c.taskTracker.TodoList().AddBatch([]TodoSpec{{Agent: "worker", PlanTaskID: "seed"}})[0]
 	store, err := NewFileArtifactStore(c.session.Workspace, c.session.Workspace)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var artifacts []ArtifactRef
+	if len(sharedInputs) != 0 {
+		workset, err := normalizeStructuredWorkset(content)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, input := range sharedInputs {
+			input.RunID, input.TaskID, input.Agent, input.Attempt = c.executionRunID, producer.ID, producer.Agent, 1
+			artifact, err := store.Put(t.Context(), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			artifacts = append(artifacts, artifact.ArtifactRef)
+			for i := range workset.Items {
+				workset.Items[i].Inputs = append(workset.Items[i].Inputs, artifact.ArtifactRef)
+			}
+		}
+		content, err = json.Marshal(workset)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	manifest, err := store.Put(t.Context(), PutArtifactRequest{
 		Content: content,
@@ -52,7 +74,7 @@ func runtimeWorksetProducerFixture(t *testing.T, c *Coordinator, content []byte)
 	if err != nil {
 		t.Fatal(err)
 	}
-	producer.TypedResult = &TaskResult{TaskID: producer.ID, Agent: producer.Agent, Attempt: 1, Status: TaskResultStatusSuccess, Source: "runtime", Artifacts: []ArtifactRef{manifest.ArtifactRef}}
+	producer.TypedResult = &TaskResult{TaskID: producer.ID, Agent: producer.Agent, Attempt: 1, Status: TaskResultStatusSuccess, Source: "runtime", Artifacts: append(artifacts, manifest.ArtifactRef)}
 	c.storeSubmittedTaskResult(producer.ID, producer.TypedResult)
 	c.taskTracker.TodoList().UpdateStatus(producer.ID, TaskDone, "produced")
 	return producer, manifest.ArtifactRef

@@ -68,7 +68,7 @@ func recoveredCollectionVerifierID(tasks []*TodoItem, events []RunEvent, branchI
 	}
 	for _, sourceID := range verifier.DependsOn {
 		source := todoItemByID(tasks, sourceID)
-		if !failedReadOnlyCollectionVerifier(verifier, source) || !hasCommittedWorkflowCollectionRepair(source, branchID) {
+		if !readOnlyCollectionVerifier(verifier, source) || !hasCommittedWorkflowCollectionRepair(source, branchID) {
 			continue
 		}
 		for _, grant := range collectionRepairGrants(source.ExecutionReceipt) {
@@ -95,7 +95,7 @@ func provenCollectionVerifierRetry(events []RunEvent, branchID string, verifier,
 		return false
 	}
 	before := ReduceToSessionData(events[:i+1])
-	localOnly, err := resultRepairLocalCommitOnly(before, producer.ID)
+	localOnly, err := resultRepairLocalCommitOnly(before, producer.ID, assessment.ValidatorRevision >= resultRecoveryStrandedVerifierRevision)
 	if err != nil || !localOnly {
 		return false
 	}

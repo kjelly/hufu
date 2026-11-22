@@ -86,20 +86,30 @@ func TestResultCollectionRepairsWorksetPathReferences(t *testing.T) {
 			return
 		}
 		assertCollectorResponseChannel(t, request)
-		location := "dir/soruce.go:7"
+		prompt := fmt.Sprint(request["messages"])
+		path := "dir/short.go"
 		n := calls.Add(1)
 		if n == 2 {
-			matches := regexp.MustCompile(`"(path_[0-9a-f]{12})":"dir/source.go"`).FindStringSubmatch(fmt.Sprint(request["messages"]))
-			if len(matches) != 2 {
-				t.Error("collector was not given the complete frozen path choices")
-				http.Error(w, "missing choices", http.StatusBadRequest)
-				return
+			path = "dir/source.go"
+			for _, pointer := range []string{"/findings/0/location", "/findings/1/location", "/findings/2/location"} {
+				if !strings.Contains(prompt, pointer) {
+					t.Errorf("repair prompt did not identify %s", pointer)
+				}
 			}
-			location = matches[1] + ":7"
 		} else if n != 1 {
 			t.Error("path repair exceeded its bounded calls")
 		}
-		body, err := json.Marshal(map[string]any{"status": "success", "summary": "original issue retained", "structured_payload": map[string]any{"findings": []any{map[string]any{"location": location, "summary": "original issue retained"}}}})
+		matches := regexp.MustCompile(`"(path_[0-9a-f]{12})":"` + regexp.QuoteMeta(path) + `"`).FindStringSubmatch(prompt)
+		if len(matches) != 2 || !strings.Contains(prompt, "Frozen source line spans by path") {
+			t.Error("collector was not given frozen path keys and source spans")
+			http.Error(w, "missing choices", http.StatusBadRequest)
+			return
+		}
+		var findings []map[string]string
+		for _, line := range []int{67, 81, 399} {
+			findings = append(findings, map[string]string{"location": fmt.Sprintf("%s:%d", matches[1], line), "summary": fmt.Sprintf("original issue %d retained", line)})
+		}
+		body, err := json.Marshal(map[string]any{"status": "success", "summary": "original issues retained", "structured_payload": map[string]any{"findings": findings}})
 		if err != nil {
 			t.Error(err)
 			return
@@ -108,7 +118,7 @@ func TestResultCollectionRepairsWorksetPathReferences(t *testing.T) {
 		_, _ = fmt.Fprintf(w, "data: {\"id\":\"claims\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", string(body))
 	}))
 	t.Cleanup(server.Close)
-	compiled, err := CompileResultContractDocument("paths.json", []byte(worksetPathResultSchema))
+	compiled, err := CompileResultContractDocument("paths.json", []byte(withWorksetLineSpans(worksetPathResultSchema)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +129,7 @@ func TestResultCollectionRepairsWorksetPathReferences(t *testing.T) {
 	c.providerBoundaryStart = func(context.Context, string) error { return nil }
 	c.delegatedTasks = make(map[string]int)
 	testTaskCache(c).entries = make(map[string][]cachedTaskEntry)
-	worker := scriptWorker(textTurn("Original issue at dir/source.go line 7."))
+	worker := scriptWorker(textTurn("Original issues at dir/source.go lines 67, 81, and 399."))
 	c.workerAgentOverride = worker
 	if err := os.MkdirAll(filepath.Join(c.projectDir, "dir"), 0o700); err != nil {
 		t.Fatal(err)
@@ -127,7 +137,7 @@ func TestResultCollectionRepairsWorksetPathReferences(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(c.projectDir, "dir", "source.go"), []byte("package fixture\n\n\n\n\n\n// original issue\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, manifest := runtimeWorksetProducerFixture(t, c, []byte(`{"schema_version":1,"items":[{"key":"assigned-child","bindings":{"identity":"frozen-value"},"touched_paths":["dir/source.go"]}]}`))
+	_, manifest := runtimeWorksetProducerFixture(t, c, []byte(`{"schema_version":1,"items":[{"key":"assigned-child","bindings":{"identity":"frozen-value"},"touched_paths":["dir/source.go","dir/short.go"]}]}`), PutArtifactRequest{Kind: "source", Path: "line-inventory.json", Content: []byte(worksetLineInventory)})
 	_, err = c.ExecuteTasks(t.Context(), []TaskDef{{ID: "evaluate", Agent: "worker", Model: "ollama/test", SideEffect: SideEffectNone,
 		Execution: ExecutionContract{RequiresResult: true},
 		FanOut:    &FanOutSpec{SourceArtifact: FactRef{TaskID: "seed", Artifact: manifest.ID}, GoalTemplate: "Evaluate {identity}"}}})
@@ -143,8 +153,10 @@ func TestResultCollectionRepairsWorksetPathReferences(t *testing.T) {
 	if item.Status != TaskDone || cp == nil || cp.State != ResultCollectionCommitted || worker.Calls() != 1 || calls.Load() != 2 || cp.TurnsUsed != 2 {
 		t.Fatalf("work=%d collection=%d task=%s checkpoint=%+v", worker.Calls(), calls.Load(), item.Status, cp)
 	}
-	if !strings.Contains(string(item.TypedResult.StructuredPayload.Value), `"location":"dir/source.go:7"`) {
-		t.Fatal("consumer did not receive the exact frozen path")
+	for _, line := range []int{67, 81, 399} {
+		if !strings.Contains(string(item.TypedResult.StructuredPayload.Value), fmt.Sprintf(`"location":"dir/source.go:%d","summary":"original issue %d retained"`, line, line)) {
+			t.Fatalf("consumer did not receive the exact frozen path and original claim at line %d", line)
+		}
 	}
 	replayed := ReduceToTodoList(mustReadEvents(t, c.eventStore))
 	stored := todoItemByID(replayed, item.ID)

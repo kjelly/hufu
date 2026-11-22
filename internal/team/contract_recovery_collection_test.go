@@ -29,6 +29,7 @@ type contractCollectionFixtureOptions struct {
 	LongOutput       bool
 	Exhausted        bool
 	FrozenPaths      []string
+	FrozenLineSpans  string
 	PendingPeer      bool
 	PreserveContract bool
 }
@@ -70,6 +71,9 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 			t.Fatal(err)
 		}
 		oldDocument = string(raw)
+		if fixture.FrozenLineSpans != "" {
+			oldDocument = strings.TrimSuffix(oldDocument, "}") + `,"x-hufu-workset-paths":{"pointers":["/locations/*"],"format":"path_line"}}`
+		}
 	}
 	old, err := CompileResultContractDocument("research.json", []byte(oldDocument))
 	if err != nil {
@@ -126,7 +130,7 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 		c.SetSessionData(&SessionData{RunInputSnapshots: []RunInputSnapshot{*snapshot}, ActiveRunInputSnapshotID: snapshot.ID})
 		c.session.WorkspaceVersion = WorkspaceVersionContext{Mode: versionstore.ModeOff, WorkspaceID: "metadata", ProjectID: "project", TeamName: "test", ControlRoot: c.session.Workspace, SubjectRoot: c.projectDir, StateDir: t.TempDir()}
 		if fixture.FrozenPaths != nil {
-			frozenBinding = collectionFrozenPathProducer(t, c, snapshot, &observedSource, fixture.FrozenPaths)
+			frozenBinding = collectionFrozenPathProducer(t, c, snapshot, &observedSource, fixture.FrozenPaths, fixture.FrozenLineSpans)
 		}
 	})
 	if fixture.FrozenPaths == nil {
@@ -308,7 +312,9 @@ func contractCollectionFixture(t *testing.T, response string, effect SideEffectC
 	if fixture.Accepted {
 		nextDocument = strings.Replace(oldDocument, `"runtime_owned_files_read":false`, `"runtime_owned_files_read":true`, 1)
 	}
-	if fixture.FrozenPaths != nil {
+	if fixture.FrozenLineSpans != "" {
+		nextDocument = withWorksetLineSpans(nextDocument)
+	} else if fixture.FrozenPaths != nil {
 		nextDocument = strings.TrimSuffix(nextDocument, "}") + `,"x-hufu-workset-paths":{"pointers":["/locations/*"],"format":"path_line"}}`
 	}
 	next, err := CompileResultContractDocument("research.json", []byte(nextDocument))

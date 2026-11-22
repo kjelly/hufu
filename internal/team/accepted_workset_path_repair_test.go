@@ -12,7 +12,7 @@ import (
 	"github.com/kjelly/hufu/internal/execution"
 )
 
-func collectionFrozenPathProducer(t *testing.T, c *Coordinator, snapshot *RunInputSnapshot, input *ArtifactRef, paths []string) *WorksetBinding {
+func collectionFrozenPathProducer(t *testing.T, c *Coordinator, snapshot *RunInputSnapshot, input *ArtifactRef, paths []string, lineInventory string) *WorksetBinding {
 	t.Helper()
 	definition := TaskDef{ID: "path-source", Agent: "worker", Phase: PhasePrepare, SideEffect: SideEffectNone, Recovery: RecoveryManual}
 	hash, err := effectiveContractHash(definition.ID, definition.Agent, definition.Execution, definition.OutputMode, definition.SideEffect, definition.Recovery, definition.MaxRetries, definition.Action, definition.FanOut, definition.Optional, definition)
@@ -60,7 +60,10 @@ func collectionFrozenPathProducer(t *testing.T, c *Coordinator, snapshot *RunInp
 	if err != nil {
 		t.Fatal(err)
 	}
-	assigned, err := store.Put(t.Context(), PutArtifactRequest{Kind: "source", Path: "assigned-source.json", Content: []byte("frozen assigned path evidence"), RunID: c.executionRunID, TaskID: item.ID, Attempt: 1, Agent: item.Agent})
+	if lineInventory == "" {
+		lineInventory = "frozen assigned path evidence"
+	}
+	assigned, err := store.Put(t.Context(), PutArtifactRequest{Kind: "source", Path: "assigned-source.json", Content: []byte(lineInventory), RunID: c.executionRunID, TaskID: item.ID, Attempt: 1, Agent: item.Agent})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,10 +90,18 @@ func collectionFrozenPathProducer(t *testing.T, c *Coordinator, snapshot *RunInp
 }
 
 func TestAcceptedWorksetPathRepairRetainsWorkAcrossRecovery(t *testing.T) {
-	for _, scenario := range []string{"restart", "cancelled"} {
+	for _, scenario := range []string{"restart", "cancelled", "assigned_path_out_of_bounds"} {
 		t.Run(scenario, func(t *testing.T) {
-			response := strings.Replace(researchCollectionResponse(t, 2), `"structured_payload":{`, `"structured_payload":{"locations":["dir/soruce.go:7"],`, 1)
-			c, source, id := contractCollectionFixture(t, response, SideEffectNone, contractCollectionFixtureOptions{Accepted: true, ValidAccepted: true, ArtifactKeys: true, FrozenPaths: []string{"dir/source.go"}})
+			location := "dir/soruce.go:7"
+			repaired := "dir/source.go:7"
+			fixture := contractCollectionFixtureOptions{Accepted: true, ValidAccepted: true, ArtifactKeys: true, FrozenPaths: []string{"dir/source.go"}}
+			if scenario == "assigned_path_out_of_bounds" {
+				location, repaired = "dir/short.go:67", "dir/source.go:67"
+				fixture.FrozenPaths = append(fixture.FrozenPaths, "dir/short.go")
+				fixture.FrozenLineSpans = worksetLineInventory
+			}
+			response := strings.Replace(researchCollectionResponse(t, 2), `"structured_payload":{`, `"structured_payload":{"locations":["`+location+`"],`, 1)
+			c, source, id := contractCollectionFixture(t, response, SideEffectNone, fixture)
 			original := cloneTodoItem(todoItemByID(source.Session.Tasks, id))
 			before := mustReadEvents(t, c.eventStore)
 			ctx := contractCollectionContext(t, id)
@@ -119,13 +130,26 @@ func TestAcceptedWorksetPathRepairRetainsWorkAcrossRecovery(t *testing.T) {
 			if err := c.validateResumeSources(WithSessionResume(t.Context())); err != nil {
 				t.Fatal(err)
 			}
-			binding, err := c.verifiedWorksetPathChoices(t.Context(), id)
+			_, compiled, err := c.boundResultContract(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			binding, err := c.verifiedWorksetPathSelection(t.Context(), id, compiled.worksetPaths)
 			if err != nil {
 				t.Fatal(err)
 			}
 			var key string
-			for candidate := range binding {
-				key = candidate
+			for candidate, path := range binding.paths {
+				if path == "dir/source.go" {
+					key = candidate
+				}
+			}
+			if scenario == "assigned_path_out_of_bounds" {
+				wrong := WithAcceptedReferenceSelections(t.Context(), []AcceptedReferenceSelection{{Pointer: "/locations/0", Reference: "dir/short.go"}})
+				a, err := c.AssessResultCollectionRecovery(wrong, id)
+				if err != nil || a.Disposition != RecoveryBlocked {
+					t.Fatalf("the wrong assigned file remained selectable: %+v, %v", a, err)
+				}
 			}
 			selected := WithAcceptedReferenceSelections(t.Context(), []AcceptedReferenceSelection{{Pointer: "/locations/0", Reference: key}})
 			assessment, err := c.AssessResultCollectionRecovery(selected, id)
@@ -172,7 +196,7 @@ func TestAcceptedWorksetPathRepairRetainsWorkAcrossRecovery(t *testing.T) {
 			if worker.Calls() != 0 || item.Status != TaskDone || currentResultCollection(item).TurnsUsed != currentResultCollection(original).TurnsUsed || currentResultCollection(item).Work != currentResultCollection(original).Work {
 				t.Fatal("path selection replayed work or changed the spent budget")
 			}
-			if !strings.Contains(string(item.TypedResult.StructuredPayload.Value), `"locations":["dir/source.go:7"]`) {
+			if !strings.Contains(string(item.TypedResult.StructuredPayload.Value), `"locations":["`+repaired+`"]`) {
 				t.Fatal("exact path selection was not preserved")
 			}
 			got, err := acceptedResultSemanticHashWithPaths(item.TypedResult, proof.Pointers, proof.PathPointers)
@@ -211,12 +235,16 @@ func TestAcceptedWorksetPathRepairRejectsInvalidAuthority(t *testing.T) {
 				t.Fatal(err)
 			}
 			c = reopenContractCollection(t, c, child)
-			choices, err := c.verifiedWorksetPathChoices(t.Context(), id)
+			_, compiled, err := c.boundResultContract(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			choices, err := c.verifiedWorksetPathSelection(t.Context(), id, compiled.worksetPaths)
 			if err != nil {
 				t.Fatal(err)
 			}
 			var key string
-			for candidate := range choices {
+			for candidate := range choices.paths {
 				key = candidate
 			}
 			selection := AcceptedReferenceSelection{Pointer: "/locations/0", Reference: key}

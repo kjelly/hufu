@@ -94,7 +94,7 @@ func (c *Coordinator) validateIndependentResultClaims(ctx context.Context, taskI
 		return false
 	}
 	if compiled != nil && compiled.worksetPaths != nil {
-		_, err := c.verifiedWorksetPathChoices(ctx, taskID)
+		_, err := c.verifiedWorksetPathSelection(ctx, taskID, compiled.worksetPaths)
 		if !check("workset_paths", err) {
 			return false
 		}

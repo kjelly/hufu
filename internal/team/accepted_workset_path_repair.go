@@ -1,63 +1,22 @@
 package team
 
-import (
-	"fmt"
-	"strconv"
-	"strings"
-)
+import "fmt"
 
-func invalidAcceptedWorksetPaths(value any, tokens []string, pointer string, choices map[string]string, invalid *[]string) error {
-	if len(tokens) == 0 {
-		text, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("accepted path reference must be a string")
-		}
+func invalidAcceptedWorksetPaths(value any, tokens []string, selection worksetPathSelection, invalid *[]string) error {
+	_, err := transformWorksetPathLeaves(value, tokens, "", func(text, pointer string) (string, error) {
 		if _, _, err := splitWorksetPathLine(text); err != nil {
-			return err
+			return "", err
 		}
-		resolved, err := resolveWorksetPathLine(text, choices)
+		resolved, err := selection.resolve(text)
 		if err != nil || resolved != text {
 			*invalid = append(*invalid, pointer)
 		}
-		return nil
-	}
-	if tokens[0] == "*" {
-		items, ok := value.([]any)
-		if !ok {
-			return fmt.Errorf("accepted path selector requires an array")
-		}
-		for i, item := range items {
-			if err := invalidAcceptedWorksetPaths(item, tokens[1:], pointer+"/"+strconv.Itoa(i), choices, invalid); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	object, ok := value.(map[string]any)
-	if !ok {
-		return fmt.Errorf("accepted path selector requires an object")
-	}
-	child, exists := object[tokens[0]]
-	if !exists {
-		return nil // Schema-owned optional fields need not be present.
-	}
-	token := strings.ReplaceAll(strings.ReplaceAll(tokens[0], "~", "~0"), "/", "~1")
-	return invalidAcceptedWorksetPaths(child, tokens[1:], pointer+"/"+token, choices, invalid)
+		return text, nil
+	})
+	return err
 }
 
-func replaceAcceptedWorksetPath(payload any, selection AcceptedReferenceSelection, choices map[string]string) error {
-	path, ok := choices[selection.Reference]
-	if !ok {
-		for _, canonical := range choices {
-			if canonical == selection.Reference {
-				path, ok = canonical, true
-				break
-			}
-		}
-	}
-	if !ok {
-		return fmt.Errorf("selected path is not in the receipt-verified frozen workset")
-	}
+func replaceAcceptedWorksetPath(payload any, selection AcceptedReferenceSelection, paths worksetPathSelection) error {
 	current, err := resolveJSONPointer(payload, selection.Pointer)
 	if err != nil {
 		return err
@@ -70,5 +29,9 @@ func replaceAcceptedWorksetPath(payload any, selection AcceptedReferenceSelectio
 	if err != nil {
 		return err
 	}
-	return replaceAcceptedReference(payload, fixedCollectionPointerTokens(selection.Pointer), path+":"+line)
+	reference, err := paths.resolve(selection.Reference + ":" + line)
+	if err != nil {
+		return fmt.Errorf("%s: %w", selection.Pointer, err)
+	}
+	return replaceAcceptedReference(payload, fixedCollectionPointerTokens(selection.Pointer), reference)
 }
