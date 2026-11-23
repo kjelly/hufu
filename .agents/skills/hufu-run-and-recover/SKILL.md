@@ -1,6 +1,6 @@
 ---
 name: hufu-run-and-recover
-description: Execute or take over a Hufu task, monitor it through final acceptance, and recover failures on the original session lineage. Use when the user asks Codex to run a Hufu command or task to completion and carry out necessary recovery. Apply authorized, team-neutral runtime fixes when a confirmed defect blocks recovery.
+description: Execute or take over a Hufu task through final acceptance. Use when the user asks to run and recover a Hufu command or task on its original session lineage. Diagnose blocked work, repair confirmed defects in the owning runtime or team adapter within scope, and verify recovery.
 ---
 
 # Run and recover a Hufu task
@@ -63,6 +63,7 @@ narrowest eligible documented operation based on the failed boundary.
 | --- | --- |
 | Interrupted or retryable work | Ordinary `resume` when admitted. Preserve accepted results. Check side-effect receipts before any work replay. |
 | Work saved, result not accepted | Prefer an eligible result-only repair so worker tools are not run again. |
+| Read-only native Go action failed because of a confirmed adapter defect | Fix the owning adapter, then assess `resume --repair-action <task-id> --dry-run` for the exact failed run and branch. Bind publication to the admitted plan hash and preflight the child. |
 | Workers complete, final acceptance interrupted | Preserve accepted results. Use `--retry-acceptance` only if its exact-source preview admits it. Otherwise assess whether an eligible checkpoint before final acceptance can be resumed with zero child tasks to replay. |
 | Frozen result contracts require an upgrade | Use controlled contract recovery only when eligible. Bind publication to the preview's exact plan hash and preflight the child before executing it. |
 
@@ -85,20 +86,24 @@ If the same failure recurs, reassess its cause and the recovery evidence
 before another attempt. Repeat only when new evidence, a validated fix, or a
 changed supported recovery disposition justifies it.
 
-## 4. Fix confirmed runtime defects when authorized
+## 4. Fix confirmed defects in the owning layer
 
-For a demonstrated runtime defect, follow
-[harden-hufu-runtime](../harden-hufu-runtime/SKILL.md) and the repository's
-[fix evidence workflow](../../../docs/reference/fix-evidence.md). Reproduce
-the observed failure and validate a team-independent fix at the affected
-boundary. Keep team-specific behavior with the team, and preserve frozen
-inputs, policy, accepted artifacts, receipts, and verification requirements.
-Apply the repository's relevant validation gates. Then repeat recovery
-preflight for the original target using the repaired executable before any
-live recovery. Verify the fix on the live task by taking the admitted
-continuation of the original lineage. Use an offline fixture when reproducing
-the launch command for regression coverage. A team- or provider-specific cause
-alone does not justify changing Hufu core.
+An execute-and-recover request covers narrow source fixes necessary to continue
+the authorized task, including defects in its team-owned action adapters.
+Honor explicit read-only or no-edit instructions and obtain authorization for
+changes outside the requested scope.
+
+Follow the [fix evidence workflow](../../../docs/reference/fix-evidence.md).
+Reproduce the failing boundary offline. Fix team-owned code under its team;
+for a runtime defect, follow [harden-hufu-runtime](../harden-hufu-runtime/SKILL.md)
+and use a team-independent regression. Preserve frozen inputs, accepted
+artifacts, receipts, side-effect authority, and verification requirements.
+Run the relevant validation gates and repeat recovery preflight for the
+original target with the repaired source. Follow the documented
+[native Go action recovery](../../../docs/architecture/execution-runtime.md)
+for adapter replacements, including the plan hash and any required metadata-only
+selection. Verify the fix by running the admitted continuation and checking its
+acceptance.
 
 ## 5. Finish or report the blocker
 
