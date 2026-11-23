@@ -93,7 +93,11 @@ func TestEventStoreAtomicBatchReconcilesUncertainCommit(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	store.commitHook = func() error { return errors.New("fixture sync failure") }
-	if _, err := store.AppendPersistedBatchAtHead(t.Context(), eventBatchFixture(), ""); err == nil {
+	legacy := eventBatchFixture()
+	for i := range legacy {
+		legacy[i].SchemaVersion = eventStoreStrictSchemaVersion
+	}
+	if _, err := store.AppendPersistedBatchAtHead(t.Context(), legacy, ""); err == nil {
 		t.Fatal("uncertain durability was reported as success")
 	}
 	reopened, err := NewEventStore(workspace, "run-batch", "session-batch")

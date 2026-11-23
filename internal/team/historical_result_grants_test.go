@@ -322,7 +322,7 @@ func TestHistoricalResultGrantExportImportPreservesAuthority(t *testing.T) {
 	conflict := cloneRunEvent(durable)
 	conflict.ID, conflict.IdempotencyKey = "second-grant", "second-key"
 	conflict.PreviousID, conflict.PreviousHash = durable.ID, durable.Hash
-	conflict.Hash = ComputeEventHash(conflict.PreviousHash, conflict.ID, conflict.Type, conflict.Timestamp, conflict.Payload)
+	conflict.Hash = eventChainEntry(conflict).Digest()
 	line, err := json.Marshal(conflict)
 	if err != nil {
 		t.Fatal(err)

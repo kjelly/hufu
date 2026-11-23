@@ -40,3 +40,29 @@ func TestVerifierRequiresRootWithoutPredecessor(t *testing.T) {
 		t.Fatalf("root predecessor error = %v", err)
 	}
 }
+
+func TestFramedDigest(t *testing.T) {
+	entry := Entry{
+		SchemaVersion: FramedSchemaVersion, ID: "event-42", Type: "task_completed",
+		Timestamp: "2026-01-01T00:00:00Z", Payload: json.RawMessage(`{"value":1}`),
+	}
+	const digest = "e7b97183d214b0822911e6fd42c8251aaadbd32d6b3a6b2008005035c5415659"
+	if got := entry.Digest(); got != digest {
+		t.Fatalf("framed digest = %s, want %s", got, digest)
+	}
+	entry.Hash = digest
+	if err := entry.VerifyDigest(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifierRequiresIdentifiedEvents(t *testing.T) {
+	for _, entry := range []Entry{{Type: "task_completed"}, {ID: "event-42"}} {
+		entry.SchemaVersion = FramedSchemaVersion
+		entry.Hash = entry.Digest()
+		var verifier Verifier
+		if err := verifier.Verify(entry); err == nil || verifier.Sequence() != 0 {
+			t.Fatalf("identity validation advanced the verifier: %v", err)
+		}
+	}
+}

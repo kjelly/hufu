@@ -72,7 +72,7 @@ func scanEventRow(rows *sql.Rows) (int, RunEvent, error) {
 
 func eventChainEntry(event RunEvent) eventchain.Entry {
 	return eventchain.Entry{
-		ID: event.ID, PreviousID: event.PreviousID, Type: event.Type, Timestamp: event.Timestamp,
+		SchemaVersion: event.SchemaVersion, ID: event.ID, PreviousID: event.PreviousID, Type: event.Type, Timestamp: event.Timestamp,
 		Payload: event.Payload, PreviousHash: event.PreviousHash, Hash: event.Hash,
 	}
 }

@@ -85,7 +85,7 @@ func insertRawChainedEvent(t *testing.T, workspace string, event RunEvent) error
 			event.Payload = []byte(`{"progress":"raw"}`)
 		}
 		event.PreviousID, event.PreviousHash = last.ID, last.Hash
-		event.Hash = ComputeEventHash(event.PreviousHash, event.ID, event.Type, event.Timestamp, event.Payload)
+		event.Hash = eventChainEntry(event).Digest()
 		insertErr = insertEvent(context.Background(), q, sequence+1, event)
 	})
 	return insertErr

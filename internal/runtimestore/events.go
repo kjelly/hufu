@@ -22,7 +22,7 @@ func VerifyEventChain(ctx context.Context, workspace string) error {
 		return err
 	}
 	defer func() { _ = store.Close() }()
-	rows, err := store.db.QueryContext(ctx, `SELECT sequence, id, previous_id, type, timestamp, payload, previous_hash, hash FROM events ORDER BY sequence`)
+	rows, err := store.db.QueryContext(ctx, `SELECT sequence, schema_version, id, previous_id, type, timestamp, payload, previous_hash, hash FROM events ORDER BY sequence`)
 	if err != nil {
 		return fmt.Errorf("read events: %w", err)
 	}
@@ -32,7 +32,7 @@ func VerifyEventChain(ctx context.Context, workspace string) error {
 		var sequence int
 		var entry eventchain.Entry
 		var payload []byte
-		if err := rows.Scan(&sequence, &entry.ID, &entry.PreviousID, &entry.Type, &entry.Timestamp, &payload, &entry.PreviousHash, &entry.Hash); err != nil {
+		if err := rows.Scan(&sequence, &entry.SchemaVersion, &entry.ID, &entry.PreviousID, &entry.Type, &entry.Timestamp, &payload, &entry.PreviousHash, &entry.Hash); err != nil {
 			return fmt.Errorf("decode event %d: %w", verifier.Sequence()+1, err)
 		}
 		if sequence != verifier.Sequence()+1 {

@@ -108,6 +108,9 @@ func TestScopedEventChainRequiresExactCanonicalBranch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if result := VerifyEventChain(events); !result.Valid {
+		t.Fatalf("audit rejected the mixed-schema journal: %v", result.Findings)
+	}
 	lineage, err := team.ProjectValidatedEventsForBranch(events, tree, child.ID)
 	if err != nil {
 		t.Fatal(err)

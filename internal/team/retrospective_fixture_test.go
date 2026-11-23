@@ -29,7 +29,10 @@ func TestRetrospectiveSyntheticSnapshotProvenance(t *testing.T) {
 		}
 		var terminal RunEvent
 		for _, r := range records {
-			terminal = appendReportEvent(t, store, RunEvent{ID: r.id, Type: r.kind, TaskID: r.task, Timestamp: "2026-10-16T00:00:00Z"}, r.payload)
+			// The published example uses v2 event hashes.
+			terminal = appendReportEvent(t, store, RunEvent{
+				SchemaVersion: 2, ID: r.id, Type: r.kind, TaskID: r.task, Timestamp: "2026-10-16T00:00:00Z",
+			}, r.payload)
 		}
 		report, err := LoadRunReport(t.Context(), workspace, terminal.ID)
 		if err != nil {

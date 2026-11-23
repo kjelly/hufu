@@ -80,8 +80,8 @@ func TestEventStoreRedactsBeforeHashAndPersistence(t *testing.T) {
 	if strings.Contains(string(durable.Payload), "top-secret") {
 		t.Fatalf("durable payload leaked secret: %s", durable.Payload)
 	}
-	if got := ComputeEventHash(durable.PreviousHash, durable.ID, durable.Type, durable.Timestamp, durable.Payload); got != durable.Hash {
-		t.Fatalf("hash = %s, want hash over redacted persisted payload %s", durable.Hash, got)
+	if err := durable.VerifyHash(); err != nil {
+		t.Fatalf("digest over redacted persisted payload: %v", err)
 	}
 }
 

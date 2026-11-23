@@ -349,7 +349,7 @@ func cloneContractRevalidation(proof *ContractRevalidation) *ContractRevalidatio
 }
 
 func decodeContractRecovery(event RunEvent) (*ContractRecoveryPlan, error) {
-	if event.SchemaVersion < eventStoreSchemaVersion {
+	if event.SchemaVersion < eventStoreStrictSchemaVersion {
 		return nil, fmt.Errorf("contract recovery requires current events")
 	}
 	var plan ContractRecoveryPlan

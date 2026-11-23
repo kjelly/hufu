@@ -25,11 +25,16 @@ import (
 var ErrEventStoreWriterUnavailable = errors.New("event store writer unavailable")
 
 const (
-	// eventStoreSchemaVersion is the current writer schema. Schema v1 remains
-	// replayable, but all event-first production boundaries now write v2.
-	eventStoreSchemaVersion       = 2
+	eventStoreSchemaVersion = eventchain.FramedSchemaVersion
+	// Schema v2 introduced strict event-first payloads. Framing changes the
+	// digest, so those payload contracts still apply to v2 rows during replay.
+	eventStoreStrictSchemaVersion = 2
 	eventStoreLegacySchemaVersion = 1
 )
+
+func knownStrictEventSchema(version int) bool {
+	return version == eventStoreStrictSchemaVersion || version == eventStoreSchemaVersion
+}
 
 // RunEvent defines a single append-only structured event in the session timeline.
 type RunEvent struct {
@@ -136,9 +141,15 @@ func (es *EventStore) SetInvocationID(invocationID string) {
 	es.invocationID = strings.TrimSpace(invocationID)
 }
 
-// ComputeEventHash computes a SHA-256 hash over an event's prevHash, ID, type, timestamp, and payload.
+// ComputeEventHash computes the legacy digest for event schemas v1 and v2.
 func ComputeEventHash(prevHash, id, eventType, timestamp string, payload json.RawMessage) string {
 	return eventchain.ComputeHash(prevHash, id, eventType, timestamp, payload)
+}
+
+// VerifyHash checks the digest for a stored event without assuming its position
+// in the chain. Scoped readers verify the available links separately.
+func (event RunEvent) VerifyHash() error {
+	return eventChainEntry(event).VerifyDigest()
 }
 
 // NewEventStore opens workspace's event journal, creating runtime.sqlite when
@@ -416,7 +427,7 @@ func (es *EventStore) prepareEvent(event RunEvent) (RunEvent, error) {
 
 	event.PreviousID = es.lastEventID
 	event.PreviousHash = es.lastHash
-	event.Hash = ComputeEventHash(event.PreviousHash, event.ID, event.Type, event.Timestamp, event.Payload)
+	event.Hash = eventChainEntry(event).Digest()
 	return event, nil
 }
 
@@ -553,8 +564,7 @@ func (es *EventStore) prefixRewritten(ctx context.Context, q runtimestore.Querye
 		return false, fmt.Errorf("decode validated head: %w", err)
 	}
 	validated := es.cachedEvents[len(es.cachedEvents)-1]
-	if !sameStoredEvent(head, validated) ||
-		head.Hash != ComputeEventHash(head.PreviousHash, head.ID, head.Type, head.Timestamp, head.Payload) {
+	if !sameStoredEvent(head, validated) || head.VerifyHash() != nil {
 		return true, nil
 	}
 	return false, rows.Err()

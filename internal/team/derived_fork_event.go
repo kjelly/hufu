@@ -36,7 +36,7 @@ func decodeDerivedForkCreated(event RunEvent) (DerivedForkCreatedPayload, error)
 	if err != nil {
 		return payload, err
 	}
-	if event.Type != string(EventDerivedForkCreated) || event.SchemaVersion != eventStoreSchemaVersion ||
+	if event.Type != string(EventDerivedForkCreated) || !knownStrictEventSchema(event.SchemaVersion) ||
 		!historicalGrantIdentity(event.ID) || !historicalGrantIdentity(event.SessionID) || !historicalGrantIdentity(event.Timestamp) ||
 		event.Actor != "workspace-versioning" || event.BranchID != payload.Intent.BranchID || event.RunID != "" ||
 		event.TaskID != "" || event.Attempt != 0 || event.IdempotencyKey != derivedForkIdempotencyKey(payload.SnapshotID) {

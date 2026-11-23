@@ -84,7 +84,7 @@ func readStepInvocationEvidence(event RunEvent, profiles map[string]RunEvent) (s
 	}
 	profileEvent, ok := profiles[payload.ProfileEventID]
 	if !ok || profileEvent.Hash != payload.ProfileHash || profileEvent.RunID != event.RunID || profileEvent.BranchID != event.BranchID ||
-		profileEvent.Hash != ComputeEventHash(profileEvent.PreviousHash, profileEvent.ID, profileEvent.Type, profileEvent.Timestamp, profileEvent.Payload) {
+		profileEvent.VerifyHash() != nil {
 		return stepInvocationEvidence{}, fmt.Errorf("structured step invocation profile source mismatch")
 	}
 	var profile modelprofile.TelemetryProjection

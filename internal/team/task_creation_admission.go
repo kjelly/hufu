@@ -12,7 +12,7 @@ import (
 // backfill. Pending metadata is not a new occurrence; an explicit retry reset
 // commits its own task_created event with a new retry count.
 func taskCreationCheckpointKey(event RunEvent) string {
-	if event.Type != string(EventTaskCreated) || event.SchemaVersion < eventStoreSchemaVersion || event.TaskID == "" {
+	if event.Type != string(EventTaskCreated) || event.SchemaVersion < eventStoreStrictSchemaVersion || event.TaskID == "" {
 		return ""
 	}
 	var payload struct {

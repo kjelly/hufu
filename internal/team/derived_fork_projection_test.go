@@ -35,6 +35,41 @@ func TestDerivedForkReplaysIdenticalChildPolicySnapshot(t *testing.T) {
 	}
 }
 
+func TestRefreshDerivedForkRetainsPendingTerminalCommit(t *testing.T) {
+	f, ops := derivedForkPreparationFixture(t)
+	result, err := ops.ForkNewTask(t.Context(), "investigation", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sameBranch := range []bool{true, false} {
+		name := "same_branch"
+		owner := result.Branch.ID
+		if !sameBranch {
+			name, owner = "other_branch", "main"
+		}
+		t.Run(name, func(t *testing.T) {
+			live := NewSession()
+			live.PendingTerminalCommit = &PendingTerminalCommit{
+				RunID: "pending-run", BranchID: owner, IdempotencyKey: "terminal:pending-run",
+			}
+			if err := SaveSession(f.control, live); err != nil {
+				t.Fatal(err)
+			}
+			err := RefreshActiveBranchProjection(f.control, f.tree, f.events)
+			if (err == nil) != sameBranch {
+				t.Fatalf("refresh on %s with pending commit on %s: %v", result.Branch.ID, owner, err)
+			}
+			saved := LoadSession(f.control)
+			if saved == nil || !reflect.DeepEqual(saved.PendingTerminalCommit, live.PendingTerminalCommit) {
+				t.Fatal("refresh lost the unconfirmed terminal commit")
+			}
+			if sameBranch != (saved.DerivedFork != nil) {
+				t.Fatal("refresh changed the branch projection contrary to the pending commit's scope")
+			}
+		})
+	}
+}
+
 func TestDerivedForkResetsExecutableProjectionAndPreservesParent(t *testing.T) {
 	f, ops := derivedForkPreparationFixture(t)
 	compaction := testCompactionState(t, f.control)

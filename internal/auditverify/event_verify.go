@@ -53,7 +53,7 @@ func verifyScopedEventChain(ctx context.Context, workspace string, events []team
 // EventChainVerification is the result of independently re-deriving the hash
 // chain over a slice of events (spec.md §11). It never re-implements the hash
 // algorithm itself: linkage is checked field-by-field and every hash is
-// recomputed via team.ComputeEventHash.
+// checked via RunEvent.VerifyHash.
 //
 // The check is scoped to internal linkage of the supplied slice: for a branch
 // lineage that forks partway through the log, events[0] need not have an
@@ -98,10 +98,9 @@ func VerifyEventChain(events []team.RunEvent) EventChainVerification {
 				valid = false
 			}
 		}
-		expected := team.ComputeEventHash(event.PreviousHash, event.ID, event.Type, event.Timestamp, event.Payload)
-		if event.Hash != expected {
+		if err := event.VerifyHash(); err != nil {
 			result.Findings = append(result.Findings, fmt.Sprintf(
-				"event %d (%s) hash does not match its recomputed digest", i, event.ID))
+				"event %d (%s) hash verification: %v", i, event.ID, err))
 			valid = false
 		}
 	}

@@ -195,7 +195,7 @@ func flushGovernanceEvents(ctx context.Context, repo *contextstore.SQLiteReposit
 	}
 	defer func() { _ = store.Close() }()
 	for _, event := range events {
-		if err = store.Append(team.RunEvent{Type: event.EventType, Actor: "operator", IdempotencyKey: event.IdempotencyKey, Payload: event.Payload}); err != nil {
+		if _, err = store.AppendPersisted(team.RunEvent{Type: event.EventType, Actor: "operator", IdempotencyKey: event.IdempotencyKey, Payload: event.Payload}); err != nil {
 			return err
 		}
 		if err = repo.MarkPromotionEventDelivered(ctx, event.IdempotencyKey); err != nil {

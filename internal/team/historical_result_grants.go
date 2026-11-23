@@ -68,7 +68,7 @@ func decodeHistoricalResultGrants(event RunEvent) (HistoricalResultGrantsPayload
 	if err != nil {
 		return payload, err
 	}
-	if event.SchemaVersion != eventStoreSchemaVersion || event.Type != string(EventHistoricalResultsGranted) ||
+	if !knownStrictEventSchema(event.SchemaVersion) || event.Type != string(EventHistoricalResultsGranted) ||
 		event.Actor != "operator" || event.TaskID != "" || event.Attempt != 0 || event.IdempotencyKey == "" ||
 		payload.SchemaVersion != historicalResultGrantsVersion || payload.SessionID != event.SessionID ||
 		payload.BranchID != event.BranchID || payload.CycleID != event.RunID {

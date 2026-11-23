@@ -69,7 +69,7 @@ func (c *Coordinator) mediaProviderAdmissionPayload(ctx context.Context, request
 
 func decodeMediaProviderEvent(event RunEvent) (MediaProviderAdmittedPayload, error) {
 	var payload MediaProviderAdmittedPayload
-	if event.SchemaVersion < eventStoreSchemaVersion || len(event.Payload) > 16<<10 {
+	if event.SchemaVersion < eventStoreStrictSchemaVersion || len(event.Payload) > 16<<10 {
 		return payload, media.Reject(media.BindingConflict, "invalid image provider admission envelope")
 	}
 	if err := json.Unmarshal(event.Payload, &payload, json.RejectUnknownMembers(true)); err != nil {

@@ -48,7 +48,7 @@ func (c *Coordinator) validateRecordedDependencyViewDispatch(ctx context.Context
 		return err
 	}
 	for _, event := range events {
-		if event.Type != "task_context_manifest" || event.TaskID != manifest.TaskID || event.RunID != manifest.RunID || event.SchemaVersion != eventStoreSchemaVersion {
+		if event.Type != "task_context_manifest" || event.TaskID != manifest.TaskID || event.RunID != manifest.RunID || !knownStrictEventSchema(event.SchemaVersion) {
 			continue
 		}
 		var payload struct {

@@ -39,7 +39,7 @@ func (p MediaConsumerBoundPayload) refs() []media.Ref {
 
 func decodeMediaConsumerEvent(event RunEvent) (MediaConsumerBoundPayload, error) {
 	var p MediaConsumerBoundPayload
-	if event.SchemaVersion < eventStoreSchemaVersion || len(event.Payload) > 64<<10 {
+	if event.SchemaVersion < eventStoreStrictSchemaVersion || len(event.Payload) > 64<<10 {
 		return p, media.Reject(media.BindingConflict, "invalid image consumer envelope")
 	}
 	if err := json.Unmarshal(event.Payload, &p, json.RejectUnknownMembers(true)); err != nil {

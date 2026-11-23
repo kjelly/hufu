@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -90,6 +91,56 @@ func TestTerminalTransferRequiresExplicitAuthorizationAndMovesControlNotProvenan
 		}
 	}
 	t.Fatal("missing terminal task transfer event")
+}
+
+func TestTerminalTransferPersistenceFailureRetainsControl(t *testing.T) {
+	workspace := t.TempDir()
+	transfers := 0
+	manager, err := NewTerminalSessionManager(workspace, func(typ, _ string, _ map[string]interface{}) {
+		if typ == string(TerminalTaskTransferred) {
+			transfers++
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := TerminalSession{
+		ID: "terminal-test", RunID: "run-transfer", OwnerTaskID: "owner", ControllerTaskID: "source",
+		Mode: TerminalModePipe, State: TerminalSessionRunning, Running: true,
+		Custodian: TerminalCustodianOwner, CleanupState: TerminalCleanupNone,
+		HandoffReason: "previous handoff", HandoffAuthorizedBy: "previous operator", HandedOffAt: time.Unix(42, 0).UTC(),
+	}
+	manager.sessions[session.ID] = &managedTerminalSession{session: session}
+	if err := manager.persistLocked(); err != nil {
+		t.Fatal(err)
+	}
+	writeErr := errors.New("terminal store unavailable")
+	manager.persistDocument = func([]byte) error { return writeErr }
+	request := transferRequest(&session, "source", "destination")
+	if _, err := manager.TransferTerminal(t.Context(), request); !errors.Is(err, writeErr) {
+		t.Fatalf("transfer error = %v, want persistence failure", err)
+	}
+	live, err := manager.List(t.Context(), session.RunID)
+	if err != nil || len(live) != 1 {
+		t.Fatalf("live sessions = %v, err = %v", live, err)
+	}
+	saved, err := LoadTerminalSessions(workspace)
+	if err != nil || len(saved) != 1 {
+		t.Fatalf("saved sessions = %v, err = %v", saved, err)
+	}
+	for _, current := range []TerminalSession{live[0], saved[0]} {
+		if current.ControllerTaskID != session.ControllerTaskID || current.HandoffReason != session.HandoffReason ||
+			current.HandoffAuthorizedBy != session.HandoffAuthorizedBy || !current.HandedOffAt.Equal(session.HandedOffAt) {
+			t.Fatalf("failed transfer changed custody or prior handoff fields: %+v", current)
+		}
+	}
+	if transfers != 0 {
+		t.Fatal("failed transfer emitted a transfer event")
+	}
+	manager.persistDocument = nil
+	if current, err := manager.TransferTerminal(t.Context(), request); err != nil || current.ControllerTaskID != "destination" || transfers != 1 {
+		t.Fatalf("retry did not commit one transfer: controller=%s events=%d err=%v", current.ControllerTaskID, transfers, err)
+	}
 }
 
 func TestCoordinatorTransferTerminalRejectsUnsafeRequests(t *testing.T) {

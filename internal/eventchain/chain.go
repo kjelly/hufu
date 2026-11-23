@@ -4,21 +4,28 @@ package eventchain
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 )
+
+// FramedSchemaVersion is the first event schema with length-delimited hashes.
+const FramedSchemaVersion = 3
 
 // Entry contains the persisted fields that participate in event-chain
 // verification.
 type Entry struct {
-	ID           string          `json:"id"`
-	PreviousID   string          `json:"previous_id,omitempty"`
-	Type         string          `json:"type"`
-	Timestamp    string          `json:"timestamp"`
-	Payload      json.RawMessage `json:"payload,omitempty"`
-	PreviousHash string          `json:"previous_hash,omitempty"`
-	Hash         string          `json:"hash,omitempty"`
+	SchemaVersion int             `json:"schema_version,omitempty"`
+	ID            string          `json:"id"`
+	PreviousID    string          `json:"previous_id,omitempty"`
+	Type          string          `json:"type"`
+	Timestamp     string          `json:"timestamp"`
+	Payload       json.RawMessage `json:"payload,omitempty"`
+	PreviousHash  string          `json:"previous_hash,omitempty"`
+	Hash          string          `json:"hash,omitempty"`
 }
 
 // Verifier validates a root-based event chain in sequence.
@@ -28,7 +35,7 @@ type Verifier struct {
 	previousHash string
 }
 
-// ComputeHash computes the canonical SHA-256 event digest.
+// ComputeHash computes the historical digest for schemas before framing.
 func ComputeHash(previousHash, id, eventType, timestamp string, payload json.RawMessage) string {
 	hash := sha256.New()
 	_, _ = hash.Write([]byte(previousHash))
@@ -37,6 +44,39 @@ func ComputeHash(previousHash, id, eventType, timestamp string, payload json.Raw
 	_, _ = hash.Write([]byte(timestamp))
 	_, _ = hash.Write(payload)
 	return hex.EncodeToString(hash.Sum(nil))
+}
+
+// Digest computes the digest using the event's persisted schema version.
+func (e Entry) Digest() string {
+	if e.SchemaVersion < FramedSchemaVersion {
+		return ComputeHash(e.PreviousHash, e.ID, e.Type, e.Timestamp, e.Payload)
+	}
+
+	hash := sha256.New()
+	_, _ = io.WriteString(hash, "hufu:event-chain\x00")
+	var size [8]byte
+	binary.BigEndian.PutUint64(size[:], uint64(e.SchemaVersion))
+	_, _ = hash.Write(size[:])
+	for _, field := range [...]string{e.PreviousHash, e.ID, e.Type, e.Timestamp} {
+		binary.BigEndian.PutUint64(size[:], uint64(len(field)))
+		_, _ = hash.Write(size[:])
+		_, _ = io.WriteString(hash, field)
+	}
+	binary.BigEndian.PutUint64(size[:], uint64(len(e.Payload)))
+	_, _ = hash.Write(size[:])
+	_, _ = hash.Write(e.Payload)
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+// VerifyDigest checks the event identity and digest without assuming linkage.
+func (e Entry) VerifyDigest() error {
+	if e.ID == "" || e.Type == "" {
+		return errors.New("event ID and type are required")
+	}
+	if e.Hash != e.Digest() {
+		return errors.New("hash invalid")
+	}
+	return nil
 }
 
 // Verify validates and advances the chain. It does not mutate verifier state
@@ -49,8 +89,8 @@ func (v *Verifier) Verify(entry Entry) error {
 	} else if entry.PreviousID != v.previousID || entry.PreviousHash != v.previousHash {
 		return fmt.Errorf("event %d (%s) does not continue hash chain", v.sequence, entry.ID)
 	}
-	if entry.Hash != ComputeHash(entry.PreviousHash, entry.ID, entry.Type, entry.Timestamp, entry.Payload) {
-		return fmt.Errorf("event %d (%s) hash invalid", v.sequence, entry.ID)
+	if err := entry.VerifyDigest(); err != nil {
+		return fmt.Errorf("event %d (%s): %w", v.sequence, entry.ID, err)
 	}
 	v.sequence++
 	v.previousID = entry.ID

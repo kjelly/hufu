@@ -84,7 +84,7 @@ func compareRunInputSnapshotProjection(live []RunInputSnapshot, liveActive strin
 
 // Keep policy projection and its cache boundary on the same event vocabulary.
 func executionPolicyProjectionEvent(event RunEvent) bool {
-	if event.SchemaVersion < eventStoreSchemaVersion {
+	if event.SchemaVersion < eventStoreStrictSchemaVersion {
 		return false
 	}
 	switch EventType(event.Type) {
@@ -594,7 +594,7 @@ func compareSingleTaskProjection(left, right *TodoItem) error {
 
 func hasCurrentCanonicalProjectionEvents(events []RunEvent) bool {
 	for _, event := range events {
-		if event.SchemaVersion < eventStoreSchemaVersion {
+		if event.SchemaVersion < eventStoreStrictSchemaVersion {
 			continue
 		}
 		switch EventType(event.Type) {

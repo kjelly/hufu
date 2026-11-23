@@ -87,7 +87,7 @@ func validateTaskMediaEventFields(e RunEvent) error {
 
 func decodeMediaInputEvent(e RunEvent) (media.InputSnapshot, error) {
 	var snapshot media.InputSnapshot
-	if e.SchemaVersion < eventStoreSchemaVersion || len(e.Payload) > 512<<10 {
+	if e.SchemaVersion < eventStoreStrictSchemaVersion || len(e.Payload) > 512<<10 {
 		return snapshot, media.Reject(media.BindingConflict, "invalid media input event envelope")
 	}
 	if err := json.Unmarshal(e.Payload, &snapshot, json.RejectUnknownMembers(true)); err != nil {
@@ -104,7 +104,7 @@ func decodeMediaInputEvent(e RunEvent) (media.InputSnapshot, error) {
 
 func decodeTaskMediaEvent(e RunEvent) (TaskMediaBoundPayload, error) {
 	var payload TaskMediaBoundPayload
-	if e.SchemaVersion < eventStoreSchemaVersion || len(e.Payload) > 64<<10 {
+	if e.SchemaVersion < eventStoreStrictSchemaVersion || len(e.Payload) > 64<<10 {
 		return payload, media.Reject(media.BindingConflict, "invalid task media event envelope")
 	}
 	if err := json.Unmarshal(e.Payload, &payload, json.RejectUnknownMembers(true)); err != nil {

@@ -81,7 +81,7 @@ func applyHistoricalGrantReport(reports []HistoricalResultGrantReport, bySource 
 	}
 	task := tasks[taskID]
 	if task == nil || taskID != event.TaskID || manifest.TaskID != taskID || manifest.RunID != event.RunID ||
-		event.SchemaVersion != eventStoreSchemaVersion {
+		!knownStrictEventSchema(event.SchemaVersion) {
 		return fmt.Errorf("historical result report has a mismatched dispatch identity")
 	}
 	if task.HistoricalResultBinding == nil || task.HistoricalResultBinding.Grant != *ref {

@@ -42,7 +42,7 @@ func (p ToolMediaPublishedPayload) digest() (string, error) {
 
 func decodeToolMediaPublication(event RunEvent) (ToolMediaPublishedPayload, error) {
 	var p ToolMediaPublishedPayload
-	if event.SchemaVersion < eventStoreSchemaVersion || len(event.Payload) > 512<<10 {
+	if event.SchemaVersion < eventStoreStrictSchemaVersion || len(event.Payload) > 512<<10 {
 		return p, media.Reject(media.BindingConflict, "invalid tool media publication envelope")
 	}
 	if err := json.Unmarshal(event.Payload, &p, json.RejectUnknownMembers(true)); err != nil {

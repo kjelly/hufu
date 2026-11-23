@@ -73,10 +73,10 @@ func ValidateEventPayload(event RunEvent) error {
 		return fmt.Errorf("event type is empty")
 	}
 	// Schema v1 intentionally allowed sparse events. Preserve those old
-	// workspaces (and their hash chains); v2 is the current event-first
-	// contract and requires complete durable identity.
+	// workspaces (and their hash chains); v2 introduced the event-first
+	// contract, which requires complete durable identity.
 	missingRun := strings.TrimSpace(event.RunID) == "" && event.Type != string(EventDerivedForkCreated)
-	if event.SchemaVersion >= eventStoreSchemaVersion && (strings.TrimSpace(event.ID) == "" || missingRun || strings.TrimSpace(event.SessionID) == "" || strings.TrimSpace(event.Actor) == "" || strings.TrimSpace(event.Timestamp) == "") {
+	if event.SchemaVersion >= eventStoreStrictSchemaVersion && (strings.TrimSpace(event.ID) == "" || missingRun || strings.TrimSpace(event.SessionID) == "" || strings.TrimSpace(event.Actor) == "" || strings.TrimSpace(event.Timestamp) == "") {
 		return fmt.Errorf("event identity is incomplete")
 	}
 	if len(event.Payload) > 0 && !json.Valid(event.Payload) {

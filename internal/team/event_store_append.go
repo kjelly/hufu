@@ -218,7 +218,10 @@ func (es *EventStore) replayedEventBatch(ctx context.Context, q runtimestore.Que
 }
 
 func sameBatchEventContent(a, b RunEvent) bool {
-	return a.SchemaVersion == b.SchemaVersion && a.Type == b.Type && a.Actor == b.Actor &&
+	// V2 and v3 share the strict payload contract. An idempotent retry after
+	// a digest upgrade returns the original durable event with its old hash.
+	sameSchema := a.SchemaVersion == b.SchemaVersion || knownStrictEventSchema(a.SchemaVersion) && knownStrictEventSchema(b.SchemaVersion)
+	return sameSchema && a.Type == b.Type && a.Actor == b.Actor &&
 		a.RunID == b.RunID && a.SessionID == b.SessionID && a.BranchID == b.BranchID &&
 		a.TaskID == b.TaskID && a.Attempt == b.Attempt && a.IdempotencyKey == b.IdempotencyKey && bytes.Equal(a.Payload, b.Payload)
 }

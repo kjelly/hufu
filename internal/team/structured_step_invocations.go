@@ -37,7 +37,7 @@ func decodeStructuredStepInvocation(event RunEvent) (structuredStepInvocationObs
 	if err := json.Unmarshal(event.Payload, &payload, json.RejectUnknownMembers(true)); err != nil {
 		return payload, fmt.Errorf("decode structured step invocation: %w", err)
 	}
-	if event.Type != string(EventStructuredStepInvocationObserved) || event.SchemaVersion < eventStoreSchemaVersion ||
+	if event.Type != string(EventStructuredStepInvocationObserved) || event.SchemaVersion < eventStoreStrictSchemaVersion ||
 		event.RunID == "" || event.BranchID == "" || event.TaskID == "" || event.Attempt < 1 || event.Actor != "runtime" ||
 		payload.OccurrenceRevision < 0 || payload.Version != 1 || payload.ReceiptID == "" || payload.StepID == "" || payload.RepairAttempt < 0 ||
 		payload.ModelExecutionID == "" || payload.ProfileEventID == "" || !validStructuredStepDigest(payload.ProfileHash) ||

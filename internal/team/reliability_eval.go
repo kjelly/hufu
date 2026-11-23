@@ -245,7 +245,7 @@ func replayReliabilityBoundary(s ReliabilityScenario) (ReliabilityBoundaryEviden
 			return evidence, err
 		}
 		payload, _ := json.Marshal(map[string]string{"fault": string(s.Fault), "detail": utils.RedactSecrets(s.Injection.Detail)})
-		err = store.Append(RunEvent{Type: "boundary_fault", Actor: "replay", Payload: payload})
+		_, err = store.AppendPersisted(RunEvent{Type: "boundary_fault", Actor: "replay", Payload: payload})
 		if err == nil {
 			err = store.VerifyHashChain()
 		}

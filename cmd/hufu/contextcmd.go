@@ -567,7 +567,7 @@ func runContextRebuild(cmd *cobra.Command, _ []string) error {
 		if marshalErr != nil {
 			return marshalErr
 		}
-		if appendErr := eventStore.Append(team.RunEvent{Type: "memory_aggregate_rebuilt", Actor: "maintenance", IdempotencyKey: "memory:aggregate_rebuilt:" + policy.PolicyVersion + ":" + hex.EncodeToString(digest[:12]), Payload: payload}); appendErr != nil {
+		if _, appendErr := eventStore.AppendPersisted(team.RunEvent{Type: "memory_aggregate_rebuilt", Actor: "maintenance", IdempotencyKey: "memory:aggregate_rebuilt:" + policy.PolicyVersion + ":" + hex.EncodeToString(digest[:12]), Payload: payload}); appendErr != nil {
 			return fmt.Errorf("record aggregate rebuild: %w", appendErr)
 		}
 	}

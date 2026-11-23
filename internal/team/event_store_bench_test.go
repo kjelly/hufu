@@ -44,7 +44,7 @@ func writeBenchEventLog(b *testing.B, count int) string {
 		if i%2 == 0 {
 			event.IdempotencyKey = fmt.Sprintf("bench-key-%d", i)
 		}
-		event.Hash = ComputeEventHash(event.PreviousHash, event.ID, event.Type, event.Timestamp, event.Payload)
+		event.Hash = eventChainEntry(event).Digest()
 		line, err := json.Marshal(event)
 		if err != nil {
 			b.Fatal(err)

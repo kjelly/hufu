@@ -131,7 +131,7 @@ func persistConsolidationProposal(cmd *cobra.Command, repo *contextstore.SQLiteR
 	if err != nil {
 		return err
 	}
-	if err := eventStore.Append(team.RunEvent{Type: "memory_consolidation_proposed", Actor: "maintenance", IdempotencyKey: "memory:consolidation_proposed:" + proposal.ID, Payload: eventPayload}); err != nil {
+	if _, err := eventStore.AppendPersisted(team.RunEvent{Type: "memory_consolidation_proposed", Actor: "maintenance", IdempotencyKey: "memory:consolidation_proposed:" + proposal.ID, Payload: eventPayload}); err != nil {
 		return fmt.Errorf("record consolidation proposal: %w", err)
 	}
 	pending := "explicit approval required"

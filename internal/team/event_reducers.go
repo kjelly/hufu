@@ -135,7 +135,7 @@ func ReduceToSessionData(events []RunEvent) *SessionData {
 			// event-store schema. Older envelopes cannot establish the
 			// immutable execution boundary: the authoritative lineage reader
 			// deliberately ignores them, so replay must do the same.
-			if e.SchemaVersion < eventStoreSchemaVersion {
+			if e.SchemaVersion < eventStoreStrictSchemaVersion {
 				continue
 			}
 			var snapshot ExecutionPolicySnapshot

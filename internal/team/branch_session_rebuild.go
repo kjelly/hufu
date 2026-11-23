@@ -85,13 +85,21 @@ func RefreshActiveBranchProjection(workspace string, st *SessionTree, es *EventS
 	if len(tasks) == 0 && len(replayed.Entries) == 0 && len(replayed.CriterionResults) == 0 && len(replayed.CriterionCheckpoints) == 0 && replayed.LastCriterionProgressAt == "" && replayed.ExecutionPolicySnapshot == nil && len(replayed.MediaInputSnapshots) == 0 && replayed.DerivedFork == nil {
 		return nil
 	}
-	sd := LoadSession(workspace)
+	docs := workspaceDocs(workspace)
+	sd, _, err := loadSessionFrom(docs)
+	if err != nil {
+		return fmt.Errorf("refresh projection for branch %q: %w", b.ID, err)
+	}
+	if err := refusePendingTerminalCommitSwitch(sd, b.ID); err != nil {
+		return err
+	}
 	if sd == nil {
 		sd = NewSession()
 	}
 	if replayed.DerivedFork != nil && !sameDerivedForkLineage(sd.DerivedFork, replayed.DerivedFork) {
 		carryWorkspaceSessionState(replayed, sd)
-		return SaveSession(workspace, replayed)
+		replayed.PendingTerminalCommit = sd.PendingTerminalCommit
+		return saveSessionTo(docs, replayed)
 	}
 	sd.Tasks = tasks
 	sd.Entries = replayed.Entries
@@ -102,7 +110,7 @@ func RefreshActiveBranchProjection(workspace string, st *SessionTree, es *EventS
 	sd.MediaInputSnapshots = cloneMediaInputSnapshots(replayed.MediaInputSnapshots)
 	sd.HistoricalResultGrants = cloneHistoricalGrantCycleRef(replayed.HistoricalResultGrants)
 	sd.DerivedFork = cloneDerivedForkRef(replayed.DerivedFork)
-	if err := SaveSession(workspace, sd); err != nil {
+	if err := saveSessionTo(docs, sd); err != nil {
 		return fmt.Errorf("refresh projection for branch %q: %w", b.ID, err)
 	}
 	return nil

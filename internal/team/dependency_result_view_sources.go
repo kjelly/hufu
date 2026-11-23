@@ -87,7 +87,7 @@ func dependencyViewSourceFromEvents(ctx context.Context, events []RunEvent, item
 		if err := ctx.Err(); err != nil {
 			return DependencyResultViewSource{}, err
 		}
-		if event.Type != string(EventTaskCompleted) || event.TaskID != item.ID || event.SchemaVersion != eventStoreSchemaVersion {
+		if event.Type != string(EventTaskCompleted) || event.TaskID != item.ID || !knownStrictEventSchema(event.SchemaVersion) {
 			continue
 		}
 		var terminal dependencyViewTerminalSource

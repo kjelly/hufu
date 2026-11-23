@@ -240,7 +240,7 @@ func WriteMemoryPolicySnapshot(workspace string, snapshot MemoryPolicySnapshot) 
 		if marshalErr != nil {
 			return path, marshalErr
 		}
-		if appendErr := store.Append(team.RunEvent{Type: "memory_policy_evaluated", Actor: "improve", IdempotencyKey: "memory:policy_evaluated:" + snapshot.ID + ":" + snapshot.RevisionHash, Payload: payload}); appendErr != nil {
+		if _, appendErr := store.AppendPersisted(team.RunEvent{Type: "memory_policy_evaluated", Actor: "improve", IdempotencyKey: "memory:policy_evaluated:" + snapshot.ID + ":" + snapshot.RevisionHash, Payload: payload}); appendErr != nil {
 			return path, fmt.Errorf("record memory policy evaluation: %w", appendErr)
 		}
 	}
@@ -408,7 +408,8 @@ func appendMemoryPolicyLifecycleEvent(workspace, eventType, activeID, previousID
 	if err != nil {
 		return err
 	}
-	return store.Append(team.RunEvent{Type: eventType, Actor: "improve", IdempotencyKey: "memory:" + eventType + ":" + activeID + ":" + revision, Payload: payload})
+	_, err = store.AppendPersisted(team.RunEvent{Type: eventType, Actor: "improve", IdempotencyKey: "memory:" + eventType + ":" + activeID + ":" + revision, Payload: payload})
+	return err
 }
 
 func memoryPolicyAdoptionPath(workspace string) string {

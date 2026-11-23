@@ -496,7 +496,9 @@ func (m *TerminalSessionManager) TransferTerminal(_ context.Context, req Termina
 	if !ok {
 		return TerminalSession{}, fmt.Errorf("transfer terminal session %q: session not found", req.SessionID)
 	}
-	s := &managed.session
+	previous := managed.session
+	next := previous
+	s := &next
 	normalizeTerminalSessionDefaults(s)
 	if s.RunID != req.RunID {
 		return TerminalSession{}, fmt.Errorf("transfer terminal session %q: run %q does not match requested run %q", s.ID, s.RunID, req.RunID)
@@ -523,10 +525,12 @@ func (m *TerminalSessionManager) TransferTerminal(_ context.Context, req Termina
 	s.HandoffReason = req.Reason
 	s.HandoffAuthorizedBy = req.OperatorAuthorization
 	s.HandedOffAt = time.Now().UTC()
+	managed.session = next
 	if err := m.persistLocked(); err != nil {
+		managed.session = previous
 		return TerminalSession{}, err
 	}
-	copy := deepCopyTerminalSession(*s)
+	copy := deepCopyTerminalSession(next)
 	m.emit(string(TerminalTaskTransferred), copy, map[string]interface{}{
 		"source_task_id": req.SourceTaskID, "destination_task_id": req.DestinationTaskID,
 		"reason": req.Reason, "operator_authorization": req.OperatorAuthorization,

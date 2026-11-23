@@ -25,7 +25,7 @@ func decodeStructuredStepReceiptEvent(event RunEvent) (structuredStepReceiptReco
 	if err := json.Unmarshal(event.Payload, &payload, json.RejectUnknownMembers(true)); err != nil {
 		return payload, err
 	}
-	if event.Type != string(EventStructuredStepReceiptRecorded) || event.SchemaVersion < eventStoreSchemaVersion ||
+	if event.Type != string(EventStructuredStepReceiptRecorded) || event.SchemaVersion < eventStoreStrictSchemaVersion ||
 		event.RunID == "" || event.BranchID == "" || event.TaskID == "" || event.Attempt < 1 || event.Actor != "runtime" || payload.Version != 1 ||
 		payload.ReceiptID == "" || payload.OccurrenceRevision < 0 || payload.Artifact.ID == "" ||
 		!validStructuredStepDigest(payload.Artifact.SHA256) || payload.Artifact.Bytes <= 0 ||

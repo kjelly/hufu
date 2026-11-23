@@ -1,6 +1,7 @@
 package team
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/kjelly/hufu/internal/agent"
 	contextstore "github.com/kjelly/hufu/internal/context"
+	"github.com/kjelly/hufu/internal/runtimestore"
 )
 
 func TestEventStoreSyncFailureIsObservable(t *testing.T) {
@@ -79,6 +81,67 @@ func TestEventStoreStampsInvocationIdentity(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].InvocationID != "inv-parent" {
 		t.Fatalf("durable events = %#v, want invocation_id inv-parent", events)
+	}
+}
+
+func TestEventStoreWritesFramedHashesAfterLegacyEvents(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewEventStore(workspace, "run-digest", "session-digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	legacy := RunEvent{SchemaVersion: 2, Type: "digest_probe", Actor: "test", Payload: []byte(`{"value":1}`)}
+	legacy, err = store.AppendPersistedContext(t.Context(), legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.AppendPersistedContext(t.Context(), RunEvent{Type: "digest_probe", Actor: "test", Payload: []byte(`{"value":2}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Hash == ComputeEventHash(current.PreviousHash, current.ID, current.Type, current.Timestamp, current.Payload) {
+		t.Fatal("the current writer still uses the legacy event digest")
+	}
+	if current.PreviousID != legacy.ID || current.PreviousHash != legacy.Hash {
+		t.Fatal("current event lost its link to the legacy journal")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var replayed []RunEvent
+	if err := StreamValidatedRunEvents(t.Context(), workspace, func(event RunEvent) error {
+		replayed = append(replayed, event)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed) != 2 || !sameStoredEvent(replayed[0], legacy) || !sameStoredEvent(replayed[1], current) {
+		t.Fatal("reopening the mixed journal changed an event")
+	}
+	if err := runtimestore.VerifyEventChain(t.Context(), workspace); err != nil {
+		t.Fatalf("migration verifier rejected the mixed journal: %v", err)
+	}
+	var exported bytes.Buffer
+	if err := ExportEventLog(t.Context(), workspace, &exported); err != nil {
+		t.Fatal(err)
+	}
+	imported := t.TempDir()
+	if count, err := ImportEventLog(t.Context(), imported, &exported); err != nil || count != 2 {
+		t.Fatalf("import mixed journal: count=%d err=%v", count, err)
+	}
+	reopened, err := NewEventStore(imported, "run-digest", "session-digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	events := mustReadEvents(t, reopened)
+	if len(events) != 2 || !sameStoredEvent(events[0], legacy) || !sameStoredEvent(events[1], current) {
+		t.Fatal("export/import changed an event in the mixed journal")
+	}
+	last, err := reopened.AppendPersistedContext(t.Context(), RunEvent{Type: "digest_probe", Actor: "test"})
+	if err != nil || last.PreviousHash != current.Hash {
+		t.Fatalf("extend imported chain: %v", err)
 	}
 }
 
@@ -673,7 +736,7 @@ func TestEventStoreRejectsNonEmptyFirstLink(t *testing.T) {
 			event.Actor = "user"
 			event.Timestamp = "2026-01-01T00:00:00Z"
 			event.Payload = json.RawMessage(`{"started":true}`)
-			event.Hash = ComputeEventHash(event.PreviousHash, event.ID, event.Type, event.Timestamp, event.Payload)
+			event.Hash = eventChainEntry(event).Digest()
 			insertJournalEvents(t, workspace, event)
 			if _, err := NewEventStore(workspace, "run-first-link", "session-first-link"); err == nil {
 				t.Fatal("NewEventStore accepted a non-empty first link")
